@@ -1,0 +1,4 @@
+interface:
+  display_name: "Triagem e delimitação pericial"
+  short_description: "Delimita autonomamente o encargo pericial judicial"
+  default_prompt: "Use $triagem-delimitacao-pericial para analisar os documentos PJe e gerar delimitacao-pericial.json rastreável."

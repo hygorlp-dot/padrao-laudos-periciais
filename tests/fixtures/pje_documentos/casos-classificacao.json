@@ -1,0 +1,8 @@
+[
+  {"titulo": "Decisão", "tipo": "Decisão", "classe": "DECISAO"},
+  {"titulo": "Contestação", "tipo": "Contestação", "classe": "CONTESTACAO"},
+  {"titulo": "Petição inicial", "tipo": "Petição inicial", "classe": "PETICAO_INICIAL"},
+  {"titulo": "Procuração", "tipo": "Documento", "classe": "PROCURACAO"},
+  {"titulo": "LAUDO PERICIAL", "tipo": "Laudo", "classe": "OUTRO"},
+  {"titulo": "Documento genérico", "tipo": "Documento", "classe": "OUTRO"}
+]

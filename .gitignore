@@ -212,6 +212,9 @@ tempCodeRunnerFile.py
 # Referências periciais privadas — uso exclusivamente local
 referencias/privadas/
 
+# Arquivo local de empacotamento do workspace — contém metadados do Git e caches
+.vscode.zip
+
 # Marimo
 marimo/_static/
 marimo/_lsp/

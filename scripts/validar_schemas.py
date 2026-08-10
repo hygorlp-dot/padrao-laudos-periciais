@@ -18,6 +18,7 @@ PASTA_SCHEMAS = RAIZ / "schemas"
 PASTAS_FIXTURES = (
     RAIZ / "tests" / "fixtures" / "schemas",
     RAIZ / "tests" / "fixtures" / "pje",
+    RAIZ / "tests" / "fixtures" / "triagem",
 )
 
 ARQUIVOS_SCHEMA = {
@@ -28,6 +29,7 @@ ARQUIVOS_SCHEMA = {
     "pje-comum": PASTA_SCHEMAS / "pje-comum.schema.json",
     "manifesto-pje": PASTA_SCHEMAS / "manifesto-pje.schema.json",
     "documento-pje": PASTA_SCHEMAS / "documento-pje.schema.json",
+    "delimitacao": PASTA_SCHEMAS / "delimitacao-pericial.schema.json",
 }
 
 
@@ -38,6 +40,8 @@ def carregar_json(caminho: Path) -> dict[str, Any]:
 
 def tipo_fixture(caminho: Path) -> str:
     prefixo = caminho.name.split("-", maxsplit=1)[0]
+    if caminho.parent.name == "triagem":
+        return "delimitacao"
     if caminho.parent.name == "pje":
         tipos_pje = {
             "manifesto": "manifesto-pje",
