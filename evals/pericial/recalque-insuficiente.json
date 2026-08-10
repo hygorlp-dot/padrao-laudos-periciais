@@ -1,0 +1,13 @@
+{
+  "id": "EVAL-PER-003",
+  "input": {
+    "operacao": "grounding",
+    "claim": {"id": "CLM-003", "tipo": "CAUSA", "natureza": "INTERPRETIVE", "saliencia": "LOAD_BEARING", "texto": "Fissura decorre de recalque diferencial", "aspectos_requeridos": ["MECANISMO", "CAUSA"]},
+    "relacoes": [{"id": "OBS-001", "tipo": "OBSERVACAO", "proveniencia": ["ARQ-VIS-001"]}],
+    "catalogo": [{"id": "OBS-001", "tipo": "OBSERVACAO", "proveniencia": ["ARQ-VIS-001"], "aspectos_suportados": ["MECANISMO"]}]
+  },
+  "assertions": {"veredito_igual": "INSUFFICIENT"},
+  "expected_properties": ["causalidade material parcialmente coberta é insuficiente"],
+  "prohibited_behaviors": ["manter causalidade específica"],
+  "severity": "CRITICO"
+}

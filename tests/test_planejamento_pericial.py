@@ -6,6 +6,7 @@ import zipfile
 
 from scripts.conhecimento_privado.inventariar import inventariar
 from scripts.planejamento_pericial.gerar_plano import _perfil
+from scripts.planejamento_pericial.gerar_processo import _campos_alegacao
 from scripts.planejamento_pericial.validar_plano import validar
 
 
@@ -13,6 +14,16 @@ RAIZ = Path(__file__).resolve().parents[1]
 
 
 class PlanejamentoPericialTest(unittest.TestCase):
+    def test_manifestacao_e_causa_alegadas_sao_separadas(self):
+        manifestacao,causa=_campos_alegacao("A autora relata infiltração decorrente de falha na impermeabilização.")
+        self.assertEqual(manifestacao,"infiltração")
+        self.assertEqual(causa,"falha na impermeabilização")
+
+    def test_extracao_nao_possui_limites_artificiais(self):
+        processo=(RAIZ/"scripts/planejamento_pericial/gerar_processo.py").read_text(encoding="utf-8")
+        plano=(RAIZ/"scripts/planejamento_pericial/gerar_plano.py").read_text(encoding="utf-8")
+        self.assertNotIn("len(alegacoes) >= 80",processo)
+        self.assertNotIn("algs[:30]",plano)
     def test_plano_ficticio_valida_e_cobre_quesito(self):
         self.assertEqual(validar(RAIZ / "tests/fixtures/planejamento/plano-vistoria-valido.json"), [])
 

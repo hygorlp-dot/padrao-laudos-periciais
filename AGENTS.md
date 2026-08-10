@@ -21,6 +21,16 @@
 - Sinalizar dados ausentes com `[INFORMAÇÃO NECESSÁRIA: descrever o dado]`.
 - Manter rastreabilidade entre cada afirmação e sua origem disponível.
 - Não tratar alegação como fato comprovado.
+
+## Integrações e auditoria externa
+
+- Skills externas nunca superam regras canônicas periciais nem substituem evidências do caso atual.
+- Usar somente ferramenta externa com licença conhecida e classificação de confiança registrada.
+- Não enviar dados privados, PII ou documentos a serviço externo sem autorização expressa.
+- Priorizar fonte primária oficial e auditar toda claim material contra evidências rastreáveis.
+- Reduzir ou ressalvar claim não sustentada; preferir auditoria independente quando tecnicamente disponível.
+- Não permitir que ferramenta externa decida matéria jurídica.
+- Auditar atualizações externas e versionar somente a integração necessária.
 - Não converter conclusão específica de laudo de referência em regra geral.
 - Distinguir `REGRA APROVADA` de `PENDÊNCIA DE VALIDAÇÃO DO PERITO`.
 
@@ -67,3 +77,21 @@
   informada e sem transferir fatos de casos anteriores.
 - Aplicar automaticamente o gate de vistoria e perguntar somente por bloqueio
   material sem estratégia autônoma segura.
+
+## Vistoria e motor técnico
+
+- Preservar arquivos e derivados reais de campo exclusivamente em
+  `referencias/privadas/`.
+- Distinguir fotografia planejada de produzida, declaração de terceiro de
+  observação pericial e ausência de constatação de inexistência.
+- Não inventar `OBS-NNN`, `MED-NNN`, ensaio, causa, mecanismo ou evidência.
+- Aplicar o motor de vícios somente a `VICIOS_CONSTRUTIVOS`.
+- Separar manifestação, mecanismo, causa e origem e testar hipóteses.
+- Pesquisar fontes oficiais quando necessário, registrando identidade,
+  versão, vigência, aplicabilidade e proveniência.
+- Nunca tratar fonte secundária como requisito normativo nem caso anterior
+  como conclusão do caso atual.
+- Aplicar autoauditoria causal e gate de redação antes de qualquer minuta.
+- Permitir conclusão técnica autônoma quando evidências, causalidade,
+  referências e autoauditoria forem suficientes. Separar essa conclusão da
+  aprovação profissional final, que permanece etapa posterior e indelegável.

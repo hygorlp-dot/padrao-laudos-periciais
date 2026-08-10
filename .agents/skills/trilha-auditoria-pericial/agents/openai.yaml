@@ -1,0 +1,4 @@
+interface:
+  display_name: "Trilha de Auditoria Pericial"
+  short_description: "Registra decisões e evidências sem raciocínio privado"
+  default_prompt: "Use $trilha-auditoria-pericial para registrar uma execução pericial auditável."

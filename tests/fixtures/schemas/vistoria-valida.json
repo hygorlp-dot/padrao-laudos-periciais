@@ -1,65 +1,25 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "2.0.0",
   "numero_processo": "0000001-00.2026.4.00.0001",
+  "status": "VISTORIA_ESTRUTURADA",
   "data": "2026-02-10",
   "hora_inicio": "09:00:00",
   "hora_fim": "10:00:00",
-  "local": {
-    "logradouro": "Rua Fictícia",
-    "numero": "100",
-    "complemento": null,
-    "bairro": "Bairro Teste",
-    "municipio": "Cidade Fictícia",
-    "uf": "PE",
-    "cep": null
-  },
+  "local": "Endereço fictício",
   "coordenadas": null,
-  "clima": null,
-  "temperatura": null,
-  "umidade_relativa": null,
-  "presentes": [],
-  "metodos_utilizados": [
-    {
-      "nome": "INSPECAO_VISUAL",
-      "descricao": "Inspeção visual fictícia",
-      "efetivamente_utilizado": true
-    }
-  ],
+  "condicoes": {"clima": null, "temperatura": null, "umidade_relativa": null, "campo_examinado": "Superfície fictícia"},
+  "participantes": [],
+  "atividades_executadas": [{"id": "ATV-EXEC-001", "atividade_planejada": "ATV-001", "descricao": "Inspeção fictícia", "status": "EXECUTADO", "evidencias": ["OBS-001"], "impacto_nao_execucao": null}],
   "equipamentos": [],
   "limitacoes": [],
-  "condicoes_gerais": {
-    "conservacao": "Registro fictício de conservação.",
-    "habitabilidade": null,
-    "indicios_estruturais": null,
-    "manutencao_aparente": null,
-    "alteracoes_aparentes": null,
-    "limitacoes": []
-  },
-  "fotografias": [
-    {
-      "id": "FOT-001",
-      "arquivo": "foto-ficticia-001.jpg",
-      "data_hora": null,
-      "ambiente": "Sala",
-      "sistema": null,
-      "descricao_objetiva": "Registro visual fictício de uma superfície.",
-      "relacionado_a": ["ALG-001"],
-      "validada": true,
-      "observacoes": null
-    }
-  ],
-  "observacoes_campo": [
-    {
-      "id": "OBS-001",
-      "ambiente": "Sala",
-      "sistema": null,
-      "descricao_objetiva": "Foi observada alteração superficial localizada.",
-      "metodo": ["INSPECAO_VISUAL"],
-      "extensao": "Localizada",
-      "medicao": null,
-      "unidade": null,
-      "fotografias": ["FOT-001"],
-      "observacoes": null
-    }
-  ]
+  "fotografias": [],
+  "videos": [],
+  "medicoes": [],
+  "ensaios": [],
+  "documentos_obtidos": [],
+  "declaracoes": [],
+  "observacoes": [{"id": "OBS-001", "local": "Local fictício", "ambiente": "Ambiente fictício", "sistema": "REVESTIMENTOS", "elemento": "Parede", "descricao_objetiva": "Alteração superficial localizada.", "manifestacao": "fissura superficial", "resultado": "OBSERVADO", "campo_examinado": "Parede acessível", "metodo": ["INSPECAO_VISUAL"], "fotografias": [], "medicoes": [], "alegacoes": ["ALG-001"], "questoes": ["QT-001"], "quesitos": ["QUE-001"], "confianca": {"nivel": "ALTA"}, "proveniencia": ["ARQ-VIS-001"], "limitacoes": []}],
+  "cobertura": [{"tipo": "ATIVIDADE", "planejado": "ATV-001", "status": "EXECUTADO", "executado": ["ATV-EXEC-001"], "evidencia_equivalente": [], "impacto": null}],
+  "inventario_fonte": "inventario-vistoria.json",
+  "proveniencia": ["ARQ-VIS-001"]
 }

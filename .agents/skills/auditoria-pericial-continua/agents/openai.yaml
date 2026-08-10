@@ -1,0 +1,4 @@
+interface:
+  display_name: "Auditoria Pericial Contínua"
+  short_description: "Detecta incoerências periciais durante o fluxo"
+  default_prompt: "Use $auditoria-pericial-continua para executar detector rápido e auditoria profunda."

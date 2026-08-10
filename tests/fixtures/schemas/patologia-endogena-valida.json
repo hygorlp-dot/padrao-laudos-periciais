@@ -1,5 +1,6 @@
 {
   "id": "PAT-001",
+  "manifestacao": "Alteração fictícia",
   "alegacoes_relacionadas": ["ALG-001"],
   "ambiente": "Sala",
   "localizacao_detalhada": "Parede norte",
@@ -12,6 +13,9 @@
     "evidencias": ["OBS-001", "FOT-001"],
     "fotografias": ["FOT-001"]
   },
+  "constatacoes": ["OBS-001"],
+  "evidencias": ["OBS-001", "FOT-001"],
+  "hipoteses": ["HIP-001"],
   "analise_causal": {
     "causa_provavel": "Hipótese causal fictícia sustentada pelas evidências de teste.",
     "causas_alternativas": [],
@@ -25,21 +29,22 @@
     "caracterizado": true,
     "tipo": "OCULTO",
     "fundamentacao": "Fundamentação fictícia aprovada para teste.",
-    "validado_perito": true
+    "revisao_profissional": {"status": "APROVADO"}
   },
   "normas_relacionadas": [],
   "consequencias": {
-    "seguranca": null,
-    "funcionalidade": "Perda fictícia de desempenho localizado.",
-    "estanqueidade": null,
-    "salubridade": null,
-    "higiene": null,
-    "durabilidade": null,
-    "conforto": null,
-    "estetica": null,
-    "manutencao": null,
-    "evolucao": null
+    "seguranca": {"status":"INCONCLUSIVA","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "salubridade": {"status":"INCONCLUSIVA","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "funcionalidade": {"status":"PRESENTE","evidencias":["OBS-001"],"fundamentacao":"Perda fictícia de desempenho localizado.","confianca":"MEDIA"},
+    "desempenho": {"status":"PRESENTE","evidencias":["OBS-001"],"fundamentacao":"Perda fictícia de desempenho localizado.","confianca":"MEDIA"},
+    "estanqueidade": {"status":"INCONCLUSIVA","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "durabilidade": {"status":"INCONCLUSIVA","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "estetica": {"status":"INCONCLUSIVA","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "usabilidade": {"status":"INCONCLUSIVA","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "evolucao": {"status":"INCONCLUSIVA","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "extensao": {"status":"INCONCLUSIVA","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"}
   },
+  "reparabilidade": "REPARAVEL",
   "recomendacao": {
     "necessaria": true,
     "descricao": "Executar reparo fictício localizado.",
@@ -51,8 +56,12 @@
     "quantitativo": 1.0,
     "unidade": "m²",
     "memoria_calculo": "1,00 m x 1,00 m = 1,00 m²",
-    "validado_perito": true
+    "revisao_profissional": {"status": "APROVADO"}
   },
+  "elegibilidade_orcamento": "ELEGIVEL_ORCAMENTO_VICIO",
+  "conclusao_tecnica": "A alteração fictícia possui causa e origem sustentadas nesta fixture.",
+  "confianca": {"nivel": "ALTA"},
+  "proveniencia": ["OBS-001", "FOT-001"],
   "redacao": {
     "analise_alegacoes_causas": "Texto fictício de análise.",
     "consequencias": "Texto fictício de consequências.",

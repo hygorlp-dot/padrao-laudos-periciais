@@ -1,0 +1,4 @@
+interface:
+  display_name: "Motor de Vícios Construtivos"
+  short_description: "Analisa evidências pós-vistoria com rastreabilidade"
+  default_prompt: "Use $motor-vicios-construtivos para estruturar a vistoria, testar hipóteses causais e sanear as questões técnicas."

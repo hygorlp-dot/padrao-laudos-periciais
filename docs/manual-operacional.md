@@ -25,23 +25,26 @@ implementado do que permanece previsto.
    equipamentos, documentos e cobertura dos quesitos.
 8. **Vistoria** — realizar constatações, medições e registros sob condução do
    perito.
-9. **`vistoria.json`** — futura consolidação estruturada dos dados de campo.
-10. **Análise por `PAT-NNN`** — analisar cada manifestação como unidade
+9. **`vistoria.json`** — consolidação estruturada dos dados de campo, sem
+   converter declaração, fotografia ou anotação em causa.
+10. **Motor técnico de vícios** — organizar manifestações, testar hipóteses,
+    auditar causalidade e aplicar o gate de redação.
+11. **Análise por `PAT-NNN`** — analisar cada manifestação como unidade
    rastreável conforme os padrões canônicos.
-11. **Redação técnica** — redigir análise, consequências, classificação e
+12. **Redação técnica** — redigir análise, consequências, classificação e
    conclusão específica.
-12. **`laudo.json`** — futura fonte estruturada única do laudo.
-13. **Conclusão** — consolidar somente resultados já fundamentados e aprovados
+13. **`laudo.json`** — futura fonte estruturada única do laudo.
+14. **Conclusão** — consolidar somente resultados já fundamentados e aprovados
     pelo perito.
-14. **Quesitos** — responder integralmente os conjuntos identificados.
-15. **Orçamento** — incluir somente itens que atendam aos requisitos técnicos
+15. **Quesitos** — responder integralmente os conjuntos identificados.
+16. **Orçamento** — incluir somente itens que atendam aos requisitos técnicos
     canônicos.
-16. **Revisão** — auditar integridade, coerência, rastreabilidade e completude.
-17. **Preenchimento do modelo Word** — preencher futuramente o DOCM preservando
+17. **Revisão** — auditar integridade, coerência, rastreabilidade e completude.
+18. **Preenchimento do modelo Word** — preencher futuramente o DOCM preservando
     o padrão visual aprovado.
-18. **Revisão final do DOCM/PDF** — conferir conteúdo, campos, paginação e
+19. **Revisão final do DOCM/PDF** — conferir conteúdo, campos, paginação e
     resultado visual.
-19. **Validação e liberação pelo perito** — etapa final e indelegável.
+20. **Validação e liberação pelo perito** — etapa final e indelegável.
 
 ## Estado de implementação
 
@@ -60,19 +63,27 @@ implementado do que permanece previsto.
 - contrato, padrão, Skill e validador relacional da triagem e delimitação;
 - geração de `processo.json`, inventário incremental de conhecimento privado,
   recuperação pertinente, plano-vistoria e ficha pré-vistoria;
+- inventário de campo, `vistoria.json`, motor inicial de vícios, hipóteses,
+  PAT, autoauditoria e gate de redação;
 - referências privadas locais para comparação;
 - arquitetura preparada para evolução futura.
 
 ### Ainda não implementado
 
 - serviço autônomo de extração semântica sem intervenção do Codex;
-- `vistoria.json` e `laudo.json`;
-- automação de rastreabilidade entre `PAT-NNN`, fotografias, quesitos e
-  orçamento;
+- `laudo.json` e motores especializados para outras famílias periciais;
+- redação integral automática e orçamento final;
 - preenchimento automático do DOCM;
 - atualização automática de campos Word;
 - automação de revisão do DOCM/PDF;
 - demais scripts e integrações operacionais.
+
+## Auditoria integrada
+
+Antes do gate de redação, executar detector rápido, auditoria de grounding das
+claims materiais, deep forensic audit e registro da trilha profissional. A
+auditoria externa é local, seletiva e subordinada aos padrões canônicos; hooks
+automáticos permanecem desativados até confirmação oficial da interface.
 
 ## Documentos de apoio
 
@@ -83,3 +94,4 @@ implementado do que permanece previsto.
 - [Padrão de orçamento](./padroes/padrao-orcamento.md).
 - [Padrão de delimitação pericial](./padroes/padrao-delimitacao-pericial.md).
 - [Padrão de planejamento e pré-vistoria](./padroes/padrao-planejamento-vistoria.md).
+- [Padrão de vistoria e motor de vícios](./padroes/padrao-vistoria-motor-vicios.md).

@@ -1,130 +1,947 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://padrao-laudos-periciais.local/schemas/vistoria.schema.json",
-  "title": "Vistoria pericial",
-  "description": "Contrato exclusivo da diligência e das constatações objetivas de campo, sem causas prováveis ou conclusões técnicas.",
-  "type": "object",
-  "required": ["schema_version", "numero_processo", "data", "hora_inicio", "hora_fim", "local", "coordenadas", "clima", "temperatura", "umidade_relativa", "presentes", "metodos_utilizados", "equipamentos", "limitacoes", "condicoes_gerais", "fotografias", "observacoes_campo"],
-  "additionalProperties": false,
-  "properties": {
-    "schema_version": { "type": "string", "minLength": 1 },
-    "numero_processo": { "$ref": "processo.schema.json#/$defs/numeroProcesso" },
-    "data": { "type": ["string", "null"], "format": "date" },
-    "hora_inicio": { "type": ["string", "null"], "format": "time" },
-    "hora_fim": { "type": ["string", "null"], "format": "time" },
-    "local": { "$ref": "processo.schema.json#/$defs/endereco" },
-    "coordenadas": { "$ref": "processo.schema.json#/$defs/coordenadas" },
-    "clima": { "type": ["string", "null"] },
-    "temperatura": { "$ref": "#/$defs/medicao" },
-    "umidade_relativa": { "$ref": "#/$defs/medicao" },
-    "presentes": { "type": "array", "items": { "$ref": "#/$defs/presente" } },
-    "metodos_utilizados": { "type": "array", "items": { "$ref": "#/$defs/metodo" }, "uniqueItems": true },
-    "equipamentos": { "type": "array", "items": { "$ref": "#/$defs/equipamento" } },
-    "limitacoes": { "type": "array", "items": { "$ref": "#/$defs/limitacao" } },
-    "condicoes_gerais": { "$ref": "#/$defs/condicoesGerais" },
-    "fotografias": { "type": "array", "items": { "$ref": "#/$defs/fotografia" } },
-    "observacoes_campo": { "type": "array", "items": { "$ref": "#/$defs/observacaoCampo" } }
-  },
-  "$defs": {
-    "textoNulo": { "type": ["string", "null"] },
-    "medicao": {
-      "type": ["object", "null"],
-      "required": ["valor", "unidade", "metodo"],
-      "additionalProperties": false,
-      "properties": {
-        "valor": { "type": ["number", "null"] },
-        "unidade": { "$ref": "#/$defs/textoNulo" },
-        "metodo": { "$ref": "#/$defs/textoNulo" }
-      }
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://padrao-laudos-periciais.local/schemas/vistoria.schema.json",
+    "title": "Vistoria pericial estruturada",
+    "description": "Contrato de evid\u00eancias objetivas da dilig\u00eancia; n\u00e3o cont\u00e9m conclus\u00e3o causal.",
+    "type": "object",
+    "required": [
+        "schema_version",
+        "numero_processo",
+        "status",
+        "data",
+        "hora_inicio",
+        "hora_fim",
+        "local",
+        "coordenadas",
+        "condicoes",
+        "participantes",
+        "atividades_executadas",
+        "equipamentos",
+        "limitacoes",
+        "fotografias",
+        "videos",
+        "medicoes",
+        "ensaios",
+        "documentos_obtidos",
+        "declaracoes",
+        "observacoes",
+        "cobertura",
+        "inventario_fonte",
+        "proveniencia"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "schema_version": {
+            "type": "string"
+        },
+        "numero_processo": {
+            "$ref": "processo.schema.json#/$defs/numeroProcesso"
+        },
+        "status": {
+            "enum": [
+                "VISTORIA_ESTRUTURADA",
+                "AGUARDANDO_DADOS_DE_VISTORIA"
+            ]
+        },
+        "data": {
+            "type": [
+                "string",
+                "null"
+            ],
+            "format": "date"
+        },
+        "hora_inicio": {
+            "type": [
+                "string",
+                "null"
+            ],
+            "format": "time"
+        },
+        "hora_fim": {
+            "type": [
+                "string",
+                "null"
+            ],
+            "format": "time"
+        },
+        "local": {
+            "type": [
+                "string",
+                "null"
+            ]
+        },
+        "coordenadas": {
+            "type": [
+                "object",
+                "null"
+            ],
+            "required": [
+                "latitude",
+                "longitude",
+                "fonte"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "latitude": {
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "minimum": -90,
+                    "maximum": 90
+                },
+                "longitude": {
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "minimum": -180,
+                    "maximum": 180
+                },
+                "fonte": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                }
+            }
+        },
+        "condicoes": {
+            "type": "object",
+            "required": [
+                "clima",
+                "temperatura",
+                "umidade_relativa",
+                "campo_examinado"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "clima": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "temperatura": {
+                    "type": [
+                        "number",
+                        "null"
+                    ]
+                },
+                "umidade_relativa": {
+                    "type": [
+                        "number",
+                        "null"
+                    ]
+                },
+                "campo_examinado": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                }
+            }
+        },
+        "participantes": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/participante"
+            }
+        },
+        "atividades_executadas": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/atividade"
+            }
+        },
+        "equipamentos": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/equipamento"
+            }
+        },
+        "limitacoes": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/limitacao"
+            }
+        },
+        "fotografias": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/fotografia"
+            }
+        },
+        "videos": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/video"
+            }
+        },
+        "medicoes": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/medicao"
+            }
+        },
+        "ensaios": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/ensaio"
+            }
+        },
+        "documentos_obtidos": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/documento"
+            }
+        },
+        "declaracoes": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/declaracao"
+            }
+        },
+        "observacoes": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/observacao"
+            }
+        },
+        "cobertura": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/cobertura"
+            }
+        },
+        "inventario_fonte": {
+            "type": [
+                "string",
+                "null"
+            ]
+        },
+        "proveniencia": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        }
     },
-    "presente": {
-      "type": "object",
-      "required": ["nome", "polo", "qualificacao", "observacao"],
-      "additionalProperties": false,
-      "properties": {
-        "nome": { "type": "string", "minLength": 1 },
-        "polo": { "enum": ["ATIVO", "PASSIVO", "PERITO", "ASSISTENTE_TECNICO", "TERCEIRO", "OUTRO"] },
-        "qualificacao": { "$ref": "#/$defs/textoNulo" },
-        "observacao": { "$ref": "#/$defs/textoNulo" }
-      }
-    },
-    "metodo": {
-      "type": "object",
-      "required": ["nome", "descricao", "efetivamente_utilizado"],
-      "additionalProperties": false,
-      "properties": {
-        "nome": { "enum": ["INSPECAO_VISUAL", "PERCUSSAO", "MEDICAO", "FISSUROMETRO", "NIVEL", "PRUMO", "OUTRO"] },
-        "descricao": { "$ref": "#/$defs/textoNulo" },
-        "efetivamente_utilizado": { "const": true }
-      }
-    },
-    "equipamento": {
-      "type": "object",
-      "required": ["tipo", "identificacao", "finalidade"],
-      "additionalProperties": false,
-      "properties": {
-        "tipo": { "type": "string", "minLength": 1 },
-        "identificacao": { "$ref": "#/$defs/textoNulo" },
-        "finalidade": { "type": "string", "minLength": 1 }
-      }
-    },
-    "limitacao": {
-      "type": "object",
-      "required": ["id", "descricao", "ambiente_sistema_afetado", "consequencia_tecnica"],
-      "additionalProperties": false,
-      "properties": {
-        "id": { "type": "string", "pattern": "^LIM-[0-9]{3,}$" },
-        "descricao": { "type": "string", "minLength": 1 },
-        "ambiente_sistema_afetado": { "$ref": "#/$defs/textoNulo" },
-        "consequencia_tecnica": { "type": "string", "minLength": 1 }
-      }
-    },
-    "condicoesGerais": {
-      "type": "object",
-      "required": ["conservacao", "habitabilidade", "indicios_estruturais", "manutencao_aparente", "alteracoes_aparentes", "limitacoes"],
-      "additionalProperties": false,
-      "properties": {
-        "conservacao": { "$ref": "#/$defs/textoNulo" },
-        "habitabilidade": { "$ref": "#/$defs/textoNulo" },
-        "indicios_estruturais": { "$ref": "#/$defs/textoNulo" },
-        "manutencao_aparente": { "$ref": "#/$defs/textoNulo" },
-        "alteracoes_aparentes": { "$ref": "#/$defs/textoNulo" },
-        "limitacoes": { "type": "array", "items": { "type": "string", "pattern": "^LIM-[0-9]{3,}$" } }
-      }
-    },
-    "fotografia": {
-      "type": "object",
-      "required": ["id", "arquivo", "data_hora", "ambiente", "sistema", "descricao_objetiva", "relacionado_a", "validada", "observacoes"],
-      "additionalProperties": false,
-      "properties": {
-        "id": { "type": "string", "pattern": "^FOT-[0-9]{3,}$" },
-        "arquivo": { "type": "string", "minLength": 1 },
-        "data_hora": { "type": ["string", "null"], "format": "date-time" },
-        "ambiente": { "$ref": "#/$defs/textoNulo" },
-        "sistema": { "$ref": "#/$defs/textoNulo" },
-        "descricao_objetiva": { "type": "string", "minLength": 1 },
-        "relacionado_a": { "type": "array", "items": { "type": "string", "pattern": "^(ALG|PAT)-[0-9]{3,}$" }, "uniqueItems": true },
-        "validada": { "type": "boolean" },
-        "observacoes": { "$ref": "#/$defs/textoNulo" }
-      }
-    },
-    "observacaoCampo": {
-      "description": "Constatação objetiva; causa provável não é permitida neste objeto.",
-      "type": "object",
-      "required": ["id", "ambiente", "sistema", "descricao_objetiva", "metodo", "extensao", "medicao", "unidade", "fotografias", "observacoes"],
-      "additionalProperties": false,
-      "properties": {
-        "id": { "type": "string", "pattern": "^OBS-[0-9]{3,}$" },
-        "ambiente": { "$ref": "#/$defs/textoNulo" },
-        "sistema": { "$ref": "#/$defs/textoNulo" },
-        "descricao_objetiva": { "type": "string", "minLength": 1 },
-        "metodo": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "uniqueItems": true },
-        "extensao": { "$ref": "#/$defs/textoNulo" },
-        "medicao": { "type": ["number", "null"] },
-        "unidade": { "$ref": "#/$defs/textoNulo" },
-        "fotografias": { "type": "array", "items": { "type": "string", "pattern": "^FOT-[0-9]{3,}$" }, "uniqueItems": true },
-        "observacoes": { "$ref": "#/$defs/textoNulo" }
-      }
+    "$defs": {
+        "ids": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "uniqueItems": true
+        },
+        "participante": {
+            "type": "object",
+            "required": [
+                "nome",
+                "papel",
+                "qualificacao"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "nome": {
+                    "type": "string"
+                },
+                "papel": {
+                    "enum": [
+                        "PARTE",
+                        "ASSISTENTE",
+                        "PERITO",
+                        "TERCEIRO",
+                        "OUTRO"
+                    ]
+                },
+                "qualificacao": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                }
+            }
+        },
+        "atividade": {
+            "type": "object",
+            "required": [
+                "id",
+                "atividade_planejada",
+                "descricao",
+                "status",
+                "evidencias",
+                "impacto_nao_execucao"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": "^ATV-EXEC-[0-9]{3,}$"
+                },
+                "atividade_planejada": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "pattern": "^ATV-[0-9]{3,}$"
+                },
+                "descricao": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/$defs/statusExecucao"
+                },
+                "evidencias": {
+                    "$ref": "#/$defs/ids"
+                },
+                "impacto_nao_execucao": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                }
+            }
+        },
+        "equipamento": {
+            "type": "object",
+            "required": [
+                "tipo",
+                "identificacao",
+                "finalidade"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "tipo": {
+                    "type": "string"
+                },
+                "identificacao": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "finalidade": {
+                    "type": "string"
+                }
+            }
+        },
+        "limitacao": {
+            "type": "object",
+            "required": [
+                "id",
+                "descricao",
+                "campo_afetado",
+                "consequencia_tecnica"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": "^LIM-[0-9]{3,}$"
+                },
+                "descricao": {
+                    "type": "string"
+                },
+                "campo_afetado": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "consequencia_tecnica": {
+                    "type": "string"
+                }
+            }
+        },
+        "fotografia": {
+            "type": "object",
+            "required": [
+                "id",
+                "arquivo_inventario",
+                "fotografia_planejada",
+                "finalidade_planejada",
+                "descricao_visual_observada",
+                "estado_interpretacao",
+                "candidatos_planejamento",
+                "metodo_associacao",
+                "data_hora",
+                "coordenadas",
+                "orientacao",
+                "ambiente",
+                "sistema",
+                "descricao_objetiva",
+                "atividade",
+                "questoes",
+                "quesitos",
+                "alegacoes",
+                "confianca",
+                "proveniencia"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": "^FOT-[0-9]{3,}$"
+                },
+                "arquivo_inventario": {
+                    "type": "string",
+                    "pattern": "^ARQ-VIS-[0-9]{3,}$"
+                },
+                "fotografia_planejada": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "pattern": "^FOT-PLANO-[0-9]{3,}$"
+                },
+                "finalidade_planejada": { "type": ["string", "null"] },
+                "descricao_visual_observada": { "type": ["string", "null"] },
+                "estado_interpretacao": { "enum": ["NAO_INTERPRETADA", "INTERPRETADA"] },
+                "candidatos_planejamento": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": [
+                            "id",
+                            "score"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "pattern": "^FOT-PLANO-[0-9]{3,}$"
+                            },
+                            "score": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 1
+                            }
+                        }
+                    }
+                },
+                    "metodo_associacao": {
+                        "enum": [
+                            "AFINIDADE_SEMANTICA_NOME_FINALIDADE",
+                            "ASSOCIACAO_AMBIGUA",
+                            "SEM_ASSOCIACAO_SEGURA"
+                        ]
+                },
+                "data_hora": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "format": "date-time"
+                },
+                "coordenadas": {
+                    "type": [
+                        "object",
+                        "null"
+                    ]
+                },
+                "orientacao": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "ambiente": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "sistema": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "descricao_objetiva": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "atividade": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "questoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "quesitos": {
+                    "$ref": "#/$defs/ids"
+                },
+                "alegacoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "confianca": {
+                    "$ref": "pje-comum.schema.json#/$defs/confianca"
+                },
+                "proveniencia": {
+                    "$ref": "#/$defs/ids"
+                }
+            }
+        },
+        "video": {
+            "type": "object",
+            "required": [
+                "id",
+                "arquivo_inventario",
+                "data_hora",
+                "ambiente",
+                "atividade",
+                "questoes",
+                "alegacoes",
+                "proveniencia"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": "^VID-[0-9]{3,}$"
+                },
+                "arquivo_inventario": {
+                    "type": "string"
+                },
+                "data_hora": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "format": "date-time"
+                },
+                "ambiente": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "atividade": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "questoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "alegacoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "proveniencia": {
+                    "$ref": "#/$defs/ids"
+                }
+            }
+        },
+        "medicao": {
+            "type": "object",
+            "required": [
+                "id",
+                "medicao_planejada",
+                "grandeza",
+                "valor",
+                "unidade",
+                "local",
+                "ambiente",
+                "sistema",
+                "instrumento",
+                "precisao",
+                "data_hora",
+                "responsavel",
+                "metodo",
+                "questoes",
+                "quesitos",
+                "alegacoes",
+                "observacoes",
+                "fotografias",
+                "proveniencia"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": "^MED-[0-9]{3,}$"
+                },
+                "medicao_planejada": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "pattern": "^MED-PLANO-[0-9]{3,}$"
+                },
+                "grandeza": {
+                    "type": "string"
+                },
+                "valor": {
+                    "type": "number"
+                },
+                "unidade": {
+                    "type": "string"
+                },
+                "local": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "ambiente": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "sistema": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "instrumento": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "precisao": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "data_hora": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "format": "date-time"
+                },
+                "responsavel": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "metodo": {
+                    "type": "string"
+                },
+                "questoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "quesitos": {
+                    "$ref": "#/$defs/ids"
+                },
+                "alegacoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "observacoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "fotografias": {
+                    "$ref": "#/$defs/ids"
+                },
+                "proveniencia": {
+                    "$ref": "#/$defs/ids"
+                }
+            }
+        },
+        "ensaio": {
+            "type": "object",
+            "required": [
+                "id",
+                "nome",
+                "status",
+                "resultado",
+                "unidade",
+                "metodo",
+                "questoes",
+                "proveniencia"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": "^ENS-[0-9]{3,}$"
+                },
+                "nome": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/$defs/statusExecucao"
+                },
+                "resultado": {
+                    "type": [
+                        "string",
+                        "number",
+                        "null"
+                    ]
+                },
+                "unidade": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "metodo": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "questoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "proveniencia": {
+                    "$ref": "#/$defs/ids"
+                }
+            }
+        },
+        "documento": {
+            "type": "object",
+            "required": [
+                "id",
+                "arquivo_inventario",
+                "descricao",
+                "proveniencia"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": "^DOC-VIS-[0-9]{3,}$"
+                },
+                "arquivo_inventario": {
+                    "type": "string"
+                },
+                "descricao": {
+                    "type": "string"
+                },
+                "proveniencia": {
+                    "$ref": "#/$defs/ids"
+                }
+            }
+        },
+        "declaracao": {
+            "type": "object",
+            "required": [
+                "id",
+                "natureza",
+                "declarante",
+                "texto_original",
+                "questoes",
+                "alegacoes",
+                "proveniencia"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": "^DEC-VIS-[0-9]{3,}$"
+                },
+                "natureza": {
+                    "enum": [
+                        "DECLARADO_PELA_PARTE",
+                        "DECLARADO_PELO_ASSISTENTE",
+                        "DECLARADO_POR_TERCEIRO"
+                    ]
+                },
+                "declarante": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "texto_original": {
+                    "type": "string"
+                },
+                "questoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "alegacoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "proveniencia": {
+                    "$ref": "#/$defs/ids"
+                }
+            }
+        },
+        "observacao": {
+            "type": "object",
+            "required": [
+                "id",
+                "local",
+                "ambiente",
+                "sistema",
+                "elemento",
+                "descricao_objetiva",
+                "manifestacao",
+                "resultado",
+                "campo_examinado",
+                "metodo",
+                "fotografias",
+                "medicoes",
+                "alegacoes",
+                "questoes",
+                "quesitos",
+                "confianca",
+                "proveniencia",
+                "limitacoes"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": "^OBS-[0-9]{3,}$"
+                },
+                "local": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "ambiente": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "sistema": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "elemento": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "descricao_objetiva": {
+                    "type": "string"
+                },
+                "manifestacao": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "resultado": {
+                    "enum": [
+                        "OBSERVADO",
+                        "FALHA",
+                        "NAO_CONSTATADO_NA_VISTORIA",
+                        "CONFORME",
+                        "INCONCLUSIVO"
+                    ]
+                },
+                "campo_examinado": {
+                    "type": "string"
+                },
+                "metodo": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "fotografias": {
+                    "$ref": "#/$defs/ids"
+                },
+                "medicoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "alegacoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "questoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "quesitos": {
+                    "$ref": "#/$defs/ids"
+                },
+                "confianca": {
+                    "$ref": "pje-comum.schema.json#/$defs/confianca"
+                },
+                "proveniencia": {
+                    "$ref": "#/$defs/ids"
+                },
+                "limitacoes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "aspectos_suportados": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                },
+                "aspectos_contraditos": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                }
+            }
+        },
+        "cobertura": {
+            "type": "object",
+            "required": [
+                "tipo",
+                "planejado",
+                "status",
+                "executado",
+                "evidencia_equivalente",
+                "impacto"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "tipo": {
+                    "enum": [
+                        "ATIVIDADE",
+                        "MEDICAO",
+                        "FOTOGRAFIA",
+                        "ENSAIO",
+                        "DOCUMENTO"
+                    ]
+                },
+                "planejado": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/$defs/statusExecucao"
+                },
+                "executado": {
+                    "$ref": "#/$defs/ids"
+                },
+                "evidencia_equivalente": {
+                    "$ref": "#/$defs/ids"
+                },
+                "impacto": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                }
+            }
+        },
+        "statusExecucao": {
+            "enum": [
+                "EXECUTADO",
+                "PARCIALMENTE_EXECUTADO",
+                "NAO_EXECUTADO",
+                "NAO_APLICAVEL",
+                "SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE"
+            ]
+        }
     }
-  }
 }
