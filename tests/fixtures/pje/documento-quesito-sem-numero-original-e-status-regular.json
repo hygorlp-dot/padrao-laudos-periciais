@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0.0", "documento_id": "DOC-PJE-102", "id_pje": "910002", "processo_cnj": "0000009-00.2026.4.00.0001",
+  "titulo_original": "Quesitos fictícios", "tipo_original": "Petição", "classe_normalizada": "QUESITOS_AUTOR", "subclasse_normalizada": null,
+  "prioridade": "A_ESSENCIAL", "ordem_indice": 2, "data_hora": null,
+  "paginas": [{"referencia": {"pagina_pdf": 4, "pagina_documento": 1, "pagina_original": null}, "classificacao": "TEXTO_DIGITAL", "possui_texto_util": true, "possui_imagens": false, "possui_tabelas": false, "requer_ocr": false, "confianca": {"nivel": "ALTA"}}],
+  "secoes": [], "subdocumentos": [], "blocos_texto": [], "tabelas": [], "imagens": [], "fotografias": [], "eventos": [],
+  "quesitos": [{
+    "id_interno": "QUE-101", "grupo": "Autor fictício", "origem": "AUTOR", "documento_id": "DOC-PJE-102", "id_pje": "910002",
+    "numero_original": null, "caminho_original": null, "ordem_real": 1, "texto_integral": "Quesito fictício sem número.", "subitens": [],
+    "paginas": [{"pagina_pdf": 4, "pagina_documento": 1, "pagina_original": null}], "status_numeracao": "REGULAR",
+    "proveniencia": {"arquivo": "negativo-ficticio.pdf", "sha256": "9999999999999999999999999999999999999999999999999999999999999999", "documento_id": "DOC-PJE-102", "id_pje": "910002", "pagina_pdf": 4, "pagina_documento": 1, "pagina_original": null, "trecho": "Quesito fictício", "natureza": "REQUERIDO", "metodo_extracao": "EXTRACAO_SEMANTICA", "confianca": {"nivel": "ALTA"}, "status_verificacao": "VERIFICADO"}
+  }],
+  "alegacoes": [], "entidades": [], "referencias_normativas": [],
+  "fontes": [{"arquivo": "negativo-ficticio.pdf", "sha256": "9999999999999999999999999999999999999999999999999999999999999999", "documento_id": "DOC-PJE-102", "id_pje": "910002", "pagina_pdf": 4, "pagina_documento": 1, "pagina_original": null, "trecho": "Quesitos fictícios", "natureza": "REQUERIDO", "metodo_extracao": "RODAPE_PJE", "confianca": {"nivel": "ALTA"}, "status_verificacao": "VERIFICADO"}],
+  "conflitos": [], "alertas": [],
+  "status_reconciliacao": {"status": "CONFIRMADO", "id_indice": "910002", "id_rodape": "910002", "pagina_destino_link": 4, "primeira_pagina_detectada": 4, "ultima_pagina_detectada": 4, "evidencias": [], "motivos": [], "confianca": {"nivel": "ALTA"}},
+  "status_validacao": "BLOQUEADO"
+}

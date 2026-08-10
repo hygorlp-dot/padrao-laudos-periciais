@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/manifesto-pje.schema.json",
+  "title": "Manifesto de PDF consolidado do PJe",
+  "description": "Contrato para inventário, diagnóstico, segmentação e reconciliação de um PDF consolidado do PJe, sem duplicar o conteúdo integral dos documentos.",
+  "type": "object",
+  "required": [
+    "schema_version", "arquivo", "processo", "pessoas", "vinculos_processuais", "representacoes",
+    "indice", "documentos", "paginas", "eventos", "conflitos", "pendencias", "metricas_extracao", "status_validacao"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "minLength": 1 },
+    "arquivo": { "$ref": "#/$defs/arquivo" },
+    "processo": { "$ref": "#/$defs/processo" },
+    "pessoas": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/pessoa" } },
+    "vinculos_processuais": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/vinculoProcessual" } },
+    "representacoes": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/representacao" } },
+    "indice": { "$ref": "#/$defs/indice" },
+    "documentos": { "type": "array", "items": { "$ref": "#/$defs/documentoManifesto" } },
+    "paginas": { "type": "array", "minItems": 1, "items": { "$ref": "pje-comum.schema.json#/$defs/paginaManifesto" } },
+    "eventos": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/evento" } },
+    "conflitos": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/conflito" } },
+    "pendencias": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/pendencia" } },
+    "metricas_extracao": { "$ref": "#/$defs/metricasExtracao" },
+    "status_validacao": { "enum": ["RASCUNHO", "BLOQUEADO", "VALIDADO"] }
+  },
+  "$defs": {
+    "arquivo": {
+      "type": "object",
+      "required": ["nome", "sha256", "total_paginas", "data_exportacao"],
+      "additionalProperties": false,
+      "properties": {
+        "nome": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "total_paginas": { "type": "integer", "minimum": 1 },
+        "data_exportacao": { "type": ["string", "null"], "format": "date" }
+      }
+    },
+    "campoTexto": {
+      "type": "object",
+      "required": ["valor", "motivo_ausencia", "proveniencia"],
+      "additionalProperties": false,
+      "properties": {
+        "valor": { "type": ["string", "null"], "minLength": 1 },
+        "motivo_ausencia": {
+          "oneOf": [
+            { "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" },
+            { "type": "null" }
+          ]
+        },
+        "proveniencia": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" }
+      },
+      "oneOf": [
+        { "properties": { "valor": { "type": "string", "minLength": 1 }, "motivo_ausencia": { "type": "null" } } },
+        { "properties": { "valor": { "type": "null" }, "motivo_ausencia": { "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" } } }
+      ]
+    },
+    "numeroCnjPrincipal": {
+      "type": "object",
+      "required": ["valor", "proveniencia"],
+      "additionalProperties": false,
+      "properties": {
+        "valor": { "$ref": "pje-comum.schema.json#/$defs/numeroCnj" },
+        "proveniencia": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" }
+      }
+    },
+    "valorCausa": {
+      "type": "object",
+      "required": ["valor", "moeda", "motivo_ausencia", "proveniencia"],
+      "additionalProperties": false,
+      "properties": {
+        "valor": { "type": ["number", "null"], "minimum": 0 },
+        "moeda": { "type": ["string", "null"], "pattern": "^[A-Z]{3}$" },
+        "motivo_ausencia": {
+          "oneOf": [{ "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" }, { "type": "null" }]
+        },
+        "proveniencia": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" }
+      },
+      "oneOf": [
+        { "properties": { "valor": { "type": "number", "minimum": 0 }, "moeda": { "type": "string", "pattern": "^[A-Z]{3}$" }, "motivo_ausencia": { "type": "null" } } },
+        { "properties": { "valor": { "type": "null" }, "moeda": { "type": "null" }, "motivo_ausencia": { "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" } } }
+      ]
+    },
+    "flagProcessual": {
+      "type": "object",
+      "required": ["valor", "motivo_ausencia", "proveniencia"],
+      "additionalProperties": false,
+      "properties": {
+        "valor": { "type": ["boolean", "null"] },
+        "motivo_ausencia": { "oneOf": [{ "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" }, { "type": "null" }] },
+        "proveniencia": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" }
+      },
+      "oneOf": [
+        { "properties": { "valor": { "type": "boolean" }, "motivo_ausencia": { "type": "null" } } },
+        { "properties": { "valor": { "type": "null" }, "motivo_ausencia": { "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" } } }
+      ]
+    },
+    "flags": {
+      "type": "object",
+      "required": ["segredo_justica", "justica_gratuita", "pedido_liminar"],
+      "additionalProperties": false,
+      "properties": {
+        "segredo_justica": { "$ref": "#/$defs/flagProcessual" },
+        "justica_gratuita": { "$ref": "#/$defs/flagProcessual" },
+        "pedido_liminar": { "$ref": "#/$defs/flagProcessual" }
+      }
+    },
+    "processo": {
+      "type": "object",
+      "required": ["numero_cnj", "tribunal", "secao", "subsecao", "orgao_julgador", "classe", "assuntos", "valor_causa", "flags"],
+      "additionalProperties": false,
+      "properties": {
+        "numero_cnj": { "$ref": "#/$defs/numeroCnjPrincipal" },
+        "tribunal": { "$ref": "#/$defs/campoTexto" },
+        "secao": { "$ref": "#/$defs/campoTexto" },
+        "subsecao": { "$ref": "#/$defs/campoTexto" },
+        "orgao_julgador": { "$ref": "#/$defs/campoTexto" },
+        "classe": { "$ref": "#/$defs/campoTexto" },
+        "assuntos": { "type": "array", "items": { "$ref": "#/$defs/campoTexto" } },
+        "valor_causa": { "$ref": "#/$defs/valorCausa" },
+        "flags": { "$ref": "#/$defs/flags" }
+      }
+    },
+    "itemIndice": {
+      "description": "titulo_original e tipo_original preservam literalmente os valores do índice e nunca são substituídos pela taxonomia normalizada.",
+      "type": "object",
+      "required": ["documento_id_interno", "id_pje", "data", "hora", "titulo_original", "tipo_original", "ordem_indice", "pagina_destino_link", "texto_bruto", "confianca"],
+      "additionalProperties": false,
+      "properties": {
+        "documento_id_interno": { "type": "string", "pattern": "^DOC-PJE-[0-9]{3,}$" },
+        "id_pje": { "$ref": "pje-comum.schema.json#/$defs/idPje" },
+        "data": { "type": ["string", "null"], "format": "date" },
+        "hora": { "type": ["string", "null"], "format": "time" },
+        "titulo_original": { "type": "string", "minLength": 1 },
+        "tipo_original": { "type": "string", "minLength": 1 },
+        "ordem_indice": { "type": "integer", "minimum": 1 },
+        "pagina_destino_link": { "type": ["integer", "null"], "minimum": 1 },
+        "texto_bruto": { "type": "string", "minLength": 1 },
+        "normalizacao_id": {
+          "type": "object",
+          "required": ["valor_original", "valor_normalizado", "metodo", "confianca"],
+          "additionalProperties": false,
+          "properties": {
+            "valor_original": { "type": "string", "minLength": 1 },
+            "valor_normalizado": { "$ref": "pje-comum.schema.json#/$defs/idPje" },
+            "metodo": { "enum": ["SEM_ALTERACAO", "REMOCAO_ESPACOS", "REMOCAO_QUEBRAS_LINHA"] },
+            "confianca": { "$ref": "pje-comum.schema.json#/$defs/confianca" }
+          }
+        },
+        "confianca": { "$ref": "pje-comum.schema.json#/$defs/confianca" }
+      }
+    },
+    "indice": {
+      "type": "object",
+      "required": ["paginas", "itens", "possui_links_internos", "confianca"],
+      "additionalProperties": false,
+      "properties": {
+        "paginas": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 1 }, "uniqueItems": true },
+        "itens": { "type": "array", "items": { "$ref": "#/$defs/itemIndice" } },
+        "possui_links_internos": { "type": "boolean" },
+        "confianca": { "$ref": "pje-comum.schema.json#/$defs/confianca" }
+      }
+    },
+    "documentoManifesto": {
+      "type": "object",
+      "required": [
+        "documento_id", "id_pje", "titulo_original", "tipo_original", "classe_normalizada", "subclasse_normalizada",
+        "prioridade", "ordem_indice", "data_hora", "pagina_pdf_inicio", "pagina_pdf_fim", "total_paginas",
+        "possui_texto", "possui_imagens", "possui_tabelas", "possui_anexos_internos", "requer_ocr",
+        "confianca_segmentacao", "confianca_classificacao", "status_reconciliacao", "referencia_documento_pje"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "documento_id": { "type": "string", "pattern": "^DOC-PJE-[0-9]{3,}$" },
+        "id_pje": { "$ref": "pje-comum.schema.json#/$defs/idPje" },
+        "titulo_original": { "type": "string", "minLength": 1 },
+        "tipo_original": { "type": "string", "minLength": 1 },
+        "classe_normalizada": { "$ref": "pje-comum.schema.json#/$defs/classeDocumental" },
+        "subclasse_normalizada": { "type": ["string", "null"], "pattern": "^[A-Z0-9_]+$" },
+        "prioridade": { "$ref": "pje-comum.schema.json#/$defs/prioridadeDocumental" },
+        "ordem_indice": { "type": ["integer", "null"], "minimum": 1 },
+        "data_hora": { "type": ["string", "null"], "format": "date-time" },
+        "pagina_pdf_inicio": { "type": "integer", "minimum": 1 },
+        "pagina_pdf_fim": { "type": "integer", "minimum": 1 },
+        "total_paginas": { "type": "integer", "minimum": 1 },
+        "possui_texto": { "type": "boolean" },
+        "possui_imagens": { "type": "boolean" },
+        "possui_tabelas": { "type": "boolean" },
+        "possui_anexos_internos": { "type": "boolean" },
+        "requer_ocr": { "type": "boolean" },
+        "confianca_segmentacao": { "$ref": "pje-comum.schema.json#/$defs/confianca" },
+        "confianca_classificacao": { "$ref": "pje-comum.schema.json#/$defs/confianca" },
+        "status_reconciliacao": { "$ref": "pje-comum.schema.json#/$defs/reconciliacao" },
+        "referencia_documento_pje": { "type": "string", "minLength": 1 }
+      }
+    },
+    "metricasExtracao": {
+      "type": "object",
+      "required": ["documentos_indice", "documentos_segmentados", "documentos_confirmados", "paginas_com_rodape", "paginas_sem_texto_util", "paginas_candidatas_ocr", "conflitos_abertos"],
+      "additionalProperties": false,
+      "properties": {
+        "documentos_indice": { "type": "integer", "minimum": 0 },
+        "documentos_segmentados": { "type": "integer", "minimum": 0 },
+        "documentos_confirmados": { "type": "integer", "minimum": 0 },
+        "paginas_com_rodape": { "type": "integer", "minimum": 0 },
+        "paginas_sem_texto_util": { "type": "integer", "minimum": 0 },
+        "paginas_candidatas_ocr": { "type": "integer", "minimum": 0 },
+        "conflitos_abertos": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

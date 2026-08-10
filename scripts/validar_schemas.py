@@ -15,13 +15,19 @@ from referencing import Registry, Resource
 
 RAIZ = Path(__file__).resolve().parents[1]
 PASTA_SCHEMAS = RAIZ / "schemas"
-PASTA_FIXTURES = RAIZ / "tests" / "fixtures" / "schemas"
+PASTAS_FIXTURES = (
+    RAIZ / "tests" / "fixtures" / "schemas",
+    RAIZ / "tests" / "fixtures" / "pje",
+)
 
 ARQUIVOS_SCHEMA = {
     "processo": PASTA_SCHEMAS / "processo.schema.json",
     "vistoria": PASTA_SCHEMAS / "vistoria.schema.json",
     "patologia": PASTA_SCHEMAS / "patologia.schema.json",
     "laudo": PASTA_SCHEMAS / "laudo.schema.json",
+    "pje-comum": PASTA_SCHEMAS / "pje-comum.schema.json",
+    "manifesto-pje": PASTA_SCHEMAS / "manifesto-pje.schema.json",
+    "documento-pje": PASTA_SCHEMAS / "documento-pje.schema.json",
 }
 
 
@@ -32,6 +38,14 @@ def carregar_json(caminho: Path) -> dict[str, Any]:
 
 def tipo_fixture(caminho: Path) -> str:
     prefixo = caminho.name.split("-", maxsplit=1)[0]
+    if caminho.parent.name == "pje":
+        tipos_pje = {
+            "manifesto": "manifesto-pje",
+            "documento": "documento-pje",
+        }
+        if prefixo not in tipos_pje:
+            raise ValueError(f"prefixo de fixture PJe desconhecido: {caminho.name}")
+        return tipos_pje[prefixo]
     if prefixo not in ARQUIVOS_SCHEMA:
         raise ValueError(f"prefixo de fixture desconhecido: {caminho.name}")
     return prefixo
@@ -72,7 +86,11 @@ def principal() -> int:
         )
 
     falhas: list[str] = []
-    fixtures = sorted(PASTA_FIXTURES.glob("*.json"))
+    fixtures = sorted(
+        caminho
+        for pasta in PASTAS_FIXTURES
+        for caminho in pasta.glob("*.json")
+    )
     if not fixtures:
         falhas.append("nenhuma fixture encontrada")
 
@@ -108,7 +126,10 @@ def principal() -> int:
             print(f"- {falha}", file=sys.stderr)
         return 1
 
-    print(f"\nVALIDAÇÃO APROVADA: 4 schemas e {len(fixtures)} fixtures conferidos.")
+    print(
+        f"\nVALIDAÇÃO APROVADA: {len(schemas)} schemas "
+        f"e {len(fixtures)} fixtures conferidos."
+    )
     return 0
 
 

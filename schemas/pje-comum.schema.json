@@ -1,0 +1,479 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/pje-comum.schema.json",
+  "title": "Definições comuns para contratos PJe",
+  "description": "Vocabulário estrutural reutilizável para extração determinística, rastreável e validável de PDFs consolidados do PJe.",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "identificadorInterno": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-[0-9]{3,}$"
+    },
+    "idPje": {
+      "description": "Identificador numérico original do documento no PJe.",
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "numeroCnj": {
+      "description": "Valida apenas o formato CNJ; a escolha do número principal pertence ao extrator e exige proveniência.",
+      "type": "string",
+      "pattern": "^[0-9]{7}-[0-9]{2}\\.[0-9]{4}\\.[0-9]\\.[0-9]{2}\\.[0-9]{4}$"
+    },
+    "ausenciaInformacao": {
+      "enum": [
+        "AUSENTE_NO_DOCUMENTO",
+        "NAO_LOCALIZADO",
+        "NAO_EXTRAIDO",
+        "ILEGIVEL",
+        "CONFLITANTE",
+        "NAO_APLICAVEL"
+      ]
+    },
+    "statusVerificacao": {
+      "enum": ["NAO_VERIFICADO", "EM_VERIFICACAO", "VERIFICADO", "CONFLITANTE", "INCONCLUSIVO"]
+    },
+    "naturezaInformacao": {
+      "enum": [
+        "ALEGADO",
+        "DOCUMENTADO",
+        "DECIDIDO",
+        "REQUERIDO",
+        "DECLARADO_PELA_PARTE",
+        "CONSTATADO_POR_TECNICO_DA_PARTE",
+        "INFORMADO_PELA_RE",
+        "INFORMADO_POR_ORGAO_PUBLICO",
+        "OBSERVADO_PELO_PERITO",
+        "INFERIDO_TECNICAMENTE",
+        "INCONCLUSIVO"
+      ]
+    },
+    "metodoExtracao": {
+      "enum": [
+        "INDICE_PJE",
+        "RODAPE_PJE",
+        "CAMPO_ESTRUTURADO",
+        "TEXTO_DIGITAL",
+        "TABELA_DIGITAL",
+        "LINK_INTERNO",
+        "OCR",
+        "CLASSIFICACAO_AUTOMATICA",
+        "EXTRACAO_SEMANTICA",
+        "MANUAL",
+        "OUTRO"
+      ]
+    },
+    "confianca": {
+      "description": "Indicador operacional do extrator ou classificador. O score não representa probabilidade estatística calibrada.",
+      "type": "object",
+      "required": ["nivel"],
+      "additionalProperties": false,
+      "properties": {
+        "nivel": { "enum": ["ALTA", "MEDIA", "BAIXA"] },
+        "score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+      }
+    },
+    "bbox": {
+      "description": "Retângulo no sistema de coordenadas declarado; a unidade e a origem dos eixos devem ser preservadas.",
+      "type": "object",
+      "required": ["x0", "y0", "x1", "y1", "sistema_coordenadas", "unidade"],
+      "additionalProperties": false,
+      "properties": {
+        "x0": { "type": "number" },
+        "y0": { "type": "number" },
+        "x1": { "type": "number" },
+        "y1": { "type": "number" },
+        "sistema_coordenadas": { "type": "string", "minLength": 1 },
+        "unidade": { "type": "string", "minLength": 1 }
+      }
+    },
+    "referenciaPagina": {
+      "description": "Três níveis independentes. pagina_original nunca é inferida de pagina_documento.",
+      "type": "object",
+      "required": ["pagina_pdf", "pagina_documento", "pagina_original"],
+      "additionalProperties": false,
+      "properties": {
+        "pagina_pdf": { "type": "integer", "minimum": 1 },
+        "pagina_documento": { "type": ["integer", "null"], "minimum": 1 },
+        "pagina_original": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "proveniencia": {
+      "type": "object",
+      "required": [
+        "arquivo",
+        "sha256",
+        "documento_id",
+        "id_pje",
+        "pagina_pdf",
+        "pagina_documento",
+        "pagina_original",
+        "trecho",
+        "natureza",
+        "metodo_extracao",
+        "confianca",
+        "status_verificacao"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "arquivo": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "documento_id": { "type": ["string", "null"], "pattern": "^DOC-PJE-[0-9]{3,}$" },
+        "id_pje": { "oneOf": [{ "$ref": "#/$defs/idPje" }, { "type": "null" }] },
+        "pagina_pdf": { "type": "integer", "minimum": 1 },
+        "pagina_documento": { "type": ["integer", "null"], "minimum": 1 },
+        "pagina_original": { "type": ["string", "null"], "minLength": 1 },
+        "bbox": { "$ref": "#/$defs/bbox" },
+        "trecho": { "type": ["string", "null"] },
+        "natureza": { "$ref": "#/$defs/naturezaInformacao" },
+        "metodo_extracao": { "$ref": "#/$defs/metodoExtracao" },
+        "confianca": { "$ref": "#/$defs/confianca" },
+        "status_verificacao": { "$ref": "#/$defs/statusVerificacao" }
+      }
+    },
+    "referenciaFonte": { "$ref": "#/$defs/proveniencia" },
+    "statusReconciliacao": {
+      "enum": ["CONFIRMADO", "PROVAVEL", "CONFLITANTE", "NAO_LOCALIZADO", "SEM_ITEM_NO_INDICE"]
+    },
+    "reconciliacao": {
+      "type": "object",
+      "required": [
+        "status",
+        "id_indice",
+        "id_rodape",
+        "pagina_destino_link",
+        "primeira_pagina_detectada",
+        "ultima_pagina_detectada",
+        "evidencias",
+        "motivos",
+        "confianca"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "$ref": "#/$defs/statusReconciliacao" },
+        "id_indice": { "oneOf": [{ "$ref": "#/$defs/idPje" }, { "type": "null" }] },
+        "id_rodape": { "oneOf": [{ "$ref": "#/$defs/idPje" }, { "type": "null" }] },
+        "pagina_destino_link": { "type": ["integer", "null"], "minimum": 1 },
+        "primeira_pagina_detectada": { "type": ["integer", "null"], "minimum": 1 },
+        "ultima_pagina_detectada": { "type": ["integer", "null"], "minimum": 1 },
+        "evidencias": { "type": "array", "items": { "$ref": "#/$defs/proveniencia" } },
+        "motivos": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "confianca": { "$ref": "#/$defs/confianca" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "CONFIRMADO" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "id_indice": { "$ref": "#/$defs/idPje" },
+              "id_rodape": { "$ref": "#/$defs/idPje" },
+              "pagina_destino_link": { "type": "integer", "minimum": 1 },
+              "primeira_pagina_detectada": { "type": "integer", "minimum": 1 },
+              "ultima_pagina_detectada": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "statusConflito": {
+      "enum": ["ABERTO", "RESOLVIDO_POR_FONTE_PRIMARIA", "VALIDACAO_PERITO", "NAO_RESOLVIDO"]
+    },
+    "conflito": {
+      "type": "object",
+      "required": ["conflito_id", "campo", "tipo", "descricao", "valores_conflitantes", "fontes", "status", "bloqueante", "decisao", "observacoes"],
+      "additionalProperties": false,
+      "properties": {
+        "conflito_id": { "type": "string", "pattern": "^CON-PJE-[0-9]{3,}$" },
+        "campo": { "type": "string", "minLength": 1 },
+        "tipo": { "type": "string", "minLength": 1 },
+        "descricao": { "type": "string", "minLength": 1 },
+        "valores_conflitantes": { "type": "array", "minItems": 2, "items": {} },
+        "fontes": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/proveniencia" } },
+        "status": { "$ref": "#/$defs/statusConflito" },
+        "bloqueante": { "type": "boolean" },
+        "decisao": { "type": ["string", "null"] },
+        "observacoes": { "type": ["string", "null"] }
+      }
+    },
+    "pendencia": {
+      "type": "object",
+      "required": ["pendencia_id", "campo", "motivo_ausencia", "descricao", "bloqueante", "fontes", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "pendencia_id": { "type": "string", "pattern": "^PEN-PJE-[0-9]{3,}$" },
+        "campo": { "type": "string", "minLength": 1 },
+        "motivo_ausencia": { "$ref": "#/$defs/ausenciaInformacao" },
+        "descricao": { "type": "string", "minLength": 1 },
+        "bloqueante": { "type": "boolean" },
+        "fontes": { "type": "array", "items": { "$ref": "#/$defs/proveniencia" } },
+        "status": { "enum": ["ABERTA", "RESOLVIDA", "DISPENSADA"] }
+      }
+    },
+    "classificacaoPagina": {
+      "enum": [
+        "TEXTO_DIGITAL",
+        "TEXTO_E_IMAGEM",
+        "PREDOMINANTEMENTE_VISUAL",
+        "DOCUMENTO_ESCANEADO",
+        "FOTOGRAFIA",
+        "TABELA_COMPLEXA",
+        "PAGINA_EM_BRANCO",
+        "INDETERMINADA"
+      ]
+    },
+    "prioridadeDocumental": {
+      "description": "A prioridade C identifica movimentação ou formalização e nunca significa conteúdo descartável.",
+      "enum": ["A_ESSENCIAL", "B_CONTEXTO_RELEVANTE", "C_MOVIMENTACAO_FORMALIZACAO"]
+    },
+    "classeDocumental": {
+      "enum": [
+        "PETICAO_INICIAL", "EMENDA_INICIAL", "CONTESTACAO", "REPLICA", "MANIFESTACAO",
+        "DECISAO", "DESPACHO", "ATO_ORDINATORIO", "CITACAO", "INTIMACAO", "CERTIDAO",
+        "QUESITOS_JUIZO", "QUESITOS_AUTOR", "QUESITOS_REU", "INDICACAO_ASSISTENTE_TECNICO",
+        "PARECER_TECNICO_PARTE", "LAUDO_TECNICO_PARTE", "RELATORIO_FOTOGRAFICO", "ORCAMENTO_PARTE",
+        "CONTRATO", "MEMORIAL_DESCRITIVO", "PROJETO", "ART_RRT",
+        "DOCUMENTO_IDENTIFICACAO", "COMPROVANTE_RESIDENCIA", "DECLARACAO", "PROCURACAO", "SUBSTABELECIMENTO", "TERMO_RENUNCIA",
+        "REQUERIMENTO_ADMINISTRATIVO", "RESPOSTA_ADMINISTRATIVA", "DOCUMENTO_CAIXA", "MANIFESTACAO_OPERACIONAL",
+        "DOCUMENTO_EMPREENDIMENTO", "DOSSIER_EMPREENDIMENTO", "QUADRO_RESUMO", "DOCUMENTO_ALIENACAO",
+        "EMAIL_OU_COMPROVANTE_CONTATO", "COMPROVANTE_TELEFONICO",
+        "NORMA_OU_ORIENTACAO_TECNICA", "RELATORIO_INSTITUCIONAL", "ANEXO_TECNICO", "DOCUMENTO_COMPOSTO", "OUTRO"
+      ]
+    },
+    "paginaManifesto": {
+      "type": "object",
+      "required": [
+        "pagina_pdf", "classificacao", "quantidade_caracteres", "densidade_textual",
+        "quantidade_imagens", "cobertura_visual", "possui_rodape_pje", "id_pje_detectado",
+        "pagina_documento_detectada", "requer_inspecao_visual", "requer_ocr", "motivo_ocr", "confianca"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "pagina_pdf": { "type": "integer", "minimum": 1 },
+        "classificacao": { "$ref": "#/$defs/classificacaoPagina" },
+        "quantidade_caracteres": { "type": "integer", "minimum": 0 },
+        "densidade_textual": { "type": ["number", "null"], "minimum": 0 },
+        "quantidade_imagens": { "type": "integer", "minimum": 0 },
+        "cobertura_visual": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "possui_rodape_pje": { "type": "boolean" },
+        "id_pje_detectado": { "oneOf": [{ "$ref": "#/$defs/idPje" }, { "type": "null" }] },
+        "pagina_documento_detectada": { "type": ["integer", "null"], "minimum": 1 },
+        "requer_inspecao_visual": { "type": "boolean" },
+        "requer_ocr": { "type": "boolean" },
+        "motivo_ocr": { "type": ["string", "null"] },
+        "confianca": { "$ref": "#/$defs/confianca" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "requer_ocr": { "const": true } }, "required": ["requer_ocr"] },
+          "then": { "properties": { "motivo_ocr": { "type": "string", "minLength": 1 } } }
+        }
+      ]
+    },
+    "pessoa": {
+      "type": "object",
+      "required": ["pessoa_id", "nome", "tipo", "documento_identificacao", "proveniencia"],
+      "additionalProperties": false,
+      "properties": {
+        "pessoa_id": { "type": "string", "pattern": "^PES-[0-9]{3,}$" },
+        "nome": { "type": "string", "minLength": 1 },
+        "tipo": { "enum": ["PESSOA_FISICA", "PESSOA_JURIDICA", "ORGAO_PUBLICO", "INDETERMINADO"] },
+        "documento_identificacao": { "type": ["string", "null"] },
+        "proveniencia": { "$ref": "#/$defs/proveniencia" }
+      }
+    },
+    "vinculoProcessual": {
+      "type": "object",
+      "required": ["vinculo_id", "pessoa_id", "polo", "qualificacao", "proveniencia"],
+      "additionalProperties": false,
+      "properties": {
+        "vinculo_id": { "type": "string", "pattern": "^VIN-[0-9]{3,}$" },
+        "pessoa_id": { "type": "string", "pattern": "^PES-[0-9]{3,}$" },
+        "polo": { "enum": ["AUTOR", "REU", "TERCEIRO", "PROCURADOR", "ASSISTENTE_TECNICO", "PERITO", "OUTRO"] },
+        "qualificacao": { "type": ["string", "null"] },
+        "proveniencia": { "$ref": "#/$defs/proveniencia" }
+      }
+    },
+    "representacao": {
+      "type": "object",
+      "required": ["representacao_id", "pessoa_representada_id", "representante_id", "tipo", "proveniencia"],
+      "additionalProperties": false,
+      "properties": {
+        "representacao_id": { "type": "string", "pattern": "^REP-[0-9]{3,}$" },
+        "pessoa_representada_id": { "type": "string", "pattern": "^PES-[0-9]{3,}$" },
+        "representante_id": { "type": "string", "pattern": "^PES-[0-9]{3,}$" },
+        "tipo": { "enum": ["ADVOGADO", "PROCURADOR", "REPRESENTANTE_LEGAL", "ASSISTENTE_TECNICO", "OUTRO"] },
+        "proveniencia": { "$ref": "#/$defs/proveniencia" }
+      }
+    },
+    "tipoEvento": {
+      "enum": [
+        "NOMEACAO_PERITO", "CORRECAO_NOMEACAO_PERITO", "INTIMACAO_PERITO", "ACEITE_ENCARGO",
+        "DESIGNACAO_PERICIA", "DATA_PERICIA", "LOCAL_PERICIA", "PRAZO_DESIGNACAO", "PRAZO_LAUDO",
+        "HONORARIOS_PERICIAIS", "PRAZO_MANIFESTACAO_PARTES", "APRESENTACAO_QUESITOS",
+        "INDICACAO_ASSISTENTE", "DETERMINACAO_JUNTADA_DOCUMENTO", "DELIMITACAO_OBJETO_PERICIA", "OUTRO"
+      ]
+    },
+    "evento": {
+      "type": "object",
+      "required": ["evento_id", "tipo", "data", "hora", "local", "valor", "unidade", "descricao", "proveniencia", "status_verificacao"],
+      "additionalProperties": false,
+      "properties": {
+        "evento_id": { "type": "string", "pattern": "^EVE-[0-9]{3,}$" },
+        "tipo": { "$ref": "#/$defs/tipoEvento" },
+        "data": { "type": ["string", "null"], "format": "date" },
+        "hora": { "type": ["string", "null"], "format": "time" },
+        "local": { "type": ["string", "null"] },
+        "valor": { "type": ["number", "string", "null"] },
+        "unidade": { "type": ["string", "null"] },
+        "descricao": { "type": "string", "minLength": 1 },
+        "proveniencia": { "$ref": "#/$defs/proveniencia" },
+        "status_verificacao": { "$ref": "#/$defs/statusVerificacao" }
+      }
+    },
+    "statusNumeracaoQuesito": {
+      "enum": ["REGULAR", "REINICIADO_POR_SECAO", "DUPLICADO", "AUSENTE", "INCONSISTENTE", "INDETERMINADO"]
+    },
+    "quesito": {
+      "type": "object",
+      "required": ["id_interno", "grupo", "origem", "documento_id", "id_pje", "numero_original", "caminho_original", "ordem_real", "texto_integral", "subitens", "paginas", "status_numeracao", "proveniencia"],
+      "additionalProperties": false,
+      "properties": {
+        "id_interno": { "type": "string", "pattern": "^QUE-[0-9]{3,}$" },
+        "grupo": { "type": "string", "minLength": 1 },
+        "origem": { "enum": ["JUIZO", "AUTOR", "REU", "TERCEIRO", "INDETERMINADA"] },
+        "documento_id": { "type": "string", "pattern": "^DOC-PJE-[0-9]{3,}$" },
+        "id_pje": { "$ref": "#/$defs/idPje" },
+        "numero_original": { "type": ["string", "null"], "minLength": 1 },
+        "caminho_original": { "type": ["string", "null"] },
+        "ordem_real": { "type": "integer", "minimum": 1 },
+        "texto_integral": { "type": "string", "minLength": 1 },
+        "subitens": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "paginas": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/referenciaPagina" } },
+        "status_numeracao": { "$ref": "#/$defs/statusNumeracaoQuesito" },
+        "proveniencia": { "$ref": "#/$defs/proveniencia" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status_numeracao": { "const": "REGULAR" } }, "required": ["status_numeracao"] },
+          "then": { "properties": { "numero_original": { "type": "string", "minLength": 1 } } }
+        }
+      ]
+    },
+    "alegacao": {
+      "description": "Registro de conteúdo alegado ou informado por terceiro; não representa constatação do perito judicial.",
+      "type": "object",
+      "required": ["alegacao_id", "origem", "texto", "ambiente_alegado", "sistema_alegado", "tipo", "proveniencia", "confianca"],
+      "additionalProperties": false,
+      "properties": {
+        "alegacao_id": { "type": "string", "pattern": "^ALG-[0-9]{3,}$" },
+        "origem": { "type": "string", "minLength": 1 },
+        "texto": { "type": "string", "minLength": 1 },
+        "ambiente_alegado": { "type": ["string", "null"] },
+        "sistema_alegado": { "type": ["string", "null"] },
+        "tipo": { "enum": ["ALEGADO_PELA_PARTE", "CONSTATADO_POR_TECNICO_DA_PARTE", "INFORMADO_PELA_RE"] },
+        "proveniencia": { "$ref": "#/$defs/proveniencia" },
+        "confianca": { "$ref": "#/$defs/confianca" }
+      }
+    },
+    "coordenadasGeograficas": {
+      "type": ["object", "null"],
+      "required": ["latitude", "longitude"],
+      "additionalProperties": false,
+      "properties": {
+        "latitude": { "type": "number", "minimum": -90, "maximum": 90 },
+        "longitude": { "type": "number", "minimum": -180, "maximum": 180 }
+      }
+    },
+    "fotografia": {
+      "type": "object",
+      "required": ["fotografia_id", "numero_original", "rotulo_original", "legenda", "pagina_pdf", "pagina_documento", "pagina_original", "ambiente", "sistema", "descricao", "data_hora", "coordenadas", "documento_pai", "proveniencia", "confianca"],
+      "additionalProperties": false,
+      "properties": {
+        "fotografia_id": { "type": "string", "pattern": "^FOT-[0-9]{3,}$" },
+        "numero_original": { "type": ["string", "null"] },
+        "rotulo_original": { "type": ["string", "null"] },
+        "legenda": { "type": ["string", "null"] },
+        "pagina_pdf": { "type": "integer", "minimum": 1 },
+        "pagina_documento": { "type": ["integer", "null"], "minimum": 1 },
+        "pagina_original": { "type": ["string", "null"] },
+        "bbox": { "$ref": "#/$defs/bbox" },
+        "ambiente": { "type": ["string", "null"] },
+        "sistema": { "type": ["string", "null"] },
+        "descricao": { "type": ["string", "null"] },
+        "data_hora": { "type": ["string", "null"], "format": "date-time" },
+        "coordenadas": { "$ref": "#/$defs/coordenadasGeograficas" },
+        "documento_pai": { "type": "string", "pattern": "^DOC-PJE-[0-9]{3,}$" },
+        "proveniencia": { "$ref": "#/$defs/proveniencia" },
+        "confianca": { "$ref": "#/$defs/confianca" }
+      }
+    },
+    "tipoTabela": {
+      "enum": ["TABELA_PROCESSUAL", "TABELA_CONTRATUAL", "TABELA_ALEGACOES", "TABELA_PARECER_TECNICO", "TABELA_ORCAMENTO", "TABELA_DOCUMENTO_INSTITUCIONAL", "OUTRA"]
+    },
+    "tabela": {
+      "type": "object",
+      "required": ["tabela_id", "tipo", "titulo", "texto_bruto", "estrutura_normalizada", "pagina", "proveniencia", "confianca"],
+      "additionalProperties": false,
+      "properties": {
+        "tabela_id": { "type": "string", "pattern": "^TAB-[0-9]{3,}$" },
+        "tipo": { "$ref": "#/$defs/tipoTabela" },
+        "titulo": { "type": ["string", "null"] },
+        "texto_bruto": { "type": "string", "minLength": 1 },
+        "estrutura_normalizada": { "type": ["array", "null"], "items": { "type": "array", "items": {} } },
+        "pagina": { "$ref": "#/$defs/referenciaPagina" },
+        "proveniencia": { "$ref": "#/$defs/proveniencia" },
+        "confianca": { "$ref": "#/$defs/confianca" }
+      }
+    },
+    "blocoTexto": {
+      "type": "object",
+      "required": ["bloco_id", "texto", "pagina", "proveniencia"],
+      "additionalProperties": false,
+      "properties": {
+        "bloco_id": { "type": "string", "pattern": "^BLT-[0-9]{3,}$" },
+        "texto": { "type": "string", "minLength": 1 },
+        "pagina": { "$ref": "#/$defs/referenciaPagina" },
+        "proveniencia": { "$ref": "#/$defs/proveniencia" }
+      }
+    },
+    "imagem": {
+      "type": "object",
+      "required": ["imagem_id", "pagina", "bbox", "tipo", "descricao", "proveniencia"],
+      "additionalProperties": false,
+      "properties": {
+        "imagem_id": { "type": "string", "pattern": "^IMG-[0-9]{3,}$" },
+        "pagina": { "$ref": "#/$defs/referenciaPagina" },
+        "bbox": { "$ref": "#/$defs/bbox" },
+        "tipo": { "enum": ["FOTOGRAFIA", "LOGOTIPO", "ASSINATURA", "DOCUMENTO_ESCANEADO", "FIGURA", "OUTRO"] },
+        "descricao": { "type": ["string", "null"] },
+        "proveniencia": { "$ref": "#/$defs/proveniencia" }
+      }
+    },
+    "entidade": {
+      "type": "object",
+      "required": ["entidade_id", "tipo", "valor", "proveniencia", "confianca"],
+      "additionalProperties": false,
+      "properties": {
+        "entidade_id": { "type": "string", "pattern": "^ENT-[0-9]{3,}$" },
+        "tipo": { "type": "string", "minLength": 1 },
+        "valor": { "type": "string", "minLength": 1 },
+        "proveniencia": { "$ref": "#/$defs/proveniencia" },
+        "confianca": { "$ref": "#/$defs/confianca" }
+      }
+    },
+    "referenciaNormativa": {
+      "type": "object",
+      "required": ["entidade", "numero", "titulo", "edicao_ano", "trecho_citado", "proveniencia", "status_verificacao"],
+      "additionalProperties": false,
+      "properties": {
+        "entidade": { "type": ["string", "null"] },
+        "numero": { "type": ["string", "null"] },
+        "titulo": { "type": ["string", "null"] },
+        "edicao_ano": { "type": ["string", "null"] },
+        "trecho_citado": { "type": ["string", "null"] },
+        "proveniencia": { "$ref": "#/$defs/proveniencia" },
+        "status_verificacao": { "$ref": "#/$defs/statusVerificacao" }
+      }
+    }
+  }
+}
