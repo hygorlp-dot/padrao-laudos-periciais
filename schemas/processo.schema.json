@@ -23,7 +23,14 @@
     "quesitos",
     "decisoes",
     "conflitos",
-    "pendencias"
+    "pendencias",
+    "objeto_material",
+    "eventos",
+    "documentos_tecnicos",
+    "assistentes_tecnicos",
+    "dados_vistoria_determinados",
+    "honorarios_prazos",
+    "proveniencia"
   ],
   "additionalProperties": false,
   "properties": {
@@ -66,7 +73,14 @@
     "pendencias": {
       "type": "array",
       "items": { "$ref": "#/$defs/pendencia" }
-    }
+    },
+    "objeto_material": { "$ref": "#/$defs/registroSemantico" },
+    "eventos": { "type": "array", "items": { "$ref": "#/$defs/evento" } },
+    "documentos_tecnicos": { "type": "array", "items": { "type": "string", "pattern": "^DOC-[0-9]{3,}$" } },
+    "assistentes_tecnicos": { "type": "array", "items": { "$ref": "#/$defs/registroSemantico" } },
+    "dados_vistoria_determinados": { "type": "array", "items": { "$ref": "#/$defs/registroSemantico" } },
+    "honorarios_prazos": { "type": "array", "items": { "$ref": "#/$defs/registroSemantico" } },
+    "proveniencia": { "type": "array", "minItems": 1, "items": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" } }
   },
   "$defs": {
     "textoNulo": { "type": ["string", "null"] },
@@ -239,7 +253,7 @@
     "alegacao": {
       "description": "Registro de conteúdo alegado; não representa constatação ou patologia confirmada.",
       "type": "object",
-      "required": ["id", "origem", "parte", "documento_fonte", "id_processual", "texto", "ambiente_alegado", "sistema_alegado", "data_alegada", "observacoes", "status_verificacao"],
+      "required": ["id", "origem", "parte", "documento_fonte", "id_processual", "texto", "manifestacao_alegada", "causa_alegada", "consequencia_alegada", "ambiente_alegado", "sistema_alegado", "data_alegada", "paginas", "natureza", "proveniencia", "observacoes", "status_verificacao"],
       "additionalProperties": false,
       "properties": {
         "id": { "type": "string", "pattern": "^ALG-[0-9]{3,}$" },
@@ -256,9 +270,15 @@
             "tipo_registro": { "enum": ["ORIGINAL", "SINTESE_FIEL"] }
           }
         },
+        "manifestacao_alegada": { "$ref": "#/$defs/textoNulo" },
+        "causa_alegada": { "$ref": "#/$defs/textoNulo" },
+        "consequencia_alegada": { "$ref": "#/$defs/textoNulo" },
         "ambiente_alegado": { "$ref": "#/$defs/textoNulo" },
         "sistema_alegado": { "$ref": "#/$defs/textoNulo" },
         "data_alegada": { "$ref": "#/$defs/dataNula" },
+        "paginas": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/referenciaPagina" } },
+        "natureza": { "enum": ["ALEGADO_PELA_PARTE", "INFORMADO_PELA_RE", "CONSTATADO_POR_TECNICO_DA_PARTE", "DECIDIDO_PELO_JUIZO", "DOCUMENTADO", "OBSERVADO_PELO_PERITO_JUDICIAL", "MEDIDO_PELO_PERITO", "CALCULADO_PELO_PERITO", "INFERIDO_TECNICAMENTE", "FONTE_DE_TERCEIRO", "NAO_DOCUMENTADO", "NAO_CONSTATADO", "INCONCLUSIVO"] },
+        "proveniencia": { "type": "array", "minItems": 1, "items": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" } },
         "observacoes": { "$ref": "#/$defs/textoNulo" },
         "status_verificacao": { "$ref": "#/$defs/statusVerificacao" }
       }
@@ -318,6 +338,30 @@
         "necessaria_para": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "bloqueante": { "type": "boolean" },
         "status": { "enum": ["ABERTA", "RESOLVIDA", "DISPENSADA_PELO_PERITO"] }
+      }
+    },
+    "registroSemantico": {
+      "type": "object",
+      "required": ["descricao", "natureza", "documento_fonte", "proveniencia"],
+      "additionalProperties": false,
+      "properties": {
+        "descricao": { "type": "string", "minLength": 1 },
+        "natureza": { "enum": ["ALEGADO_PELA_PARTE", "INFORMADO_PELA_RE", "CONSTATADO_POR_TECNICO_DA_PARTE", "DECIDIDO_PELO_JUIZO", "DOCUMENTADO", "INFERIDO_TECNICAMENTE", "FONTE_DE_TERCEIRO", "NAO_DOCUMENTADO", "INCONCLUSIVO"] },
+        "documento_fonte": { "type": ["string", "null"], "pattern": "^DOC-[0-9]{3,}$" },
+        "proveniencia": { "type": "array", "minItems": 1, "items": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" } }
+      }
+    },
+    "evento": {
+      "type": "object",
+      "required": ["id", "data", "descricao", "natureza", "documento_fonte", "proveniencia"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^EVT-[0-9]{3,}$" },
+        "data": { "$ref": "#/$defs/dataNula" },
+        "descricao": { "type": "string", "minLength": 1 },
+        "natureza": { "enum": ["DECIDIDO_PELO_JUIZO", "DOCUMENTADO", "ALEGADO_PELA_PARTE", "INFORMADO_PELA_RE", "INCONCLUSIVO"] },
+        "documento_fonte": { "type": ["string", "null"], "pattern": "^DOC-[0-9]{3,}$" },
+        "proveniencia": { "type": "array", "minItems": 1, "items": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" } }
       }
     }
   }

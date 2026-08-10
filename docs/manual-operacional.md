@@ -17,11 +17,12 @@ implementado do que permanece previsto.
    de perícia, tema controvertido, objeto, objetivo, questões técnicas,
    quesitos, ressalvas, conflitos e plano preliminar em
    `delimitacao-pericial.json`.
-5. **`processo.json`** — futura consolidação estruturada dos dados processuais.
-6. **Ficha pré-vistoria** — preparar informações, pendências e objetivos da
-   diligência.
-7. **Preparação da vistoria** — planejar escopo, participantes, instrumentos e
-   registros necessários.
+5. **`processo.json`** — consolidação semântica rastreável do que consta nos
+   autos.
+6. **Conhecimento pertinente** — inventariar e recuperar normas e modelos
+   privados sem convertê-los em fatos do caso.
+7. **Plano e ficha pré-vistoria** — definir atividades, medições, fotografias,
+   equipamentos, documentos e cobertura dos quesitos.
 8. **Vistoria** — realizar constatações, medições e registros sob condução do
    perito.
 9. **`vistoria.json`** — futura consolidação estruturada dos dados de campo.
@@ -57,14 +58,15 @@ implementado do que permanece previsto.
 - geração determinística de `documento-pje.json` a partir dos intervalos
   reconciliados do manifesto, com texto digital e catálogo estrutural;
 - contrato, padrão, Skill e validador relacional da triagem e delimitação;
+- geração de `processo.json`, inventário incremental de conhecimento privado,
+  recuperação pertinente, plano-vistoria e ficha pré-vistoria;
 - referências privadas locais para comparação;
 - arquitetura preparada para evolução futura.
 
 ### Ainda não implementado
 
 - serviço autônomo de extração semântica sem intervenção do Codex;
-- `processo.json`, `vistoria.json` e `laudo.json`;
-- geração automática de fichas;
+- `vistoria.json` e `laudo.json`;
 - automação de rastreabilidade entre `PAT-NNN`, fotografias, quesitos e
   orçamento;
 - preenchimento automático do DOCM;
@@ -80,3 +82,4 @@ implementado do que permanece previsto.
 - [Padrão de quesitos](./padroes/padrao-quesitos.md).
 - [Padrão de orçamento](./padroes/padrao-orcamento.md).
 - [Padrão de delimitação pericial](./padroes/padrao-delimitacao-pericial.md).
+- [Padrão de planejamento e pré-vistoria](./padroes/padrao-planejamento-vistoria.md).

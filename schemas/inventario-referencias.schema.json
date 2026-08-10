@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/inventario-referencias.schema.json",
+  "title": "Inventário privado de referências",
+  "type": "object",
+  "required": ["schema_version", "gerado_em", "arquivos"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"type": "string"},
+    "gerado_em": {"type": "string", "format": "date-time"},
+    "arquivos": {"type": "array", "items": {"$ref": "#/$defs/arquivo"}}
+  },
+  "$defs": {
+    "arquivo": {
+      "type": "object",
+      "required": ["id", "categoria", "caminho_relativo", "nome", "extensao", "sha256", "tamanho_bytes", "processado_em", "versao_extrator", "acao_processamento", "metodo_extracao", "situacao_extracao", "tipo_provavel", "confianca"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^(MOD|NOR)-[0-9]{4,}$"},
+        "categoria": {"enum": ["MODELO_REFERENCIAL", "NORMA_TECNICA", "LITERATURA_TECNICA"]},
+        "caminho_relativo": {"type": "string", "minLength": 1},
+        "nome": {"type": "string", "minLength": 1},
+        "extensao": {"enum": [".pdf", ".docx", ".docm"]},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "tamanho_bytes": {"type": "integer", "minimum": 0},
+        "processado_em": {"type": "string", "format": "date-time"},
+        "versao_extrator": {"type": "string"},
+        "acao_processamento": {"enum": ["PROCESSADO", "REUTILIZADO"]},
+        "metodo_extracao": {"enum": ["PYPDF_TEXTO_DIGITAL", "OOXML_DOCUMENT_XML", "NAO_SUPORTADO"]},
+        "situacao_extracao": {"enum": ["EXTRAIDO", "TEXTO_INSUFICIENTE", "ERRO_EXTRACAO", "NAO_ALTERADO"]},
+        "tipo_provavel": {"type": "string"},
+        "confianca": {"$ref": "pje-comum.schema.json#/$defs/confianca"}
+      }
+    }
+  }
+}

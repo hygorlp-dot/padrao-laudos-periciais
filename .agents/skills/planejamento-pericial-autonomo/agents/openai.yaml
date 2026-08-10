@@ -1,0 +1,4 @@
+interface:
+  display_name: "Planejamento pericial autônomo"
+  short_description: "Gera processo, plano e ficha pré-vistoria"
+  default_prompt: "Use $planejamento-pericial-autonomo para transformar os documentos PJe em processo, delimitação, plano e ficha pré-vistoria rastreáveis."

@@ -85,9 +85,15 @@
         "conteudo": "A parte alega uma manifestação fictícia.",
         "tipo_registro": "SINTESE_FIEL"
       },
+      "manifestacao_alegada": "Manifestação fictícia",
+      "causa_alegada": null,
+      "consequencia_alegada": null,
       "ambiente_alegado": "Sala",
       "sistema_alegado": null,
       "data_alegada": null,
+      "paginas": [{"pagina_pdf": 1, "pagina_documento": 1, "pagina_original": null}],
+      "natureza": "ALEGADO_PELA_PARTE",
+      "proveniencia": [{"arquivo": "processo-ficticio.pdf", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "documento_id": "DOC-PJE-001", "id_pje": "900001", "pagina_pdf": 1, "pagina_documento": 1, "pagina_original": null, "trecho": "Trecho fictício", "natureza": "ALEGADO", "metodo_extracao": "TEXTO_DIGITAL", "confianca": {"nivel": "ALTA"}, "status_verificacao": "VERIFICADO"}],
       "observacoes": null,
       "status_verificacao": "NAO_VERIFICADO"
     }
@@ -106,5 +112,12 @@
   ],
   "decisoes": [],
   "conflitos": [],
-  "pendencias": []
+  "pendencias": [],
+  "objeto_material": {"descricao": "Imóvel fictício", "natureza": "DOCUMENTADO", "documento_fonte": "DOC-001", "proveniencia": [{"arquivo": "processo-ficticio.pdf", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "documento_id": "DOC-PJE-001", "id_pje": "900001", "pagina_pdf": 1, "pagina_documento": 1, "pagina_original": null, "trecho": "Imóvel fictício", "natureza": "DOCUMENTADO", "metodo_extracao": "TEXTO_DIGITAL", "confianca": {"nivel": "ALTA"}, "status_verificacao": "VERIFICADO"}]},
+  "eventos": [],
+  "documentos_tecnicos": [],
+  "assistentes_tecnicos": [],
+  "dados_vistoria_determinados": [],
+  "honorarios_prazos": [],
+  "proveniencia": [{"arquivo": "processo-ficticio.pdf", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "documento_id": "DOC-PJE-001", "id_pje": "900001", "pagina_pdf": 1, "pagina_documento": 1, "pagina_original": null, "trecho": "Processo fictício", "natureza": "DOCUMENTADO", "metodo_extracao": "TEXTO_DIGITAL", "confianca": {"nivel": "ALTA"}, "status_verificacao": "VERIFICADO"}]
 }

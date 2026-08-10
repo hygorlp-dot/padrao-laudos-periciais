@@ -113,6 +113,16 @@ def gerar(diretorio: Path) -> dict[str, Any]:
     modelos = [item for item in modelos if item.is_file()]
     normas = [item for item in normas if item.is_file()]
     perfil = PERFIS.get(resultado.tipo, PERFIS["OUTRO"])
+    conhecimento_modelos = []
+    for caminho in sorted((raiz_privada / "conhecimento" / "modelos").glob("MOD-*.json")):
+        dado = json.loads(caminho.read_text(encoding="utf-8"))
+        if dado.get("tipo_pericia") == resultado.tipo or set(dado.get("sistemas", [])) & set(perfil["sistemas"]):
+            conhecimento_modelos.append(dado["id"])
+    conhecimento_normas = []
+    for caminho in sorted((raiz_privada / "conhecimento" / "normas").glob("NOR-*.json")):
+        dado = json.loads(caminho.read_text(encoding="utf-8"))
+        if resultado.tipo in dado.get("sistemas", []) or set(dado.get("sistemas", [])) & set(perfil["sistemas"]):
+            conhecimento_normas.append(dado["id"])
     fonte = _fonte(documentos, resultado.documentos_fonte)
     prov = fonte["proveniencia"]
     docs_por_id = {d["documento_id"]: d for d in documentos}
@@ -125,7 +135,7 @@ def gerar(diretorio: Path) -> dict[str, Any]:
             "id": f"QT-{numero:03d}", "descricao": descricao,
             "origem": f"Delimitação inferencial apoiada em {fonte['documento']['documento_id']}",
             "necessidade_para_saneamento": "Componente necessário para responder ao tema controvertido sem antecipar conclusão.",
-            "quesitos_relacionados": [], "evidencias_disponiveis": ["Documentos PJe estruturalmente extraídos"],
+            "quesitos_relacionados": [], "alegacoes_relacionadas": [], "evidencias_disponiveis": ["Documentos PJe estruturalmente extraídos"],
             "evidencias_necessarias": ["Vistoria e documentação técnica pertinente"],
             "documentos_relacionados": resultado.documentos_fonte, "ressalvas": res_ids,
             "status_saneamento": "A_SANEAR", "confianca": _confianca(resultado.nivel),
@@ -226,13 +236,13 @@ def gerar(diretorio: Path) -> dict[str, Any]:
             "pontos_criticos": ["Não converter alegação em constatação", "Distinguir condição atual da histórica quando aplicável"],
             "questoes_que_dependem_da_vistoria": [q["id"] for q in questoes],
         },
-        "memoria_referencial": {"fontes_disponiveis": len(modelos), "itens_recuperados": [], "status": "DISPONIVEL" if modelos else "INDISPONIVEL"},
-        "conhecimento_normativo": {"fontes_disponiveis": len(normas), "itens_recuperados": [], "status": "PENDENTE_VERIFICACAO_NORMATIVA" if normas else "INDISPONIVEL"},
+        "memoria_referencial": {"fontes_disponiveis": len(modelos), "itens_recuperados": conhecimento_modelos, "status": "DISPONIVEL" if modelos else "INDISPONIVEL"},
+        "conhecimento_normativo": {"fontes_disponiveis": len(normas), "itens_recuperados": conhecimento_normas, "status": "PENDENTE_VERIFICACAO_NORMATIVA" if normas else "INDISPONIVEL"},
         "autoauditoria": [
             {"criterio": "Classificação usa múltiplas peças e não o número do processo", "resultado": "APROVADO", "observacao": ", ".join(resultado.documentos_fonte)},
             {"criterio": "Tema e objeto possuem fonte identificável", "resultado": "ALERTA", "observacao": "Formulação preliminar requer validação semântica final do perito."},
-            {"criterio": "Normas usadas possuem proveniência", "resultado": "APROVADO", "observacao": "Nenhuma regra normativa foi aplicada; base normativa indisponível."},
-            {"criterio": "Modelos não contaminam fatos do caso", "resultado": "APROVADO", "observacao": "Nenhum modelo referencial estava disponível."},
+            {"criterio": "Normas usadas possuem proveniência", "resultado": "APROVADO", "observacao": f"Conhecimento recuperado por ID privado: {', '.join(conhecimento_normas) or 'nenhum aplicável'}."},
+            {"criterio": "Modelos não contaminam fatos do caso", "resultado": "APROVADO", "observacao": f"Modelos recuperados apenas como experiência: {', '.join(conhecimento_modelos) or 'nenhum disponível'}."},
         ],
         "status": status, "proveniencia": proveniencias_gerais,
     }
