@@ -3,7 +3,7 @@
 ## Status
 
 **REGRA APROVADA.** Preservar o sistema visual existente, tomando o laudo
-Eliane Ferreira de Souza como referência principal. O modelo não será recriado
+o laudo privado aprovado como referência visual principal. O modelo não será recriado
 do zero.
 
 ## Formato

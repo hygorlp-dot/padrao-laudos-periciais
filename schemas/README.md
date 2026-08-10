@@ -21,6 +21,15 @@ Esta pasta contém os contratos de dados iniciais do projeto em JSON Schema Draf
   proveniência.
 - `plano-vistoria.schema.json`: atividades, medições, fotografias,
   equipamentos, cobertura, autonomia e gate pré-vistoria.
+- `inventario-vistoria.schema.json`: arquivos de campo e metadados incrementais.
+- `analise-motor-vicios.schema.json`: manifestações, hipóteses, PAT, QT,
+  quesitos, autoauditoria e gate de redação.
+- `fonte-online.schema.json`: proveniência, vigência e controle de uso de
+  fontes técnicas pesquisadas online.
+- `auditoria-grounding-pericial.schema.json`: claim, evidências, saliência e
+  veredito de grounding.
+- `trilha-auditoria-agente.schema.json`: execução profissional auditável sem
+  chain-of-thought ou raciocínio privado.
 
 Os schemas rejeitam propriedades não declaradas. Alegações, documentos, constatações, inferências e resultados inconclusivos devem permanecer semanticamente separados.
 
@@ -49,20 +58,22 @@ PDF PJe
 → plano-vistoria.json
 → processo.json
 → vistoria.json
-→ laudo.json
+→ motor técnico
+→ PAT-NNN
+→ gate de redação
+→ laudo.json futuro
 ```
 
-Os contratos do manifesto, documento PJe e delimitação estão implementados. O
-parser gera os dois primeiros; a Skill de triagem orienta o Codex na produção
-do terceiro. A transformação posterior para `processo.json` ainda não está
-implementada.
+Os contratos e mecanismos até o gate de redação estão implementados. A
+execução semântica permanece orquestrada pelas Skills e condicionada à
+evidência disponível.
 
 ## Limitações atuais
 
 - Os schemas são contratos iniciais e não substituem a validação técnica do perito.
 - A integridade interna da delimitação possui validador complementar; relações
   com arquivos distintos ainda exigem conferência contra o corpus-fonte.
-- Não há OCR, serviço semântico autônomo, geração de `processo.json` ou
+- Não há OCR, motores especializados adicionais, laudo completo ou
   automação Word.
-- Não há automação de cálculos, normas, quesitos ou orçamento.
+- Não há orçamento final nem respostas finais formatadas aos quesitos.
 - Alterações nos enums e nas condicionais dependem de decisão canônica documentada.

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/fonte-online.schema.json",
+  "title": "Fonte técnica online verificada",
+  "type": "object",
+  "required": ["schema_version", "id", "tipo_fonte", "entidade", "titulo", "url", "dominio", "acessado_em", "edicao", "versao", "data_publicacao", "vigencia", "status_vigencia", "sha256", "questoes_tecnicas", "finalidade", "confianca", "metodo_verificacao", "ultima_verificacao_online", "status_uso"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"type": "string"}, "id": {"type": "string", "pattern": "^WEB-(NOR|REF)-[0-9]{3,}$"},
+    "tipo_fonte": {"enum": ["NORMA_TECNICA", "REGULAMENTO", "LEGISLACAO", "MANUAL_OFICIAL", "ESPECIFICACAO_TECNICA", "LITERATURA_CIENTIFICA", "REFERENCIA_TECNICA", "BOA_PRATICA", "DOCUMENTO_INSTITUCIONAL", "FONTE_SECUNDARIA"]},
+    "entidade": {"type": "string"}, "titulo": {"type": "string"}, "url": {"type": "string", "format": "uri"}, "dominio": {"type": "string"}, "acessado_em": {"type": "string", "format": "date-time"},
+    "edicao": {"type": ["string", "null"]}, "versao": {"type": ["string", "null"]}, "data_publicacao": {"type": ["string", "null"]}, "vigencia": {"type": ["string", "null"]}, "status_vigencia": {"enum": ["VIGENTE", "REVOGADA", "SUBSTITUIDA", "NAO_VERIFICADA", "NAO_APLICAVEL"]},
+    "sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"}, "questoes_tecnicas": {"type": "array", "items": {"type": "string", "pattern": "^QT-[0-9]{3,}$"}}, "finalidade": {"type": "string"},
+    "confianca": {"$ref": "pje-comum.schema.json#/$defs/confianca"}, "metodo_verificacao": {"type": "array", "minItems": 1, "items": {"type": "string"}}, "ultima_verificacao_online": {"type": "string", "format": "date-time"},
+    "status_uso": {"enum": ["VALIDADA_PARA_USO", "APENAS_DESCOBERTA", "REJEITADA", "PENDENTE_VERIFICACAO_NORMATIVA"]}
+  }
+}

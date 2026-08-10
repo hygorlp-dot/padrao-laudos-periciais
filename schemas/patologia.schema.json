@@ -4,31 +4,48 @@
   "title": "Manifestação patológica",
   "description": "Contrato central de uma manifestação PAT-NNN, separando constatação objetiva, análise causal, classificação, conclusão e orçamento.",
   "type": "object",
-  "required": ["id", "alegacoes_relacionadas", "ambiente", "localizacao_detalhada", "sistema", "constatacao", "analise_causal", "origem", "criticidade", "vicio_construtivo", "normas_relacionadas", "consequencias", "recomendacao", "orcamento", "redacao", "status_validacao"],
+  "required": ["id", "manifestacao", "alegacoes_relacionadas", "ambiente", "localizacao_detalhada", "sistema", "constatacao", "constatacoes", "evidencias", "hipoteses", "analise_causal", "origem", "criticidade", "vicio_construtivo", "normas_relacionadas", "consequencias", "reparabilidade", "recomendacao", "elegibilidade_orcamento", "orcamento", "conclusao_tecnica", "confianca", "proveniencia", "redacao", "status_validacao"],
   "additionalProperties": false,
   "properties": {
     "id": { "type": "string", "pattern": "^PAT-[0-9]{3,}$" },
+    "manifestacao": { "type": "string", "minLength": 1 },
     "alegacoes_relacionadas": { "type": "array", "items": { "type": "string", "pattern": "^ALG-[0-9]{3,}$" }, "uniqueItems": true },
     "ambiente": { "type": ["string", "null"] },
     "localizacao_detalhada": { "type": ["string", "null"] },
     "sistema": { "type": ["string", "null"] },
+    "elemento": { "type": ["string", "null"] },
     "constatacao": { "$ref": "#/$defs/constatacao" },
+    "constatacoes": { "type": "array", "items": { "type": "string", "pattern": "^OBS-[0-9]{3,}$" }, "uniqueItems": true },
+    "evidencias": { "type": "array", "items": { "type": "string", "pattern": "^(OBS|DOC|FOT|MED|ENS)-[A-Z]*-?[0-9]{3,}$" }, "uniqueItems": true },
+    "medicoes": { "type": "array", "items": { "type": "string", "pattern": "^MED-[0-9]{3,}$" }, "uniqueItems": true },
+    "hipoteses": { "type": "array", "items": { "type": "string", "pattern": "^HIP-[0-9]{3,}$" }, "uniqueItems": true },
     "analise_causal": { "$ref": "#/$defs/analiseCausal" },
+    "mecanismo": { "type": ["string", "null"] },
+    "causa": { "type": ["string", "null"] },
     "origem": { "$ref": "#/$defs/origem" },
     "criticidade": { "$ref": "#/$defs/criticidade" },
     "vicio_construtivo": { "$ref": "#/$defs/vicioConstrutivo" },
     "normas_relacionadas": { "type": "array", "items": { "$ref": "#/$defs/normaRelacionada" } },
+    "referencias_tecnicas": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "ressalvas": { "type": "array", "items": { "type": "string" } },
     "consequencias": { "$ref": "#/$defs/consequencias" },
+    "reparabilidade": { "enum": ["REPARAVEL", "REPARAVEL_COM_INTERVENCAO_COMPLEMENTAR", "NECESSITA_INVESTIGACAO", "NAO_APLICAVEL"] },
     "recomendacao": { "$ref": "#/$defs/recomendacao" },
+    "elegibilidade_orcamento": { "enum": ["ELEGIVEL_ORCAMENTO_VICIO", "NAO_ELEGIVEL", "PENDENTE"] },
     "orcamento": { "$ref": "#/$defs/orcamento" },
+    "conclusao_tecnica": { "type": "string", "minLength": 1 },
+    "confianca": { "$ref": "pje-comum.schema.json#/$defs/confianca" },
+    "proveniencia": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
     "redacao": { "$ref": "#/$defs/redacao" },
+    "texto_tecnico_preliminar": { "type": ["string", "null"] },
     "status_validacao": { "enum": ["RASCUNHO", "PENDENTE_PERITO", "APROVADO_PERITO", "BLOQUEADO"] }
   },
   "$defs": {
     "textoNulo": { "type": ["string", "null"] },
+    "revisaoProfissional": { "type": "object", "required": ["status"], "additionalProperties": false, "properties": { "status": { "enum": ["NAO_REVISADO", "APROVADO", "AJUSTADO"] } } },
     "situacao": { "enum": ["CONFORME", "ANOMALIA", "FALHA", "INCONCLUSIVA", "NAO_CONSTATADA"] },
     "origem": { "enum": ["ENDOGENA_CONSTRUTIVA", "EXOGENA", "FUNCIONAL", "USO_OPERACAO_MANUTENCAO", "MISTA", "INCONCLUSIVA", "NAO_APLICAVEL"] },
-    "criticidade": { "enum": ["CRITICA", "MEDIA", "MINIMA", "NAO_APLICAVEL"] },
+    "criticidade": { "enum": ["CRITICA", "MEDIA", "MINIMA", "INCONCLUSIVA", "NAO_APLICAVEL"] },
     "grauCerteza": { "enum": ["CONFIRMADO", "PROVAVEL", "POSSIVEL", "INCONCLUSIVO", "NAO_APLICAVEL"] },
     "constatacao": {
       "description": "Conteúdo observado; não deve receber alegações ou inferências causais.",
@@ -54,61 +71,75 @@
         "causas_alternativas": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
         "fundamentos": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
         "limitacoes": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
-        "grau_certeza": { "$ref": "#/$defs/grauCerteza" }
+        "grau_certeza": { "$ref": "#/$defs/grauCerteza" },
+        "status_capacidade": { "enum": ["SUPORTE_CAUSAL_COMPLETO", "SUPORTE_CAUSAL_PARCIAL", "MOTOR_CAUSAL_NAO_IMPLEMENTADO"] },
+        "aspectos_requeridos": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "aspectos_origem": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
       }
     },
     "vicioConstrutivo": {
       "type": "object",
-      "required": ["caracterizado", "tipo", "fundamentacao", "validado_perito"],
+      "required": ["caracterizado", "tipo", "fundamentacao", "revisao_profissional"],
       "additionalProperties": false,
       "properties": {
         "caracterizado": { "type": "boolean" },
         "tipo": { "enum": ["APARENTE", "OCULTO", "NAO_APLICAVEL", "INCONCLUSIVO"] },
         "fundamentacao": { "$ref": "#/$defs/textoNulo" },
-        "validado_perito": { "type": "boolean" }
+        "revisao_profissional": { "$ref": "#/$defs/revisaoProfissional" }
       }
     },
     "normaRelacionada": {
       "type": "object",
-      "required": ["referencia", "item", "aplicacao", "verificada"],
+      "required": ["id", "item", "requisito", "verificada", "aplicabilidade_temporal", "proveniencia", "aspectos_suportados"],
       "additionalProperties": false,
       "properties": {
-        "referencia": { "type": "string", "minLength": 1 },
+        "id": { "type": "string", "pattern": "^NOR-[0-9]{3,}$" },
         "item": { "$ref": "#/$defs/textoNulo" },
-        "aplicacao": { "type": "string", "minLength": 1 },
-        "verificada": { "type": "boolean" }
+        "requisito": { "$ref": "#/$defs/textoNulo" },
+        "verificada": { "type": "boolean" },
+        "aplicabilidade_temporal": { "enum": ["APLICAVEL_PRINCIPAL", "APLICAVEL_COMPLEMENTAR", "NAO_APLICAVEL", "APLICABILIDADE_INCONCLUSIVA"] },
+        "proveniencia": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+        "aspectos_suportados": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+        ,"edicao": { "$ref": "#/$defs/textoNulo" }
+        ,"pagina": { "type": ["integer", "null"], "minimum": 1 }
+        ,"tipo_requisito": { "$ref": "#/$defs/textoNulo" }
+        ,"metodo_verificacao": { "$ref": "#/$defs/textoNulo" }
+        ,"criterio": { "type": ["object", "string", "null"] }
+        ,"confianca": { "$ref": "pje-comum.schema.json#/$defs/confianca" }
+        ,"avaliacao_conformidade": { "type": "object", "required": ["norma", "requisito", "metodo", "criterio", "resultado", "fundamentacao", "evidencias"], "additionalProperties": false, "properties": { "norma": { "$ref": "#/$defs/textoNulo" }, "requisito": { "$ref": "#/$defs/textoNulo" }, "metodo": { "$ref": "#/$defs/textoNulo" }, "criterio": { "type": ["object", "string", "null"] }, "resultado": { "enum": ["ATENDE", "NAO_ATENDE", "INCONCLUSIVO"] }, "fundamentacao": { "type": "string", "minLength": 1 }, "evidencias": { "type": "array", "items": { "type": "string", "pattern": "^(OBS|MED|FOT|DOC|ENS)-[A-Z]*-?[0-9]{3,}$" }, "uniqueItems": true } } }
       }
     },
     "consequencias": {
       "type": "object",
-      "required": ["seguranca", "funcionalidade", "estanqueidade", "salubridade", "higiene", "durabilidade", "conforto", "estetica", "manutencao", "evolucao"],
+      "required": ["seguranca", "salubridade", "funcionalidade", "desempenho", "estanqueidade", "durabilidade", "estetica", "usabilidade", "evolucao", "extensao"],
       "additionalProperties": false,
       "properties": {
-        "seguranca": { "$ref": "#/$defs/textoNulo" },
-        "funcionalidade": { "$ref": "#/$defs/textoNulo" },
-        "estanqueidade": { "$ref": "#/$defs/textoNulo" },
-        "salubridade": { "$ref": "#/$defs/textoNulo" },
-        "higiene": { "$ref": "#/$defs/textoNulo" },
-        "durabilidade": { "$ref": "#/$defs/textoNulo" },
-        "conforto": { "$ref": "#/$defs/textoNulo" },
-        "estetica": { "$ref": "#/$defs/textoNulo" },
-        "manutencao": { "$ref": "#/$defs/textoNulo" },
-        "evolucao": { "$ref": "#/$defs/textoNulo" }
+        "seguranca": { "$ref": "#/$defs/consequencia" },
+        "salubridade": { "$ref": "#/$defs/consequencia" },
+        "funcionalidade": { "$ref": "#/$defs/consequencia" },
+        "desempenho": { "$ref": "#/$defs/consequencia" },
+        "estanqueidade": { "$ref": "#/$defs/consequencia" },
+        "durabilidade": { "$ref": "#/$defs/consequencia" },
+        "estetica": { "$ref": "#/$defs/consequencia" },
+        "usabilidade": { "$ref": "#/$defs/consequencia" },
+        "evolucao": { "$ref": "#/$defs/consequencia" },
+        "extensao": { "$ref": "#/$defs/consequencia" }
       }
     },
+    "consequencia": { "type": "object", "required": ["status", "evidencias", "fundamentacao", "confianca"], "additionalProperties": false, "properties": { "status": { "enum": ["PRESENTE", "AUSENTE", "INCONCLUSIVA", "NAO_APLICAVEL"] }, "evidencias": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }, "fundamentacao": { "$ref": "#/$defs/textoNulo" }, "confianca": { "enum": ["ALTA", "MEDIA", "BAIXA"] } } },
     "recomendacao": {
       "type": "object",
       "required": ["necessaria", "descricao", "extensao"],
       "additionalProperties": false,
       "properties": {
         "necessaria": { "type": "boolean" },
-        "descricao": { "$ref": "#/$defs/textoNulo" },
+        "descricao": { "type": ["object", "string", "null"] },
         "extensao": { "$ref": "#/$defs/textoNulo" }
       }
     },
     "orcamento": {
       "type": "object",
-      "required": ["incluir", "justificativa", "quantitativo", "unidade", "memoria_calculo", "validado_perito"],
+      "required": ["incluir", "justificativa", "quantitativo", "unidade", "memoria_calculo", "revisao_profissional"],
       "additionalProperties": false,
       "properties": {
         "incluir": { "type": "boolean" },
@@ -116,7 +147,7 @@
         "quantitativo": { "type": ["number", "null"], "exclusiveMinimum": 0 },
         "unidade": { "$ref": "#/$defs/textoNulo" },
         "memoria_calculo": { "$ref": "#/$defs/textoNulo" },
-        "validado_perito": { "type": "boolean" }
+        "revisao_profissional": { "$ref": "#/$defs/revisaoProfissional" }
       }
     },
     "redacao": {
@@ -168,9 +199,9 @@
       "if": { "properties": { "vicio_construtivo": { "properties": { "caracterizado": { "const": true } }, "required": ["caracterizado"] } }, "required": ["vicio_construtivo"] },
       "then": {
         "properties": {
-          "constatacao": { "properties": { "situacao": { "const": "ANOMALIA" } } },
+          "constatacao": { "properties": { "situacao": { "enum": ["ANOMALIA", "FALHA"] } } },
           "origem": { "const": "ENDOGENA_CONSTRUTIVA" },
-          "vicio_construtivo": { "properties": { "validado_perito": { "const": true } } }
+          "vicio_construtivo": { "properties": { "tipo": { "enum": ["APARENTE", "OCULTO", "INCONCLUSIVO"] } } }
         }
       }
     },
@@ -180,14 +211,13 @@
         "properties": {
           "constatacao": { "properties": { "situacao": { "const": "ANOMALIA" } } },
           "origem": { "const": "ENDOGENA_CONSTRUTIVA" },
-          "vicio_construtivo": { "properties": { "caracterizado": { "const": true }, "validado_perito": { "const": true } } },
+          "vicio_construtivo": { "properties": { "caracterizado": { "const": true }, "tipo": { "enum": ["APARENTE", "OCULTO", "INCONCLUSIVO"] } } },
           "recomendacao": { "properties": { "necessaria": { "const": true } } },
           "orcamento": {
             "properties": {
               "quantitativo": { "type": "number", "exclusiveMinimum": 0 },
               "unidade": { "type": "string", "minLength": 1 },
-              "memoria_calculo": { "type": "string", "minLength": 1 },
-              "validado_perito": { "const": true }
+              "memoria_calculo": { "type": "string", "minLength": 1 }
             }
           }
         }

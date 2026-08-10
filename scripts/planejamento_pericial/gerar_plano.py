@@ -62,33 +62,33 @@ def gerar(diretorio: Path) -> dict[str, Any]:
     tipo = delimitacao["tipo_pericia"]["tipo"]; perfil = _perfil(tipo)
     qts = [q["id"] for q in delimitacao["questoes_tecnicas"]]
     quesitos = [q for q in delimitacao["quesitos"] if q["pertinencia"] in {"PERTINENTE_TECNICO", "PERTINENTE_PARCIAL"}]
-    algs = [a["id"] for a in processo["alegacoes"]]
+    algs = [a["id"] for a in processo["alegacoes"]];qt_por_id={q["id"]:q for q in delimitacao["questoes_tecnicas"]}
     sistemas = {a["sistema_alegado"] for a in processo["alegacoes"] if a["sistema_alegado"]}
     raiz_privada = diretorio.parent.parent
     conhecimento = _conhecimento(raiz_privada, tipo, sistemas)
     fundamentos = [c["fonte"] for c in conhecimento]
     atividades = []
-    for i, (verificar, metodo) in enumerate(perfil["atividades"], 1):
-        qt = qts[(i - 1) % len(qts)]
+    for i, qt_obj in enumerate(sorted(delimitacao["questoes_tecnicas"],key=lambda x:x["id"]), 1):
+        qt=qt_obj["id"];verificar=qt_obj.get("descricao","");baixo=verificar.lower()
+        metodo="Medição objetiva e inspeção visual" if any(t in baixo for t in ("abertura","extens","dimens","medir","quant")) else "Inspeção causal, confronto documental e teste de hipóteses" if any(t in baixo for t in ("causa","origem","mecanismo","decorre")) else "Inspeção visual sistemática"
         relacionados = [q["id"] for q in quesitos if qt in q["questoes_tecnicas_relacionadas"]]
+        alg_qt=qt_por_id[qt].get("alegacoes_relacionadas",[])
         atividades.append({"id": f"ATV-{i:03d}", "verificar": verificar, "justificativa": "Obter evidência necessária ao saneamento do tema e dos quesitos pertinentes.",
-                           "questoes_tecnicas": [qt], "quesitos": relacionados, "alegacoes": algs[:30], "metodo": metodo,
+                           "questoes_tecnicas": [qt], "quesitos": relacionados, "alegacoes": alg_qt, "metodo": metodo,
                            "fundamentos": fundamentos, "evidencia_esperada": "Registro objetivo, rastreável e sem conclusão causal antecipada.",
                            "obrigatoriedade": "OBRIGATORIA", "consequencia_se_nao_realizada": "Limitação da questão técnica e dos quesitos vinculados."})
-    medicoes = [{"id": f"MED-PLANO-{i:03d}", "grandeza": grandeza, "local": delimitacao["objeto_material"]["texto"],
-                 "motivo": "Produzir dado objetivo pertinente às questões técnicas.", "instrumento_sugerido": instrumento,
-                 "precisao_necessaria": None, "questoes_tecnicas": qts, "quesitos": [q["id"] for q in quesitos],
-                 "criterio": fundamentos[0] if fundamentos else None, "obrigatoriedade": "CONDICIONAL",
-                 "consequencia_ausencia": "A conclusão quantitativa correspondente poderá ficar limitada."}
-                for i, (grandeza, instrumento) in enumerate(perfil["medicoes"], 1)]
-    fotografias = [{"id": f"FOT-PLANO-{i:03d}", "finalidade": finalidade, "enquadramento": finalidade,
-                    "questoes_tecnicas": qts, "quesitos": [q["id"] for q in quesitos], "alegacoes": algs[:30]}
-                   for i, finalidade in enumerate(perfil["fotos"], 1)]
+    medicoes=[];fotografias=[]
+    for qt in sorted(delimitacao["questoes_tecnicas"],key=lambda x:x["id"]):
+        qid=qt["id"];descricao=qt.get("descricao","");baixo=descricao.lower();relacionados=[q["id"] for q in quesitos if qid in q["questoes_tecnicas_relacionadas"]]
+        fotografias.append({"id":f"FOT-PLANO-{len(fotografias)+1:03d}","finalidade":f"Registrar evidência visual para {descricao}","enquadramento":"Contexto, aproximação e detalhe pertinente à QT.","questoes_tecnicas":[qid],"quesitos":relacionados,"alegacoes":qt.get("alegacoes_relacionadas",[])})
+        if any(t in baixo for t in ("abertura","extens","dimens","medir","medição","quant")):
+            medicoes.append({"id":f"MED-PLANO-{len(medicoes)+1:03d}","grandeza":"Grandeza indicada pela questão técnica","local":delimitacao["objeto_material"]["texto"],"motivo":descricao,"instrumento_sugerido":"Instrumento compatível com a grandeza","precisao_necessaria":None,"questoes_tecnicas":[qid],"quesitos":relacionados,"criterio":fundamentos[0] if fundamentos else None,"obrigatoriedade":"OBRIGATORIA","consequencia_ausencia":"Sem medição ou substituto equivalente, a conclusão quantitativa fica bloqueada."})
     cobertura = []
     for q in quesitos:
         atvs = [a["id"] for a in atividades if any(qt in a["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])]
-        cobertura.append({"quesito": q["id"], "questoes_tecnicas": q["questoes_tecnicas_relacionadas"], "alegacoes": algs[:30],
-                          "atividades": atvs, "medicoes": [m["id"] for m in medicoes], "fotografias": [f["id"] for f in fotografias],
+        alg_q={a for qt in q["questoes_tecnicas_relacionadas"] if qt in qt_por_id for a in qt_por_id[qt].get("alegacoes_relacionadas",[])}
+        cobertura.append({"quesito": q["id"], "questoes_tecnicas": q["questoes_tecnicas_relacionadas"], "alegacoes": sorted(alg_q),
+                          "atividades": atvs, "medicoes": [m["id"] for m in medicoes if any(qt in m["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])], "fotografias": [f["id"] for f in fotografias if any(qt in f["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])],
                           "ensaios": [], "documentos": processo["documentos_tecnicos"], "planejada": bool(atvs or medicoes or fotografias)})
     bloqueante = any(c["classificacao"] == "BLOQUEANTE" and c["status"] == "ABERTO" for c in delimitacao["conflitos"])
     lacuna_cobertura = any(not c["planejada"] for c in cobertura)

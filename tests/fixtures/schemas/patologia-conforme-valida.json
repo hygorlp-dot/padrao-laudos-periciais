@@ -1,5 +1,6 @@
 {
   "id": "PAT-002",
+  "manifestacao": "Condição superficial examinada",
   "alegacoes_relacionadas": ["ALG-002"],
   "ambiente": "Cozinha",
   "localizacao_detalhada": null,
@@ -12,6 +13,9 @@
     "evidencias": ["OBS-002"],
     "fotografias": []
   },
+  "constatacoes": ["OBS-002"],
+  "evidencias": ["OBS-002"],
+  "hipoteses": [],
   "analise_causal": {
     "causa_provavel": null,
     "causas_alternativas": [],
@@ -25,21 +29,22 @@
     "caracterizado": false,
     "tipo": "NAO_APLICAVEL",
     "fundamentacao": null,
-    "validado_perito": false
+    "revisao_profissional": {"status": "NAO_REVISADO"}
   },
   "normas_relacionadas": [],
   "consequencias": {
-    "seguranca": null,
-    "funcionalidade": null,
-    "estanqueidade": null,
-    "salubridade": null,
-    "higiene": null,
-    "durabilidade": null,
-    "conforto": null,
-    "estetica": null,
-    "manutencao": null,
-    "evolucao": null
+    "seguranca": {"status":"NAO_APLICAVEL","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "salubridade": {"status":"NAO_APLICAVEL","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "funcionalidade": {"status":"NAO_APLICAVEL","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "desempenho": {"status":"NAO_APLICAVEL","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "estanqueidade": {"status":"NAO_APLICAVEL","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "durabilidade": {"status":"NAO_APLICAVEL","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "estetica": {"status":"NAO_APLICAVEL","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "usabilidade": {"status":"NAO_APLICAVEL","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "evolucao": {"status":"NAO_APLICAVEL","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "extensao": {"status":"NAO_APLICAVEL","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"}
   },
+  "reparabilidade": "NAO_APLICAVEL",
   "recomendacao": {
     "necessaria": false,
     "descricao": null,
@@ -51,8 +56,12 @@
     "quantitativo": null,
     "unidade": null,
     "memoria_calculo": null,
-    "validado_perito": false
+    "revisao_profissional": {"status": "NAO_REVISADO"}
   },
+  "elegibilidade_orcamento": "NAO_ELEGIVEL",
+  "conclusao_tecnica": "A condição examinada mostrou-se conforme no escopo fictício.",
+  "confianca": {"nivel": "ALTA"},
+  "proveniencia": ["OBS-002"],
   "redacao": {
     "analise_alegacoes_causas": "A alegação fictícia foi confrontada com a observação.",
     "consequencias": null,

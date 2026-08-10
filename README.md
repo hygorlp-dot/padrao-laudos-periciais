@@ -20,9 +20,10 @@ vícios e manifestações patológicas em edificações, sem impedir expansão f
 
 ## Fluxo de dados
 
-O fluxo atual implementa `PDF PJe → manifesto-pje.json → documento-pje.json → processo.json → delimitacao-pericial.json → plano-vistoria.json → ficha-pre-vistoria.md`.
-A vistoria alimentará futuramente
-análises `PAT-NNN`, `laudo.json`, revisão e preenchimento do modelo DOCM.
+O fluxo atual implementa `PDF PJe → manifesto-pje.json → documento-pje.json →
+processo.json → delimitacao-pericial.json → plano-vistoria.json →
+ficha-pre-vistoria.md → vistoria.json → motor técnico → PAT-NNN → gate de
+redação`. `laudo.json`, Word e PDF permanecem em etapas futuras.
 
 ## Skills
 
@@ -33,13 +34,22 @@ análises `PAT-NNN`, `laudo.json`, revisão e preenchimento do modelo DOCM.
   cobertura de quesitos, ressalvas, conflitos e plano pericial preliminar.
 - `planejamento-pericial-autonomo`: gera processo semântico, recupera
   conhecimento e produz plano e ficha pré-vistoria.
+- `motor-vicios-construtivos`: estrutura evidências de campo, testa hipóteses,
+  gera PAT, saneia questões e aplica o gate de redação.
+- `auditoria-pericial-continua`, `auditoria-grounding-pericial`,
+  `trilha-auditoria-pericial` e `auditoria-pericial-integrada`: detector,
+  grounding, deep audit, trilha profissional e gate.
+
+Integrações externas auditadas são documentadas em
+[`docs/terceiros/integracoes-agentes.md`](docs/terceiros/integracoes-agentes.md).
 
 ## Privacidade e estado atual
 
 `referencias/privadas/` contém material exclusivamente local e nunca deve ser
 versionada. Atualmente, o projeto possui arquitetura, padrões canônicos,
 checklists, skills, contratos JSON Schema, parser estrutural PJe, processo
-semântico, triagem e planejamento pré-vistoria. A execução semântica é conduzida
+semântico, triagem, planejamento e motor pós-vistoria inicial para vícios.
+A execução semântica é conduzida
 pelo Codex conforme as Skills; automação Word ainda não foi implementada.
 
 Consulte o [manual operacional](docs/manual-operacional.md) e as

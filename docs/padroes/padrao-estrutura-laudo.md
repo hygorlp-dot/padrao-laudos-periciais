@@ -8,10 +8,10 @@ validação do perito.
 
 ## Referências documentais
 
-- Referência visual principal: laudo Eliane Ferreira de Souza.
-- Referência secundária: Daniela Maria dos Santos, versão 8, e demais laudos
+- Referência visual principal: laudo privado aprovado para essa finalidade.
+- Referência secundária: versão 8 do laudo privado secundário e demais laudos
   finalizados.
-- Referência excluída de conteúdo final: Daniela Maria dos Santos, versão 9,
+- Referência excluída de conteúdo final: versão 9 do laudo privado secundário,
   por conter respostas provisórias, orçamento incompleto e encerramento não
   finalizado.
 - Nenhuma conclusão específica dos laudos de referência constitui regra geral.

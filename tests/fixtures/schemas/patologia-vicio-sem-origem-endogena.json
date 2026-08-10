@@ -8,11 +8,11 @@
   "analise_causal": {"causa_provavel": "Hipótese funcional fictícia.", "causas_alternativas": [], "fundamentos": ["Fundamento fictício."], "limitacoes": [], "grau_certeza": "CONFIRMADO"},
   "origem": "FUNCIONAL",
   "criticidade": "MEDIA",
-  "vicio_construtivo": {"caracterizado": true, "tipo": "OCULTO", "fundamentacao": "Caracterização fictícia incompatível com a origem.", "validado_perito": true},
+  "vicio_construtivo": {"caracterizado": true, "tipo": "OCULTO", "fundamentacao": "Caracterização fictícia incompatível com a origem.", "revisao_profissional": {"status": "NAO_REVISADO"}},
   "normas_relacionadas": [],
   "consequencias": {"seguranca": null, "funcionalidade": "Consequência fictícia.", "estanqueidade": null, "salubridade": null, "higiene": null, "durabilidade": null, "conforto": null, "estetica": null, "manutencao": null, "evolucao": null},
   "recomendacao": {"necessaria": true, "descricao": "Serviço fictício.", "extensao": "1 m²"},
-  "orcamento": {"incluir": false, "justificativa": "Não incluído.", "quantitativo": null, "unidade": null, "memoria_calculo": null, "validado_perito": false},
+  "orcamento": {"incluir": false, "justificativa": "Não incluído.", "quantitativo": null, "unidade": null, "memoria_calculo": null, "revisao_profissional": {"status": "NAO_REVISADO"}},
   "redacao": {"analise_alegacoes_causas": "Análise fictícia.", "consequencias": "Consequência fictícia.", "classificacao": "Classificação fictícia.", "conclusao": "Conclusão fictícia."},
   "status_validacao": "APROVADO_PERITO"
 }

@@ -16,10 +16,12 @@ from referencing import Registry, Resource
 RAIZ = Path(__file__).resolve().parents[1]
 PASTA_SCHEMAS = RAIZ / "schemas"
 PASTAS_FIXTURES = (
+    RAIZ / "tests" / "fixtures" / "auditoria",
     RAIZ / "tests" / "fixtures" / "schemas",
     RAIZ / "tests" / "fixtures" / "pje",
     RAIZ / "tests" / "fixtures" / "triagem",
     RAIZ / "tests" / "fixtures" / "planejamento",
+    RAIZ / "tests" / "fixtures" / "motor-vicios",
 )
 
 ARQUIVOS_SCHEMA = {
@@ -35,6 +37,11 @@ ARQUIVOS_SCHEMA = {
     "conhecimento-referencial": PASTA_SCHEMAS / "conhecimento-referencial.schema.json",
     "conhecimento-normativo": PASTA_SCHEMAS / "conhecimento-normativo.schema.json",
     "plano-vistoria": PASTA_SCHEMAS / "plano-vistoria.schema.json",
+    "inventario-vistoria": PASTA_SCHEMAS / "inventario-vistoria.schema.json",
+    "analise-motor-vicios": PASTA_SCHEMAS / "analise-motor-vicios.schema.json",
+    "fonte-online": PASTA_SCHEMAS / "fonte-online.schema.json",
+    "auditoria-grounding": PASTA_SCHEMAS / "auditoria-grounding-pericial.schema.json",
+    "trilha-auditoria": PASTA_SCHEMAS / "trilha-auditoria-agente.schema.json",
 }
 
 
@@ -44,11 +51,21 @@ def carregar_json(caminho: Path) -> dict[str, Any]:
 
 
 def tipo_fixture(caminho: Path) -> str:
+    if caminho.name.startswith("auditoria-grounding"):
+        return "auditoria-grounding"
+    if caminho.name.startswith("trilha-auditoria"):
+        return "trilha-auditoria"
     prefixo = caminho.name.split("-", maxsplit=1)[0]
     if caminho.parent.name == "triagem":
         return "delimitacao"
     if caminho.parent.name == "planejamento":
         return next(nome for nome in ("conhecimento-referencial", "conhecimento-normativo", "plano-vistoria", "inventario") if caminho.name.startswith(nome))
+    if caminho.parent.name == "motor-vicios":
+        if caminho.name.startswith("inventario-vistoria"):
+            return "inventario-vistoria"
+        if caminho.name.startswith("fonte-online"):
+            return "fonte-online"
+        return "analise-motor-vicios"
     if caminho.parent.name == "pje":
         tipos_pje = {
             "manifesto": "manifesto-pje",

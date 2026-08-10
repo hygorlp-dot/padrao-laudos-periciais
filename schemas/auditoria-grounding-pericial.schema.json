@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/auditoria-grounding-pericial.schema.json",
+  "title": "Auditoria de grounding pericial",
+  "type": "object",
+  "required": ["claim_id", "tipo", "natureza", "saliencia", "texto", "evidencias", "veredito", "auditoria_independente", "justificativa_resumida", "remediacao"],
+  "additionalProperties": false,
+  "properties": {
+    "claim_id": {"type": "string", "pattern": "^CLM-[0-9]{3,}$"},
+    "tipo": {"enum": ["FATO_PROCESSUAL", "FATO_DOCUMENTAL", "CONSTATACAO_DE_VISTORIA", "MEDICAO", "MANIFESTACAO_TECNICA", "MECANISMO", "CAUSA", "ORIGEM", "CRITICIDADE", "CONFORMIDADE_NORMATIVA", "VICIO_CONSTRUTIVO", "REPARABILIDADE", "ORCAMENTO", "INFERENCIA_TECNICA", "LIMITACAO", "CONCLUSAO_DE_QT"]},
+    "natureza": {"enum": ["FACTUAL", "INTERPRETIVE", "SYNTHETIC"]},
+    "saliencia": {"enum": ["LOAD_BEARING", "SUPPORTING", "ILLUSTRATIVE"]},
+    "texto": {"type": "string", "minLength": 1},
+    "evidencias": {"type": "array", "items": {"type": "string", "pattern": "^(ALG|DOC|OBS|MED|FOT|NOR|MOD|RES|PAT|QT|QUE)-"}, "uniqueItems": true},
+    "veredito": {"enum": ["GROUNDED", "WEAKLY_GROUNDED", "INTERPOLATED", "UNSUBSTANTIATED", "INSUFFICIENT", "UNVERIFIABLE", "CONTRADICTED"]},
+    "auditoria_independente": {"enum": ["SIM", "NAO"]},
+    "justificativa_resumida": {"type": "string", "minLength": 1},
+    "remediacao": {"type": "string", "minLength": 1}
+  },
+  "allOf": [{"if": {"properties": {"veredito": {"const": "GROUNDED"}}}, "then": {"properties": {"evidencias": {"minItems": 1}}}}]
+}

@@ -1,5 +1,6 @@
 {
   "id": "PAT-003",
+  "manifestacao": "Condição de cobertura não conclusivamente examinada",
   "alegacoes_relacionadas": ["ALG-003"],
   "ambiente": "Cobertura",
   "localizacao_detalhada": null,
@@ -12,6 +13,9 @@
     "evidencias": ["OBS-003"],
     "fotografias": []
   },
+  "constatacoes": ["OBS-003"],
+  "evidencias": ["OBS-003"],
+  "hipoteses": [],
   "analise_causal": {
     "causa_provavel": null,
     "causas_alternativas": [],
@@ -25,21 +29,22 @@
     "caracterizado": false,
     "tipo": "INCONCLUSIVO",
     "fundamentacao": null,
-    "validado_perito": false
+    "revisao_profissional": {"status": "NAO_REVISADO"}
   },
   "normas_relacionadas": [],
   "consequencias": {
-    "seguranca": null,
-    "funcionalidade": null,
-    "estanqueidade": null,
-    "salubridade": null,
-    "higiene": null,
-    "durabilidade": null,
-    "conforto": null,
-    "estetica": null,
-    "manutencao": null,
-    "evolucao": null
+    "seguranca": {"status":"INCONCLUSIVA","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "salubridade": {"status":"INCONCLUSIVA","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "funcionalidade": {"status":"INCONCLUSIVA","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "desempenho": {"status":"INCONCLUSIVA","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "estanqueidade": {"status":"INCONCLUSIVA","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "durabilidade": {"status":"INCONCLUSIVA","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "estetica": {"status":"INCONCLUSIVA","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "usabilidade": {"status":"INCONCLUSIVA","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "evolucao": {"status":"INCONCLUSIVA","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"},
+    "extensao": {"status":"INCONCLUSIVA","evidencias":[],"fundamentacao":null,"confianca":"BAIXA"}
   },
+  "reparabilidade": "NECESSITA_INVESTIGACAO",
   "recomendacao": {
     "necessaria": false,
     "descricao": "Avaliação complementar fictícia depende de decisão do perito.",
@@ -51,8 +56,12 @@
     "quantitativo": null,
     "unidade": null,
     "memoria_calculo": null,
-    "validado_perito": false
+    "revisao_profissional": {"status": "NAO_REVISADO"}
   },
+  "elegibilidade_orcamento": "PENDENTE",
+  "conclusao_tecnica": "A limitação registrada impede conclusão técnica segura.",
+  "confianca": {"nivel": "BAIXA"},
+  "proveniencia": ["OBS-003"],
   "redacao": {
     "analise_alegacoes_causas": "A limitação fictícia impediu análise causal.",
     "consequencias": null,

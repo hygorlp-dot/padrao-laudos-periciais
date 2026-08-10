@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/inventario-vistoria.schema.json",
+  "title": "Inventário privado de arquivos de vistoria",
+  "type": "object",
+  "required": ["schema_version", "processo", "gerado_em", "arquivos", "status"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"type": "string"},
+    "processo": {"type": "string", "minLength": 1},
+    "gerado_em": {"type": "string", "format": "date-time"},
+    "arquivos": {"type": "array", "items": {"$ref": "#/$defs/arquivo"}},
+    "status": {"enum": ["INVENTARIADO", "SEM_DADOS_DE_VISTORIA"]}
+  },
+  "$defs": {
+    "arquivo": {
+      "type": "object",
+      "required": ["id", "nome", "caminho_relativo", "sha256", "extensao", "tamanho_bytes", "data_processamento", "data_arquivo", "categoria", "metodo_ingestao", "metadados", "confianca", "status", "acao_processamento"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^ARQ-VIS-[0-9]{3,}$"},
+        "nome": {"type": "string", "minLength": 1},
+        "caminho_relativo": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "extensao": {"type": "string"},
+        "tamanho_bytes": {"type": "integer", "minimum": 0},
+        "data_processamento": {"type": "string", "format": "date-time"},
+        "data_arquivo": {"type": "string", "format": "date-time"},
+        "categoria": {"enum": ["FOTOGRAFIA", "VIDEO", "MEDICAO", "ANOTACAO", "DOCUMENTO", "OUTRO"]},
+        "metodo_ingestao": {"enum": ["METADADOS_ARQUIVO", "EXIF", "TEXTO_SIMPLES", "JSON", "CSV", "XLSX_OOXML"]},
+        "metadados": {
+          "type": "object",
+          "required": ["data_hora_captura", "orientacao", "coordenadas", "texto_original", "exif_bruto"],
+          "additionalProperties": false,
+          "properties": {
+            "data_hora_captura": {"type": ["string", "null"], "format": "date-time"},
+            "orientacao": {"type": ["string", "null"]},
+            "coordenadas": {"type": ["object", "null"], "required": ["latitude", "longitude"], "additionalProperties": false, "properties": {"latitude": {"type": "number", "minimum": -90, "maximum": 90}, "longitude": {"type": "number", "minimum": -180, "maximum": 180}}},
+            "texto_original": {"type": ["string", "null"]},
+            "exif_bruto": {"type": "object", "additionalProperties": {"type": "string"}}
+          }
+        },
+        "confianca": {"$ref": "pje-comum.schema.json#/$defs/confianca"},
+        "status": {"enum": ["EXTRAIDO", "METADADOS_PARCIAIS", "FORMATO_NAO_SUPORTADO", "ERRO_EXTRACAO"]},
+        "acao_processamento": {"enum": ["PROCESSADO", "REUTILIZADO"]}
+      }
+    }
+  }
+}

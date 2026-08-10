@@ -17,9 +17,11 @@ from typing import Any
 try:
     from scripts.triagem_pericial.classificar_tipo import classificar, normalizar
     from scripts.triagem_pericial.extrair_quesitos import extrair
+    from scripts.triagem_pericial.semantica import melhores
 except ModuleNotFoundError:  # execução direta pelo caminho do script
     from classificar_tipo import classificar, normalizar
     from extrair_quesitos import extrair
+    from semantica import melhores
 
 
 PERFIS = {
@@ -97,9 +99,23 @@ def _origem_quesito(documento: dict[str, Any]) -> str:
 
 
 def _materia_juridica(texto: str) -> str | None:
-    termos = ["prescrição", "decadência", "culpa", "responsabilidade civil", "dever de indenizar", "legitimidade"]
+    termos = ["prescrição", "decadência", "culpa", "responsabilidade civil", "dever de indenizar", "indenizar", "responsabilizar", "responsável pelo dano", "obrigação de pagar", "legitimidade", "nexo jurídico"]
     encontrados = [termo for termo in termos if normalizar(termo) in normalizar(texto)]
     return ", ".join(encontrados) if encontrados else None
+
+def _tema_dos_autos(documentos, fallback):
+    sinais=re.compile(r"(?i)\b(per[ií]cia|prova t[eé]cnica|verificar|determinar|controvers|fissur|trinc|umidade|infiltra|desplac|estrutura|impermeabiliza)\b")
+    candidatos=[]
+    camadas={"DECISAO":7,"QUESITOS_JUIZO":6,"DESPACHO":5,"ATO_JUDICIAL":4,"QUESITOS":3,"PETICAO_INICIAL":2,"MANIFESTACAO":2,"PARECER_TECNICO_PARTE":1}
+    for doc in documentos:
+        for pag in doc.get("paginas",[]):
+            for trecho in re.split(r"(?<=[.!?])\s+|\n+",pag.get("texto_bruto","")):
+                limpo=re.sub(r"\s+"," ",trecho).strip()
+                if 25<=len(limpo)<=700 and sinais.search(limpo):candidatos.append((camadas.get(doc.get("classe_normalizada"),0),len(sinais.findall(limpo)),doc,pag,limpo))
+    if not candidatos:return fallback,None
+    _,_,doc,pag,trecho=max(candidatos,key=lambda x:(x[0],x[1]));manifestacoes=sorted(set(re.findall(r"(?i)\b(fissuras?|trincas?|umidade|infiltrações?|desplacamentos?|deformações?)\b",trecho)))
+    texto=("Verificar tecnicamente "+", ".join(manifestacoes)+", suas causas e consequências dentro do encargo delimitado nos autos.") if manifestacoes else trecho
+    return texto,{"documento_id":doc["documento_id"],"pagina":pag.get("referencia"),"trecho":trecho,"natureza":"DELIMITACAO_EXTRAIDA","camada_autoridade":max(candidatos,key=lambda x:(x[0],x[1]))[0]}
 
 
 def gerar(diretorio: Path) -> dict[str, Any]:
@@ -153,21 +169,22 @@ def gerar(diretorio: Path) -> dict[str, Any]:
             vistos_texto[chave] = qid
         juridica = _materia_juridica(item["texto_integral"])
         pertinencia = "REPETITIVO" if repetitivo else "PERTINENTE_PARCIAL" if juridica else "PERTINENTE_TECNICO"
-        questao_id = f"QT-{1 + (ordem - 1) % len(questoes):03d}"
-        questoes[int(questao_id[-3:]) - 1]["quesitos_relacionados"].append(qid)
+        questoes_relacionadas = melhores(item["texto_integral"], questoes)
+        for questao_id in questoes_relacionadas:
+            next(q for q in questoes if q["id"] == questao_id)["quesitos_relacionados"].append(qid)
         doc = docs_por_id[item["documento_id"]]
         quesitos.append({
             "id": qid, "origem": _origem_quesito(doc), "documento_id": item["documento_id"],
             "id_pje": item["id_pje"], "numero_original": item["numero_original"],
             "caminho_original": item["numero_original"], "ordem_real": ordem,
             "texto_integral": item["texto_integral"], "subitens": [], "paginas": [item["pagina"]],
-            "pertinencia": pertinencia, "questoes_tecnicas_relacionadas": [questao_id],
+            "pertinencia": pertinencia, "questoes_tecnicas_relacionadas": questoes_relacionadas,
             "evidencias_necessarias": ["Evidência documental e/ou de vistoria compatível com o conteúdo do quesito"],
             "ressalvas_aplicaveis": res_ids,
             "status_cobertura": "REPETITIVO" if repetitivo else "PARCIAL",
             "materia_tecnica": item["texto_integral"] if not juridica else "Aspecto técnico a separar da qualificação jurídica",
             "materia_juridica_associada": juridica,
-            "secoes_laudisticas_previstas": ["Análise técnica vinculada à questão " + questao_id],
+            "secoes_laudisticas_previstas": ["Análise técnica vinculada à questão " + q for q in questoes_relacionadas],
             "proveniencia": [item["proveniencia"]],
         })
 
@@ -196,6 +213,7 @@ def gerar(diretorio: Path) -> dict[str, Any]:
         })
     status = "PENDENTE_EVIDENCIAS_ADICIONAIS" if resultado.nivel == "BAIXA" else "APTO_PARA_PLANEJAMENTO"
     sha_manifesto = hashlib.sha256(manifesto_path.read_bytes()).hexdigest()
+    tema_extraido,passagem_tema=_tema_dos_autos(documentos,perfil["tema"])
     analise = lambda texto: {"texto": texto, "confianca": _confianca(resultado.nivel),
                              "documentos_fonte": resultado.documentos_fonte,
                              "status_verificacao": "PENDENTE_VALIDACAO_PERITO"}
@@ -213,7 +231,7 @@ def gerar(diretorio: Path) -> dict[str, Any]:
                           "criterios": resultado.criterios, "alternativas_consideradas": resultado.alternativas},
         "subtipos_pericia": resultado.subtipos,
         "assunto_processual": assunto,
-        "controversia_processual": analise(perfil["tema"]), "tema_controvertido": analise(perfil["tema"]),
+        "controversia_processual": analise(tema_extraido), "tema_controvertido": analise(tema_extraido),
         "objeto_material": analise(perfil["objeto"]), "objetivo_pericial": analise(perfil["objetivo"]),
         "questoes_tecnicas": questoes, "quesitos": quesitos, "matriz_cobertura": cobertura,
         "ressalvas": ressalvas, "fatores_limitantes": [r["descricao"] for r in ressalvas], "conflitos": [],

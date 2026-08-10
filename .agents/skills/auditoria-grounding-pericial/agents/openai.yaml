@@ -1,0 +1,4 @@
+interface:
+  display_name: "Grounding Pericial"
+  short_description: "Audita afirmações contra evidências periciais"
+  default_prompt: "Use $auditoria-grounding-pericial para verificar claims materiais e suas evidências."

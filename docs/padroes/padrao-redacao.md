@@ -8,10 +8,10 @@ gerais.
 
 ## Referências
 
-- Usar Eliane Ferreira de Souza como referência visual principal.
-- Usar Daniela Maria dos Santos, versão 8, e os demais laudos finalizados como
+- Usar o laudo privado aprovado como referência visual principal.
+- Usar a versão 8 do laudo privado secundário e os demais laudos finalizados como
   referências secundárias de estrutura e redação.
-- Não usar Daniela Maria dos Santos, versão 9, como referência de conteúdo
+- Não usar a versão 9 do laudo privado secundário como referência de conteúdo
   final.
 
 ## Tom e pessoa verbal

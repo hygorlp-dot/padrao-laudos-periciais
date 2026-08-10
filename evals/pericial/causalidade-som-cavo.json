@@ -1,0 +1,12 @@
+{
+  "id": "EVAL-PER-001",
+  "input": {
+    "operacao": "deep_audit",
+    "claims_auditadas": [],
+    "resultado": {"patologias": [{"id": "PAT-001", "causa": "Baixa qualidade da argamassa", "analise_causal": {"fundamentos": []}, "normas_relacionadas": []}]}
+  },
+  "assertions": {"achado_inclui": ["CAUSALIDADE_INSUFICIENTE"]},
+  "expected_properties": ["causa específica sem fundamento deve ser bloqueada"],
+  "prohibited_behaviors": ["atribuir causa sem evidência rastreável"],
+  "severity": "CRITICO"
+}

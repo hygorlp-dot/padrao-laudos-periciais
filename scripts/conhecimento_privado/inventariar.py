@@ -15,7 +15,7 @@ from pypdf import PdfReader
 
 
 EXTENSOES = {".pdf", ".docx", ".docm"}
-VERSAO_EXTRATOR = "1.1.0"
+VERSAO_EXTRATOR = "1.2.0"
 SISTEMAS = {
     "REVESTIMENTOS": ("revestimento", "ceram", "argamassa", "aderencia"),
     "VEDACOES": ("vedacao", "alvenaria", "fissura", "trinca"),
@@ -135,14 +135,46 @@ def derivar_modelo(item: dict, paginas: list[str]) -> dict:
     tipo, _ = tipo_provavel(texto, "MODELO_REFERENCIAL")
     base = normalizar(texto[:300000])
     sistemas = [nome for nome, termos in SISTEMAS.items() if any(t in base for t in termos)]
+    extrair=lambda padrao,limite:[x["descricao"] for x in itens_textuais(paginas,padrao,limite)]
+    estrutura=extrair(r"^(?:[0-9]+(?:\.[0-9]+)*\s+)?(?:considera[cç][oõ]es|metodologia|vistoria|conclus[aã]o|quesitos|or[cç]amento|encerramento)\b",30)
+    metodologia=extrair(r"\b(metodologia|inspe[cç][aã]o visual|levantamento|procedimento)\b",20)
+    medicoes=extrair(r"\b(medi[cç][aã]o|medidor|trena|fissur[oô]metro|umidade)\b",20)
+    ressalvas=extrair(r"\b(limita[cç][aã]o|ressalva|n[aã]o foi poss[ií]vel|inacess[ií]vel)\b",20)
+    questoes=extrair(r"^(?:quesito|pergunta|quest[aã]o)(?:\s+n?[.º°]?\s*\d+)?\s*[:.-]",30)
+    estrategias=extrair(r"\b(confrontou-se|comparou-se|correlacionou-se|foi verificado|procedeu-se|adotou-se)\b",20)
+    formas_resposta=extrair(r"^(?:r\s*:|resposta\s*:|ao quesito)\s*",30)
     return {"schema_version": "1.0.0", "id": item["id"],
             "fonte": {"arquivo": item["caminho_relativo"], "sha256": item["sha256"], "metodo_extracao": item["metodo_extracao"], "confianca": item["confianca"]},
-            "nivel": "CASO_ANTERIOR", "tipo_pericia": tipo, "subtipos": [], "temas": [],
-            "estrutura": [], "metodologia": [], "tecnicas": [], "sistemas": sistemas, "medicoes": [],
-            "ensaios": [], "equipamentos": [], "tipos_evidencia": [], "ressalvas": [],
-            "questoes_tecnicas": [], "praticas_recorrentes": [],
+            "nivel": "CASO_ANTERIOR", "tipo_pericia": tipo, "subtipos": [], "temas": sistemas,
+            "estrutura": estrutura, "metodologia": metodologia, "tecnicas": metodologia, "sistemas": sistemas, "medicoes": medicoes,
+            "ensaios": extrair(r"\bensaio\b",10), "equipamentos": medicoes, "tipos_evidencia": ["fotografias","medições","documentos"] if estrutura else [], "ressalvas": ressalvas,
+            "questoes_tecnicas": questoes, "estrategias_analise": estrategias,
+            "formas_resposta_quesitos": formas_resposta,
+            "praticas_recorrentes": (["estrutura por capítulos"] if estrutura else []) +
+                                    (["respostas identificadas individualmente"] if formas_resposta else []),
             "elementos_proibidos_como_regra": ["fatos", "nomes", "endereços", "conclusões", "causalidade", "valores", "responsabilidade"],
             "status": "EXTRAIDO" if texto.strip() else "TEXTO_INSUFICIENTE"}
+
+
+def agregar_regras_candidatas(modelos: list[dict], minimo_fontes: int = 2) -> list[dict]:
+    """Promove apenas práticas metodológicas recorrentes; nunca resultados de casos."""
+    proibidos = re.compile(r"\b(causa|culpa|respons[aá]vel|indeniza|v[ií]cio caracterizado|origem end[oó]gena|valor)\b", re.I)
+    ocorrencias: dict[str, set[str]] = {}
+    originais: dict[str, str] = {}
+    for modelo in modelos:
+        fonte = modelo.get("id") or modelo.get("fonte", {}).get("sha256")
+        for campo in ("praticas_recorrentes", "estrategias_analise", "formas_resposta_quesitos"):
+            for pratica in modelo.get(campo, []):
+                texto = pratica if isinstance(pratica, str) else pratica.get("descricao", "")
+                chave = re.sub(r"\s+", " ", normalizar(texto)).strip()
+                if fonte and chave and not proibidos.search(texto):
+                    ocorrencias.setdefault(chave, set()).add(fonte)
+                    originais.setdefault(chave, texto)
+    return [
+        {"pratica": originais[chave], "fontes_independentes": sorted(fontes),
+         "status": "CANDIDATA_VALIDACAO_PERITO"}
+        for chave, fontes in sorted(ocorrencias.items()) if len(fontes) >= minimo_fontes
+    ]
 
 
 def inventariar(raiz_privada: Path) -> dict:

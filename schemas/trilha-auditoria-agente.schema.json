@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/trilha-auditoria-agente.schema.json",
+  "title": "Trilha de auditoria profissional do agente",
+  "type": "object",
+  "required": ["schema_version", "execucao_id", "processo", "timestamp", "agente", "skill", "objetivo", "inputs", "fontes", "artefatos", "decisoes_autonomas", "inferencias", "pesquisas_online", "normas_utilizadas", "modelos_utilizados", "outputs", "auditorias", "achados", "correcoes", "validacoes_humanas", "status", "proveniencia"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"type": "string", "minLength": 1}, "execucao_id": {"type": "string", "minLength": 1}, "processo": {"type": ["string", "null"]}, "timestamp": {"type": "string", "format": "date-time"}, "agente": {"type": "string", "minLength": 1}, "skill": {"type": ["string", "null"]}, "objetivo": {"type": ["string", "null"]},
+    "inputs": {"$ref": "#/$defs/lista"}, "fontes": {"$ref": "#/$defs/lista"}, "artefatos": {"$ref": "#/$defs/lista"}, "decisoes_autonomas": {"$ref": "#/$defs/registros"}, "inferencias": {"$ref": "#/$defs/registros"}, "pesquisas_online": {"$ref": "#/$defs/registros"}, "normas_utilizadas": {"$ref": "#/$defs/lista"}, "modelos_utilizados": {"$ref": "#/$defs/lista"}, "outputs": {"$ref": "#/$defs/lista"}, "auditorias": {"$ref": "#/$defs/lista"}, "achados": {"$ref": "#/$defs/registros"}, "correcoes": {"$ref": "#/$defs/registros"}, "validacoes_humanas": {"$ref": "#/$defs/registros"}, "status": {"enum": ["EM_ANALISE", "APROVADO", "BLOQUEADO"]}, "proveniencia": {"$ref": "#/$defs/lista"}
+  },
+  "$defs": {
+    "lista": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "registros": {"type": "array", "items": {"type": "object", "propertyNames": {"not": {"enum": ["chain_of_thought", "scratchpad", "raciocinio_oculto"]}}, "additionalProperties": {"type": ["string", "number", "boolean", "null"]}}}
+  }
+}

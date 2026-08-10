@@ -44,13 +44,8 @@ def extrair(documentos: list[dict[str, Any]]) -> list[dict[str, Any]]:
         decisao_com_quesitos = classe in {"DECISAO", "DESPACHO"} and bool(
             re.search(r"quesitos?\s+(?:do\s+ju[ií]zo|a\s+serem\s+respondidos|abaixo|seguintes)", contexto)
         )
-        origem_plausivel = (
-            classe == "PETICAO_INICIAL"
-            or submissao_explicita
-            or decisao_com_quesitos
-            or "quesit" in titulo
-        )
-        if not origem_plausivel or classe in {"CONTESTACAO", "REPLICA", "PARECER_TECNICO_PARTE"}:
+        origem_plausivel = submissao_explicita or decisao_com_quesitos or "quesit" in titulo or bool(INICIO.search(texto))
+        if not origem_plausivel:
             continue
         inicios = list(INICIO.finditer(texto))
         if not inicios and "quesit" not in texto.lower():

@@ -1,0 +1,606 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://padrao-laudos-periciais.local/schemas/analise-motor-vicios.schema.json",
+    "title": "Resultado do motor t\u00e9cnico de v\u00edcios construtivos",
+    "type": "object",
+    "required": [
+        "schema_version",
+        "processo_cnj",
+        "tipo_pericia",
+        "status_execucao",
+        "manifestacoes",
+        "hipoteses",
+        "patologias",
+        "questoes_saneadas",
+        "cobertura_quesitos",
+        "pesquisa_online",
+        "autoauditoria",
+        "autonomia",
+        "gate_redacao",
+        "proveniencia"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "schema_version": {
+            "type": "string"
+        },
+        "processo_cnj": {
+            "$ref": "pje-comum.schema.json#/$defs/numeroCnj"
+        },
+        "tipo_pericia": {
+            "type": "string"
+        },
+        "status_execucao": {
+            "enum": [
+                "ANALISE_INICIAL",
+                "ANALISE_CONCLUIDA",
+                "AGUARDANDO_DADOS_DE_VISTORIA",
+                "MOTOR_ESPECIALIZADO_NAO_IMPLEMENTADO"
+            ]
+        },
+        "estado_analise": {
+            "enum": [
+                "PAT_INICIAL",
+                "PAT_FINAL"
+            ]
+        },
+        "catalogo_evidencias": {
+            "type": "array",
+            "items": {
+                "type": "object"
+            }
+        },
+        "manifestacoes": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/manifestacao"
+            }
+        },
+        "hipoteses": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/hipotese"
+            }
+        },
+        "patologias": {
+            "type": "array",
+            "items": {
+                "$ref": "patologia.schema.json"
+            }
+        },
+        "questoes_saneadas": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/questao"
+            }
+        },
+        "cobertura_quesitos": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/cobertura"
+            }
+        },
+        "pesquisa_online": {
+            "$ref": "#/$defs/pesquisa"
+        },
+        "autoauditoria": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/achado"
+            }
+        },
+        "autonomia": {
+            "$ref": "#/$defs/autonomia"
+        },
+        "gate_redacao": {
+            "enum": [
+                "APTO_PARA_REDACAO",
+                "APTO_PARA_REDACAO_COM_RESSALVAS",
+                "BLOQUEADO_PARA_REDACAO"
+            ]
+        },
+        "proveniencia": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "minLength": 1
+            }
+        }
+    },
+    "$defs": {
+        "ids": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "uniqueItems": true
+        },
+        "manifestacao": {
+            "type": "object",
+            "required": [
+                "id",
+                "descricao",
+                "sistema",
+                "elemento",
+                "local",
+                "alegacoes",
+                "observacoes",
+                "fotografias",
+                "medicoes",
+                "questoes"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": "^MAN-[0-9]{3,}$"
+                },
+                "descricao": {
+                    "type": "string"
+                },
+                "sistema": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "elemento": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "local": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "alegacoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "observacoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "fotografias": {
+                    "$ref": "#/$defs/ids"
+                },
+                "medicoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "questoes": {
+                    "$ref": "#/$defs/ids"
+                }
+            }
+        },
+        "hipotese": {
+            "type": "object",
+            "required": [
+                "id",
+                "manifestacao",
+                "descricao",
+                "mecanismo",
+                "causa_candidata",
+                "evidencias_favoraveis",
+                "evidencias_contrarias",
+                "evidencias_ausentes",
+                "normas",
+                "literatura",
+                "modelos_referenciais",
+                "compatibilidade_tecnica",
+                "confianca",
+                "status",
+                "motivo_status",
+                "proveniencia"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": "^HIP-[0-9]{3,}$"
+                },
+                "manifestacao": {
+                    "type": "string",
+                    "pattern": "^MAN-[0-9]{3,}$"
+                },
+                "descricao": {
+                    "type": "string"
+                },
+                "mecanismo": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "causa_candidata": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "aspectos_requeridos": { "$ref": "#/$defs/ids" },
+                "aspectos_cobertos": { "$ref": "#/$defs/ids" },
+                "evidencias_favoraveis": {
+                    "$ref": "#/$defs/ids"
+                },
+                "evidencias_contrarias": {
+                    "$ref": "#/$defs/ids"
+                },
+                "evidencias_ausentes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "normas": {
+                    "$ref": "#/$defs/ids"
+                },
+                "literatura": {
+                    "$ref": "#/$defs/ids"
+                },
+                "modelos_referenciais": {
+                    "$ref": "#/$defs/ids"
+                },
+                "compatibilidade_tecnica": {
+                    "enum": [
+                        "COMPATIVEL",
+                        "PARCIALMENTE_COMPATIVEL",
+                        "INCOMPATIVEL",
+                        "NAO_AVALIAVEL"
+                    ]
+                },
+                "confianca": {
+                    "$ref": "pje-comum.schema.json#/$defs/confianca"
+                },
+                "status": {
+                    "enum": [
+                        "POSSIVEL",
+                        "FORTALECIDA",
+                        "ENFRAQUECIDA",
+                        "AFASTADA",
+                        "NAO_TESTAVEL",
+                        "MAIS_PROVAVEL"
+                    ]
+                },
+                "motivo_status": {
+                    "type": "string"
+                },
+                "proveniencia": {
+                    "$ref": "#/$defs/ids"
+                }
+            }
+        },
+        "questao": {
+            "type": "object",
+            "required": [
+                "id",
+                "status",
+                "patologias",
+                "observacoes",
+                "fotografias",
+                "medicoes",
+                "hipoteses",
+                "normas",
+                "conclusao",
+                "ressalvas",
+                "quesitos",
+                "confianca"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": "^QT-[0-9]{3,}$"
+                },
+                "dimensoes_saneamento": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "required": ["intencao", "status"],
+                        "additionalProperties": false,
+                        "properties": {
+                            "intencao": {"enum": ["JURIDICO", "ORCAMENTO", "CAUSALIDADE", "ORIGEM", "MECANISMO", "EXISTENCIA", "SEGURANCA", "REPARO", "CONFORMIDADE", "METODOLOGIA", "CARACTERIZACAO"]},
+                            "status": {"enum": ["SANEADA", "NAO_SANEADA_POR_CAPACIDADE", "PREJUDICADA"]}
+                        }
+                    }
+                },
+                "status": {
+                    "enum": [
+                        "SANEADA",
+                        "SANEADA_COM_RESSALVA",
+                        "PARCIALMENTE_SANEADA",
+                        "INCONCLUSIVA_POR_LIMITACAO",
+                        "PREJUDICADA",
+                        "FORA_DO_ESCOPO_TECNICO"
+                    ]
+                },
+                "patologias": {
+                    "$ref": "#/$defs/ids"
+                },
+                "observacoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "fotografias": {
+                    "$ref": "#/$defs/ids"
+                },
+                "medicoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "hipoteses": {
+                    "$ref": "#/$defs/ids"
+                },
+                "normas": {
+                    "$ref": "#/$defs/ids"
+                },
+                "conclusao": {
+                    "type": "string"
+                },
+                "ressalvas": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "quesitos": {
+                    "$ref": "#/$defs/ids"
+                },
+                "confianca": {
+                    "$ref": "pje-comum.schema.json#/$defs/confianca"
+                }
+            }
+        },
+        "cobertura": {
+            "type": "object",
+            "required": [
+                "quesito",
+                "status",
+                "questoes",
+                "patologias",
+                "observacoes",
+                "fotografias",
+                "medicoes",
+                "hipoteses",
+                "normas",
+                "ressalvas"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "quesito": {
+                    "type": "string",
+                    "pattern": "^QUE-[0-9]{3,}$"
+                },
+                "status": {
+                    "enum": [
+                        "RESPONDIVEL",
+                        "RESPONDIVEL_COM_RESSALVA",
+                        "PREJUDICADO",
+                        "MATERIA_JURIDICA",
+                        "PENDENTE_EVIDENCIA"
+                    ]
+                },
+                "questoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "patologias": {
+                    "$ref": "#/$defs/ids"
+                },
+                "observacoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "fotografias": {
+                    "$ref": "#/$defs/ids"
+                },
+                "medicoes": {
+                    "$ref": "#/$defs/ids"
+                },
+                "hipoteses": {
+                    "$ref": "#/$defs/ids"
+                },
+                "normas": {
+                    "$ref": "#/$defs/ids"
+                },
+                "ressalvas": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "pesquisa": {
+            "type": "object",
+            "required": [
+                "status",
+                "pesquisas_realizadas",
+                "fontes_oficiais_localizadas",
+                "fontes_rejeitadas",
+                "fontes_cacheadas",
+                "revalidacoes_vigencia",
+                "pesquisas_desnecessarias_evitadas"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "status": {
+                    "enum": [
+                        "NAO_NECESSARIA",
+                        "REALIZADA",
+                        "PESQUISA_ONLINE_INDISPONIVEL"
+                    ]
+                },
+                "pesquisas_realizadas": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "fontes_oficiais_localizadas": {
+                    "$ref": "#/$defs/ids"
+                },
+                "fontes_rejeitadas": {
+                    "$ref": "#/$defs/ids"
+                },
+                "fontes_cacheadas": {
+                    "$ref": "#/$defs/ids"
+                },
+                "revalidacoes_vigencia": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "pesquisas_desnecessarias_evitadas": {
+                    "type": "integer",
+                    "minimum": 0
+                }
+            }
+        },
+        "achado": {
+            "type": "object",
+            "required": [
+                "id",
+                "severidade",
+                "tipo",
+                "descricao",
+                "evidencias",
+                "bloqueante"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": "^AUD-[0-9]{3,}$"
+                },
+                "severidade": {
+                    "enum": [
+                        "ALERTA",
+                        "RELEVANTE",
+                        "BLOQUEANTE"
+                    ]
+                },
+                "tipo": {
+                    "type": "string"
+                },
+                "descricao": {
+                    "type": "string"
+                },
+                "evidencias": {
+                    "$ref": "#/$defs/ids"
+                },
+                "bloqueante": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "autonomia": {
+            "type": "object",
+            "required": [
+                "decisoes_autonomas",
+                "hipoteses_criadas",
+                "hipoteses_testadas",
+                "pesquisas_autonomas",
+                "normas_recuperadas",
+                "fontes_online_recuperadas",
+                "lacunas_resolvidas",
+                "ressalvas_criadas",
+                "perguntas_evitadas",
+                "perguntas_necessarias"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "decisoes_autonomas": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "hipoteses_criadas": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "hipoteses_testadas": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "hipoteses_fortalecidas": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "hipoteses_afastadas": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "claims_geradas": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "claims_grounded": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "claims_insufficient": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "claims_interpolated": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "claims_reduzidas": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "claims_removidas": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "autocorrecoes": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "normas_utilizadas": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "normas_rejeitadas": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "fontes_online": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "perguntas_perito": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "pesquisas_autonomas": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "normas_recuperadas": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "fontes_online_recuperadas": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "lacunas_resolvidas": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "ressalvas_criadas": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "perguntas_evitadas": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "perguntas_necessarias": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    }
+                }
+            }
+        }
+    }
+}

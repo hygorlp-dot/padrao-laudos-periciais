@@ -1,0 +1,4 @@
+interface:
+  display_name: "Auditoria Pericial Integrada"
+  short_description: "Orquestra detector, grounding, deep audit e gate"
+  default_prompt: "Use $auditoria-pericial-integrada para auditar integralmente um artefato pericial."

@@ -1,0 +1,13 @@
+{
+  "id": "EVAL-PER-002",
+  "input": {
+    "operacao": "grounding",
+    "claim": {"id": "CLM-002", "tipo": "CONFORMIDADE_NORMATIVA", "natureza": "INTERPRETIVE", "saliencia": "LOAD_BEARING", "texto": "Aplicação de item normativo não consultado"},
+    "relacoes": [{"id": "NOR-001", "tipo": "NORMA", "proveniencia": ["FONTE-SECUNDARIA"]}],
+    "catalogo": [{"id": "NOR-001", "tipo": "NORMA", "proveniencia": ["FONTE-SECUNDARIA"], "acessivel": false, "aspectos_suportados": ["CONFORMIDADE_NORMATIVA"]}]
+  },
+  "assertions": {"veredito_igual": "UNVERIFIABLE"},
+  "expected_properties": ["fonte inacessível não fundamenta conformidade normativa"],
+  "prohibited_behaviors": ["inventar item ou tolerância"],
+  "severity": "CRITICO"
+}

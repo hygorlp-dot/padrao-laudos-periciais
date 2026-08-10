@@ -8,11 +8,11 @@
   "analise_causal": {"causa_provavel": null, "causas_alternativas": ["Hipótese fictícia não confirmada."], "fundamentos": [], "limitacoes": ["Acesso fictício limitado."], "grau_certeza": "INCONCLUSIVO"},
   "origem": "INCONCLUSIVA",
   "criticidade": "NAO_APLICAVEL",
-  "vicio_construtivo": {"caracterizado": true, "tipo": "OCULTO", "fundamentacao": "Caracterização fictícia incompatível com a situação.", "validado_perito": true},
+  "vicio_construtivo": {"caracterizado": true, "tipo": "OCULTO", "fundamentacao": "Caracterização fictícia incompatível com a situação.", "revisao_profissional": {"status": "NAO_REVISADO"}},
   "normas_relacionadas": [],
   "consequencias": {"seguranca": null, "funcionalidade": null, "estanqueidade": null, "salubridade": null, "higiene": null, "durabilidade": null, "conforto": null, "estetica": null, "manutencao": null, "evolucao": null},
   "recomendacao": {"necessaria": false, "descricao": "Avaliação complementar depende do perito.", "extensao": null},
-  "orcamento": {"incluir": false, "justificativa": "Análise inconclusiva não produz item.", "quantitativo": null, "unidade": null, "memoria_calculo": null, "validado_perito": false},
+  "orcamento": {"incluir": false, "justificativa": "Análise inconclusiva não produz item.", "quantitativo": null, "unidade": null, "memoria_calculo": null, "revisao_profissional": {"status": "NAO_REVISADO"}},
   "redacao": {"analise_alegacoes_causas": "Análise fictícia inconclusiva.", "consequencias": null, "classificacao": "Inconclusiva.", "conclusao": "Não foi possível concluir."},
   "status_validacao": "BLOQUEADO"
 }

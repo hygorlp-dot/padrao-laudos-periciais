@@ -28,12 +28,12 @@
     "textoNulo": { "type": ["string", "null"] },
     "secaoTexto": {
       "type": "object",
-      "required": ["texto", "fontes", "validado_perito"],
+      "required": ["texto", "fontes", "revisao_profissional"],
       "additionalProperties": false,
       "properties": {
         "texto": { "$ref": "#/$defs/textoNulo" },
         "fontes": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
-        "validado_perito": { "type": "boolean" }
+        "revisao_profissional": { "enum": ["NAO_REVISADO", "APROVADO", "AJUSTADO"] }
       }
     },
     "conclusaoGeral": {
