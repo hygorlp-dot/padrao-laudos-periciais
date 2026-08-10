@@ -19,6 +19,7 @@ PASTAS_FIXTURES = (
     RAIZ / "tests" / "fixtures" / "schemas",
     RAIZ / "tests" / "fixtures" / "pje",
     RAIZ / "tests" / "fixtures" / "triagem",
+    RAIZ / "tests" / "fixtures" / "planejamento",
 )
 
 ARQUIVOS_SCHEMA = {
@@ -30,6 +31,10 @@ ARQUIVOS_SCHEMA = {
     "manifesto-pje": PASTA_SCHEMAS / "manifesto-pje.schema.json",
     "documento-pje": PASTA_SCHEMAS / "documento-pje.schema.json",
     "delimitacao": PASTA_SCHEMAS / "delimitacao-pericial.schema.json",
+    "inventario": PASTA_SCHEMAS / "inventario-referencias.schema.json",
+    "conhecimento-referencial": PASTA_SCHEMAS / "conhecimento-referencial.schema.json",
+    "conhecimento-normativo": PASTA_SCHEMAS / "conhecimento-normativo.schema.json",
+    "plano-vistoria": PASTA_SCHEMAS / "plano-vistoria.schema.json",
 }
 
 
@@ -42,6 +47,8 @@ def tipo_fixture(caminho: Path) -> str:
     prefixo = caminho.name.split("-", maxsplit=1)[0]
     if caminho.parent.name == "triagem":
         return "delimitacao"
+    if caminho.parent.name == "planejamento":
+        return next(nome for nome in ("conhecimento-referencial", "conhecimento-normativo", "plano-vistoria", "inventario") if caminho.name.startswith(nome))
     if caminho.parent.name == "pje":
         tipos_pje = {
             "manifesto": "manifesto-pje",

@@ -20,8 +20,8 @@ vícios e manifestações patológicas em edificações, sem impedir expansão f
 
 ## Fluxo de dados
 
-O fluxo atual implementa `PDF PJe → manifesto-pje.json → documento-pje.json → delimitacao-pericial.json`.
-A delimitação antecede `processo.json`, vistoria,
+O fluxo atual implementa `PDF PJe → manifesto-pje.json → documento-pje.json → processo.json → delimitacao-pericial.json → plano-vistoria.json → ficha-pre-vistoria.md`.
+A vistoria alimentará futuramente
 análises `PAT-NNN`, `laudo.json`, revisão e preenchimento do modelo DOCM.
 
 ## Skills
@@ -31,14 +31,16 @@ análises `PAT-NNN`, `laudo.json`, revisão e preenchimento do modelo DOCM.
   `BLOQUEADO`.
 - `triagem-delimitacao-pericial`: leitura semântica, delimitação do encargo,
   cobertura de quesitos, ressalvas, conflitos e plano pericial preliminar.
+- `planejamento-pericial-autonomo`: gera processo semântico, recupera
+  conhecimento e produz plano e ficha pré-vistoria.
 
 ## Privacidade e estado atual
 
 `referencias/privadas/` contém material exclusivamente local e nunca deve ser
 versionada. Atualmente, o projeto possui arquitetura, padrões canônicos,
-checklists, skills, contratos JSON Schema, parser estrutural PJe e contrato de
-triagem semântica. A execução semântica é conduzida pelo Codex conforme a Skill;
-`processo.json` automático e automação Word ainda não foram implementados.
+checklists, skills, contratos JSON Schema, parser estrutural PJe, processo
+semântico, triagem e planejamento pré-vistoria. A execução semântica é conduzida
+pelo Codex conforme as Skills; automação Word ainda não foi implementada.
 
 Consulte o [manual operacional](docs/manual-operacional.md) e as
 [regras periciais](docs/padroes/regras-periciais.md).

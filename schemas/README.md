@@ -14,6 +14,13 @@ Esta pasta contém os contratos de dados iniciais do projeto em JSON Schema Draf
 - `delimitacao-pericial.schema.json`: classificação do tipo de perícia,
   delimitação técnica, quesitos, cobertura, ressalvas, conflitos, módulos e
   plano pericial preliminar.
+- `inventario-referencias.schema.json`: catálogo incremental por hash das
+  fontes privadas.
+- `conhecimento-referencial.schema.json` e
+  `conhecimento-normativo.schema.json`: derivados privados com níveis e
+  proveniência.
+- `plano-vistoria.schema.json`: atividades, medições, fotografias,
+  equipamentos, cobertura, autonomia e gate pré-vistoria.
 
 Os schemas rejeitam propriedades não declaradas. Alegações, documentos, constatações, inferências e resultados inconclusivos devem permanecer semanticamente separados.
 
@@ -38,6 +45,8 @@ PDF PJe
 → manifesto-pje.json
 → documento-pje.json
 → delimitacao-pericial.json
+→ conhecimento pertinente
+→ plano-vistoria.json
 → processo.json
 → vistoria.json
 → laudo.json

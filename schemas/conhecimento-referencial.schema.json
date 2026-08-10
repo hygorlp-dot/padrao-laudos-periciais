@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/conhecimento-referencial.schema.json",
+  "title": "Conhecimento derivado de modelo referencial",
+  "type": "object",
+  "required": ["schema_version", "id", "fonte", "nivel", "tipo_pericia", "subtipos", "temas", "estrutura", "metodologia", "tecnicas", "sistemas", "medicoes", "ensaios", "equipamentos", "tipos_evidencia", "ressalvas", "questoes_tecnicas", "praticas_recorrentes", "elementos_proibidos_como_regra", "status"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"type": "string"}, "id": {"type": "string", "pattern": "^MOD-[0-9]{4,}$"},
+    "fonte": {"$ref": "#/$defs/fonte"},
+    "nivel": {"enum": ["PADRAO_CANONICO", "REGRA_APROVADA", "EXPERIENCIA_REFERENCIAL", "CASO_ANTERIOR", "REGRA_CANDIDATA"]},
+    "tipo_pericia": {"type": "string"}, "subtipos": {"type": "array", "items": {"type": "string"}},
+    "temas": {"type": "array", "items": {"type": "string"}}, "estrutura": {"type": "array", "items": {"type": "string"}},
+    "metodologia": {"type": "array", "items": {"type": "string"}}, "tecnicas": {"type": "array", "items": {"type": "string"}},
+    "sistemas": {"type": "array", "items": {"type": "string"}}, "medicoes": {"type": "array", "items": {"type": "string"}},
+    "ensaios": {"type": "array", "items": {"type": "string"}}, "equipamentos": {"type": "array", "items": {"type": "string"}},
+    "tipos_evidencia": {"type": "array", "items": {"type": "string"}}, "ressalvas": {"type": "array", "items": {"type": "string"}},
+    "questoes_tecnicas": {"type": "array", "items": {"type": "string"}}, "praticas_recorrentes": {"type": "array", "items": {"type": "string"}},
+    "elementos_proibidos_como_regra": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "status": {"enum": ["EXTRAIDO", "TEXTO_INSUFICIENTE", "PENDENTE_REVISAO"]}
+  },
+  "$defs": {"fonte": {"type": "object", "required": ["arquivo", "sha256", "metodo_extracao", "confianca"], "additionalProperties": false, "properties": {"arquivo": {"type": "string"}, "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "metodo_extracao": {"type": "string"}, "confianca": {"$ref": "pje-comum.schema.json#/$defs/confianca"}}}}
+}

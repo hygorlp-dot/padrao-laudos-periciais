@@ -1,0 +1,10 @@
+{"cenarios":[
+{"id":"vicio_ceramico","esperado":"verificação sem origem presumida"},{"id":"fissura_sem_causa","esperado":"causa permanece inconclusiva"},
+{"id":"umidade","esperado":"medição condicional"},{"id":"sistema_nao_documentado","esperado":"ressalva documental"},
+{"id":"quesito_exige_medicao","esperado":"MED-PLANO"},{"id":"quesito_documental","esperado":"cobertura documental"},
+{"id":"quesito_juridico","esperado":"delimitação jurídica"},{"id":"documento_ausente","esperado":"documento a solicitar"},
+{"id":"conflito_campo","esperado":"atividade de verificação"},{"id":"conflito_bloqueante","esperado":"BLOQUEADO_PARA_VISTORIA"},
+{"id":"avaliacao_imobiliaria","esperado":"caracterização e dados de mercado"},{"id":"rodovia","esperado":"geometria e segurança operacional"},
+{"id":"norma_aplicavel","esperado":"APLICAVEL_PRINCIPAL"},{"id":"norma_posterior","esperado":"não usar historicamente de modo automático"},
+{"id":"norma_sem_edicao","esperado":"PENDENTE_VERIFICACAO_NORMATIVA"},{"id":"modelo_semelhante","esperado":"EXPERIENCIA_REFERENCIAL"},
+{"id":"modelo_conclusao_especifica","esperado":"não contaminar o caso atual"}]}

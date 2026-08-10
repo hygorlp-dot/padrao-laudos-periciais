@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/conhecimento-normativo.schema.json",
+  "title": "Conhecimento normativo privado",
+  "type": "object",
+  "required": ["schema_version", "id", "entidade", "numero", "titulo", "edicao", "data", "vigencia", "escopo", "sistemas", "assuntos", "terminologia", "requisitos", "criterios_aceitacao", "metodos_verificacao", "ensaios", "limitacoes", "referencias_cruzadas", "aplicabilidade_temporal", "proveniencia", "status"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"type": "string"}, "id": {"type": "string", "pattern": "^NOR-[0-9]{4,}$"},
+    "entidade": {"type": ["string", "null"]}, "numero": {"type": ["string", "null"]}, "titulo": {"type": ["string", "null"]},
+    "edicao": {"type": ["string", "null"]}, "data": {"type": ["string", "null"]}, "vigencia": {"type": ["string", "null"]},
+    "escopo": {"type": "array", "items": {"$ref": "#/$defs/item"}}, "sistemas": {"type": "array", "items": {"type": "string"}},
+    "assuntos": {"type": "array", "items": {"type": "string"}}, "terminologia": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+    "requisitos": {"type": "array", "items": {"$ref": "#/$defs/item"}}, "criterios_aceitacao": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+    "metodos_verificacao": {"type": "array", "items": {"$ref": "#/$defs/item"}}, "ensaios": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+    "limitacoes": {"type": "array", "items": {"$ref": "#/$defs/item"}}, "referencias_cruzadas": {"type": "array", "items": {"type": "string"}},
+    "aplicabilidade_temporal": {"enum": ["APLICAVEL_PRINCIPAL", "APLICAVEL_COMPLEMENTAR", "NAO_APLICAVEL", "APLICABILIDADE_INCONCLUSIVA"]},
+    "proveniencia": {"$ref": "#/$defs/proveniencia"},
+    "status": {"enum": ["VERIFICADO", "PENDENTE_VERIFICACAO_NORMATIVA", "TEXTO_INSUFICIENTE"]}
+  },
+  "$defs": {
+    "item": {"type": "object", "required": ["descricao", "pagina", "secao_item", "status_verificacao"], "additionalProperties": false, "properties": {"descricao": {"type": "string"}, "pagina": {"type": ["integer", "null"], "minimum": 1}, "secao_item": {"type": ["string", "null"]}, "status_verificacao": {"enum": ["VERIFICADO", "PENDENTE_VERIFICACAO_NORMATIVA"]}}},
+    "proveniencia": {"type": "object", "required": ["arquivo", "sha256", "norma", "edicao", "pagina", "secao_item", "metodo_extracao", "confianca", "status_verificacao"], "additionalProperties": false, "properties": {"arquivo": {"type": "string"}, "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "norma": {"type": ["string", "null"]}, "edicao": {"type": ["string", "null"]}, "pagina": {"type": ["integer", "null"], "minimum": 1}, "secao_item": {"type": ["string", "null"]}, "metodo_extracao": {"type": "string"}, "confianca": {"$ref": "pje-comum.schema.json#/$defs/confianca"}, "status_verificacao": {"enum": ["VERIFICADO", "PENDENTE_VERIFICACAO_NORMATIVA"]}}}
+  }
+}

@@ -55,3 +55,15 @@
 - Fazer quesitos pertinentes influenciarem o plano do laudo futuro.
 - Não converter `NÃO CONSTATADO` em `INEXISTENTE`.
 - Reconhecer inconclusividade fundamentada como resultado técnico válido.
+
+## Planejamento pré-vistoria
+
+- Construir o plano para obter evidências necessárias ao saneamento das
+  questões técnicas e dos quesitos pertinentes; não usar roteiro genérico.
+- Manter fatos do processo, experiência referencial, conhecimento normativo e
+  ações planejadas em camadas distintas.
+- Não tratar atividade, medição, fotografia ou ensaio planejado como realizado.
+- Recuperar normas e modelos por conteúdo e proveniência, sem depender da pasta
+  informada e sem transferir fatos de casos anteriores.
+- Aplicar automaticamente o gate de vistoria e perguntar somente por bloqueio
+  material sem estratégia autônoma segura.
