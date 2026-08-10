@@ -1,14 +1,24 @@
 # Referências
 
-Esta pasta receberá somente laudos selecionados pelo perito para servirem como
-referência de estrutura, estilo e padronagem. Não é destinada ao armazenamento
-dos autos completos de processos reais.
+Esta pasta versionada registra apenas orientações sobre referências. Laudos de
+referência e autos autorizados para testes privados permanecem exclusivamente
+na área local ignorada pelo Git.
 
 ## Referências privadas
 
 `referencias/privadas/` contém laudos reais usados somente no ambiente local.
 Esses arquivos não podem ser versionados e devem permanecer integralmente fora
 do histórico do Git.
+
+Quando autorizados pelo perito:
+
+- `referencias/privadas/processos/` armazena PDFs reais usados como testes
+  privados de integração;
+- `referencias/privadas/derivados/` armazenará manifestos e documentos
+  estruturados derivados desses PDFs.
+
+Todo o conteúdo dessas duas pastas permanece protegido pela regra abrangente
+`referencias/privadas/` do `.gitignore`.
 
 Os arquivos deverão ser preferencialmente anonimizados antes da inclusão. A
 anonimização deverá remover ou substituir dados pessoais, informações

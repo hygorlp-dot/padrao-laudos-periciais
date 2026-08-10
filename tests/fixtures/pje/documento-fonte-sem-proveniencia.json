@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0.0", "documento_id": "DOC-PJE-103", "id_pje": "910003", "processo_cnj": "0000009-00.2026.4.00.0001",
+  "titulo_original": "Documento fictício sem proveniência", "tipo_original": "Documento", "classe_normalizada": "OUTRO", "subclasse_normalizada": null,
+  "prioridade": "B_CONTEXTO_RELEVANTE", "ordem_indice": 3, "data_hora": null,
+  "paginas": [{"referencia": {"pagina_pdf": 5, "pagina_documento": 1, "pagina_original": null}, "classificacao": "TEXTO_DIGITAL", "possui_texto_util": true, "possui_imagens": false, "possui_tabelas": false, "requer_ocr": false, "confianca": {"nivel": "ALTA"}}],
+  "secoes": [], "subdocumentos": [],
+  "blocos_texto": [{"bloco_id": "BLT-101", "texto": "Informação fictícia sem fonte.", "pagina": {"pagina_pdf": 5, "pagina_documento": 1, "pagina_original": null}}],
+  "tabelas": [], "imagens": [], "fotografias": [], "eventos": [], "quesitos": [], "alegacoes": [], "entidades": [], "referencias_normativas": [],
+  "fontes": [{"arquivo": "negativo-ficticio.pdf", "sha256": "9999999999999999999999999999999999999999999999999999999999999999", "documento_id": "DOC-PJE-103", "id_pje": "910003", "pagina_pdf": 5, "pagina_documento": 1, "pagina_original": null, "trecho": "Documento fictício", "natureza": "DOCUMENTADO", "metodo_extracao": "RODAPE_PJE", "confianca": {"nivel": "ALTA"}, "status_verificacao": "VERIFICADO"}],
+  "conflitos": [], "alertas": [],
+  "status_reconciliacao": {"status": "CONFIRMADO", "id_indice": "910003", "id_rodape": "910003", "pagina_destino_link": 5, "primeira_pagina_detectada": 5, "ultima_pagina_detectada": 5, "evidencias": [], "motivos": [], "confianca": {"nivel": "ALTA"}},
+  "status_validacao": "BLOQUEADO"
+}

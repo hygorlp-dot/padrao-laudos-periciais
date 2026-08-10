@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0.0",
+  "documento_id": "DOC-PJE-002",
+  "id_pje": "900002",
+  "processo_cnj": "0000001-00.2026.4.00.0001",
+  "titulo_original": "Documento técnico composto fictício",
+  "tipo_original": "Documento comprobatório",
+  "classe_normalizada": "DOCUMENTO_COMPOSTO",
+  "subclasse_normalizada": "PARECER_COM_ANEXO",
+  "prioridade": "A_ESSENCIAL",
+  "ordem_indice": 2,
+  "data_hora": "2026-01-01T10:01:00-03:00",
+  "paginas": [
+    {"referencia": {"pagina_pdf": 4, "pagina_documento": 1, "pagina_original": "1"}, "classificacao": "TEXTO_E_IMAGEM", "possui_texto_util": true, "possui_imagens": true, "possui_tabelas": false, "requer_ocr": false, "confianca": {"nivel": "ALTA"}},
+    {"referencia": {"pagina_pdf": 5, "pagina_documento": 2, "pagina_original": "A-1"}, "classificacao": "TEXTO_E_IMAGEM", "possui_texto_util": true, "possui_imagens": true, "possui_tabelas": false, "requer_ocr": false, "confianca": {"nivel": "ALTA"}}
+  ],
+  "secoes": [{
+    "secao_id": "SEC-001", "titulo_original": "Conclusão fictícia", "tipo_normalizado": "CONCLUSAO",
+    "pagina_inicio": {"pagina_pdf": 4, "pagina_documento": 1, "pagina_original": "1"},
+    "pagina_fim": {"pagina_pdf": 4, "pagina_documento": 1, "pagina_original": "1"},
+    "paginas": [{"pagina_pdf": 4, "pagina_documento": 1, "pagina_original": "1"}],
+    "texto": "Conclusão fictícia atribuída ao técnico da parte.",
+    "proveniencia": {"arquivo": "processo-ficticio.pdf", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "documento_id": "DOC-PJE-002", "id_pje": "900002", "pagina_pdf": 4, "pagina_documento": 1, "pagina_original": "1", "trecho": "Conclusão fictícia", "natureza": "CONSTATADO_POR_TECNICO_DA_PARTE", "metodo_extracao": "EXTRACAO_SEMANTICA", "confianca": {"nivel": "MEDIA"}, "status_verificacao": "NAO_VERIFICADO"}
+  }],
+  "subdocumentos": [{
+    "subdocumento_id": "SUB-001", "documento_pai": "DOC-PJE-002", "titulo": "Anexo fotográfico fictício", "tipo": "ANEXO",
+    "pagina_inicio": {"pagina_pdf": 5, "pagina_documento": 2, "pagina_original": "A-1"},
+    "pagina_fim": {"pagina_pdf": 5, "pagina_documento": 2, "pagina_original": "A-1"},
+    "paginas": [{"pagina_pdf": 5, "pagina_documento": 2, "pagina_original": "A-1"}],
+    "possui_texto": true, "possui_imagens": true, "possui_tabelas": false,
+    "proveniencia": {"arquivo": "processo-ficticio.pdf", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "documento_id": "DOC-PJE-002", "id_pje": "900002", "pagina_pdf": 5, "pagina_documento": 2, "pagina_original": "A-1", "trecho": "Anexo fictício", "natureza": "DOCUMENTADO", "metodo_extracao": "EXTRACAO_SEMANTICA", "confianca": {"nivel": "ALTA"}, "status_verificacao": "VERIFICADO"}
+  }],
+  "blocos_texto": [], "tabelas": [], "imagens": [], "fotografias": [], "eventos": [], "quesitos": [], "alegacoes": [], "entidades": [], "referencias_normativas": [],
+  "fontes": [{"arquivo": "processo-ficticio.pdf", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "documento_id": "DOC-PJE-002", "id_pje": "900002", "pagina_pdf": 4, "pagina_documento": 1, "pagina_original": "1", "trecho": "Documento composto fictício", "natureza": "DOCUMENTADO", "metodo_extracao": "RODAPE_PJE", "confianca": {"nivel": "ALTA"}, "status_verificacao": "VERIFICADO"}],
+  "conflitos": [], "alertas": [],
+  "status_reconciliacao": {"status": "CONFIRMADO", "id_indice": "900002", "id_rodape": "900002", "pagina_destino_link": 4, "primeira_pagina_detectada": 4, "ultima_pagina_detectada": 5, "evidencias": [], "motivos": [], "confianca": {"nivel": "ALTA"}},
+  "status_validacao": "VALIDADO"
+}

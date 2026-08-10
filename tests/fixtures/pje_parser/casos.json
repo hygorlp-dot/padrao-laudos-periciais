@@ -1,0 +1,9 @@
+{
+  "rodapes": [
+    {"texto": "Num. 123456 - Pág. 1", "id": "123456", "pagina": 1},
+    {"texto": "conteúdo sem marcador", "id": null, "pagina": null}
+  ],
+  "id_fragmentado": {"valor": "15306\n6023", "normalizado": "153066023", "metodo": "REMOCAO_QUEBRAS_LINHA"},
+  "paginas_continuas": [1, 2, 3],
+  "paginas_com_salto": [1, 3]
+}

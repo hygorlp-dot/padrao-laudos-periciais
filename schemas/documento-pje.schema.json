@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/documento-pje.schema.json",
+  "title": "Documento processual do PJe",
+  "description": "Contrato para um DOCUMENTO_PJE e sua estrutura interna. Seções e subdocumentos pertencentes ao mesmo documento não recebem id_pje próprio.",
+  "type": "object",
+  "required": [
+    "schema_version", "documento_id", "id_pje", "processo_cnj", "titulo_original", "tipo_original",
+    "classe_normalizada", "subclasse_normalizada", "prioridade", "ordem_indice", "data_hora", "paginas",
+    "secoes", "subdocumentos", "blocos_texto", "tabelas", "imagens", "fotografias", "eventos", "quesitos",
+    "alegacoes", "entidades", "referencias_normativas", "fontes", "conflitos", "alertas",
+    "status_reconciliacao", "status_validacao"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "minLength": 1 },
+    "documento_id": { "type": "string", "pattern": "^DOC-PJE-[0-9]{3,}$" },
+    "id_pje": { "$ref": "pje-comum.schema.json#/$defs/idPje" },
+    "processo_cnj": { "$ref": "pje-comum.schema.json#/$defs/numeroCnj" },
+    "titulo_original": { "type": "string", "minLength": 1 },
+    "tipo_original": { "type": "string", "minLength": 1 },
+    "classe_normalizada": { "$ref": "pje-comum.schema.json#/$defs/classeDocumental" },
+    "subclasse_normalizada": { "type": ["string", "null"], "pattern": "^[A-Z0-9_]+$" },
+    "prioridade": { "$ref": "pje-comum.schema.json#/$defs/prioridadeDocumental" },
+    "ordem_indice": { "type": ["integer", "null"], "minimum": 1 },
+    "data_hora": { "type": ["string", "null"], "format": "date-time" },
+    "paginas": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/paginaDocumento" } },
+    "secoes": { "type": "array", "items": { "$ref": "#/$defs/secaoInterna" } },
+    "subdocumentos": { "type": "array", "items": { "$ref": "#/$defs/subdocumentoAnexo" } },
+    "blocos_texto": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/blocoTexto" } },
+    "tabelas": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/tabela" } },
+    "imagens": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/imagem" } },
+    "fotografias": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/fotografia" } },
+    "eventos": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/evento" } },
+    "quesitos": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/quesito" } },
+    "alegacoes": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/alegacao" } },
+    "entidades": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/entidade" } },
+    "referencias_normativas": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/referenciaNormativa" } },
+    "fontes": { "type": "array", "minItems": 1, "items": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" } },
+    "conflitos": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/conflito" } },
+    "alertas": { "type": "array", "items": { "$ref": "#/$defs/alerta" } },
+    "status_reconciliacao": { "$ref": "pje-comum.schema.json#/$defs/reconciliacao" },
+    "status_validacao": { "enum": ["RASCUNHO", "BLOQUEADO", "VALIDADO"] }
+  },
+  "$defs": {
+    "paginaDocumento": {
+      "type": "object",
+      "required": ["referencia", "classificacao", "possui_texto_util", "possui_imagens", "possui_tabelas", "requer_ocr", "confianca"],
+      "additionalProperties": false,
+      "properties": {
+        "referencia": { "$ref": "pje-comum.schema.json#/$defs/referenciaPagina" },
+        "classificacao": { "$ref": "pje-comum.schema.json#/$defs/classificacaoPagina" },
+        "possui_texto_util": { "type": "boolean" },
+        "possui_imagens": { "type": "boolean" },
+        "possui_tabelas": { "type": "boolean" },
+        "requer_ocr": { "type": "boolean" },
+        "confianca": { "$ref": "pje-comum.schema.json#/$defs/confianca" }
+      }
+    },
+    "tipoSecao": {
+      "enum": ["CORPO_PRINCIPAL", "CONCLUSAO", "RELATORIO_FOTOGRAFICO", "ORCAMENTO", "MEMORIA_CALCULO", "ANEXO", "REFERENCIAS", "OUTRA"]
+    },
+    "secaoInterna": {
+      "description": "SECAO_INTERNA pertencente ao documento PJe pai; não admite id_pje.",
+      "type": "object",
+      "required": ["secao_id", "titulo_original", "tipo_normalizado", "pagina_inicio", "pagina_fim", "paginas", "texto", "proveniencia"],
+      "additionalProperties": false,
+      "properties": {
+        "secao_id": { "type": "string", "pattern": "^SEC-[0-9]{3,}$" },
+        "titulo_original": { "type": ["string", "null"] },
+        "tipo_normalizado": { "$ref": "#/$defs/tipoSecao" },
+        "pagina_inicio": { "$ref": "pje-comum.schema.json#/$defs/referenciaPagina" },
+        "pagina_fim": { "$ref": "pje-comum.schema.json#/$defs/referenciaPagina" },
+        "paginas": { "type": "array", "minItems": 1, "items": { "$ref": "pje-comum.schema.json#/$defs/referenciaPagina" } },
+        "texto": { "type": ["string", "null"] },
+        "proveniencia": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" }
+      }
+    },
+    "subdocumentoAnexo": {
+      "description": "SUBDOCUMENTO_ANEXO interno ao mesmo ID PJe; o objeto não admite id_pje próprio.",
+      "type": "object",
+      "required": ["subdocumento_id", "documento_pai", "titulo", "tipo", "pagina_inicio", "pagina_fim", "paginas", "possui_texto", "possui_imagens", "possui_tabelas", "proveniencia"],
+      "additionalProperties": false,
+      "properties": {
+        "subdocumento_id": { "type": "string", "pattern": "^SUB-[0-9]{3,}$" },
+        "documento_pai": { "type": "string", "pattern": "^DOC-PJE-[0-9]{3,}$" },
+        "titulo": { "type": "string", "minLength": 1 },
+        "tipo": { "enum": ["ANEXO", "RELATORIO_FOTOGRAFICO", "ORCAMENTO", "MEMORIA_CALCULO", "OUTRO"] },
+        "pagina_inicio": { "$ref": "pje-comum.schema.json#/$defs/referenciaPagina" },
+        "pagina_fim": { "$ref": "pje-comum.schema.json#/$defs/referenciaPagina" },
+        "paginas": { "type": "array", "minItems": 1, "items": { "$ref": "pje-comum.schema.json#/$defs/referenciaPagina" } },
+        "possui_texto": { "type": "boolean" },
+        "possui_imagens": { "type": "boolean" },
+        "possui_tabelas": { "type": "boolean" },
+        "proveniencia": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" }
+      }
+    },
+    "alerta": {
+      "type": "object",
+      "required": ["alerta_id", "tipo", "descricao", "bloqueante", "proveniencia"],
+      "additionalProperties": false,
+      "properties": {
+        "alerta_id": { "type": "string", "pattern": "^ALT-[0-9]{3,}$" },
+        "tipo": { "type": "string", "pattern": "^[A-Z0-9_]+$" },
+        "descricao": { "type": "string", "minLength": 1 },
+        "bloqueante": { "type": "boolean" },
+        "proveniencia": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" }
+      }
+    }
+  }
+}
