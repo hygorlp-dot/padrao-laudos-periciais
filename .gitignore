@@ -209,6 +209,9 @@ tempCodeRunnerFile.py
 # PyPI configuration file
 .pypirc
 
+# Referências periciais privadas — uso exclusivamente local
+referencias/privadas/
+
 # Marimo
 marimo/_static/
 marimo/_lsp/

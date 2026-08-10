@@ -1,0 +1,63 @@
+{
+  "id": "PAT-003",
+  "alegacoes_relacionadas": ["ALG-003"],
+  "ambiente": "Cobertura",
+  "localizacao_detalhada": null,
+  "sistema": null,
+  "constatacao": {
+    "situacao": "INCONCLUSIVA",
+    "descricao": "O acesso fictício foi insuficiente para conclusão segura.",
+    "extensao": null,
+    "metodo": ["INSPECAO_VISUAL"],
+    "evidencias": ["OBS-003"],
+    "fotografias": []
+  },
+  "analise_causal": {
+    "causa_provavel": null,
+    "causas_alternativas": [],
+    "fundamentos": [],
+    "limitacoes": ["Acesso fictício indisponível."],
+    "grau_certeza": "INCONCLUSIVO"
+  },
+  "origem": "INCONCLUSIVA",
+  "criticidade": "NAO_APLICAVEL",
+  "vicio_construtivo": {
+    "caracterizado": false,
+    "tipo": "INCONCLUSIVO",
+    "fundamentacao": null,
+    "validado_perito": false
+  },
+  "normas_relacionadas": [],
+  "consequencias": {
+    "seguranca": null,
+    "funcionalidade": null,
+    "estanqueidade": null,
+    "salubridade": null,
+    "higiene": null,
+    "durabilidade": null,
+    "conforto": null,
+    "estetica": null,
+    "manutencao": null,
+    "evolucao": null
+  },
+  "recomendacao": {
+    "necessaria": false,
+    "descricao": "Avaliação complementar fictícia depende de decisão do perito.",
+    "extensao": null
+  },
+  "orcamento": {
+    "incluir": false,
+    "justificativa": "Análise inconclusiva não produz item.",
+    "quantitativo": null,
+    "unidade": null,
+    "memoria_calculo": null,
+    "validado_perito": false
+  },
+  "redacao": {
+    "analise_alegacoes_causas": "A limitação fictícia impediu análise causal.",
+    "consequencias": null,
+    "classificacao": "Situação e origem inconclusivas.",
+    "conclusao": "Não foi possível concluir com os elementos fictícios disponíveis."
+  },
+  "status_validacao": "BLOQUEADO"
+}

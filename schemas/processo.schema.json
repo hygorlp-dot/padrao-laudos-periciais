@@ -1,0 +1,324 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/processo.schema.json",
+  "title": "Processo judicial pericial",
+  "description": "Contrato para extração estruturada dos autos, preservando alegações, documentos, conflitos e pendências sem convertê-los em constatações.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "numero_processo",
+    "tipo_acao",
+    "assunto",
+    "juizo",
+    "vara",
+    "subsecao",
+    "tribunal",
+    "partes",
+    "perito",
+    "imovel",
+    "contrato",
+    "datas_relevantes",
+    "documentos",
+    "alegacoes",
+    "quesitos",
+    "decisoes",
+    "conflitos",
+    "pendencias"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "minLength": 1 },
+    "numero_processo": { "$ref": "#/$defs/numeroProcesso" },
+    "tipo_acao": { "type": ["string", "null"] },
+    "assunto": { "type": ["string", "null"] },
+    "juizo": { "type": ["string", "null"] },
+    "vara": { "type": ["string", "null"] },
+    "subsecao": { "type": ["string", "null"] },
+    "tribunal": { "type": ["string", "null"] },
+    "partes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/parte" }
+    },
+    "perito": { "$ref": "#/$defs/perito" },
+    "imovel": { "$ref": "#/$defs/imovel" },
+    "contrato": { "$ref": "#/$defs/contrato" },
+    "datas_relevantes": { "$ref": "#/$defs/datasRelevantes" },
+    "documentos": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/documento" }
+    },
+    "alegacoes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/alegacao" }
+    },
+    "quesitos": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/quesito" }
+    },
+    "decisoes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/decisao" }
+    },
+    "conflitos": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/conflito" }
+    },
+    "pendencias": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/pendencia" }
+    }
+  },
+  "$defs": {
+    "textoNulo": { "type": ["string", "null"] },
+    "dataNula": { "type": ["string", "null"], "format": "date" },
+    "numeroProcesso": {
+      "description": "Aceita o padrão CNJ sem validar matematicamente o dígito ou um registro excepcional explicitamente justificado.",
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9]{7}-[0-9]{2}\\.[0-9]{4}\\.[0-9]\\.[0-9]{2}\\.[0-9]{4}$"
+        },
+        {
+          "type": "object",
+          "required": ["valor", "formato", "justificativa"],
+          "additionalProperties": false,
+          "properties": {
+            "valor": { "type": "string", "minLength": 1 },
+            "formato": { "const": "EXCEPCIONAL" },
+            "justificativa": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "coordenadas": {
+      "type": ["object", "null"],
+      "required": ["latitude", "longitude", "fonte"],
+      "additionalProperties": false,
+      "properties": {
+        "latitude": { "type": ["number", "null"], "minimum": -90, "maximum": 90 },
+        "longitude": { "type": ["number", "null"], "minimum": -180, "maximum": 180 },
+        "fonte": { "$ref": "#/$defs/textoNulo" }
+      }
+    },
+    "endereco": {
+      "type": "object",
+      "required": ["logradouro", "numero", "complemento", "bairro", "municipio", "uf", "cep"],
+      "additionalProperties": false,
+      "properties": {
+        "logradouro": { "$ref": "#/$defs/textoNulo" },
+        "numero": { "$ref": "#/$defs/textoNulo" },
+        "complemento": { "$ref": "#/$defs/textoNulo" },
+        "bairro": { "$ref": "#/$defs/textoNulo" },
+        "municipio": { "$ref": "#/$defs/textoNulo" },
+        "uf": { "type": ["string", "null"], "pattern": "^[A-Z]{2}$" },
+        "cep": { "type": ["string", "null"], "pattern": "^[0-9]{5}-?[0-9]{3}$" }
+      }
+    },
+    "representante": {
+      "type": "object",
+      "required": ["nome", "qualificacao", "documento_fonte"],
+      "additionalProperties": false,
+      "properties": {
+        "nome": { "type": "string", "minLength": 1 },
+        "qualificacao": { "$ref": "#/$defs/textoNulo" },
+        "documento_fonte": { "type": ["string", "null"], "pattern": "^DOC-[0-9]{3,}$" }
+      }
+    },
+    "parte": {
+      "type": "object",
+      "required": ["polo", "nome", "cpf_cnpj", "qualificacao", "representantes", "advogados"],
+      "additionalProperties": false,
+      "properties": {
+        "polo": { "enum": ["ATIVO", "PASSIVO", "TERCEIRO", "OUTRO"] },
+        "nome": { "type": "string", "minLength": 1 },
+        "cpf_cnpj": { "$ref": "#/$defs/textoNulo" },
+        "qualificacao": { "$ref": "#/$defs/textoNulo" },
+        "representantes": { "type": "array", "items": { "$ref": "#/$defs/representante" } },
+        "advogados": { "type": "array", "items": { "$ref": "#/$defs/representante" } }
+      }
+    },
+    "perito": {
+      "type": "object",
+      "required": ["nome", "profissao", "crea", "crea_regional", "ibape"],
+      "additionalProperties": false,
+      "properties": {
+        "nome": { "type": ["string", "null"] },
+        "profissao": { "$ref": "#/$defs/textoNulo" },
+        "crea": { "$ref": "#/$defs/textoNulo" },
+        "crea_regional": { "$ref": "#/$defs/textoNulo" },
+        "ibape": { "$ref": "#/$defs/textoNulo" }
+      }
+    },
+    "caracterizacaoConstrutiva": {
+      "type": "object",
+      "required": ["descricao", "status_confirmacao", "fontes"],
+      "additionalProperties": false,
+      "properties": {
+        "descricao": { "$ref": "#/$defs/textoNulo" },
+        "status_confirmacao": { "enum": ["DOCUMENTADA", "OBSERVADA", "INFERIDA", "NAO_CONFIRMADA"] },
+        "fontes": { "type": "array", "items": { "type": "string", "pattern": "^DOC-[0-9]{3,}$" } }
+      }
+    },
+    "imovel": {
+      "type": "object",
+      "required": ["endereco", "matricula", "area", "tipologia", "empreendimento", "unidade", "bloco", "quadra", "coordenadas", "caracterizacao_construtiva"],
+      "additionalProperties": false,
+      "properties": {
+        "endereco": { "$ref": "#/$defs/endereco" },
+        "matricula": { "$ref": "#/$defs/textoNulo" },
+        "area": {
+          "type": ["object", "null"],
+          "required": ["valor", "unidade", "fonte"],
+          "additionalProperties": false,
+          "properties": {
+            "valor": { "type": ["number", "null"], "minimum": 0 },
+            "unidade": { "$ref": "#/$defs/textoNulo" },
+            "fonte": { "$ref": "#/$defs/textoNulo" }
+          }
+        },
+        "tipologia": { "$ref": "#/$defs/textoNulo" },
+        "empreendimento": { "$ref": "#/$defs/textoNulo" },
+        "unidade": { "$ref": "#/$defs/textoNulo" },
+        "bloco": { "$ref": "#/$defs/textoNulo" },
+        "quadra": { "$ref": "#/$defs/textoNulo" },
+        "coordenadas": { "$ref": "#/$defs/coordenadas" },
+        "caracterizacao_construtiva": { "$ref": "#/$defs/caracterizacaoConstrutiva" }
+      }
+    },
+    "contrato": {
+      "type": ["object", "null"],
+      "required": ["numero", "data", "programa_habitacional", "modalidade", "valor"],
+      "additionalProperties": false,
+      "properties": {
+        "numero": { "$ref": "#/$defs/textoNulo" },
+        "data": { "$ref": "#/$defs/dataNula" },
+        "programa_habitacional": { "$ref": "#/$defs/textoNulo" },
+        "modalidade": { "$ref": "#/$defs/textoNulo" },
+        "valor": { "type": ["number", "null"], "minimum": 0 }
+      }
+    },
+    "datasRelevantes": {
+      "type": "object",
+      "required": ["contrato", "entrega", "inicio_utilizacao", "habite_se", "surgimento_alegado_manifestacoes", "primeira_reclamacao", "primeira_comprovacao_documental", "ajuizamento", "nomeacao", "vistoria"],
+      "additionalProperties": false,
+      "properties": {
+        "contrato": { "$ref": "#/$defs/dataNula" },
+        "entrega": { "$ref": "#/$defs/dataNula" },
+        "inicio_utilizacao": { "$ref": "#/$defs/dataNula" },
+        "habite_se": { "$ref": "#/$defs/dataNula" },
+        "surgimento_alegado_manifestacoes": { "$ref": "#/$defs/dataNula" },
+        "primeira_reclamacao": { "$ref": "#/$defs/dataNula" },
+        "primeira_comprovacao_documental": { "$ref": "#/$defs/dataNula" },
+        "ajuizamento": { "$ref": "#/$defs/dataNula" },
+        "nomeacao": { "$ref": "#/$defs/dataNula" },
+        "vistoria": { "$ref": "#/$defs/dataNula" }
+      }
+    },
+    "statusDocumento": {
+      "enum": ["PRESENTE", "AUSENTE", "ILEGIVEL", "PARCIAL", "CONFLITANTE", "NAO_VERIFICADO"]
+    },
+    "documento": {
+      "type": "object",
+      "required": ["id", "tipo", "descricao", "id_processual", "data", "autor_origem", "status", "paginas", "observacoes"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^DOC-[0-9]{3,}$" },
+        "tipo": { "type": "string", "minLength": 1 },
+        "descricao": { "type": "string", "minLength": 1 },
+        "id_processual": { "$ref": "#/$defs/textoNulo" },
+        "data": { "$ref": "#/$defs/dataNula" },
+        "autor_origem": { "$ref": "#/$defs/textoNulo" },
+        "status": { "$ref": "#/$defs/statusDocumento" },
+        "paginas": { "type": ["array", "null"], "items": { "type": "integer", "minimum": 1 }, "uniqueItems": true },
+        "observacoes": { "$ref": "#/$defs/textoNulo" }
+      }
+    },
+    "statusVerificacao": {
+      "enum": ["NAO_VERIFICADO", "EM_VERIFICACAO", "VERIFICADO", "CONFLITANTE", "INCONCLUSIVO"]
+    },
+    "alegacao": {
+      "description": "Registro de conteúdo alegado; não representa constatação ou patologia confirmada.",
+      "type": "object",
+      "required": ["id", "origem", "parte", "documento_fonte", "id_processual", "texto", "ambiente_alegado", "sistema_alegado", "data_alegada", "observacoes", "status_verificacao"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^ALG-[0-9]{3,}$" },
+        "origem": { "type": "string", "minLength": 1 },
+        "parte": { "$ref": "#/$defs/textoNulo" },
+        "documento_fonte": { "type": ["string", "null"], "pattern": "^DOC-[0-9]{3,}$" },
+        "id_processual": { "$ref": "#/$defs/textoNulo" },
+        "texto": {
+          "type": "object",
+          "required": ["conteudo", "tipo_registro"],
+          "additionalProperties": false,
+          "properties": {
+            "conteudo": { "type": "string", "minLength": 1 },
+            "tipo_registro": { "enum": ["ORIGINAL", "SINTESE_FIEL"] }
+          }
+        },
+        "ambiente_alegado": { "$ref": "#/$defs/textoNulo" },
+        "sistema_alegado": { "$ref": "#/$defs/textoNulo" },
+        "data_alegada": { "$ref": "#/$defs/dataNula" },
+        "observacoes": { "$ref": "#/$defs/textoNulo" },
+        "status_verificacao": { "$ref": "#/$defs/statusVerificacao" }
+      }
+    },
+    "origemQuesito": { "enum": ["JUIZO", "PARTE_AUTORA", "PARTE_RE", "TERCEIRO", "OUTRO"] },
+    "quesito": {
+      "type": "object",
+      "required": ["id", "origem", "parte_origem_textual", "numero_original", "texto_integral", "documento_fonte", "id_processual", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^QUE-[0-9]{3,}$" },
+        "origem": { "$ref": "#/$defs/origemQuesito" },
+        "parte_origem_textual": { "$ref": "#/$defs/textoNulo" },
+        "numero_original": { "type": "string", "minLength": 1 },
+        "texto_integral": { "type": "string", "minLength": 1 },
+        "documento_fonte": { "type": ["string", "null"], "pattern": "^DOC-[0-9]{3,}$" },
+        "id_processual": { "$ref": "#/$defs/textoNulo" },
+        "status": { "enum": ["IDENTIFICADO", "PENDENTE", "CONFLITANTE", "NAO_APLICAVEL"] }
+      }
+    },
+    "decisao": {
+      "type": "object",
+      "required": ["id", "documento", "id_processual", "data", "sintese", "determinacoes_relevantes_pericia"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^DEC-[0-9]{3,}$" },
+        "documento": { "type": ["string", "null"], "pattern": "^DOC-[0-9]{3,}$" },
+        "id_processual": { "$ref": "#/$defs/textoNulo" },
+        "data": { "$ref": "#/$defs/dataNula" },
+        "sintese": { "type": "string", "minLength": 1 },
+        "determinacoes_relevantes_pericia": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "conflito": {
+      "type": "object",
+      "required": ["id", "tipo", "descricao", "fontes_conflitantes", "criticidade", "bloqueante", "decisao_perito", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^CON-[0-9]{3,}$" },
+        "tipo": { "type": "string", "minLength": 1 },
+        "descricao": { "type": "string", "minLength": 1 },
+        "fontes_conflitantes": { "type": "array", "minItems": 2, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "criticidade": { "enum": ["CRITICA", "IMPORTANTE", "EDITORIAL"] },
+        "bloqueante": { "type": "boolean" },
+        "decisao_perito": { "$ref": "#/$defs/textoNulo" },
+        "status": { "enum": ["ABERTO", "RESOLVIDO", "ACEITO_PELO_PERITO"] }
+      }
+    },
+    "pendencia": {
+      "type": "object",
+      "required": ["id", "descricao", "tipo", "necessaria_para", "bloqueante", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^PEN-[0-9]{3,}$" },
+        "descricao": { "type": "string", "minLength": 1 },
+        "tipo": { "type": "string", "minLength": 1 },
+        "necessaria_para": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "bloqueante": { "type": "boolean" },
+        "status": { "enum": ["ABERTA", "RESOLVIDA", "DISPENSADA_PELO_PERITO"] }
+      }
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "PAT-102",
+  "alegacoes_relacionadas": ["ALG-102"],
+  "ambiente": "Área fictícia B",
+  "localizacao_detalhada": null,
+  "sistema": "Sistema fictício B",
+  "constatacao": {"situacao": "ANOMALIA", "descricao": "Manifestação fictícia constatada.", "extensao": "2 m²", "metodo": ["INSPECAO_VISUAL"], "evidencias": ["OBS-102"], "fotografias": []},
+  "analise_causal": {"causa_provavel": "Hipótese funcional fictícia.", "causas_alternativas": [], "fundamentos": ["Fundamento fictício."], "limitacoes": [], "grau_certeza": "PROVAVEL"},
+  "origem": "FUNCIONAL",
+  "criticidade": "MEDIA",
+  "vicio_construtivo": {"caracterizado": false, "tipo": "NAO_APLICAVEL", "fundamentacao": null, "validado_perito": false},
+  "normas_relacionadas": [],
+  "consequencias": {"seguranca": null, "funcionalidade": "Consequência fictícia.", "estanqueidade": null, "salubridade": null, "higiene": null, "durabilidade": null, "conforto": null, "estetica": null, "manutencao": null, "evolucao": null},
+  "recomendacao": {"necessaria": true, "descricao": "Serviço fictício.", "extensao": "2 m²"},
+  "orcamento": {"incluir": true, "justificativa": "Caso negativo fictício.", "quantitativo": 2, "unidade": "m²", "memoria_calculo": "2 m² fictícios.", "validado_perito": true},
+  "redacao": {"analise_alegacoes_causas": "Análise fictícia.", "consequencias": "Consequência fictícia.", "classificacao": "Origem funcional.", "conclusao": "Manifestação funcional fictícia."},
+  "status_validacao": "PENDENTE_PERITO"
+}
