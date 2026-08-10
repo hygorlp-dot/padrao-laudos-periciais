@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/laudo.schema.json",
+  "title": "Laudo pericial consolidado",
+  "description": "Contrato de consolidação final do laudo, reutilizando manifestações PAT-NNN e preservando rastreabilidade entre fontes, respostas e orçamento.",
+  "type": "object",
+  "required": ["schema_version", "numero_processo", "identificacao", "objeto", "objetivo", "metodologia", "documentos", "vistoria", "patologias", "condicoes_gerais", "conclusao_geral", "quadro_resumo", "quesitos", "orcamento", "referencias", "validacao_final"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "minLength": 1 },
+    "numero_processo": { "$ref": "processo.schema.json#/$defs/numeroProcesso" },
+    "identificacao": { "type": "object", "additionalProperties": false, "required": ["texto", "fonte"], "properties": { "texto": { "type": ["string", "null"] }, "fonte": { "type": ["string", "null"] } } },
+    "objeto": { "$ref": "#/$defs/secaoTexto" },
+    "objetivo": { "$ref": "#/$defs/secaoTexto" },
+    "metodologia": { "$ref": "#/$defs/secaoTexto" },
+    "documentos": { "type": "array", "items": { "type": "string", "pattern": "^DOC-[0-9]{3,}$" }, "uniqueItems": true },
+    "vistoria": { "type": ["string", "null"], "description": "Identificador ou caminho controlado para vistoria.json; não incorpora texto livre de constatação." },
+    "patologias": { "type": "array", "items": { "$ref": "patologia.schema.json" } },
+    "condicoes_gerais": { "$ref": "#/$defs/secaoTexto" },
+    "conclusao_geral": { "$ref": "#/$defs/conclusaoGeral" },
+    "quadro_resumo": { "type": "array", "items": { "$ref": "#/$defs/quadroResumo" } },
+    "quesitos": { "type": "array", "items": { "$ref": "#/$defs/respostaQuesito" } },
+    "orcamento": { "$ref": "#/$defs/orcamentoConsolidado" },
+    "referencias": { "type": "array", "items": { "$ref": "#/$defs/referencia" } },
+    "validacao_final": { "$ref": "#/$defs/validacaoFinal" }
+  },
+  "$defs": {
+    "textoNulo": { "type": ["string", "null"] },
+    "secaoTexto": {
+      "type": "object",
+      "required": ["texto", "fontes", "validado_perito"],
+      "additionalProperties": false,
+      "properties": {
+        "texto": { "$ref": "#/$defs/textoNulo" },
+        "fontes": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "validado_perito": { "type": "boolean" }
+      }
+    },
+    "conclusaoGeral": {
+      "type": "object",
+      "required": ["texto", "quantidade_anomalias", "quantidade_endogenas", "quantidade_funcionais", "quantidade_exogenas", "quantidade_falhas_uso_manutencao", "quantidade_inconclusivas", "quantidade_nao_constatadas"],
+      "additionalProperties": false,
+      "properties": {
+        "texto": { "$ref": "#/$defs/textoNulo" },
+        "quantidade_anomalias": { "type": "integer", "minimum": 0 },
+        "quantidade_endogenas": { "type": "integer", "minimum": 0 },
+        "quantidade_funcionais": { "type": "integer", "minimum": 0 },
+        "quantidade_exogenas": { "type": "integer", "minimum": 0 },
+        "quantidade_falhas_uso_manutencao": { "type": "integer", "minimum": 0 },
+        "quantidade_inconclusivas": { "type": "integer", "minimum": 0 },
+        "quantidade_nao_constatadas": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "quadroResumo": {
+      "type": "object",
+      "required": ["patologia_id", "local", "constatacao", "situacao", "origem", "criticidade", "incluir_orcamento"],
+      "additionalProperties": false,
+      "properties": {
+        "patologia_id": { "type": "string", "pattern": "^PAT-[0-9]{3,}$" },
+        "local": { "$ref": "#/$defs/textoNulo" },
+        "constatacao": { "type": "string", "minLength": 1 },
+        "situacao": { "$ref": "patologia.schema.json#/$defs/situacao" },
+        "origem": { "$ref": "patologia.schema.json#/$defs/origem" },
+        "criticidade": { "$ref": "patologia.schema.json#/$defs/criticidade" },
+        "incluir_orcamento": { "type": "boolean" }
+      }
+    },
+    "respostaQuesito": {
+      "type": "object",
+      "required": ["quesito_id", "origem", "numero_original", "texto_integral", "resposta", "patologias_relacionadas", "documentos_relacionados", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "quesito_id": { "type": "string", "pattern": "^QUE-[0-9]{3,}$" },
+        "origem": { "$ref": "processo.schema.json#/$defs/origemQuesito" },
+        "numero_original": { "type": "string", "minLength": 1 },
+        "texto_integral": { "type": "string", "minLength": 1 },
+        "resposta": { "type": ["string", "null"], "pattern": "^R:" },
+        "patologias_relacionadas": { "type": "array", "items": { "type": "string", "pattern": "^PAT-[0-9]{3,}$" }, "uniqueItems": true },
+        "documentos_relacionados": { "type": "array", "items": { "type": "string", "pattern": "^DOC-[0-9]{3,}$" }, "uniqueItems": true },
+        "status": { "enum": ["PENDENTE", "RESPONDIDO", "INCONCLUSIVO_JUSTIFICADO", "NAO_APLICAVEL_JUSTIFICADO"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "enum": ["RESPONDIDO", "INCONCLUSIVO_JUSTIFICADO", "NAO_APLICAVEL_JUSTIFICADO"] } }, "required": ["status"] },
+          "then": { "properties": { "resposta": { "type": "string", "pattern": "^R:", "minLength": 3 } } }
+        }
+      ]
+    },
+    "itemOrcamento": {
+      "type": "object",
+      "required": ["id", "patologia_id", "fonte", "codigo", "descricao", "unidade", "quantidade", "memoria_calculo", "custo_unitario", "bdi", "preco_unitario_com_bdi", "preco_total"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^ORC-[0-9]{3,}$" },
+        "patologia_id": { "type": "string", "pattern": "^PAT-[0-9]{3,}$" },
+        "fonte": { "type": "string", "minLength": 1 },
+        "codigo": { "$ref": "#/$defs/textoNulo" },
+        "descricao": { "type": "string", "minLength": 1 },
+        "unidade": { "type": "string", "minLength": 1 },
+        "quantidade": { "type": "number", "exclusiveMinimum": 0 },
+        "memoria_calculo": { "type": "string", "minLength": 1 },
+        "custo_unitario": { "type": "number", "minimum": 0 },
+        "bdi": { "type": "number", "minimum": 0 },
+        "preco_unitario_com_bdi": { "type": "number", "minimum": 0 },
+        "preco_total": { "type": "number", "minimum": 0 }
+      }
+    },
+    "orcamentoConsolidado": {
+      "type": "object",
+      "required": ["itens", "fonte", "competencia", "regime", "bdi", "valor_total"],
+      "additionalProperties": false,
+      "properties": {
+        "itens": { "type": "array", "items": { "$ref": "#/$defs/itemOrcamento" } },
+        "fonte": { "$ref": "#/$defs/textoNulo" },
+        "competencia": { "$ref": "#/$defs/textoNulo" },
+        "regime": { "$ref": "#/$defs/textoNulo" },
+        "bdi": { "type": ["number", "null"], "minimum": 0 },
+        "valor_total": { "type": ["number", "null"], "minimum": 0 }
+      }
+    },
+    "referencia": {
+      "type": "object",
+      "required": ["referencia", "aplicabilidade", "verificada"],
+      "additionalProperties": false,
+      "properties": {
+        "referencia": { "type": "string", "minLength": 1 },
+        "aplicabilidade": { "type": "string", "minLength": 1 },
+        "verificada": { "const": true }
+      }
+    },
+    "validacaoFinal": {
+      "type": "object",
+      "required": ["status", "conflitos", "pendencias", "data", "observacoes"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "enum": ["RASCUNHO", "BLOQUEADO", "APROVADO_PERITO"] },
+        "conflitos": { "type": "array", "items": { "type": "string", "pattern": "^CON-[0-9]{3,}$" }, "uniqueItems": true },
+        "pendencias": { "type": "array", "items": { "type": "string", "pattern": "^PEN-[0-9]{3,}$" }, "uniqueItems": true },
+        "data": { "type": ["string", "null"], "format": "date" },
+        "observacoes": { "$ref": "#/$defs/textoNulo" }
+      }
+    }
+  }
+}

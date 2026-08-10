@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/vistoria.schema.json",
+  "title": "Vistoria pericial",
+  "description": "Contrato exclusivo da diligência e das constatações objetivas de campo, sem causas prováveis ou conclusões técnicas.",
+  "type": "object",
+  "required": ["schema_version", "numero_processo", "data", "hora_inicio", "hora_fim", "local", "coordenadas", "clima", "temperatura", "umidade_relativa", "presentes", "metodos_utilizados", "equipamentos", "limitacoes", "condicoes_gerais", "fotografias", "observacoes_campo"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "minLength": 1 },
+    "numero_processo": { "$ref": "processo.schema.json#/$defs/numeroProcesso" },
+    "data": { "type": ["string", "null"], "format": "date" },
+    "hora_inicio": { "type": ["string", "null"], "format": "time" },
+    "hora_fim": { "type": ["string", "null"], "format": "time" },
+    "local": { "$ref": "processo.schema.json#/$defs/endereco" },
+    "coordenadas": { "$ref": "processo.schema.json#/$defs/coordenadas" },
+    "clima": { "type": ["string", "null"] },
+    "temperatura": { "$ref": "#/$defs/medicao" },
+    "umidade_relativa": { "$ref": "#/$defs/medicao" },
+    "presentes": { "type": "array", "items": { "$ref": "#/$defs/presente" } },
+    "metodos_utilizados": { "type": "array", "items": { "$ref": "#/$defs/metodo" }, "uniqueItems": true },
+    "equipamentos": { "type": "array", "items": { "$ref": "#/$defs/equipamento" } },
+    "limitacoes": { "type": "array", "items": { "$ref": "#/$defs/limitacao" } },
+    "condicoes_gerais": { "$ref": "#/$defs/condicoesGerais" },
+    "fotografias": { "type": "array", "items": { "$ref": "#/$defs/fotografia" } },
+    "observacoes_campo": { "type": "array", "items": { "$ref": "#/$defs/observacaoCampo" } }
+  },
+  "$defs": {
+    "textoNulo": { "type": ["string", "null"] },
+    "medicao": {
+      "type": ["object", "null"],
+      "required": ["valor", "unidade", "metodo"],
+      "additionalProperties": false,
+      "properties": {
+        "valor": { "type": ["number", "null"] },
+        "unidade": { "$ref": "#/$defs/textoNulo" },
+        "metodo": { "$ref": "#/$defs/textoNulo" }
+      }
+    },
+    "presente": {
+      "type": "object",
+      "required": ["nome", "polo", "qualificacao", "observacao"],
+      "additionalProperties": false,
+      "properties": {
+        "nome": { "type": "string", "minLength": 1 },
+        "polo": { "enum": ["ATIVO", "PASSIVO", "PERITO", "ASSISTENTE_TECNICO", "TERCEIRO", "OUTRO"] },
+        "qualificacao": { "$ref": "#/$defs/textoNulo" },
+        "observacao": { "$ref": "#/$defs/textoNulo" }
+      }
+    },
+    "metodo": {
+      "type": "object",
+      "required": ["nome", "descricao", "efetivamente_utilizado"],
+      "additionalProperties": false,
+      "properties": {
+        "nome": { "enum": ["INSPECAO_VISUAL", "PERCUSSAO", "MEDICAO", "FISSUROMETRO", "NIVEL", "PRUMO", "OUTRO"] },
+        "descricao": { "$ref": "#/$defs/textoNulo" },
+        "efetivamente_utilizado": { "const": true }
+      }
+    },
+    "equipamento": {
+      "type": "object",
+      "required": ["tipo", "identificacao", "finalidade"],
+      "additionalProperties": false,
+      "properties": {
+        "tipo": { "type": "string", "minLength": 1 },
+        "identificacao": { "$ref": "#/$defs/textoNulo" },
+        "finalidade": { "type": "string", "minLength": 1 }
+      }
+    },
+    "limitacao": {
+      "type": "object",
+      "required": ["id", "descricao", "ambiente_sistema_afetado", "consequencia_tecnica"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^LIM-[0-9]{3,}$" },
+        "descricao": { "type": "string", "minLength": 1 },
+        "ambiente_sistema_afetado": { "$ref": "#/$defs/textoNulo" },
+        "consequencia_tecnica": { "type": "string", "minLength": 1 }
+      }
+    },
+    "condicoesGerais": {
+      "type": "object",
+      "required": ["conservacao", "habitabilidade", "indicios_estruturais", "manutencao_aparente", "alteracoes_aparentes", "limitacoes"],
+      "additionalProperties": false,
+      "properties": {
+        "conservacao": { "$ref": "#/$defs/textoNulo" },
+        "habitabilidade": { "$ref": "#/$defs/textoNulo" },
+        "indicios_estruturais": { "$ref": "#/$defs/textoNulo" },
+        "manutencao_aparente": { "$ref": "#/$defs/textoNulo" },
+        "alteracoes_aparentes": { "$ref": "#/$defs/textoNulo" },
+        "limitacoes": { "type": "array", "items": { "type": "string", "pattern": "^LIM-[0-9]{3,}$" } }
+      }
+    },
+    "fotografia": {
+      "type": "object",
+      "required": ["id", "arquivo", "data_hora", "ambiente", "sistema", "descricao_objetiva", "relacionado_a", "validada", "observacoes"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^FOT-[0-9]{3,}$" },
+        "arquivo": { "type": "string", "minLength": 1 },
+        "data_hora": { "type": ["string", "null"], "format": "date-time" },
+        "ambiente": { "$ref": "#/$defs/textoNulo" },
+        "sistema": { "$ref": "#/$defs/textoNulo" },
+        "descricao_objetiva": { "type": "string", "minLength": 1 },
+        "relacionado_a": { "type": "array", "items": { "type": "string", "pattern": "^(ALG|PAT)-[0-9]{3,}$" }, "uniqueItems": true },
+        "validada": { "type": "boolean" },
+        "observacoes": { "$ref": "#/$defs/textoNulo" }
+      }
+    },
+    "observacaoCampo": {
+      "description": "Constatação objetiva; causa provável não é permitida neste objeto.",
+      "type": "object",
+      "required": ["id", "ambiente", "sistema", "descricao_objetiva", "metodo", "extensao", "medicao", "unidade", "fotografias", "observacoes"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^OBS-[0-9]{3,}$" },
+        "ambiente": { "$ref": "#/$defs/textoNulo" },
+        "sistema": { "$ref": "#/$defs/textoNulo" },
+        "descricao_objetiva": { "type": "string", "minLength": 1 },
+        "metodo": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "uniqueItems": true },
+        "extensao": { "$ref": "#/$defs/textoNulo" },
+        "medicao": { "type": ["number", "null"] },
+        "unidade": { "$ref": "#/$defs/textoNulo" },
+        "fotografias": { "type": "array", "items": { "type": "string", "pattern": "^FOT-[0-9]{3,}$" }, "uniqueItems": true },
+        "observacoes": { "$ref": "#/$defs/textoNulo" }
+      }
+    }
+  }
+}

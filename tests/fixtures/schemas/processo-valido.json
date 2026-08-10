@@ -1,0 +1,110 @@
+{
+  "schema_version": "1.0.0",
+  "numero_processo": "0000001-00.2026.4.00.0001",
+  "tipo_acao": "Ação fictícia para teste",
+  "assunto": "Manifestação patológica fictícia",
+  "juizo": "Juízo fictício",
+  "vara": null,
+  "subsecao": null,
+  "tribunal": "Tribunal fictício",
+  "partes": [
+    {
+      "polo": "ATIVO",
+      "nome": "Pessoa Fictícia A",
+      "cpf_cnpj": null,
+      "qualificacao": null,
+      "representantes": [],
+      "advogados": []
+    }
+  ],
+  "perito": {
+    "nome": "Perito Fictício",
+    "profissao": "Engenheiro civil",
+    "crea": null,
+    "crea_regional": null,
+    "ibape": null
+  },
+  "imovel": {
+    "endereco": {
+      "logradouro": "Rua Fictícia",
+      "numero": "100",
+      "complemento": null,
+      "bairro": "Bairro Teste",
+      "municipio": "Cidade Fictícia",
+      "uf": "PE",
+      "cep": null
+    },
+    "matricula": null,
+    "area": null,
+    "tipologia": "Residencial",
+    "empreendimento": null,
+    "unidade": null,
+    "bloco": null,
+    "quadra": null,
+    "coordenadas": null,
+    "caracterizacao_construtiva": {
+      "descricao": null,
+      "status_confirmacao": "NAO_CONFIRMADA",
+      "fontes": []
+    }
+  },
+  "contrato": null,
+  "datas_relevantes": {
+    "contrato": null,
+    "entrega": null,
+    "inicio_utilizacao": null,
+    "habite_se": null,
+    "surgimento_alegado_manifestacoes": null,
+    "primeira_reclamacao": null,
+    "primeira_comprovacao_documental": null,
+    "ajuizamento": "2026-01-10",
+    "nomeacao": null,
+    "vistoria": null
+  },
+  "documentos": [
+    {
+      "id": "DOC-001",
+      "tipo": "Petição",
+      "descricao": "Documento fictício",
+      "id_processual": null,
+      "data": null,
+      "autor_origem": "Parte autora fictícia",
+      "status": "PRESENTE",
+      "paginas": null,
+      "observacoes": null
+    }
+  ],
+  "alegacoes": [
+    {
+      "id": "ALG-001",
+      "origem": "Parte autora fictícia",
+      "parte": "Pessoa Fictícia A",
+      "documento_fonte": "DOC-001",
+      "id_processual": null,
+      "texto": {
+        "conteudo": "A parte alega uma manifestação fictícia.",
+        "tipo_registro": "SINTESE_FIEL"
+      },
+      "ambiente_alegado": "Sala",
+      "sistema_alegado": null,
+      "data_alegada": null,
+      "observacoes": null,
+      "status_verificacao": "NAO_VERIFICADO"
+    }
+  ],
+  "quesitos": [
+    {
+      "id": "QUE-001",
+      "origem": "JUIZO",
+      "parte_origem_textual": "Juízo fictício",
+      "numero_original": "1",
+      "texto_integral": "Descrever a condição observada.",
+      "documento_fonte": "DOC-001",
+      "id_processual": null,
+      "status": "IDENTIFICADO"
+    }
+  ],
+  "decisoes": [],
+  "conflitos": [],
+  "pendencias": []
+}

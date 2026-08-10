@@ -1,0 +1,4 @@
+* text=auto eol=lf
+
+*.docm binary
+*.pdf binary

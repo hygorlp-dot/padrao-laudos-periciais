@@ -1,0 +1,63 @@
+{
+  "id": "PAT-001",
+  "alegacoes_relacionadas": ["ALG-001"],
+  "ambiente": "Sala",
+  "localizacao_detalhada": "Parede norte",
+  "sistema": "Revestimento fictício",
+  "constatacao": {
+    "situacao": "ANOMALIA",
+    "descricao": "Alteração fictícia efetivamente observada.",
+    "extensao": "1,00 m²",
+    "metodo": ["INSPECAO_VISUAL"],
+    "evidencias": ["OBS-001", "FOT-001"],
+    "fotografias": ["FOT-001"]
+  },
+  "analise_causal": {
+    "causa_provavel": "Hipótese causal fictícia sustentada pelas evidências de teste.",
+    "causas_alternativas": [],
+    "fundamentos": ["Fundamento técnico fictício para validar a estrutura."],
+    "limitacoes": [],
+    "grau_certeza": "PROVAVEL"
+  },
+  "origem": "ENDOGENA_CONSTRUTIVA",
+  "criticidade": "MEDIA",
+  "vicio_construtivo": {
+    "caracterizado": true,
+    "tipo": "OCULTO",
+    "fundamentacao": "Fundamentação fictícia aprovada para teste.",
+    "validado_perito": true
+  },
+  "normas_relacionadas": [],
+  "consequencias": {
+    "seguranca": null,
+    "funcionalidade": "Perda fictícia de desempenho localizado.",
+    "estanqueidade": null,
+    "salubridade": null,
+    "higiene": null,
+    "durabilidade": null,
+    "conforto": null,
+    "estetica": null,
+    "manutencao": null,
+    "evolucao": null
+  },
+  "recomendacao": {
+    "necessaria": true,
+    "descricao": "Executar reparo fictício localizado.",
+    "extensao": "1,00 m²"
+  },
+  "orcamento": {
+    "incluir": true,
+    "justificativa": "Atende aos requisitos técnicos fictícios da fixture.",
+    "quantitativo": 1.0,
+    "unidade": "m²",
+    "memoria_calculo": "1,00 m x 1,00 m = 1,00 m²",
+    "validado_perito": true
+  },
+  "redacao": {
+    "analise_alegacoes_causas": "Texto fictício de análise.",
+    "consequencias": "Texto fictício de consequências.",
+    "classificacao": "Texto fictício de classificação.",
+    "conclusao": "Conclusão técnica fictícia aprovada apenas para teste."
+  },
+  "status_validacao": "APROVADO_PERITO"
+}
