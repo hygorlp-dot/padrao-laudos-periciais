@@ -21,6 +21,9 @@
     "tipo_original": { "type": "string", "minLength": 1 },
     "classe_normalizada": { "$ref": "pje-comum.schema.json#/$defs/classeDocumental" },
     "subclasse_normalizada": { "type": ["string", "null"], "pattern": "^[A-Z0-9_]+$" },
+    "confianca_classificacao": { "$ref": "pje-comum.schema.json#/$defs/confianca" },
+    "criterios_classificacao": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "status_revisao": { "enum": ["REVISADO_AUTOMATICAMENTE", "PENDENTE_REVISAO"] },
     "prioridade": { "$ref": "pje-comum.schema.json#/$defs/prioridadeDocumental" },
     "ordem_indice": { "type": ["integer", "null"], "minimum": 1 },
     "data_hora": { "type": ["string", "null"], "format": "date-time" },
@@ -50,6 +53,9 @@
       "properties": {
         "referencia": { "$ref": "pje-comum.schema.json#/$defs/referenciaPagina" },
         "classificacao": { "$ref": "pje-comum.schema.json#/$defs/classificacaoPagina" },
+        "texto_bruto": { "type": "string" },
+        "metodo_extracao": { "const": "TEXTO_DIGITAL" },
+        "quantidade_caracteres": { "type": "integer", "minimum": 0 },
         "possui_texto_util": { "type": "boolean" },
         "possui_imagens": { "type": "boolean" },
         "possui_tabelas": { "type": "boolean" },
@@ -73,7 +79,8 @@
         "pagina_fim": { "$ref": "pje-comum.schema.json#/$defs/referenciaPagina" },
         "paginas": { "type": "array", "minItems": 1, "items": { "$ref": "pje-comum.schema.json#/$defs/referenciaPagina" } },
         "texto": { "type": ["string", "null"] },
-        "proveniencia": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" }
+        "proveniencia": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" },
+        "confianca": { "$ref": "pje-comum.schema.json#/$defs/confianca" }
       }
     },
     "subdocumentoAnexo": {

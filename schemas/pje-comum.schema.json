@@ -420,6 +420,10 @@
         "titulo": { "type": ["string", "null"] },
         "texto_bruto": { "type": "string", "minLength": 1 },
         "estrutura_normalizada": { "type": ["array", "null"], "items": { "type": "array", "items": {} } },
+        "bbox": { "$ref": "#/$defs/bbox" },
+        "linhas": { "type": ["integer", "null"], "minimum": 0 },
+        "colunas": { "type": ["integer", "null"], "minimum": 0 },
+        "dados_normalizados": { "type": ["array", "null"], "items": { "type": "array", "items": {} } },
         "pagina": { "$ref": "#/$defs/referenciaPagina" },
         "proveniencia": { "$ref": "#/$defs/proveniencia" },
         "confianca": { "$ref": "#/$defs/confianca" }
@@ -432,8 +436,11 @@
       "properties": {
         "bloco_id": { "type": "string", "pattern": "^BLT-[0-9]{3,}$" },
         "texto": { "type": "string", "minLength": 1 },
+        "bbox": { "$ref": "#/$defs/bbox" },
+        "ordem_leitura": { "type": "integer", "minimum": 1 },
         "pagina": { "$ref": "#/$defs/referenciaPagina" },
-        "proveniencia": { "$ref": "#/$defs/proveniencia" }
+        "proveniencia": { "$ref": "#/$defs/proveniencia" },
+        "confianca": { "$ref": "#/$defs/confianca" }
       }
     },
     "imagem": {
@@ -445,8 +452,12 @@
         "pagina": { "$ref": "#/$defs/referenciaPagina" },
         "bbox": { "$ref": "#/$defs/bbox" },
         "tipo": { "enum": ["FOTOGRAFIA", "LOGOTIPO", "ASSINATURA", "DOCUMENTO_ESCANEADO", "FIGURA", "OUTRO"] },
+        "largura": { "type": "number", "exclusiveMinimum": 0 },
+        "altura": { "type": "number", "exclusiveMinimum": 0 },
+        "tipo_provavel": { "type": "string", "minLength": 1 },
         "descricao": { "type": ["string", "null"] },
-        "proveniencia": { "$ref": "#/$defs/proveniencia" }
+        "proveniencia": { "$ref": "#/$defs/proveniencia" },
+        "confianca": { "$ref": "#/$defs/confianca" }
       }
     },
     "entidade": {

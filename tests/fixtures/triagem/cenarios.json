@@ -1,0 +1,21 @@
+{
+  "cenarios": [
+    {"id": "vicios_construtivos", "entrada": "Decisão fictícia determina exame de infiltração e fissuras.", "esperado": "VICIOS_CONSTRUTIVOS"},
+    {"id": "avaliacao_imobiliaria", "entrada": "Decisão fictícia determina apuração de valor locativo de mercado.", "esperado": "AVALIACAO_IMOBILIARIA"},
+    {"id": "engenharia_rodoviaria", "entrada": "Decisão fictícia determina exame de rodovia, pavimento e sinalização.", "esperado": "ENGENHARIA_RODOVIARIA"},
+    {"id": "tipo_hibrido", "entrada": "Encargo fictício reúne condições rodoviárias e sinistro viário.", "esperado": "TIPO_PRINCIPAL_E_SUBTIPO"},
+    {"id": "tipo_outro", "entrada": "Os elementos fictícios não permitem enquadramento inicial.", "esperado": "OUTRO"},
+    {"id": "decisao_delimitadora", "entrada": "A decisão fictícia define objeto e finalidade da prova.", "esperado": "DELIMITACAO_PRIMARIA"},
+    {"id": "ausencia_decisao_clara", "entrada": "Não foi localizada decisão delimitadora inequívoca.", "esperado": "RESSALVA"},
+    {"id": "quesito_tecnico", "entrada": "Qual é a extensão da fissura fictícia?", "esperado": "PERTINENTE_TECNICO"},
+    {"id": "quesito_parcialmente_juridico", "entrada": "Há origem técnica e responsabilidade pelo evento fictício?", "esperado": "PERTINENTE_PARCIAL"},
+    {"id": "quesito_juridico", "entrada": "A pretensão fictícia está prescrita?", "esperado": "MATERIA_JURIDICA"},
+    {"id": "quesito_repetitivo", "entrada": "Dois quesitos fictícios possuem conteúdo técnico equivalente.", "esperado": "REPETITIVO"},
+    {"id": "ressalva_documental", "entrada": "Projeto fictício indispensável não foi disponibilizado.", "esperado": "LIMITACAO_DOCUMENTAL"},
+    {"id": "ressalva_temporal", "entrada": "A condição fictícia na data do evento não pode ser reproduzida.", "esperado": "LIMITACAO_TEMPORAL"},
+    {"id": "conflito_resolvivel", "entrada": "Alegação e documento oficial fictícios divergem, prevalecendo a fonte oficial.", "esperado": "RESOLVIDO_POR_HIERARQUIA_DE_FONTES"},
+    {"id": "conflito_bloqueante", "entrada": "Duas fontes oficiais fictícias divergem sobre o objeto material.", "esperado": "BLOQUEANTE"},
+    {"id": "nao_constatado_nao_inexistente", "entrada": "Elemento fictício não foi constatado dentro da amostra examinada.", "esperado": "NAO_AFIRMAR_INEXISTENCIA"},
+    {"id": "tema_insuficiente", "entrada": "O assunto cadastrado fictício não delimita a controvérsia técnica.", "esperado": "PENDENTE_EVIDENCIAS_ADICIONAIS"}
+  ]
+}

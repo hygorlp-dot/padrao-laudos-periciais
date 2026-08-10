@@ -43,3 +43,15 @@
 - Não concluir responsabilidade civil, culpa, legitimidade, prescrição,
   decadência, direito à indenização ou outra qualificação jurídica reservada
   ao Juízo.
+
+## Triagem e autonomia pericial
+
+- Operar com autonomia máxima por padrão e perguntar ao perito somente diante
+  de exceção material irresolúvel pelas fontes disponíveis.
+- Trabalhar para o saneamento técnico do tema controvertido e não iniciar
+  redação conclusiva antes da delimitação do encargo.
+- Fazer a evidência atual prevalecer sobre modelos e casos anteriores.
+- Usar norma somente com proveniência e verificação identificáveis.
+- Fazer quesitos pertinentes influenciarem o plano do laudo futuro.
+- Não converter `NÃO CONSTATADO` em `INEXISTENTE`.
+- Reconhecer inconclusividade fundamentada como resultado técnico válido.

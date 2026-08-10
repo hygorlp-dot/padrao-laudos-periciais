@@ -11,6 +11,9 @@ Esta pasta contém os contratos de dados iniciais do projeto em JSON Schema Draf
 - `pje-comum.schema.json`: definições reutilizáveis de proveniência, confiança, paginação, reconciliação, conflitos e elementos extraídos do PJe.
 - `manifesto-pje.schema.json`: inventário e segmentação do PDF consolidado, sem duplicar o conteúdo integral dos documentos.
 - `documento-pje.schema.json`: conteúdo estruturado de um documento PJe e de suas seções e anexos internos.
+- `delimitacao-pericial.schema.json`: classificação do tipo de perícia,
+  delimitação técnica, quesitos, cobertura, ressalvas, conflitos, módulos e
+  plano pericial preliminar.
 
 Os schemas rejeitam propriedades não declaradas. Alegações, documentos, constatações, inferências e resultados inconclusivos devem permanecer semanticamente separados.
 
@@ -34,21 +37,23 @@ pastas são casos negativos e devem ser rejeitados.
 PDF PJe
 → manifesto-pje.json
 → documento-pje.json
+→ delimitacao-pericial.json
 → processo.json
 → vistoria.json
 → laudo.json
 ```
 
-Os contratos do manifesto e do documento PJe estão implementados. O parser
-estrutural determinístico gera `manifesto-pje.json`; a geração de
-`documento-pje.json` e a transformação para `processo.json` ainda não estão
-implementadas.
+Os contratos do manifesto, documento PJe e delimitação estão implementados. O
+parser gera os dois primeiros; a Skill de triagem orienta o Codex na produção
+do terceiro. A transformação posterior para `processo.json` ainda não está
+implementada.
 
 ## Limitações atuais
 
 - Os schemas são contratos iniciais e não substituem a validação técnica do perito.
-- Unicidade e integridade referencial entre arquivos distintos exigirão validação complementar futura.
-- A extração atual termina no manifesto estrutural: não há OCR, interpretação
-  semântica, geração de `documento-pje.json` ou automação Word.
+- A integridade interna da delimitação possui validador complementar; relações
+  com arquivos distintos ainda exigem conferência contra o corpus-fonte.
+- Não há OCR, serviço semântico autônomo, geração de `processo.json` ou
+  automação Word.
 - Não há automação de cálculos, normas, quesitos ou orçamento.
 - Alterações nos enums e nas condicionais dependem de decisão canônica documentada.

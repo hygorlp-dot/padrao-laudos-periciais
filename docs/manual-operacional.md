@@ -12,31 +12,35 @@ implementado do que permanece previsto.
 2. **Extração estruturada** — identificar dados, documentos, alegações,
    quesitos e lacunas, sem inventar conteúdo.
 3. **Contratos PJe** — representar o PDF consolidado em `manifesto-pje.json`
-   e, futuramente, cada peça em `documento-pje.json`.
-4. **`processo.json`** — futura consolidação estruturada dos dados processuais.
-5. **Ficha pré-vistoria** — preparar informações, pendências e objetivos da
+   e cada peça reconciliada em `documento-pje.json`.
+4. **Triagem e delimitação pericial** — leitura semântica pelo Codex, com tipo
+   de perícia, tema controvertido, objeto, objetivo, questões técnicas,
+   quesitos, ressalvas, conflitos e plano preliminar em
+   `delimitacao-pericial.json`.
+5. **`processo.json`** — futura consolidação estruturada dos dados processuais.
+6. **Ficha pré-vistoria** — preparar informações, pendências e objetivos da
    diligência.
-6. **Preparação da vistoria** — planejar escopo, participantes, instrumentos e
+7. **Preparação da vistoria** — planejar escopo, participantes, instrumentos e
    registros necessários.
-7. **Vistoria** — realizar constatações, medições e registros sob condução do
+8. **Vistoria** — realizar constatações, medições e registros sob condução do
    perito.
-8. **`vistoria.json`** — futura consolidação estruturada dos dados de campo.
-9. **Análise por `PAT-NNN`** — analisar cada manifestação como unidade
+9. **`vistoria.json`** — futura consolidação estruturada dos dados de campo.
+10. **Análise por `PAT-NNN`** — analisar cada manifestação como unidade
    rastreável conforme os padrões canônicos.
-10. **Redação técnica** — redigir análise, consequências, classificação e
+11. **Redação técnica** — redigir análise, consequências, classificação e
    conclusão específica.
-11. **`laudo.json`** — futura fonte estruturada única do laudo.
-12. **Conclusão** — consolidar somente resultados já fundamentados e aprovados
+12. **`laudo.json`** — futura fonte estruturada única do laudo.
+13. **Conclusão** — consolidar somente resultados já fundamentados e aprovados
     pelo perito.
-13. **Quesitos** — responder integralmente os conjuntos identificados.
-14. **Orçamento** — incluir somente itens que atendam aos requisitos técnicos
+14. **Quesitos** — responder integralmente os conjuntos identificados.
+15. **Orçamento** — incluir somente itens que atendam aos requisitos técnicos
     canônicos.
-15. **Revisão** — auditar integridade, coerência, rastreabilidade e completude.
-16. **Preenchimento do modelo Word** — preencher futuramente o DOCM preservando
+16. **Revisão** — auditar integridade, coerência, rastreabilidade e completude.
+17. **Preenchimento do modelo Word** — preencher futuramente o DOCM preservando
     o padrão visual aprovado.
-17. **Revisão final do DOCM/PDF** — conferir conteúdo, campos, paginação e
+18. **Revisão final do DOCM/PDF** — conferir conteúdo, campos, paginação e
     resultado visual.
-18. **Validação e liberação pelo perito** — etapa final e indelegável.
+19. **Validação e liberação pelo perito** — etapa final e indelegável.
 
 ## Estado de implementação
 
@@ -50,13 +54,15 @@ implementado do que permanece previsto.
 - fixtures fictícias e validador local dos contratos;
 - parser estrutural determinístico de PDF PJe para `manifesto-pje.json`, sem
   OCR nem extração semântica;
+- geração determinística de `documento-pje.json` a partir dos intervalos
+  reconciliados do manifesto, com texto digital e catálogo estrutural;
+- contrato, padrão, Skill e validador relacional da triagem e delimitação;
 - referências privadas locais para comparação;
 - arquitetura preparada para evolução futura.
 
 ### Ainda não implementado
 
-- extração semântica automatizada;
-- geração de `documento-pje.json`;
+- serviço autônomo de extração semântica sem intervenção do Codex;
 - `processo.json`, `vistoria.json` e `laudo.json`;
 - geração automática de fichas;
 - automação de rastreabilidade entre `PAT-NNN`, fotografias, quesitos e
@@ -73,3 +79,4 @@ implementado do que permanece previsto.
 - [Padrão de patologia](./padroes/padrao-patologia.md).
 - [Padrão de quesitos](./padroes/padrao-quesitos.md).
 - [Padrão de orçamento](./padroes/padrao-orcamento.md).
+- [Padrão de delimitação pericial](./padroes/padrao-delimitacao-pericial.md).
