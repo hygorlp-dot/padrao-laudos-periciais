@@ -70,6 +70,9 @@ implementado do que permanece previsto.
   autônomo do laudo;
 - referências privadas locais para comparação;
 - arquitetura preparada para evolução futura.
+- Backend Contract V1 em monólito modular: identidade estável, estados,
+  revisões, autoridade de valores, dependências e `STALE`, invariantes, Unit of
+  Work, portas, capabilities, jobs, erros e migrações em memória.
 
 ### Ainda não implementado
 
@@ -91,6 +94,7 @@ automáticos permanecem desativados até confirmação oficial da interface.
 ## Documentos de apoio
 
 - [Regras periciais](./padroes/regras-periciais.md).
+- [Backend Contract V1](./padroes/padrao-backend-contract.md).
 - [Estrutura do laudo](./padroes/padrao-estrutura-laudo.md).
 - [Padrão de patologia](./padroes/padrao-patologia.md).
 - [Padrão de quesitos](./padroes/padrao-quesitos.md).
