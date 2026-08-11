@@ -74,7 +74,7 @@ class FinalClosureR7(unittest.TestCase):
 
     def test_equivalencia_somente_medicao_e_fotografia(self):
         casos={
-            "MEDICAO":({"id":"MED-PLANO-001","grandeza":"abertura","questoes_tecnicas":["QT-001"]},{"id":"MED-001","medicao_planejada":None,"grandeza":"abertura","questoes":["QT-001"]},"medicoes"),
+            "MEDICAO":({"id":"MED-PLANO-001","grandeza":"abertura","local":"Sala","criterio":"resultado em mm","questoes_tecnicas":["QT-001"]},{"id":"MED-001","medicao_planejada":None,"grandeza":"abertura","valor":0.2,"unidade":"mm","local":"Sala","questoes":["QT-001"],"observacoes":["OBS-001"],"metodo":"fissurômetro"},"medicoes"),
             "FOTOGRAFIA":({"id":"FOT-PLANO-001","finalidade":"fissura detalhe","questoes_tecnicas":["QT-001"]},{"id":"FOT-001","fotografia_planejada":None,"finalidade_planejada":"fissura detalhe","questoes":["QT-001"]},"fotografias"),
         }
         for tipo,(planejado,executado,colecao) in casos.items():

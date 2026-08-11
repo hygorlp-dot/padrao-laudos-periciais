@@ -101,14 +101,21 @@ def _origem_quesito(documento: dict[str, Any]) -> str:
 
 
 def _materia_juridica(texto: str) -> str | None:
-    termos = ["prescrição", "decadência", "culpa", "responsabilidade civil", "dever de indenizar", "indenizar", "responsabilizar", "responsável pelo dano", "obrigação de pagar", "legitimidade", "nexo jurídico"]
+    termos = ["prescrição", "decadência", "culpa", "responsabilidade civil", "dever de indenizar", "indenizar", "responsabiliz", "responsável pelo dano", "obrigação de pagar", "legitimidade", "nexo jurídico", "valor da causa", "causa de pedir", "inadimplemento"]
     encontrados = [termo for termo in termos if normalizar(termo) in normalizar(texto)]
     return ", ".join(encontrados) if encontrados else None
 
 def _tem_materia_tecnica(texto: str) -> bool:
-    termos=("origem técnica","causa","manifestação","fissura","trinca","umidade","infiltração","desplacamento","medição","conformidade","sistema construtivo","desempenho")
+    termos=("origem técnica","manifestação","fissura","trinca","umidade","infiltração","desplacamento","medição","conformidade","sistema construtivo","desempenho")
     normal=normalizar(texto)
-    return any(normalizar(termo) in normal for termo in termos)
+    if any(normalizar(termo) in normal for termo in termos):return True
+    fenomenos=r"(?:fissura|trinca|umidade|infiltracao|manifestacao|desplacamento|falha tecnica|vicio construtivo|mecanismo construtivo)"
+    return bool(re.search(rf"\bcausa\s+(?:da|do|das|dos)\s+{fenomenos}\b",normal) or re.search(rf"\b{fenomenos}\b[^?.;]{{0,80}}\bcausa\b",normal))
+
+def _classificar_pertinencia(texto: str,repetitivo: bool) -> str:
+    if repetitivo:return "REPETITIVO"
+    juridica=bool(_materia_juridica(texto));tecnica=_tem_materia_tecnica(texto)
+    return "PERTINENTE_PARCIAL" if juridica and tecnica else "MATERIA_JURIDICA" if juridica else "PERTINENTE_TECNICO"
 
 def _tema_dos_autos(documentos, fallback):
     sinais=re.compile(r"(?i)\b(per[ií]cia|prova t[eé]cnica|verificar|determinar|controvers|fissur|trinc|umidade|infiltra|desplac|estrutura|impermeabiliza)\b")
@@ -211,9 +218,12 @@ def gerar(diretorio: Path) -> dict[str, Any]:
         if not repetitivo:
             vistos_texto[chave] = qid
         juridica = _materia_juridica(item["texto_integral"])
-        componente_tecnico=_tem_materia_tecnica(item["texto_integral"])
-        pertinencia = "REPETITIVO" if repetitivo else "PERTINENTE_PARCIAL" if juridica and componente_tecnico else "MATERIA_JURIDICA" if juridica else "PERTINENTE_TECNICO"
-        questoes_relacionadas = melhores(item["texto_integral"], questoes) if not juridica or componente_tecnico else []
+        pertinencia = _classificar_pertinencia(item["texto_integral"],repetitivo)
+        componente_tecnico = _tem_materia_tecnica(item["texto_integral"])
+        relacionavel = pertinencia in {"PERTINENTE_TECNICO", "PERTINENTE_PARCIAL"} or (
+            pertinencia == "REPETITIVO" and componente_tecnico
+        )
+        questoes_relacionadas = melhores(item["texto_integral"], questoes) if relacionavel else []
         for questao_id in questoes_relacionadas:
             next(q for q in questoes if q["id"] == questao_id)["quesitos_relacionados"].append(qid)
         doc = docs_por_id[item["documento_id"]]
@@ -226,7 +236,7 @@ def gerar(diretorio: Path) -> dict[str, Any]:
             "evidencias_necessarias": ["Evidência documental e/ou de vistoria compatível com o conteúdo do quesito"],
             "ressalvas_aplicaveis": res_ids,
             "status_cobertura": "REPETITIVO" if repetitivo else "JURIDICO_DELIMITADO" if pertinencia=="MATERIA_JURIDICA" else "PARCIAL",
-            "materia_tecnica": item["texto_integral"] if not juridica else "Aspecto técnico a separar da qualificação jurídica" if componente_tecnico else None,
+            "materia_tecnica": item["texto_integral"] if not juridica else "Aspecto técnico a separar da qualificação jurídica" if pertinencia=="PERTINENTE_PARCIAL" else None,
             "materia_juridica_associada": juridica,
             "secoes_laudisticas_previstas": ["Análise técnica vinculada à questão " + q for q in questoes_relacionadas],
             "proveniencia": [item["proveniencia"]],
