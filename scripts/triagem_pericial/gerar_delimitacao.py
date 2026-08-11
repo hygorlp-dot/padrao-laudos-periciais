@@ -119,6 +119,18 @@ def _tema_dos_autos(documentos, fallback):
     texto=("Verificar tecnicamente "+", ".join(manifestacoes)+", suas causas e consequências dentro do encargo delimitado nos autos.") if manifestacoes else trecho
     return texto,{"documento_id":doc["documento_id"],"pagina":pag.get("referencia"),"trecho":trecho,"natureza":"DELIMITACAO_EXTRAIDA","camada_autoridade":max(candidatos,key=lambda x:(x[0],x[1]))[0]}
 
+def _elemento_dos_autos(documentos,termos,fallback):
+    candidatos=[]
+    peso={"DECISAO":5,"DESPACHO":4,"ATO_JUDICIAL":3,"PETICAO_INICIAL":2,"MANIFESTACAO":1}
+    for doc in documentos:
+        for pag in doc.get("paginas",[]):
+            for trecho in re.split(r"(?<=[.!?])\s+|\n+",pag.get("texto_bruto","")):
+                limpo=re.sub(r"\s+"," ",trecho).strip();normal=normalizar(limpo)
+                if 15<=len(limpo)<=700 and any(t in normal for t in termos):candidatos.append((peso.get(doc.get("classe_normalizada"),0),doc,pag,limpo))
+    if not candidatos:return {"texto":fallback,"confianca":_confianca("BAIXA"),"documentos_fonte":[],"status_verificacao":"INCONCLUSIVO"}
+    _,doc,pag,trecho=max(candidatos,key=lambda x:(x[0],len(x[3])))
+    return {"texto":trecho,"confianca":_confianca("ALTA" if doc.get("classe_normalizada") in {"DECISAO","DESPACHO"} else "MEDIA"),"documentos_fonte":[doc["documento_id"]],"status_verificacao":"PENDENTE_VALIDACAO_PERITO"}
+
 
 def gerar(diretorio: Path) -> dict[str, Any]:
     manifesto_path = diretorio / "manifesto-pje.json"
@@ -147,20 +159,36 @@ def gerar(diretorio: Path) -> dict[str, Any]:
     agora = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
     res_ids = ["RES-001", "RES-002"] + (["RES-003"] if resultado.nivel == "MEDIA" else [])
+    extraidos = extrair(documentos)
+    esqueletos = [{"id": f"QT-{i:03d}", "descricao": descricao} for i, descricao in enumerate(perfil["questoes"], 1)]
+    fontes_qt = {q["id"]: {"quesitos": [], "passagens": []} for q in esqueletos}
+    for item in extraidos:
+        for qid in melhores(item["texto_integral"], esqueletos):
+            fontes_qt[qid]["quesitos"].append(item)
+    for doc in documentos:
+        for pag in doc.get("paginas", []):
+            for trecho in re.split(r"(?<=[.!?])\s+|\n+", pag.get("texto_bruto", "")):
+                limpo = trecho.strip()
+                if re.search(r"(?i)\b(alega|sustenta|afirma|determina|delimita|per[ií]cia)\b", limpo):
+                    for qid in melhores(limpo, esqueletos):
+                        fontes_qt[qid]["passagens"].append((doc, pag, limpo))
     questoes = []
-    for numero, descricao in enumerate(perfil["questoes"], 1):
+    for esqueleto in esqueletos:
+        numero=int(esqueleto["id"].split("-")[1]);descricao=esqueleto["descricao"];fontes=fontes_qt[esqueleto["id"]]
+        docs_fonte=sorted(set([x["documento_id"] for x in fontes["quesitos"]]+[d["documento_id"] for d,_,_ in fontes["passagens"]]))
+        derivada=bool(docs_fonte)
         questoes.append({
             "id": f"QT-{numero:03d}", "descricao": descricao,
-            "origem": f"Delimitação inferencial apoiada em {fonte['documento']['documento_id']}",
+            "origem": "Decisão/documentos delimitadores, quesitos e alegações pertinentes" if derivada else "Fallback metodológico do perfil pericial",
             "necessidade_para_saneamento": "Componente necessário para responder ao tema controvertido sem antecipar conclusão.",
             "quesitos_relacionados": [], "alegacoes_relacionadas": [], "evidencias_disponiveis": ["Documentos PJe estruturalmente extraídos"],
             "evidencias_necessarias": ["Vistoria e documentação técnica pertinente"],
-            "documentos_relacionados": resultado.documentos_fonte, "ressalvas": res_ids,
+            "documentos_relacionados": docs_fonte, "ressalvas": res_ids,
             "status_saneamento": "A_SANEAR", "confianca": _confianca(resultado.nivel),
-            "proveniencia": [prov],
+            "proveniencia": ([x["proveniencia"] for x in fontes["quesitos"]] +
+                              [{**{k:v for k,v in pag.get("proveniencia",prov).items() if k != "bbox"},"trecho":trecho} for _,pag,trecho in fontes["passagens"]]) if derivada else [prov],
         })
 
-    extraidos = extrair(documentos)
     vistos_texto: dict[str, str] = {}
     quesitos = []
     for ordem, item in enumerate(extraidos, 1):
@@ -189,6 +217,18 @@ def gerar(diretorio: Path) -> dict[str, Any]:
             "secoes_laudisticas_previstas": ["Análise técnica vinculada à questão " + q for q in questoes_relacionadas],
             "proveniencia": [item["proveniencia"]],
         })
+
+    # PERFIS orientam a decomposição, mas as QTs registram as fontes reais que
+    # as especializam: quesitos e passagens pertinentes dos autos.
+    for questao in questoes:
+        ligados=[q for q in quesitos if questao["id"] in q["questoes_tecnicas_relacionadas"]]
+        passagens=fontes_qt[questao["id"]]["passagens"]
+        fontes=sorted(set(questao["documentos_relacionados"]+[q["documento_id"] for q in ligados]+[d["documento_id"] for d,_,_ in passagens]))
+        proveniencias=list(questao["proveniencia"])+[q["proveniencia"][0] for q in ligados]
+        questao.update({"origem":"Decisão/documentos delimitadores, quesitos e alegações pertinentes" if ligados or passagens else "Fallback metodológico do perfil pericial",
+                        "documentos_relacionados":fontes,"proveniencia":list({json.dumps(p,sort_keys=True):p for p in proveniencias}.values()),
+                        "evidencias_disponiveis":list(dict.fromkeys(questao["evidencias_disponiveis"]+[q["id"] for q in ligados]+[t for _,_,t in passagens])),
+                        "confianca":_confianca("ALTA" if passagens and ligados else "MEDIA" if passagens or ligados else "BAIXA")})
 
     cobertura = [{"quesito_id": q["id"], "questoes_tecnicas": q["questoes_tecnicas_relacionadas"],
                   "secoes_laudisticas": q["secoes_laudisticas_previstas"], "status": q["status_cobertura"]}
@@ -225,6 +265,8 @@ def gerar(diretorio: Path) -> dict[str, Any]:
     assunto = {"texto": "; ".join(assuntos) if assuntos else "Assunto processual não localizado no manifesto.",
                "confianca": _confianca("ALTA" if assuntos else "BAIXA"), "documentos_fonte": [],
                "status_verificacao": "VERIFICADO" if assuntos else "INCONCLUSIVO"}
+    tema_analise=analise(tema_extraido)
+    if passagem_tema:tema_analise.update({"documentos_fonte":[passagem_tema["documento_id"]],"status_verificacao":"PENDENTE_VALIDACAO_PERITO"})
     return {
         "schema_version": "1.0.0",
         "identificacao": {"processo_cnj": manifesto["processo"]["numero_cnj"]["valor"], "manifesto_sha256": sha_manifesto, "data_geracao": agora},
@@ -233,8 +275,9 @@ def gerar(diretorio: Path) -> dict[str, Any]:
                           "criterios": resultado.criterios, "alternativas_consideradas": resultado.alternativas},
         "subtipos_pericia": resultado.subtipos,
         "assunto_processual": assunto,
-        "controversia_processual": analise(tema_extraido), "tema_controvertido": analise(tema_extraido),
-        "objeto_material": analise(perfil["objeto"]), "objetivo_pericial": analise(perfil["objetivo"]),
+        "controversia_processual": dict(tema_analise), "tema_controvertido": dict(tema_analise),
+        "objeto_material": _elemento_dos_autos(documentos,("objeto da pericia","imovel objeto","bem objeto"),perfil["objeto"]),
+        "objetivo_pericial": _elemento_dos_autos(documentos,("objetivo da pericia","finalidade da pericia","prova pericial para"),perfil["objetivo"]),
         "questoes_tecnicas": questoes, "quesitos": quesitos, "matriz_cobertura": cobertura,
         "ressalvas": ressalvas, "fatores_limitantes": [r["descricao"] for r in ressalvas], "conflitos": [],
         "materias_excluidas": [{"descricao": "Responsabilidade civil, culpa, prescrição, decadência e dever de indenizar.",
@@ -261,7 +304,7 @@ def gerar(diretorio: Path) -> dict[str, Any]:
         "autoauditoria": [
             {"criterio": "Classificação usa múltiplas peças e não o número do processo", "resultado": resultado_criterio(len(resultado.documentos_fonte)>=2), "observacao": ", ".join(resultado.documentos_fonte)},
             {"criterio": "Tema e objeto possuem fonte identificável", "resultado": "ALERTA", "observacao": "Formulação preliminar requer validação semântica final do perito."},
-            {"criterio": "Normas usadas possuem proveniência", "resultado": resultado_criterio(all(str(n).startswith("NOR-") for n in conhecimento_normas)), "observacao": f"Conhecimento recuperado por ID privado: {', '.join(conhecimento_normas) or 'nenhum aplicável'}."},
+            {"criterio": "Normas usadas possuem proveniência", "resultado": "BLOQUEADO" if conhecimento_normas else "ALERTA", "observacao": f"IDs recuperados exigem proveniência material no artefato: {', '.join(conhecimento_normas) or 'nenhuma norma usada nesta etapa'}."},
             {"criterio": "Modelos não contaminam fatos do caso", "resultado": resultado_criterio(not any(str(d).startswith("MOD-") for d in resultado.documentos_fonte)), "observacao": f"Modelos recuperados apenas como experiência: {', '.join(conhecimento_modelos) or 'nenhum disponível'}."},
         ],
         "status": status, "proveniencia": proveniencias_gerais,

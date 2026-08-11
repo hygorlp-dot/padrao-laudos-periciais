@@ -19,6 +19,15 @@ def _duplicados(valores: list[str]) -> list[str]:
     vistos: set[str] = set()
     return sorted({valor for valor in valores if valor in vistos or vistos.add(valor)})
 
+def recalcular_autoauditoria(delimitacao):
+    fontes=set(delimitacao.get("tipo_pericia",{}).get("documentos_fonte",[]))
+    normas=delimitacao.get("conhecimento_normativo",{}).get("itens_recuperados",[])
+    prov_normas=delimitacao.get("conhecimento_normativo",{}).get("proveniencias",[])
+    serializado=str({k:v for k,v in delimitacao.items() if k not in {"memoria_referencial","autoauditoria"}})
+    return {"Classificação usa múltiplas peças e não o número do processo":"APROVADO" if len(fontes)>=2 else "BLOQUEADO",
+            "Normas usadas possuem proveniência":"ALERTA" if not normas else "APROVADO" if len(prov_normas)>=len(normas) else "BLOQUEADO",
+            "Modelos não contaminam fatos do caso":"BLOQUEADO" if "MOD-" in serializado else "APROVADO"}
+
 
 def validar_relacoes(delimitacao: dict[str, Any]) -> list[str]:
     """Retorna violações sem corrigir ou completar o conteúdo recebido."""
@@ -83,6 +92,9 @@ def validar_relacoes(delimitacao: dict[str, Any]) -> list[str]:
             erros.append("Status APTO incompatível com conflitos bloqueantes abertos: " + ", ".join(bloqueantes))
         if auditoria_bloqueada:
             erros.append("Status APTO incompatível com autoauditoria BLOQUEADA: " + "; ".join(auditoria_bloqueada))
+    recalculada=recalcular_autoauditoria(delimitacao);declarada={a.get("criterio"):a.get("resultado") for a in delimitacao.get("autoauditoria",[])}
+    for criterio,resultado in recalculada.items():
+        if declarada.get(criterio)!=resultado:erros.append(f"Autoauditoria divergente do recálculo: {criterio}")
     return erros
 
 
