@@ -140,6 +140,9 @@ def _elemento_dos_autos(documentos,termos,fallback):
 def gerar(diretorio: Path) -> dict[str, Any]:
     manifesto_path = diretorio / "manifesto-pje.json"
     manifesto = json.loads(manifesto_path.read_text(encoding="utf-8"))
+    from scripts.extracao_pje.validar_integridade import validar_integridade
+    erros_manifesto,_=validar_integridade(manifesto)
+    if manifesto.get("status_validacao")!="VALIDADO" or erros_manifesto:raise ValueError("Manifesto PJe não validado; triagem bloqueada")
     documentos = [json.loads(path.read_text(encoding="utf-8")) for path in sorted((diretorio / "documentos").glob("*.json"))]
     resultado = classificar(documentos)
     raiz_privada = diretorio.parent.parent

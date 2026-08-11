@@ -35,12 +35,17 @@ def validar_integridade(manifesto):
             erros.append(f"{ident}: salto na paginação interna {paginas}")
     met = manifesto["metricas_extracao"]
     itens={i["documento_id_interno"] for i in manifesto["indice"]["itens"] if i.get("documento_id_interno")}
-    contabilizados={d.get("documento_id") for d in documentos if d.get("ordem_indice") is not None}
-    contabilizados|={x for c in manifesto["conflitos"] for x in c.get("itens_indice_relacionados",[])}
-    contabilizados|={x for p in manifesto.get("pendencias",[]) for x in p.get("itens_indice_relacionados",[])}
-    faltantes=itens-{x for x in contabilizados if x}
+    contagens={item:0 for item in itens}
+    for d in documentos:
+        if d.get("ordem_indice") is not None and d.get("documento_id") in contagens:contagens[d["documento_id"]]+=1
+    for grupo in (manifesto["conflitos"],manifesto.get("pendencias",[])):
+        for registro in grupo:
+            for item in registro.get("itens_indice_relacionados",[]):
+                if item in contagens:contagens[item]+=1
+    faltantes={item for item,total in contagens.items() if total==0};duplicados={item for item,total in contagens.items() if total>1}
     if faltantes: erros.append("Itens do índice não contabilizados: "+", ".join(sorted(faltantes)))
-    if manifesto.get("status_validacao")=="VALIDADO" and (faltantes or manifesto.get("conflitos") or manifesto.get("pendencias")):erros.append("Status VALIDADO incompatível com item não contabilizado, conflito ou pendência")
+    if duplicados: erros.append("Itens do índice contabilizados mais de uma vez: "+", ".join(sorted(duplicados)))
+    if manifesto.get("status_validacao")=="VALIDADO" and (faltantes or duplicados or any(c.get("bloqueante") and c.get("status")=="ABERTO" for c in manifesto.get("conflitos",[])) or any(p.get("bloqueante") and p.get("status")=="ABERTA" for p in manifesto.get("pendencias",[]))):erros.append("Status VALIDADO incompatível com item não contabilizado, conflito ou pendência")
     verificacoes = {"documentos_segmentados": len(documentos), "documentos_indice": len(manifesto["indice"]["itens"]),
                     "documentos_confirmados": sum(d["status_reconciliacao"]["status"] == "CONFIRMADO" for d in documentos),
                     "paginas_com_rodape": sum(p["possui_rodape_pje"] for p in manifesto["paginas"]),

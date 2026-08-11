@@ -204,15 +204,17 @@ def executar_pipeline_redacao(processo, delimitacao, motor):
     quesitos = _grupos_quesitos(delimitacao, final); orcamento = _orcamento(final)
     _acrescentar_claims_globais(corrigida, plano, delimitacao, final, quesitos, orcamento)
     ids_processuais=sorted({i for chave in ("sintese_processual","controversia_processual","tema_controvertido","objeto_material","objetivo_pericial") for i in _proveniencia(delimitacao.get(chave)) if i.startswith("DOC-")})
-    ids_documentos_reais=set()
+    documentos_reais={}
     for documento in processo.get("documentos",[]):
         if documento.get("status") != "PRESENTE": continue
-        if documento.get("id"): ids_documentos_reais.add(documento["id"])
+        aliases=[]
+        if documento.get("id"):aliases.append(documento["id"])
         origem=str(documento.get("observacoes") or "").removeprefix("Origem estrutural: ").strip()
-        if origem.startswith("DOC-"): ids_documentos_reais.add(origem)
-    catalogo_processual=[{"id":i,"tipo":"DOCUMENTO","classe_probatoria":"EVIDENCIA_PRIMARIA","proveniencia":[i],"aspectos_suportados":["FATO_PROCESSUAL"],"aspectos_contraditos":[],"acessivel":True} for i in ids_processuais if i in ids_documentos_reais]
+        if origem.startswith("DOC-"):aliases.append(origem)
+        for alias in aliases:documentos_reais[alias]=documento
+    catalogo_processual=[{"id":i,"tipo":"DOCUMENTO","classe_probatoria":"EVIDENCIA_PRIMARIA","data":documentos_reais[i].get("data"),"documento_processual":documentos_reais[i].get("id"),"proveniencia":[str(documentos_reais[i].get("observacoes") or i)],"aspectos_suportados":["FATO_PROCESSUAL"],"aspectos_contraditos":[],"acessivel":True} for i in ids_processuais if i in documentos_reais]
     grounding = auditar_grounding_redacao(corrigida, {**motor,"catalogo_processual":catalogo_processual})
-    fidelidade = auditar_fidelidade(corrigida, final)
+    fidelidade = auditar_fidelidade(corrigida, {**final,"catalogo_evidencias":final.get("catalogo_evidencias",[])+catalogo_processual})
     provisoria = _montar_laudo(processo, delimitacao, final, plano, corrigida, "BLOQUEADO_PARA_LAUDO", grounding, fidelidade, estilo + redundancia, correcoes)
     semanticos = auditar_laudo_semantico(provisoria, final)
     qts_materiais = {q["id"] for q in final.get("questoes_saneadas", []) if q.get("status") != "PREJUDICADA"}

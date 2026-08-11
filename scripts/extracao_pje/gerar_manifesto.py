@@ -20,6 +20,13 @@ from .validar_integridade import validar_integridade
 def _conflito_colisao(leitor,itens,destino,numero):
     fontes=[{"arquivo": leitor.caminho.name, "sha256": leitor.sha256, "pagina_pdf": i["pagina_origem_indice"], "pagina_documento": None, "pagina_original": None, "documento_id": i["documento_id_interno"], "id_pje": i["id_pje"], "trecho": i["texto_bruto"], "natureza":"DOCUMENTADO", "metodo_extracao": "TEXTO_DIGITAL", "confianca":i["confianca"], "status_verificacao":"VERIFICADO"} for i in itens]
     return {"conflito_id":f"CON-PJE-{numero:03d}","campo":"indice.pagina_destino_link","tipo":"OUTRO","descricao":"Mais de um item do índice aponta para o mesmo destino","valores_conflitantes":[i["id_pje"] for i in itens],"fontes":fontes,"status":"ABERTO","bloqueante":True,"decisao":None,"observacoes":f"Destino PDF {destino}","itens_indice_relacionados":[i["documento_id_interno"] for i in itens]}
+def _fonte_indice(leitor,item):
+    return {"arquivo":leitor.caminho.name,"sha256":leitor.sha256,"documento_id":item["documento_id_interno"],"id_pje":item["id_pje"],"pagina_pdf":item["pagina_origem_indice"],"pagina_documento":None,"pagina_original":None,"trecho":item["texto_bruto"],"natureza":"DOCUMENTADO","metodo_extracao":"INDICE_PJE","confianca":item["confianca"],"status_verificacao":"VERIFICADO"}
+def _fonte_rodape(leitor,pagina):
+    return {"arquivo":leitor.caminho.name,"sha256":leitor.sha256,"documento_id":None,"id_pje":pagina["id_pje_detectado"],"pagina_pdf":pagina["pagina_pdf"],"pagina_documento":pagina["pagina_documento_detectada"],"pagina_original":None,"trecho":f'Num. {pagina["id_pje_detectado"]} - Pag. {pagina["pagina_documento_detectada"]}',"natureza":"DOCUMENTADO","metodo_extracao":"CAMPO_ESTRUTURADO","confianca":pagina["confianca"],"status_verificacao":"VERIFICADO"}
+def _status_manifesto(erros,conflitos,pendencias):
+    bloqueio=bool(erros) or any(c.get("bloqueante") and c.get("status")=="ABERTO" for c in conflitos) or any(p.get("bloqueante") and p.get("status")=="ABERTA" for p in pendencias)
+    return "BLOQUEADO" if bloqueio else "VALIDADO"
 
 
 def _validar_schema(manifesto, raiz):
@@ -43,6 +50,9 @@ def construir_manifesto(caminho_pdf, raiz_repositorio=None):
         segmentos = segmentar_documentos(itens, paginas)
         documentos = []
         conflitos = []
+        colisoes_registradas=set()
+        for conflito_capa in capa.get("conflitos",[]):
+            conflitos.append({"conflito_id":f"CON-PJE-{len(conflitos)+1:03d}","campo":conflito_capa["campo"],"tipo":"DIVERGENCIA_CAPA","descricao":"Valores materialmente divergentes na capa PJe","valores_conflitantes":conflito_capa["valores"],"fontes":conflito_capa["fontes"],"status":"ABERTO","bloqueante":True,"decisao":None,"observacoes":None,"itens_indice_relacionados":[]})
         for seg in segmentos:
             item = seg.pop("item_indice")
             rodapes = seg.pop("rodapes")
@@ -50,6 +60,9 @@ def construir_manifesto(caminho_pdf, raiz_repositorio=None):
             estado_item = seg.pop("estado_item_indice", "SEGMENTADO")
             if estado_item == "CONFLITO_DESTINO":
                 itens_colididos=seg.pop("itens_colididos")
+                chave_colisao=tuple(sorted(i["documento_id_interno"] for i in itens_colididos))
+                if chave_colisao in colisoes_registradas:continue
+                colisoes_registradas.add(chave_colisao)
                 conflitos.append(_conflito_colisao(leitor,itens_colididos,seg["pagina_pdf_inicio"],len(conflitos)+1))
                 continue
             rec = reconciliar_documento({**seg, "id_rodape": id_rodape, "item_indice": item, "rodapes": rodapes})
@@ -70,9 +83,10 @@ def construir_manifesto(caminho_pdf, raiz_repositorio=None):
             })
         for doc in documentos:
             if doc["status_reconciliacao"]["status"] == "CONFLITANTE":
+                item=next(i for i in itens if i["documento_id_interno"]==doc["documento_id"]);pagina_rodape=next(p for p in paginas if p["pagina_pdf"]==doc["pagina_pdf_inicio"] and p.get("id_pje_detectado"))
                 conflitos.append({"conflito_id": f"CON-PJE-{len(conflitos)+1:03d}", "campo": "id_pje", "tipo": "DIVERGENCIA_INDICE_RODAPE",
                                   "descricao": "ID do índice diverge do rodapé", "valores_conflitantes": [doc["status_reconciliacao"]["id_indice"], doc["status_reconciliacao"]["id_rodape"]],
-                                  "fontes": [capa["processo"]["numero_cnj"]["proveniencia"]] * 2, "status": "ABERTO", "bloqueante": True,
+                                  "fontes": [_fonte_indice(leitor,item),_fonte_rodape(leitor,pagina_rodape)], "status": "ABERTO", "bloqueante": True,
                                   "decisao": None, "observacoes": doc["documento_id"], "itens_indice_relacionados":[doc["documento_id"]]})
         pendencias = []
         if not capa["cnj_localizado"]:
@@ -102,10 +116,7 @@ def construir_manifesto(caminho_pdf, raiz_repositorio=None):
                      "documentos": documentos, "paginas": paginas, "eventos": eventos, "conflitos": conflitos,
                      "pendencias": pendencias, "metricas_extracao": met, "status_validacao": "RASCUNHO"}
         erros, alertas = validar_integridade(manifesto)
-        if erros:
-            manifesto["status_validacao"] = "BLOQUEADO"
-        elif not pendencias and not conflitos:
-            manifesto["status_validacao"] = "VALIDADO"
+        manifesto["status_validacao"]=_status_manifesto(erros,conflitos,pendencias)
         _validar_schema(manifesto, raiz)
         return manifesto, erros, alertas
 
