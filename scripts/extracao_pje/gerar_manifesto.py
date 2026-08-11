@@ -17,6 +17,10 @@ from .reconciliar_indice import reconciliar_documento
 from .segmentar_documentos import segmentar_documentos
 from .validar_integridade import validar_integridade
 
+def _conflito_colisao(leitor,itens,destino,numero):
+    fontes=[{"arquivo": leitor.caminho.name, "sha256": leitor.sha256, "pagina_pdf": i["pagina_origem_indice"], "pagina_documento": None, "pagina_original": None, "documento_id": i["documento_id_interno"], "id_pje": i["id_pje"], "trecho": i["texto_bruto"], "natureza":"DOCUMENTADO", "metodo_extracao": "TEXTO_DIGITAL", "confianca":i["confianca"], "status_verificacao":"VERIFICADO"} for i in itens]
+    return {"conflito_id":f"CON-PJE-{numero:03d}","campo":"indice.pagina_destino_link","tipo":"OUTRO","descricao":"Mais de um item do índice aponta para o mesmo destino","valores_conflitantes":[i["id_pje"] for i in itens],"fontes":fontes,"status":"ABERTO","bloqueante":True,"decisao":None,"observacoes":f"Destino PDF {destino}","itens_indice_relacionados":[i["documento_id_interno"] for i in itens]}
+
 
 def _validar_schema(manifesto, raiz):
     arquivos = [raiz / "schemas" / n for n in ("pje-comum.schema.json", "manifesto-pje.schema.json")]
@@ -46,11 +50,7 @@ def construir_manifesto(caminho_pdf, raiz_repositorio=None):
             estado_item = seg.pop("estado_item_indice", "SEGMENTADO")
             if estado_item == "CONFLITO_DESTINO":
                 itens_colididos=seg.pop("itens_colididos")
-                fontes=[{"arquivo": leitor.caminho.name, "sha256": leitor.sha256, "pagina_pdf": i["pagina_origem_indice"], "pagina_documento": None, "pagina_original": None, "documento_id": i["documento_id_interno"], "id_pje": i["id_pje"], "trecho": i["texto_bruto"], "natureza":"DOCUMENTADO", "metodo_extracao": "TEXTO_PDF", "confianca":i["confianca"], "status_verificacao":"VERIFICADO"} for i in itens_colididos]
-                conflitos.append({"conflito_id": f"CON-PJE-{len(conflitos)+1:03d}", "campo": "indice.pagina_destino_link", "tipo": "OUTRO",
-                                  "descricao": "Mais de um item do índice aponta para o mesmo destino", "valores_conflitantes": [str(seg["pagina_pdf_inicio"])],
-                                  "fontes": fontes,
-                                  "status": "ABERTO", "bloqueante": True, "decisao": None, "observacoes": item["documento_id_interno"], "itens_indice_relacionados":[item["documento_id_interno"]]})
+                conflitos.append(_conflito_colisao(leitor,itens_colididos,seg["pagina_pdf_inicio"],len(conflitos)+1))
                 continue
             rec = reconciliar_documento({**seg, "id_rodape": id_rodape, "item_indice": item, "rodapes": rodapes})
             fatia = paginas[seg["pagina_pdf_inicio"] - 1:seg["pagina_pdf_fim"]]

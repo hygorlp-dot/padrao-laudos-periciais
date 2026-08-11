@@ -5,6 +5,8 @@ from pypdf.generic import DictionaryObject,NameObject,StreamObject
 from scripts.extracao_pje.segmentar_documentos import segmentar_documentos
 from scripts.extracao_pje.extrair_capa import extrair_capa
 from scripts.extracao_pje.leitor_pdf import LeitorPdf
+from scripts.extracao_pje.gerar_manifesto import _conflito_colisao
+from jsonschema import Draft202012Validator
 from scripts.extracao_pje.extrair_indice import extrair_indice
 from scripts.extracao_pje.validar_integridade import validar_integridade
 from scripts.motor_vicios.autocorrigir import autocorrigir
@@ -32,6 +34,10 @@ class IntegridadeRastreabilidade25(unittest.TestCase):
         paginas=[{"pagina_pdf":i,"possui_rodape_pje":False,"pagina_documento_detectada":None,"id_pje_detectado":None} for i in range(1,5)]
         a=segmentar_documentos(itens,paginas);b=segmentar_documentos(list(reversed(itens)),paginas)
         self.assertEqual(len(a),2);self.assertEqual({x["estado_item_indice"] for x in a},{"CONFLITO_DESTINO"});self.assertEqual(sorted(x["id_pje"] for x in a),sorted(x["id_pje"] for x in b))
+        completos=[{**x,"documento_id_interno":f"DOC-PJE-{i:03d}","pagina_origem_indice":1,"texto_bruto":f"item {i}","confianca":{"nivel":"MEDIA"}} for i,x in enumerate(itens,1)]
+        conflito=_conflito_colisao(Leitor({}),completos,2,1);schema=json.loads((Path(__file__).resolve().parents[1]/"schemas/pje-comum.schema.json").read_text(encoding="utf8"));contrato={"$schema":schema["$schema"],"$defs":schema["$defs"],"$ref":"#/$defs/conflito"}
+        self.assertEqual(list(Draft202012Validator(contrato).iter_errors(conflito)),[])
+        self.assertEqual(conflito["itens_indice_relacionados"],["DOC-PJE-001","DOC-PJE-002"])
     def test_segmentacao_normal_e_descoberta_por_rodape(self):
         paginas=[{"pagina_pdf":i,"possui_rodape_pje":i in {2,4},"pagina_documento_detectada":1 if i in {2,4} else None,"id_pje_detectado":str(i) if i in {2,4} else None} for i in range(1,5)]
         itens=[{"documento_id_interno":"DOC-PJE-001","id_pje":"2","ordem_indice":1,"pagina_destino_link":2}]
