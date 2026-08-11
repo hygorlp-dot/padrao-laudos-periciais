@@ -9,7 +9,18 @@ from typing import Protocol
 from dataclasses import dataclass
 
 DOMINIOS_OFICIAIS=("abnt.org.br","gov.br","dnit.gov.br","ibape-nacional.com.br","caixa.gov.br")
-PII_PADROES=(re.compile(r"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b"),re.compile(r"\b(?:\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}|\d{20})\b"),re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b"),re.compile(r"\(?\d{2}\)?\s*\d{4,5}-?\d{4}"),re.compile(r"(?i)\b(?:rua|avenida|av\.|travessa|alameda|rodovia)\s+[\wÀ-ÿ ]+,?\s*\d+"),re.compile(r"(?i)\b(?:parte autora|parte ré|nos autos|processo judicial|petição inicial|dados das partes)\b"))
+PII_PADROES=(re.compile(r"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b"),re.compile(r"\b\d{11}\b"),re.compile(r"\b\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}\b"),re.compile(r"\b\d{14}\b"),re.compile(r"\b(?:\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}|\d{20})\b"),re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b"),re.compile(r"\(?\d{2}\)?\s*\d{4,5}-?\d{4}"),re.compile(r"(?i)\b(?:rua|avenida|av\.|travessa|alameda|rodovia)\s+[\wÀ-ÿ ]+,?\s*\d+"),re.compile(r"(?i)\b(?:matr[ií]cula|inscri[cç][aã]o)\s*(?:n[.º°o]*\s*)?[\w./-]+"),re.compile(r"(?i)\b(?:parte autora|parte ré|nos autos|processo judicial|petição inicial|dados das partes)\b"))
+
+def dados_sensiveis_processo(processo):
+    valores=[]
+    def visitar(chave,valor):
+        if chave in {"nome","cpf_cnpj","numero_processo","endereco","matricula","email","telefone","numero_oab"} and isinstance(valor,(str,int)):valores.append(str(valor))
+        elif isinstance(valor,dict):
+            for k,v in valor.items():visitar(k,v)
+        elif isinstance(valor,list):
+            for v in valor:visitar(chave,v)
+    visitar("",processo or {})
+    return tuple(dict.fromkeys(v for v in valores if v.strip()))
 @dataclass(frozen=True)
 class EgressPolicy:
     permitir_egress: bool=False
@@ -55,7 +66,9 @@ class AgentSearchProvider:
         return self.executor(consulta)
 
 def buscar(consulta,provider:SearchProvider,politica=None):
-    resultados=provider.buscar(consulta,politica) if isinstance(provider,AgentSearchProvider) else provider.buscar(consulta);classificados=[]
+    exige=bool(getattr(provider,"EXTERNAL_DATA_EGRESS_REQUIRED",False))
+    if exige and politica is None:raise PermissionError("provider externo sem EgressPolicy")
+    resultados=provider.buscar(consulta,politica) if exige else provider.buscar(consulta);classificados=[]
     for item in resultados:
         x=dict(item);x["oficial"]=dominio_oficial(x.get("url",""));x["status_uso"]="CANDIDATA_OFICIAL" if x["oficial"] else "APENAS_DESCOBERTA";classificados.append(x)
     return sorted(classificados,key=lambda x:(not x["oficial"],x.get("url","")))

@@ -8,6 +8,7 @@ from xml.etree import ElementTree
 
 IMAGENS={".jpg",".jpeg",".png",".tif",".tiff",".heic"}; VIDEOS={".mp4",".mov",".avi",".mkv",".m4v"}
 TEXTOS={".txt",".md"}; DADOS={".json",".csv",".xlsx"}
+DOCUMENTOS={".pdf",".doc",".docx",".docm",".odt"}
 
 def agora(): return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 def sha256(p): return hashlib.sha256(p.read_bytes()).hexdigest()
@@ -15,6 +16,7 @@ def categoria(p):
     e=p.suffix.lower(); base="/".join(x.lower() for x in p.parts)
     if e in IMAGENS:return "FOTOGRAFIA"
     if e in VIDEOS:return "VIDEO"
+    if e in DOCUMENTOS:return "DOCUMENTO"
     if "medic" in base:return "MEDICAO"
     if e in TEXTOS|DADOS:return "ANOTACAO"
     if "document" in base:return "DOCUMENTO"
@@ -77,7 +79,9 @@ def inventariar(diretorio:Path, destino:Path|None=None):
         txt,met=texto(p); meta,met_exif=exif(p)
         if txt is not None:meta["texto_original"]=txt
         metodo=met_exif if met_exif=="EXIF" else met
-        suportado=p.suffix.lower() in IMAGENS|VIDEOS|TEXTOS|DADOS
+        # Documentos de campo são preservados por metadados nesta etapa, ainda
+        # que sua extração semântica pertença a outro boundary.
+        suportado=p.suffix.lower() in IMAGENS|VIDEOS|TEXTOS|DADOS|DOCUMENTOS
         novo={"id":f"ARQ-VIS-{proximo:03d}","nome":p.name,"caminho_relativo":p.relative_to(diretorio).as_posix(),"sha256":h,"extensao":p.suffix.lower(),"tamanho_bytes":p.stat().st_size,"data_processamento":agora(),"data_arquivo":datetime.fromtimestamp(p.stat().st_mtime,timezone.utc).astimezone().isoformat(timespec="seconds"),"categoria":categoria(p),"metodo_ingestao":metodo,"metadados":meta,"confianca":{"nivel":"ALTA" if txt is not None or met_exif=="EXIF" else "MEDIA"},"status":"EXTRAIDO" if txt is not None else "METADADOS_PARCIAIS" if suportado else "FORMATO_NAO_SUPORTADO","acao_processamento":"PROCESSADO"}
         itens.append(novo);por_hash[h]=novo;proximo+=1
     obj={"schema_version":"1.0.0","processo":diretorio.name,"gerado_em":agora(),"arquivos":itens,"status":"INVENTARIADO" if itens else "SEM_DADOS_DE_VISTORIA"}

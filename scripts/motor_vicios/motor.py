@@ -18,7 +18,7 @@ def _identidade_manifestacao(obs,chave):
 def _base(processo,delimitacao,status,tipo):
     quesitos=[]
     for q in delimitacao.get("quesitos",[]):
-        jurid=q.get("pertinencia")=="NAO_PERTINENTE_JURIDICO" or bool(q.get("materia_juridica_associada"))
+        jurid=q.get("pertinencia")=="MATERIA_JURIDICA" or (q.get("pertinencia")=="REPETITIVO" and q.get("materia_juridica_associada") and not q.get("materia_tecnica"))
         quesitos.append({"quesito":q["id"],"status":"MATERIA_JURIDICA" if jurid else "PENDENTE_EVIDENCIA","questoes":q.get("questoes_tecnicas_relacionadas",[]),"patologias":[],"observacoes":[],"fotografias":[],"medicoes":[],"hipoteses":[],"normas":[],"ressalvas":[]})
     return {"schema_version":"1.0.0","processo_cnj":processo["numero_processo"],"tipo_pericia":tipo,"status_execucao":status,"manifestacoes":[],"hipoteses":[],"patologias":[],"questoes_saneadas":[],"cobertura_quesitos":quesitos,"pesquisa_online":{"status":"NAO_NECESSARIA","pesquisas_realizadas":0,"fontes_oficiais_localizadas":[],"fontes_rejeitadas":[],"fontes_cacheadas":[],"revalidacoes_vigencia":0,"pesquisas_desnecessarias_evitadas":1},"autoauditoria":[],"autonomia":{"decisoes_autonomas":1,"hipoteses_criadas":0,"hipoteses_testadas":0,"pesquisas_autonomas":0,"normas_recuperadas":0,"fontes_online_recuperadas":0,"lacunas_resolvidas":0,"ressalvas_criadas":0,"perguntas_evitadas":["Não solicitar informação rotineira sem evidência de campo."],"perguntas_necessarias":[]},"gate_redacao":"BLOQUEADO_PARA_REDACAO","proveniencia":["processo.json","delimitacao-pericial.json"]}
 
@@ -67,7 +67,7 @@ def executar(processo,delimitacao,plano,vistoria,contexto=None,conhecimento=None
             fonte=next((x for x in conhecimento.get("normas",[]) if x.get("id")==n["id"]),{})
             n.update({"edicao":fonte.get("edicao"),"pagina":fonte.get("pagina"),"tipo_requisito":fonte.get("tipo_requisito"),"metodo_verificacao":fonte.get("metodo_verificacao"),"criterio":fonte.get("criterio"),"confianca":fonte.get("confianca",{"nivel":"MEDIA" if n["verificada"] else "BAIXA"}),"avaliacao_conformidade":avaliar_conformidade_normativa(fonte,ligados)})
     for qt in delimitacao["questoes_tecnicas"]:
-        pats=[p for p in r["patologias"] if qt["id"] in next(m["questoes"] for m in r["manifestacoes"] if m["id"]==f"MAN-{int(p['id'][-3:]):03d}")]
+        pats=[p for p in r["patologias"] if qt["id"] in next(m["questoes"] for m in r["manifestacoes"] if m["id"]==p["id"].replace("PAT-","MAN-"))]
         dimensoes=intencoes(qt.get("descricao",""));exige_causa=bool({"CAUSALIDADE","ORIGEM","MECANISMO"}&set(dimensoes)) and "JURIDICO" not in dimensoes;sem_capacidade=any(p.get("analise_causal",{}).get("status_capacidade")=="MOTOR_CAUSAL_NAO_IMPLEMENTADO" for p in pats)
         inc=any(p["constatacao"]["situacao"]=="INCONCLUSIVA" or (p["constatacao"]["situacao"]=="ANOMALIA" and not p["causa"]) for p in pats) and exige_causa
         st="SANEADA_COM_RESSALVA" if pats and inc else "SANEADA" if pats else "PREJUDICADA"

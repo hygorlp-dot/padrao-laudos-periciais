@@ -35,9 +35,9 @@ class AdvSafeHardening(unittest.TestCase):
         linhas=" ".join(f"{x} 650 m {x} 740 l S" for x in (40,140,260,480,570))+" 40 650 m 570 650 l S 40 680 m 570 680 l S 40 710 m 570 710 l S 40 740 m 570 740 l S"
         textos="BT /F1 10 Tf 45 720 Td (ID) Tj 100 0 Td (Data) Tj 120 0 Td (Titulo) Tj 220 0 Td (Tipo) Tj ET BT /F1 10 Tf 45 690 Td (900001) Tj 100 0 Td (01/01/2026) Tj 120 0 Td (Peticao sintetica) Tj 220 0 Td (PETICAO) Tj ET BT /F1 10 Tf 45 660 Td (900002) Tj 100 0 Td (02/01/2026) Tj 120 0 Td (Decisao sintetica) Tj 220 0 Td (DECISAO) Tj ET"
         pagina(linhas+textos+" BT /F1 10 Tf 40 760 Td (Processo 0000001-00.2026.4.00.0001) Tj ET")
-        pagina("BT /F1 10 Tf 40 730 Td (Documento sintetico sem PII real) Tj 0 -690 Td (Num. 900001 - Pag. 1) Tj ET")
+        pagina("BT /F1 10 Tf 40 730 Td (A autora alega infiltracao e fissura no imovel por vicio construtivo.) Tj 0 -20 Td (O objeto da pericia e o imovel e o objetivo da pericia e determinar a causa.) Tj 0 -20 Td (QUESITOS:) Tj 0 -20 Td (1. Existe umidade na parede?) Tj 0 -630 Td (Num. 900001 - Pag. 1) Tj ET")
         pagina("BT /F1 10 Tf 40 730 Td (Pagina complementar sem rodape e sem link) Tj ET")
-        pagina("BT /F1 10 Tf 40 730 Td (Segundo documento sintetico) Tj 0 -690 Td (Num. 900002 - Pag. 1) Tj ET")
+        pagina("BT /F1 10 Tf 40 730 Td (DECISAO: defiro pericia para verificar infiltracao, fissura e determinar a causa.) Tj 0 -20 Td (O objeto da pericia e o imovel e o objetivo da pericia e sanear a controversia.) Tj 0 -650 Td (Num. 900002 - Pag. 1) Tj ET")
         with open(caminho,"wb") as f:w.write(f)
 
     def test_associacao_ambigua_falha_fechado(self):
@@ -64,15 +64,15 @@ class AdvSafeHardening(unittest.TestCase):
         equivalente=copy.deepcopy(ausente);equivalente["cobertura"][0].update(status="SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE",evidencia_equivalente=["OBS-001"])
         self.assertFalse(recalcular_execucao(plano,equivalente)["apto"])
         equivalente["cobertura"][0]["justificativa_equivalencia"]="Método alternativo tecnicamente identificado";equivalente["observacoes"]=[{"id":"OBS-001","questoes":["QT-001"]}]
-        self.assertTrue(recalcular_execucao(plano,equivalente)["apto"])
+        self.assertFalse(recalcular_execucao(plano,equivalente)["apto"])
         forjado=copy.deepcopy(ausente);forjado["cobertura"][0].update(status="EXECUTADO",executado=["ENS-FAKE"])
         self.assertFalse(recalcular_execucao(plano,forjado)["apto"])
         irrelevante=copy.deepcopy(equivalente);irrelevante["observacoes"][0]["questoes"]=[]
         self.assertFalse(recalcular_execucao(plano,irrelevante)["apto"])
 
     def test_migracao_plano_explicita_e_fail_closed(self):
-        legado={"schema_version":"1.0.0","requisitos_cobertura":[{"questao_tecnica":"QT-001","tipo":"ATIVIDADE","obrigatoriedade":"OBRIGATORIA"}]}
-        self.assertEqual(migrar_plano(legado)["schema_version"],"2.0.0")
+        legado={"schema_version":"1.0.0","atividades":[{"id":"ATV-001","questoes_tecnicas":["QT-001"]}],"requisitos_cobertura":[{"questao_tecnica":"QT-001","tipo":"ATIVIDADE","obrigatoriedade":"OBRIGATORIA"}]}
+        migrado=migrar_plano(legado);self.assertEqual((migrado["schema_version"],migrado["requisitos_cobertura"][0]["item_planejado"]),("2.0.0","ATV-001"));self.assertEqual(migrar_plano(migrado),migrado)
         with self.assertRaises(DomainError):migrar_plano({"schema_version":"1.0.0"})
         with self.assertRaises(DomainError):migrar_plano({"schema_version":"3.0.0"})
 

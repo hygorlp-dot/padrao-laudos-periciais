@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 from .validar_plano import recalcular_cobertura
+from scripts.triagem_pericial.semantica import melhores
 
 
 def _hash(caminho: Path) -> str: return hashlib.sha256(caminho.read_bytes()).hexdigest()
@@ -60,6 +61,9 @@ def _perfil(tipo: str) -> dict[str, Any]:
 def gerar(diretorio: Path) -> dict[str, Any]:
     processo_path, delimitacao_path = diretorio / "processo.json", diretorio / "delimitacao-pericial.json"
     processo = json.loads(processo_path.read_text(encoding="utf-8")); delimitacao = json.loads(delimitacao_path.read_text(encoding="utf-8"))
+    from scripts.triagem_pericial.validar_delimitacao import validar_instancia,status_derivado
+    erros_delimitacao=validar_instancia(delimitacao)
+    if erros_delimitacao or status_derivado(delimitacao)!="APTO_PARA_PLANEJAMENTO":raise ValueError("delimitação inválida ou bloqueada no boundary de planejamento: "+"; ".join(erros_delimitacao+[status_derivado(delimitacao)]))
     tipo = delimitacao["tipo_pericia"]["tipo"]; perfil = _perfil(tipo)
     qts = [q["id"] for q in delimitacao["questoes_tecnicas"]]
     quesitos = [q for q in delimitacao["quesitos"] if q["pertinencia"] in {"PERTINENTE_TECNICO", "PERTINENTE_PARCIAL"}]
@@ -89,7 +93,10 @@ def gerar(diretorio: Path) -> dict[str, Any]:
         if any(t in qt.get("descricao","").lower() for t in ("ensaio","teste de")):
             ensaios.append({"id":f"ENS-PLANO-{len(ensaios)+1:03d}","nome":f"Ensaio requerido por {qt['id']}","classificacao":"INDISPENSAVEL","justificativa":qt["descricao"],"fundamento":None,"questoes_tecnicas":[qt["id"]],"conclusoes_limitadas_se_ausente":[qt["id"]]})
     documentos_caso=[d for d in delimitacao["documentos_ausentes"] if not str(d).casefold().startswith("base privada")]
-    documentos_planejados=[{"id":f"DOC-PLANO-{i:03d}","descricao":str(d),"questoes_tecnicas":qts,"criterio_satisfacao":"Documento identificado e materialmente relacionado às QTs indicadas."} for i,d in enumerate(documentos_caso,1)]
+    documentos_planejados=[]
+    for d in documentos_caso:
+        ligados=melhores(str(d),delimitacao["questoes_tecnicas"])
+        if ligados:documentos_planejados.append({"id":f"DOC-PLANO-{len(documentos_planejados)+1:03d}","descricao":str(d),"questoes_tecnicas":ligados,"criterio_satisfacao":"Identidade documental e pertinência material verificadas para as QTs indicadas."})
     requisitos_cobertura=[]
     for tipo_req,chave in (("ATIVIDADE",atividades),("FOTOGRAFIA",fotografias),("MEDICAO",medicoes),("ENSAIO",ensaios),("DOCUMENTO",documentos_planejados)):
         for item in chave:
@@ -101,7 +108,7 @@ def gerar(diretorio: Path) -> dict[str, Any]:
         alg_q={a for qt in q["questoes_tecnicas_relacionadas"] if qt in qt_por_id for a in qt_por_id[qt].get("alegacoes_relacionadas",[])}
         cobertura.append({"quesito": q["id"], "questoes_tecnicas": q["questoes_tecnicas_relacionadas"], "alegacoes": sorted(alg_q),
                           "atividades": atvs, "medicoes": [m["id"] for m in medicoes if any(qt in m["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])], "fotografias": [f["id"] for f in fotografias if any(qt in f["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])],
-                          "ensaios": [], "documentos": processo["documentos_tecnicos"], "planejada": False})
+                          "ensaios": [e["id"] for e in ensaios if any(qt in e["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])], "documentos": [d["id"] for d in documentos_planejados if any(qt in d["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])], "planejada": False})
     calculada=recalcular_cobertura({"cobertura":cobertura,"requisitos_cobertura":requisitos_cobertura,"atividades":atividades,"medicoes":medicoes,"fotografias":fotografias,"ensaios":ensaios,"documentos_a_solicitar":documentos_planejados})
     for item in cobertura:item["planejada"]=calculada["cobertura"].get(item["quesito"],False)
     bloqueante = any(c["classificacao"] == "BLOQUEANTE" and c["status"] == "ABERTO" for c in delimitacao["conflitos"])

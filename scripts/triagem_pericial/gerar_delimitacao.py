@@ -105,6 +105,11 @@ def _materia_juridica(texto: str) -> str | None:
     encontrados = [termo for termo in termos if normalizar(termo) in normalizar(texto)]
     return ", ".join(encontrados) if encontrados else None
 
+def _tem_materia_tecnica(texto: str) -> bool:
+    termos=("origem técnica","causa","manifestação","fissura","trinca","umidade","infiltração","desplacamento","medição","conformidade","sistema construtivo","desempenho")
+    normal=normalizar(texto)
+    return any(normalizar(termo) in normal for termo in termos)
+
 def _tema_dos_autos(documentos, fallback):
     sinais=re.compile(r"(?i)\b(per[ií]cia|prova t[eé]cnica|verificar|determinar|controvers|fissur|trinc|umidade|infiltra|desplac|estrutura|impermeabiliza)\b")
     candidatos=[]
@@ -148,11 +153,14 @@ def gerar(diretorio: Path) -> dict[str, Any]:
         dado = json.loads(caminho.read_text(encoding="utf-8"))
         if dado.get("tipo_pericia") == resultado.tipo or set(dado.get("sistemas", [])) & set(perfil["sistemas"]):
             conhecimento_modelos.append(dado["id"])
-    conhecimento_normas = []
+    conhecimento_normas = [];conhecimento_normas_fontes=[]
     for caminho in sorted((raiz_privada / "conhecimento" / "normas").glob("NOR-*.json")):
         dado = json.loads(caminho.read_text(encoding="utf-8"))
         if resultado.tipo in dado.get("sistemas", []) or set(dado.get("sistemas", [])) & set(perfil["sistemas"]):
             conhecimento_normas.append(dado["id"])
+            prov_norma=dado.get("proveniencia") or dado.get("fonte",{}).get("proveniencia") or [str(caminho)]
+            if isinstance(prov_norma,dict):prov_norma=[json.dumps(prov_norma,sort_keys=True)]
+            conhecimento_normas_fontes.append({"id":dado["id"],"proveniencia":[str(x) for x in prov_norma]})
     fonte = _fonte(documentos, resultado.documentos_fonte)
     prov = fonte["proveniencia"]
     docs_por_id = {d["documento_id"]: d for d in documentos}
@@ -198,8 +206,9 @@ def gerar(diretorio: Path) -> dict[str, Any]:
         if not repetitivo:
             vistos_texto[chave] = qid
         juridica = _materia_juridica(item["texto_integral"])
-        pertinencia = "REPETITIVO" if repetitivo else "PERTINENTE_PARCIAL" if juridica else "PERTINENTE_TECNICO"
-        questoes_relacionadas = melhores(item["texto_integral"], questoes)
+        componente_tecnico=_tem_materia_tecnica(item["texto_integral"])
+        pertinencia = "REPETITIVO" if repetitivo else "PERTINENTE_PARCIAL" if juridica and componente_tecnico else "MATERIA_JURIDICA" if juridica else "PERTINENTE_TECNICO"
+        questoes_relacionadas = melhores(item["texto_integral"], questoes) if not juridica or componente_tecnico else []
         for questao_id in questoes_relacionadas:
             next(q for q in questoes if q["id"] == questao_id)["quesitos_relacionados"].append(qid)
         doc = docs_por_id[item["documento_id"]]
@@ -211,8 +220,8 @@ def gerar(diretorio: Path) -> dict[str, Any]:
             "pertinencia": pertinencia, "questoes_tecnicas_relacionadas": questoes_relacionadas,
             "evidencias_necessarias": ["Evidência documental e/ou de vistoria compatível com o conteúdo do quesito"],
             "ressalvas_aplicaveis": res_ids,
-            "status_cobertura": "REPETITIVO" if repetitivo else "PARCIAL",
-            "materia_tecnica": item["texto_integral"] if not juridica else "Aspecto técnico a separar da qualificação jurídica",
+            "status_cobertura": "REPETITIVO" if repetitivo else "JURIDICO_DELIMITADO" if pertinencia=="MATERIA_JURIDICA" else "PARCIAL",
+            "materia_tecnica": item["texto_integral"] if not juridica else "Aspecto técnico a separar da qualificação jurídica" if componente_tecnico else None,
             "materia_juridica_associada": juridica,
             "secoes_laudisticas_previstas": ["Análise técnica vinculada à questão " + q for q in questoes_relacionadas],
             "proveniencia": [item["proveniencia"]],
@@ -267,7 +276,7 @@ def gerar(diretorio: Path) -> dict[str, Any]:
                "status_verificacao": "VERIFICADO" if assuntos else "INCONCLUSIVO"}
     tema_analise=analise(tema_extraido)
     if passagem_tema:tema_analise.update({"documentos_fonte":[passagem_tema["documento_id"]],"status_verificacao":"PENDENTE_VALIDACAO_PERITO"})
-    return {
+    saida={
         "schema_version": "1.0.0",
         "identificacao": {"processo_cnj": manifesto["processo"]["numero_cnj"]["valor"], "manifesto_sha256": sha_manifesto, "data_geracao": agora},
         "tipo_pericia": {"tipo": resultado.tipo, "confianca": _confianca(resultado.nivel, resultado.score),
@@ -300,15 +309,20 @@ def gerar(diretorio: Path) -> dict[str, Any]:
             "questoes_que_dependem_da_vistoria": [q["id"] for q in questoes],
         },
         "memoria_referencial": {"fontes_disponiveis": len(modelos), "itens_recuperados": conhecimento_modelos, "status": "DISPONIVEL" if modelos else "INDISPONIVEL"},
-        "conhecimento_normativo": {"fontes_disponiveis": len(normas), "itens_recuperados": conhecimento_normas, "status": "PENDENTE_VERIFICACAO_NORMATIVA" if normas else "INDISPONIVEL"},
+        "conhecimento_normativo": {"fontes_disponiveis": len(normas), "itens_recuperados": conhecimento_normas, "fontes":conhecimento_normas_fontes, "status": "PENDENTE_VERIFICACAO_NORMATIVA" if normas else "INDISPONIVEL"},
         "autoauditoria": [
             {"criterio": "Classificação usa múltiplas peças e não o número do processo", "resultado": resultado_criterio(len(resultado.documentos_fonte)>=2), "observacao": ", ".join(resultado.documentos_fonte)},
             {"criterio": "Tema e objeto possuem fonte identificável", "resultado": "ALERTA", "observacao": "Formulação preliminar requer validação semântica final do perito."},
-            {"criterio": "Normas usadas possuem proveniência", "resultado": "BLOQUEADO" if conhecimento_normas else "ALERTA", "observacao": f"IDs recuperados exigem proveniência material no artefato: {', '.join(conhecimento_normas) or 'nenhuma norma usada nesta etapa'}."},
+            {"criterio": "Normas usadas possuem proveniência", "resultado": "APROVADO" if conhecimento_normas and conhecimento_normas_fontes else "ALERTA", "observacao": f"Fontes estruturadas: {', '.join(conhecimento_normas) or 'nenhuma norma usada nesta etapa'}."},
             {"criterio": "Modelos não contaminam fatos do caso", "resultado": resultado_criterio(not any(str(d).startswith("MOD-") for d in resultado.documentos_fonte)), "observacao": f"Modelos recuperados apenas como experiência: {', '.join(conhecimento_modelos) or 'nenhum disponível'}."},
         ],
         "status": status, "proveniencia": proveniencias_gerais,
     }
+    from scripts.triagem_pericial.validar_delimitacao import recalcular_autoauditoria,status_derivado
+    recalculada=recalcular_autoauditoria(saida);por={x["criterio"]:x for x in saida["autoauditoria"]}
+    saida["autoauditoria"]=[{"criterio":c,"resultado":r,"observacao":por.get(c,{}).get("observacao","Critério recalculado no boundary.")} for c,r in recalculada.items()]
+    saida["status"]=status_derivado(saida)
+    return saida
 
 
 def main() -> int:

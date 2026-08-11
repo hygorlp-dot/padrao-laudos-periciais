@@ -7,7 +7,10 @@ def _decimal(valor):return Decimal(str(valor).replace(",","."))
 def _unidade(valor):return unicodedata.normalize("NFKC",str(valor)).casefold().replace(" ","").rstrip(".?!")
 def _pares_quantitativos(texto):
     normal=unicodedata.normalize("NFKC",texto or "")
-    return [(_decimal(v),_unidade(u)) for v,u in re.findall(r"(?<![\w.,])(\d+(?:[.,]\d+)?)\s*([^\d\s,;:()][^\s,;:()]*)",normal)]
+    componente=r"[^\d\s,;:()][^\s,;:()]*"
+    padrao=rf"(?<![\w.,])([+-]?\d+(?:[.,]\d+)?)\s*({componente}(?:\s*/\s*{componente})*)"
+    return [(_decimal(v),_unidade(u)) for v,u in re.findall(padrao,normal)]
+def normalizar_medicao(valor,unidade):return _decimal(valor),_unidade(unidade)
 def texto_quantitativo(texto,unidades_referencia=()):
     permitidas={_unidade(u) for u in unidades_referencia}|{u for par in CONVERSOES for u in par}|{"%","°c","kn/m2"}
     return any(u in permitidas for _,u in _pares_quantitativos(texto))

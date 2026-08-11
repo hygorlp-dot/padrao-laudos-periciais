@@ -39,8 +39,8 @@ def pat(identificador, situacao, origem, criticidade, conclusao, evidencia_id, *
 
 class RedacaoPericialTest(unittest.TestCase):
     def setUp(self):
-        self.processo = {"numero_processo": "PROCESSO-SINTETICO-001", "documentos_relevantes": []}
-        self.delimitacao = {"tipo_pericia": "VICIOS_CONSTRUTIVOS", "sintese_processual": {"texto": "As partes divergem sobre manifestações fictícias.", "proveniencia": ["DOC-001"]}, "tema_controvertido": {"texto": "Analisar manifestações sintéticas.", "proveniencia": ["DOC-001"]}, "objeto": {"texto": "Edificação sintética", "proveniencia": ["DOC-001"]}, "objetivo": {"texto": "Verificar as manifestações delimitadas.", "proveniencia": ["DOC-001"]}, "escopo": None, "ressalvas": [], "quesitos": [{"id": "QUE-001", "origem": "JUIZO", "numero_original": "1", "texto_integral": "Quais manifestações foram verificadas?", "questoes_tecnicas": ["QT-001"], "patologias_relacionadas": ["PAT-001", "PAT-002", "PAT-003"], "referencias_secoes": ["4.2"]}]}
+        self.processo = {"numero_processo": "PROCESSO-SINTETICO-001", "documentos_relevantes": [], "documentos": [{"id":"DOC-001","status":"PRESENTE"}]}
+        self.delimitacao = {"tipo_pericia": {"tipo":"VICIOS_CONSTRUTIVOS"}, "sintese_processual": {"texto": "As partes divergem sobre manifestações fictícias.", "documentos_fonte": ["DOC-001"]}, "tema_controvertido": {"texto": "Analisar manifestações sintéticas.", "documentos_fonte": ["DOC-001"]}, "objeto_material": {"texto": "Edificação sintética", "documentos_fonte": ["DOC-001"]}, "objetivo_pericial": {"texto": "Verificar as manifestações delimitadas.", "documentos_fonte": ["DOC-001"]}, "escopo": None, "ressalvas": [], "quesitos": [{"id": "QUE-001", "origem": "JUIZO", "numero_original": "1", "texto_integral": "Quais manifestações foram verificadas?", "questoes_tecnicas_relacionadas": ["QT-001"], "secoes_laudisticas_previstas": ["4.2"]}]}
         pats = [
             pat("PAT-001", "ANOMALIA", "ENDOGENA_CONSTRUTIVA", "MINIMA", "A manifestação foi confirmada no revestimento.", "OBS-001", causa="retração do revestimento", grau="PROVAVEL"),
             pat("PAT-002", "NAO_CONSTATADA", "NAO_APLICAVEL", "NAO_APLICAVEL", "A infiltração não foi constatada na data da vistoria.", "OBS-002", causa=None, grau="INCONCLUSIVO"),
@@ -168,7 +168,7 @@ class RedacaoPericialTest(unittest.TestCase):
         self.assertIn("1.4 Síntese Processual e Delimitação do Tema Controvertido", saida["plano_redacao"]["secoes"][0]["subsecoes"])
         self.assertEqual(len(saida["laudo"]["quadro_resumo"]), 3)
         self.assertTrue(saida["laudo"]["sintese_conclusiva_tema"])
-        self.assertEqual(saida["laudo"]["quesitos"][0]["itens"][0]["resposta"], "R: Resultados consolidados.")
+        self.assertEqual(saida["laudo"]["quesitos"][0]["itens"][0]["resposta"], "R: QT-001: Resultados consolidados.")
         self.assertFalse(saida["laudo"]["orcamento"]["aplicavel"])
         self.assertEqual(saida["laudo"]["referencias"], [])
 
@@ -202,6 +202,18 @@ class RedacaoPericialTest(unittest.TestCase):
         bloco = next(b for b in r["blocos"] if b["pat_id"] == "PAT-002")
         bloco["textos"][0] = "A infiltração não existe."
         self.assertIn("NAO_CONSTATADA_CONVERTIDA_EM_INEXISTENTE", {a["tipo"] for a in auditar_fidelidade(r, self.final)})
+
+    def test_documento_processual_inexistente_nao_faz_self_grounding(self):
+        processo = {**self.processo, "documentos": []}
+        delimitacao = copy.deepcopy(self.delimitacao)
+        for chave in ("sintese_processual", "tema_controvertido", "objeto_material", "objetivo_pericial"):
+            delimitacao[chave]["documentos_fonte"] = ["DOC-999"]
+        saida = executar_pipeline_redacao(processo, delimitacao, self.motor)
+        ids_processuais = {c["id"] for c in saida["redacao_final"]["claims"] if c.get("tipo") == "CONTEUDO_PROCESSUAL"}
+        processuais = [a for a in saida["grounding"] if a.get("claim_red_id") in ids_processuais]
+        self.assertTrue(processuais)
+        self.assertTrue(all(a["veredito"] == "UNVERIFIABLE" for a in processuais))
+        self.assertEqual(saida["gate"], "BLOQUEADO_PARA_LAUDO")
 
 
 if __name__ == "__main__":

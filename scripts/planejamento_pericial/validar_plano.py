@@ -34,19 +34,26 @@ def recalcular_execucao(plano,vistoria):
     cobertura={c.get("planejado"):c for c in vistoria.get("cobertura",[]) if c.get("planejado")}
     catalogos={"ATIVIDADE":{x.get("id"):x for x in vistoria.get("atividades_executadas",[])},"FOTOGRAFIA":{x.get("id"):x for x in vistoria.get("fotografias",[])},"MEDICAO":{x.get("id"):x for x in vistoria.get("medicoes",[])},"ENSAIO":{x.get("id"):x for x in vistoria.get("ensaios",[])},"DOCUMENTO":{x.get("id"):x for x in vistoria.get("documentos_obtidos",[])}}
     campos_plano={"ATIVIDADE":"atividade_planejada","FOTOGRAFIA":"fotografia_planejada","MEDICAO":"medicao_planejada","ENSAIO":"ensaio_planejado","DOCUMENTO":"documento_planejado"}
+    planejados={tipo:{x.get("id"):x for x in plano.get(chave,[]) if isinstance(x,dict)} for tipo,chave in TIPOS_COBERTURA.items()}
     faltantes=[]
     for requisito in plano.get("requisitos_cobertura",[]):
         if requisito.get("obrigatoriedade")!="OBRIGATORIA":continue
-        planejado=requisito.get("item_planejado")
+        planejado=requisito.get("item_planejado");tipo=requisito.get("tipo");qt=requisito.get("questao_tecnica")
+        item_plano=planejados.get(tipo,{}).get(planejado)
+        if not item_plano or qt not in item_plano.get("questoes_tecnicas",[]):
+            faltantes.append({"questao_tecnica":qt,"tipo":tipo,"item_planejado":planejado});continue
         candidatos=[planejado] if planejado else [c.get("planejado") for c in vistoria.get("cobertura",[]) if c.get("tipo")==requisito.get("tipo")]
         satisfeito=False
         for item in candidatos:
             execucao=cobertura.get(item,{})
-            tipo=requisito.get("tipo");qt=requisito.get("questao_tecnica");artefatos=[catalogos.get(tipo,{}).get(i) for i in execucao.get("executado",[])]
+            artefatos=[catalogos.get(tipo,{}).get(i) for i in execucao.get("executado",[])]
             direto=execucao.get("status")=="EXECUTADO" and any(a and a.get(campos_plano[tipo])==planejado and qt in a.get("questoes",a.get("questoes_tecnicas",[])) for a in artefatos)
-            equivalentes=set(execucao.get("evidencia_equivalente",[]));todos=[x for cat in catalogos.values() for x in cat.values()]+vistoria.get("observacoes",[])+vistoria.get("declaracoes",[])
-            equivalentes_validos=[e for e in todos if e.get("id") in equivalentes and qt in e.get("questoes",e.get("questoes_tecnicas",[]))]
-            equivalente=execucao.get("status")=="SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE" and bool(equivalentes_validos) and bool(execucao.get("justificativa_equivalencia"))
+            equivalentes=set(execucao.get("evidencia_equivalente",[]));meta=execucao.get("equivalencia") or {};todos=[(t,x) for t,cat in catalogos.items() for x in cat.values()]
+            equivalentes_validos=[e for t,e in todos if t==tipo and e.get("id") in equivalentes and qt in e.get("questoes",e.get("questoes_tecnicas",[]))]
+            capability_esperada=requisito.get("capability") or tipo
+            equivalente=(execucao.get("status")=="SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE" and bool(equivalentes_validos) and
+                         meta.get("requisito_original")==planejado and meta.get("tipo_evidencia")==tipo and meta.get("capability")==capability_esperada and
+                         bool(meta.get("metodo_substituto")) and bool(execucao.get("justificativa_equivalencia")))
             satisfeito=satisfeito or direto or equivalente
         if not satisfeito:faltantes.append({"questao_tecnica":requisito.get("questao_tecnica"),"tipo":requisito.get("tipo"),"item_planejado":planejado})
     return {"apto":bool(plano.get("requisitos_cobertura")) and not faltantes,"faltantes":faltantes}
