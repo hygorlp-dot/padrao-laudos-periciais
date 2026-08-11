@@ -93,7 +93,7 @@
       "required": ["pagina_pdf", "pagina_documento", "pagina_original"],
       "additionalProperties": false,
       "properties": {
-        "pagina_pdf": { "type": "integer", "minimum": 1 },
+        "pagina_pdf": { "type": ["integer", "null"], "minimum": 1 },
         "pagina_documento": { "type": ["integer", "null"], "minimum": 1 },
         "pagina_original": { "type": ["string", "null"], "minLength": 1 }
       }
@@ -120,7 +120,7 @@
         "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
         "documento_id": { "type": ["string", "null"], "pattern": "^DOC-PJE-[0-9]{3,}$" },
         "id_pje": { "oneOf": [{ "$ref": "#/$defs/idPje" }, { "type": "null" }] },
-        "pagina_pdf": { "type": "integer", "minimum": 1 },
+        "pagina_pdf": { "type": ["integer", "null"], "minimum": 1 },
         "pagina_documento": { "type": ["integer", "null"], "minimum": 1 },
         "pagina_original": { "type": ["string", "null"], "minLength": 1 },
         "bbox": { "$ref": "#/$defs/bbox" },

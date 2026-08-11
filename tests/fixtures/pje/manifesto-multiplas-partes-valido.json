@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "arquivo": {"nome": "multiplas-partes-ficticio.pdf", "sha256": "1111111111111111111111111111111111111111111111111111111111111111", "total_paginas": 1, "data_exportacao": "2026-02-01"},
   "processo": {
     "numero_cnj": {"valor": "0000002-00.2026.4.00.0001", "proveniencia": {"arquivo": "multiplas-partes-ficticio.pdf", "sha256": "1111111111111111111111111111111111111111111111111111111111111111", "documento_id": null, "id_pje": null, "pagina_pdf": 1, "pagina_documento": null, "pagina_original": null, "trecho": "Número fictício", "natureza": "DOCUMENTADO", "metodo_extracao": "CAMPO_ESTRUTURADO", "confianca": {"nivel": "ALTA"}, "status_verificacao": "VERIFICADO"}},

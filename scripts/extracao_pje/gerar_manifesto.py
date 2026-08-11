@@ -38,10 +38,20 @@ def construir_manifesto(caminho_pdf, raiz_repositorio=None):
         capa = extrair_capa(leitor, paginas_indice)
         segmentos = segmentar_documentos(itens, paginas)
         documentos = []
+        conflitos = []
         for seg in segmentos:
             item = seg.pop("item_indice")
             rodapes = seg.pop("rodapes")
             id_rodape = seg.pop("id_rodape")
+            estado_item = seg.pop("estado_item_indice", "SEGMENTADO")
+            if estado_item == "CONFLITO_DESTINO":
+                itens_colididos=seg.pop("itens_colididos")
+                fontes=[{"arquivo": leitor.caminho.name, "sha256": leitor.sha256, "pagina_pdf": i["pagina_origem_indice"], "pagina_documento": None, "pagina_original": None, "documento_id": i["documento_id_interno"], "id_pje": i["id_pje"], "trecho": i["texto_bruto"], "natureza":"DOCUMENTADO", "metodo_extracao": "TEXTO_PDF", "confianca":i["confianca"], "status_verificacao":"VERIFICADO"} for i in itens_colididos]
+                conflitos.append({"conflito_id": f"CON-PJE-{len(conflitos)+1:03d}", "campo": "indice.pagina_destino_link", "tipo": "OUTRO",
+                                  "descricao": "Mais de um item do índice aponta para o mesmo destino", "valores_conflitantes": [str(seg["pagina_pdf_inicio"])],
+                                  "fontes": fontes,
+                                  "status": "ABERTO", "bloqueante": True, "decisao": None, "observacoes": item["documento_id_interno"]})
+                continue
             rec = reconciliar_documento({**seg, "id_rodape": id_rodape, "item_indice": item, "rodapes": rodapes})
             fatia = paginas[seg["pagina_pdf_inicio"] - 1:seg["pagina_pdf_fim"]]
             data_hora = None
@@ -58,7 +68,6 @@ def construir_manifesto(caminho_pdf, raiz_repositorio=None):
                 "confianca_segmentacao": rec["confianca"], "confianca_classificacao": {"nivel": "BAIXA", "score": None},
                 "status_reconciliacao": rec, "referencia_documento_pje": f'documentos/{seg["documento_id"]}.json',
             })
-        conflitos = []
         for doc in documentos:
             if doc["status_reconciliacao"]["status"] == "CONFLITANTE":
                 conflitos.append({"conflito_id": f"CON-PJE-{len(conflitos)+1:03d}", "campo": "id_pje", "tipo": "DIVERGENCIA_INDICE_RODAPE",
@@ -81,11 +90,11 @@ def construir_manifesto(caminho_pdf, raiz_repositorio=None):
                "paginas_com_rodape": sum(p["possui_rodape_pje"] for p in paginas),
                "paginas_sem_texto_util": sum(p["quantidade_caracteres"] == 0 for p in paginas),
                "paginas_candidatas_ocr": sum(p["requer_ocr"] for p in paginas), "conflitos_abertos": len(conflitos)}
-        manifesto = {"schema_version": "1.0.0", "arquivo": {"nome": leitor.caminho.name, "sha256": leitor.sha256,
+        manifesto = {"schema_version": "1.1.0", "arquivo": {"nome": leitor.caminho.name, "sha256": leitor.sha256,
                      "total_paginas": leitor.total_paginas, "data_exportacao": None}, "processo": capa["processo"],
                      "pessoas": [], "vinculos_processuais": [], "representacoes": [],
                      "indice": {"paginas": paginas_indice, "itens": itens, "possui_links_internos": bool(links),
-                                "confianca": {"nivel": "ALTA" if itens else "BAIXA"}},
+                                "confianca": {"nivel": "BAIXA" if not itens or any(i["confianca"]["nivel"]=="BAIXA" for i in itens) else "MEDIA" if any(i["confianca"]["nivel"]=="MEDIA" for i in itens) else "ALTA"}},
                      "documentos": documentos, "paginas": paginas, "eventos": eventos, "conflitos": conflitos,
                      "pendencias": pendencias, "metricas_extracao": met, "status_validacao": "RASCUNHO"}
         erros, alertas = validar_integridade(manifesto)

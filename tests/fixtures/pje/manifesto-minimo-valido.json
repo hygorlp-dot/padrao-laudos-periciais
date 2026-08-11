@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "arquivo": {"nome": "processo-ficticio.pdf", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "total_paginas": 3, "data_exportacao": "2026-01-01"},
   "processo": {
     "numero_cnj": {"valor": "0000001-00.2026.4.00.0001", "proveniencia": {"arquivo": "processo-ficticio.pdf", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "documento_id": null, "id_pje": null, "pagina_pdf": 1, "pagina_documento": null, "pagina_original": null, "trecho": "Número fictício", "natureza": "DOCUMENTADO", "metodo_extracao": "CAMPO_ESTRUTURADO", "confianca": {"nivel": "ALTA", "score": 1.0}, "status_verificacao": "VERIFICADO"}},
@@ -21,7 +21,7 @@
   "representacoes": [],
   "indice": {
     "paginas": [1, 2],
-    "itens": [{"documento_id_interno": "DOC-PJE-001", "id_pje": "900001", "data": "2026-01-01", "hora": "10:00:00", "titulo_original": "Petição inicial fictícia", "tipo_original": "Petição inicial", "ordem_indice": 1, "pagina_destino_link": 3, "texto_bruto": "900001 01/01/2026 Petição inicial fictícia", "confianca": {"nivel": "ALTA", "score": 1.0}}],
+    "itens": [{"documento_id_interno": "DOC-PJE-001", "id_pje": "900001", "data": "2026-01-01", "hora": "10:00:00", "titulo_original": "Petição inicial fictícia", "tipo_original": "Petição inicial", "ordem_indice": 1, "pagina_destino_link": 3, "pagina_origem_indice": 1, "metodo_associacao_link": "LINK_ID_INEQUIVOCO", "candidatos_destino_link": [3], "destino_escolhido_link": 3, "texto_bruto": "900001 01/01/2026 Petição inicial fictícia", "confianca": {"nivel": "ALTA", "score": 1.0}}],
     "possui_links_internos": true,
     "confianca": {"nivel": "ALTA"}
   },

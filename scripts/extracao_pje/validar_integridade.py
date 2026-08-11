@@ -4,6 +4,11 @@
 def validar_integridade(manifesto):
     erros, alertas = [], []
     documentos = manifesto["documentos"]
+    for item in manifesto["indice"]["itens"]:
+        metodo=item.get("metodo_associacao_link")
+        if metodo=="FALLBACK_POSICIONAL" and item.get("confianca",{}).get("nivel")=="ALTA":erros.append(f'{item.get("documento_id_interno")}: fallback posicional não pode ter confiança ALTA')
+        if len(item.get("candidatos_destino_link",[]))>1 and item.get("destino_escolhido_link") is not None:erros.append(f'{item.get("documento_id_interno")}: associação ambígua não pode escolher destino')
+        if item.get("pagina_destino_link")!=item.get("destino_escolhido_link"):erros.append(f'{item.get("documento_id_interno")}: destino escolhido diverge do destino de segmentação')
     ids = set()
     ocupadas = {}
     for doc in documentos:
@@ -29,6 +34,13 @@ def validar_integridade(manifesto):
         if paginas and any(b != a + 1 for a, b in zip(paginas, paginas[1:])):
             erros.append(f"{ident}: salto na paginação interna {paginas}")
     met = manifesto["metricas_extracao"]
+    itens={i["documento_id_interno"] for i in manifesto["indice"]["itens"] if i.get("documento_id_interno")}
+    contabilizados={d.get("documento_id") for d in documentos if d.get("ordem_indice") is not None}
+    contabilizados|={c.get("observacoes") for c in manifesto["conflitos"]}
+    contabilizados|={p.get("campo") for p in manifesto.get("pendencias",[])}
+    faltantes=itens-{x for x in contabilizados if x}
+    if faltantes: erros.append("Itens do índice não contabilizados: "+", ".join(sorted(faltantes)))
+    if manifesto.get("status_validacao")=="VALIDADO" and (faltantes or manifesto.get("conflitos") or manifesto.get("pendencias")):erros.append("Status VALIDADO incompatível com item não contabilizado, conflito ou pendência")
     verificacoes = {"documentos_segmentados": len(documentos), "documentos_indice": len(manifesto["indice"]["itens"]),
                     "documentos_confirmados": sum(d["status_reconciliacao"]["status"] == "CONFIRMADO" for d in documentos),
                     "paginas_com_rodape": sum(p["possui_rodape_pje"] for p in manifesto["paginas"]),
