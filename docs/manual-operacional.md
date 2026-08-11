@@ -65,14 +65,17 @@ implementado do que permanece previsto.
   recuperação pertinente, plano-vistoria e ficha pré-vistoria;
 - inventário de campo, `vistoria.json`, motor inicial de vícios, hipóteses,
   PAT, autoauditoria e gate de redação;
+- planejamento semântico da redação, `CLAIM-RED-NNN`, quatro blocos de PAT,
+  auditoria de grounding/fidelidade/linguagem, autocorreção editorial e gate
+  autônomo do laudo;
 - referências privadas locais para comparação;
 - arquitetura preparada para evolução futura.
 
 ### Ainda não implementado
 
 - serviço autônomo de extração semântica sem intervenção do Codex;
-- `laudo.json` e motores especializados para outras famílias periciais;
-- redação integral automática e orçamento final;
+- motores especializados para outras famílias periciais;
+- motor completo de preços, composições e memória de cálculo orçamentária;
 - preenchimento automático do DOCM;
 - atualização automática de campos Word;
 - automação de revisão do DOCM/PDF;

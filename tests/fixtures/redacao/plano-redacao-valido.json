@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.1.0", "status": "PLANEJADO", "gate_tecnico": "APTO_PARA_REDACAO_COM_RESSALVAS",
+  "tipo_pericia": "VICIOS_CONSTRUTIVOS", "modelo_documental": "LAUDO_VICIOS_CONSTRUTIVOS_V1",
+  "numero_processo": "PROCESSO-SINTETICO-001", "sintese_processual": "Síntese fictícia.",
+  "tema_controvertido": "Analisar manifestações fictícias.", "objeto": "Edificação fictícia", "objetivo": "Examinar as manifestações fictícias.",
+  "secoes": [{"id":"SEC-001","numero":"1","titulo":"CONSIDERAÇÕES GERAIS","subsecoes":["1.1 Identificação do Processo"],"finalidade":"Delimitar o encargo.","pat_ids":["PAT-001"],"qt_ids":["QT-001"],"que_ids":["QUE-001"],"evidencias_permitidas":["OBS-001"],"grau_certeza":"NAO_APLICAVEL","ressalvas_obrigatorias":[]}],
+  "unidades_patologia": [{"pat_id":"PAT-001","qt_ids":["QT-001"],"que_ids":["QUE-001"],"evidencias_permitidas":["OBS-001"],"grau_certeza":"PROVAVEL","ressalvas_obrigatorias":[]}],
+  "metricas": {"patologias":1,"questoes_tecnicas":1,"quesitos_influentes":1}
+}

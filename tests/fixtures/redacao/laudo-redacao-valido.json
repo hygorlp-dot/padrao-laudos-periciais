@@ -1,0 +1,14 @@
+{
+  "schema_version":"1.1.0","tipo_pericia":"VICIOS_CONSTRUTIVOS","modelo_documental":"LAUDO_VICIOS_CONSTRUTIVOS_V1",
+  "identificacao":{"numero_processo":"PROCESSO-SINTETICO-001"},"qualificacao_perito":null,"preambulo":null,
+  "sintese_processual":"Síntese fictícia.","tema_controvertido":"Tema fictício.","objeto":"Edificação fictícia.","objetivo":"Examinar tecnicamente.",
+  "metodologia":[],"normas_aplicaveis":[],"definicoes_necessarias":[],"criterios_origem":null,"criterios_criticidade":null,"limitacoes":[],
+  "dados_diligencia":null,"condicoes_gerais":null,"sistemas_analisados":[],
+  "analises_tecnicas":[{"pat_id":"PAT-001","titulos":["Análise das Alegações e Prováveis Causas","Consequências","Classificação","Conclusão"],"textos":["Análise fictícia.","Consequência fictícia.","Situação: ANOMALIA.","Conclusão fictícia."],"claim_ids":["CLAIM-RED-001","CLAIM-RED-002","CLAIM-RED-003","CLAIM-RED-004"]}],
+  "patologias":[{"id_patologia":"PAT-001","local":null,"sistema":null,"alegacao_original":null,"alegacao_normalizada":null,"fotografias":[],"manifestacao":"fissura","constatacao":{},"situacao":"ANOMALIA","origem":"ENDOGENA_CONSTRUTIVA","criticidade":"MINIMA","vicio_construtivo":null,"tipo_vicio":null,"recomendacoes_tecnicas":[],"reparo":null,"elegivel_orcamento":false,"conclusao_tecnica":"Conclusão fictícia."}],"conclusao_classificacoes":[{"pat_id":"PAT-001"}],
+  "quadro_resumo":[{"pat_id":"PAT-001","local":null,"sistema":null,"manifestacao":"fissura","situacao":"ANOMALIA","origem":"ENDOGENA_CONSTRUTIVA","criticidade":"MINIMA","vicio_construtivo":null,"reparo_orcamento":false}],
+  "sintese_conclusiva_tema":"Resposta técnica fictícia.","quesitos":[],"orcamento":{"aplicavel":false,"itens":[],"observacao":"Sem itens."},"referencias":[],"encerramento":{},
+  "claims_redacao":[{"id":"CLAIM-RED-001","secao":"PAT:PAT-001","tipo":"MANIFESTACAO_TECNICA","texto_semantico":"Análise fictícia.","pat_ids":["PAT-001"],"qt_ids":["QT-001"],"que_ids":["QUE-001"],"alg_ids":["ALG-001"],"obs_ids":["OBS-001"],"med_ids":[],"fot_ids":[],"doc_ids":[],"nor_ids":[],"res_ids":[],"con_ids":[],"confianca":"ALTA","natureza":"INTERPRETIVE","materialidade":"LOAD_BEARING"}],
+  "metadados_de_auditoria":{"gate":"APTO_PARA_LAUDO","grounding":[],"achados_fidelidade":[],"achados_estilo":[],"autocorrecoes":[]},
+  "aprendizado_futuro":{"status":"NAO_IMPLEMENTADO","redacao_agente":null,"correcao_perito":null,"redacao_final":null,"diff_semantico":null,"regra_candidata":null}
+}

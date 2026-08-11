@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/plano-redacao.schema.json",
+  "title": "Plano semântico de redação pericial",
+  "type": "object",
+  "required": ["schema_version", "status", "gate_tecnico", "tipo_pericia", "modelo_documental", "numero_processo", "sintese_processual", "tema_controvertido", "objeto", "objetivo", "secoes", "unidades_patologia", "metricas"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["PLANEJADO", "BLOQUEADO"] },
+    "gate_tecnico": { "enum": ["APTO_PARA_REDACAO", "APTO_PARA_REDACAO_COM_RESSALVAS", "BLOQUEADO_PARA_REDACAO"] },
+    "tipo_pericia": { "type": "string", "minLength": 1 },
+    "modelo_documental": { "type": ["string", "null"] },
+    "numero_processo": { "type": ["string", "null"] },
+    "sintese_processual": { "type": ["string", "null"] },
+    "tema_controvertido": { "type": ["string", "null"] },
+    "objeto": { "type": ["string", "null"] },
+    "objetivo": { "type": ["string", "null"] },
+    "secoes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "numero", "titulo", "subsecoes", "finalidade", "pat_ids", "qt_ids", "que_ids", "evidencias_permitidas", "grau_certeza", "ressalvas_obrigatorias"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^SEC-[0-9]{3,}$" },
+          "numero": { "type": "string", "pattern": "^[1-8]$" },
+          "titulo": { "type": "string", "minLength": 1 },
+          "subsecoes": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+          "finalidade": { "type": "string", "minLength": 1 },
+          "pat_ids": { "$ref": "#/$defs/idsPat" },
+          "qt_ids": { "$ref": "#/$defs/idsQt" },
+          "que_ids": { "$ref": "#/$defs/idsQue" },
+          "evidencias_permitidas": { "type": "array", "items": { "type": "string", "pattern": "^(ALG|OBS|MED|FOT|DOC|NOR|RES|ENS)-[A-Z]*-?[0-9]{3,}$" }, "uniqueItems": true },
+          "grau_certeza": { "enum": ["CONFIRMADO", "PROVAVEL", "POSSIVEL", "INCONCLUSIVO", "NAO_APLICAVEL"] },
+          "ressalvas_obrigatorias": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+        }
+      }
+    },
+    "unidades_patologia": { "type": "array", "items": { "type": "object", "required": ["pat_id", "qt_ids", "que_ids", "evidencias_permitidas", "grau_certeza", "ressalvas_obrigatorias"], "additionalProperties": false, "properties": { "pat_id": { "type": "string", "pattern": "^PAT-[0-9]{3,}$" }, "qt_ids": { "$ref": "#/$defs/idsQt" }, "que_ids": { "$ref": "#/$defs/idsQue" }, "evidencias_permitidas": { "type": "array", "items": { "type": "string", "pattern": "^(ALG|OBS|MED|FOT|DOC|NOR|RES|ENS)-[A-Z]*-?[0-9]{3,}$" }, "uniqueItems": true }, "grau_certeza": { "enum": ["CONFIRMADO", "PROVAVEL", "POSSIVEL", "INCONCLUSIVO", "NAO_APLICAVEL"] }, "ressalvas_obrigatorias": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true } } } },
+    "metricas": { "type": "object", "required": ["patologias", "questoes_tecnicas", "quesitos_influentes"], "additionalProperties": false, "properties": { "patologias": { "type": "integer", "minimum": 0 }, "questoes_tecnicas": { "type": "integer", "minimum": 0 }, "quesitos_influentes": { "type": "integer", "minimum": 0 } } }
+  },
+  "$defs": {
+    "idsPat": { "type": "array", "items": { "type": "string", "pattern": "^PAT-[0-9]{3,}$" }, "uniqueItems": true },
+    "idsQt": { "type": "array", "items": { "type": "string", "pattern": "^QT-[0-9]{3,}$" }, "uniqueItems": true },
+    "idsQue": { "type": "array", "items": { "type": "string", "pattern": "^QUE-[0-9]{3,}$" }, "uniqueItems": true }
+  }
+}

@@ -22,6 +22,7 @@ PASTAS_FIXTURES = (
     RAIZ / "tests" / "fixtures" / "triagem",
     RAIZ / "tests" / "fixtures" / "planejamento",
     RAIZ / "tests" / "fixtures" / "motor-vicios",
+    RAIZ / "tests" / "fixtures" / "redacao",
 )
 
 ARQUIVOS_SCHEMA = {
@@ -42,6 +43,8 @@ ARQUIVOS_SCHEMA = {
     "fonte-online": PASTA_SCHEMAS / "fonte-online.schema.json",
     "auditoria-grounding": PASTA_SCHEMAS / "auditoria-grounding-pericial.schema.json",
     "trilha-auditoria": PASTA_SCHEMAS / "trilha-auditoria-agente.schema.json",
+    "plano-redacao": PASTA_SCHEMAS / "plano-redacao.schema.json",
+    "laudo-redacao": PASTA_SCHEMAS / "laudo-redacao.schema.json",
 }
 
 
@@ -66,6 +69,8 @@ def tipo_fixture(caminho: Path) -> str:
         if caminho.name.startswith("fonte-online"):
             return "fonte-online"
         return "analise-motor-vicios"
+    if caminho.parent.name == "redacao":
+        return "plano-redacao" if caminho.name.startswith("plano-redacao") else "laudo-redacao"
     if caminho.parent.name == "pje":
         tipos_pje = {
             "manifesto": "manifesto-pje",

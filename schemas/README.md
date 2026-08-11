@@ -4,6 +4,11 @@ Esta pasta contém os contratos de dados iniciais do projeto em JSON Schema Draf
 
 ## Arquivos
 
+- `plano-redacao.schema.json`: finalidade e cobertura de QT, QUE, PAT,
+  evidências, certeza e ressalvas antes da redação.
+- `laudo-redacao.schema.json`: modelo semântico do laudo e claims rastreáveis,
+  sem propriedades de layout Word.
+
 - `processo.schema.json`: dados extraídos dos autos, separados em documentos, alegações, quesitos, decisões, conflitos e pendências.
 - `vistoria.schema.json`: planejamento e registro da vistoria, incluindo participantes, métodos, equipamentos, limitações, fotografias e constatações de campo.
 - `patologia.schema.json`: unidade técnica `PAT-NNN`, suas evidências, análise causal, classificações, conclusão e elegibilidade orçamentária.
