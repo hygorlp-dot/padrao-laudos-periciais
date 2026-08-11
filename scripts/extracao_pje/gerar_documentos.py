@@ -14,6 +14,10 @@ from .validar_documento import criar_validador, validar_documento
 
 
 def gerar_documentos(manifesto, caminho_pdf, diretorio_saida, sobrescrever=False, raiz_repositorio=None):
+    from .validar_integridade import validar_integridade
+    erros_manifesto,_=validar_integridade(manifesto)
+    if manifesto.get("status_validacao")!="VALIDADO" or erros_manifesto:
+        raise ValueError("Manifesto PJe não validado; geração de documentos bloqueada")
     saida = Path(diretorio_saida)
     documentos_dir = saida / "documentos"
     if documentos_dir.exists() and any(documentos_dir.glob("*.json")) and not sobrescrever:

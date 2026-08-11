@@ -55,8 +55,8 @@
       },
       "oneOf": [
         { "properties": { "valor": { "type": "string", "minLength": 1 }, "motivo_ausencia": { "type": "null" } } },
-        { "properties": { "valor": { "type": "null" }, "motivo_ausencia": { "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" } } },
-        { "required": ["status", "fontes"], "properties": { "valor": { "type": "null" }, "motivo_ausencia": { "type": "null" }, "status": { "const": "CONFLITANTE" }, "fontes": { "minItems": 2 } } }
+        { "not": { "required": ["status"] }, "properties": { "valor": { "type": "null" }, "motivo_ausencia": { "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" } } },
+        { "required": ["status", "fontes"], "properties": { "valor": { "type": "null" }, "motivo_ausencia": { "const": "CONFLITANTE" }, "status": { "const": "CONFLITANTE" }, "fontes": { "minItems": 2 } } }
       ]
     },
     "numeroCnjPrincipal": {
@@ -79,10 +79,13 @@
           "oneOf": [{ "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" }, { "type": "null" }]
         },
         "proveniencia": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" }
+        ,"status": { "enum": ["CONFIRMADO", "CONFLITANTE"] }
+        ,"fontes": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" } }
       },
       "oneOf": [
         { "properties": { "valor": { "type": "number", "minimum": 0 }, "moeda": { "type": "string", "pattern": "^[A-Z]{3}$" }, "motivo_ausencia": { "type": "null" } } },
-        { "properties": { "valor": { "type": "null" }, "moeda": { "type": "null" }, "motivo_ausencia": { "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" } } }
+        { "not": { "required": ["status"] }, "properties": { "valor": { "type": "null" }, "moeda": { "type": "null" }, "motivo_ausencia": { "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" } } },
+        { "required": ["status", "fontes"], "properties": { "valor": { "type": "null" }, "moeda": { "type": "null" }, "motivo_ausencia": { "const": "CONFLITANTE" }, "status": { "const": "CONFLITANTE" }, "fontes": { "minItems": 2 } } }
       ]
     },
     "flagProcessual": {
@@ -93,10 +96,13 @@
         "valor": { "type": ["boolean", "null"] },
         "motivo_ausencia": { "oneOf": [{ "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" }, { "type": "null" }] },
         "proveniencia": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" }
+        ,"status": { "enum": ["CONFIRMADO", "CONFLITANTE"] }
+        ,"fontes": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" } }
       },
       "oneOf": [
         { "properties": { "valor": { "type": "boolean" }, "motivo_ausencia": { "type": "null" } } },
-        { "properties": { "valor": { "type": "null" }, "motivo_ausencia": { "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" } } }
+        { "not": { "required": ["status"] }, "properties": { "valor": { "type": "null" }, "motivo_ausencia": { "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" } } },
+        { "required": ["status", "fontes"], "properties": { "valor": { "type": "null" }, "motivo_ausencia": { "const": "CONFLITANTE" }, "status": { "const": "CONFLITANTE" }, "fontes": { "minItems": 2 } } }
       ]
     },
     "flags": {
