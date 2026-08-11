@@ -86,6 +86,10 @@ def extrair_claims(resultado):
             if aspecto.get("veredito")=="GROUNDED":claims.append({"id":f"CLM-{len(claims)+1:03d}","tipo":"ASPECTO_OBSERVAVEL","natureza":"FACTUAL","saliencia":"SUPPORTING","texto":f"ASPECTO_OBSERVAVEL: {aspecto['aspecto']}","evidencia_id":evidencia["id"],"aspectos_requeridos":[aspecto["aspecto"]]})
     for pat in resultado.get("patologias",[]):
         ac=pat.get("analise_causal",{});causais=ac.get("aspectos_requeridos",[]);origem=ac.get("aspectos_origem",[])
+        if pat.get("constatacao",{}).get("situacao")=="CONFORME":
+            add("INFERENCIA_TECNICA","A condição examinada foi classificada como conforme no escopo observado.","SYNTHETIC","LOAD_BEARING",pat,requeridos=["CONSTATACAO_DE_VISTORIA"])
+            add("INFERENCIA_TECNICA","As consequências técnicas são não aplicáveis à condição classificada como conforme.","SYNTHETIC","LOAD_BEARING",pat,requeridos=["CONSTATACAO_DE_VISTORIA"])
+            add("INFERENCIA_TECNICA","Situação: CONFORME. Origem: NÃO APLICÁVEL. Criticidade: NÃO APLICÁVEL. Vício construtivo: NÃO CARACTERIZADO.","SYNTHETIC","LOAD_BEARING",pat,requeridos=["CONSTATACAO_DE_VISTORIA"])
         add("CONSTATACAO_DE_VISTORIA",pat.get("constatacao",{}).get("situacao"),"FACTUAL","SUPPORTING",pat,requeridos=["CONSTATACAO_DE_VISTORIA"])
         add("MANIFESTACAO_TECNICA",pat.get("manifestacao"),"INTERPRETIVE","SUPPORTING",pat,requeridos=["CONSTATACAO_DE_VISTORIA"])
         add("MECANISMO",pat.get("mecanismo"),"INTERPRETIVE","LOAD_BEARING",pat,requeridos=causais)

@@ -88,7 +88,8 @@ def gerar(diretorio: Path) -> dict[str, Any]:
     medicoes=[];fotografias=[]
     for qt in sorted(delimitacao["questoes_tecnicas"],key=lambda x:x["id"]):
         qid=qt["id"];descricao=qt.get("descricao","");baixo=descricao.lower();relacionados=[q["id"] for q in quesitos if qid in q["questoes_tecnicas_relacionadas"]]
-        fotografias.append({"id":f"FOT-PLANO-{len(fotografias)+1:03d}","finalidade":f"Registrar evidência visual para {descricao}","enquadramento":"Contexto, aproximação e detalhe pertinente à QT.","questoes_tecnicas":[qid],"quesitos":relacionados,"alegacoes":qt.get("alegacoes_relacionadas",[])})
+        atividade=next((a["id"] for a in atividades if qid in a["questoes_tecnicas"]),None)
+        fotografias.append({"id":f"FOT-PLANO-{len(fotografias)+1:03d}","finalidade":f"Registrar evidência visual para {descricao}","enquadramento":"Contexto, aproximação e detalhe pertinente à QT.","atividade":atividade,"questoes_tecnicas":[qid],"quesitos":relacionados,"alegacoes":qt.get("alegacoes_relacionadas",[])})
         if any(t in baixo for t in ("abertura","extens","dimens","medir","medição","quant")):
             medicoes.append({"id":f"MED-PLANO-{len(medicoes)+1:03d}","grandeza":"Grandeza indicada pela questão técnica","local":delimitacao["objeto_material"]["texto"],"motivo":descricao,"instrumento_sugerido":"Instrumento compatível com a grandeza","precisao_necessaria":None,"questoes_tecnicas":[qid],"quesitos":relacionados,"criterio":fundamentos[0] if fundamentos else None,"obrigatoriedade":"OBRIGATORIA","consequencia_ausencia":"Sem medição ou substituto equivalente, a conclusão quantitativa fica bloqueada."})
     ensaios=[]

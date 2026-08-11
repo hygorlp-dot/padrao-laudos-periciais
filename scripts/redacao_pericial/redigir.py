@@ -42,6 +42,8 @@ def _analise(pat):
     if pat.get("alegacoes_relacionadas"):
         partes.append("A manifestação foi analisada a partir das alegações identificadas nos autos.")
     situacao = pat["constatacao"]["situacao"]
+    if situacao == "CONFORME":
+        return "A condição examinada foi classificada como conforme no escopo observado."
     descricao = pat["constatacao"].get("descricao")
     if situacao == "NAO_CONSTATADA":
         partes.append(f"Na data da vistoria, {descricao.rstrip('.').lower()} não foi constatada.")
@@ -62,6 +64,8 @@ def _analise(pat):
 
 
 def _consequencias(pat):
+    if pat["constatacao"]["situacao"] == "CONFORME":
+        return "As consequências técnicas são não aplicáveis à condição classificada como conforme."
     trechos = []
     for dimensao, dado in pat.get("consequencias", {}).items():
         if dado.get("status") in {"PRESENTE", "AUSENTE", "INCONCLUSIVA"} and dado.get("fundamentacao"):

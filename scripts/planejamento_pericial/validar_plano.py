@@ -10,9 +10,10 @@ from referencing import Registry, Resource
 RAIZ = Path(__file__).resolve().parents[2]
 TIPOS_COBERTURA={"ATIVIDADE":"atividades","MEDICAO":"medicoes","FOTOGRAFIA":"fotografias","ENSAIO":"ensaios","DOCUMENTO":"documentos"}
 CATALOGOS_PLANEJADOS={**TIPOS_COBERTURA,"DOCUMENTO":"documentos_a_solicitar"}
+TIPOS_EQUIVALENCIA_SUPORTADOS=frozenset({"MEDICAO","FOTOGRAFIA"})
 
 def capability_item(tipo,item):
-    campos={"ATIVIDADE":("verificar","metodo"),"MEDICAO":("grandeza",),"FOTOGRAFIA":("finalidade",),"ENSAIO":("nome","metodo","fundamento"),"DOCUMENTO":("descricao","criterio_satisfacao")}.get(tipo,())
+    campos={"MEDICAO":("grandeza",),"FOTOGRAFIA":("finalidade","finalidade_planejada")}.get(tipo,())
     valores=[str(item.get(c) or "").strip().casefold() for c in campos if item.get(c)]
     return " | ".join(valores) if valores else None
 
@@ -59,7 +60,7 @@ def recalcular_execucao(plano,vistoria):
             equivalentes=set(execucao.get("evidencia_equivalente",[]));meta=execucao.get("equivalencia") or {};todos=[(t,x) for t,cat in catalogos.items() for x in cat.values()]
             equivalentes_validos=[e for t,e in todos if t==tipo and e.get("id") in equivalentes and qt in e.get("questoes",e.get("questoes_tecnicas",[]))]
             capability_esperada=capability_item(tipo,item_plano)
-            equivalente=(execucao.get("status")=="SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE" and bool(equivalentes_validos) and
+            equivalente=(tipo in TIPOS_EQUIVALENCIA_SUPORTADOS and execucao.get("status")=="SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE" and bool(equivalentes_validos) and
                          bool(capability_esperada) and meta.get("requisito_original")==planejado and meta.get("tipo_evidencia")==tipo and str(meta.get("capability") or "").casefold()==capability_esperada and
                          all(capability_item(tipo,e)==capability_esperada for e in equivalentes_validos) and
                          bool(meta.get("metodo_substituto")) and bool(execucao.get("justificativa_equivalencia")))

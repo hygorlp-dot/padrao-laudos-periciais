@@ -126,9 +126,10 @@ class MotorViciosFinalTest(unittest.TestCase):
             linhas=[]
             for i,a in enumerate(plano["atividades"],1):
                 resultado="NAO_CONSTATADO_NA_VISTORIA" if i==len(plano["atividades"]) else "OBSERVADO"
-                linhas.append(f"tipo=OBS;descricao={'interface com umidade' if i==1 else 'condição examinada'};manifestacao={'umidade' if i<3 else 'fissura'};resultado={resultado};sistema=IMPERMEABILIZACAO;atividade_planejada={a['id']}")
+                linhas.append(f"tipo=OBS;registro_id={a['id']};descricao={'interface com umidade' if i==1 else 'condição examinada'};manifestacao={'umidade' if i<3 else 'fissura'};resultado={resultado};sistema=IMPERMEABILIZACAO;atividade_planejada={a['id']}")
             med_planejada=plano["medicoes"][0]["id"] if plano["medicoes"] else ""
-            linhas.extend([f"tipo=MED;grandeza=abertura;valor=0,2;unidade=mm;medicao_planejada={med_planejada}","tipo=DECLARACAO;descricao=Morador relatou evento fictício"])
+            atividade_med=next((a["id"] for a in plano["atividades"] if plano["medicoes"] and set(a["questoes_tecnicas"])&set(plano["medicoes"][0]["questoes_tecnicas"])),"")
+            linhas.extend([f"tipo=MED;vinculo_registro={atividade_med};grandeza=abertura;valor=0,2;unidade=mm;medicao_planejada={med_planejada}","tipo=DECLARACAO;descricao=Morador relatou evento fictício"])
             campo=d/"campo";campo.mkdir();(campo/"notas.txt").write_text("\n".join(linhas),encoding="utf-8")
             for i,f in enumerate(plano["fotografias"],1):(campo/f"{f['id']}.jpg").write_bytes(f"imagem sintetica {i}".encode())
             inventario=inventariar(campo);vistoria=gerar(inventario,plano,processo["numero_processo"])

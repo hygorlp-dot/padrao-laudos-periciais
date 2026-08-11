@@ -213,12 +213,13 @@
             "type": "array",
             "items": {
                 "type": "object",
-                "required": ["observacao", "evidencia", "motivo"],
+                "required": ["observacao", "evidencia", "motivo", "origem"],
                 "additionalProperties": false,
                 "properties": {
                     "observacao": {"type": "string", "pattern": "^OBS-[0-9]{3,}$"},
                     "evidencia": {"type": "string"},
-                    "motivo": {"enum": ["VINCULO_EXPLICITO", "ATIVIDADE_ELEMENTO_MANIFESTACAO_CONVERGENTES"]}
+                    "motivo": {"enum": ["VINCULO_EXPLICITO", "VINCULO_REGISTRO_EXPLICITO", "ATIVIDADE_PLANEJADA_UNIVOCA", "ATIVIDADE_ELEMENTO_MANIFESTACAO_CONVERGENTES"]},
+                    "origem": {"enum": ["ENTRADA_ESTRUTURADA", "REGISTRO_CAMPO_COMUM", "PLANO_VISTORIA"]}
                 }
             }
         },
@@ -883,6 +884,10 @@
                         "type": "string"
                     }
                 },
+                "atividade": {
+                    "type": ["string", "null"],
+                    "pattern": "^ATV-[0-9]{3,}$"
+                },
                 "fotografias": {
                     "$ref": "#/$defs/ids"
                 },
@@ -979,7 +984,17 @@
                         "null"
                     ]
                 }
-            }
+            },
+            "allOf": [
+                {
+                    "if": {"properties": {"status": {"const": "SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE"}}, "required": ["status"]},
+                    "then": {"properties": {"tipo": {"enum": ["MEDICAO", "FOTOGRAFIA"]}, "evidencia_equivalente": {"minItems": 1}, "equivalencia": {"type": "object"}, "justificativa_equivalencia": {"type": "string", "minLength": 1}}}
+                },
+                {
+                    "if": {"properties": {"tipo": {"enum": ["ATIVIDADE", "ENSAIO", "DOCUMENTO"]}}, "required": ["tipo"]},
+                    "then": {"properties": {"status": {"enum": ["EXECUTADO", "PARCIALMENTE_EXECUTADO", "NAO_EXECUTADO", "NAO_APLICAVEL"]}, "evidencia_equivalente": {"maxItems": 0}, "equivalencia": {"const": null}, "justificativa_equivalencia": {"const": null}}}
+                }
+            ]
         },
         "statusExecucao": {
             "enum": [

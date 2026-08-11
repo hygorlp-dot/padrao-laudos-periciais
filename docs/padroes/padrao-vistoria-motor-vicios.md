@@ -17,6 +17,21 @@
 - Texto livre, nome de arquivo e fotografia isolada não autorizam conclusão causal.
 - A associação entre foto executada e planejada registra candidatos, score e método; associação insegura permanece pendente.
 - A cobertura planejada/executada decorre dos IDs efetivamente associados, nunca da mera existência de arquivos.
+- `relacoes_evidencia` é a fonte explícita do vínculo `OBS ↔ MED/FOT`; registra
+  a origem e o motivo. Mesma QT, sistema, ambiente ou proveniência, sem vínculo
+  inequívoco adicional, não autoriza associação automática.
+- Execução de um item de cobertura não equivale a suporte analítico da PAT. O
+  Motor deve bloquear quando a evidência material executada não estiver ligada
+  à observação e à PAT correspondentes.
+
+### Equivalência de execução
+
+- A equivalência V1 é suportada somente para `MEDICAO` e `FOTOGRAFIA`.
+- A capability de `MEDICAO` é a grandeza; a de `FOTOGRAFIA` é a finalidade.
+- Tipo, capability e QT devem coincidir, e método substituto e justificativa
+  devem estar registrados.
+- `ATIVIDADE`, `ENSAIO` e `DOCUMENTO` não suportam equivalência nesta versão;
+  somente execução direta e identificável satisfaz esses requisitos.
 
 ## Sequência causal
 

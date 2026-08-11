@@ -5,6 +5,22 @@ from jsonschema import Draft202012Validator,FormatChecker
 from referencing import Registry,Resource
 
 RAIZ=Path(__file__).resolve().parents[2]
+def lacunas_suporte_analitico(obj,plano,vistoria):
+    """Distingue execução operacional de vínculo analítico com a PAT da QT."""
+    relacoes={(r.get("observacao"),r.get("evidencia")) for r in (vistoria or {}).get("relacoes_evidencia",[])}
+    pats={p.get("id"):p for p in obj.get("patologias",[])}
+    pats_qt={q.get("id"):{pid for pid in q.get("patologias",[]) if pid in pats} for q in obj.get("questoes_saneadas",[])}
+    cobertura={c.get("planejado"):c for c in (vistoria or {}).get("cobertura",[]) if c.get("planejado")}
+    lacunas=[]
+    for requisito in (plano or {}).get("requisitos_cobertura",[]):
+        if requisito.get("obrigatoriedade")!="OBRIGATORIA" or requisito.get("tipo") not in {"MEDICAO","FOTOGRAFIA"}:continue
+        qt=requisito.get("questao_tecnica");item=requisito.get("item_planejado");linha=cobertura.get(item,{})
+        evidencias=set(linha.get("executado",[])) | set(linha.get("evidencia_equivalente",[]))
+        observacoes={obs for obs,evidencia in relacoes if evidencia in evidencias}
+        vinculada=any(observacoes & set(pats[pid].get("constatacoes",[])) for pid in pats_qt.get(qt,set()))
+        if evidencias and not vinculada:lacunas.append({"questao_tecnica":qt,"tipo":requisito.get("tipo"),"item_planejado":item})
+    return lacunas
+
 def validar(obj, processo=None, delimitacao=None, plano=None, vistoria=None, normas=None, ressalvas=None):
     nomes=("pje-comum.schema.json","patologia.schema.json","analise-motor-vicios.schema.json");ss=[json.loads((RAIZ/"schemas"/n).read_text(encoding="utf-8")) for n in nomes];reg=Registry().with_resources((s["$id"],Resource.from_contents(s)) for s in ss);erros=[e.message for e in Draft202012Validator(ss[-1],registry=reg,format_checker=FormatChecker()).iter_errors(obj)]
     ids={p["id"] for p in obj.get("patologias",[])}
@@ -27,6 +43,7 @@ def validar(obj, processo=None, delimitacao=None, plano=None, vistoria=None, nor
         if set(q["patologias"])-ids:erros.append(f"{q['id']}: PAT inexistente")
         conferir([q.get("id")],"QT",q.get("id","QT"));conferir(q.get("quesitos",[]),"QUE",q.get("id","QT"));conferir(q.get("hipoteses",[]),"HIP",q.get("id","QT"));conferir(q.get("normas",[]),"NOR",q.get("id","QT"))
     for q in obj.get("cobertura_quesitos",[]):conferir([q.get("quesito")],"QUE",q.get("quesito","QUE"));conferir(q.get("questoes",[]),"QT",q.get("quesito","QUE"))
+    for lacuna in lacunas_suporte_analitico(obj,plano,vistoria):erros.append(f"{lacuna['questao_tecnica']}: {lacuna['tipo']} executada sem vínculo analítico com a PAT")
     if obj.get("gate_redacao")!="BLOQUEADO_PARA_REDACAO" and any(a["bloqueante"] for a in obj.get("autoauditoria",[])):erros.append("gate apto com achado bloqueante")
     return erros
 def main():
