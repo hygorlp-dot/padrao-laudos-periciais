@@ -77,6 +77,13 @@ class FinalDeltaR3Test(unittest.TestCase):
         erros, _ = validar_integridade(manifesto)
         self.assertTrue(any("Página 3 com owners incompatíveis" in erro for erro in erros), erros)
 
+    def test_conflito_resolvido_nao_duplica_owner_de_item_ou_pagina(self):
+        manifesto=json.loads((ROOT/"tests/fixtures/pje/manifesto-minimo-valido.json").read_text(encoding="utf-8"))
+        manifesto["conflitos"]=[{"conflito_id":"CON-PJE-001","campo":"indice.pagina_destino_link","tipo":"COLISAO_DESTINO","descricao":"Colisão resolvida por fonte primária","valores_conflitantes":["A","B"],"fontes":[],"status":"RESOLVIDO_POR_FONTE_PRIMARIA","bloqueante":True,"decisao":"Documento confirmado","observacoes":None,"itens_indice_relacionados":["DOC-PJE-001"],"pagina_pdf_inicio":2,"pagina_pdf_fim":3,"total_paginas":2}]
+        manifesto["metricas_extracao"]["conflitos_abertos"]=1
+        erros,_=validar_integridade(manifesto)
+        self.assertFalse(any("mais de uma vez" in erro or "owners incompatíveis" in erro or "Status VALIDADO incompatível" in erro for erro in erros),erros)
+
     def test_colisao_bloqueia_todos_os_consumidores_sem_saida_parcial(self):
         manifesto = json.loads((ROOT / "tests/fixtures/pje/manifesto-minimo-valido.json").read_text(encoding="utf-8"))
         manifesto["status_validacao"]="BLOQUEADO"
