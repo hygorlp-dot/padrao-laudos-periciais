@@ -9,6 +9,17 @@ MANIFEST = ROOT / "docs/terceiros/superpowers-manifest.json"
 LICENSE = ROOT / ".agents/third-party/superpowers/LICENSE"
 EXECUTABLE_SUFFIXES = {".py", ".js", ".cjs", ".mjs", ".ts", ".sh", ".ps1"}
 NETWORK_PATTERN = re.compile(r"https?://|\bcurl\b|\bwget\b|\bfetch\s*\(", re.IGNORECASE)
+FIRST_PARTY_POLICY = (
+    "AGENTS.md é canônico sobre `using-superpowers`",
+    "não tentar invocar Skills não vendorizadas",
+    "`brainstorming`",
+    "proporcionalmente ao risco",
+    "perguntas e operações triviais",
+    "subagente independente quando disponível",
+    "review package",
+    "revisão externa do PR antes do merge",
+    "nunca declarar revisão independente concluída sem evidência",
+)
 
 
 def _hash(path):
@@ -42,6 +53,11 @@ def verificar():
         errors.append("EGRESS_DEFAULT")
     if policy.get("telemetry_default") != "DISABLED":
         errors.append("TELEMETRY_DEFAULT")
+    for relative in ("AGENTS.md", ".agents/skills/engenharia-seguranca-pericial/SKILL.md"):
+        text = re.sub(r"\s+", " ", (ROOT / relative).read_text(encoding="utf-8")).casefold()
+        for required in FIRST_PARTY_POLICY:
+            if required.casefold() not in text:
+                errors.append(f"FIRST_PARTY_POLICY {relative} {required}")
     return errors
 
 

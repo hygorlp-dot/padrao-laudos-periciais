@@ -5,6 +5,15 @@ description: Aplicar Safety Engineering ao Core Pericial em mudanças materiais,
 
 # Engenharia de Segurança Pericial
 
+## Precedência e proporcionalidade
+
+- AGENTS.md é canônico sobre `using-superpowers` e prevalece diante de
+  qualquer conflito com instrução upstream.
+- Não tentar invocar Skills não vendorizadas, inclusive `brainstorming`.
+- Aplicar Skills proporcionalmente ao risco. O fluxo é obrigatório nas
+  mudanças materiais definidas em `AGENTS.md`, sem impor burocracia em
+  perguntas e operações triviais.
+
 ## Fluxo obrigatório
 
 1. Delimitar a Issue e reproduzir o comportamento material.
@@ -14,7 +23,11 @@ description: Aplicar Safety Engineering ao Core Pericial em mudanças materiais,
 4. Acrescentar adversarial/property tests proporcionais ao risco.
 5. Executar regressão integral e `verification-before-completion`.
 6. Solicitar revisão conforme `requesting-code-review`; avaliar achados com
-   `receiving-code-review`.
+   `receiving-code-review`. Usar subagente independente quando disponível. Se
+   indisponível, gerar `review package` contendo requisitos, SHAs base/head,
+   arquivos e diff, testes/guards, privacidade e riscos, e exigir revisão
+   externa do PR antes do merge. Nunca declarar revisão independente concluída
+   sem evidência identificável, como relatório do subagente ou review do PR.
 7. Falhar fechado diante de conflito material, evidência insuficiente,
    privacidade incerta ou gate não recalculado.
 

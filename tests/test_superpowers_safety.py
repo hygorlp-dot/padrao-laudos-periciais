@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -7,6 +8,10 @@ from scripts.terceiros.verificar_superpowers import verificar
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def normalized(path):
+    return re.sub(r"\s+", " ", path.read_text(encoding="utf-8")).casefold()
 
 
 class SuperpowersIntegrationTest(unittest.TestCase):
@@ -61,6 +66,25 @@ class SuperpowersIntegrationTest(unittest.TestCase):
         positions = [workflow.index(item) for item in sequence]
         self.assertEqual(positions, sorted(positions))
         self.assertIn("engenharia-seguranca-pericial", text)
+
+    def test_first_party_rules_override_superpowers_without_trivial_bureaucracy(self):
+        agents = normalized(ROOT / "AGENTS.md")
+        wrapper = normalized(ROOT / ".agents/skills/engenharia-seguranca-pericial/SKILL.md")
+        for text in (agents, wrapper):
+            self.assertIn("AGENTS.md é canônico sobre `using-superpowers`".casefold(), text)
+            self.assertIn("não tentar invocar Skills não vendorizadas".casefold(), text)
+            self.assertIn("`brainstorming`", text)
+            self.assertIn("proporcionalmente ao risco", text)
+            self.assertIn("perguntas e operações triviais", text)
+
+    def test_independent_review_and_external_fallback_are_explicit(self):
+        agents = normalized(ROOT / "AGENTS.md")
+        wrapper = normalized(ROOT / ".agents/skills/engenharia-seguranca-pericial/SKILL.md")
+        for text in (agents, wrapper):
+            self.assertIn("subagente independente quando disponível", text)
+            self.assertIn("review package", text)
+            self.assertIn("revisão externa do PR antes do merge".casefold(), text)
+            self.assertIn("nunca declarar revisão independente concluída sem evidência", text)
 
     def test_telemetry_environment_is_disabled_and_private_data_is_untracked(self):
         policy = json.loads((ROOT / ".agents/superpowers-policy.json").read_text(encoding="utf-8"))
