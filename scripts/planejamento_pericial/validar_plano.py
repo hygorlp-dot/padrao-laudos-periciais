@@ -63,18 +63,21 @@ def validar(caminho: Path) -> list[str]:
     registro=Registry()
     for s in schemas: registro=registro.with_resource(s["$id"],Resource.from_contents(s))
     schema=next(s for s in schemas if s["$id"].endswith("plano-vistoria.schema.json")); v=validator_for(schema)(schema,registry=registro,format_checker=FormatChecker())
-    dado=json.loads(caminho.read_text(encoding="utf-8"))
+    try:dado=json.loads(caminho.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError,UnicodeDecodeError,OSError) as exc:return [f"JSON inválido ou ilegível: {type(exc).__name__}"]
+    from scripts.planejamento_pericial.migracoes import migrar_plano
+    from scripts.backend_contract.errors import DomainError
     try:
-        from scripts.planejamento_pericial.migracoes import migrar_plano
         dado=migrar_plano(dado)
-    except Exception as exc:return [f"Migração/versão inválida: {type(exc).__name__}"]
+    except DomainError as exc:return [f"Migração/versão inválida: {exc}"]
     erros=[e.message for e in v.iter_errors(dado)]
-    ids={k:{x["id"] for x in dado[k]} for k in ("atividades","medicoes","fotografias")}
-    quesitos=set(dado["quesitos_relacionados"]); calculada=recalcular_cobertura(dado);cobertos={q for q,ok in calculada["cobertura"].items() if ok}
+    if erros:return erros
+    ids={k:{x["id"] for x in dado.get(k,[]) if isinstance(x,dict) and x.get("id")} for k in ("atividades","medicoes","fotografias")}
+    quesitos=set(dado.get("quesitos_relacionados",[])); calculada=recalcular_cobertura(dado);cobertos={q for q,ok in calculada["cobertura"].items() if ok}
     if quesitos-cobertos: erros.append("Quesitos pertinentes sem cobertura: "+", ".join(sorted(quesitos-cobertos)))
-    for c in dado["cobertura"]:
+    for c in dado.get("cobertura",[]):
         for chave in ("atividades","medicoes","fotografias"):
-            faltam=set(c[chave])-ids[chave]
+            faltam=set(c.get(chave,[]))-ids[chave]
             if faltam: erros.append(f"Cobertura referencia {chave} inexistentes: {', '.join(faltam)}")
     if dado["status"]!="BLOQUEADO_PARA_VISTORIA" and (erros or not calculada["apto"]): erros.append("Gate não bloqueado apesar de falha relacional ou requisito obrigatório sem cobertura específica")
     return erros

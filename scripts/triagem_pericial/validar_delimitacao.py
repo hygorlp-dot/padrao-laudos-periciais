@@ -33,6 +33,9 @@ def recalcular_autoauditoria(delimitacao):
         resultado["Vínculos ALG/QUE/QT definidos semanticamente"]="APROVADO" if qts and all(q.get("alegacoes_relacionadas") or q.get("quesitos_relacionados") or q.get("documentos_relacionados") for q in qts_derivadas) else "BLOQUEADO"
     if any(x.get("criterio")=="Tema e objeto possuem fonte identificável" for x in delimitacao.get("autoauditoria",[])):
         resultado["Tema e objeto possuem fonte identificável"]="APROVADO" if delimitacao.get("tema_controvertido",{}).get("documentos_fonte") and delimitacao.get("objeto_material",{}).get("documentos_fonte") else "BLOQUEADO"
+    if any(x.get("criterio")=="Capability de delimitação disponível" for x in delimitacao.get("autoauditoria",[])):
+        from scripts.triagem_pericial.capabilities import pode_delimitar
+        resultado["Capability de delimitação disponível"]="APROVADO" if pode_delimitar(delimitacao.get("tipo_pericia",{}).get("tipo")) else "BLOQUEADO"
     return resultado
 
 def status_derivado(delimitacao):

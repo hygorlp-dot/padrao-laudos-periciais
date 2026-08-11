@@ -1,6 +1,7 @@
 """Auditoria profunda baseada em claims já extraídas e seus vereditos."""
 from __future__ import annotations
 import re
+from scripts.motor_vicios.regras_probatorias import suporte_endogeno
 NEGACOES=(r"\b(não|nao)\b",r"\bausência de\b",r"\bausencia de\b",r"\binexistência de\b",r"\binexistencia de\b",r"\bsem\b",r"\binexistente\b")
 PREFIXOS_EXISTENCIA=(r"^há\s+",r"^ha\s+",r"^existe\s+",r"^presença de\s+",r"^presenca de\s+")
 def _polaridade(texto):
@@ -9,7 +10,7 @@ def _polaridade(texto):
     return negado,re.sub(r"\s+"," ",base).strip(" .,:;")
 def executar_deep_audit(claims_auditadas,resultado=None):
     achados=[]
-    catalogo={e.get("id"):e for e in (resultado or {}).get("catalogo_evidencias",[])};dimensoes={"PROJETO_CONSTRUTIVO_DOCUMENTADO","MATERIAL_CONSTRUTIVO_DOCUMENTADO","ESPECIFICACAO_CONSTRUTIVA_DOCUMENTADA","DETALHE_CONSTRUTIVO_DOCUMENTADO","PROCEDIMENTO_EXECUTIVO_DOCUMENTADO","CONTROLE_TECNOLOGICO_DOCUMENTADO","DOCUMENTACAO_OBRA_VERIFICADA"};divergencias={"EXECUCAO_DIVERGENTE_DOCUMENTADA","NAO_CONFORMIDADE_CONSTRUTIVA_VERIFICADA"}
+    catalogo={e.get("id"):e for e in (resultado or {}).get("catalogo_evidencias",[])}
     for claim in claims_auditadas:
         if claim["saliencia"]=="LOAD_BEARING" and claim["veredito"] in {"INSUFFICIENT","INTERPOLATED","UNSUBSTANTIATED","CONTRADICTED"}:
             achados.append({"id":f"AUD-DEEP-{len(achados)+1:03d}","tipo":"CONCLUSAO_EXCEDE_EVIDENCIA","severidade":"CRITICO","claim_id":claim["claim_id"],"veredito":claim["veredito"],"acao":"Reduzir a conclusão ao conteúdo efetivamente sustentado."})
@@ -23,8 +24,8 @@ def executar_deep_audit(claims_auditadas,resultado=None):
         for norma in pat.get("normas_relacionadas",[]):
             if norma.get("item") and not norma.get("verificada"):achados.append({"id":f"AUD-DEEP-{len(achados)+1:03d}","tipo":"EXTRAPOLACAO_NORMATIVA","severidade":"CRITICO","claim_id":pat["id"],"veredito":"UNVERIFIABLE","acao":"Remover o item específico até consulta e verificação da fonte."})
             if norma.get("authority") in {"FONTE_PRIMARIA_OFICIAL","FONTE_OFICIAL_VERIFICADA"} and norma.get("classificacao_fonte")!="FONTE_PRIMARIA_OFICIAL":achados.append({"id":f"AUD-DEEP-{len(achados)+1:03d}","tipo":"AUTORIDADE_NORMATIVA_AUTODECLARADA","severidade":"CRITICO","claim_id":pat["id"],"veredito":"UNVERIFIABLE","acao":"Remover autoridade oficial indevida e verificar a fonte."})
-        ligadas=[catalogo.get(x,{}) for x in pat.get("evidencias",[])];aspectos={a for e in ligadas for a in e.get("aspectos_suportados",[])};fontes={tuple(e.get("proveniencia",[])) or (e.get("id"),) for e in ligadas if set(e.get("aspectos_suportados",[]))&(dimensoes|divergencias)}
-        if pat.get("origem")=="ENDOGENA_CONSTRUTIVA" and not (aspectos&dimensoes and aspectos&divergencias and len(fontes)>=2):achados.append({"id":f"AUD-DEEP-{len(achados)+1:03d}","tipo":"ORIGEM_ENDOGENA_SEM_EVIDENCIA_CONSTRUTIVA","severidade":"CRITICO","claim_id":pat["id"],"veredito":"UNSUBSTANTIATED","acao":"Reduzir origem a inconclusiva e rever vício, reparo e orçamento."})
+        ligadas=[catalogo.get(x,{}) for x in pat.get("evidencias",[])]
+        if pat.get("origem")=="ENDOGENA_CONSTRUTIVA" and not suporte_endogeno(ligadas):achados.append({"id":f"AUD-DEEP-{len(achados)+1:03d}","tipo":"ORIGEM_ENDOGENA_SEM_EVIDENCIA_CONSTRUTIVA","severidade":"CRITICO","claim_id":pat["id"],"veredito":"UNSUBSTANTIATED","acao":"Reduzir origem a inconclusiva e rever vício, reparo e orçamento."})
     por_pat={p.get("id"):p for p in (resultado or {}).get("patologias",[])}
     for qt in (resultado or {}).get("questoes_saneadas",[]):
         ligados=[por_pat[x] for x in qt.get("patologias",[]) if x in por_pat]

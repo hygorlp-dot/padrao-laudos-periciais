@@ -147,7 +147,9 @@ def gerar(diretorio: Path) -> dict[str, Any]:
     normas = list((raiz_privada / "normas").glob("**/*")) if (raiz_privada / "normas").exists() else []
     modelos = [item for item in modelos if item.is_file()]
     normas = [item for item in normas if item.is_file()]
-    perfil = PERFIS.get(resultado.tipo, PERFIS["OUTRO"])
+    from scripts.triagem_pericial.capabilities import capability
+    capacidade=capability(resultado.tipo)
+    perfil = PERFIS.get(capacidade["PERFIL_DELIMITACAO"] or "OUTRO", PERFIS["OUTRO"])
     conhecimento_modelos = []
     for caminho in sorted((raiz_privada / "conhecimento" / "modelos").glob("MOD-*.json")):
         dado = json.loads(caminho.read_text(encoding="utf-8"))
@@ -315,6 +317,7 @@ def gerar(diretorio: Path) -> dict[str, Any]:
             {"criterio": "Tema e objeto possuem fonte identificável", "resultado": "ALERTA", "observacao": "Formulação preliminar requer validação semântica final do perito."},
             {"criterio": "Normas usadas possuem proveniência", "resultado": "APROVADO" if conhecimento_normas and conhecimento_normas_fontes else "ALERTA", "observacao": f"Fontes estruturadas: {', '.join(conhecimento_normas) or 'nenhuma norma usada nesta etapa'}."},
             {"criterio": "Modelos não contaminam fatos do caso", "resultado": resultado_criterio(not any(str(d).startswith("MOD-") for d in resultado.documentos_fonte)), "observacao": f"Modelos recuperados apenas como experiência: {', '.join(conhecimento_modelos) or 'nenhum disponível'}."},
+            {"criterio":"Capability de delimitação disponível","resultado":"APROVADO" if capacidade["PERFIL_DELIMITACAO"] else "BLOQUEADO","observacao":capacidade["STATUS"]},
         ],
         "status": status, "proveniencia": proveniencias_gerais,
     }

@@ -124,7 +124,10 @@ class AuditoriaFinal2(unittest.TestCase):
             d=Path(td);pdf=d/"autos-sinteticos.pdf";AdvSafeHardening._pdf_sintetico(pdf)
             manifesto,erros,_=construir_manifesto(pdf);self.assertEqual(erros,[]);self.assertEqual(validar("manifesto-pje.schema.json",manifesto),[]);salvar_manifesto(manifesto,d)
             relatorio=gerar_documentos(manifesto,pdf,d);self.assertEqual((relatorio["documentos_gerados"],relatorio["documentos_validos"],relatorio["erros"]),(2,2,[]))
-            for caminho in sorted((d/"documentos").glob("*.json")):self.assertEqual(validar("documento-pje.schema.json",json.loads(caminho.read_text(encoding="utf8"))),[])
+            docs_gerados=[]
+            for caminho in sorted((d/"documentos").glob("*.json")):
+                doc=json.loads(caminho.read_text(encoding="utf8"));docs_gerados.append(doc);self.assertEqual(validar("documento-pje.schema.json",doc),[])
+            self.assertNotEqual(docs_gerados[0]["classe_normalizada"],"ART_RRT")
             delimitacao=gerar_delimitacao(d);self.assertEqual(validar("delimitacao-pericial.schema.json",delimitacao),[]);self.assertEqual(validar_relacoes(delimitacao),[]);self.assertEqual(status_derivado(delimitacao),"APTO_PARA_PLANEJAMENTO");(d/"delimitacao-pericial.json").write_text(json.dumps(delimitacao),encoding="utf8")
             processo=gerar_processo(d);self.assertEqual(validar("processo.schema.json",processo),[]);(d/"processo.json").write_text(json.dumps(processo),encoding="utf8")
             delimitacao=aprofundar(d);self.assertEqual(validar("delimitacao-pericial.schema.json",delimitacao),[]);self.assertEqual(validar_relacoes(delimitacao),[]);self.assertEqual(status_derivado(delimitacao),"APTO_PARA_PLANEJAMENTO");(d/"delimitacao-pericial.json").write_text(json.dumps(delimitacao),encoding="utf8")
