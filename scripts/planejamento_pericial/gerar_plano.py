@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any
+from .validar_plano import recalcular_cobertura
 
 
 def _hash(caminho: Path) -> str: return hashlib.sha256(caminho.read_bytes()).hexdigest()
@@ -83,13 +84,19 @@ def gerar(diretorio: Path) -> dict[str, Any]:
         fotografias.append({"id":f"FOT-PLANO-{len(fotografias)+1:03d}","finalidade":f"Registrar evidência visual para {descricao}","enquadramento":"Contexto, aproximação e detalhe pertinente à QT.","questoes_tecnicas":[qid],"quesitos":relacionados,"alegacoes":qt.get("alegacoes_relacionadas",[])})
         if any(t in baixo for t in ("abertura","extens","dimens","medir","medição","quant")):
             medicoes.append({"id":f"MED-PLANO-{len(medicoes)+1:03d}","grandeza":"Grandeza indicada pela questão técnica","local":delimitacao["objeto_material"]["texto"],"motivo":descricao,"instrumento_sugerido":"Instrumento compatível com a grandeza","precisao_necessaria":None,"questoes_tecnicas":[qid],"quesitos":relacionados,"criterio":fundamentos[0] if fundamentos else None,"obrigatoriedade":"OBRIGATORIA","consequencia_ausencia":"Sem medição ou substituto equivalente, a conclusão quantitativa fica bloqueada."})
+    requisitos_cobertura=[]
+    for qt in sorted(delimitacao["questoes_tecnicas"],key=lambda x:x["id"]):
+        requisitos_cobertura.extend({"questao_tecnica":qt["id"],"tipo":tipo_req,"obrigatoriedade":"OBRIGATORIA"} for tipo_req in ("ATIVIDADE","FOTOGRAFIA"))
+        if any(t in qt.get("descricao","").lower() for t in ("abertura","extens","dimens","medir","medição","quant")):requisitos_cobertura.append({"questao_tecnica":qt["id"],"tipo":"MEDICAO","obrigatoriedade":"OBRIGATORIA"})
     cobertura = []
     for q in quesitos:
         atvs = [a["id"] for a in atividades if any(qt in a["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])]
         alg_q={a for qt in q["questoes_tecnicas_relacionadas"] if qt in qt_por_id for a in qt_por_id[qt].get("alegacoes_relacionadas",[])}
         cobertura.append({"quesito": q["id"], "questoes_tecnicas": q["questoes_tecnicas_relacionadas"], "alegacoes": sorted(alg_q),
                           "atividades": atvs, "medicoes": [m["id"] for m in medicoes if any(qt in m["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])], "fotografias": [f["id"] for f in fotografias if any(qt in f["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])],
-                          "ensaios": [], "documentos": processo["documentos_tecnicos"], "planejada": bool(atvs or medicoes or fotografias)})
+                          "ensaios": [], "documentos": processo["documentos_tecnicos"], "planejada": False})
+    calculada=recalcular_cobertura({"cobertura":cobertura,"requisitos_cobertura":requisitos_cobertura,"atividades":atividades,"medicoes":medicoes,"fotografias":fotografias,"ensaios":[]})
+    for item in cobertura:item["planejada"]=calculada["cobertura"].get(item["quesito"],False)
     bloqueante = any(c["classificacao"] == "BLOQUEANTE" and c["status"] == "ABERTO" for c in delimitacao["conflitos"])
     lacuna_cobertura = any(not c["planejada"] for c in cobertura)
     status = "BLOQUEADO_PARA_VISTORIA" if bloqueante or lacuna_cobertura else "APTO_PARA_VISTORIA_COM_RESSALVAS" if delimitacao["ressalvas"] or delimitacao["documentos_ausentes"] else "APTO_PARA_VISTORIA"
@@ -101,7 +108,7 @@ def gerar(diretorio: Path) -> dict[str, Any]:
             "atividades": atividades, "equipamentos": [{"nome": n, "finalidade": f, "questoes_tecnicas": qts} for n, f in perfil["equip"]],
             "medicoes": medicoes, "fotografias": fotografias, "ensaios": [], "documentos_a_solicitar": delimitacao["documentos_ausentes"],
             "seguranca_e_acesso": perfil["seguranca"], "pontos_criticos": ["Não converter alegação em constatação", "Não concluir origem antes da análise pós-vistoria"],
-            "pendencias": delimitacao["fatores_limitantes"], "cobertura": cobertura,
+            "pendencias": delimitacao["fatores_limitantes"], "cobertura": cobertura,"requisitos_cobertura":requisitos_cobertura,
             "autonomia": {"decisoes_autonomas": len(atividades)+len(medicoes)+len(fotografias), "ressalvas_autonomas": len(delimitacao["ressalvas"]),
                           "lacunas_resolvidas_sem_perguntar": len(delimitacao["documentos_ausentes"]),
                           "perguntas_evitadas_autonomamente": ["tipo de perícia", "tema controvertido", "quesitos", "atividades", "fotografias", "medições", "equipamentos"],

@@ -31,7 +31,7 @@ def executar(processo,delimitacao,plano,vistoria,contexto=None,conhecimento=None
     for idx,(chave,obs) in enumerate(por_manifestacao.items(),1):
         desc,amb,sis,elem=chave;capacidade=capacidade_causal(sis);sem_motor=capacidade["nivel_de_capacidade"]=="MOTOR_CAUSAL_NAO_IMPLEMENTADO"; mid=f"MAN-{idx:03d}"; alg=sorted({x for o in obs for x in o["alegacoes"]});fot=sorted({x for o in obs for x in o["fotografias"]});med=sorted({x for o in obs for x in o["medicoes"]});qts=sorted({x for o in obs for x in o["questoes"]});oids=[o["id"] for o in obs]
         r["manifestacoes"].append({"id":mid,"descricao":desc,"sistema":sis,"elemento":elem,"local":amb,"alegacoes":alg,"observacoes":oids,"fotografias":fot,"medicoes":med,"questoes":qts})
-        ctx=contexto.get(mid,{}) if contexto.get("_modo")=="OVERRIDE_EXPLICITO" else {};evidencias_man=selecionar(catalogo,ids=[o["id"] for o in obs]+fot+med,sistema=sis,manifestacao=desc,contexto={"questoes":qts,"sistema":sis,"manifestacao":desc,"ambiente":amb,"elemento":elem,"alegacoes":alg});normas=recuperar_normas_para_manifestacao(conhecimento.get("normas",[]),sistema=sis,manifestacao=desc,questoes=qts,data_relevante=conhecimento.get("data_relevante"));sit=situacao(obs)
+        ctx=contexto.get(mid,{}) if contexto.get("_modo")=="OVERRIDE_EXPLICITO" else {};evidencias_man=selecionar(catalogo,ids=[o["id"] for o in obs]+fot+med,sistema=sis,manifestacao=desc,contexto={"questoes":qts,"sistema":sis,"manifestacao":desc,"ambiente":amb,"elemento":elem,"alegacoes":alg},relacao_id=mid);normas=recuperar_normas_para_manifestacao(conhecimento.get("normas",[]),sistema=sis,manifestacao=desc,questoes=qts,data_relevante=conhecimento.get("data_relevante"));sit=situacao(obs)
         hips=gerar_hipoteses(desc,mid,ctx.get("evidencias_hipoteses",{}),ctx.get("evidencias_ausentes",[]),hip_seq,sistema=sis,catalogo=evidencias_man,normas=normas) if sit in {"ANOMALIA","FALHA","INCONCLUSIVA"} else []
         hip_seq+=len(hips);r["hipoteses"].extend(hips)
         mais=next((h for h in hips if h["status"]=="MAIS_PROVAVEL"),None);causa=mais["causa_candidata"] if mais else None;mec=mais["mecanismo"] if mais else None;fundamentos=mais["evidencias_favoraveis"] if mais else []
@@ -44,7 +44,9 @@ def executar(processo,delimitacao,plano,vistoria,contexto=None,conhecimento=None
     for p in r["patologias"]:
         cap=capacidade_causal(p.get("sistema"));p["analise_causal"]["status_capacidade"]=cap["nivel_de_capacidade"]
         if cap["nivel_de_capacidade"]=="MOTOR_CAUSAL_NAO_IMPLEMENTADO":p["analise_causal"]["limitacoes"]=["MOTOR_ESPECIALIZADO_NAO_IMPLEMENTADO",*p["analise_causal"]["limitacoes"]]
-        ligados=[e for e in catalogo if e["id"] in p["evidencias"] or e.get("associacao",{}).get("confianca")=="ALTA" or (e["tipo"]=="NORMA" and e.get("sistema") and e.get("sistema")==p.get("sistema"))]
+        man=next((m for m in r["manifestacoes"] if m["id"].replace("MAN-","PAT-")==p["id"]),{})
+        relacionados=selecionar(catalogo,ids=p["evidencias"],sistema=p.get("sistema"),manifestacao=p.get("manifestacao"),contexto={"questoes":man.get("questoes",[]),"sistema":p.get("sistema"),"manifestacao":p.get("manifestacao"),"ambiente":p.get("ambiente"),"elemento":p.get("elemento"),"alegacoes":p.get("alegacoes_relacionadas",[])},relacao_id=p["id"])
+        ligados=[e for e in relacionados if e["tipo"]!="NORMA"]+[e for e in catalogo if e["tipo"]=="NORMA" and e.get("sistema") and e.get("sistema")==p.get("sistema")]
         p["evidencias"]=sorted({e["id"] for e in ligados if e["tipo"]!="NORMA"});p["medicoes"]=sorted(e["id"] for e in ligados if e["tipo"]=="MEDICAO")
         p["consequencias"]=avaliar_consequencias(p["constatacao"]["situacao"],ligados)
         p["criticidade"],_=derivar_criticidade(p["constatacao"]["situacao"],p["consequencias"])
