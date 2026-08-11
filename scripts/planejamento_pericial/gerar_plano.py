@@ -62,12 +62,13 @@ def _perfil(tipo: str) -> dict[str, Any]:
 def gerar(diretorio: Path) -> dict[str, Any]:
     processo_path, delimitacao_path = diretorio / "processo.json", diretorio / "delimitacao-pericial.json"
     processo = json.loads(processo_path.read_text(encoding="utf-8")); delimitacao = json.loads(delimitacao_path.read_text(encoding="utf-8"))
+    tipo = delimitacao["tipo_pericia"]["tipo"]
+    from scripts.triagem_pericial.capabilities import pode_planejar
+    if not pode_planejar(tipo):raise ValueError("PERFIL_ESPECIALIZADO_NAO_IMPLEMENTADO: planejamento bloqueado para "+tipo)
     from scripts.triagem_pericial.validar_delimitacao import validar_instancia,status_derivado
     erros_delimitacao=validar_instancia(delimitacao)
     if erros_delimitacao or status_derivado(delimitacao)!="APTO_PARA_PLANEJAMENTO":raise ValueError("delimitação inválida ou bloqueada no boundary de planejamento: "+"; ".join(erros_delimitacao+[status_derivado(delimitacao)]))
-    tipo = delimitacao["tipo_pericia"]["tipo"]; perfil = _perfil(tipo)
-    from scripts.triagem_pericial.capabilities import pode_planejar
-    if not pode_planejar(tipo):raise ValueError("PERFIL_ESPECIALIZADO_NAO_IMPLEMENTADO: planejamento bloqueado para "+tipo)
+    perfil = _perfil(tipo)
     qts = [q["id"] for q in delimitacao["questoes_tecnicas"]]
     quesitos = [q for q in delimitacao["quesitos"] if q["pertinencia"] in {"PERTINENTE_TECNICO", "PERTINENTE_PARCIAL"}]
     algs = [a["id"] for a in processo["alegacoes"]];qt_por_id={q["id"]:q for q in delimitacao["questoes_tecnicas"]}

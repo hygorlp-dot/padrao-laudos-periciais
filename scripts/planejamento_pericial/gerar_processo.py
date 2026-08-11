@@ -61,6 +61,10 @@ def gerar(diretorio: Path, *, data_laudo: str | None = None) -> dict[str, Any]:
     erros_manifesto,_=validar_integridade(manifesto)
     if manifesto.get("status_validacao")!="VALIDADO" or erros_manifesto:raise ValueError("Manifesto PJe não validado; processo não será construído parcialmente")
     delimitacao = gerar_delimitacao(diretorio)
+    from scripts.triagem_pericial.validar_delimitacao import validar_instancia,status_derivado
+    erros_delimitacao=validar_instancia(delimitacao);estado_delimitacao=status_derivado(delimitacao)
+    if erros_delimitacao or estado_delimitacao!="APTO_PARA_PLANEJAMENTO":
+        raise ValueError("Delimitação inválida ou bloqueada; processo não será construído parcialmente: "+"; ".join(erros_delimitacao+[estado_delimitacao]))
     fontes = [json.loads(p.read_text(encoding="utf-8")) for p in sorted((diretorio / "documentos").glob("*.json"))]
     mapa = {d["documento_id"]: f"DOC-{i:03d}" for i, d in enumerate(fontes, 1)}
     documentos = [{"id": mapa[d["documento_id"]], "tipo": d["classe_normalizada"], "descricao": d["titulo_original"],

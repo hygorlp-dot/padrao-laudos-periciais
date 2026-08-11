@@ -3,6 +3,8 @@
 from __future__ import annotations
 import argparse, json
 from pathlib import Path
+from decimal import Decimal,InvalidOperation
+import re,unicodedata
 from jsonschema.validators import validator_for
 from jsonschema import FormatChecker
 from referencing import Registry, Resource
@@ -11,6 +13,32 @@ RAIZ = Path(__file__).resolve().parents[2]
 TIPOS_COBERTURA={"ATIVIDADE":"atividades","MEDICAO":"medicoes","FOTOGRAFIA":"fotografias","ENSAIO":"ensaios","DOCUMENTO":"documentos"}
 CATALOGOS_PLANEJADOS={**TIPOS_COBERTURA,"DOCUMENTO":"documentos_a_solicitar"}
 TIPOS_EQUIVALENCIA_SUPORTADOS=frozenset({"MEDICAO","FOTOGRAFIA"})
+
+def _normalizar_semantica(valor):
+    base=unicodedata.normalize("NFKD",str(valor or "")).encode("ascii","ignore").decode().casefold()
+    return re.sub(r"\s+"," ",base).strip()
+
+def _unidade_planejada(item):
+    texto=" ".join(str(item.get(c) or "") for c in ("grandeza","criterio","precisao_necessaria"))
+    unidades=re.findall(r"(?i)(?<![a-z])(?:mm|cm|m|%|°c|kpa|mpa|pa)(?![a-z])",texto)
+    return unidades[-1].casefold() if unidades else None
+
+def _grandeza_compativel(planejada,executada):
+    a,b=_normalizar_semantica(planejada),_normalizar_semantica(executada)
+    categorias={"ABERTURA":("abertura","fissura","trinca"),"UMIDADE":("umidade","teor higrometrico"),"TEMPERATURA":("temperatura",),"PRESSAO":("pressao",)}
+    def categoria(texto):return next((nome for nome,termos in categorias.items() if any(t in texto for t in termos)),texto)
+    return bool(a and b and categoria(a)==categoria(b))
+
+def _medicao_equivalente(item_plano,evidencia,qt):
+    try:
+        valor=Decimal(str(evidencia.get("valor")))
+        if not valor.is_finite():return False
+    except (InvalidOperation,ValueError,TypeError):return False
+    unidade_esperada=_unidade_planejada(item_plano);unidade_obtida=str(evidencia.get("unidade") or "").strip().casefold()
+    local_esperado=_normalizar_semantica(item_plano.get("local"));local_obtido=_normalizar_semantica(evidencia.get("local"))
+    return bool(_grandeza_compativel(item_plano.get("grandeza"),evidencia.get("grandeza")) and unidade_esperada and unidade_obtida==unidade_esperada and
+                (not local_esperado or local_obtido==local_esperado) and qt in evidencia.get("questoes",evidencia.get("questoes_tecnicas",[])) and
+                evidencia.get("observacoes") and str(evidencia.get("metodo") or "").strip())
 
 def capability_item(tipo,item):
     campos={"MEDICAO":("grandeza",),"FOTOGRAFIA":("finalidade","finalidade_planejada")}.get(tipo,())
@@ -43,6 +71,8 @@ def recalcular_execucao(plano,vistoria):
     campos_plano={"ATIVIDADE":"atividade_planejada","FOTOGRAFIA":"fotografia_planejada","MEDICAO":"medicao_planejada","ENSAIO":"ensaio_planejado","DOCUMENTO":"documento_planejado"}
     planejados={tipo:{x.get("id"):x for x in plano.get(chave,[]) if isinstance(x,dict)} for tipo,chave in CATALOGOS_PLANEJADOS.items()}
     faltantes=[]
+    if not plano.get("requisitos_cobertura"):
+        return {"apto":False,"faltantes":[{"questao_tecnica":None,"tipo":None,"item_planejado":None,"motivo":"SEM_REQUISITOS_COBERTURA"}]}
     for requisito in plano.get("requisitos_cobertura",[]):
         if requisito.get("obrigatoriedade")!="OBRIGATORIA":continue
         planejado=requisito.get("item_planejado");tipo=requisito.get("tipo");qt=requisito.get("questao_tecnica")
@@ -60,7 +90,8 @@ def recalcular_execucao(plano,vistoria):
             equivalentes=set(execucao.get("evidencia_equivalente",[]));meta=execucao.get("equivalencia") or {};todos=[(t,x) for t,cat in catalogos.items() for x in cat.values()]
             equivalentes_validos=[e for t,e in todos if t==tipo and e.get("id") in equivalentes and qt in e.get("questoes",e.get("questoes_tecnicas",[]))]
             capability_esperada=capability_item(tipo,item_plano)
-            equivalente=(tipo in TIPOS_EQUIVALENCIA_SUPORTADOS and execucao.get("status")=="SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE" and bool(equivalentes_validos) and
+            integridade_tipo=all(_medicao_equivalente(item_plano,e,qt) for e in equivalentes_validos) if tipo=="MEDICAO" else True
+            equivalente=(tipo in TIPOS_EQUIVALENCIA_SUPORTADOS and execucao.get("status")=="SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE" and bool(equivalentes_validos) and integridade_tipo and
                          bool(capability_esperada) and meta.get("requisito_original")==planejado and meta.get("tipo_evidencia")==tipo and str(meta.get("capability") or "").casefold()==capability_esperada and
                          all(capability_item(tipo,e)==capability_esperada for e in equivalentes_validos) and
                          bool(meta.get("metodo_substituto")) and bool(execucao.get("justificativa_equivalencia")))
