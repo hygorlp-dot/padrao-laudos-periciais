@@ -13,6 +13,25 @@
   loading, skeleton, progress, hover, press, navegação ou microinterações, ler
   `.agents/skills/design-motion-principles/SKILL.md` e
   `.agents/skills/ui-pericial/SKILL.md` antes de implementar.
+- Em mudança material, usar as Skills `engenharia-seguranca-pericial`,
+  `test-driven-development`, `systematic-debugging` e
+  `verification-before-completion`, conforme aplicáveis.
+- AGENTS.md é canônico sobre `using-superpowers`: em caso de conflito, estas
+  regras first-party prevalecem. Não tentar invocar Skills não vendorizadas,
+  inclusive `brainstorming`. Aplicar Skills proporcionalmente ao risco; elas
+  são obrigatórias nas mudanças materiais já definidas, sem criar burocracia
+  em perguntas e operações triviais.
+- Cumprir e registrar nesta ordem: reprodução do bug → teste falhando →
+  causa-raiz → correção → adversarial/property tests → regressão → revisão →
+  verificação final. Falhar fechado quando um gate material não puder ser
+  demonstrado com evidência fresca.
+- Para code review, usar subagente independente quando disponível. Se estiver
+  indisponível, gerar `review package` com requisitos, diff, testes e riscos e
+  exigir revisão externa do PR antes do merge. Nunca declarar revisão
+  independente concluída sem evidência identificável da revisão.
+- Manter telemetria Superpowers desabilitada e egress negado por padrão. Não
+  enviar conteúdo pericial a ferramentas ou serviços externos sem autorização
+  expressa.
 
 ## Escopo
 

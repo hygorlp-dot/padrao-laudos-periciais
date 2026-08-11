@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "telemetry_default": "DISABLED",
+  "egress_default": "DENY",
+  "allow_external_egress": false,
+  "environment": {
+    "SUPERPOWERS_DISABLE_TELEMETRY": "true",
+    "DISABLE_TELEMETRY": "true"
+  },
+  "excluded_network_capabilities": ["brainstorming-server", "remote-brand-image"]
+}
