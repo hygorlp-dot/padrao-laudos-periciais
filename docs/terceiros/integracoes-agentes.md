@@ -7,6 +7,7 @@
 | Proposition Audit | Catálogo Awesome Legal Skills abaixo | `4b0a895640d44add67ab4db1a0250e5a48888ee1` | Apache-2.0 | `THIRD_PARTY_PINNED`; execução pericial por `WRAPPER_LOCAL` | Skill seletiva, LICENSE e NOTICE |
 | Awesome Legal Skills | [repositório upstream](https://github.com/lawve-ai/awesome-legal-skills) | `4b0a895640d44add67ab4db1a0250e5a48888ee1` | Raiz CC-BY-NC-ND-4.0; licença individual por Skill | Catálogo privado `REFERENCE_ONLY`; seleção por licença | Nenhum catálogo incorporado |
 | Design Motion Principles | [repositório upstream](https://github.com/kylezantos/design-motion-principles) | `4a9ca879f24a361f4dca4174fe2da0f67b5ddee3` | MIT | `THIRD_PARTY_SKILL_PINNED_BYTE_EXACT`; wrapper pericial separado | Subtree completo da Skill e `/LICENSE`; 16 blobs verificados |
+| Superpowers | [repositório upstream](https://github.com/obra/superpowers) | `v6.2.0` / `3dcbd5c4b48e02263fbf4a3c01e3fe4f81d584d9` | MIT | `THIRD_PARTY_SKILLS_PINNED_BYTE_EXACT`; seleção mínima; telemetria desabilitada; egress deny-by-default | 8 Skills de engenharia, 25 blobs e LICENSE |
 
 ## Política
 
@@ -21,6 +22,13 @@ Design Motion Principles está em
 `.agents/skills/design-motion-principles/`; a adaptação first-party está em
 `.agents/skills/ui-pericial/`. O manifesto do guard registra o commit e os Git
 blob IDs esperados. Atualizações exigem Issue e nova comparação byte-exata.
+
+Superpowers foi incorporado seletivamente em `.agents/skills/`; a adaptação de
+domínio está em `.agents/skills/engenharia-seguranca-pericial/`. O servidor de
+brainstorming e demais capacidades com rede não foram copiados. A política
+`.agents/superpowers-policy.json` desabilita telemetria e nega egress por
+padrão. O guard `scripts/terceiros/verificar_superpowers.py` impede divergência
+dos blobs pinados e da licença.
 
 ## Atualização controlada
 

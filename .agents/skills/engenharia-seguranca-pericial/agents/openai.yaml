@@ -1,0 +1,4 @@
+interface:
+  display_name: "Engenharia de Segurança Pericial"
+  short_description: "Hardening adversarial do Core Pericial"
+  default_prompt: "Use $engenharia-seguranca-pericial para conduzir uma mudança material no Core Pericial com fail-closed, testes adversariais e verificação final."
