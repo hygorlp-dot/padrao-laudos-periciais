@@ -5,7 +5,7 @@ import re
 import unicodedata
 
 from scripts.auditoria_pericial.grounding import auditar_claim
-from scripts.motor_vicios.auditar import comparar_medicao
+from scripts.motor_vicios.auditar import comparar_medicao,texto_quantitativo
 
 TIPO_CLAIM = {"MANIFESTACAO_TECNICA": "MANIFESTACAO_TECNICA", "INFERENCIA_TECNICA": "INFERENCIA_TECNICA", "ORIGEM": "ORIGEM", "CONCLUSAO_DE_QT": "CONCLUSAO_DE_QT", "REPARABILIDADE": "REPARABILIDADE"}
 
@@ -81,7 +81,16 @@ def auditar_fidelidade(redacao, motor_final):
             if norma not in normas: add("NORMA_INVENTADA", pat_id, sorted(normas), norma)
         texto = claim.get("texto_semantico", "")
         if re.search(r"\bitem\s+\d+(?:\.\d+)+\b", _n(texto)) and not claim.get("nor_ids"): add("NORMA_INVENTADA", pat_id, "item normativo verificado", texto)
-        for med_id in claim.get("med_ids", []):
+        unidades=[catalogo.get(i,{}).get("unidade") for i in claim.get("med_ids",[])]
+        # Uma grandeza expressamente quantificada sem unidade também é material:
+        # deve falhar fechada, sem confundir anos, IDs ou numeração fotográfica.
+        contexto_medicao=bool(re.search(
+            r"\b(?:abertura|medid[ao]|medicao|comprimento|largura|altura|espessura|"
+            r"temperatura|percentual|umidade|valor)\b[^.;:]{0,60}\b\d+(?:[,.]\d+)?\b",
+            _n(texto),
+        ))
+        quantitativo=texto_quantitativo(texto,unidades) or contexto_medicao
+        for med_id in claim.get("med_ids", []) if quantitativo else []:
             med = catalogo.get(med_id, {}); valor = med.get("valor"); unidade = med.get("unidade")
             numeros = re.findall(r"\b\d+(?:[,.]\d+)?\s*(?:mm|cm|m|%)\b", _n(texto))
             if valor is not None and not comparar_medicao(texto, med, permitir_conversao=False): add("MEDICAO_ALTERADA", pat_id, f"{valor} {unidade}", numeros or "valor/unidade ausente")
@@ -105,7 +114,7 @@ def auditar_laudo_semantico(laudo, motor_final):
         if atual != esperado: add("QUADRO_RESUMO_DIVERGENTE", pat["id"], esperado, atual)
     for item in laudo.get("orcamento", {}).get("itens", []):
         pat = pats.get(item.get("pat_id"))
-        elegivel = bool(pat and pat.get("elegivel_orcamento") is True and
+        elegivel = bool(pat and pat.get("elegibilidade_orcamento") == "ELEGIVEL_ORCAMENTO_VICIO" and
                         pat.get("constatacao", {}).get("situacao") == "ANOMALIA" and
                         pat.get("origem") == "ENDOGENA_CONSTRUTIVA")
         if not elegivel: add("ORCAMENTO_INELEGIVEL", item.get("pat_id"), "PAT elegível pelo Motor", item)
@@ -135,6 +144,6 @@ def auditar_laudo_semantico(laudo, motor_final):
             if fundamentos and not any(_n(f) in _n(resposta_q) for f in fundamentos):
                 add("QUESITO_CRIA_CONCLUSAO_NOVA", q.get("id"), fundamentos, resposta_q)
     for pat in pats.values():
-        if pat.get("elegivel_orcamento") is True and not any(i.get("pat_id") == pat["id"] for i in laudo.get("orcamento", {}).get("itens", [])):
+        if pat.get("elegibilidade_orcamento") == "ELEGIVEL_ORCAMENTO_VICIO" and not any(i.get("pat_id") == pat["id"] for i in laudo.get("orcamento", {}).get("itens", [])):
             add("ORCAMENTO_ELEGIVEL_INCOMPLETO", pat["id"], "item completo", "ausente")
     return achados

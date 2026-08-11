@@ -16,11 +16,13 @@ ESTRUTURA_VICIOS = (
 
 def _texto(valor):
     return valor.get("texto") if isinstance(valor, dict) else valor
+def _ressalva(valor):
+    return valor.get("id") or valor.get("descricao") if isinstance(valor,dict) else str(valor)
 
 
 def _tipo_pericia(delimitacao, motor):
-    return (delimitacao.get("tipo_pericia") or motor.get("tipo_pericia") or
-            motor.get("analise_final", {}).get("tipo_pericia"))
+    valor=(delimitacao.get("tipo_pericia") or motor.get("tipo_pericia") or motor.get("analise_final", {}).get("tipo_pericia"))
+    return valor.get("tipo") if isinstance(valor,dict) else valor
 
 
 def planejar(processo, delimitacao, motor):
@@ -31,7 +33,7 @@ def planejar(processo, delimitacao, motor):
     patologias = final.get("patologias", [])
     questoes = final.get("questoes_saneadas", delimitacao.get("questoes_tecnicas", []))
     quesitos = delimitacao.get("quesitos", [])
-    ressalvas = list(dict.fromkeys(delimitacao.get("ressalvas", []) + final.get("ressalvas", [])))
+    ressalvas = list(dict.fromkeys(_ressalva(x) for x in delimitacao.get("ressalvas", []) + final.get("ressalvas", [])))
     secoes = []
     unidades = []
     for pat in patologias:
@@ -71,7 +73,7 @@ def planejar(processo, delimitacao, motor):
         "modelo_documental": modelo, "numero_processo": processo.get("numero_processo"),
         "sintese_processual": _texto(delimitacao.get("sintese_processual")),
         "tema_controvertido": _texto(delimitacao.get("tema_controvertido")),
-        "objeto": _texto(delimitacao.get("objeto")), "objetivo": _texto(delimitacao.get("objetivo")),
+        "objeto": _texto(delimitacao.get("objeto_material") or delimitacao.get("objeto")), "objetivo": _texto(delimitacao.get("objetivo_pericial") or delimitacao.get("objetivo")),
         "secoes": secoes, "unidades_patologia": unidades,
         "metricas": {"patologias": len(patologias), "questoes_tecnicas": len(questoes), "quesitos_influentes": len(quesitos)},
     }

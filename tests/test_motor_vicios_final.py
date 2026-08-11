@@ -1,4 +1,4 @@
-import copy,json,tempfile,unittest
+import copy,json,re,tempfile,unittest
 from pathlib import Path
 
 from scripts.auditoria_pericial.grounding import extrair_claims
@@ -13,6 +13,7 @@ from scripts.planejamento_pericial.gerar_processo import gerar as gerar_processo
 from scripts.triagem_pericial.gerar_delimitacao import gerar as gerar_delimitacao
 from scripts.vistoria_estruturada.gerar_vistoria import gerar
 from scripts.vistoria_estruturada.inventariar_vistoria import inventariar
+from scripts.redacao_pericial.pipeline import executar_pipeline_redacao
 
 RAIZ=Path(__file__).resolve().parents[1]
 def load(p):return json.loads((RAIZ/p).read_text(encoding="utf-8"))
@@ -27,7 +28,10 @@ class MotorViciosFinalTest(unittest.TestCase):
         return {"id":"OBS-001","local":"Local fictício","ambiente":"Ambiente fictício","sistema":"IMPERMEABILIZACAO","elemento":"Parede","descricao_objetiva":descricao,"manifestacao":"umidade","resultado":resultado,"campo_examinado":"Superfície acessível","metodo":["INSPECAO_VISUAL"],"fotografias":[],"medicoes":[],"alegacoes":["ALG-001"],"questoes":["QT-001"],"quesitos":["QUE-001"],"confianca":{"nivel":"ALTA"},"proveniencia":["ARQ-VIS-001"],"limitacoes":[],"aspectos_suportados":aspectos or []}
 
     def vistoria(self,obs=None):
-        v=load("tests/fixtures/schemas/vistoria-valida.json");v["observacoes"]=[obs or self.obs()];return v
+        v=load("tests/fixtures/schemas/vistoria-valida.json");v["observacoes"]=[obs or self.obs()]
+        v["cobertura"]=[{"tipo":r["tipo"],"planejado":r.get("item_planejado"),"status":"EXECUTADO","executado":[f"EXEC-{i:03d}"],"evidencia_equivalente":[],"justificativa_equivalencia":None,"impacto":None} for i,r in enumerate(self.plano["requisitos_cobertura"],1)]
+        v["atividades_executadas"]=[{"id":f"EXEC-{i:03d}","atividade_planejada":r["item_planejado"],"questoes":[r["questao_tecnica"]]} for i,r in enumerate(self.plano["requisitos_cobertura"],1) if r["tipo"]=="ATIVIDADE"]
+        return v
 
     def test_causalidade_emerge_sem_contexto_externo(self):
         r=executar_pipeline_motor(self.processo,self.delimitacao,self.plano,self.vistoria())
@@ -64,7 +68,7 @@ class MotorViciosFinalTest(unittest.TestCase):
 
     def test_cobertura_atividade_ensaio_documento_e_equivalente(self):
         plano=copy.deepcopy(self.plano);plano["ensaios"]=[{"id":"ENS-PLANO-001","nome":"estanqueidade"}];plano["documentos_a_solicitar"]=[{"id":"DOC-PLANO-001","descricao":"memorial"}]
-        texto="\n".join(["tipo=ATV;descricao=inspeção;atividade_planejada=ATV-001","tipo=ENS;descricao=estanqueidade;resultado=negativo","tipo=OBS;descricao=evidência equivalente;substitui_planejado=MED-PLANO-001"])
+        texto="\n".join(["tipo=ATV;descricao=inspeção;atividade_planejada=ATV-001","tipo=ENS;descricao=estanqueidade;resultado=negativo","tipo=OBS;descricao=evidência equivalente;substitui_planejado=MED-PLANO-001;justificativa_equivalencia=método alternativo identificado"])
         plano["medicoes"]=[{"id":"MED-PLANO-001"}]
         inv={"arquivos":[{"id":"ARQ-VIS-001","nome":"campo.txt","caminho_relativo":"campo.txt","categoria":"ANOTACAO","metodo_ingestao":"TEXTO_SIMPLES","metadados":{"texto_original":texto}},{"id":"ARQ-VIS-002","nome":"memorial.pdf","caminho_relativo":"memorial.pdf","categoria":"DOCUMENTO","metadados":{}}]}
         estados={(x["tipo"],x["planejado"]):x["status"] for x in gerar(inv,plano)["cobertura"]}
@@ -125,12 +129,21 @@ class MotorViciosFinalTest(unittest.TestCase):
             med_planejada=plano["medicoes"][0]["id"] if plano["medicoes"] else ""
             linhas.extend([f"tipo=MED;grandeza=abertura;valor=0,2;unidade=mm;medicao_planejada={med_planejada}","tipo=DECLARACAO;descricao=Morador relatou evento fictício"])
             campo=d/"campo";campo.mkdir();(campo/"notas.txt").write_text("\n".join(linhas),encoding="utf-8")
+            for i,f in enumerate(plano["fotografias"],1):(campo/f"{f['id']}.jpg").write_bytes(f"imagem sintetica {i}".encode())
             inventario=inventariar(campo);vistoria=gerar(inventario,plano,processo["numero_processo"])
             norma={"id":"NOR-001","titulo":"Norma pública fictícia","requisito":"Critério fictício verificado","verificada":True,"edicao":"2020","aplicabilidade_temporal":"APLICAVEL","proveniencia":["https://oficial.example/norma"],"sistema":"IMPERMEABILIZACAO","classificacao_fonte":"FONTE_PRIMARIA_OFICIAL","entidade":"Entidade sintética","documento":"Norma sintética","dominio":"oficial.example","url":"https://oficial.example/norma","dominio_oficial":True,"status_verificacao":"VERIFICADO","escopo_fonte":"CONTEUDO_NORMATIVO","conteudo_normativo_verificado":True,"conteudo_consultado":"Critério fictício verificado"}
             saida=executar_pipeline_motor(processo,delimitacao,plano,vistoria,{"normas":[norma],"data_relevante":"2026-01-01"})
+            redacao=executar_pipeline_redacao(processo,delimitacao,saida)
             self.assertEqual(delimitacao["tipo_pericia"]["tipo"],"VICIOS_CONSTRUTIVOS");self.assertIn("determinar causa",delimitacao["tema_controvertido"]["texto"].lower())
             self.assertTrue(vistoria["medicoes"]);self.assertTrue(vistoria["declaracoes"]);self.assertTrue(saida["analise_inicial"]["patologias"]);self.assertTrue(saida["claims"]);self.assertTrue(saida["grounding_inicial"])
-            self.assertEqual(saida["analise_final"]["estado_analise"],"PAT_FINAL");self.assertTrue(saida["trilha"]);self.assertEqual(saida["gate"],"APTO_PARA_REDACAO_COM_RESSALVAS",(saida["erros_finais"],saida["detector_final"],saida["deep_audit_final"],saida["grounding_final"]))
+            self.assertEqual(saida["analise_final"]["estado_analise"],"PAT_FINAL");self.assertTrue(saida["trilha"]);self.assertEqual(saida["gate"],"APTO_PARA_REDACAO_COM_RESSALVAS",saida.get("coverage_execucao"))
+            self.assertEqual(redacao["plano_redacao"]["modelo_documental"],"LAUDO_VICIOS_CONSTRUTIVOS_V1");self.assertEqual(redacao["plano_redacao"]["tema_controvertido"],delimitacao["tema_controvertido"]["texto"]);self.assertEqual(redacao["plano_redacao"]["objeto"],delimitacao["objeto_material"]["texto"]);self.assertEqual(redacao["plano_redacao"]["objetivo"],delimitacao["objetivo_pericial"]["texto"])
+            self.assertTrue(any(q["origem"].startswith("Decisão/documentos") and q["documentos_relacionados"] for q in delimitacao["questoes_tecnicas"]))
+            que=next(q for q in delimitacao["quesitos"] if q["pertinencia"]=="PERTINENTE_TECNICO");qt_ids=que["questoes_tecnicas_relacionadas"]
+            qts=[q for q in saida["analise_final"]["questoes_saneadas"] if q["id"] in qt_ids]
+            self.assertTrue(qt_ids and any(q.get("patologias") for q in qts))
+            respostas=[q["resposta"] for g in redacao["laudo"].get("quesitos",[]) for q in g.get("itens",[]) if q.get("id")==que["id"]]
+            self.assertTrue(respostas and all(r.startswith("R: ") and "INFORMAÇÃO NECESSÁRIA" not in r for r in respostas))
             self.assertTrue(any(q.get("materia_juridica_associada") for q in delimitacao["quesitos"]));self.assertTrue(all("validado_perito" not in p.get("vicio_construtivo",{}) for p in saida["analise_final"]["patologias"]))
 
 if __name__=="__main__":unittest.main()

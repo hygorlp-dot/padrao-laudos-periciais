@@ -63,7 +63,7 @@ def _grupos_quesitos(delimitacao, final):
     grupos = {}
     for q in delimitacao.get("quesitos", []):
         origem = q.get("origem") or q.get("parte") or "OUTROS"
-        qt_ids = q.get("questoes_tecnicas", [])
+        qt_ids = q.get("questoes_tecnicas_relacionadas", q.get("questoes_tecnicas", []))
         resposta = q.get("resposta") or next((conclusoes.get(i) for i in qt_ids if conclusoes.get(i)), None)
         resposta = "R: " + resposta.strip() if isinstance(resposta, str) and resposta.strip() else "R: [INFORMAÇÃO NECESSÁRIA: resposta técnica não disponível no estado saneado]"
         grupos.setdefault(origem, []).append({
@@ -80,13 +80,22 @@ def _orcamento(final):
     itens = []
     for pat in final.get("patologias", []):
         bruto = pat.get("orcamento") or pat.get("item_orcamento")
-        if pat.get("elegivel_orcamento") is True and bruto:
+        if pat.get("elegibilidade_orcamento")=="ELEGIVEL_ORCAMENTO_VICIO" and isinstance(bruto,dict) and bruto.get("incluir") is True:
             dados = dict(bruto) if isinstance(bruto, dict) else {"descricao": str(bruto)}
             dados["pat_id"] = pat["id"]
             itens.append(dados)
     return {"aplicavel": bool(itens), "itens": itens,
             "observacao": None if itens else "Seção sem itens: nenhum item elegível e integralmente estruturado foi fornecido pelo Motor."}
 
+
+def _projetar_patologia(p):
+    recomendacao=p.get("recomendacao") or {"necessaria":False,"descricao":None,"extensao":None}
+    return {"id_patologia":p["id"],"local":p.get("localizacao_detalhada") or p.get("ambiente"),"sistema":p.get("sistema"),
+        "alegacao_original":p.get("alegacao_original"),"alegacao_normalizada":p.get("alegacao_normalizada"),"fotografias":p.get("constatacao",{}).get("fotografias",[]),
+        "manifestacao":p.get("manifestacao"),"constatacao":p.get("constatacao"),"situacao":p.get("constatacao",{}).get("situacao"),"origem":p.get("origem"),
+        "criticidade":p.get("criticidade"),"vicio_construtivo":p.get("vicio_construtivo"),"tipo_vicio":p.get("vicio_construtivo",{}).get("tipo"),
+        "recomendacoes_tecnicas":[recomendacao] if recomendacao.get("necessaria") else [],"reparo":recomendacao,
+        "elegivel_orcamento":p.get("elegibilidade_orcamento")=="ELEGIVEL_ORCAMENTO_VICIO","conclusao_tecnica":p.get("conclusao_tecnica")}
 
 def _montar_laudo(processo, delimitacao, final, plano, redacao, gate, grounding, fidelidade, estilo, correcoes):
     pats = final.get("patologias", [])
@@ -95,10 +104,10 @@ def _montar_laudo(processo, delimitacao, final, plano, redacao, gate, grounding,
     sintese_tema = " ".join(q.get("conclusao", "").strip() for q in qts if q.get("conclusao"))
     ressalvas = list(dict.fromkeys(r for p in pats for r in p.get("ressalvas", []) + p.get("analise_causal", {}).get("limitacoes", [])))
     quadro = [{
-        "pat_id": p["id"], "local": p.get("local"), "sistema": p.get("sistema"),
+        "pat_id": p["id"], "local": p.get("localizacao_detalhada") or p.get("ambiente"), "sistema": p.get("sistema"),
         "manifestacao": p.get("manifestacao"), "situacao": p["constatacao"]["situacao"],
         "origem": p.get("origem"), "criticidade": p.get("criticidade"),
-        "vicio_construtivo": p.get("vicio_construtivo"), "reparo_orcamento": p.get("elegivel_orcamento", False),
+        "vicio_construtivo": p.get("vicio_construtivo"), "reparo_orcamento": p.get("elegibilidade_orcamento")=="ELEGIVEL_ORCAMENTO_VICIO",
     } for p in pats]
     return {
         "schema_version": "1.1.0", "tipo_pericia": plano["tipo_pericia"], "modelo_documental": plano["modelo_documental"],
@@ -111,15 +120,7 @@ def _montar_laudo(processo, delimitacao, final, plano, redacao, gate, grounding,
         "criterios_criticidade": final.get("criterios_criticidade"), "limitacoes": ressalvas,
         "dados_diligencia": final.get("dados_diligencia") or final.get("vistoria"),
         "condicoes_gerais": final.get("condicoes_gerais"), "sistemas_analisados": final.get("sistemas_analisados", []),
-        "analises_tecnicas": redacao["blocos"], "patologias": [{
-            "id_patologia": p["id"], "local": p.get("local"), "sistema": p.get("sistema"),
-            "alegacao_original": p.get("alegacao_original"), "alegacao_normalizada": p.get("alegacao_normalizada"),
-            "fotografias": p.get("constatacao", {}).get("fotografias", []), "manifestacao": p.get("manifestacao"),
-            "constatacao": p.get("constatacao"), "situacao": p.get("constatacao", {}).get("situacao"), "origem": p.get("origem"),
-            "criticidade": p.get("criticidade"), "vicio_construtivo": p.get("vicio_construtivo"), "tipo_vicio": p.get("tipo_vicio"),
-            "recomendacoes_tecnicas": p.get("recomendacoes_tecnicas", []), "reparo": p.get("reparo"),
-            "elegivel_orcamento": p.get("elegivel_orcamento", False), "conclusao_tecnica": p.get("conclusao_tecnica")
-        } for p in pats],
+        "analises_tecnicas": redacao["blocos"], "patologias": [_projetar_patologia(p) for p in pats],
         "conclusao_classificacoes": [{"pat_id": p["id"], "situacao": p["constatacao"]["situacao"], "origem": p["origem"], "criticidade": p["criticidade"]} for p in pats],
         "quadro_resumo": quadro, "sintese_conclusiva_tema": sintese_tema,
         "quesitos": _grupos_quesitos(delimitacao, final), "orcamento": _orcamento(final), "referencias": normas,
@@ -162,6 +163,20 @@ def _render_markdown(laudo):
 
 
 def executar_pipeline_redacao(processo, delimitacao, motor):
+    from scripts.motor_vicios.pipeline import recalcular_gate
+    estado={"erros":motor.get("erros_finais",[]),"detector":motor.get("detector_final",[]),"deep":motor.get("deep_audit_final",[]),
+            "materiais":[a for a in motor.get("grounding_final",[]) if a.get("saliencia")=="LOAD_BEARING"],
+            "proposition_bloqueante":any(x.get("verdict")!="SUPPORTED" for x in motor.get("proposition_audit_results",[])),
+            "autoauditoria":motor.get("analise_final",{}).get("autoauditoria",[]),
+            "ressalvas":any(p.get("ressalvas") or p.get("analise_causal",{}).get("grau_certeza")=="INCONCLUSIVO" for p in motor.get("analise_final",{}).get("patologias",[]))}
+    auditavel=any(k in motor for k in ("erros_finais","detector_final","deep_audit_final","grounding_final","proposition_audit_results","coverage_execucao"))
+    if auditavel:
+        from scripts.planejamento_pericial.validar_plano import recalcular_execucao
+        entradas=motor.get("coverage_inputs") or {}
+        cobertura_recalculada=recalcular_execucao(entradas.get("plano",{}),entradas.get("vistoria",{}))
+        if not cobertura_recalculada["apto"]:estado["erros"]=[*estado["erros"],"coverage executada insuficiente"]
+    gate_recalculado=recalcular_gate(estado) if auditavel else motor.get("gate")
+    if auditavel and (motor.get("gate") not in {None,gate_recalculado} or gate_recalculado=="BLOQUEADO_PARA_REDACAO"):motor={**motor,"gate":"BLOQUEADO_PARA_REDACAO"}
     plano = planejar(processo, delimitacao, motor)
     inicial = redigir(plano, motor)
     if plano["status"] == "BLOQUEADO" or inicial["status"] == "BLOQUEADO":
