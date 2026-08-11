@@ -97,6 +97,18 @@ class RedacaoPericialTest(unittest.TestCase):
         tipos = {a["tipo"] for a in auditar_fidelidade(r, self.final)}
         self.assertTrue({"NORMA_INVENTADA", "UNSUPPORTED_REDRAFT_CLAIM"} <= tipos)
 
+    def test_fidelidade_numerica_valida_par_decimal_valor_unidade_sem_conversao(self):
+        final = {"patologias": [], "catalogo_evidencias": [{"id": "MED-001", "tipo": "MEDICAO", "valor": "4", "unidade": "mm"}]}
+        def tipos(texto):
+            redacao = {"blocos": [], "claims": [{"id": "CLAIM-RED-001", "pat_ids": [], "med_ids": ["MED-001"], "nor_ids": [], "texto_semantico": texto}]}
+            return {a["tipo"] for a in auditar_fidelidade(redacao, final)}
+        self.assertIn("MEDICAO_ALTERADA", tipos("A abertura medida foi de 40 mm."))
+        self.assertIn("MEDICAO_ALTERADA", tipos("A abertura medida foi de 4 cm."))
+        self.assertNotIn("MEDICAO_ALTERADA", tipos("A abertura medida foi de 4,0 mm."))
+        self.assertNotIn("MEDICAO_ALTERADA", tipos("A abertura medida foi de 4.0 mm."))
+        self.assertIn("MEDICAO_ALTERADA", tipos("A abertura medida foi de 4."))
+        self.assertIn("MEDICAO_ALTERADA", tipos("A abertura medida foi de 0,4 cm."))
+
     def test_norma_verificada_citada_vincula_claim_e_referencias(self):
         motor = copy.deepcopy(self.motor)
         pat1 = motor["analise_final"]["patologias"][0]

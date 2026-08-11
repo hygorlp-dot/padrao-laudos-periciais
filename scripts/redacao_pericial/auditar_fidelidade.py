@@ -5,6 +5,7 @@ import re
 import unicodedata
 
 from scripts.auditoria_pericial.grounding import auditar_claim
+from scripts.motor_vicios.auditar import comparar_medicao
 
 TIPO_CLAIM = {"MANIFESTACAO_TECNICA": "MANIFESTACAO_TECNICA", "INFERENCIA_TECNICA": "INFERENCIA_TECNICA", "ORIGEM": "ORIGEM", "CONCLUSAO_DE_QT": "CONCLUSAO_DE_QT", "REPARABILIDADE": "REPARABILIDADE"}
 
@@ -83,7 +84,7 @@ def auditar_fidelidade(redacao, motor_final):
         for med_id in claim.get("med_ids", []):
             med = catalogo.get(med_id, {}); valor = med.get("valor"); unidade = med.get("unidade")
             numeros = re.findall(r"\b\d+(?:[,.]\d+)?\s*(?:mm|cm|m|%)\b", _n(texto))
-            if numeros and valor is not None and not any(str(valor).replace(".", ",") in x or str(valor) in x for x in numeros): add("MEDICAO_ALTERADA", pat_id, f"{valor} {unidade}", numeros)
+            if valor is not None and not comparar_medicao(texto, med, permitir_conversao=False): add("MEDICAO_ALTERADA", pat_id, f"{valor} {unidade}", numeros or "valor/unidade ausente")
     return achados
 
 
