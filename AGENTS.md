@@ -1,5 +1,19 @@
 # Regras fundamentais do repositório
 
+## Governança de desenvolvimento
+
+- Antes de alterar o repositório, ler este arquivo, os padrões aplicáveis e
+  `docs/padroes/padrao-governanca-desenvolvimento.md`.
+- Localizar ou criar a Issue correspondente e trabalhar somente na branch da
+  Issue. Não implementar correção, melhoria, função, refatoração material ou
+  integração diretamente em `main`.
+- Manter o escopo da Issue, testar, auditar e entregar por Pull Request com
+  referência explícita à Issue.
+- Para UI, UX, React, Tauri, CSS, motion, transições, modais, drawers, toasts,
+  loading, skeleton, progress, hover, press, navegação ou microinterações, ler
+  `.agents/skills/design-motion-principles/SKILL.md` e
+  `.agents/skills/ui-pericial/SKILL.md` antes de implementar.
+
 ## Escopo
 
 - Tratar este repositório como o padrão de trabalho do perito, nunca como arquivo de autos de processos reais.

@@ -1,0 +1,27 @@
+{
+  "name": "Design Motion Principles",
+  "repo": "https://github.com/kylezantos/design-motion-principles",
+  "commit": "4a9ca879f24a361f4dca4174fe2da0f67b5ddee3",
+  "license": "MIT",
+  "mode": "THIRD_PARTY_SKILL_PINNED_BYTE_EXACT",
+  "destination": ".agents/skills/design-motion-principles",
+  "wrapper": ".agents/skills/ui-pericial/SKILL.md",
+  "blobs": {
+    "LICENSE": "adbcec5552ebeb9745b0850b29b81478395da655",
+    "SKILL.md": "e4cf1c7825756157872d241e1d349331403226d5",
+    "references/accessibility.md": "d70bf277383085ce903187d44a1b8976fac3fef9",
+    "references/anti-checklist.md": "3612dbefb8110ae3dcbc8dce7b04ecaff006383c",
+    "references/audit-checklist.md": "c08a9d2c2fb9335927e73edaa3c130d635cc3412",
+    "references/creation-gotchas.md": "cc605074f7a568e89804953b95dd648e1a554533",
+    "references/demo-shell.html": "0914dd7554af36152f13a9129e1d4fdc85d3f0e0",
+    "references/emil-kowalski.md": "c913ae4a29b8b5f7c6bd991bbb7d9d61f29a2901",
+    "references/jakub-krehel.md": "ccd4e56fc7bc67a1b474a5d29fd68b450abe6985",
+    "references/jhey-tompkins.md": "3a9d93fd6bac0daf095bfffb2b31100a2a8f76e9",
+    "references/motion-cookbook.md": "01acea69d783bf9632257f54ecf9aa0eea1cd8f7",
+    "references/output-format.md": "f0ea8c9a8434eefa50d96c1fe8217a3b0bfff074",
+    "references/performance.md": "da675deeb2cfa115938d286dd5e021421adcb889",
+    "references/report-template.html": "d10fc2c3ba3c11a08a3fad234620030b1c4cfcaa",
+    "workflows/audit.md": "3e9a480324d7202ac84c4d4d4ff7b092293d8100",
+    "workflows/create.md": "1dd971f91822fe90631719be72c061851e5ab026"
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "UI Pericial"
+  short_description: "Interface pericial funcional e acessível"
+  default_prompt: "Use $ui-pericial para projetar uma interação pericial clara, acessível e com motion funcional."
