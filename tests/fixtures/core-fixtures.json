@@ -1,0 +1,293 @@
+{
+    "schema_version":  "1.0.0",
+    "fixtures":  [
+                     {
+                         "arquivo":  "tests/fixtures/auditoria/auditoria-grounding-valida.json",
+                         "dominio":  "AUDIT",
+                         "schema":  "auditoria-grounding-pericial.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Grounding vÃ¡lido",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/auditoria/trilha-auditoria-valida.json",
+                         "dominio":  "AUDIT",
+                         "schema":  "trilha-auditoria-agente.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Trilha vÃ¡lida",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/motor-vicios/analise-motor-vicios-valida.json",
+                         "dominio":  "MOTOR",
+                         "schema":  "analise-motor-vicios.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "AnÃ¡lise vÃ¡lida",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/motor-vicios/fonte-online-valida.json",
+                         "dominio":  "NORMS",
+                         "schema":  "fonte-online.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Fonte online vÃ¡lida",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/motor-vicios/inventario-vistoria-valido.json",
+                         "dominio":  "INSPECTION",
+                         "schema":  "inventario-vistoria.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "InventÃ¡rio de vistoria vÃ¡lido",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/motor-vicios-cenarios.json",
+                         "dominio":  "MOTOR",
+                         "schema":  null,
+                         "consumer":  "tests/test_motor_vicios.py::MotorViciosTest::test_trinta_cenarios_de_risco_executam_comportamento",
+                         "finalidade":  "CenÃ¡rios sintÃ©ticos do Motor",
+                         "expected":  "DATASET"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/pje/documento-composto-valido.json",
+                         "dominio":  "PJE_EXTRACTION",
+                         "schema":  "documento-pje.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Documento composto vÃ¡lido",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/pje/documento-fonte-sem-proveniencia.json",
+                         "dominio":  "PJE_EXTRACTION",
+                         "schema":  "documento-pje.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Documento sem proveniÃªncia",
+                         "expected":  "INVALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/pje/documento-parecer-com-fotos-orcamento-valido.json",
+                         "dominio":  "PJE_EXTRACTION",
+                         "schema":  "documento-pje.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Parecer composto vÃ¡lido",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/pje/documento-quesito-sem-numero-original-e-status-regular.json",
+                         "dominio":  "PJE_EXTRACTION",
+                         "schema":  "documento-pje.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Quesito inconsistente",
+                         "expected":  "INVALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/pje/documento-secao-com-id-pje-proprio.json",
+                         "dominio":  "PJE_EXTRACTION",
+                         "schema":  "documento-pje.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "SeÃ§Ã£o com identidade indevida",
+                         "expected":  "INVALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/pje/documento-simples-valido.json",
+                         "dominio":  "PJE_EXTRACTION",
+                         "schema":  "documento-pje.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Documento simples vÃ¡lido",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/pje/manifesto-documento-sem-pagina.json",
+                         "dominio":  "PJE_MANIFEST",
+                         "schema":  "manifesto-pje.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Manifesto sem pÃ¡gina",
+                         "expected":  "INVALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/pje/manifesto-minimo-valido.json",
+                         "dominio":  "PJE_MANIFEST",
+                         "schema":  "manifesto-pje.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Manifesto mÃ­nimo vÃ¡lido",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/pje/manifesto-multiplas-partes-valido.json",
+                         "dominio":  "PJE_MANIFEST",
+                         "schema":  "manifesto-pje.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Manifesto multilateral vÃ¡lido",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/pje/manifesto-reconciliacao-invalida.json",
+                         "dominio":  "PJE_RECONCILIATION",
+                         "schema":  "manifesto-pje.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "ReconciliaÃ§Ã£o invÃ¡lida",
+                         "expected":  "INVALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/pje_documentos/casos-classificacao.json",
+                         "dominio":  "DOCUMENT_CLASSIFICATION",
+                         "schema":  null,
+                         "consumer":  "tests/test_documentos_pje.py::DocumentoPjeTest::test_classes_exatas_e_outro",
+                         "finalidade":  "Casos de classificaÃ§Ã£o documental",
+                         "expected":  "DATASET"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/pje_parser/casos.json",
+                         "dominio":  "PJE_EXTRACTION",
+                         "schema":  null,
+                         "consumer":  "tests/test_extracao_pje.py::ParserPjeTest::test_rodape_valido_e_ausente",
+                         "finalidade":  "Casos do parser estrutural",
+                         "expected":  "DATASET"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/planejamento/conhecimento-normativo-valido.json",
+                         "dominio":  "NORMS",
+                         "schema":  "conhecimento-normativo.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Conhecimento normativo vÃ¡lido",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/planejamento/conhecimento-referencial-valido.json",
+                         "dominio":  "PLANNING",
+                         "schema":  "conhecimento-referencial.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Conhecimento referencial vÃ¡lido",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/planejamento/inventario-valido.json",
+                         "dominio":  "PLANNING",
+                         "schema":  "inventario-referencias.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "InventÃ¡rio referencial vÃ¡lido",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/planejamento/plano-vistoria-valido.json",
+                         "dominio":  "PLANNING",
+                         "schema":  "plano-vistoria.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Plano de vistoria vÃ¡lido",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/planejamento-cenarios.json",
+                         "dominio":  "PLANNING",
+                         "schema":  null,
+                         "consumer":  "tests/test_planejamento_pericial.py::PlanejamentoPericialTest::test_dezessete_cenarios_sinteticos_documentados",
+                         "finalidade":  "CenÃ¡rios de planejamento",
+                         "expected":  "DATASET"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/redacao/laudo-redacao-valido.json",
+                         "dominio":  "REDACTION",
+                         "schema":  "laudo-redacao.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Laudo semÃ¢ntico vÃ¡lido",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/redacao/plano-redacao-valido.json",
+                         "dominio":  "REDACTION",
+                         "schema":  "plano-redacao.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Plano de redaÃ§Ã£o vÃ¡lido",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/schemas/patologia-conforme-com-orcamento.json",
+                         "dominio":  "MOTOR",
+                         "schema":  "patologia.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Patologia conforme com orÃ§amento indevido",
+                         "expected":  "INVALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/schemas/patologia-conforme-valida.json",
+                         "dominio":  "MOTOR",
+                         "schema":  "patologia.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Patologia conforme vÃ¡lida",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/schemas/patologia-endogena-valida.json",
+                         "dominio":  "MOTOR",
+                         "schema":  "patologia.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Patologia endÃ³gena vÃ¡lida",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/schemas/patologia-funcional-com-orcamento.json",
+                         "dominio":  "MOTOR",
+                         "schema":  "patologia.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Patologia funcional com orÃ§amento indevido",
+                         "expected":  "INVALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/schemas/patologia-inconclusiva-com-vicio.json",
+                         "dominio":  "MOTOR",
+                         "schema":  "patologia.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Patologia inconclusiva com vÃ­cio indevido",
+                         "expected":  "INVALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/schemas/patologia-inconclusiva-valida.json",
+                         "dominio":  "MOTOR",
+                         "schema":  "patologia.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Patologia inconclusiva vÃ¡lida",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/schemas/patologia-vicio-sem-origem-endogena.json",
+                         "dominio":  "MOTOR",
+                         "schema":  "patologia.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "VÃ­cio sem origem endÃ³gena",
+                         "expected":  "INVALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/schemas/processo-valido.json",
+                         "dominio":  "PROCESS_GENERATION",
+                         "schema":  "processo.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Processo vÃ¡lido",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/schemas/vistoria-valida.json",
+                         "dominio":  "INSPECTION",
+                         "schema":  "vistoria.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Vistoria vÃ¡lida",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/triagem/cenarios.json",
+                         "dominio":  "TRIAGE",
+                         "schema":  "delimitacao-pericial.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "CenÃ¡rios de triagem rejeitados pelo schema unitÃ¡rio",
+                         "expected":  "INVALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/triagem/delimitacao-minima-valida.json",
+                         "dominio":  "DELIMITATION",
+                         "schema":  "delimitacao-pericial.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "DelimitaÃ§Ã£o mÃ­nima vÃ¡lida",
+                         "expected":  "VALID"
+                     }
+                 ]
+}
