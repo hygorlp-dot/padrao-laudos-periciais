@@ -57,8 +57,8 @@ def executar_pipeline_motor(processo,delimitacao,plano,vistoria,conhecimento=Non
     if inicial["status_execucao"]!="ANALISE_INICIAL":
         trilha=registrar_trilha(execucao_id=execucao_id or str(uuid.uuid4()),processo=processo.get("numero_processo"),skill="motor-vicios-construtivos",objetivo="Processar evidências de vistoria",inputs=["processo","delimitacao","plano","vistoria"],outputs=["analise_final"],status="BLOQUEADO",proveniencia=inicial.get("proveniencia",[]));return {"analise_inicial":inicial,"analise_final":inicial,"claims":[],"grounding":[],"detector":[],"deep_audit":[],"proposition_audit_results":[],"autocorrecoes":[],"trilha":trilha,"gate":"BLOQUEADO_PARA_REDACAO"}
     erros_iniciais=validar(inicial,processo,delimitacao,plano,vistoria,conhecimento.get("normas",[]),delimitacao.get("ressalvas",[]));claims,audits,detector,deep,catalogo=_auditar(inicial,processo,delimitacao,vistoria,conhecimento)
-    final,correcoes=autocorrigir(inicial,claims,audits,detector+deep);final["catalogo_evidencias"]=catalogo;final["autoauditoria"]=auditar(final,vistoria);resultado_autoauditoria=classificar_autoauditoria(final["autoauditoria"])
-    claims_f,audits_f,detector_f,deep_f,catalogo_f=_auditar(final,processo,delimitacao,vistoria,conhecimento);final["catalogo_evidencias"]=catalogo_f
+    final,correcoes=autocorrigir(inicial,claims,audits,detector+deep);final["autoauditoria"]=auditar(final,vistoria);resultado_autoauditoria=classificar_autoauditoria(final["autoauditoria"])
+    claims_f,audits_f,detector_f,deep_f,catalogo_f=_auditar(final,processo,delimitacao,vistoria,conhecimento)
     erros_finais=validar(final,processo,delimitacao,plano,vistoria,conhecimento.get("normas",[]),delimitacao.get("ressalvas",[]));materiais=[a for a in audits_f if a["saliencia"]=="LOAD_BEARING"]
     proposition=auditar_proposicoes(claims_f,audits_f,catalogo_f);prop_bloqueante=any(p["verdict"]!="SUPPORTED" for p in proposition)
     from scripts.planejamento_pericial.validar_plano import recalcular_execucao

@@ -13,6 +13,11 @@ implementado do que permanece previsto.
    quesitos e lacunas, sem inventar conteúdo.
 3. **Contratos PJe** — representar o PDF consolidado em `manifesto-pje.json`
    e cada peça reconciliada em `documento-pje.json`.
+
+O contrato `manifesto-pje.json` está na versão `1.1.0`. Cada item do índice
+registra página de origem, método, candidatos, destino escolhido e confiança.
+Itens de versões anteriores devem ser reextraídos: não se presume associação
+de link nem se promove fallback posicional a confiança alta.
 4. **Triagem e delimitação pericial** — leitura semântica pelo Codex, com tipo
    de perícia, tema controvertido, objeto, objetivo, questões técnicas,
    quesitos, ressalvas, conflitos e plano preliminar em

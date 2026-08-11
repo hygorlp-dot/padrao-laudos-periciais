@@ -10,7 +10,7 @@
   ],
   "additionalProperties": false,
   "properties": {
-    "schema_version": { "type": "string", "minLength": 1 },
+    "schema_version": { "const": "1.1.0" },
     "arquivo": { "$ref": "#/$defs/arquivo" },
     "processo": { "$ref": "#/$defs/processo" },
     "pessoas": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/pessoa" } },
@@ -49,11 +49,14 @@
             { "type": "null" }
           ]
         },
-        "proveniencia": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" }
+        "proveniencia": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" },
+        "status": { "enum": ["CONFIRMADO", "CONFLITANTE"] },
+        "fontes": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" } }
       },
       "oneOf": [
         { "properties": { "valor": { "type": "string", "minLength": 1 }, "motivo_ausencia": { "type": "null" } } },
-        { "properties": { "valor": { "type": "null" }, "motivo_ausencia": { "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" } } }
+        { "not": { "required": ["status"] }, "properties": { "valor": { "type": "null" }, "motivo_ausencia": { "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" } } },
+        { "required": ["status", "fontes"], "properties": { "valor": { "type": "null" }, "motivo_ausencia": { "const": "CONFLITANTE" }, "status": { "const": "CONFLITANTE" }, "fontes": { "minItems": 2 } } }
       ]
     },
     "numeroCnjPrincipal": {
@@ -76,10 +79,13 @@
           "oneOf": [{ "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" }, { "type": "null" }]
         },
         "proveniencia": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" }
+        ,"status": { "enum": ["CONFIRMADO", "CONFLITANTE"] }
+        ,"fontes": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" } }
       },
       "oneOf": [
         { "properties": { "valor": { "type": "number", "minimum": 0 }, "moeda": { "type": "string", "pattern": "^[A-Z]{3}$" }, "motivo_ausencia": { "type": "null" } } },
-        { "properties": { "valor": { "type": "null" }, "moeda": { "type": "null" }, "motivo_ausencia": { "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" } } }
+        { "not": { "required": ["status"] }, "properties": { "valor": { "type": "null" }, "moeda": { "type": "null" }, "motivo_ausencia": { "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" } } },
+        { "required": ["status", "fontes"], "properties": { "valor": { "type": "null" }, "moeda": { "type": "null" }, "motivo_ausencia": { "const": "CONFLITANTE" }, "status": { "const": "CONFLITANTE" }, "fontes": { "minItems": 2 } } }
       ]
     },
     "flagProcessual": {
@@ -90,10 +96,13 @@
         "valor": { "type": ["boolean", "null"] },
         "motivo_ausencia": { "oneOf": [{ "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" }, { "type": "null" }] },
         "proveniencia": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" }
+        ,"status": { "enum": ["CONFIRMADO", "CONFLITANTE"] }
+        ,"fontes": { "type": "array", "items": { "$ref": "pje-comum.schema.json#/$defs/proveniencia" } }
       },
       "oneOf": [
         { "properties": { "valor": { "type": "boolean" }, "motivo_ausencia": { "type": "null" } } },
-        { "properties": { "valor": { "type": "null" }, "motivo_ausencia": { "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" } } }
+        { "not": { "required": ["status"] }, "properties": { "valor": { "type": "null" }, "motivo_ausencia": { "$ref": "pje-comum.schema.json#/$defs/ausenciaInformacao" } } },
+        { "required": ["status", "fontes"], "properties": { "valor": { "type": "null" }, "motivo_ausencia": { "const": "CONFLITANTE" }, "status": { "const": "CONFLITANTE" }, "fontes": { "minItems": 2 } } }
       ]
     },
     "flags": {
@@ -125,7 +134,7 @@
     "itemIndice": {
       "description": "titulo_original e tipo_original preservam literalmente os valores do índice e nunca são substituídos pela taxonomia normalizada.",
       "type": "object",
-      "required": ["documento_id_interno", "id_pje", "data", "hora", "titulo_original", "tipo_original", "ordem_indice", "pagina_destino_link", "texto_bruto", "confianca"],
+      "required": ["documento_id_interno", "id_pje", "data", "hora", "titulo_original", "tipo_original", "ordem_indice", "pagina_destino_link", "pagina_origem_indice", "metodo_associacao_link", "candidatos_destino_link", "destino_escolhido_link", "texto_bruto", "confianca"],
       "additionalProperties": false,
       "properties": {
         "documento_id_interno": { "type": "string", "pattern": "^DOC-PJE-[0-9]{3,}$" },
@@ -136,6 +145,10 @@
         "tipo_original": { "type": "string", "minLength": 1 },
         "ordem_indice": { "type": "integer", "minimum": 1 },
         "pagina_destino_link": { "type": ["integer", "null"], "minimum": 1 },
+        "pagina_origem_indice": { "type": "integer", "minimum": 1 },
+        "metodo_associacao_link": { "enum": ["LINK_ID_INEQUIVOCO", "FALLBACK_POSICIONAL", "LINK_AMBIGUO", "SEM_ASSOCIACAO"] },
+        "candidatos_destino_link": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "uniqueItems": true },
+        "destino_escolhido_link": { "type": ["integer", "null"], "minimum": 1 },
         "texto_bruto": { "type": "string", "minLength": 1 },
         "normalizacao_id": {
           "type": "object",

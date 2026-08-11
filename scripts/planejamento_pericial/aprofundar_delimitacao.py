@@ -24,6 +24,12 @@ def aprofundar(diretorio:Path)->dict:
         if qt["alegacoes_relacionadas"]: continue
         qt["alegacoes_relacionadas"]=[a["id"] for a in processo["alegacoes"] if qt["id"] in melhores(" ".join(filter(None,[a.get("manifestacao_alegada"),a.get("causa_alegada"),a.get("ambiente_alegado"),a.get("sistema_alegado")])),questoes)]
     for quesito in delimitacao["quesitos"]:
+        if quesito.get("pertinencia")=="MATERIA_JURIDICA":
+            quesito["questoes_tecnicas_relacionadas"]=[];quesito["secoes_laudisticas_previstas"]=[];quesito["status_cobertura"]="JURIDICO_DELIMITADO"
+            for qt in questoes:qt["quesitos_relacionados"]=[x for x in qt.get("quesitos_relacionados",[]) if x!=quesito["id"]]
+            continue
+        if quesito.get("pertinencia")=="REPETITIVO":
+            continue
         relacionados=melhores(quesito["texto_integral"],questoes)
         if not relacionados and quesito.get("pertinencia") in {"PERTINENTE_TECNICO","PERTINENTE_PARCIAL"}:
             novo_id=f"QT-{max((int(q['id'].split('-')[1]) for q in questoes),default=0)+1:03d}"

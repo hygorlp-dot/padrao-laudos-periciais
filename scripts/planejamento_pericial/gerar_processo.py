@@ -55,9 +55,16 @@ def _partes(documentos: list[dict]) -> list[dict]:
             for polo, nome in nomes]
 
 
-def gerar(diretorio: Path) -> dict[str, Any]:
+def gerar(diretorio: Path, *, data_laudo: str | None = None) -> dict[str, Any]:
     manifesto = json.loads((diretorio / "manifesto-pje.json").read_text(encoding="utf-8"))
+    from scripts.extracao_pje.validar_integridade import validar_integridade
+    erros_manifesto,_=validar_integridade(manifesto)
+    if manifesto.get("status_validacao")!="VALIDADO" or erros_manifesto:raise ValueError("Manifesto PJe não validado; processo não será construído parcialmente")
     delimitacao = gerar_delimitacao(diretorio)
+    from scripts.triagem_pericial.validar_delimitacao import validar_instancia,status_derivado
+    erros_delimitacao=validar_instancia(delimitacao);estado_delimitacao=status_derivado(delimitacao)
+    if erros_delimitacao or estado_delimitacao!="APTO_PARA_PLANEJAMENTO":
+        raise ValueError("Delimitação inválida ou bloqueada; processo não será construído parcialmente: "+"; ".join(erros_delimitacao+[estado_delimitacao]))
     fontes = [json.loads(p.read_text(encoding="utf-8")) for p in sorted((diretorio / "documentos").glob("*.json"))]
     mapa = {d["documento_id"]: f"DOC-{i:03d}" for i, d in enumerate(fontes, 1)}
     documentos = [{"id": mapa[d["documento_id"]], "tipo": d["classe_normalizada"], "descricao": d["titulo_original"],
@@ -100,7 +107,10 @@ def gerar(diretorio: Path) -> dict[str, Any]:
     processo = manifesto["processo"]
     valor = lambda k: processo[k].get("valor") if isinstance(processo.get(k), dict) else None
     assuntos = [i["valor"] for i in processo.get("assuntos", []) if i.get("valor")]
-    return {"schema_version": "2.0.0", "numero_processo": processo["numero_cnj"]["valor"], "tipo_acao": valor("classe"),
+    conflitos_upstream=[{"id":f"CON-{i:03d}","tipo":c["tipo"],"descricao":c["descricao"],"fontes_conflitantes":list(dict.fromkeys(f'{f.get("documento_id") or "CAPA"}:p{f.get("pagina_pdf")}' for f in c.get("fontes",[]))),"criticidade":"CRITICA" if c.get("bloqueante") else "IMPORTANTE","bloqueante":c.get("bloqueante",False),"decisao_perito":c.get("decisao"),"status":"ABERTO" if c.get("status")=="ABERTO" else "RESOLVIDO"} for i,c in enumerate(manifesto.get("conflitos",[]),1)]
+    if any(len(c["fontes_conflitantes"])<2 for c in conflitos_upstream):raise ValueError("Conflito upstream sem duas fontes distinguíveis; processo bloqueado")
+    pendencias_upstream=[{"id":f"PEN-{i:03d}","descricao":p["descricao"],"tipo":p["motivo_ausencia"],"necessaria_para":[p["campo"]],"bloqueante":p.get("bloqueante",False),"status":"ABERTA" if p.get("status")=="ABERTA" else "RESOLVIDA"} for i,p in enumerate(manifesto.get("pendencias",[]),1)]
+    return {"schema_version": "2.0.0", "numero_processo": processo["numero_cnj"]["valor"], "data_laudo": data_laudo, "tipo_acao": valor("classe"),
             "assunto": "; ".join(assuntos) or None, "juizo": valor("orgao_julgador"), "vara": valor("orgao_julgador"),
             "subsecao": valor("subsecao"), "tribunal": valor("tribunal"), "partes": _partes(fontes),
             "perito": {"nome": None, "profissao": None, "crea": None, "crea_regional": None, "ibape": None},
@@ -110,7 +120,7 @@ def gerar(diretorio: Path) -> dict[str, Any]:
             "contrato": None, "datas_relevantes": {"contrato": None, "entrega": None, "inicio_utilizacao": None, "habite_se": None,
                 "surgimento_alegado_manifestacoes": None, "primeira_reclamacao": None, "primeira_comprovacao_documental": None,
                 "ajuizamento": None, "nomeacao": None, "vistoria": None}, "documentos": documentos, "alegacoes": alegacoes,
-            "quesitos": quesitos, "decisoes": decisoes, "conflitos": [], "pendencias": [],
+            "quesitos": quesitos, "decisoes": decisoes, "conflitos": conflitos_upstream, "pendencias": pendencias_upstream,
             "objeto_material": {"descricao": delimitacao["objeto_material"]["texto"], "natureza": "INFERIDO_TECNICAMENTE",
                                 "documento_fonte": mapa.get(delimitacao["tipo_pericia"]["documentos_fonte"][0]), "proveniencia": delimitacao["proveniencia"]},
             "eventos": eventos, "documentos_tecnicos": [mapa[d["documento_id"]] for d in fontes if d["classe_normalizada"] in {"PARECER_TECNICO_PARTE", "LAUDO_PERICIAL"}],

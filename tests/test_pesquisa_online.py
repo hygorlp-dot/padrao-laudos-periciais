@@ -14,6 +14,7 @@ class PesquisaOnlineTest(unittest.TestCase):
             self.assertTrue((Path(td)/(meta["sha256"]+".bin")).exists());self.assertEqual(verificar(meta)["status_vigencia"],"PENDENTE_VERIFICACAO")
     def test_busca_classifica_oficial_e_secundaria(self):
         class P:
+            EGRESS_CAPABILITY="LOCAL_NO_EGRESS"
             def buscar(self,q):return [{"id":"F1","url":"https://www.gov.br/ato"},{"id":"F2","url":"https://blog.example/ato"}]
         r=buscar_seguro("ato",P(),EgressPolicy(permitir_egress=True));self.assertEqual(r["status"],"CONCLUIDA");self.assertTrue(r["resultados"][0]["oficial"]);self.assertEqual(r["resultados"][1]["status_uso"],"APENAS_DESCOBERTA")
     def test_contradicao_revogada_e_sucessora(self):
@@ -22,6 +23,7 @@ class PesquisaOnlineTest(unittest.TestCase):
     def test_timeout_sem_rede_e_erros_http(self):
         for erro,status in ((TimeoutError(),"TIMEOUT"),(OSError(),"SEARCH_PROVIDER_INDISPONIVEL"),(RuntimeError("HTTP 404"),"ERRO_PROVIDER"),(RuntimeError("HTTP 500"),"ERRO_PROVIDER")):
             class P:
+                EGRESS_CAPABILITY="LOCAL_NO_EGRESS"
                 def buscar(self,q,e=erro):raise e
             self.assertEqual(buscar_seguro("consulta",P(),EgressPolicy(permitir_egress=True))["status"],status)
     def test_cache_valido_e_expirado(self):
