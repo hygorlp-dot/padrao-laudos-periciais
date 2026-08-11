@@ -1,0 +1,4 @@
+interface:
+  display_name: "Repository Safety Gate"
+  short_description: "Executa os gates do Core Pericial congelado"
+  default_prompt: "Mapeie o impacto da alteração e execute o Repository Safety Gate aplicável."
