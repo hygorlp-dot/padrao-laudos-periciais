@@ -7,7 +7,7 @@ import unicodedata
 from scripts.auditoria_pericial.grounding import auditar_claim
 from scripts.motor_vicios.auditar import comparar_medicao,texto_quantitativo
 
-TIPO_CLAIM = {"MANIFESTACAO_TECNICA": "MANIFESTACAO_TECNICA", "INFERENCIA_TECNICA": "INFERENCIA_TECNICA", "ORIGEM": "ORIGEM", "CONCLUSAO_DE_QT": "CONCLUSAO_DE_QT", "REPARABILIDADE": "REPARABILIDADE"}
+TIPO_CLAIM = {"MANIFESTACAO_TECNICA": "MANIFESTACAO_TECNICA", "INFERENCIA_TECNICA": "INFERENCIA_TECNICA", "ORIGEM": "ORIGEM", "CONCLUSAO_DE_QT": "CONCLUSAO_DE_QT", "REPARABILIDADE": "REPARABILIDADE", "CONTEUDO_PROCESSUAL":"FATO_PROCESSUAL"}
 
 
 def _n(texto):
@@ -16,10 +16,19 @@ def _n(texto):
 
 def auditar_grounding_redacao(redacao, motor_final):
     final = motor_final.get("analise_final", motor_final)
-    catalogo = final.get("catalogo_evidencias", [])
+    claims_motor=motor_final.get("claims_finais",[])
+    audits_motor={a.get("claim_id"):a for a in motor_final.get("grounding_final",[])}
+    catalogo = final.get("catalogo_evidencias", [])+motor_final.get("catalogo_processual",[])
     por_id = {e.get("id"): e for e in catalogo}
     saida = []
     for claim in redacao.get("claims", []):
+        equivalentes={"MANIFESTACAO_TECNICA":{"MANIFESTACAO_TECNICA","CONSTATACAO_DE_VISTORIA"},"INFERENCIA_TECNICA":{"INFERENCIA_TECNICA","CAUSA","MECANISMO"},"ORIGEM":{"ORIGEM","CRITICIDADE","VICIO_CONSTRUTIVO","CONSTATACAO_DE_VISTORIA","INFERENCIA_TECNICA"},"CONCLUSAO_DE_QT":{"CONCLUSAO_DE_QT","INFERENCIA_TECNICA"},"REPARABILIDADE":{"REPARABILIDADE","ORCAMENTO"}}
+        relacionados=[c for c in claims_motor if c.get("tipo") in equivalentes.get(claim.get("tipo"),{claim.get("tipo")}) and (set(claim.get("pat_ids",[])) & {c.get("patologia")} or set(claim.get("qt_ids",[])) & {c.get("questao")})]
+        auditados=[audits_motor[c["id"]] for c in relacionados if c.get("id") in audits_motor]
+        if auditados:
+            veredito="GROUNDED" if all(a.get("veredito")=="GROUNDED" for a in auditados) else next((a.get("veredito") for a in auditados if a.get("veredito")!="GROUNDED"),"UNVERIFIABLE")
+            saida.append({"claim_id":claim["id"],"claim_red_id":claim["id"],"tipo":claim["tipo"],"natureza":claim["natureza"],"saliencia":claim["materialidade"],"texto":claim["texto_semantico"],"evidencias":sorted({e for a in auditados for e in a.get("evidencias",[])}),"veredito":veredito,"componente":"TECNICO","auditoria_independente":"NAO","justificativa_resumida":"Derivado de claims finais do Motor auditadas contra evidência primária.","remediacao":"Manter" if veredito=="GROUNDED" else "Reduzir, ressalvar ou remover."})
+            continue
         ids = sum((claim.get(k, []) for k in ("obs_ids", "med_ids", "fot_ids", "doc_ids", "nor_ids", "res_ids", "con_ids")), [])
         rel = [por_id[i] for i in ids if i in por_id]
         tipo = TIPO_CLAIM.get(claim["tipo"], "INFERENCIA_TECNICA")
@@ -139,9 +148,9 @@ def auditar_laudo_semantico(laudo, motor_final):
                 add("QUESITO_SEM_RESPOSTA_TECNICA", q.get("id"), "R: resposta objetiva", resposta_q)
             for campo in ("id", "numero_original", "texto_integral"):
                 if not q.get(campo): add("QUESITO_INCOMPLETO", q.get("id"), campo, q.get(campo))
-            if not q.get("referencias_secoes"): add("QUESITO_SEM_REFERENCIA_TECNICA", q.get("id"), "seção técnica", [])
+            if q.get("pertinencia") != "MATERIA_JURIDICA" and not q.get("referencias_secoes"): add("QUESITO_SEM_REFERENCIA_TECNICA", q.get("id"), "seção técnica", [])
             fundamentos = [x.get("conclusao") for x in final.get("questoes_saneadas", []) if x.get("id") in q.get("qt_ids", []) and x.get("conclusao")]
-            if fundamentos and not any(_n(f) in _n(resposta_q) for f in fundamentos):
+            if fundamentos and not all(_n(f) in _n(resposta_q) for f in fundamentos):
                 add("QUESITO_CRIA_CONCLUSAO_NOVA", q.get("id"), fundamentos, resposta_q)
     for pat in pats.values():
         if pat.get("elegibilidade_orcamento") == "ELEGIVEL_ORCAMENTO_VICIO" and not any(i.get("pat_id") == pat["id"] for i in laudo.get("orcamento", {}).get("itens", [])):

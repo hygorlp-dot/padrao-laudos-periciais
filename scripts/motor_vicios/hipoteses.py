@@ -34,7 +34,9 @@ def _independentes(ids,catalogo):
 def gerar(manifestacao,man_id,evidencias=None,ausentes=None,inicio=1,*,sistema=None,catalogo=None,normas=None):
     catalogo=catalogo or [];saida=[]
     if capacidade_causal(sistema)["nivel_de_capacidade"]=="MOTOR_CAUSAL_NAO_IMPLEMENTADO":return saida
-    for i,hip in enumerate(candidatos(sistema,manifestacao),inicio):
+    man_num=int(man_id.split("-",1)[1]) if man_id.split("-",1)[1].isdigit() else inicio
+    for ordem,hip in enumerate(candidatos(sistema,manifestacao),1):
+        i=man_num*100+ordem
         mec,causa,requeridos,_=hip;favor,contra,cobertos=relacionar_evidencias(catalogo,hip) if catalogo else ([],[],[]);fi=_independentes(favor,catalogo);ci=_independentes(contra,catalogo);cobertura=len(set(cobertos))/max(1,len(requeridos))
         if ci>=1 and not fi:status="AFASTADA";comp="INCOMPATIVEL"
         elif ci and fi:status="POSSIVEL";comp="PARCIALMENTE_COMPATIVEL"

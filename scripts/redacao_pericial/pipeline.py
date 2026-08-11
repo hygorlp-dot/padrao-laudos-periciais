@@ -20,7 +20,7 @@ def _proveniencia(valor):
         if isinstance(item, str) and item.split("-", 1)[0] in {"ALG", "DOC", "OBS", "MED", "FOT", "NOR", "RES", "CON"}: encontrados.append(item)
         elif isinstance(item, dict):
             for chave, dado in item.items():
-                if chave in {"proveniencia", "evidencias", "fontes", "documentos", "ids"}: visitar(dado)
+                if chave in {"proveniencia", "evidencias", "fontes", "documentos", "documentos_fonte", "ids"}: visitar(dado)
         elif isinstance(item, list):
             for dado in item: visitar(dado)
     visitar(valor)
@@ -40,8 +40,10 @@ def _acrescentar_claims_globais(redacao, plano, delimitacao, final, quesitos, or
             "obs_ids": por("OBS-"), "med_ids": por("MED-"), "fot_ids": por("FOT-"), "nor_ids": por("NOR-"), "res_ids": por("RES-"), "con_ids": por("CON-"),
             "confianca": "ALTA", "natureza": "INTERPRETIVE", "materialidade": material})
         contador += 1
-    for secao, chave, tipo in (("1.4", "sintese_processual", "MANIFESTACAO_TECNICA"), ("1.4", "tema_controvertido", "CONCLUSAO_DE_QT"), ("1.5", "objeto", "MANIFESTACAO_TECNICA"), ("1.6", "objetivo", "CONCLUSAO_DE_QT")):
-        add(secao, plano.get(chave), tipo, _proveniencia(delimitacao.get(chave)))
+    for secao, chave, fonte_chave, tipo in (("1.4", "sintese_processual", "sintese_processual", "CONTEUDO_PROCESSUAL"), ("1.4", "tema_controvertido", "tema_controvertido", "CONTEUDO_PROCESSUAL"), ("1.5", "objeto", "objeto_material", "CONTEUDO_PROCESSUAL"), ("1.6", "objetivo", "objetivo_pericial", "CONTEUDO_PROCESSUAL")):
+        fonte=delimitacao.get(fonte_chave)
+        if fonte_chave=="sintese_processual" and not fonte:fonte=delimitacao.get("controversia_processual")
+        add(secao, plano.get(chave), tipo, _proveniencia(fonte))
     for secao, chave, tipo in (("2.1", "metodologia", "INFERENCIA_TECNICA"), ("3.1", "dados_diligencia", "MANIFESTACAO_TECNICA"), ("3.2", "condicoes_gerais", "MANIFESTACAO_TECNICA")):
         valor = final.get(chave) or (final.get("vistoria") if chave == "dados_diligencia" else None)
         if valor:
@@ -52,25 +54,34 @@ def _acrescentar_claims_globais(redacao, plano, delimitacao, final, quesitos, or
     add("4.3", resposta_tema, "CONCLUSAO_DE_QT", todas, qts=qts, pats=list(catalogo_pat))
     for grupo in quesitos:
         for q in grupo["itens"]:
-            fontes = list(dict.fromkeys(e for pat_id in q.get("pat_ids", []) for e in catalogo_pat.get(pat_id, []))) or todas
+            fontes = list(dict.fromkeys(e for pat_id in q.get("pat_ids", []) for e in catalogo_pat.get(pat_id, [])))
             add("5", q["resposta"], "CONCLUSAO_DE_QT", fontes, qts=q.get("qt_ids", []), ques=[q["id"]] if q.get("id") else [], pats=q.get("pat_ids", []))
     for item in orcamento["itens"]:
         add("6", item.get("descricao") or item.get("servico"), "REPARABILIDADE", catalogo_pat.get(item.get("pat_id"), []), pats=[item.get("pat_id")])
 
 
 def _grupos_quesitos(delimitacao, final):
-    conclusoes = {q.get("id"): q.get("conclusao") for q in final.get("questoes_saneadas", [])}
+    qts_finais = {q.get("id"): q for q in final.get("questoes_saneadas", [])}
     grupos = {}
     for q in delimitacao.get("quesitos", []):
         origem = q.get("origem") or q.get("parte") or "OUTROS"
-        qt_ids = q.get("questoes_tecnicas_relacionadas", q.get("questoes_tecnicas", []))
-        resposta = q.get("resposta") or next((conclusoes.get(i) for i in qt_ids if conclusoes.get(i)), None)
+        qt_ids = q.get("questoes_tecnicas_relacionadas", [])
+        partes=[]
+        for qid in qt_ids:
+            conclusao=qts_finais.get(qid,{}).get("conclusao")
+            partes.append(f"{qid}: {conclusao.strip()}" if isinstance(conclusao,str) and conclusao.strip() else f"{qid}: [INFORMAÇÃO NECESSÁRIA: dimensão técnica não saneada]")
+        resposta = q.get("resposta") or " ".join(partes)
+        juridico = q.get("materia_juridica_associada")
+        if q.get("pertinencia") == "MATERIA_JURIDICA":
+            resposta = "Matéria jurídica reservada à apreciação do Juízo."
+        elif q.get("pertinencia") == "PERTINENTE_PARCIAL" and juridico:
+            resposta = (resposta.strip() + " " if resposta else "") + f"Quanto à parcela jurídica ({juridico}), a apreciação compete ao Juízo."
         resposta = "R: " + resposta.strip() if isinstance(resposta, str) and resposta.strip() else "R: [INFORMAÇÃO NECESSÁRIA: resposta técnica não disponível no estado saneado]"
         grupos.setdefault(origem, []).append({
             "id": q.get("id"), "numero_original": q.get("numero_original"),
             "texto_integral": q.get("texto_integral") or q.get("texto"), "resposta": resposta,
-            "qt_ids": qt_ids, "pat_ids": q.get("patologias_relacionadas", []),
-            "referencias_secoes": q.get("referencias_secoes", []),
+            "qt_ids": qt_ids, "pat_ids": sorted({pid for qid in qt_ids for pid in qts_finais.get(qid,{}).get("patologias",[])}),
+            "referencias_secoes": q.get("secoes_laudisticas_previstas", []), "pertinencia": q.get("pertinencia"),
         })
     ordem = {"JUIZO": 0, "JUÍZO": 0, "PARTE_AUTORA": 1, "AUTORA": 1, "PARTE_RE": 2, "PARTE_RÉ": 2, "RE": 2, "RÉ": 2}
     return [{"origem": origem, "itens": itens} for origem, itens in sorted(grupos.items(), key=lambda x: (ordem.get(x[0].upper(), 9), x[0])) if itens]
@@ -188,7 +199,15 @@ def executar_pipeline_redacao(processo, delimitacao, motor):
     corrigida, correcoes = autocorrigir(inicial, estilo)
     quesitos = _grupos_quesitos(delimitacao, final); orcamento = _orcamento(final)
     _acrescentar_claims_globais(corrigida, plano, delimitacao, final, quesitos, orcamento)
-    grounding = auditar_grounding_redacao(corrigida, final)
+    ids_processuais=sorted({i for chave in ("sintese_processual","controversia_processual","tema_controvertido","objeto_material","objetivo_pericial") for i in _proveniencia(delimitacao.get(chave)) if i.startswith("DOC-")})
+    ids_documentos_reais=set()
+    for documento in processo.get("documentos",[]):
+        if documento.get("status") != "PRESENTE": continue
+        if documento.get("id"): ids_documentos_reais.add(documento["id"])
+        origem=str(documento.get("observacoes") or "").removeprefix("Origem estrutural: ").strip()
+        if origem.startswith("DOC-"): ids_documentos_reais.add(origem)
+    catalogo_processual=[{"id":i,"tipo":"DOCUMENTO","classe_probatoria":"EVIDENCIA_PRIMARIA","proveniencia":[i],"aspectos_suportados":["FATO_PROCESSUAL"],"aspectos_contraditos":[],"acessivel":True} for i in ids_processuais if i in ids_documentos_reais]
+    grounding = auditar_grounding_redacao(corrigida, {**motor,"catalogo_processual":catalogo_processual})
     fidelidade = auditar_fidelidade(corrigida, final)
     provisoria = _montar_laudo(processo, delimitacao, final, plano, corrigida, "BLOQUEADO_PARA_LAUDO", grounding, fidelidade, estilo + redundancia, correcoes)
     semanticos = auditar_laudo_semantico(provisoria, final)

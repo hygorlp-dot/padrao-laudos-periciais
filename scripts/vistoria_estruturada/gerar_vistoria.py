@@ -60,9 +60,12 @@ def _numero(v):
     try:return float(str(v).replace(",","."))
     except (ValueError,TypeError):return None
 
+def _linguagem_declarativa(texto):
+    return bool(re.search(r"(?i)\b(?:morador|autor(?:a)?|r[eé]u|r[eé]|propriet[aá]ri[oa]|assistente)\s+(?:informou|declarou|relatou|relata|disse|afirmou)\b|\bsegundo\s+(?:o|a)\b|\bconforme\s+relatado\b",texto or ""))
+
 def gerar(inventario,plano=None,numero_processo=None):
     fotos=[];videos=[];docs=[];medicoes=[];observacoes=[];declaracoes=[];limitacoes=[];atividades=[];ensaios=[];equivalentes={};planejadas=(plano or {}).get("fotografias",[])
-    for a in inventario["arquivos"]:
+    for a in sorted(inventario["arquivos"],key=lambda x:x.get("id","")):
         meta=a.get("metadados",{})
         if a["categoria"]=="FOTOGRAFIA":
             explicitos=[p for p in planejadas if p["id"].casefold() in (a["nome"]+" "+a["caminho_relativo"]).casefold()]
@@ -70,7 +73,10 @@ def gerar(inventario,plano=None,numero_processo=None):
             plano_foto=next((p for p in planejadas if melhor and p["id"]==melhor["id"]),{})
             fotos.append({"id":f"FOT-{len(fotos)+1:03d}","arquivo_inventario":a["id"],"fotografia_planejada":melhor["id"] if melhor else None,"finalidade_planejada":plano_foto.get("finalidade"),"descricao_visual_observada":None,"estado_interpretacao":"NAO_INTERPRETADA","candidatos_planejamento":pontos,"metodo_associacao":"ID_PLANEJADO_EXPLICITO" if explicitos else "ASSOCIACAO_AMBIGUA" if ambiguo else "AFINIDADE_SEMANTICA_NOME_FINALIDADE" if melhor else "SEM_ASSOCIACAO_SEGURA","data_hora":meta.get("data_hora_captura"),"coordenadas":meta.get("coordenadas"),"orientacao":meta.get("orientacao"),"ambiente":plano_foto.get("ambiente"),"sistema":plano_foto.get("sistema"),"descricao_objetiva":None,"atividade":plano_foto.get("atividade"),"questoes":plano_foto.get("questoes_tecnicas",[]),"quesitos":plano_foto.get("quesitos",[]),"alegacoes":plano_foto.get("alegacoes",[]),"confianca":{"nivel":"BAIXA" if ambiguo or not melhor else "MEDIA"},"proveniencia":[a["id"]]})
         elif a["categoria"]=="VIDEO":videos.append({"id":f"VID-{len(videos)+1:03d}","arquivo_inventario":a["id"],"data_hora":meta.get("data_hora_captura"),"ambiente":None,"atividade":None,"questoes":[],"alegacoes":[],"proveniencia":[a["id"]]})
-        elif a["categoria"]=="DOCUMENTO":docs.append({"id":f"DOC-VIS-{len(docs)+1:03d}","arquivo_inventario":a["id"],"descricao":a["nome"],"proveniencia":[a["id"]]})
+        elif a["categoria"]=="DOCUMENTO":
+            planejado=meta.get("documento_planejado")
+            item=next((p for p in (plano or {}).get("documentos_a_solicitar",[]) if p.get("id")==planejado),{})
+            docs.append({"id":f"DOC-VIS-{len(docs)+1:03d}","arquivo_inventario":a["id"],"documento_planejado":planejado if item else None,"descricao":a["nome"],"questoes":item.get("questoes_tecnicas",[]),"proveniencia":[a["id"]]})
         for r in _linhas(a):
             tipo=str(r.get("tipo") or r.get("natureza") or "").upper();valor=_numero(r.get("valor"));descricao=r.get("descricao") or r.get("texto")
             if valor is not None and r.get("grandeza") and r.get("unidade"):
@@ -79,11 +85,14 @@ def gerar(inventario,plano=None,numero_processo=None):
             if tipo in {"ATV","ATIVIDADE"} and descricao:
                 planejada=next((x for x in (plano or {}).get("atividades",[]) if x.get("id")==r.get("atividade_planejada")),{})
                 atividades.append({"id":f"ATV-EXEC-{len(atividades)+1:03d}","atividade_planejada":r.get("atividade_planejada"),"descricao":descricao,"status":r.get("status","EXECUTADO"),"questoes":planejada.get("questoes_tecnicas",[]),"evidencias":[a["id"]],"impacto_nao_execucao":None});continue
-            if tipo in {"ENS","ENSAIO"} and descricao:ensaios.append({"id":f"ENS-{len(ensaios)+1:03d}","ensaio_planejado":r.get("ensaio_planejado"),"nome":descricao,"status":r.get("status","EXECUTADO"),"resultado":r.get("resultado"),"unidade":r.get("unidade"),"metodo":r.get("metodo"),"questoes":[],"proveniencia":[a["id"]]});continue
-            if r.get("substitui_planejado") and r.get("justificativa_equivalencia"):equivalentes.setdefault(r["substitui_planejado"],[]).append({"id":a["id"],"justificativa":r["justificativa_equivalencia"]})
+            if tipo in {"ENS","ENSAIO"} and descricao:
+                planejado=r.get("ensaio_planejado");item=next((p for p in (plano or {}).get("ensaios",[]) if p.get("id")==planejado),{})
+                ensaios.append({"id":f"ENS-{len(ensaios)+1:03d}","ensaio_planejado":planejado if item else None,"nome":descricao,"status":r.get("status","EXECUTADO"),"resultado":r.get("resultado"),"unidade":r.get("unidade"),"metodo":r.get("metodo"),"questoes":item.get("questoes_tecnicas",[]),"proveniencia":[a["id"]]});continue
             if tipo.startswith("DECLAR") and descricao:declaracoes.append({"id":f"DEC-VIS-{len(declaracoes)+1:03d}","natureza":r.get("natureza_declaracao","DECLARADO_POR_TERCEIRO"),"declarante":r.get("declarante"),"texto_original":descricao,"questoes":[],"alegacoes":[],"proveniencia":[a["id"]]})
             elif tipo.startswith("LIMIT") and descricao:limitacoes.append({"id":f"LIM-{len(limitacoes)+1:03d}","descricao":descricao,"campo_afetado":r.get("campo_afetado"),"consequencia_tecnica":r.get("consequencia","Extensão da análise limitada ao campo efetivamente acessível.")})
             elif tipo in {"OBS","OBSERVACAO","CONSTATAÇÃO","CONSTATACAO"} and descricao:
+                if _linguagem_declarativa(descricao):
+                    declaracoes.append({"id":f"DEC-VIS-{len(declaracoes)+1:03d}","natureza":"DECLARADO_POR_TERCEIRO","declarante":r.get("declarante"),"texto_original":descricao,"questoes":[],"alegacoes":[],"proveniencia":[a["id"]]});continue
                 vinculos=_vinculos(descricao,plano,r.get("atividade_planejada"))
                 if vinculos["atividade"] and not any(x.get("atividade_planejada")==vinculos["atividade"] for x in atividades):
                     atividades.append({"id":f"ATV-EXEC-{len(atividades)+1:03d}","atividade_planejada":vinculos["atividade"],"descricao":"Atividade documentada por observação de campo rastreável.","status":"EXECUTADO","questoes":vinculos["questoes"],"evidencias":[a["id"]],"impacto_nao_execucao":None})
@@ -93,25 +102,31 @@ def gerar(inventario,plano=None,numero_processo=None):
                 if polaridades=={"NEGADO"}:resultado="NAO_CONSTATADO_NA_VISTORIA"
                 elif polaridades and polaridades<={"INCERTO","HIPOTETICO"}:resultado="INCONCLUSIVO"
                 observacoes.append({"id":f"OBS-{len(observacoes)+1:03d}","local":r.get("local"),"ambiente":r.get("ambiente"),"sistema":r.get("sistema"),"elemento":r.get("elemento"),"descricao_objetiva":descricao,"manifestacao":r.get("manifestacao") or (proposicoes[0]["manifestacao"] if len(proposicoes)==1 else None),"resultado":resultado,"campo_examinado":r.get("campo_examinado","Campo descrito na anotação estruturada"),"metodo":[r.get("metodo","REGISTRO_DE_CAMPO")],"fotografias":[],"medicoes":[],"alegacoes":vinculos["alegacoes"],"questoes":vinculos["questoes"],"quesitos":vinculos["quesitos"],"confianca":{"nivel":"MEDIA"},"proveniencia":[a["id"]],"limitacoes":[],"aspectos_suportados":aspectos})
+    relacoes=[]
     for obs in observacoes:
         def comp(item):
-            return bool(obs.get("ambiente") and item.get("ambiente")==obs.get("ambiente")) or item.get("proveniencia")==obs.get("proveniencia") or bool(set(item.get("questoes",[]))&set(obs.get("questoes",[])))
+            explicito=obs["id"] in item.get("observacoes",[])
+            qts=bool(set(item.get("questoes",[]))&set(obs.get("questoes",[])))
+            sistema=bool(obs.get("sistema") and item.get("sistema") and item.get("sistema")==obs.get("sistema"))
+            return explicito or (qts and sistema)
         obs["medicoes"]=sorted(m["id"] for m in medicoes if comp(m));obs["fotografias"]=sorted(f["id"] for f in fotos if comp(f))
+        for eid in obs["medicoes"]+obs["fotografias"]:
+            item=next(x for x in medicoes+fotos if x["id"]==eid);relacoes.append({"observacao":obs["id"],"evidencia":eid,"motivo":"VINCULO_EXPLICITO" if obs["id"] in item.get("observacoes",[]) else "QT_E_SISTEMA_CONVERGENTES"})
         for med in medicoes:
             if med["id"] in obs["medicoes"]:med["observacoes"]=sorted(set(med["observacoes"]+[obs["id"]]))
     executados={"FOTOGRAFIA":{f["fotografia_planejada"]:f["id"] for f in fotos if f["fotografia_planejada"]},"MEDICAO":{m["medicao_planejada"]:m["id"] for m in medicoes if m["medicao_planejada"]},"ATIVIDADE":{a["atividade_planejada"]:a["id"] for a in atividades if a["atividade_planejada"]},"ENSAIO":{},"DOCUMENTO":{}}
     for e in ensaios:
-        candidatos=[p for p in (plano or {}).get("ensaios",[]) if e.get("ensaio_planejado")==p["id"] or afinidade(e["nome"],p.get("nome") or p.get("descricao") or "")>0]
-        if len(candidatos)==1:p=candidatos[0];e["ensaio_planejado"]=p["id"];e["questoes"]=p.get("questoes_tecnicas",[]);executados["ENSAIO"][p["id"]]=e["id"]
+        p=next((p for p in (plano or {}).get("ensaios",[]) if e.get("ensaio_planejado")==p["id"]),None)
+        if p:executados["ENSAIO"][p["id"]]=e["id"]
     for d in docs:
-        candidatos=[p for p in (plano or {}).get("documentos_a_solicitar",[]) if afinidade(d["descricao"],p.get("descricao",""))>0]
-        if len(candidatos)==1:p=candidatos[0];d["documento_planejado"]=p["id"];d["questoes"]=p.get("questoes_tecnicas",[]);executados["DOCUMENTO"][p["id"]]=d["id"]
+        p=next((p for p in (plano or {}).get("documentos_a_solicitar",[]) if d.get("documento_planejado")==p["id"]),None)
+        if p:executados["DOCUMENTO"][p["id"]]=d["id"]
     cobertura=[]
     if plano:
         for tipo,chave in (("ATIVIDADE","atividades"),("MEDICAO","medicoes"),("FOTOGRAFIA","fotografias"),("ENSAIO","ensaios"),("DOCUMENTO","documentos_a_solicitar")):
             for x in plano.get(chave,[]):
-                pid=x.get("id") if isinstance(x,dict) else str(x);achado=executados[tipo].get(pid);eq=equivalentes.get(pid,[]);status="EXECUTADO" if achado else "SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE" if eq else "NAO_EXECUTADO";cobertura.append({"tipo":tipo,"planejado":pid,"status":status,"executado":[achado] if achado else [],"evidencia_equivalente":[e["id"] for e in eq],"justificativa_equivalencia":"; ".join(e["justificativa"] for e in eq) or None,"impacto":None if achado or eq else "Ausência ainda não avaliada tecnicamente."})
-    return {"schema_version":"2.0.0","numero_processo":numero_processo or "0000000-00.0000.0.00.0000","status":"VISTORIA_ESTRUTURADA" if inventario["arquivos"] else "AGUARDANDO_DADOS_DE_VISTORIA","data":None,"hora_inicio":None,"hora_fim":None,"local":None,"coordenadas":None,"condicoes":{"clima":None,"temperatura":None,"umidade_relativa":None,"campo_examinado":None},"participantes":[],"atividades_executadas":atividades,"equipamentos":[],"limitacoes":limitacoes,"fotografias":fotos,"videos":videos,"medicoes":medicoes,"ensaios":ensaios,"documentos_obtidos":docs,"declaracoes":declaracoes,"observacoes":observacoes,"cobertura":cobertura,"inventario_fonte":"inventario-vistoria.json","proveniencia":["inventario-vistoria.json"]}
+                pid=x.get("id") if isinstance(x,dict) else str(x);achado=executados[tipo].get(pid);status="EXECUTADO" if achado else "NAO_EXECUTADO";cobertura.append({"tipo":tipo,"planejado":pid,"status":status,"executado":[achado] if achado else [],"evidencia_equivalente":[],"equivalencia":None,"justificativa_equivalencia":None,"impacto":None if achado else "Ausência ainda não avaliada tecnicamente."})
+    return {"schema_version":"2.0.0","numero_processo":numero_processo or "0000000-00.0000.0.00.0000","status":"VISTORIA_ESTRUTURADA" if inventario["arquivos"] else "AGUARDANDO_DADOS_DE_VISTORIA","data":None,"hora_inicio":None,"hora_fim":None,"local":None,"coordenadas":None,"condicoes":{"clima":None,"temperatura":None,"umidade_relativa":None,"campo_examinado":None},"participantes":[],"atividades_executadas":atividades,"equipamentos":[],"limitacoes":limitacoes,"fotografias":fotos,"videos":videos,"medicoes":medicoes,"ensaios":ensaios,"documentos_obtidos":docs,"declaracoes":declaracoes,"observacoes":observacoes,"relacoes_evidencia":relacoes,"cobertura":cobertura,"inventario_fonte":"inventario-vistoria.json","proveniencia":["inventario-vistoria.json"]}
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument("inventario",type=Path);p.add_argument("--plano",type=Path);p.add_argument("--processo");p.add_argument("--saida",type=Path);a=p.parse_args();inv=json.loads(a.inventario.read_text(encoding="utf-8"));pl=json.loads(a.plano.read_text(encoding="utf-8")) if a.plano else None;out=a.saida or a.inventario.parent/"vistoria.json";out.write_text(json.dumps(gerar(inv,pl,a.processo),ensure_ascii=False,indent=2)+"\n",encoding="utf-8",newline="\n");print(out);return 0
 if __name__=="__main__":raise SystemExit(main())
