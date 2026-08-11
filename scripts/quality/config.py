@@ -105,7 +105,7 @@ def validate_configuration(root: Path) -> list[dict]:
                 findings.append(_finding(invariant["id"], boundary_id, "registry symmetry", "invariante não declarado pelo boundary", "P1"))
     if lock.get("core_base_sha") == FROZEN_CORE_SHA:
         from .historical_mutations import load_mutants, validate_historical_registry, validate_mutant_definitions
-        from .metrics import analyze_complexity, validate_quality_baseline
+        from .metrics import analyze_complexity, validate_complexity_baseline
         from .schema_versions import validate_schema_version_matrix
         required = ("historical-bugs.json", "historical-mutants.json", "schema-versions.json", "quality-baseline.json")
         for name in required:
@@ -123,6 +123,6 @@ def validate_configuration(root: Path) -> list[dict]:
             baseline = json.loads((root / "config/quality-baseline.json").read_text(encoding="utf-8"))
             paths = [root / item["path"] for item in baseline.get("hotspots", [])]
             complexity = analyze_complexity(paths, base=root) if paths and all(path.is_file() for path in paths) else []
-            for item in validate_quality_baseline(baseline, baseline.get("coverage", {}), complexity):
+            for item in validate_complexity_baseline(baseline, complexity):
                 findings.append(_finding("QUALITY_NON_REGRESSION", "QUALITY_GATE", item["code"], str(item), "P1"))
     return findings

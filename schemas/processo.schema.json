@@ -34,7 +34,7 @@
   ],
   "additionalProperties": false,
   "properties": {
-    "schema_version": { "type": "string", "minLength": 1 },
+    "schema_version": { "const": "2.0.0" },
     "numero_processo": { "$ref": "#/$defs/numeroProcesso" },
     "data_laudo": { "type": ["string", "null"], "format": "date" },
     "tipo_acao": { "type": ["string", "null"] },

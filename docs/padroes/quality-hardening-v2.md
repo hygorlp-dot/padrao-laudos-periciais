@@ -26,8 +26,9 @@ aprovados; não cria regra pericial nem altera semântica funcional.
 
 ## Cobertura e complexidade
 
-A cobertura mede módulos críticos com branch coverage. O baseline inicial é
-84,545% de linhas e 72,788% de branches. A complexidade é medida por AST e
+A cobertura mede módulos críticos com branch coverage no escopo estável da
+regressão do Core, sem autocobertura dos testes do próprio gate. O baseline é
+84,493% de linhas e 72,654% de branches. A complexidade é medida por AST e
 mantida como non-regression nos cinco maiores hotspots. Nenhum hotspot foi
 refatorado nesta fase: o risco de alterar o Core congelado excedeu o benefício
 de uma refatoração misturada ao hardening.

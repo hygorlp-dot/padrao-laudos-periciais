@@ -41,14 +41,33 @@ def parse_coverage_totals(report: dict) -> dict:
     return {"line_percent": round(line, 3), "branch_percent": round(branch, 3)}
 
 
-def validate_quality_baseline(baseline: dict, coverage: dict, complexity: list[dict]) -> list[dict]:
+def validate_quality_baseline(
+    baseline: dict,
+    coverage: dict | None,
+    complexity: list[dict],
+    *,
+    duration_seconds: float | None = None,
+) -> list[dict]:
     findings: list[dict] = []
-    for key, code in (("line_percent", "COVERAGE_LINE_REGRESSION"), ("branch_percent", "COVERAGE_BRANCH_REGRESSION")):
-        if float(coverage.get(key, 0)) < float(baseline.get("coverage", {}).get(key, 0)):
-            findings.append({"code": code, "severity": "P1", "expected": baseline["coverage"][key], "actual": coverage.get(key)})
+    if coverage is None:
+        findings.append({"code": "COVERAGE_MEASUREMENT_MISSING", "severity": "P1"})
+    else:
+        for key, code in (("line_percent", "COVERAGE_LINE_REGRESSION"), ("branch_percent", "COVERAGE_BRANCH_REGRESSION")):
+            if float(coverage.get(key, 0)) < float(baseline.get("coverage", {}).get(key, 0)):
+                findings.append({"code": code, "severity": "P1", "expected": baseline["coverage"][key], "actual": coverage.get(key)})
     current = {(item["path"], item["function"]): item["complexity"] for item in complexity}
     for expected in baseline.get("hotspots", []):
         key = (expected["path"], expected["function"])
         if key not in current or current[key] > expected["complexity"]:
             findings.append({"code": "HOTSPOT_COMPLEXITY_REGRESSION", "severity": "P1", "expected": expected, "actual": current.get(key)})
+    limit = baseline.get("full_gate_max_seconds")
+    if duration_seconds is not None and limit is not None and duration_seconds > float(limit):
+        findings.append({"code": "FULL_GATE_DURATION_REGRESSION", "severity": "P1", "expected": limit, "actual": duration_seconds})
     return findings
+
+
+def validate_complexity_baseline(baseline: dict, complexity: list[dict]) -> list[dict]:
+    return [
+        item for item in validate_quality_baseline(baseline, baseline.get("coverage", {}), complexity)
+        if item["code"] == "HOTSPOT_COMPLEXITY_REGRESSION"
+    ]

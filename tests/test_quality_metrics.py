@@ -37,6 +37,20 @@ def test_repository_hotspot_baseline_matches_current_measurement():
     assert findings == []
 
 
+def test_quality_baseline_requires_fresh_coverage_measurement():
+    baseline = {"coverage":{"line_percent":80.0,"branch_percent":70.0},"hotspots":[]}
+    findings = validate_quality_baseline(baseline, None, [])
+    assert {item["code"] for item in findings} == {"COVERAGE_MEASUREMENT_MISSING"}
+
+
+def test_quality_baseline_rejects_full_gate_duration_regression():
+    baseline = {"coverage":{"line_percent":80.0,"branch_percent":70.0},"hotspots":[],"full_gate_max_seconds":30.0}
+    findings = validate_quality_baseline(
+        baseline, {"line_percent":80.0,"branch_percent":70.0}, [], duration_seconds=30.1
+    )
+    assert {item["code"] for item in findings} == {"FULL_GATE_DURATION_REGRESSION"}
+
+
 def test_metrics_module_uses_ast_not_source_execution():
     tree = ast.parse("def f(x):\n    return x\n")
     assert tree.body[0].name == "f"

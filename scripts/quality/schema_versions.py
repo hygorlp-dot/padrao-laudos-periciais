@@ -1,6 +1,7 @@
 """Matriz mecânica dos contratos de versão e migração existentes."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
@@ -22,6 +23,15 @@ def validate_schema_version_matrix(matrix: dict, root: Path) -> list[dict]:
         schema_path = root / "schemas" / name
         if not schema_path.is_file():
             findings.append(_finding("SCHEMA_FILE_NOT_FOUND", name, str(schema_path)))
+        else:
+            try:
+                schema_doc = json.loads(schema_path.read_text(encoding="utf-8"))
+                version_contract = schema_doc.get("properties", {}).get("schema_version", {})
+                enforced = version_contract.get("const")
+                if enforced != item["current_version"]:
+                    findings.append(_finding("SCHEMA_VERSION_NOT_ENFORCED", name, f"schema={enforced!r}; matrix={item['current_version']!r}"))
+            except (OSError, json.JSONDecodeError) as exc:
+                findings.append(_finding("SCHEMA_FILE_INVALID", name, str(exc)))
         migrator = item.get("migrator")
         if migrator and not (root / migrator.split(":", 1)[0]).is_file():
             findings.append(_finding("MIGRATOR_NOT_FOUND", name, migrator))
