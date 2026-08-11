@@ -13,6 +13,16 @@
   loading, skeleton, progress, hover, press, navegação ou microinterações, ler
   `.agents/skills/design-motion-principles/SKILL.md` e
   `.agents/skills/ui-pericial/SKILL.md` antes de implementar.
+- Em mudança material, usar as Skills `engenharia-seguranca-pericial`,
+  `test-driven-development`, `systematic-debugging` e
+  `verification-before-completion`, conforme aplicáveis.
+- Cumprir e registrar nesta ordem: reprodução do bug → teste falhando →
+  causa-raiz → correção → adversarial/property tests → regressão → revisão →
+  verificação final. Falhar fechado quando um gate material não puder ser
+  demonstrado com evidência fresca.
+- Manter telemetria Superpowers desabilitada e egress negado por padrão. Não
+  enviar conteúdo pericial a ferramentas ou serviços externos sem autorização
+  expressa.
 
 ## Escopo
 
