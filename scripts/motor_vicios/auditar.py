@@ -1,5 +1,22 @@
 """Autoauditoria causal e relacional do resultado do motor."""
 import re
+from decimal import Decimal, InvalidOperation
+
+CONVERSOES={("mm","cm"):Decimal("0.1"),("cm","mm"):Decimal("10"),("m","cm"):Decimal("100"),("cm","m"):Decimal("0.01")}
+def _decimal(valor):return Decimal(str(valor).replace(",","."))
+def comparar_medicao(texto,medicao,permitir_conversao=False):
+    padrao=re.compile(r"(?<![\w.,])(\d+(?:[.,]\d+)?)\s*([a-zA-Z²³]+)\b")
+    try:esperado=_decimal(medicao["valor"]);unidade=str(medicao["unidade"]).casefold()
+    except (KeyError,InvalidOperation):return False
+    for bruto,unidade_texto in padrao.findall(texto or ""):
+        atual=_decimal(bruto);ut=unidade_texto.casefold()
+        if ut==unidade and atual==esperado:return True
+        if permitir_conversao and (ut,unidade) in CONVERSOES and atual*CONVERSOES[(ut,unidade)]==esperado:return True
+    return False
+
+def classificar_autoauditoria(achados):
+    if any(a.get("bloqueante") for a in achados):return "REPROVADO"
+    return "APROVADO_COM_RESSALVA" if achados else "APROVADO"
 
 def auditar(resultado, vistoria=None):
     achados=[]
@@ -29,8 +46,7 @@ def auditar(resultado, vistoria=None):
         for mid in p.get("medicoes",[]):
             med=next((m for m in vistoria.get("medicoes",[]) if m["id"]==mid),None)
             if not med or med.get("valor") is None:continue
-            valores=[float(x.replace(",",".")) for x in re.findall(r"(?<!\w)(\d+(?:[.,]\d+)?)\s*"+re.escape(str(med.get("unidade") or ""))+r"\b",texto,re.I)]
-            if valores and all(abs(v-float(med["valor"]))>1e-9 for v in valores):add("CONTRADICAO_MEDICAO","Valor textual do PAT diverge da medição referenciada.",[pid,mid])
+            if re.search(r"\d+(?:[.,]\d+)?\s*[a-zA-Z²³]+",texto) and not comparar_medicao(texto,med):add("CONTRADICAO_MEDICAO","Valor ou unidade textual do PAT diverge da medição referenciada.",[pid,mid])
         baixo=texto.lower()
         for oid in p.get("constatacoes",[]):
             ob=next((o for o in vistoria.get("observacoes",[]) if o["id"]==oid),None)

@@ -6,8 +6,20 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request,urlopen
 from typing import Protocol
+from dataclasses import dataclass
 
 DOMINIOS_OFICIAIS=("abnt.org.br","gov.br","dnit.gov.br","ibape-nacional.com.br","caixa.gov.br")
+PII_PADROES=(re.compile(r"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b"),re.compile(r"\b\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}\b"),re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b"),re.compile(r"\(?\d{2}\)?\s*\d{4,5}-?\d{4}"),re.compile(r"(?i)\b(?:rua|avenida|av\.|travessa|alameda|rodovia)\s+[\wÀ-ÿ ]+,?\s*\d+"),re.compile(r"(?i)\b(?:parte autora|parte ré|nos autos|processo judicial|petição inicial|dados das partes)\b"))
+@dataclass(frozen=True)
+class EgressPolicy:
+    permitir_egress: bool=False
+    autorizar_dados_caso: bool=False
+    def preparar(self,consulta):
+        if not self.permitir_egress:raise PermissionError("egress negado")
+        if any(p.search(consulta or "") for p in PII_PADROES) and not self.autorizar_dados_caso:raise PermissionError("dados de caso/PII bloqueados")
+        saneada=consulta
+        for p in PII_PADROES:saneada=p.sub("[DADO_REMOVIDO]",saneada)
+        return saneada
 def dominio_oficial(url):
     host=(urlparse(url).hostname or "").lower()
     return any(host==d or host.endswith("."+d) for d in DOMINIOS_OFICIAIS)
@@ -41,9 +53,12 @@ def buscar(consulta,provider:SearchProvider):
         x=dict(item);x["oficial"]=dominio_oficial(x.get("url",""));x["status_uso"]="CANDIDATA_OFICIAL" if x["oficial"] else "APENAS_DESCOBERTA";classificados.append(x)
     return sorted(classificados,key=lambda x:(not x["oficial"],x.get("url","")))
 
-def buscar_seguro(consulta,provider:SearchProvider):
+def buscar_seguro(consulta,provider:SearchProvider,politica=None):
     """Executa busca pública sem mascarar indisponibilidade ou erro HTTP."""
-    try:return {"status":"CONCLUIDA","consulta":consulta,"resultados":buscar(consulta,provider),"erro":None}
+    try:
+        saneada=(politica or EgressPolicy()).preparar(consulta)
+        return {"status":"CONCLUIDA","consulta":saneada,"resultados":buscar(saneada,provider),"erro":None}
+    except PermissionError as exc:return {"status":"BLOQUEADO_POR_EGRESS","consulta":None,"resultados":[],"erro":str(exc)}
     except TimeoutError as exc:return {"status":"TIMEOUT","consulta":consulta,"resultados":[],"erro":type(exc).__name__}
     except OSError as exc:return {"status":"SEARCH_PROVIDER_INDISPONIVEL","consulta":consulta,"resultados":[],"erro":type(exc).__name__}
     except Exception as exc:return {"status":"ERRO_PROVIDER","consulta":consulta,"resultados":[],"erro":type(exc).__name__}

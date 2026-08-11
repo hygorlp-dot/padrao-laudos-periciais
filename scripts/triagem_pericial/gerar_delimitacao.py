@@ -12,6 +12,8 @@ import hashlib
 import json
 from pathlib import Path
 import re
+
+def resultado_criterio(condicao):return "APROVADO" if bool(condicao) else "BLOQUEADO"
 from typing import Any
 
 try:
@@ -257,10 +259,10 @@ def gerar(diretorio: Path) -> dict[str, Any]:
         "memoria_referencial": {"fontes_disponiveis": len(modelos), "itens_recuperados": conhecimento_modelos, "status": "DISPONIVEL" if modelos else "INDISPONIVEL"},
         "conhecimento_normativo": {"fontes_disponiveis": len(normas), "itens_recuperados": conhecimento_normas, "status": "PENDENTE_VERIFICACAO_NORMATIVA" if normas else "INDISPONIVEL"},
         "autoauditoria": [
-            {"criterio": "Classificação usa múltiplas peças e não o número do processo", "resultado": "APROVADO", "observacao": ", ".join(resultado.documentos_fonte)},
+            {"criterio": "Classificação usa múltiplas peças e não o número do processo", "resultado": resultado_criterio(len(resultado.documentos_fonte)>=2), "observacao": ", ".join(resultado.documentos_fonte)},
             {"criterio": "Tema e objeto possuem fonte identificável", "resultado": "ALERTA", "observacao": "Formulação preliminar requer validação semântica final do perito."},
-            {"criterio": "Normas usadas possuem proveniência", "resultado": "APROVADO", "observacao": f"Conhecimento recuperado por ID privado: {', '.join(conhecimento_normas) or 'nenhum aplicável'}."},
-            {"criterio": "Modelos não contaminam fatos do caso", "resultado": "APROVADO", "observacao": f"Modelos recuperados apenas como experiência: {', '.join(conhecimento_modelos) or 'nenhum disponível'}."},
+            {"criterio": "Normas usadas possuem proveniência", "resultado": resultado_criterio(all(str(n).startswith("NOR-") for n in conhecimento_normas)), "observacao": f"Conhecimento recuperado por ID privado: {', '.join(conhecimento_normas) or 'nenhum aplicável'}."},
+            {"criterio": "Modelos não contaminam fatos do caso", "resultado": resultado_criterio(not any(str(d).startswith("MOD-") for d in resultado.documentos_fonte)), "observacao": f"Modelos recuperados apenas como experiência: {', '.join(conhecimento_modelos) or 'nenhum disponível'}."},
         ],
         "status": status, "proveniencia": proveniencias_gerais,
     }

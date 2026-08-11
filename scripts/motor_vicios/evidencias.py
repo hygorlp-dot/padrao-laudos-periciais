@@ -2,6 +2,7 @@
 from __future__ import annotations
 import re
 import unicodedata
+from copy import deepcopy
 
 INFERENCIAS_PROIBIDAS={"CAUSA","ORIGEM","VICIO_CONSTRUTIVO","CONFORMIDADE_NORMATIVA","REPARO_DEFINIDO","ORCAMENTO","CRITICIDADE"}
 
@@ -138,13 +139,16 @@ def consolidar_aspectos(catalogo):
         saida.append({"contexto":chave,"aspectos":sorted(aspectos),"status":"CONTRADICTED" if contradicao else "GROUNDED","evidencias":[e["id"] for e in evidencias]})
     return saida
 
-def selecionar(catalogo, *, ids=None, sistema=None, manifestacao=None,contexto=None):
+def selecionar(catalogo, *, ids=None, sistema=None, manifestacao=None,contexto=None,relacao_id=None):
     ids=set(ids or []);contexto=contexto or {"sistema":sistema,"manifestacao":manifestacao}
     saida=[]
     for e in catalogo:
-        if e["id"] in ids:saida.append(e);continue
+        if e["id"] in ids and e["tipo"] not in {"DOCUMENTO","ENSAIO"}:saida.append(deepcopy(e));continue
         if e["tipo"] in {"DOCUMENTO","ENSAIO"}:
-            assoc=pontuar_associacao(e,contexto);e["associacao"]=assoc
-            if assoc["confianca"]=="ALTA":saida.append(e)
-        elif e["tipo"]=="NORMA" and e.get("sistema") and sistema and e["sistema"]==sistema:saida.append(e)
-    return saida
+            assoc=pontuar_associacao(e,contexto)
+            if assoc["confianca"]=="ALTA":
+                relacionado=deepcopy(e)
+                relacionado["relacao_associacao"]={"relacao_id":relacao_id,"evidencia_id":e["id"],**assoc}
+                saida.append(relacionado)
+        elif e["tipo"]=="NORMA" and e.get("sistema") and sistema and e["sistema"]==sistema:saida.append(deepcopy(e))
+    return sorted(saida,key=lambda item:item["id"])
