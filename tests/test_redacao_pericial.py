@@ -39,7 +39,7 @@ def pat(identificador, situacao, origem, criticidade, conclusao, evidencia_id, *
 
 class RedacaoPericialTest(unittest.TestCase):
     def setUp(self):
-        self.processo = {"numero_processo": "PROCESSO-SINTETICO-001", "documentos_relevantes": [], "documentos": [{"id":"DOC-001","status":"PRESENTE"}]}
+        self.processo = {"numero_processo": "PROCESSO-SINTETICO-001", "data_laudo":"2026-08-11", "documentos_relevantes": [], "documentos": [{"id":"DOC-001","status":"PRESENTE"}]}
         self.delimitacao = {"tipo_pericia": {"tipo":"VICIOS_CONSTRUTIVOS"}, "sintese_processual": {"texto": "As partes divergem sobre manifestações fictícias.", "documentos_fonte": ["DOC-001"]}, "tema_controvertido": {"texto": "Analisar manifestações sintéticas.", "documentos_fonte": ["DOC-001"]}, "objeto_material": {"texto": "Edificação sintética", "documentos_fonte": ["DOC-001"]}, "objetivo_pericial": {"texto": "Verificar as manifestações delimitadas.", "documentos_fonte": ["DOC-001"]}, "escopo": None, "ressalvas": [], "quesitos": [{"id": "QUE-001", "origem": "JUIZO", "numero_original": "1", "texto_integral": "Quais manifestações foram verificadas?", "questoes_tecnicas_relacionadas": ["QT-001"], "secoes_laudisticas_previstas": ["4.2"]}]}
         pats = [
             pat("PAT-001", "ANOMALIA", "ENDOGENA_CONSTRUTIVA", "MINIMA", "A manifestação foi confirmada no revestimento.", "OBS-001", causa="retração do revestimento", grau="PROVAVEL"),
@@ -158,6 +158,14 @@ class RedacaoPericialTest(unittest.TestCase):
     def test_e2e_tres_pat_gate_ressalvas(self):
         saida = executar_pipeline_redacao(self.processo, self.delimitacao, self.motor)
         self.assertEqual(saida["gate"], "APTO_PARA_LAUDO_COM_RESSALVAS", (saida["grounding"], saida["achados"], saida["qt_ausentes"]))
+
+    def test_pipeline_bloqueia_data_material_alterada(self):
+        motor=copy.deepcopy(self.motor);pat0=motor["analise_final"]["patologias"][0]
+        pat0["conclusao_tecnica"]="A manifestação foi confirmada na vistoria de 10/08/2026."
+        next(e for e in motor["analise_final"]["catalogo_evidencias"] if e["id"]=="OBS-001")["data"]="2026-08-11"
+        saida=executar_pipeline_redacao(self.processo,self.delimitacao,motor)
+        self.assertEqual(saida["gate"],"BLOQUEADO_PARA_LAUDO")
+        self.assertTrue(any(a["tipo"]=="DATA_ALTERADA" for a in saida["achados"]))
         self.assertEqual(len(saida["redacao_final"]["blocos"]), 3); self.assertEqual(saida["metricas"]["claims_redigidas"], 18)
         schema = json.loads((Path(__file__).resolve().parents[1] / "schemas/laudo-redacao.schema.json").read_text(encoding="utf-8"))
         self.assertEqual(list(validator_for(schema)(schema).iter_errors(saida["laudo"])), [])

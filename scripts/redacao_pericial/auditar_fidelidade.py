@@ -6,6 +6,7 @@ import unicodedata
 
 from scripts.auditoria_pericial.grounding import auditar_claim
 from scripts.motor_vicios.auditar import comparar_medicao,texto_quantitativo
+from .datas import auditar_datas, extrair_datas
 
 TIPO_CLAIM = {"MANIFESTACAO_TECNICA": "MANIFESTACAO_TECNICA", "INFERENCIA_TECNICA": "INFERENCIA_TECNICA", "ORIGEM": "ORIGEM", "CONCLUSAO_DE_QT": "CONCLUSAO_DE_QT", "REPARABILIDADE": "REPARABILIDADE", "CONTEUDO_PROCESSUAL":"FATO_PROCESSUAL"}
 
@@ -106,6 +107,10 @@ def auditar_fidelidade(redacao, motor_final):
         for norma in claim.get("nor_ids", []):
             if norma not in normas: add("NORMA_INVENTADA", pat_id, sorted(normas), norma)
         texto = claim.get("texto_semantico", "")
+        ids_fonte=sum((claim.get(k,[]) for k in ("obs_ids","med_ids","fot_ids","doc_ids","nor_ids")),[])
+        fontes=[catalogo[i] for i in ids_fonte if i in catalogo]
+        for achado in auditar_datas(texto,fontes):
+            achados.append({**achado,"pat_id":pat_id})
         if re.search(r"\bitem\s+\d+(?:\.\d+)+\b", _n(texto)) and not claim.get("nor_ids"): add("NORMA_INVENTADA", pat_id, "item normativo verificado", texto)
         unidades=[catalogo.get(i,{}).get("unidade") for i in claim.get("med_ids",[])]
         # Uma grandeza expressamente quantificada sem unidade também é material:
@@ -131,6 +136,8 @@ def auditar_laudo_semantico(laudo, motor_final):
     def add(tipo, identificador, esperado, atual):
         achados.append({"tipo": tipo, "severidade": "CRITICO", "pat_id": identificador,
                         "esperado": esperado, "atual": atual, "bloqueante": True})
+    data_encerramento=laudo.get("encerramento",{}).get("data")
+    if data_encerramento and not extrair_datas(str(data_encerramento)):add("DATA_LAUDO_INVALIDA","encerramento","data canônica",data_encerramento)
     for linha in laudo.get("quadro_resumo", []):
         pat = pats.get(linha.get("pat_id"))
         if not pat:

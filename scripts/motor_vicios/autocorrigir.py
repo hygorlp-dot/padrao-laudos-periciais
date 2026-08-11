@@ -6,7 +6,10 @@ REPROVADOS={"INSUFFICIENT","UNSUBSTANTIATED","INTERPOLATED","CONTRADICTED"}
 def autocorrigir(resultado,claims,auditorias,achados=None):
     final=deepcopy(resultado);por_claim={c["id"]:c for c in claims};por_pat={p["id"]:p for p in final.get("patologias",[])};historico=[]
     def registrar(claim,antes,depois,acao,motivo):
-        historico.append({"id":f"AUT-{len(historico)+1:03d}","claim":claim["id"],"valor_antes":str(antes),"veredito":next(a["veredito"] for a in auditorias if a["claim_id"]==claim["id"]),"evidencia":",".join(next(a["evidencias"] for a in auditorias if a["claim_id"]==claim["id"])),"acao":acao,"valor_depois":str(depois),"motivo":motivo})
+        historico.append({"id":f"AUT-{len(historico)+1:03d}","alvo":claim["id"],"claim":claim["id"],"valor_antes":str(antes),"veredito":next(a["veredito"] for a in auditorias if a["claim_id"]==claim["id"]),"evidencia":",".join(next(a["evidencias"] for a in auditorias if a["claim_id"]==claim["id"])),"acao":acao,"valor_depois":str(depois),"motivo":motivo,"achado_originador":claim["id"]})
+    def registrar_achado(achado,alvo,antes,depois,acao,motivo):
+        if antes==depois:return
+        historico.append({"id":f"AUT-{len(historico)+1:03d}","alvo":alvo,"claim":achado.get("claim_id"),"valor_antes":str(antes),"veredito":None,"evidencia":",".join(map(str,achado.get("evidencias",[]))),"acao":acao,"valor_depois":str(depois),"motivo":motivo,"achado_originador":achado.get("tipo")})
     for audit in auditorias:
         if audit["veredito"] not in REPROVADOS:continue
         claim=por_claim[audit["claim_id"]];pat=por_pat.get(claim.get("patologia"))
@@ -34,7 +37,8 @@ def autocorrigir(resultado,claims,auditorias,achados=None):
         elif tipo=="CONFORMIDADE_NORMATIVA":
             antes=len(pat["normas_relacionadas"]);pat["normas_relacionadas"]=[n for n in pat["normas_relacionadas"] if n.get("verificada") and n.get("aplicabilidade_temporal")!="NAO_APLICAVEL"];registrar(claim,antes,len(pat["normas_relacionadas"]),"REMOVER_FUNDAMENTO_NORMATIVO","Norma ou requisito não verificável.")
     for achado in achados or []:
-        tipo=achado.get("tipo");alvo=achado.get("claim_id")
+        estado_antes_achado=deepcopy(final)
+        tipo=achado.get("tipo");alvo=achado.get("claim_id") or next((x for x in achado.get("evidencias",[]) if str(x).startswith(("OBS-","NOR-","PAT-","QT-"))),None)
         if tipo in {"QT_CAUSAL_SEM_CAPACIDADE_DO_MOTOR","ANALISE_CAUSAL_NAO_EXECUTADA"}:
             qid=alvo or next((x for x in achado.get("evidencias",[]) if str(x).startswith("QT-")),None)
             qt=next((q for q in final.get("questoes_saneadas",[]) if q.get("id")==qid),None)
@@ -48,24 +52,31 @@ def autocorrigir(resultado,claims,auditorias,achados=None):
         if tipo=="NEGACAO_CONVERTIDA_EM_FATO":
             for evidencia in final.get("catalogo_evidencias",[]):
                 if evidencia.get("id")==alvo:
+                    antes=deepcopy(evidencia)
                     negados={a.get("aspecto") for a in evidencia.get("auditoria_aspectos",[]) if a.get("polaridade")=="NEGADO"};evidencia["aspectos_suportados"]=[x for x in evidencia.get("aspectos_suportados",[]) if x not in negados];evidencia["aspectos_contraditos"]=sorted(set(evidencia.get("aspectos_contraditos",[]))|negados)
+                    registrar_achado(achado,alvo,antes,evidencia,"CORRIGIR_POLARIDADE","Aspecto negado não pode permanecer como suporte positivo.")
         if tipo=="AUTORIDADE_NORMATIVA_AUTODECLARADA":
             for evidencia in final.get("catalogo_evidencias",[]):
-                if evidencia.get("id")==alvo:evidencia["authority"]="NAO_DETERMINADA"
+                if evidencia.get("id")==alvo:
+                    antes=deepcopy(evidencia);evidencia["authority"]="NAO_DETERMINADA";registrar_achado(achado,alvo,antes,evidencia,"REMOVER_AUTORIDADE_AUTODECLARADA","Autoridade exige proveniência verificável.")
             for pat in final.get("patologias",[]):
                 for norma in pat.get("normas_relacionadas",[]):
                     if norma.get("authority") in {"FONTE_PRIMARIA_OFICIAL","FONTE_OFICIAL_VERIFICADA"} and norma.get("classificacao_fonte")!="FONTE_PRIMARIA_OFICIAL":norma["authority"]="NAO_DETERMINADA"
         if tipo=="OBS_NEGADA_COM_RESULTADO_OBSERVADO":
             for evidencia in final.get("catalogo_evidencias",[]):
-                if evidencia.get("id")==alvo:evidencia["resultado"]="NAO_CONSTATADO_NA_VISTORIA"
+                if evidencia.get("id")==alvo:
+                    antes=deepcopy(evidencia);evidencia["resultado"]="NAO_CONSTATADO_NA_VISTORIA";registrar_achado(achado,alvo,antes,evidencia,"CORRIGIR_RESULTADO_NEGADO","Observação negada não pode permanecer observada.")
             for pat in final.get("patologias",[]):
                 if alvo in pat.get("constatacoes",[]):pat["constatacao"]["situacao"]="NAO_CONSTATADA";pat["causa"]=None;pat["origem"]="NAO_APLICAVEL";pat["vicio_construtivo"].update({"caracterizado":False,"tipo":"NAO_APLICAVEL","fundamentacao":None});pat["elegibilidade_orcamento"]="NAO_ELEGIVEL";pat["conclusao_tecnica"]="A manifestação não foi constatada na vistoria, sem equivaler a afirmação de inexistência."
         if tipo=="NORMA_USADA_COMO_FATO_DO_CASO":
             normativos={"REQUISITO_NORMATIVO_VERIFICADO","METODO_NORMATIVO_VERIFICADO","CRITERIO_NORMATIVO_VERIFICADO","DEFINICAO_NORMATIVA_VERIFICADA","ESCOPO_NORMATIVO_VERIFICADO","APLICABILIDADE_TEMPORAL"}
             for evidencia in final.get("catalogo_evidencias",[]):
-                if evidencia.get("id")==alvo:evidencia["aspectos_suportados"]=[x for x in evidencia.get("aspectos_suportados",[]) if x in normativos]
+                if evidencia.get("id")==alvo:
+                    antes=deepcopy(evidencia);evidencia["aspectos_suportados"]=[x for x in evidencia.get("aspectos_suportados",[]) if x in normativos];registrar_achado(achado,alvo,antes,evidencia,"RESTRINGIR_NORMA_A_ASPECTO_NORMATIVO","Norma não prova fato físico do caso.")
             for pat in final.get("patologias",[]):
                 if alvo in pat.get("analise_causal",{}).get("fundamentos",[]):pat["analise_causal"]["fundamentos"].remove(alvo);pat["causa"]=None;pat["origem"]="INCONCLUSIVA";pat["vicio_construtivo"].update({"caracterizado":False,"tipo":"INCONCLUSIVO","fundamentacao":None});pat["recomendacao"].update({"necessaria":False,"descricao":None});pat["elegibilidade_orcamento"]="PENDENTE"
+        registrar_achado(achado,alvo or "ANALISE",estado_antes_achado,final,"APLICAR_CORRECAO_DETECTOR","Correção determinística motivada por achado reproduzível.")
+    estado_antes_finalizacao=deepcopy(final)
     final["estado_analise"]="PAT_FINAL";final["status_execucao"]="ANALISE_CONCLUIDA"
     for qt in final.get("questoes_saneadas",[]):
         pats=[por_pat[x] for x in qt["patologias"] if x in por_pat];inc=any(p.get("constatacao",{}).get("situacao") in {"ANOMALIA","FALHA","INCONCLUSIVA"} and not p.get("causa") for p in pats)
@@ -74,4 +85,5 @@ def autocorrigir(resultado,claims,auditorias,achados=None):
         if inc and qt.get("status") not in {"SANEADA","INCONCLUSIVA_POR_LIMITACAO"}:qt["status"]="SANEADA_COM_RESSALVA";qt["ressalvas"]=["Causalidade inconclusiva após auditoria."];qt["conclusao"]="A questão pode ser tratada quanto à constatação, com ressalva de que a causa específica permanece inconclusiva."
     for cob in final.get("cobertura_quesitos",[]):
         if cob["status"]!="MATERIA_JURIDICA" and cob.get("patologias"):cob["status"]="RESPONDIVEL_COM_RESSALVA" if any(por_pat[x].get("ressalvas") for x in cob["patologias"] if x in por_pat) else "RESPONDIVEL"
+    registrar_achado({"tipo":"FINALIZACAO_AUTOCORRECAO","evidencias":[]},"PAT_FINAL",estado_antes_finalizacao,final,"FINALIZAR_ESTADO_CORRIGIDO","Estado final e projeções derivadas recalculados após as correções.")
     return final,historico
