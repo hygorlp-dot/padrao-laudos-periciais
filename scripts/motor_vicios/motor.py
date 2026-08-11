@@ -1,7 +1,7 @@
 """Orquestra manifestações, hipóteses, PAT, saneamento, quesitos e gate de redação."""
 
 from __future__ import annotations
-import argparse,json,re
+import argparse,hashlib,json,re
 from pathlib import Path
 from scripts.triagem_pericial.semantica import intencoes
 from .auditar import auditar
@@ -11,6 +11,9 @@ from .evidencias import construir_catalogo,selecionar
 from .normas import recuperar_normas_para_manifestacao,avaliar_conformidade_normativa
 
 def _consequencias():return {k:None for k in ("seguranca","funcionalidade","estanqueidade","salubridade","higiene","durabilidade","conforto","estetica","manutencao","evolucao")}
+def _identidade_manifestacao(obs,chave):
+    numeros=[int(m.group(1)) for o in obs if (m:=re.fullmatch(r"OBS-(\d+)",o.get("id","")))]
+    return f"{min(numeros):03d}" if numeros else str(int(hashlib.sha256(repr(chave).encode()).hexdigest()[:12],16))
 
 def _base(processo,delimitacao,status,tipo):
     quesitos=[]
@@ -28,8 +31,9 @@ def executar(processo,delimitacao,plano,vistoria,contexto=None,conhecimento=None
     for o in vistoria["observacoes"]:
         chave=(o.get("manifestacao") or "Condição examinada",o.get("ambiente"),o.get("sistema"),o.get("elemento"));por_manifestacao.setdefault(chave,[]).append(o)
     hip_seq=1
-    for idx,(chave,obs) in enumerate(por_manifestacao.items(),1):
-        desc,amb,sis,elem=chave;capacidade=capacidade_causal(sis);sem_motor=capacidade["nivel_de_capacidade"]=="MOTOR_CAUSAL_NAO_IMPLEMENTADO"; mid=f"MAN-{idx:03d}"; alg=sorted({x for o in obs for x in o["alegacoes"]});fot=sorted({x for o in obs for x in o["fotografias"]});med=sorted({x for o in obs for x in o["medicoes"]});qts=sorted({x for o in obs for x in o["questoes"]});oids=[o["id"] for o in obs]
+    for idx,chave in enumerate(sorted(por_manifestacao,key=lambda x:tuple(str(v or "").casefold() for v in x)),1):
+        obs=sorted(por_manifestacao[chave],key=lambda x:x.get("id", ""))
+        desc,amb,sis,elem=chave;capacidade=capacidade_causal(sis);sem_motor=capacidade["nivel_de_capacidade"]=="MOTOR_CAUSAL_NAO_IMPLEMENTADO";sufixo=_identidade_manifestacao(obs,chave);idx=int(sufixo);mid=f"MAN-{sufixo}";alg=sorted({x for o in obs for x in o["alegacoes"]});fot=sorted({x for o in obs for x in o["fotografias"]});med=sorted({x for o in obs for x in o["medicoes"]});qts=sorted({x for o in obs for x in o["questoes"]});oids=[o["id"] for o in obs]
         r["manifestacoes"].append({"id":mid,"descricao":desc,"sistema":sis,"elemento":elem,"local":amb,"alegacoes":alg,"observacoes":oids,"fotografias":fot,"medicoes":med,"questoes":qts})
         ctx=contexto.get(mid,{}) if contexto.get("_modo")=="OVERRIDE_EXPLICITO" else {};evidencias_man=selecionar(catalogo,ids=[o["id"] for o in obs]+fot+med,sistema=sis,manifestacao=desc,contexto={"questoes":qts,"sistema":sis,"manifestacao":desc,"ambiente":amb,"elemento":elem,"alegacoes":alg},relacao_id=mid);normas=recuperar_normas_para_manifestacao(conhecimento.get("normas",[]),sistema=sis,manifestacao=desc,questoes=qts,data_relevante=conhecimento.get("data_relevante"));sit=situacao(obs)
         hips=gerar_hipoteses(desc,mid,ctx.get("evidencias_hipoteses",{}),ctx.get("evidencias_ausentes",[]),hip_seq,sistema=sis,catalogo=evidencias_man,normas=normas) if sit in {"ANOMALIA","FALHA","INCONCLUSIVA"} else []

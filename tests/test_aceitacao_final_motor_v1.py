@@ -1,4 +1,4 @@
-import copy,json,tempfile,time,unittest
+import copy,json,re,tempfile,time,unittest
 from pathlib import Path
 
 from scripts.auditoria_pericial.grounding import auditar_claim
@@ -24,7 +24,10 @@ class AceitacaoFinalMotorV1Test(unittest.TestCase):
     def obs(self,i=1,aspectos=None,resultado="OBSERVADO"):
         return {"id":f"OBS-{i:03d}","local":"Local sintético","ambiente":"Sala sintética","sistema":"IMPERMEABILIZACAO","elemento":"Parede","descricao_objetiva":"Interface sob chuva com vedação deteriorada","manifestacao":"umidade","resultado":resultado,"campo_examinado":"Superfície acessível","metodo":["INSPECAO_VISUAL"],"fotografias":[],"medicoes":[],"alegacoes":["ALG-001"],"questoes":["QT-001"],"quesitos":["QUE-001"],"confianca":{"nivel":"ALTA"},"proveniencia":[f"ARQ-VIS-{i:03d}"],"limitacoes":[],"aspectos_suportados":aspectos or []}
     def vistoria(self,obs):
-        v=load("tests/fixtures/schemas/vistoria-valida.json");v["observacoes"]=obs;return v
+        v=load("tests/fixtures/schemas/vistoria-valida.json");v["observacoes"]=obs
+        v["cobertura"]=[{"tipo":r["tipo"],"planejado":r.get("item_planejado"),"status":"EXECUTADO","executado":[f"EXEC-{i:03d}"],"evidencia_equivalente":[],"justificativa_equivalencia":None,"impacto":None} for i,r in enumerate(self.plano["requisitos_cobertura"],1)]
+        v["atividades_executadas"]=[{"id":f"EXEC-{i:03d}","atividade_planejada":r["item_planejado"],"questoes":[r["questao_tecnica"]]} for i,r in enumerate(self.plano["requisitos_cobertura"],1) if r["tipo"]=="ATIVIDADE"]
+        return v
     def forte(self):
         obs=[self.obs(1),self.obs(2)];docs=[{"id":"DOC-VIS-001","descricao":"Projeto executivo com detalhe executivo especifica a vedação.","sistema":"IMPERMEABILIZACAO","questoes":["QT-001"],"proveniencia":["ARQ-DOC-001"]},{"id":"DOC-VIS-002","descricao":"Controle tecnológico documenta execução divergente e resultado incompatível com o requisito.","sistema":"IMPERMEABILIZACAO","questoes":["QT-001"],"proveniencia":["ARQ-DOC-002"]}]
         return executar_pipeline_motor(self.processo,self.delim,self.plano,self.vistoria(obs),{"documentos":docs})
@@ -66,9 +69,9 @@ class AceitacaoFinalMotorV1Test(unittest.TestCase):
             delim=gerar_delimitacao(d);(d/"delimitacao-pericial.json").write_text(json.dumps(delim),encoding="utf-8");processo=gerar_processo(d);(d/"processo.json").write_text(json.dumps(processo),encoding="utf-8");delim=aprofundar(d);(d/"delimitacao-pericial.json").write_text(json.dumps(delim),encoding="utf-8");plano=gerar_plano(d);campo=d/"campo";campo.mkdir()
             for i,a in enumerate(plano["atividades"],1):(campo/f"nota-{i}.txt").write_text(f"tipo=OBS;descricao=interface sob chuva com vedação deteriorada;manifestacao=umidade;resultado=OBSERVADO;sistema=IMPERMEABILIZACAO;ambiente=Sala sintética;elemento=Parede;atividade_planejada={a['id']}",encoding="utf-8")
             for i,m in enumerate(plano["medicoes"],1):(campo/f"med-{i}.txt").write_text(f"tipo=MED;grandeza=abertura;valor=0,2;unidade=mm;medicao_planejada={m['id']}",encoding="utf-8")
-            (campo/"foto-interface.jpg").write_bytes(b"imagem sintetica")
+            for i,f in enumerate(plano["fotografias"],1):(campo/f"{f['id']}.jpg").write_bytes(f"imagem sintetica {i}".encode())
             vistoria=gerar_vistoria(inventariar(campo),plano,processo["numero_processo"]);norma={"id":"NOR-001","titulo":"Requisito sintético de impermeabilização","requisito":"Interface deve atender ao requisito X","verificada":True,"edicao":"2010","pagina":1,"item":"1","tipo_requisito":"DESEMPENHO","metodo_verificacao":"Inspeção e medição","criterio":"Requisito X","proveniencia":["https://oficial.example/norma"],"sistema":"IMPERMEABILIZACAO","classificacao_fonte":"FONTE_PRIMARIA_OFICIAL","entidade":"Entidade sintética","documento":"Norma sintética","dominio":"oficial.example","url":"https://oficial.example/norma","dominio_oficial":True,"status_verificacao":"VERIFICADO","escopo_fonte":"CONTEUDO_NORMATIVO","conteudo_normativo_verificado":True,"conteudo_consultado":"Interface deve atender ao requisito X"};docs=[{"id":"DOC-VIS-001","descricao":"Projeto executivo com detalhe executivo especifica vedação.","sistema":"IMPERMEABILIZACAO","questoes":["QT-001"],"proveniencia":["ARQ-DOC-001"]},{"id":"DOC-VIS-002","descricao":"Controle tecnológico documenta execução divergente e resultado incompatível com o requisito.","sistema":"IMPERMEABILIZACAO","questoes":["QT-001"],"proveniencia":["ARQ-DOC-002"]}];r=executar_pipeline_motor(processo,delim,plano,vistoria,{"normas":[norma],"documentos":docs,"data_relevante":"2015"})
-        p=r["analise_final"]["patologias"][0];self.assertTrue(vistoria["fotografias"] and vistoria["medicoes"]);self.assertEqual((p["causa"],p["origem"],p["vicio_construtivo"]["caracterizado"],r["gate"]),("falha de vedação","ENDOGENA_CONSTRUTIVA",True,"APTO_PARA_REDACAO"))
+        p=r["analise_final"]["patologias"][0];self.assertTrue(vistoria["fotografias"] and vistoria["medicoes"]);self.assertEqual((p["causa"],p["origem"],p["vicio_construtivo"]["caracterizado"],r["gate"]),("falha de vedação","ENDOGENA_CONSTRUTIVA",True,"APTO_PARA_REDACAO"),r.get("coverage_execucao"))
     def test_e2e_final_02_autocorrecao_conservadora(self):
         r=executar_pipeline_motor(self.processo,self.delim,self.plano,self.vistoria([self.obs()]));pi=r["analise_inicial"]["patologias"][0];pf=r["analise_final"]["patologias"][0]
         self.assertIsNone(pi["causa"]);self.assertIsNone(pf["causa"]);self.assertEqual(pf["origem"],"INCONCLUSIVA");self.assertEqual(r["gate"],"APTO_PARA_REDACAO_COM_RESSALVAS")

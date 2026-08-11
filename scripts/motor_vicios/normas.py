@@ -7,9 +7,17 @@ def _ano(valor):
     if not valor:return None
     try:return int(str(valor)[:4])
     except ValueError:return None
+def _data(valor):
+    if not valor:return None
+    try:return date.fromisoformat(str(valor)[:10])
+    except ValueError:return None
 
 def aplicabilidade_temporal(norma,data_relevante=None):
+    ref_data=_data(data_relevante);inicio_data=_data(norma.get("vigencia_inicio") or norma.get("publicacao"));fim_data=_data(norma.get("vigencia_fim"))
+    if ref_data and inicio_data and inicio_data>ref_data:return "APLICAVEL_COMPLEMENTAR" if norma.get("uso_retroativo")=="REFERENCIAL" else "NAO_APLICAVEL"
+    if ref_data and fim_data and ref_data>fim_data:return "NAO_APLICAVEL"
     ref=_ano(data_relevante);inicio=_ano(norma.get("vigencia_inicio") or norma.get("edicao"));fim=_ano(norma.get("vigencia_fim"))
+    if not ref or not (inicio or fim):return "APLICABILIDADE_INCONCLUSIVA"
     if norma.get("status_vigencia") in {"REVOGADA","SUBSTITUIDA"} and not ref:return "APLICABILIDADE_INCONCLUSIVA"
     if ref and inicio and inicio>ref:return "APLICAVEL_COMPLEMENTAR" if norma.get("uso_retroativo")=="REFERENCIAL" else "NAO_APLICAVEL"
     if ref and fim and ref>fim:return "NAO_APLICAVEL"

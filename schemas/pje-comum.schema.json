@@ -167,7 +167,7 @@
             "properties": {
               "id_indice": { "$ref": "#/$defs/idPje" },
               "id_rodape": { "$ref": "#/$defs/idPje" },
-              "pagina_destino_link": { "type": "integer", "minimum": 1 },
+              "pagina_destino_link": { "type": ["integer", "null"], "minimum": 1 },
               "primeira_pagina_detectada": { "type": "integer", "minimum": 1 },
               "ultima_pagina_detectada": { "type": "integer", "minimum": 1 }
             }
