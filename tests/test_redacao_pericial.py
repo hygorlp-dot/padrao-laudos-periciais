@@ -166,6 +166,13 @@ class RedacaoPericialTest(unittest.TestCase):
         saida=executar_pipeline_redacao(self.processo,self.delimitacao,motor)
         self.assertEqual(saida["gate"],"BLOQUEADO_PARA_LAUDO")
         self.assertTrue(any(a["tipo"]=="DATA_ALTERADA" for a in saida["achados"]))
+
+    def test_pipeline_bloqueia_data_laudo_ausente_sem_inventar_hoje(self):
+        processo=copy.deepcopy(self.processo);processo.pop("data_laudo")
+        saida=executar_pipeline_redacao(processo,self.delimitacao,self.motor)
+        self.assertEqual(saida["gate"],"BLOQUEADO_PARA_LAUDO")
+        self.assertIsNone(saida["laudo"]["encerramento"]["data"])
+        self.assertTrue(any(a["tipo"]=="DATA_LAUDO_AUSENTE" for a in saida["achados"]))
         self.assertEqual(len(saida["redacao_final"]["blocos"]), 3); self.assertEqual(saida["metricas"]["claims_redigidas"], 18)
         schema = json.loads((Path(__file__).resolve().parents[1] / "schemas/laudo-redacao.schema.json").read_text(encoding="utf-8"))
         self.assertEqual(list(validator_for(schema)(schema).iter_errors(saida["laudo"])), [])

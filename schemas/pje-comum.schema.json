@@ -180,7 +180,7 @@
     },
     "conflito": {
       "type": "object",
-      "required": ["conflito_id", "campo", "tipo", "descricao", "valores_conflitantes", "fontes", "status", "bloqueante", "decisao", "observacoes"],
+      "required": ["conflito_id", "campo", "tipo", "descricao", "valores_conflitantes", "fontes", "status", "bloqueante", "decisao", "observacoes", "itens_indice_relacionados"],
       "additionalProperties": false,
       "properties": {
         "conflito_id": { "type": "string", "pattern": "^CON-PJE-[0-9]{3,}$" },
@@ -192,12 +192,13 @@
         "status": { "$ref": "#/$defs/statusConflito" },
         "bloqueante": { "type": "boolean" },
         "decisao": { "type": ["string", "null"] },
-        "observacoes": { "type": ["string", "null"] }
+        "observacoes": { "type": ["string", "null"] },
+        "itens_indice_relacionados": { "type": "array", "items": { "type": "string", "pattern": "^DOC-PJE-[0-9]{3,}$" }, "uniqueItems": true }
       }
     },
     "pendencia": {
       "type": "object",
-      "required": ["pendencia_id", "campo", "motivo_ausencia", "descricao", "bloqueante", "fontes", "status"],
+      "required": ["pendencia_id", "campo", "motivo_ausencia", "descricao", "bloqueante", "fontes", "status", "itens_indice_relacionados"],
       "additionalProperties": false,
       "properties": {
         "pendencia_id": { "type": "string", "pattern": "^PEN-PJE-[0-9]{3,}$" },
@@ -206,7 +207,8 @@
         "descricao": { "type": "string", "minLength": 1 },
         "bloqueante": { "type": "boolean" },
         "fontes": { "type": "array", "items": { "$ref": "#/$defs/proveniencia" } },
-        "status": { "enum": ["ABERTA", "RESOLVIDA", "DISPENSADA"] }
+        "status": { "enum": ["ABERTA", "RESOLVIDA", "DISPENSADA"] },
+        "itens_indice_relacionados": { "type": "array", "items": { "type": "string", "pattern": "^DOC-PJE-[0-9]{3,}$" }, "uniqueItems": true }
       }
     },
     "classificacaoPagina": {

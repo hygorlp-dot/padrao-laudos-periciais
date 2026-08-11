@@ -10,7 +10,8 @@ def segmentar_documentos(itens, paginas):
     for pagina in paginas:
         if pagina["possui_rodape_pje"] and pagina["pagina_documento_detectada"] == 1:
             item = next((i for i in itens if i["id_pje"] == pagina["id_pje_detectado"]), None)
-            inicios.setdefault(pagina["pagina_pdf"],[]).append(item)
+            if item is not None or pagina["pagina_pdf"] not in inicios:
+                inicios.setdefault(pagina["pagina_pdf"],[]).append(item)
     for inicio, candidatos in list(inicios.items()):
         unicos={}
         for item in candidatos:
