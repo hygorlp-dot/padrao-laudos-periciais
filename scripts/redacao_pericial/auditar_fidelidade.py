@@ -38,7 +38,7 @@ def auditar_grounding_redacao(redacao, motor_final):
     por_id = {e.get("id"): e for e in catalogo}
     saida = []
     for claim in redacao.get("claims", []):
-        equivalentes={"MANIFESTACAO_TECNICA":{"MANIFESTACAO_TECNICA","CONSTATACAO_DE_VISTORIA"},"INFERENCIA_TECNICA":{"INFERENCIA_TECNICA","CAUSA","MECANISMO"},"ORIGEM":{"ORIGEM","CRITICIDADE","VICIO_CONSTRUTIVO","CONSTATACAO_DE_VISTORIA","INFERENCIA_TECNICA"},"CONCLUSAO_DE_QT":{"CONCLUSAO_DE_QT","INFERENCIA_TECNICA"},"REPARABILIDADE":{"REPARABILIDADE","ORCAMENTO"}}
+        equivalentes={"MANIFESTACAO_TECNICA":{"MANIFESTACAO_TECNICA","CONSTATACAO_DE_VISTORIA","INFERENCIA_TECNICA"},"INFERENCIA_TECNICA":{"INFERENCIA_TECNICA","CAUSA","MECANISMO"},"ORIGEM":{"ORIGEM","CRITICIDADE","VICIO_CONSTRUTIVO","CONSTATACAO_DE_VISTORIA","INFERENCIA_TECNICA"},"CONCLUSAO_DE_QT":{"CONCLUSAO_DE_QT","INFERENCIA_TECNICA"},"REPARABILIDADE":{"REPARABILIDADE","ORCAMENTO"}}
         relacionados=[c for c in claims_motor if c.get("tipo") in equivalentes.get(claim.get("tipo"),{claim.get("tipo")}) and (set(claim.get("pat_ids",[])) & {c.get("patologia")} or set(claim.get("qt_ids",[])) & {c.get("questao")})]
         auditados=[audits_motor[c["id"]] for c in relacionados if c.get("id") in audits_motor]
         if auditados:
