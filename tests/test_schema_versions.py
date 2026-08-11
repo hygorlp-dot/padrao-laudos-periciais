@@ -26,6 +26,22 @@ def test_schema_version_matrix_is_complete_and_fail_closed():
     assert all(item["future_version_policy"] == "FAIL_CLOSED" for item in matrix["schemas"])
 
 
+def test_schema_version_matrix_rejects_version_not_enforced_by_schema():
+    matrix = json.loads((ROOT / "config/schema-versions.json").read_text(encoding="utf-8"))
+    forged = copy.deepcopy(matrix)
+    item = next(entry for entry in forged["schemas"] if entry["schema"] == "laudo-redacao.schema.json")
+    item["current_version"] = "999.0.0"
+    item["versions_supported"] = ["999.0.0"]
+    findings = validate_schema_version_matrix(forged, ROOT)
+    assert "SCHEMA_VERSION_NOT_ENFORCED" in {finding["code"] for finding in findings}
+
+
+def test_schema_version_matrix_matches_redaction_producer_version():
+    matrix = json.loads((ROOT / "config/schema-versions.json").read_text(encoding="utf-8"))
+    item = next(entry for entry in matrix["schemas"] if entry["schema"] == "laudo-redacao.schema.json")
+    assert item["current_version"] == "1.1.0"
+
+
 def test_current_version_is_accepted_without_mutation():
     current = json.loads((ROOT / "tests/fixtures/planejamento/plano-vistoria-valido.json").read_text(encoding="utf-8"))
     assert migrar_plano(current) == current

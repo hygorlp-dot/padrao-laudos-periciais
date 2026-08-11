@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 import time
@@ -10,6 +11,7 @@ from pathlib import Path
 
 from .config import validate_configuration
 from .fixture_registry import validate_fixture_registry
+from .metrics import analyze_complexity, parse_coverage_totals, validate_quality_baseline
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -57,7 +59,8 @@ def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_fil
             ("historical critical mutation suite", [sys.executable, "-m", "pytest", "-q", "tests/test_historical_mutations.py::test_historical_critical_mutants_are_all_killed"], "NO_SILENT_LOSS", "QUALITY_GATE"),
             ("quality V2", [sys.executable, "-m", "pytest", "-q", "tests/test_core_properties_v2.py", "tests/test_fault_injection.py", "tests/test_schema_versions.py", "tests/test_quality_metrics.py", "tests/test_quality_hardening_v2.py", "tests/test_historical_mutations.py", "-k", "not historical_critical_mutants"], "SCHEMA_VERSION_FIDELITY", "QUALITY_GATE"),
             ("schemas", [sys.executable, "scripts/validar_schemas.py"], "SOURCE_TRUTH", "REPOSITORY"),
-            ("regression", [sys.executable, "-m", "pytest", "tests", "-q", "--ignore=tests/test_historical_mutations.py", "--ignore=tests/test_core_properties_v2.py", "--ignore=tests/test_fault_injection.py", "--ignore=tests/test_schema_versions.py", "--ignore=tests/test_quality_metrics.py", "--ignore=tests/test_quality_hardening_v2.py"], "FAIL_CLOSED", "CORE"),
+            ("regression", [sys.executable, "-m", "coverage", "run", "--branch", "--data-file=coverage-quality-v2.data", "--source=scripts/extracao_pje,scripts/planejamento_pericial,scripts/conhecimento_privado,scripts/redacao_pericial", "-m", "pytest", "tests", "-q", "--ignore=tests/test_historical_mutations.py", "--ignore=tests/test_core_properties_v2.py", "--ignore=tests/test_fault_injection.py", "--ignore=tests/test_schema_versions.py", "--ignore=tests/test_quality_metrics.py", "--ignore=tests/test_quality_hardening_v2.py"], "FAIL_CLOSED", "CORE"),
+            ("coverage report", [sys.executable, "-m", "coverage", "json", "--data-file=coverage-quality-v2.data", "-o", "coverage-quality-v2.json"], "QUALITY_NON_REGRESSION", "QUALITY_GATE"),
             ("E2E positive", [sys.executable, "-m", "pytest", "-q", "tests/test_final_closure_r7.py", "-k", "e2e_positivo"], "SOURCE_TRUTH", "MOTOR"),
             ("E2E negative", [sys.executable, "-m", "pytest", "-q", "tests/test_aceitacao_final_motor_v1.py", "-k", "e2e_final_03"], "ESSENTIAL_INPUT_REMOVAL_DEGRADES_RESULT", "MOTOR"),
         ])
@@ -68,6 +71,22 @@ def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_fil
         if not passed:
             reason = (completed.stderr or completed.stdout or f"exit {completed.returncode}").strip().splitlines()[-1]
             findings.append(_finding(invariant, boundary, name, reason, "P0" if name in {"regression", "E2E negative", "privacy"} else "P1"))
+    if mode == "full":
+        quality_findings: list[dict] = []
+        try:
+            baseline = json.loads((root / "config/quality-baseline.json").read_text(encoding="utf-8"))
+            report = json.loads((root / "coverage-quality-v2.json").read_text(encoding="utf-8"))
+            paths = [root / item["path"] for item in baseline.get("hotspots", [])]
+            complexity = analyze_complexity(paths, base=root)
+            elapsed = time.perf_counter() - started
+            quality_findings = validate_quality_baseline(
+                baseline, parse_coverage_totals(report), complexity, duration_seconds=elapsed
+            )
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            quality_findings = [{"code": "QUALITY_MEASUREMENT_INVALID", "detail": str(exc)}]
+        checks.append(("quality non-regression", not quality_findings))
+        for item in quality_findings:
+            findings.append(_finding("QUALITY_NON_REGRESSION", "QUALITY_GATE", item["code"], str(item), "P1"))
     passed = not findings and all(ok for _, ok in checks)
     return GateResult("PASS" if passed else "FAIL", 0 if passed else 1, tuple(checks), tuple(findings), round(time.perf_counter() - started, 3))
 
