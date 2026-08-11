@@ -8,6 +8,16 @@ from uuid import uuid4
 from .models import ArtifactStatus
 
 
+def _deep_freeze(value):
+    if isinstance(value, dict):
+        return MappingProxyType({key: _deep_freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_deep_freeze(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_deep_freeze(item) for item in value)
+    return deepcopy(value)
+
+
 class RevisionSource(StrEnum):
     SOURCE = "SOURCE"
     AI = "AI"
@@ -40,7 +50,7 @@ class RevisionStore:
             revision_id=str(uuid4()), artifact_id=artifact_id,
             revision=len(history) + 1, created_at=datetime.now(timezone.utc).isoformat(),
             supersedes=supersedes, status=ArtifactStatus.CURRENT, source=source,
-            payload=MappingProxyType(deepcopy(payload)),
+            payload=_deep_freeze(payload),
         )
         history.append(item)
         return item
@@ -50,7 +60,7 @@ class RevisionStore:
 
     def snapshot(self):
         return {
-            artifact_id: [replace(item, payload=MappingProxyType(deepcopy(dict(item.payload)))) for item in history]
+            artifact_id: list(history)
             for artifact_id, history in self._items.items()
         }
 
@@ -76,15 +86,19 @@ class ValueEntry:
 
 class ValueHistory:
     def __init__(self):
-        self.entries = []
+        self._entries = []
+
+    @property
+    def entries(self):
+        return tuple(self._entries)
 
     def add(self, authority, value, reason=None):
         if authority is Authority.EFFECTIVE_VALUE:
             raise ValueError("EFFECTIVE_VALUE é derivado, não armazenado")
         if authority is Authority.PROFESSIONAL_OVERRIDE and not reason:
             raise ValueError("Professional Override exige justificativa")
-        entry = ValueEntry(authority, value, datetime.now(timezone.utc).isoformat(), reason)
-        self.entries.append(entry)
+        entry = ValueEntry(authority, _deep_freeze(value), datetime.now(timezone.utc).isoformat(), reason)
+        self._entries.append(entry)
         return entry
 
     def effective(self):
@@ -95,7 +109,13 @@ class ValueHistory:
             Authority.SOURCE_VALUE,
         )
         for authority in precedence:
-            for entry in reversed(self.entries):
+            for entry in reversed(self._entries):
                 if entry.authority is authority:
                     return entry
         raise ValueError("Nenhum valor disponível")
+
+    def snapshot(self):
+        return list(self._entries)
+
+    def restore(self, snapshot):
+        self._entries = snapshot

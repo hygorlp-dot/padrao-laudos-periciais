@@ -50,12 +50,47 @@ class CaseIdentityAndStateTest(unittest.TestCase):
     def test_valid_transition(self):
         machine = CaseStateMachine()
         self.assertEqual(machine.transition(CaseState.AUTOS_IMPORTADOS), CaseState.AUTOS_IMPORTADOS)
+        self.assertEqual(machine.history[0].operation, "ADVANCE")
+        self.assertEqual(machine.history[0].reason, "AVANCO_NORMAL")
 
     def test_invalid_transition_is_rejected_without_state_change(self):
         machine = CaseStateMachine()
         with self.assertRaises(DomainError):
             machine.transition(CaseState.PAT_FINAL)
         self.assertEqual(machine.state, CaseState.CRIADO)
+        self.assertEqual(machine.history, ())
+
+    def test_authorized_reopen_requires_previous_state_and_reason(self):
+        machine = CaseStateMachine()
+        machine.transition(CaseState.AUTOS_IMPORTADOS)
+        machine.transition(CaseState.AUTOS_ANALISADOS)
+        machine.reopen(CaseState.AUTOS_IMPORTADOS, "Autos complementares recebidos")
+        self.assertEqual(machine.state, CaseState.AUTOS_IMPORTADOS)
+        record = machine.history[-1]
+        self.assertEqual((record.origin, record.destination), (CaseState.AUTOS_ANALISADOS, CaseState.AUTOS_IMPORTADOS))
+        self.assertEqual(record.reason, "Autos complementares recebidos")
+        self.assertTrue(record.timestamp)
+
+    def test_reopen_without_reason_or_with_arbitrary_jump_is_rejected(self):
+        machine = CaseStateMachine(CaseState.DELIMITADO)
+        with self.assertRaises(DomainError):
+            machine.reopen(CaseState.AUTOS_ANALISADOS, "")
+        with self.assertRaises(DomainError):
+            machine.reopen(CaseState.AUTOS_IMPORTADOS, "Salto indevido")
+        self.assertEqual(machine.history, ())
+
+    def test_unit_of_work_rolls_back_state_and_transition_history(self):
+        machine = CaseStateMachine()
+        uow = UnitOfWork(machine)
+
+        def failing_transition():
+            machine.transition(CaseState.AUTOS_IMPORTADOS)
+            raise RuntimeError("falha simulada")
+
+        with self.assertRaises(RuntimeError):
+            uow.execute(failing_transition)
+        self.assertEqual(machine.state, CaseState.CRIADO)
+        self.assertEqual(machine.history, ())
 
 
 class RevisionAndAuthorityTest(unittest.TestCase):
@@ -74,6 +109,18 @@ class RevisionAndAuthorityTest(unittest.TestCase):
         with self.assertRaises(TypeError):
             revision.payload["valor"] = 2
 
+    def test_revision_payload_is_deeply_immutable_and_defensive(self):
+        original = {"causa": {"fatores": ["água"], "tags": {"umidade"}}}
+        revision = RevisionStore().append("PAT-001", original, RevisionSource.ENGINE)
+        original["causa"]["fatores"].append("vento")
+        original["causa"]["tags"].add("externa")
+        self.assertEqual(revision.payload["causa"]["fatores"], ("água",))
+        self.assertEqual(revision.payload["causa"]["tags"], frozenset({"umidade"}))
+        with self.assertRaises(TypeError):
+            revision.payload["causa"]["novo"] = True
+        with self.assertRaises(AttributeError):
+            revision.payload["causa"]["fatores"].append("x")
+
     def test_professional_override_is_explicit_and_effective(self):
         history = ValueHistory()
         history.add(Authority.SOURCE_VALUE, "alegado")
@@ -87,6 +134,25 @@ class RevisionAndAuthorityTest(unittest.TestCase):
     def test_professional_override_requires_reason(self):
         with self.assertRaises(ValueError):
             ValueHistory().add(Authority.PROFESSIONAL_OVERRIDE, "x")
+
+    def test_value_history_entries_and_nested_values_are_immutable(self):
+        original = {"classificacao": ["ANOMALIA"]}
+        history = ValueHistory()
+        history.add(Authority.ENGINE_DECISION, original)
+        override = history.add(
+            Authority.PROFESSIONAL_OVERRIDE,
+            {"classificacao": ["INCONCLUSIVA"]},
+            reason="Validação profissional",
+        )
+        original["classificacao"].append("ALTERADA")
+        self.assertEqual(history.entries[0].value["classificacao"], ("ANOMALIA",))
+        self.assertEqual(history.effective(), override)
+        with self.assertRaises(AttributeError):
+            history.entries.append(override)
+        with self.assertRaises(TypeError):
+            del history.entries[0]
+        with self.assertRaises(AttributeError):
+            override.value["classificacao"].append("x")
 
 
 class DependencyAndUnitOfWorkTest(unittest.TestCase):

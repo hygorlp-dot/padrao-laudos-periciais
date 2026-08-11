@@ -12,12 +12,17 @@ consolida contratos transversais e não reconstrói o Motor Técnico existente.
 - IDs materiais existentes permanecem rastreáveis.
 - o caso percorre uma máquina de estados explícita de `CRIADO` a `ENCERRADO`;
 - transição não declarada é rejeitada, sem avanço silencioso.
+- avanço e reabertura preservam origem, destino, motivo e timestamp;
+- reabertura exige motivo e retorna somente ao estado imediatamente anterior,
+  sem saltos arbitrários.
 
 ## Revisões e autoridade
 
 Artefato material usa histórico append-only com `revision`, `created_at`,
 `supersedes`, `status` e `source`. Nova revisão marca a anterior como
-`SUPERSEDED`, sem apagá-la.
+`SUPERSEDED`, sem apagá-la. Payloads e valores históricos são congelados
+recursivamente; leituras usam estruturas imutáveis e cópias defensivas impedem
+que a mutação do objeto de entrada altere o registro armazenado.
 
 Valores mantêm camadas distintas:
 
