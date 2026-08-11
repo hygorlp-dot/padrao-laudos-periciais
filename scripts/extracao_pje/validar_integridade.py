@@ -55,8 +55,10 @@ def validar_integridade(manifesto):
     contagens={item:0 for item in itens}
     for d in documentos:
         if d.get("ordem_indice") is not None and d.get("documento_id") in contagens:contagens[d["documento_id"]]+=1
-    for grupo in (manifesto["conflitos"],manifesto.get("pendencias",[])):
+    for tipo_grupo,grupo in (("conflito",manifesto["conflitos"]),("pendencia",manifesto.get("pendencias",[]))):
         for registro in grupo:
+            if tipo_grupo=="conflito" and registro.get("status")=="RESOLVIDO_POR_FONTE_PRIMARIA":continue
+            if tipo_grupo=="pendencia" and registro.get("status")!="ABERTA":continue
             for item in registro.get("itens_indice_relacionados",[]):
                 if item in contagens:contagens[item]+=1
     faltantes={item for item,total in contagens.items() if total==0};duplicados={item for item,total in contagens.items() if total>1}
