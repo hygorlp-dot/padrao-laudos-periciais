@@ -55,7 +55,7 @@ def _partes(documentos: list[dict]) -> list[dict]:
             for polo, nome in nomes]
 
 
-def gerar(diretorio: Path) -> dict[str, Any]:
+def gerar(diretorio: Path, *, data_laudo: str | None = None) -> dict[str, Any]:
     manifesto = json.loads((diretorio / "manifesto-pje.json").read_text(encoding="utf-8"))
     delimitacao = gerar_delimitacao(diretorio)
     fontes = [json.loads(p.read_text(encoding="utf-8")) for p in sorted((diretorio / "documentos").glob("*.json"))]
@@ -100,7 +100,7 @@ def gerar(diretorio: Path) -> dict[str, Any]:
     processo = manifesto["processo"]
     valor = lambda k: processo[k].get("valor") if isinstance(processo.get(k), dict) else None
     assuntos = [i["valor"] for i in processo.get("assuntos", []) if i.get("valor")]
-    return {"schema_version": "2.0.0", "numero_processo": processo["numero_cnj"]["valor"], "tipo_acao": valor("classe"),
+    return {"schema_version": "2.0.0", "numero_processo": processo["numero_cnj"]["valor"], "data_laudo": data_laudo, "tipo_acao": valor("classe"),
             "assunto": "; ".join(assuntos) or None, "juizo": valor("orgao_julgador"), "vara": valor("orgao_julgador"),
             "subsecao": valor("subsecao"), "tribunal": valor("tribunal"), "partes": _partes(fontes),
             "perito": {"nome": None, "profissao": None, "crea": None, "crea_regional": None, "ibape": None},

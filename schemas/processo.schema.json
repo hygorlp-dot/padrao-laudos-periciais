@@ -36,6 +36,7 @@
   "properties": {
     "schema_version": { "type": "string", "minLength": 1 },
     "numero_processo": { "$ref": "#/$defs/numeroProcesso" },
+    "data_laudo": { "type": ["string", "null"], "format": "date" },
     "tipo_acao": { "type": ["string", "null"] },
     "assunto": { "type": ["string", "null"] },
     "juizo": { "type": ["string", "null"] },

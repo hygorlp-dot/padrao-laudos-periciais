@@ -36,6 +36,10 @@ class IntegridadeRastreabilidade25(unittest.TestCase):
         paginas=[{"pagina_pdf":i,"possui_rodape_pje":i in {2,4},"pagina_documento_detectada":1 if i in {2,4} else None,"id_pje_detectado":str(i) if i in {2,4} else None} for i in range(1,5)]
         itens=[{"documento_id_interno":"DOC-PJE-001","id_pje":"2","ordem_indice":1,"pagina_destino_link":2}]
         docs=segmentar_documentos(itens,paginas);self.assertEqual([(x["id_pje"],x["estado_item_indice"]) for x in docs],[("2","SEGMENTADO"),("4","DESCOBERTO_RODAPE")])
+    def test_divergencia_indice_rodape_nao_causa_excecao(self):
+        itens=[{"documento_id_interno":"DOC-PJE-001","id_pje":"10","ordem_indice":1,"pagina_destino_link":2}]
+        paginas=[{"pagina_pdf":1,"possui_rodape_pje":False,"pagina_documento_detectada":None,"id_pje_detectado":None},{"pagina_pdf":2,"possui_rodape_pje":True,"pagina_documento_detectada":1,"id_pje_detectado":"99"}]
+        docs=segmentar_documentos(itens,paginas);self.assertEqual(len(docs),1);self.assertEqual((docs[0]["item_indice"]["id_pje"],docs[0]["id_rodape"]),("10","99"))
     def test_link_inequivoco_alta_fallback_media_e_ambiguo_fechado(self):
         tabela=[["900001","01/01/2026","Peticao","TIPO"]]
         base={"pagina_origem":1,"texto_associado":""}
@@ -49,6 +53,7 @@ class IntegridadeRastreabilidade25(unittest.TestCase):
         raiz=Path(__file__).resolve().parents[1];m=json.loads((raiz/"tests/fixtures/pje/manifesto-minimo-valido.json").read_text(encoding="utf8"))
         m["indice"]["itens"][0]["metodo_associacao_link"]="FALLBACK_POSICIONAL";m["indice"]["itens"][0]["confianca"]["nivel"]="ALTA";m["documentos"]=[];m["metricas_extracao"]["documentos_segmentados"]=0;m["metricas_extracao"]["documentos_confirmados"]=0
         erros,_=validar_integridade(m);self.assertTrue(any("fallback posicional" in e for e in erros));self.assertTrue(any("não contabilizados" in e for e in erros));self.assertTrue(any("Status VALIDADO" in e for e in erros))
+        m["conflitos"]=[{"observacoes":"DOC-PJE-001"}];erros,_=validar_integridade(m);self.assertTrue(any("não contabilizados" in e for e in erros))
     def test_capa_preserva_pagina_real_e_conflito(self):
         r=extrair_capa(Leitor({1:"0000001-00.2026.4.00.0001",2:"Tribunal: TJBA\nClasse: A",3:"Classe: B"}),[1,2,3])
         self.assertEqual(r["processo"]["tribunal"]["proveniencia"]["pagina_pdf"],2);self.assertEqual(r["processo"]["classe"]["status"],"CONFLITANTE");self.assertEqual({f["pagina_pdf"] for f in r["processo"]["classe"]["fontes"]},{2,3})
@@ -72,7 +77,7 @@ class IntegridadeRastreabilidade25(unittest.TestCase):
         redacao={"blocos":[],"claims":[{"id":"CLAIM-RED-001","texto_semantico":"Documento de 10/08/2026","doc_ids":["DOC-001"],"pat_ids":[]}]}
         motor={"patologias":[],"catalogo_evidencias":[{"id":"DOC-001","data":"2026-08-11"}]}
         self.assertEqual(auditar_fidelidade(redacao,motor)[0]["tipo"],"DATA_ALTERADA")
-        self.assertFalse(any(a["tipo"].startswith("DATA_LAUDO") for a in auditar_laudo_semantico({"encerramento":{"data":None}},motor)))
+        self.assertTrue(any(a["tipo"]=="DATA_LAUDO_AUSENTE" for a in auditar_laudo_semantico({"encerramento":{"data":None}},motor)))
 
     def test_autocorrecao_preserva_catalogo_corrigido_trilha_e_idempotencia(self):
         resultado={"patologias":[],"questoes_saneadas":[],"cobertura_quesitos":[],"catalogo_evidencias":[{"id":"OBS-001","aspectos_suportados":["CAUSA"],"aspectos_contraditos":[],"auditoria_aspectos":[{"aspecto":"CAUSA","polaridade":"NEGADO"}]}]}

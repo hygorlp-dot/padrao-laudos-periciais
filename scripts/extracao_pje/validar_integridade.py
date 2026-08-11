@@ -36,8 +36,8 @@ def validar_integridade(manifesto):
     met = manifesto["metricas_extracao"]
     itens={i["documento_id_interno"] for i in manifesto["indice"]["itens"] if i.get("documento_id_interno")}
     contabilizados={d.get("documento_id") for d in documentos if d.get("ordem_indice") is not None}
-    contabilizados|={c.get("observacoes") for c in manifesto["conflitos"]}
-    contabilizados|={p.get("campo") for p in manifesto.get("pendencias",[])}
+    contabilizados|={x for c in manifesto["conflitos"] for x in c.get("itens_indice_relacionados",[])}
+    contabilizados|={x for p in manifesto.get("pendencias",[]) for x in p.get("itens_indice_relacionados",[])}
     faltantes=itens-{x for x in contabilizados if x}
     if faltantes: erros.append("Itens do índice não contabilizados: "+", ".join(sorted(faltantes)))
     if manifesto.get("status_validacao")=="VALIDADO" and (faltantes or manifesto.get("conflitos") or manifesto.get("pendencias")):erros.append("Status VALIDADO incompatível com item não contabilizado, conflito ou pendência")

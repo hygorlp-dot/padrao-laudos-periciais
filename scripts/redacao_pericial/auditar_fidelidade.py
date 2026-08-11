@@ -137,7 +137,8 @@ def auditar_laudo_semantico(laudo, motor_final):
         achados.append({"tipo": tipo, "severidade": "CRITICO", "pat_id": identificador,
                         "esperado": esperado, "atual": atual, "bloqueante": True})
     data_encerramento=laudo.get("encerramento",{}).get("data")
-    if data_encerramento and not extrair_datas(str(data_encerramento)):add("DATA_LAUDO_INVALIDA","encerramento","data canônica",data_encerramento)
+    if not data_encerramento:add("DATA_LAUDO_AUSENTE","encerramento","data_laudo estruturada",data_encerramento)
+    elif not extrair_datas(str(data_encerramento)):add("DATA_LAUDO_INVALIDA","encerramento","data canônica",data_encerramento)
     for linha in laudo.get("quadro_resumo", []):
         pat = pats.get(linha.get("pat_id"))
         if not pat:

@@ -50,7 +50,7 @@ def construir_manifesto(caminho_pdf, raiz_repositorio=None):
                 conflitos.append({"conflito_id": f"CON-PJE-{len(conflitos)+1:03d}", "campo": "indice.pagina_destino_link", "tipo": "OUTRO",
                                   "descricao": "Mais de um item do índice aponta para o mesmo destino", "valores_conflitantes": [str(seg["pagina_pdf_inicio"])],
                                   "fontes": fontes,
-                                  "status": "ABERTO", "bloqueante": True, "decisao": None, "observacoes": item["documento_id_interno"]})
+                                  "status": "ABERTO", "bloqueante": True, "decisao": None, "observacoes": item["documento_id_interno"], "itens_indice_relacionados":[item["documento_id_interno"]]})
                 continue
             rec = reconciliar_documento({**seg, "id_rodape": id_rodape, "item_indice": item, "rodapes": rodapes})
             fatia = paginas[seg["pagina_pdf_inicio"] - 1:seg["pagina_pdf_fim"]]
@@ -73,11 +73,15 @@ def construir_manifesto(caminho_pdf, raiz_repositorio=None):
                 conflitos.append({"conflito_id": f"CON-PJE-{len(conflitos)+1:03d}", "campo": "id_pje", "tipo": "DIVERGENCIA_INDICE_RODAPE",
                                   "descricao": "ID do índice diverge do rodapé", "valores_conflitantes": [doc["status_reconciliacao"]["id_indice"], doc["status_reconciliacao"]["id_rodape"]],
                                   "fontes": [capa["processo"]["numero_cnj"]["proveniencia"]] * 2, "status": "ABERTO", "bloqueante": True,
-                                  "decisao": None, "observacoes": doc["documento_id"]})
+                                  "decisao": None, "observacoes": doc["documento_id"], "itens_indice_relacionados":[doc["documento_id"]]})
         pendencias = []
         if not capa["cnj_localizado"]:
             pendencias.append({"pendencia_id": "PEN-PJE-001", "campo": "processo.numero_cnj", "motivo_ausencia": "NAO_LOCALIZADO",
-                               "descricao": "CNJ principal não localizado na capa ou índice", "bloqueante": True, "fontes": [], "status": "ABERTA"})
+                               "descricao": "CNJ principal não localizado na capa ou índice", "bloqueante": True, "fontes": [], "status": "ABERTA", "itens_indice_relacionados":[]})
+        contabilizados={d["documento_id"] for d in documentos if d.get("ordem_indice") is not None}|{x for c in conflitos for x in c.get("itens_indice_relacionados",[])}
+        for item in itens:
+            if item["documento_id_interno"] in contabilizados:continue
+            pendencias.append({"pendencia_id":f"PEN-PJE-{len(pendencias)+1:03d}","campo":"indice.pagina_destino_link","motivo_ausencia":"NAO_LOCALIZADO","descricao":"Item do índice sem destino segmentável inequívoco","bloqueante":True,"fontes":[],"status":"ABERTA","itens_indice_relacionados":[item["documento_id_interno"]]})
         eventos = []
         if capa["ultima_distribuicao"]["valor"]:
             eventos.append({"evento_id": "EVE-001", "tipo": "OUTRO", "data": None, "hora": None,
