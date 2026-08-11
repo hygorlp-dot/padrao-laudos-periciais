@@ -1,0 +1,534 @@
+{
+    "schema_version":  "1.0.0",
+    "boundaries":  [
+                       {
+                           "id":  "PJE_EXTRACTION",
+                           "paths":  [
+                                         "scripts/extracao_pje/"
+                                     ],
+                           "invariants":  [
+                                              "CARDINALITY_CONSERVATION",
+                                              "DATE_FIDELITY",
+                                              "DOCUMENT_PAGE_FIDELITY",
+                                              "EXACT_PAGE_ACCOUNTING",
+                                              "IDEMPOTENCE",
+                                              "NO_SILENT_LOSS",
+                                              "NO_SILENT_PAGE_LOSS",
+                                              "ORDER_INVARIANCE",
+                                              "PROVENANCE_FIDELITY",
+                                              "STABLE_IDENTITY"
+                                          ],
+                           "schemas":  [
+                                           "manifesto-pje.schema.json",
+                                           "documento-pje.schema.json"
+                                       ],
+                           "tests":  [
+                                         "tests/test_extracao_pje.py",
+                                         "tests/test_core_properties.py"
+                                     ],
+                           "consumers":  [
+                                             "PJE_RECONCILIATION",
+                                             "PJE_MANIFEST"
+                                         ]
+                       },
+                       {
+                           "id":  "PJE_RECONCILIATION",
+                           "paths":  [
+                                         "scripts/extracao_pje/reconciliar_indice.py",
+                                         "scripts/extracao_pje/segmentar_documentos.py"
+                                     ],
+                           "invariants":  [
+                                              "DOCUMENT_PAGE_FIDELITY",
+                                              "EXACT_ITEM_ACCOUNTING",
+                                              "EXACT_PAGE_ACCOUNTING",
+                                              "NO_SILENT_OVERWRITE",
+                                              "NO_SILENT_PAGE_LOSS"
+                                          ],
+                           "schemas":  [
+                                           "manifesto-pje.schema.json"
+                                       ],
+                           "tests":  [
+                                         "tests/test_final_delta_r3.py"
+                                     ],
+                           "consumers":  [
+                                             "PJE_MANIFEST"
+                                         ]
+                       },
+                       {
+                           "id":  "PJE_MANIFEST",
+                           "paths":  [
+                                         "scripts/extracao_pje/gerar_manifesto.py",
+                                         "scripts/extracao_pje/validar_integridade.py"
+                                     ],
+                           "invariants":  [
+                                              "CARDINALITY_CONSERVATION",
+                                              "DOCUMENT_PAGE_FIDELITY",
+                                              "EXACT_ITEM_ACCOUNTING",
+                                              "EXACT_PAGE_ACCOUNTING",
+                                              "FAIL_CLOSED",
+                                              "NO_DANGLING_REFERENCE",
+                                              "NO_SILENT_LOSS",
+                                              "NO_SILENT_OVERWRITE",
+                                              "NO_SILENT_PAGE_LOSS",
+                                              "PRODUCER_NOT_VALIDATOR",
+                                              "SOURCE_TRUTH"
+                                          ],
+                           "schemas":  [
+                                           "manifesto-pje.schema.json"
+                                       ],
+                           "tests":  [
+                                         "tests/test_integridade_rastreabilidade_25.py",
+                                         "tests/test_final_delta_r3.py"
+                                     ],
+                           "consumers":  [
+                                             "TRIAGE",
+                                             "PROCESS_GENERATION"
+                                         ]
+                       },
+                       {
+                           "id":  "DOCUMENT_CLASSIFICATION",
+                           "paths":  [
+                                         "scripts/extracao_pje/classificar_documentos.py"
+                                     ],
+                           "invariants":  [
+                                              "ORDER_INVARIANCE"
+                                          ],
+                           "schemas":  [
+                                           "documento-pje.schema.json"
+                                       ],
+                           "tests":  [
+                                         "tests/test_hardening_adicional.py"
+                                     ],
+                           "consumers":  [
+                                             "TRIAGE"
+                                         ]
+                       },
+                       {
+                           "id":  "TRIAGE",
+                           "paths":  [
+                                         "scripts/triagem_pericial/"
+                                     ],
+                           "invariants":  [
+                                              "ALLEGATION_NOT_OBSERVATION",
+                                              "FAIL_CLOSED",
+                                              "JURIDICAL_TECHNICAL_ISOLATION",
+                                              "PROVENANCE_FIDELITY"
+                                          ],
+                           "schemas":  [
+                                           "delimitacao-pericial.schema.json"
+                                       ],
+                           "tests":  [
+                                         "tests/test_delimitacao_pericial.py",
+                                         "tests/test_claude_terminal_continuation.py"
+                                     ],
+                           "consumers":  [
+                                             "DELIMITATION"
+                                         ]
+                       },
+                       {
+                           "id":  "DELIMITATION",
+                           "paths":  [
+                                         "scripts/triagem_pericial/gerar_delimitacao.py",
+                                         "scripts/triagem_pericial/validar_delimitacao.py"
+                                     ],
+                           "invariants":  [
+                                              "FAIL_CLOSED",
+                                              "IDEMPOTENCE",
+                                              "JURIDICAL_TECHNICAL_ISOLATION",
+                                              "NO_DANGLING_REFERENCE",
+                                              "PRODUCER_NOT_VALIDATOR",
+                                              "SOURCE_TRUTH"
+                                          ],
+                           "schemas":  [
+                                           "delimitacao-pericial.schema.json"
+                                       ],
+                           "tests":  [
+                                         "tests/test_claude_terminal_continuation.py"
+                                     ],
+                           "consumers":  [
+                                             "PROCESS_GENERATION",
+                                             "PLANNING"
+                                         ]
+                       },
+                       {
+                           "id":  "PROCESS_GENERATION",
+                           "paths":  [
+                                         "scripts/planejamento_pericial/gerar_processo.py"
+                                     ],
+                           "invariants":  [
+                                              "DATE_FIDELITY",
+                                              "FAIL_CLOSED",
+                                              "SOURCE_TRUTH"
+                                          ],
+                           "schemas":  [
+                                           "processo.schema.json"
+                                       ],
+                           "tests":  [
+                                         "tests/test_claude_terminal_continuation.py"
+                                     ],
+                           "consumers":  [
+                                             "PLANNING",
+                                             "MOTOR",
+                                             "REDACTION"
+                                         ]
+                       },
+                       {
+                           "id":  "PLANNING",
+                           "paths":  [
+                                         "scripts/planejamento_pericial/"
+                                     ],
+                           "invariants":  [
+                                              "FAIL_CLOSED",
+                                              "MEASUREMENT_EQUIVALENCE_INTEGRITY",
+                                              "PRODUCER_NOT_VALIDATOR",
+                                              "SOURCE_TRUTH"
+                                          ],
+                           "schemas":  [
+                                           "plano-vistoria.schema.json"
+                                       ],
+                           "tests":  [
+                                         "tests/test_planejamento_pericial.py",
+                                         "tests/test_core_properties.py"
+                                     ],
+                           "consumers":  [
+                                             "COVERAGE",
+                                             "INSPECTION"
+                                         ]
+                       },
+                       {
+                           "id":  "COVERAGE",
+                           "paths":  [
+                                         "scripts/planejamento_pericial/validar_plano.py"
+                                     ],
+                           "invariants":  [
+                                              "ESSENTIAL_INPUT_REMOVAL_DEGRADES_RESULT",
+                                              "FAIL_CLOSED",
+                                              "MEASUREMENT_EQUIVALENCE_INTEGRITY",
+                                              "NO_DANGLING_REFERENCE",
+                                              "PRODUCER_NOT_VALIDATOR",
+                                              "VALUE_UNIT_FIDELITY"
+                                          ],
+                           "schemas":  [
+                                           "plano-vistoria.schema.json",
+                                           "vistoria.schema.json"
+                                       ],
+                           "tests":  [
+                                         "tests/test_core_properties.py",
+                                         "tests/test_final_closure_r7.py"
+                                     ],
+                           "consumers":  [
+                                             "MOTOR",
+                                             "REDACTION"
+                                         ]
+                       },
+                       {
+                           "id":  "INSPECTION",
+                           "paths":  [
+                                         "scripts/vistoria_estruturada/"
+                                     ],
+                           "invariants":  [
+                                              "ALLEGATION_NOT_OBSERVATION",
+                                              "DECLARATION_NOT_OBSERVATION",
+                                              "MEASUREMENT_EQUIVALENCE_INTEGRITY",
+                                              "NAO_CONSTATADO_NOT_INEXISTENTE",
+                                              "NO_SILENT_EVIDENCE_LOSS",
+                                              "PROVENANCE_FIDELITY",
+                                              "STABLE_IDENTITY"
+                                          ],
+                           "schemas":  [
+                                           "vistoria.schema.json",
+                                           "inventario-vistoria.schema.json"
+                                       ],
+                           "tests":  [
+                                         "tests/test_auditoria_final2.py",
+                                         "tests/test_motor_vicios_final.py"
+                                     ],
+                           "consumers":  [
+                                             "EVIDENCE_GRAPH",
+                                             "MOTOR"
+                                         ]
+                       },
+                       {
+                           "id":  "EVIDENCE_GRAPH",
+                           "paths":  [
+                                         "scripts/motor_vicios/evidencias.py",
+                                         "scripts/motor_vicios/pipeline.py"
+                                     ],
+                           "invariants":  [
+                                              "ALLEGATION_NOT_OBSERVATION",
+                                              "DECLARATION_NOT_OBSERVATION",
+                                              "ESSENTIAL_INPUT_REMOVAL_DEGRADES_RESULT",
+                                              "IRRELEVANT_INPUT_INVARIANCE",
+                                              "NO_DANGLING_REFERENCE",
+                                              "NO_SILENT_EVIDENCE_LOSS",
+                                              "NO_SILENT_LOSS",
+                                              "NORM_NOT_PHYSICAL_EVIDENCE",
+                                              "ORDER_INVARIANCE",
+                                              "PROVENANCE_FIDELITY",
+                                              "SEMANTIC_MONOTONICITY",
+                                              "STABLE_IDENTITY"
+                                          ],
+                           "schemas":  [
+                                           "analise-motor-vicios.schema.json"
+                                       ],
+                           "tests":  [
+                                         "tests/test_claude_terminal_continuation.py",
+                                         "tests/test_core_pericial_p0.py"
+                                     ],
+                           "consumers":  [
+                                             "MOTOR",
+                                             "CAUSALITY",
+                                             "AUDIT"
+                                         ]
+                       },
+                       {
+                           "id":  "MOTOR",
+                           "paths":  [
+                                         "scripts/motor_vicios/"
+                                     ],
+                           "invariants":  [
+                                              "ALLEGATION_NOT_OBSERVATION",
+                                              "CORRECTION_PERSISTENCE",
+                                              "DECLARATION_NOT_OBSERVATION",
+                                              "ESSENTIAL_INPUT_REMOVAL_DEGRADES_RESULT",
+                                              "FAIL_CLOSED",
+                                              "IDEMPOTENCE",
+                                              "IRRELEVANT_INPUT_INVARIANCE",
+                                              "NAO_CONSTATADO_NOT_INEXISTENTE",
+                                              "NO_DANGLING_REFERENCE",
+                                              "NO_SILENT_EVIDENCE_LOSS",
+                                              "NO_SILENT_LOSS",
+                                              "ORDER_INVARIANCE",
+                                              "PRODUCER_NOT_VALIDATOR",
+                                              "SECOND_AUDIT_USES_CORRECTED_STATE",
+                                              "SOURCE_TRUTH",
+                                              "STABLE_IDENTITY",
+                                              "VALUE_UNIT_FIDELITY"
+                                          ],
+                           "schemas":  [
+                                           "analise-motor-vicios.schema.json",
+                                           "patologia.schema.json"
+                                       ],
+                           "tests":  [
+                                         "tests/test_motor_vicios_final.py",
+                                         "tests/test_core_pericial_p0.py"
+                                     ],
+                           "consumers":  [
+                                             "AUTOCORRECTION",
+                                             "AUDIT",
+                                             "REDACTION"
+                                         ]
+                       },
+                       {
+                           "id":  "CAUSALITY",
+                           "paths":  [
+                                         "scripts/motor_vicios/hipoteses.py",
+                                         "scripts/motor_vicios/regras.py",
+                                         "scripts/motor_vicios/regras_probatorias.py"
+                                     ],
+                           "invariants":  [
+                                              "IRRELEVANT_INPUT_INVARIANCE",
+                                              "NORM_NOT_PHYSICAL_EVIDENCE",
+                                              "SEMANTIC_MONOTONICITY"
+                                          ],
+                           "schemas":  [
+                                           "patologia.schema.json"
+                                       ],
+                           "tests":  [
+                                         "tests/test_motor_vicios_final.py",
+                                         "tests/test_hardening_adicional.py"
+                                     ],
+                           "consumers":  [
+                                             "MOTOR",
+                                             "AUDIT"
+                                         ]
+                       },
+                       {
+                           "id":  "NORMS",
+                           "paths":  [
+                                         "scripts/motor_vicios/normas.py",
+                                         "scripts/conhecimento_privado/"
+                                     ],
+                           "invariants":  [
+                                              "NORM_NOT_PHYSICAL_EVIDENCE",
+                                              "NORMATIVE_FIDELITY",
+                                              "PROVENANCE_FIDELITY"
+                                          ],
+                           "schemas":  [
+                                           "conhecimento-normativo.schema.json",
+                                           "fonte-online.schema.json"
+                                       ],
+                           "tests":  [
+                                         "tests/test_final_safety_closure.py",
+                                         "tests/test_pesquisa_online.py"
+                                     ],
+                           "consumers":  [
+                                             "CAUSALITY",
+                                             "AUDIT",
+                                             "REDACTION"
+                                         ]
+                       },
+                       {
+                           "id":  "AUTOCORRECTION",
+                           "paths":  [
+                                         "scripts/motor_vicios/autocorrigir.py",
+                                         "scripts/redacao_pericial/autocorrigir_redacao.py"
+                                     ],
+                           "invariants":  [
+                                              "CORRECTION_PERSISTENCE",
+                                              "CORRECTION_TRACEABILITY",
+                                              "EDITORIAL_IMMUTABILITY",
+                                              "IDEMPOTENCE",
+                                              "NO_SILENT_OVERWRITE",
+                                              "SECOND_AUDIT_USES_CORRECTED_STATE"
+                                          ],
+                           "schemas":  [
+
+                                       ],
+                           "tests":  [
+                                         "tests/test_final_delta_r3.py"
+                                     ],
+                           "consumers":  [
+                                             "AUDIT",
+                                             "REDACTION"
+                                         ]
+                       },
+                       {
+                           "id":  "AUDIT",
+                           "paths":  [
+                                         "scripts/auditoria_pericial/"
+                                     ],
+                           "invariants":  [
+                                              "CORRECTION_PERSISTENCE",
+                                              "CORRECTION_TRACEABILITY",
+                                              "DECLARATION_NOT_OBSERVATION",
+                                              "ESSENTIAL_INPUT_REMOVAL_DEGRADES_RESULT",
+                                              "FAIL_CLOSED",
+                                              "IRRELEVANT_INPUT_INVARIANCE",
+                                              "NO_CERTAINTY_INFLATION",
+                                              "NO_SILENT_EVIDENCE_LOSS",
+                                              "NORM_NOT_PHYSICAL_EVIDENCE",
+                                              "NORMATIVE_FIDELITY",
+                                              "PROVENANCE_FIDELITY",
+                                              "SECOND_AUDIT_USES_CORRECTED_STATE",
+                                              "SEMANTIC_MONOTONICITY",
+                                              "TEXT_GROUNDING"
+                                          ],
+                           "schemas":  [
+                                           "auditoria-grounding-pericial.schema.json",
+                                           "trilha-auditoria-agente.schema.json"
+                                       ],
+                           "tests":  [
+                                         "tests/test_auditoria_pericial.py",
+                                         "tests/test_final_safety_closure.py"
+                                     ],
+                           "consumers":  [
+                                             "MOTOR",
+                                             "REDACTION"
+                                         ]
+                       },
+                       {
+                           "id":  "REDACTION",
+                           "paths":  [
+                                         "scripts/redacao_pericial/"
+                                     ],
+                           "invariants":  [
+                                              "DATE_FIDELITY",
+                                              "EDITORIAL_IMMUTABILITY",
+                                              "FAIL_CLOSED",
+                                              "JURIDICAL_TECHNICAL_ISOLATION",
+                                              "NAO_CONSTATADO_NOT_INEXISTENTE",
+                                              "NO_CERTAINTY_INFLATION",
+                                              "NO_DANGLING_REFERENCE",
+                                              "NORMATIVE_FIDELITY",
+                                              "PRODUCER_NOT_VALIDATOR",
+                                              "PROVENANCE_FIDELITY",
+                                              "SEMANTIC_MONOTONICITY",
+                                              "SOURCE_TRUTH",
+                                              "TEXT_GROUNDING",
+                                              "VALUE_UNIT_FIDELITY"
+                                          ],
+                           "schemas":  [
+                                           "plano-redacao.schema.json",
+                                           "laudo-redacao.schema.json"
+                                       ],
+                           "tests":  [
+                                         "tests/test_redacao_pericial.py",
+                                         "tests/test_final_safety_closure.py"
+                                     ],
+                           "consumers":  [
+                                             "FIDELITY"
+                                         ]
+                       },
+                       {
+                           "id":  "FIDELITY",
+                           "paths":  [
+                                         "scripts/redacao_pericial/auditar_fidelidade.py",
+                                         "scripts/redacao_pericial/datas.py"
+                                     ],
+                           "invariants":  [
+                                              "DATE_FIDELITY",
+                                              "EDITORIAL_IMMUTABILITY",
+                                              "NAO_CONSTATADO_NOT_INEXISTENTE",
+                                              "NO_CERTAINTY_INFLATION",
+                                              "NORMATIVE_FIDELITY",
+                                              "TEXT_GROUNDING",
+                                              "VALUE_UNIT_FIDELITY"
+                                          ],
+                           "schemas":  [
+                                           "laudo-redacao.schema.json"
+                                       ],
+                           "tests":  [
+                                         "tests/test_redacao_pericial.py"
+                                     ],
+                           "consumers":  [
+
+                                         ]
+                       },
+                       {
+                           "id":  "EGRESS",
+                           "paths":  [
+                                         "scripts/conhecimento_privado/pesquisa_online.py"
+                                     ],
+                           "invariants":  [
+                                              "FAIL_CLOSED",
+                                              "PII_DENY_BY_DEFAULT",
+                                              "UNKNOWN_EXTERNAL_PROVIDER_FAIL_CLOSED"
+                                          ],
+                           "schemas":  [
+                                           "fonte-online.schema.json"
+                                       ],
+                           "tests":  [
+                                         "tests/test_pesquisa_online.py",
+                                         "tests/test_final_delta_r3.py"
+                                     ],
+                           "consumers":  [
+                                             "NORMS"
+                                         ]
+                       },
+                       {
+                           "id":  "THIRD_PARTY_TRUST",
+                           "paths":  [
+                                         "scripts/terceiros/",
+                                         ".agents/skills/impeccable/",
+                                         ".agents/skills/claim-audit/",
+                                         ".agents/skills/proposition-audit/"
+                                     ],
+                           "invariants":  [
+                                              "FAIL_CLOSED",
+                                              "PII_DENY_BY_DEFAULT",
+                                              "UNKNOWN_EXTERNAL_PROVIDER_FAIL_CLOSED"
+                                          ],
+                           "schemas":  [
+
+                                       ],
+                           "tests":  [
+                                         "tests/test_integracoes_externas.py",
+                                         "tests/test_superpowers_safety.py"
+                                     ],
+                           "consumers":  [
+
+                                         ]
+                       }
+                   ]
+}

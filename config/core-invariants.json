@@ -1,0 +1,592 @@
+{
+    "schema_version":  "1.0.0",
+    "invariants":  [
+                       {
+                           "id":  "NO_SILENT_LOSS",
+                           "descricao":  "Nenhum item vÃ¡lido desaparece sem diagnÃ³stico.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "EVIDENCE_GRAPH",
+                                              "MOTOR",
+                                              "PJE_EXTRACTION",
+                                              "PJE_MANIFEST"
+                                          ],
+                           "testes":  [
+                                          "tests/test_final_delta_r3.py",
+                                          "tests/test_claude_terminal_continuation.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "NO_SILENT_PAGE_LOSS",
+                           "descricao":  "Toda pÃ¡gina possui destino ou conflito explÃ­cito.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "PJE_EXTRACTION",
+                                              "PJE_MANIFEST",
+                                              "PJE_RECONCILIATION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_final_delta_r3.py",
+                                          "tests/test_core_properties.py"
+                                      ],
+                           "global":  false,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "NO_SILENT_OVERWRITE",
+                           "descricao":  "ColisÃµes nunca sobrescrevem conteÃºdo silenciosamente.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "AUTOCORRECTION",
+                                              "PJE_MANIFEST",
+                                              "PJE_RECONCILIATION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_final_delta_r3.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "NO_SILENT_EVIDENCE_LOSS",
+                           "descricao":  "NÃ³s legÃ­timos permanecem no grafo de evidÃªncias.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "AUDIT",
+                                              "EVIDENCE_GRAPH",
+                                              "INSPECTION",
+                                              "MOTOR"
+                                          ],
+                           "testes":  [
+                                          "tests/test_claude_terminal_continuation.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "NO_DANGLING_REFERENCE",
+                           "descricao":  "Toda referÃªncia resolve para identidade existente.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "COVERAGE",
+                                              "DELIMITATION",
+                                              "EVIDENCE_GRAPH",
+                                              "MOTOR",
+                                              "PJE_MANIFEST",
+                                              "REDACTION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_claude_terminal_continuation.py",
+                                          "tests/test_final_safety_closure.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "CARDINALITY_CONSERVATION",
+                           "descricao":  "Contagens de entrada e saÃ­da sÃ£o conservadas.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "PJE_EXTRACTION",
+                                              "PJE_MANIFEST"
+                                          ],
+                           "testes":  [
+                                          "tests/test_core_properties.py",
+                                          "tests/test_final_delta_r3.py"
+                                      ],
+                           "global":  false,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "EXACT_ITEM_ACCOUNTING",
+                           "descricao":  "Cada item Ã© contabilizado exatamente uma vez.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "PJE_MANIFEST",
+                                              "PJE_RECONCILIATION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_final_delta_r3.py"
+                                      ],
+                           "global":  false,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "EXACT_PAGE_ACCOUNTING",
+                           "descricao":  "Cada pÃ¡gina Ã© contabilizada exatamente uma vez.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "PJE_EXTRACTION",
+                                              "PJE_MANIFEST",
+                                              "PJE_RECONCILIATION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_core_properties.py",
+                                          "tests/test_final_delta_r3.py"
+                                      ],
+                           "global":  false,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "SOURCE_TRUTH",
+                           "descricao":  "Consumidores derivam estado das fontes canÃ´nicas.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "DELIMITATION",
+                                              "MOTOR",
+                                              "PJE_MANIFEST",
+                                              "PLANNING",
+                                              "PROCESS_GENERATION",
+                                              "REDACTION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_final_safety_closure.py",
+                                          "tests/test_claude_terminal_continuation.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "PROVENANCE_FIDELITY",
+                           "descricao":  "ProveniÃªncia preserva identidade e origem.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "AUDIT",
+                                              "EVIDENCE_GRAPH",
+                                              "INSPECTION",
+                                              "NORMS",
+                                              "PJE_EXTRACTION",
+                                              "REDACTION",
+                                              "TRIAGE"
+                                          ],
+                           "testes":  [
+                                          "tests/test_integridade_rastreabilidade_25.py",
+                                          "tests/test_final_safety_closure.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "DOCUMENT_PAGE_FIDELITY",
+                           "descricao":  "Documento e pÃ¡gina permanecem inseparÃ¡veis.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "PJE_EXTRACTION",
+                                              "PJE_MANIFEST",
+                                              "PJE_RECONCILIATION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_integridade_rastreabilidade_25.py"
+                                      ],
+                           "global":  false,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "FAIL_CLOSED",
+                           "descricao":  "Falha material ou configuraÃ§Ã£o incerta bloqueia avanÃ§o.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "AUDIT",
+                                              "COVERAGE",
+                                              "DELIMITATION",
+                                              "EGRESS",
+                                              "MOTOR",
+                                              "PJE_MANIFEST",
+                                              "PLANNING",
+                                              "PROCESS_GENERATION",
+                                              "REDACTION",
+                                              "THIRD_PARTY_TRUST",
+                                              "TRIAGE"
+                                          ],
+                           "testes":  [
+                                          "tests/test_repository_safety_gate.py",
+                                          "tests/test_final_safety_closure.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "PRODUCER_NOT_VALIDATOR",
+                           "descricao":  "Produtor nÃ£o prova sozinho a validade do que produziu.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "COVERAGE",
+                                              "DELIMITATION",
+                                              "MOTOR",
+                                              "PJE_MANIFEST",
+                                              "PLANNING",
+                                              "REDACTION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_final_safety_closure.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "CORRECTION_PERSISTENCE",
+                           "descricao":  "CorreÃ§Ã£o validada persiste no estado final.",
+                           "severidade":  "P1",
+                           "boundaries":  [
+                                              "AUDIT",
+                                              "AUTOCORRECTION",
+                                              "MOTOR"
+                                          ],
+                           "testes":  [
+                                          "tests/test_final_delta_r3.py"
+                                      ],
+                           "global":  false,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "CORRECTION_TRACEABILITY",
+                           "descricao":  "Toda correÃ§Ã£o possui trilha identificÃ¡vel.",
+                           "severidade":  "P1",
+                           "boundaries":  [
+                                              "AUDIT",
+                                              "AUTOCORRECTION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_final_safety_closure.py"
+                                      ],
+                           "global":  false,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "SECOND_AUDIT_USES_CORRECTED_STATE",
+                           "descricao":  "Segunda auditoria usa o estado corrigido.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "AUDIT",
+                                              "AUTOCORRECTION",
+                                              "MOTOR"
+                                          ],
+                           "testes":  [
+                                          "tests/test_final_delta_r3.py"
+                                      ],
+                           "global":  false,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "SEMANTIC_MONOTONICITY",
+                           "descricao":  "Mais suporte vÃ¡lido nÃ£o degrada semanticamente o resultado.",
+                           "severidade":  "P1",
+                           "boundaries":  [
+                                              "AUDIT",
+                                              "CAUSALITY",
+                                              "EVIDENCE_GRAPH",
+                                              "REDACTION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_core_properties.py",
+                                          "tests/test_final_safety_closure.py"
+                                      ],
+                           "global":  false,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "IDEMPOTENCE",
+                           "descricao":  "Reexecutar entrada equivalente preserva resultado.",
+                           "severidade":  "P1",
+                           "boundaries":  [
+                                              "AUTOCORRECTION",
+                                              "DELIMITATION",
+                                              "MOTOR",
+                                              "PJE_EXTRACTION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_core_properties.py",
+                                          "tests/test_claude_terminal_continuation.py"
+                                      ],
+                           "global":  false,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "ORDER_INVARIANCE",
+                           "descricao":  "Ordem equivalente nÃ£o altera resultado.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "DOCUMENT_CLASSIFICATION",
+                                              "EVIDENCE_GRAPH",
+                                              "MOTOR",
+                                              "PJE_EXTRACTION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_core_properties.py",
+                                          "tests/test_hardening_adicional.py"
+                                      ],
+                           "global":  false,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "IRRELEVANT_INPUT_INVARIANCE",
+                           "descricao":  "Entrada irrelevante nÃ£o altera conclusÃ£o ou gate.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "AUDIT",
+                                              "CAUSALITY",
+                                              "EVIDENCE_GRAPH",
+                                              "MOTOR"
+                                          ],
+                           "testes":  [
+                                          "tests/test_core_pericial_p0.py"
+                                      ],
+                           "global":  false,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "ESSENTIAL_INPUT_REMOVAL_DEGRADES_RESULT",
+                           "descricao":  "Remover suporte essencial reduz confianÃ§a ou bloqueia.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "AUDIT",
+                                              "COVERAGE",
+                                              "EVIDENCE_GRAPH",
+                                              "MOTOR"
+                                          ],
+                           "testes":  [
+                                          "tests/test_core_pericial_p0.py"
+                                      ],
+                           "global":  false,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "STABLE_IDENTITY",
+                           "descricao":  "Identidades permanecem estÃ¡veis sob entradas equivalentes.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "EVIDENCE_GRAPH",
+                                              "INSPECTION",
+                                              "MOTOR",
+                                              "PJE_EXTRACTION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_auditoria_final2.py"
+                                      ],
+                           "global":  false,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "VALUE_UNIT_FIDELITY",
+                           "descricao":  "Valor e unidade sÃ£o comparados estruturalmente.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "COVERAGE",
+                                              "FIDELITY",
+                                              "MOTOR",
+                                              "REDACTION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_core_properties.py",
+                                          "tests/test_redacao_pericial.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "DATE_FIDELITY",
+                           "descricao":  "Datas permanecem vinculadas Ã  fonte correta.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "FIDELITY",
+                                              "PJE_EXTRACTION",
+                                              "PROCESS_GENERATION",
+                                              "REDACTION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_redacao_pericial.py",
+                                          "tests/test_integridade_rastreabilidade_25.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "NORMATIVE_FIDELITY",
+                           "descricao":  "Norma e item exigem autoridade e proveniÃªncia verificadas.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "AUDIT",
+                                              "FIDELITY",
+                                              "NORMS",
+                                              "REDACTION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_final_safety_closure.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "TEXT_GROUNDING",
+                           "descricao":  "RedaÃ§Ã£o material permanece derivÃ¡vel das claims auditadas.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "AUDIT",
+                                              "FIDELITY",
+                                              "REDACTION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_final_safety_closure.py"
+                                      ],
+                           "global":  false,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "NO_CERTAINTY_INFLATION",
+                           "descricao":  "RedaÃ§Ã£o nÃ£o eleva certeza alÃ©m do suporte.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "AUDIT",
+                                              "FIDELITY",
+                                              "REDACTION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_final_safety_closure.py"
+                                      ],
+                           "global":  false,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "ALLEGATION_NOT_OBSERVATION",
+                           "descricao":  "AlegaÃ§Ã£o nÃ£o Ã© convertida em observaÃ§Ã£o.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "EVIDENCE_GRAPH",
+                                              "INSPECTION",
+                                              "MOTOR",
+                                              "TRIAGE"
+                                          ],
+                           "testes":  [
+                                          "tests/test_final_safety_closure.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "DECLARATION_NOT_OBSERVATION",
+                           "descricao":  "DeclaraÃ§Ã£o nÃ£o Ã© convertida em evidÃªncia fÃ­sica.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "AUDIT",
+                                              "EVIDENCE_GRAPH",
+                                              "INSPECTION",
+                                              "MOTOR"
+                                          ],
+                           "testes":  [
+                                          "tests/test_claude_terminal_continuation.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "NORM_NOT_PHYSICAL_EVIDENCE",
+                           "descricao":  "Norma nÃ£o prova constataÃ§Ã£o fÃ­sica.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "AUDIT",
+                                              "CAUSALITY",
+                                              "EVIDENCE_GRAPH",
+                                              "NORMS"
+                                          ],
+                           "testes":  [
+                                          "tests/test_final_safety_closure.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "NAO_CONSTATADO_NOT_INEXISTENTE",
+                           "descricao":  "NÃ£o constatado nÃ£o Ã© inexistente.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "FIDELITY",
+                                              "INSPECTION",
+                                              "MOTOR",
+                                              "REDACTION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_auditoria_pericial.py",
+                                          "tests/test_redacao_pericial.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "PII_DENY_BY_DEFAULT",
+                           "descricao":  "PII e dados de caso nÃ£o saem por padrÃ£o.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "EGRESS",
+                                              "THIRD_PARTY_TRUST"
+                                          ],
+                           "testes":  [
+                                          "tests/test_repository_safety_gate.py",
+                                          "tests/test_pesquisa_online.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "UNKNOWN_EXTERNAL_PROVIDER_FAIL_CLOSED",
+                           "descricao":  "Provider sem capability explÃ­cita Ã© bloqueado.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "EGRESS",
+                                              "THIRD_PARTY_TRUST"
+                                          ],
+                           "testes":  [
+                                          "tests/test_final_delta_r3.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "EDITORIAL_IMMUTABILITY",
+                           "descricao":  "CorreÃ§Ã£o editorial nÃ£o altera conteÃºdo material.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "AUTOCORRECTION",
+                                              "FIDELITY",
+                                              "REDACTION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_final_delta_r3.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "JURIDICAL_TECHNICAL_ISOLATION",
+                           "descricao":  "MatÃ©ria jurÃ­dica nÃ£o contamina questÃ£o tÃ©cnica.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "DELIMITATION",
+                                              "REDACTION",
+                                              "TRIAGE"
+                                          ],
+                           "testes":  [
+                                          "tests/test_claude_terminal_continuation.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "MEASUREMENT_EQUIVALENCE_INTEGRITY",
+                           "descricao":  "EquivalÃªncia de mediÃ§Ã£o Ã© recalculada por propriedades estruturais.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "COVERAGE",
+                                              "INSPECTION",
+                                              "PLANNING"
+                                          ],
+                           "testes":  [
+                                          "tests/test_core_properties.py",
+                                          "tests/test_claude_terminal_continuation.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       }
+                   ]
+}
