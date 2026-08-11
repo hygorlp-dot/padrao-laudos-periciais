@@ -25,6 +25,7 @@
         "documentos_obtidos",
         "declaracoes",
         "observacoes",
+        "relacoes_evidencia",
         "cobertura",
         "inventario_fonte",
         "proveniencia"
@@ -32,7 +33,7 @@
     "additionalProperties": false,
     "properties": {
         "schema_version": {
-            "type": "string"
+            "const": "2.0.0"
         },
         "numero_processo": {
             "$ref": "processo.schema.json#/$defs/numeroProcesso"
@@ -208,6 +209,20 @@
                 "$ref": "#/$defs/observacao"
             }
         },
+        "relacoes_evidencia": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["observacao", "evidencia", "motivo", "origem"],
+                "additionalProperties": false,
+                "properties": {
+                    "observacao": {"type": "string", "pattern": "^OBS-[0-9]{3,}$"},
+                    "evidencia": {"type": "string"},
+                    "motivo": {"enum": ["VINCULO_EXPLICITO", "VINCULO_REGISTRO_EXPLICITO", "ATIVIDADE_PLANEJADA_UNIVOCA", "ATIVIDADE_ELEMENTO_MANIFESTACAO_CONVERGENTES"]},
+                    "origem": {"enum": ["ENTRADA_ESTRUTURADA", "REGISTRO_CAMPO_COMUM", "PLANO_VISTORIA"]}
+                }
+            }
+        },
         "cobertura": {
             "type": "array",
             "items": {
@@ -271,6 +286,7 @@
                 "atividade_planejada",
                 "descricao",
                 "status",
+                "questoes",
                 "evidencias",
                 "impacto_nao_execucao"
             ],
@@ -292,6 +308,9 @@
                 },
                 "status": {
                     "$ref": "#/$defs/statusExecucao"
+                },
+                "questoes": {
+                    "$ref": "#/$defs/ids"
                 },
                 "evidencias": {
                     "$ref": "#/$defs/ids"
@@ -424,6 +443,7 @@
                     "metodo_associacao": {
                         "enum": [
                             "AFINIDADE_SEMANTICA_NOME_FINALIDADE",
+                            "ID_PLANEJADO_EXPLICITO",
                             "ASSOCIACAO_AMBIGUA",
                             "SEM_ASSOCIACAO_SEGURA"
                         ]
@@ -654,6 +674,7 @@
             "type": "object",
             "required": [
                 "id",
+                "ensaio_planejado",
                 "nome",
                 "status",
                 "resultado",
@@ -667,6 +688,10 @@
                 "id": {
                     "type": "string",
                     "pattern": "^ENS-[0-9]{3,}$"
+                },
+                "ensaio_planejado": {
+                    "type": ["string", "null"],
+                    "pattern": "^ENS-PLANO-[0-9]{3,}$"
                 },
                 "nome": {
                     "type": "string"
@@ -706,7 +731,9 @@
             "required": [
                 "id",
                 "arquivo_inventario",
+                "documento_planejado",
                 "descricao",
+                "questoes",
                 "proveniencia"
             ],
             "additionalProperties": false,
@@ -718,8 +745,15 @@
                 "arquivo_inventario": {
                     "type": "string"
                 },
+                "documento_planejado": {
+                    "type": ["string", "null"],
+                    "pattern": "^DOC-PLANO-[0-9]{3,}$"
+                },
                 "descricao": {
                     "type": "string"
+                },
+                "questoes": {
+                    "$ref": "#/$defs/ids"
                 },
                 "proveniencia": {
                     "$ref": "#/$defs/ids"
@@ -850,6 +884,10 @@
                         "type": "string"
                     }
                 },
+                "atividade": {
+                    "type": ["string", "null"],
+                    "pattern": "^ATV-[0-9]{3,}$"
+                },
                 "fotografias": {
                     "$ref": "#/$defs/ids"
                 },
@@ -901,6 +939,8 @@
                 "status",
                 "executado",
                 "evidencia_equivalente",
+                "equivalencia",
+                "justificativa_equivalencia",
                 "impacto"
             ],
             "additionalProperties": false,
@@ -926,13 +966,35 @@
                 "evidencia_equivalente": {
                     "$ref": "#/$defs/ids"
                 },
+                "equivalencia": {
+                    "type": ["object", "null"],
+                    "required": ["requisito_original", "tipo_evidencia", "capability", "metodo_substituto"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "requisito_original": {"type": "string"},
+                        "tipo_evidencia": {"enum": ["ATIVIDADE", "FOTOGRAFIA", "MEDICAO", "ENSAIO", "DOCUMENTO"]},
+                        "capability": {"type": "string", "minLength": 1},
+                        "metodo_substituto": {"type": "string", "minLength": 1}
+                    }
+                },
+                "justificativa_equivalencia": {"type": ["string", "null"]},
                 "impacto": {
                     "type": [
                         "string",
                         "null"
                     ]
                 }
-            }
+            },
+            "allOf": [
+                {
+                    "if": {"properties": {"status": {"const": "SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE"}}, "required": ["status"]},
+                    "then": {"properties": {"tipo": {"enum": ["MEDICAO", "FOTOGRAFIA"]}, "evidencia_equivalente": {"minItems": 1}, "equivalencia": {"type": "object"}, "justificativa_equivalencia": {"type": "string", "minLength": 1}}}
+                },
+                {
+                    "if": {"properties": {"tipo": {"enum": ["ATIVIDADE", "ENSAIO", "DOCUMENTO"]}}, "required": ["tipo"]},
+                    "then": {"properties": {"status": {"enum": ["EXECUTADO", "PARCIALMENTE_EXECUTADO", "NAO_EXECUTADO", "NAO_APLICAVEL"]}, "evidencia_equivalente": {"maxItems": 0}, "equivalencia": {"const": null}, "justificativa_equivalencia": {"const": null}}}
+                }
+            ]
         },
         "statusExecucao": {
             "enum": [

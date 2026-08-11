@@ -12,12 +12,11 @@ def inferir_origem(causa,evidencias):
     """Infere origem pela convergencia de fatos independentes, nao por rotulo pronto."""
     aspectos={a for e in evidencias for a in e.get("aspectos_suportados",[])}
     def independentes(sinais):
-        fontes={tuple(e.get("proveniencia",[])) or (e.get("id"),) for e in evidencias if set(e.get("aspectos_suportados",[]))&set(sinais)}
-        return len(fontes)>=2
+        from .regras_probatorias import fontes_independentes
+        return len(fontes_independentes(evidencias,sinais))>=2
     grupos=[]
-    dimensoes={"PROJETO_CONSTRUTIVO_DOCUMENTADO","MATERIAL_CONSTRUTIVO_DOCUMENTADO","ESPECIFICACAO_CONSTRUTIVA_DOCUMENTADA","DETALHE_CONSTRUTIVO_DOCUMENTADO","PROCEDIMENTO_EXECUTIVO_DOCUMENTADO","CONTROLE_TECNOLOGICO_DOCUMENTADO","DOCUMENTACAO_OBRA_VERIFICADA"}
-    divergencias={"EXECUCAO_DIVERGENTE_DOCUMENTADA","NAO_CONFORMIDADE_CONSTRUTIVA_VERIFICADA"}
-    if causa and aspectos&dimensoes and aspectos&divergencias and independentes(dimensoes|divergencias):grupos.append("ENDOGENA_CONSTRUTIVA")
+    from .regras_probatorias import suporte_endogeno
+    if causa and suporte_endogeno(evidencias):grupos.append("ENDOGENA_CONSTRUTIVA")
     if {"IMPACTO_REGISTRADO","INTERVENCAO_TERCEIRO_DOCUMENTADA"}<=aspectos and independentes({"IMPACTO_REGISTRADO","INTERVENCAO_TERCEIRO_DOCUMENTADA"}):grupos.append("EXOGENA")
     if "COMPORTAMENTO_FUNCIONAL_OBSERVADO" in aspectos and independentes({"COMPORTAMENTO_FUNCIONAL_OBSERVADO"}):grupos.append("FUNCIONAL")
     if {"MANUTENCAO_AUSENTE_DOCUMENTADA","USO_INADEQUADO_DOCUMENTADO"}<=aspectos and independentes({"MANUTENCAO_AUSENTE_DOCUMENTADA","USO_INADEQUADO_DOCUMENTADO"}):grupos.append("USO_OPERACAO_MANUTENCAO")

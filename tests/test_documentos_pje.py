@@ -24,7 +24,7 @@ class PaginaFalsa:
     width, height = 600, 800
     images = [{"x0": 10, "top": 10, "x1": 310, "bottom": 410}]
     def extract_text(self): return "Foto 1\nTabela de orçamento"
-    def extract_words(self, **_): return [{"x0": 10, "top": 10, "x1": 100, "bottom": 30}]
+    def extract_words(self, **_): return [{"text":"Foto","x0":10,"top":415,"x1":50,"bottom":430},{"text":"1","x0":55,"top":415,"x1":65,"bottom":430}]
     def find_tables(self): return [TabelaFalsa()]
 
 

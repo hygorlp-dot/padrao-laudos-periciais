@@ -29,12 +29,15 @@ def relacionar_evidencias(catalogo,hipotese):
     return sorted(set(favor)),sorted(set(contra)),sorted(requeridos&cobertura)
 
 def _independentes(ids,catalogo):
-    mapa={e["id"]:e for e in catalogo};return len({tuple(mapa[i].get("proveniencia",[])) or (i,) for i in ids if i in mapa})
+    from .regras_probatorias import identidade_fontes
+    mapa={e["id"]:e for e in catalogo};return len({fonte for i in ids if i in mapa for fonte in identidade_fontes(mapa[i])})
 
 def gerar(manifestacao,man_id,evidencias=None,ausentes=None,inicio=1,*,sistema=None,catalogo=None,normas=None):
     catalogo=catalogo or [];saida=[]
     if capacidade_causal(sistema)["nivel_de_capacidade"]=="MOTOR_CAUSAL_NAO_IMPLEMENTADO":return saida
-    for i,hip in enumerate(candidatos(sistema,manifestacao),inicio):
+    man_num=int(man_id.split("-",1)[1]) if man_id.split("-",1)[1].isdigit() else inicio
+    for ordem,hip in enumerate(candidatos(sistema,manifestacao),1):
+        i=man_num*100+ordem
         mec,causa,requeridos,_=hip;favor,contra,cobertos=relacionar_evidencias(catalogo,hip) if catalogo else ([],[],[]);fi=_independentes(favor,catalogo);ci=_independentes(contra,catalogo);cobertura=len(set(cobertos))/max(1,len(requeridos))
         if ci>=1 and not fi:status="AFASTADA";comp="INCOMPATIVEL"
         elif ci and fi:status="POSSIVEL";comp="PARCIALMENTE_COMPATIVEL"

@@ -1,21 +1,24 @@
 """Orquestra manifestações, hipóteses, PAT, saneamento, quesitos e gate de redação."""
 
 from __future__ import annotations
-import argparse,json,re
+import argparse,hashlib,json,re
 from pathlib import Path
 from scripts.triagem_pericial.semantica import intencoes
 from .auditar import auditar
 from .hipoteses import gerar as gerar_hipoteses,capacidade_causal
 from .regras import situacao,classificacoes,inferir_origem,avaliar_consequencias,derivar_criticidade,estruturar_reparo,tipo_vicio
-from .evidencias import construir_catalogo,selecionar
+from .evidencias import associar_documentos_ensaios,construir_catalogo,selecionar
 from .normas import recuperar_normas_para_manifestacao,avaliar_conformidade_normativa
 
 def _consequencias():return {k:None for k in ("seguranca","funcionalidade","estanqueidade","salubridade","higiene","durabilidade","conforto","estetica","manutencao","evolucao")}
+def _identidade_manifestacao(obs,chave):
+    numeros=[int(m.group(1)) for o in obs if (m:=re.fullmatch(r"OBS-(\d+)",o.get("id","")))]
+    return f"{min(numeros):03d}" if numeros else str(int(hashlib.sha256(repr(chave).encode()).hexdigest()[:12],16))
 
 def _base(processo,delimitacao,status,tipo):
     quesitos=[]
     for q in delimitacao.get("quesitos",[]):
-        jurid=q.get("pertinencia")=="NAO_PERTINENTE_JURIDICO" or bool(q.get("materia_juridica_associada"))
+        jurid=q.get("pertinencia")=="MATERIA_JURIDICA" or (q.get("pertinencia")=="REPETITIVO" and q.get("materia_juridica_associada") and not q.get("materia_tecnica"))
         quesitos.append({"quesito":q["id"],"status":"MATERIA_JURIDICA" if jurid else "PENDENTE_EVIDENCIA","questoes":q.get("questoes_tecnicas_relacionadas",[]),"patologias":[],"observacoes":[],"fotografias":[],"medicoes":[],"hipoteses":[],"normas":[],"ressalvas":[]})
     return {"schema_version":"1.0.0","processo_cnj":processo["numero_processo"],"tipo_pericia":tipo,"status_execucao":status,"manifestacoes":[],"hipoteses":[],"patologias":[],"questoes_saneadas":[],"cobertura_quesitos":quesitos,"pesquisa_online":{"status":"NAO_NECESSARIA","pesquisas_realizadas":0,"fontes_oficiais_localizadas":[],"fontes_rejeitadas":[],"fontes_cacheadas":[],"revalidacoes_vigencia":0,"pesquisas_desnecessarias_evitadas":1},"autoauditoria":[],"autonomia":{"decisoes_autonomas":1,"hipoteses_criadas":0,"hipoteses_testadas":0,"pesquisas_autonomas":0,"normas_recuperadas":0,"fontes_online_recuperadas":0,"lacunas_resolvidas":0,"ressalvas_criadas":0,"perguntas_evitadas":["Não solicitar informação rotineira sem evidência de campo."],"perguntas_necessarias":[]},"gate_redacao":"BLOQUEADO_PARA_REDACAO","proveniencia":["processo.json","delimitacao-pericial.json"]}
 
@@ -27,11 +30,17 @@ def executar(processo,delimitacao,plano,vistoria,contexto=None,conhecimento=None
     r=_base(processo,delimitacao,"ANALISE_INICIAL",tipo); contexto=contexto or {};conhecimento=conhecimento or {};catalogo=construir_catalogo(vistoria,conhecimento.get("documentos"),conhecimento.get("normas"));r["catalogo_evidencias"]=catalogo;r["estado_analise"]="PAT_INICIAL"; por_manifestacao={}
     for o in vistoria["observacoes"]:
         chave=(o.get("manifestacao") or "Condição examinada",o.get("ambiente"),o.get("sistema"),o.get("elemento"));por_manifestacao.setdefault(chave,[]).append(o)
+    contextos=[]
+    for chave,grupo in por_manifestacao.items():
+        desc,amb,sis,elem=chave;obs=sorted(grupo,key=lambda x:x.get("id", ""));sufixo=_identidade_manifestacao(obs,chave)
+        contextos.append({"relacao_id":f"MAN-{sufixo}","questoes":sorted({x for o in obs for x in o["questoes"]}),"sistema":sis,"manifestacao":desc,"ambiente":amb,"elemento":elem,"alegacoes":sorted({x for o in obs for x in o["alegacoes"]})})
+    r["relacoes_associacao"]=associar_documentos_ensaios(catalogo,contextos)
     hip_seq=1
-    for idx,(chave,obs) in enumerate(por_manifestacao.items(),1):
-        desc,amb,sis,elem=chave;capacidade=capacidade_causal(sis);sem_motor=capacidade["nivel_de_capacidade"]=="MOTOR_CAUSAL_NAO_IMPLEMENTADO"; mid=f"MAN-{idx:03d}"; alg=sorted({x for o in obs for x in o["alegacoes"]});fot=sorted({x for o in obs for x in o["fotografias"]});med=sorted({x for o in obs for x in o["medicoes"]});qts=sorted({x for o in obs for x in o["questoes"]});oids=[o["id"] for o in obs]
+    for idx,chave in enumerate(sorted(por_manifestacao,key=lambda x:tuple(str(v or "").casefold() for v in x)),1):
+        obs=sorted(por_manifestacao[chave],key=lambda x:x.get("id", ""))
+        desc,amb,sis,elem=chave;capacidade=capacidade_causal(sis);sem_motor=capacidade["nivel_de_capacidade"]=="MOTOR_CAUSAL_NAO_IMPLEMENTADO";sufixo=_identidade_manifestacao(obs,chave);idx=int(sufixo);mid=f"MAN-{sufixo}";alg=sorted({x for o in obs for x in o["alegacoes"]});fot=sorted({x for o in obs for x in o["fotografias"]});med=sorted({x for o in obs for x in o["medicoes"]});qts=sorted({x for o in obs for x in o["questoes"]});oids=[o["id"] for o in obs]
         r["manifestacoes"].append({"id":mid,"descricao":desc,"sistema":sis,"elemento":elem,"local":amb,"alegacoes":alg,"observacoes":oids,"fotografias":fot,"medicoes":med,"questoes":qts})
-        ctx=contexto.get(mid,{}) if contexto.get("_modo")=="OVERRIDE_EXPLICITO" else {};evidencias_man=selecionar(catalogo,ids=[o["id"] for o in obs]+fot+med,sistema=sis,manifestacao=desc,contexto={"questoes":qts,"sistema":sis,"manifestacao":desc,"ambiente":amb,"elemento":elem,"alegacoes":alg});normas=recuperar_normas_para_manifestacao(conhecimento.get("normas",[]),sistema=sis,manifestacao=desc,questoes=qts,data_relevante=conhecimento.get("data_relevante"));sit=situacao(obs)
+        ctx=contexto.get(mid,{}) if contexto.get("_modo")=="OVERRIDE_EXPLICITO" else {};evidencias_man=selecionar(catalogo,ids=[o["id"] for o in obs]+fot+med,sistema=sis,manifestacao=desc,contexto={"questoes":qts,"sistema":sis,"manifestacao":desc,"ambiente":amb,"elemento":elem,"alegacoes":alg},relacao_id=mid,relacoes=r["relacoes_associacao"]);normas=recuperar_normas_para_manifestacao(conhecimento.get("normas",[]),sistema=sis,manifestacao=desc,questoes=qts,data_relevante=conhecimento.get("data_relevante"));sit=situacao(obs)
         hips=gerar_hipoteses(desc,mid,ctx.get("evidencias_hipoteses",{}),ctx.get("evidencias_ausentes",[]),hip_seq,sistema=sis,catalogo=evidencias_man,normas=normas) if sit in {"ANOMALIA","FALHA","INCONCLUSIVA"} else []
         hip_seq+=len(hips);r["hipoteses"].extend(hips)
         mais=next((h for h in hips if h["status"]=="MAIS_PROVAVEL"),None);causa=mais["causa_candidata"] if mais else None;mec=mais["mecanismo"] if mais else None;fundamentos=mais["evidencias_favoraveis"] if mais else []
@@ -43,8 +52,10 @@ def executar(processo,delimitacao,plano,vistoria,contexto=None,conhecimento=None
         pat={"id":f"PAT-{idx:03d}","manifestacao":desc,"alegacoes_relacionadas":alg,"ambiente":amb,"localizacao_detalhada":amb,"sistema":sis,"elemento":elem,"constatacao":{"situacao":sit,"descricao":"; ".join(o["descricao_objetiva"] for o in obs),"extensao":None,"metodo":sorted({m for o in obs for m in o["metodo"]}),"evidencias":oids+fot,"fotografias":fot},"constatacoes":oids,"evidencias":oids+fot+med,"medicoes":med,"hipoteses":[h["id"] for h in hips],"analise_causal":{"causa_provavel":causa,"causas_alternativas":[h["causa_candidata"] for h in hips if h["causa_candidata"] and h is not mais],"fundamentos":fundamentos,"limitacoes":ctx.get("evidencias_ausentes",[]),"grau_certeza":"PROVAVEL" if mais and mais["status"]=="MAIS_PROVAVEL" else "POSSIVEL" if causa else "INCONCLUSIVO" if sit in {"ANOMALIA","FALHA"} else "NAO_APLICAVEL"},"mecanismo":mec,"causa":causa,"origem":origem,"criticidade":crit,"vicio_construtivo":{"caracterizado":vicio,"tipo":"INCONCLUSIVO" if vicio or sit in {"ANOMALIA","FALHA"} else "NAO_APLICAVEL","fundamentacao":causalidade.get("fundamentacao_vicio")},"normas_relacionadas":[{"id":n["id"],"item":n.get("item"),"requisito":n.get("requisito"),"verificada":n.get("verificada",False),"aplicabilidade_temporal":n["aplicabilidade_temporal"],"proveniencia":n.get("proveniencia",[]),"aspectos_suportados":n.get("aspectos_suportados",[])} for n in normas],"referencias_tecnicas":[],"ressalvas":ctx.get("evidencias_ausentes",[]),"consequencias":_consequencias(),"reparabilidade":"REPARAVEL" if reparo_ok else "NECESSITA_INVESTIGACAO" if sit in {"ANOMALIA","FALHA"} else "NAO_APLICAVEL","recomendacao":{"necessaria":reparo_ok,"descricao":causalidade.get("reparo") if reparo_ok else None,"extensao":None},"elegibilidade_orcamento":eleg,"orcamento":{"incluir":False,"justificativa":"A composição orçamentária final não integra esta etapa.","quantitativo":None,"unidade":None,"memoria_calculo":None},"conclusao_tecnica":conclusao,"confianca":{"nivel":"MEDIA" if causa else "BAIXA" if sit in {"ANOMALIA","FALHA"} else "ALTA"},"proveniencia":oids or ["vistoria.json"],"redacao":{"analise_alegacoes_causas":None,"consequencias":None,"classificacao":None,"conclusao":None},"texto_tecnico_preliminar":None,"status_validacao":"RASCUNHO"};r["patologias"].append(pat)
     for p in r["patologias"]:
         cap=capacidade_causal(p.get("sistema"));p["analise_causal"]["status_capacidade"]=cap["nivel_de_capacidade"]
-        if cap["nivel_de_capacidade"]=="MOTOR_CAUSAL_NAO_IMPLEMENTADO":p["analise_causal"]["limitacoes"]=["MOTOR_ESPECIALIZADO_NAO_IMPLEMENTADO",*p["analise_causal"]["limitacoes"]]
-        ligados=[e for e in catalogo if e["id"] in p["evidencias"] or e.get("associacao",{}).get("confianca")=="ALTA" or (e["tipo"]=="NORMA" and e.get("sistema") and e.get("sistema")==p.get("sistema"))]
+        if cap["nivel_de_capacidade"]=="MOTOR_CAUSAL_NAO_IMPLEMENTADO" and p["constatacao"]["situacao"] in {"ANOMALIA","FALHA"}:p["analise_causal"]["limitacoes"]=["MOTOR_ESPECIALIZADO_NAO_IMPLEMENTADO",*p["analise_causal"]["limitacoes"]]
+        man=next((m for m in r["manifestacoes"] if m["id"].replace("MAN-","PAT-")==p["id"]),{})
+        relacionados=selecionar(catalogo,ids=p["evidencias"],sistema=p.get("sistema"),manifestacao=p.get("manifestacao"),contexto={"questoes":man.get("questoes",[]),"sistema":p.get("sistema"),"manifestacao":p.get("manifestacao"),"ambiente":p.get("ambiente"),"elemento":p.get("elemento"),"alegacoes":p.get("alegacoes_relacionadas",[])},relacao_id=p["id"].replace("PAT-","MAN-"),relacoes=r["relacoes_associacao"])
+        ligados=[e for e in relacionados if e["tipo"]!="NORMA"]+[e for e in catalogo if e["tipo"]=="NORMA" and e.get("sistema") and e.get("sistema")==p.get("sistema")]
         p["evidencias"]=sorted({e["id"] for e in ligados if e["tipo"]!="NORMA"});p["medicoes"]=sorted(e["id"] for e in ligados if e["tipo"]=="MEDICAO")
         p["consequencias"]=avaliar_consequencias(p["constatacao"]["situacao"],ligados)
         p["criticidade"],_=derivar_criticidade(p["constatacao"]["situacao"],p["consequencias"])
@@ -59,10 +70,11 @@ def executar(processo,delimitacao,plano,vistoria,contexto=None,conhecimento=None
         p["orcamento"]["revisao_profissional"]={"status":"NAO_REVISADO"}
         for n in p["normas_relacionadas"]:
             fonte=next((x for x in conhecimento.get("normas",[]) if x.get("id")==n["id"]),{})
-            n.update({"edicao":fonte.get("edicao"),"pagina":fonte.get("pagina"),"tipo_requisito":fonte.get("tipo_requisito"),"metodo_verificacao":fonte.get("metodo_verificacao"),"criterio":fonte.get("criterio"),"confianca":fonte.get("confianca",{"nivel":"MEDIA" if n["verificada"] else "BAIXA"}),"avaliacao_conformidade":avaliar_conformidade_normativa(fonte,ligados)})
+            from .normas import normalizar_fonte_normativa,projetar_norma_pat
+            normalizada=normalizar_fonte_normativa(fonte,conhecimento.get("data_relevante"));normalizada["confianca"]=normalizada.get("confianca",{"nivel":"MEDIA" if normalizada["verificada"] else "BAIXA"});avaliacao=avaliar_conformidade_normativa(normalizada,ligados);projecao=projetar_norma_pat(normalizada);projecao["avaliacao_conformidade"]=avaliacao;n.clear();n.update(projecao)
     for qt in delimitacao["questoes_tecnicas"]:
-        pats=[p for p in r["patologias"] if qt["id"] in next(m["questoes"] for m in r["manifestacoes"] if m["id"]==f"MAN-{int(p['id'][-3:]):03d}")]
-        dimensoes=intencoes(qt.get("descricao",""));exige_causa=bool({"CAUSALIDADE","ORIGEM","MECANISMO"}&set(dimensoes)) and "JURIDICO" not in dimensoes;sem_capacidade=any(p.get("analise_causal",{}).get("status_capacidade")=="MOTOR_CAUSAL_NAO_IMPLEMENTADO" for p in pats)
+        pats=[p for p in r["patologias"] if qt["id"] in next(m["questoes"] for m in r["manifestacoes"] if m["id"]==p["id"].replace("PAT-","MAN-"))]
+        dimensoes=intencoes(qt.get("descricao",""));exige_causa=bool({"CAUSALIDADE","ORIGEM","MECANISMO"}&set(dimensoes)) and "JURIDICO" not in dimensoes;sem_capacidade=any(p["constatacao"]["situacao"] in {"ANOMALIA","FALHA"} and p.get("analise_causal",{}).get("status_capacidade")=="MOTOR_CAUSAL_NAO_IMPLEMENTADO" for p in pats)
         inc=any(p["constatacao"]["situacao"]=="INCONCLUSIVA" or (p["constatacao"]["situacao"]=="ANOMALIA" and not p["causa"]) for p in pats) and exige_causa
         st="SANEADA_COM_RESSALVA" if pats and inc else "SANEADA" if pats else "PREJUDICADA"
         if exige_causa and sem_capacidade:st="INCONCLUSIVA_POR_LIMITACAO";conclusao="MOTOR_ESPECIALIZADO_NAO_IMPLEMENTADO: a constatação pode ser descrita, mas a causa não foi analisada por módulo causal específico.";ressalvas=["Limitação de capacidade do software; não equivale a inconclusão técnica por insuficiência de evidência."]

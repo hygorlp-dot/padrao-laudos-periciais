@@ -14,15 +14,21 @@ def autocorrigir(resultado,claims,auditorias,achados=None):
         tipo=claim["tipo"]
         if tipo in {"CAUSA","MECANISMO"}:
             antes=pat["causa"] if tipo=="CAUSA" else pat["mecanismo"]
-            if tipo=="CAUSA":pat["causa"]=None;pat["analise_causal"]["causa_provavel"]=None;pat["origem"]="INCONCLUSIVA";pat["vicio_construtivo"].update({"caracterizado":False,"tipo":"INCONCLUSIVO","fundamentacao":None});pat["reparabilidade"]="NECESSITA_INVESTIGACAO";pat["recomendacao"].update({"necessaria":False,"descricao":None});pat["elegibilidade_orcamento"]="PENDENTE"
+            if tipo=="CAUSA":
+                pat["causa"]=None;pat["analise_causal"]["causa_provavel"]=None
+                if pat.get("constatacao",{}).get("situacao") not in {"CONFORME","NAO_CONSTATADA"}:pat["origem"]="INCONCLUSIVA";pat["vicio_construtivo"].update({"caracterizado":False,"tipo":"INCONCLUSIVO","fundamentacao":None});pat["reparabilidade"]="NECESSITA_INVESTIGACAO";pat["recomendacao"].update({"necessaria":False,"descricao":None});pat["elegibilidade_orcamento"]="PENDENTE"
             else:pat["mecanismo"]=None
             pat["analise_causal"]["grau_certeza"]="INCONCLUSIVO";pat["conclusao_tecnica"]="A manifestação foi constatada, mas os elementos disponíveis não permitem individualizar com segurança sua causa.";ress="Causalidade inconclusiva após auditoria do suporte probatório."
             if ress not in pat["ressalvas"]:pat["ressalvas"].append(ress)
             registrar(claim,antes,None,"REDUZIR_CLAIM","Suporte insuficiente para manter formulação causal específica.")
         elif tipo=="ORIGEM":
-            antes=pat["origem"];pat["origem"]="INCONCLUSIVA";pat["vicio_construtivo"].update({"caracterizado":False,"tipo":"INCONCLUSIVO","fundamentacao":None});pat["elegibilidade_orcamento"]="PENDENTE";registrar(claim,antes,"INCONCLUSIVA","REDUZIR_ORIGEM","Origem dependia de claim não sustentada.")
+            antes=pat["origem"]
+            if pat.get("constatacao",{}).get("situacao") not in {"CONFORME","NAO_CONSTATADA"}:pat["origem"]="INCONCLUSIVA";pat["vicio_construtivo"].update({"caracterizado":False,"tipo":"INCONCLUSIVO","fundamentacao":None});pat["elegibilidade_orcamento"]="PENDENTE"
+            registrar(claim,antes,pat["origem"],"REDUZIR_ORIGEM","Origem dependia de claim não sustentada.")
         elif tipo=="CRITICIDADE":
-            antes=pat["criticidade"];pat["criticidade"]="INCONCLUSIVA";registrar(claim,antes,"INCONCLUSIVA","REDUZIR_CRITICIDADE","Criticidade sem fundamento suficiente.")
+            antes=pat["criticidade"]
+            if pat.get("constatacao",{}).get("situacao") not in {"CONFORME","NAO_CONSTATADA"}:pat["criticidade"]="INCONCLUSIVA"
+            registrar(claim,antes,pat["criticidade"],"REDUZIR_CRITICIDADE","Criticidade sem fundamento suficiente.")
         elif tipo=="VICIO_CONSTRUTIVO":
             antes=pat["vicio_construtivo"]["caracterizado"];pat["vicio_construtivo"].update({"caracterizado":False,"tipo":"INCONCLUSIVO","fundamentacao":None});pat["elegibilidade_orcamento"]="PENDENTE";registrar(claim,antes,False,"REMOVER_CARACTERIZACAO","Caracterização dependia de origem/causa não sustentada.")
         elif tipo=="CONFORMIDADE_NORMATIVA":
@@ -36,7 +42,7 @@ def autocorrigir(resultado,claims,auditorias,achados=None):
                 qt["status"]="INCONCLUSIVA_POR_LIMITACAO";qt["conclusao"]="Análise causal não executada; conteúdo indisponível para redação técnica.";qt["ressalvas"]=["BLOQUEIO_INTERNO_POR_CAPACIDADE_DO_MOTOR"]
                 for pid in qt.get("patologias",[]):
                     pat=por_pat.get(pid)
-                    if pat and pat.get("analise_causal",{}).get("status_capacidade")=="MOTOR_CAUSAL_NAO_IMPLEMENTADO":pat["causa"]=None;pat["mecanismo"]=None;pat["origem"]="INCONCLUSIVA";pat["vicio_construtivo"].update({"caracterizado":False,"tipo":"INCONCLUSIVO","fundamentacao":None});pat["elegibilidade_orcamento"]="PENDENTE"
+                    if pat and pat.get("analise_causal",{}).get("status_capacidade")=="MOTOR_CAUSAL_NAO_IMPLEMENTADO" and pat.get("constatacao",{}).get("situacao") not in {"CONFORME","NAO_CONSTATADA"}:pat["causa"]=None;pat["mecanismo"]=None;pat["origem"]="INCONCLUSIVA";pat["vicio_construtivo"].update({"caracterizado":False,"tipo":"INCONCLUSIVO","fundamentacao":None});pat["elegibilidade_orcamento"]="PENDENTE"
         if tipo=="ORIGEM_ENDOGENA_SEM_EVIDENCIA_CONSTRUTIVA" and alvo in por_pat:
             pat=por_pat[alvo];pat["origem"]="INCONCLUSIVA";pat["vicio_construtivo"].update({"caracterizado":False,"tipo":"INCONCLUSIVO","fundamentacao":None});pat["recomendacao"].update({"necessaria":False,"descricao":None});pat["reparabilidade"]="NECESSITA_INVESTIGACAO";pat["elegibilidade_orcamento"]="PENDENTE"
         if tipo=="NEGACAO_CONVERTIDA_EM_FATO":

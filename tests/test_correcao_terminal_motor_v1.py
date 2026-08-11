@@ -30,7 +30,10 @@ class CorrecaoTerminalMotorV1Test(unittest.TestCase):
     def test_obs_pol_06_pipeline_nao_afirma_anomalia(self):
         r=executar_pipeline_motor(self.processo,self.delim,self.plano,self.gerar("Sala: Não há fissura na parede."));p=r["analise_final"]["patologias"][0];self.assertEqual(p["constatacao"]["situacao"],"NAO_CONSTATADA");self.assertNotIn("foi observada",p["conclusao_tecnica"].lower())
 
-    def norma(self):return {"id":"NOR-001","tipo":"NORMA","requisito":"interface com vedação deteriorada não atende ao requisito","verificada":True,"proveniencia":["FONTE"],"metodo_verificacao":"medição","criterio":{"operador":"<=","valor":.5,"unidade":"mm","grandeza":"abertura"}}
+    def norma(self):return {"id":"NOR-001","tipo":"NORMA","entidade":"ABNT","numero":"1","classificacao_fonte":"FONTE_TECNICA_LOCAL_VERIFICADA","requisito":"interface com vedação deteriorada não atende ao requisito","verificada":True,"proveniencia":["FONTE"],"aplicabilidade_temporal":"APLICAVEL_PRINCIPAL","metodo_verificacao":"medição","criterio":{"operador":"<=","valor":.5,"unidade":"mm","grandeza":"abertura"}}
+
+    def norma(self):
+        return {"id":"NOR-001","tipo":"NORMA","entidade":"ABNT","numero":"1","classificacao_fonte":"FONTE_TECNICA_LOCAL_VERIFICADA","status_verificacao":"VERIFICADO","requisito":"requisito de abertura","verificada":True,"proveniencia":["FONTE"],"vigencia_inicio":"2010-01-01","data_relevante":"2020-01-01","metodo_verificacao":"medicao","criterio":{"operador":"<=","valor":.5,"unidade":"mm","grandeza":"abertura"}}
 
     def test_nor_src_01_05_tipagem_epistemica(self):
         e=construir_catalogo({},normas=[self.norma()])[0];self.assertIn("REQUISITO_NORMATIVO_VERIFICADO",e["aspectos_suportados"]);self.assertFalse({"VEDACAO_DETERIORADA","INTERFACE_IDENTIFICADA","FISSURA_PRESENTE"}&set(e["aspectos_suportados"]))
@@ -52,7 +55,7 @@ class CorrecaoTerminalMotorV1Test(unittest.TestCase):
         obs={"id":"OBS-001","tipo":"OBSERVACAO","resultado":"OBSERVADO","aspectos_suportados":["FISSURA_PRESENTE"],"auditoria_aspectos":[{"aspecto":"FISSURA_PRESENTE","polaridade":"AFIRMADO","aspectos_derivados_consultados":False}]};nor={"id":"NOR-001","tipo":"NORMA","aspectos_suportados":["REQUISITO_NORMATIVO_VERIFICADO"],"auditoria_aspectos":[]};r={"patologias":[],"catalogo_evidencias":[obs,nor],"cobertura_quesitos":[],"questoes_saneadas":[]};self.assertFalse({"OBS_NEGADA_COM_RESULTADO_OBSERVADO","NORMA_USADA_COMO_FATO_DO_CASO"}&{x["tipo"] for x in executar_detector(r)});self.assertFalse({"OBS_NEGADA_COM_RESULTADO_OBSERVADO","NORMA_USADA_COMO_FATO_DO_CASO"}&{x["tipo"] for x in executar_deep_audit([],r)})
 
     def obs_vedacao(self):
-        v=load("tests/fixtures/schemas/vistoria-valida.json");v["observacoes"][0].update({"descricao_objetiva":"Fissura observada.","manifestacao":"fissura","sistema":"VEDACOES","resultado":"OBSERVADO"});return v
+        v=load("tests/fixtures/schemas/vistoria-valida.json");v["atividades_executadas"][0]["questoes"]=["QT-001"];v["observacoes"][0].update({"descricao_objetiva":"Fissura observada.","manifestacao":"fissura","sistema":"VEDACOES","resultado":"OBSERVADO"});return v
 
     def test_cap_01_02_registro_dos_sistemas(self):
         self.assertEqual(set(SISTEMAS_AUDITADOS),{"IMPERMEABILIZACAO","REVESTIMENTOS","ESQUADRIAS","ESTRUTURA","VEDACOES","PINTURA","COBERTURA","FORROS","INSTALACOES_ELETRICAS","INSTALACOES_HIDROSSANITARIAS","DRENAGEM","OUTRO"});self.assertEqual(capacidade_causal("IMPERMEABILIZACAO")["nivel_de_capacidade"],"SUPORTE_CAUSAL_PARCIAL");self.assertEqual(capacidade_causal("VEDACOES")["nivel_de_capacidade"],"MOTOR_CAUSAL_NAO_IMPLEMENTADO")

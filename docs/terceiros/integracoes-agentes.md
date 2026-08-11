@@ -16,6 +16,13 @@
 - `REFERENCE_ONLY`: consulta conceitual; nenhuma execução ou cópia automática.
 - `BLOCKED`: licença, segurança ou saída de dados incompatível.
 
+O catálogo separa decisão humana de governança (`review_status`, evidência da
+revisão, commit pinado, licença e restrições) de sinais técnicos calculados.
+Ausência de revisão resulta em `UNREVIEWED` e bloqueio conservador. O requisito
+de egress usa os estados `YES`, `NO_VERIFIED` e `UNKNOWN`; ausência de sinal
+estático nunca equivale a `NO_VERIFIED`. Integrações com estado `UNKNOWN` não
+podem receber dados privados.
+
 Nenhuma integração supera os contratos canônicos, fornece fatos do caso ou decide matéria jurídica. Atualizações exigem nova auditoria; `scripts/terceiros/verificar_atualizacoes.py` somente informa divergência e nunca atualiza.
 
 Design Motion Principles está em
