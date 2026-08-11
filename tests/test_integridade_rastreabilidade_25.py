@@ -38,7 +38,7 @@ class IntegridadeRastreabilidade25(unittest.TestCase):
         itens=[{"id_pje":"10","ordem_indice":1,"pagina_destino_link":2},{"id_pje":"20","ordem_indice":2,"pagina_destino_link":2}]
         paginas=[{"pagina_pdf":i,"possui_rodape_pje":False,"pagina_documento_detectada":None,"id_pje_detectado":None} for i in range(1,5)]
         a=segmentar_documentos(itens,paginas);b=segmentar_documentos(list(reversed(itens)),paginas)
-        self.assertEqual(len(a),2);self.assertEqual({x["estado_item_indice"] for x in a},{"CONFLITO_DESTINO"});self.assertEqual(sorted(x["id_pje"] for x in a),sorted(x["id_pje"] for x in b))
+        self.assertEqual(len(a),1);self.assertEqual(a[0]["estado_item_indice"],"CONFLITO_DESTINO");self.assertEqual([i["id_pje"] for i in a[0]["itens_colididos"]],[i["id_pje"] for i in b[0]["itens_colididos"]])
         completos=[{**x,"documento_id_interno":f"DOC-PJE-{i:03d}","pagina_origem_indice":1,"texto_bruto":f"item {i}","confianca":{"nivel":"MEDIA"}} for i,x in enumerate(itens,1)]
         conflito=_conflito_colisao(Leitor({}),completos,2,1);schema=json.loads((Path(__file__).resolve().parents[1]/"schemas/pje-comum.schema.json").read_text(encoding="utf8"));contrato={"$schema":schema["$schema"],"$defs":schema["$defs"],"$ref":"#/$defs/conflito"}
         self.assertEqual(list(Draft202012Validator(contrato).iter_errors(conflito)),[])

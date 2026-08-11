@@ -16,10 +16,18 @@ from .leitor_pdf import LeitorPdf
 from .reconciliar_indice import reconciliar_documento
 from .segmentar_documentos import segmentar_documentos
 from .validar_integridade import validar_integridade
+from .classificar_documentos import classificar_documento,prioridade_documental
 
-def _conflito_colisao(leitor,itens,destino,numero):
+def _classificacao_manifesto(titulo,tipo):
+    classificada=classificar_documento(titulo,tipo,f"{titulo} {tipo}")
+    classe="NAO_CLASSIFICADO" if classificada["classe_normalizada"]=="OUTRO" else classificada["classe_normalizada"]
+    return {**classificada,"classe_normalizada":classe,"prioridade":prioridade_documental(classe,classificada["status_revisao"])}
+
+def _conflito_colisao(leitor,itens,inicio,fim=None,numero=None):
+    if numero is None:
+        numero,fim=fim,inicio
     fontes=[{"arquivo": leitor.caminho.name, "sha256": leitor.sha256, "pagina_pdf": i["pagina_origem_indice"], "pagina_documento": None, "pagina_original": None, "documento_id": i["documento_id_interno"], "id_pje": i["id_pje"], "trecho": i["texto_bruto"], "natureza":"DOCUMENTADO", "metodo_extracao": "TEXTO_DIGITAL", "confianca":i["confianca"], "status_verificacao":"VERIFICADO"} for i in itens]
-    return {"conflito_id":f"CON-PJE-{numero:03d}","campo":"indice.pagina_destino_link","tipo":"OUTRO","descricao":"Mais de um item do índice aponta para o mesmo destino","valores_conflitantes":[i["id_pje"] for i in itens],"fontes":fontes,"status":"ABERTO","bloqueante":True,"decisao":None,"observacoes":f"Destino PDF {destino}","itens_indice_relacionados":[i["documento_id_interno"] for i in itens]}
+    return {"conflito_id":f"CON-PJE-{numero:03d}","campo":"indice.pagina_destino_link","tipo":"COLISAO_DESTINO","descricao":"Mais de um item do índice aponta para o mesmo intervalo","valores_conflitantes":[i["id_pje"] for i in itens],"fontes":fontes,"status":"ABERTO","bloqueante":True,"decisao":None,"observacoes":f"Intervalo PDF {inicio}-{fim}","itens_indice_relacionados":[i["documento_id_interno"] for i in itens],"pagina_pdf_inicio":inicio,"pagina_pdf_fim":fim,"total_paginas":fim-inicio+1}
 def _fonte_indice(leitor,item):
     return {"arquivo":leitor.caminho.name,"sha256":leitor.sha256,"documento_id":item["documento_id_interno"],"id_pje":item["id_pje"],"pagina_pdf":item["pagina_origem_indice"],"pagina_documento":None,"pagina_original":None,"trecho":item["texto_bruto"],"natureza":"DOCUMENTADO","metodo_extracao":"INDICE_PJE","confianca":item["confianca"],"status_verificacao":"VERIFICADO"}
 def _fonte_rodape(leitor,pagina):
@@ -63,22 +71,23 @@ def construir_manifesto(caminho_pdf, raiz_repositorio=None):
                 chave_colisao=tuple(sorted(i["documento_id_interno"] for i in itens_colididos))
                 if chave_colisao in colisoes_registradas:continue
                 colisoes_registradas.add(chave_colisao)
-                conflitos.append(_conflito_colisao(leitor,itens_colididos,seg["pagina_pdf_inicio"],len(conflitos)+1))
+                conflitos.append(_conflito_colisao(leitor,itens_colididos,seg["pagina_pdf_inicio"],seg["pagina_pdf_fim"],len(conflitos)+1))
                 continue
             rec = reconciliar_documento({**seg, "id_rodape": id_rodape, "item_indice": item, "rodapes": rodapes})
             fatia = paginas[seg["pagina_pdf_inicio"] - 1:seg["pagina_pdf_fim"]]
             data_hora = None
             if item and item["data"] and item["hora"]:
                 data_hora = f'{item["data"]}T{item["hora"]}-03:00'
+            classificacao=_classificacao_manifesto(item["titulo_original"] if item else "Documento sem item no índice",item["tipo_original"] if item else "Não informado no índice")
             documentos.append({
                 **seg, "titulo_original": item["titulo_original"] if item else "Documento sem item no índice",
                 "tipo_original": item["tipo_original"] if item else "Não informado no índice",
-                "classe_normalizada": "OUTRO", "subclasse_normalizada": None,
-                "prioridade": "B_CONTEXTO_RELEVANTE", "ordem_indice": item["ordem_indice"] if item else None,
+                "classe_normalizada": classificacao["classe_normalizada"], "subclasse_normalizada": classificacao["subclasse_normalizada"],
+                "prioridade": classificacao["prioridade"], "ordem_indice": item["ordem_indice"] if item else None,
                 "data_hora": data_hora, "possui_texto": any(p["quantidade_caracteres"] > 0 for p in fatia),
                 "possui_imagens": any(p["quantidade_imagens"] > 0 for p in fatia), "possui_tabelas": False,
                 "possui_anexos_internos": False, "requer_ocr": any(p["requer_ocr"] for p in fatia),
-                "confianca_segmentacao": rec["confianca"], "confianca_classificacao": {"nivel": "BAIXA", "score": None},
+                "confianca_segmentacao": rec["confianca"], "confianca_classificacao": classificacao["confianca_classificacao"],
                 "status_reconciliacao": rec, "referencia_documento_pje": f'documentos/{seg["documento_id"]}.json',
             })
         for doc in documentos:

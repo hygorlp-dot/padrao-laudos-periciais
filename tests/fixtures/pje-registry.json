@@ -1,0 +1,14 @@
+{
+  "fixtures": [
+    {"arquivo":"documento-composto-valido.json","finalidade":"Documento composto válido","schema":"documento-pje.schema.json","consumer":"validator documento PJe","expected":"VALID"},
+    {"arquivo":"documento-fonte-sem-proveniencia.json","finalidade":"Rejeitar fonte sem proveniência","schema":"documento-pje.schema.json","consumer":"validator documento PJe","expected":"INVALID"},
+    {"arquivo":"documento-parecer-com-fotos-orcamento-valido.json","finalidade":"Parecer composto válido","schema":"documento-pje.schema.json","consumer":"validator documento PJe","expected":"VALID"},
+    {"arquivo":"documento-quesito-sem-numero-original-e-status-regular.json","finalidade":"Rejeitar quesito inconsistente","schema":"documento-pje.schema.json","consumer":"validator documento PJe","expected":"INVALID"},
+    {"arquivo":"documento-secao-com-id-pje-proprio.json","finalidade":"Rejeitar seção com identidade PJe indevida","schema":"documento-pje.schema.json","consumer":"validator documento PJe","expected":"INVALID"},
+    {"arquivo":"documento-simples-valido.json","finalidade":"Documento simples válido","schema":"documento-pje.schema.json","consumer":"validator documento PJe","expected":"VALID"},
+    {"arquivo":"manifesto-documento-sem-pagina.json","finalidade":"Rejeitar documento sem página inicial","schema":"manifesto-pje.schema.json","consumer":"validator manifesto PJe","expected":"INVALID"},
+    {"arquivo":"manifesto-minimo-valido.json","finalidade":"Manifesto mínimo válido","schema":"manifesto-pje.schema.json","consumer":"validator manifesto PJe","expected":"VALID"},
+    {"arquivo":"manifesto-multiplas-partes-valido.json","finalidade":"Manifesto multilateral válido","schema":"manifesto-pje.schema.json","consumer":"validator manifesto PJe","expected":"VALID"},
+    {"arquivo":"manifesto-reconciliacao-invalida.json","finalidade":"Rejeitar reconciliação incompatível","schema":"manifesto-pje.schema.json","consumer":"validator manifesto PJe","expected":"INVALID"}
+  ]
+}

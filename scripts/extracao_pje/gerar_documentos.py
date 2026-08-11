@@ -5,7 +5,7 @@ from collections import Counter
 from pathlib import Path
 
 from .catalogar_imagens import catalogar_imagens
-from .classificar_documentos import classificar_documento
+from .classificar_documentos import classificar_documento,prioridade_documental
 from .detectar_secoes_internas import criar_subdocumentos, detectar_secoes
 from .extrair_blocos_texto import extrair_pagina_e_blocos, proveniencia, referencia_pagina
 from .extrair_tabelas_documento import extrair_tabelas
@@ -65,7 +65,7 @@ def gerar_documentos(manifesto, caminho_pdf, diretorio_saida, sobrescrever=False
                                 "proveniencia": fonte})
             doc = {"schema_version": "1.0.0", "documento_id": base["documento_id"], "id_pje": base["id_pje"],
                    "processo_cnj": manifesto["processo"]["numero_cnj"]["valor"], "titulo_original": base["titulo_original"],
-                   "tipo_original": base["tipo_original"], **classificacao, "prioridade": base["prioridade"],
+                   "tipo_original": base["tipo_original"], **classificacao, "prioridade": prioridade_documental(classificacao["classe_normalizada"],classificacao["status_revisao"]),
                    "ordem_indice": base["ordem_indice"], "data_hora": base["data_hora"], "paginas": paginas,
                    "secoes": secoes, "subdocumentos": subdocumentos, "blocos_texto": blocos, "tabelas": tabelas,
                    "imagens": imagens, "fotografias": fotos, "eventos": [], "quesitos": [], "alegacoes": [],

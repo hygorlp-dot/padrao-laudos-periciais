@@ -65,7 +65,7 @@ class CorePericialP0Test(unittest.TestCase):
         self.assertFalse(comparar_medicao("0,4 cm", {"valor": "4", "unidade": "mm"}, permitir_conversao=False))
 
     def test_egress_deny_pii_e_consulta_publica_saneada(self):
-        provider = type("P", (), {"buscar": lambda self, q: [{"url": "https://www.gov.br/fonte", "q": q}]})()
+        provider = type("P", (), {"EGRESS_CAPABILITY":"LOCAL_NO_EGRESS","buscar": lambda self, q: [{"url": "https://www.gov.br/fonte", "q": q}]})()
         politica = EgressPolicy()
         self.assertFalse(politica.permitir_egress)
         self.assertEqual(buscar_seguro("norma técnica pública", provider)["status"], "BLOQUEADO_POR_EGRESS")
