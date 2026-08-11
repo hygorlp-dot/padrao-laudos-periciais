@@ -587,6 +587,40 @@
                                       ],
                            "global":  true,
                            "bloqueante":  true
+                       },
+                       {
+                           "id":  "SCHEMA_VERSION_FIDELITY",
+                           "descricao":  "Versões correntes, migráveis e futuras seguem política explícita e fail-closed.",
+                           "severidade":  "P1",
+                           "boundaries":  [
+                                              "PLANNING",
+                                              "PROCESS_GENERATION",
+                                              "QUALITY_GATE",
+                                              "INSPECTION",
+                                              "REDACTION"
+                                          ],
+                           "testes":  [
+                                          "tests/test_schema_versions.py",
+                                          "tests/test_quality_hardening_v2.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "MIGRATION_NO_SILENT_LOSS",
+                           "descricao":  "Migrações preservam campos materiais ou falham explicitamente.",
+                           "severidade":  "P0",
+                           "boundaries":  [
+                                              "PLANNING",
+                                              "PROCESS_GENERATION",
+                                              "QUALITY_GATE"
+                                          ],
+                           "testes":  [
+                                          "tests/test_schema_versions.py",
+                                          "tests/test_fault_injection.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
                        }
                    ]
 }
