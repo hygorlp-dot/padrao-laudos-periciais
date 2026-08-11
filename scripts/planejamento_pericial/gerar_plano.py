@@ -48,7 +48,7 @@ def _perfil(tipo: str) -> dict[str, Any]:
             "fotos": ["contexto do trecho e sentidos de circulação", "sinalização e visibilidade", "pavimento, acostamento, drenagem e dispositivos laterais"],
             "equip": [("receptor GNSS", "localização do trecho"), ("trena", "geometria e distâncias"), ("câmera", "registro técnico do trecho")],
             "seguranca": ["Planejar proteção operacional junto à rodovia", "Usar apoio e sinalização da diligência quando exigidos"]}
-    return {"atividades": [
+    if tipo == "VICIOS_CONSTRUTIVOS": return {"atividades": [
         ("Localizar e caracterizar objetivamente cada manifestação alegada, sem presumir origem.", "Inspeção visual sistemática"),
         ("Examinar interfaces, extensão e sinais associados relevantes à análise causal futura.", "Inspeção visual e medição pertinente"),
         ("Confrontar alegações, condições observáveis e documentação construtiva disponível.", "Rastreabilidade documental e de campo")],
@@ -56,6 +56,7 @@ def _perfil(tipo: str) -> dict[str, Any]:
         "fotos": ["contexto do ambiente e sistema", "aproximação da manifestação alegada", "detalhe com escala e interface correlata"],
         "equip": [("trena", "extensão e localização"), ("régua/fissurômetro", "dimensões compatíveis com fissuras"), ("medidor de umidade", "indícios de umidade quando alegados"), ("câmera", "registro probatório")],
         "seguranca": ["Confirmar acesso aos ambientes e elementos abrangidos"]}
+    return {"atividades":[("Caracterizar o objeto e registrar somente fatos observáveis pertinentes ao encargo.","Inspeção genérica controlada"),("Identificar documentos e grandezas indispensáveis sem aplicar método especializado não implementado.","Registro documental")],"medicoes":[],"fotos":["contexto geral do objeto pericial"],"equip": [("câmera","registro geral rastreável")],"seguranca":["Confirmar acesso seguro ao objeto da diligência"]}
 
 
 def gerar(diretorio: Path) -> dict[str, Any]:
@@ -65,6 +66,8 @@ def gerar(diretorio: Path) -> dict[str, Any]:
     erros_delimitacao=validar_instancia(delimitacao)
     if erros_delimitacao or status_derivado(delimitacao)!="APTO_PARA_PLANEJAMENTO":raise ValueError("delimitação inválida ou bloqueada no boundary de planejamento: "+"; ".join(erros_delimitacao+[status_derivado(delimitacao)]))
     tipo = delimitacao["tipo_pericia"]["tipo"]; perfil = _perfil(tipo)
+    from scripts.triagem_pericial.capabilities import pode_planejar
+    if not pode_planejar(tipo):raise ValueError("PERFIL_ESPECIALIZADO_NAO_IMPLEMENTADO: planejamento bloqueado para "+tipo)
     qts = [q["id"] for q in delimitacao["questoes_tecnicas"]]
     quesitos = [q for q in delimitacao["quesitos"] if q["pertinencia"] in {"PERTINENTE_TECNICO", "PERTINENTE_PARCIAL"}]
     algs = [a["id"] for a in processo["alegacoes"]];qt_por_id={q["id"]:q for q in delimitacao["questoes_tecnicas"]}

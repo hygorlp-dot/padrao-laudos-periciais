@@ -33,7 +33,7 @@ class AdvSafeHardening(unittest.TestCase):
             p[NameObject("/Resources")]=DictionaryObject({NameObject("/Font"):DictionaryObject({NameObject("/F1"):w._add_object(fonte)})})
             s=StreamObject();s.set_data(comandos.encode("ascii"));p[NameObject("/Contents")]=w._add_object(s)
         linhas=" ".join(f"{x} 650 m {x} 740 l S" for x in (40,140,260,480,570))+" 40 650 m 570 650 l S 40 680 m 570 680 l S 40 710 m 570 710 l S 40 740 m 570 740 l S"
-        textos="BT /F1 10 Tf 45 720 Td (ID) Tj 100 0 Td (Data) Tj 120 0 Td (Titulo) Tj 220 0 Td (Tipo) Tj ET BT /F1 10 Tf 45 690 Td (900001) Tj 100 0 Td (01/01/2026) Tj 120 0 Td (Peticao sintetica) Tj 220 0 Td (PETICAO) Tj ET BT /F1 10 Tf 45 660 Td (900002) Tj 100 0 Td (02/01/2026) Tj 120 0 Td (Decisao sintetica) Tj 220 0 Td (DECISAO) Tj ET"
+        textos="BT /F1 10 Tf 45 720 Td (ID) Tj 100 0 Td (Data) Tj 120 0 Td (Titulo) Tj 220 0 Td (Tipo) Tj ET BT /F1 10 Tf 45 690 Td (900001) Tj 100 0 Td (01/01/2026) Tj 120 0 Td (Manifestacao da parte autora) Tj 220 0 Td (PETICAO) Tj ET BT /F1 10 Tf 45 660 Td (900002) Tj 100 0 Td (02/01/2026) Tj 120 0 Td (Decisao sintetica) Tj 220 0 Td (DECISAO) Tj ET"
         pagina(linhas+textos+" BT /F1 10 Tf 40 760 Td (Processo 0000001-00.2026.4.00.0001) Tj ET")
         pagina("BT /F1 10 Tf 40 730 Td (A autora alega infiltracao e fissura no imovel por vicio construtivo.) Tj 0 -20 Td (O objeto da pericia e o imovel e o objetivo da pericia e determinar a causa.) Tj 0 -20 Td (QUESITOS:) Tj 0 -20 Td (1. Existe umidade na parede?) Tj 0 -630 Td (Num. 900001 - Pag. 1) Tj ET")
         pagina("BT /F1 10 Tf 40 730 Td (Pagina complementar sem rodape e sem link) Tj ET")
