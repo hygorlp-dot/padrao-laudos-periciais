@@ -5,6 +5,8 @@ from copy import deepcopy
 import re
 
 REMOVIVEIS = ("É importante destacar que ", "Cumpre ressaltar que ", "Vale salientar que ", "Importa mencionar que ")
+TITULOS_IMUTAVEIS={"classificação","conclusão"}
+CLAIMS_IMUTAVEIS={"ORIGEM","CONCLUSAO_DE_QT","CLASSIFICACAO","CONCLUSAO"}
 
 
 def autocorrigir(redacao, achados):
@@ -15,6 +17,10 @@ def autocorrigir(redacao, achados):
         novos = []
         for indice, texto in enumerate(bloco.get("textos", [])):
             original = texto
+            titulo=(bloco.get("titulos",[])[indice] if indice<len(bloco.get("titulos",[])) else "").casefold()
+            claim=claims.get(bloco.get("claim_ids",[])[indice]) if indice<len(bloco.get("claim_ids",[])) else None
+            if bloco.get("material") is True or titulo in TITULOS_IMUTAVEIS or (claim and (claim.get("imutavel") is True or claim.get("material") is True or claim.get("tipo") in CLAIMS_IMUTAVEIS)):
+                novos.append(texto);continue
             if "ABERTURA_GENERICA" in editoriais:
                 for termo in REMOVIVEIS: texto = texto.replace(termo, "")
             if "CONECTIVO_REPETITIVO" in editoriais:

@@ -33,6 +33,23 @@ def validar_integridade(manifesto):
             alertas.append(f"{ident}: paginação interna começa em {paginas[0]}")
         if paginas and any(b != a + 1 for a, b in zip(paginas, paginas[1:])):
             erros.append(f"{ident}: salto na paginação interna {paginas}")
+    for grupo_nome,grupo in (("conflito",manifesto.get("conflitos",[])),("pendencia",manifesto.get("pendencias",[]))):
+        for registro in grupo:
+            if grupo_nome=="conflito" and registro.get("status")=="RESOLVIDO_POR_FONTE_PRIMARIA":continue
+            if grupo_nome=="pendencia" and registro.get("status")!="ABERTA":continue
+            inicio,fim=registro.get("pagina_pdf_inicio"),registro.get("pagina_pdf_fim")
+            if inicio is None and fim is None:continue
+            ident=registro.get("conflito_id") or registro.get("pendencia_id") or grupo_nome
+            if not isinstance(inicio,int) or not isinstance(fim,int) or inicio>fim:
+                erros.append(f"{ident}: intervalo de páginas inválido");continue
+            if registro.get("total_paginas")!=fim-inicio+1:erros.append(f"{ident}: total de páginas inconsistente")
+            for pagina in range(inicio,fim+1):
+                if pagina in ocupadas:erros.append(f"Página {pagina} com owners incompatíveis: {ocupadas[pagina]} e {ident}")
+                else:ocupadas[pagina]=ident
+    inicio_documental=max(manifesto.get("indice",{}).get("paginas",[]) or [0])+1
+    total_pdf=manifesto.get("arquivo",{}).get("total_paginas") or max((p.get("pagina_pdf",0) for p in manifesto.get("paginas",[])),default=0)
+    for pagina in range(inicio_documental,total_pdf+1):
+        if pagina not in ocupadas:erros.append(f"Página {pagina} sem owner na região documental")
     met = manifesto["metricas_extracao"]
     itens={i["documento_id_interno"] for i in manifesto["indice"]["itens"] if i.get("documento_id_interno")}
     contagens={item:0 for item in itens}

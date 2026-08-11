@@ -27,8 +27,8 @@ def segmentar_documentos(itens, paginas):
         id_rodape = rodapes[0]["id_pje_detectado"] if rodapes else None
         id_pje = item["id_pje"] if item else id_rodape
         if len(candidatos)>1:
-            for colidido in sorted(candidatos,key=lambda x:(x["ordem_indice"],x["id_pje"])):
-                documentos.append({"documento_id":colidido.get("documento_id_interno",f"DOC-PJE-{colidido['ordem_indice']:03d}"),"id_pje":colidido["id_pje"],"pagina_pdf_inicio":inicio,"pagina_pdf_fim":inicio,"total_paginas":1,"item_indice":colidido,"itens_colididos":candidatos,"id_rodape":id_rodape,"rodapes":rodapes,"estado_item_indice":"CONFLITO_DESTINO"})
+            ordenados_colisao=sorted(candidatos,key=lambda x:(x["ordem_indice"],x["id_pje"]))
+            documentos.append({"documento_id":None,"id_pje":None,"pagina_pdf_inicio":inicio,"pagina_pdf_fim":fim,"total_paginas":fim-inicio+1,"item_indice":None,"itens_colididos":ordenados_colisao,"id_rodape":id_rodape,"rodapes":rodapes,"estado_item_indice":"CONFLITO_DESTINO"})
             continue
         if not id_pje:continue
         ordem = item["ordem_indice"] if item else len(documentos) + 1
