@@ -80,3 +80,53 @@ Para cada manifestação, seguir o bloco de
   para parágrafos e respostas aos quesitos.
 - **PENDÊNCIA DE VALIDAÇÃO DO PERITO:** aprovar abreviações e convenções de
   unidades ainda não registradas.
+
+## Linguagem pericial natural
+
+**REGRA APROVADA.** A redação expressa o `PAT_FINAL`; não produz nova verdade
+técnica. O texto deve ser formal, preciso, econômico e natural.
+
+- Cada parágrafo deve descrever, comparar, explicar, classificar, concluir ou
+  ressalvar algo rastreável.
+- Evitar aberturas genéricas, metadiscurso, conectivos repetitivos,
+  adjetivação vazia, tom promocional e conclusões hiperbólicas.
+- Não variar termo técnico apenas para evitar repetição.
+- Não repetir a mesma conclusão em sucessivos parágrafos.
+- Uma expressão isolada não constitui erro; considerar frequência, contexto e
+  função.
+- `CONFIRMADO` admite sustentação afirmativa; `PROVÁVEL` indica
+  compatibilidade; `POSSÍVEL` ou `INCONCLUSIVO` exigem linguagem que preserve a
+  limitação.
+- Não usar detector de IA como critério de qualidade.
+
+Pode haver variação de ritmo, extensão e ordem de frases não materiais. Não
+pode variar medida, norma, causa, origem, criticidade, ressalva ou conclusão.
+
+## Redação judicial orientada ao tema
+
+- A síntese processual deve ser curta, neutra e limitada ao necessário para
+  formular o tema técnico controvertido.
+- Tema, objeto e objetivo têm funções distintas conforme
+  [o padrão de estrutura](padrao-estrutura-laudo.md).
+- Cada parágrafo técnico deve descrever, fundamentar, comparar, explicar
+  mecanismo, ressalvar, classificar, concluir ou responder. Parágrafo sem
+  função deve ser sinalizado.
+- Evitar texto de apostila e definições elementares que não sejam necessárias
+  à compreensão do método, mecanismo, critério ou conclusão.
+- O grau de assertividade deve preservar a confiança saneada: confirmação
+  admite formulação afirmativa; probabilidade exige compatibilidade; resultado
+  possível ou inconclusivo exige limitação expressa.
+
+## Claims da redação
+
+- Toda afirmação material deve possuir `CLAIM-RED-NNN` e proveniência até
+  evidência primária, norma verificada, `PAT-NNN`, `QT-NNN` e `QUE-NNN`
+  relacionados.
+- PAT não fundamenta PAT, texto não fundamenta o próprio texto e resposta a
+  quesito não constitui fonte autônoma de verdade.
+- Claim que cite norma deve auditar separadamente o componente normativo
+  contra `NOR-NNN`; evidência física não comprova conteúdo normativo.
+- Claim material nova gera `UNSUPPORTED_REDRAFT_CLAIM` e bloqueia o laudo.
+- Autocorreção é exclusivamente editorial e não pode modificar fato, medida,
+  causa, origem, criticidade, norma, reparo, quantitativo, ressalva ou
+  conclusão.

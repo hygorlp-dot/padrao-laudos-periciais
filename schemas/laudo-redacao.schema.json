@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/laudo-redacao.schema.json",
+  "title": "Modelo semântico judicial do laudo pericial",
+  "description": "Conteúdo canônico sem atributos de layout Word.",
+  "type": "object",
+  "required": ["schema_version", "tipo_pericia", "modelo_documental", "identificacao", "qualificacao_perito", "preambulo", "sintese_processual", "tema_controvertido", "objeto", "objetivo", "metodologia", "normas_aplicaveis", "definicoes_necessarias", "criterios_origem", "criterios_criticidade", "limitacoes", "dados_diligencia", "condicoes_gerais", "sistemas_analisados", "analises_tecnicas", "patologias", "conclusao_classificacoes", "quadro_resumo", "sintese_conclusiva_tema", "quesitos", "orcamento", "referencias", "encerramento", "claims_redacao", "metadados_de_auditoria", "aprendizado_futuro"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "minLength": 1 },
+    "tipo_pericia": { "const": "VICIOS_CONSTRUTIVOS" },
+    "modelo_documental": { "const": "LAUDO_VICIOS_CONSTRUTIVOS_V1" },
+    "identificacao": { "type": "object" }, "qualificacao_perito": {}, "preambulo": {},
+    "sintese_processual": { "type": ["string", "null"] }, "tema_controvertido": { "type": ["string", "null"] },
+    "objeto": { "type": ["string", "null"] }, "objetivo": { "type": ["string", "null"] },
+    "metodologia": { "type": "array" }, "normas_aplicaveis": { "$ref": "#/$defs/idsNor" },
+    "definicoes_necessarias": { "type": "array" }, "criterios_origem": {}, "criterios_criticidade": {},
+    "limitacoes": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "dados_diligencia": {}, "condicoes_gerais": {}, "sistemas_analisados": { "type": "array" },
+    "analises_tecnicas": { "type": "array", "items": { "$ref": "#/$defs/bloco" } },
+    "patologias": { "type": "array", "items": { "type": "object", "required": ["id_patologia", "local", "sistema", "alegacao_original", "alegacao_normalizada", "fotografias", "manifestacao", "constatacao", "situacao", "origem", "criticidade", "vicio_construtivo", "tipo_vicio", "recomendacoes_tecnicas", "reparo", "elegivel_orcamento", "conclusao_tecnica"], "additionalProperties": false, "properties": { "id_patologia": { "type": "string", "pattern": "^PAT-[0-9]{3,}$" }, "local": {}, "sistema": {}, "alegacao_original": {}, "alegacao_normalizada": {}, "fotografias": { "type": "array" }, "manifestacao": {}, "constatacao": { "type": "object" }, "situacao": { "type": "string" }, "origem": { "type": "string" }, "criticidade": { "enum": ["CRITICA", "MEDIA", "MINIMA", "NAO_APLICAVEL"] }, "vicio_construtivo": {}, "tipo_vicio": {}, "recomendacoes_tecnicas": { "type": "array" }, "reparo": {}, "elegivel_orcamento": { "type": "boolean" }, "conclusao_tecnica": { "type": "string" } } } },
+    "conclusao_classificacoes": { "type": "array", "items": { "type": "object" } },
+    "quadro_resumo": { "type": "array", "items": { "type": "object", "required": ["pat_id", "local", "sistema", "manifestacao", "situacao", "origem", "criticidade", "vicio_construtivo", "reparo_orcamento"], "additionalProperties": false, "properties": { "pat_id": { "type": "string", "pattern": "^PAT-[0-9]{3,}$" }, "local": {}, "sistema": {}, "manifestacao": {}, "situacao": { "type": "string" }, "origem": { "type": "string" }, "criticidade": { "type": "string" }, "vicio_construtivo": {}, "reparo_orcamento": { "type": "boolean" } } } },
+    "sintese_conclusiva_tema": { "type": "string" },
+    "quesitos": { "type": "array", "items": { "type": "object", "required": ["origem", "itens"], "additionalProperties": false, "properties": { "origem": { "type": "string" }, "itens": { "type": "array", "minItems": 1, "items": { "type": "object" } } } } },
+    "orcamento": { "type": "object", "required": ["aplicavel", "itens", "observacao"], "additionalProperties": false, "properties": { "aplicavel": { "type": "boolean" }, "itens": { "type": "array" }, "observacao": { "type": ["string", "null"] } } },
+    "referencias": { "$ref": "#/$defs/idsNor" }, "encerramento": { "type": "object" },
+    "claims_redacao": { "type": "array", "items": { "$ref": "#/$defs/claim" } },
+    "metadados_de_auditoria": { "type": "object", "required": ["gate", "grounding", "achados_fidelidade", "achados_estilo", "autocorrecoes"], "additionalProperties": false, "properties": { "gate": { "enum": ["APTO_PARA_LAUDO", "APTO_PARA_LAUDO_COM_RESSALVAS", "BLOQUEADO_PARA_LAUDO"] }, "grounding": { "type": "array" }, "achados_fidelidade": { "type": "array" }, "achados_estilo": { "type": "array" }, "autocorrecoes": { "type": "array" } } },
+    "aprendizado_futuro": { "type": "object", "required": ["status", "redacao_agente", "correcao_perito", "redacao_final", "diff_semantico", "regra_candidata"], "additionalProperties": false, "properties": { "status": { "const": "NAO_IMPLEMENTADO" }, "redacao_agente": { "type": "null" }, "correcao_perito": { "type": "null" }, "redacao_final": { "type": "null" }, "diff_semantico": { "type": "null" }, "regra_candidata": { "type": "null" } } }
+  },
+  "$defs": {
+    "idsPat": { "type": "array", "items": { "type": "string", "pattern": "^PAT-[0-9]{3,}$" }, "uniqueItems": true },
+    "idsNor": { "type": "array", "items": { "type": "string", "pattern": "^NOR-[0-9]{3,}$" }, "uniqueItems": true },
+    "listaIds": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "claim": { "type": "object", "additionalProperties": false, "required": ["id", "secao", "tipo", "texto_semantico", "pat_ids", "qt_ids", "que_ids", "alg_ids", "obs_ids", "med_ids", "fot_ids", "doc_ids", "nor_ids", "res_ids", "con_ids", "confianca", "natureza", "materialidade"], "properties": { "id": { "type": "string", "pattern": "^CLAIM-RED-[0-9]{3,}$" }, "secao": { "type": "string", "minLength": 1 }, "tipo": { "type": "string", "minLength": 1 }, "texto_semantico": { "type": "string", "minLength": 1 }, "pat_ids": { "$ref": "#/$defs/listaIds" }, "qt_ids": { "$ref": "#/$defs/listaIds" }, "que_ids": { "$ref": "#/$defs/listaIds" }, "alg_ids": { "$ref": "#/$defs/listaIds" }, "obs_ids": { "$ref": "#/$defs/listaIds" }, "med_ids": { "$ref": "#/$defs/listaIds" }, "fot_ids": { "$ref": "#/$defs/listaIds" }, "doc_ids": { "$ref": "#/$defs/listaIds" }, "nor_ids": { "$ref": "#/$defs/listaIds" }, "res_ids": { "$ref": "#/$defs/listaIds" }, "con_ids": { "$ref": "#/$defs/listaIds" }, "confianca": { "type": ["string", "object"] }, "natureza": { "enum": ["FACTUAL", "INTERPRETIVE", "SYNTHETIC"] }, "materialidade": { "enum": ["LOAD_BEARING", "SUPPORTING", "ILLUSTRATIVE"] } } },
+    "bloco": { "type": "object", "additionalProperties": false, "required": ["pat_id", "titulos", "textos", "claim_ids"], "properties": { "pat_id": { "type": "string", "pattern": "^PAT-[0-9]{3,}$" }, "titulos": { "type": "array", "prefixItems": [{ "const": "Análise das Alegações e Prováveis Causas" }, { "const": "Consequências" }, { "const": "Classificação" }, { "const": "Conclusão" }], "items": false }, "textos": { "type": "array", "minItems": 4, "maxItems": 4, "items": { "type": "string", "minLength": 1 } }, "claim_ids": { "type": "array", "minItems": 4, "items": { "type": "string", "pattern": "^CLAIM-RED-[0-9]{3,}$" } } } }
+  }
+}
