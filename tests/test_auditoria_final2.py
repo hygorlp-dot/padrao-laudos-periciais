@@ -48,11 +48,11 @@ class AuditoriaFinal2(unittest.TestCase):
         with self.assertRaises(DomainError):migrar_plano({"schema_version":"3.0.0"})
 
     def test_equivalencia_tipagem_e_catalogo_planejado(self):
-        plano={"ensaios":[{"id":"ENS-PLANO-001","questoes_tecnicas":["QT-001"]}],"requisitos_cobertura":[{"questao_tecnica":"QT-001","tipo":"ENSAIO","obrigatoriedade":"OBRIGATORIA","item_planejado":"ENS-PLANO-001"}]}
+        plano={"ensaios":[{"id":"ENS-PLANO-001","nome":"ESTANQUEIDADE","questoes_tecnicas":["QT-001"]}],"requisitos_cobertura":[{"questao_tecnica":"QT-001","tipo":"ENSAIO","obrigatoriedade":"OBRIGATORIA","item_planejado":"ENS-PLANO-001"}]}
         base={"cobertura":[{"planejado":"ENS-PLANO-001","status":"SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE","executado":[],"evidencia_equivalente":["OBS-001"],"justificativa_equivalencia":"justificada","equivalencia":{"requisito_original":"ENS-PLANO-001","tipo_evidencia":"ENSAIO","capability":"ESTANQUEIDADE","metodo_substituto":"ensaio equivalente"}}],"observacoes":[{"id":"OBS-001","questoes":["QT-001"]}]}
         self.assertFalse(recalcular_execucao(plano,base)["apto"])
-        base["ensaios"]=[{"id":"ENS-001","ensaio_planejado":None,"questoes":["QT-001"]}];base["cobertura"][0]["evidencia_equivalente"]=["ENS-001"]
-        self.assertFalse(recalcular_execucao(plano,base)["apto"]);base["cobertura"][0]["equivalencia"]["capability"]="ENSAIO"
+        base["ensaios"]=[{"id":"ENS-001","ensaio_planejado":None,"nome":"OUTRO ENSAIO","questoes":["QT-001"]}];base["cobertura"][0]["evidencia_equivalente"]=["ENS-001"]
+        self.assertFalse(recalcular_execucao(plano,base)["apto"]);base["ensaios"][0]["nome"]="ESTANQUEIDADE";base["cobertura"][0]["equivalencia"]["capability"]="estanqueidade"
         self.assertTrue(recalcular_execucao(plano,base)["apto"])
 
     def test_isolamento_mesmo_arquivo_ambiente_sem_vinculo(self):
@@ -78,9 +78,9 @@ class AuditoriaFinal2(unittest.TestCase):
 
     def test_norma_temporal_autoridade_e_decimal(self):
         self.assertEqual(aplicabilidade_temporal({"edicao":"2024","publicacao":"2024-01-01","status_vigencia":"REVOGADA"},"2020-01-01"),"APLICABILIDADE_INCONCLUSIVA")
-        norma={"id":"NOR-001","verificada":True,"requisito":"x","metodo_verificacao":"medir","criterio":{"operador":"<=","valor":"4,0","unidade":"mm"},"proveniencia":["x"],"aplicabilidade_temporal":"APLICAVEL_PRINCIPAL"}
+        norma={"id":"NOR-001","entidade":"ABNT","numero":"1","classificacao_fonte":"FONTE_TECNICA_LOCAL_VERIFICADA","status_verificacao":"VERIFICADO","verificada":True,"requisito":"x","metodo_verificacao":"medir","criterio":{"operador":"<=","valor":"4,0","unidade":"mm"},"proveniencia":["x"],"vigencia_inicio":"2010-01-01","data_relevante":"2020-01-01"}
         self.assertEqual(avaliar_conformidade_normativa(norma,[{"id":"MED-001","tipo":"MEDICAO","valor":"4.0","unidade":"mm"}])["resultado"],"ATENDE")
-        norma["aplicabilidade_temporal"]="NAO_APLICAVEL";self.assertEqual(avaliar_conformidade_normativa(norma,[{"id":"MED-001","tipo":"MEDICAO","valor":4,"unidade":"mm"}])["resultado"],"INCONCLUSIVO")
+        norma["vigencia_inicio"]="2024-01-01";self.assertEqual(avaliar_conformidade_normativa(norma,[{"id":"MED-001","tipo":"MEDICAO","valor":4,"unidade":"mm"}])["resultado"],"INCONCLUSIVO")
         recuperada=recuperar_normas_para_manifestacao([{**norma,"url":"https://oficial.example/norma","sistema":"VEDACOES"}],sistema="VEDACOES",manifestacao="fissura",data_relevante="2020-01-01")[0];self.assertFalse(recuperada["verificada"])
         local=recuperar_normas_para_manifestacao([{**norma,"url":None,"proveniencia":[],"classificacao_fonte":"FONTE_TECNICA_LOCAL_VERIFICADA","sistema":"VEDACOES"}],sistema="VEDACOES",manifestacao="fissura",data_relevante="2020-01-01")[0];self.assertFalse(local["autoridade_fonte_verificada"]);self.assertFalse(local["verificada"])
 
@@ -127,18 +127,21 @@ class AuditoriaFinal2(unittest.TestCase):
             docs_gerados=[]
             for caminho in sorted((d/"documentos").glob("*.json")):
                 doc=json.loads(caminho.read_text(encoding="utf8"));docs_gerados.append(doc);self.assertEqual(validar("documento-pje.schema.json",doc),[])
-            self.assertNotEqual(docs_gerados[0]["classe_normalizada"],"ART_RRT")
+            self.assertEqual(docs_gerados[0]["classe_normalizada"],"MANIFESTACAO")
             delimitacao=gerar_delimitacao(d);self.assertEqual(validar("delimitacao-pericial.schema.json",delimitacao),[]);self.assertEqual(validar_relacoes(delimitacao),[]);self.assertEqual(status_derivado(delimitacao),"APTO_PARA_PLANEJAMENTO");(d/"delimitacao-pericial.json").write_text(json.dumps(delimitacao),encoding="utf8")
-            processo=gerar_processo(d);self.assertEqual(validar("processo.schema.json",processo),[]);(d/"processo.json").write_text(json.dumps(processo),encoding="utf8")
+            processo=gerar_processo(d);processo["imovel"]["endereco"]=load("tests/fixtures/schemas/processo-valido.json")["imovel"]["endereco"];self.assertIn("100",dados_sensiveis_processo(processo));self.assertEqual(validar("processo.schema.json",processo),[]);(d/"processo.json").write_text(json.dumps(processo),encoding="utf8")
             delimitacao=aprofundar(d);self.assertEqual(validar("delimitacao-pericial.schema.json",delimitacao),[]);self.assertEqual(validar_relacoes(delimitacao),[]);self.assertEqual(status_derivado(delimitacao),"APTO_PARA_PLANEJAMENTO");(d/"delimitacao-pericial.json").write_text(json.dumps(delimitacao),encoding="utf8")
-            plano=gerar_plano(d);self.assertEqual(validar("plano-vistoria.schema.json",plano),[]);self.assertTrue(recalcular_cobertura(plano)["apto"])
+            plano=gerar_plano(d);qt_documento=plano["requisitos_cobertura"][0]["questao_tecnica"];plano["documentos_a_solicitar"].append({"id":"DOC-PLANO-999","descricao":"memorial sintetico","questoes_tecnicas":[qt_documento],"criterio_satisfacao":"identidade documental"});plano["requisitos_cobertura"].append({"questao_tecnica":qt_documento,"tipo":"DOCUMENTO","obrigatoriedade":"OBRIGATORIA","item_planejado":"DOC-PLANO-999"});next(c for c in plano["cobertura"] if qt_documento in c["questoes_tecnicas"])["documentos"].append("DOC-PLANO-999");self.assertEqual(validar("plano-vistoria.schema.json",plano),[]);self.assertTrue(recalcular_cobertura(plano)["apto"])
             campo=d/"campo";campo.mkdir()
             for i,item in enumerate(plano["atividades"],1):(campo/f"atividade-{i}.txt").write_text(f"tipo=OBS;descricao=interface com umidade observada;manifestacao=umidade;resultado=OBSERVADO;sistema=IMPERMEABILIZACAO;ambiente=Sala;elemento=Parede;atividade_planejada={item['id']}",encoding="utf8")
             for i,item in enumerate(plano["medicoes"],1):(campo/f"medicao-{i}.txt").write_text(f"tipo=MED;grandeza=abertura;valor=0,2;unidade=mm;medicao_planejada={item['id']}",encoding="utf8")
             for i,item in enumerate(plano["fotografias"],1):(campo/f"{item['id']}.jpg").write_bytes(f"imagem-{i}".encode())
-            vistoria=gerar(inventariar(campo),plano,processo["numero_processo"]);self.assertEqual(validar("vistoria.schema.json",vistoria),[]);self.assertTrue(recalcular_execucao(plano,vistoria)["apto"])
-            motor=executar_pipeline_motor(processo,delimitacao,plano,vistoria);self.assertEqual(validar("analise-motor-vicios.schema.json",motor["analise_final"]),[]);self.assertEqual(motor["erros_finais"],[]);self.assertIn(motor["gate"],{"APTO_PARA_REDACAO","APTO_PARA_REDACAO_COM_RESSALVAS"})
-            redacao=executar_pipeline_redacao(processo,delimitacao,motor);self.assertEqual(validar("laudo-redacao.schema.json",redacao["laudo"]),[]);self.assertIn(redacao["gate"],{"APTO_PARA_LAUDO","APTO_PARA_LAUDO_COM_RESSALVAS"},{"achados":redacao.get("achados"),"grounding":redacao.get("grounding"),"qt_ausentes":redacao.get("qt_ausentes")})
+            (campo/"segunda-manifestacao.txt").write_text(f"tipo=OBS;descricao=não há fissura;manifestacao=fissura;resultado=NAO_CONSTATADO_NA_VISTORIA;sistema=IMPERMEABILIZACAO;ambiente=Sala;elemento=Parede;atividade_planejada={plano['atividades'][0]['id']}",encoding="utf8");(campo/"DOC-PLANO-999.pdf").write_bytes(b"%PDF-1.4 memorial sintetico")
+            inventario_campo=inventariar(campo);next(a for a in inventario_campo["arquivos"] if a["nome"]=="DOC-PLANO-999.pdf")["metadados"]["documento_planejado"]="DOC-PLANO-999"
+            vistoria=gerar(inventario_campo,plano,processo["numero_processo"]);self.assertEqual(validar("vistoria.schema.json",vistoria),[]);self.assertTrue(recalcular_execucao(plano,vistoria)["apto"]);self.assertEqual(len({o["manifestacao"] for o in vistoria["observacoes"]}),2)
+            norma={"id":"NOR-999","entidade":"ABNT","numero":"999","titulo":"impermeabilizacao","sistema":"IMPERMEABILIZACAO","classificacao_fonte":"FONTE_TECNICA_LOCAL_VERIFICADA","status_verificacao":"VERIFICADO","verificada":True,"requisito":"abertura maxima","metodo_verificacao":"medir","criterio":{"operador":"<=","valor":4,"unidade":"mm","grandeza":"abertura"},"proveniencia":["NOR-LOCAL-999"],"vigencia_inicio":"2024-01-01"}
+            motor=executar_pipeline_motor(processo,delimitacao,plano,vistoria,{"normas":[norma],"data_relevante":"2020-01-01"});self.assertEqual(validar("analise-motor-vicios.schema.json",motor["analise_final"]),[]);self.assertEqual(motor["erros_finais"],[]);self.assertIn(motor["gate"],{"APTO_PARA_REDACAO","APTO_PARA_REDACAO_COM_RESSALVAS"});self.assertTrue(all(n["avaliacao_conformidade"]["resultado"]=="INCONCLUSIVO" for p in motor["analise_final"]["patologias"] for n in p["normas_relacionadas"] if n["id"]=="NOR-999"))
+            redacao=executar_pipeline_redacao(processo,delimitacao,motor);self.assertEqual(validar("laudo-redacao.schema.json",redacao["laudo"]),[]);self.assertEqual(redacao["gate"],"BLOQUEADO_PARA_LAUDO",{"achados":redacao.get("achados"),"grounding":redacao.get("grounding"),"qt_ausentes":redacao.get("qt_ausentes")})
             que=delimitacao["quesitos"][0];qts=set(que["questoes_tecnicas_relacionadas"]);saneadas={q["id"]:q for q in motor["analise_final"]["questoes_saneadas"]};pats={p for qid in qts for p in saneadas[qid]["patologias"]};self.assertTrue(pats);self.assertTrue(all(next(p for p in motor["analise_final"]["patologias"] if p["id"]==pid)["evidencias"] for pid in pats));self.assertTrue(any(item["id"]==que["id"] and qts<=set(item["qt_ids"]) for grupo in redacao["laudo"]["quesitos"] for item in grupo["itens"]))
             caso_novo=copy.deepcopy(delimitacao);caso_novo["quesitos"][0].update(texto_integral="Determinar o teor de cloretos no concreto.",materia_tecnica="Teor de cloretos no concreto",questoes_tecnicas_relacionadas=[])
             for qt in caso_novo["questoes_tecnicas"]:qt["quesitos_relacionados"]=[x for x in qt["quesitos_relacionados"] if x!=que["id"]]

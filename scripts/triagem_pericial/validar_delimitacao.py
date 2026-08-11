@@ -40,7 +40,9 @@ def recalcular_autoauditoria(delimitacao):
 
 def status_derivado(delimitacao):
     auditoria=recalcular_autoauditoria(delimitacao)
-    bloqueio=any(v=="BLOQUEADO" for v in auditoria.values()) or any(c.get("classificacao")=="BLOQUEANTE" and c.get("status")!="RESOLVIDO_POR_HIERARQUIA_DE_FONTES" for c in delimitacao.get("conflitos",[]))
+    classificacao=delimitacao.get("tipo_pericia",{});confianca=classificacao.get("confianca",{})
+    ambigua=confianca.get("nivel")=="BAIXA"
+    bloqueio=ambigua or any(v=="BLOQUEADO" for v in auditoria.values()) or any(c.get("classificacao")=="BLOQUEANTE" and c.get("status")!="RESOLVIDO_POR_HIERARQUIA_DE_FONTES" for c in delimitacao.get("conflitos",[]))
     return "BLOQUEADO" if bloqueio else "APTO_PARA_PLANEJAMENTO"
 
 

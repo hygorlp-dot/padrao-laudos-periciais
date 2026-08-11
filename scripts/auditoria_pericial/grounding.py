@@ -2,6 +2,7 @@
 from __future__ import annotations
 import re
 import unicodedata
+from scripts.motor_vicios.regras_probatorias import identidade_fontes
 TIPOS={"ASPECTO_OBSERVAVEL","FATO_PROCESSUAL","FATO_DOCUMENTAL","CONSTATACAO_DE_VISTORIA","MEDICAO","MANIFESTACAO_TECNICA","MECANISMO","CAUSA","ORIGEM","CRITICIDADE","REQUISITO_NORMATIVO","CONFORMIDADE_NORMATIVA","VICIO_CONSTRUTIVO","REPARABILIDADE","ORCAMENTO","INFERENCIA_TECNICA","LIMITACAO","CONCLUSAO_DE_QT"}
 PREFIXOS=("ALG-","DOC-","OBS-","MED-","FOT-","ENS-","NOR-","MOD-","RES-","PAT-","QT-","QUE-","HIP-")
 TIPOS_EVIDENCIA={"DOCUMENTO","OBSERVACAO","MEDICAO","FOTOGRAFIA","ENSAIO","NORMA","RESSALVA","MODELO_REFERENCIAL","INFERENCIA_TECNICA"}
@@ -9,7 +10,8 @@ def _lista_textual(valor):return isinstance(valor,list) and all(isinstance(x,str
 def _classe_probatoria(e):
     if e.get("classe_probatoria"):return e["classe_probatoria"]
     return "EVIDENCIA_PRIMARIA" if str(e.get("id","")).startswith(("OBS-","MED-","FOT-","DOC-","ENS-","NOR-")) else "INFERENCIA_INTERMEDIARIA"
-def _evidencia_valida(e):return isinstance(e,dict) and isinstance(e.get("id"),str) and e["id"].startswith(PREFIXOS) and _classe_probatoria(e)=="EVIDENCIA_PRIMARIA" and _lista_textual(e.get("proveniencia")) and e.get("tipo") in TIPOS_EVIDENCIA and _lista_textual(e.get("aspectos_suportados",[])) and _lista_textual(e.get("aspectos_contraditos",[])) and isinstance(e.get("acessivel",True),bool)
+def _proveniencia_valida(valor):return isinstance(valor,list) and bool(valor) and bool(identidade_fontes({"proveniencia":valor}))
+def _evidencia_valida(e):return isinstance(e,dict) and isinstance(e.get("id"),str) and e["id"].startswith(PREFIXOS) and _classe_probatoria(e)=="EVIDENCIA_PRIMARIA" and _proveniencia_valida(e.get("proveniencia")) and e.get("tipo") in TIPOS_EVIDENCIA and _lista_textual(e.get("aspectos_suportados",[])) and _lista_textual(e.get("aspectos_contraditos",[])) and isinstance(e.get("acessivel",True),bool)
 def auditar_claim(claim,evidencias,catalogo=None):
     if claim.get("tipo") not in TIPOS or claim.get("natureza") not in {"FACTUAL","INTERPRETIVE","SYNTHETIC"} or claim.get("saliencia") not in {"LOAD_BEARING","SUPPORTING","ILLUSTRATIVE"} or not isinstance(claim.get("texto"),str) or not claim["texto"].strip() or not isinstance(claim.get("id"),str) or not re.fullmatch(r"CLM-[0-9]{3,}",claim["id"]) or not _lista_textual(claim.get("aspectos_requeridos",[claim.get("tipo")])) or not isinstance(claim.get("detalhe_nao_suportado",False),bool):raise ValueError("contrato da claim inválido")
     if not isinstance(evidencias,list) or catalogo is not None and not isinstance(catalogo,list):raise ValueError("evidências e catálogo devem ser listas")
@@ -20,7 +22,8 @@ def auditar_claim(claim,evidencias,catalogo=None):
         fonte=catalogo_por_id.get(relacao.get("id"))
         compativel=not (fonte and fonte.get("tipo")=="NORMA" and claim["tipo"] not in {"REQUISITO_NORMATIVO","CONFORMIDADE_NORMATIVA","VIGENCIA","REGULATORIA"})
         if fonte and fonte.get("acessivel",True) and not compativel:incompativel=True
-        if fonte and compativel and fonte["tipo"]==relacao.get("tipo") and set(fonte["proveniencia"])==set(relacao.get("proveniencia",[])):validas.append(fonte)
+        mesma_fonte=fonte and identidade_fontes(fonte)==identidade_fontes({"proveniencia":relacao.get("proveniencia",[])})
+        if fonte and compativel and fonte["tipo"]==relacao.get("tipo") and mesma_fonte:validas.append(fonte)
     acessiveis=[e for e in validas if e.get("acessivel",True)];requeridos=set(claim.get("aspectos_requeridos",[claim["tipo"]]));favor=[e for e in acessiveis if requeridos & set(e.get("aspectos_suportados",[]))];contra=[e for e in acessiveis if requeridos & set(e.get("aspectos_contraditos",[]))]
     cobertura=set().union(*(set(e.get("aspectos_suportados",[])) for e in favor)) if favor else set()
     if contra:veredito="CONTRADICTED"
@@ -94,6 +97,7 @@ def extrair_claims(resultado):
         if pat.get("elegibilidade_orcamento")!="PENDENTE":add("ORCAMENTO",pat.get("elegibilidade_orcamento"),"SYNTHETIC","LOAD_BEARING",pat,requeridos=[*causais,*origem,"DETALHE_CONSTRUTIVO_DOCUMENTADO"] if pat.get("elegibilidade_orcamento")=="ELEGIVEL_ORCAMENTO_VICIO" else ["CONSTATACAO_DE_VISTORIA"])
         for med in pat.get("medicoes",[]):add("MEDICAO",med,"FACTUAL","SUPPORTING",pat,requeridos=["MEDICAO_REGISTRADA"])
         for norma in pat.get("normas_relacionadas",[]):
+            if norma.get("aplicabilidade_temporal")!="APLICAVEL_PRINCIPAL":continue
             add("REQUISITO_NORMATIVO",norma.get("id"),"FACTUAL","LOAD_BEARING",pat,requeridos=["REQUISITO_NORMATIVO_VERIFICADO"])
             av=norma.get("avaliacao_conformidade",{})
             if av.get("resultado") in {"ATENDE","NAO_ATENDE"}:add("CONFORMIDADE_NORMATIVA",av["resultado"],"SYNTHETIC","LOAD_BEARING",pat,requeridos=["REQUISITO_NORMATIVO_VERIFICADO","MEDICAO_REGISTRADA"])

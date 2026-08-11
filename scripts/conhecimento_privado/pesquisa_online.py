@@ -13,13 +13,16 @@ PII_PADROES=(re.compile(r"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b"),re.compile(r"\b\d{11}\
 
 def dados_sensiveis_processo(processo):
     valores=[]
-    def visitar(chave,valor):
-        if chave in {"nome","cpf_cnpj","numero_processo","endereco","matricula","email","telefone","numero_oab"} and isinstance(valor,(str,int)):valores.append(str(valor))
+    sensiveis={"nome","cpf_cnpj","numero_processo","endereco","matricula","email","telefone","numero_oab","cnj","cnpj","cpf"}
+    containers={"endereco","representantes","advogados","partes","imovel"}
+    def visitar(chave,valor,em_container=False):
+        protegido=em_container or chave in containers
+        if (chave in sensiveis or protegido) and isinstance(valor,(str,int)):valores.append(str(valor))
         elif isinstance(valor,dict):
-            for k,v in valor.items():visitar(k,v)
+            for k,v in valor.items():visitar(k,v,protegido)
         elif isinstance(valor,list):
-            for v in valor:visitar(chave,v)
-    visitar("",processo or {})
+            for v in valor:visitar(chave,v,protegido)
+    visitar("",processo or {},False)
     return tuple(dict.fromkeys(v for v in valores if v.strip()))
 @dataclass(frozen=True)
 class EgressPolicy:

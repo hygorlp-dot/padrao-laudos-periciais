@@ -10,10 +10,17 @@ REVIEWS_APROVADOS={
  "claim-audit":{"review_status":"APPROVED_LOCAL","review_evidence":"docs/terceiros/integracoes-agentes.md","commit_pin":"f09c72ef22119692667dce2b288fc51a24534db5","license":"MIT","restrictions":["local only"]},
  "awesome-legal-skills":{"review_status":"REFERENCE_ONLY","review_evidence":"docs/terceiros/integracoes-agentes.md","commit_pin":"4b0a895640d44add67ab4db1a0250e5a48888ee1","license":"CC-BY-NC-ND-4.0","restrictions":["no automatic execution"]},
 }
-def politica_trust(_nome,review):
+RAIZ_REPOSITORIO=Path(__file__).resolve().parents[2]
+def politica_trust(_nome,review,*,commit_real=None,licenca_real=None):
     if not review:return {"review_status":"UNREVIEWED","review_evidence":None,"commit_pin":None,"license":None,"restrictions":["FAIL_CLOSED"]}
     obrigatorios=("review_status","review_evidence","commit_pin","license","restrictions")
-    return dict(review) if all(review.get(k) for k in obrigatorios) else {"review_status":"UNREVIEWED","review_evidence":None,"commit_pin":None,"license":None,"restrictions":["FAIL_CLOSED"]}
+    evidencia=Path(str(review.get("review_evidence")))
+    if not evidencia.is_absolute():evidencia=RAIZ_REPOSITORIO/evidencia
+    valido=all(review.get(k) for k in obrigatorios) and evidencia.is_file()
+    if not valido:return {"review_status":"UNREVIEWED","review_evidence":review.get("review_evidence"),"commit_pin":review.get("commit_pin"),"license":review.get("license"),"restrictions":["FAIL_CLOSED"]}
+    if commit_real is not None and commit_real!=review["commit_pin"] or licenca_real is not None and licenca_real!=review["license"]:
+        return {**review,"review_status":"STALE_REVIEW","restrictions":sorted(set(review["restrictions"]+["FAIL_CLOSED"]))}
+    return dict(review)
 SINAIS_EGRESS=(r"https?://",r"\brequests\b",r"\bhttpx\b",r"\burllib\b",r"\bfetch\s*\(",r"\bcurl\b",r"\bwget\b",r"\bsocket\b",r"webhook",r"telemetr",r"upload",r"download",r"api[_ -]?key",r"token")
 def classificar_egress(textos,ausencia_verificada=False):
     conteudo="\n".join(map(str,textos)).lower()
@@ -48,7 +55,8 @@ def catalogar(base:Path,destino:Path):
         instalacao=[p.relative_to(repo).as_posix() for p in arquivos if p.name.lower() in {"package.json","package-lock.json","requirements.txt","pyproject.toml","setup.py"}]
         risco="RISCO_MEDIO" if executaveis or instalacao else "RISCO_BAIXO"
         textos=[p.read_text(encoding="utf-8",errors="ignore") for p in arquivos if p.suffix.lower() in {".md",".py",".js",".mjs",".cjs",".sh",".ps1"}]
-        obj={"id":f"REP-EXT-{indice:03d}","nome":nome,"url":url,"commit":_git(repo,"rev-parse","HEAD"),"branch":_git(repo,"branch","--show-current"),"consultado_em":agora,"licenca_raiz":licenca,"arquivos":len(arquivos),"tamanho_bytes":sum(p.stat().st_size for p in arquivos),"skills":len(list(repo.rglob("SKILL.md"))),"arquivos_instalacao":instalacao,"scripts_executaveis":executaveis,"hooks":[p.relative_to(repo).as_posix() for p in arquivos if "hook" in p.name.lower()],"risco":risco,"justificativa":"Execução externa não autorizada; integração apenas após inspeção e seleção manual.","trust":politica_trust(nome,REVIEWS_APROVADOS.get(nome)),"external_data_egress_required":classificar_egress(textos)}
+        commit=_git(repo,"rev-parse","HEAD")
+        obj={"id":f"REP-EXT-{indice:03d}","nome":nome,"url":url,"commit":commit,"branch":_git(repo,"branch","--show-current"),"consultado_em":agora,"licenca_raiz":licenca,"arquivos":len(arquivos),"tamanho_bytes":sum(p.stat().st_size for p in arquivos),"skills":len(list(repo.rglob("SKILL.md"))),"arquivos_instalacao":instalacao,"scripts_executaveis":executaveis,"hooks":[p.relative_to(repo).as_posix() for p in arquivos if "hook" in p.name.lower()],"risco":risco,"justificativa":"Execução externa não autorizada; integração apenas após inspeção e seleção manual.","trust":politica_trust(nome,REVIEWS_APROVADOS.get(nome),commit_real=commit,licenca_real=licenca),"external_data_egress_required":classificar_egress(textos)}
         (destino/f"REP-EXT-{indice:03d}.json").write_text(json.dumps(obj,ensure_ascii=False,indent=2)+"\n",encoding="utf-8",newline="\n");relatorios.append(obj)
     awesome=base/"awesome-legal-skills";catalogo=[]
     for skill in sorted((awesome/"skills").glob("*/SKILL.md")):

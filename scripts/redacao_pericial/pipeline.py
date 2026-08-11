@@ -9,6 +9,10 @@ from .autocorrigir_redacao import autocorrigir
 
 REPROVADOS = {"INSUFFICIENT", "UNSUBSTANTIATED", "INTERPOLATED", "UNVERIFIABLE", "CONTRADICTED"}
 
+def recalcular_gate_redacao(*,fidelidade,semanticos,ausentes,materiais,tem_ressalva=False):
+    bloqueio=bool(fidelidade or semanticos or ausentes or any(a.get("veredito") in REPROVADOS for a in materiais))
+    return "BLOQUEADO_PARA_LAUDO" if bloqueio else "APTO_PARA_LAUDO_COM_RESSALVAS" if tem_ressalva else "APTO_PARA_LAUDO"
+
 
 def _texto(valor):
     return valor.get("texto") if isinstance(valor, dict) else valor
@@ -215,9 +219,8 @@ def executar_pipeline_redacao(processo, delimitacao, motor):
     qts_cobertas = {q for c in corrigida["claims"] for q in c.get("qt_ids", [])}
     ausentes = sorted(qts_materiais - qts_cobertas)
     materiais = [a for a in grounding if next((c for c in corrigida["claims"] if c["id"] == a["claim_red_id"]), {}).get("materialidade") == "LOAD_BEARING"]
-    bloqueio = bool(fidelidade or semanticos or ausentes or any(a.get("veredito") in REPROVADOS for a in materiais))
     tem_ressalva = bool(provisoria["limitacoes"] or any(p.get("analise_causal", {}).get("grau_certeza") == "INCONCLUSIVO" for p in final.get("patologias", [])))
-    gate = "BLOQUEADO_PARA_LAUDO" if bloqueio else "APTO_PARA_LAUDO_COM_RESSALVAS" if tem_ressalva else "APTO_PARA_LAUDO"
+    gate = recalcular_gate_redacao(fidelidade=fidelidade,semanticos=semanticos,ausentes=ausentes,materiais=materiais,tem_ressalva=tem_ressalva)
     laudo = _montar_laudo(processo, delimitacao, final, plano, corrigida, gate, grounding, fidelidade + semanticos, estilo + redundancia, correcoes)
     metricas = {
         "claims_redigidas": len(corrigida["claims"]), "claims_grounded": sum(a.get("veredito") == "GROUNDED" for a in grounding),

@@ -9,6 +9,12 @@ from referencing import Registry, Resource
 
 RAIZ = Path(__file__).resolve().parents[2]
 TIPOS_COBERTURA={"ATIVIDADE":"atividades","MEDICAO":"medicoes","FOTOGRAFIA":"fotografias","ENSAIO":"ensaios","DOCUMENTO":"documentos"}
+CATALOGOS_PLANEJADOS={**TIPOS_COBERTURA,"DOCUMENTO":"documentos_a_solicitar"}
+
+def capability_item(tipo,item):
+    campos={"ATIVIDADE":("verificar","metodo"),"MEDICAO":("grandeza",),"FOTOGRAFIA":("finalidade",),"ENSAIO":("nome","metodo","fundamento"),"DOCUMENTO":("descricao","criterio_satisfacao")}.get(tipo,())
+    valores=[str(item.get(c) or "").strip().casefold() for c in campos if item.get(c)]
+    return " | ".join(valores) if valores else None
 
 def recalcular_cobertura(dado):
     requisitos=dado.get("requisitos_cobertura",[]);por_quesito={}
@@ -34,7 +40,7 @@ def recalcular_execucao(plano,vistoria):
     cobertura={c.get("planejado"):c for c in vistoria.get("cobertura",[]) if c.get("planejado")}
     catalogos={"ATIVIDADE":{x.get("id"):x for x in vistoria.get("atividades_executadas",[])},"FOTOGRAFIA":{x.get("id"):x for x in vistoria.get("fotografias",[])},"MEDICAO":{x.get("id"):x for x in vistoria.get("medicoes",[])},"ENSAIO":{x.get("id"):x for x in vistoria.get("ensaios",[])},"DOCUMENTO":{x.get("id"):x for x in vistoria.get("documentos_obtidos",[])}}
     campos_plano={"ATIVIDADE":"atividade_planejada","FOTOGRAFIA":"fotografia_planejada","MEDICAO":"medicao_planejada","ENSAIO":"ensaio_planejado","DOCUMENTO":"documento_planejado"}
-    planejados={tipo:{x.get("id"):x for x in plano.get(chave,[]) if isinstance(x,dict)} for tipo,chave in TIPOS_COBERTURA.items()}
+    planejados={tipo:{x.get("id"):x for x in plano.get(chave,[]) if isinstance(x,dict)} for tipo,chave in CATALOGOS_PLANEJADOS.items()}
     faltantes=[]
     for requisito in plano.get("requisitos_cobertura",[]):
         if requisito.get("obrigatoriedade")!="OBRIGATORIA":continue
@@ -42,7 +48,9 @@ def recalcular_execucao(plano,vistoria):
         item_plano=planejados.get(tipo,{}).get(planejado)
         if not item_plano or qt not in item_plano.get("questoes_tecnicas",[]):
             faltantes.append({"questao_tecnica":qt,"tipo":tipo,"item_planejado":planejado});continue
-        candidatos=[planejado] if planejado else [c.get("planejado") for c in vistoria.get("cobertura",[]) if c.get("tipo")==requisito.get("tipo")]
+        if not planejado:
+            faltantes.append({"questao_tecnica":qt,"tipo":tipo,"item_planejado":None});continue
+        candidatos=[planejado]
         satisfeito=False
         for item in candidatos:
             execucao=cobertura.get(item,{})
@@ -50,9 +58,10 @@ def recalcular_execucao(plano,vistoria):
             direto=execucao.get("status")=="EXECUTADO" and any(a and a.get(campos_plano[tipo])==planejado and qt in a.get("questoes",a.get("questoes_tecnicas",[])) for a in artefatos)
             equivalentes=set(execucao.get("evidencia_equivalente",[]));meta=execucao.get("equivalencia") or {};todos=[(t,x) for t,cat in catalogos.items() for x in cat.values()]
             equivalentes_validos=[e for t,e in todos if t==tipo and e.get("id") in equivalentes and qt in e.get("questoes",e.get("questoes_tecnicas",[]))]
-            capability_esperada=requisito.get("capability") or tipo
+            capability_esperada=capability_item(tipo,item_plano)
             equivalente=(execucao.get("status")=="SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE" and bool(equivalentes_validos) and
-                         meta.get("requisito_original")==planejado and meta.get("tipo_evidencia")==tipo and meta.get("capability")==capability_esperada and
+                         bool(capability_esperada) and meta.get("requisito_original")==planejado and meta.get("tipo_evidencia")==tipo and str(meta.get("capability") or "").casefold()==capability_esperada and
+                         all(capability_item(tipo,e)==capability_esperada for e in equivalentes_validos) and
                          bool(meta.get("metodo_substituto")) and bool(execucao.get("justificativa_equivalencia")))
             satisfeito=satisfeito or direto or equivalente
         if not satisfeito:faltantes.append({"questao_tecnica":requisito.get("questao_tecnica"),"tipo":requisito.get("tipo"),"item_planejado":planejado})

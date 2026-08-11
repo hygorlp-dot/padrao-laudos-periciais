@@ -218,7 +218,7 @@
                 "properties": {
                     "observacao": {"type": "string", "pattern": "^OBS-[0-9]{3,}$"},
                     "evidencia": {"type": "string"},
-                    "motivo": {"enum": ["VINCULO_EXPLICITO", "QT_E_SISTEMA_CONVERGENTES"]}
+                    "motivo": {"enum": ["VINCULO_EXPLICITO", "ATIVIDADE_ELEMENTO_MANIFESTACAO_CONVERGENTES"]}
                 }
             }
         },
