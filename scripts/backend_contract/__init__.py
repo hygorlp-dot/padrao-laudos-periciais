@@ -20,7 +20,7 @@ from .ports import (
     SecretStore,
 )
 from .revisions import Authority, RevisionSource, RevisionStore, ValueHistory
-from .state_machine import CaseState, CaseStateMachine
+from .state_machine import CaseState, CaseStateMachine, TransitionRecord
 from .unit_of_work import UnitOfWork
 
 __all__ = [name for name in globals() if not name.startswith("_")]
