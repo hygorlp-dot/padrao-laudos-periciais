@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.0.0",
+  "core_base_sha": "71dea5d95d9843d08fe1547b6b52812ddd060511",
+  "invariants_count": 36,
+  "invariants_fingerprint": "c0737fd3058fa42c8633158e31cfa310bf6282f6c495fedc716264901752c3c9",
+  "boundaries_count": 20,
+  "boundaries_fingerprint": "019a9ea2bf8e50472028d6e15d1b58a1bc3fe7ba51a5e7a46acafa92e06803b6"
+}
