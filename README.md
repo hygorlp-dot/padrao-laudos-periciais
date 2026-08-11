@@ -16,6 +16,8 @@ vícios e manifestações patológicas em edificações, sem impedir expansão f
 - `referencias/`: orientação e referências locais.
 - `schemas/`: contratos de dados iniciais.
 - `scripts/` e `tests/`: extração estrutural PJe e validação local dos contratos.
+- `scripts/backend_contract/`: contratos transversais do monólito modular,
+  sem adaptadores de infraestrutura.
 - `templates/` e `fixtures/`: áreas reservadas para etapas futuras.
 
 ## Fluxo de dados
