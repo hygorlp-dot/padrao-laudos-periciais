@@ -153,3 +153,5 @@ def test_change_impact_cli_and_ci_use_first_party_gate(capsys):
     workflow = (ROOT / ".github/workflows/core-safety.yml").read_text(encoding="utf-8")
     assert "python -m scripts.quality.verify_core --full" in workflow
     assert "secrets" not in workflow.casefold() and "deploy" not in workflow.casefold()
+    dependencies=(ROOT/"requirements-dev.txt").read_text(encoding="utf-8")
+    assert "pytest==9.1.1" in dependencies
