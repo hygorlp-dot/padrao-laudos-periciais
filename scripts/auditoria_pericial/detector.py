@@ -60,11 +60,11 @@ def executar_detector(resultado,processo=None,delimitacao=None,vistoria=None,nor
         sem_capacidade=any(p.get("analise_causal",{}).get("status_capacidade")=="MOTOR_CAUSAL_NAO_IMPLEMENTADO" for p in ligados)
         if qt.get("status")=="INCONCLUSIVA_POR_LIMITACAO" and sem_capacidade:add("QT_CAUSAL_SEM_CAPACIDADE_DO_MOTOR",[qid,*[p["id"] for p in ligados]])
     usadas={eid for p in resultado.get("patologias",[]) for eid in p.get("evidencias",[])}
-    dimensoes_construtivas={"PROJETO_CONSTRUTIVO_DOCUMENTADO","MATERIAL_CONSTRUTIVO_DOCUMENTADO","ESPECIFICACAO_CONSTRUTIVA_DOCUMENTADA","DETALHE_CONSTRUTIVO_DOCUMENTADO","PROCEDIMENTO_EXECUTIVO_DOCUMENTADO","CONTROLE_TECNOLOGICO_DOCUMENTADO","DOCUMENTACAO_OBRA_VERIFICADA"};divergencias_construtivas={"EXECUCAO_DIVERGENTE_DOCUMENTADA","NAO_CONFORMIDADE_CONSTRUTIVA_VERIFICADA"}
+    from scripts.motor_vicios.regras_probatorias import suporte_endogeno
     catalogo_por_id={e.get("id"):e for e in resultado.get("catalogo_evidencias",[])}
     for pat in resultado.get("patologias",[]):
-        ligadas=[catalogo_por_id.get(x,{}) for x in pat.get("evidencias",[])];aspectos={a for e in ligadas for a in e.get("aspectos_suportados",[])};fontes={tuple(e.get("proveniencia",[])) or (e.get("id"),) for e in ligadas if set(e.get("aspectos_suportados",[]))&(dimensoes_construtivas|divergencias_construtivas)}
-        if pat.get("origem")=="ENDOGENA_CONSTRUTIVA" and not (aspectos&dimensoes_construtivas and aspectos&divergencias_construtivas and len(fontes)>=2):add("ORIGEM_ENDOGENA_SEM_EVIDENCIA_CONSTRUTIVA",[pat["id"]])
+        ligadas=[catalogo_por_id.get(x,{}) for x in pat.get("evidencias",[])]
+        if pat.get("origem")=="ENDOGENA_CONSTRUTIVA" and not suporte_endogeno(ligadas):add("ORIGEM_ENDOGENA_SEM_EVIDENCIA_CONSTRUTIVA",[pat["id"]])
     for e in resultado.get("catalogo_evidencias",[]):
         for a in e.get("auditoria_aspectos",[]):
             if a.get("polaridade")=="NEGADO" and a.get("aspecto") in e.get("aspectos_suportados",[]):add("NEGACAO_CONVERTIDA_EM_FATO",[e["id"],a["aspecto"]])

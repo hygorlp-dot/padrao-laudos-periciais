@@ -5,20 +5,47 @@ import re
 import unicodedata
 
 from scripts.auditoria_pericial.grounding import auditar_claim
+from scripts.motor_vicios.auditar import comparar_medicao,texto_quantitativo
 
-TIPO_CLAIM = {"MANIFESTACAO_TECNICA": "MANIFESTACAO_TECNICA", "INFERENCIA_TECNICA": "INFERENCIA_TECNICA", "ORIGEM": "ORIGEM", "CONCLUSAO_DE_QT": "CONCLUSAO_DE_QT", "REPARABILIDADE": "REPARABILIDADE"}
+TIPO_CLAIM = {"MANIFESTACAO_TECNICA": "MANIFESTACAO_TECNICA", "INFERENCIA_TECNICA": "INFERENCIA_TECNICA", "ORIGEM": "ORIGEM", "CONCLUSAO_DE_QT": "CONCLUSAO_DE_QT", "REPARABILIDADE": "REPARABILIDADE", "CONTEUDO_PROCESSUAL":"FATO_PROCESSUAL"}
 
 
 def _n(texto):
     return unicodedata.normalize("NFKD", str(texto)).encode("ascii", "ignore").decode().lower()
 
+def _texto_derivavel(redacao,motor):
+    a,b=_n(redacao),_n(motor);termos=lambda x:set(re.findall(r"[a-z]{4,}",x))-{"para","como","pela","pelo","uma","com"}
+    compartilhados=termos(a)&termos(b);neg=lambda x:bool(re.search(r"\b(?:nao|sem|ausencia|inexist\w*|jamais)\b",x))
+    inflacao=any(x in a and x not in b for x in ("inequivocamente","comprovadamente","sempre","jamais"))
+    contradicao=bool(compartilhados) and neg(a)!=neg(b)
+    dimensoes=(
+        {"conforme","anomalia","falha","inconclusiva","constatada"},
+        {"endogena","construtiva","exogena","funcional","mista","inconclusiva","manutencao"},
+        {"critica","media","minima"},
+        {"colapso","instabilidade","insalubridade","indenizacao","prescricao","culpa"},
+    )
+    alteracao_material=any((termos(a)&d)!=(termos(b)&d) for d in dimensoes if (termos(a)|termos(b))&d)
+    editorial={"data","vistoria","alegacoes","identificadas","autos","constatou","constatada","constatado","observada","observado","manifestacao","elementos","disponiveis","permitem","individualizar","especifica","especifico","foram","registradas","consequencias","tecnicas","adicionais","final","situacao","origem","criticidade","vicio","construtivo","caracterizado","caracterizada","analise","partir","questao","tratada","evidencias","indicadas","campo","metodo","limitacoes","fenomeno","ocorrido","causalidade","permanece","dentro"}
+    novidade=termos(a)-termos(b)-editorial
+    return not contradicao and not inflacao and not alteracao_material and not novidade
+
 
 def auditar_grounding_redacao(redacao, motor_final):
     final = motor_final.get("analise_final", motor_final)
-    catalogo = final.get("catalogo_evidencias", [])
+    claims_motor=motor_final.get("claims_finais",[])
+    audits_motor={a.get("claim_id"):a for a in motor_final.get("grounding_final",[])}
+    catalogo = final.get("catalogo_evidencias", [])+motor_final.get("catalogo_processual",[])
     por_id = {e.get("id"): e for e in catalogo}
     saida = []
     for claim in redacao.get("claims", []):
+        equivalentes={"MANIFESTACAO_TECNICA":{"MANIFESTACAO_TECNICA","CONSTATACAO_DE_VISTORIA","INFERENCIA_TECNICA"},"INFERENCIA_TECNICA":{"INFERENCIA_TECNICA","CAUSA","MECANISMO"},"ORIGEM":{"ORIGEM","CRITICIDADE","VICIO_CONSTRUTIVO","CONSTATACAO_DE_VISTORIA","INFERENCIA_TECNICA"},"CONCLUSAO_DE_QT":{"CONCLUSAO_DE_QT","INFERENCIA_TECNICA"},"REPARABILIDADE":{"REPARABILIDADE","ORCAMENTO"}}
+        relacionados=[c for c in claims_motor if c.get("tipo") in equivalentes.get(claim.get("tipo"),{claim.get("tipo")}) and (set(claim.get("pat_ids",[])) & {c.get("patologia")} or set(claim.get("qt_ids",[])) & {c.get("questao")})]
+        auditados=[audits_motor[c["id"]] for c in relacionados if c.get("id") in audits_motor]
+        if auditados:
+            fieis=[c for c in relacionados if _texto_derivavel(claim["texto_semantico"],c.get("texto") or c.get("texto_semantico") or "")]
+            veredito="GROUNDED" if fieis and all(audits_motor.get(c["id"],{}).get("veredito")=="GROUNDED" for c in fieis) else "UNSUBSTANTIATED"
+            saida.append({"claim_id":claim["id"],"claim_red_id":claim["id"],"tipo":claim["tipo"],"natureza":claim["natureza"],"saliencia":claim["materialidade"],"texto":claim["texto_semantico"],"evidencias":sorted({e for a in auditados for e in a.get("evidencias",[])}),"veredito":veredito,"componente":"TECNICO","auditoria_independente":"NAO","justificativa_resumida":"Derivado de claims finais do Motor auditadas contra evidência primária.","remediacao":"Manter" if veredito=="GROUNDED" else "Reduzir, ressalvar ou remover."})
+            continue
         ids = sum((claim.get(k, []) for k in ("obs_ids", "med_ids", "fot_ids", "doc_ids", "nor_ids", "res_ids", "con_ids")), [])
         rel = [por_id[i] for i in ids if i in por_id]
         tipo = TIPO_CLAIM.get(claim["tipo"], "INFERENCIA_TECNICA")
@@ -80,10 +107,19 @@ def auditar_fidelidade(redacao, motor_final):
             if norma not in normas: add("NORMA_INVENTADA", pat_id, sorted(normas), norma)
         texto = claim.get("texto_semantico", "")
         if re.search(r"\bitem\s+\d+(?:\.\d+)+\b", _n(texto)) and not claim.get("nor_ids"): add("NORMA_INVENTADA", pat_id, "item normativo verificado", texto)
-        for med_id in claim.get("med_ids", []):
+        unidades=[catalogo.get(i,{}).get("unidade") for i in claim.get("med_ids",[])]
+        # Uma grandeza expressamente quantificada sem unidade também é material:
+        # deve falhar fechada, sem confundir anos, IDs ou numeração fotográfica.
+        contexto_medicao=bool(re.search(
+            r"\b(?:abertura|medid[ao]|medicao|comprimento|largura|altura|espessura|"
+            r"temperatura|percentual|umidade|valor)\b[^.;:]{0,60}\b\d+(?:[,.]\d+)?\b",
+            _n(texto),
+        ))
+        quantitativo=texto_quantitativo(texto,unidades) or contexto_medicao
+        for med_id in claim.get("med_ids", []) if quantitativo else []:
             med = catalogo.get(med_id, {}); valor = med.get("valor"); unidade = med.get("unidade")
             numeros = re.findall(r"\b\d+(?:[,.]\d+)?\s*(?:mm|cm|m|%)\b", _n(texto))
-            if numeros and valor is not None and not any(str(valor).replace(".", ",") in x or str(valor) in x for x in numeros): add("MEDICAO_ALTERADA", pat_id, f"{valor} {unidade}", numeros)
+            if valor is not None and not comparar_medicao(texto, med, permitir_conversao=False): add("MEDICAO_ALTERADA", pat_id, f"{valor} {unidade}", numeros or "valor/unidade ausente")
     return achados
 
 
@@ -104,7 +140,7 @@ def auditar_laudo_semantico(laudo, motor_final):
         if atual != esperado: add("QUADRO_RESUMO_DIVERGENTE", pat["id"], esperado, atual)
     for item in laudo.get("orcamento", {}).get("itens", []):
         pat = pats.get(item.get("pat_id"))
-        elegivel = bool(pat and pat.get("elegivel_orcamento") is True and
+        elegivel = bool(pat and pat.get("elegibilidade_orcamento") == "ELEGIVEL_ORCAMENTO_VICIO" and
                         pat.get("constatacao", {}).get("situacao") == "ANOMALIA" and
                         pat.get("origem") == "ENDOGENA_CONSTRUTIVA")
         if not elegivel: add("ORCAMENTO_INELEGIVEL", item.get("pat_id"), "PAT elegível pelo Motor", item)
@@ -129,11 +165,11 @@ def auditar_laudo_semantico(laudo, motor_final):
                 add("QUESITO_SEM_RESPOSTA_TECNICA", q.get("id"), "R: resposta objetiva", resposta_q)
             for campo in ("id", "numero_original", "texto_integral"):
                 if not q.get(campo): add("QUESITO_INCOMPLETO", q.get("id"), campo, q.get(campo))
-            if not q.get("referencias_secoes"): add("QUESITO_SEM_REFERENCIA_TECNICA", q.get("id"), "seção técnica", [])
+            if q.get("pertinencia") != "MATERIA_JURIDICA" and not q.get("referencias_secoes"): add("QUESITO_SEM_REFERENCIA_TECNICA", q.get("id"), "seção técnica", [])
             fundamentos = [x.get("conclusao") for x in final.get("questoes_saneadas", []) if x.get("id") in q.get("qt_ids", []) and x.get("conclusao")]
-            if fundamentos and not any(_n(f) in _n(resposta_q) for f in fundamentos):
+            if fundamentos and not all(_n(f) in _n(resposta_q) for f in fundamentos):
                 add("QUESITO_CRIA_CONCLUSAO_NOVA", q.get("id"), fundamentos, resposta_q)
     for pat in pats.values():
-        if pat.get("elegivel_orcamento") is True and not any(i.get("pat_id") == pat["id"] for i in laudo.get("orcamento", {}).get("itens", [])):
+        if pat.get("elegibilidade_orcamento") == "ELEGIVEL_ORCAMENTO_VICIO" and not any(i.get("pat_id") == pat["id"] for i in laudo.get("orcamento", {}).get("itens", [])):
             add("ORCAMENTO_ELEGIVEL_INCOMPLETO", pat["id"], "item completo", "ausente")
     return achados

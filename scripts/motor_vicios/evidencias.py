@@ -2,6 +2,7 @@
 from __future__ import annotations
 import re
 import unicodedata
+from copy import deepcopy
 
 INFERENCIAS_PROIBIDAS={"CAUSA","ORIGEM","VICIO_CONSTRUTIVO","CONFORMIDADE_NORMATIVA","REPARO_DEFINIDO","ORCAMENTO","CRITICIDADE"}
 
@@ -112,7 +113,8 @@ def construir_catalogo(vistoria,documentos=None,normas=None):
         e=_base(dec,"RESSALVA",dec.get("natureza"),dec.get("texto_original"));e["classe_probatoria"]="INFERENCIA_INTERMEDIARIA";e["aspectos_suportados"]=["DECLARACAO"];catalogo.append(e)
     for doc in documentos or vistoria.get("documentos_obtidos",[]):catalogo.append(_base(doc,"DOCUMENTO","DOCUMENTO",doc.get("descricao") or doc.get("titulo")))
     for nor in normas or []:
-        item=dict(nor);item["acessivel"]=bool(nor.get("verificada") and nor.get("proveniencia") and nor.get("requisito"));e=_base(item,"NORMA","NORMA_TECNICA",nor.get("requisito") or nor.get("titulo"));e["acessivel"]=item["acessivel"];e["auditoria_aspectos"]=auditar_aspectos(e);e["aspectos_suportados"]=[a["aspecto"] for a in e["auditoria_aspectos"]];e["classe_probatoria"]="EVIDENCIA_PRIMARIA" if e["acessivel"] else "INFERENCIA_INTERMEDIARIA";catalogo.append(e)
+        from .normas import normalizar_fonte_normativa
+        item=normalizar_fonte_normativa(nor,nor.get("data_relevante"));item["acessivel"]=bool(item.get("verificada") and item.get("proveniencia") and item.get("requisito"));e=_base(item,"NORMA","NORMA_TECNICA",item.get("requisito") or item.get("titulo"));e["acessivel"]=item["acessivel"];e["auditoria_aspectos"]=auditar_aspectos(e);e["aspectos_suportados"]=[a["aspecto"] for a in e["auditoria_aspectos"]];e["classe_probatoria"]="EVIDENCIA_PRIMARIA" if e["acessivel"] else "INFERENCIA_INTERMEDIARIA";catalogo.append(e)
     return catalogo
 
 def pontuar_associacao(evidencia,contexto):
@@ -127,6 +129,23 @@ def pontuar_associacao(evidencia,contexto):
     confianca="ALTA" if pontos>=5 else "MEDIA" if pontos>=3 else "BAIXA"
     return {"score":pontos,"confianca":confianca,"motivo":motivos,"status":"ASSOCIADA" if confianca=="ALTA" else "REVISAO_NECESSARIA" if confianca=="MEDIA" else "PENDENTE_ASSOCIACAO"}
 
+def associar_documentos_ensaios(catalogo,contextos):
+    """Resolve DOC/ENS contra todas as MAN antes do uso; empate nunca associa."""
+    relacoes=[]
+    for evidencia in (e for e in catalogo if e["tipo"] in {"DOCUMENTO","ENSAIO"}):
+        candidatos=[(ctx,pontuar_associacao(evidencia,ctx)) for ctx in contextos]
+        altos=[x for x in candidatos if x[1]["confianca"]=="ALTA"]
+        maior=max((a[1]["score"] for a in altos),default=-1)
+        vencedores=[a for a in altos if a[1]["score"]==maior]
+        if len(vencedores)==1:
+            ctx,assoc=vencedores[0];status="ASSOCIADA"
+            alvos=[ctx["relacao_id"]]
+        else:
+            assoc={"score":maior,"confianca":"BAIXA","motivo":sorted({m for _,a in vencedores for m in a["motivo"]})};status="AMBIGUA" if len(vencedores)>1 else "NAO_ASSOCIADA"
+            alvos=sorted(ctx["relacao_id"] for ctx,_ in vencedores)
+        relacoes.append({"evidencia_id":evidencia["id"],"tipo_evidencia":evidencia["tipo"],"manifestacoes":alvos,"patologias":[x.replace("MAN-","PAT-") for x in alvos],"status":status,"confianca":assoc["confianca"],"score":assoc["score"],"motivos":assoc["motivo"]})
+    return relacoes
+
 def consolidar_aspectos(catalogo):
     """Mantém contexto espacial/temporal e explicita contradição no mesmo trecho."""
     grupos={}
@@ -138,13 +157,18 @@ def consolidar_aspectos(catalogo):
         saida.append({"contexto":chave,"aspectos":sorted(aspectos),"status":"CONTRADICTED" if contradicao else "GROUNDED","evidencias":[e["id"] for e in evidencias]})
     return saida
 
-def selecionar(catalogo, *, ids=None, sistema=None, manifestacao=None,contexto=None):
+def selecionar(catalogo, *, ids=None, sistema=None, manifestacao=None,contexto=None,relacao_id=None,relacoes=None):
     ids=set(ids or []);contexto=contexto or {"sistema":sistema,"manifestacao":manifestacao}
     saida=[]
     for e in catalogo:
-        if e["id"] in ids:saida.append(e);continue
+        if e["id"] in ids and e["tipo"] not in {"DOCUMENTO","ENSAIO"}:saida.append(deepcopy(e));continue
         if e["tipo"] in {"DOCUMENTO","ENSAIO"}:
-            assoc=pontuar_associacao(e,contexto);e["associacao"]=assoc
-            if assoc["confianca"]=="ALTA":saida.append(e)
-        elif e["tipo"]=="NORMA" and e.get("sistema") and sistema and e["sistema"]==sistema:saida.append(e)
-    return saida
+            validada=next((r for r in (relacoes or []) if r["evidencia_id"]==e["id"] and r["status"]=="ASSOCIADA" and relacao_id in r["manifestacoes"]),None)
+            assoc=pontuar_associacao(e,contexto)
+            if relacoes is not None and not validada:continue
+            if assoc["confianca"]=="ALTA":
+                relacionado=deepcopy(e)
+                relacionado["relacao_associacao"]={"relacao_id":relacao_id,"evidencia_id":e["id"],**assoc,"validacao_global":bool(validada)}
+                saida.append(relacionado)
+        elif e["tipo"]=="NORMA" and e.get("sistema") and sistema and e["sistema"]==sistema:saida.append(deepcopy(e))
+    return sorted(saida,key=lambda item:item["id"])

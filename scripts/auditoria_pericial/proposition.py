@@ -5,11 +5,12 @@ TIPOS={"REQUISITO_NORMATIVO","VIGENCIA","CITACAO","JURIDICA_AUXILIAR","REGULATOR
 
 AUTORIDADES={"FONTE_PRIMARIA_OFICIAL","FONTE_INSTITUCIONAL","NORMA_TECNICA","LITERATURA_CIENTIFICA","REFERENCIA_TECNICA","FONTE_SECUNDARIA","NAO_DETERMINADA"}
 def classificar_autoridade(fonte):
+    from scripts.conhecimento_privado.pesquisa_online import dominio_oficial
     declarada=fonte.get("classificacao_fonte")
     origem=" ".join(map(str,fonte.get("proveniencia",[]))).lower()+" "+str(fonte.get("dominio") or "").lower()
     if declarada=="FONTE_SECUNDARIA" or any(x in origem for x in ("blog","medium.com","wordpress")):return "FONTE_SECUNDARIA"
     identidade=bool(fonte.get("entidade") and (fonte.get("documento") or fonte.get("titulo")) and (fonte.get("url") or fonte.get("dominio")) and fonte.get("proveniencia") and fonte.get("status_verificacao")=="VERIFICADO")
-    if declarada=="FONTE_PRIMARIA_OFICIAL" and identidade and fonte.get("dominio_oficial") is True:return "FONTE_PRIMARIA_OFICIAL"
+    if declarada=="FONTE_PRIMARIA_OFICIAL" and identidade and dominio_oficial(fonte.get("url") or ""):return "FONTE_PRIMARIA_OFICIAL"
     if declarada in AUTORIDADES-{"FONTE_PRIMARIA_OFICIAL","FONTE_SECUNDARIA","NAO_DETERMINADA"} and identidade:return declarada
     return "NAO_DETERMINADA"
 

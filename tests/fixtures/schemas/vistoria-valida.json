@@ -9,7 +9,7 @@
   "coordenadas": null,
   "condicoes": {"clima": null, "temperatura": null, "umidade_relativa": null, "campo_examinado": "Superfície fictícia"},
   "participantes": [],
-  "atividades_executadas": [{"id": "ATV-EXEC-001", "atividade_planejada": "ATV-001", "descricao": "Inspeção fictícia", "status": "EXECUTADO", "evidencias": ["OBS-001"], "impacto_nao_execucao": null}],
+  "atividades_executadas": [{"id": "ATV-EXEC-001", "atividade_planejada": "ATV-001", "descricao": "Inspeção fictícia", "status": "EXECUTADO", "questoes": ["QT-001"], "evidencias": ["OBS-001"], "impacto_nao_execucao": null}],
   "equipamentos": [],
   "limitacoes": [],
   "fotografias": [],
@@ -19,7 +19,8 @@
   "documentos_obtidos": [],
   "declaracoes": [],
   "observacoes": [{"id": "OBS-001", "local": "Local fictício", "ambiente": "Ambiente fictício", "sistema": "REVESTIMENTOS", "elemento": "Parede", "descricao_objetiva": "Alteração superficial localizada.", "manifestacao": "fissura superficial", "resultado": "OBSERVADO", "campo_examinado": "Parede acessível", "metodo": ["INSPECAO_VISUAL"], "fotografias": [], "medicoes": [], "alegacoes": ["ALG-001"], "questoes": ["QT-001"], "quesitos": ["QUE-001"], "confianca": {"nivel": "ALTA"}, "proveniencia": ["ARQ-VIS-001"], "limitacoes": []}],
-  "cobertura": [{"tipo": "ATIVIDADE", "planejado": "ATV-001", "status": "EXECUTADO", "executado": ["ATV-EXEC-001"], "evidencia_equivalente": [], "impacto": null}],
+  "relacoes_evidencia": [],
+  "cobertura": [{"tipo": "ATIVIDADE", "planejado": "ATV-001", "status": "EXECUTADO", "executado": ["ATV-EXEC-001"], "evidencia_equivalente": [], "equivalencia": null, "justificativa_equivalencia": null, "impacto": null}],
   "inventario_fonte": "inventario-vistoria.json",
   "proveniencia": ["ARQ-VIS-001"]
 }

@@ -15,9 +15,7 @@ def intencao(texto):
     achados=intencoes(texto)
     return achados[0] if len(achados)==1 else "MISTO" if achados else "CARACTERIZACAO"
 def melhores(texto,candidatos,campo="descricao",minimo=.04):
-    it=intencao(texto);pontos=[(afinidade(texto,x.get(campo))+(0.35 if intencao(x.get(campo))==it else 0),x["id"]) for x in candidatos]
+    it=intencao(texto);pontos=[(afinidade(texto,x.get(campo))+(0.35 if it!="CARACTERIZACAO" and intencao(x.get(campo))==it else 0),x["id"]) for x in candidatos]
     maior=max((x[0] for x in pontos),default=0)
     aceitos=[x for x in pontos if x[0]>=minimo and abs(x[0]-maior)<=0.05]
-    if not aceitos and maior>0:
-        aceitos=[x for x in pontos if x[0]==maior]
     return [i for _,i in sorted(aceitos,key=lambda x:(-x[0],x[1]))]

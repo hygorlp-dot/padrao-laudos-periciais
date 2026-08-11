@@ -9,6 +9,10 @@ from .autocorrigir_redacao import autocorrigir
 
 REPROVADOS = {"INSUFFICIENT", "UNSUBSTANTIATED", "INTERPOLATED", "UNVERIFIABLE", "CONTRADICTED"}
 
+def recalcular_gate_redacao(*,fidelidade,semanticos,ausentes,materiais,tem_ressalva=False):
+    bloqueio=bool(fidelidade or semanticos or ausentes or any(a.get("veredito") in REPROVADOS for a in materiais))
+    return "BLOQUEADO_PARA_LAUDO" if bloqueio else "APTO_PARA_LAUDO_COM_RESSALVAS" if tem_ressalva else "APTO_PARA_LAUDO"
+
 
 def _texto(valor):
     return valor.get("texto") if isinstance(valor, dict) else valor
@@ -20,7 +24,7 @@ def _proveniencia(valor):
         if isinstance(item, str) and item.split("-", 1)[0] in {"ALG", "DOC", "OBS", "MED", "FOT", "NOR", "RES", "CON"}: encontrados.append(item)
         elif isinstance(item, dict):
             for chave, dado in item.items():
-                if chave in {"proveniencia", "evidencias", "fontes", "documentos", "ids"}: visitar(dado)
+                if chave in {"proveniencia", "evidencias", "fontes", "documentos", "documentos_fonte", "ids"}: visitar(dado)
         elif isinstance(item, list):
             for dado in item: visitar(dado)
     visitar(valor)
@@ -40,8 +44,10 @@ def _acrescentar_claims_globais(redacao, plano, delimitacao, final, quesitos, or
             "obs_ids": por("OBS-"), "med_ids": por("MED-"), "fot_ids": por("FOT-"), "nor_ids": por("NOR-"), "res_ids": por("RES-"), "con_ids": por("CON-"),
             "confianca": "ALTA", "natureza": "INTERPRETIVE", "materialidade": material})
         contador += 1
-    for secao, chave, tipo in (("1.4", "sintese_processual", "MANIFESTACAO_TECNICA"), ("1.4", "tema_controvertido", "CONCLUSAO_DE_QT"), ("1.5", "objeto", "MANIFESTACAO_TECNICA"), ("1.6", "objetivo", "CONCLUSAO_DE_QT")):
-        add(secao, plano.get(chave), tipo, _proveniencia(delimitacao.get(chave)))
+    for secao, chave, fonte_chave, tipo in (("1.4", "sintese_processual", "sintese_processual", "CONTEUDO_PROCESSUAL"), ("1.4", "tema_controvertido", "tema_controvertido", "CONTEUDO_PROCESSUAL"), ("1.5", "objeto", "objeto_material", "CONTEUDO_PROCESSUAL"), ("1.6", "objetivo", "objetivo_pericial", "CONTEUDO_PROCESSUAL")):
+        fonte=delimitacao.get(fonte_chave)
+        if fonte_chave=="sintese_processual" and not fonte:fonte=delimitacao.get("controversia_processual")
+        add(secao, plano.get(chave), tipo, _proveniencia(fonte))
     for secao, chave, tipo in (("2.1", "metodologia", "INFERENCIA_TECNICA"), ("3.1", "dados_diligencia", "MANIFESTACAO_TECNICA"), ("3.2", "condicoes_gerais", "MANIFESTACAO_TECNICA")):
         valor = final.get(chave) or (final.get("vistoria") if chave == "dados_diligencia" else None)
         if valor:
@@ -52,25 +58,34 @@ def _acrescentar_claims_globais(redacao, plano, delimitacao, final, quesitos, or
     add("4.3", resposta_tema, "CONCLUSAO_DE_QT", todas, qts=qts, pats=list(catalogo_pat))
     for grupo in quesitos:
         for q in grupo["itens"]:
-            fontes = list(dict.fromkeys(e for pat_id in q.get("pat_ids", []) for e in catalogo_pat.get(pat_id, []))) or todas
+            fontes = list(dict.fromkeys(e for pat_id in q.get("pat_ids", []) for e in catalogo_pat.get(pat_id, [])))
             add("5", q["resposta"], "CONCLUSAO_DE_QT", fontes, qts=q.get("qt_ids", []), ques=[q["id"]] if q.get("id") else [], pats=q.get("pat_ids", []))
     for item in orcamento["itens"]:
         add("6", item.get("descricao") or item.get("servico"), "REPARABILIDADE", catalogo_pat.get(item.get("pat_id"), []), pats=[item.get("pat_id")])
 
 
 def _grupos_quesitos(delimitacao, final):
-    conclusoes = {q.get("id"): q.get("conclusao") for q in final.get("questoes_saneadas", [])}
+    qts_finais = {q.get("id"): q for q in final.get("questoes_saneadas", [])}
     grupos = {}
     for q in delimitacao.get("quesitos", []):
         origem = q.get("origem") or q.get("parte") or "OUTROS"
-        qt_ids = q.get("questoes_tecnicas", [])
-        resposta = q.get("resposta") or next((conclusoes.get(i) for i in qt_ids if conclusoes.get(i)), None)
+        qt_ids = q.get("questoes_tecnicas_relacionadas", [])
+        partes=[]
+        for qid in qt_ids:
+            conclusao=qts_finais.get(qid,{}).get("conclusao")
+            partes.append(f"{qid}: {conclusao.strip()}" if isinstance(conclusao,str) and conclusao.strip() else f"{qid}: [INFORMAÇÃO NECESSÁRIA: dimensão técnica não saneada]")
+        resposta = q.get("resposta") or " ".join(partes)
+        juridico = q.get("materia_juridica_associada")
+        if q.get("pertinencia") == "MATERIA_JURIDICA":
+            resposta = "Matéria jurídica reservada à apreciação do Juízo."
+        elif q.get("pertinencia") == "PERTINENTE_PARCIAL" and juridico:
+            resposta = (resposta.strip() + " " if resposta else "") + f"Quanto à parcela jurídica ({juridico}), a apreciação compete ao Juízo."
         resposta = "R: " + resposta.strip() if isinstance(resposta, str) and resposta.strip() else "R: [INFORMAÇÃO NECESSÁRIA: resposta técnica não disponível no estado saneado]"
         grupos.setdefault(origem, []).append({
             "id": q.get("id"), "numero_original": q.get("numero_original"),
             "texto_integral": q.get("texto_integral") or q.get("texto"), "resposta": resposta,
-            "qt_ids": qt_ids, "pat_ids": q.get("patologias_relacionadas", []),
-            "referencias_secoes": q.get("referencias_secoes", []),
+            "qt_ids": qt_ids, "pat_ids": sorted({pid for qid in qt_ids for pid in qts_finais.get(qid,{}).get("patologias",[])}),
+            "referencias_secoes": q.get("secoes_laudisticas_previstas", []), "pertinencia": q.get("pertinencia"),
         })
     ordem = {"JUIZO": 0, "JUÍZO": 0, "PARTE_AUTORA": 1, "AUTORA": 1, "PARTE_RE": 2, "PARTE_RÉ": 2, "RE": 2, "RÉ": 2}
     return [{"origem": origem, "itens": itens} for origem, itens in sorted(grupos.items(), key=lambda x: (ordem.get(x[0].upper(), 9), x[0])) if itens]
@@ -80,13 +95,22 @@ def _orcamento(final):
     itens = []
     for pat in final.get("patologias", []):
         bruto = pat.get("orcamento") or pat.get("item_orcamento")
-        if pat.get("elegivel_orcamento") is True and bruto:
+        if pat.get("elegibilidade_orcamento")=="ELEGIVEL_ORCAMENTO_VICIO" and isinstance(bruto,dict) and bruto.get("incluir") is True:
             dados = dict(bruto) if isinstance(bruto, dict) else {"descricao": str(bruto)}
             dados["pat_id"] = pat["id"]
             itens.append(dados)
     return {"aplicavel": bool(itens), "itens": itens,
             "observacao": None if itens else "Seção sem itens: nenhum item elegível e integralmente estruturado foi fornecido pelo Motor."}
 
+
+def _projetar_patologia(p):
+    recomendacao=p.get("recomendacao") or {"necessaria":False,"descricao":None,"extensao":None}
+    return {"id_patologia":p["id"],"local":p.get("localizacao_detalhada") or p.get("ambiente"),"sistema":p.get("sistema"),
+        "alegacao_original":p.get("alegacao_original"),"alegacao_normalizada":p.get("alegacao_normalizada"),"fotografias":p.get("constatacao",{}).get("fotografias",[]),
+        "manifestacao":p.get("manifestacao"),"constatacao":p.get("constatacao"),"situacao":p.get("constatacao",{}).get("situacao"),"origem":p.get("origem"),
+        "criticidade":p.get("criticidade"),"vicio_construtivo":p.get("vicio_construtivo"),"tipo_vicio":p.get("vicio_construtivo",{}).get("tipo"),
+        "recomendacoes_tecnicas":[recomendacao] if recomendacao.get("necessaria") else [],"reparo":recomendacao,
+        "elegivel_orcamento":p.get("elegibilidade_orcamento")=="ELEGIVEL_ORCAMENTO_VICIO","conclusao_tecnica":p.get("conclusao_tecnica")}
 
 def _montar_laudo(processo, delimitacao, final, plano, redacao, gate, grounding, fidelidade, estilo, correcoes):
     pats = final.get("patologias", [])
@@ -95,10 +119,10 @@ def _montar_laudo(processo, delimitacao, final, plano, redacao, gate, grounding,
     sintese_tema = " ".join(q.get("conclusao", "").strip() for q in qts if q.get("conclusao"))
     ressalvas = list(dict.fromkeys(r for p in pats for r in p.get("ressalvas", []) + p.get("analise_causal", {}).get("limitacoes", [])))
     quadro = [{
-        "pat_id": p["id"], "local": p.get("local"), "sistema": p.get("sistema"),
+        "pat_id": p["id"], "local": p.get("localizacao_detalhada") or p.get("ambiente"), "sistema": p.get("sistema"),
         "manifestacao": p.get("manifestacao"), "situacao": p["constatacao"]["situacao"],
         "origem": p.get("origem"), "criticidade": p.get("criticidade"),
-        "vicio_construtivo": p.get("vicio_construtivo"), "reparo_orcamento": p.get("elegivel_orcamento", False),
+        "vicio_construtivo": p.get("vicio_construtivo"), "reparo_orcamento": p.get("elegibilidade_orcamento")=="ELEGIVEL_ORCAMENTO_VICIO",
     } for p in pats]
     return {
         "schema_version": "1.1.0", "tipo_pericia": plano["tipo_pericia"], "modelo_documental": plano["modelo_documental"],
@@ -111,15 +135,7 @@ def _montar_laudo(processo, delimitacao, final, plano, redacao, gate, grounding,
         "criterios_criticidade": final.get("criterios_criticidade"), "limitacoes": ressalvas,
         "dados_diligencia": final.get("dados_diligencia") or final.get("vistoria"),
         "condicoes_gerais": final.get("condicoes_gerais"), "sistemas_analisados": final.get("sistemas_analisados", []),
-        "analises_tecnicas": redacao["blocos"], "patologias": [{
-            "id_patologia": p["id"], "local": p.get("local"), "sistema": p.get("sistema"),
-            "alegacao_original": p.get("alegacao_original"), "alegacao_normalizada": p.get("alegacao_normalizada"),
-            "fotografias": p.get("constatacao", {}).get("fotografias", []), "manifestacao": p.get("manifestacao"),
-            "constatacao": p.get("constatacao"), "situacao": p.get("constatacao", {}).get("situacao"), "origem": p.get("origem"),
-            "criticidade": p.get("criticidade"), "vicio_construtivo": p.get("vicio_construtivo"), "tipo_vicio": p.get("tipo_vicio"),
-            "recomendacoes_tecnicas": p.get("recomendacoes_tecnicas", []), "reparo": p.get("reparo"),
-            "elegivel_orcamento": p.get("elegivel_orcamento", False), "conclusao_tecnica": p.get("conclusao_tecnica")
-        } for p in pats],
+        "analises_tecnicas": redacao["blocos"], "patologias": [_projetar_patologia(p) for p in pats],
         "conclusao_classificacoes": [{"pat_id": p["id"], "situacao": p["constatacao"]["situacao"], "origem": p["origem"], "criticidade": p["criticidade"]} for p in pats],
         "quadro_resumo": quadro, "sintese_conclusiva_tema": sintese_tema,
         "quesitos": _grupos_quesitos(delimitacao, final), "orcamento": _orcamento(final), "referencias": normas,
@@ -162,6 +178,20 @@ def _render_markdown(laudo):
 
 
 def executar_pipeline_redacao(processo, delimitacao, motor):
+    from scripts.motor_vicios.pipeline import recalcular_gate
+    estado={"erros":motor.get("erros_finais",[]),"detector":motor.get("detector_final",[]),"deep":motor.get("deep_audit_final",[]),
+            "materiais":[a for a in motor.get("grounding_final",[]) if a.get("saliencia")=="LOAD_BEARING"],
+            "proposition_bloqueante":any(x.get("verdict")!="SUPPORTED" for x in motor.get("proposition_audit_results",[])),
+            "autoauditoria":motor.get("analise_final",{}).get("autoauditoria",[]),
+            "ressalvas":any(p.get("ressalvas") or p.get("analise_causal",{}).get("grau_certeza")=="INCONCLUSIVO" for p in motor.get("analise_final",{}).get("patologias",[]))}
+    auditavel=any(k in motor for k in ("erros_finais","detector_final","deep_audit_final","grounding_final","proposition_audit_results","coverage_execucao"))
+    if auditavel:
+        from scripts.planejamento_pericial.validar_plano import recalcular_execucao
+        entradas=motor.get("coverage_inputs") or {}
+        cobertura_recalculada=recalcular_execucao(entradas.get("plano",{}),entradas.get("vistoria",{}))
+        if not cobertura_recalculada["apto"]:estado["erros"]=[*estado["erros"],"coverage executada insuficiente"]
+    gate_recalculado=recalcular_gate(estado) if auditavel else motor.get("gate")
+    if auditavel and (motor.get("gate") not in {None,gate_recalculado} or gate_recalculado=="BLOQUEADO_PARA_REDACAO"):motor={**motor,"gate":"BLOQUEADO_PARA_REDACAO"}
     plano = planejar(processo, delimitacao, motor)
     inicial = redigir(plano, motor)
     if plano["status"] == "BLOQUEADO" or inicial["status"] == "BLOQUEADO":
@@ -173,7 +203,15 @@ def executar_pipeline_redacao(processo, delimitacao, motor):
     corrigida, correcoes = autocorrigir(inicial, estilo)
     quesitos = _grupos_quesitos(delimitacao, final); orcamento = _orcamento(final)
     _acrescentar_claims_globais(corrigida, plano, delimitacao, final, quesitos, orcamento)
-    grounding = auditar_grounding_redacao(corrigida, final)
+    ids_processuais=sorted({i for chave in ("sintese_processual","controversia_processual","tema_controvertido","objeto_material","objetivo_pericial") for i in _proveniencia(delimitacao.get(chave)) if i.startswith("DOC-")})
+    ids_documentos_reais=set()
+    for documento in processo.get("documentos",[]):
+        if documento.get("status") != "PRESENTE": continue
+        if documento.get("id"): ids_documentos_reais.add(documento["id"])
+        origem=str(documento.get("observacoes") or "").removeprefix("Origem estrutural: ").strip()
+        if origem.startswith("DOC-"): ids_documentos_reais.add(origem)
+    catalogo_processual=[{"id":i,"tipo":"DOCUMENTO","classe_probatoria":"EVIDENCIA_PRIMARIA","proveniencia":[i],"aspectos_suportados":["FATO_PROCESSUAL"],"aspectos_contraditos":[],"acessivel":True} for i in ids_processuais if i in ids_documentos_reais]
+    grounding = auditar_grounding_redacao(corrigida, {**motor,"catalogo_processual":catalogo_processual})
     fidelidade = auditar_fidelidade(corrigida, final)
     provisoria = _montar_laudo(processo, delimitacao, final, plano, corrigida, "BLOQUEADO_PARA_LAUDO", grounding, fidelidade, estilo + redundancia, correcoes)
     semanticos = auditar_laudo_semantico(provisoria, final)
@@ -181,9 +219,8 @@ def executar_pipeline_redacao(processo, delimitacao, motor):
     qts_cobertas = {q for c in corrigida["claims"] for q in c.get("qt_ids", [])}
     ausentes = sorted(qts_materiais - qts_cobertas)
     materiais = [a for a in grounding if next((c for c in corrigida["claims"] if c["id"] == a["claim_red_id"]), {}).get("materialidade") == "LOAD_BEARING"]
-    bloqueio = bool(fidelidade or semanticos or ausentes or any(a.get("veredito") in REPROVADOS for a in materiais))
     tem_ressalva = bool(provisoria["limitacoes"] or any(p.get("analise_causal", {}).get("grau_certeza") == "INCONCLUSIVO" for p in final.get("patologias", [])))
-    gate = "BLOQUEADO_PARA_LAUDO" if bloqueio else "APTO_PARA_LAUDO_COM_RESSALVAS" if tem_ressalva else "APTO_PARA_LAUDO"
+    gate = recalcular_gate_redacao(fidelidade=fidelidade,semanticos=semanticos,ausentes=ausentes,materiais=materiais,tem_ressalva=tem_ressalva)
     laudo = _montar_laudo(processo, delimitacao, final, plano, corrigida, gate, grounding, fidelidade + semanticos, estilo + redundancia, correcoes)
     metricas = {
         "claims_redigidas": len(corrigida["claims"]), "claims_grounded": sum(a.get("veredito") == "GROUNDED" for a in grounding),

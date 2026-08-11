@@ -16,11 +16,13 @@ ESTRUTURA_VICIOS = (
 
 def _texto(valor):
     return valor.get("texto") if isinstance(valor, dict) else valor
+def _ressalva(valor):
+    return valor.get("id") or valor.get("descricao") if isinstance(valor,dict) else str(valor)
 
 
 def _tipo_pericia(delimitacao, motor):
-    return (delimitacao.get("tipo_pericia") or motor.get("tipo_pericia") or
-            motor.get("analise_final", {}).get("tipo_pericia"))
+    valor=(delimitacao.get("tipo_pericia") or motor.get("tipo_pericia") or motor.get("analise_final", {}).get("tipo_pericia"))
+    return valor.get("tipo") if isinstance(valor,dict) else valor
 
 
 def planejar(processo, delimitacao, motor):
@@ -31,12 +33,12 @@ def planejar(processo, delimitacao, motor):
     patologias = final.get("patologias", [])
     questoes = final.get("questoes_saneadas", delimitacao.get("questoes_tecnicas", []))
     quesitos = delimitacao.get("quesitos", [])
-    ressalvas = list(dict.fromkeys(delimitacao.get("ressalvas", []) + final.get("ressalvas", [])))
+    ressalvas = list(dict.fromkeys(_ressalva(x) for x in delimitacao.get("ressalvas", []) + final.get("ressalvas", [])))
     secoes = []
     unidades = []
     for pat in patologias:
         qts = [q["id"] for q in questoes if pat["id"] in q.get("patologias", [])]
-        ques = [q["id"] for q in quesitos if pat["id"] in q.get("patologias_relacionadas", []) or set(q.get("questoes_tecnicas", [])) & set(qts)]
+        ques = [q["id"] for q in quesitos if set(q.get("questoes_tecnicas_relacionadas", [])) & set(qts)]
         evidencias = pat.get("evidencias", []) + pat.get("constatacoes", []) + pat.get("medicoes", [])
         evidencias += [n["id"] for n in pat.get("normas_relacionadas", []) if n.get("verificada")]
         unidades.append({"pat_id": pat["id"], "qt_ids": list(dict.fromkeys(qts)), "que_ids": list(dict.fromkeys(ques)),
@@ -69,9 +71,9 @@ def planejar(processo, delimitacao, motor):
         "schema_version": "1.1.0", "status": "BLOQUEADO" if bloqueado else "PLANEJADO",
         "gate_tecnico": gate or "BLOQUEADO_PARA_REDACAO", "tipo_pericia": tipo or "NAO_INFORMADO",
         "modelo_documental": modelo, "numero_processo": processo.get("numero_processo"),
-        "sintese_processual": _texto(delimitacao.get("sintese_processual")),
+        "sintese_processual": _texto(delimitacao.get("sintese_processual") or delimitacao.get("controversia_processual")),
         "tema_controvertido": _texto(delimitacao.get("tema_controvertido")),
-        "objeto": _texto(delimitacao.get("objeto")), "objetivo": _texto(delimitacao.get("objetivo")),
+        "objeto": _texto(delimitacao.get("objeto_material") or delimitacao.get("objeto")), "objetivo": _texto(delimitacao.get("objetivo_pericial") or delimitacao.get("objetivo")),
         "secoes": secoes, "unidades_patologia": unidades,
         "metricas": {"patologias": len(patologias), "questoes_tecnicas": len(questoes), "quesitos_influentes": len(quesitos)},
     }
