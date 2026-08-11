@@ -120,7 +120,7 @@
         "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
         "documento_id": { "type": ["string", "null"], "pattern": "^DOC-PJE-[0-9]{3,}$" },
         "id_pje": { "oneOf": [{ "$ref": "#/$defs/idPje" }, { "type": "null" }] },
-        "pagina_pdf": { "type": "integer", "minimum": 1 },
+        "pagina_pdf": { "type": ["integer", "null"], "minimum": 1 },
         "pagina_documento": { "type": ["integer", "null"], "minimum": 1 },
         "pagina_original": { "type": ["string", "null"], "minLength": 1 },
         "bbox": { "$ref": "#/$defs/bbox" },
@@ -129,7 +129,11 @@
         "metodo_extracao": { "$ref": "#/$defs/metodoExtracao" },
         "confianca": { "$ref": "#/$defs/confianca" },
         "status_verificacao": { "$ref": "#/$defs/statusVerificacao" }
-      }
+      },
+      "allOf": [
+        { "if": { "properties": { "natureza": { "const": "DOCUMENTADO" }, "status_verificacao": { "const": "VERIFICADO" } }, "required": ["natureza", "status_verificacao"] }, "then": { "properties": { "pagina_pdf": { "type": "integer", "minimum": 1 }, "trecho": { "type": "string", "minLength": 1 } } } },
+        { "if": { "properties": { "pagina_pdf": { "type": "null" } }, "required": ["pagina_pdf"] }, "then": { "properties": { "natureza": { "const": "INCONCLUSIVO" }, "status_verificacao": { "const": "INCONCLUSIVO" }, "trecho": { "type": "null" } } } }
+      ]
     },
     "referenciaFonte": { "$ref": "#/$defs/proveniencia" },
     "statusReconciliacao": {
@@ -180,8 +184,9 @@
     },
     "conflito": {
       "type": "object",
-      "required": ["conflito_id", "campo", "tipo", "descricao", "valores_conflitantes", "fontes", "status", "bloqueante", "decisao", "observacoes"],
+      "required": ["conflito_id", "campo", "tipo", "descricao", "valores_conflitantes", "fontes", "status", "bloqueante", "decisao", "observacoes", "itens_indice_relacionados"],
       "additionalProperties": false,
+      "allOf": [{"if":{"properties":{"tipo":{"const":"COLISAO_DESTINO"}},"required":["tipo"]},"then":{"required":["pagina_pdf_inicio","pagina_pdf_fim","total_paginas"]}}],
       "properties": {
         "conflito_id": { "type": "string", "pattern": "^CON-PJE-[0-9]{3,}$" },
         "campo": { "type": "string", "minLength": 1 },
@@ -192,12 +197,16 @@
         "status": { "$ref": "#/$defs/statusConflito" },
         "bloqueante": { "type": "boolean" },
         "decisao": { "type": ["string", "null"] },
-        "observacoes": { "type": ["string", "null"] }
+        "observacoes": { "type": ["string", "null"] },
+        "itens_indice_relacionados": { "type": "array", "items": { "type": "string", "pattern": "^DOC-PJE-[0-9]{3,}$" }, "uniqueItems": true },
+        "pagina_pdf_inicio": { "type": "integer", "minimum": 1 },
+        "pagina_pdf_fim": { "type": "integer", "minimum": 1 },
+        "total_paginas": { "type": "integer", "minimum": 1 }
       }
     },
     "pendencia": {
       "type": "object",
-      "required": ["pendencia_id", "campo", "motivo_ausencia", "descricao", "bloqueante", "fontes", "status"],
+      "required": ["pendencia_id", "campo", "motivo_ausencia", "descricao", "bloqueante", "fontes", "status", "itens_indice_relacionados"],
       "additionalProperties": false,
       "properties": {
         "pendencia_id": { "type": "string", "pattern": "^PEN-PJE-[0-9]{3,}$" },
@@ -206,7 +215,11 @@
         "descricao": { "type": "string", "minLength": 1 },
         "bloqueante": { "type": "boolean" },
         "fontes": { "type": "array", "items": { "$ref": "#/$defs/proveniencia" } },
-        "status": { "enum": ["ABERTA", "RESOLVIDA", "DISPENSADA"] }
+        "status": { "enum": ["ABERTA", "RESOLVIDA", "DISPENSADA"] },
+        "itens_indice_relacionados": { "type": "array", "items": { "type": "string", "pattern": "^DOC-PJE-[0-9]{3,}$" }, "uniqueItems": true },
+        "pagina_pdf_inicio": { "type": "integer", "minimum": 1 },
+        "pagina_pdf_fim": { "type": "integer", "minimum": 1 },
+        "total_paginas": { "type": "integer", "minimum": 1 }
       }
     },
     "classificacaoPagina": {
@@ -223,7 +236,7 @@
     },
     "prioridadeDocumental": {
       "description": "A prioridade C identifica movimentação ou formalização e nunca significa conteúdo descartável.",
-      "enum": ["A_ESSENCIAL", "B_CONTEXTO_RELEVANTE", "C_MOVIMENTACAO_FORMALIZACAO"]
+      "enum": ["A_ESSENCIAL", "B_CONTEXTO_RELEVANTE", "C_MOVIMENTACAO_FORMALIZACAO", "PENDENTE"]
     },
     "classeDocumental": {
       "enum": [
@@ -236,7 +249,7 @@
         "REQUERIMENTO_ADMINISTRATIVO", "RESPOSTA_ADMINISTRATIVA", "DOCUMENTO_CAIXA", "MANIFESTACAO_OPERACIONAL",
         "DOCUMENTO_EMPREENDIMENTO", "DOSSIER_EMPREENDIMENTO", "QUADRO_RESUMO", "DOCUMENTO_ALIENACAO",
         "EMAIL_OU_COMPROVANTE_CONTATO", "COMPROVANTE_TELEFONICO",
-        "NORMA_OU_ORIENTACAO_TECNICA", "RELATORIO_INSTITUCIONAL", "ANEXO_TECNICO", "DOCUMENTO_COMPOSTO", "OUTRO"
+        "NORMA_OU_ORIENTACAO_TECNICA", "RELATORIO_INSTITUCIONAL", "ANEXO_TECNICO", "DOCUMENTO_COMPOSTO", "NAO_CLASSIFICADO", "OUTRO"
       ]
     },
     "paginaManifesto": {

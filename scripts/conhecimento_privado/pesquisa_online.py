@@ -54,6 +54,7 @@ class SearchProvider(Protocol):
     def buscar(self,consulta:str)->list[dict]:...
 
 class MockSearchProvider:
+    EGRESS_CAPABILITY="LOCAL_NO_EGRESS"
     def __init__(self,resultados=None,erro=None):self.resultados=resultados or [];self.erro=erro
     def buscar(self,consulta):
         if self.erro:raise self.erro
@@ -62,6 +63,7 @@ class MockSearchProvider:
 class AgentSearchProvider:
     """Adaptador para ferramenta de busca do agente; não recebe artefatos processuais."""
     EXTERNAL_DATA_EGRESS_REQUIRED=True
+    EGRESS_CAPABILITY="EXTERNAL_EGRESS"
     def __init__(self,executor):self.executor=executor
     def buscar(self,consulta,politica=None):
         consulta=(politica or EgressPolicy()).preparar(consulta)
@@ -69,8 +71,11 @@ class AgentSearchProvider:
         return self.executor(consulta)
 
 def buscar(consulta,provider:SearchProvider,politica=None):
-    exige=bool(getattr(provider,"EXTERNAL_DATA_EGRESS_REQUIRED",False))
+    capability=getattr(provider,"EGRESS_CAPABILITY","UNKNOWN")
+    if capability not in {"LOCAL_NO_EGRESS","EXTERNAL_EGRESS"}:raise PermissionError("capability de egress do provider desconhecida")
+    exige=capability=="EXTERNAL_EGRESS"
     if exige and politica is None:raise PermissionError("provider externo sem EgressPolicy")
+    consulta=(politica.preparar(consulta) if exige else consulta)
     resultados=provider.buscar(consulta,politica) if exige else provider.buscar(consulta);classificados=[]
     for item in resultados:
         x=dict(item);x["oficial"]=dominio_oficial(x.get("url",""));x["status_uso"]="CANDIDATA_OFICIAL" if x["oficial"] else "APENAS_DESCOBERTA";classificados.append(x)

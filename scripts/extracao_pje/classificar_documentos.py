@@ -5,6 +5,15 @@ import unicodedata
 
 from .regras_classificacao import REGRAS_CLASSIFICACAO, REGRAS_EXATAS
 
+ESSENCIAIS={"DECISAO","DESPACHO","PETICAO_INICIAL","EMENDA_INICIAL","CONTESTACAO","REPLICA","QUESITOS_JUIZO","QUESITOS_AUTOR","QUESITOS_REU","PARECER_TECNICO_PARTE","LAUDO_TECNICO_PARTE","PROJETO","MEMORIAL_DESCRITIVO","ART_RRT"}
+FORMAIS={"ATO_ORDINATORIO","CITACAO","INTIMACAO","CERTIDAO","PROCURACAO","SUBSTABELECIMENTO"}
+
+def prioridade_documental(classe,status_revisao="REVISADO_AUTOMATICAMENTE"):
+    if classe in {"OUTRO","NAO_CLASSIFICADO"}:return "PENDENTE"
+    if classe in ESSENCIAIS:return "A_ESSENCIAL"
+    if classe in FORMAIS:return "C_MOVIMENTACAO_FORMALIZACAO"
+    return "B_CONTEXTO_RELEVANTE"
+
 
 def normalizar_busca(texto):
     base = unicodedata.normalize("NFKD", texto or "")

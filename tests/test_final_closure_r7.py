@@ -74,7 +74,7 @@ class FinalClosureR7(unittest.TestCase):
 
     def test_equivalencia_somente_medicao_e_fotografia(self):
         casos={
-            "MEDICAO":({"id":"MED-PLANO-001","grandeza":"abertura","questoes_tecnicas":["QT-001"]},{"id":"MED-001","medicao_planejada":None,"grandeza":"abertura","questoes":["QT-001"]},"medicoes"),
+            "MEDICAO":({"id":"MED-PLANO-001","grandeza":"abertura","local":"Sala","criterio":"resultado em mm","questoes_tecnicas":["QT-001"]},{"id":"MED-001","medicao_planejada":None,"grandeza":"abertura","valor":0.2,"unidade":"mm","local":"Sala","questoes":["QT-001"],"observacoes":["OBS-001"],"metodo":"fissurômetro"},"medicoes"),
             "FOTOGRAFIA":({"id":"FOT-PLANO-001","finalidade":"fissura detalhe","questoes_tecnicas":["QT-001"]},{"id":"FOT-001","fotografia_planejada":None,"finalidade_planejada":"fissura detalhe","questoes":["QT-001"]},"fotografias"),
         }
         for tipo,(planejado,executado,colecao) in casos.items():
@@ -109,7 +109,7 @@ class FinalClosureR7(unittest.TestCase):
             self.assertEqual(validar("manifesto-pje.schema.json",manifesto),[]);self.assertEqual(gerar_documentos(manifesto,pdf,d)["erros"],[])
             for caminho in (d/"documentos").glob("*.json"):self.assertEqual(validar("documento-pje.schema.json",json.loads(caminho.read_text(encoding="utf8"))),[])
             delimitacao=gerar_delimitacao(d);self.assertEqual(validar("delimitacao-pericial.schema.json",delimitacao),[]);(d/"delimitacao-pericial.json").write_text(json.dumps(delimitacao),encoding="utf8")
-            processo=gerar_processo(d);self.assertEqual(validar("processo.schema.json",processo),[]);(d/"processo.json").write_text(json.dumps(processo),encoding="utf8")
+            processo=gerar_processo(d,data_laudo="2026-08-11");self.assertEqual(validar("processo.schema.json",processo),[]);(d/"processo.json").write_text(json.dumps(processo),encoding="utf8")
             delimitacao=aprofundar(d);(d/"delimitacao-pericial.json").write_text(json.dumps(delimitacao),encoding="utf8");self.assertEqual(validar("delimitacao-pericial.schema.json",delimitacao),[])
             plano=gerar_plano(d);self.assertEqual(validar("plano-vistoria.schema.json",plano),[]);from scripts.planejamento_pericial.validar_plano import recalcular_cobertura;self.assertTrue(recalcular_cobertura(plano)["apto"])
             campo=d/"campo";campo.mkdir();atividade_por_qt={qt:a["id"] for a in plano["atividades"] for qt in a["questoes_tecnicas"]}

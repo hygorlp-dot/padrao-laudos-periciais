@@ -26,7 +26,9 @@ def executar(processo,delimitacao,plano,vistoria,contexto=None,conhecimento=None
     tipo=delimitacao["tipo_pericia"]["tipo"]
     if tipo!="VICIOS_CONSTRUTIVOS":return _base(processo,delimitacao,"MOTOR_ESPECIALIZADO_NAO_IMPLEMENTADO",tipo)
     if vistoria.get("status")=="AGUARDANDO_DADOS_DE_VISTORIA" or not vistoria.get("observacoes"):
-        return _base(processo,delimitacao,"AGUARDANDO_DADOS_DE_VISTORIA",tipo)
+        bloqueado=_base(processo,delimitacao,"AGUARDANDO_DADOS_DE_VISTORIA",tipo)
+        bloqueado["catalogo_evidencias"]=construir_catalogo(vistoria,conhecimento.get("documentos") if conhecimento else None,conhecimento.get("normas") if conhecimento else None)
+        return bloqueado
     r=_base(processo,delimitacao,"ANALISE_INICIAL",tipo); contexto=contexto or {};conhecimento=conhecimento or {};catalogo=construir_catalogo(vistoria,conhecimento.get("documentos"),conhecimento.get("normas"));r["catalogo_evidencias"]=catalogo;r["estado_analise"]="PAT_INICIAL"; por_manifestacao={}
     for o in vistoria["observacoes"]:
         chave=(o.get("manifestacao") or "Condição examinada",o.get("ambiente"),o.get("sistema"),o.get("elemento"));por_manifestacao.setdefault(chave,[]).append(o)
