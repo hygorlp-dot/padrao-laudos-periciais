@@ -19,7 +19,7 @@ class BloqueiosFinaisMotorV1Test(unittest.TestCase):
     def obs(self,i,texto="Interface sob chuva com vedação deteriorada",**extra):
         dado={"id":f"OBS-{i:03d}","ambiente":"Sala","sistema":"IMPERMEABILIZACAO","elemento":"Parede","descricao_objetiva":texto,"manifestacao":"umidade","resultado":"OBSERVADO","metodo":["INSPECAO_VISUAL"],"fotografias":["FOT-001"],"medicoes":["MED-001"],"alegacoes":["ALG-001"],"questoes":["QT-001"],"quesitos":["QUE-001"],"proveniencia":[f"ARQ-{i:03d}"]};dado.update(extra);return dado
     def vistoria(self,observacoes):
-        v=load("tests/fixtures/schemas/vistoria-valida.json");v["observacoes"]=observacoes;v["medicoes"]=[{"id":"MED-001","grandeza":"teor de umidade","valor":18.0,"unidade":"%","ambiente":"Sala","sistema":"IMPERMEABILIZACAO","instrumento":"medidor","questoes":["QT-001"],"proveniencia":["ARQ-MED-001"]}];v["fotografias"]=[{"id":"FOT-001","descricao_objetiva":"Registro da mancha e interface","ambiente":"Sala","sistema":"IMPERMEABILIZACAO","questoes":["QT-001"],"proveniencia":["ARQ-FOT-001"]}];return v
+        v=load("tests/fixtures/schemas/vistoria-valida.json");v["observacoes"]=observacoes;v["atividades_executadas"][0]["questoes"]=["QT-001"];v["medicoes"]=[{"id":"MED-001","grandeza":"teor de umidade","valor":18.0,"unidade":"%","ambiente":"Sala","sistema":"IMPERMEABILIZACAO","instrumento":"medidor","questoes":["QT-001"],"proveniencia":["ARQ-MED-001"]}];v["fotografias"]=[{"id":"FOT-001","descricao_objetiva":"Registro da mancha e interface","ambiente":"Sala","sistema":"IMPERMEABILIZACAO","questoes":["QT-001"],"proveniencia":["ARQ-FOT-001"]}];return v
     def evidencias(self,*textos):
         return construir_catalogo(self.vistoria([self.obs(i+1,t) for i,t in enumerate(textos)]))
 

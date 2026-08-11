@@ -52,7 +52,7 @@ class CorrecaoTerminalMotorV1Test(unittest.TestCase):
         obs={"id":"OBS-001","tipo":"OBSERVACAO","resultado":"OBSERVADO","aspectos_suportados":["FISSURA_PRESENTE"],"auditoria_aspectos":[{"aspecto":"FISSURA_PRESENTE","polaridade":"AFIRMADO","aspectos_derivados_consultados":False}]};nor={"id":"NOR-001","tipo":"NORMA","aspectos_suportados":["REQUISITO_NORMATIVO_VERIFICADO"],"auditoria_aspectos":[]};r={"patologias":[],"catalogo_evidencias":[obs,nor],"cobertura_quesitos":[],"questoes_saneadas":[]};self.assertFalse({"OBS_NEGADA_COM_RESULTADO_OBSERVADO","NORMA_USADA_COMO_FATO_DO_CASO"}&{x["tipo"] for x in executar_detector(r)});self.assertFalse({"OBS_NEGADA_COM_RESULTADO_OBSERVADO","NORMA_USADA_COMO_FATO_DO_CASO"}&{x["tipo"] for x in executar_deep_audit([],r)})
 
     def obs_vedacao(self):
-        v=load("tests/fixtures/schemas/vistoria-valida.json");v["observacoes"][0].update({"descricao_objetiva":"Fissura observada.","manifestacao":"fissura","sistema":"VEDACOES","resultado":"OBSERVADO"});return v
+        v=load("tests/fixtures/schemas/vistoria-valida.json");v["atividades_executadas"][0]["questoes"]=["QT-001"];v["observacoes"][0].update({"descricao_objetiva":"Fissura observada.","manifestacao":"fissura","sistema":"VEDACOES","resultado":"OBSERVADO"});return v
 
     def test_cap_01_02_registro_dos_sistemas(self):
         self.assertEqual(set(SISTEMAS_AUDITADOS),{"IMPERMEABILIZACAO","REVESTIMENTOS","ESQUADRIAS","ESTRUTURA","VEDACOES","PINTURA","COBERTURA","FORROS","INSTALACOES_ELETRICAS","INSTALACOES_HIDROSSANITARIAS","DRENAGEM","OUTRO"});self.assertEqual(capacidade_causal("IMPERMEABILIZACAO")["nivel_de_capacidade"],"SUPORTE_CAUSAL_PARCIAL");self.assertEqual(capacidade_causal("VEDACOES")["nivel_de_capacidade"],"MOTOR_CAUSAL_NAO_IMPLEMENTADO")

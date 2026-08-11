@@ -10,7 +10,7 @@ class PesquisaOnlineTest(unittest.TestCase):
     def test_rejeita_dominio_nao_oficial(self):self.assertFalse(dominio_oficial("https://example.com/norma"))
     def test_cache_com_mock_e_vigencia_explicita(self):
         with tempfile.TemporaryDirectory() as td:
-            meta=pesquisar("https://www.gov.br/exemplo",Path(td),lambda *a,**k:Resposta())
+            meta=pesquisar("https://www.gov.br/exemplo",Path(td),lambda *a,**k:Resposta(),EgressPolicy(permitir_egress=True))
             self.assertTrue((Path(td)/(meta["sha256"]+".bin")).exists());self.assertEqual(verificar(meta)["status_vigencia"],"PENDENTE_VERIFICACAO")
     def test_busca_classifica_oficial_e_secundaria(self):
         class P:
@@ -28,7 +28,9 @@ class PesquisaOnlineTest(unittest.TestCase):
         agora=datetime.now(timezone.utc);self.assertTrue(cache_valido({"acessado_em":agora.isoformat()},agora));self.assertFalse(cache_valido({"acessado_em":(agora-timedelta(days=2)).isoformat()},agora))
     def test_providers_mock_e_agente(self):
         mock=MockSearchProvider([{"url":"https://www.gov.br/fonte"}]);self.assertEqual(buscar_seguro("fonte pública",mock,EgressPolicy(permitir_egress=True))["status"],"CONCLUIDA")
-        agente=AgentSearchProvider(lambda q:[{"url":"https://www.dnit.gov.br/manual","query":q}]);self.assertTrue(agente.EXTERNAL_DATA_EGRESS_REQUIRED);self.assertEqual(agente.buscar("manual público")[0]["query"],"manual público")
+        agente=AgentSearchProvider(lambda q:[{"url":"https://www.dnit.gov.br/manual","query":q}]);self.assertTrue(agente.EXTERNAL_DATA_EGRESS_REQUIRED)
+        with self.assertRaises(PermissionError): agente.buscar("manual público")
+        self.assertEqual(agente.buscar("manual público",EgressPolicy(permitir_egress=True))[0]["query"],"manual público")
     def test_mock_integrado_ao_fluxo_do_motor(self):
         raiz=Path(__file__).resolve().parents[1];load=lambda p:json.loads((raiz/p).read_text(encoding="utf-8"));processo=load("tests/fixtures/schemas/processo-valido.json");delim=load("tests/fixtures/triagem/delimitacao-minima-valida.json");plano=load("tests/fixtures/planejamento/plano-vistoria-valido.json");vistoria=load("tests/fixtures/schemas/vistoria-valida.json")
         r=executar_pipeline_motor(processo,delim,plano,vistoria,{"search_provider":MockSearchProvider([{"url":"https://www.gov.br/fonte"}])});self.assertEqual(r["analise_inicial"]["pesquisa_online"]["status"],"CONCLUIDA");self.assertEqual(r["analise_inicial"]["pesquisa_online"]["fontes_oficiais_localizadas"],["https://www.gov.br/fonte"])
