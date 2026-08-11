@@ -106,12 +106,13 @@ def gerar(inventario,plano=None,numero_processo=None):
     for obs in observacoes:
         def comp(item):
             explicito=obs["id"] in item.get("observacoes",[])
-            qts=bool(set(item.get("questoes",[]))&set(obs.get("questoes",[])))
-            sistema=bool(obs.get("sistema") and item.get("sistema") and item.get("sistema")==obs.get("sistema"))
-            return explicito or (qts and sistema)
+            atividade=bool(obs.get("atividade") and item.get("atividade") and item.get("atividade")==obs.get("atividade"))
+            elemento=bool(obs.get("elemento") and item.get("elemento") and normalizar(obs.get("elemento"))==normalizar(item.get("elemento")))
+            manifestacao=bool(obs.get("manifestacao") and item.get("manifestacao") and normalizar(obs.get("manifestacao"))==normalizar(item.get("manifestacao")))
+            return explicito or (atividade and elemento and manifestacao)
         obs["medicoes"]=sorted(m["id"] for m in medicoes if comp(m));obs["fotografias"]=sorted(f["id"] for f in fotos if comp(f))
         for eid in obs["medicoes"]+obs["fotografias"]:
-            item=next(x for x in medicoes+fotos if x["id"]==eid);relacoes.append({"observacao":obs["id"],"evidencia":eid,"motivo":"VINCULO_EXPLICITO" if obs["id"] in item.get("observacoes",[]) else "QT_E_SISTEMA_CONVERGENTES"})
+            item=next(x for x in medicoes+fotos if x["id"]==eid);relacoes.append({"observacao":obs["id"],"evidencia":eid,"motivo":"VINCULO_EXPLICITO" if obs["id"] in item.get("observacoes",[]) else "ATIVIDADE_ELEMENTO_MANIFESTACAO_CONVERGENTES"})
         for med in medicoes:
             if med["id"] in obs["medicoes"]:med["observacoes"]=sorted(set(med["observacoes"]+[obs["id"]]))
     executados={"FOTOGRAFIA":{f["fotografia_planejada"]:f["id"] for f in fotos if f["fotografia_planejada"]},"MEDICAO":{m["medicao_planejada"]:m["id"] for m in medicoes if m["medicao_planejada"]},"ATIVIDADE":{a["atividade_planejada"]:a["id"] for a in atividades if a["atividade_planejada"]},"ENSAIO":{},"DOCUMENTO":{}}

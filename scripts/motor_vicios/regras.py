@@ -12,8 +12,8 @@ def inferir_origem(causa,evidencias):
     """Infere origem pela convergencia de fatos independentes, nao por rotulo pronto."""
     aspectos={a for e in evidencias for a in e.get("aspectos_suportados",[])}
     def independentes(sinais):
-        fontes={tuple(e.get("proveniencia",[])) or (e.get("id"),) for e in evidencias if set(e.get("aspectos_suportados",[]))&set(sinais)}
-        return len(fontes)>=2
+        from .regras_probatorias import fontes_independentes
+        return len(fontes_independentes(evidencias,sinais))>=2
     grupos=[]
     from .regras_probatorias import suporte_endogeno
     if causa and suporte_endogeno(evidencias):grupos.append("ENDOGENA_CONSTRUTIVA")

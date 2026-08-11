@@ -17,6 +17,7 @@ REGRAS_CLASSIFICACAO = (
     ("PHRASE", "documento de identificacao", "DOCUMENTO_IDENTIFICACAO"),
     ("PHRASE", "relatorio fotografico", "RELATORIO_FOTOGRAFICO"),
     ("PHRASE", "memorial descritivo", "MEMORIAL_DESCRITIVO"),
+    ("PHRASE", "manifestacao da parte", "MANIFESTACAO"),
     ("PHRASE", "anotacao de responsabilidade tecnica", "ART_RRT"),
     ("PHRASE", "registro de responsabilidade tecnica", "ART_RRT"),
 )

@@ -29,7 +29,8 @@ def relacionar_evidencias(catalogo,hipotese):
     return sorted(set(favor)),sorted(set(contra)),sorted(requeridos&cobertura)
 
 def _independentes(ids,catalogo):
-    mapa={e["id"]:e for e in catalogo};return len({tuple(mapa[i].get("proveniencia",[])) or (i,) for i in ids if i in mapa})
+    from .regras_probatorias import identidade_fontes
+    mapa={e["id"]:e for e in catalogo};return len({fonte for i in ids if i in mapa for fonte in identidade_fontes(mapa[i])})
 
 def gerar(manifestacao,man_id,evidencias=None,ausentes=None,inicio=1,*,sistema=None,catalogo=None,normas=None):
     catalogo=catalogo or [];saida=[]

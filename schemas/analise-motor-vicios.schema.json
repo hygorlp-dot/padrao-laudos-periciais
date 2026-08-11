@@ -20,6 +20,12 @@
         "proveniencia"
     ],
     "additionalProperties": false,
+    "allOf": [
+        {
+            "if": {"properties": {"status_execucao": {"enum": ["ANALISE_INICIAL", "ANALISE_CONCLUIDA"]}}},
+            "then": {"required": ["relacoes_associacao"]}
+        }
+    ],
     "properties": {
         "schema_version": {
             "type": "string"
@@ -54,6 +60,12 @@
             "type": "array",
             "items": {
                 "$ref": "#/$defs/manifestacao"
+            }
+        },
+        "relacoes_associacao": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/relacaoAssociacao"
             }
         },
         "hipoteses": {
@@ -108,6 +120,21 @@
         }
     },
     "$defs": {
+        "relacaoAssociacao": {
+            "type": "object",
+            "required": ["evidencia_id", "tipo_evidencia", "manifestacoes", "patologias", "status", "confianca", "score", "motivos"],
+            "additionalProperties": false,
+            "properties": {
+                "evidencia_id": {"type": "string", "pattern": "^(DOC|ENS)-"},
+                "tipo_evidencia": {"enum": ["DOCUMENTO", "ENSAIO"]},
+                "manifestacoes": {"$ref": "#/$defs/ids"},
+                "patologias": {"$ref": "#/$defs/ids"},
+                "status": {"enum": ["ASSOCIADA", "AMBIGUA", "NAO_ASSOCIADA"]},
+                "confianca": {"enum": ["ALTA", "MEDIA", "BAIXA"]},
+                "score": {"type": "integer"},
+                "motivos": {"type": "array", "items": {"enum": ["questoes", "atividade", "alegacoes", "ambiente", "sistema", "elemento", "manifestacao"]}, "uniqueItems": true}
+            }
+        },
         "ids": {
             "type": "array",
             "items": {

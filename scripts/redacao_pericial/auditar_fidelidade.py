@@ -13,6 +13,22 @@ TIPO_CLAIM = {"MANIFESTACAO_TECNICA": "MANIFESTACAO_TECNICA", "INFERENCIA_TECNIC
 def _n(texto):
     return unicodedata.normalize("NFKD", str(texto)).encode("ascii", "ignore").decode().lower()
 
+def _texto_derivavel(redacao,motor):
+    a,b=_n(redacao),_n(motor);termos=lambda x:set(re.findall(r"[a-z]{4,}",x))-{"para","como","pela","pelo","uma","com"}
+    compartilhados=termos(a)&termos(b);neg=lambda x:bool(re.search(r"\b(?:nao|sem|ausencia|inexist\w*|jamais)\b",x))
+    inflacao=any(x in a and x not in b for x in ("inequivocamente","comprovadamente","sempre","jamais"))
+    contradicao=bool(compartilhados) and neg(a)!=neg(b)
+    dimensoes=(
+        {"conforme","anomalia","falha","inconclusiva","constatada"},
+        {"endogena","construtiva","exogena","funcional","mista","inconclusiva","manutencao"},
+        {"critica","media","minima"},
+        {"colapso","instabilidade","insalubridade","indenizacao","prescricao","culpa"},
+    )
+    alteracao_material=any((termos(a)&d)!=(termos(b)&d) for d in dimensoes if (termos(a)|termos(b))&d)
+    editorial={"data","vistoria","alegacoes","identificadas","autos","constatou","constatada","constatado","observada","observado","manifestacao","elementos","disponiveis","permitem","individualizar","especifica","especifico","foram","registradas","consequencias","tecnicas","adicionais","final","situacao","origem","criticidade","vicio","construtivo","caracterizado","caracterizada","analise","partir","questao","tratada","evidencias","indicadas","campo","metodo","limitacoes","fenomeno","ocorrido","causalidade","permanece","dentro"}
+    novidade=termos(a)-termos(b)-editorial
+    return not contradicao and not inflacao and not alteracao_material and not novidade
+
 
 def auditar_grounding_redacao(redacao, motor_final):
     final = motor_final.get("analise_final", motor_final)
@@ -26,7 +42,8 @@ def auditar_grounding_redacao(redacao, motor_final):
         relacionados=[c for c in claims_motor if c.get("tipo") in equivalentes.get(claim.get("tipo"),{claim.get("tipo")}) and (set(claim.get("pat_ids",[])) & {c.get("patologia")} or set(claim.get("qt_ids",[])) & {c.get("questao")})]
         auditados=[audits_motor[c["id"]] for c in relacionados if c.get("id") in audits_motor]
         if auditados:
-            veredito="GROUNDED" if all(a.get("veredito")=="GROUNDED" for a in auditados) else next((a.get("veredito") for a in auditados if a.get("veredito")!="GROUNDED"),"UNVERIFIABLE")
+            fieis=[c for c in relacionados if _texto_derivavel(claim["texto_semantico"],c.get("texto") or c.get("texto_semantico") or "")]
+            veredito="GROUNDED" if fieis and all(audits_motor.get(c["id"],{}).get("veredito")=="GROUNDED" for c in fieis) else "UNSUBSTANTIATED"
             saida.append({"claim_id":claim["id"],"claim_red_id":claim["id"],"tipo":claim["tipo"],"natureza":claim["natureza"],"saliencia":claim["materialidade"],"texto":claim["texto_semantico"],"evidencias":sorted({e for a in auditados for e in a.get("evidencias",[])}),"veredito":veredito,"componente":"TECNICO","auditoria_independente":"NAO","justificativa_resumida":"Derivado de claims finais do Motor auditadas contra evidência primária.","remediacao":"Manter" if veredito=="GROUNDED" else "Reduzir, ressalvar ou remover."})
             continue
         ids = sum((claim.get(k, []) for k in ("obs_ids", "med_ids", "fot_ids", "doc_ids", "nor_ids", "res_ids", "con_ids")), [])
