@@ -84,10 +84,17 @@ def gerar(diretorio: Path) -> dict[str, Any]:
         fotografias.append({"id":f"FOT-PLANO-{len(fotografias)+1:03d}","finalidade":f"Registrar evidência visual para {descricao}","enquadramento":"Contexto, aproximação e detalhe pertinente à QT.","questoes_tecnicas":[qid],"quesitos":relacionados,"alegacoes":qt.get("alegacoes_relacionadas",[])})
         if any(t in baixo for t in ("abertura","extens","dimens","medir","medição","quant")):
             medicoes.append({"id":f"MED-PLANO-{len(medicoes)+1:03d}","grandeza":"Grandeza indicada pela questão técnica","local":delimitacao["objeto_material"]["texto"],"motivo":descricao,"instrumento_sugerido":"Instrumento compatível com a grandeza","precisao_necessaria":None,"questoes_tecnicas":[qid],"quesitos":relacionados,"criterio":fundamentos[0] if fundamentos else None,"obrigatoriedade":"OBRIGATORIA","consequencia_ausencia":"Sem medição ou substituto equivalente, a conclusão quantitativa fica bloqueada."})
-    requisitos_cobertura=[]
+    ensaios=[]
     for qt in sorted(delimitacao["questoes_tecnicas"],key=lambda x:x["id"]):
-        requisitos_cobertura.extend({"questao_tecnica":qt["id"],"tipo":tipo_req,"obrigatoriedade":"OBRIGATORIA"} for tipo_req in ("ATIVIDADE","FOTOGRAFIA"))
-        if any(t in qt.get("descricao","").lower() for t in ("abertura","extens","dimens","medir","medição","quant")):requisitos_cobertura.append({"questao_tecnica":qt["id"],"tipo":"MEDICAO","obrigatoriedade":"OBRIGATORIA"})
+        if any(t in qt.get("descricao","").lower() for t in ("ensaio","teste de")):
+            ensaios.append({"id":f"ENS-PLANO-{len(ensaios)+1:03d}","nome":f"Ensaio requerido por {qt['id']}","classificacao":"INDISPENSAVEL","justificativa":qt["descricao"],"fundamento":None,"questoes_tecnicas":[qt["id"]],"conclusoes_limitadas_se_ausente":[qt["id"]]})
+    documentos_caso=[d for d in delimitacao["documentos_ausentes"] if not str(d).casefold().startswith("base privada")]
+    documentos_planejados=[{"id":f"DOC-PLANO-{i:03d}","descricao":str(d),"questoes_tecnicas":qts,"criterio_satisfacao":"Documento identificado e materialmente relacionado às QTs indicadas."} for i,d in enumerate(documentos_caso,1)]
+    requisitos_cobertura=[]
+    for tipo_req,chave in (("ATIVIDADE",atividades),("FOTOGRAFIA",fotografias),("MEDICAO",medicoes),("ENSAIO",ensaios),("DOCUMENTO",documentos_planejados)):
+        for item in chave:
+            for qt in item.get("questoes_tecnicas",[]):
+                requisitos_cobertura.append({"questao_tecnica":qt,"tipo":tipo_req,"obrigatoriedade":"OBRIGATORIA","item_planejado":item["id"]})
     cobertura = []
     for q in quesitos:
         atvs = [a["id"] for a in atividades if any(qt in a["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])]
@@ -95,18 +102,18 @@ def gerar(diretorio: Path) -> dict[str, Any]:
         cobertura.append({"quesito": q["id"], "questoes_tecnicas": q["questoes_tecnicas_relacionadas"], "alegacoes": sorted(alg_q),
                           "atividades": atvs, "medicoes": [m["id"] for m in medicoes if any(qt in m["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])], "fotografias": [f["id"] for f in fotografias if any(qt in f["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])],
                           "ensaios": [], "documentos": processo["documentos_tecnicos"], "planejada": False})
-    calculada=recalcular_cobertura({"cobertura":cobertura,"requisitos_cobertura":requisitos_cobertura,"atividades":atividades,"medicoes":medicoes,"fotografias":fotografias,"ensaios":[]})
+    calculada=recalcular_cobertura({"cobertura":cobertura,"requisitos_cobertura":requisitos_cobertura,"atividades":atividades,"medicoes":medicoes,"fotografias":fotografias,"ensaios":ensaios,"documentos_a_solicitar":documentos_planejados})
     for item in cobertura:item["planejada"]=calculada["cobertura"].get(item["quesito"],False)
     bloqueante = any(c["classificacao"] == "BLOQUEANTE" and c["status"] == "ABERTO" for c in delimitacao["conflitos"])
     lacuna_cobertura = any(not c["planejada"] for c in cobertura)
     status = "BLOQUEADO_PARA_VISTORIA" if bloqueante or lacuna_cobertura else "APTO_PARA_VISTORIA_COM_RESSALVAS" if delimitacao["ressalvas"] or delimitacao["documentos_ausentes"] else "APTO_PARA_VISTORIA"
-    return {"schema_version": "1.0.0", "identificacao": {"gerado_em": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"), "processo_sha256": _hash(processo_path), "delimitacao_sha256": _hash(delimitacao_path)},
+    return {"schema_version": "2.0.0", "identificacao": {"gerado_em": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"), "processo_sha256": _hash(processo_path), "delimitacao_sha256": _hash(delimitacao_path)},
             "processo_cnj": processo["numero_processo"], "tipo_pericia": tipo, "tema_controvertido": delimitacao["tema_controvertido"]["texto"], "objeto": delimitacao["objeto_material"]["texto"],
             "questoes_tecnicas": qts, "quesitos_relacionados": [q["id"] for q in quesitos], "alegacoes_relacionadas": algs,
             "documentos_relevantes": [d["documento_id"] for d in delimitacao["documentos_relevantes"]], "documentos_ausentes": delimitacao["documentos_ausentes"],
             "conhecimento_recuperado": conhecimento, "ressalvas": [r["id"] for r in delimitacao["ressalvas"]], "conflitos": [c["id"] for c in delimitacao["conflitos"]],
             "atividades": atividades, "equipamentos": [{"nome": n, "finalidade": f, "questoes_tecnicas": qts} for n, f in perfil["equip"]],
-            "medicoes": medicoes, "fotografias": fotografias, "ensaios": [], "documentos_a_solicitar": delimitacao["documentos_ausentes"],
+            "medicoes": medicoes, "fotografias": fotografias, "ensaios": ensaios, "documentos_a_solicitar": documentos_planejados,
             "seguranca_e_acesso": perfil["seguranca"], "pontos_criticos": ["Não converter alegação em constatação", "Não concluir origem antes da análise pós-vistoria"],
             "pendencias": delimitacao["fatores_limitantes"], "cobertura": cobertura,"requisitos_cobertura":requisitos_cobertura,
             "autonomia": {"decisoes_autonomas": len(atividades)+len(medicoes)+len(fotografias), "ressalvas_autonomas": len(delimitacao["ressalvas"]),
