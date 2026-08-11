@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0.0",
+  "schemas": [
+    {
+      "schema": "plano-vistoria.schema.json",
+      "current_version": "2.0.0",
+      "versions_supported": ["1.0.0", "2.0.0"],
+      "migrator": "scripts/planejamento_pericial/migracoes.py:migrar_plano",
+      "consumers": ["PLANNING", "COVERAGE"],
+      "future_version_policy": "FAIL_CLOSED",
+      "material_fields": ["requisitos_cobertura", "atividades", "medicoes", "fotografias", "ensaios", "documentos_a_solicitar"],
+      "protected_material_fields": ["requisitos_cobertura", "atividades", "medicoes", "fotografias", "ensaios", "documentos_a_solicitar"]
+    },
+    {
+      "schema": "processo.schema.json",
+      "current_version": "2.0.0",
+      "versions_supported": ["2.0.0"],
+      "migrator": null,
+      "consumers": ["PROCESS_MODEL", "MOTOR", "REDACTION"],
+      "future_version_policy": "FAIL_CLOSED",
+      "material_fields": ["documentos", "alegacoes", "quesitos", "decisoes", "proveniencia"],
+      "protected_material_fields": ["documentos", "alegacoes", "quesitos", "decisoes", "proveniencia"]
+    },
+    {
+      "schema": "vistoria.schema.json",
+      "current_version": "2.0.0",
+      "versions_supported": ["2.0.0"],
+      "migrator": null,
+      "consumers": ["INSPECTION", "COVERAGE", "MOTOR"],
+      "future_version_policy": "FAIL_CLOSED",
+      "material_fields": ["observacoes", "medicoes", "fotografias", "relacoes_evidencia", "cobertura"],
+      "protected_material_fields": ["observacoes", "medicoes", "fotografias", "relacoes_evidencia", "cobertura"]
+    },
+    {
+      "schema": "laudo-redacao.schema.json",
+      "current_version": "1.0.0",
+      "versions_supported": ["1.0.0"],
+      "migrator": null,
+      "consumers": ["REDACTION", "FIDELITY"],
+      "future_version_policy": "FAIL_CLOSED",
+      "material_fields": ["analises_tecnicas", "claims_redacao", "quesitos", "conclusao", "encerramento"],
+      "protected_material_fields": ["analises_tecnicas", "claims_redacao", "quesitos", "conclusao", "encerramento"]
+    }
+  ]
+}

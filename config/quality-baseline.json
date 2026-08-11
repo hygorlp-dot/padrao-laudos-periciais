@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0.0",
+  "core_base_sha": "15e77be13fa5aae96325d20fab322809e40e816f",
+  "historical_mutants_total": 10,
+  "coverage": {"line_percent": 84.545, "branch_percent": 72.788, "policy": "NON_REGRESSION_ON_CRITICAL_MODULES"},
+  "hotspots": [
+    {"path":"scripts/motor_vicios/motor.py","function":"executar","complexity":130},
+    {"path":"scripts/triagem_pericial/gerar_delimitacao.py","function":"gerar","complexity":96},
+    {"path":"scripts/planejamento_pericial/gerar_plano.py","function":"gerar","complexity":57},
+    {"path":"scripts/redacao_pericial/pipeline.py","function":"executar_pipeline_redacao","complexity":41},
+    {"path":"scripts/motor_vicios/pipeline.py","function":"executar_pipeline_motor","complexity":27}
+  ],
+  "full_gate_max_seconds": 30.0
+}

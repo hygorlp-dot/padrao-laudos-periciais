@@ -54,8 +54,10 @@ def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_fil
     ]
     if mode == "full":
         commands.extend([
+            ("historical critical mutation suite", [sys.executable, "-m", "pytest", "-q", "tests/test_historical_mutations.py::test_historical_critical_mutants_are_all_killed"], "NO_SILENT_LOSS", "QUALITY_GATE"),
+            ("quality V2", [sys.executable, "-m", "pytest", "-q", "tests/test_core_properties_v2.py", "tests/test_fault_injection.py", "tests/test_schema_versions.py", "tests/test_quality_metrics.py", "tests/test_quality_hardening_v2.py", "tests/test_historical_mutations.py", "-k", "not historical_critical_mutants"], "SCHEMA_VERSION_FIDELITY", "QUALITY_GATE"),
             ("schemas", [sys.executable, "scripts/validar_schemas.py"], "SOURCE_TRUTH", "REPOSITORY"),
-            ("regression", [sys.executable, "-m", "pytest", "tests", "-q"], "FAIL_CLOSED", "CORE"),
+            ("regression", [sys.executable, "-m", "pytest", "tests", "-q", "--ignore=tests/test_historical_mutations.py", "--ignore=tests/test_core_properties_v2.py", "--ignore=tests/test_fault_injection.py", "--ignore=tests/test_schema_versions.py", "--ignore=tests/test_quality_metrics.py", "--ignore=tests/test_quality_hardening_v2.py"], "FAIL_CLOSED", "CORE"),
             ("E2E positive", [sys.executable, "-m", "pytest", "-q", "tests/test_final_closure_r7.py", "-k", "e2e_positivo"], "SOURCE_TRUTH", "MOTOR"),
             ("E2E negative", [sys.executable, "-m", "pytest", "-q", "tests/test_aceitacao_final_motor_v1.py", "-k", "e2e_final_03"], "ESSENTIAL_INPUT_REMOVAL_DEGRADES_RESULT", "MOTOR"),
         ])

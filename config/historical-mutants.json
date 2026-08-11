@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0.0",
+  "mutants": [
+    {
+      "id": "MUT-001",
+      "source": "scripts/extracao_pje/segmentar_documentos.py",
+      "search": "fim = ordenados[pos + 1] - 1 if pos + 1 < len(ordenados) else total",
+      "replacement": "fim = inicio",
+      "test": "tests/test_final_delta_r3.py -k colisao_preserva_intervalo"
+    },
+    {
+      "id": "MUT-002",
+      "source": "scripts/extracao_pje/validar_integridade.py",
+      "search": "if pagina not in ocupadas:erros.append(f\"Página {pagina} sem owner na região documental\")",
+      "replacement": "if False and pagina not in ocupadas:erros.append(f\"Página {pagina} sem owner na região documental\")",
+      "test": "tests/test_final_delta_r3.py -k validator_detecta_perda"
+    },
+    {
+      "id": "MUT-003",
+      "source": "scripts/extracao_pje/validar_integridade.py",
+      "search": "if pagina in ocupadas:erros.append(f\"Página {pagina} com owners incompatíveis: {ocupadas[pagina]} e {ident}\")",
+      "replacement": "if False and pagina in ocupadas:erros.append(f\"Página {pagina} com owners incompatíveis: {ocupadas[pagina]} e {ident}\")",
+      "test": "tests/test_final_delta_r3.py -k validator_detecta_perda"
+    },
+    {
+      "id": "MUT-004",
+      "source": "scripts/planejamento_pericial/gerar_processo.py",
+      "search": "if erros_delimitacao or estado_delimitacao!=\"APTO_PARA_PLANEJAMENTO\":",
+      "replacement": "if False:",
+      "test": "tests/test_claude_terminal_continuation.py -k delimitacao_bloqueada"
+    },
+    {
+      "id": "MUT-005",
+      "source": "scripts/planejamento_pericial/validar_plano.py",
+      "search": "integridade_tipo=all(_medicao_equivalente(item_plano,e,qt) for e in equivalentes_validos) if tipo==\"MEDICAO\" else True",
+      "replacement": "integridade_tipo=True",
+      "test": "tests/test_claude_terminal_continuation.py -k equivalencia_medicao"
+    },
+    {
+      "id": "MUT-006",
+      "source": "scripts/planejamento_pericial/validar_plano.py",
+      "search": "unidade_esperada and unidade_obtida==unidade_esperada and",
+      "replacement": "unidade_esperada and True and",
+      "test": "tests/test_claude_terminal_continuation.py -k equivalencia_medicao"
+    },
+    {
+      "id": "MUT-007",
+      "source": "scripts/conhecimento_privado/pesquisa_online.py",
+      "search": "if capability not in {\"LOCAL_NO_EGRESS\",\"EXTERNAL_EGRESS\"}:raise PermissionError(\"capability de egress do provider desconhecida\")",
+      "replacement": "if False and capability not in {\"LOCAL_NO_EGRESS\",\"EXTERNAL_EGRESS\"}:raise PermissionError(\"capability de egress do provider desconhecida\")",
+      "test": "tests/test_final_delta_r3.py -k boundary_egress"
+    },
+    {
+      "id": "MUT-008",
+      "source": "scripts/redacao_pericial/autocorrigir_redacao.py",
+      "search": "if bloco.get(\"material\") is True or titulo in TITULOS_IMUTAVEIS or (claim and (claim.get(\"imutavel\") is True or claim.get(\"material\") is True or claim.get(\"tipo\") in CLAIMS_IMUTAVEIS)):",
+      "replacement": "if False:",
+      "test": "tests/test_historical_mutations.py -k classificacao_title"
+    },
+    {
+      "id": "MUT-009",
+      "source": "scripts/motor_vicios/pipeline.py",
+      "search": "claims_f,audits_f,detector_f,deep_f,catalogo_f=_auditar(final,processo,delimitacao,vistoria,conhecimento)",
+      "replacement": "claims_f,audits_f,detector_f,deep_f,catalogo_f=_auditar(final,processo,delimitacao,vistoria,conhecimento);final[\"catalogo_evidencias\"]=catalogo_f",
+      "test": "tests/test_claude_terminal_continuation.py -k catalogo_final_preserva"
+    },
+    {
+      "id": "MUT-010",
+      "source": "scripts/triagem_pericial/gerar_delimitacao.py",
+      "search": ", \"valor da causa\", \"causa de pedir\", \"inadimplemento\"",
+      "replacement": ", \"causa de pedir\", \"inadimplemento\"",
+      "test": "tests/test_historical_mutations.py -k valor_da_causa"
+    }
+  ]
+}
