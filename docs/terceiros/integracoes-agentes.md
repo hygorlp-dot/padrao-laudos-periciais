@@ -6,6 +6,7 @@
 | Claim Audit | [repositório upstream](https://github.com/mhalle/claim-audit) | `f09c72ef22119692667dce2b288fc51a24534db5` | MIT | `THIRD_PARTY_PINNED`; wrapper pericial separado; `INTEGRACAO_METODOLOGICA_ADAPTADA` | Skill, recursos e LICENSE |
 | Proposition Audit | Catálogo Awesome Legal Skills abaixo | `4b0a895640d44add67ab4db1a0250e5a48888ee1` | Apache-2.0 | `THIRD_PARTY_PINNED`; execução pericial por `WRAPPER_LOCAL` | Skill seletiva, LICENSE e NOTICE |
 | Awesome Legal Skills | [repositório upstream](https://github.com/lawve-ai/awesome-legal-skills) | `4b0a895640d44add67ab4db1a0250e5a48888ee1` | Raiz CC-BY-NC-ND-4.0; licença individual por Skill | Catálogo privado `REFERENCE_ONLY`; seleção por licença | Nenhum catálogo incorporado |
+| Design Motion Principles | [repositório upstream](https://github.com/kylezantos/design-motion-principles) | `4a9ca879f24a361f4dca4174fe2da0f67b5ddee3` | MIT | `THIRD_PARTY_SKILL_PINNED_BYTE_EXACT`; wrapper pericial separado | Subtree completo da Skill e `/LICENSE`; 16 blobs verificados |
 
 ## Política
 
@@ -15,6 +16,11 @@
 - `BLOCKED`: licença, segurança ou saída de dados incompatível.
 
 Nenhuma integração supera os contratos canônicos, fornece fatos do caso ou decide matéria jurídica. Atualizações exigem nova auditoria; `scripts/terceiros/verificar_atualizacoes.py` somente informa divergência e nunca atualiza.
+
+Design Motion Principles está em
+`.agents/skills/design-motion-principles/`; a adaptação first-party está em
+`.agents/skills/ui-pericial/`. O manifesto do guard registra o commit e os Git
+blob IDs esperados. Atualizações exigem Issue e nova comparação byte-exata.
 
 ## Atualização controlada
 
