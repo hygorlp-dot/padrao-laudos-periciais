@@ -82,7 +82,14 @@ def evaluate_merge_gate_for_paths(state: dict, changed_paths: list[str]) -> dict
 
 def evaluate_repository_merge_gate(root: Path, base_sha: str, head_sha: str, state: dict,
                                    *, reviews: list[dict]) -> dict:
-    """Recompute change risk and review bindings from repository artifacts."""
+    """Recompute risk, but never treat repository-local review files as authority.
+
+    Local JSON and hashes can prove consistency and exact-HEAD binding.  They
+    cannot prove that a different actor produced them, because the change
+    producer can write the same files.  Until an external trust root is
+    integrated, repository evidence remains auditable but cannot authorize a
+    merge or establish independent review.
+    """
     if not (SHA.fullmatch(base_sha) and SHA.fullmatch(head_sha) and base_sha != head_sha
             and state.get("expected_base_sha") == base_sha and (root / ".git").exists()):
         raise ValueError("exact repository SHAs are required")
@@ -126,16 +133,23 @@ def evaluate_repository_merge_gate(root: Path, base_sha: str, head_sha: str, sta
         if kind:
             identities.add(identity)
             verified[kind] = review
+    # Deliberately do not promote locally verified artifacts to independent
+    # approval.  A producer can forge distinct-looking executions, contexts,
+    # worktrees and hashes.  Human merge authority (or a future external,
+    # cryptographically verifiable issuer) is the trust boundary.
     bound = dict(state, head_sha=head_sha, expected_head_sha=head_sha,
-                 codex_review="APPROVED" if "codex" in verified else "MISSING",
-                 systemic_audit="APPROVED" if "systemic" in verified else "MISSING",
+                 codex_review="UNTRUSTED_LOCAL_EVIDENCE" if "codex" in verified else "MISSING",
+                 systemic_audit="UNTRUSTED_LOCAL_EVIDENCE" if "systemic" in verified else "MISSING",
                  codex_review_head=head_sha if "codex" in verified else None,
                  systemic_audit_head=head_sha if "systemic" in verified else None,
-                 independence_proven="codex" in verified and "systemic" in verified,
-                 codex_independence_evidence_verified="codex" in verified,
-                 systemic_independence_evidence_verified="systemic" in verified,
-                 claude_review="APPROVED" if "claude" in verified else "MISSING",
+                 independence_proven=False,
+                 codex_independence_evidence_verified=False,
+                 systemic_independence_evidence_verified=False,
+                 claude_review="UNTRUSTED_LOCAL_EVIDENCE" if "claude" in verified else "MISSING",
                  claude_review_head=head_sha if "claude" in verified else None,
-                 claude_independence_proven="claude" in verified,
-                 claude_independence_evidence_verified="claude" in verified)
-    return evaluate_merge_gate_for_paths(bound, changed)
+                 claude_independence_proven=False,
+                 claude_independence_evidence_verified=False)
+    result = evaluate_merge_gate_for_paths(bound, changed)
+    result["reasons"] = sorted(set(result["reasons"] + ["trusted_independence_authority_missing"]))
+    result["status"] = "BLOCKED"
+    return result
