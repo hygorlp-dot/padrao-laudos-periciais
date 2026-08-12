@@ -84,7 +84,10 @@ def sanitize_external_context(files: list[dict], *, expected_head: str | None = 
             # External packages receive only an exact-HEAD manifest.  Raw file
             # bytes stay in the isolated checkout and are never copied into an
             # egress payload, avoiding lexical PII-detection as a trust claim.
-            safe.append({"path": path, "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()})
+            safe.append({
+                "path_sha256": hashlib.sha256(path.encode("utf-8")).hexdigest(),
+                "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            })
     if reasons:
         return {"allowed": False, "files": [], "reasons": sorted(set(reasons)), "head_sha": actual_head}
     return {"allowed": True, "files": safe, "reasons": [], "head_sha": actual_head}
