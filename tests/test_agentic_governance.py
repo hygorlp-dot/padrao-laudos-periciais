@@ -184,7 +184,9 @@ def test_independence_rejects_nonempty_but_forged_evidence_records(tmp_path):
 def test_review_package_is_first_party_exact_head_and_excludes_private_paths(tmp_path):
     import subprocess
     actual_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    actual_base = subprocess.check_output(["git", "rev-parse", "HEAD^"], cwd=ROOT, text=True).strip()
+    actual_base = subprocess.check_output(
+        ["git", "merge-base", "origin/main", "HEAD"], cwd=ROOT, text=True,
+    ).strip()
     public = tmp_path / "README.md"
     public.write_text("public", encoding="utf-8")
     package = build_review_package(
@@ -344,7 +346,9 @@ def test_review_package_expands_rename_and_binds_all_auxiliary_artifacts(tmp_pat
 def test_review_package_marks_test_claims_untrusted_and_requires_head_paths():
     import subprocess
     actual_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    actual_base = subprocess.check_output(["git", "rev-parse", "HEAD^"], cwd=ROOT, text=True).strip()
+    actual_base = subprocess.check_output(
+        ["git", "merge-base", "origin/main", "HEAD"], cwd=ROOT, text=True,
+    ).strip()
     package = build_review_package(
         issue=31, base_sha=actual_base, head_sha=actual_head, changed_files=[],
         tests=["tests/test_agentic_governance.py"], test_results={"status": "PASS"},
