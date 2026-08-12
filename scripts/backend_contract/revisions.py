@@ -207,13 +207,15 @@ class ValueHistory:
     def restore(self, snapshot):
         if not isinstance(snapshot, ValueHistorySnapshot) or snapshot.history_id != self._history_id:
             raise ValueError("Snapshot de ValueHistory inválido")
+        if type(snapshot.signature) is not str:
+            raise ValueError("Snapshot de ValueHistory invÃ¡lido")
         try:
             expected = hmac.new(
                 self._snapshot_key,
                 _snapshot_payload(snapshot.history_id, snapshot.entries),
                 hashlib.sha256,
             ).hexdigest()
-        except (AttributeError, TypeError, ValueError) as exc:
+        except (AttributeError, RecursionError, TypeError, ValueError) as exc:
             raise ValueError("Snapshot de ValueHistory inválido") from exc
         if not hmac.compare_digest(snapshot.signature, expected):
             raise ValueError("Snapshot de ValueHistory inválido")
