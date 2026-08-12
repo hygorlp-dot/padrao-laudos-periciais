@@ -269,7 +269,7 @@ def test_external_context_rejects_untracked_and_narrative_case_content(tmp_path,
         {"path": "docs/untracked.md", "content": "public-looking"}
     ])
     assert result["allowed"] is False
-    assert "SOURCE_NOT_TRACKED" in result["reasons"]
+    assert "PATH_NOT_ALLOWLISTED" in result["reasons"]
 
 
 def test_external_context_is_bound_to_head_blob_and_governance_allowlist(tmp_path, monkeypatch):
