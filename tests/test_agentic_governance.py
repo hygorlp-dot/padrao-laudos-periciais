@@ -184,10 +184,11 @@ def test_independence_rejects_nonempty_but_forged_evidence_records(tmp_path):
 def test_review_package_is_first_party_exact_head_and_excludes_private_paths(tmp_path):
     import subprocess
     actual_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    actual_base = subprocess.check_output(["git", "rev-parse", "HEAD^"], cwd=ROOT, text=True).strip()
     public = tmp_path / "README.md"
     public.write_text("public", encoding="utf-8")
     package = build_review_package(
-        issue=31, base_sha=BASE, head_sha=actual_head,
+        issue=31, base_sha=actual_base, head_sha=actual_head,
         changed_files=["README.md"], affected_boundaries=["AGENTIC_GOVERNANCE"],
         invariants=["INDEPENDENT_REVIEW_PROOF"], adrs=["ADR-independent-review-proof.md"],
         schemas=["review-multiagente.schema.json"], tests=["tests/test_agentic_governance.py"],
@@ -196,19 +197,20 @@ def test_review_package_is_first_party_exact_head_and_excludes_private_paths(tmp
     )
     assert package["head_sha"] == actual_head and package["private_data_included"] is False
     assert package["privacy"] == "PASS" and package["sanitization_receipt"]["head_sha"] == actual_head
-    assert "changed_files" not in package and len(package["changed_file_hashes"][0]) == 64
+    assert "changed_files" not in package and package["change_manifest"]
+    assert set(package["change_manifest"][0]) == {"path_sha256", "content_sha256", "status"}
     with pytest.raises(TypeError):
         build_review_package(issue=31, base_sha=BASE, head_sha=HEAD, changed_files=[],
                              sanitization_receipt={"allowed": True, "head_sha": HEAD, "files": []})
     with pytest.raises(ValueError):
-        build_review_package(issue=31, base_sha=BASE, head_sha=actual_head,
+        build_review_package(issue=31, base_sha=actual_base, head_sha=actual_head,
                              changed_files=["docs/Maria-de-Souza-caso.md"],
                              affected_boundaries=["AUTORA_MARIA_DE_SOUZA"],
                              invariants=["CPF_123.456.789-09"],
                              test_results={"raw": "A autora Maria reside na Rua X, 123"},
                              deploy_impact="Parte Maria de Souza")
     with pytest.raises(ValueError):
-        build_review_package(issue=31, base_sha=BASE, head_sha=actual_head, changed_files=[],
+        build_review_package(issue=31, base_sha=actual_base, head_sha=actual_head, changed_files=[],
                              affected_boundaries=["AUTORA_MARIA_DE_SOUZA"],
                              invariants=["CPF_12345678909"])
     with pytest.raises(ValueError):
