@@ -1,7 +1,7 @@
 import unittest
 import re
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from scripts.backend_contract import (
     ArtifactStatus,
@@ -97,9 +97,19 @@ class RevisionAndAuthorityTest(unittest.TestCase):
     def test_revision_store_rejects_ai_or_unknown_authority_as_current(self):
         store = RevisionStore()
         for source in (RevisionSource.AI, "AI_PROPOSAL"):
-            with self.assertRaisesRegex(ValueError, "fonte de revisÃ£o"):
+            with self.assertRaisesRegex(ValueError, "fonte de revis"):
                 store.append("PAT-001", {"conclusao": "proposta"}, source)
         self.assertEqual(store.history("PAT-001"), ())
+
+    def test_revision_store_append_is_atomic_when_payload_is_invalid(self):
+        store = RevisionStore()
+        current = store.append("PAT-001", {"valor": 1}, RevisionSource.SOURCE)
+        cyclic = []
+        cyclic.append(cyclic)
+        with self.assertRaisesRegex(ValueError, "c.clico"):
+            store.append("PAT-001", cyclic, RevisionSource.ENGINE)
+        self.assertEqual(store.history("PAT-001"), (current,))
+        self.assertIs(store.history("PAT-001")[0].status, ArtifactStatus.CURRENT)
 
     def test_revision_store_restore_is_defensive_and_validated(self):
         store = RevisionStore()
@@ -111,6 +121,17 @@ class RevisionAndAuthorityTest(unittest.TestCase):
         self.assertEqual(store.history("PAT-001"), (source,))
         with self.assertRaisesRegex(ValueError, "Snapshot de RevisionStore"):
             store.restore({"PAT-001": ["forged"]})
+
+        forged_payload = {"valor": "AI"}
+        forged = replace(
+            source,
+            source=RevisionSource.AI,
+            payload=forged_payload,
+        )
+        with self.assertRaisesRegex(ValueError, "Snapshot de RevisionStore"):
+            store.restore({"PAT-001": [forged]})
+        forged_payload["valor"] = "alterado"
+        self.assertEqual(store.history("PAT-001"), (source,))
 
     def test_revision_history_is_append_only(self):
         store = RevisionStore()
