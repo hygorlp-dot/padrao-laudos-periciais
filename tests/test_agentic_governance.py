@@ -272,6 +272,32 @@ def test_external_context_rejects_untracked_and_narrative_case_content(tmp_path,
     assert "SOURCE_NOT_TRACKED" in result["reasons"]
 
 
+def test_external_context_is_bound_to_head_blob_and_governance_allowlist(tmp_path, monkeypatch):
+    import subprocess
+    import scripts.agentic.sanitize as sanitizer
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Synthetic Test"], cwd=tmp_path, check=True)
+    target = tmp_path / "scripts/agentic/public.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("PUBLIC = True\n", encoding="utf-8")
+    subprocess.run(["git", "add", "scripts/agentic/public.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=tmp_path, check=True)
+    monkeypatch.setattr(sanitizer, "ROOT", tmp_path)
+    target.write_text("Demandante Maria de Souza reside no apartamento objeto da acao.\n", encoding="utf-8")
+    assert sanitizer.sanitize_external_context([{
+        "path": "scripts/agentic/public.py", "content": target.read_text(encoding="utf-8")
+    }])["allowed"] is False
+    case = tmp_path / "docs/case.md"
+    case.parent.mkdir(exist_ok=True)
+    case.write_text("A autora Maria de Souza relatou infiltracao severa.", encoding="utf-8")
+    subprocess.run(["git", "add", "docs/case.md"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "case"], cwd=tmp_path, check=True)
+    assert sanitizer.sanitize_external_context([{
+        "path": "docs/case.md", "content": case.read_text(encoding="utf-8")
+    }])["allowed"] is False
+
+
 def test_review_schema_and_runtime_reject_invalid_or_stale_output():
     schema = json.loads((ROOT / "schemas/review-multiagente.schema.json").read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(schema)
