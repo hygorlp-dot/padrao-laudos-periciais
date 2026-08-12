@@ -63,5 +63,9 @@ class ClaudeManagedRunner:
     """Single-attempt Claude adapter. Rate limiting is surfaced; never retried here."""
     def __init__(self, runner: ManagedAgentRunner | None = None):
         self.runner = runner or ManagedAgentRunner()
-    def run_once(self, command: Sequence[str], **kwargs) -> ExecutionResult:
-        return self.runner.run("claude", command, **kwargs)
+    def run_once(self, command: Sequence[str], *, rate_limit_exit_codes: tuple[int, ...] = (29,), **kwargs) -> ExecutionResult:
+        result = self.runner.run("claude", command, **kwargs)
+        if result.exit_code in rate_limit_exit_codes:
+            self.runner._safe("record_diagnostic", "RATE_LIMITED")
+            self.runner.clear_error("claude")
+        return result

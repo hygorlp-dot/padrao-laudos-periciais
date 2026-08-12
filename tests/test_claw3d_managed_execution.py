@@ -147,7 +147,8 @@ def test_claude_adapter_makes_one_attempt_without_retry(tmp_path):
     result = ClaudeManagedRunner(ManagedAgentRunner(store=store, heartbeat_seconds=0.01)).run_once(command)
     assert result.exit_code == 29
     assert calls_file.read_text() == "one"
-    assert state(store, "claude") == "error"
+    assert state(store, "claude") == "idle"
+    assert "RATE_LIMITED" in store.diagnostic_file.read_text(encoding="utf-8")
 
 
 def test_operator_wrapper_and_safe_stop_identity_are_present():

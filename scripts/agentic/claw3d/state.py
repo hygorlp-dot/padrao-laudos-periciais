@@ -123,6 +123,11 @@ class PresenceStore:
         except OSError:
             pass
 
+    def record_diagnostic(self, code: str) -> None:
+        if code not in {"RATE_LIMITED"}:
+            raise ValueError("unknown diagnostic code")
+        self._diagnose(code)
+
     def set_state(self, agent_id: str, state: str) -> None:
         if agent_id not in AGENTS or state not in STATES:
             raise ValueError("unknown agent or operational state")
