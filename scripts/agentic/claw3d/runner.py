@@ -6,7 +6,6 @@ import subprocess
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -30,8 +29,6 @@ class _TelemetryCoordinator:
     def __init__(self):
         self._condition = threading.Condition()
         self._owners: dict[str, dict] = {}
-        self._inflight: set[int] = set()
-        self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="claw3d-store")
         self._sequence = 0
         self._thread = threading.Thread(target=self._run, name="claw3d-telemetry-reconciler", daemon=True)
         self._thread.start()
@@ -39,15 +36,18 @@ class _TelemetryCoordinator:
     def register(self, owner: str, store, interval: float) -> None:
         with self._condition:
             self._owners.setdefault(owner, {"store": store, "interval": max(.005, interval),
-                                             "active": {}, "terminal": {}, "diagnostics": set(), "closed": False})
+                                             "active": {}, "terminal": {}, "last_known": {},
+                                             "diagnostics": set(), "closed": False})
             self._condition.notify()
 
     def start(self, owner: str, store, interval: float, execution: dict) -> None:
         with self._condition:
             state = self._owners.setdefault(owner, {"store": store, "interval": max(.005, interval),
-                                                     "active": {}, "terminal": {}, "diagnostics": set(), "closed": False})
+                                                     "active": {}, "terminal": {}, "last_known": {},
+                                                     "diagnostics": set(), "closed": False})
             if state["closed"]: return
             state["active"][execution["execution_id"]] = execution
+            state["last_known"][execution["execution_id"]] = dict(execution)
             self._condition.notify()
 
     def diagnostic(self, owner: str, code: str) -> None:
@@ -64,7 +64,8 @@ class _TelemetryCoordinator:
                 return
             state["active"].pop(execution_id, None)
             self._sequence += 1
-            state["terminal"][execution_id] = {"execution_id": execution_id, "role": role,
+            state["terminal"][execution_id] = {**state["last_known"].pop(execution_id, {}),
+                                                "execution_id": execution_id, "role": role,
                                                 "state": "idle" if exit_code == 0 else "error",
                                                 "exit_code": exit_code, "sequence": self._sequence}
             while len(state["terminal"]) > 256:
@@ -84,7 +85,6 @@ class _TelemetryCoordinator:
         with self._condition:
             return {
                 "workers": int(self._thread.is_alive()),
-                "store_workers": 4,
                 "owners": len(self._owners),
                 "active_executions": sum(len(item["active"]) for item in self._owners.values()),
                 "pending_states": sum(len(item["terminal"]) + len(item["diagnostics"])
@@ -122,30 +122,13 @@ class _TelemetryCoordinator:
     def _run(self):
         while True:
             for group in self._snapshot().values():
-                store_id = id(group["store"])
-                with self._condition:
-                    if store_id in self._inflight:
-                        continue
-                    self._inflight.add(store_id)
                 try:
-                    future = self._pool.submit(group["store"].reconcile_presence,
-                                               list(group["active"].values()), group["terminal"],
-                                               authoritative_owners=group["owners"],
-                                               diagnostics=group["diagnostics"])
-                    future.add_done_callback(lambda completed, current=group, key=store_id:
-                                             self._complete(current, key, completed))
-                except RuntimeError:
-                    with self._condition: self._inflight.discard(store_id)
+                    group["store"].reconcile_presence(list(group["active"].values()), group["terminal"],
+                                                      authoritative_owners=group["owners"],
+                                                      diagnostics=group["diagnostics"])
+                except Exception:
                     continue
-
-    def _complete(self, group, store_id, future):
-        try:
-            if future.exception() is None:
                 self._acknowledge(group)
-        finally:
-            with self._condition:
-                self._inflight.discard(store_id)
-                self._condition.notify()
 
 
 _COORDINATOR = _TelemetryCoordinator()
@@ -172,8 +155,10 @@ class ManagedExecution:
         self._done.set()
 
     def wait(self, timeout=None):
+        deadline = None if timeout is None else time.monotonic() + timeout
         self.process.wait(timeout=timeout)
-        self._done.wait(timeout=timeout)
+        remaining = None if deadline is None else max(0, deadline - time.monotonic())
+        self._done.wait(timeout=remaining)
         return self.process.returncode
 
     @property
@@ -185,6 +170,8 @@ class ManagedExecution:
 class ManagedAgentRunner:
     def __init__(self, *, store: PresenceStore | None = None, heartbeat_seconds: float = 1.0):
         self.store = store or PresenceStore.from_environment()
+        if type(self.store) is not PresenceStore or "reconcile_presence" in self.store.__dict__:
+            raise TypeError("managed telemetry requires the bounded first-party PresenceStore")
         self.heartbeat_seconds = float(heartbeat_seconds)
         self._owner, self._closed = str(uuid.uuid4()), False
 

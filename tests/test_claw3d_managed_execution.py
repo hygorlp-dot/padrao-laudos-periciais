@@ -132,11 +132,10 @@ def test_same_role_remains_working_until_all_real_executions_finish(tmp_path):
     wait_state(store, "researcher", "idle")
 
 
-def test_presence_failure_never_changes_managed_process_exit():
-    class BrokenStore:
-        def reconcile_presence(self, *_args, **_kwargs): raise OSError("bridge down")
-
-    result = ManagedAgentRunner(store=BrokenStore(), heartbeat_seconds=0.01).run(
+def test_presence_failure_never_changes_managed_process_exit(tmp_path, monkeypatch):
+    store = PresenceStore(tmp_path)
+    monkeypatch.setattr(PresenceStore, "reconcile_presence", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("bridge down")))
+    result = ManagedAgentRunner(store=store, heartbeat_seconds=0.01).run(
         "auditor", [sys.executable, "-c", "raise SystemExit(3)"]
     )
     assert result.exit_code == 3
@@ -204,14 +203,14 @@ def _capture_start_error(runner, errors, cwd):
         errors.append(exc)
 
 
-def test_slow_presence_store_never_delays_real_process_spawn(tmp_path):
+def test_slow_presence_store_never_delays_real_process_spawn(tmp_path, monkeypatch):
     spawned_at = tmp_path / "spawned.txt"
 
-    class SlowStore:
-        def reconcile_presence(self, *_args, **_kwargs): time.sleep(.4)
+    store = PresenceStore(tmp_path / "state")
+    monkeypatch.setattr(PresenceStore, "reconcile_presence", lambda *_args, **_kwargs: time.sleep(.4))
 
     started = time.monotonic()
-    execution = ManagedAgentRunner(store=SlowStore(), heartbeat_seconds=.01).start(
+    execution = ManagedAgentRunner(store=store, heartbeat_seconds=.01).start(
         "reviewer", [sys.executable, "-c", f"from pathlib import Path; Path({str(spawned_at)!r}).write_text('ok')"]
     )
     deadline = time.monotonic() + .25
@@ -222,15 +221,15 @@ def test_slow_presence_store_never_delays_real_process_spawn(tmp_path):
     assert execution.wait() == 0
 
 
-def test_blocked_presence_store_never_delays_child_completion(tmp_path):
+def test_blocked_presence_store_never_delays_child_completion(tmp_path, monkeypatch):
     release = threading.Event()
 
-    class BlockingStore:
-        def reconcile_presence(self, *_args, **_kwargs): release.wait(5)
+    store = PresenceStore(tmp_path)
+    monkeypatch.setattr(PresenceStore, "reconcile_presence", lambda *_args, **_kwargs: release.wait(5))
 
     try:
         started = time.monotonic()
-        result = ManagedAgentRunner(store=BlockingStore(), heartbeat_seconds=.01).run(
+        result = ManagedAgentRunner(store=store, heartbeat_seconds=.01).run(
             "reviewer", [sys.executable, "-c", "raise SystemExit(6)"]
         )
         assert result.exit_code == 6
@@ -258,13 +257,13 @@ def test_completed_executions_do_not_leak_publisher_threads(tmp_path):
     assert ManagedAgentRunner.telemetry_resource_counts()["pending_states"] - pending_before <= len(AGENTS)
 
 
-def test_permanently_blocked_store_has_constant_thread_bound(tmp_path):
+def test_permanently_blocked_store_has_constant_thread_bound(tmp_path, monkeypatch):
     release = threading.Event()
-    class HungStore:
-        def reconcile_presence(self, *_args, **_kwargs): release.wait(5)
+    store = PresenceStore(tmp_path)
+    monkeypatch.setattr(PresenceStore, "reconcile_presence", lambda *_args, **_kwargs: release.wait(5))
     before = len([thread for thread in threading.enumerate() if thread.name == "claw3d-telemetry-reconciler"])
     pending_before = ManagedAgentRunner.telemetry_resource_counts()["pending_states"]
-    runner = ManagedAgentRunner(store=HungStore(), heartbeat_seconds=.01)
+    runner = ManagedAgentRunner(store=store, heartbeat_seconds=.01)
     try:
         for _ in range(12):
             assert runner.run("reviewer", [sys.executable, "-c", "pass"]).exit_code == 0
@@ -279,19 +278,16 @@ def test_permanently_blocked_store_has_constant_thread_bound(tmp_path):
         runner.close()
 
 
-def test_short_process_preserves_begin_before_finish(tmp_path):
-    class RecordingStore:
-        def __init__(self): self.calls = []
-        def reconcile_presence(self, active, terminal, **_kwargs): self.calls.append((tuple(active), dict(terminal)))
-
-    store = RecordingStore()
+def test_short_process_preserves_terminal_even_without_prior_active_write(tmp_path):
+    store = PresenceStore(tmp_path)
     result = ManagedAgentRunner(store=store, heartbeat_seconds=.01).run(
         "reviewer", [sys.executable, "-c", "pass"]
     )
     assert result.exit_code == 0
     deadline = time.monotonic() + 1
-    while time.monotonic() < deadline and not any(not active for active, _ in store.calls): time.sleep(.01)
-    assert store.calls and store.calls[-1][0] == ()
+    while (store.internal_state()["executions"].get(result.execution_id, {}).get("status") != "finished"
+           and time.monotonic() < deadline): time.sleep(.01)
+    assert store.internal_state()["executions"][result.execution_id]["status"] == "finished"
 
 
 def test_live_process_does_not_become_stale_and_receives_heartbeat(tmp_path):
@@ -310,21 +306,21 @@ def test_live_process_does_not_become_stale_and_receives_heartbeat(tmp_path):
     runner.close()
 
 
-def test_store_recovery_converges_to_current_real_state(tmp_path):
+def test_store_recovery_converges_to_current_real_state(tmp_path, monkeypatch):
     backing = PresenceStore(tmp_path)
     release = threading.Event()
-    class RecoveringStore:
-        calls = 0
-        def reconcile_presence(self, active, terminal, **kwargs):
-            if not release.is_set(): release.wait(2)
-            backing.reconcile_presence(active, terminal, **kwargs)
-            self.calls += 1
-    runner = ManagedAgentRunner(store=RecoveringStore(), heartbeat_seconds=.01)
+    backing.calls = 0
+    original = backing.reconcile_presence
+    def recovering(active, terminal, **kwargs):
+        if not release.is_set(): release.wait(2)
+        original(active, terminal, **kwargs); backing.calls += 1
+    monkeypatch.setattr(PresenceStore, "reconcile_presence", recovering)
+    runner = ManagedAgentRunner(store=backing, heartbeat_seconds=.01)
     result = runner.run("reviewer", [sys.executable, "-c", "pass"])
     assert result.exit_code == 0
     release.set()
     deadline = time.monotonic() + 2
-    while (RecoveringStore.calls < 2 or
+    while (backing.calls < 2 or
            any(item.get("status") == "running" for item in backing.internal_state()["executions"].values())):
         if time.monotonic() >= deadline: break
         time.sleep(.01)
@@ -333,24 +329,26 @@ def test_store_recovery_converges_to_current_real_state(tmp_path):
     runner.close()
 
 
-def test_hung_store_does_not_stale_healthy_store(tmp_path):
+def test_lock_stalled_store_does_not_stale_healthy_store(tmp_path):
     release = threading.Event()
-    class HungStore:
-        def reconcile_presence(self, *_args, **_kwargs): release.wait(5)
-    blocked = ManagedAgentRunner(store=HungStore(), heartbeat_seconds=.01)
-    healthy_store = PresenceStore(tmp_path, stale_after_seconds=.05)
+    blocked_store = PresenceStore(tmp_path / "blocked")
+    blocked = ManagedAgentRunner(store=blocked_store, heartbeat_seconds=.01)
+    healthy_store = PresenceStore(tmp_path / "healthy", stale_after_seconds=.5)
     healthy = ManagedAgentRunner(store=healthy_store, heartbeat_seconds=.01)
+    def hold_lock():
+        with blocked_store._locked(): release.wait(2)
+    holder = threading.Thread(target=hold_lock); holder.start(); time.sleep(.02)
     try:
-        blocked_run = blocked.start("researcher", [sys.executable, "-c", "import time; time.sleep(.3)"])
-        live = healthy.start("reviewer", [sys.executable, "-c", "import time; time.sleep(.3)"])
-        wait_state(healthy_store, "reviewer", "working")
-        time.sleep(.12)
+        blocked_run = blocked.start("researcher", [sys.executable, "-c", "import time; time.sleep(2)"])
+        live = healthy.start("reviewer", [sys.executable, "-c", "import time; time.sleep(2)"])
+        wait_state(healthy_store, "reviewer", "working", timeout=1.5)
+        time.sleep(.3)
         assert live.process.poll() is None
         assert healthy_store.recover_stale() == []
         assert state(healthy_store, "reviewer") == "working"
         assert live.wait() == blocked_run.wait() == 0
     finally:
-        release.set(); blocked.close(); healthy.close()
+        release.set(); holder.join(1); blocked.close(); healthy.close()
 
 
 def test_same_role_terminals_keep_exact_exit_attribution_after_recovery(tmp_path):

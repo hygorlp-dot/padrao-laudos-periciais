@@ -68,7 +68,9 @@ class PresenceStore:
         key = str(self.lock_file)
         with _THREAD_LOCKS_GUARD:
             thread_lock = _THREAD_LOCKS.setdefault(key, threading.RLock())
-        with thread_lock:
+        if not thread_lock.acquire(timeout=.25):
+            raise TimeoutError("presence thread lock acquisition timed out")
+        try:
             mode = "r+b" if self.lock_file.exists() else "w+b"
             with self.lock_file.open(mode) as stream:
                 stream.seek(0)
@@ -76,10 +78,18 @@ class PresenceStore:
                     stream.write(b"0")
                     stream.flush()
                 stream.seek(0)
-                if os.name == "nt":
-                    msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
-                else:  # pragma: no cover
-                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+                deadline = time.monotonic() + .25
+                while True:
+                    try:
+                        if os.name == "nt":
+                            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                        else:  # pragma: no cover
+                            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except OSError:
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("presence store lock acquisition timed out")
+                        time.sleep(.005)
                 try:
                     yield
                 finally:
@@ -88,6 +98,8 @@ class PresenceStore:
                         msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
                     else:  # pragma: no cover
                         fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            thread_lock.release()
 
     def _read_unlocked(self) -> dict:
         if not self.state_file.is_file():
@@ -231,6 +243,16 @@ class PresenceStore:
                     exit_code = terminal.get("exit_code") if terminal else None
                     execution.update(status="finished" if exit_code == 0 else "error",
                                      exit_code=exit_code, finished_at=_utc_now(), lastSeen=None)
+            for execution_id, terminal in terminal_executions.items():
+                if execution_id not in data["executions"]:
+                    data["executions"][execution_id] = {
+                        "role": terminal["role"], "process_id": terminal.get("process_id"),
+                        "started_at": terminal.get("started_at") or _utc_now(),
+                        "finished_at": _utc_now(), "exit_code": terminal["exit_code"],
+                        "worktree": terminal.get("worktree"), "head_sha": terminal.get("head_sha"),
+                        "owner_id": terminal.get("owner_id"), "lastSeen": None,
+                        "status": "finished" if terminal["exit_code"] == 0 else "error",
+                    }
             for execution_id, raw in active.items():
                 existing = data["executions"].get(execution_id)
                 data["executions"][execution_id] = {
