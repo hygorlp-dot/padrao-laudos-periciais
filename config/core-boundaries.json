@@ -562,6 +562,25 @@
                            "consumers":  [
 
                                          ]
+                       },
+                       {
+                           "id":  "BACKEND_AUTHORITY",
+                           "paths":  [
+                                         "scripts/backend_contract/revisions.py"
+                                     ],
+                           "invariants":  [
+                                              "PROPOSAL_NOT_EFFECTIVE_WITHOUT_DECISION"
+                                          ],
+                           "schemas":  [
+
+                                       ],
+                           "tests":  [
+                                         "tests/test_proposal_authority.py",
+                                         "tests/test_backend_contract.py"
+                                     ],
+                           "consumers":  [
+
+                                         ]
                        }
                    ]
 }

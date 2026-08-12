@@ -28,9 +28,11 @@ Valores mantêm camadas distintas:
 
 `SOURCE_VALUE → AI_PROPOSAL → ENGINE_DECISION → PROFESSIONAL_OVERRIDE`.
 
-`EFFECTIVE_VALUE` é derivado pela precedência e não é armazenado como nova
-fonte. Override profissional exige justificativa explícita e preserva todo o
-histórico.
+`EFFECTIVE_VALUE` é derivado somente pela precedência
+`PROFESSIONAL_OVERRIDE > ENGINE_DECISION > SOURCE_VALUE` e não é armazenado
+como nova fonte. `AI_PROPOSAL` permanece no histórico e pode ser consultada
+como proposta pendente, mas nunca participa sozinha de `effective()`. Override
+profissional exige justificativa explícita e preserva todo o histórico.
 
 ## Dependências e STALE
 
@@ -65,6 +67,12 @@ Issues e testes adversariais próprios.
 Uma mudança material reúne `update + invalidation + audit event` na mesma
 unidade. Falha restaura os participantes ao snapshot anterior. O V1 usa
 contratos em memória e não exige banco, fila ou serviço distribuído.
+
+`RevisionStoreSnapshot` é opaco, efêmero e vinculado à instância que o criou.
+Serve exclusivamente ao rollback intra-instância da `UnitOfWork`; não é formato
+de persistência, backup, transporte entre processos ou restauração em outro
+`RevisionStore`. Persistência real exigirá contrato próprio na etapa futura de
+Storage/Security.
 
 Eventos de auditoria registram identificador, tipo, correlação, instante,
 caso/artefato quando aplicáveis e resumo profissional. Não armazenam

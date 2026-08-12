@@ -1,31 +1,64 @@
 from copy import deepcopy
 
 
+class RollbackError(RuntimeError):
+    def __init__(self, original_error, restore_errors):
+        super().__init__("Falha ao restaurar integralmente a UnitOfWork")
+        self.original_error = original_error
+        self.restore_errors = tuple(restore_errors)
+
+
 class UnitOfWork:
     def __init__(self, *participants):
+        strategies = []
+        for participant in participants:
+            snapshot = getattr(participant, "snapshot", None)
+            restore = getattr(participant, "restore", None)
+            protocol_pair = callable(snapshot) and callable(restore)
+            if protocol_pair:
+                strategies.append("protocol")
+            elif type(participant) is list:
+                strategies.append("list")
+            elif type(participant) is dict:
+                strategies.append("dict")
+            else:
+                raise TypeError("UnitOfWork exige participante reversível")
         self._participants = participants
+        self._strategies = tuple(strategies)
 
     @staticmethod
-    def _snapshot(participant):
-        return participant.snapshot() if hasattr(participant, "snapshot") else deepcopy(participant)
+    def _snapshot(participant, strategy):
+        return participant.snapshot() if strategy == "protocol" else deepcopy(participant)
 
     @staticmethod
-    def _restore(participant, snapshot):
-        if hasattr(participant, "restore"):
+    def _restore(participant, snapshot, strategy):
+        if strategy == "protocol":
             participant.restore(snapshot)
-        elif isinstance(participant, list):
+        elif strategy == "list":
             participant[:] = snapshot
-        elif isinstance(participant, dict):
+        elif strategy == "dict":
             participant.clear()
             participant.update(snapshot)
+        else:
+            raise TypeError("UnitOfWork exige participante reversível")
 
     def execute(self, operation):
-        snapshots = [self._snapshot(item) for item in self._participants]
+        snapshots = [
+            self._snapshot(item, strategy)
+            for item, strategy in zip(self._participants, self._strategies)
+        ]
         try:
             return operation()
-        except Exception:
-            for participant, snapshot in zip(self._participants, snapshots):
-                self._restore(participant, snapshot)
+        except BaseException as original_error:
+            restore_errors = []
+            restoration = tuple(zip(self._participants, snapshots, self._strategies))
+            for participant, snapshot, strategy in reversed(restoration):
+                try:
+                    self._restore(participant, snapshot, strategy)
+                except BaseException as restore_error:
+                    restore_errors.append(restore_error)
+            if restore_errors:
+                raise RollbackError(original_error, restore_errors) from original_error
             raise
 
     def execute_material_change(self, update, graph, upstream_id, audit_log, audit_event):
