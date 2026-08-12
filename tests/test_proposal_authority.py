@@ -1,6 +1,7 @@
 from hypothesis import given, strategies as st
 import pytest
 from dataclasses import replace
+import struct
 
 from scripts.backend_contract import Authority, ValueHistory
 
@@ -137,6 +138,17 @@ def test_cyclic_container_and_malformed_snapshot_fail_closed():
     malformed = replace(snapshot, entries=(replace(snapshot.entries[0], authority="FORGED"),))
     with pytest.raises(ValueError, match="Snapshot de ValueHistory inválido"):
         history.restore(malformed)
+
+
+def test_snapshot_distinguishes_nan_payload_bits():
+    first = struct.unpack(">d", bytes.fromhex("7ff8000000000001"))[0]
+    second = struct.unpack(">d", bytes.fromhex("7ff8000000000002"))[0]
+    history = ValueHistory()
+    history.record_source(first)
+    snapshot = history.snapshot()
+    forged = replace(snapshot, entries=(replace(snapshot.entries[0], value=second),))
+    with pytest.raises(ValueError, match="Snapshot de ValueHistory inválido"):
+        history.restore(forged)
 
 
 def test_reason_must_be_immutable_nonempty_text():
