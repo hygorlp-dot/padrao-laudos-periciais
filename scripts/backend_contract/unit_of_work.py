@@ -17,9 +17,9 @@ class UnitOfWork:
             protocol_pair = callable(snapshot) and callable(restore)
             if protocol_pair:
                 strategies.append("protocol")
-            elif isinstance(participant, list):
+            elif type(participant) is list:
                 strategies.append("list")
-            elif isinstance(participant, dict):
+            elif type(participant) is dict:
                 strategies.append("dict")
             else:
                 raise TypeError("UnitOfWork exige participante reversível")
