@@ -97,7 +97,7 @@ def build_review_package(*, issue: int, base_sha: str, head_sha: str,
         subprocess.run(["git", "merge-base", "--is-ancestor", base_sha, head_sha], cwd=root,
                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         raw_paths = subprocess.check_output(
-            ["git", "diff", "--name-only", "-z", base_sha, head_sha], cwd=root,
+            ["git", "diff", "--no-renames", "--name-only", "-z", base_sha, head_sha], cwd=root,
         )
         derived_paths = [item.decode("utf-8", errors="strict") for item in raw_paths.split(b"\0") if item]
         actual_merge_base = subprocess.check_output(
@@ -136,11 +136,13 @@ def build_review_package(*, issue: int, base_sha: str, head_sha: str,
         "change_manifest": change_manifest,
         "affected_boundaries": _technical_ids(affected_boundaries, _registry_ids(root, head_sha, "core-boundaries.json", "boundaries")),
         "invariants": _technical_ids(invariants, _registry_ids(root, head_sha, "core-invariants.json", "invariants")),
-        "schema_path_hashes": _path_hashes(schemas), "test_path_hashes": _path_hashes(tests),
+        "adr_artifacts": _artifact_manifest(root, head_sha, adrs),
+        "schema_artifacts": _artifact_manifest(root, head_sha, schemas),
         "test_artifacts": _artifact_manifest(root, head_sha, tests),
         "test_results": {"declared_status": result_status, "trusted": False},
         "ci": {"declared_status": ci, "trusted": False}, "privacy": "PASS",
-        "dependency_path_hashes": _path_hashes(dependencies), "deploy_impact": deploy_impact,
+        "dependency_artifacts": _artifact_manifest(root, head_sha, dependencies),
+        "deploy_impact": deploy_impact,
         "private_data_included": False,
         "sanitization_receipt": receipt,
     }

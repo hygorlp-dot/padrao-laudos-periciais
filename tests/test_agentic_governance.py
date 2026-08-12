@@ -190,8 +190,9 @@ def test_review_package_is_first_party_exact_head_and_excludes_private_paths(tmp
     package = build_review_package(
         issue=31, base_sha=actual_base, head_sha=actual_head,
         changed_files=["README.md"], affected_boundaries=["AGENTIC_GOVERNANCE"],
-        invariants=["INDEPENDENT_REVIEW_PROOF"], adrs=["ADR-independent-review-proof.md"],
-        schemas=["review-multiagente.schema.json"], tests=["tests/test_agentic_governance.py"],
+        invariants=["INDEPENDENT_REVIEW_PROOF"],
+        adrs=["docs/arquitetura/decisoes/ADR-independent-review-proof.md"],
+        schemas=["schemas/review-multiagente.schema.json"], tests=["tests/test_agentic_governance.py"],
         test_results={"status": "PASS"}, ci="PASS", privacy="PASS",
         dependencies=[], deploy_impact="NONE",
     )
@@ -307,6 +308,37 @@ def test_review_package_uses_nul_diff_for_unicode_path(tmp_path, monkeypatch):
         "status": "PRESENT",
     }]
     assert package["ci"] == {"declared_status": "PASS", "trusted": False}
+
+
+def test_review_package_expands_rename_and_binds_all_auxiliary_artifacts(tmp_path, monkeypatch):
+    import subprocess
+    import scripts.agentic.package as package_module
+    import scripts.agentic.sanitize as sanitizer
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Synthetic Test"], cwd=tmp_path, check=True)
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config/core-boundaries.json").write_text('{"boundaries":[]}', encoding="utf-8")
+    (tmp_path / "config/core-invariants.json").write_text('{"invariants":[]}', encoding="utf-8")
+    (tmp_path / "old.py").write_text("value = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=tmp_path, check=True)
+    base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    subprocess.run(["git", "mv", "old.py", "new.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "rename"], cwd=tmp_path, check=True)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    monkeypatch.setattr(package_module, "ROOT", tmp_path)
+    monkeypatch.setattr(sanitizer, "ROOT", tmp_path)
+    package = package_module.build_review_package(
+        issue=31, base_sha=base, head_sha=head, changed_files=[], repository_root=tmp_path,
+    )
+    assert [item["status"] for item in package["change_manifest"]] == ["PRESENT", "DELETED"]
+    with pytest.raises(ValueError, match="cannot read exact revision path"):
+        package_module.build_review_package(
+            issue=31, base_sha=base, head_sha=head, changed_files=[], repository_root=tmp_path,
+            adrs=["docs/missing.md"], schemas=["schemas/missing.json"],
+            dependencies=["missing.lock"],
+        )
 
 
 def test_review_package_marks_test_claims_untrusted_and_requires_head_paths():
