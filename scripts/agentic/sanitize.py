@@ -19,8 +19,13 @@ PATTERNS = (
     re.compile(r"(?i)\b(?:endere[cç]o|rua|avenida|travessa)\b[^\n]{0,80}\d+"),
     re.compile(r"(?i)\b(?:peti[cç][aã]o inicial|dados das partes|autos do processo)\b"),
 )
-ALLOWED_PREFIXES = ("scripts/", "tests/", "schemas/", "docs/", ".agents/", "config/", ".github/")
-ALLOWED_FILES = {"AGENTS.md", "README.md", "requirements.txt", "requirements-dev.txt"}
+ALLOWED_PREFIXES = (
+    "scripts/agentic/", "tests/test_agentic_", "schemas/review-",
+    "docs/padroes/protocolo-", "docs/arquitetura/decisoes/ADR-",
+    ".agents/skills/reviewer-independente/", ".agents/skills/systemic-auditor/",
+    ".agents/skills/external-diversity-review/", "config/core-",
+)
+ALLOWED_FILES = {"AGENTS.md"}
 
 
 def sanitize_external_context(files: list[dict]) -> dict:
@@ -61,8 +66,16 @@ def sanitize_external_context(files: list[dict]) -> dict:
             if tracked.returncode != 0:
                 reasons.append("SOURCE_NOT_TRACKED")
                 continue
+            try:
+                committed = subprocess.check_output(
+                    ["git", "show", f"HEAD:{path}"], cwd=root, text=True,
+                    encoding="utf-8", errors="strict",
+                )
+            except (subprocess.CalledProcessError, UnicodeError):
+                reasons.append("HEAD_BLOB_NOT_AVAILABLE")
+                continue
             actual = source.read_text(encoding="utf-8")
-            if actual != content:
+            if actual != content or committed != content:
                 reasons.append("CONTENT_NOT_BOUND_TO_SOURCE")
                 continue
             safe.append({"path": path, "content": content, "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()})
