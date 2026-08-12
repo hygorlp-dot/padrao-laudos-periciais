@@ -2,9 +2,12 @@
 import re
 import json
 import subprocess
+import hashlib
 from pathlib import Path
+from jsonschema import Draft202012Validator
 from .risk import classify_change_risk
 from .review import validate_review_output
+from .independence import verify_independence_evidence
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
@@ -80,7 +83,8 @@ def evaluate_merge_gate_for_paths(state: dict, changed_paths: list[str]) -> dict
 def evaluate_repository_merge_gate(root: Path, base_sha: str, head_sha: str, state: dict,
                                    *, reviews: list[dict]) -> dict:
     """Recompute change risk and review bindings from repository artifacts."""
-    if not (SHA.fullmatch(base_sha) and SHA.fullmatch(head_sha) and (root / ".git").exists()):
+    if not (SHA.fullmatch(base_sha) and SHA.fullmatch(head_sha) and base_sha != head_sha
+            and state.get("expected_base_sha") == base_sha and (root / ".git").exists()):
         raise ValueError("exact repository SHAs are required")
     try:
         subprocess.run(["git", "merge-base", "--is-ancestor", base_sha, head_sha], cwd=root, check=True,
@@ -90,10 +94,17 @@ def evaluate_repository_merge_gate(root: Path, base_sha: str, head_sha: str, sta
         raise ValueError("cannot derive canonical changeset") from exc
     review_types = {"PR_REVIEW": "codex", "SYSTEMIC_AUDIT": "systemic", "EXTERNAL_DIVERSITY": "claude"}
     verified = {}
+    schema_path = root / "schemas/review-multiagente.schema.json"
+    if not schema_path.is_file():
+        schema_path = Path(__file__).resolve().parents[2] / "schemas/review-multiagente.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
     for review in reviews:
-        if validate_review_output(review, expected_head=head_sha):
+        if list(Draft202012Validator(schema).iter_errors(review)) or validate_review_output(review, expected_head=head_sha):
             continue
         if review.get("conclusion") != "APPROVED":
+            continue
+        evidence = review.get("independence", {}).get("evidence", {})
+        if verify_independence_evidence(evidence, head_sha, root):
             continue
         kind = review_types.get(review.get("review_type"))
         if kind:
