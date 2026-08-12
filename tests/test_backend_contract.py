@@ -1,7 +1,8 @@
 import unittest
 import re
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from types import MappingProxyType
 
 from scripts.backend_contract import (
     ArtifactStatus,
@@ -25,6 +26,7 @@ from scripts.backend_contract import (
     MigrationRegistry,
     RevisionSource,
     RevisionStore,
+    RollbackError,
     UnitOfWork,
     ValueHistory,
     default_invariants,
@@ -92,8 +94,214 @@ class CaseIdentityAndStateTest(unittest.TestCase):
         self.assertEqual(machine.state, CaseState.CRIADO)
         self.assertEqual(machine.history, ())
 
+    def test_unit_of_work_attempts_every_restore_when_one_participant_fails(self):
+        class Participant:
+            def __init__(self, name, fail_restore=False):
+                self.name = name
+                self.value = "before"
+                self.fail_restore = fail_restore
+
+            def snapshot(self):
+                return self.value
+
+            def restore(self, snapshot):
+                if self.fail_restore:
+                    raise RuntimeError(f"restore-{self.name}")
+                self.value = snapshot
+
+        for failing_index in range(3):
+            participants = [
+                Participant(str(index), fail_restore=index == failing_index)
+                for index in range(3)
+            ]
+            uow = UnitOfWork(*participants)
+
+            def fail_operation():
+                for participant in participants:
+                    participant.value = "dirty"
+                raise ValueError("operation")
+
+            with self.assertRaises(RollbackError) as captured:
+                uow.execute(fail_operation)
+            self.assertIsInstance(captured.exception.original_error, ValueError)
+            self.assertEqual(len(captured.exception.restore_errors), 1)
+            for index, participant in enumerate(participants):
+                expected = "dirty" if index == failing_index else "before"
+                self.assertEqual(participant.value, expected)
+
+    def test_unit_of_work_rejects_participants_without_reversible_contract(self):
+        class SnapshotOnly:
+            def snapshot(self):
+                return "state"
+
+        for participant in ({"before"}, SnapshotOnly(), object()):
+            with self.assertRaisesRegex(TypeError, "participante reversível"):
+                UnitOfWork(participant)
+
+    def test_unit_of_work_rolls_back_before_reraising_base_exception(self):
+        values = ["before"]
+        uow = UnitOfWork(values)
+
+        def cancelled():
+            values[:] = ["dirty"]
+            raise SystemExit(7)
+
+        with self.assertRaises(SystemExit):
+            uow.execute(cancelled)
+        self.assertEqual(values, ["before"])
+
+    def test_unit_of_work_rejects_builtin_subclasses_with_protocol_shadows(self):
+        class OddList(list):
+            snapshot = None
+
+        class OddDict(dict):
+            restore = None
+
+        with self.assertRaises(TypeError):
+            UnitOfWork(OddList(["before"]))
+        with self.assertRaises(TypeError):
+            UnitOfWork(OddDict(value="before"))
+
+    def test_unit_of_work_uses_one_strategy_for_partial_protocol_container_subclasses(self):
+        class RestoreOnlyList(list):
+            snapshot = None
+
+            def restore(self, snapshot):
+                pass
+
+        class SnapshotOnlyDict(dict):
+            restore = None
+
+            def snapshot(self):
+                return {"fake": "snapshot"}
+
+        for participant in (RestoreOnlyList(["before"]), SnapshotOnlyDict(value="before")):
+            with self.assertRaisesRegex(TypeError, "participante reversível"):
+                UnitOfWork(participant)
+
+    def test_unit_of_work_rejects_builtin_subclasses_with_untracked_extra_state(self):
+        class AuthorityList(list):
+            pass
+
+        class AuthorityDict(dict):
+            pass
+
+        values = AuthorityList(["before"])
+        values.authority = "SOURCE"
+        mapping = AuthorityDict(value="before")
+        mapping.authority = "SOURCE"
+        for participant in (values, mapping):
+            with self.assertRaisesRegex(TypeError, "participante reversível"):
+                UnitOfWork(participant)
+
 
 class RevisionAndAuthorityTest(unittest.TestCase):
+    def test_revision_store_rejects_ai_or_unknown_authority_as_current(self):
+        store = RevisionStore()
+        for source in (RevisionSource.AI, "AI_PROPOSAL"):
+            with self.assertRaisesRegex(ValueError, "fonte de revis"):
+                store.append("PAT-001", {"conclusao": "proposta"}, source)
+        self.assertEqual(store.history("PAT-001"), ())
+
+    def test_revision_store_append_is_atomic_when_payload_is_invalid(self):
+        store = RevisionStore()
+        current = store.append("PAT-001", {"valor": 1}, RevisionSource.SOURCE)
+        cyclic = []
+        cyclic.append(cyclic)
+        with self.assertRaisesRegex(ValueError, "c.clico"):
+            store.append("PAT-001", cyclic, RevisionSource.ENGINE)
+        self.assertEqual(store.history("PAT-001"), (current,))
+        self.assertIs(store.history("PAT-001")[0].status, ArtifactStatus.CURRENT)
+
+        empty_store = RevisionStore()
+        with self.assertRaisesRegex(ValueError, "c.clico"):
+            empty_store.append("PAT-NEW", cyclic, RevisionSource.SOURCE)
+        self.assertEqual(empty_store.snapshot().histories, ())
+
+    def test_revision_store_restore_is_defensive_and_validated(self):
+        store = RevisionStore()
+        source = store.append("PAT-001", {"valor": 1}, RevisionSource.SOURCE)
+        snapshot = store.snapshot()
+        store.append("PAT-001", {"valor": 2}, RevisionSource.ENGINE)
+        store.restore(snapshot)
+        self.assertEqual(store.history("PAT-001"), (source,))
+        with self.assertRaisesRegex(ValueError, "Snapshot de RevisionStore"):
+            store.restore({"PAT-001": ["forged"]})
+        self.assertEqual(store.history("PAT-001"), (source,))
+
+    def test_revision_store_snapshot_is_instance_bound_and_immutable(self):
+        first, second = RevisionStore(), RevisionStore()
+        first.append("PAT-001", {"valor": 1}, RevisionSource.SOURCE)
+        snapshot = first.snapshot()
+        self.assertIsInstance(snapshot.histories, tuple)
+        with self.assertRaisesRegex(ValueError, "Snapshot de RevisionStore"):
+            second.restore(snapshot)
+
+    def test_revision_store_restores_nested_payload_and_uow_rolls_back_all_participants(self):
+        store = RevisionStore()
+        original = store.append(
+            "PAT-001",
+            {"causa": {"fatores": ["água"], "detalhes": {"origem": "interna"}}},
+            RevisionSource.SOURCE,
+        )
+        graph = DependencyGraph()
+        graph.add_artifact("PAT-001")
+        audit = AuditLog()
+        uow = UnitOfWork(store, graph, audit)
+
+        def failing_change():
+            store.append("PAT-001", {"causa": "alterada"}, RevisionSource.ENGINE)
+            graph.mark_stale("PAT-001")
+            audit.append(AuditEvent.create("UPDATED", "COR-NESTED", "Falha sintética"))
+            raise RuntimeError("rollback")
+
+        with self.assertRaisesRegex(RuntimeError, "rollback"):
+            uow.execute(failing_change)
+        self.assertEqual(store.history("PAT-001"), (original,))
+        self.assertIs(graph.status("PAT-001"), ArtifactStatus.CURRENT)
+        self.assertEqual(audit.events, ())
+
+    def test_revision_store_rejects_every_signed_field_tampering_atomically(self):
+        store = RevisionStore()
+        original = store.append("PAT-001", {"valor": 1}, RevisionSource.SOURCE)
+        snapshot = store.snapshot()
+        artifact_id, history = snapshot.histories[0]
+        revision = history[0]
+        attacks = (
+            replace(revision, revision_id="forged"),
+            replace(revision, artifact_id="PAT-999"),
+            replace(revision, revision=2),
+            replace(revision, created_at="forged"),
+            replace(revision, supersedes=revision.revision_id),
+            replace(revision, status=ArtifactStatus.SUPERSEDED),
+            replace(revision, source=RevisionSource.ENGINE),
+            replace(revision, source=RevisionSource.PROFESSIONAL),
+            replace(revision, payload=MappingProxyType({"valor": "forged"})),
+        )
+        for forged in attacks:
+            attack = replace(snapshot, histories=((artifact_id, (forged,)),))
+            with self.assertRaisesRegex(ValueError, "Snapshot de RevisionStore"):
+                store.restore(attack)
+            self.assertEqual(store.history("PAT-001"), (original,))
+
+    def test_revision_store_rejects_duplicate_cross_artifact_and_self_reference(self):
+        store = RevisionStore()
+        first = store.append("PAT-001", {"valor": 1}, RevisionSource.SOURCE)
+        second = store.append("PAT-001", {"valor": 2}, RevisionSource.ENGINE)
+        store.append("PAT-002", {"valor": 3}, RevisionSource.SOURCE)
+        snapshot = store.snapshot()
+        duplicate = replace(second, revision_id=first.revision_id, supersedes=first.revision_id)
+        self_reference = replace(second, supersedes=second.revision_id)
+        cross_artifact = replace(snapshot.histories[1][1][0], revision_id=first.revision_id)
+        attacks = (
+            replace(snapshot, histories=(("PAT-001", (first, duplicate)), snapshot.histories[1])),
+            replace(snapshot, histories=(("PAT-001", (first, self_reference)), snapshot.histories[1])),
+            replace(snapshot, histories=(snapshot.histories[0], ("PAT-002", (cross_artifact,)))),
+        )
+        for attack in attacks:
+            with self.assertRaisesRegex(ValueError, "Snapshot de RevisionStore"):
+                store.restore(attack)
+
     def test_revision_history_is_append_only(self):
         store = RevisionStore()
         first = store.append("PAT-001", {"situacao": "INCONCLUSIVA"}, RevisionSource.ENGINE)
