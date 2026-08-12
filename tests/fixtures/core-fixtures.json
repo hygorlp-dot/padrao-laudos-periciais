@@ -288,6 +288,22 @@
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "DelimitaÃ§Ã£o mÃ­nima vÃ¡lida",
                          "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/agentic/review-multiagente-valido.json",
+                         "dominio":  "AGENTIC_GOVERNANCE",
+                         "schema":  "review-multiagente.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Revisão independente válida",
+                         "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/agentic/review-multiagente-independencia-invalida.json",
+                         "dominio":  "AGENTIC_GOVERNANCE",
+                         "schema":  "review-multiagente.schema.json",
+                         "consumer":  "scripts/validar_schemas.py::principal",
+                         "finalidade":  "Aprovação sem independência",
+                         "expected":  "INVALID"
                      }
                  ]
 }

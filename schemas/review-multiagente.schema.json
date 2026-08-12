@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/review-multiagente.schema.json",
+  "title": "Revisão independente multiagente",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "review_id", "execution_id", "review_type", "base_sha", "head_sha", "independence", "architecture_status", "architectural_challenges", "findings", "code_ranking", "engineering_priorities", "p0_open", "p1_material_open", "residual_risks", "conclusion"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "review_id": {"type": "string", "minLength": 1},
+    "execution_id": {"type": "string", "minLength": 1},
+    "review_type": {"enum": ["PR_REVIEW", "SYSTEMIC_AUDIT", "EXTERNAL_DIVERSITY"]},
+    "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "independence": {"$ref": "#/$defs/independence"},
+    "architecture_status": {"enum": ["CONFORME", "RESSALVAS", "BLOQUEADO"]},
+    "architectural_challenges": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "code_ranking": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ranking"}},
+    "engineering_priorities": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "p0_open": {"type": "integer", "minimum": 0},
+    "p1_material_open": {"type": "integer", "minimum": 0},
+    "residual_risks": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "conclusion": {"enum": ["APPROVED", "BLOCKED"]}
+  },
+  "allOf": [{
+    "if": {"properties": {"conclusion": {"const": "APPROVED"}}, "required": ["conclusion"]},
+    "then": {"properties": {"p0_open": {"const": 0}, "p1_material_open": {"const": 0}, "independence": {"properties": {"separate_execution": {"const": true}, "separate_context": {"const": true}, "isolated_checkout": {"const": true}, "implementation_write_access": {"const": false}, "private_context_received": {"const": false}, "independence_proven": {"const": true}}}}}
+  }],
+  "$defs": {
+    "independence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["separate_execution", "separate_context", "isolated_checkout", "implementation_write_access", "private_context_received", "independence_proven"],
+      "properties": {
+        "separate_execution": {"type": "boolean"}, "separate_context": {"type": "boolean"},
+        "isolated_checkout": {"type": "boolean"}, "implementation_write_access": {"type": "boolean"},
+        "private_context_received": {"type": "boolean"}, "independence_proven": {"type": "boolean"}
+      }
+    },
+    "finding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["code", "severity", "evidence"],
+      "properties": {"code": {"type": "string", "minLength": 1}, "severity": {"enum": ["P0", "P1", "P2"]}, "evidence": {"type": "string", "minLength": 1}}
+    },
+    "ranking": {
+      "type": "object", "additionalProperties": false,
+      "required": ["boundary", "intrinsic_risk", "robustness", "engineering_priority", "evidence"],
+      "properties": {
+        "boundary": {"type": "string", "minLength": 1}, "intrinsic_risk": {"enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"]},
+        "robustness": {"enum": ["A", "B", "C", "D", "E"]}, "engineering_priority": {"type": "integer", "minimum": 1},
+        "evidence": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}
