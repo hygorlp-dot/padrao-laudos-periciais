@@ -10,6 +10,7 @@ try {
     $acquired = $mutex.WaitOne([TimeSpan]::FromSeconds($TimeoutSeconds))
     if (-not $acquired) { throw 'Timed out waiting for the Claw3D startup lock.' }
     $runtime = if ($env:CLAW3D_AGENT_STATE_DIR) { $env:CLAW3D_AGENT_STATE_DIR } else { Join-Path $env:LOCALAPPDATA 'padrao-laudos-periciais\claw3d' }
+    if (-not [IO.Path]::IsPathRooted($runtime)) { throw 'CLAW3D_AGENT_STATE_DIR must be absolute.' }
     New-Item -ItemType Directory -Force -Path $runtime | Out-Null
     $pidFile = Join-Path $runtime 'bridge.pid'
 

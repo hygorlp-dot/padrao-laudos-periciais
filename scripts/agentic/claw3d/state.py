@@ -46,6 +46,8 @@ class PresenceStore:
         configured = os.getenv("CLAW3D_AGENT_STATE_DIR")
         if configured:
             state_dir = Path(configured)
+            if not state_dir.is_absolute():
+                raise ValueError("CLAW3D_AGENT_STATE_DIR must be absolute")
         else:
             local = os.getenv("LOCALAPPDATA") or tempfile.gettempdir()
             state_dir = Path(local) / "padrao-laudos-periciais" / "claw3d"
@@ -63,7 +65,8 @@ class PresenceStore:
         with _THREAD_LOCKS_GUARD:
             thread_lock = _THREAD_LOCKS.setdefault(key, threading.RLock())
         with thread_lock:
-            with self.lock_file.open("a+b") as stream:
+            mode = "r+b" if self.lock_file.exists() else "w+b"
+            with self.lock_file.open(mode) as stream:
                 stream.seek(0)
                 if stream.tell() == 0:
                     stream.write(b"0")

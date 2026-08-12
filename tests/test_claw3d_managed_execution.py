@@ -342,3 +342,24 @@ def test_foreign_process_on_bridge_port_is_never_killed_and_start_leaves_no_pid(
         assert not (tmp_path / "state/bridge.pid").exists()
     finally:
         foreign.terminate(); foreign.wait(timeout=5)
+
+
+def test_parallel_start_stop_collision_is_serialized(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    scripts = root / "scripts/agentic/claw3d"
+    port = _free_port()
+    env = dict(os.environ, CLAW3D_LIVE_PRESENCE_ENABLED="1", CLAW3D_AGENT_STATE_DIR=str(tmp_path))
+    start_cmd = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(scripts / "Start-Claw3DAgentBridge.ps1"), "-Port", str(port)]
+    stop_cmd = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(scripts / "Stop-Claw3DAgentBridge.ps1"), "-Port", str(port)]
+    starter = subprocess.Popen(start_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(.05)
+    stopper = subprocess.Popen(stop_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    start_output = starter.communicate(timeout=20)
+    stop_output = stopper.communicate(timeout=20)
+    try:
+        assert starter.returncode == stopper.returncode == 0, (start_output, stop_output)
+        assert not (tmp_path / "bridge.pid").exists()
+        with pytest.raises(OSError):
+            urlopen(f"http://127.0.0.1:{port}/health", timeout=.2)
+    finally:
+        _powershell(scripts / "Stop-Claw3DAgentBridge.ps1", "-Port", port, env=env)

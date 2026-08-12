@@ -29,6 +29,8 @@ Estados permitidos são `idle`, `working`, `meeting` e `error`. Finding técnico
 O bridge usa `127.0.0.1:8787`, estado atômico local e diretório compartilhado
 por `CLAW3D_AGENT_STATE_DIR`. Falha do bridge é diagnosticada localmente e
 nunca propagada ao Core ou ao exit code do processo observado.
+Quando configurado, `CLAW3D_AGENT_STATE_DIR` deve ser absoluto para que
+worktrees e clientes locais não criem estados divergentes por resolução de CWD.
 
 ## Operação local
 

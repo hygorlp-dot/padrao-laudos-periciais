@@ -1,6 +1,12 @@
 param([int]$Port = 8787)
 $ErrorActionPreference = 'Stop'
 $runtime = if ($env:CLAW3D_AGENT_STATE_DIR) { $env:CLAW3D_AGENT_STATE_DIR } else { Join-Path $env:LOCALAPPDATA 'padrao-laudos-periciais\claw3d' }
+if (-not [IO.Path]::IsPathRooted($runtime)) { Write-Error 'CLAW3D_AGENT_STATE_DIR must be absolute.'; exit 1 }
+$mutex = [Threading.Mutex]::new($false, "Local\padrao-laudos-claw3d-$Port")
+$acquired = $false
+try {
+    $acquired = $mutex.WaitOne([TimeSpan]::FromSeconds(8))
+    if (-not $acquired) { throw 'Timed out waiting for the Claw3D lifecycle lock.' }
 $pidFile = Join-Path $runtime 'bridge.pid'
 if (-not (Test-Path -LiteralPath $pidFile)) {
     try {
@@ -30,3 +36,7 @@ if ($processInfo -and $healthMatches -and $identity.module -eq 'scripts.agentic.
 }
 Remove-Item -LiteralPath $pidFile -ErrorAction SilentlyContinue
 Write-Output 'Claw3D bridge stopped.'
+} finally {
+    if ($acquired) { $mutex.ReleaseMutex() }
+    $mutex.Dispose()
+}

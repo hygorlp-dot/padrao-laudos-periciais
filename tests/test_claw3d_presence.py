@@ -129,6 +129,12 @@ def test_worktrees_share_explicit_runtime_directory(tmp_path, monkeypatch):
     assert first.state_dir == second.state_dir == (tmp_path / "shared").resolve()
 
 
+def test_relative_shared_runtime_directory_fails_closed(monkeypatch):
+    monkeypatch.setenv("CLAW3D_AGENT_STATE_DIR", "relative/runtime")
+    with pytest.raises(ValueError, match="absolute"):
+        PresenceStore.from_environment()
+
+
 def test_claude_rate_limit_records_error_without_retry_loop_then_can_idle(tmp_path):
     sink = Claw3DPresenceSink(PresenceStore(tmp_path))
     calls = []
@@ -201,3 +207,20 @@ def test_parallel_presence_requests_remain_valid(tmp_path):
         assert errors == []
     finally:
         bridge.stop()
+
+
+def test_lock_file_size_remains_bounded_across_acquisitions(tmp_path):
+    store = PresenceStore(tmp_path)
+    for _ in range(100):
+        store.snapshot()
+    assert store.lock_file.stat().st_size == 1
+
+
+def test_operator_state_reader_rejects_non_loopback_url():
+    script = Path(__file__).resolve().parents[1] / "scripts/agentic/claw3d/Get-Claw3DAgentState.ps1"
+    result = __import__('subprocess').run(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-BridgeUrl", "https://example.test"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+    assert "loopback" in (result.stdout + result.stderr).casefold()
