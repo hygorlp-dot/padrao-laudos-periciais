@@ -92,6 +92,8 @@ class RevisionStore:
         self._items = {}
 
     def append(self, artifact_id, payload, source):
+        if type(source) is not RevisionSource or source is RevisionSource.AI:
+            raise ValueError("fonte de revisÃ£o nÃ£o pode promover proposta de IA")
         history = self._items.setdefault(artifact_id, [])
         supersedes = history[-1].revision_id if history else None
         if history:
@@ -115,7 +117,16 @@ class RevisionStore:
         }
 
     def restore(self, snapshot):
-        self._items = snapshot
+        if type(snapshot) is not dict:
+            raise ValueError("Snapshot de RevisionStore invÃ¡lido")
+        restored = {}
+        for artifact_id, history in snapshot.items():
+            if type(artifact_id) is not str or type(history) is not list:
+                raise ValueError("Snapshot de RevisionStore invÃ¡lido")
+            if any(type(item) is not Revision for item in history):
+                raise ValueError("Snapshot de RevisionStore invÃ¡lido")
+            restored[artifact_id] = list(history)
+        self._items = restored
 
 
 class Authority(StrEnum):
@@ -207,7 +218,7 @@ class ValueHistory:
     def restore(self, snapshot):
         if not isinstance(snapshot, ValueHistorySnapshot) or snapshot.history_id != self._history_id:
             raise ValueError("Snapshot de ValueHistory inválido")
-        if type(snapshot.signature) is not str:
+        if type(snapshot.entries) is not tuple or type(snapshot.signature) is not str:
             raise ValueError("Snapshot de ValueHistory inválido")
         try:
             expected = hmac.new(
@@ -217,6 +228,10 @@ class ValueHistory:
             ).hexdigest()
         except (AttributeError, RecursionError, TypeError, ValueError) as exc:
             raise ValueError("Snapshot de ValueHistory inválido") from exc
-        if not hmac.compare_digest(snapshot.signature, expected):
+        try:
+            valid_signature = hmac.compare_digest(snapshot.signature, expected)
+        except TypeError as exc:
+            raise ValueError("Snapshot de ValueHistory inválido") from exc
+        if not valid_signature:
             raise ValueError("Snapshot de ValueHistory inválido")
         self._entries = list(snapshot.entries)

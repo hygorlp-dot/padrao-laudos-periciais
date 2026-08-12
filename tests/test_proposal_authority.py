@@ -151,6 +151,8 @@ def test_restore_normalizes_malformed_signature_and_recursive_forgery():
     recursive["self"] = recursive_proxy
     attacks = (
         replace(snapshot, signature=None),
+        replace(snapshot, signature="\ud800"),
+        replace(snapshot, entries=list(snapshot.entries)),
         replace(
             snapshot,
             entries=(replace(snapshot.entries[0], value=recursive_proxy),),
