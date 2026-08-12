@@ -2,20 +2,70 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import StrEnum
+import hashlib
+import hmac
+import json
+import struct
+from decimal import Decimal
 from types import MappingProxyType
 from uuid import uuid4
 
 from .models import ArtifactStatus
 
 
-def _deep_freeze(value):
-    if isinstance(value, dict):
-        return MappingProxyType({key: _deep_freeze(item) for key, item in value.items()})
-    if isinstance(value, (list, tuple)):
-        return tuple(_deep_freeze(item) for item in value)
-    if isinstance(value, (set, frozenset)):
-        return frozenset(_deep_freeze(item) for item in value)
-    return deepcopy(value)
+def _deep_freeze(value, seen=None):
+    seen = set() if seen is None else seen
+    is_container = type(value) in {dict, MappingProxyType, list, tuple, set, frozenset}
+    if is_container and id(value) in seen:
+        raise ValueError("Container cíclico não suportado")
+    if is_container:
+        seen.add(id(value))
+    if type(value) in {dict, MappingProxyType}:
+        if not all(type(key) is str for key in value):
+            raise TypeError("Tipo de valor não suportado: chave não textual")
+        frozen = MappingProxyType({key: _deep_freeze(item, seen) for key, item in value.items()})
+    elif type(value) in {list, tuple}:
+        frozen = tuple(_deep_freeze(item, seen) for item in value)
+    elif type(value) in {set, frozenset}:
+        frozen = frozenset(_deep_freeze(item, seen) for item in value)
+    elif value is None or type(value) in {bool, int, float, str, bytes, Decimal}:
+        return deepcopy(value)
+    else:
+        raise TypeError(f"Tipo de valor não suportado: {type(value).__name__}")
+    seen.remove(id(value))
+    return frozen
+
+
+def _canonical(value):
+    if isinstance(value, MappingProxyType):
+        return ["map", [[key, _canonical(item)] for key, item in sorted(value.items())]]
+    if isinstance(value, tuple):
+        return ["tuple", [_canonical(item) for item in value]]
+    if isinstance(value, frozenset):
+        items = [_canonical(item) for item in value]
+        return ["set", sorted(items, key=lambda item: json.dumps(item, ensure_ascii=True, sort_keys=True))]
+    if type(value) is ValueEntry:
+        return ["entry", value.authority.value, _canonical(value.value), value.created_at, value.reason]
+    if type(value) is bytes:
+        return ["bytes", value.hex()]
+    if type(value) is Decimal:
+        return ["decimal", str(value)]
+    if value is None or type(value) in {bool, str}:
+        return [type(value).__name__, value]
+    if type(value) is int:
+        return ["int", hex(value)]
+    if type(value) is float:
+        return ["float64", struct.pack(">d", value).hex()]
+    raise TypeError(f"Tipo de valor não suportado: {type(value).__name__}")
+
+
+def _snapshot_payload(history_id, entries):
+    return json.dumps(
+        [history_id, [_canonical(entry) for entry in entries]],
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
 
 
 class RevisionSource(StrEnum):
@@ -37,21 +87,65 @@ class Revision:
     payload: MappingProxyType
 
 
+@dataclass(frozen=True, slots=True)
+class RevisionStoreSnapshot:
+    store_id: str
+    histories: tuple[tuple[str, tuple[Revision, ...]], ...]
+    signature: str
+
+
+def _canonical_revision(item):
+    if type(item) is not Revision:
+        raise TypeError("Revisão inválida")
+    return [
+        "revision",
+        item.revision_id,
+        item.artifact_id,
+        item.revision,
+        item.created_at,
+        item.supersedes,
+        item.status.value,
+        item.source.value,
+        _canonical(item.payload),
+    ]
+
+
+def _revision_store_snapshot_payload(store_id, histories):
+    return json.dumps(
+        [
+            store_id,
+            [
+                [artifact_id, [_canonical_revision(item) for item in history]]
+                for artifact_id, history in histories
+            ],
+        ],
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode()
+
+
 class RevisionStore:
     def __init__(self):
         self._items = {}
+        self._store_id = str(uuid4())
+        self._snapshot_key = uuid4().bytes
 
     def append(self, artifact_id, payload, source):
-        history = self._items.setdefault(artifact_id, [])
+        if type(source) is not RevisionSource or source is RevisionSource.AI:
+            raise ValueError("fonte de revisão não pode promover proposta de IA")
+        history = self._items.get(artifact_id, [])
         supersedes = history[-1].revision_id if history else None
-        if history:
-            history[-1] = replace(history[-1], status=ArtifactStatus.SUPERSEDED)
+        frozen_payload = _deep_freeze(payload)
         item = Revision(
             revision_id=str(uuid4()), artifact_id=artifact_id,
             revision=len(history) + 1, created_at=datetime.now(timezone.utc).isoformat(),
             supersedes=supersedes, status=ArtifactStatus.CURRENT, source=source,
-            payload=_deep_freeze(payload),
+            payload=frozen_payload,
         )
+        if history:
+            history[-1] = replace(history[-1], status=ArtifactStatus.SUPERSEDED)
+        else:
+            self._items[artifact_id] = history
         history.append(item)
         return item
 
@@ -59,13 +153,74 @@ class RevisionStore:
         return tuple(self._items.get(artifact_id, ()))
 
     def snapshot(self):
-        return {
-            artifact_id: list(history)
-            for artifact_id, history in self._items.items()
-        }
+        histories = tuple(
+            (artifact_id, tuple(history))
+            for artifact_id, history in sorted(self._items.items())
+        )
+        signature = hmac.new(
+            self._snapshot_key,
+            _revision_store_snapshot_payload(self._store_id, histories),
+            hashlib.sha256,
+        ).hexdigest()
+        return RevisionStoreSnapshot(self._store_id, histories, signature)
 
     def restore(self, snapshot):
-        self._items = snapshot
+        if (
+            type(snapshot) is not RevisionStoreSnapshot
+            or snapshot.store_id != self._store_id
+            or type(snapshot.histories) is not tuple
+            or type(snapshot.signature) is not str
+        ):
+            raise ValueError("Snapshot de RevisionStore inválido")
+        try:
+            expected = hmac.new(
+                self._snapshot_key,
+                _revision_store_snapshot_payload(snapshot.store_id, snapshot.histories),
+                hashlib.sha256,
+            ).hexdigest()
+            valid_signature = hmac.compare_digest(snapshot.signature, expected)
+        except (AttributeError, RecursionError, TypeError, ValueError) as exc:
+            raise ValueError("Snapshot de RevisionStore inválido") from exc
+        if not valid_signature:
+            raise ValueError("Snapshot de RevisionStore inválido")
+        restored = {}
+        revision_ids = set()
+        for entry in snapshot.histories:
+            if type(entry) is not tuple or len(entry) != 2:
+                raise ValueError("Snapshot de RevisionStore inválido")
+            artifact_id, history = entry
+            if type(artifact_id) is not str or not artifact_id or type(history) is not tuple:
+                raise ValueError("Snapshot de RevisionStore inválido")
+            if artifact_id in restored:
+                raise ValueError("Snapshot de RevisionStore inválido")
+            validated = []
+            for index, item in enumerate(history, start=1):
+                previous = validated[-1] if validated else None
+                expected_status = ArtifactStatus.CURRENT if index == len(history) else ArtifactStatus.SUPERSEDED
+                if (
+                    type(item) is not Revision
+                    or type(item.source) is not RevisionSource
+                    or item.source is RevisionSource.AI
+                    or type(item.status) is not ArtifactStatus
+                    or item.status is not expected_status
+                    or item.artifact_id != artifact_id
+                    or item.revision != index
+                    or item.supersedes != (previous.revision_id if previous else None)
+                    or type(item.revision_id) is not str
+                    or not item.revision_id
+                    or item.revision_id in revision_ids
+                    or item.supersedes == item.revision_id
+                    or type(item.created_at) is not str
+                ):
+                    raise ValueError("Snapshot de RevisionStore inválido")
+                try:
+                    payload = _deep_freeze(dict(item.payload))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("Snapshot de RevisionStore inválido") from exc
+                validated.append(replace(item, payload=payload))
+                revision_ids.add(item.revision_id)
+            restored[artifact_id] = validated
+        self._items = restored
 
 
 class Authority(StrEnum):
@@ -84,38 +239,93 @@ class ValueEntry:
     reason: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ValueHistorySnapshot:
+    history_id: str
+    entries: tuple[ValueEntry, ...]
+    signature: str
+
+
 class ValueHistory:
     def __init__(self):
         self._entries = []
+        self._history_id = str(uuid4())
+        self._snapshot_key = uuid4().bytes
 
     @property
     def entries(self):
         return tuple(self._entries)
 
-    def add(self, authority, value, reason=None):
+    def _append(self, authority, value, reason=None):
         if authority is Authority.EFFECTIVE_VALUE:
             raise ValueError("EFFECTIVE_VALUE é derivado, não armazenado")
-        if authority is Authority.PROFESSIONAL_OVERRIDE and not reason:
+        if reason is not None and type(reason) is not str:
+            raise TypeError("justificativa deve ser texto imutável")
+        if authority is Authority.PROFESSIONAL_OVERRIDE and (not reason or not reason.strip()):
             raise ValueError("Professional Override exige justificativa")
         entry = ValueEntry(authority, _deep_freeze(value), datetime.now(timezone.utc).isoformat(), reason)
         self._entries.append(entry)
         return entry
 
+    def record_source(self, value):
+        return self._append(Authority.SOURCE_VALUE, value)
+
+    def propose_ai(self, value):
+        return self._append(Authority.AI_PROPOSAL, value)
+
+    def decide_engine(self, value, reason=None):
+        return self._append(Authority.ENGINE_DECISION, value, reason)
+
+    def override_professional(self, value, reason):
+        return self._append(Authority.PROFESSIONAL_OVERRIDE, value, reason)
+
     def effective(self):
         precedence = (
             Authority.PROFESSIONAL_OVERRIDE,
             Authority.ENGINE_DECISION,
-            Authority.AI_PROPOSAL,
             Authority.SOURCE_VALUE,
         )
         for authority in precedence:
             for entry in reversed(self._entries):
                 if entry.authority is authority:
                     return entry
-        raise ValueError("Nenhum valor disponível")
+        raise ValueError("Nenhum valor efetivo disponível")
+
+    def pending_proposals(self):
+        last_decision = max(
+            (
+                index for index, entry in enumerate(self._entries)
+                if entry.authority in {Authority.ENGINE_DECISION, Authority.PROFESSIONAL_OVERRIDE}
+            ),
+            default=-1,
+        )
+        return tuple(
+            entry for entry in self._entries[last_decision + 1:]
+            if entry.authority is Authority.AI_PROPOSAL
+        )
 
     def snapshot(self):
-        return list(self._entries)
+        entries = tuple(self._entries)
+        signature = hmac.new(self._snapshot_key, _snapshot_payload(self._history_id, entries), hashlib.sha256).hexdigest()
+        return ValueHistorySnapshot(self._history_id, entries, signature)
 
     def restore(self, snapshot):
-        self._entries = snapshot
+        if not isinstance(snapshot, ValueHistorySnapshot) or snapshot.history_id != self._history_id:
+            raise ValueError("Snapshot de ValueHistory inválido")
+        if type(snapshot.entries) is not tuple or type(snapshot.signature) is not str:
+            raise ValueError("Snapshot de ValueHistory inválido")
+        try:
+            expected = hmac.new(
+                self._snapshot_key,
+                _snapshot_payload(snapshot.history_id, snapshot.entries),
+                hashlib.sha256,
+            ).hexdigest()
+        except (AttributeError, RecursionError, TypeError, ValueError) as exc:
+            raise ValueError("Snapshot de ValueHistory inválido") from exc
+        try:
+            valid_signature = hmac.compare_digest(snapshot.signature, expected)
+        except TypeError as exc:
+            raise ValueError("Snapshot de ValueHistory inválido") from exc
+        if not valid_signature:
+            raise ValueError("Snapshot de ValueHistory inválido")
+        self._entries = list(snapshot.entries)
