@@ -182,19 +182,23 @@ def test_independence_rejects_nonempty_but_forged_evidence_records(tmp_path):
 
 
 def test_review_package_is_first_party_exact_head_and_excludes_private_paths(tmp_path):
+    import subprocess
+    actual_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     public = tmp_path / "README.md"
     public.write_text("public", encoding="utf-8")
     package = build_review_package(
-        issue=31, base_sha=BASE, head_sha=HEAD,
+        issue=31, base_sha=BASE, head_sha=actual_head,
         changed_files=["README.md"], affected_boundaries=["AGENTIC_GOVERNANCE"],
         invariants=["INDEPENDENT_REVIEW_PROOF"], adrs=["ADR-independent-review-proof.md"],
         schemas=["review-multiagente.schema.json"], tests=["tests/test_agentic_governance.py"],
         test_results={"status": "PASS"}, ci="PASS", privacy="PASS",
         dependencies=[], deploy_impact="NONE",
-        sanitization_receipt={"allowed": True, "head_sha": HEAD, "reasons": [], "files": []},
     )
-    assert package["head_sha"] == HEAD and package["private_data_included"] is False
-    assert package["privacy"] == "PASS" and package["sanitization_receipt"]["head_sha"] == HEAD
+    assert package["head_sha"] == actual_head and package["private_data_included"] is False
+    assert package["privacy"] == "PASS" and package["sanitization_receipt"]["head_sha"] == actual_head
+    with pytest.raises(TypeError):
+        build_review_package(issue=31, base_sha=BASE, head_sha=HEAD, changed_files=[],
+                             sanitization_receipt={"allowed": True, "head_sha": HEAD, "files": []})
     with pytest.raises(ValueError):
         build_review_package(issue=31, base_sha=BASE, head_sha=HEAD,
                              changed_files=["referencias/privadas/caso.pdf"])
