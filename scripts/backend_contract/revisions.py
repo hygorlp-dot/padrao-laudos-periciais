@@ -2,6 +2,8 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import StrEnum
+import hashlib
+import hmac
 from types import MappingProxyType
 from uuid import uuid4
 
@@ -84,9 +86,18 @@ class ValueEntry:
     reason: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ValueHistorySnapshot:
+    history_id: str
+    entries: tuple[ValueEntry, ...]
+    signature: str
+
+
 class ValueHistory:
     def __init__(self):
         self._entries = []
+        self._history_id = str(uuid4())
+        self._snapshot_key = uuid4().bytes
 
     @property
     def entries(self):
@@ -139,9 +150,18 @@ class ValueHistory:
         )
 
     def snapshot(self):
-        return list(self._entries)
+        entries = tuple(self._entries)
+        signature = hmac.new(self._snapshot_key, repr((self._history_id, entries)).encode(), hashlib.sha256).hexdigest()
+        return ValueHistorySnapshot(self._history_id, entries, signature)
 
     def restore(self, snapshot):
-        if not isinstance(snapshot, (list, tuple)) or not all(isinstance(entry, ValueEntry) for entry in snapshot):
+        if not isinstance(snapshot, ValueHistorySnapshot) or snapshot.history_id != self._history_id:
             raise ValueError("Snapshot de ValueHistory inválido")
-        self._entries = list(snapshot)
+        expected = hmac.new(
+            self._snapshot_key,
+            repr((snapshot.history_id, snapshot.entries)).encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(snapshot.signature, expected):
+            raise ValueError("Snapshot de ValueHistory inválido")
+        self._entries = list(snapshot.entries)
