@@ -197,6 +197,7 @@
                                               "PLANNING",
                                               "PROCESS_GENERATION",
                                               "REDACTION",
+                                              "AGENTIC_GOVERNANCE",
                                               "THIRD_PARTY_TRUST",
                                               "TRIAGE"
                                           ],
@@ -519,6 +520,7 @@
                            "severidade":  "P0",
                            "boundaries":  [
                                               "EGRESS",
+                                              "AGENTIC_GOVERNANCE",
                                               "THIRD_PARTY_TRUST"
                                           ],
                            "testes":  [
@@ -633,6 +635,33 @@
                                           "tests/test_proposal_authority.py"
                                       ],
                            "global":  true,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "INDEPENDENT_REVIEW_PROOF",
+                           "descricao":  "Revisão independente exige execução, contexto e checkout separados, HEAD exato e evidência persistida.",
+                           "severidade":  "P1",
+                           "boundaries":  ["AGENTIC_GOVERNANCE"],
+                           "testes":  ["tests/test_agentic_governance.py"],
+                           "global":  false,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "EXTERNAL_DIVERSITY_REVIEW_GATE",
+                           "descricao":  "Mudança material enumerada exige revisão externa no HEAD final estável.",
+                           "severidade":  "P1",
+                           "boundaries":  ["AGENTIC_GOVERNANCE"],
+                           "testes":  ["tests/test_agentic_governance.py"],
+                           "global":  false,
+                           "bloqueante":  true
+                       },
+                       {
+                           "id":  "REVIEW_STALE_FAIL_CLOSED",
+                           "descricao":  "Review ausente, inválida ou ligada a outro HEAD bloqueia o merge.",
+                           "severidade":  "P0",
+                           "boundaries":  ["AGENTIC_GOVERNANCE"],
+                           "testes":  ["tests/test_agentic_governance.py"],
+                           "global":  false,
                            "bloqueante":  true
                        }
                    ]

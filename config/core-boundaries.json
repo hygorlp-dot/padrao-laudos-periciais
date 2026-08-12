@@ -581,6 +581,29 @@
                            "consumers":  [
 
                                          ]
+                       },
+                       {
+                           "id":  "AGENTIC_GOVERNANCE",
+                           "paths":  [
+                                         "scripts/agentic/",
+                                         "schemas/review-multiagente.schema.json",
+                                         "docs/padroes/protocolo-",
+                                         ".agents/skills/autonomia-desenvolvimento/",
+                                         ".agents/skills/research-ranking/",
+                                         ".agents/skills/reviewer-independente/",
+                                         ".agents/skills/systemic-auditor/",
+                                         ".agents/skills/external-diversity-review/"
+                                     ],
+                           "invariants":  [
+                                              "FAIL_CLOSED",
+                                              "PII_DENY_BY_DEFAULT",
+                                              "INDEPENDENT_REVIEW_PROOF",
+                                              "EXTERNAL_DIVERSITY_REVIEW_GATE",
+                                              "REVIEW_STALE_FAIL_CLOSED"
+                                          ],
+                           "schemas":  ["review-multiagente.schema.json"],
+                           "tests":  ["tests/test_agentic_governance.py"],
+                           "consumers":  []
                        }
                    ]
 }

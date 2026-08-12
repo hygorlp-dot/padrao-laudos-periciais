@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0.0",
   "core_base_sha": "71dea5d95d9843d08fe1547b6b52812ddd060511",
-  "invariants_count": 39,
-  "invariants_fingerprint": "95ebd5dbfe03ad9669b4394629e78ed74590ba387c1edfd32c5cd633f5ae3b09",
-  "boundaries_count": 22,
-  "boundaries_fingerprint": "1fdae84d33442f9e0d7fd3f7e794b056a2c08ec856f815d29bd29eb42de54ead"
+  "invariants_count": 42,
+  "invariants_fingerprint": "c267c64bb2aecad51988b1d4f4f4d8d08f8f0a50ceb2ffe8639e0d298190763c",
+  "boundaries_count": 23,
+  "boundaries_fingerprint": "ad9a3fd2e5beed8b34771ceb189f2e0518f38dc0e032e25ddd39f4050e5325d7"
 }
