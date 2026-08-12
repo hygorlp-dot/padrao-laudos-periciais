@@ -171,6 +171,33 @@ class CaseIdentityAndStateTest(unittest.TestCase):
         self.assertEqual(values, ["before"])
         self.assertEqual(mapping, {"value": "before"})
 
+    def test_unit_of_work_uses_one_strategy_for_partial_protocol_container_subclasses(self):
+        class RestoreOnlyList(list):
+            snapshot = None
+
+            def restore(self, snapshot):
+                pass
+
+        class SnapshotOnlyDict(dict):
+            restore = None
+
+            def snapshot(self):
+                return {"fake": "snapshot"}
+
+        values = RestoreOnlyList(["before"])
+        mapping = SnapshotOnlyDict(value="before")
+        uow = UnitOfWork(values, mapping)
+
+        def failing_change():
+            values[:] = ["dirty"]
+            mapping["value"] = "dirty"
+            raise RuntimeError("rollback")
+
+        with self.assertRaisesRegex(RuntimeError, "rollback"):
+            uow.execute(failing_change)
+        self.assertEqual(values, ["before"])
+        self.assertEqual(mapping, {"value": "before"})
+
 
 class RevisionAndAuthorityTest(unittest.TestCase):
     def test_revision_store_rejects_ai_or_unknown_authority_as_current(self):

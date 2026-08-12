@@ -10,41 +10,51 @@ class RollbackError(RuntimeError):
 
 class UnitOfWork:
     def __init__(self, *participants):
+        strategies = []
         for participant in participants:
             snapshot = getattr(participant, "snapshot", None)
             restore = getattr(participant, "restore", None)
             protocol_pair = callable(snapshot) and callable(restore)
-            if not protocol_pair and not isinstance(participant, (list, dict)):
+            if protocol_pair:
+                strategies.append("protocol")
+            elif isinstance(participant, list):
+                strategies.append("list")
+            elif isinstance(participant, dict):
+                strategies.append("dict")
+            else:
                 raise TypeError("UnitOfWork exige participante reversível")
         self._participants = participants
+        self._strategies = tuple(strategies)
 
     @staticmethod
-    def _snapshot(participant):
-        snapshot = getattr(participant, "snapshot", None)
-        return snapshot() if callable(snapshot) else deepcopy(participant)
+    def _snapshot(participant, strategy):
+        return participant.snapshot() if strategy == "protocol" else deepcopy(participant)
 
     @staticmethod
-    def _restore(participant, snapshot):
-        restore = getattr(participant, "restore", None)
-        if callable(restore):
-            restore(snapshot)
-        elif isinstance(participant, list):
+    def _restore(participant, snapshot, strategy):
+        if strategy == "protocol":
+            participant.restore(snapshot)
+        elif strategy == "list":
             participant[:] = snapshot
-        elif isinstance(participant, dict):
+        elif strategy == "dict":
             participant.clear()
             participant.update(snapshot)
         else:
             raise TypeError("UnitOfWork exige participante reversível")
 
     def execute(self, operation):
-        snapshots = [self._snapshot(item) for item in self._participants]
+        snapshots = [
+            self._snapshot(item, strategy)
+            for item, strategy in zip(self._participants, self._strategies)
+        ]
         try:
             return operation()
         except BaseException as original_error:
             restore_errors = []
-            for participant, snapshot in reversed(tuple(zip(self._participants, snapshots))):
+            restoration = tuple(zip(self._participants, snapshots, self._strategies))
+            for participant, snapshot, strategy in reversed(restoration):
                 try:
-                    self._restore(participant, snapshot)
+                    self._restore(participant, snapshot, strategy)
                 except BaseException as restore_error:
                     restore_errors.append(restore_error)
             if restore_errors:
