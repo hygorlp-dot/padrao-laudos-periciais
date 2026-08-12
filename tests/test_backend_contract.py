@@ -150,26 +150,17 @@ class CaseIdentityAndStateTest(unittest.TestCase):
             uow.execute(cancelled)
         self.assertEqual(values, ["before"])
 
-    def test_unit_of_work_builtin_subclasses_ignore_noncallable_protocol_shadows(self):
+    def test_unit_of_work_rejects_builtin_subclasses_with_protocol_shadows(self):
         class OddList(list):
             snapshot = None
 
         class OddDict(dict):
             restore = None
 
-        values = OddList(["before"])
-        mapping = OddDict(value="before")
-        uow = UnitOfWork(values, mapping)
-
-        def failing_change():
-            values[:] = ["dirty"]
-            mapping["value"] = "dirty"
-            raise RuntimeError("rollback")
-
-        with self.assertRaisesRegex(RuntimeError, "rollback"):
-            uow.execute(failing_change)
-        self.assertEqual(values, ["before"])
-        self.assertEqual(mapping, {"value": "before"})
+        with self.assertRaises(TypeError):
+            UnitOfWork(OddList(["before"]))
+        with self.assertRaises(TypeError):
+            UnitOfWork(OddDict(value="before"))
 
     def test_unit_of_work_uses_one_strategy_for_partial_protocol_container_subclasses(self):
         class RestoreOnlyList(list):
