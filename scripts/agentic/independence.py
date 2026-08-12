@@ -86,4 +86,11 @@ def evaluate_independence(implementer: dict, reviewer: dict, expected_head: str,
             reasons.append("EVIDENCE_ROOT_MISSING")
         else:
             reasons.extend(verify_independence_evidence(evidence, expected_head, evidence_root))
-    return {"independence_proven": not reasons, "reasons": reasons}
+    local_consistency_verified = not reasons
+    if local_consistency_verified:
+        reasons.append("TRUSTED_INDEPENDENCE_AUTHORITY_MISSING")
+    return {
+        "independence_proven": False,
+        "local_consistency_verified": local_consistency_verified,
+        "reasons": reasons,
+    }
