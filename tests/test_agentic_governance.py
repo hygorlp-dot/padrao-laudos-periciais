@@ -1,4 +1,5 @@
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,15 @@ def _review(**overrides):
             "implementation_write_access": False,
             "private_context_received": False,
             "independence_proven": True,
+            "evidence": {
+                "execution_record": "codex-task/review-001",
+                "context_record": "context/review-001",
+                "checkout_record": "worktree/review-001",
+                "checkout_head_sha": HEAD,
+                "permissions_record": "read-only",
+                "persisted_review": "docs/reviews/review-001.json",
+                "persisted_review_sha256": "d" * 64,
+            },
         },
         "architecture_status": "CONFORME",
         "architectural_challenges": [],
@@ -66,6 +76,8 @@ def test_risk_and_external_diversity_are_deterministic_and_fail_closed():
     assert evaluate_external_diversity_gate([])["claude_required"] is False
     with pytest.raises(ValueError):
         evaluate_external_diversity_gate(["UNKNOWN_TRIGGER"])
+    mixed = classify_change_risk(["scripts/backend_contract/revisions.py", "unknown/new.py"])
+    assert mixed["conservative"] is True and "MATERIAL_ARCHITECTURE_CHANGE" in mixed["triggers"]
 
 
 def test_every_material_external_trigger_requires_one_final_review():
@@ -110,14 +122,40 @@ def test_independence_rejects_same_execution_context_worktree_stale_or_unpersist
     assert evaluate_independence(implementer, reviewer, HEAD)["independence_proven"] is False
 
 
-def test_independence_accepts_isolated_read_only_exact_head_review():
+def _write_independence_evidence(root: Path):
+    review = root / "reviews/review.json"
+    review.parent.mkdir(parents=True)
+    review.write_text('{"conclusion":"APPROVED"}', encoding="utf-8")
+    for name in ("execution", "context", "permissions"):
+        (root / f"reviews/{name}.txt").write_text(name, encoding="utf-8")
+    (root / "reviews/checkout.json").write_text(json.dumps(
+        {"head_sha": HEAD, "isolated": True, "clean": True, "read_only": True}), encoding="utf-8")
+    return {"execution_record": "reviews/execution.txt", "context_record": "reviews/context.txt",
+            "checkout_record": "reviews/checkout.json", "checkout_head_sha": HEAD,
+            "permissions_record": "reviews/permissions.txt", "persisted_review": "reviews/review.json",
+            "persisted_review_sha256": hashlib.sha256(review.read_bytes()).hexdigest()}
+
+
+def test_independence_accepts_isolated_read_only_exact_head_review(tmp_path):
+    result = evaluate_independence(
+        {"execution_id": "impl", "context_id": "ctx-impl", "worktree": "C:/impl"},
+        {"execution_id": "review", "context_id": "ctx-review", "worktree": "C:/review",
+         "implementation_write_access": False, "private_context_received": False,
+         "head_sha": HEAD, "persisted_evidence": True,
+         "evidence": _write_independence_evidence(tmp_path)}, HEAD, evidence_root=tmp_path,
+    )
+    assert result == {"independence_proven": True, "reasons": []}
+
+
+def test_independence_requires_verifiable_records_not_only_self_attested_booleans():
     result = evaluate_independence(
         {"execution_id": "impl", "context_id": "ctx-impl", "worktree": "C:/impl"},
         {"execution_id": "review", "context_id": "ctx-review", "worktree": "C:/review",
          "implementation_write_access": False, "private_context_received": False,
          "head_sha": HEAD, "persisted_evidence": True}, HEAD,
     )
-    assert result == {"independence_proven": True, "reasons": []}
+    assert result["independence_proven"] is False
+    assert "STRUCTURED_EVIDENCE_MISSING" in result["reasons"]
 
 
 def test_review_package_is_first_party_exact_head_and_excludes_private_paths(tmp_path):
@@ -135,6 +173,11 @@ def test_review_package_is_first_party_exact_head_and_excludes_private_paths(tmp
     with pytest.raises(ValueError):
         build_review_package(issue=31, base_sha=BASE, head_sha=HEAD,
                              changed_files=["referencias/privadas/caso.pdf"])
+    with pytest.raises(ValueError):
+        build_review_package(issue=31, base_sha="x" * 40, head_sha=HEAD, changed_files=[])
+    with pytest.raises(ValueError):
+        build_review_package(issue=31, base_sha=BASE, head_sha=HEAD,
+                             changed_files=["scripts/../referencias/privadas/caso.txt"])
 
 
 @pytest.mark.parametrize("unsafe", [
@@ -146,6 +189,7 @@ def test_review_package_is_first_party_exact_head_and_excludes_private_paths(tmp
     {"path": "review.txt", "content": "Telefone (71) 99999-1234"},
     {"path": "review.txt", "content": "Endereço: Rua Exemplo, 123"},
     {"path": "review.txt", "content": "petição inicial com dados das partes"},
+    {"path": "scripts/../referencias/privadas/caso.txt", "content": "x"},
 ])
 def test_external_context_sanitizer_blocks_private_pii_and_secrets(unsafe):
     result = sanitize_external_context([unsafe])
@@ -153,11 +197,13 @@ def test_external_context_sanitizer_blocks_private_pii_and_secrets(unsafe):
 
 
 def test_external_context_sanitizer_allows_only_public_first_party_text():
-    result = sanitize_external_context([{"path": "scripts/agentic/gates.py", "content": "FAIL_CLOSED = True"}])
+    content = (ROOT / "scripts/agentic/gates.py").read_text(encoding="utf-8")
+    result = sanitize_external_context([{"path": "scripts/agentic/gates.py", "content": content}])
     assert result["allowed"] is True
     assert result["files"][0]["path"] == "scripts/agentic/gates.py"
     assert len(result["files"][0]["sha256"]) == 64
     assert sanitize_external_context([{"path": "exports/review.txt", "content": "public"}])["allowed"] is False
+    assert sanitize_external_context([{"path": "scripts/agentic/gates.py", "content": "forged"}])["allowed"] is False
 
 
 def test_review_schema_and_runtime_reject_invalid_or_stale_output():
@@ -172,6 +218,9 @@ def test_review_schema_and_runtime_reject_invalid_or_stale_output():
     forged["independence"]["separate_execution"] = False
     assert list(Draft202012Validator(schema).iter_errors(forged))
     assert any(item["code"] == "INDEPENDENCE_NOT_PROVEN" for item in validate_review_output(forged, expected_head=HEAD))
+    inconsistent = _review(findings=[{"code": "MATERIAL", "severity": "P1", "evidence": "open"}])
+    assert list(Draft202012Validator(schema).iter_errors(inconsistent))
+    assert any(item["code"] == "INCONSISTENT_FINDING_COUNT" for item in validate_review_output(inconsistent, expected_head=HEAD))
 
 
 def test_findings_are_deduplicated_without_hiding_severity():
@@ -202,15 +251,26 @@ def test_merge_gate_blocks_stale_missing_external_review_ci_privacy_or_dependenc
         "head_sha": HEAD, "expected_head_sha": HEAD, "tests": "PASS", "verify_core": "PASS",
         "ci": "PASS", "privacy": "PASS", "p0_open": 0, "p1_material_open": 0,
         "codex_review": "APPROVED", "systemic_audit": "APPROVED",
-        "independence_proven": True, "claude_required": True, "claude_review": "APPROVED",
-        "claude_independence_proven": True, "external_egress_gate": "PASS",
+        "independence_proven": True, "codex_independence_evidence_verified": True,
+        "systemic_independence_evidence_verified": True, "claude_required": True,
+        "claude_triggers": ["BOOTSTRAP_GOVERNANCE_CHANGE"], "claude_review": "APPROVED",
+        "claude_independence_proven": True, "claude_independence_evidence_verified": True,
+        "external_egress_gate": "PASS",
+        "codex_review_head": HEAD, "systemic_audit_head": HEAD, "claude_review_head": HEAD,
         "dependency_merged": True, "cross_model_disagreement_material": 0,
     }
     assert evaluate_merge_gate(base)["status"] == "APPROVED"
+    missing_external_decision = dict(base)
+    del missing_external_decision["claude_required"]
+    assert evaluate_merge_gate(missing_external_decision)["status"] == "BLOCKED"
     for field, bad in (("expected_head_sha", "c" * 40), ("ci", "FAIL"), ("privacy", "UNKNOWN"),
                        ("claude_review", "DEFERRED"), ("dependency_merged", False)):
         candidate = dict(base, **{field: bad})
         assert evaluate_merge_gate(candidate)["status"] == "BLOCKED"
+    no_heads = dict(base)
+    no_heads.pop("head_sha")
+    no_heads.pop("expected_head_sha")
+    assert evaluate_merge_gate(no_heads)["status"] == "BLOCKED"
 
 
 def test_governance_documents_encode_claude_budget_and_stacked_dependency():

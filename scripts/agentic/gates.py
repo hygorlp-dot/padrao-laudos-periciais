@@ -1,4 +1,7 @@
 """External diversity, recovery and merge gates."""
+import re
+
+SHA = re.compile(r"^[0-9a-f]{40}$")
 
 EXTERNAL_TRIGGERS = {
     "MATERIAL_ARCHITECTURE_CHANGE", "AI_AUTHORITY_CHANGE", "AI_GATEWAY_CHANGE",
@@ -26,14 +29,36 @@ def next_recovery_action(findings: list[dict]) -> str:
 
 
 def evaluate_merge_gate(state: dict) -> dict:
+    reasons = []
+    head = state.get("head_sha")
+    expected_head = state.get("expected_head_sha")
+    if not (isinstance(head, str) and SHA.fullmatch(head) and head == expected_head):
+        reasons.append("head_sha")
+    if not isinstance(state.get("claude_required"), bool):
+        reasons.append("claude_required")
+    triggers = state.get("claude_triggers", [])
+    try:
+        derived = evaluate_external_diversity_gate(triggers)["claude_required"]
+    except (TypeError, ValueError):
+        derived = None
+        reasons.append("claude_triggers")
+    if derived is None or state.get("claude_required") is not derived:
+        reasons.append("claude_gate_consistency")
     required = {
-        "head_sha": state.get("expected_head_sha"), "tests": "PASS", "verify_core": "PASS",
+        "tests": "PASS", "verify_core": "PASS",
         "ci": "PASS", "privacy": "PASS", "p0_open": 0, "p1_material_open": 0,
         "codex_review": "APPROVED", "systemic_audit": "APPROVED",
-        "independence_proven": True, "external_egress_gate": "PASS",
+        "independence_proven": True, "codex_independence_evidence_verified": True,
+        "systemic_independence_evidence_verified": True, "external_egress_gate": "PASS",
         "dependency_merged": True, "cross_model_disagreement_material": 0,
     }
     if state.get("claude_required") is True:
-        required.update({"claude_review": "APPROVED", "claude_independence_proven": True})
-    reasons = [key for key, value in required.items() if state.get(key) != value]
+        required.update({"claude_review": "APPROVED", "claude_independence_proven": True,
+                         "claude_independence_evidence_verified": True})
+    for name in ("codex_review_head", "systemic_audit_head"):
+        if state.get(name) != head:
+            reasons.append(name)
+    if state.get("claude_required") is True and state.get("claude_review_head") != head:
+        reasons.append("claude_review_head")
+    reasons.extend(key for key, value in required.items() if state.get(key) != value)
     return {"status": "APPROVED" if not reasons else "BLOCKED", "reasons": reasons}

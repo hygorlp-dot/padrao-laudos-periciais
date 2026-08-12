@@ -13,9 +13,10 @@ TRIGGER_PATHS = {
 
 def classify_change_risk(paths: list[str]) -> dict:
     normalized = sorted({path.replace("\\", "/") for path in paths})
+    matched = {path for path in normalized if any(path.startswith(prefix) for prefix in TRIGGER_PATHS)}
     triggers = sorted({trigger for path in normalized for prefix, trigger in TRIGGER_PATHS.items() if path.startswith(prefix)})
-    unknown = bool(normalized) and not triggers
+    unknown = bool(set(normalized) - matched)
     if unknown:
-        triggers = ["MATERIAL_ARCHITECTURE_CHANGE"]
+        triggers = sorted(set(triggers) | {"MATERIAL_ARCHITECTURE_CHANGE"})
     risk = "HIGH" if triggers else "LOW"
     return {"risk": risk, "triggers": triggers, "paths": normalized, "conservative": unknown}

@@ -1,5 +1,20 @@
 """Build a minimal, sanitized review package manifest."""
 from __future__ import annotations
+import re
+from pathlib import PurePosixPath
+
+SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _safe_path(value: str) -> str:
+    raw = value.replace("\\", "/")
+    path = PurePosixPath(raw)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError("unsafe review package path")
+    normalized = path.as_posix()
+    if normalized.startswith("referencias/privadas/"):
+        raise ValueError("private path cannot enter review package")
+    return normalized
 
 
 def build_review_package(*, issue: int, base_sha: str, head_sha: str,
@@ -9,10 +24,9 @@ def build_review_package(*, issue: int, base_sha: str, head_sha: str,
                          test_results: dict | None = None, ci: str = "UNKNOWN",
                          privacy: str = "UNKNOWN", dependencies: list[str] | None = None,
                          deploy_impact: str = "NONE", merge_base: str | None = None) -> dict:
-    paths = sorted({path.replace("\\", "/") for path in changed_files})
-    if any(path.startswith("referencias/privadas/") for path in paths):
-        raise ValueError("private path cannot enter review package")
-    if not (isinstance(issue, int) and issue > 0 and len(base_sha) == 40 and len(head_sha) == 40):
+    paths = sorted({_safe_path(path) for path in changed_files})
+    if not (isinstance(issue, int) and issue > 0 and SHA.fullmatch(base_sha) and SHA.fullmatch(head_sha)
+            and (merge_base is None or SHA.fullmatch(merge_base))):
         raise ValueError("issue and exact SHAs are required")
     return {
         "schema_version": "1.0.0", "issue": issue, "base_sha": base_sha,

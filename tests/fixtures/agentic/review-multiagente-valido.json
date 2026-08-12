@@ -11,7 +11,16 @@
     "isolated_checkout": true,
     "implementation_write_access": false,
     "private_context_received": false,
-    "independence_proven": true
+    "independence_proven": true,
+    "evidence": {
+      "execution_record": "codex-task/review-sintetico-001",
+      "context_record": "context/review-sintetico-001",
+      "checkout_record": "worktree/review-sintetico-001",
+      "checkout_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "permissions_record": "read-only",
+      "persisted_review": "docs/reviews/review-sintetico-001.json",
+      "persisted_review_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
   },
   "architecture_status": "CONFORME",
   "architectural_challenges": [],
