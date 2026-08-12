@@ -2,6 +2,8 @@
 from __future__ import annotations
 import re
 import hashlib
+import json
+from pathlib import Path
 from pathlib import PurePosixPath
 from .sanitize import sanitize_external_context
 
@@ -28,9 +30,17 @@ def _path_hashes(values: list[str] | None) -> list[str]:
     return [hashlib.sha256(value.encode("utf-8")).hexdigest() for value in _safe_paths(values)]
 
 
-def _technical_ids(values: list[str] | None) -> list[str]:
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def _registry_ids(filename: str, key: str) -> set[str]:
+    data = json.loads((ROOT / "config" / filename).read_text(encoding="utf-8"))
+    return {item["id"] for item in data[key]}
+
+
+def _technical_ids(values: list[str] | None, allowed: set[str]) -> list[str]:
     result = sorted(set(values or []))
-    if any(not isinstance(value, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{1,79}", value) for value in result):
+    if any(not isinstance(value, str) or value not in allowed for value in result):
         raise ValueError("only canonical technical identifiers are allowed")
     return result
 
@@ -60,8 +70,9 @@ def build_review_package(*, issue: int, base_sha: str, head_sha: str,
     return {
         "schema_version": "1.0.0", "issue": issue, "base_sha": base_sha,
         "head_sha": head_sha, "merge_base": merge_base or base_sha,
-        "changed_file_hashes": paths, "affected_boundaries": _technical_ids(affected_boundaries),
-        "invariants": _technical_ids(invariants), "adr_path_hashes": _path_hashes(adrs),
+        "changed_file_hashes": paths,
+        "affected_boundaries": _technical_ids(affected_boundaries, _registry_ids("core-boundaries.json", "boundaries")),
+        "invariants": _technical_ids(invariants, _registry_ids("core-invariants.json", "invariants")),
         "schema_path_hashes": _path_hashes(schemas), "test_path_hashes": _path_hashes(tests),
         "test_results": {"status": result_status}, "ci": ci, "privacy": "PASS",
         "dependency_path_hashes": _path_hashes(dependencies), "deploy_impact": deploy_impact,

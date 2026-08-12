@@ -208,6 +208,10 @@ def test_review_package_is_first_party_exact_head_and_excludes_private_paths(tmp
                              test_results={"raw": "A autora Maria reside na Rua X, 123"},
                              deploy_impact="Parte Maria de Souza")
     with pytest.raises(ValueError):
+        build_review_package(issue=31, base_sha=BASE, head_sha=actual_head, changed_files=[],
+                             affected_boundaries=["AUTORA_MARIA_DE_SOUZA"],
+                             invariants=["CPF_12345678909"])
+    with pytest.raises(ValueError):
         build_review_package(issue=31, base_sha=BASE, head_sha=HEAD,
                              changed_files=["referencias/privadas/caso.pdf"])
     with pytest.raises(ValueError):
@@ -248,9 +252,9 @@ def test_external_context_sanitizer_allows_only_public_first_party_text():
     content = (ROOT / "scripts/agentic/gates.py").read_text(encoding="utf-8")
     result = sanitize_external_context([{"path": "scripts/agentic/gates.py", "content": content}])
     assert result["allowed"] is True
-    assert result["files"][0]["path"] == "scripts/agentic/gates.py"
+    assert set(result["files"][0]) == {"path_sha256", "content_sha256"}
     assert "content" not in result["files"][0]
-    assert len(result["files"][0]["sha256"]) == 64
+    assert all(len(value) == 64 for value in result["files"][0].values())
     assert sanitize_external_context([{"path": "exports/review.txt", "content": "public"}])["allowed"] is False
     assert sanitize_external_context([{"path": "scripts/agentic/gates.py", "content": "forged"}])["allowed"] is False
 
@@ -328,7 +332,10 @@ def test_external_context_manifest_never_exports_raw_narrative(tmp_path, monkeyp
     monkeypatch.setattr(sanitizer, "ROOT", tmp_path)
     result = sanitizer.sanitize_external_context([{"path": "scripts/agentic/public.py", "content": narrative}])
     assert result["allowed"] is True
-    assert result["files"] == [{"path": "scripts/agentic/public.py", "sha256": hashlib.sha256(narrative.encode()).hexdigest()}]
+    assert result["files"] == [{
+        "path_sha256": hashlib.sha256("scripts/agentic/public.py".encode()).hexdigest(),
+        "content_sha256": hashlib.sha256(narrative.encode()).hexdigest(),
+    }]
     assert narrative not in json.dumps(result)
 
 
