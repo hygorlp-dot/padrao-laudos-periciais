@@ -19,7 +19,7 @@ from .ports import (
     ReportExporter,
     SecretStore,
 )
-from .revisions import Authority, RevisionSource, RevisionStore, ValueHistory
+from .revisions import Authority, RevisionSource, RevisionStore, RevisionStoreSnapshot, ValueHistory
 from .state_machine import CaseState, CaseStateMachine, TransitionRecord
 from .unit_of_work import UnitOfWork
 

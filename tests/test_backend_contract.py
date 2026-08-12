@@ -2,6 +2,7 @@ import unittest
 import re
 from pathlib import Path
 from dataclasses import dataclass, replace
+from types import MappingProxyType
 
 from scripts.backend_contract import (
     ArtifactStatus,
@@ -117,21 +118,59 @@ class RevisionAndAuthorityTest(unittest.TestCase):
         snapshot = store.snapshot()
         store.append("PAT-001", {"valor": 2}, RevisionSource.ENGINE)
         store.restore(snapshot)
-        snapshot["PAT-001"].clear()
         self.assertEqual(store.history("PAT-001"), (source,))
         with self.assertRaisesRegex(ValueError, "Snapshot de RevisionStore"):
             store.restore({"PAT-001": ["forged"]})
-
-        forged_payload = {"valor": "AI"}
-        forged = replace(
-            source,
-            source=RevisionSource.AI,
-            payload=forged_payload,
-        )
-        with self.assertRaisesRegex(ValueError, "Snapshot de RevisionStore"):
-            store.restore({"PAT-001": [forged]})
-        forged_payload["valor"] = "alterado"
         self.assertEqual(store.history("PAT-001"), (source,))
+
+    def test_revision_store_snapshot_is_instance_bound_and_immutable(self):
+        first, second = RevisionStore(), RevisionStore()
+        first.append("PAT-001", {"valor": 1}, RevisionSource.SOURCE)
+        snapshot = first.snapshot()
+        self.assertIsInstance(snapshot.histories, tuple)
+        with self.assertRaisesRegex(ValueError, "Snapshot de RevisionStore"):
+            second.restore(snapshot)
+
+    def test_revision_store_rejects_every_signed_field_tampering_atomically(self):
+        store = RevisionStore()
+        original = store.append("PAT-001", {"valor": 1}, RevisionSource.SOURCE)
+        snapshot = store.snapshot()
+        artifact_id, history = snapshot.histories[0]
+        revision = history[0]
+        attacks = (
+            replace(revision, revision_id="forged"),
+            replace(revision, artifact_id="PAT-999"),
+            replace(revision, revision=2),
+            replace(revision, created_at="forged"),
+            replace(revision, supersedes=revision.revision_id),
+            replace(revision, status=ArtifactStatus.SUPERSEDED),
+            replace(revision, source=RevisionSource.ENGINE),
+            replace(revision, source=RevisionSource.PROFESSIONAL),
+            replace(revision, payload=MappingProxyType({"valor": "forged"})),
+        )
+        for forged in attacks:
+            attack = replace(snapshot, histories=((artifact_id, (forged,)),))
+            with self.assertRaisesRegex(ValueError, "Snapshot de RevisionStore"):
+                store.restore(attack)
+            self.assertEqual(store.history("PAT-001"), (original,))
+
+    def test_revision_store_rejects_duplicate_cross_artifact_and_self_reference(self):
+        store = RevisionStore()
+        first = store.append("PAT-001", {"valor": 1}, RevisionSource.SOURCE)
+        second = store.append("PAT-001", {"valor": 2}, RevisionSource.ENGINE)
+        store.append("PAT-002", {"valor": 3}, RevisionSource.SOURCE)
+        snapshot = store.snapshot()
+        duplicate = replace(second, revision_id=first.revision_id, supersedes=first.revision_id)
+        self_reference = replace(second, supersedes=second.revision_id)
+        cross_artifact = replace(snapshot.histories[1][1][0], revision_id=first.revision_id)
+        attacks = (
+            replace(snapshot, histories=(("PAT-001", (first, duplicate)), snapshot.histories[1])),
+            replace(snapshot, histories=(("PAT-001", (first, self_reference)), snapshot.histories[1])),
+            replace(snapshot, histories=(snapshot.histories[0], ("PAT-002", (cross_artifact,)))),
+        )
+        for attack in attacks:
+            with self.assertRaisesRegex(ValueError, "Snapshot de RevisionStore"):
+                store.restore(attack)
 
     def test_revision_history_is_append_only(self):
         store = RevisionStore()
