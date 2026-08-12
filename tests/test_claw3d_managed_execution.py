@@ -166,7 +166,7 @@ def test_operator_wrapper_and_safe_stop_identity_are_present():
     root = __import__('pathlib').Path(__file__).resolve().parents[1] / "scripts/agentic/claw3d"
     invoke = (root / "Invoke-AgentRole.ps1").read_text(encoding="utf-8")
     stop = (root / "Stop-Claw3DAgentBridge.ps1").read_text(encoding="utf-8")
-    assert "scripts.agentic.claw3d.cli run" in invoke
+    assert "scripts.agentic.claw3d.cli" in invoke and "--command-base64" in invoke
     assert "Get-CimInstance Win32_Process" in stop
     assert "scripts.agentic.claw3d.bridge" in stop
     assert "instanceToken" in stop and "processId" in stop and "/health" in stop
