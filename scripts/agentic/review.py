@@ -21,6 +21,11 @@ def validate_review_output(review: dict, *, expected_head: str) -> list[dict]:
     )
     if not independent:
         findings.append({"code": "INDEPENDENCE_NOT_PROVEN", "severity": "P0"})
+    else:
+        # A schema-shaped local artifact can be internally consistent, but it
+        # cannot prove who authored it.  Never promote self-attestation to an
+        # independent-review claim at this boundary.
+        findings.append({"code": "TRUSTED_INDEPENDENCE_AUTHORITY_MISSING", "severity": "P0"})
     if review.get("conclusion") == "APPROVED" and (review.get("p0_open") != 0 or review.get("p1_material_open") != 0):
         findings.append({"code": "INCONSISTENT_APPROVAL", "severity": "P0"})
     if review.get("conclusion") == "APPROVED" and any(

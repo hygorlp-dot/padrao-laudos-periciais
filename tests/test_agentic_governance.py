@@ -150,7 +150,11 @@ def test_independence_accepts_isolated_read_only_exact_head_review(tmp_path):
          "head_sha": HEAD, "persisted_evidence": True,
          "evidence": _write_independence_evidence(tmp_path)}, HEAD, evidence_root=tmp_path,
     )
-    assert result == {"independence_proven": True, "reasons": []}
+    assert result == {
+        "independence_proven": False,
+        "local_consistency_verified": True,
+        "reasons": ["TRUSTED_INDEPENDENCE_AUTHORITY_MISSING"],
+    }
 
 
 def test_independence_requires_verifiable_records_not_only_self_attested_booleans():
@@ -248,7 +252,9 @@ def test_review_schema_and_runtime_reject_invalid_or_stale_output():
     schema = json.loads((ROOT / "schemas/review-multiagente.schema.json").read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(schema)
     assert list(Draft202012Validator(schema).iter_errors(_review())) == []
-    assert validate_review_output(_review(), expected_head=HEAD) == []
+    assert {item["code"] for item in validate_review_output(_review(), expected_head=HEAD)} == {
+        "TRUSTED_INDEPENDENCE_AUTHORITY_MISSING"
+    }
     invalid = _review(head_sha="c" * 40, conclusion="APPROVED", p1_material_open=1)
     findings = validate_review_output(invalid, expected_head=HEAD)
     assert {item["code"] for item in findings} >= {"STALE_REVIEW", "INCONSISTENT_APPROVAL"}
