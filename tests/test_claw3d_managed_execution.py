@@ -172,12 +172,30 @@ def test_operator_wrapper_and_safe_stop_identity_are_present():
     assert "instanceToken" in stop and "processId" in stop and "/health" in stop
 
 
-def test_documented_wrapper_runs_real_child_when_presence_disabled(tmp_path):
+@__import__('pytest').mark.parametrize("enabled", [False, True])
+def test_documented_wrapper_runs_real_child(tmp_path, enabled):
     root = __import__('pathlib').Path(__file__).resolve().parents[1]
     env = dict(os.environ)
-    env.pop("CLAW3D_LIVE_PRESENCE_ENABLED", None)
+    if enabled:
+        env["CLAW3D_LIVE_PRESENCE_ENABLED"] = "1"
+        env["CLAW3D_AGENT_STATE_DIR"] = str(tmp_path / "runtime")
+    else:
+        env.pop("CLAW3D_LIVE_PRESENCE_ENABLED", None)
     script = root / "scripts/agentic/claw3d/Invoke-AgentRole.ps1"
-    expression = f"& '{script}' -Role reviewer -Command @('{sys.executable}','--version')"
+    expression = f"& '{script}' -Role reviewer -Executable '{sys.executable}' -ArgumentList @('--version')"
+    result = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", expression],
+                            cwd=root, env=env, capture_output=True, text=True)
+    assert result.returncode == 0
+    assert "Python" in result.stdout
+
+
+def test_enabled_wrapper_store_failure_does_not_block_child(tmp_path):
+    root = __import__('pathlib').Path(__file__).resolve().parents[1]
+    invalid_state = tmp_path / "not-a-directory"
+    invalid_state.write_text("x")
+    env = dict(os.environ, CLAW3D_LIVE_PRESENCE_ENABLED="1", CLAW3D_AGENT_STATE_DIR=str(invalid_state))
+    script = root / "scripts/agentic/claw3d/Invoke-AgentRole.ps1"
+    expression = f"& '{script}' -Role reviewer -Executable '{sys.executable}' -ArgumentList @('--version')"
     result = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", expression],
                             cwd=root, env=env, capture_output=True, text=True)
     assert result.returncode == 0

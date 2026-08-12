@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
+import base64
 from .state import AGENTS, PresenceStore
 from .capabilities import detect_codex_capability
 from .runner import ManagedAgentRunner
@@ -22,22 +24,33 @@ def main(argv=None) -> int:
     run_parser = sub.add_parser("run")
     run_parser.add_argument("role", choices=AGENTS)
     run_parser.add_argument("--cwd", default=os.getcwd())
-    run_parser.add_argument("process_command", nargs=argparse.REMAINDER)
+    run_parser.add_argument("--command-json")
+    run_parser.add_argument("--command-base64")
+    run_parser.add_argument("process_command", nargs="*")
     args = parser.parse_args(argv)
-    store = PresenceStore.from_environment()
     if args.command == "codex-capability":
         result = detect_codex_capability(executable=args.executable)
         print(json.dumps({"available": result.available, "version": result.version,
                           "non_interactive": result.non_interactive, "command": result.command}))
         return 0
     if args.command == "run":
-        command = args.process_command
+        if args.command_base64:
+            command = json.loads(base64.b64decode(args.command_base64).decode("utf-8"))
+        else:
+            command = json.loads(args.command_json) if args.command_json else args.process_command
+        if not isinstance(command, list) or any(type(part) is not str for part in command):
+            parser.error("managed command must be a JSON string array")
         if command[:1] == ["--"]:
             command = command[1:]
         if not command:
             parser.error("managed run requires a command")
-        result = ManagedAgentRunner(store=store).run(args.role, command, cwd=args.cwd)
-        return result.exit_code
+        try:
+            store = PresenceStore.from_environment()
+            result = ManagedAgentRunner(store=store).run(args.role, command, cwd=args.cwd)
+            return result.exit_code
+        except Exception:
+            return subprocess.run(command, cwd=args.cwd, check=False).returncode
+    store = PresenceStore.from_environment()
     if args.command == "set":
         store.set_state(args.agent_id, args.state)
     elif args.command == "watchdog":
