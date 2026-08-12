@@ -92,7 +92,7 @@ class ValueHistory:
     def entries(self):
         return tuple(self._entries)
 
-    def add(self, authority, value, reason=None):
+    def _append(self, authority, value, reason=None):
         if authority is Authority.EFFECTIVE_VALUE:
             raise ValueError("EFFECTIVE_VALUE é derivado, não armazenado")
         if authority is Authority.PROFESSIONAL_OVERRIDE and not reason:
@@ -100,6 +100,18 @@ class ValueHistory:
         entry = ValueEntry(authority, _deep_freeze(value), datetime.now(timezone.utc).isoformat(), reason)
         self._entries.append(entry)
         return entry
+
+    def record_source(self, value):
+        return self._append(Authority.SOURCE_VALUE, value)
+
+    def propose_ai(self, value):
+        return self._append(Authority.AI_PROPOSAL, value)
+
+    def decide_engine(self, value, reason=None):
+        return self._append(Authority.ENGINE_DECISION, value, reason)
+
+    def override_professional(self, value, reason):
+        return self._append(Authority.PROFESSIONAL_OVERRIDE, value, reason)
 
     def effective(self):
         precedence = (
@@ -130,4 +142,6 @@ class ValueHistory:
         return list(self._entries)
 
     def restore(self, snapshot):
-        self._entries = snapshot
+        if not isinstance(snapshot, (list, tuple)) or not all(isinstance(entry, ValueEntry) for entry in snapshot):
+            raise ValueError("Snapshot de ValueHistory inválido")
+        self._entries = list(snapshot)

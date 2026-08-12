@@ -123,24 +123,23 @@ class RevisionAndAuthorityTest(unittest.TestCase):
 
     def test_professional_override_is_explicit_and_effective(self):
         history = ValueHistory()
-        history.add(Authority.SOURCE_VALUE, "alegado")
-        history.add(Authority.AI_PROPOSAL, "proposto")
-        history.add(Authority.ENGINE_DECISION, "decidido")
-        override = history.add(Authority.PROFESSIONAL_OVERRIDE, "validado", reason="Decisão técnica do perito")
+        history.record_source("alegado")
+        history.propose_ai("proposto")
+        history.decide_engine("decidido")
+        override = history.override_professional("validado", reason="Decisão técnica do perito")
         self.assertEqual(history.effective().value, "validado")
         self.assertEqual(override.reason, "Decisão técnica do perito")
         self.assertEqual(len(history.entries), 4)
 
     def test_professional_override_requires_reason(self):
         with self.assertRaises(ValueError):
-            ValueHistory().add(Authority.PROFESSIONAL_OVERRIDE, "x")
+            ValueHistory().override_professional("x", reason="")
 
     def test_value_history_entries_and_nested_values_are_immutable(self):
         original = {"classificacao": ["ANOMALIA"]}
         history = ValueHistory()
-        history.add(Authority.ENGINE_DECISION, original)
-        override = history.add(
-            Authority.PROFESSIONAL_OVERRIDE,
+        history.decide_engine(original)
+        override = history.override_professional(
             {"classificacao": ["INCONCLUSIVA"]},
             reason="Validação profissional",
         )
