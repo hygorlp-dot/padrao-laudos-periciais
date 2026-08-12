@@ -268,6 +268,28 @@ def test_review_package_derives_merge_base_and_hashes_binary_blob_bytes(tmp_path
             issue=31, base_sha=base, head_sha=head, changed_files=[],
             merge_base="0" * 40, repository_root=tmp_path,
         )
+    with pytest.raises(ValueError, match="distinct base and head"):
+        package_module.build_review_package(
+            issue=31, base_sha=head, head_sha=head, changed_files=[],
+            repository_root=tmp_path,
+        )
+
+
+def test_review_package_marks_test_claims_untrusted_and_requires_head_paths():
+    import subprocess
+    actual_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    actual_base = subprocess.check_output(["git", "rev-parse", "HEAD^"], cwd=ROOT, text=True).strip()
+    package = build_review_package(
+        issue=31, base_sha=actual_base, head_sha=actual_head, changed_files=[],
+        tests=["tests/test_agentic_governance.py"], test_results={"status": "PASS"},
+    )
+    assert package["test_results"] == {"declared_status": "PASS", "trusted": False}
+    assert package["test_artifacts"][0]["content_sha256"]
+    with pytest.raises(ValueError, match="cannot read exact revision path"):
+        build_review_package(
+            issue=31, base_sha=actual_base, head_sha=actual_head, changed_files=[],
+            tests=["tests/does-not-exist.py"], test_results={"status": "PASS"},
+        )
 
 
 @pytest.mark.parametrize("unsafe", [

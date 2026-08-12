@@ -51,6 +51,20 @@ def _git_bytes(root: Path, revision: str, path: str) -> bytes:
         raise FileNotFoundError(path) from exc
 
 
+def _artifact_manifest(root: Path, revision: str, values: list[str] | None) -> list[dict]:
+    manifest = []
+    for path in _safe_paths(values):
+        try:
+            content = _git_bytes(root, revision, path)
+        except FileNotFoundError as exc:
+            raise ValueError(f"cannot read exact revision path: {path}") from exc
+        manifest.append({
+            "path_sha256": hashlib.sha256(path.encode("utf-8")).hexdigest(),
+            "content_sha256": hashlib.sha256(content).hexdigest(),
+        })
+    return manifest
+
+
 def _registry_ids(root: Path, revision: str, filename: str, key: str) -> set[str]:
     data = json.loads(_git_text(root, revision, f"config/{filename}"))
     return {item["id"] for item in data[key]}
@@ -77,6 +91,8 @@ def build_review_package(*, issue: int, base_sha: str, head_sha: str,
     if not (isinstance(issue, int) and issue > 0 and SHA.fullmatch(base_sha) and SHA.fullmatch(head_sha)
             and (merge_base is None or SHA.fullmatch(merge_base))):
         raise ValueError("issue and exact SHAs are required")
+    if base_sha == head_sha:
+        raise ValueError("distinct base and head are required")
     try:
         subprocess.run(["git", "merge-base", "--is-ancestor", base_sha, head_sha], cwd=root,
                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -120,7 +136,8 @@ def build_review_package(*, issue: int, base_sha: str, head_sha: str,
         "affected_boundaries": _technical_ids(affected_boundaries, _registry_ids(root, head_sha, "core-boundaries.json", "boundaries")),
         "invariants": _technical_ids(invariants, _registry_ids(root, head_sha, "core-invariants.json", "invariants")),
         "schema_path_hashes": _path_hashes(schemas), "test_path_hashes": _path_hashes(tests),
-        "test_results": {"status": result_status}, "ci": ci, "privacy": "PASS",
+        "test_artifacts": _artifact_manifest(root, head_sha, tests),
+        "test_results": {"declared_status": result_status, "trusted": False}, "ci": ci, "privacy": "PASS",
         "dependency_path_hashes": _path_hashes(dependencies), "deploy_impact": deploy_impact,
         "private_data_included": False,
         "sanitization_receipt": receipt,
