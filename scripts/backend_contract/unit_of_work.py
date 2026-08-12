@@ -20,12 +20,14 @@ class UnitOfWork:
 
     @staticmethod
     def _snapshot(participant):
-        return participant.snapshot() if hasattr(participant, "snapshot") else deepcopy(participant)
+        snapshot = getattr(participant, "snapshot", None)
+        return snapshot() if callable(snapshot) else deepcopy(participant)
 
     @staticmethod
     def _restore(participant, snapshot):
-        if hasattr(participant, "restore"):
-            participant.restore(snapshot)
+        restore = getattr(participant, "restore", None)
+        if callable(restore):
+            restore(snapshot)
         elif isinstance(participant, list):
             participant[:] = snapshot
         elif isinstance(participant, dict):
