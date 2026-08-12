@@ -191,8 +191,10 @@ def test_review_package_is_first_party_exact_head_and_excludes_private_paths(tmp
         schemas=["review-multiagente.schema.json"], tests=["tests/test_agentic_governance.py"],
         test_results={"status": "PASS"}, ci="PASS", privacy="PASS",
         dependencies=[], deploy_impact="NONE",
+        sanitization_receipt={"allowed": True, "head_sha": HEAD, "reasons": [], "files": []},
     )
     assert package["head_sha"] == HEAD and package["private_data_included"] is False
+    assert package["privacy"] == "PASS" and package["sanitization_receipt"]["head_sha"] == HEAD
     with pytest.raises(ValueError):
         build_review_package(issue=31, base_sha=BASE, head_sha=HEAD,
                              changed_files=["referencias/privadas/caso.pdf"])
@@ -235,6 +237,7 @@ def test_external_context_sanitizer_allows_only_public_first_party_text():
     result = sanitize_external_context([{"path": "scripts/agentic/gates.py", "content": content}])
     assert result["allowed"] is True
     assert result["files"][0]["path"] == "scripts/agentic/gates.py"
+    assert "content" not in result["files"][0]
     assert len(result["files"][0]["sha256"]) == 64
     assert sanitize_external_context([{"path": "exports/review.txt", "content": "public"}])["allowed"] is False
     assert sanitize_external_context([{"path": "scripts/agentic/gates.py", "content": "forged"}])["allowed"] is False
@@ -296,6 +299,25 @@ def test_external_context_is_bound_to_head_blob_and_governance_allowlist(tmp_pat
     assert sanitizer.sanitize_external_context([{
         "path": "docs/case.md", "content": case.read_text(encoding="utf-8")
     }])["allowed"] is False
+
+
+def test_external_context_manifest_never_exports_raw_narrative(tmp_path, monkeypatch):
+    import subprocess
+    import scripts.agentic.sanitize as sanitizer
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Synthetic Test"], cwd=tmp_path, check=True)
+    target = tmp_path / "scripts/agentic/public.py"
+    target.parent.mkdir(parents=True)
+    narrative = "# A autora Maria de Souza relatou infiltracao severa no apartamento.\n"
+    target.write_text(narrative, encoding="utf-8")
+    subprocess.run(["git", "add", "scripts/agentic/public.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=tmp_path, check=True)
+    monkeypatch.setattr(sanitizer, "ROOT", tmp_path)
+    result = sanitizer.sanitize_external_context([{"path": "scripts/agentic/public.py", "content": narrative}])
+    assert result["allowed"] is True
+    assert result["files"] == [{"path": "scripts/agentic/public.py", "sha256": hashlib.sha256(narrative.encode()).hexdigest()}]
+    assert narrative not in json.dumps(result)
 
 
 def test_review_schema_and_runtime_reject_invalid_or_stale_output():
