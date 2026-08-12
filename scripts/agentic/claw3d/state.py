@@ -104,6 +104,9 @@ class PresenceStore:
                                                    "lastSeen": raw.get("lastSeen") if type(raw.get("lastSeen")) in (int, float) else None}
             for execution_id, raw in executions.items():
                 if type(execution_id) is str and isinstance(raw, dict) and raw.get("role") in AGENTS and raw.get("status") in {"running", "finished", "error", "cancelled"}:
+                    if raw.get("status") == "running" and (type(raw.get("process_id")) is not int or raw.get("process_id") <= 0):
+                        self._diagnose("discarded running execution without valid process id")
+                        continue
                     clean["executions"][execution_id] = {key: raw.get(key) for key in ("role", "process_id", "started_at", "finished_at", "exit_code", "worktree", "head_sha", "lastSeen", "status")}
             clean["timestamp"] = data.get("timestamp") if type(data.get("timestamp")) is str else _utc_now()
             return clean
@@ -168,8 +171,8 @@ class PresenceStore:
                 data["agents"][agent_id]["lastSeen"] = time.time()
                 self._write_unlocked(data)
 
-    def begin_execution(self, agent_id: str, execution_id: str, *, process_id: int | None, worktree: str, head_sha: str | None) -> None:
-        if agent_id not in AGENTS or not execution_id:
+    def begin_execution(self, agent_id: str, execution_id: str, *, process_id: int, worktree: str, head_sha: str | None) -> None:
+        if agent_id not in AGENTS or not execution_id or type(process_id) is not int or process_id <= 0:
             raise ValueError("unknown agent or execution")
         with self._locked():
             data = self._read_unlocked()

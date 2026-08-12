@@ -22,6 +22,8 @@ class ManagedExecution:
         self._done, self._result = threading.Event(), None
         threading.Thread(target=self._observe, name=f"presence-{role}-{execution_id}", daemon=True).start()
     def _observe(self):
+        self.runner._safe("begin_execution", self.role, self.execution_id,
+                          process_id=self.process.pid, worktree=self.worktree, head_sha=self.head_sha)
         while self.process.poll() is None:
             self.runner._safe("heartbeat_execution", self.execution_id)
             self._done.wait(self.runner.heartbeat_seconds)
@@ -46,13 +48,7 @@ class ManagedAgentRunner:
         if role not in AGENTS or not command or any(type(part) is not str for part in command):
             raise ValueError("invalid managed role or command")
         worktree, execution_id = str(Path(cwd or os.getcwd()).resolve()), str(uuid.uuid4())
-        self._safe("begin_execution", role, execution_id, process_id=None, worktree=worktree, head_sha=head_sha)
-        try:
-            process = subprocess.Popen(list(command), cwd=worktree, env=dict(environment) if environment else None)
-        except BaseException:
-            self._safe("finish_execution", execution_id, exit_code=-1)
-            raise
-        self._safe("attach_process", execution_id, process.pid)
+        process = subprocess.Popen(list(command), cwd=worktree, env=dict(environment) if environment else None)
         return ManagedExecution(self, execution_id, role, process, worktree, head_sha)
     def run(self, role: str, command: Sequence[str], **kwargs) -> ExecutionResult:
         execution = self.start(role, command, **kwargs); execution.wait(); return execution.result

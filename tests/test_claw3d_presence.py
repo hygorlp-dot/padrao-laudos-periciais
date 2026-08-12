@@ -45,6 +45,25 @@ def test_working_cannot_be_fabricated_without_execution_lease(tmp_path):
     with pytest.raises(ValueError, match="execution lease"):
         store.set_state("reviewer", "working")
     assert next(item for item in store.snapshot()["agents"] if item["agentId"] == "reviewer")["state"] == "idle"
+    for invalid_pid in (None, 0, -1, True):
+        with pytest.raises(ValueError):
+            store.begin_execution("reviewer", f"invalid-{invalid_pid}", process_id=invalid_pid,
+                                  worktree=str(tmp_path), head_sha=None)
+
+
+def test_persisted_running_entry_without_real_pid_is_not_published(tmp_path):
+    poisoned = PresenceStore(tmp_path)._empty()
+    poisoned["executions"]["forged"] = {
+        "role": "reviewer", "process_id": None, "started_at": "synthetic",
+        "finished_at": None, "exit_code": None, "worktree": str(tmp_path),
+        "head_sha": None, "lastSeen": time.time(), "status": "running",
+    }
+    (tmp_path / "presence-state.json").write_text(json.dumps(poisoned), encoding="utf-8")
+    assert state_from_snapshot(PresenceStore(tmp_path), "reviewer") == "idle"
+
+
+def state_from_snapshot(store, role):
+    return next(item["state"] for item in store.snapshot()["agents"] if item["agentId"] == role)
 
 
 def test_concurrent_updates_are_atomic_and_preserve_all_agents(tmp_path):
@@ -55,7 +74,7 @@ def test_concurrent_updates_are_atomic_and_preserve_all_agents(tmp_path):
     def update(agent_id):
         try:
             barrier.wait()
-            store.begin_execution(agent_id, f"run-{agent_id}", process_id=None, worktree=str(tmp_path), head_sha=None)
+            store.begin_execution(agent_id, f"run-{agent_id}", process_id=os.getpid(), worktree=str(tmp_path), head_sha=None)
         except Exception as exc:  # pragma: no cover - diagnostic collection
             errors.append(exc)
 
@@ -69,7 +88,7 @@ def test_concurrent_updates_are_atomic_and_preserve_all_agents(tmp_path):
 
 def test_heartbeat_and_watchdog_mark_stale_work_as_error(tmp_path):
     store = PresenceStore(tmp_path, stale_after_seconds=0.02)
-    store.begin_execution("auditor", "run-auditor", process_id=None, worktree=str(tmp_path), head_sha=None)
+    store.begin_execution("auditor", "run-auditor", process_id=os.getpid(), worktree=str(tmp_path), head_sha=None)
     first = store.internal_state()["executions"]["run-auditor"]["lastSeen"]
     store.heartbeat_execution("run-auditor")
     assert store.internal_state()["executions"]["run-auditor"]["lastSeen"] >= first
@@ -131,7 +150,7 @@ def test_worktrees_share_explicit_runtime_directory(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAW3D_AGENT_STATE_DIR", str(tmp_path / "shared"))
     first = PresenceStore.from_environment(workspace=tmp_path / "worktree-a")
     second = PresenceStore.from_environment(workspace=tmp_path / "worktree-b")
-    first.begin_execution("researcher", "shared-run", process_id=None, worktree=str(tmp_path), head_sha=None)
+    first.begin_execution("researcher", "shared-run", process_id=os.getpid(), worktree=str(tmp_path), head_sha=None)
     assert next(item for item in second.snapshot()["agents"] if item["agentId"] == "researcher")["state"] == "working"
     assert first.state_dir == second.state_dir == (tmp_path / "shared").resolve()
 
@@ -145,7 +164,7 @@ def test_relative_shared_runtime_directory_fails_closed(monkeypatch):
 def test_claude_rate_limit_records_error_without_retry_loop_then_can_idle(tmp_path):
     sink = Claw3DPresenceSink(PresenceStore(tmp_path))
     calls = []
-    sink.store.begin_execution("claude", "claude-run", process_id=None, worktree=str(tmp_path), head_sha=None)
+    sink.store.begin_execution("claude", "claude-run", process_id=os.getpid(), worktree=str(tmp_path), head_sha=None)
     calls.append("one-real-call")
     sink.set_state("claude", "error")
     sink.set_state("claude", "idle")
@@ -157,7 +176,7 @@ def test_finished_execution_history_is_bounded(tmp_path):
     store = PresenceStore(tmp_path, max_execution_history=8)
     for index in range(12):
         execution_id = f"run-{index:03d}"
-        store.begin_execution("researcher", execution_id, process_id=None, worktree=str(tmp_path), head_sha=None)
+        store.begin_execution("researcher", execution_id, process_id=os.getpid(), worktree=str(tmp_path), head_sha=None)
         store.finish_execution(execution_id, exit_code=0)
     state = store.internal_state()
     assert len(state["executions"]) == 8

@@ -4,6 +4,7 @@ import subprocess
 import sys
 import time
 import socket
+import threading
 from pathlib import Path
 
 from urllib.request import urlopen
@@ -146,14 +147,63 @@ def test_codex_capability_does_not_accept_exec_as_prose(tmp_path):
     assert result.command is None
 
 
-def test_process_start_failure_sets_error_and_never_leaves_working(tmp_path):
+def test_process_start_failure_never_fabricates_working(tmp_path):
     store = PresenceStore(tmp_path)
     runner = ManagedAgentRunner(store=store)
     try:
         runner.start("implementer", ["definitely-not-a-real-program"])
     except OSError:
         pass
-    assert state(store, "implementer") == "error"
+    assert state(store, "implementer") == "idle"
+
+
+def test_working_is_published_only_after_real_process_exists(tmp_path, monkeypatch):
+    store = PresenceStore(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+
+    def blocked_popen(*_args, **_kwargs):
+        entered.set()
+        release.wait(2)
+        raise OSError("synthetic spawn failure")
+
+    monkeypatch.setattr(subprocess, "Popen", blocked_popen)
+    errors = []
+    thread = threading.Thread(target=lambda: _capture_start_error(
+        ManagedAgentRunner(store=store), errors, tmp_path
+    ))
+    thread.start()
+    assert entered.wait(1)
+    assert state(store, "reviewer") == "idle"
+    assert store.internal_state()["executions"] == {}
+    release.set(); thread.join(2)
+    assert errors and state(store, "reviewer") == "idle"
+
+
+def _capture_start_error(runner, errors, cwd):
+    try:
+        runner.start("reviewer", ["synthetic"], cwd=cwd)
+    except OSError as exc:
+        errors.append(exc)
+
+
+def test_slow_presence_store_never_delays_real_process_spawn(tmp_path):
+    spawned_at = tmp_path / "spawned.txt"
+
+    class SlowStore:
+        def begin_execution(self, *_args, **_kwargs): time.sleep(.4)
+        def heartbeat_execution(self, *_args, **_kwargs): pass
+        def finish_execution(self, *_args, **_kwargs): pass
+
+    started = time.monotonic()
+    execution = ManagedAgentRunner(store=SlowStore(), heartbeat_seconds=.01).start(
+        "reviewer", [sys.executable, "-c", f"from pathlib import Path; Path({str(spawned_at)!r}).write_text('ok')"]
+    )
+    deadline = time.monotonic() + .25
+    while not spawned_at.exists() and time.monotonic() < deadline:
+        time.sleep(.01)
+    assert spawned_at.read_text() == "ok"
+    assert time.monotonic() - started < .3
+    assert execution.wait() == 0
 
 
 def test_claude_adapter_makes_one_attempt_without_retry(tmp_path):
