@@ -7,6 +7,7 @@ from pathlib import Path
 
 INVARIANT_FIELDS = {"id", "descricao", "severidade", "boundaries", "testes", "global", "bloqueante"}
 BOUNDARY_FIELDS = {"id", "paths", "invariants", "schemas", "tests", "consumers"}
+FROZEN_CORE_SHA = "71dea5d95d9843d08fe1547b6b52812ddd060511"
 
 
 def _fingerprint(values) -> str:
@@ -54,6 +55,7 @@ def validate_configuration(root: Path) -> list[dict]:
         findings.append(_finding("CONFIGURATION", "REPOSITORY", "core-boundaries.json", "registro de boundaries vazio", "P0"))
     invariant_ids = {item.get("id") for item in invariants if isinstance(item, dict)}
     boundary_ids = {item.get("id") for item in boundaries if isinstance(item, dict)}
+    lock = {}
     try:
         lock=json.loads((root/"config/core-registry-lock.json").read_text(encoding="utf-8"))
         expected=registry_lock(invariant_doc,boundary_doc,lock.get("core_base_sha"))
@@ -101,4 +103,26 @@ def validate_configuration(root: Path) -> list[dict]:
             boundary = next((item for item in boundaries if item.get("id") == boundary_id), None)
             if boundary and invariant.get("id") not in boundary.get("invariants", []):
                 findings.append(_finding(invariant["id"], boundary_id, "registry symmetry", "invariante não declarado pelo boundary", "P1"))
+    if lock.get("core_base_sha") == FROZEN_CORE_SHA:
+        from .historical_mutations import load_mutants, validate_historical_registry, validate_mutant_definitions
+        from .metrics import analyze_complexity, validate_complexity_baseline
+        from .schema_versions import validate_schema_version_matrix
+        required = ("historical-bugs.json", "historical-mutants.json", "schema-versions.json", "quality-baseline.json")
+        for name in required:
+            if not (root / "config" / name).is_file():
+                findings.append(_finding("CONFIGURATION", "QUALITY_GATE", name, "configuração V2 ausente", "P1"))
+        if all((root / "config" / name).is_file() for name in required):
+            historical = json.loads((root / "config/historical-bugs.json").read_text(encoding="utf-8"))
+            for item in validate_historical_registry(historical, root):
+                findings.append(_finding("HISTORICAL_REGRESSION", "QUALITY_GATE", item["bug_id"], item["code"], "P1"))
+            for item in validate_mutant_definitions(load_mutants(root), root):
+                findings.append(_finding("HISTORICAL_REGRESSION", "QUALITY_GATE", item["bug_id"], item["code"], "P1"))
+            matrix = json.loads((root / "config/schema-versions.json").read_text(encoding="utf-8"))
+            for item in validate_schema_version_matrix(matrix, root):
+                findings.append(_finding("SCHEMA_VERSION_FIDELITY", "QUALITY_GATE", item["schema"], item["code"], "P1"))
+            baseline = json.loads((root / "config/quality-baseline.json").read_text(encoding="utf-8"))
+            paths = [root / item["path"] for item in baseline.get("hotspots", [])]
+            complexity = analyze_complexity(paths, base=root) if paths and all(path.is_file() for path in paths) else []
+            for item in validate_complexity_baseline(baseline, complexity):
+                findings.append(_finding("QUALITY_NON_REGRESSION", "QUALITY_GATE", item["code"], str(item), "P1"))
     return findings

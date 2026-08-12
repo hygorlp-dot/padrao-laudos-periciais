@@ -158,6 +158,8 @@
                            "invariants":  [
                                               "DATE_FIDELITY",
                                               "FAIL_CLOSED",
+                                              "MIGRATION_NO_SILENT_LOSS",
+                                              "SCHEMA_VERSION_FIDELITY",
                                               "SOURCE_TRUTH"
                                           ],
                            "schemas":  [
@@ -180,7 +182,9 @@
                            "invariants":  [
                                               "FAIL_CLOSED",
                                               "MEASUREMENT_EQUIVALENCE_INTEGRITY",
+                                              "MIGRATION_NO_SILENT_LOSS",
                                               "PRODUCER_NOT_VALIDATOR",
+                                              "SCHEMA_VERSION_FIDELITY",
                                               "SOURCE_TRUTH"
                                           ],
                            "schemas":  [
@@ -233,6 +237,7 @@
                                               "NAO_CONSTATADO_NOT_INEXISTENTE",
                                               "NO_SILENT_EVIDENCE_LOSS",
                                               "PROVENANCE_FIDELITY",
+                                              "SCHEMA_VERSION_FIDELITY",
                                               "STABLE_IDENTITY"
                                           ],
                            "schemas":  [
@@ -443,6 +448,7 @@
                                               "NORMATIVE_FIDELITY",
                                               "PRODUCER_NOT_VALIDATOR",
                                               "PROVENANCE_FIDELITY",
+                                              "SCHEMA_VERSION_FIDELITY",
                                               "SEMANTIC_MONOTONICITY",
                                               "SOURCE_TRUTH",
                                               "TEXT_GROUNDING",
@@ -525,6 +531,33 @@
                            "tests":  [
                                          "tests/test_integracoes_externas.py",
                                          "tests/test_superpowers_safety.py"
+                                     ],
+                           "consumers":  [
+
+                                         ]
+                       },
+                       {
+                           "id":  "QUALITY_GATE",
+                           "paths":  [
+                                         "scripts/quality/",
+                                         "config/historical-bugs.json",
+                                         "config/historical-mutants.json",
+                                         "config/schema-versions.json",
+                                         "config/quality-baseline.json"
+                                     ],
+                           "invariants":  [
+                                              "MIGRATION_NO_SILENT_LOSS",
+                                              "SCHEMA_VERSION_FIDELITY"
+                                          ],
+                           "schemas":  [
+
+                                       ],
+                           "tests":  [
+                                         "tests/test_quality_hardening_v2.py",
+                                         "tests/test_historical_mutations.py",
+                                         "tests/test_fault_injection.py",
+                                         "tests/test_schema_versions.py",
+                                         "tests/test_quality_metrics.py"
                                      ],
                            "consumers":  [
 

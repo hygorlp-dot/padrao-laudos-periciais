@@ -47,6 +47,9 @@ htmlcov/
 .cache
 nosetests.xml
 coverage.xml
+coverage-quality-v2.json
+coverage-quality-v2.data
+mutants/
 *.cover
 *.py.cover
 .hypothesis/
