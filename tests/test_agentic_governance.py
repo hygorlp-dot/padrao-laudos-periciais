@@ -248,6 +248,30 @@ def test_external_context_cannot_override_the_canonical_repository_root(tmp_path
         sanitize_external_context([{"path": "scripts/forged.py", "content": "public"}], root=tmp_path)
 
 
+def test_external_context_rejects_untracked_and_narrative_case_content(tmp_path, monkeypatch):
+    import subprocess
+    import scripts.agentic.sanitize as sanitizer
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Synthetic Test"], cwd=tmp_path, check=True)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    private_prose = "Requerente: Maria de Souza, proprietaria do imovel objeto da lide."
+    (docs / "case.md").write_text(private_prose, encoding="utf-8")
+    (docs / "untracked.md").write_text("public-looking", encoding="utf-8")
+    subprocess.run(["git", "add", "docs/case.md"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=tmp_path, check=True)
+    monkeypatch.setattr(sanitizer, "ROOT", tmp_path)
+    assert sanitizer.sanitize_external_context([
+        {"path": "docs/case.md", "content": private_prose}
+    ])["allowed"] is False
+    result = sanitizer.sanitize_external_context([
+        {"path": "docs/untracked.md", "content": "public-looking"}
+    ])
+    assert result["allowed"] is False
+    assert "SOURCE_NOT_TRACKED" in result["reasons"]
+
+
 def test_review_schema_and_runtime_reject_invalid_or_stale_output():
     schema = json.loads((ROOT / "schemas/review-multiagente.schema.json").read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(schema)
@@ -290,7 +314,8 @@ def test_ranking_requires_evidence_and_is_stably_ordered():
 
 def test_self_recovery_routes_material_findings_back_to_tdd():
     assert next_recovery_action([{"severity": "P1"}]) == "REPRODUCE_TEST_FIX_REVERIFY"
-    assert next_recovery_action([]) == "READY_FOR_FINAL_GATES"
+    assert next_recovery_action([]) == "NO_MATERIAL_FINDING_DIAGNOSTIC_ONLY"
+    assert next_recovery_action([{"unexpected": True}]) == "BLOCK_INVALID_FINDINGS"
 
 
 def test_merge_gate_derives_external_review_from_changed_paths():

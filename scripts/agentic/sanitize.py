@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import re
 import hashlib
+import subprocess
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[2]
 
 DENIED_EXTENSIONS = {".pdf", ".doc", ".docx", ".docm", ".zip", ".png", ".jpg", ".jpeg"}
 PATTERNS = (
+    re.compile(r"(?i)\b(?:requerente|requerido|autor(?:a)?|reu|proprietari[oa])\b[^\n]{0,120}\b(?:imovel|lide|processo|parte)\b"),
     re.compile(r"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b"),
     re.compile(r"\b\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}\b"),
     re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b"),
@@ -51,6 +53,13 @@ def sanitize_external_context(files: list[dict]) -> dict:
                 continue
             if not source.is_file():
                 reasons.append("SOURCE_NOT_FOUND")
+                continue
+            tracked = subprocess.run(
+                ["git", "ls-files", "--error-unmatch", "--", path], cwd=root,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            if tracked.returncode != 0:
+                reasons.append("SOURCE_NOT_TRACKED")
                 continue
             actual = source.read_text(encoding="utf-8")
             if actual != content:
