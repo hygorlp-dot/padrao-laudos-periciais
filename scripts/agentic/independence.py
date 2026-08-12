@@ -32,7 +32,7 @@ def verify_independence_evidence(evidence: dict, expected_head: str, root: Path)
     except (OSError, json.JSONDecodeError):
         return ["EVIDENCE_RECORD_INVALID"]
     if not (set(execution) == {"execution_id", "role", "provider_record"}
-            and execution.get("role") in {"PR_REVIEWER", "SYSTEMIC_AUDITOR", "EXTERNAL_DIVERSITY_REVIEWER"}
+            and execution.get("role") in {"PR_REVIEWER", "SYSTEMIC_AUDITOR", "CLAUDE_EXTERNAL_DIVERSITY_REVIEWER"}
             and all(isinstance(execution.get(key), str) and execution[key].strip() for key in ("execution_id", "provider_record"))):
         reasons.append("EXECUTION_RECORD_NOT_PROVEN")
     if not (set(context) == {"context_id", "separate_from_implementer", "private_context_received"}

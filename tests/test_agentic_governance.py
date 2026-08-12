@@ -129,7 +129,7 @@ def _write_independence_evidence(root: Path):
     review.parent.mkdir(parents=True)
     review.write_text('{"conclusion":"APPROVED"}', encoding="utf-8")
     (root / "reviews/execution.json").write_text(json.dumps(
-        {"execution_id": "exec-review", "role": "PR_REVIEWER", "provider_record": "codex-task/exec-review"}), encoding="utf-8")
+        {"execution_id": "execution-review-001", "role": "PR_REVIEWER", "provider_record": "codex-task/exec-review"}), encoding="utf-8")
     (root / "reviews/context.json").write_text(json.dumps(
         {"context_id": "ctx-review", "separate_from_implementer": True, "private_context_received": False}), encoding="utf-8")
     (root / "reviews/permissions.json").write_text(json.dumps(
