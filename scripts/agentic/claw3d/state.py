@@ -109,7 +109,7 @@ class PresenceStore:
                     if raw.get("status") == "running" and (type(raw.get("process_id")) is not int or raw.get("process_id") <= 0):
                         self._diagnose("discarded running execution without valid process id")
                         continue
-                    clean["executions"][execution_id] = {key: raw.get(key) for key in ("role", "process_id", "started_at", "finished_at", "exit_code", "worktree", "head_sha", "lastSeen", "status")}
+                    clean["executions"][execution_id] = {key: raw.get(key) for key in ("role", "process_id", "started_at", "finished_at", "exit_code", "worktree", "head_sha", "owner_id", "lastSeen", "status")}
             clean["timestamp"] = data.get("timestamp") if type(data.get("timestamp")) is str else _utc_now()
             return clean
         except (OSError, json.JSONDecodeError, ValueError) as exc:
@@ -200,6 +200,57 @@ class PresenceStore:
             if execution and execution.get("status") == "running":
                 execution["process_id"] = int(process_id)
                 self._write_unlocked(data)
+
+    def reconcile_presence(self, active_executions: list[dict], terminal_roles: dict[str, dict],
+                           *, authoritative_owners: list[str], diagnostics=()) -> None:
+        """Atomically project current real executions; intermediate events are unnecessary."""
+        active = {}
+        for raw in active_executions:
+            if (not isinstance(raw, dict) or raw.get("role") not in AGENTS or
+                    type(raw.get("execution_id")) is not str or
+                    type(raw.get("process_id")) is not int or raw["process_id"] <= 0 or
+                    type(raw.get("owner_id")) is not str):
+                raise ValueError("invalid active execution projection")
+            active[raw["execution_id"]] = raw
+        if (not isinstance(terminal_roles, dict) or any(role not in AGENTS for role in terminal_roles) or
+                not isinstance(authoritative_owners, list) or
+                any(type(owner) is not str for owner in authoritative_owners)):
+            raise ValueError("invalid terminal role projection")
+        if not set(diagnostics).issubset({"RATE_LIMITED"}):
+            raise ValueError("invalid diagnostic projection")
+        now = time.time()
+        with self._locked():
+            data = self._read_unlocked()
+            for execution_id, execution in data["executions"].items():
+                if (execution.get("status") == "running" and execution_id not in active and
+                        execution.get("owner_id") in authoritative_owners):
+                    terminal = terminal_roles.get(execution["role"], {})
+                    exit_code = terminal.get("exit_code", 0)
+                    execution.update(status="finished" if exit_code == 0 else "error",
+                                     exit_code=exit_code, finished_at=_utc_now(), lastSeen=None)
+            for execution_id, raw in active.items():
+                existing = data["executions"].get(execution_id)
+                if existing and existing.get("status") != "running":
+                    continue
+                data["executions"][execution_id] = {
+                    "role": raw["role"], "process_id": raw["process_id"],
+                    "started_at": existing.get("started_at") if existing else _utc_now(),
+                    "finished_at": None, "exit_code": None, "worktree": raw.get("worktree"),
+                    "head_sha": raw.get("head_sha"), "lastSeen": now, "status": "running",
+                    "owner_id": raw["owner_id"],
+                }
+            active_roles = {raw["role"] for raw in data["executions"].values()
+                            if raw.get("status") == "running"}
+            for role in AGENTS:
+                if role in active_roles:
+                    data["agents"][role].update(state="working", lastSeen=now)
+                elif role in terminal_roles:
+                    data["agents"][role].update(state=terminal_roles[role]["state"], lastSeen=None)
+                elif data["agents"][role]["state"] == "working":
+                    data["agents"][role].update(state="idle", lastSeen=None)
+            self._write_unlocked(data)
+        for code in diagnostics:
+            self._diagnose(code)
 
     def finish_execution(self, execution_id: str, *, exit_code: int | None, cancelled: bool = False) -> None:
         with self._locked():

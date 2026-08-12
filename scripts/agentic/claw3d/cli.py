@@ -51,8 +51,13 @@ def main(argv=None) -> int:
             return subprocess.run(command, cwd=args.cwd, check=False).returncode
         # There is exactly one execution boundary. Once delegated to the
         # managed runner, no fallback may execute the child a second time.
-        result = runner.run(args.role, command, cwd=args.cwd)
-        return result.exit_code
+        try:
+            result = runner.run(args.role, command, cwd=args.cwd)
+            return result.exit_code
+        finally:
+            close = getattr(runner, "close", None)
+            if close:
+                close()
     store = PresenceStore.from_environment()
     if args.command == "set":
         store.set_state(args.agent_id, args.state)

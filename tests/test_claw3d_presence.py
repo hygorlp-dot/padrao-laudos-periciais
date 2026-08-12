@@ -40,6 +40,22 @@ def test_state_transitions_and_agent_state_are_independent(tmp_path):
         store.set_state("unknown", "working")
 
 
+def test_reconciliation_never_closes_another_process_owner(tmp_path):
+    store = PresenceStore(tmp_path)
+    store.reconcile_presence([
+        {"execution_id": "foreign-run", "role": "researcher", "process_id": 101,
+         "worktree": str(tmp_path), "head_sha": None, "owner_id": "foreign-owner"}
+    ], {}, authoritative_owners=["foreign-owner"])
+    store.reconcile_presence([], {"reviewer": {"state": "idle", "exit_code": 0, "sequence": 1}},
+                             authoritative_owners=["local-owner"])
+    assert store.internal_state()["executions"]["foreign-run"]["status"] == "running"
+    assert state_from_presence(store, "researcher") == "working"
+
+
+def state_from_presence(store, role):
+    return next(item["state"] for item in store.snapshot()["agents"] if item["agentId"] == role)
+
+
 def test_working_cannot_be_fabricated_without_execution_lease(tmp_path):
     store = PresenceStore(tmp_path)
     with pytest.raises(ValueError, match="execution lease"):

@@ -21,6 +21,15 @@ def state(store, role):
     return next(agent["state"] for agent in store.snapshot()["agents"] if agent["agentId"] == role)
 
 
+def wait_state(store, role, expected, timeout=1):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if state(store, role) == expected:
+            return
+        time.sleep(.01)
+    assert state(store, role) == expected
+
+
 def test_public_snapshot_is_rebuilt_from_first_party_whitelist(tmp_path):
     poisoned = {
         "workspaceId": "CNJ 0000000-00.0000.0.00.0000 Rua Particular, 123",
@@ -57,14 +66,14 @@ def test_managed_real_subprocess_lifecycle_and_exit_codes(tmp_path):
     store = PresenceStore(tmp_path)
     runner = ManagedAgentRunner(store=store, heartbeat_seconds=0.01)
     running = runner.start("implementer", [sys.executable, "-c", "import time; time.sleep(.15)"])
-    assert state(store, "implementer") == "working"
+    wait_state(store, "implementer", "working")
     assert running.wait() == 0
-    assert state(store, "implementer") == "idle"
+    wait_state(store, "implementer", "idle")
     failed = runner.run("reviewer", [sys.executable, "-c", "raise SystemExit(7)"])
     assert failed.exit_code == 7
-    assert state(store, "reviewer") == "error"
+    wait_state(store, "reviewer", "error")
     runner.clear_error("reviewer")
-    assert state(store, "reviewer") == "idle"
+    wait_state(store, "reviewer", "idle")
 
 
 def test_parallel_managed_processes_have_independent_leases(tmp_path):
@@ -72,12 +81,12 @@ def test_parallel_managed_processes_have_independent_leases(tmp_path):
     runner = ManagedAgentRunner(store=store, heartbeat_seconds=0.01)
     first = runner.start("implementer", [sys.executable, "-c", "import time; time.sleep(.12)"])
     second = runner.start("reviewer", [sys.executable, "-c", "import time; time.sleep(.3)"])
-    assert state(store, "implementer") == state(store, "reviewer") == "working"
+    wait_state(store, "implementer", "working"); wait_state(store, "reviewer", "working")
     assert first.wait() == 0
-    assert state(store, "implementer") == "idle"
+    wait_state(store, "implementer", "idle")
     assert state(store, "reviewer") == "working"
     assert second.wait() == 0
-    assert state(store, "reviewer") == "idle"
+    wait_state(store, "reviewer", "idle")
 
 
 def test_live_http_presence_tracks_real_parallel_processes(tmp_path):
@@ -92,11 +101,21 @@ def test_live_http_presence_tracks_real_parallel_processes(tmp_path):
         def remote_states():
             with urlopen(f"http://127.0.0.1:{port}/presence", timeout=2) as response:
                 return {item["agentId"]: item["state"] for item in json.load(response)["agents"]}
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            current = remote_states()
+            if current["implementer"] == current["reviewer"] == "working": break
+            time.sleep(.01)
         assert remote_states()["implementer"] == remote_states()["reviewer"] == "working"
         first.wait()
+        deadline = time.monotonic() + 1
         current = remote_states()
+        while time.monotonic() < deadline and current["implementer"] != "idle":
+            time.sleep(.01); current = remote_states()
         assert current["implementer"] == "idle" and current["reviewer"] == "working"
         second.wait()
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline and remote_states()["reviewer"] != "idle": time.sleep(.01)
         assert remote_states()["implementer"] == remote_states()["reviewer"] == "idle"
     finally:
         bridge.stop()
@@ -110,14 +129,12 @@ def test_same_role_remains_working_until_all_real_executions_finish(tmp_path):
     assert short.wait() == 0
     assert state(store, "researcher") == "working"
     assert long.wait() == 0
-    assert state(store, "researcher") == "idle"
+    wait_state(store, "researcher", "idle")
 
 
 def test_presence_failure_never_changes_managed_process_exit():
     class BrokenStore:
-        def begin_execution(self, *_args, **_kwargs): raise OSError("bridge down")
-        def heartbeat_execution(self, *_args, **_kwargs): raise OSError("bridge down")
-        def finish_execution(self, *_args, **_kwargs): raise OSError("bridge down")
+        def reconcile_presence(self, *_args, **_kwargs): raise OSError("bridge down")
 
     result = ManagedAgentRunner(store=BrokenStore(), heartbeat_seconds=0.01).run(
         "auditor", [sys.executable, "-c", "raise SystemExit(3)"]
@@ -191,9 +208,7 @@ def test_slow_presence_store_never_delays_real_process_spawn(tmp_path):
     spawned_at = tmp_path / "spawned.txt"
 
     class SlowStore:
-        def begin_execution(self, *_args, **_kwargs): time.sleep(.4)
-        def heartbeat_execution(self, *_args, **_kwargs): pass
-        def finish_execution(self, *_args, **_kwargs): pass
+        def reconcile_presence(self, *_args, **_kwargs): time.sleep(.4)
 
     started = time.monotonic()
     execution = ManagedAgentRunner(store=SlowStore(), heartbeat_seconds=.01).start(
@@ -207,17 +222,11 @@ def test_slow_presence_store_never_delays_real_process_spawn(tmp_path):
     assert execution.wait() == 0
 
 
-@pytest.mark.parametrize("blocked_method", ["begin_execution", "heartbeat_execution", "finish_execution"])
-def test_blocked_presence_store_never_delays_child_completion(tmp_path, blocked_method):
+def test_blocked_presence_store_never_delays_child_completion(tmp_path):
     release = threading.Event()
 
     class BlockingStore:
-        def begin_execution(self, *_args, **_kwargs):
-            if blocked_method == "begin_execution": release.wait(5)
-        def heartbeat_execution(self, *_args, **_kwargs):
-            if blocked_method == "heartbeat_execution": release.wait(5)
-        def finish_execution(self, *_args, **_kwargs):
-            if blocked_method == "finish_execution": release.wait(5)
+        def reconcile_presence(self, *_args, **_kwargs): release.wait(5)
 
     try:
         started = time.monotonic()
@@ -231,51 +240,119 @@ def test_blocked_presence_store_never_delays_child_completion(tmp_path, blocked_
 
 
 def test_completed_executions_do_not_leak_publisher_threads(tmp_path):
-    prefix = "presence-publisher-shared"
-    before = {thread.ident for thread in threading.enumerate() if thread.name == prefix}
-    runner = ManagedAgentRunner(store=PresenceStore(tmp_path), heartbeat_seconds=.01)
-    for _ in range(12):
+    before = len([thread for thread in threading.enumerate() if thread.name == "claw3d-telemetry-reconciler"])
+    pending_before = ManagedAgentRunner.telemetry_resource_counts()["pending_states"]
+    runners = [ManagedAgentRunner(store=PresenceStore(tmp_path / str(index)), heartbeat_seconds=.01) for index in range(12)]
+    for runner in runners:
         assert runner.run("reviewer", [sys.executable, "-c", "pass"]).exit_code == 0
+        runner.close()
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:
-        remaining = [thread for thread in threading.enumerate()
-                     if thread.name == prefix and thread.ident not in before]
-        if len(remaining) <= 1:
+        counts = ManagedAgentRunner.telemetry_resource_counts()
+        if counts["active_executions"] == 0 and counts["pending_states"] <= pending_before:
             break
         time.sleep(.01)
-    assert len(remaining) == 1
+    after = len([thread for thread in threading.enumerate() if thread.name == "claw3d-telemetry-reconciler"])
+    assert after <= max(1, before)
+    assert ManagedAgentRunner.telemetry_resource_counts()["active_executions"] == 0
+    assert ManagedAgentRunner.telemetry_resource_counts()["pending_states"] - pending_before <= len(AGENTS)
 
 
 def test_permanently_blocked_store_has_constant_thread_bound(tmp_path):
     release = threading.Event()
     class HungStore:
-        def begin_execution(self, *_args, **_kwargs): release.wait(5)
-        def finish_execution(self, *_args, **_kwargs): pass
+        def reconcile_presence(self, *_args, **_kwargs): release.wait(5)
+    before = len([thread for thread in threading.enumerate() if thread.name == "claw3d-telemetry-reconciler"])
+    pending_before = ManagedAgentRunner.telemetry_resource_counts()["pending_states"]
     runner = ManagedAgentRunner(store=HungStore(), heartbeat_seconds=.01)
     try:
         for _ in range(12):
             assert runner.run("reviewer", [sys.executable, "-c", "pass"]).exit_code == 0
         publishers = [thread for thread in threading.enumerate()
-                      if thread.name == "presence-publisher-shared" and thread.is_alive()]
-        assert len([thread for thread in publishers if thread.ident]) >= 1
-        assert runner._telemetry.qsize() <= runner._telemetry.maxsize
+                      if thread.name == "claw3d-telemetry-reconciler" and thread.is_alive()]
+        assert len(publishers) <= max(1, before)
+        counts = ManagedAgentRunner.telemetry_resource_counts()
+        assert counts["active_executions"] == 0
+        assert counts["pending_states"] - pending_before <= len(AGENTS)
     finally:
         release.set()
+        runner.close()
 
 
 def test_short_process_preserves_begin_before_finish(tmp_path):
     class RecordingStore:
         def __init__(self): self.calls = []
-        def begin_execution(self, *_args, **_kwargs): self.calls.append("begin")
-        def heartbeat_execution(self, *_args, **_kwargs): self.calls.append("heartbeat")
-        def finish_execution(self, *_args, **_kwargs): self.calls.append("finish")
+        def reconcile_presence(self, active, terminal, **_kwargs): self.calls.append((tuple(active), dict(terminal)))
 
     store = RecordingStore()
     result = ManagedAgentRunner(store=store, heartbeat_seconds=.01).run(
         "reviewer", [sys.executable, "-c", "pass"]
     )
     assert result.exit_code == 0
-    assert store.calls[0] == "begin" and store.calls[-1] == "finish"
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline and not any(not active for active, _ in store.calls): time.sleep(.01)
+    assert store.calls and store.calls[-1][0] == ()
+
+
+def test_live_process_does_not_become_stale_and_receives_heartbeat(tmp_path):
+    store = PresenceStore(tmp_path, stale_after_seconds=.04)
+    runner = ManagedAgentRunner(store=store, heartbeat_seconds=.01)
+    execution = runner.start("reviewer", [sys.executable, "-c", "import time; time.sleep(.5)"])
+    for _ in range(5):
+        time.sleep(.045)
+        assert execution.process.poll() is None
+        assert store.recover_stale() == []
+        assert state(store, "reviewer") == "working"
+    assert execution.wait() == 0
+    deadline = time.monotonic() + 1
+    while state(store, "reviewer") != "idle" and time.monotonic() < deadline: time.sleep(.01)
+    assert state(store, "reviewer") == "idle"
+    runner.close()
+
+
+def test_store_recovery_converges_to_current_real_state(tmp_path):
+    backing = PresenceStore(tmp_path)
+    release = threading.Event()
+    class RecoveringStore:
+        calls = 0
+        def reconcile_presence(self, active, terminal, **kwargs):
+            if not release.is_set(): release.wait(2)
+            backing.reconcile_presence(active, terminal, **kwargs)
+            self.calls += 1
+    runner = ManagedAgentRunner(store=RecoveringStore(), heartbeat_seconds=.01)
+    result = runner.run("reviewer", [sys.executable, "-c", "pass"])
+    assert result.exit_code == 0
+    release.set()
+    deadline = time.monotonic() + 2
+    while (RecoveringStore.calls < 2 or
+           any(item.get("status") == "running" for item in backing.internal_state()["executions"].values())):
+        if time.monotonic() >= deadline: break
+        time.sleep(.01)
+    assert state(backing, "reviewer") == "idle"
+    assert not any(item.get("status") == "running" for item in backing.internal_state()["executions"].values())
+    runner.close()
+
+
+def test_stress_120_short_executions_returns_resources_to_baseline(tmp_path):
+    store = PresenceStore(tmp_path)
+    runner = ManagedAgentRunner(store=store, heartbeat_seconds=.005)
+    before = ManagedAgentRunner.telemetry_resource_counts()
+    threads_before = len(threading.enumerate())
+    for index in range(120):
+        role = tuple(AGENTS)[index % len(AGENTS)]
+        assert runner.run(role, [sys.executable, "-c", "pass"]).exit_code == 0
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        counts = ManagedAgentRunner.telemetry_resource_counts()
+        if counts["active_executions"] == 0 and counts["pending_states"] <= before["pending_states"]:
+            break
+        time.sleep(.01)
+    runner.close()
+    counts = ManagedAgentRunner.telemetry_resource_counts()
+    assert counts["workers"] == 1
+    assert counts["active_executions"] == 0
+    assert counts["pending_states"] <= before["pending_states"]
+    assert len(threading.enumerate()) <= threads_before + 2
 
 
 def test_claude_adapter_makes_one_attempt_without_retry(tmp_path):
@@ -285,7 +362,9 @@ def test_claude_adapter_makes_one_attempt_without_retry(tmp_path):
     result = ClaudeManagedRunner(ManagedAgentRunner(store=store, heartbeat_seconds=0.01)).run_once(command)
     assert result.exit_code == 29
     assert calls_file.read_text() == "one"
-    assert state(store, "claude") == "idle"
+    wait_state(store, "claude", "idle")
+    deadline = time.monotonic() + 1
+    while not store.diagnostic_file.exists() and time.monotonic() < deadline: time.sleep(.01)
     assert "RATE_LIMITED" in store.diagnostic_file.read_text(encoding="utf-8")
 
 

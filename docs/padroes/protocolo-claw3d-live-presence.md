@@ -72,6 +72,34 @@ Depois que o subprocesso foi delegado ao runner, falha de observabilidade nunca
 inicia o comando novamente. Argumentos permanecem uma lista, `shell=False`, e
 o exit code do filho é preservado.
 
+## Lifecycle da telemetria
+
+A presença é uma projeção reconciliável do estado real atual, não um ledger de
+eventos. Um reconciliador process-wide é o único worker de publicação; novos
+runners não criam novos dispatchers.
+
+- `OWNER`: processo Python local;
+- `START`: importação do runtime first-party;
+- `STOP`: término do processo; runners possuem `close()` para retirar seu
+  estado desejado, sem encerrar subprocessos;
+- `RESOURCE BOUND`: um worker, nenhuma fila de eventos e memória proporcional
+  às execuções ativas mais um estado terminal por papel/owner;
+- `FAILURE MODE`: o store pode degradar ou bloquear o worker, mas nunca o
+  subprocesso nem seu exit code;
+- `RECOVERY MODE`: quando o store volta, recebe uma nova projeção do estado
+  atual e fecha leases que já não correspondem a processos ativos.
+
+Enquanto o subprocesso permanece vivo, a reconciliação renova o heartbeat.
+Quando termina, ele é removido imediatamente do registro ativo. Estado
+intermediário antigo não pode ressuscitá-lo. Execuções simultâneas do mesmo
+papel mantêm `working` enquanto ao menos uma permanecer ativa.
+
+`PROCESS_LIFETIME_COMPONENT = TRUE`
+
+`OBSERVABILITY_STATE_IS_RECONCILABLE = TRUE`
+
+`TERMINAL_STATE_DOMINATES_INTERMEDIATE_TELEMETRY = TRUE`
+
 `/health` prova somente liveness. Readiness exige `/health`, `/presence`, PID e
 token da mesma instância. O startup persiste `bridge.pid` apenas após essa
 verificação. Bridge sem PID é órfão e nunca é encerrado ou adotado
