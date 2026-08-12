@@ -86,6 +86,28 @@ def test_restore_rejects_tampered_authority_reason_or_payload():
     assert history.pending_proposals() == (proposal,)
 
 
+def test_values_with_ambiguous_repr_or_mutable_unsupported_types_are_rejected():
+    class Ambiguous:
+        def __init__(self, value):
+            self.value = value
+
+        def __repr__(self):
+            return "same-repr"
+
+    history = ValueHistory()
+    for value in (Ambiguous("trusted"), bytearray(b"AB")):
+        with pytest.raises((TypeError, ValueError), match="Tipo de valor não suportado"):
+            history.record_source(value)
+
+
+def test_reason_must_be_immutable_nonempty_text():
+    history = ValueHistory()
+    with pytest.raises((TypeError, ValueError), match="justificativa"):
+        history.override_professional("D", reason=["mutable"])
+    with pytest.raises((TypeError, ValueError), match="justificativa"):
+        history.override_professional("D", reason="   ")
+
+
 def test_generic_self_declared_authority_is_not_an_available_api():
     history = ValueHistory()
     assert not hasattr(history, "add")
