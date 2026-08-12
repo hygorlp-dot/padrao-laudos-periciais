@@ -94,6 +94,7 @@ def evaluate_repository_merge_gate(root: Path, base_sha: str, head_sha: str, sta
         raise ValueError("cannot derive canonical changeset") from exc
     review_types = {"PR_REVIEW": "codex", "SYSTEMIC_AUDIT": "systemic", "EXTERNAL_DIVERSITY": "claude"}
     verified = {}
+    identities = set()
     schema_path = root / "schemas/review-multiagente.schema.json"
     if not schema_path.is_file():
         schema_path = Path(__file__).resolve().parents[2] / "schemas/review-multiagente.schema.json"
@@ -107,7 +108,20 @@ def evaluate_repository_merge_gate(root: Path, base_sha: str, head_sha: str, sta
         if verify_independence_evidence(evidence, head_sha, root):
             continue
         kind = review_types.get(review.get("review_type"))
+        expected_role = {"codex": "PR_REVIEWER", "systemic": "SYSTEMIC_AUDITOR", "claude": "EXTERNAL_DIVERSITY_REVIEWER"}.get(kind)
+        try:
+            execution = json.loads((root / evidence["execution_record"]).read_text(encoding="utf-8"))
+            persisted = json.loads((root / evidence["persisted_review"]).read_text(encoding="utf-8"))
+        except (OSError, KeyError, json.JSONDecodeError):
+            continue
+        expected_persisted = json.loads(json.dumps(review))
+        expected_persisted["independence"]["evidence"].pop("persisted_review_sha256", None)
+        identity = (evidence.get("execution_record"), evidence.get("context_record"), evidence.get("checkout_record"))
+        if (review.get("base_sha") != base_sha or execution.get("role") != expected_role
+                or persisted != expected_persisted or identity in identities):
+            continue
         if kind:
+            identities.add(identity)
             verified[kind] = review
     bound = dict(state, head_sha=head_sha, expected_head_sha=head_sha,
                  codex_review="APPROVED" if "codex" in verified else "MISSING",
