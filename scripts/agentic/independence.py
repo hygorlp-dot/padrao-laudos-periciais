@@ -24,13 +24,28 @@ def verify_independence_evidence(evidence: dict, expected_head: str, root: Path)
         return ["STRUCTURED_EVIDENCE_INVALID"]
     if any(not path.is_file() for path in record_paths):
         return ["EVIDENCE_RECORD_NOT_FOUND"]
-    if any(not path.read_bytes() for path in (record_paths[0], record_paths[1], record_paths[3])):
-        return ["EVIDENCE_RECORD_EMPTY"]
     try:
+        execution = json.loads(record_paths[0].read_text(encoding="utf-8"))
+        context = json.loads(record_paths[1].read_text(encoding="utf-8"))
         checkout = json.loads(record_paths[2].read_text(encoding="utf-8"))
+        permissions = json.loads(record_paths[3].read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return ["CHECKOUT_RECORD_INVALID"]
-    if checkout != {"head_sha": expected_head, "isolated": True, "clean": True, "read_only": True}:
+        return ["EVIDENCE_RECORD_INVALID"]
+    if not (set(execution) == {"execution_id", "role", "provider_record"}
+            and execution.get("role") in {"PR_REVIEWER", "SYSTEMIC_AUDITOR", "EXTERNAL_DIVERSITY_REVIEWER"}
+            and all(isinstance(execution.get(key), str) and execution[key].strip() for key in ("execution_id", "provider_record"))):
+        reasons.append("EXECUTION_RECORD_NOT_PROVEN")
+    if not (set(context) == {"context_id", "separate_from_implementer", "private_context_received"}
+            and isinstance(context.get("context_id"), str) and context["context_id"].strip()
+            and context.get("separate_from_implementer") is True and context.get("private_context_received") is False):
+        reasons.append("CONTEXT_RECORD_NOT_PROVEN")
+    if not (set(permissions) == {"read_only", "implementation_write_access"}
+            and permissions.get("read_only") is True and permissions.get("implementation_write_access") is False):
+        reasons.append("PERMISSIONS_RECORD_NOT_PROVEN")
+    if not (set(checkout) == {"head_sha", "isolated", "clean", "read_only", "worktree"}
+            and checkout.get("head_sha") == expected_head and checkout.get("isolated") is True
+            and checkout.get("clean") is True and checkout.get("read_only") is True
+            and isinstance(checkout.get("worktree"), str) and checkout["worktree"].strip()):
         reasons.append("CHECKOUT_RECORD_NOT_PROVEN")
     digest = hashlib.sha256(record_paths[4].read_bytes()).hexdigest()
     if digest != evidence.get("persisted_review_sha256"):

@@ -9,10 +9,11 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 def _safe_path(value: str) -> str:
     raw = value.replace("\\", "/")
     path = PurePosixPath(raw)
-    if path.is_absolute() or ".." in path.parts:
+    windows_absolute = len(raw) >= 3 and raw[1:3] == ":/"
+    if path.is_absolute() or windows_absolute or ".." in path.parts:
         raise ValueError("unsafe review package path")
     normalized = path.as_posix()
-    if normalized.casefold().startswith("referencias/privadas/"):
+    if normalized.casefold() == "referencias/privadas" or normalized.casefold().startswith("referencias/privadas/"):
         raise ValueError("private path cannot enter review package")
     return normalized
 
