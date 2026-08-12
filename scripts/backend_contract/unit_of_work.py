@@ -10,6 +10,12 @@ class RollbackError(RuntimeError):
 
 class UnitOfWork:
     def __init__(self, *participants):
+        for participant in participants:
+            snapshot = getattr(participant, "snapshot", None)
+            restore = getattr(participant, "restore", None)
+            protocol_pair = callable(snapshot) and callable(restore)
+            if not protocol_pair and not isinstance(participant, (list, dict)):
+                raise TypeError("UnitOfWork exige participante reversível")
         self._participants = participants
 
     @staticmethod
@@ -25,17 +31,19 @@ class UnitOfWork:
         elif isinstance(participant, dict):
             participant.clear()
             participant.update(snapshot)
+        else:
+            raise TypeError("UnitOfWork exige participante reversível")
 
     def execute(self, operation):
         snapshots = [self._snapshot(item) for item in self._participants]
         try:
             return operation()
-        except Exception as original_error:
+        except BaseException as original_error:
             restore_errors = []
             for participant, snapshot in reversed(tuple(zip(self._participants, snapshots))):
                 try:
                     self._restore(participant, snapshot)
-                except Exception as restore_error:
+                except BaseException as restore_error:
                     restore_errors.append(restore_error)
             if restore_errors:
                 raise RollbackError(original_error, restore_errors) from original_error
