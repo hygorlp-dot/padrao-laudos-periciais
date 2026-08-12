@@ -608,9 +608,9 @@
                        {
                            "id": "CLAW3D_OBSERVABILITY",
                            "paths": ["scripts/agentic/claw3d/", "docs/padroes/protocolo-claw3d-live-presence.md"],
-                           "invariants": ["CLAW3D_IS_NON_AUTHORITATIVE"],
+                           "invariants": ["CLAW3D_IS_NON_AUTHORITATIVE", "REAL_COMMAND_EXECUTION_COUNT_EXACTLY_ONCE", "LIVENESS_IS_NOT_READINESS", "ORPHAN_BRIDGE_MUST_BE_DETECTED_SAFELY", "START_SUCCESS_REQUIRES_VERIFIED_INSTANCE", "EXIT_CODE_FIDELITY", "EXECUTION_LEASE_ISOLATION", "PUBLIC_PRESENCE_SNAPSHOT_MINIMAL"],
                            "schemas": [],
-                           "tests": ["tests/test_claw3d_presence.py"],
+                           "tests": ["tests/test_claw3d_presence.py", "tests/test_claw3d_managed_execution.py"],
                            "consumers": []
                        }
                    ]

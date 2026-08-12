@@ -3,6 +3,7 @@ import os
 import threading
 import time
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import urlopen
 
 import pytest
@@ -146,3 +147,57 @@ def test_runtime_is_ignored_and_powershell_operator_commands_exist():
     scripts = root / "scripts/agentic/claw3d"
     for name in ("Start-Claw3DAgentBridge.ps1", "Stop-Claw3DAgentBridge.ps1", "Get-Claw3DAgentState.ps1", "Set-Claw3DAgentState.ps1"):
         assert (scripts / name).is_file()
+
+
+def test_health_ok_presence_broken_is_not_ready(tmp_path):
+    class BrokenStore:
+        def recover_stale(self): raise ValueError("corrupt")
+        def snapshot(self): raise ValueError("corrupt")
+    bridge = PresenceBridge(BrokenStore(), port=0, instance_token="expected")
+    bridge.start()
+    try:
+        _, port = bridge.address
+        with urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as response:
+            assert json.load(response)["status"] == "ok"
+        with pytest.raises(HTTPError) as error:
+            urlopen(f"http://127.0.0.1:{port}/presence", timeout=2)
+        assert error.value.code == 503
+        payload = json.loads(error.value.read())
+        assert payload == {"status": "degraded", "error": "presence_unavailable"}
+    finally:
+        bridge.stop()
+
+
+@pytest.mark.parametrize("content", ["", "{", "[]", '{"agents":{"unknown":{"state":"working"}}}'])
+def test_corrupt_presence_state_degrades_without_connection_drop(tmp_path, content):
+    (tmp_path / "presence-state.json").write_text(content, encoding="utf-8")
+    bridge = PresenceBridge(PresenceStore(tmp_path), port=0)
+    bridge.start()
+    try:
+        _, port = bridge.address
+        with urlopen(f"http://127.0.0.1:{port}/presence", timeout=2) as response:
+            payload = json.load(response)
+        assert payload["workspaceId"] == "padrao-laudos-periciais"
+        assert all(item["state"] == "idle" for item in payload["agents"])
+    finally:
+        bridge.stop()
+
+
+def test_parallel_presence_requests_remain_valid(tmp_path):
+    bridge = PresenceBridge(PresenceStore(tmp_path), port=0)
+    bridge.start()
+    errors = []
+    try:
+        _, port = bridge.address
+        def fetch():
+            try:
+                with urlopen(f"http://127.0.0.1:{port}/presence", timeout=2) as response:
+                    assert json.load(response)["workspaceId"] == "padrao-laudos-periciais"
+            except Exception as exc:
+                errors.append(exc)
+        threads = [threading.Thread(target=fetch) for _ in range(12)]
+        for thread in threads: thread.start()
+        for thread in threads: thread.join()
+        assert errors == []
+    finally:
+        bridge.stop()

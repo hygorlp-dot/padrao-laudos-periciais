@@ -9,6 +9,14 @@ Não possui autoridade de domínio, orquestração, safety ou merge.
 
 `CLAW3D_FAILURE = NON_BLOCKING`
 
+`REAL_COMMAND_EXECUTION_COUNT_EXACTLY_ONCE = TRUE`
+
+`LIVENESS_IS_NOT_READINESS = TRUE`
+
+`START_SUCCESS_REQUIRES_VERIFIED_INSTANCE = TRUE`
+
+`EXECUTION_LEASE_ISOLATION = TRUE`
+
 O modo desta integração é `REMOTE_CLAW3D_PRESENCE_ENDPOINT`. O snapshot público
 é reconstruído por whitelist first-party e contém somente identificador, nome,
 estado operacional e timestamp dos cinco papéis. `workspaceId` é sempre a
@@ -56,6 +64,19 @@ $env:CLAW3D_LIVE_PRESENCE_ENABLED='1'
 O wrapper inicia o bridge quando habilitado e devolve o exit code real. O
 adapter Claude faz uma única tentativa: rate limit é erro operacional, sem loop
 automático de retry.
+
+O fallback não gerenciado é permitido somente antes da fronteira de execução.
+Depois que o subprocesso foi delegado ao runner, falha de observabilidade nunca
+inicia o comando novamente. Argumentos permanecem uma lista, `shell=False`, e
+o exit code do filho é preservado.
+
+`/health` prova somente liveness. Readiness exige `/health`, `/presence`, PID e
+token da mesma instância. O startup persiste `bridge.pid` apenas após essa
+verificação. Bridge sem PID é órfão e nunca é encerrado ou adotado
+automaticamente; processo estrangeiro permanece intocado.
+
+No Windows, os wrappers usam `powershell.exe -NoProfile -ExecutionPolicy
+Bypass -File ...`, sem mudança permanente da ExecutionPolicy da máquina.
 
 ## Capacidade local observada
 

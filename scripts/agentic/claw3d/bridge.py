@@ -21,8 +21,11 @@ class PresenceBridge:
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
                 if self.path in {"/presence", "/api/office/presence"}:
-                    bridge.store.recover_stale()
-                    payload, status = bridge.store.snapshot(), 200
+                    try:
+                        bridge.store.recover_stale()
+                        payload, status = bridge.store.snapshot(), 200
+                    except Exception:
+                        payload, status = {"status": "degraded", "error": "presence_unavailable"}, 503
                 elif self.path == "/health":
                     payload, status = {"status": "ok", "processId": os.getpid()}, 200
                     if bridge.instance_token:
@@ -33,6 +36,7 @@ class PresenceBridge:
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(encoded)))
+                self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(encoded)
 

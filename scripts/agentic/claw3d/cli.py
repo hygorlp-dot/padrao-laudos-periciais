@@ -46,10 +46,13 @@ def main(argv=None) -> int:
             parser.error("managed run requires a command")
         try:
             store = PresenceStore.from_environment()
-            result = ManagedAgentRunner(store=store).run(args.role, command, cwd=args.cwd)
-            return result.exit_code
+            runner = ManagedAgentRunner(store=store)
         except Exception:
             return subprocess.run(command, cwd=args.cwd, check=False).returncode
+        # There is exactly one execution boundary. Once delegated to the
+        # managed runner, no fallback may execute the child a second time.
+        result = runner.run(args.role, command, cwd=args.cwd)
+        return result.exit_code
     store = PresenceStore.from_environment()
     if args.command == "set":
         store.set_state(args.agent_id, args.state)

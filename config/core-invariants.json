@@ -672,6 +672,34 @@
                            "testes":  ["tests/test_claw3d_presence.py"],
                            "global":  false,
                            "bloqueante":  true
+                       },
+                       {
+                           "id": "REAL_COMMAND_EXECUTION_COUNT_EXACTLY_ONCE", "descricao": "Falha de observabilidade nunca repete o subprocesso observado.",
+                           "severidade": "P0", "boundaries": ["CLAW3D_OBSERVABILITY"], "testes": ["tests/test_claw3d_managed_execution.py"], "global": false, "bloqueante": true
+                       },
+                       {
+                           "id": "LIVENESS_IS_NOT_READINESS", "descricao": "Processo vivo não prova que o endpoint de presença está utilizável.",
+                           "severidade": "P1", "boundaries": ["CLAW3D_OBSERVABILITY"], "testes": ["tests/test_claw3d_presence.py"], "global": false, "bloqueante": true
+                       },
+                       {
+                           "id": "ORPHAN_BRIDGE_MUST_BE_DETECTED_SAFELY", "descricao": "Bridge órfão é detectado sem encerrar processo cuja identidade não esteja provada.",
+                           "severidade": "P1", "boundaries": ["CLAW3D_OBSERVABILITY"], "testes": ["tests/test_claw3d_managed_execution.py"], "global": false, "bloqueante": true
+                       },
+                       {
+                           "id": "START_SUCCESS_REQUIRES_VERIFIED_INSTANCE", "descricao": "Startup exige processo, identidade, health e presença verificados.",
+                           "severidade": "P1", "boundaries": ["CLAW3D_OBSERVABILITY"], "testes": ["tests/test_claw3d_managed_execution.py"], "global": false, "bloqueante": true
+                       },
+                       {
+                           "id": "EXIT_CODE_FIDELITY", "descricao": "Observabilidade não altera nem mascara o exit code do subprocesso.",
+                           "severidade": "P1", "boundaries": ["CLAW3D_OBSERVABILITY"], "testes": ["tests/test_claw3d_managed_execution.py"], "global": false, "bloqueante": true
+                       },
+                       {
+                           "id": "EXECUTION_LEASE_ISOLATION", "descricao": "Uma lease nunca encerra ou altera outra execução legítima.",
+                           "severidade": "P1", "boundaries": ["CLAW3D_OBSERVABILITY"], "testes": ["tests/test_claw3d_managed_execution.py"], "global": false, "bloqueante": true
+                       },
+                       {
+                           "id": "PUBLIC_PRESENCE_SNAPSHOT_MINIMAL", "descricao": "O snapshot público contém somente a whitelist de presença não sensível.",
+                           "severidade": "P0", "boundaries": ["CLAW3D_OBSERVABILITY"], "testes": ["tests/test_claw3d_presence.py"], "global": false, "bloqueante": true
                        }
                    ]
 }

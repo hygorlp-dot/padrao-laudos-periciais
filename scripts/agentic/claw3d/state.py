@@ -87,6 +87,8 @@ class PresenceStore:
             return self._empty()
         try:
             data = json.loads(self.state_file.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("presence state root must be an object")
             agents = data.get("agents") if isinstance(data.get("agents"), dict) else {}
             executions = data.get("executions") if isinstance(data.get("executions"), dict) else {}
             clean = self._empty()

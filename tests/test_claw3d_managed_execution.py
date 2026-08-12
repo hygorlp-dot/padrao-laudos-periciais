@@ -3,12 +3,17 @@ import os
 import subprocess
 import sys
 import time
+import socket
+from pathlib import Path
 
 from urllib.request import urlopen
+
+import pytest
 
 from scripts.agentic.claw3d import AGENTS, ClaudeManagedRunner, PresenceBridge, PresenceStore
 from scripts.agentic.claw3d.capabilities import detect_codex_capability
 from scripts.agentic.claw3d.runner import ManagedAgentRunner
+from scripts.agentic.claw3d import cli as claw_cli
 
 
 def state(store, role):
@@ -200,3 +205,140 @@ def test_enabled_wrapper_store_failure_does_not_block_child(tmp_path):
                             cwd=root, env=env, capture_output=True, text=True)
     assert result.returncode == 0
     assert "Python" in result.stdout
+
+
+def test_observability_failure_never_executes_command_twice(tmp_path, monkeypatch):
+    marker = tmp_path / "executions.txt"
+    command = [sys.executable, "-c", f"from pathlib import Path; p=Path({str(marker)!r}); p.write_text((p.read_text() if p.exists() else '')+'x')"]
+
+    class PostSpawnFailure:
+        def __init__(self, **_kwargs): pass
+        def run(self, *_args, **_kwargs):
+            subprocess.run(command, check=True)
+            raise RuntimeError("observability failed after spawn")
+
+    monkeypatch.setattr(claw_cli, "ManagedAgentRunner", PostSpawnFailure)
+    with pytest.raises(RuntimeError):
+        claw_cli.main(["run", "reviewer", "--command-json", json.dumps(command)])
+    assert marker.read_text() == "x"
+
+
+def test_store_initialization_failure_executes_child_once(tmp_path, monkeypatch):
+    marker = tmp_path / "executions.txt"
+    command = [sys.executable, "-c", f"from pathlib import Path; Path({str(marker)!r}).write_text('x')"]
+    monkeypatch.setattr(claw_cli.PresenceStore, "from_environment", classmethod(lambda cls: (_ for _ in ()).throw(OSError("store"))))
+    assert claw_cli.main(["run", "reviewer", "--command-json", json.dumps(command)]) == 0
+    assert marker.read_text() == "x"
+
+
+def test_child_nonzero_exit_is_not_retried(tmp_path):
+    marker = tmp_path / "executions.txt"
+    command = [sys.executable, "-c", f"from pathlib import Path; p=Path({str(marker)!r}); p.write_text('x'); raise SystemExit(9)"]
+    assert claw_cli.main(["run", "reviewer", "--command-json", json.dumps(command)]) == 9
+    assert marker.read_text() == "x"
+
+
+def test_command_argv_is_preserved_without_shell(tmp_path):
+    output = tmp_path / "argv.json"
+    arguments = ["space value", 'quote"value', "unicode-ç", "&|;$()", "", "x" * 4096]
+    command = [sys.executable, "-c", "import json,sys;from pathlib import Path;Path(sys.argv[1]).write_text(json.dumps(sys.argv[2:],ensure_ascii=False),encoding='utf-8')", str(output), *arguments]
+    result = ManagedAgentRunner(store=PresenceStore(tmp_path / "state"), heartbeat_seconds=.01).run("implementer", command, cwd=tmp_path)
+    assert result.exit_code == 0
+    assert json.loads(output.read_text(encoding="utf-8")) == arguments
+
+
+def _free_port():
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _powershell(script, *arguments, env):
+    return subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), *map(str, arguments)],
+                          capture_output=True, text=True, env=env, timeout=20)
+
+
+def test_start_stop_start_cycle_is_idempotent(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    scripts = root / "scripts/agentic/claw3d"
+    port = _free_port()
+    env = dict(os.environ, CLAW3D_LIVE_PRESENCE_ENABLED="1", CLAW3D_AGENT_STATE_DIR=str(tmp_path))
+    start, stop = scripts / "Start-Claw3DAgentBridge.ps1", scripts / "Stop-Claw3DAgentBridge.ps1"
+    try:
+        first = _powershell(start, "-Port", port, env=env)
+        assert first.returncode == 0 and "ready" in first.stdout.casefold()
+        identity = json.loads((tmp_path / "bridge.pid").read_text())
+        second = _powershell(start, "-Port", port, env=env)
+        assert second.returncode == 0
+        assert json.loads((tmp_path / "bridge.pid").read_text())["pid"] == identity["pid"]
+        assert _powershell(stop, "-Port", port, env=env).returncode == 0
+        assert _powershell(start, "-Port", port, env=env).returncode == 0
+    finally:
+        _powershell(stop, "-Port", port, env=env)
+
+
+def test_parallel_start_attempts_create_single_bridge(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    script = root / "scripts/agentic/claw3d/Start-Claw3DAgentBridge.ps1"
+    stop = root / "scripts/agentic/claw3d/Stop-Claw3DAgentBridge.ps1"
+    port = _free_port()
+    env = dict(os.environ, CLAW3D_LIVE_PRESENCE_ENABLED="1", CLAW3D_AGENT_STATE_DIR=str(tmp_path))
+    command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Port", str(port)]
+    processes = [subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env) for _ in range(2)]
+    try:
+        results = [process.communicate(timeout=20) + (process.returncode,) for process in processes]
+        assert [item[2] for item in results] == [0, 0]
+        identity = json.loads((tmp_path / "bridge.pid").read_text())
+        with urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as response:
+            assert json.load(response)["processId"] == identity["pid"]
+    finally:
+        _powershell(stop, "-Port", port, env=env)
+
+
+def test_first_party_orphan_bridge_is_detected_and_not_killed(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    port = _free_port()
+    env = dict(os.environ, CLAW3D_AGENT_STATE_DIR=str(tmp_path))
+    process = subprocess.Popen([sys.executable, "-m", "scripts.agentic.claw3d.bridge", "--port", str(port), "--instance-token", "orphan"], cwd=root, env=env)
+    stop = root / "scripts/agentic/claw3d/Stop-Claw3DAgentBridge.ps1"
+    try:
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                urlopen(f"http://127.0.0.1:{port}/health", timeout=.2).close(); break
+            except OSError: time.sleep(.05)
+        result = _powershell(stop, "-Port", port, env=env)
+        assert result.returncode != 0
+        assert process.poll() is None
+    finally:
+        process.terminate(); process.wait(timeout=5)
+
+
+def test_stale_pid_file_does_not_kill_reused_pid(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    port = _free_port()
+    innocent = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(10)"])
+    (tmp_path / "bridge.pid").write_text(json.dumps({"pid": innocent.pid, "module":"scripts.agentic.claw3d.bridge", "port":port, "instanceToken":"stale"}))
+    env = dict(os.environ, CLAW3D_AGENT_STATE_DIR=str(tmp_path))
+    try:
+        result = _powershell(root / "scripts/agentic/claw3d/Stop-Claw3DAgentBridge.ps1", "-Port", port, env=env)
+        assert result.returncode != 0
+        assert innocent.poll() is None
+    finally:
+        innocent.terminate(); innocent.wait(timeout=5)
+
+
+def test_foreign_process_on_bridge_port_is_never_killed_and_start_leaves_no_pid(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    port = _free_port()
+    foreign = subprocess.Popen([sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"],
+                               cwd=tmp_path, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    env = dict(os.environ, CLAW3D_LIVE_PRESENCE_ENABLED="1", CLAW3D_AGENT_STATE_DIR=str(tmp_path / "state"))
+    try:
+        time.sleep(.2)
+        result = _powershell(root / "scripts/agentic/claw3d/Start-Claw3DAgentBridge.ps1", "-Port", port, env=env)
+        assert result.returncode != 0
+        assert foreign.poll() is None
+        assert not (tmp_path / "state/bridge.pid").exists()
+    finally:
+        foreign.terminate(); foreign.wait(timeout=5)
