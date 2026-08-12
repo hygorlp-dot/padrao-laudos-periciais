@@ -13,6 +13,7 @@ from scripts.agentic import (
     evaluate_independence,
     evaluate_merge_gate,
     evaluate_merge_gate_for_paths,
+    evaluate_repository_merge_gate,
     next_recovery_action,
     rank_boundaries,
     sanitize_external_context,
@@ -127,13 +128,17 @@ def _write_independence_evidence(root: Path):
     review = root / "reviews/review.json"
     review.parent.mkdir(parents=True)
     review.write_text('{"conclusion":"APPROVED"}', encoding="utf-8")
-    for name in ("execution", "context", "permissions"):
-        (root / f"reviews/{name}.txt").write_text(name, encoding="utf-8")
+    (root / "reviews/execution.json").write_text(json.dumps(
+        {"execution_id": "exec-review", "role": "PR_REVIEWER", "provider_record": "codex-task/exec-review"}), encoding="utf-8")
+    (root / "reviews/context.json").write_text(json.dumps(
+        {"context_id": "ctx-review", "separate_from_implementer": True, "private_context_received": False}), encoding="utf-8")
+    (root / "reviews/permissions.json").write_text(json.dumps(
+        {"read_only": True, "implementation_write_access": False}), encoding="utf-8")
     (root / "reviews/checkout.json").write_text(json.dumps(
-        {"head_sha": HEAD, "isolated": True, "clean": True, "read_only": True}), encoding="utf-8")
-    return {"execution_record": "reviews/execution.txt", "context_record": "reviews/context.txt",
+        {"head_sha": HEAD, "isolated": True, "clean": True, "read_only": True, "worktree": "C:/isolated/review"}), encoding="utf-8")
+    return {"execution_record": "reviews/execution.json", "context_record": "reviews/context.json",
             "checkout_record": "reviews/checkout.json", "checkout_head_sha": HEAD,
-            "permissions_record": "reviews/permissions.txt", "persisted_review": "reviews/review.json",
+            "permissions_record": "reviews/permissions.json", "persisted_review": "reviews/review.json",
             "persisted_review_sha256": hashlib.sha256(review.read_bytes()).hexdigest()}
 
 
@@ -157,6 +162,19 @@ def test_independence_requires_verifiable_records_not_only_self_attested_boolean
     )
     assert result["independence_proven"] is False
     assert "STRUCTURED_EVIDENCE_MISSING" in result["reasons"]
+
+
+def test_independence_rejects_nonempty_but_forged_evidence_records(tmp_path):
+    evidence = _write_independence_evidence(tmp_path)
+    (tmp_path / evidence["execution_record"]).write_text("forged", encoding="utf-8")
+    result = evaluate_independence(
+        {"execution_id": "impl", "context_id": "ctx-impl", "worktree": "C:/impl"},
+        {"execution_id": "review", "context_id": "ctx-review", "worktree": "C:/review",
+         "implementation_write_access": False, "private_context_received": False,
+         "head_sha": HEAD, "persisted_evidence": True, "evidence": evidence},
+        HEAD, evidence_root=tmp_path,
+    )
+    assert result["independence_proven"] is False
 
 
 def test_review_package_is_first_party_exact_head_and_excludes_private_paths(tmp_path):
@@ -185,6 +203,11 @@ def test_review_package_is_first_party_exact_head_and_excludes_private_paths(tmp
     with pytest.raises(ValueError):
         build_review_package(issue=31, base_sha=BASE, head_sha=HEAD,
                              changed_files=["REFERENCIAS/PRIVADAS/caso.txt"])
+    for unsafe in ("C:/outside.txt", "referencias/privadas"):
+        with pytest.raises(ValueError):
+            build_review_package(issue=31, base_sha=BASE, head_sha=HEAD,
+                                 changed_files=[unsafe], adrs=[unsafe], schemas=[unsafe],
+                                 tests=[unsafe], dependencies=[unsafe])
 
 
 @pytest.mark.parametrize("unsafe", [
@@ -275,6 +298,39 @@ def test_merge_gate_derives_external_review_from_changed_paths():
     }
     result = evaluate_merge_gate_for_paths(state, ["scripts/agentic/gates.py"])
     assert result["status"] == "BLOCKED" and "claude_review" in result["reasons"]
+
+
+def test_repository_merge_gate_derives_git_diff_and_verifies_persisted_reviews(tmp_path):
+    import subprocess
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Synthetic Test"], cwd=tmp_path, check=True)
+    (tmp_path / "README.md").write_text("base", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=tmp_path, check=True)
+    base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    (tmp_path / "scripts/agentic").mkdir(parents=True)
+    (tmp_path / "scripts/agentic/gate.py").write_text("material", encoding="utf-8")
+    subprocess.run(["git", "add", "scripts/agentic/gate.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "head"], cwd=tmp_path, check=True)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    state = {"tests": "PASS", "verify_core": "PASS", "ci": "PASS", "privacy": "PASS",
+             "p0_open": 0, "p1_material_open": 0, "dependency_merged": True,
+             "cross_model_disagreement_material": 0, "external_egress_gate": "PASS"}
+    result = evaluate_repository_merge_gate(tmp_path, base, head, state, reviews=[])
+    assert result["status"] == "BLOCKED"
+    assert {"codex_review", "systemic_audit", "claude_review"} <= set(result["reasons"])
+
+
+def test_repository_merge_gate_rejects_caller_claims_without_review_artifacts(tmp_path):
+    state = {"head_sha": HEAD, "expected_head_sha": HEAD, "tests": "PASS", "verify_core": "PASS",
+             "ci": "PASS", "privacy": "PASS", "p0_open": 0, "p1_material_open": 0,
+             "codex_review": "APPROVED", "systemic_audit": "APPROVED", "independence_proven": True,
+             "codex_independence_evidence_verified": True, "systemic_independence_evidence_verified": True,
+             "external_egress_gate": "PASS", "dependency_merged": True,
+             "cross_model_disagreement_material": 0}
+    with pytest.raises(ValueError):
+        evaluate_repository_merge_gate(tmp_path, BASE, HEAD, state, reviews=[])
 
 
 def test_merge_gate_blocks_stale_missing_external_review_ci_privacy_or_dependency():
