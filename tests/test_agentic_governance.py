@@ -275,6 +275,40 @@ def test_review_package_derives_merge_base_and_hashes_binary_blob_bytes(tmp_path
         )
 
 
+def test_review_package_uses_nul_diff_for_unicode_path(tmp_path, monkeypatch):
+    import subprocess
+    import scripts.agentic.package as package_module
+    import scripts.agentic.sanitize as sanitizer
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Synthetic Test"], cwd=tmp_path, check=True)
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config/core-boundaries.json").write_text('{"boundaries":[]}', encoding="utf-8")
+    (tmp_path / "config/core-invariants.json").write_text('{"invariants":[]}', encoding="utf-8")
+    subprocess.run(["git", "add", "config"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=tmp_path, check=True)
+    base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    path = "scripts/agentic/ação.py"
+    (tmp_path / "scripts/agentic").mkdir(parents=True)
+    payload = b"print('ok')\n"
+    (tmp_path / path).write_bytes(payload)
+    subprocess.run(["git", "add", "--", path], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "unicode"], cwd=tmp_path, check=True)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    monkeypatch.setattr(package_module, "ROOT", tmp_path)
+    monkeypatch.setattr(sanitizer, "ROOT", tmp_path)
+    package = package_module.build_review_package(
+        issue=31, base_sha=base, head_sha=head, changed_files=[], repository_root=tmp_path,
+        ci="PASS",
+    )
+    assert package["change_manifest"] == [{
+        "path_sha256": hashlib.sha256(path.encode("utf-8")).hexdigest(),
+        "content_sha256": hashlib.sha256(payload).hexdigest(),
+        "status": "PRESENT",
+    }]
+    assert package["ci"] == {"declared_status": "PASS", "trusted": False}
+
+
 def test_review_package_marks_test_claims_untrusted_and_requires_head_paths():
     import subprocess
     actual_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
