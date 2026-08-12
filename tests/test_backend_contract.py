@@ -184,19 +184,24 @@ class CaseIdentityAndStateTest(unittest.TestCase):
             def snapshot(self):
                 return {"fake": "snapshot"}
 
-        values = RestoreOnlyList(["before"])
-        mapping = SnapshotOnlyDict(value="before")
-        uow = UnitOfWork(values, mapping)
+        for participant in (RestoreOnlyList(["before"]), SnapshotOnlyDict(value="before")):
+            with self.assertRaisesRegex(TypeError, "participante reversível"):
+                UnitOfWork(participant)
 
-        def failing_change():
-            values[:] = ["dirty"]
-            mapping["value"] = "dirty"
-            raise RuntimeError("rollback")
+    def test_unit_of_work_rejects_builtin_subclasses_with_untracked_extra_state(self):
+        class AuthorityList(list):
+            pass
 
-        with self.assertRaisesRegex(RuntimeError, "rollback"):
-            uow.execute(failing_change)
-        self.assertEqual(values, ["before"])
-        self.assertEqual(mapping, {"value": "before"})
+        class AuthorityDict(dict):
+            pass
+
+        values = AuthorityList(["before"])
+        values.authority = "SOURCE"
+        mapping = AuthorityDict(value="before")
+        mapping.authority = "SOURCE"
+        for participant in (values, mapping):
+            with self.assertRaisesRegex(TypeError, "participante reversível"):
+                UnitOfWork(participant)
 
 
 class RevisionAndAuthorityTest(unittest.TestCase):
