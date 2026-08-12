@@ -35,6 +35,8 @@ Esta pasta contém os contratos de dados iniciais do projeto em JSON Schema Draf
   veredito de grounding.
 - `trilha-auditoria-agente.schema.json`: execução profissional auditável sem
   chain-of-thought ou raciocínio privado.
+- `review-multiagente.schema.json`: output estruturado de revisão independente,
+  com vínculo ao HEAD, prova de independência, findings e ranking auditável.
 
 Os schemas rejeitam propriedades não declaradas. Alegações, documentos, constatações, inferências e resultados inconclusivos devem permanecer semanticamente separados.
 
