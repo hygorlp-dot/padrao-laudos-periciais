@@ -12,18 +12,27 @@ from uuid import uuid4
 from .models import ArtifactStatus
 
 
-def _deep_freeze(value):
+def _deep_freeze(value, seen=None):
+    seen = set() if seen is None else seen
+    is_container = type(value) in {dict, list, tuple, set, frozenset}
+    if is_container and id(value) in seen:
+        raise ValueError("Container cíclico não suportado")
+    if is_container:
+        seen.add(id(value))
     if type(value) is dict:
         if not all(type(key) is str for key in value):
             raise TypeError("Tipo de valor não suportado: chave não textual")
-        return MappingProxyType({key: _deep_freeze(item) for key, item in value.items()})
-    if type(value) in {list, tuple}:
-        return tuple(_deep_freeze(item) for item in value)
-    if type(value) in {set, frozenset}:
-        return frozenset(_deep_freeze(item) for item in value)
-    if value is None or type(value) in {bool, int, float, str, bytes, Decimal}:
+        frozen = MappingProxyType({key: _deep_freeze(item, seen) for key, item in value.items()})
+    elif type(value) in {list, tuple}:
+        frozen = tuple(_deep_freeze(item, seen) for item in value)
+    elif type(value) in {set, frozenset}:
+        frozen = frozenset(_deep_freeze(item, seen) for item in value)
+    elif value is None or type(value) in {bool, int, float, str, bytes, Decimal}:
         return deepcopy(value)
-    raise TypeError(f"Tipo de valor não suportado: {type(value).__name__}")
+    else:
+        raise TypeError(f"Tipo de valor não suportado: {type(value).__name__}")
+    seen.remove(id(value))
+    return frozen
 
 
 def _canonical(value):
@@ -34,14 +43,18 @@ def _canonical(value):
     if isinstance(value, frozenset):
         items = [_canonical(item) for item in value]
         return ["set", sorted(items, key=lambda item: json.dumps(item, ensure_ascii=True, sort_keys=True))]
-    if isinstance(value, ValueEntry):
+    if type(value) is ValueEntry:
         return ["entry", value.authority.value, _canonical(value.value), value.created_at, value.reason]
-    if isinstance(value, bytes):
+    if type(value) is bytes:
         return ["bytes", value.hex()]
-    if isinstance(value, Decimal):
+    if type(value) is Decimal:
         return ["decimal", str(value)]
-    if value is None or isinstance(value, (bool, int, float, str)):
+    if value is None or type(value) in {bool, str}:
         return [type(value).__name__, value]
+    if type(value) is int:
+        return ["int", hex(value)]
+    if type(value) is float:
+        return ["float", value.hex()]
     raise TypeError(f"Tipo de valor não suportado: {type(value).__name__}")
 
 
@@ -199,7 +212,7 @@ class ValueHistory:
                 _snapshot_payload(snapshot.history_id, snapshot.entries),
                 hashlib.sha256,
             ).hexdigest()
-        except (TypeError, ValueError) as exc:
+        except (AttributeError, TypeError, ValueError) as exc:
             raise ValueError("Snapshot de ValueHistory inválido") from exc
         if not hmac.compare_digest(snapshot.signature, expected):
             raise ValueError("Snapshot de ValueHistory inválido")

@@ -116,6 +116,29 @@ def test_scalar_subclasses_with_hidden_state_are_rejected():
         ValueHistory().override_professional("D", reason=StatefulStr("reason"))
 
 
+def test_every_accepted_integer_can_be_snapshotted_and_restored():
+    history = ValueHistory()
+    source = history.record_source(10 ** 5000)
+    snapshot = history.snapshot()
+    history.propose_ai("proposal")
+    history.restore(snapshot)
+    assert history.effective() == source
+
+
+def test_cyclic_container_and_malformed_snapshot_fail_closed():
+    cyclic = []
+    cyclic.append(cyclic)
+    with pytest.raises(ValueError, match="cíclico"):
+        ValueHistory().record_source(cyclic)
+
+    history = ValueHistory()
+    history.record_source("A")
+    snapshot = history.snapshot()
+    malformed = replace(snapshot, entries=(replace(snapshot.entries[0], authority="FORGED"),))
+    with pytest.raises(ValueError, match="Snapshot de ValueHistory inválido"):
+        history.restore(malformed)
+
+
 def test_reason_must_be_immutable_nonempty_text():
     history = ValueHistory()
     with pytest.raises((TypeError, ValueError), match="justificativa"):
