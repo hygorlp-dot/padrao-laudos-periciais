@@ -31,9 +31,14 @@ def evaluate_external_diversity_gate(triggers: list[str]) -> dict:
 
 
 def next_recovery_action(findings: list[dict]) -> str:
-    if any(item.get("severity") in {"P0", "P1"} for item in findings):
+    if not isinstance(findings, list) or any(
+        not isinstance(item, dict) or item.get("severity") not in {"P0", "P1", "P2"}
+        for item in findings
+    ):
+        return "BLOCK_INVALID_FINDINGS"
+    if any(item["severity"] in {"P0", "P1"} for item in findings):
         return "REPRODUCE_TEST_FIX_REVERIFY"
-    return "READY_FOR_FINAL_GATES"
+    return "NO_MATERIAL_FINDING_DIAGNOSTIC_ONLY"
 
 
 def evaluate_merge_gate(state: dict) -> dict:
