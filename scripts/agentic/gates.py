@@ -108,17 +108,20 @@ def evaluate_repository_merge_gate(root: Path, base_sha: str, head_sha: str, sta
         if verify_independence_evidence(evidence, head_sha, root):
             continue
         kind = review_types.get(review.get("review_type"))
-        expected_role = {"codex": "PR_REVIEWER", "systemic": "SYSTEMIC_AUDITOR", "claude": "EXTERNAL_DIVERSITY_REVIEWER"}.get(kind)
+        expected_role = {"codex": "PR_REVIEWER", "systemic": "SYSTEMIC_AUDITOR", "claude": "CLAUDE_EXTERNAL_DIVERSITY_REVIEWER"}.get(kind)
         try:
             execution = json.loads((root / evidence["execution_record"]).read_text(encoding="utf-8"))
+            context = json.loads((root / evidence["context_record"]).read_text(encoding="utf-8"))
+            checkout = json.loads((root / evidence["checkout_record"]).read_text(encoding="utf-8"))
             persisted = json.loads((root / evidence["persisted_review"]).read_text(encoding="utf-8"))
         except (OSError, KeyError, json.JSONDecodeError):
             continue
         expected_persisted = json.loads(json.dumps(review))
         expected_persisted["independence"]["evidence"].pop("persisted_review_sha256", None)
-        identity = (evidence.get("execution_record"), evidence.get("context_record"), evidence.get("checkout_record"))
+        identity = (execution.get("execution_id"), context.get("context_id"), checkout.get("worktree"), execution.get("provider_record"))
         if (review.get("base_sha") != base_sha or execution.get("role") != expected_role
-                or persisted != expected_persisted or identity in identities):
+                or review.get("execution_id") != execution.get("execution_id")
+                or persisted != expected_persisted or identity in identities or any(not value for value in identity)):
             continue
         if kind:
             identities.add(identity)
