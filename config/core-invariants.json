@@ -621,6 +621,19 @@
                                       ],
                            "global":  true,
                            "bloqueante":  true
+                       },
+                       {
+                           "id":  "PROPOSAL_NOT_EFFECTIVE_WITHOUT_DECISION",
+                           "descricao":  "Proposta de IA permanece auditável, mas não se torna valor efetivo sem decisão do motor ou do perito.",
+                           "severidade":  "P1",
+                           "boundaries":  [
+                                              "BACKEND_AUTHORITY"
+                                          ],
+                           "testes":  [
+                                          "tests/test_proposal_authority.py"
+                                      ],
+                           "global":  true,
+                           "bloqueante":  true
                        }
                    ]
 }
