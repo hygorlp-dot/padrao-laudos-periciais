@@ -1,6 +1,13 @@
 from copy import deepcopy
 
 
+class RollbackError(RuntimeError):
+    def __init__(self, original_error, restore_errors):
+        super().__init__("Falha ao restaurar integralmente a UnitOfWork")
+        self.original_error = original_error
+        self.restore_errors = tuple(restore_errors)
+
+
 class UnitOfWork:
     def __init__(self, *participants):
         self._participants = participants
@@ -23,9 +30,15 @@ class UnitOfWork:
         snapshots = [self._snapshot(item) for item in self._participants]
         try:
             return operation()
-        except Exception:
-            for participant, snapshot in zip(self._participants, snapshots):
-                self._restore(participant, snapshot)
+        except Exception as original_error:
+            restore_errors = []
+            for participant, snapshot in reversed(tuple(zip(self._participants, snapshots))):
+                try:
+                    self._restore(participant, snapshot)
+                except Exception as restore_error:
+                    restore_errors.append(restore_error)
+            if restore_errors:
+                raise RollbackError(original_error, restore_errors) from original_error
             raise
 
     def execute_material_change(self, update, graph, upstream_id, audit_log, audit_event):

@@ -26,6 +26,7 @@ from scripts.backend_contract import (
     MigrationRegistry,
     RevisionSource,
     RevisionStore,
+    RollbackError,
     UnitOfWork,
     ValueHistory,
     default_invariants,
@@ -92,6 +93,41 @@ class CaseIdentityAndStateTest(unittest.TestCase):
             uow.execute(failing_transition)
         self.assertEqual(machine.state, CaseState.CRIADO)
         self.assertEqual(machine.history, ())
+
+    def test_unit_of_work_attempts_every_restore_when_one_participant_fails(self):
+        class Participant:
+            def __init__(self, name, fail_restore=False):
+                self.name = name
+                self.value = "before"
+                self.fail_restore = fail_restore
+
+            def snapshot(self):
+                return self.value
+
+            def restore(self, snapshot):
+                if self.fail_restore:
+                    raise RuntimeError(f"restore-{self.name}")
+                self.value = snapshot
+
+        for failing_index in range(3):
+            participants = [
+                Participant(str(index), fail_restore=index == failing_index)
+                for index in range(3)
+            ]
+            uow = UnitOfWork(*participants)
+
+            def fail_operation():
+                for participant in participants:
+                    participant.value = "dirty"
+                raise ValueError("operation")
+
+            with self.assertRaises(RollbackError) as captured:
+                uow.execute(fail_operation)
+            self.assertIsInstance(captured.exception.original_error, ValueError)
+            self.assertEqual(len(captured.exception.restore_errors), 1)
+            for index, participant in enumerate(participants):
+                expected = "dirty" if index == failing_index else "before"
+                self.assertEqual(participant.value, expected)
 
 
 class RevisionAndAuthorityTest(unittest.TestCase):
