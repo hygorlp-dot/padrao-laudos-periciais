@@ -234,6 +234,42 @@ def test_review_package_is_first_party_exact_head_and_excludes_private_paths(tmp
                                  tests=[unsafe], dependencies=[unsafe])
 
 
+def test_review_package_derives_merge_base_and_hashes_binary_blob_bytes(tmp_path, monkeypatch):
+    import subprocess
+    import scripts.agentic.package as package_module
+    import scripts.agentic.sanitize as sanitizer
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Synthetic Test"], cwd=tmp_path, check=True)
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config/core-boundaries.json").write_text('{"boundaries":[]}', encoding="utf-8")
+    (tmp_path / "config/core-invariants.json").write_text('{"invariants":[]}', encoding="utf-8")
+    subprocess.run(["git", "add", "config"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=tmp_path, check=True)
+    base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    payload = b"\xff\xfe\x00\x81"
+    (tmp_path / "asset.bin").write_bytes(payload)
+    subprocess.run(["git", "add", "asset.bin"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "binary"], cwd=tmp_path, check=True)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    monkeypatch.setattr(package_module, "ROOT", tmp_path)
+    monkeypatch.setattr(sanitizer, "ROOT", tmp_path)
+    package = package_module.build_review_package(
+        issue=31, base_sha=base, head_sha=head, changed_files=[], repository_root=tmp_path,
+    )
+    assert package["merge_base"] == base
+    assert package["change_manifest"] == [{
+        "path_sha256": hashlib.sha256(b"asset.bin").hexdigest(),
+        "content_sha256": hashlib.sha256(payload).hexdigest(),
+        "status": "PRESENT",
+    }]
+    with pytest.raises(ValueError):
+        package_module.build_review_package(
+            issue=31, base_sha=base, head_sha=head, changed_files=[],
+            merge_base="0" * 40, repository_root=tmp_path,
+        )
+
+
 @pytest.mark.parametrize("unsafe", [
     {"path": "referencias/privadas/caso.pdf", "content": "x"},
     {"path": "review.txt", "content": "CPF 123.456.789-09"},

@@ -44,6 +44,13 @@ def _git_text(root: Path, revision: str, path: str) -> str:
         raise ValueError(f"cannot read exact revision path: {path}") from exc
 
 
+def _git_bytes(root: Path, revision: str, path: str) -> bytes:
+    try:
+        return subprocess.check_output(["git", "show", f"{revision}:{path}"], cwd=root)
+    except subprocess.CalledProcessError as exc:
+        raise FileNotFoundError(path) from exc
+
+
 def _registry_ids(root: Path, revision: str, filename: str, key: str) -> set[str]:
     data = json.loads(_git_text(root, revision, f"config/{filename}"))
     return {item["id"] for item in data[key]}
@@ -76,14 +83,19 @@ def build_review_package(*, issue: int, base_sha: str, head_sha: str,
         derived_paths = subprocess.check_output(
             ["git", "diff", "--name-only", base_sha, head_sha], cwd=root, text=True,
         ).splitlines()
+        actual_merge_base = subprocess.check_output(
+            ["git", "merge-base", base_sha, head_sha], cwd=root, text=True,
+        ).strip()
     except subprocess.CalledProcessError as exc:
         raise ValueError("base/head ancestry and canonical diff are required") from exc
+    if merge_base is not None and merge_base != actual_merge_base:
+        raise ValueError("declared merge base does not match git")
     change_manifest = []
     for path in _safe_paths(derived_paths):
         try:
-            content = _git_text(root, head_sha, path).encode("utf-8")
+            content = _git_bytes(root, head_sha, path)
             status = "PRESENT"
-        except ValueError:
+        except FileNotFoundError:
             content = b""
             status = "DELETED"
         change_manifest.append({
@@ -103,7 +115,7 @@ def build_review_package(*, issue: int, base_sha: str, head_sha: str,
         raise ValueError("external context failed first-party sanitization")
     return {
         "schema_version": "1.0.0", "issue": issue, "base_sha": base_sha,
-        "head_sha": head_sha, "merge_base": merge_base or base_sha,
+        "head_sha": head_sha, "merge_base": actual_merge_base,
         "change_manifest": change_manifest,
         "affected_boundaries": _technical_ids(affected_boundaries, _registry_ids(root, head_sha, "core-boundaries.json", "boundaries")),
         "invariants": _technical_ids(invariants, _registry_ids(root, head_sha, "core-invariants.json", "invariants")),
