@@ -13,15 +13,15 @@ from .models import ArtifactStatus
 
 
 def _deep_freeze(value):
-    if isinstance(value, dict):
-        if not all(isinstance(key, str) for key in value):
+    if type(value) is dict:
+        if not all(type(key) is str for key in value):
             raise TypeError("Tipo de valor não suportado: chave não textual")
         return MappingProxyType({key: _deep_freeze(item) for key, item in value.items()})
-    if isinstance(value, (list, tuple)):
+    if type(value) in {list, tuple}:
         return tuple(_deep_freeze(item) for item in value)
-    if isinstance(value, (set, frozenset)):
+    if type(value) in {set, frozenset}:
         return frozenset(_deep_freeze(item) for item in value)
-    if value is None or isinstance(value, (bool, int, float, str, bytes, Decimal)):
+    if value is None or type(value) in {bool, int, float, str, bytes, Decimal}:
         return deepcopy(value)
     raise TypeError(f"Tipo de valor não suportado: {type(value).__name__}")
 
@@ -140,7 +140,7 @@ class ValueHistory:
     def _append(self, authority, value, reason=None):
         if authority is Authority.EFFECTIVE_VALUE:
             raise ValueError("EFFECTIVE_VALUE é derivado, não armazenado")
-        if reason is not None and not isinstance(reason, str):
+        if reason is not None and type(reason) is not str:
             raise TypeError("justificativa deve ser texto imutável")
         if authority is Authority.PROFESSIONAL_OVERRIDE and (not reason or not reason.strip()):
             raise ValueError("Professional Override exige justificativa")

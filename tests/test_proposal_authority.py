@@ -100,6 +100,22 @@ def test_values_with_ambiguous_repr_or_mutable_unsupported_types_are_rejected():
             history.record_source(value)
 
 
+def test_scalar_subclasses_with_hidden_state_are_rejected():
+    class StatefulStr(str):
+        pass
+
+    class StatefulFloat(float):
+        pass
+
+    values = (StatefulStr("same"), StatefulFloat(1.0))
+    for value in values:
+        value.marker = "mutable"
+        with pytest.raises(TypeError, match="Tipo de valor não suportado"):
+            ValueHistory().record_source(value)
+    with pytest.raises(TypeError, match="justificativa"):
+        ValueHistory().override_professional("D", reason=StatefulStr("reason"))
+
+
 def test_reason_must_be_immutable_nonempty_text():
     history = ValueHistory()
     with pytest.raises((TypeError, ValueError), match="justificativa"):
