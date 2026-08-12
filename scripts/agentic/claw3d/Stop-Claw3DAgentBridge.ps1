@@ -1,8 +1,16 @@
 $runtime = if ($env:CLAW3D_AGENT_STATE_DIR) { $env:CLAW3D_AGENT_STATE_DIR } else { Join-Path $env:LOCALAPPDATA 'padrao-laudos-periciais\claw3d' }
 $pidFile = Join-Path $runtime 'bridge.pid'
 if (-not (Test-Path -LiteralPath $pidFile)) { Write-Output 'Claw3D bridge is not running.'; exit 0 }
-$bridgePid = [int](Get-Content -LiteralPath $pidFile -Raw)
-$process = Get-Process -Id $bridgePid -ErrorAction SilentlyContinue
-if ($process) { Stop-Process -Id $bridgePid -ErrorAction SilentlyContinue; $process.WaitForExit(5000) | Out-Null }
+$identity = Get-Content -LiteralPath $pidFile -Raw | ConvertFrom-Json
+$bridgePid = [int]$identity.pid
+$processInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $bridgePid" -ErrorAction SilentlyContinue
+if ($processInfo -and $identity.module -eq 'scripts.agentic.claw3d.bridge' -and
+    $processInfo.CommandLine -like '*scripts.agentic.claw3d.bridge*') {
+    $process = Get-Process -Id $bridgePid -ErrorAction SilentlyContinue
+    if ($process) { Stop-Process -Id $bridgePid -ErrorAction SilentlyContinue; $process.WaitForExit(5000) | Out-Null }
+} elseif ($processInfo) {
+    Write-Error 'PID file does not identify the managed Claw3D bridge; no process was stopped.'
+    exit 1
+}
 Remove-Item -LiteralPath $pidFile -ErrorAction SilentlyContinue
 Write-Output 'Claw3D bridge stopped.'

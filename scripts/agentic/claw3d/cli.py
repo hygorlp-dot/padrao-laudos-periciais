@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from .state import AGENTS, PresenceStore
+from .capabilities import detect_codex_capability
+from .runner import ManagedAgentRunner
 
 
 def main(argv=None) -> int:
@@ -14,8 +17,27 @@ def main(argv=None) -> int:
     set_parser.add_argument("state", choices=("idle", "working", "meeting", "error"))
     sub.add_parser("get")
     sub.add_parser("watchdog")
+    capability_parser = sub.add_parser("codex-capability")
+    capability_parser.add_argument("--executable", default="codex")
+    run_parser = sub.add_parser("run")
+    run_parser.add_argument("role", choices=AGENTS)
+    run_parser.add_argument("--cwd", default=os.getcwd())
+    run_parser.add_argument("process_command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     store = PresenceStore.from_environment()
+    if args.command == "codex-capability":
+        result = detect_codex_capability(executable=args.executable)
+        print(json.dumps({"available": result.available, "version": result.version,
+                          "non_interactive": result.non_interactive, "command": result.command}))
+        return 0
+    if args.command == "run":
+        command = args.process_command
+        if command[:1] == ["--"]:
+            command = command[1:]
+        if not command:
+            parser.error("managed run requires a command")
+        result = ManagedAgentRunner(store=store).run(args.role, command, cwd=args.cwd)
+        return result.exit_code
     if args.command == "set":
         store.set_state(args.agent_id, args.state)
     elif args.command == "watchdog":

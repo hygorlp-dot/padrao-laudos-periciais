@@ -18,7 +18,7 @@ class PresenceBridge:
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
-                if self.path == "/presence":
+                if self.path in {"/presence", "/api/office/presence"}:
                     bridge.store.recover_stale()
                     payload, status = bridge.store.snapshot(), 200
                 elif self.path == "/health":

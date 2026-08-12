@@ -23,6 +23,7 @@ AGENTS = {
     "claude": "Claude Externo",
 }
 STATES = {"idle", "working", "meeting", "error"}
+WORKSPACE_ID = "padrao-laudos-periciais"
 _THREAD_LOCKS: dict[str, threading.RLock] = {}
 _THREAD_LOCKS_GUARD = threading.Lock()
 
@@ -53,8 +54,8 @@ class PresenceStore:
 
     def _empty(self) -> dict:
         now = _utc_now()
-        return {"workspaceId": "padrao-laudos-periciais", "timestamp": now,
-                "agents": {key: {"name": name, "state": "idle", "lastSeen": None} for key, name in AGENTS.items()}}
+        return {"timestamp": now, "agents": {key: {"state": "idle", "lastSeen": None} for key in AGENTS},
+                "executions": {}}
 
     @contextmanager
     def _locked(self):
@@ -86,9 +87,18 @@ class PresenceStore:
             return self._empty()
         try:
             data = json.loads(self.state_file.read_text(encoding="utf-8"))
-            if set(data.get("agents", {})) != set(AGENTS):
-                raise ValueError("invalid agent catalog")
-            return data
+            agents = data.get("agents") if isinstance(data.get("agents"), dict) else {}
+            executions = data.get("executions") if isinstance(data.get("executions"), dict) else {}
+            clean = self._empty()
+            for agent_id in AGENTS:
+                raw = agents.get(agent_id, {}) if isinstance(agents.get(agent_id), dict) else {}
+                clean["agents"][agent_id] = {"state": raw.get("state") if raw.get("state") in STATES else "idle",
+                                                   "lastSeen": raw.get("lastSeen") if type(raw.get("lastSeen")) in (int, float) else None}
+            for execution_id, raw in executions.items():
+                if type(execution_id) is str and isinstance(raw, dict) and raw.get("role") in AGENTS and raw.get("status") in {"running", "finished", "error", "cancelled"}:
+                    clean["executions"][execution_id] = {key: raw.get(key) for key in ("role", "process_id", "started_at", "finished_at", "exit_code", "worktree", "head_sha", "lastSeen", "status")}
+            clean["timestamp"] = data.get("timestamp") if type(data.get("timestamp")) is str else _utc_now()
+            return clean
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             self._diagnose(f"state recovery: {type(exc).__name__}")
             return self._empty()
@@ -131,11 +141,60 @@ class PresenceStore:
                 data["agents"][agent_id]["lastSeen"] = time.time()
                 self._write_unlocked(data)
 
+    def begin_execution(self, agent_id: str, execution_id: str, *, process_id: int | None, worktree: str, head_sha: str | None) -> None:
+        if agent_id not in AGENTS or not execution_id:
+            raise ValueError("unknown agent or execution")
+        with self._locked():
+            data = self._read_unlocked()
+            data["executions"][execution_id] = {"role": agent_id, "process_id": process_id, "started_at": _utc_now(), "finished_at": None,
+                                                  "exit_code": None, "worktree": worktree, "head_sha": head_sha,
+                                                  "lastSeen": time.time(), "status": "running"}
+            self._write_unlocked(data)
+
+    def heartbeat_execution(self, execution_id: str) -> None:
+        with self._locked():
+            data = self._read_unlocked()
+            execution = data["executions"].get(execution_id)
+            if execution and execution.get("status") == "running":
+                execution["lastSeen"] = time.time()
+                self._write_unlocked(data)
+
+    def attach_process(self, execution_id: str, process_id: int) -> None:
+        with self._locked():
+            data = self._read_unlocked()
+            execution = data["executions"].get(execution_id)
+            if execution and execution.get("status") == "running":
+                execution["process_id"] = int(process_id)
+                self._write_unlocked(data)
+
+    def finish_execution(self, execution_id: str, *, exit_code: int | None, cancelled: bool = False) -> None:
+        with self._locked():
+            data = self._read_unlocked()
+            execution = data["executions"].get(execution_id)
+            if not execution:
+                return
+            execution.update(finished_at=_utc_now(), exit_code=exit_code, lastSeen=None,
+                             status="cancelled" if cancelled else ("finished" if exit_code == 0 else "error"))
+            role = execution["role"]
+            if exit_code == 0 or cancelled:
+                data["agents"][role].update(state="idle", lastSeen=None)
+            elif exit_code is not None:
+                data["agents"][role].update(state="error", lastSeen=None)
+            self._write_unlocked(data)
+
     def recover_stale(self) -> list[str]:
         stale = []
         now = time.time()
         with self._locked():
             data = self._read_unlocked()
+            for execution in data["executions"].values():
+                seen = execution.get("lastSeen")
+                if execution.get("status") == "running" and (type(seen) not in (int, float) or now - seen > self.stale_after_seconds):
+                    execution.update(status="error", finished_at=_utc_now(), exit_code=None, lastSeen=None)
+                    role = execution["role"]
+                    data["agents"][role].update(state="error", lastSeen=None)
+                    if role not in stale:
+                        stale.append(role)
             for agent_id, agent in data["agents"].items():
                 seen = agent.get("lastSeen")
                 if agent.get("state") in {"working", "meeting"} and (not isinstance(seen, (int, float)) or now - seen > self.stale_after_seconds):
@@ -151,5 +210,6 @@ class PresenceStore:
 
     def snapshot(self) -> dict:
         data = self.internal_state()
-        return {"workspaceId": data["workspaceId"], "timestamp": data["timestamp"],
-                "agents": [{"agentId": key, "name": AGENTS[key], "state": data["agents"][key]["state"]} for key in AGENTS]}
+        active_roles = {item["role"] for item in data["executions"].values() if item.get("status") == "running"}
+        return {"workspaceId": WORKSPACE_ID, "timestamp": _utc_now(),
+                "agents": [{"agentId": key, "name": AGENTS[key], "state": "working" if key in active_roles else data["agents"][key]["state"]} for key in AGENTS]}

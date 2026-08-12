@@ -12,5 +12,6 @@ $root = Resolve-Path (Join-Path $PSScriptRoot '..\..\..')
 $process = Start-Process -FilePath 'python' -ArgumentList @('-m','scripts.agentic.claw3d.bridge','--host','127.0.0.1','--port',"$Port") -WorkingDirectory $root -WindowStyle Hidden -PassThru
 $runtime = if ($env:CLAW3D_AGENT_STATE_DIR) { $env:CLAW3D_AGENT_STATE_DIR } else { Join-Path $env:LOCALAPPDATA 'padrao-laudos-periciais\claw3d' }
 New-Item -ItemType Directory -Force -Path $runtime | Out-Null
-Set-Content -LiteralPath (Join-Path $runtime 'bridge.pid') -Value $process.Id -Encoding ascii
+@{ pid = $process.Id; module = 'scripts.agentic.claw3d.bridge'; port = $Port } |
+    ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $runtime 'bridge.pid') -Encoding ascii
 Write-Output "Claw3D bridge started on http://127.0.0.1:$Port/presence"
