@@ -20,35 +20,32 @@ class ManagedExecution:
         self.runner, self.execution_id, self.role = runner, execution_id, role
         self.process, self.worktree, self.head_sha = process, worktree, head_sha
         self._done, self._published, self._result = threading.Event(), threading.Event(), None
-        self._telemetry = queue.Queue(maxsize=1)
+        self._telemetry = queue.Queue()
         threading.Thread(target=self._publish, name=f"presence-publisher-{execution_id}", daemon=True).start()
         self._telemetry.put(("begin_execution", (self.role, self.execution_id),
                              {"process_id": self.process.pid, "worktree": self.worktree, "head_sha": self.head_sha}))
         threading.Thread(target=self._observe, name=f"presence-{role}-{execution_id}", daemon=True).start()
     def _publish(self):
         while True:
-            method, args, kwargs = self._telemetry.get()
-            self.runner._safe(method, *args, **kwargs)
+            try:
+                method, args, kwargs = self._telemetry.get(timeout=self.runner.heartbeat_seconds)
+            except queue.Empty:
+                self.runner._safe("heartbeat_execution", self.execution_id)
+                continue
+            try:
+                self.runner._safe(method, *args, **kwargs)
+            finally:
+                if method == "finish_execution":
+                    self._published.set()
             if method == "finish_execution":
-                self._published.set()
+                break
     def _observe(self):
         while self.process.poll() is None:
-            try:
-                self._telemetry.put_nowait(("heartbeat_execution", (self.execution_id,), {}))
-            except queue.Full:
-                pass
             self._done.wait(self.runner.heartbeat_seconds)
         code = int(self.process.returncode)
         self._result = ExecutionResult(self.execution_id, self.role, self.process.pid, code, self.worktree, self.head_sha)
         self._done.set()
-        try:
-            self._telemetry.put_nowait(("finish_execution", (self.execution_id,), {"exit_code": code}))
-        except queue.Full:
-            try:
-                self._telemetry.get_nowait()
-            except queue.Empty:
-                pass
-            self._telemetry.put_nowait(("finish_execution", (self.execution_id,), {"exit_code": code}))
+        self._telemetry.put(("finish_execution", (self.execution_id,), {"exit_code": code}))
     def wait(self, timeout=None):
         self.process.wait(timeout=timeout); self._done.wait(timeout=timeout)
         self._published.wait(min(.1, timeout) if timeout is not None else .1)

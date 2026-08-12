@@ -229,6 +229,37 @@ def test_blocked_presence_store_never_delays_child_completion(tmp_path, blocked_
         release.set()
 
 
+def test_completed_executions_do_not_leak_publisher_threads(tmp_path):
+    prefix = "presence-publisher-"
+    before = {thread.ident for thread in threading.enumerate() if thread.name.startswith(prefix)}
+    runner = ManagedAgentRunner(store=PresenceStore(tmp_path), heartbeat_seconds=.01)
+    for _ in range(12):
+        assert runner.run("reviewer", [sys.executable, "-c", "pass"]).exit_code == 0
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        remaining = [thread for thread in threading.enumerate()
+                     if thread.name.startswith(prefix) and thread.ident not in before]
+        if not remaining:
+            break
+        time.sleep(.01)
+    assert remaining == []
+
+
+def test_short_process_preserves_begin_before_finish(tmp_path):
+    class RecordingStore:
+        def __init__(self): self.calls = []
+        def begin_execution(self, *_args, **_kwargs): self.calls.append("begin")
+        def heartbeat_execution(self, *_args, **_kwargs): self.calls.append("heartbeat")
+        def finish_execution(self, *_args, **_kwargs): self.calls.append("finish")
+
+    store = RecordingStore()
+    result = ManagedAgentRunner(store=store, heartbeat_seconds=.01).run(
+        "reviewer", [sys.executable, "-c", "pass"]
+    )
+    assert result.exit_code == 0
+    assert store.calls[0] == "begin" and store.calls[-1] == "finish"
+
+
 def test_claude_adapter_makes_one_attempt_without_retry(tmp_path):
     store = PresenceStore(tmp_path)
     calls_file = tmp_path / "calls.txt"
