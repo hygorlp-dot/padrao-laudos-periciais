@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0.0",
+  "review_id": "review-sintetico-001",
+  "execution_id": "execution-sintetica-001",
+  "review_type": "PR_REVIEW",
+  "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "independence": {
+    "separate_execution": true,
+    "separate_context": true,
+    "isolated_checkout": true,
+    "implementation_write_access": false,
+    "private_context_received": false,
+    "independence_proven": true
+  },
+  "architecture_status": "CONFORME",
+  "architectural_challenges": [],
+  "findings": [],
+  "code_ranking": [{
+    "boundary": "AGENTIC_GOVERNANCE",
+    "intrinsic_risk": "HIGH",
+    "robustness": "B",
+    "engineering_priority": 1,
+    "evidence": "Gates de merge e revisão externa são fail-closed."
+  }],
+  "engineering_priorities": ["Preservar vínculo ao HEAD exato."],
+  "p0_open": 0,
+  "p1_material_open": 0,
+  "residual_risks": ["Disponibilidade do revisor externo."],
+  "conclusion": "APPROVED"
+}

@@ -35,6 +35,20 @@
 - Manter telemetria Superpowers desabilitada e egress negado por padrão. Não
   enviar conteúdo pericial a ferramentas ou serviços externos sem autorização
   expressa.
+- O repositório é a memória canônica. Aplicar
+  `docs/padroes/protocolo-autonomia-agente.md` e os protocolos de pesquisa,
+  revisão multiagente, auditoria sistêmica e external diversity review.
+- Papéis permanentes: `IMPLEMENTER`, `RESEARCHER`, `PR_REVIEWER`,
+  `SYSTEMIC_AUDITOR` e `CLAUDE_EXTERNAL_DIVERSITY_REVIEWER`. Reviewer e Auditor
+  devem usar execuções e checkouts independentes, read-only, com HEAD explícito
+  e evidência persistida; autodeclaração não prova independência.
+- Não chamar Claude em HEAD intermediário. O gate externo é proporcional ao
+  risco, e egress externo exige pacote first-party sanitizado. Rate limit adia
+  somente merge que dependa dessa revisão, não o trabalho Codex seguro.
+- Autonomia é o padrão (`DEFAULT_ACTION = DECIDE_AND_PROCEED`); escalonamento
+  humano é exceção para autoridade, privacidade/egress, custo, operação
+  destrutiva sem rollback, login/MFA, decisão pericial ou divergência material
+  irresolúvel.
 
 ## Escopo
 
