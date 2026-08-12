@@ -112,6 +112,11 @@ class RevisionAndAuthorityTest(unittest.TestCase):
         self.assertEqual(store.history("PAT-001"), (current,))
         self.assertIs(store.history("PAT-001")[0].status, ArtifactStatus.CURRENT)
 
+        empty_store = RevisionStore()
+        with self.assertRaisesRegex(ValueError, "c.clico"):
+            empty_store.append("PAT-NEW", cyclic, RevisionSource.SOURCE)
+        self.assertEqual(empty_store.snapshot().histories, ())
+
     def test_revision_store_restore_is_defensive_and_validated(self):
         store = RevisionStore()
         source = store.append("PAT-001", {"valor": 1}, RevisionSource.SOURCE)
@@ -130,6 +135,30 @@ class RevisionAndAuthorityTest(unittest.TestCase):
         self.assertIsInstance(snapshot.histories, tuple)
         with self.assertRaisesRegex(ValueError, "Snapshot de RevisionStore"):
             second.restore(snapshot)
+
+    def test_revision_store_restores_nested_payload_and_uow_rolls_back_all_participants(self):
+        store = RevisionStore()
+        original = store.append(
+            "PAT-001",
+            {"causa": {"fatores": ["água"], "detalhes": {"origem": "interna"}}},
+            RevisionSource.SOURCE,
+        )
+        graph = DependencyGraph()
+        graph.add_artifact("PAT-001")
+        audit = AuditLog()
+        uow = UnitOfWork(store, graph, audit)
+
+        def failing_change():
+            store.append("PAT-001", {"causa": "alterada"}, RevisionSource.ENGINE)
+            graph.mark_stale("PAT-001")
+            audit.append(AuditEvent.create("UPDATED", "COR-NESTED", "Falha sintética"))
+            raise RuntimeError("rollback")
+
+        with self.assertRaisesRegex(RuntimeError, "rollback"):
+            uow.execute(failing_change)
+        self.assertEqual(store.history("PAT-001"), (original,))
+        self.assertIs(graph.status("PAT-001"), ArtifactStatus.CURRENT)
+        self.assertEqual(audit.events, ())
 
     def test_revision_store_rejects_every_signed_field_tampering_atomically(self):
         store = RevisionStore()

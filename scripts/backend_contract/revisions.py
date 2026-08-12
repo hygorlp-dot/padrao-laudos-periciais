@@ -15,12 +15,12 @@ from .models import ArtifactStatus
 
 def _deep_freeze(value, seen=None):
     seen = set() if seen is None else seen
-    is_container = type(value) in {dict, list, tuple, set, frozenset}
+    is_container = type(value) in {dict, MappingProxyType, list, tuple, set, frozenset}
     if is_container and id(value) in seen:
         raise ValueError("Container cíclico não suportado")
     if is_container:
         seen.add(id(value))
-    if type(value) is dict:
+    if type(value) in {dict, MappingProxyType}:
         if not all(type(key) is str for key in value):
             raise TypeError("Tipo de valor não suportado: chave não textual")
         frozen = MappingProxyType({key: _deep_freeze(item, seen) for key, item in value.items()})
@@ -133,7 +133,7 @@ class RevisionStore:
     def append(self, artifact_id, payload, source):
         if type(source) is not RevisionSource or source is RevisionSource.AI:
             raise ValueError("fonte de revisão não pode promover proposta de IA")
-        history = self._items.setdefault(artifact_id, [])
+        history = self._items.get(artifact_id, [])
         supersedes = history[-1].revision_id if history else None
         frozen_payload = _deep_freeze(payload)
         item = Revision(
@@ -144,6 +144,8 @@ class RevisionStore:
         )
         if history:
             history[-1] = replace(history[-1], status=ArtifactStatus.SUPERSEDED)
+        else:
+            self._items[artifact_id] = history
         history.append(item)
         return item
 
