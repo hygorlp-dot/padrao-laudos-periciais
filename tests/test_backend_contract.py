@@ -129,6 +129,27 @@ class CaseIdentityAndStateTest(unittest.TestCase):
                 expected = "dirty" if index == failing_index else "before"
                 self.assertEqual(participant.value, expected)
 
+    def test_unit_of_work_rejects_participants_without_reversible_contract(self):
+        class SnapshotOnly:
+            def snapshot(self):
+                return "state"
+
+        for participant in ({"before"}, SnapshotOnly(), object()):
+            with self.assertRaisesRegex(TypeError, "participante reversível"):
+                UnitOfWork(participant)
+
+    def test_unit_of_work_rolls_back_before_reraising_base_exception(self):
+        values = ["before"]
+        uow = UnitOfWork(values)
+
+        def cancelled():
+            values[:] = ["dirty"]
+            raise SystemExit(7)
+
+        with self.assertRaises(SystemExit):
+            uow.execute(cancelled)
+        self.assertEqual(values, ["before"])
+
 
 class RevisionAndAuthorityTest(unittest.TestCase):
     def test_revision_store_rejects_ai_or_unknown_authority_as_current(self):
