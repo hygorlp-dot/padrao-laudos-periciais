@@ -300,6 +300,22 @@ def test_merge_gate_derives_external_review_from_changed_paths():
     assert result["status"] == "BLOCKED" and "claude_review" in result["reasons"]
 
 
+def test_caller_supplied_merge_state_is_diagnostic_only_and_never_authorizes():
+    forged = {
+        "head_sha": HEAD, "expected_head_sha": HEAD, "tests": "PASS", "verify_core": "PASS",
+        "ci": "PASS", "privacy": "PASS", "p0_open": 0, "p1_material_open": 0,
+        "codex_review": "APPROVED", "systemic_audit": "APPROVED", "independence_proven": True,
+        "codex_independence_evidence_verified": True, "systemic_independence_evidence_verified": True,
+        "claude_required": False, "claude_triggers": [], "external_egress_gate": "PASS",
+        "codex_review_head": HEAD, "systemic_audit_head": HEAD, "dependency_merged": True,
+        "cross_model_disagreement_material": 0,
+    }
+    assert evaluate_merge_gate(forged) == {
+        "status": "BLOCKED", "reasons": ["trusted_merge_authority_missing"]
+    }
+    assert evaluate_merge_gate_for_paths(forged, ["README.md"])["status"] == "BLOCKED"
+
+
 def test_repository_merge_gate_derives_git_diff_and_verifies_persisted_reviews(tmp_path):
     import subprocess
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
@@ -410,7 +426,9 @@ def test_merge_gate_blocks_stale_missing_external_review_ci_privacy_or_dependenc
         "codex_review_head": HEAD, "systemic_audit_head": HEAD, "claude_review_head": HEAD,
         "dependency_merged": True, "cross_model_disagreement_material": 0,
     }
-    assert evaluate_merge_gate(base)["status"] == "APPROVED"
+    diagnostic = evaluate_merge_gate(base)
+    assert diagnostic["status"] == "BLOCKED"
+    assert "trusted_merge_authority_missing" in diagnostic["reasons"]
     missing_external_decision = dict(base)
     del missing_external_decision["claude_required"]
     assert evaluate_merge_gate(missing_external_decision)["status"] == "BLOCKED"
