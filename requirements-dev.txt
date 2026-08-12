@@ -1,3 +1,5 @@
 -r requirements.txt
 hypothesis==6.165.3
 pytest==9.1.1
+coverage==7.15.4
+mutmut==3.7.0

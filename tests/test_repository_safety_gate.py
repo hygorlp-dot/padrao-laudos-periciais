@@ -155,3 +155,28 @@ def test_change_impact_cli_and_ci_use_first_party_gate(capsys):
     assert "secrets" not in workflow.casefold() and "deploy" not in workflow.casefold()
     dependencies=(ROOT/"requirements-dev.txt").read_text(encoding="utf-8")
     assert "pytest==9.1.1" in dependencies
+
+
+def test_safety_gate_v2_names_historical_and_quality_checks_without_renaming_ci():
+    source = (ROOT / "scripts/quality/verify_core.py").read_text(encoding="utf-8")
+    assert "historical critical mutation suite" in source
+    assert "quality V2" in source
+    core = (ROOT / ".github/workflows/core-safety.yml").read_text(encoding="utf-8")
+    assert "name: core-safety" in core
+    assert "python -m scripts.quality.verify_core --full" in core
+
+
+def test_quality_depth_is_optional_first_party_without_secrets_or_deploy():
+    workflow = (ROOT / ".github/workflows/quality-depth.yml").read_text(encoding="utf-8")
+    assert "workflow_dispatch" in workflow and "schedule" in workflow
+    assert "python -m scripts.quality.deep_quality" in workflow
+    assert "secrets" not in workflow.casefold() and "deploy" not in workflow.casefold()
+    assert "pull_request" not in workflow
+
+
+def test_dev_dependencies_are_exact_and_runtime_requirements_unchanged():
+    dev = (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
+    assert "mutmut==3.7.0" in dev
+    assert "coverage==7.15.4" in dev
+    runtime = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "mutmut" not in runtime and "coverage" not in runtime
