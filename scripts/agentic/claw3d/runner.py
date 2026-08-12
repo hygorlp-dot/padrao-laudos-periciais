@@ -6,6 +6,7 @@ import subprocess
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -29,6 +30,8 @@ class _TelemetryCoordinator:
     def __init__(self):
         self._condition = threading.Condition()
         self._owners: dict[str, dict] = {}
+        self._inflight: set[int] = set()
+        self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="claw3d-store")
         self._sequence = 0
         self._thread = threading.Thread(target=self._run, name="claw3d-telemetry-reconciler", daemon=True)
         self._thread.start()
@@ -61,8 +64,11 @@ class _TelemetryCoordinator:
                 return
             state["active"].pop(execution_id, None)
             self._sequence += 1
-            state["terminal"][role] = {"state": "idle" if exit_code == 0 else "error",
-                                        "exit_code": exit_code, "sequence": self._sequence}
+            state["terminal"][execution_id] = {"execution_id": execution_id, "role": role,
+                                                "state": "idle" if exit_code == 0 else "error",
+                                                "exit_code": exit_code, "sequence": self._sequence}
+            while len(state["terminal"]) > 256:
+                state["terminal"].pop(next(iter(state["terminal"])))
             self._condition.notify()
 
     def close(self, owner: str) -> None:
@@ -78,6 +84,7 @@ class _TelemetryCoordinator:
         with self._condition:
             return {
                 "workers": int(self._thread.is_alive()),
+                "store_workers": 4,
                 "owners": len(self._owners),
                 "active_executions": sum(len(item["active"]) for item in self._owners.values()),
                 "pending_states": sum(len(item["terminal"]) + len(item["diagnostics"])
@@ -94,9 +101,8 @@ class _TelemetryCoordinator:
                                                                "active": {}, "terminal": {}, "diagnostics": set()})
                 group["owners"].append(owner)
                 group["active"].update({key: dict(value) for key, value in item["active"].items()})
-                for role, terminal in item["terminal"].items():
-                    if terminal["sequence"] > group["terminal"].get(role, {}).get("sequence", -1):
-                        group["terminal"][role] = dict(terminal)
+                for execution_id, terminal in item["terminal"].items():
+                    group["terminal"][execution_id] = dict(terminal)
                 group["diagnostics"].update(item["diagnostics"])
         return groups
 
@@ -106,9 +112,9 @@ class _TelemetryCoordinator:
                 item = self._owners.get(owner)
                 if item is None:
                     continue
-                for role, terminal in list(item["terminal"].items()):
-                    if terminal["sequence"] <= group["terminal"].get(role, {}).get("sequence", -1):
-                        item["terminal"].pop(role, None)
+                for execution_id, terminal in list(item["terminal"].items()):
+                    if terminal["sequence"] <= group["terminal"].get(execution_id, {}).get("sequence", -1):
+                        item["terminal"].pop(execution_id, None)
                 item["diagnostics"].difference_update(group["diagnostics"])
                 if not item["active"] and not item["terminal"] and not item["diagnostics"]:
                     self._owners.pop(owner, None)
@@ -116,13 +122,30 @@ class _TelemetryCoordinator:
     def _run(self):
         while True:
             for group in self._snapshot().values():
+                store_id = id(group["store"])
+                with self._condition:
+                    if store_id in self._inflight:
+                        continue
+                    self._inflight.add(store_id)
                 try:
-                    group["store"].reconcile_presence(list(group["active"].values()), group["terminal"],
-                                                      authoritative_owners=group["owners"],
-                                                      diagnostics=group["diagnostics"])
-                except Exception:
+                    future = self._pool.submit(group["store"].reconcile_presence,
+                                               list(group["active"].values()), group["terminal"],
+                                               authoritative_owners=group["owners"],
+                                               diagnostics=group["diagnostics"])
+                    future.add_done_callback(lambda completed, current=group, key=store_id:
+                                             self._complete(current, key, completed))
+                except RuntimeError:
+                    with self._condition: self._inflight.discard(store_id)
                     continue
+
+    def _complete(self, group, store_id, future):
+        try:
+            if future.exception() is None:
                 self._acknowledge(group)
+        finally:
+            with self._condition:
+                self._inflight.discard(store_id)
+                self._condition.notify()
 
 
 _COORDINATOR = _TelemetryCoordinator()

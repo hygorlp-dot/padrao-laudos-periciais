@@ -6,6 +6,7 @@ import os
 import tempfile
 import threading
 import time
+import weakref
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,7 +27,7 @@ STATES = {"idle", "working", "meeting", "error"}
 WORKSPACE_ID = "padrao-laudos-periciais"
 MAX_EXECUTION_HISTORY = 256
 MAX_DIAGNOSTIC_BYTES = 65536
-_THREAD_LOCKS: dict[str, threading.RLock] = {}
+_THREAD_LOCKS = weakref.WeakValueDictionary()
 _THREAD_LOCKS_GUARD = threading.Lock()
 
 
@@ -201,7 +202,7 @@ class PresenceStore:
                 execution["process_id"] = int(process_id)
                 self._write_unlocked(data)
 
-    def reconcile_presence(self, active_executions: list[dict], terminal_roles: dict[str, dict],
+    def reconcile_presence(self, active_executions: list[dict], terminal_executions: dict[str, dict],
                            *, authoritative_owners: list[str], diagnostics=()) -> None:
         """Atomically project current real executions; intermediate events are unnecessary."""
         active = {}
@@ -212,7 +213,9 @@ class PresenceStore:
                     type(raw.get("owner_id")) is not str):
                 raise ValueError("invalid active execution projection")
             active[raw["execution_id"]] = raw
-        if (not isinstance(terminal_roles, dict) or any(role not in AGENTS for role in terminal_roles) or
+        if (not isinstance(terminal_executions, dict) or
+                any(value.get("role") not in AGENTS or value.get("execution_id") != key
+                    for key, value in terminal_executions.items()) or
                 not isinstance(authoritative_owners, list) or
                 any(type(owner) is not str for owner in authoritative_owners)):
             raise ValueError("invalid terminal role projection")
@@ -224,14 +227,12 @@ class PresenceStore:
             for execution_id, execution in data["executions"].items():
                 if (execution.get("status") == "running" and execution_id not in active and
                         execution.get("owner_id") in authoritative_owners):
-                    terminal = terminal_roles.get(execution["role"], {})
-                    exit_code = terminal.get("exit_code", 0)
+                    terminal = terminal_executions.get(execution_id)
+                    exit_code = terminal.get("exit_code") if terminal else None
                     execution.update(status="finished" if exit_code == 0 else "error",
                                      exit_code=exit_code, finished_at=_utc_now(), lastSeen=None)
             for execution_id, raw in active.items():
                 existing = data["executions"].get(execution_id)
-                if existing and existing.get("status") != "running":
-                    continue
                 data["executions"][execution_id] = {
                     "role": raw["role"], "process_id": raw["process_id"],
                     "started_at": existing.get("started_at") if existing else _utc_now(),
@@ -244,8 +245,10 @@ class PresenceStore:
             for role in AGENTS:
                 if role in active_roles:
                     data["agents"][role].update(state="working", lastSeen=now)
-                elif role in terminal_roles:
-                    data["agents"][role].update(state=terminal_roles[role]["state"], lastSeen=None)
+                elif any(item["role"] == role for item in terminal_executions.values()):
+                    latest = max((item for item in terminal_executions.values() if item["role"] == role),
+                                 key=lambda item: item["sequence"])
+                    data["agents"][role].update(state=latest["state"], lastSeen=None)
                 elif data["agents"][role]["state"] == "working":
                     data["agents"][role].update(state="idle", lastSeen=None)
             self._write_unlocked(data)

@@ -273,7 +273,7 @@ def test_permanently_blocked_store_has_constant_thread_bound(tmp_path):
         assert len(publishers) <= max(1, before)
         counts = ManagedAgentRunner.telemetry_resource_counts()
         assert counts["active_executions"] == 0
-        assert counts["pending_states"] - pending_before <= len(AGENTS)
+        assert counts["pending_states"] - pending_before <= 256
     finally:
         release.set()
         runner.close()
@@ -331,6 +331,46 @@ def test_store_recovery_converges_to_current_real_state(tmp_path):
     assert state(backing, "reviewer") == "idle"
     assert not any(item.get("status") == "running" for item in backing.internal_state()["executions"].values())
     runner.close()
+
+
+def test_hung_store_does_not_stale_healthy_store(tmp_path):
+    release = threading.Event()
+    class HungStore:
+        def reconcile_presence(self, *_args, **_kwargs): release.wait(5)
+    blocked = ManagedAgentRunner(store=HungStore(), heartbeat_seconds=.01)
+    healthy_store = PresenceStore(tmp_path, stale_after_seconds=.05)
+    healthy = ManagedAgentRunner(store=healthy_store, heartbeat_seconds=.01)
+    try:
+        blocked_run = blocked.start("researcher", [sys.executable, "-c", "import time; time.sleep(.3)"])
+        live = healthy.start("reviewer", [sys.executable, "-c", "import time; time.sleep(.3)"])
+        wait_state(healthy_store, "reviewer", "working")
+        time.sleep(.12)
+        assert live.process.poll() is None
+        assert healthy_store.recover_stale() == []
+        assert state(healthy_store, "reviewer") == "working"
+        assert live.wait() == blocked_run.wait() == 0
+    finally:
+        release.set(); blocked.close(); healthy.close()
+
+
+def test_same_role_terminals_keep_exact_exit_attribution_after_recovery(tmp_path):
+    store = PresenceStore(tmp_path)
+    owner = "owner"
+    active = [
+        {"execution_id": "failed", "role": "implementer", "process_id": 101,
+         "worktree": str(tmp_path), "head_sha": None, "owner_id": owner},
+        {"execution_id": "passed", "role": "implementer", "process_id": 102,
+         "worktree": str(tmp_path), "head_sha": None, "owner_id": owner},
+    ]
+    store.reconcile_presence(active, {}, authoritative_owners=[owner])
+    terminals = {
+        "failed": {"execution_id": "failed", "role": "implementer", "state": "error", "exit_code": 7, "sequence": 1},
+        "passed": {"execution_id": "passed", "role": "implementer", "state": "idle", "exit_code": 0, "sequence": 2},
+    }
+    store.reconcile_presence([], terminals, authoritative_owners=[owner])
+    executions = store.internal_state()["executions"]
+    assert (executions["failed"]["status"], executions["failed"]["exit_code"]) == ("error", 7)
+    assert (executions["passed"]["status"], executions["passed"]["exit_code"]) == ("finished", 0)
 
 
 def test_stress_120_short_executions_returns_resources_to_baseline(tmp_path):
