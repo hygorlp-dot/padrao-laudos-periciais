@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 import sys
 import time
 
@@ -130,6 +132,15 @@ def test_codex_capability_detection_is_fail_closed():
     assert absent.available is False and absent.non_interactive is False and absent.command is None
 
 
+def test_codex_capability_does_not_accept_exec_as_prose(tmp_path):
+    fake = tmp_path / "fake-codex.cmd"
+    fake.write_text("@echo off\r\nif \"%1\"==\"--version\" (echo fake 1.0) else (echo cannot execute non-interactively)\r\n", encoding="ascii")
+    result = detect_codex_capability(executable=str(fake))
+    assert result.available is True
+    assert result.non_interactive is False
+    assert result.command is None
+
+
 def test_process_start_failure_sets_error_and_never_leaves_working(tmp_path):
     store = PresenceStore(tmp_path)
     runner = ManagedAgentRunner(store=store)
@@ -158,3 +169,16 @@ def test_operator_wrapper_and_safe_stop_identity_are_present():
     assert "scripts.agentic.claw3d.cli run" in invoke
     assert "Get-CimInstance Win32_Process" in stop
     assert "scripts.agentic.claw3d.bridge" in stop
+    assert "instanceToken" in stop and "/health" in stop
+
+
+def test_documented_wrapper_runs_real_child_when_presence_disabled(tmp_path):
+    root = __import__('pathlib').Path(__file__).resolve().parents[1]
+    env = dict(os.environ)
+    env.pop("CLAW3D_LIVE_PRESENCE_ENABLED", None)
+    script = root / "scripts/agentic/claw3d/Invoke-AgentRole.ps1"
+    expression = f"& '{script}' -Role reviewer -Command @('{sys.executable}','--version')"
+    result = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", expression],
+                            cwd=root, env=env, capture_output=True, text=True)
+    assert result.returncode == 0
+    assert "Python" in result.stdout

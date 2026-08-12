@@ -102,7 +102,7 @@ def test_unavailable_sink_never_blocks_or_changes_workflow_result():
 
 
 def test_bridge_binds_loopback_and_serves_presence_and_health(tmp_path):
-    bridge = PresenceBridge(PresenceStore(tmp_path), host="127.0.0.1", port=0)
+    bridge = PresenceBridge(PresenceStore(tmp_path), host="127.0.0.1", port=0, instance_token="test-instance")
     bridge.start()
     try:
         host, port = bridge.address
@@ -110,7 +110,7 @@ def test_bridge_binds_loopback_and_serves_presence_and_health(tmp_path):
         with urlopen(f"http://127.0.0.1:{port}/presence", timeout=2) as response:
             assert json.load(response)["workspaceId"] == "padrao-laudos-periciais"
         with urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as response:
-            assert json.load(response) == {"status": "ok"}
+            assert json.load(response) == {"status": "ok", "instanceToken": "test-instance"}
     finally:
         bridge.stop()
     assert bridge.running is False

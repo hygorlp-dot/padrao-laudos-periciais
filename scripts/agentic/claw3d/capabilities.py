@@ -1,6 +1,7 @@
 """Fail-closed discovery of supported local Codex invocation capabilities."""
 from __future__ import annotations
 import subprocess
+import re
 from dataclasses import dataclass
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ def detect_codex_capability(*, executable: str = "codex") -> CodexCapability:
         return CodexCapability(False, None, False, None)
     if version.returncode != 0 or help_result.returncode != 0:
         return CodexCapability(False, None, False, None)
-    non_interactive = "exec" in f"{help_result.stdout}\n{help_result.stderr}".casefold()
+    help_text = f"{help_result.stdout}\n{help_result.stderr}"
+    non_interactive = bool(re.search(r"(?mi)^\s*exec(?:\s{2,}|\s*$)", help_text))
     return CodexCapability(True, version.stdout.strip() or version.stderr.strip(), non_interactive,
                            (executable, "exec") if non_interactive else None)

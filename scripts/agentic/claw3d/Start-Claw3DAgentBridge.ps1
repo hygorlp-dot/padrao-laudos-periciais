@@ -9,9 +9,10 @@ try {
     if ($health.status -eq 'ok') { Write-Output "Claw3D bridge already running on 127.0.0.1:$Port"; exit 0 }
 } catch { }
 $root = Resolve-Path (Join-Path $PSScriptRoot '..\..\..')
-$process = Start-Process -FilePath 'python' -ArgumentList @('-m','scripts.agentic.claw3d.bridge','--host','127.0.0.1','--port',"$Port") -WorkingDirectory $root -WindowStyle Hidden -PassThru
+$instanceToken = [Guid]::NewGuid().ToString('N')
+$process = Start-Process -FilePath 'python' -ArgumentList @('-m','scripts.agentic.claw3d.bridge','--host','127.0.0.1','--port',"$Port",'--instance-token',$instanceToken) -WorkingDirectory $root -WindowStyle Hidden -PassThru
 $runtime = if ($env:CLAW3D_AGENT_STATE_DIR) { $env:CLAW3D_AGENT_STATE_DIR } else { Join-Path $env:LOCALAPPDATA 'padrao-laudos-periciais\claw3d' }
 New-Item -ItemType Directory -Force -Path $runtime | Out-Null
-@{ pid = $process.Id; module = 'scripts.agentic.claw3d.bridge'; port = $Port } |
+@{ pid = $process.Id; module = 'scripts.agentic.claw3d.bridge'; port = $Port; instanceToken = $instanceToken } |
     ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $runtime 'bridge.pid') -Encoding ascii
 Write-Output "Claw3D bridge started on http://127.0.0.1:$Port/presence"

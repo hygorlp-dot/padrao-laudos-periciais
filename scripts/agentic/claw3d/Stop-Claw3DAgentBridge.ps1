@@ -4,7 +4,12 @@ if (-not (Test-Path -LiteralPath $pidFile)) { Write-Output 'Claw3D bridge is not
 $identity = Get-Content -LiteralPath $pidFile -Raw | ConvertFrom-Json
 $bridgePid = [int]$identity.pid
 $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $bridgePid" -ErrorAction SilentlyContinue
-if ($processInfo -and $identity.module -eq 'scripts.agentic.claw3d.bridge' -and
+$healthMatches = $false
+try {
+    $health = Invoke-RestMethod -Uri "http://127.0.0.1:$($identity.port)/health" -TimeoutSec 1
+    $healthMatches = $health.status -eq 'ok' -and $health.instanceToken -eq $identity.instanceToken
+} catch { }
+if ($processInfo -and $healthMatches -and $identity.module -eq 'scripts.agentic.claw3d.bridge' -and
     $processInfo.CommandLine -like '*scripts.agentic.claw3d.bridge*') {
     $process = Get-Process -Id $bridgePid -ErrorAction SilentlyContinue
     if ($process) { Stop-Process -Id $bridgePid -ErrorAction SilentlyContinue; $process.WaitForExit(5000) | Out-Null }

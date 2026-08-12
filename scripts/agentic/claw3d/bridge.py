@@ -10,10 +10,11 @@ from .state import PresenceStore
 
 
 class PresenceBridge:
-    def __init__(self, store: PresenceStore, *, host: str = "127.0.0.1", port: int = 8787):
+    def __init__(self, store: PresenceStore, *, host: str = "127.0.0.1", port: int = 8787, instance_token: str | None = None):
         if host != "127.0.0.1":
             raise ValueError("Claw3D bridge is loopback-only")
         self.store = store
+        self.instance_token = instance_token
         bridge = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -23,6 +24,8 @@ class PresenceBridge:
                     payload, status = bridge.store.snapshot(), 200
                 elif self.path == "/health":
                     payload, status = {"status": "ok"}, 200
+                    if bridge.instance_token:
+                        payload["instanceToken"] = bridge.instance_token
                 else:
                     payload, status = {"error": "not_found"}, 404
                 encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -62,8 +65,9 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
+    parser.add_argument("--instance-token")
     args = parser.parse_args(argv)
-    bridge = PresenceBridge(PresenceStore.from_environment(), host=args.host, port=args.port)
+    bridge = PresenceBridge(PresenceStore.from_environment(), host=args.host, port=args.port, instance_token=args.instance_token)
     try:
         bridge.server.serve_forever()
     except KeyboardInterrupt:

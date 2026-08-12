@@ -49,7 +49,8 @@ Git, UI, nomes de worktree e arquivos alterados nunca fabricam atividade.
 
 ```powershell
 $env:CLAW3D_LIVE_PRESENCE_ENABLED='1'
-.\scripts\agentic\claw3d\Invoke-AgentRole.ps1 -Role reviewer -- python -c "print('READY')"
+.\scripts\agentic\claw3d\Invoke-AgentRole.ps1 -Role reviewer `
+    -Command @('python', '-c', 'print("READY")')
 ```
 
 O wrapper inicia o bridge quando habilitado e devolve o exit code real. O
