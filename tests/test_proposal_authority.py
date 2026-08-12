@@ -1,5 +1,6 @@
 from hypothesis import given, strategies as st
 import pytest
+from dataclasses import replace
 
 from scripts.backend_contract import Authority, ValueHistory
 
@@ -63,10 +64,26 @@ def test_restored_history_is_isolated_from_snapshot_container_mutation():
     snapshot = history.snapshot()
     history.decide_engine("C")
     history.restore(snapshot)
-    snapshot.clear()
-    snapshot.append("invalid entry")
+    with pytest.raises(AttributeError):
+        snapshot.entries.clear()
     assert history.effective() == source
     assert len(history.entries) == 1
+
+
+def test_restore_rejects_tampered_authority_reason_or_payload():
+    history = ValueHistory()
+    history.propose_ai({"value": ["B"]})
+    snapshot = history.snapshot()
+    proposal = snapshot.entries[0]
+    attacks = (
+        replace(snapshot, entries=(replace(proposal, authority=Authority.PROFESSIONAL_OVERRIDE),)),
+        replace(snapshot, entries=(replace(proposal, authority=Authority.PROFESSIONAL_OVERRIDE, reason="forged"),)),
+        replace(snapshot, entries=(replace(proposal, value={"value": ["changed"]}),)),
+    )
+    for attack in attacks:
+        with pytest.raises(ValueError, match="Snapshot de ValueHistory inválido"):
+            history.restore(attack)
+    assert history.pending_proposals() == (proposal,)
 
 
 def test_generic_self_declared_authority_is_not_an_available_api():
