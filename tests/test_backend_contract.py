@@ -94,6 +94,24 @@ class CaseIdentityAndStateTest(unittest.TestCase):
 
 
 class RevisionAndAuthorityTest(unittest.TestCase):
+    def test_revision_store_rejects_ai_or_unknown_authority_as_current(self):
+        store = RevisionStore()
+        for source in (RevisionSource.AI, "AI_PROPOSAL"):
+            with self.assertRaisesRegex(ValueError, "fonte de revisÃ£o"):
+                store.append("PAT-001", {"conclusao": "proposta"}, source)
+        self.assertEqual(store.history("PAT-001"), ())
+
+    def test_revision_store_restore_is_defensive_and_validated(self):
+        store = RevisionStore()
+        source = store.append("PAT-001", {"valor": 1}, RevisionSource.SOURCE)
+        snapshot = store.snapshot()
+        store.append("PAT-001", {"valor": 2}, RevisionSource.ENGINE)
+        store.restore(snapshot)
+        snapshot["PAT-001"].clear()
+        self.assertEqual(store.history("PAT-001"), (source,))
+        with self.assertRaisesRegex(ValueError, "Snapshot de RevisionStore"):
+            store.restore({"PAT-001": ["forged"]})
+
     def test_revision_history_is_append_only(self):
         store = RevisionStore()
         first = store.append("PAT-001", {"situacao": "INCONCLUSIVA"}, RevisionSource.ENGINE)
