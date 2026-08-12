@@ -346,6 +346,28 @@ def test_repository_merge_gate_rejects_forged_reviews_and_base_equal_head(tmp_pa
         evaluate_repository_merge_gate(tmp_path, head, head, {"expected_base_sha": head}, reviews=[])
 
 
+def test_repository_merge_gate_rejects_wrong_base_decoy_persisted_review_and_reused_identity(tmp_path):
+    import subprocess
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Synthetic Test"], cwd=tmp_path, check=True)
+    (tmp_path / "README.md").write_text("base", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=tmp_path, check=True)
+    base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    (tmp_path / "scripts/agentic").mkdir(parents=True)
+    (tmp_path / "scripts/agentic/x.py").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "add", "scripts/agentic/x.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "head"], cwd=tmp_path, check=True)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    state = {"expected_base_sha": base, "tests": "PASS", "verify_core": "PASS", "ci": "PASS", "privacy": "PASS",
+             "p0_open": 0, "p1_material_open": 0, "dependency_merged": True,
+             "cross_model_disagreement_material": 0, "external_egress_gate": "PASS"}
+    forged = _review(base_sha="f" * 40, head_sha=head)
+    result = evaluate_repository_merge_gate(tmp_path, base, head, state, reviews=[forged, forged, forged])
+    assert result["status"] == "BLOCKED"
+
+
 def test_merge_gate_blocks_stale_missing_external_review_ci_privacy_or_dependency():
     base = {
         "head_sha": HEAD, "expected_head_sha": HEAD, "tests": "PASS", "verify_core": "PASS",
