@@ -4,7 +4,7 @@ if ($env:CLAW3D_LIVE_PRESENCE_ENABLED -ne '1') {
     Write-Output 'Claw3D live presence is disabled. Set CLAW3D_LIVE_PRESENCE_ENABLED=1 to enable.'
     exit 0
 }
-$mutex = [Threading.Mutex]::new($false, "Local\padrao-laudos-claw3d-$Port")
+$mutex = [Threading.Mutex]::new($false, 'Local\padrao-laudos-claw3d-lifecycle')
 $acquired = $false
 try {
     $acquired = $mutex.WaitOne([TimeSpan]::FromSeconds($TimeoutSeconds))
@@ -13,6 +13,12 @@ try {
     if (-not [IO.Path]::IsPathRooted($runtime)) { throw 'CLAW3D_AGENT_STATE_DIR must be absolute.' }
     New-Item -ItemType Directory -Force -Path $runtime | Out-Null
     $pidFile = Join-Path $runtime 'bridge.pid'
+    if (Test-Path -LiteralPath $pidFile) {
+        $recorded = Get-Content -LiteralPath $pidFile -Raw | ConvertFrom-Json
+        if ([int]$recorded.port -ne $Port) {
+            throw "A managed Claw3D bridge is already registered on port $($recorded.port); refusing a second instance."
+        }
+    }
 
     $portOccupied = $false
     $client = [Net.Sockets.TcpClient]::new()

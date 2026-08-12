@@ -32,7 +32,7 @@
 - [x] Test idempotent and parallel startup.
 
 ### Task 4: Regression and review
-- [x] Calibrate the full-gate ceiling to 75 seconds for real Windows subprocess lifecycle tests; semantic checks remain unchanged.
+- [x] Calibrate the full-gate ceiling to 90 seconds for real Windows subprocess lifecycle tests; semantic checks remain unchanged.
 - [ ] Run full regression and repository gates.
 - [ ] Run real subprocess and bridge smokes.
 - [ ] Commit/push PR #34 and obtain three independent reviews.

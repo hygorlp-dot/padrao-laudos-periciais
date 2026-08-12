@@ -29,15 +29,22 @@ def test_snapshot_has_exactly_five_agents_and_privacy_minimal_contract(tmp_path)
 
 def test_state_transitions_and_agent_state_are_independent(tmp_path):
     store = PresenceStore(tmp_path)
-    store.set_state("implementer", "working")
-    store.set_state("reviewer", "meeting")
+    store.begin_execution("implementer", "run-1", process_id=1, worktree=str(tmp_path), head_sha=None)
+    store.begin_execution("reviewer", "run-2", process_id=2, worktree=str(tmp_path), head_sha=None)
     states = {item["agentId"]: item["state"] for item in store.snapshot()["agents"]}
-    assert states["implementer"] == "working" and states["reviewer"] == "meeting"
+    assert states["implementer"] == "working" and states["reviewer"] == "working"
     assert states["researcher"] == "idle"
     with pytest.raises(ValueError):
         store.set_state("implementer", "invented")
     with pytest.raises(ValueError):
         store.set_state("unknown", "working")
+
+
+def test_working_cannot_be_fabricated_without_execution_lease(tmp_path):
+    store = PresenceStore(tmp_path)
+    with pytest.raises(ValueError, match="execution lease"):
+        store.set_state("reviewer", "working")
+    assert next(item for item in store.snapshot()["agents"] if item["agentId"] == "reviewer")["state"] == "idle"
 
 
 def test_concurrent_updates_are_atomic_and_preserve_all_agents(tmp_path):
@@ -48,7 +55,7 @@ def test_concurrent_updates_are_atomic_and_preserve_all_agents(tmp_path):
     def update(agent_id):
         try:
             barrier.wait()
-            store.set_state(agent_id, "working")
+            store.begin_execution(agent_id, f"run-{agent_id}", process_id=None, worktree=str(tmp_path), head_sha=None)
         except Exception as exc:  # pragma: no cover - diagnostic collection
             errors.append(exc)
 
@@ -62,20 +69,20 @@ def test_concurrent_updates_are_atomic_and_preserve_all_agents(tmp_path):
 
 def test_heartbeat_and_watchdog_mark_stale_work_as_error(tmp_path):
     store = PresenceStore(tmp_path, stale_after_seconds=0.02)
-    store.set_state("auditor", "working")
-    first = store.internal_state()["agents"]["auditor"]["lastSeen"]
-    store.heartbeat("auditor")
-    assert store.internal_state()["agents"]["auditor"]["lastSeen"] >= first
+    store.begin_execution("auditor", "run-auditor", process_id=None, worktree=str(tmp_path), head_sha=None)
+    first = store.internal_state()["executions"]["run-auditor"]["lastSeen"]
+    store.heartbeat_execution("run-auditor")
+    assert store.internal_state()["executions"]["run-auditor"]["lastSeen"] >= first
     time.sleep(0.03)
     assert store.recover_stale() == ["auditor"]
     assert next(item for item in store.snapshot()["agents"] if item["agentId"] == "auditor")["state"] == "error"
 
 
 @pytest.mark.parametrize("agent_id", list(AGENTS))
-def test_real_lifecycle_sets_working_then_idle_and_failure_sets_error(tmp_path, agent_id):
+def test_unmanaged_lifecycle_does_not_fabricate_working(tmp_path, agent_id):
     sink = Claw3DPresenceSink(PresenceStore(tmp_path))
     with agent_lifecycle(sink, agent_id):
-        assert sink.store.internal_state()["agents"][agent_id]["state"] == "working"
+        assert sink.store.internal_state()["agents"][agent_id]["state"] == "idle"
     assert sink.store.internal_state()["agents"][agent_id]["state"] == "idle"
     with pytest.raises(RuntimeError):
         with agent_lifecycle(sink, agent_id):
@@ -124,8 +131,8 @@ def test_worktrees_share_explicit_runtime_directory(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAW3D_AGENT_STATE_DIR", str(tmp_path / "shared"))
     first = PresenceStore.from_environment(workspace=tmp_path / "worktree-a")
     second = PresenceStore.from_environment(workspace=tmp_path / "worktree-b")
-    first.set_state("researcher", "working")
-    assert second.internal_state()["agents"]["researcher"]["state"] == "working"
+    first.begin_execution("researcher", "shared-run", process_id=None, worktree=str(tmp_path), head_sha=None)
+    assert next(item for item in second.snapshot()["agents"] if item["agentId"] == "researcher")["state"] == "working"
     assert first.state_dir == second.state_dir == (tmp_path / "shared").resolve()
 
 
@@ -138,12 +145,23 @@ def test_relative_shared_runtime_directory_fails_closed(monkeypatch):
 def test_claude_rate_limit_records_error_without_retry_loop_then_can_idle(tmp_path):
     sink = Claw3DPresenceSink(PresenceStore(tmp_path))
     calls = []
-    sink.set_state("claude", "working")
+    sink.store.begin_execution("claude", "claude-run", process_id=None, worktree=str(tmp_path), head_sha=None)
     calls.append("one-real-call")
     sink.set_state("claude", "error")
     sink.set_state("claude", "idle")
     assert calls == ["one-real-call"]
     assert sink.store.internal_state()["agents"]["claude"]["state"] == "idle"
+
+
+def test_finished_execution_history_is_bounded(tmp_path):
+    store = PresenceStore(tmp_path, max_execution_history=8)
+    for index in range(12):
+        execution_id = f"run-{index:03d}"
+        store.begin_execution("researcher", execution_id, process_id=None, worktree=str(tmp_path), head_sha=None)
+        store.finish_execution(execution_id, exit_code=0)
+    state = store.internal_state()
+    assert len(state["executions"]) == 8
+    assert "run-000" not in state["executions"] and "run-011" in state["executions"]
 
 
 def test_runtime_is_ignored_and_powershell_operator_commands_exist():

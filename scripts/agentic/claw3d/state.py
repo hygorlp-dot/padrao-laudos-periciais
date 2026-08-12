@@ -24,6 +24,8 @@ AGENTS = {
 }
 STATES = {"idle", "working", "meeting", "error"}
 WORKSPACE_ID = "padrao-laudos-periciais"
+MAX_EXECUTION_HISTORY = 256
+MAX_DIAGNOSTIC_BYTES = 65536
 _THREAD_LOCKS: dict[str, threading.RLock] = {}
 _THREAD_LOCKS_GUARD = threading.Lock()
 
@@ -33,12 +35,13 @@ def _utc_now() -> str:
 
 
 class PresenceStore:
-    def __init__(self, state_dir: Path, *, stale_after_seconds: float = 300.0):
+    def __init__(self, state_dir: Path, *, stale_after_seconds: float = 300.0, max_execution_history: int = MAX_EXECUTION_HISTORY):
         self.state_dir = Path(state_dir).resolve()
         self.state_file = self.state_dir / "presence-state.json"
         self.lock_file = self.state_dir / "presence-state.lock"
         self.diagnostic_file = self.state_dir / "diagnostics.log"
         self.stale_after_seconds = float(stale_after_seconds)
+        self.max_execution_history = max(1, int(max_execution_history))
         self.state_dir.mkdir(parents=True, exist_ok=True)
 
     @classmethod
@@ -109,6 +112,15 @@ class PresenceStore:
             return self._empty()
 
     def _write_unlocked(self, data: dict) -> None:
+        executions = data.get("executions", {})
+        running = {key: value for key, value in executions.items() if value.get("status") == "running"}
+        finished = sorted(
+            ((key, value) for key, value in executions.items() if value.get("status") != "running"),
+            key=lambda item: (item[1].get("finished_at") or item[1].get("started_at") or "", item[0]),
+            reverse=True,
+        )
+        slots = max(0, self.max_execution_history - len(running))
+        data["executions"] = {**running, **dict(reversed(finished[:slots]))}
         data["timestamp"] = _utc_now()
         fd, temporary = tempfile.mkstemp(prefix="presence-", suffix=".tmp", dir=self.state_dir)
         try:
@@ -123,6 +135,9 @@ class PresenceStore:
 
     def _diagnose(self, message: str) -> None:
         try:
+            if self.diagnostic_file.is_file() and self.diagnostic_file.stat().st_size > MAX_DIAGNOSTIC_BYTES:
+                tail = self.diagnostic_file.read_bytes()[-(MAX_DIAGNOSTIC_BYTES // 2):]
+                self.diagnostic_file.write_bytes(tail)
             with self.diagnostic_file.open("a", encoding="utf-8") as stream:
                 stream.write(f"{_utc_now()} {message}\n")
         except OSError:
@@ -136,6 +151,8 @@ class PresenceStore:
     def set_state(self, agent_id: str, state: str) -> None:
         if agent_id not in AGENTS or state not in STATES:
             raise ValueError("unknown agent or operational state")
+        if state in {"working", "meeting"}:
+            raise ValueError("working state requires a managed execution lease")
         with self._locked():
             data = self._read_unlocked()
             data["agents"][agent_id]["state"] = state

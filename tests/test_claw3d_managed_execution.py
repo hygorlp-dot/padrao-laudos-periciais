@@ -328,6 +328,25 @@ def test_stale_pid_file_does_not_kill_reused_pid(tmp_path):
         innocent.terminate(); innocent.wait(timeout=5)
 
 
+def test_stale_missing_pid_does_not_claim_orphan_bridge_stopped(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    port = _free_port()
+    env = dict(os.environ, CLAW3D_AGENT_STATE_DIR=str(tmp_path))
+    bridge = subprocess.Popen([sys.executable, "-m", "scripts.agentic.claw3d.bridge", "--port", str(port), "--instance-token", "live"], cwd=root, env=env)
+    (tmp_path / "bridge.pid").write_text(json.dumps({"pid": 999999, "module":"scripts.agentic.claw3d.bridge", "port":port, "instanceToken":"stale"}))
+    try:
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try: urlopen(f"http://127.0.0.1:{port}/health", timeout=.2).close(); break
+            except OSError: time.sleep(.05)
+        result = _powershell(root / "scripts/agentic/claw3d/Stop-Claw3DAgentBridge.ps1", "-Port", port, env=env)
+        assert result.returncode != 0
+        assert bridge.poll() is None
+        assert (tmp_path / "bridge.pid").exists()
+    finally:
+        bridge.terminate(); bridge.wait(timeout=5)
+
+
 def test_foreign_process_on_bridge_port_is_never_killed_and_start_leaves_no_pid(tmp_path):
     root = Path(__file__).resolve().parents[1]
     port = _free_port()
@@ -363,3 +382,22 @@ def test_parallel_start_stop_collision_is_serialized(tmp_path):
             urlopen(f"http://127.0.0.1:{port}/health", timeout=.2)
     finally:
         _powershell(scripts / "Stop-Claw3DAgentBridge.ps1", "-Port", port, env=env)
+
+
+def test_wrong_port_stop_and_second_port_start_never_orphan_bridge(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    scripts = root / "scripts/agentic/claw3d"
+    first_port, second_port = _free_port(), _free_port()
+    env = dict(os.environ, CLAW3D_LIVE_PRESENCE_ENABLED="1", CLAW3D_AGENT_STATE_DIR=str(tmp_path))
+    start, stop = scripts / "Start-Claw3DAgentBridge.ps1", scripts / "Stop-Claw3DAgentBridge.ps1"
+    try:
+        assert _powershell(start, "-Port", first_port, env=env).returncode == 0
+        identity = json.loads((tmp_path / "bridge.pid").read_text())
+        wrong_stop = _powershell(stop, "-Port", second_port, env=env)
+        assert wrong_stop.returncode != 0
+        assert json.loads((tmp_path / "bridge.pid").read_text())["pid"] == identity["pid"]
+        assert _powershell(start, "-Port", second_port, env=env).returncode != 0
+        with urlopen(f"http://127.0.0.1:{first_port}/health", timeout=2) as response:
+            assert json.load(response)["processId"] == identity["pid"]
+    finally:
+        _powershell(stop, "-Port", first_port, env=env)
