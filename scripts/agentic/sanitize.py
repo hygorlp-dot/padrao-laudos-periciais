@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import re
 import hashlib
+from pathlib import Path, PurePosixPath
+
+ROOT = Path(__file__).resolve().parents[2]
 
 DENIED_EXTENSIONS = {".pdf", ".doc", ".docx", ".docm", ".zip", ".png", ".jpg", ".jpeg"}
 PATTERNS = (
@@ -18,14 +21,19 @@ ALLOWED_PREFIXES = ("scripts/", "tests/", "schemas/", "docs/", ".agents/", "conf
 ALLOWED_FILES = {"AGENTS.md", "README.md", "requirements.txt", "requirements-dev.txt"}
 
 
-def sanitize_external_context(files: list[dict]) -> dict:
+def sanitize_external_context(files: list[dict], *, root: Path = ROOT) -> dict:
     safe = []
     reasons = []
     for item in files:
-        path = str(item.get("path", "")).replace("\\", "/")
+        raw_path = str(item.get("path", "")).replace("\\", "/")
+        candidate = PurePosixPath(raw_path)
+        unsafe_path = candidate.is_absolute() or ".." in candidate.parts
+        path = candidate.as_posix()
         content = item.get("content")
         suffix = "." + path.rsplit(".", 1)[-1].lower() if "." in path else ""
-        if not path or not isinstance(content, str):
+        if unsafe_path:
+            reasons.append("UNSAFE_PATH")
+        elif not path or not isinstance(content, str):
             reasons.append("INVALID_CONTEXT_ITEM")
         elif path.startswith("referencias/privadas/") or suffix in DENIED_EXTENSIONS:
             reasons.append("PRIVATE_OR_BINARY_PATH")
@@ -34,6 +42,19 @@ def sanitize_external_context(files: list[dict]) -> dict:
         elif any(pattern.search(content) for pattern in PATTERNS):
             reasons.append("PII_OR_SECRET_DETECTED")
         else:
+            source = (root / path).resolve()
+            try:
+                source.relative_to(root.resolve())
+            except ValueError:
+                reasons.append("PATH_OUTSIDE_REPOSITORY")
+                continue
+            if not source.is_file():
+                reasons.append("SOURCE_NOT_FOUND")
+                continue
+            actual = source.read_text(encoding="utf-8")
+            if actual != content:
+                reasons.append("CONTENT_NOT_BOUND_TO_SOURCE")
+                continue
             safe.append({"path": path, "content": content, "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()})
     if reasons:
         return {"allowed": False, "files": [], "reasons": sorted(set(reasons))}

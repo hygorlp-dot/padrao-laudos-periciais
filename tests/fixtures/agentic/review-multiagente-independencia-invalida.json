@@ -11,7 +11,16 @@
     "isolated_checkout": false,
     "implementation_write_access": true,
     "private_context_received": true,
-    "independence_proven": false
+    "independence_proven": false,
+    "evidence": {
+      "execution_record": "same-task",
+      "context_record": "same-context",
+      "checkout_record": "same-worktree",
+      "checkout_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "permissions_record": "write",
+      "persisted_review": "docs/reviews/forged.json",
+      "persisted_review_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
   },
   "architecture_status": "CONFORME",
   "architectural_challenges": [],

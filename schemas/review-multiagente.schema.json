@@ -25,16 +25,27 @@
   },
   "allOf": [{
     "if": {"properties": {"conclusion": {"const": "APPROVED"}}, "required": ["conclusion"]},
-    "then": {"properties": {"p0_open": {"const": 0}, "p1_material_open": {"const": 0}, "independence": {"properties": {"separate_execution": {"const": true}, "separate_context": {"const": true}, "isolated_checkout": {"const": true}, "implementation_write_access": {"const": false}, "private_context_received": {"const": false}, "independence_proven": {"const": true}}}}}
+    "then": {"properties": {"p0_open": {"const": 0}, "p1_material_open": {"const": 0}, "findings": {"items": {"properties": {"severity": {"const": "P2"}}}}, "independence": {"properties": {"separate_execution": {"const": true}, "separate_context": {"const": true}, "isolated_checkout": {"const": true}, "implementation_write_access": {"const": false}, "private_context_received": {"const": false}, "independence_proven": {"const": true}}}}}
   }],
   "$defs": {
     "independence": {
       "type": "object", "additionalProperties": false,
-      "required": ["separate_execution", "separate_context", "isolated_checkout", "implementation_write_access", "private_context_received", "independence_proven"],
+      "required": ["separate_execution", "separate_context", "isolated_checkout", "implementation_write_access", "private_context_received", "independence_proven", "evidence"],
       "properties": {
         "separate_execution": {"type": "boolean"}, "separate_context": {"type": "boolean"},
         "isolated_checkout": {"type": "boolean"}, "implementation_write_access": {"type": "boolean"},
-        "private_context_received": {"type": "boolean"}, "independence_proven": {"type": "boolean"}
+        "private_context_received": {"type": "boolean"}, "independence_proven": {"type": "boolean"},
+        "evidence": {"$ref": "#/$defs/independenceEvidence"}
+      }
+    },
+    "independenceEvidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["execution_record", "context_record", "checkout_record", "checkout_head_sha", "permissions_record", "persisted_review", "persisted_review_sha256"],
+      "properties": {
+        "execution_record": {"type": "string", "minLength": 1}, "context_record": {"type": "string", "minLength": 1},
+        "checkout_record": {"type": "string", "minLength": 1}, "checkout_head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "permissions_record": {"type": "string", "minLength": 1}, "persisted_review": {"type": "string", "minLength": 1},
+        "persisted_review_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
     },
     "finding": {
