@@ -37,6 +37,7 @@ def next_recovery_action(findings: list[dict]) -> str:
 
 
 def evaluate_merge_gate(state: dict) -> dict:
+    """Evaluate policy diagnostics without granting merge authority."""
     reasons = []
     head = state.get("head_sha")
     expected_head = state.get("expected_head_sha")
@@ -69,7 +70,10 @@ def evaluate_merge_gate(state: dict) -> dict:
     if state.get("claude_required") is True and state.get("claude_review_head") != head:
         reasons.append("claude_review_head")
     reasons.extend(key for key, value in required.items() if state.get(key) != value)
-    return {"status": "APPROVED" if not reasons else "BLOCKED", "reasons": reasons}
+    # Caller-supplied booleans are useful diagnostics but are not a trust root.
+    # This public helper must never authorize a merge by itself.
+    reasons.append("trusted_merge_authority_missing")
+    return {"status": "BLOCKED", "reasons": sorted(set(reasons))}
 
 
 def evaluate_merge_gate_for_paths(state: dict, changed_paths: list[str]) -> dict:
