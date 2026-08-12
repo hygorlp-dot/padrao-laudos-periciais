@@ -5,6 +5,7 @@ from enum import StrEnum
 import hashlib
 import hmac
 import json
+import struct
 from decimal import Decimal
 from types import MappingProxyType
 from uuid import uuid4
@@ -54,7 +55,7 @@ def _canonical(value):
     if type(value) is int:
         return ["int", hex(value)]
     if type(value) is float:
-        return ["float", value.hex()]
+        return ["float64", struct.pack(">d", value).hex()]
     raise TypeError(f"Tipo de valor não suportado: {type(value).__name__}")
 
 
