@@ -196,9 +196,17 @@ def test_review_package_is_first_party_exact_head_and_excludes_private_paths(tmp
     )
     assert package["head_sha"] == actual_head and package["private_data_included"] is False
     assert package["privacy"] == "PASS" and package["sanitization_receipt"]["head_sha"] == actual_head
+    assert "changed_files" not in package and len(package["changed_file_hashes"][0]) == 64
     with pytest.raises(TypeError):
         build_review_package(issue=31, base_sha=BASE, head_sha=HEAD, changed_files=[],
                              sanitization_receipt={"allowed": True, "head_sha": HEAD, "files": []})
+    with pytest.raises(ValueError):
+        build_review_package(issue=31, base_sha=BASE, head_sha=actual_head,
+                             changed_files=["docs/Maria-de-Souza-caso.md"],
+                             affected_boundaries=["AUTORA_MARIA_DE_SOUZA"],
+                             invariants=["CPF_123.456.789-09"],
+                             test_results={"raw": "A autora Maria reside na Rua X, 123"},
+                             deploy_impact="Parte Maria de Souza")
     with pytest.raises(ValueError):
         build_review_package(issue=31, base_sha=BASE, head_sha=HEAD,
                              changed_files=["referencias/privadas/caso.pdf"])
