@@ -2,6 +2,7 @@ from hypothesis import given, strategies as st
 import pytest
 from dataclasses import replace
 import struct
+from types import MappingProxyType
 
 from scripts.backend_contract import Authority, ValueHistory
 
@@ -138,6 +139,29 @@ def test_cyclic_container_and_malformed_snapshot_fail_closed():
     malformed = replace(snapshot, entries=(replace(snapshot.entries[0], authority="FORGED"),))
     with pytest.raises(ValueError, match="Snapshot de ValueHistory inválido"):
         history.restore(malformed)
+
+
+def test_restore_normalizes_malformed_signature_and_recursive_forgery():
+    history = ValueHistory()
+    history.record_source("A")
+    snapshot = history.snapshot()
+
+    recursive = {}
+    recursive_proxy = MappingProxyType(recursive)
+    recursive["self"] = recursive_proxy
+    attacks = (
+        replace(snapshot, signature=None),
+        replace(snapshot, signature="\ud800"),
+        replace(snapshot, entries=list(snapshot.entries)),
+        replace(
+            snapshot,
+            entries=(replace(snapshot.entries[0], value=recursive_proxy),),
+        ),
+    )
+
+    for attack in attacks:
+        with pytest.raises(ValueError, match="Snapshot de ValueHistory"):
+            history.restore(attack)
 
 
 def test_snapshot_distinguishes_nan_payload_bits():

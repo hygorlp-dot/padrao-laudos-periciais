@@ -15,12 +15,12 @@ from .models import ArtifactStatus
 
 def _deep_freeze(value, seen=None):
     seen = set() if seen is None else seen
-    is_container = type(value) in {dict, list, tuple, set, frozenset}
+    is_container = type(value) in {dict, MappingProxyType, list, tuple, set, frozenset}
     if is_container and id(value) in seen:
         raise ValueError("Container cíclico não suportado")
     if is_container:
         seen.add(id(value))
-    if type(value) is dict:
+    if type(value) in {dict, MappingProxyType}:
         if not all(type(key) is str for key in value):
             raise TypeError("Tipo de valor não suportado: chave não textual")
         frozen = MappingProxyType({key: _deep_freeze(item, seen) for key, item in value.items()})
@@ -87,21 +87,65 @@ class Revision:
     payload: MappingProxyType
 
 
+@dataclass(frozen=True, slots=True)
+class RevisionStoreSnapshot:
+    store_id: str
+    histories: tuple[tuple[str, tuple[Revision, ...]], ...]
+    signature: str
+
+
+def _canonical_revision(item):
+    if type(item) is not Revision:
+        raise TypeError("Revisão inválida")
+    return [
+        "revision",
+        item.revision_id,
+        item.artifact_id,
+        item.revision,
+        item.created_at,
+        item.supersedes,
+        item.status.value,
+        item.source.value,
+        _canonical(item.payload),
+    ]
+
+
+def _revision_store_snapshot_payload(store_id, histories):
+    return json.dumps(
+        [
+            store_id,
+            [
+                [artifact_id, [_canonical_revision(item) for item in history]]
+                for artifact_id, history in histories
+            ],
+        ],
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode()
+
+
 class RevisionStore:
     def __init__(self):
         self._items = {}
+        self._store_id = str(uuid4())
+        self._snapshot_key = uuid4().bytes
 
     def append(self, artifact_id, payload, source):
-        history = self._items.setdefault(artifact_id, [])
+        if type(source) is not RevisionSource or source is RevisionSource.AI:
+            raise ValueError("fonte de revisão não pode promover proposta de IA")
+        history = self._items.get(artifact_id, [])
         supersedes = history[-1].revision_id if history else None
-        if history:
-            history[-1] = replace(history[-1], status=ArtifactStatus.SUPERSEDED)
+        frozen_payload = _deep_freeze(payload)
         item = Revision(
             revision_id=str(uuid4()), artifact_id=artifact_id,
             revision=len(history) + 1, created_at=datetime.now(timezone.utc).isoformat(),
             supersedes=supersedes, status=ArtifactStatus.CURRENT, source=source,
-            payload=_deep_freeze(payload),
+            payload=frozen_payload,
         )
+        if history:
+            history[-1] = replace(history[-1], status=ArtifactStatus.SUPERSEDED)
+        else:
+            self._items[artifact_id] = history
         history.append(item)
         return item
 
@@ -109,13 +153,74 @@ class RevisionStore:
         return tuple(self._items.get(artifact_id, ()))
 
     def snapshot(self):
-        return {
-            artifact_id: list(history)
-            for artifact_id, history in self._items.items()
-        }
+        histories = tuple(
+            (artifact_id, tuple(history))
+            for artifact_id, history in sorted(self._items.items())
+        )
+        signature = hmac.new(
+            self._snapshot_key,
+            _revision_store_snapshot_payload(self._store_id, histories),
+            hashlib.sha256,
+        ).hexdigest()
+        return RevisionStoreSnapshot(self._store_id, histories, signature)
 
     def restore(self, snapshot):
-        self._items = snapshot
+        if (
+            type(snapshot) is not RevisionStoreSnapshot
+            or snapshot.store_id != self._store_id
+            or type(snapshot.histories) is not tuple
+            or type(snapshot.signature) is not str
+        ):
+            raise ValueError("Snapshot de RevisionStore inválido")
+        try:
+            expected = hmac.new(
+                self._snapshot_key,
+                _revision_store_snapshot_payload(snapshot.store_id, snapshot.histories),
+                hashlib.sha256,
+            ).hexdigest()
+            valid_signature = hmac.compare_digest(snapshot.signature, expected)
+        except (AttributeError, RecursionError, TypeError, ValueError) as exc:
+            raise ValueError("Snapshot de RevisionStore inválido") from exc
+        if not valid_signature:
+            raise ValueError("Snapshot de RevisionStore inválido")
+        restored = {}
+        revision_ids = set()
+        for entry in snapshot.histories:
+            if type(entry) is not tuple or len(entry) != 2:
+                raise ValueError("Snapshot de RevisionStore inválido")
+            artifact_id, history = entry
+            if type(artifact_id) is not str or not artifact_id or type(history) is not tuple:
+                raise ValueError("Snapshot de RevisionStore inválido")
+            if artifact_id in restored:
+                raise ValueError("Snapshot de RevisionStore inválido")
+            validated = []
+            for index, item in enumerate(history, start=1):
+                previous = validated[-1] if validated else None
+                expected_status = ArtifactStatus.CURRENT if index == len(history) else ArtifactStatus.SUPERSEDED
+                if (
+                    type(item) is not Revision
+                    or type(item.source) is not RevisionSource
+                    or item.source is RevisionSource.AI
+                    or type(item.status) is not ArtifactStatus
+                    or item.status is not expected_status
+                    or item.artifact_id != artifact_id
+                    or item.revision != index
+                    or item.supersedes != (previous.revision_id if previous else None)
+                    or type(item.revision_id) is not str
+                    or not item.revision_id
+                    or item.revision_id in revision_ids
+                    or item.supersedes == item.revision_id
+                    or type(item.created_at) is not str
+                ):
+                    raise ValueError("Snapshot de RevisionStore inválido")
+                try:
+                    payload = _deep_freeze(dict(item.payload))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("Snapshot de RevisionStore inválido") from exc
+                validated.append(replace(item, payload=payload))
+                revision_ids.add(item.revision_id)
+            restored[artifact_id] = validated
+        self._items = restored
 
 
 class Authority(StrEnum):
@@ -207,14 +312,20 @@ class ValueHistory:
     def restore(self, snapshot):
         if not isinstance(snapshot, ValueHistorySnapshot) or snapshot.history_id != self._history_id:
             raise ValueError("Snapshot de ValueHistory inválido")
+        if type(snapshot.entries) is not tuple or type(snapshot.signature) is not str:
+            raise ValueError("Snapshot de ValueHistory inválido")
         try:
             expected = hmac.new(
                 self._snapshot_key,
                 _snapshot_payload(snapshot.history_id, snapshot.entries),
                 hashlib.sha256,
             ).hexdigest()
-        except (AttributeError, TypeError, ValueError) as exc:
+        except (AttributeError, RecursionError, TypeError, ValueError) as exc:
             raise ValueError("Snapshot de ValueHistory inválido") from exc
-        if not hmac.compare_digest(snapshot.signature, expected):
+        try:
+            valid_signature = hmac.compare_digest(snapshot.signature, expected)
+        except TypeError as exc:
+            raise ValueError("Snapshot de ValueHistory inválido") from exc
+        if not valid_signature:
             raise ValueError("Snapshot de ValueHistory inválido")
         self._entries = list(snapshot.entries)

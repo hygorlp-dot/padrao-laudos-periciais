@@ -68,6 +68,12 @@ Uma mudança material reúne `update + invalidation + audit event` na mesma
 unidade. Falha restaura os participantes ao snapshot anterior. O V1 usa
 contratos em memória e não exige banco, fila ou serviço distribuído.
 
+`RevisionStoreSnapshot` é opaco, efêmero e vinculado à instância que o criou.
+Serve exclusivamente ao rollback intra-instância da `UnitOfWork`; não é formato
+de persistência, backup, transporte entre processos ou restauração em outro
+`RevisionStore`. Persistência real exigirá contrato próprio na etapa futura de
+Storage/Security.
+
 Eventos de auditoria registram identificador, tipo, correlação, instante,
 caso/artefato quando aplicáveis e resumo profissional. Não armazenam
 chain-of-thought.
