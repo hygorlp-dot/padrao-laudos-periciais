@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from enum import StrEnum
 import hashlib
 import hmac
+import json
+from decimal import Decimal
 from types import MappingProxyType
 from uuid import uuid4
 
@@ -12,12 +14,44 @@ from .models import ArtifactStatus
 
 def _deep_freeze(value):
     if isinstance(value, dict):
+        if not all(isinstance(key, str) for key in value):
+            raise TypeError("Tipo de valor não suportado: chave não textual")
         return MappingProxyType({key: _deep_freeze(item) for key, item in value.items()})
     if isinstance(value, (list, tuple)):
         return tuple(_deep_freeze(item) for item in value)
     if isinstance(value, (set, frozenset)):
         return frozenset(_deep_freeze(item) for item in value)
-    return deepcopy(value)
+    if value is None or isinstance(value, (bool, int, float, str, bytes, Decimal)):
+        return deepcopy(value)
+    raise TypeError(f"Tipo de valor não suportado: {type(value).__name__}")
+
+
+def _canonical(value):
+    if isinstance(value, MappingProxyType):
+        return ["map", [[key, _canonical(item)] for key, item in sorted(value.items())]]
+    if isinstance(value, tuple):
+        return ["tuple", [_canonical(item) for item in value]]
+    if isinstance(value, frozenset):
+        items = [_canonical(item) for item in value]
+        return ["set", sorted(items, key=lambda item: json.dumps(item, ensure_ascii=True, sort_keys=True))]
+    if isinstance(value, ValueEntry):
+        return ["entry", value.authority.value, _canonical(value.value), value.created_at, value.reason]
+    if isinstance(value, bytes):
+        return ["bytes", value.hex()]
+    if isinstance(value, Decimal):
+        return ["decimal", str(value)]
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return [type(value).__name__, value]
+    raise TypeError(f"Tipo de valor não suportado: {type(value).__name__}")
+
+
+def _snapshot_payload(history_id, entries):
+    return json.dumps(
+        [history_id, [_canonical(entry) for entry in entries]],
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
 
 
 class RevisionSource(StrEnum):
@@ -106,7 +140,9 @@ class ValueHistory:
     def _append(self, authority, value, reason=None):
         if authority is Authority.EFFECTIVE_VALUE:
             raise ValueError("EFFECTIVE_VALUE é derivado, não armazenado")
-        if authority is Authority.PROFESSIONAL_OVERRIDE and not reason:
+        if reason is not None and not isinstance(reason, str):
+            raise TypeError("justificativa deve ser texto imutável")
+        if authority is Authority.PROFESSIONAL_OVERRIDE and (not reason or not reason.strip()):
             raise ValueError("Professional Override exige justificativa")
         entry = ValueEntry(authority, _deep_freeze(value), datetime.now(timezone.utc).isoformat(), reason)
         self._entries.append(entry)
@@ -151,17 +187,20 @@ class ValueHistory:
 
     def snapshot(self):
         entries = tuple(self._entries)
-        signature = hmac.new(self._snapshot_key, repr((self._history_id, entries)).encode(), hashlib.sha256).hexdigest()
+        signature = hmac.new(self._snapshot_key, _snapshot_payload(self._history_id, entries), hashlib.sha256).hexdigest()
         return ValueHistorySnapshot(self._history_id, entries, signature)
 
     def restore(self, snapshot):
         if not isinstance(snapshot, ValueHistorySnapshot) or snapshot.history_id != self._history_id:
             raise ValueError("Snapshot de ValueHistory inválido")
-        expected = hmac.new(
-            self._snapshot_key,
-            repr((snapshot.history_id, snapshot.entries)).encode(),
-            hashlib.sha256,
-        ).hexdigest()
+        try:
+            expected = hmac.new(
+                self._snapshot_key,
+                _snapshot_payload(snapshot.history_id, snapshot.entries),
+                hashlib.sha256,
+            ).hexdigest()
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Snapshot de ValueHistory inválido") from exc
         if not hmac.compare_digest(snapshot.signature, expected):
             raise ValueError("Snapshot de ValueHistory inválido")
         self._entries = list(snapshot.entries)
