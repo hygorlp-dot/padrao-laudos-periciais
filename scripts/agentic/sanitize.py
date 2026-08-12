@@ -28,8 +28,11 @@ ALLOWED_PREFIXES = (
 ALLOWED_FILES = {"AGENTS.md"}
 
 
-def sanitize_external_context(files: list[dict]) -> dict:
+def sanitize_external_context(files: list[dict], *, expected_head: str | None = None) -> dict:
     root = ROOT
+    actual_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    if expected_head is not None and expected_head != actual_head:
+        return {"allowed": False, "files": [], "reasons": ["HEAD_MISMATCH"], "head_sha": actual_head}
     safe = []
     reasons = []
     for item in files:
@@ -68,7 +71,7 @@ def sanitize_external_context(files: list[dict]) -> dict:
                 continue
             try:
                 committed = subprocess.check_output(
-                    ["git", "show", f"HEAD:{path}"], cwd=root, text=True,
+                    ["git", "show", f"{actual_head}:{path}"], cwd=root, text=True,
                     encoding="utf-8", errors="strict",
                 )
             except (subprocess.CalledProcessError, UnicodeError):
@@ -78,7 +81,10 @@ def sanitize_external_context(files: list[dict]) -> dict:
             if actual != content or committed != content:
                 reasons.append("CONTENT_NOT_BOUND_TO_SOURCE")
                 continue
-            safe.append({"path": path, "content": content, "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()})
+            # External packages receive only an exact-HEAD manifest.  Raw file
+            # bytes stay in the isolated checkout and are never copied into an
+            # egress payload, avoiding lexical PII-detection as a trust claim.
+            safe.append({"path": path, "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()})
     if reasons:
-        return {"allowed": False, "files": [], "reasons": sorted(set(reasons))}
-    return {"allowed": True, "files": safe, "reasons": []}
+        return {"allowed": False, "files": [], "reasons": sorted(set(reasons)), "head_sha": actual_head}
+    return {"allowed": True, "files": safe, "reasons": [], "head_sha": actual_head}
