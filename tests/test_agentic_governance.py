@@ -375,8 +375,8 @@ def test_external_context_sanitizer_blocks_private_pii_and_secrets(unsafe):
 
 
 def test_external_context_sanitizer_allows_only_public_first_party_text():
-    content = (ROOT / "scripts/agentic/gates.py").read_text(encoding="utf-8")
-    result = sanitize_external_context([{"path": "scripts/agentic/gates.py", "content": content}])
+    content = (ROOT / "scripts/agentic/roles.py").read_text(encoding="utf-8")
+    result = sanitize_external_context([{"path": "scripts/agentic/roles.py", "content": content}])
     assert result["allowed"] is True
     assert set(result["files"][0]) == {"path_sha256", "content_sha256"}
     assert "content" not in result["files"][0]
@@ -608,7 +608,7 @@ def test_repository_merge_gate_rejects_wrong_base_decoy_persisted_review_and_reu
     assert result["status"] == "BLOCKED"
 
 
-def test_repository_merge_gate_never_trusts_self_authored_local_review_evidence(tmp_path):
+def test_repository_merge_gate_never_trusts_self_authored_local_review_evidence(tmp_path, monkeypatch):
     """Three coherent local identities still have the same untrusted author."""
     import subprocess
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
@@ -632,9 +632,16 @@ def test_repository_merge_gate_never_trusts_self_authored_local_review_evidence(
     reviews = [_review(review_type=kind, base_sha=base, head_sha=head,
                        execution_id=f"forged-{index}")
                for index, kind in enumerate(("PR_REVIEW", "SYSTEMIC_AUDIT", "EXTERNAL_DIVERSITY"), 1)]
+    for review in reviews:
+        review["independence"]["evidence"]["checkout_head_sha"] = head
+    verified_attempts = []
+    import scripts.agentic.gates as gates_module
+    monkeypatch.setattr(gates_module, "verify_independence_evidence",
+                        lambda evidence, expected_head, root: verified_attempts.append(evidence) or ["UNTRUSTED"])
     result = evaluate_repository_merge_gate(tmp_path, base, head, state, reviews=reviews)
     assert result["status"] == "BLOCKED"
     assert "trusted_independence_authority_missing" in result["reasons"]
+    assert len(verified_attempts) == 3
 
 
 def test_merge_gate_blocks_stale_missing_external_review_ci_privacy_or_dependency():

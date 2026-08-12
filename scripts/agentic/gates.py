@@ -116,7 +116,12 @@ def evaluate_repository_merge_gate(root: Path, base_sha: str, head_sha: str, sta
         schema_path = Path(__file__).resolve().parents[2] / "schemas/review-multiagente.schema.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     for review in reviews:
-        if list(Draft202012Validator(schema).iter_errors(review)) or validate_review_output(review, expected_head=head_sha):
+        semantic_findings = validate_review_output(review, expected_head=head_sha)
+        local_integrity_findings = [
+            item for item in semantic_findings
+            if item.get("code") != "TRUSTED_INDEPENDENCE_AUTHORITY_MISSING"
+        ]
+        if list(Draft202012Validator(schema).iter_errors(review)) or local_integrity_findings:
             continue
         if review.get("conclusion") != "APPROVED":
             continue
