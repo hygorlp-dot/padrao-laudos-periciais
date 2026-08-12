@@ -217,6 +217,10 @@ tempCodeRunnerFile.py
 # Referências periciais privadas — uso exclusivamente local
 referencias/privadas/
 
+# Estado local de observabilidade Claw3D
+.runtime/claw3d/
+.claw3d-runtime/
+
 # Arquivo local de empacotamento do workspace — contém metadados do Git e caches
 .vscode.zip
 

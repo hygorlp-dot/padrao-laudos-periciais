@@ -604,6 +604,14 @@
                            "schemas":  ["review-multiagente.schema.json"],
                            "tests":  ["tests/test_agentic_governance.py"],
                            "consumers":  []
+                       },
+                       {
+                           "id": "CLAW3D_OBSERVABILITY",
+                           "paths": ["scripts/agentic/claw3d/", "docs/padroes/protocolo-claw3d-live-presence.md"],
+                           "invariants": ["CLAW3D_IS_NON_AUTHORITATIVE"],
+                           "schemas": [],
+                           "tests": ["tests/test_claw3d_presence.py"],
+                           "consumers": []
                        }
                    ]
 }

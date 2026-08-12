@@ -663,6 +663,15 @@
                            "testes":  ["tests/test_agentic_governance.py"],
                            "global":  false,
                            "bloqueante":  true
+                       },
+                       {
+                           "id":  "CLAW3D_IS_NON_AUTHORITATIVE",
+                           "descricao":  "Falha ou estado visual do Claw3D nunca altera resultado, gate ou Core Pericial.",
+                           "severidade":  "P1",
+                           "boundaries":  ["CLAW3D_OBSERVABILITY"],
+                           "testes":  ["tests/test_claw3d_presence.py"],
+                           "global":  false,
+                           "bloqueante":  true
                        }
                    ]
 }

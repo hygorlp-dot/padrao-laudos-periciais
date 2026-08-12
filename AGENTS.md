@@ -49,6 +49,9 @@
   humano é exceção para autoridade, privacidade/egress, custo, operação
   destrutiva sem rollback, login/MFA, decisão pericial ou divergência material
   irresolúvel.
+- Claw3D é somente observabilidade local. Seus estados nunca constituem prova
+  de execução nem alteram domínio, revisão, safety ou merge. Falha do bridge é
+  não bloqueante; consultar `docs/padroes/protocolo-claw3d-live-presence.md`.
 
 ## Escopo
 
