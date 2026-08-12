@@ -206,6 +206,29 @@ def test_slow_presence_store_never_delays_real_process_spawn(tmp_path):
     assert execution.wait() == 0
 
 
+@pytest.mark.parametrize("blocked_method", ["begin_execution", "heartbeat_execution", "finish_execution"])
+def test_blocked_presence_store_never_delays_child_completion(tmp_path, blocked_method):
+    release = threading.Event()
+
+    class BlockingStore:
+        def begin_execution(self, *_args, **_kwargs):
+            if blocked_method == "begin_execution": release.wait(5)
+        def heartbeat_execution(self, *_args, **_kwargs):
+            if blocked_method == "heartbeat_execution": release.wait(5)
+        def finish_execution(self, *_args, **_kwargs):
+            if blocked_method == "finish_execution": release.wait(5)
+
+    try:
+        started = time.monotonic()
+        result = ManagedAgentRunner(store=BlockingStore(), heartbeat_seconds=.01).run(
+            "reviewer", [sys.executable, "-c", "raise SystemExit(6)"]
+        )
+        assert result.exit_code == 6
+        assert time.monotonic() - started < 1
+    finally:
+        release.set()
+
+
 def test_claude_adapter_makes_one_attempt_without_retry(tmp_path):
     store = PresenceStore(tmp_path)
     calls_file = tmp_path / "calls.txt"
@@ -225,6 +248,8 @@ def test_operator_wrapper_and_safe_stop_identity_are_present():
     assert "Get-CimInstance Win32_Process" in stop
     assert "scripts.agentic.claw3d.bridge" in stop
     assert "instanceToken" in stop and "processId" in stop and "/health" in stop
+    start = (root / "Start-Claw3DAgentBridge.ps1").read_text(encoding="utf-8")
+    assert "identity persistence failed; started process was terminated" in start
 
 
 @__import__('pytest').mark.parametrize("enabled", [False, True])

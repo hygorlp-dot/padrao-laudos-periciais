@@ -62,9 +62,16 @@ try {
         throw 'Claw3D bridge failed verified readiness.'
     }
     $temporaryPid = Join-Path $runtime ("bridge-{0}.tmp" -f $instanceToken)
-    @{ pid=$process.Id; module='scripts.agentic.claw3d.bridge'; port=$Port; instanceToken=$instanceToken } |
-        ConvertTo-Json -Compress | Set-Content -LiteralPath $temporaryPid -Encoding ascii
-    Move-Item -LiteralPath $temporaryPid -Destination $pidFile -Force
+    try {
+        @{ pid=$process.Id; module='scripts.agentic.claw3d.bridge'; port=$Port; instanceToken=$instanceToken } |
+            ConvertTo-Json -Compress | Set-Content -LiteralPath $temporaryPid -Encoding ascii
+        Move-Item -LiteralPath $temporaryPid -Destination $pidFile -Force
+    } catch {
+        if (-not $process.HasExited) { Stop-Process -Id $process.Id -ErrorAction SilentlyContinue; $process.WaitForExit(5000) | Out-Null }
+        Remove-Item -LiteralPath $temporaryPid -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $pidFile -ErrorAction SilentlyContinue
+        throw 'Claw3D bridge identity persistence failed; started process was terminated.'
+    }
     Write-Output "Claw3D bridge ready on http://127.0.0.1:$Port/presence"
 } finally {
     if ($acquired) { $mutex.ReleaseMutex() }

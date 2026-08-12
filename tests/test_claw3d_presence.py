@@ -211,17 +211,17 @@ def test_health_ok_presence_broken_is_not_ready(tmp_path):
         bridge.stop()
 
 
-@pytest.mark.parametrize("content", ["", "{", "[]", '{"agents":{"unknown":{"state":"working"}}}'])
-def test_corrupt_presence_state_degrades_without_connection_drop(tmp_path, content):
+@pytest.mark.parametrize("content", ["", "{", "[]"])
+def test_corrupt_presence_state_is_reported_as_degraded(tmp_path, content):
     (tmp_path / "presence-state.json").write_text(content, encoding="utf-8")
     bridge = PresenceBridge(PresenceStore(tmp_path), port=0)
     bridge.start()
     try:
         _, port = bridge.address
-        with urlopen(f"http://127.0.0.1:{port}/presence", timeout=2) as response:
-            payload = json.load(response)
-        assert payload["workspaceId"] == "padrao-laudos-periciais"
-        assert all(item["state"] == "idle" for item in payload["agents"])
+        with pytest.raises(HTTPError) as error:
+            urlopen(f"http://127.0.0.1:{port}/presence", timeout=2)
+        assert error.value.code == 503
+        assert json.loads(error.value.read()) == {"status": "degraded", "error": "presence_unavailable"}
     finally:
         bridge.stop()
 

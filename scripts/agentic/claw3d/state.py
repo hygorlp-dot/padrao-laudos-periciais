@@ -112,7 +112,7 @@ class PresenceStore:
             return clean
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             self._diagnose(f"state recovery: {type(exc).__name__}")
-            return self._empty()
+            raise RuntimeError("presence state is corrupt") from exc
 
     def _write_unlocked(self, data: dict) -> None:
         executions = data.get("executions", {})
@@ -190,6 +190,8 @@ class PresenceStore:
                 self._write_unlocked(data)
 
     def attach_process(self, execution_id: str, process_id: int) -> None:
+        if type(process_id) is not int or process_id <= 0:
+            raise ValueError("process id must be a positive integer")
         with self._locked():
             data = self._read_unlocked()
             execution = data["executions"].get(execution_id)
