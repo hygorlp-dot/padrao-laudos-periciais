@@ -1,5 +1,6 @@
 """External diversity, recovery and merge gates."""
 import re
+from .risk import classify_change_risk
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
@@ -62,3 +63,11 @@ def evaluate_merge_gate(state: dict) -> dict:
         reasons.append("claude_review_head")
     reasons.extend(key for key, value in required.items() if state.get(key) != value)
     return {"status": "APPROVED" if not reasons else "BLOCKED", "reasons": reasons}
+
+
+def evaluate_merge_gate_for_paths(state: dict, changed_paths: list[str]) -> dict:
+    """Bind the merge decision to risk derived from the actual changed paths."""
+    risk = classify_change_risk(changed_paths)
+    derived = evaluate_external_diversity_gate(risk["triggers"])
+    bound = dict(state, claude_required=derived["claude_required"], claude_triggers=derived["triggers"])
+    return evaluate_merge_gate(bound)
