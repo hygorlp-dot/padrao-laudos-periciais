@@ -93,17 +93,18 @@ class RevisionStore:
 
     def append(self, artifact_id, payload, source):
         if type(source) is not RevisionSource or source is RevisionSource.AI:
-            raise ValueError("fonte de revisÃ£o nÃ£o pode promover proposta de IA")
+            raise ValueError("fonte de revisão não pode promover proposta de IA")
         history = self._items.setdefault(artifact_id, [])
         supersedes = history[-1].revision_id if history else None
-        if history:
-            history[-1] = replace(history[-1], status=ArtifactStatus.SUPERSEDED)
+        frozen_payload = _deep_freeze(payload)
         item = Revision(
             revision_id=str(uuid4()), artifact_id=artifact_id,
             revision=len(history) + 1, created_at=datetime.now(timezone.utc).isoformat(),
             supersedes=supersedes, status=ArtifactStatus.CURRENT, source=source,
-            payload=_deep_freeze(payload),
+            payload=frozen_payload,
         )
+        if history:
+            history[-1] = replace(history[-1], status=ArtifactStatus.SUPERSEDED)
         history.append(item)
         return item
 
@@ -118,14 +119,34 @@ class RevisionStore:
 
     def restore(self, snapshot):
         if type(snapshot) is not dict:
-            raise ValueError("Snapshot de RevisionStore invÃ¡lido")
+            raise ValueError("Snapshot de RevisionStore inválido")
         restored = {}
         for artifact_id, history in snapshot.items():
             if type(artifact_id) is not str or type(history) is not list:
-                raise ValueError("Snapshot de RevisionStore invÃ¡lido")
-            if any(type(item) is not Revision for item in history):
-                raise ValueError("Snapshot de RevisionStore invÃ¡lido")
-            restored[artifact_id] = list(history)
+                raise ValueError("Snapshot de RevisionStore inválido")
+            validated = []
+            for index, item in enumerate(history, start=1):
+                previous = validated[-1] if validated else None
+                expected_status = ArtifactStatus.CURRENT if index == len(history) else ArtifactStatus.SUPERSEDED
+                if (
+                    type(item) is not Revision
+                    or type(item.source) is not RevisionSource
+                    or item.source is RevisionSource.AI
+                    or type(item.status) is not ArtifactStatus
+                    or item.status is not expected_status
+                    or item.artifact_id != artifact_id
+                    or item.revision != index
+                    or item.supersedes != (previous.revision_id if previous else None)
+                    or type(item.revision_id) is not str
+                    or type(item.created_at) is not str
+                ):
+                    raise ValueError("Snapshot de RevisionStore inválido")
+                try:
+                    payload = _deep_freeze(dict(item.payload))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("Snapshot de RevisionStore inválido") from exc
+                validated.append(replace(item, payload=payload))
+            restored[artifact_id] = validated
         self._items = restored
 
 
