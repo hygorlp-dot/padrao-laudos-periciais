@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -23,7 +24,7 @@ class PresenceBridge:
                     bridge.store.recover_stale()
                     payload, status = bridge.store.snapshot(), 200
                 elif self.path == "/health":
-                    payload, status = {"status": "ok"}, 200
+                    payload, status = {"status": "ok", "processId": os.getpid()}, 200
                     if bridge.instance_token:
                         payload["instanceToken"] = bridge.instance_token
                 else:

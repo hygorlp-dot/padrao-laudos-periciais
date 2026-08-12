@@ -7,7 +7,8 @@ $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $bridgePid" -E
 $healthMatches = $false
 try {
     $health = Invoke-RestMethod -Uri "http://127.0.0.1:$($identity.port)/health" -TimeoutSec 1
-    $healthMatches = $health.status -eq 'ok' -and $health.instanceToken -eq $identity.instanceToken
+    $healthMatches = $health.status -eq 'ok' -and $health.instanceToken -eq $identity.instanceToken -and
+        [int]$health.processId -eq $bridgePid
 } catch { }
 if ($processInfo -and $healthMatches -and $identity.module -eq 'scripts.agentic.claw3d.bridge' -and
     $processInfo.CommandLine -like '*scripts.agentic.claw3d.bridge*') {

@@ -169,7 +169,7 @@ def test_operator_wrapper_and_safe_stop_identity_are_present():
     assert "scripts.agentic.claw3d.cli run" in invoke
     assert "Get-CimInstance Win32_Process" in stop
     assert "scripts.agentic.claw3d.bridge" in stop
-    assert "instanceToken" in stop and "/health" in stop
+    assert "instanceToken" in stop and "processId" in stop and "/health" in stop
 
 
 def test_documented_wrapper_runs_real_child_when_presence_disabled(tmp_path):

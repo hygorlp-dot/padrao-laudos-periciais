@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -110,7 +111,7 @@ def test_bridge_binds_loopback_and_serves_presence_and_health(tmp_path):
         with urlopen(f"http://127.0.0.1:{port}/presence", timeout=2) as response:
             assert json.load(response)["workspaceId"] == "padrao-laudos-periciais"
         with urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as response:
-            assert json.load(response) == {"status": "ok", "instanceToken": "test-instance"}
+            assert json.load(response) == {"status": "ok", "instanceToken": "test-instance", "processId": os.getpid()}
     finally:
         bridge.stop()
     assert bridge.running is False
