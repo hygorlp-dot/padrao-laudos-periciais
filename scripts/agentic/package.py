@@ -12,9 +12,13 @@ def _safe_path(value: str) -> str:
     if path.is_absolute() or ".." in path.parts:
         raise ValueError("unsafe review package path")
     normalized = path.as_posix()
-    if normalized.startswith("referencias/privadas/"):
+    if normalized.casefold().startswith("referencias/privadas/"):
         raise ValueError("private path cannot enter review package")
     return normalized
+
+
+def _safe_paths(values: list[str] | None) -> list[str]:
+    return sorted({_safe_path(value) for value in values or []})
 
 
 def build_review_package(*, issue: int, base_sha: str, head_sha: str,
@@ -32,9 +36,9 @@ def build_review_package(*, issue: int, base_sha: str, head_sha: str,
         "schema_version": "1.0.0", "issue": issue, "base_sha": base_sha,
         "head_sha": head_sha, "merge_base": merge_base or base_sha,
         "changed_files": paths, "affected_boundaries": sorted(set(affected_boundaries or [])),
-        "invariants": sorted(set(invariants or [])), "adrs": sorted(set(adrs or [])),
-        "schemas": sorted(set(schemas or [])), "tests": sorted(set(tests or [])),
+        "invariants": sorted(set(invariants or [])), "adrs": _safe_paths(adrs),
+        "schemas": _safe_paths(schemas), "tests": _safe_paths(tests),
         "test_results": test_results or {}, "ci": ci, "privacy": privacy,
-        "dependencies": sorted(set(dependencies or [])), "deploy_impact": deploy_impact,
+        "dependencies": _safe_paths(dependencies), "deploy_impact": deploy_impact,
         "private_data_included": False,
     }

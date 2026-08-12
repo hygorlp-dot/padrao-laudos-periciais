@@ -24,6 +24,8 @@ def verify_independence_evidence(evidence: dict, expected_head: str, root: Path)
         return ["STRUCTURED_EVIDENCE_INVALID"]
     if any(not path.is_file() for path in record_paths):
         return ["EVIDENCE_RECORD_NOT_FOUND"]
+    if any(not path.read_bytes() for path in (record_paths[0], record_paths[1], record_paths[3])):
+        return ["EVIDENCE_RECORD_EMPTY"]
     try:
         checkout = json.loads(record_paths[2].read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):

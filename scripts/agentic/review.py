@@ -27,4 +27,8 @@ def validate_review_output(review: dict, *, expected_head: str) -> list[dict]:
         item.get("severity") in {"P0", "P1"} for item in review.get("findings", []) if isinstance(item, dict)
     ):
         findings.append({"code": "INCONSISTENT_FINDING_COUNT", "severity": "P0"})
+    actual_p0 = sum(item.get("severity") == "P0" for item in review.get("findings", []) if isinstance(item, dict))
+    actual_p1 = sum(item.get("severity") == "P1" for item in review.get("findings", []) if isinstance(item, dict))
+    if review.get("p0_open") != actual_p0 or review.get("p1_material_open") != actual_p1:
+        findings.append({"code": "FINDING_COUNT_MISMATCH", "severity": "P0"})
     return findings

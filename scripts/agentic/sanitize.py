@@ -21,7 +21,8 @@ ALLOWED_PREFIXES = ("scripts/", "tests/", "schemas/", "docs/", ".agents/", "conf
 ALLOWED_FILES = {"AGENTS.md", "README.md", "requirements.txt", "requirements-dev.txt"}
 
 
-def sanitize_external_context(files: list[dict], *, root: Path = ROOT) -> dict:
+def sanitize_external_context(files: list[dict]) -> dict:
+    root = ROOT
     safe = []
     reasons = []
     for item in files:
@@ -35,7 +36,7 @@ def sanitize_external_context(files: list[dict], *, root: Path = ROOT) -> dict:
             reasons.append("UNSAFE_PATH")
         elif not path or not isinstance(content, str):
             reasons.append("INVALID_CONTEXT_ITEM")
-        elif path.startswith("referencias/privadas/") or suffix in DENIED_EXTENSIONS:
+        elif path.casefold().startswith("referencias/privadas/") or suffix in DENIED_EXTENSIONS:
             reasons.append("PRIVATE_OR_BINARY_PATH")
         elif not (path in ALLOWED_FILES or path.startswith(ALLOWED_PREFIXES)):
             reasons.append("PATH_NOT_ALLOWLISTED")

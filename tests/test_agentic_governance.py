@@ -12,6 +12,7 @@ from scripts.agentic import (
     evaluate_external_diversity_gate,
     evaluate_independence,
     evaluate_merge_gate,
+    evaluate_merge_gate_for_paths,
     next_recovery_action,
     rank_boundaries,
     sanitize_external_context,
@@ -178,6 +179,12 @@ def test_review_package_is_first_party_exact_head_and_excludes_private_paths(tmp
     with pytest.raises(ValueError):
         build_review_package(issue=31, base_sha=BASE, head_sha=HEAD,
                              changed_files=["scripts/../referencias/privadas/caso.txt"])
+    with pytest.raises(ValueError):
+        build_review_package(issue=31, base_sha=BASE, head_sha=HEAD, changed_files=[],
+                             tests=["../private/test.py"], dependencies=["referencias/privadas/x"])
+    with pytest.raises(ValueError):
+        build_review_package(issue=31, base_sha=BASE, head_sha=HEAD,
+                             changed_files=["REFERENCIAS/PRIVADAS/caso.txt"])
 
 
 @pytest.mark.parametrize("unsafe", [
@@ -206,6 +213,14 @@ def test_external_context_sanitizer_allows_only_public_first_party_text():
     assert sanitize_external_context([{"path": "scripts/agentic/gates.py", "content": "forged"}])["allowed"] is False
 
 
+def test_external_context_cannot_override_the_canonical_repository_root(tmp_path):
+    source = tmp_path / "scripts/forged.py"
+    source.parent.mkdir()
+    source.write_text("public", encoding="utf-8")
+    with pytest.raises(TypeError):
+        sanitize_external_context([{"path": "scripts/forged.py", "content": "public"}], root=tmp_path)
+
+
 def test_review_schema_and_runtime_reject_invalid_or_stale_output():
     schema = json.loads((ROOT / "schemas/review-multiagente.schema.json").read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(schema)
@@ -221,6 +236,9 @@ def test_review_schema_and_runtime_reject_invalid_or_stale_output():
     inconsistent = _review(findings=[{"code": "MATERIAL", "severity": "P1", "evidence": "open"}])
     assert list(Draft202012Validator(schema).iter_errors(inconsistent))
     assert any(item["code"] == "INCONSISTENT_FINDING_COUNT" for item in validate_review_output(inconsistent, expected_head=HEAD))
+    blocked_mismatch = _review(conclusion="BLOCKED", architecture_status="BLOQUEADO",
+                               findings=[{"code": "OPEN", "severity": "P0", "evidence": "x"}])
+    assert any(item["code"] == "FINDING_COUNT_MISMATCH" for item in validate_review_output(blocked_mismatch, expected_head=HEAD))
 
 
 def test_findings_are_deduplicated_without_hiding_severity():
@@ -244,6 +262,19 @@ def test_ranking_requires_evidence_and_is_stably_ordered():
 def test_self_recovery_routes_material_findings_back_to_tdd():
     assert next_recovery_action([{"severity": "P1"}]) == "REPRODUCE_TEST_FIX_REVERIFY"
     assert next_recovery_action([]) == "READY_FOR_FINAL_GATES"
+
+
+def test_merge_gate_derives_external_review_from_changed_paths():
+    state = {
+        "head_sha": HEAD, "expected_head_sha": HEAD, "tests": "PASS", "verify_core": "PASS",
+        "ci": "PASS", "privacy": "PASS", "p0_open": 0, "p1_material_open": 0,
+        "codex_review": "APPROVED", "systemic_audit": "APPROVED", "independence_proven": True,
+        "codex_independence_evidence_verified": True, "systemic_independence_evidence_verified": True,
+        "external_egress_gate": "PASS", "dependency_merged": True,
+        "cross_model_disagreement_material": 0, "codex_review_head": HEAD, "systemic_audit_head": HEAD,
+    }
+    result = evaluate_merge_gate_for_paths(state, ["scripts/agentic/gates.py"])
+    assert result["status"] == "BLOCKED" and "claude_review" in result["reasons"]
 
 
 def test_merge_gate_blocks_stale_missing_external_review_ci_privacy_or_dependency():
