@@ -28,9 +28,11 @@ Valores mantêm camadas distintas:
 
 `SOURCE_VALUE → AI_PROPOSAL → ENGINE_DECISION → PROFESSIONAL_OVERRIDE`.
 
-`EFFECTIVE_VALUE` é derivado pela precedência e não é armazenado como nova
-fonte. Override profissional exige justificativa explícita e preserva todo o
-histórico.
+`EFFECTIVE_VALUE` é derivado somente pela precedência
+`PROFESSIONAL_OVERRIDE > ENGINE_DECISION > SOURCE_VALUE` e não é armazenado
+como nova fonte. `AI_PROPOSAL` permanece no histórico e pode ser consultada
+como proposta pendente, mas nunca participa sozinha de `effective()`. Override
+profissional exige justificativa explícita e preserva todo o histórico.
 
 ## Dependências e STALE
 

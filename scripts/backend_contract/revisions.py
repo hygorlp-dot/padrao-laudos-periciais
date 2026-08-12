@@ -105,14 +105,26 @@ class ValueHistory:
         precedence = (
             Authority.PROFESSIONAL_OVERRIDE,
             Authority.ENGINE_DECISION,
-            Authority.AI_PROPOSAL,
             Authority.SOURCE_VALUE,
         )
         for authority in precedence:
             for entry in reversed(self._entries):
                 if entry.authority is authority:
                     return entry
-        raise ValueError("Nenhum valor disponível")
+        raise ValueError("Nenhum valor efetivo disponível")
+
+    def pending_proposals(self):
+        last_decision = max(
+            (
+                index for index, entry in enumerate(self._entries)
+                if entry.authority in {Authority.ENGINE_DECISION, Authority.PROFESSIONAL_OVERRIDE}
+            ),
+            default=-1,
+        )
+        return tuple(
+            entry for entry in self._entries[last_decision + 1:]
+            if entry.authority is Authority.AI_PROPOSAL
+        )
 
     def snapshot(self):
         return list(self._entries)
