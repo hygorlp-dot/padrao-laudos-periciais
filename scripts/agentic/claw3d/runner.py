@@ -20,32 +20,18 @@ class ManagedExecution:
         self.runner, self.execution_id, self.role = runner, execution_id, role
         self.process, self.worktree, self.head_sha = process, worktree, head_sha
         self._done, self._published, self._result = threading.Event(), threading.Event(), None
-        self._telemetry = queue.Queue()
-        threading.Thread(target=self._publish, name=f"presence-publisher-{execution_id}", daemon=True).start()
-        self._telemetry.put(("begin_execution", (self.role, self.execution_id),
-                             {"process_id": self.process.pid, "worktree": self.worktree, "head_sha": self.head_sha}))
+        self.runner._enqueue("begin_execution", self.role, self.execution_id,
+                             process_id=self.process.pid, worktree=self.worktree, head_sha=self.head_sha)
         threading.Thread(target=self._observe, name=f"presence-{role}-{execution_id}", daemon=True).start()
-    def _publish(self):
-        while True:
-            try:
-                method, args, kwargs = self._telemetry.get(timeout=self.runner.heartbeat_seconds)
-            except queue.Empty:
-                self.runner._safe("heartbeat_execution", self.execution_id)
-                continue
-            try:
-                self.runner._safe(method, *args, **kwargs)
-            finally:
-                if method == "finish_execution":
-                    self._published.set()
-            if method == "finish_execution":
-                break
     def _observe(self):
         while self.process.poll() is None:
             self._done.wait(self.runner.heartbeat_seconds)
         code = int(self.process.returncode)
         self._result = ExecutionResult(self.execution_id, self.role, self.process.pid, code, self.worktree, self.head_sha)
         self._done.set()
-        self._telemetry.put(("finish_execution", (self.execution_id,), {"exit_code": code}))
+        published = self.runner._enqueue("finish_execution", self.execution_id, exit_code=code)
+        if published:
+            self._published = published
     def wait(self, timeout=None):
         self.process.wait(timeout=timeout); self._done.wait(timeout=timeout)
         self._published.wait(min(.1, timeout) if timeout is not None else .1)
@@ -57,6 +43,18 @@ class ManagedExecution:
 class ManagedAgentRunner:
     def __init__(self, *, store: PresenceStore | None = None, heartbeat_seconds: float = 1.0):
         self.store, self.heartbeat_seconds = store or PresenceStore.from_environment(), float(heartbeat_seconds)
+        self._telemetry = queue.Queue(maxsize=256)
+        threading.Thread(target=self._publish, name="presence-publisher-shared", daemon=True).start()
+    def _publish(self):
+        while True:
+            method, args, kwargs, completed = self._telemetry.get()
+            try: self._safe(method, *args, **kwargs)
+            finally: completed.set()
+    def _enqueue(self, method, *args, **kwargs):
+        completed = threading.Event()
+        try: self._telemetry.put_nowait((method, args, kwargs, completed))
+        except queue.Full: return False
+        return completed
     def _safe(self, method, *args, **kwargs):
         try: return getattr(self.store, method)(*args, **kwargs)
         except Exception: return None

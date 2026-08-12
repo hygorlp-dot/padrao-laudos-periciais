@@ -211,7 +211,7 @@ def test_health_ok_presence_broken_is_not_ready(tmp_path):
         bridge.stop()
 
 
-@pytest.mark.parametrize("content", ["", "{", "[]"])
+@pytest.mark.parametrize("content", ["", "{", "[]", "{}", '{"agents":[],"executions":[]}'])
 def test_corrupt_presence_state_is_reported_as_degraded(tmp_path, content):
     (tmp_path / "presence-state.json").write_text(content, encoding="utf-8")
     bridge = PresenceBridge(PresenceStore(tmp_path), port=0)

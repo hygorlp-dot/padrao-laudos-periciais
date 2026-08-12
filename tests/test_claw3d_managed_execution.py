@@ -30,6 +30,7 @@ def test_public_snapshot_is_rebuilt_from_first_party_whitelist(tmp_path):
             "unknown": {"name": "CPF 000.000.000-00", "state": "working"},
         },
         "nested": {"email": "parte@example.test", "path": "referencias/privadas/caso.pdf"},
+        "executions": {},
     }
     (tmp_path / "presence-state.json").write_text(json.dumps(poisoned), encoding="utf-8")
     snapshot = PresenceStore(tmp_path).snapshot()
@@ -230,19 +231,36 @@ def test_blocked_presence_store_never_delays_child_completion(tmp_path, blocked_
 
 
 def test_completed_executions_do_not_leak_publisher_threads(tmp_path):
-    prefix = "presence-publisher-"
-    before = {thread.ident for thread in threading.enumerate() if thread.name.startswith(prefix)}
+    prefix = "presence-publisher-shared"
+    before = {thread.ident for thread in threading.enumerate() if thread.name == prefix}
     runner = ManagedAgentRunner(store=PresenceStore(tmp_path), heartbeat_seconds=.01)
     for _ in range(12):
         assert runner.run("reviewer", [sys.executable, "-c", "pass"]).exit_code == 0
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:
         remaining = [thread for thread in threading.enumerate()
-                     if thread.name.startswith(prefix) and thread.ident not in before]
-        if not remaining:
+                     if thread.name == prefix and thread.ident not in before]
+        if len(remaining) <= 1:
             break
         time.sleep(.01)
-    assert remaining == []
+    assert len(remaining) == 1
+
+
+def test_permanently_blocked_store_has_constant_thread_bound(tmp_path):
+    release = threading.Event()
+    class HungStore:
+        def begin_execution(self, *_args, **_kwargs): release.wait(5)
+        def finish_execution(self, *_args, **_kwargs): pass
+    runner = ManagedAgentRunner(store=HungStore(), heartbeat_seconds=.01)
+    try:
+        for _ in range(12):
+            assert runner.run("reviewer", [sys.executable, "-c", "pass"]).exit_code == 0
+        publishers = [thread for thread in threading.enumerate()
+                      if thread.name == "presence-publisher-shared" and thread.is_alive()]
+        assert len([thread for thread in publishers if thread.ident]) >= 1
+        assert runner._telemetry.qsize() <= runner._telemetry.maxsize
+    finally:
+        release.set()
 
 
 def test_short_process_preserves_begin_before_finish(tmp_path):

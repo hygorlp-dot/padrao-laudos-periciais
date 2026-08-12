@@ -95,8 +95,10 @@ class PresenceStore:
             data = json.loads(self.state_file.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
                 raise ValueError("presence state root must be an object")
-            agents = data.get("agents") if isinstance(data.get("agents"), dict) else {}
-            executions = data.get("executions") if isinstance(data.get("executions"), dict) else {}
+            if not isinstance(data.get("agents"), dict) or not isinstance(data.get("executions"), dict):
+                raise ValueError("presence state must contain object agents and executions")
+            agents = data["agents"]
+            executions = data["executions"]
             clean = self._empty()
             for agent_id in AGENTS:
                 raw = agents.get(agent_id, {}) if isinstance(agents.get(agent_id), dict) else {}
