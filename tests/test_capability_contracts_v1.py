@@ -89,6 +89,7 @@ def test_p0_p1_fixture_matrix_covers_boundaries_and_positive_controls():
         "EXCEPTION_MODULE_PATH_MISMATCH", "BOOTSTRAP_ANALYZER_DIGEST_MISMATCH",
         "BOOTSTRAP_POLICY_DIGEST_MISMATCH", "BOOTSTRAP_SCHEMA_DIGEST_MISMATCH", "BOOTSTRAP_PIN_REGISTRY_TAMPER",
         "BOOTSTRAP_VERIFIER_TAMPER", "BOOTSTRAP_INVENTORY_PARSER_TAMPER", "BOOTSTRAP_BLOCKING_ADAPTER_TAMPER",
+        "BOOTSTRAP_PROTECTED_BASE_VERIFIER_ABSENT", "BOOTSTRAP_PROTECTED_WORKFLOW_ABSENT", "BOOTSTRAP_UNTRUSTED_CANDIDATE_VERIFIER",
     }
     assert required_families <= {case["boundaryFamily"] for case in matrix["cases"]}
 
@@ -127,7 +128,7 @@ def test_exception_lifecycle_and_atomic_topology_are_fail_closed():
     migration = (ROOT / "docs/arquitetura/planos/migracao-capability-boundary-v1.md").read_text(encoding="utf-8")
     for token in ["BASELINE_MUST_BE_ANCESTOR", "EXCEPTION_MUST_PREEXIST_IN_BASELINE", "EXPIRED_EXCEPTION_BLOCKS", "DUPLICATE_EXCEPTION_BLOCKS", "SAME_CANDIDATE_TREE_BYTES", "COMMIT_TREE_MATCH_REQUIRED", "MODULE_PATH_CONSISTENCY_REQUIRED"]:
         assert token in contract
-    for token in ["NO_DEPLOYED_LEGACY_ORACLE", "NEW_GATE_BLOCKS_ON_INTRODUCTION", "REVERSE_ORDER_ROLLBACK"]:
+    for token in ["NO_DEPLOYED_LEGACY_ORACLE", "NEW_GATE_BLOCKS_ON_INTRODUCTION", "REVERSE_ORDER_ROLLBACK", "TRUST_ANCHOR_MUST_PREEXIST_CUTOVER", "PR-T"]:
         assert token in migration
 
 
