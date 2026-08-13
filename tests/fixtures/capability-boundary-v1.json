@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1.0.0",
+  "cases": [
+    {"id":"P0-DYNAMIC-IMPORT-LITERAL","capabilityClass":"DYNAMIC_IMPORT_ACQUISITION","source":"__import__('os')","expected":"BLOCK","severity":"P0"},
+    {"id":"P0-DYNAMIC-EXEC","capabilityClass":"DYNAMIC_EXECUTION_ACQUISITION","source":"exec(code)","expected":"BLOCK","severity":"P0"},
+    {"id":"P1-EXECUTABLE-DESERIALIZATION","capabilityClass":"EXECUTABLE_DESERIALIZATION_OR_NATIVE_LOADING","source":"pickle.loads(payload)","expected":"BLOCK","severity":"P1"},
+    {"id":"P1-POSIX-FORK","capabilityClass":"PROCESS_NAMESPACE_ACQUISITION","source":"import pty","expected":"BLOCK","severity":"P1"},
+    {"id":"P1-OS-DIRECT","capabilityClass":"OS_PROCESS_MEMBER_ACQUISITION","source":"os.system('tool')","expected":"BLOCK","severity":"P1"},
+    {"id":"P1-OS-DICT-ESCAPE","capabilityClass":"SENSITIVE_NAMESPACE_ESCAPE","source":"vars(os)","expected":"BLOCK","severity":"P1"},
+    {"id":"P1-HIGHER-ORDER-REFLECTION","capabilityClass":"UNKNOWN_SENSITIVE_REFLECTION","source":"itemgetter(name)(vars(os))","expected":"BLOCK","severity":"P1"},
+    {"id":"SAFE-OS-PATH","capabilityClass":null,"source":"os.path.join('a','b')","expected":"ALLOW","severity":null},
+    {"id":"SAFE-OS-ENVIRON","capabilityClass":null,"source":"os.environ.get('X')","expected":"ALLOW","severity":null},
+    {"id":"SAFE-NON-SENSITIVE-REFLECTION","capabilityClass":null,"source":"getattr(local, 'value')","expected":"ALLOW","severity":null}
+  ]
+}
