@@ -3,9 +3,10 @@ import json
 from pathlib import Path
 
 import pytest
+import jsonschema
 
 from scripts.quality.architecture_analyzer import analyze_sources, apply_exact_baseline, run_architecture_gate
-from scripts.quality.repository_inventory import canonical_python_path
+from scripts.quality.repository_inventory import canonical_python_path, candidate_tree
 
 
 ROOT = Path(__file__).parents[1]
@@ -44,8 +45,8 @@ def test_unresolved_first_party_import_blocks():
 def test_cycle_and_disallowed_component_edge_block():
     policy = _policy()
     policy["components"] = [
-        {"id": "A", "paths": ["scripts/a/"], "allowedConsumers": []},
-        {"id": "B", "paths": ["scripts/b/"], "allowedConsumers": []},
+        {"id": "A", "layer":"DOMAIN", "paths": ["scripts/a/"], "allowedConsumers": []},
+        {"id": "B", "layer":"DOMAIN", "paths": ["scripts/b/"], "allowedConsumers": []},
     ]
     sources = {"scripts/a/x.py": "import scripts.b.y\n", "scripts/b/y.py": "import scripts.a.x\n"}
     result = analyze_sources(sources, policy)
@@ -57,8 +58,8 @@ def test_cycle_and_disallowed_component_edge_block():
 def test_overlapping_ownership_fails_closed():
     policy = _policy()
     policy["components"] = [
-        {"id": "ROOT", "paths": ["scripts/a/"], "allowedConsumers": []},
-        {"id": "FILE", "paths": ["scripts/a/x.py"], "allowedConsumers": []},
+        {"id": "ROOT", "layer":"DOMAIN", "paths": ["scripts/a/"], "allowedConsumers": []},
+        {"id": "FILE", "layer":"DOMAIN", "paths": ["scripts/a/x.py"], "allowedConsumers": []},
     ]
     result = analyze_sources({"scripts/a/x.py": "VALUE=1\n"}, policy)
     assert any(item["code"] == "AMBIGUOUS_COMPONENT_OWNERSHIP" for item in result["findings"])
@@ -69,6 +70,46 @@ def test_dynamic_architecture_bypass_is_reported_but_no_capability_code_exists()
     findings = analyze_sources(sources, _policy())["findings"]
     assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
     assert all("CAPABILITY" not in item["code"] for item in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "import importlib as il\nil.import_module(name)\n",
+    "from importlib import import_module as load\nload(name)\n",
+    "import runpy as r\nr.run_module(name)\n",
+    "import builtins\nbuiltins.__import__(name)\n",
+])
+def test_dynamic_architecture_bypass_import_aliases(source):
+    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in analyze_sources({"scripts/a.py": source}, _policy())["findings"])
+
+
+def test_nonexistent_import_does_not_fall_back_to_package():
+    sources = {"scripts/quality/__init__.py": "", "scripts/a.py": "import scripts.quality.nonexistent\n"}
+    assert any(item["code"] == "UNRESOLVED_FIRST_PARTY_IMPORT" for item in analyze_sources(sources, _policy())["findings"])
+
+
+def test_layer_policy_is_executable():
+    policy = _policy()
+    policy["components"] = [
+        {"id":"LOW","layer":"DOMAIN","paths":["scripts/low/"],"allowedDependencies":["HIGH"]},
+        {"id":"HIGH","layer":"GOVERNANCE","paths":["scripts/high/"],"allowedDependencies":[]},
+    ]
+    result = analyze_sources({"scripts/low/a.py":"import scripts.high.b\n", "scripts/high/b.py":""}, policy)
+    assert any(item["code"] == "DISALLOWED_LAYER_DEPENDENCY" for item in result["findings"])
+
+
+def test_candidate_commit_tree_relation_is_verified():
+    commit, tree = candidate_tree(ROOT, "HEAD")
+    assert len(commit) == 40 and len(tree) == 40
+    with pytest.raises(ValueError):
+        candidate_tree(ROOT, "HEAD", expected_tree="0" * 40)
+
+
+def test_architecture_baseline_schema_is_closed():
+    baseline = json.loads((ROOT / "config/architecture-baseline-v1.json").read_text())
+    schema = json.loads((ROOT / "schemas/architecture-baseline-v1.schema.json").read_text())
+    jsonschema.validate(baseline, schema)
+    baseline["unknown"] = True
+    with pytest.raises(jsonschema.ValidationError): jsonschema.validate(baseline, schema)
 
 
 def test_parse_failure_and_invalid_input_fail_closed():

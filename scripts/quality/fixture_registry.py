@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import re
-import runpy
+import ast
 from pathlib import Path
 
 
@@ -27,8 +27,15 @@ def validate_fixture_registry(root: Path) -> list[dict]:
     validator_path=root/"scripts/validar_schemas.py"
     if validator_path.is_file():
         try:
-            namespace=runpy.run_path(str(validator_path))
-            discovery_directories={Path(path).resolve() for path in namespace.get("PASTAS_FIXTURES",())}
+            tree=ast.parse(validator_path.read_text(encoding="utf-8"), filename=str(validator_path))
+            assignment=next(node for node in tree.body if isinstance(node,ast.Assign) and any(isinstance(target,ast.Name) and target.id=="PASTAS_FIXTURES" for target in node.targets))
+            parts=[]
+            for expression in assignment.value.elts:
+                names=[node.id for node in ast.walk(expression) if isinstance(node,ast.Name)]
+                strings=[node.value for node in ast.walk(expression) if isinstance(node,ast.Constant) and isinstance(node.value,str)]
+                if not names or names[0]!="RAIZ" or not strings: raise ValueError("fixture discovery expression invalid")
+                parts.append(root.joinpath(*strings).resolve())
+            discovery_directories=set(parts)
         except Exception:
             discovery_directories=set()
     for entry in entries:
