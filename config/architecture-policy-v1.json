@@ -1,0 +1,19 @@
+{
+  "policyVersion": "1.0.0",
+  "productionRoots": ["scripts/"],
+  "components": [
+    {"id":"PJE","layer":"INGESTION","paths":["scripts/extracao_pje/"],"allowedDependencies":[]},
+    {"id":"TRIAGE","layer":"DOMAIN","paths":["scripts/triagem_pericial/"],"allowedDependencies":["PJE"]},
+    {"id":"PLANNING","layer":"DOMAIN","paths":["scripts/planejamento_pericial/"],"allowedDependencies":["TRIAGE","PJE","MOTOR","BACKEND"]},
+    {"id":"INSPECTION","layer":"DOMAIN","paths":["scripts/vistoria_estruturada/"],"allowedDependencies":["PLANNING","TRIAGE","MOTOR"]},
+    {"id":"MOTOR","layer":"DOMAIN","paths":["scripts/motor_vicios/"],"allowedDependencies":["PLANNING","INSPECTION","TRIAGE","AUDIT","KNOWLEDGE"]},
+    {"id":"REDACTION","layer":"OUTPUT","paths":["scripts/redacao_pericial/"],"allowedDependencies":["MOTOR","PLANNING","INSPECTION","AUDIT"]},
+    {"id":"AUDIT","layer":"ASSURANCE","paths":["scripts/auditoria_pericial/"],"allowedDependencies":["MOTOR","REDACTION","KNOWLEDGE"]},
+    {"id":"KNOWLEDGE","layer":"SUPPORT","paths":["scripts/conhecimento_privado/"],"allowedDependencies":[]},
+    {"id":"THIRD_PARTY","layer":"SUPPORT","paths":["scripts/terceiros/"],"allowedDependencies":[]},
+    {"id":"BACKEND","layer":"SUPPORT","paths":["scripts/backend_contract/"],"allowedDependencies":[]},
+    {"id":"AGENTIC","layer":"GOVERNANCE","paths":["scripts/agentic/"],"allowedDependencies":[]},
+    {"id":"QUALITY","layer":"GOVERNANCE","paths":["scripts/quality/"],"allowedDependencies":["AGENTIC"]},
+    {"id":"TOOLS","layer":"SUPPORT","paths":["scripts/validar_schemas.py"],"allowedDependencies":[]}
+  ]
+}
