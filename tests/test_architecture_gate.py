@@ -338,6 +338,18 @@ def test_process_capability_acquisition_transformations_fail_closed(source):
     assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
 
 
+def test_platform_os_named_expression_process_capability_fails_closed():
+    tree = architecture_gate.ast.parse(
+        "import platform\n(p := platform.os).system('tool')\n"
+    )
+
+    _, findings = architecture_gate._imports(
+        tree, "scripts.domain.indirect_process", False, set()
+    )
+
+    assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
 @pytest.mark.parametrize("source", [
     "import os\nos.__getattribute__('system')('tool')\n",
     "import asyncio\nasyncio.__getattribute__('create_' + 'subprocess_shell')('tool')\n",
