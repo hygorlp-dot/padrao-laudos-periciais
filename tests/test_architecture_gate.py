@@ -208,6 +208,19 @@ def test_architecture_debt_exceptions_require_a_new_pinned_policy(mutation):
     assert findings == [{"code": "ARCHITECTURE_REGISTRY_POLICY_INVALID"}]
 
 
+@pytest.mark.parametrize("mutation", [None, "remove", "replace"])
+def test_current_process_capability_blob_is_atomically_pinned(mutation):
+    registry = json.loads((ROOT / "config/core-architecture-v1.json").read_text(encoding="utf-8"))
+    if mutation == "remove":
+        del registry["acceptedImportCapabilityBlobs"]["scripts.quality.verify_core"]
+    elif mutation == "replace":
+        registry["acceptedImportCapabilityBlobs"]["scripts.quality.verify_core"] = "0" * 64
+
+    findings = architecture_gate._registry_findings(registry)
+
+    assert findings == ([] if mutation is None else [{"code": "ARCHITECTURE_REGISTRY_POLICY_INVALID"}])
+
+
 def test_relative_dynamic_import_and_sys_path_mutation_fail_closed(tmp_path):
     package = tmp_path / "scripts/domain"; package.mkdir(parents=True)
     (package / "rule.py").write_text("VALUE=1\n", encoding="utf-8")
