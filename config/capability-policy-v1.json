@@ -29,8 +29,13 @@
   "dynamicImportSurfaces": ["__import__", "importlib", "importlib.import_module", "importlib.machinery", "importlib.util", "pkgutil", "runpy", "pydoc", "zipimport", "sys.meta_path", "sys.path_hooks", "sys.modules", "importlib.metadata.entry_points"],
   "dynamicExecutionSurfaces": ["eval", "exec", "compile", "types.CodeType", "types.FunctionType"],
   "nativeOrExecutableDeserializationSurfaces": ["ctypes", "pickle.load", "pickle.loads", "marshal.load", "marshal.loads"],
-  "mixedNamespaces": ["os"],
-  "mixedNamespaceMembers": {"os": ["system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe", "execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp", "execvpe", "startfile"]},
+  "mixedNamespaces": ["os", "asyncio", "concurrent.futures", "pickle"],
+  "mixedNamespaceMembers": {
+    "os": ["system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe", "execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp", "execvpe", "startfile"],
+    "asyncio": ["create_subprocess_exec", "create_subprocess_shell"],
+    "concurrent.futures": ["ProcessPoolExecutor"],
+    "pickle": ["load", "loads", "Unpickler"]
+  },
   "ruleMappings": [
     {"findingCode":"DYNAMIC_IMPORT_ACQUISITION","capabilityClass":"DYNAMIC_IMPORT_ACQUISITION","severity":"P0"},
     {"findingCode":"DYNAMIC_EXECUTION_ACQUISITION","capabilityClass":"DYNAMIC_EXECUTION_ACQUISITION","severity":"P0"},
