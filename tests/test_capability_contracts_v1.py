@@ -32,7 +32,7 @@ def test_analyzer_contracts_are_independent_and_cutover_is_atomic():
     migration = (ROOT / "docs/arquitetura/planos/migracao-capability-boundary-v1.md").read_text(encoding="utf-8")
     for token in ["ARCHITECTURE_ANALYZER_V1", "CAPABILITY_ANALYZER_V1", "POLICY_FREE_SHARED_INFRASTRUCTURE", "DUAL_FINDINGS_ALLOWED"]:
         assert token in contract
-    for token in ["CUTOVER_MUST_BE_ATOMIC", "LEGACY_GATE_REMAINS_BLOCKING", "ROLLBACK_PER_PR", "NO_REDUCED_PROTECTION_WINDOW"]:
+    for token in ["CUTOVER_MUST_BE_ATOMIC", "NEW_GATE_BLOCKS_ON_INTRODUCTION", "ROLLBACK_PER_PR", "NO_REDUCED_PROTECTION_WINDOW"]:
         assert token in migration
 
 
@@ -55,9 +55,14 @@ def test_contract_schemas_accept_exact_examples_and_reject_wildcard_exception():
     exception = _json("tests/fixtures/capability-exception-v1-valid.json")
     schema = _json("schemas/capability-exception-v1.schema.json")
     jsonschema.validate(exception, schema)
-    exception["canonicalPath"] = "scripts/*"
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(exception, schema)
+    for invalid_path in ["scripts/*", "/scripts/x.py", r"C:\scripts\x.py", "scripts/../x.py", "tests/x.py"]:
+        invalid = dict(exception, canonicalPath=invalid_path)
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(invalid, schema)
+    for field, value in [("capabilityClass", "ARBITRARY"), ("findingCode", "ARBITRARY")]:
+        invalid = dict(exception, **{field: value})
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(invalid, schema)
 
 
 def test_p0_p1_fixture_matrix_covers_boundaries_and_positive_controls():
@@ -68,6 +73,39 @@ def test_p0_p1_fixture_matrix_covers_boundaries_and_positive_controls():
     assert {"SAFE-OS-PATH", "SAFE-OS-ENVIRON", "SAFE-NON-SENSITIVE-REFLECTION"} <= safe
     historical = {case["id"] for case in matrix["cases"]}
     assert {"P0-DYNAMIC-IMPORT-LITERAL", "P1-OS-DICT-ESCAPE", "P1-HIGHER-ORDER-REFLECTION", "P1-POSIX-FORK"} <= historical
+    required_families = {
+        "IMPORT_HOOK", "IMPORT_LOADER", "SUBPROCESS", "ASYNCIO_SUBPROCESS", "PTY",
+        "POSIX", "WINDOWS_PROCESS", "MULTIPROCESSING_MANAGER", "MULTIPROCESSING_POOL",
+        "MULTIPROCESSING_CONTEXT", "CONCURRENT_PROCESS_POOL", "OS_MEMBER_IMPORT",
+        "GETATTR_ESCAPE", "GETATTRIBUTE_ESCAPE", "DICT_ESCAPE", "DYNAMIC_MAPPING_ESCAPE",
+        "INVENTORY_FAILURE", "READ_FAILURE", "PARSE_FAILURE", "NONREGULAR_FILE",
+        "SYMLINK_ESCAPE", "EXCEPTION_DUPLICATE", "EXCEPTION_STALE", "EXCEPTION_EXPIRED",
+        "EXCEPTION_BLOB_MISMATCH", "EXCEPTION_BASELINE_MISMATCH", "DUAL_FINDING",
+        "ANALYZER_INDEPENDENCE",
+    }
+    assert required_families <= {case["boundaryFamily"] for case in matrix["cases"]}
+
+
+def test_policy_closes_namespace_member_and_bootstrap_contracts():
+    policy = _json("config/capability-policy-v1.json")
+    assert policy["candidateIdentity"]["inventorySource"] == "EXACT_GIT_TREE"
+    assert policy["candidateIdentity"]["contentSource"] == "SAME_EXACT_GIT_TREE"
+    roots = policy["processNamespaces"]
+    for root in ["subprocess", "asyncio.subprocess", "pty", "posix", "multiprocessing.managers", "multiprocessing.pool", "multiprocessing.context", "concurrent.futures.process"]:
+        assert root in roots
+    assert {"system", "fork", "posix_spawn", "posix_spawnp", "spawnl", "spawnv"} <= set(policy["mixedNamespaceMembers"]["os"])
+    bootstrap = policy["integrityBootstrap"]
+    assert bootstrap["failurePolicy"] == "FAIL_CLOSED"
+    assert bootstrap["ordinaryExceptionsMayAuthorizeBootstrap"] is False
+
+
+def test_exception_lifecycle_and_atomic_topology_are_fail_closed():
+    contract = (ROOT / "docs/arquitetura/contratos/analisadores-arquitetura-capability-v1.md").read_text(encoding="utf-8")
+    migration = (ROOT / "docs/arquitetura/planos/migracao-capability-boundary-v1.md").read_text(encoding="utf-8")
+    for token in ["BASELINE_MUST_BE_ANCESTOR", "EXCEPTION_MUST_PREEXIST_IN_BASELINE", "EXPIRED_EXCEPTION_BLOCKS", "DUPLICATE_EXCEPTION_BLOCKS", "SAME_CANDIDATE_TREE_BYTES"]:
+        assert token in contract
+    for token in ["NO_DEPLOYED_LEGACY_ORACLE", "NEW_GATE_BLOCKS_ON_INTRODUCTION", "REVERSE_ORDER_ROLLBACK"]:
+        assert token in migration
 
 
 def test_pr_a_contains_no_production_analyzer_implementation():
