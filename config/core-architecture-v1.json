@@ -19,6 +19,13 @@
     "3e98779a9b6bd1dd20a50f468cd3714634290782e75267fb17cb1cc7e7ccfb82",
     "998ee874d607027fd1a9d4a8be57cbe636f8d64255921387cae3065579259b0a"
   ],
+  "acceptedImportCapabilityBlobs": {
+    "scripts.auditoria_pericial.executar_evals": "125b9d0394566b96d99859602671333b6a477724867350f27288811ff090b16c",
+    "scripts.planejamento_pericial.aprofundar_delimitacao": "ce859d0b14f9a795c5957fb515c19578e5176ffea800af99657792a3ee31afa3",
+    "scripts.planejamento_pericial.gerar_processo": "63379e1fa887504a559224dcfe1b0f52354c201f0d1939df315f049d795b0e87",
+    "scripts.planejamento_pericial.validar_resultados": "dbebae3a0c45bef362f568c4680b1289c97715bcf7273abc4eae61b0631969fc",
+    "scripts.vistoria_estruturada.gerar_vistoria": "b5973f97db30fd7aea306ae1fb663f13fb0d12dcd973675c65aefe2e79da6eb2"
+  },
   "acceptedComponentCycles": [["AUDIT", "MOTOR", "PLANNING"]],
   "components": [
     {

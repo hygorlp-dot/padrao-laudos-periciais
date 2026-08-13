@@ -26,7 +26,7 @@ def _safe_path(path: str) -> str:
 
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
-EXPECTED_POLICY_SHA256 = "59ac2ae24dc2e5762f7d4962688be5a9921571ff9c14ff16b8552363f5294e70"
+EXPECTED_POLICY_SHA256 = "b45ec4989e2648c6c31a2416a7d28a60223f2f77bc79f455a23484cc403034d1"
 
 
 def _python_files(root: Path) -> list[str]:
@@ -77,14 +77,23 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             dynamic.append({"code": "RUNTIME_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"exec", "eval"}:
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
-        if isinstance(node, ast.ImportFrom) and node.module in {"sys", "importlib", "site"}:
+        if isinstance(node, ast.ImportFrom) and node.module in {"sys", "importlib", "site", "builtins"}:
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         text = ast.unparse(node) if isinstance(node, (ast.Call, ast.Assign, ast.AugAssign)) else ""
         expanded = text
         for alias, origin in aliases.items(): expanded = expanded.replace(alias + ".", origin + ".")
-        if any(token in expanded for token in ("sys.path", "site.addsitedir", "importlib.import_module", "builtins.exec", "builtins.eval", "PYTHONPATH")):
+        if source != "scripts.quality.architecture_gate" and any(token in expanded for token in ("sys.path", "site.addsitedir", "importlib.import_module", "builtins.exec", "builtins.eval", "PYTHONPATH")):
             if isinstance(node, (ast.Call, ast.Assign, ast.AugAssign)):
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"getattr", "setattr"} and node.args:
+            subject = ast.unparse(node.args[0]); origin = aliases.get(subject, subject)
+            attribute = node.args[1].value if len(node.args) > 1 and isinstance(node.args[1], ast.Constant) else None
+            if origin in {"sys", "site", "importlib", "builtins"} and attribute in {"path", "addsitedir", "import_module", "exec", "eval"}:
+                dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+        if isinstance(node, ast.Assign) and "__import__" in ast.unparse(node):
+            dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.Call)) and "PYTHON" in ast.unparse(node) and "PATH" in ast.unparse(node):
+            dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
     return ([{"target": target, "line": line} for target, line in sorted(edges)], dynamic)
 
 
@@ -93,7 +102,7 @@ def _owner(path: str, components: list[dict]) -> list[str]:
 
 
 def _registry_findings(registry: dict) -> list[dict]:
-    policy = {key: registry.get(key) for key in ("components", "allowedLayerEdges", "externalImportRoots", "forbiddenComponentEdges", "acceptedComponentCycles", "acceptedImportCapabilityFingerprints")}
+    policy = {key: registry.get(key) for key in ("components", "allowedLayerEdges", "externalImportRoots", "forbiddenComponentEdges", "acceptedComponentCycles", "acceptedImportCapabilityFingerprints", "acceptedImportCapabilityBlobs")}
     policy_digest = hashlib.sha256(json.dumps(policy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     ids = [item.get("id") for item in registry.get("components", [])]
     prefixes = [prefix for item in registry.get("components", []) for prefix in item.get("prefixes", [])]
@@ -133,7 +142,7 @@ def analyze_architecture(root: Path, registry: dict) -> dict:
             findings.append({"code": "ARCHITECTURE_SOURCE_UNPARSEABLE", "path": path, "detail": type(exc).__name__})
             continue
         imported, dynamic = _imports(tree, module, path.endswith("/__init__.py"), modules)
-        for item in dynamic if owners.get(module) != "GOVERNANCE" else []:
+        for item in dynamic if module != "scripts.quality.architecture_gate" else []:
             fingerprint = hashlib.sha256(f'{module}:{item["line"]}:{item["ast"]}'.encode()).hexdigest()
             findings.append({"code": item["code"], "path": path, "module": module, "line": item["line"], "fingerprint": fingerprint})
         for item in imported:
@@ -192,7 +201,12 @@ def validate_architecture(root: Path, registry: dict) -> list[dict]:
     if len(accepted_capabilities) != len(registry.get("acceptedImportCapabilityFingerprints", [])):
         findings.append({"code": "DUPLICATE_IMPORT_CAPABILITY_EXCEPTION"})
     observed_capabilities = {item.get("fingerprint") for item in report["findings"] if item["code"] in {"RUNTIME_IMPORT_CAPABILITY", "DYNAMIC_IMPORT_CAPABILITY"}}
-    findings = [item for item in findings if item["code"] not in {"RUNTIME_IMPORT_CAPABILITY", "DYNAMIC_IMPORT_CAPABILITY"} or item.get("fingerprint") not in accepted_capabilities]
+    accepted_blobs = registry.get("acceptedImportCapabilityBlobs", {})
+    def capability_accepted(item):
+        if item.get("fingerprint") not in accepted_capabilities: return False
+        path = item.get("path"); expected = accepted_blobs.get(item.get("module"))
+        return bool(expected and path and hashlib.sha256((root / path).read_bytes()).hexdigest() == expected)
+    findings = [item for item in findings if item["code"] not in {"RUNTIME_IMPORT_CAPABILITY", "DYNAMIC_IMPORT_CAPABILITY"} or not capability_accepted(item)]
     for fingerprint in sorted(accepted_capabilities - observed_capabilities): findings.append({"code": "STALE_IMPORT_CAPABILITY_EXCEPTION", "fingerprint": fingerprint})
     baseline_capabilities = _baseline_capability_fingerprints(root, registry.get("baselineSha", ""))
     for fingerprint in sorted(accepted_capabilities - baseline_capabilities): findings.append({"code": "IMPORT_CAPABILITY_NOT_IN_BASELINE", "fingerprint": fingerprint})
