@@ -4,7 +4,7 @@
 
 - `BASELINE_VERSION`: `V1`
 - `CORE_BASE_SHA`: `8530584c82061fb35018afd6638032ba8798b105`
-- `BASELINE_FINGERPRINT_SHA256`: `084fe96eaff716fd85449819e3d4e06f381446cc59077ad5bde2fdfd279ddae8`
+- `BASELINE_FINGERPRINT_SHA256`: `5e388774c275dd8257504557055379fcc99308fca25e835e9fb3dbe998b78917`
 - `ANALYZER_VERSION`: `1.0.0`
 - `BASELINE_IS_OBSERVATIONAL`: `TRUE`
 - `CORE_FEATURE_FREEZE`: `TRUE`
@@ -94,7 +94,7 @@ Fontes canônicas compostas, sem duplicação normativa:
 | Observação | Estado no SHA-base | Nível |
 |---|---|---|
 | pytest integral | 512 passed, 100 subtests | `PROVEN_BY_TEST` |
-| governança | 46 passed | `PROVEN_BY_TEST` |
+| governança | 47 passed | `PROVEN_BY_TEST` |
 | schemas | 20 válidos | `PROTECTED_BY_GATE` |
 | fixtures validadas | 34 | `PROTECTED_BY_GATE` |
 | fixtures registradas | 38 | `DOCUMENTED_ONLY` + validação estrutural |
