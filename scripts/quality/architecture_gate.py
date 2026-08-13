@@ -26,12 +26,15 @@ def _safe_path(path: str) -> str:
 
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
-EXPECTED_POLICY_SHA256 = "b45ec4989e2648c6c31a2416a7d28a60223f2f77bc79f455a23484cc403034d1"
+EXPECTED_POLICY_SHA256 = "a6eb87bf09503b51ee59e90cc68c22702163db489893e5b4057a2315572b1ff5"
+EXPECTED_DETECTOR_AST_SHA256 = "61d0b86cd822c5a95e60a067064a9520a8bfd12cbb5b47dc92d838992c22b167"
 
 
 def _python_files(root: Path) -> list[str]:
     completed = subprocess.run(["git", "ls-files", "-s", "-z", "scripts/*.py", "scripts/**/*.py"], cwd=root, capture_output=True)
     if completed.returncode:
+        if (root / ".git").exists():
+            raise RuntimeError("tracked architecture inventory unavailable")
         return sorted(_safe_path(path.relative_to(root).as_posix()) for path in (root / "scripts").rglob("*.py"))
     paths = []
     for item in completed.stdout.split(b"\0"):
@@ -59,8 +62,9 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
     dynamic: list[dict] = []
     aliases: dict[str, str] = {}
     detector = next((node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "_imports"), None)
+    detector_is_pinned = bool(detector and hashlib.sha256(ast.dump(detector, include_attributes=False).encode()).hexdigest() == EXPECTED_DETECTOR_AST_SHA256)
     def is_detector_implementation(node: ast.AST) -> bool:
-        return bool(source == "scripts.quality.architecture_gate" and detector
+        return bool(source == "scripts.quality.architecture_gate" and detector_is_pinned
                     and detector.lineno <= getattr(node, "lineno", -1) <= detector.end_lineno)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -96,20 +100,20 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
         text = ast.unparse(node) if isinstance(node, (ast.Call, ast.Assign, ast.AugAssign)) else ""
         expanded = text
         for alias, origin in aliases.items(): expanded = expanded.replace(alias + ".", origin + ".")
-        if not is_detector_implementation(node) and any(token in expanded for token in ("sys.path", "site.addsitedir", "importlib.import_module", "builtins.exec", "builtins.eval", "PYTHONPATH", "sys.__dict__")):
+        if not is_detector_implementation(node) and any(token in expanded for token in ("sys.path", "site.addsitedir", "importlib", "runpy", "builtins", "__builtins__", "__import__", "PYTHONPATH", "sys.__dict__")):
             if isinstance(node, (ast.Call, ast.Assign, ast.AugAssign)):
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"getattr", "setattr"} and node.args:
             subject = ast.unparse(node.args[0]); origin = aliases.get(subject, subject)
             attribute = node.args[1].value if len(node.args) > 1 and isinstance(node.args[1], ast.Constant) else None
-            if origin in {"sys", "site", "importlib", "builtins"} and attribute in {"path", "addsitedir", "import_module", "exec", "eval"}:
+            if origin in {"sys", "site", "importlib", "builtins"} and (attribute is None or attribute in {"path", "addsitedir", "import_module", "exec", "eval"}):
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Assign) and "__import__" in ast.unparse(node):
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, (ast.Assign, ast.AugAssign, ast.Call)) and "PYTHON" in ast.unparse(node) and "PATH" in ast.unparse(node):
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
     dynamic = [item for item in dynamic if not (
-        source == "scripts.quality.architecture_gate" and detector
+        source == "scripts.quality.architecture_gate" and detector_is_pinned
         and detector.lineno <= item["line"] <= detector.end_lineno
     )]
     return ([{"target": target, "line": line} for target, line in sorted(edges)], dynamic)
@@ -302,6 +306,7 @@ def registry_capability_modules(root: Path) -> set[str]:
         "scripts.planejamento_pericial.aprofundar_delimitacao",
         "scripts.planejamento_pericial.gerar_processo",
         "scripts.planejamento_pericial.validar_resultados",
+        "scripts.quality.fixture_registry",
         "scripts.vistoria_estruturada.gerar_vistoria",
     }
 
