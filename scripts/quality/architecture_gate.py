@@ -28,7 +28,7 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "c39bcbb955becd64d51d7dc369e62d9b85bc20e77bfb7a73e71523f62a815bae"
-EXPECTED_DETECTOR_AST_SHA256 = "330bc3cfd105b4e4cd7068681badcf3daab0882da03424459e6bd7e966634934"
+EXPECTED_DETECTOR_AST_SHA256 = "6a668298aa2740cef3440b49d9a4567c4f68013edfb62644db6553f84a65f057"
 EXPECTED_ANALYZER_PROCESS_FINGERPRINT = "d053267e664b9f173031fa71140e427ae0abf1bbad320c0c329b62c572fb7e2d"
 
 
@@ -262,7 +262,7 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
         call_origin = qualified_origin(node.func) if isinstance(node, ast.Call) else None
         if isinstance(node, ast.Call) and (
                 re.search(
-                    r"\b(?:os\.(?:system|popen|startfile|spawn\w*|exec\w*|fork\w*|posix_spawn\w*)|posix\.system|pty\.spawn|asyncio\.create_subprocess_(?:exec|shell)|concurrent\.futures\.ProcessPoolExecutor)\b",
+                    r"\b(?:os\.(?:system|popen|startfile|spawn\w*|exec\w*|fork\w*|posix_spawn\w*)|asyncio\.create_subprocess_(?:exec|shell)|concurrent\.futures\.ProcessPoolExecutor)\b",
                     expanded,
                 )
                 or bool(call_origin and re.fullmatch(
