@@ -27,8 +27,8 @@ def _safe_path(path: str) -> str:
 
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
-EXPECTED_POLICY_SHA256 = "a6eb87bf09503b51ee59e90cc68c22702163db489893e5b4057a2315572b1ff5"
-EXPECTED_DETECTOR_AST_SHA256 = "ae875fd4121d6f8567fbfbd1648262cc57208365c3dba4d85985ce085c03d3e5"
+EXPECTED_POLICY_SHA256 = "08f6b99f4a4997374c2b9b2767f901607b076bd2c85897f1c83ed01aa62c6763"
+EXPECTED_DETECTOR_AST_SHA256 = "933c1c9850514bc7aa808ee67c3739c7c617f0d2cffe33acd1249a7fdd7df570"
 
 
 def _python_files(root: Path) -> list[str]:
@@ -62,6 +62,7 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
     edges: set[tuple[str, int]] = set()
     dynamic: list[dict] = []
     aliases: dict[str, str] = {}
+    loader_roots = {"importlib", "runpy", "pkgutil", "pydoc", "zipimport", "pkg_resources"}
     detector = next((node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "_imports"), None)
     detector_is_pinned = bool(detector and hashlib.sha256(ast.dump(detector, include_attributes=False).encode()).hexdigest() == EXPECTED_DETECTOR_AST_SHA256)
     def is_detector_implementation(node: ast.AST) -> bool:
@@ -70,8 +71,12 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names: aliases[alias.asname or alias.name.split(".")[0]] = alias.name
+            if any(alias.name.split(".", 1)[0] in loader_roots for alias in node.names):
+                dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         elif isinstance(node, ast.ImportFrom):
             for alias in node.names: aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}" if node.module else alias.name
+            if (node.module or "").split(".", 1)[0] in loader_roots:
+                dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             edges.update((alias.name, node.lineno) for alias in node.names)
