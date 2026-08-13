@@ -27,7 +27,7 @@ def _safe_path(path: str) -> str:
 
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
-EXPECTED_POLICY_SHA256 = "77dc717ace9efb829744db69b7e528893b7fc1e9ebd27acded318ed79598b470"
+EXPECTED_POLICY_SHA256 = "b772a8cb3457fb372b4033753413a4d8c36092c130992402f034c13d781b325c"
 EXPECTED_DETECTOR_AST_SHA256 = "6db23a4127e86f5db02f44b9267dc7a7f69cd365eeee2744f7270ed0b0d398fd"
 EXPECTED_ANALYZER_PROCESS_FINGERPRINT = "d053267e664b9f173031fa71140e427ae0abf1bbad320c0c329b62c572fb7e2d"
 
@@ -213,7 +213,7 @@ def _owner(path: str, components: list[dict]) -> list[str]:
 
 
 def _registry_findings(registry: dict) -> list[dict]:
-    policy = {key: registry.get(key) for key in ("components", "allowedLayerEdges", "externalImportRoots", "forbiddenComponentEdges", "acceptedComponentCycles", "acceptedImportCapabilityFingerprints", "acceptedImportCapabilityBlobs")}
+    policy = {key: registry.get(key) for key in ("components", "allowedLayerEdges", "externalImportRoots", "forbiddenComponentEdges", "acceptedCurrentDependencies", "acceptedComponentCycles", "acceptedImportCapabilityFingerprints", "acceptedImportCapabilityBlobs")}
     policy_digest = hashlib.sha256(json.dumps(policy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     ids = [item.get("id") for item in registry.get("components", [])]
     prefixes = [prefix for item in registry.get("components", []) for prefix in item.get("prefixes", [])]

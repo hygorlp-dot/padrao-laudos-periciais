@@ -195,6 +195,19 @@ def test_registry_cannot_collapse_the_constitution(tmp_path):
     assert any(item["code"] == "ARCHITECTURE_REGISTRY_POLICY_INVALID" for item in validate_architecture(tmp_path, collapsed))
 
 
+@pytest.mark.parametrize("mutation", ["remove", "change-disposition"])
+def test_architecture_debt_exceptions_require_a_new_pinned_policy(mutation):
+    registry = json.loads((ROOT / "config/core-architecture-v1.json").read_text(encoding="utf-8"))
+    if mutation == "remove":
+        registry["acceptedCurrentDependencies"].pop()
+    else:
+        registry["acceptedCurrentDependencies"][0]["disposition"] = "REINTRODUCED_WITHOUT_DECISION"
+
+    findings = architecture_gate._registry_findings(registry)
+
+    assert findings == [{"code": "ARCHITECTURE_REGISTRY_POLICY_INVALID"}]
+
+
 def test_relative_dynamic_import_and_sys_path_mutation_fail_closed(tmp_path):
     package = tmp_path / "scripts/domain"; package.mkdir(parents=True)
     (package / "rule.py").write_text("VALUE=1\n", encoding="utf-8")
