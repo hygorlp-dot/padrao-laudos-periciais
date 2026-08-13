@@ -132,6 +132,12 @@ def test_exception_lifecycle_and_atomic_topology_are_fail_closed():
         assert token in migration
 
 
-def test_pr_a_contains_no_production_analyzer_implementation():
-    assert not (ROOT / "scripts/quality/architecture_analyzer.py").exists()
+def test_pre_cutover_stages_contain_no_capability_enforcement():
     assert not (ROOT / "scripts/quality/capability_analyzer.py").exists()
+    assert not (ROOT / "scripts/quality/capability_bootstrap.py").exists()
+    assert not (ROOT / "scripts/quality/capability_gate_adapter.py").exists()
+    architecture = ROOT / "scripts/quality/architecture_analyzer.py"
+    if architecture.exists():
+        source = architecture.read_text(encoding="utf-8")
+        assert "ARCHITECTURE_ANALYZER_V1" in source
+        assert "CAPABILITY_ANALYZER_V1" not in source
