@@ -1,0 +1,27 @@
+{
+  "policyVersion": "1.0.0",
+  "analyzerContractVersion": "1.0.0",
+  "capabilityClasses": [
+    "DYNAMIC_IMPORT_ACQUISITION",
+    "DYNAMIC_EXECUTION_ACQUISITION",
+    "EXECUTABLE_DESERIALIZATION_OR_NATIVE_LOADING",
+    "PROCESS_NAMESPACE_ACQUISITION",
+    "OS_PROCESS_MEMBER_ACQUISITION",
+    "SENSITIVE_NAMESPACE_ESCAPE",
+    "UNKNOWN_SENSITIVE_REFLECTION"
+  ],
+  "scanUniverse": {
+    "productionRoots": ["scripts/"],
+    "classifiedNonProductionRoots": ["tests/"],
+    "candidateHeadNewFilesIncluded": true,
+    "inventoryFailurePolicy": "FAIL_CLOSED",
+    "readParseFailurePolicy": "FAIL_CLOSED"
+  },
+  "processNamespaceCategories": ["SUBPROCESS", "ASYNCIO_SUBPROCESS", "MULTIPROCESSING", "PTY_POSIX", "WINDOWS_PROCESS", "CONCURRENT_PROCESS"],
+  "mixedNamespaces": ["os"],
+  "inlineSuppressionsAllowed": false,
+  "wildcardExceptionsAllowed": false,
+  "unknownSensitiveReflectionPolicy": "FAIL_CLOSED",
+  "dynamicImportPolicy": "DENY_UNLESS_EXACT_BASELINE_EXCEPTION",
+  "dynamicExecutionPolicy": "DENY_UNLESS_EXACT_BASELINE_EXCEPTION"
+}
