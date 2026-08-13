@@ -12,12 +12,12 @@
     {"source": "INFRASTRUCTURE", "target": "DOMAIN_CORE"}
   ],
   "externalImportRoots": ["PIL", "jsonschema", "pdfplumber", "pypdf", "referencing"],
-  "acceptedRuntimePathMutations": [
-    "scripts.auditoria_pericial.executar_evals",
-    "scripts.planejamento_pericial.aprofundar_delimitacao",
-    "scripts.planejamento_pericial.gerar_processo",
-    "scripts.planejamento_pericial.validar_resultados",
-    "scripts.vistoria_estruturada.gerar_vistoria"
+  "acceptedImportCapabilityFingerprints": [
+    "e242eb813831663084cbc7c00833ffb34b5310267e1b77051c0891bffda72c95",
+    "da300430935318953aa16c797d310df1251bc5ca914defd306ed149da73ed728",
+    "d30e506eaebd5fddbe1f350195540c3af90778059cf76db5f19214819b315a9d",
+    "3e98779a9b6bd1dd20a50f468cd3714634290782e75267fb17cb1cc7e7ccfb82",
+    "998ee874d607027fd1a9d4a8be57cbe636f8d64255921387cae3065579259b0a"
   ],
   "acceptedComponentCycles": [["AUDIT", "MOTOR", "PLANNING"]],
   "components": [

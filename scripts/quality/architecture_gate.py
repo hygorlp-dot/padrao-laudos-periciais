@@ -5,6 +5,7 @@ import ast
 import json
 import subprocess
 import sys
+import hashlib
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 
@@ -23,12 +24,15 @@ def _safe_path(path: str) -> str:
     return normalized
 
 
+EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
+EXPECTED_POLICY_SHA256 = "5c831eeb64fb398c0fa0be9b49d506bcd2f9814541653e0f0d97cfd2523c438e"
+
+
 def _python_files(root: Path) -> list[str]:
-    return sorted(
-        _safe_path(path.relative_to(root).as_posix())
-        for path in (root / "scripts").rglob("*.py")
-        if "__pycache__" not in path.parts
-    )
+    completed = subprocess.run(["git", "ls-files", "-z", "scripts/*.py", "scripts/**/*.py"], cwd=root, capture_output=True)
+    if completed.returncode:
+        return sorted(_safe_path(path.relative_to(root).as_posix()) for path in (root / "scripts").rglob("*.py"))
+    return sorted(_safe_path(item.decode("utf-8")) for item in completed.stdout.split(b"\0") if item and item.endswith(b".py"))
 
 
 def _resolve_from(node: ast.ImportFrom, source: str, is_package: bool) -> str:
@@ -39,9 +43,9 @@ def _resolve_from(node: ast.ImportFrom, source: str, is_package: bool) -> str:
     return node.module or ""
 
 
-def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) -> tuple[list[dict], set[str]]:
+def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) -> tuple[list[dict], list[dict]]:
     edges: set[tuple[str, int]] = set()
-    dynamic: set[str] = set()
+    dynamic: list[dict] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             edges.update((alias.name, node.lineno) for alias in node.names)
@@ -55,13 +59,19 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
                 node.func.attr if isinstance(node.func, ast.Attribute) else ""
             )
             if name in {"append", "extend", "insert", "remove"} and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Attribute) and isinstance(node.func.value.value, ast.Name) and node.func.value.value.id == "sys" and node.func.value.attr == "path":
-                dynamic.add("RUNTIME_IMPORT_PATH_MUTATION")
+                dynamic.append({"code": "RUNTIME_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
             elif name in {"__import__", "import_module"}:
                 if (not node.args or not isinstance(node.args[0], ast.Constant)
                         or not isinstance(node.args[0].value, str) or node.args[0].value.startswith(".")):
-                    dynamic.add("DYNAMIC_IMPORT_UNRESOLVED")
+                    dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
                 else:
                     edges.add((node.args[0].value, node.lineno))
+        if isinstance(node, (ast.AugAssign, ast.Assign)) and "sys.path" in ast.unparse(node):
+            dynamic.append({"code": "RUNTIME_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"exec", "eval"}:
+            dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+        if isinstance(node, ast.ImportFrom) and node.module in {"sys", "importlib", "site"}:
+            dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
     return ([{"target": target, "line": line} for target, line in sorted(edges)], dynamic)
 
 
@@ -70,14 +80,17 @@ def _owner(path: str, components: list[dict]) -> list[str]:
 
 
 def _registry_findings(registry: dict) -> list[dict]:
+    policy = {key: registry.get(key) for key in ("components", "allowedLayerEdges", "externalImportRoots", "forbiddenComponentEdges", "acceptedComponentCycles")}
+    policy_digest = hashlib.sha256(json.dumps(policy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     ids = [item.get("id") for item in registry.get("components", [])]
     prefixes = [prefix for item in registry.get("components", []) for prefix in item.get("prefixes", [])]
     forbidden = {(item.get("source"), item.get("target")) for item in registry.get("forbiddenComponentEdges", [])}
     layers = {"QUALITY_GOVERNANCE", "DOMAIN_CORE", "APPLICATION", "INFRASTRUCTURE"}
     declared_layers = {item.get("layer") for item in registry.get("components", [])}
     allowed_layers = {(item.get("source"), item.get("target")) for item in registry.get("allowedLayerEdges", [])}
-    invalid = (registry.get("schemaVersion") != "1.0.0" or not isinstance(registry.get("baselineSha"), str)
-               or len(registry.get("baselineSha", "")) != 40 or len(ids) != len(set(ids))
+    invalid = (registry.get("schemaVersion") != "1.0.0" or registry.get("baselineSha") != EXPECTED_BASELINE_SHA
+               or policy_digest != EXPECTED_POLICY_SHA256
+               or len(ids) != len(set(ids))
                or len(prefixes) != len(set(prefixes)) or declared_layers != layers
                or any(source not in layers or target not in layers for source, target in allowed_layers))
     by_id = {item.get("id"): item.get("layer") for item in registry.get("components", [])}
@@ -107,7 +120,9 @@ def analyze_architecture(root: Path, registry: dict) -> dict:
             findings.append({"code": "ARCHITECTURE_SOURCE_UNPARSEABLE", "path": path, "detail": type(exc).__name__})
             continue
         imported, dynamic = _imports(tree, module, path.endswith("/__init__.py"), modules)
-        for code in sorted(dynamic): findings.append({"code": code, "path": path, "module": module})
+        for item in dynamic:
+            fingerprint = hashlib.sha256(f'{module}:{item["line"]}:{item["ast"]}'.encode()).hexdigest()
+            findings.append({"code": item["code"], "path": path, "module": module, "line": item["line"], "fingerprint": fingerprint})
         for item in imported:
             target = item["target"]
             candidates = [known for known in modules if target == known or target.startswith(known + ".")]
@@ -160,14 +175,10 @@ def validate_architecture(root: Path, registry: dict) -> list[dict]:
             findings.append({"code": "ARCHITECTURE_EXCEPTION_EVIDENCE_MISMATCH", "source": key[0], "target": key[1]})
         if not _edge_exists_at_baseline(root, registry.get("baselineSha", ""), key[0], key[1]):
             findings.append({"code": "ARCHITECTURE_EXCEPTION_NOT_IN_BASELINE", "source": key[0], "target": key[1]})
-    accepted_mutations = set(registry.get("acceptedRuntimePathMutations", []))
-    observed_mutations = {item.get("module") for item in report["findings"] if item["code"] == "RUNTIME_IMPORT_PATH_MUTATION"}
-    findings = [item for item in findings if item["code"] != "RUNTIME_IMPORT_PATH_MUTATION" or item.get("module") not in accepted_mutations]
-    for module in sorted(accepted_mutations - observed_mutations):
-        findings.append({"code": "STALE_RUNTIME_PATH_EXCEPTION", "module": module})
-    for module in sorted(accepted_mutations):
-        if not _mutation_exists_at_baseline(root, registry.get("baselineSha", ""), module):
-            findings.append({"code": "RUNTIME_PATH_EXCEPTION_NOT_IN_BASELINE", "module": module})
+    accepted_capabilities = set(registry.get("acceptedImportCapabilityFingerprints", []))
+    observed_capabilities = {item.get("fingerprint") for item in report["findings"] if item["code"] in {"RUNTIME_IMPORT_CAPABILITY", "DYNAMIC_IMPORT_CAPABILITY"}}
+    findings = [item for item in findings if item["code"] not in {"RUNTIME_IMPORT_CAPABILITY", "DYNAMIC_IMPORT_CAPABILITY"} or item.get("fingerprint") not in accepted_capabilities]
+    for fingerprint in sorted(accepted_capabilities - observed_capabilities): findings.append({"code": "STALE_IMPORT_CAPABILITY_EXCEPTION", "fingerprint": fingerprint})
     component_edges = {(owners[e["source"]], owners[e["target"]]) for e in report["edges"] if owners.get(e["source"]) and owners.get(e["target"]) and owners[e["source"]] != owners[e["target"]]}
     observed_cycles = _cycles(component_edges)
     accepted_cycles = {tuple(sorted(item)) for item in registry.get("acceptedComponentCycles", [])}
@@ -217,23 +228,18 @@ def _edge_exists_at_baseline(root: Path, sha: str, source: str, target: str) -> 
     return False
 
 
-def _mutation_exists_at_baseline(root: Path, sha: str, module: str) -> bool:
-    for path in (module.replace(".", "/") + ".py", module.replace(".", "/") + "/__init__.py"):
-        completed = subprocess.run(["git", "show", f"{sha}:{path}"], cwd=root, capture_output=True)
-        if completed.returncode: continue
-        try: tree = ast.parse(completed.stdout.decode("utf-8-sig"), filename=path)
-        except (UnicodeError, SyntaxError): return False
-        _, dynamic = _imports(tree, module, path.endswith("/__init__.py"), set())
-        return "RUNTIME_IMPORT_PATH_MUTATION" in dynamic
-    return False
-
-
 def load_and_validate(root: Path) -> list[dict]:
     try:
         status = subprocess.run(["git", "status", "--porcelain", "--", "scripts", "config/core-architecture-v1.json"], cwd=root, capture_output=True, text=True)
         if status.returncode != 0 or status.stdout.strip():
             return [{"code": "ARCHITECTURE_WORKTREE_NOT_EXACT_HEAD"}]
-        registry = json.loads((root / "config/core-architecture-v1.json").read_text(encoding="utf-8"))
+        def strict_object(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result: raise ValueError(f"duplicate architecture key: {key}")
+                result[key] = value
+            return result
+        registry = json.loads((root / "config/core-architecture-v1.json").read_text(encoding="utf-8"), object_pairs_hook=strict_object)
         return validate_architecture(root, registry)
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
         return [{"code": "ARCHITECTURE_REGISTRY_INVALID", "detail": str(exc)}]
