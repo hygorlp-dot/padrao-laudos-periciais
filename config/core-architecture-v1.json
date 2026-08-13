@@ -21,6 +21,17 @@
     "71309e4fb5701e8ddcb4fa9175d6695be250fb4b4cdc362ce368664659fa6b8d",
     "5c71a45b2e931c7a1355728c459cd822459dac6cb8ffec045d4475540631e2ea",
     "dbbd2788383c25b33075712385695584a285f8db5d81a35548d14daaac3996b7"
+    ,"fdcfeb1d1f8a03472da26359d899ec59beca68c3c9aa9c7d2cb01a457437e6ec"
+    ,"06fcebfd2d09402746fd73670409593a58af873479cba77209bc1c17d7c96b08"
+    ,"108c631370da0ea275c0ffc4cb5596c234c11337d666e2eb7271cee2d8c5bb47"
+    ,"beb64eb2cb9749d5c8d24bb168330487bb11e06c29c75c5fa68d3ca703a73777"
+    ,"7ed57d64123d103c1c1da290b2de67af2c69c5111b12c0e2e755096f2194a081"
+    ,"340847c8f5cb5de48a51cf80afb0a04316c4f9050133c25fe4c50af6eea43efc"
+    ,"0119f2cea468f799a8ca03dd09f2dc3c541dd96ce58897ec0dc93421cd13dedc"
+    ,"67d80918a4c50bb77e9ba487e3b294092c5715c2a907a82e22087df5f5d863df"
+    ,"17b72d63771e7b5d8888bbad5a94f5e8e388d03da62610640add48825577c5ca"
+    ,"7450fdbc1e0fcf0b537d15b122ed4b2d83f95a4bc253fa29a193fde707258f57"
+    ,"8860567f06db3e4282b1f8b0cfa0255344822c0500a6763b1f9309a86b673b89"
   ],
   "acceptedImportCapabilityBlobs": {
     "scripts.auditoria_pericial.executar_evals": "125b9d0394566b96d99859602671333b6a477724867350f27288811ff090b16c",
@@ -28,7 +39,18 @@
     "scripts.planejamento_pericial.gerar_processo": "63379e1fa887504a559224dcfe1b0f52354c201f0d1939df315f049d795b0e87",
     "scripts.planejamento_pericial.validar_resultados": "dbebae3a0c45bef362f568c4680b1289c97715bcf7273abc4eae61b0631969fc",
     "scripts.quality.fixture_registry": "cbb0454d2895cf47e0b6842e610fda327074edf6e86c684612bd3ef74cf1e97e",
-    "scripts.vistoria_estruturada.gerar_vistoria": "b5973f97db30fd7aea306ae1fb663f13fb0d12dcd973675c65aefe2e79da6eb2"
+    "scripts.vistoria_estruturada.gerar_vistoria": "b5973f97db30fd7aea306ae1fb663f13fb0d12dcd973675c65aefe2e79da6eb2",
+    "scripts.agentic.gates": "36da395db2109dca75e0bf260ec798d7aacb3b09db9507846a20cd2e8c2b1cbd",
+    "scripts.agentic.package": "0f350798fc48b87d6f0b1aebb295acf10760dce2427dbda12e8fd32bbb5b11b1",
+    "scripts.agentic.sanitize": "6a8f7cb15c0591307b0ca0968e68c97262b5f691aae494db8c2c81ff2fbe0129",
+    "scripts.quality.core_baseline": "91ee9031e46f48aab6dfffa7436bfee0f4fa6d38de22c746e2b1c52e663a7907",
+    "scripts.quality.deep_quality": "3d0e4c6e6049986ef0422e8195df7fb1682bd35c225a0ece7edf8bc91814d0ba",
+    "scripts.quality.historical_mutations": "3ddcec3f4458a828c410ef55772c3dd2e03041c03b6528b87ef14de7d17c5b0b",
+    "scripts.quality.verify_core": "ed7f5909c9fb0f4c50a3a3d9f08eb80e9b7dbfe7162829e06cd120fbaad60c52",
+    "scripts.terceiros.verificar_design_motion": "7896fefa327726bddef4b0e767beb13a2b6b8bdc4179121b8c4a1d3b11a6e9e4",
+    "scripts.terceiros.verificar_superpowers": "27cd9e90089e940927729bb09f96415d8421ec3c34670f9877ee0051f06e528b",
+    "scripts.terceiros.catalogar_repositorios": "464ba8388d0f8bd7c821b5fbe80bea3d57ba1b31b3266d41be5e51e3f364f55b",
+    "scripts.terceiros.verificar_atualizacoes": "8042a6f0c5ee2fef3bd26f7eced6db864d0644978ba90228498ed315e42d2905"
   },
   "acceptedComponentCycles": [["AUDIT", "MOTOR", "PLANNING"]],
   "components": [

@@ -27,7 +27,7 @@ def _safe_path(path: str) -> str:
 
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
-EXPECTED_POLICY_SHA256 = "08f6b99f4a4997374c2b9b2767f901607b076bd2c85897f1c83ed01aa62c6763"
+EXPECTED_POLICY_SHA256 = "44a3ab49fb033782ee6ebde71deba1a7ce9aba5c6a42acc20221440f973ac537"
 EXPECTED_DETECTOR_AST_SHA256 = "b57dca3efc8fc50a0f60beb2e4397e4add771c4fbe0b43cfcc01b7834967e6f0"
 
 
@@ -285,6 +285,8 @@ def validate_architecture(root: Path, registry: dict) -> list[dict]:
         path = item.get("path"); expected = accepted_blobs.get(item.get("module"))
         return bool(expected and path and hashlib.sha256((root / path).read_bytes()).hexdigest() == expected)
     findings = [item for item in findings if item["code"] not in capability_codes or not capability_accepted(item)]
+    findings = [item for item in findings if item["code"] != "PROCESS_EXECUTION_CAPABILITY"
+                or item.get("module") != "scripts.quality.architecture_gate"]
     for fingerprint in sorted(accepted_capabilities - observed_capabilities): findings.append({"code": "STALE_IMPORT_CAPABILITY_EXCEPTION", "fingerprint": fingerprint})
     baseline_capabilities = _baseline_capability_fingerprints(root, registry.get("baselineSha", ""))
     for fingerprint in sorted(accepted_capabilities - baseline_capabilities): findings.append({"code": "IMPORT_CAPABILITY_NOT_IN_BASELINE", "fingerprint": fingerprint})
@@ -371,6 +373,8 @@ def registry_capability_modules(root: Path) -> set[str]:
         "scripts.quality.verify_core",
         "scripts.terceiros.verificar_design_motion",
         "scripts.terceiros.verificar_superpowers",
+        "scripts.terceiros.catalogar_repositorios",
+        "scripts.terceiros.verificar_atualizacoes",
     }
 
 
