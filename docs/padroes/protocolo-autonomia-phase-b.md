@@ -14,24 +14,27 @@ execução autônoma somente do `STABILIZATION_PROGRAM_V1`, partindo do SHA
 `CORE_PERICIAL_STABLE_V1`. Arquivos do repositório registram o escopo para
 auditoria, mas não provam autoria humana e não concedem autoridade.
 
-O verificador de autoridade pertence ao ambiente autenticado de orquestração.
-Implementer, PR Reviewer, Systemic Auditor, Claude, arquivos locais, hashes e
-outputs de ferramentas determinam evidência ou elegibilidade, nunca autoridade.
-O mesmo ambiente fornece verificadores separados para evidência técnica e
-independência das reviews; `PASS`, `APPROVED` ou booleans locais não bastam.
-Ausência, exceção ou rejeição de qualquer verificador bloqueia fechado.
+O verificador de autoridade pertence ao ambiente autenticado de orquestração e
+não é injetável em APIs do repositório. Implementer, PR Reviewer, Systemic
+Auditor, Claude, arquivos locais, hashes e outputs de ferramentas determinam
+evidência ou diagnóstico, nunca autoridade.
 
 ## Elegibilidade e merge
 
 `PHASE_B_MERGE = HUMAN_SCOPED_DELEGATION + TECHNICAL_ELIGIBILITY`
 
-O gate `evaluate_phase_b_merge_eligibility` é separado do merge evaluator
-genérico. Ele não executa merge e não enfraquece
-`trusted_merge_authority_missing`. Somente produz `MERGE_ELIGIBLE` quando base,
-HEAD, merge-base, CI, testes, schemas, fixtures, safety, privacy, P0/P1 e reviews
-exatos estão verdes. Claude é derivado do risco dos paths, não do caller.
-O resultado `MERGE_ELIGIBLE` não é um token, assinatura ou trust root e não
-autoriza uso fora da composição autenticada desta Fase B.
+O diagnóstico `evaluate_phase_b_technical_eligibility` é separado do merge
+evaluator genérico. Ele não aceita callbacks de autoridade, não executa merge e
+não enfraquece `trusted_merge_authority_missing`. Somente produz
+`TECHNICALLY_ELIGIBLE_DIAGNOSTIC`, marcado como
+`CALLER_ASSERTED_DIAGNOSTIC_ONLY`, quando base, HEAD, merge-base, CI, testes,
+schemas, fixtures, safety, privacy, P0/P1 e reviews declarados estão verdes.
+Claude é derivado do risco dos paths, não do caller.
+
+O orquestrador autenticado verifica novamente a evidência por ferramentas
+first-party e GitHub no HEAD exato e, fora do repositório, combina esse resultado
+com a delegação humana para decidir `MERGE_ELIGIBLE`. Nenhum output desta API é
+token, assinatura ou trust root.
 
 Qualquer HEAD novo invalida reviews. Falha de verifier, escopo, CI, review,
 privacidade, egress ou topologia bloqueia fechado.

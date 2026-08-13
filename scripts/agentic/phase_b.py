@@ -1,14 +1,11 @@
-"""Fail-closed technical eligibility for the human-preauthorized Phase B.
+"""Non-authoritative Phase-B policy diagnostics.
 
-This module does not authenticate humans and does not merge anything. The
-trusted verifier is supplied by the authenticated orchestration environment;
-repository files, review artifacts and caller booleans are never authority.
+Only the authenticated orchestration environment can combine these diagnostics
+with the human's scoped delegation. Repository code never grants merge authority.
 """
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
-
 from .risk import classify_change_risk
 
 
@@ -39,7 +36,6 @@ def _review_reasons(
     review: object,
     base: str,
     head: str,
-    trusted_review_verifier: Callable[[str, dict, str, str], bool] | None,
 ) -> list[str]:
     if not isinstance(review, dict):
         return [name]
@@ -47,44 +43,12 @@ def _review_reasons(
     if review.get("status") != "APPROVED": reasons.append(name)
     if review.get("base_sha") != base: reasons.append(f"{name}_base")
     if review.get("head_sha") != head: reasons.append(f"{name}_head")
-    if trusted_review_verifier is None:
-        reasons.append("trusted_review_verifier_missing")
-    else:
-        try:
-            if trusted_review_verifier(name, review, base, head) is not True:
-                reasons.append(f"{name}_independence")
-        except Exception:
-            reasons.append(f"{name}_independence")
     return reasons
 
 
-def evaluate_phase_b_merge_eligibility(
-    scope: dict,
-    evidence: dict,
-    *,
-    trusted_human_authority_verifier: Callable[[dict], bool] | None,
-    trusted_technical_evidence_verifier: Callable[[dict], bool] | None,
-    trusted_review_verifier: Callable[[str, dict, str, str], bool] | None,
-) -> dict:
-    """Return technical Phase-B eligibility without granting merge authority."""
+def evaluate_phase_b_technical_eligibility(scope: dict, evidence: dict) -> dict:
+    """Return caller-asserted diagnostics; never return merge authorization."""
     reasons: list[str] = []
-    if trusted_human_authority_verifier is None:
-        reasons.append("trusted_human_authority_verifier_missing")
-    else:
-        try:
-            if trusted_human_authority_verifier(scope) is not True:
-                reasons.append("human_phase_b_delegation")
-        except Exception:
-            reasons.append("human_phase_b_delegation")
-
-    if trusted_technical_evidence_verifier is None:
-        reasons.append("trusted_technical_evidence_verifier_missing")
-    else:
-        try:
-            if trusted_technical_evidence_verifier(evidence) is not True:
-                reasons.append("technical_evidence_untrusted")
-        except Exception:
-            reasons.append("technical_evidence_untrusted")
     for forbidden in ("implementer_self_approval", "local_delegation_file", "tool_output_as_authority"):
         if forbidden in evidence:
             reasons.append(forbidden)
@@ -126,11 +90,21 @@ def evaluate_phase_b_merge_eligibility(
 
     reviews = evidence.get("reviews") if isinstance(evidence.get("reviews"), dict) else {}
     for name in ("PR_REVIEWER", "SYSTEMIC_AUDITOR"):
-        reasons.extend(_review_reasons(name, reviews.get(name), base, head, trusted_review_verifier))
+        reasons.extend(_review_reasons(name, reviews.get(name), base, head))
     if claude_required:
         name = "CLAUDE_EXTERNAL_DIVERSITY_REVIEWER"
-        reasons.extend(_review_reasons(name, reviews.get(name), base, head, trusted_review_verifier))
+        reasons.extend(_review_reasons(name, reviews.get(name), base, head))
 
     if reasons:
-        return {"status": "BLOCKED", "authority": "NONE", "reasons": sorted(set(reasons))}
-    return {"status": "MERGE_ELIGIBLE", "authority": "HUMAN_SCOPED_DELEGATION_OUT_OF_BAND", "reasons": []}
+        return {
+            "status": "BLOCKED",
+            "authority": "NOT_GRANTED_BY_REPOSITORY_CODE",
+            "trust": "CALLER_ASSERTED_DIAGNOSTIC_ONLY",
+            "reasons": sorted(set(reasons)),
+        }
+    return {
+        "status": "TECHNICALLY_ELIGIBLE_DIAGNOSTIC",
+        "authority": "NOT_GRANTED_BY_REPOSITORY_CODE",
+        "trust": "CALLER_ASSERTED_DIAGNOSTIC_ONLY",
+        "reasons": [],
+    }
