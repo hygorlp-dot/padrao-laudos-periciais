@@ -558,7 +558,8 @@
                                          "tests/test_fault_injection.py",
                                          "tests/test_schema_versions.py",
                                          "tests/test_quality_metrics.py",
-                                         "tests/test_core_baseline.py"
+                                         "tests/test_core_baseline.py",
+                                         "tests/test_architecture_gate.py"
                                      ],
                            "consumers":  [
 

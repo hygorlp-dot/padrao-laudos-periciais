@@ -1,0 +1,347 @@
+{
+  "schemaVersion": "1.0.0",
+  "constitution": "docs/arquitetura/constituicao-core-pericial-v1.md",
+  "components": [
+    {
+      "id": "GOVERNANCE",
+      "layer": "QUALITY_GOVERNANCE",
+      "prefixes": [
+        "scripts/agentic/",
+        "scripts/quality/"
+      ]
+    },
+    {
+      "id": "CONTRACTS",
+      "layer": "DOMAIN_CORE",
+      "prefixes": [
+        "scripts/backend_contract/"
+      ]
+    },
+    {
+      "id": "INGESTION",
+      "layer": "INFRASTRUCTURE",
+      "prefixes": [
+        "scripts/extracao_pje/"
+      ]
+    },
+    {
+      "id": "TRIAGE",
+      "layer": "APPLICATION",
+      "prefixes": [
+        "scripts/triagem_pericial/"
+      ]
+    },
+    {
+      "id": "PLANNING",
+      "layer": "APPLICATION",
+      "prefixes": [
+        "scripts/planejamento_pericial/"
+      ]
+    },
+    {
+      "id": "INSPECTION",
+      "layer": "APPLICATION",
+      "prefixes": [
+        "scripts/vistoria_estruturada/"
+      ]
+    },
+    {
+      "id": "MOTOR",
+      "layer": "DOMAIN_CORE",
+      "prefixes": [
+        "scripts/motor_vicios/"
+      ]
+    },
+    {
+      "id": "AUDIT",
+      "layer": "APPLICATION",
+      "prefixes": [
+        "scripts/auditoria_pericial/"
+      ]
+    },
+    {
+      "id": "REDACTION",
+      "layer": "APPLICATION",
+      "prefixes": [
+        "scripts/redacao_pericial/"
+      ]
+    },
+    {
+      "id": "KNOWLEDGE_EGRESS",
+      "layer": "INFRASTRUCTURE",
+      "prefixes": [
+        "scripts/conhecimento_privado/"
+      ]
+    },
+    {
+      "id": "THIRD_PARTY_TOOLING",
+      "layer": "INFRASTRUCTURE",
+      "prefixes": [
+        "scripts/terceiros/"
+      ]
+    },
+    {
+      "id": "SCHEMA_VALIDATION",
+      "layer": "INFRASTRUCTURE",
+      "prefixes": [
+        "scripts/validar_schemas.py"
+      ]
+    }
+  ],
+  "forbiddenComponentEdges": [
+    {
+      "source": "CONTRACTS",
+      "target": "GOVERNANCE",
+      "rule": "DOMAIN_CORE_NOT_GOVERNANCE"
+    },
+    {
+      "source": "MOTOR",
+      "target": "GOVERNANCE",
+      "rule": "DOMAIN_CORE_NOT_GOVERNANCE"
+    },
+    {
+      "source": "TRIAGE",
+      "target": "GOVERNANCE",
+      "rule": "PRODUCTION_NOT_GOVERNANCE"
+    },
+    {
+      "source": "PLANNING",
+      "target": "GOVERNANCE",
+      "rule": "PRODUCTION_NOT_GOVERNANCE"
+    },
+    {
+      "source": "INSPECTION",
+      "target": "GOVERNANCE",
+      "rule": "PRODUCTION_NOT_GOVERNANCE"
+    },
+    {
+      "source": "AUDIT",
+      "target": "GOVERNANCE",
+      "rule": "PRODUCTION_NOT_GOVERNANCE"
+    },
+    {
+      "source": "REDACTION",
+      "target": "GOVERNANCE",
+      "rule": "PRODUCTION_NOT_GOVERNANCE"
+    }
+  ],
+  "acceptedCurrentDependencies": [
+    {
+      "source": "scripts.auditoria_pericial.deep_audit",
+      "target": "scripts.motor_vicios.regras_probatorias",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/auditoria_pericial/deep_audit.py:4",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.auditoria_pericial.detector",
+      "target": "scripts.motor_vicios.regras_probatorias",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/auditoria_pericial/detector.py:63",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.auditoria_pericial.grounding",
+      "target": "scripts.motor_vicios.regras_probatorias",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/auditoria_pericial/grounding.py:5",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.auditoria_pericial.proposition",
+      "target": "scripts.conhecimento_privado.pesquisa_online",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/auditoria_pericial/proposition.py:8",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.motor_vicios.evidencias",
+      "target": "scripts.auditoria_pericial.grounding",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/motor_vicios/evidencias.py:92",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.motor_vicios.motor",
+      "target": "scripts.triagem_pericial.semantica",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/motor_vicios/motor.py:6",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.motor_vicios.normas",
+      "target": "scripts.conhecimento_privado.pesquisa_online",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/motor_vicios/normas.py:7",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.motor_vicios.pipeline",
+      "target": "scripts.auditoria_pericial",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/motor_vicios/pipeline.py:5",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.motor_vicios.pipeline",
+      "target": "scripts.conhecimento_privado.pesquisa_online",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/motor_vicios/pipeline.py:53",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.motor_vicios.pipeline",
+      "target": "scripts.planejamento_pericial.validar_plano",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/motor_vicios/pipeline.py:64",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.planejamento_pericial.aprofundar_delimitacao",
+      "target": "scripts.motor_vicios.granularizar_questoes",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/planejamento_pericial/aprofundar_delimitacao.py:7",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.planejamento_pericial.aprofundar_delimitacao",
+      "target": "scripts.triagem_pericial.gerar_delimitacao",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/planejamento_pericial/aprofundar_delimitacao.py:9",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.planejamento_pericial.aprofundar_delimitacao",
+      "target": "scripts.triagem_pericial.semantica",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/planejamento_pericial/aprofundar_delimitacao.py:8",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.planejamento_pericial.aprofundar_delimitacao",
+      "target": "scripts.triagem_pericial.validar_delimitacao",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/planejamento_pericial/aprofundar_delimitacao.py:48",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.planejamento_pericial.gerar_plano",
+      "target": "scripts.triagem_pericial.capabilities",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/planejamento_pericial/gerar_plano.py:66",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.planejamento_pericial.gerar_plano",
+      "target": "scripts.triagem_pericial.semantica",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/planejamento_pericial/gerar_plano.py:12",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.planejamento_pericial.gerar_plano",
+      "target": "scripts.triagem_pericial.validar_delimitacao",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/planejamento_pericial/gerar_plano.py:68",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.planejamento_pericial.gerar_processo",
+      "target": "scripts.extracao_pje.validar_integridade",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/planejamento_pericial/gerar_processo.py:60",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.planejamento_pericial.gerar_processo",
+      "target": "scripts.triagem_pericial.gerar_delimitacao",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/planejamento_pericial/gerar_processo.py:14",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.planejamento_pericial.gerar_processo",
+      "target": "scripts.triagem_pericial.validar_delimitacao",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/planejamento_pericial/gerar_processo.py:64",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.planejamento_pericial.migracoes",
+      "target": "scripts.backend_contract.errors",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/planejamento_pericial/migracoes.py:3",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.planejamento_pericial.validar_plano",
+      "target": "scripts.backend_contract.errors",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/planejamento_pericial/validar_plano.py:110",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.planejamento_pericial.validar_resultados",
+      "target": "scripts.triagem_pericial.validar_delimitacao",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/planejamento_pericial/validar_resultados.py:12",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.redacao_pericial.auditar_fidelidade",
+      "target": "scripts.auditoria_pericial.grounding",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/redacao_pericial/auditar_fidelidade.py:7",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.redacao_pericial.auditar_fidelidade",
+      "target": "scripts.motor_vicios.auditar",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/redacao_pericial/auditar_fidelidade.py:8",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.redacao_pericial.pipeline",
+      "target": "scripts.motor_vicios.pipeline",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/redacao_pericial/pipeline.py:181",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.redacao_pericial.pipeline",
+      "target": "scripts.planejamento_pericial.validar_plano",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/redacao_pericial/pipeline.py:189",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.redacao_pericial.redigir",
+      "target": "scripts.motor_vicios.auditar",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/redacao_pericial/redigir.py:4",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.triagem_pericial.gerar_delimitacao",
+      "target": "scripts.extracao_pje.validar_integridade",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/triagem_pericial/gerar_delimitacao.py:150",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.vistoria_estruturada.gerar_vistoria",
+      "target": "scripts.motor_vicios.evidencias",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/vistoria_estruturada/gerar_vistoria.py:8",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    },
+    {
+      "source": "scripts.vistoria_estruturada.gerar_vistoria",
+      "target": "scripts.triagem_pericial.semantica",
+      "classification": "POTENTIAL_VIOLATION",
+      "evidence": "scripts/vistoria_estruturada/gerar_vistoria.py:7",
+      "disposition": "REVIEW_IN_PHASE_B_REFACTOR"
+    }
+  ]
+}
