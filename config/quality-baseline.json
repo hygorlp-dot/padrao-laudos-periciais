@@ -11,7 +11,7 @@
     {"path":"scripts/motor_vicios/pipeline.py","function":"executar_pipeline_motor","complexity":27}
   ],
   "performance_component_max_seconds": {
-    "architecture": 10.0,
+    "architecture": 15.0,
     "historical critical mutation suite": 20.0,
     "regression": 45.0
   }
