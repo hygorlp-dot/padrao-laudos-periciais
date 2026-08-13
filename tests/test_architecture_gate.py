@@ -288,6 +288,8 @@ REFLECTIVE_LOADER_ATTACKS = [
     "globals()['__buil'+'tins__']['__im'+'port__'](name)\n",
     "getattr(globals()['__buil'+'tins__'], '__im'+'port__')(name)\n",
     "globals()['__buil'+'tins__']['ex'+'ec']('import scripts.motor_vicios.motor')\n",
+    "import subprocess, sys\nsubprocess.run([sys.executable, '-m', 'scripts.motor_vicios.motor'])\n",
+    "import types\ntypes.FunctionType(compile('import scripts.motor_vicios.motor', 'x', 'exec'), globals())()\n",
 ]
 def test_reflective_stdlib_import_execution_fails_closed(tmp_path):
     package = tmp_path / "scripts/domain"; package.mkdir(parents=True)
