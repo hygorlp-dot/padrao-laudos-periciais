@@ -603,7 +603,10 @@
                                               "REVIEW_STALE_FAIL_CLOSED"
                                           ],
                            "schemas":  ["review-multiagente.schema.json"],
-                           "tests":  ["tests/test_agentic_governance.py"],
+                           "tests":  [
+                                         "tests/test_agentic_governance.py",
+                                         "tests/test_phase_b_autonomy.py"
+                                     ],
                            "consumers":  []
                        }
                    ]
