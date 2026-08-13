@@ -188,6 +188,23 @@ def test_malformed_architecture_budget_returns_structured_failure(monkeypatch, m
     assert any(item["teste"] == "PERFORMANCE_COMPONENT_BUDGET_INVALID" for item in result.findings)
 
 
+def test_missing_architecture_budget_fails_in_fast_mode(monkeypatch):
+    baseline_path = ROOT / "config/quality-baseline.json"
+    original_read_text = Path.read_text
+    monkeypatch.setattr(Path, "read_text", lambda path, *args, **kwargs:
+        json.dumps({"performance_component_max_seconds": {}})
+        if path == baseline_path else original_read_text(path, *args, **kwargs))
+    monkeypatch.setattr(verify_core, "validate_configuration", lambda _root: [])
+    monkeypatch.setattr(verify_core, "validate_fixture_registry", lambda _root: [])
+    monkeypatch.setattr(verify_core, "validate_architecture", lambda _root: [])
+    runner = lambda command, **_: subprocess.CompletedProcess(command, 0, "", "")
+
+    result = run_gate("fast", ROOT, runner=runner, tracked_files=[])
+
+    assert result.result == "FAIL"
+    assert any(item["teste"] == "PERFORMANCE_COMPONENT_BUDGET_INVALID" for item in result.findings)
+
+
 def test_repository_configuration_is_complete_and_impact_is_specific():
     assert validate_configuration(ROOT) == []
     assert validate_fixture_registry(ROOT) == []

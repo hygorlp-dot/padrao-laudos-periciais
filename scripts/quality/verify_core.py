@@ -53,6 +53,8 @@ def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_fil
         findings.append(_finding("QUALITY_NON_REGRESSION", "QUALITY_GATE", "PERFORMANCE_COMPONENT_BUDGET_INVALID", str(performance_budgets), "P1"))
         performance_budgets = {}
     else:
+        if "architecture" not in performance_budgets:
+            findings.append(_finding("QUALITY_NON_REGRESSION", "QUALITY_GATE", "PERFORMANCE_COMPONENT_BUDGET_INVALID", "architecture budget missing", "P1"))
         invalid_budgets = {
             name: value for name, value in performance_budgets.items()
             if type(value) not in {int, float} or not math.isfinite(value) or value <= 0
