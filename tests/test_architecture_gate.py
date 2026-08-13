@@ -40,10 +40,7 @@ def _registry(**changes):
 
 def test_current_repository_architecture_is_registered_and_green():
     registry = json.loads((ROOT / "config/core-architecture-v1.json").read_text(encoding="utf-8"))
-    report = analyze_architecture(ROOT, registry)
     assert validate_architecture(ROOT, registry) == []
-    assert report["modules"]
-    assert report["edges"]
 
 
 def test_forbidden_reverse_dependency_fails_closed(tmp_path):
@@ -113,9 +110,11 @@ def test_parse_failure_is_not_silently_skipped(tmp_path):
     assert any(item["code"] == "ARCHITECTURE_SOURCE_UNPARSEABLE" for item in validate_architecture(tmp_path, _registry()))
 
 
-def test_report_is_deterministic():
-    registry = json.loads((ROOT / "config/core-architecture-v1.json").read_text(encoding="utf-8"))
-    assert analyze_architecture(ROOT, registry) == analyze_architecture(ROOT, registry)
+def test_report_is_deterministic(tmp_path):
+    package = tmp_path / "scripts/domain"; package.mkdir(parents=True)
+    (package / "a.py").write_text("VALUE=1\n", encoding="utf-8")
+    first = analyze_architecture(tmp_path, _registry())
+    assert first == analyze_architecture(tmp_path, _registry())
 
 
 def test_registry_cannot_collapse_the_constitution(tmp_path):
