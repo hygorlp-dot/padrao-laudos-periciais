@@ -14,7 +14,13 @@ from pathlib import Path
 from .config import validate_configuration
 from .architecture_gate import load_and_validate as validate_architecture
 from .fixture_registry import validate_fixture_registry
-from .metrics import analyze_complexity, parse_coverage_totals, validate_quality_baseline
+from .metrics import (
+    MAX_PERFORMANCE_COMPONENT_SECONDS,
+    REQUIRED_PERFORMANCE_COMPONENTS,
+    analyze_complexity,
+    parse_coverage_totals,
+    validate_quality_baseline,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -53,17 +59,14 @@ def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_fil
         findings.append(_finding("QUALITY_NON_REGRESSION", "QUALITY_GATE", "PERFORMANCE_COMPONENT_BUDGET_INVALID", str(performance_budgets), "P1"))
         performance_budgets = {}
     else:
-        if "architecture" not in performance_budgets:
-            findings.append(_finding("QUALITY_NON_REGRESSION", "QUALITY_GATE", "PERFORMANCE_COMPONENT_BUDGET_INVALID", "architecture budget missing", "P1"))
-        invalid_budgets = {
-            name: value for name, value in performance_budgets.items()
-            if type(value) not in {int, float} or not math.isfinite(value) or value <= 0
-        }
+        invalid_budgets = set(performance_budgets) != REQUIRED_PERFORMANCE_COMPONENTS or any(
+            type(value) not in {int, float} or not math.isfinite(value) or value <= 0
+            or value > MAX_PERFORMANCE_COMPONENT_SECONDS[name]
+            for name, value in performance_budgets.items()
+        )
         if invalid_budgets:
-            findings.append(_finding("QUALITY_NON_REGRESSION", "QUALITY_GATE", "PERFORMANCE_COMPONENT_BUDGET_INVALID", str(invalid_budgets), "P1"))
-            performance_budgets = {
-                name: value for name, value in performance_budgets.items() if name not in invalid_budgets
-            }
+            findings.append(_finding("QUALITY_NON_REGRESSION", "QUALITY_GATE", "PERFORMANCE_COMPONENT_BUDGET_INVALID", str(performance_budgets), "P1"))
+            performance_budgets = {}
     architecture_started = time.perf_counter()
     architecture_errors = [
         _finding("ARCHITECTURE_DIRECTION", "QUALITY_GATE", item.get("code", "ARCHITECTURE_INVALID"), str(item), "P1")

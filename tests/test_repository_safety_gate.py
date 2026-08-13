@@ -163,7 +163,11 @@ def test_architecture_duration_confirmation_uses_three_sample_median(monkeypatch
     baseline_path = ROOT / "config/quality-baseline.json"
     original_read_text = Path.read_text
     monkeypatch.setattr(Path, "read_text", lambda path, *args, **kwargs:
-        json.dumps({"performance_component_max_seconds": {"architecture": 15.0}})
+        json.dumps({"performance_component_max_seconds": {
+            "architecture": 15.0,
+            "historical critical mutation suite": 20.0,
+            "regression": 45.0,
+        }})
         if path == baseline_path else original_read_text(path, *args, **kwargs))
     monkeypatch.setattr(verify_core, "validate_configuration", lambda _root: [])
     monkeypatch.setattr(verify_core, "validate_fixture_registry", lambda _root: [])
@@ -210,6 +214,51 @@ def test_missing_architecture_budget_fails_in_fast_mode(monkeypatch):
     original_read_text = Path.read_text
     monkeypatch.setattr(Path, "read_text", lambda path, *args, **kwargs:
         json.dumps({"performance_component_max_seconds": {}})
+        if path == baseline_path else original_read_text(path, *args, **kwargs))
+    monkeypatch.setattr(verify_core, "validate_configuration", lambda _root: [])
+    monkeypatch.setattr(verify_core, "validate_fixture_registry", lambda _root: [])
+    monkeypatch.setattr(verify_core, "validate_architecture", lambda _root: [])
+    runner = lambda command, **_: subprocess.CompletedProcess(command, 0, "", "")
+
+    result = run_gate("fast", ROOT, runner=runner, tracked_files=[])
+
+    assert result.result == "FAIL"
+    assert any(item["teste"] == "PERFORMANCE_COMPONENT_BUDGET_INVALID" for item in result.findings)
+
+
+@pytest.mark.parametrize("missing_budget", ["historical critical mutation suite", "regression"])
+def test_any_missing_performance_budget_fails_in_fast_mode(monkeypatch, missing_budget):
+    baseline_path = ROOT / "config/quality-baseline.json"
+    original_read_text = Path.read_text
+    budgets = {
+        "architecture": 15.0,
+        "historical critical mutation suite": 20.0,
+        "regression": 45.0,
+    }
+    del budgets[missing_budget]
+    monkeypatch.setattr(Path, "read_text", lambda path, *args, **kwargs:
+        json.dumps({"performance_component_max_seconds": budgets})
+        if path == baseline_path else original_read_text(path, *args, **kwargs))
+    monkeypatch.setattr(verify_core, "validate_configuration", lambda _root: [])
+    monkeypatch.setattr(verify_core, "validate_fixture_registry", lambda _root: [])
+    monkeypatch.setattr(verify_core, "validate_architecture", lambda _root: [])
+    runner = lambda command, **_: subprocess.CompletedProcess(command, 0, "", "")
+
+    result = run_gate("fast", ROOT, runner=runner, tracked_files=[])
+
+    assert result.result == "FAIL"
+    assert any(item["teste"] == "PERFORMANCE_COMPONENT_BUDGET_INVALID" for item in result.findings)
+
+
+def test_inflated_architecture_budget_fails_in_fast_mode(monkeypatch):
+    baseline_path = ROOT / "config/quality-baseline.json"
+    original_read_text = Path.read_text
+    monkeypatch.setattr(Path, "read_text", lambda path, *args, **kwargs:
+        json.dumps({"performance_component_max_seconds": {
+            "architecture": 15.1,
+            "historical critical mutation suite": 20.0,
+            "regression": 45.0,
+        }})
         if path == baseline_path else original_read_text(path, *args, **kwargs))
     monkeypatch.setattr(verify_core, "validate_configuration", lambda _root: [])
     monkeypatch.setattr(verify_core, "validate_fixture_registry", lambda _root: [])
