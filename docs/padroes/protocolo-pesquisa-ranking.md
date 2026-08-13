@@ -107,11 +107,24 @@ positivo presumido.
 
 ### Agregação e desempate
 
-`ELIGIBILITY_GATE_BEFORE_RANKING`: candidato sem verificação conclusiva de
-licença, segurança, Windows ou packaging fica `INELIGIBLE` e não pode vencer
-por score numérico. Sua exclusão e evidências permanecem no relatório.
+`ELIGIBILITY_GATE_BEFORE_RANKING`: candidato só é elegível quando todos os
+predicados positivos forem demonstrados por evidência:
 
-Para candidato elegível, usar pesos inteiros positivos predeclarados (peso 1
+- `LICENSE_ACCEPTABLE = TRUE`
+- `SECURITY_ACCEPTABLE = TRUE`
+- `WINDOWS_COMPATIBLE = TRUE`
+- `PACKAGING_IMPACT_ACCEPTABLE = TRUE`
+
+`ADVERSE_OR_UNRESOLVED_GATE = INELIGIBLE`: licença proibitiva/incompatível,
+vulnerabilidade material sem mitigação aceita, Windows não suportado, impacto
+de packaging incompatível ou qualquer resultado inconclusivo impede adoção e
+vitória por score numérico. A exclusão e suas evidências permanecem no relatório.
+
+Para candidato elegível, a direção da escala é universal:
+`SCORE_0 = WORST_OR_UNACCEPTABLE` e `SCORE_4 = BEST_OR_LOWEST_RISK`.
+Nos critérios de risco, vulnerabilidade, custo, lock-in, abandono, migração e
+complexidade, menor exposição recebe score maior; nunca alternar a direção por
+candidato. Usar pesos inteiros positivos predeclarados (peso 1
 para todos quando não houver pesos específicos) e excluir `NOT_APPLICABLE` do
 numerador e denominador:
 
