@@ -220,6 +220,20 @@ def test_change_impact_cli_and_ci_use_first_party_gate(capsys):
     workflow = (ROOT / ".github/workflows/core-safety.yml").read_text(encoding="utf-8")
     assert "python -m scripts.quality.verify_core --full" in workflow
     assert "secrets" not in workflow.casefold() and "deploy" not in workflow.casefold()
+
+
+def test_architecture_tests_are_preserved_once_outside_core_regression(monkeypatch):
+    commands = []
+    monkeypatch.setattr(verify_core, "validate_configuration", lambda _root: [])
+    monkeypatch.setattr(verify_core, "validate_fixture_registry", lambda _root: [])
+    monkeypatch.setattr(verify_core, "validate_architecture", lambda _root: [])
+    def runner(command, **_):
+        commands.append(command); return subprocess.CompletedProcess(command, 0, "", "")
+    run_gate("full", ROOT, runner=runner, tracked_files=[])
+    architecture = [c for c in commands if "tests/test_architecture_gate.py" in c and "--ignore=tests/test_architecture_gate.py" not in c]
+    regression = [c for c in commands if "coverage" in c and "run" in c]
+    assert len(architecture) == 1
+    assert len(regression) >= 1 and "--ignore=tests/test_architecture_gate.py" in regression[0]
     dependencies=(ROOT/"requirements-dev.txt").read_text(encoding="utf-8")
     assert "pytest==9.1.1" in dependencies
 

@@ -46,7 +46,7 @@
     "scripts.quality.core_baseline": "91ee9031e46f48aab6dfffa7436bfee0f4fa6d38de22c746e2b1c52e663a7907",
     "scripts.quality.deep_quality": "3d0e4c6e6049986ef0422e8195df7fb1682bd35c225a0ece7edf8bc91814d0ba",
     "scripts.quality.historical_mutations": "3ddcec3f4458a828c410ef55772c3dd2e03041c03b6528b87ef14de7d17c5b0b",
-    "scripts.quality.verify_core": "d3739d9b04298eaa7067fcb7cd5a8fbd3ac9395f7544389e9b1b9fb18873a8d2",
+    "scripts.quality.verify_core": "ccac9d50215a2f970614c8a777702f8f64e100525f1756169749136308aa5092",
     "scripts.terceiros.verificar_design_motion": "7896fefa327726bddef4b0e767beb13a2b6b8bdc4179121b8c4a1d3b11a6e9e4",
     "scripts.terceiros.verificar_superpowers": "27cd9e90089e940927729bb09f96415d8421ec3c34670f9877ee0051f06e528b",
     "scripts.terceiros.catalogar_repositorios": "464ba8388d0f8bd7c821b5fbe80bea3d57ba1b31b3266d41be5e51e3f364f55b",
