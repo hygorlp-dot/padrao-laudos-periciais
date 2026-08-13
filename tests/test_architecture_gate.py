@@ -285,6 +285,29 @@ def test_subprocess_from_import_apis_aliases_and_indirect_calls_fail_closed(monk
     assert {f"scripts/domain/process{index}.py" for index in range(len(SUBPROCESS_FROM_IMPORT_ATTACKS))} <= paths
 
 
+@pytest.mark.parametrize("source", [
+    "import multiprocessing as mp\nmp.Process(target=print, args=('x',)).start()\n",
+    "from multiprocessing import Process as Worker\nWorker(target=print).start()\n",
+    "from _winapi import CreateProcess\nCreateProcess(None, 'tool', None, None, False, 0, None, None, None)\n",
+    "import _winapi as winapi\nwinapi.CreateProcess(None, 'tool', None, None, False, 0, None, None, None)\n",
+    "import os\nos.fork()\n",
+    "from os import forkpty as fork_process\nfork_process()\n",
+    "import os\nos.posix_spawn('tool', ['tool'], {})\n",
+    "from os import posix_spawnp as spawn_process\nspawn_process('tool', ['tool'], {})\n",
+    "from _posixsubprocess import fork_exec\nfork_exec(*args)\n",
+    "from concurrent.futures import ProcessPoolExecutor\nProcessPoolExecutor()\n",
+    "import concurrent.futures as futures\nfutures.ProcessPoolExecutor()\n",
+])
+def test_stdlib_process_acquisition_surfaces_fail_closed(source):
+    tree = architecture_gate.ast.parse(source)
+
+    _, findings = architecture_gate._imports(
+        tree, "scripts.domain.stdlib_process", False, set()
+    )
+
+    assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
 REFLECTIVE_OS_PROCESS_ATTACKS = [
     "import os\nvars(os)['system']('tool')\n",
     "import os\nos.__dict__['popen']('tool')\n",
