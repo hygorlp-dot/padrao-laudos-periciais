@@ -5,8 +5,9 @@
   "required": ["schemaVersion", "policyVersion", "analyzerVersion", "ruleVersion", "findingCode", "capabilityClass", "canonicalPath", "module", "acquisitionLocation", "normalizedAcquisitionAstSha256", "wholeFileSha256", "baselineCommit", "acquiredCapability", "justification", "owner", "reviewEvidence", "disposition", "reviewBy"],
   "properties": {
     "schemaVersion": {"const": "1.0.0"}, "policyVersion": {"const": "1.0.0"}, "analyzerVersion": {"type": "string", "minLength": 1}, "ruleVersion": {"type": "string", "minLength": 1},
-    "findingCode": {"type": "string", "minLength": 1}, "capabilityClass": {"type": "string", "minLength": 1},
-    "canonicalPath": {"type": "string", "pattern": "^(?!.*(?:\\*|\\.\\.)).+\\.py$"}, "module": {"type": "string", "pattern": "^[a-zA-Z_][a-zA-Z0-9_.]*$"},
+    "findingCode": {"enum": ["DYNAMIC_IMPORT_ACQUISITION", "DYNAMIC_EXECUTION_ACQUISITION", "EXECUTABLE_DESERIALIZATION_OR_NATIVE_LOADING", "PROCESS_NAMESPACE_ACQUISITION", "OS_PROCESS_MEMBER_ACQUISITION", "SENSITIVE_NAMESPACE_ESCAPE", "UNKNOWN_SENSITIVE_REFLECTION"]},
+    "capabilityClass": {"enum": ["DYNAMIC_IMPORT_ACQUISITION", "DYNAMIC_EXECUTION_ACQUISITION", "EXECUTABLE_DESERIALIZATION_OR_NATIVE_LOADING", "PROCESS_NAMESPACE_ACQUISITION", "OS_PROCESS_MEMBER_ACQUISITION", "SENSITIVE_NAMESPACE_ESCAPE", "UNKNOWN_SENSITIVE_REFLECTION"]},
+    "canonicalPath": {"type": "string", "pattern": "^scripts/(?!.*(?:\\*|\\.\\.|\\\\))[A-Za-z0-9_./-]+\\.py$"}, "module": {"type": "string", "pattern": "^[a-zA-Z_][a-zA-Z0-9_.]*$"},
     "acquisitionLocation": {"type": "object", "additionalProperties": false, "required": ["line", "column"], "properties": {"line": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 0}}},
     "normalizedAcquisitionAstSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "wholeFileSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "baselineCommit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "acquiredCapability": {"type": "string", "minLength": 1}, "justification": {"type": "string", "minLength": 20}, "owner": {"type": "string", "minLength": 1},

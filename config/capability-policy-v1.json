@@ -17,8 +17,30 @@
     "inventoryFailurePolicy": "FAIL_CLOSED",
     "readParseFailurePolicy": "FAIL_CLOSED"
   },
+  "candidateIdentity": {
+    "requiredInputs": ["candidateCommitSha", "candidateTreeSha"],
+    "inventorySource": "EXACT_GIT_TREE",
+    "contentSource": "SAME_EXACT_GIT_TREE",
+    "identityFailurePolicy": "FAIL_CLOSED"
+  },
   "processNamespaceCategories": ["SUBPROCESS", "ASYNCIO_SUBPROCESS", "MULTIPROCESSING", "PTY_POSIX", "WINDOWS_PROCESS", "CONCURRENT_PROCESS"],
+  "processNamespaces": ["subprocess", "asyncio.subprocess", "pty", "posix", "multiprocessing", "multiprocessing.managers", "multiprocessing.pool", "multiprocessing.context", "concurrent.futures.process", "_winapi"],
+  "dynamicImportSurfaces": ["__import__", "importlib", "importlib.import_module", "importlib.machinery", "importlib.util", "pkgutil", "runpy", "pydoc", "zipimport", "sys.meta_path", "sys.path_hooks", "sys.modules", "importlib.metadata.entry_points"],
+  "dynamicExecutionSurfaces": ["eval", "exec", "compile", "types.CodeType", "types.FunctionType"],
+  "nativeOrExecutableDeserializationSurfaces": ["ctypes", "pickle.load", "pickle.loads", "marshal.load", "marshal.loads"],
   "mixedNamespaces": ["os"],
+  "mixedNamespaceMembers": {"os": ["system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe", "execv", "execve", "execvp", "execvpe"]},
+  "integrityBootstrap": {
+    "verifier": "CAPABILITY_BOOTSTRAP_V1",
+    "activationState": "CONTRACT_ONLY",
+    "pinnedArtifacts": ["scripts/quality/capability_analyzer.py", "config/capability-policy-v1.json", "schemas/capability-exception-v1.schema.json"],
+    "digestAlgorithm": "SHA-256",
+    "trustRoot": "BRANCH_PROTECTED_PIN_REGISTRY",
+    "failurePolicy": "FAIL_CLOSED",
+    "ordinaryExceptionsMayAuthorizeBootstrap": false,
+    "pinUpdateProtocol": "DEDICATED_PR_EXACT_CI_THREE_INDEPENDENT_REVIEWS",
+    "activationRequirements": ["EXTERNAL_PIN_REGISTRY_WITH_SHA256_PER_ARTIFACT", "BOOTSTRAP_IMPLEMENTATION_CAPABILITY_FREE", "ATOMIC_BLOCKING_CUTOVER"]
+  },
   "inlineSuppressionsAllowed": false,
   "wildcardExceptionsAllowed": false,
   "unknownSensitiveReflectionPolicy": "FAIL_CLOSED",
