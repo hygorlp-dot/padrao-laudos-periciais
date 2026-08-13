@@ -311,6 +311,22 @@ def test_stdlib_process_acquisition_surfaces_fail_closed(source):
     assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
 
 
+@pytest.mark.parametrize("source", [
+    "print('posix.system')\n",
+    "audit('pty.spawn')\n",
+    "class Local:\n    def system(self, command): pass\nposix = Local()\nposix.system('tool')\n",
+    "class Local:\n    def spawn(self, command): pass\npty = Local()\npty.spawn(['tool'])\n",
+])
+def test_process_api_text_and_local_names_do_not_claim_stdlib_capability(source):
+    tree = architecture_gate.ast.parse(source)
+
+    _, findings = architecture_gate._imports(
+        tree, "scripts.domain.local_process_names", False, set()
+    )
+
+    assert not any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
 REFLECTIVE_OS_PROCESS_ATTACKS = [
     "import os\nvars(os)['system']('tool')\n",
     "import os\nos.__dict__['popen']('tool')\n",
