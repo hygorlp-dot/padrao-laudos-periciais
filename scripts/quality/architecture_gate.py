@@ -28,7 +28,7 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "e9eeb8eefc3460ad5898e2d8230a3219cf7b38fd1d22cb893dadb99aa07ce04e"
-EXPECTED_DETECTOR_AST_SHA256 = "0ed9328c1007bc805161750f4d11e113216065356e589e8026bb4c9aefcc4ea3"
+EXPECTED_DETECTOR_AST_SHA256 = "435da5622d44ab7e5bba324b1517c2c81b6788d48e67aec38108c1a48b02b9e9"
 EXPECTED_ANALYZER_PROCESS_FINGERPRINT = "d053267e664b9f173031fa71140e427ae0abf1bbad320c0c329b62c572fb7e2d"
 
 
@@ -184,20 +184,14 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             return f"asyncio.{attribute or 'create_subprocess_exec'}"
         return None
     def process_origins(subject: ast.AST) -> set[str]:
-        origin = qualified_origin(subject)
-        origins = {origin} if origin else set()
-        spelling = ast.unparse(subject)
-        if spelling == "concurrent.futures.ProcessPoolExecutor":
-            origins.add(spelling)
-        if isinstance(subject, ast.IfExp):
-            origins.update(process_origins(subject.body))
-            origins.update(process_origins(subject.orelse))
-        elif isinstance(subject, (ast.List, ast.Tuple, ast.Set)):
-            for item in subject.elts:
-                origins.update(process_origins(item))
-        elif isinstance(subject, ast.Dict):
-            for item in subject.values:
-                origins.update(process_origins(item))
+        origins = set()
+        for child in ast.walk(subject):
+            origin = qualified_origin(child)
+            if origin:
+                origins.add(origin)
+            spelling = ast.unparse(child)
+            if spelling == "concurrent.futures.ProcessPoolExecutor":
+                origins.add(spelling)
         return origins
     def is_process_origin(origin: str | None) -> bool:
         return bool(origin and re.fullmatch(
@@ -216,6 +210,8 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
                 reflective_aliases.setdefault(name, []).append(((node.lineno, node.col_offset), alias.name))
             if any(alias.name in {"subprocess", "multiprocessing", "_winapi", "_posixsubprocess"} for alias in node.names):
                 dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+            if any(alias.name == "concurrent.futures.process" for alias in node.names):
+                dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
             if any(alias.name.split(".", 1)[0] in loader_roots for alias in node.names):
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         elif isinstance(node, ast.ImportFrom):
@@ -225,6 +221,8 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             if ((node.module == "subprocess" and any(alias.name in {"run", "Popen", "call", "check_call", "check_output"} for alias in node.names))
                     or (node.module == "multiprocessing" and any(alias.name in {"Process", "Pool"} for alias in node.names))
                     or (node.module == "multiprocessing" and any(alias.name in {"get_context", "*"} for alias in node.names))
+                    or (node.module == "multiprocessing" and any(alias.name == "context" for alias in node.names))
+                    or (node.module == "multiprocessing.context" and any(alias.name in {"Process", "Pool", "*"} for alias in node.names))
                     or (node.module == "_winapi" and any(alias.name == "CreateProcess" for alias in node.names))
                     or (node.module == "_posixsubprocess" and any(alias.name == "fork_exec" for alias in node.names))
                     or (node.module == "os" and any(re.fullmatch(r"system|popen|startfile|spawn\w*|exec\w*|fork\w*|posix_spawn\w*", alias.name) for alias in node.names))
@@ -232,6 +230,8 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
                     or (node.module == "concurrent.futures" and any(alias.name == "ProcessPoolExecutor" for alias in node.names))
                     or (node.module == "concurrent.futures.process" and any(alias.name in {"ProcessPoolExecutor", "*"} for alias in node.names))
                     or (node.module == "asyncio" and any(re.fullmatch(r"create_subprocess_(?:exec|shell)", alias.name) for alias in node.names))):
+                dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+            if node.module == "asyncio" and any(alias.name == "subprocess" for alias in node.names):
                 dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
             if node.module == "os" and any(alias.name == "*" for alias in node.names):
                 dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
@@ -324,10 +324,21 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             for default in (*node.args.defaults, *node.args.kw_defaults):
                 if default is not None:
                     acquired_origins.update(process_origins(default))
+            for expression in node.decorator_list:
+                acquired_origins.update(process_origins(expression))
+            annotations = [arg.annotation for arg in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)
+                           if arg.annotation is not None]
+            if node.returns is not None:
+                annotations.append(node.returns)
+            for expression in annotations:
+                acquired_origins.update(process_origins(expression))
         elif isinstance(node, (ast.Return, ast.Yield, ast.YieldFrom, ast.Lambda)):
             value = node.body if isinstance(node, ast.Lambda) else node.value
             if value is not None:
                 acquired_origins.update(process_origins(value))
+        elif isinstance(node, ast.ClassDef):
+            for expression in node.decorator_list:
+                acquired_origins.update(process_origins(expression))
         if any(is_process_origin(origin) for origin in acquired_origins):
             dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Call) and (

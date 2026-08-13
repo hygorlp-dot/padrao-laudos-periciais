@@ -766,3 +766,22 @@ def test_process_capability_hidden_behind_callable_boundaries_fails_closed(sourc
     )
 
     assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "import os\nbox=[f for f in (os.system,)]\nbox[0]('tool')\n",
+    "import os\nbox=(f for f in (os.system,))\nnext(box)('tool')\n",
+    "import os\nbox={os.system:'x'}\nnext(iter(box))('tool')\n",
+    "import os\nrun=os.system or safe\nrun('tool')\n",
+    "from asyncio import subprocess as asp\nasp.create_subprocess_exec('tool')\n",
+    "from multiprocessing.context import Process\nProcess(target=print).start()\n",
+    "from multiprocessing import context\ncontext.Process(target=print).start()\n",
+    "import concurrent.futures.process as proc\nproc.ProcessPoolExecutor()\n",
+    "import os\n@decorate(os.system)\ndef f(): pass\n",
+    "import os\ndef f(run: os.system): pass\n",
+])
+def test_process_capability_general_expression_and_import_sweep_fails_closed(source):
+    _, findings = architecture_gate._imports(
+        architecture_gate.ast.parse(source), "scripts.domain.process_general_sweep", False, set()
+    )
+    assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
