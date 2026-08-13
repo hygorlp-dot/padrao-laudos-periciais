@@ -85,6 +85,9 @@ def test_p0_p1_fixture_matrix_covers_boundaries_and_positive_controls():
         "SYMLINK_ESCAPE", "COMMIT_TREE_MISMATCH", "EXCEPTION_DUPLICATE", "EXCEPTION_STALE", "EXCEPTION_EXPIRED",
         "EXCEPTION_BLOB_MISMATCH", "EXCEPTION_BASELINE_MISMATCH", "DUAL_FINDING",
         "ANALYZER_INDEPENDENCE",
+        "ASYNCIO_PUBLIC_PROCESS", "CONCURRENT_PUBLIC_PROCESS_POOL", "EXECUTABLE_DESERIALIZER_CLASS",
+        "EXCEPTION_MODULE_PATH_MISMATCH", "BOOTSTRAP_ANALYZER_DIGEST_MISMATCH",
+        "BOOTSTRAP_POLICY_DIGEST_MISMATCH", "BOOTSTRAP_SCHEMA_DIGEST_MISMATCH", "BOOTSTRAP_PIN_REGISTRY_TAMPER",
     }
     assert required_families <= {case["boundaryFamily"] for case in matrix["cases"]}
 
@@ -98,6 +101,9 @@ def test_policy_closes_namespace_member_and_bootstrap_contracts():
     for root in ["subprocess", "asyncio.subprocess", "pty", "posix", "multiprocessing.managers", "multiprocessing.pool", "multiprocessing.context", "concurrent.futures.process"]:
         assert root in roots
     assert {"system", "fork", "posix_spawn", "posix_spawnp", "spawnl", "spawnv", "startfile", "execl", "execle", "execlp", "execlpe"} <= set(policy["mixedNamespaceMembers"]["os"])
+    assert set(policy["mixedNamespaceMembers"]["asyncio"]) == {"create_subprocess_exec", "create_subprocess_shell"}
+    assert policy["mixedNamespaceMembers"]["concurrent.futures"] == ["ProcessPoolExecutor"]
+    assert "Unpickler" in policy["mixedNamespaceMembers"]["pickle"]
     assert {item["findingCode"] for item in policy["ruleMappings"]} == set(policy["capabilityClasses"])
     assert all(item["findingCode"] == item["capabilityClass"] for item in policy["ruleMappings"])
     bootstrap = policy["integrityBootstrap"]
