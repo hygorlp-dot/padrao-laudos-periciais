@@ -2,7 +2,8 @@ import json
 from pathlib import Path
 import pytest
 
-from scripts.quality.architecture_gate import analyze_architecture, validate_architecture
+from scripts.quality import architecture_gate
+from scripts.quality.architecture_gate import analyze_architecture, load_and_validate, validate_architecture
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -108,6 +109,25 @@ def test_parse_failure_is_not_silently_skipped(tmp_path):
     package.mkdir(parents=True)
     (package / "broken.py").write_bytes(b"\xff\xfe")
     assert any(item["code"] == "ARCHITECTURE_SOURCE_UNPARSEABLE" for item in validate_architecture(tmp_path, _registry()))
+
+
+def test_inventory_failure_is_returned_as_architecture_finding(monkeypatch):
+    def fail_inventory(_root):
+        raise RuntimeError("git ls-files failed: metadata unavailable")
+
+    monkeypatch.setattr(architecture_gate, "_python_files", fail_inventory)
+    monkeypatch.setattr(
+        architecture_gate.subprocess,
+        "run",
+        lambda *_args, **_kwargs: architecture_gate.subprocess.CompletedProcess([], 0, "", ""),
+    )
+
+    findings = load_and_validate(ROOT)
+
+    assert findings == [{
+        "code": "ARCHITECTURE_INVENTORY_INVALID",
+        "detail": "git ls-files failed: metadata unavailable",
+    }]
 
 
 def test_report_is_deterministic(tmp_path):
