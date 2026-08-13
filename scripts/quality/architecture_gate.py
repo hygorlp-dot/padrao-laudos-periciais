@@ -27,8 +27,9 @@ def _safe_path(path: str) -> str:
 
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
-EXPECTED_POLICY_SHA256 = "44a3ab49fb033782ee6ebde71deba1a7ce9aba5c6a42acc20221440f973ac537"
+EXPECTED_POLICY_SHA256 = "f58e59cce00ba67c15aaa881ba3bfd8f2ad6ca22a2bca4dc77b3d513c93198ce"
 EXPECTED_DETECTOR_AST_SHA256 = "b57dca3efc8fc50a0f60beb2e4397e4add771c4fbe0b43cfcc01b7834967e6f0"
+EXPECTED_ANALYZER_PROCESS_FINGERPRINT = "d053267e664b9f173031fa71140e427ae0abf1bbad320c0c329b62c572fb7e2d"
 
 
 def _constant_string(node: ast.AST) -> str | None:
@@ -286,7 +287,8 @@ def validate_architecture(root: Path, registry: dict) -> list[dict]:
         return bool(expected and path and hashlib.sha256((root / path).read_bytes()).hexdigest() == expected)
     findings = [item for item in findings if item["code"] not in capability_codes or not capability_accepted(item)]
     findings = [item for item in findings if item["code"] != "PROCESS_EXECUTION_CAPABILITY"
-                or item.get("module") != "scripts.quality.architecture_gate"]
+                or item.get("module") != "scripts.quality.architecture_gate"
+                or item.get("fingerprint") != EXPECTED_ANALYZER_PROCESS_FINGERPRINT]
     for fingerprint in sorted(accepted_capabilities - observed_capabilities): findings.append({"code": "STALE_IMPORT_CAPABILITY_EXCEPTION", "fingerprint": fingerprint})
     baseline_capabilities = _baseline_capability_fingerprints(root, registry.get("baselineSha", ""))
     for fingerprint in sorted(accepted_capabilities - baseline_capabilities): findings.append({"code": "IMPORT_CAPABILITY_NOT_IN_BASELINE", "fingerprint": fingerprint})
