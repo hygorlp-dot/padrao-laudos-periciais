@@ -705,3 +705,47 @@ def test_reflective_platform_os_process_acquisition_fails_closed(source):
         architecture_gate.ast.parse(source), "scripts.domain.platform_reflection", False, set()
     )
     assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "import platform\nname='os'\ngetattr(platform, name).system('tool')\n",
+    "import platform\nplatform.__getattribute__('os').system('tool')\n",
+    "import platform\nobject.__getattribute__(platform, 'os').system('tool')\n",
+    "import platform\no=getattr(platform, 'os')\no.system('tool')\n",
+    "import platform\nplatform.__dict__.get('os').system('tool')\n",
+    "import platform\nvars(platform).get('os').system('tool')\n",
+])
+def test_platform_os_reflective_sibling_acquisitions_fail_closed(source):
+    _, findings = architecture_gate._imports(
+        architecture_gate.ast.parse(source), "scripts.domain.platform_reflection_siblings", False, set()
+    )
+    assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "import asyncio\nrun, = (asyncio.create_subprocess_exec,)\nrun('tool')\n",
+    "import pty\nrun, = (pty.spawn,)\nrun(['tool'])\n",
+    "import concurrent.futures\nPool, = (concurrent.futures.ProcessPoolExecutor,)\nPool()\n",
+])
+def test_non_os_process_capability_destructuring_fails_closed(source):
+    _, findings = architecture_gate._imports(
+        architecture_gate.ast.parse(source), "scripts.domain.process_destructuring", False, set()
+    )
+    assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "import os\ndef acquire():\n    return os.system\nacquire()('tool')\n",
+    "import os\ndef acquire():\n    yield os.system\nnext(acquire())('tool')\n",
+    "import os\nacquire = lambda: os.system\nacquire()('tool')\n",
+    "import platform\nosmod=getattr(platform, 'os')\nosmod.system('tool')\n",
+    "import platform\nosmod=platform.__dict__['os']\nosmod.system('tool')\n",
+    "from multiprocessing import get_context\nget_context().Process(target=print).start()\n",
+    "from concurrent.futures.process import ProcessPoolExecutor\nProcessPoolExecutor()\n",
+    "from os import *\nsystem('tool')\n",
+])
+def test_process_capability_return_factory_submodule_and_wildcard_fail_closed(source):
+    _, findings = architecture_gate._imports(
+        architecture_gate.ast.parse(source), "scripts.domain.process_extended", False, set()
+    )
+    assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
