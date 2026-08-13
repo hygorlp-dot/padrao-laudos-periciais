@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 BRANCH_NODES = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.IfExp, ast.Match, ast.comprehension)
+REQUIRED_PERFORMANCE_COMPONENTS = frozenset({"architecture", "historical critical mutation suite", "regression"})
 
 
 def _function_complexity(node: ast.FunctionDef | ast.AsyncFunctionDef) -> int:
@@ -47,6 +48,7 @@ def validate_quality_baseline(
     complexity: list[dict],
     *,
     duration_seconds: float | None = None,
+    component_durations: dict[str, float] | None = None,
 ) -> list[dict]:
     findings: list[dict] = []
     if coverage is None:
@@ -60,9 +62,18 @@ def validate_quality_baseline(
         key = (expected["path"], expected["function"])
         if key not in current or current[key] > expected["complexity"]:
             findings.append({"code": "HOTSPOT_COMPLEXITY_REGRESSION", "severity": "P1", "expected": expected, "actual": current.get(key)})
-    limit = baseline.get("full_gate_max_seconds")
-    if duration_seconds is not None and limit is not None and duration_seconds > float(limit):
-        findings.append({"code": "FULL_GATE_DURATION_REGRESSION", "severity": "P1", "expected": limit, "actual": duration_seconds})
+    budgets = baseline.get("performance_component_max_seconds")
+    if component_durations is not None:
+        if (not isinstance(budgets, dict) or set(budgets) != REQUIRED_PERFORMANCE_COMPONENTS
+                or any(type(value) not in {int, float} or value <= 0 for value in budgets.values())
+                or not REQUIRED_PERFORMANCE_COMPONENTS <= set(component_durations)):
+            findings.append({"code": "PERFORMANCE_COMPONENT_BUDGET_INVALID", "severity": "P1"})
+        else:
+            for component in sorted(REQUIRED_PERFORMANCE_COMPONENTS):
+                actual, limit = float(component_durations[component]), float(budgets[component])
+                if actual > limit:
+                    findings.append({"code": "GATE_COMPONENT_DURATION_REGRESSION", "severity": "P1",
+                                     "component": component, "expected": limit, "actual": actual})
     return findings
 
 

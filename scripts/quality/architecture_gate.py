@@ -28,7 +28,7 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "08f6b99f4a4997374c2b9b2767f901607b076bd2c85897f1c83ed01aa62c6763"
-EXPECTED_DETECTOR_AST_SHA256 = "933c1c9850514bc7aa808ee67c3739c7c617f0d2cffe33acd1249a7fdd7df570"
+EXPECTED_DETECTOR_AST_SHA256 = "a6beef1eea16097f2e872ac54bdcd4d822c1f191d25ddc4c0f339a0362a14489"
 
 
 def _python_files(root: Path) -> list[str]:
@@ -62,13 +62,15 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
     edges: set[tuple[str, int]] = set()
     dynamic: list[dict] = []
     aliases: dict[str, str] = {}
-    loader_roots = {"importlib", "runpy", "pkgutil", "pydoc", "zipimport", "pkg_resources"}
+    loader_roots = {"importlib", "runpy", "pkgutil", "pydoc", "zipimport", "pkg_resources", "ctypes", "pickle"}
     detector = next((node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "_imports"), None)
     detector_is_pinned = bool(detector and hashlib.sha256(ast.dump(detector, include_attributes=False).encode()).hexdigest() == EXPECTED_DETECTOR_AST_SHA256)
     def is_detector_implementation(node: ast.AST) -> bool:
         return bool(source == "scripts.quality.architecture_gate" and detector_is_pinned
                     and detector.lineno <= getattr(node, "lineno", -1) <= detector.end_lineno)
     for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in {"exec", "eval"} and not is_detector_implementation(node):
+            dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Import):
             for alias in node.names: aliases[alias.asname or alias.name.split(".")[0]] = alias.name
             if any(alias.name.split(".", 1)[0] in loader_roots for alias in node.names):
@@ -109,8 +111,9 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             expanded = re.sub(rf"\b{re.escape(alias)}\b", origin, expanded)
         if not is_detector_implementation(node) and any(token in expanded for token in (
             "sys.path", "vars(sys", "site.addsitedir", "vars(site", "importlib", "runpy",
-            "pkgutil", "pydoc", "zipimport", "pkg_resources", "builtins", "__builtins__",
-            "__import__", "PYTHONPATH", "sys.__dict__",
+            "pkgutil", "pydoc", "zipimport", "pkg_resources", "ctypes.pythonapi", "pickle.loads",
+            "builtins", "__builtins__", "__import__", "PYTHONPATH", "sys.__dict__",
+            "sys.meta_path", "sys.path_hooks", "sys.modules", "__loader__", "__spec__.loader",
         )):
             if isinstance(node, (ast.Call, ast.Assign, ast.AugAssign)):
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})

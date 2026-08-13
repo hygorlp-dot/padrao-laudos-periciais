@@ -43,12 +43,33 @@ def test_quality_baseline_requires_fresh_coverage_measurement():
     assert {item["code"] for item in findings} == {"COVERAGE_MEASUREMENT_MISSING"}
 
 
-def test_quality_baseline_rejects_full_gate_duration_regression():
-    baseline = {"coverage":{"line_percent":80.0,"branch_percent":70.0},"hotspots":[],"full_gate_max_seconds":30.0}
+def test_quality_baseline_rejects_real_component_duration_regression():
+    baseline = {"coverage":{"line_percent":80.0,"branch_percent":70.0},"hotspots":[],
+                "performance_component_max_seconds":{"architecture":10.0,"historical critical mutation suite":20.0,"regression":45.0}}
     findings = validate_quality_baseline(
-        baseline, {"line_percent":80.0,"branch_percent":70.0}, [], duration_seconds=30.1
+        baseline, {"line_percent":80.0,"branch_percent":70.0}, [], duration_seconds=90.0,
+        component_durations={"architecture":10.1,"historical critical mutation suite":12.0,"regression":30.0},
     )
-    assert {item["code"] for item in findings} == {"FULL_GATE_DURATION_REGRESSION"}
+    assert {item["code"] for item in findings} == {"GATE_COMPONENT_DURATION_REGRESSION"}
+
+
+def test_quality_baseline_does_not_turn_normal_runner_overhead_into_false_p1():
+    baseline = {"coverage":{"line_percent":80.0,"branch_percent":70.0},"hotspots":[],
+                "performance_component_max_seconds":{"architecture":10.0,"historical critical mutation suite":20.0,"regression":45.0}}
+    assert validate_quality_baseline(
+        baseline, {"line_percent":80.0,"branch_percent":70.0}, [], duration_seconds=90.0,
+        component_durations={"architecture":5.0,"historical critical mutation suite":12.0,"regression":36.0},
+    ) == []
+
+
+def test_performance_gate_cannot_self_disable_by_omitting_required_budgets():
+    baseline = {"coverage":{"line_percent":80.0,"branch_percent":70.0},"hotspots":[],
+                "performance_component_max_seconds":{"architecture":10.0}}
+    findings = validate_quality_baseline(
+        baseline, {"line_percent":80.0,"branch_percent":70.0}, [],
+        component_durations={"architecture":5.0,"historical critical mutation suite":12.0,"regression":30.0},
+    )
+    assert {item["code"] for item in findings} == {"PERFORMANCE_COMPONENT_BUDGET_INVALID"}
 
 
 def test_metrics_module_uses_ast_not_source_execution():
