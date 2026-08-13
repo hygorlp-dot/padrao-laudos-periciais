@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 import pytest
@@ -219,6 +220,19 @@ def test_current_process_capability_blob_is_atomically_pinned(mutation):
     findings = architecture_gate._registry_findings(registry)
 
     assert findings == ([] if mutation is None else [{"code": "ARCHITECTURE_REGISTRY_POLICY_INVALID"}])
+
+
+def test_all_accepted_capability_blobs_match_their_tracked_modules():
+    registry = json.loads((ROOT / "config/core-architecture-v1.json").read_text(encoding="utf-8"))
+
+    mismatches = []
+    for module, expected in sorted(registry["acceptedImportCapabilityBlobs"].items()):
+        path = ROOT / (module.replace(".", "/") + ".py")
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual != expected:
+            mismatches.append(module)
+
+    assert mismatches == []
 
 
 def test_relative_dynamic_import_and_sys_path_mutation_fail_closed(tmp_path):
