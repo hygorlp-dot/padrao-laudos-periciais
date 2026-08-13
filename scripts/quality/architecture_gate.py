@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import hashlib
+import re
 from functools import lru_cache
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
@@ -27,15 +28,15 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "a6eb87bf09503b51ee59e90cc68c22702163db489893e5b4057a2315572b1ff5"
-EXPECTED_DETECTOR_AST_SHA256 = "61d0b86cd822c5a95e60a067064a9520a8bfd12cbb5b47dc92d838992c22b167"
+EXPECTED_DETECTOR_AST_SHA256 = "ae875fd4121d6f8567fbfbd1648262cc57208365c3dba4d85985ce085c03d3e5"
 
 
 def _python_files(root: Path) -> list[str]:
+    if not (root / ".git").exists():
+        return sorted(_safe_path(path.relative_to(root).as_posix()) for path in (root / "scripts").rglob("*.py"))
     completed = subprocess.run(["git", "ls-files", "-s", "-z", "scripts/*.py", "scripts/**/*.py"], cwd=root, capture_output=True)
     if completed.returncode:
-        if (root / ".git").exists():
-            raise RuntimeError("tracked architecture inventory unavailable")
-        return sorted(_safe_path(path.relative_to(root).as_posix()) for path in (root / "scripts").rglob("*.py"))
+        raise RuntimeError("tracked architecture inventory unavailable")
     paths = []
     for item in completed.stdout.split(b"\0"):
         if not item:
@@ -99,14 +100,19 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         text = ast.unparse(node) if isinstance(node, (ast.Call, ast.Assign, ast.AugAssign)) else ""
         expanded = text
-        for alias, origin in aliases.items(): expanded = expanded.replace(alias + ".", origin + ".")
-        if not is_detector_implementation(node) and any(token in expanded for token in ("sys.path", "site.addsitedir", "importlib", "runpy", "builtins", "__builtins__", "__import__", "PYTHONPATH", "sys.__dict__")):
+        for alias, origin in aliases.items():
+            expanded = re.sub(rf"\b{re.escape(alias)}\b", origin, expanded)
+        if not is_detector_implementation(node) and any(token in expanded for token in (
+            "sys.path", "vars(sys", "site.addsitedir", "vars(site", "importlib", "runpy",
+            "pkgutil", "pydoc", "zipimport", "pkg_resources", "builtins", "__builtins__",
+            "__import__", "PYTHONPATH", "sys.__dict__",
+        )):
             if isinstance(node, (ast.Call, ast.Assign, ast.AugAssign)):
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"getattr", "setattr"} and node.args:
             subject = ast.unparse(node.args[0]); origin = aliases.get(subject, subject)
             attribute = node.args[1].value if len(node.args) > 1 and isinstance(node.args[1], ast.Constant) else None
-            if origin in {"sys", "site", "importlib", "builtins"} and (attribute is None or attribute in {"path", "addsitedir", "import_module", "exec", "eval"}):
+            if origin in {"sys", "site", "importlib", "runpy", "builtins"} and (attribute is None or attribute in {"path", "addsitedir", "import_module", "run_module", "run_path", "exec", "eval"}):
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Assign) and "__import__" in ast.unparse(node):
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
