@@ -40,6 +40,11 @@ def _constant_string(node: ast.AST) -> str | None:
     return None
 
 
+def _capability_fingerprint(module: str, item: dict) -> str:
+    line = "" if item["code"] == "PROCESS_EXECUTION_CAPABILITY" else str(item["line"])
+    return hashlib.sha256(f'{module}:{line}:{item["ast"]}'.encode()).hexdigest()
+
+
 def _python_files(root: Path) -> list[str]:
     if not (root / ".git").exists():
         return sorted(_safe_path(path.relative_to(root).as_posix()) for path in (root / "scripts").rglob("*.py"))
@@ -210,7 +215,7 @@ def analyze_architecture(root: Path, registry: dict) -> dict:
             continue
         imported, dynamic = _imports(tree, module, path.endswith("/__init__.py"), modules)
         for item in dynamic:
-            fingerprint = hashlib.sha256(f'{module}:{item["line"]}:{item["ast"]}'.encode()).hexdigest()
+            fingerprint = _capability_fingerprint(module, item)
             findings.append({"code": item["code"], "path": path, "module": module, "line": item["line"], "fingerprint": fingerprint})
         for item in imported:
             target = item["target"]
@@ -272,15 +277,14 @@ def validate_architecture(root: Path, registry: dict) -> list[dict]:
     accepted_capabilities = set(registry.get("acceptedImportCapabilityFingerprints", []))
     if len(accepted_capabilities) != len(registry.get("acceptedImportCapabilityFingerprints", [])):
         findings.append({"code": "DUPLICATE_IMPORT_CAPABILITY_EXCEPTION"})
-    observed_capabilities = {item.get("fingerprint") for item in report["findings"] if item["code"] in {"RUNTIME_IMPORT_CAPABILITY", "DYNAMIC_IMPORT_CAPABILITY"}}
+    capability_codes = {"RUNTIME_IMPORT_CAPABILITY", "DYNAMIC_IMPORT_CAPABILITY", "PROCESS_EXECUTION_CAPABILITY"}
+    observed_capabilities = {item.get("fingerprint") for item in report["findings"] if item["code"] in capability_codes}
     accepted_blobs = registry.get("acceptedImportCapabilityBlobs", {})
     def capability_accepted(item):
         if item.get("fingerprint") not in accepted_capabilities: return False
         path = item.get("path"); expected = accepted_blobs.get(item.get("module"))
         return bool(expected and path and hashlib.sha256((root / path).read_bytes()).hexdigest() == expected)
-    findings = [item for item in findings if item["code"] not in {"RUNTIME_IMPORT_CAPABILITY", "DYNAMIC_IMPORT_CAPABILITY"} or not capability_accepted(item)]
-    findings = [item for item in findings if item["code"] != "PROCESS_EXECUTION_CAPABILITY"
-                or owners.get(item.get("module")) not in {"GOVERNANCE", "THIRD_PARTY_TOOLING"}]
+    findings = [item for item in findings if item["code"] not in capability_codes or not capability_accepted(item)]
     for fingerprint in sorted(accepted_capabilities - observed_capabilities): findings.append({"code": "STALE_IMPORT_CAPABILITY_EXCEPTION", "fingerprint": fingerprint})
     baseline_capabilities = _baseline_capability_fingerprints(root, registry.get("baselineSha", ""))
     for fingerprint in sorted(accepted_capabilities - baseline_capabilities): findings.append({"code": "IMPORT_CAPABILITY_NOT_IN_BASELINE", "fingerprint": fingerprint})
@@ -345,7 +349,7 @@ def _baseline_capability_fingerprints(root: Path, sha: str) -> set[str]:
         except (UnicodeError, SyntaxError): continue
         _, capabilities = _imports(tree, module, False, modules)
         for item in capabilities:
-            result.add(hashlib.sha256(f'{module}:{item["line"]}:{item["ast"]}'.encode()).hexdigest())
+            result.add(_capability_fingerprint(module, item))
     return result
 
 
@@ -357,6 +361,16 @@ def registry_capability_modules(root: Path) -> set[str]:
         "scripts.planejamento_pericial.validar_resultados",
         "scripts.quality.fixture_registry",
         "scripts.vistoria_estruturada.gerar_vistoria",
+        "scripts.agentic.gates",
+        "scripts.agentic.package",
+        "scripts.agentic.sanitize",
+        "scripts.quality.architecture_gate",
+        "scripts.quality.core_baseline",
+        "scripts.quality.deep_quality",
+        "scripts.quality.historical_mutations",
+        "scripts.quality.verify_core",
+        "scripts.terceiros.verificar_design_motion",
+        "scripts.terceiros.verificar_superpowers",
     }
 
 
