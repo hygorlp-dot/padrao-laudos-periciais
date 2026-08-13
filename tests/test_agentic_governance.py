@@ -780,3 +780,18 @@ def test_python_dependency_research_policy_is_fail_closed_and_auditable():
         "RECOMMENDATION", "CONFIDENCE", "MATERIALITY", "OPEN_UNCERTAINTIES",
     ):
         assert field in protocol
+    criteria = (
+        "CORRECTNESS_FIT", "ARCHITECTURAL_FIT", "PYTHON_COMPATIBILITY",
+        "WINDOWS_COMPATIBILITY", "MAINTENANCE_ACTIVITY", "RELEASE_CADENCE",
+        "API_DOCUMENTATION_QUALITY", "LICENSE", "KNOWN_VULNERABILITIES",
+        "TRANSITIVE_DEPENDENCY_RISK", "SUPPLY_CHAIN_SIGNALS", "TEST_QUALITY",
+        "ECOSYSTEM_MATURITY", "PACKAGE_SIZE_COMPLEXITY", "PACKAGING_IMPACT",
+        "OFFLINE_LOCAL_OPERATION", "PRIVACY", "EXTERNAL_EGRESS", "LOCK_IN",
+        "REVERSIBILITY", "OPERATIONAL_COST", "ABANDONMENT_RISK",
+        "MIGRATION_COST", "REPRODUCIBLE_BUILDS_IMPACT",
+    )
+    assert len(criteria) == 24
+    assert all(f"`{criterion}`" in protocol for criterion in criteria)
+    for source_field in ("URL_OR_IDENTIFIER", "SOURCE_ENTITY", "VERSION_OR_ACCESS_DATE", "SUPPORTED_CLAIM"):
+        assert source_field in protocol
+    assert "SCORE = 0..4 | NOT_APPLICABLE" in protocol

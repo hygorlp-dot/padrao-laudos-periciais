@@ -67,13 +67,43 @@ tem poucas opções críveis ou uma solução praticamente canônica.
 
 ## Critérios mínimos reproduzíveis
 
-Avaliar, quando aplicável: correção/fit; fit arquitetural; Python e Windows;
-manutenção e cadência; API/documentação; licença; vulnerabilidades;
-dependências transitivas; supply chain; testes; maturidade; tamanho/complexidade;
-installer/packaging; operação offline/local; privacidade; egress; lock-in;
-reversibilidade; custo operacional; abandono; migração; e builds determinísticos.
+O ranking material contém exatamente estes 24 critérios canônicos:
+
+1. `CORRECTNESS_FIT`
+2. `ARCHITECTURAL_FIT`
+3. `PYTHON_COMPATIBILITY`
+4. `WINDOWS_COMPATIBILITY`
+5. `MAINTENANCE_ACTIVITY`
+6. `RELEASE_CADENCE`
+7. `API_DOCUMENTATION_QUALITY`
+8. `LICENSE`
+9. `KNOWN_VULNERABILITIES`
+10. `TRANSITIVE_DEPENDENCY_RISK`
+11. `SUPPLY_CHAIN_SIGNALS`
+12. `TEST_QUALITY`
+13. `ECOSYSTEM_MATURITY`
+14. `PACKAGE_SIZE_COMPLEXITY`
+15. `PACKAGING_IMPACT`
+16. `OFFLINE_LOCAL_OPERATION`
+17. `PRIVACY`
+18. `EXTERNAL_EGRESS`
+19. `LOCK_IN`
+20. `REVERSIBILITY`
+21. `OPERATIONAL_COST`
+22. `ABANDONMENT_RISK`
+23. `MIGRATION_COST`
+24. `REPRODUCIBLE_BUILDS_IMPACT`
+
+Por candidato e critério registrar `SCORE = 0..4 | NOT_APPLICABLE`, justificativa
+curta e IDs das evidências. `NOT_APPLICABLE` exige motivo e não vira zero. Pesos,
+se usados, são declarados antes da avaliação e iguais entre candidatos.
 Popularidade/estrelas podem aparecer apenas como sinal fraco do ecossistema e
-nunca dominar a pontuação. Toda nota material exige fonte identificável.
+nunca dominar a pontuação.
+
+Cada entrada em `SOURCES` registra `URL_OR_IDENTIFIER`, `SOURCE_ENTITY`,
+`VERSION_OR_ACCESS_DATE` e `SUPPORTED_CLAIM`. Toda nota material referencia ao
+menos uma dessas entradas; ausência de evidência produz incerteza, não score
+positivo presumido.
 
 ## Contrato de saída
 
