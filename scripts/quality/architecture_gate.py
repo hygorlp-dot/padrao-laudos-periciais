@@ -28,7 +28,7 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "e9eeb8eefc3460ad5898e2d8230a3219cf7b38fd1d22cb893dadb99aa07ce04e"
-EXPECTED_DETECTOR_AST_SHA256 = "92f977659971ee2766de27a751322e0646c0c165dc61dbc5a8ed5ac685661a19"
+EXPECTED_DETECTOR_AST_SHA256 = "0ed9328c1007bc805161750f4d11e113216065356e589e8026bb4c9aefcc4ea3"
 EXPECTED_ANALYZER_PROCESS_FINGERPRINT = "d053267e664b9f173031fa71140e427ae0abf1bbad320c0c329b62c572fb7e2d"
 
 
@@ -314,7 +314,7 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             expanded = re.sub(rf"\b{re.escape(alias)}\b", lambda _match, value=origin: value, expanded)
         call_origin = qualified_origin(node.func) if isinstance(node, ast.Call) else None
         acquired_origins = set()
-        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) for target in node.targets):
+        if isinstance(node, ast.Assign):
             acquired_origins.update(process_origins(node.value))
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value:
             acquired_origins.update(process_origins(node.value))

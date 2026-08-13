@@ -749,3 +749,20 @@ def test_process_capability_return_factory_submodule_and_wildcard_fail_closed(so
         architecture_gate.ast.parse(source), "scripts.domain.process_extended", False, set()
     )
     assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "import os\nclass Holder:\n    def __init__(self):\n        self.run = os.system\ndef acquire():\n    return Holder().run\nrun = acquire()\nrun('tool')\n",
+    "import os\nclass Box:\n    def __init__(self):\n        self._run = os.system\n    @property\n    def run(self):\n        return self._run\nBox().run('tool')\n",
+    "import os\nclass Holder:\n    def __init__(self):\n        self.run = os.system\ndef outer():\n    def inner():\n        return Holder().run\n    return inner\nrun = outer()()\nrun('tool')\n",
+    "import os\nclass Wrapper:\n    def __init__(self):\n        self.run = os.system\n    def __call__(self, command):\n        return self.run(command)\nWrapper()('tool')\n",
+])
+def test_process_capability_hidden_behind_callable_boundaries_fails_closed(source):
+    _, findings = architecture_gate._imports(
+        architecture_gate.ast.parse(source),
+        "scripts.domain.process_callable_boundary",
+        False,
+        set(),
+    )
+
+    assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
