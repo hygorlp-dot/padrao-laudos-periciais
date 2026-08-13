@@ -48,13 +48,16 @@
   "integrityBootstrap": {
     "verifier": "CAPABILITY_BOOTSTRAP_V1",
     "activationState": "CONTRACT_ONLY",
-    "pinnedArtifacts": ["scripts/quality/capability_analyzer.py", "config/capability-policy-v1.json", "schemas/capability-exception-v1.schema.json"],
+    "verifierProvenance": "PROTECTED_BASE_BLOB_NOT_CANDIDATE",
+    "workflowProvenance": "PROTECTED_BASE_WORKFLOW",
+    "protectedWorkflow": ".github/workflows/core-safety.yml",
+    "candidateEnforcementArtifacts": ["scripts/quality/capability_bootstrap.py", "scripts/quality/repository_inventory.py", "scripts/quality/ast_inventory.py", "scripts/quality/capability_analyzer.py", "scripts/quality/capability_gate_adapter.py", "scripts/quality/verify_core.py", "config/capability-policy-v1.json", "schemas/capability-policy-v1.schema.json", "schemas/capability-exception-v1.schema.json", "schemas/quality-finding-v1.schema.json"],
     "digestAlgorithm": "SHA-256",
     "trustRoot": "BRANCH_PROTECTED_PIN_REGISTRY",
     "failurePolicy": "FAIL_CLOSED",
     "ordinaryExceptionsMayAuthorizeBootstrap": false,
     "pinUpdateProtocol": "DEDICATED_PR_EXACT_CI_THREE_INDEPENDENT_REVIEWS",
-    "activationRequirements": ["EXTERNAL_PIN_REGISTRY_WITH_SHA256_PER_ARTIFACT", "BOOTSTRAP_IMPLEMENTATION_CAPABILITY_FREE", "ATOMIC_BLOCKING_CUTOVER"]
+    "activationRequirements": ["EXTERNAL_PIN_REGISTRY_WITH_SHA256_PER_ARTIFACT", "BOOTSTRAP_IMPLEMENTATION_CAPABILITY_FREE", "PROTECTED_BASE_LOADS_AND_EXECUTES_VERIFIER", "ALL_CANDIDATE_ENFORCEMENT_ARTIFACTS_PINNED", "ATOMIC_BLOCKING_CUTOVER"]
   },
   "inlineSuppressionsAllowed": false,
   "wildcardExceptionsAllowed": false,
