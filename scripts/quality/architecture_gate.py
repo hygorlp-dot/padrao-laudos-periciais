@@ -28,7 +28,7 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "77dc717ace9efb829744db69b7e528893b7fc1e9ebd27acded318ed79598b470"
-EXPECTED_DETECTOR_AST_SHA256 = "b57dca3efc8fc50a0f60beb2e4397e4add771c4fbe0b43cfcc01b7834967e6f0"
+EXPECTED_DETECTOR_AST_SHA256 = "1a1224475762957e6cbecff4865084f0a0eb5b2075909df355aa0cf3fc5c9467"
 EXPECTED_ANALYZER_PROCESS_FINGERPRINT = "d053267e664b9f173031fa71140e427ae0abf1bbad320c0c329b62c572fb7e2d"
 
 
@@ -96,6 +96,8 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         elif isinstance(node, ast.ImportFrom):
             for alias in node.names: aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}" if node.module else alias.name
+            if node.module == "subprocess" and any(alias.name in {"run", "Popen", "call", "check_call", "check_output"} for alias in node.names):
+                dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
             if (node.module or "").split(".", 1)[0] in loader_roots:
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
     for node in ast.walk(tree):
@@ -394,7 +396,10 @@ def _baseline_blob(root: str, sha: str, path: str) -> bytes | None:
 
 def load_and_validate(root: Path) -> list[dict]:
     try:
-        status = subprocess.run(["git", "status", "--porcelain", "--", "scripts", "config/core-architecture-v1.json"], cwd=root, capture_output=True, text=True)
+        status = subprocess.run([
+            "git", "status", "--porcelain", "--", "scripts", "config/core-architecture-v1.json",
+            "docs/arquitetura/constituicao-core-pericial-v1.md",
+        ], cwd=root, capture_output=True, text=True)
         if status.returncode != 0 or status.stdout.strip():
             return [{"code": "ARCHITECTURE_WORKTREE_NOT_EXACT_HEAD"}]
         def strict_object(pairs):

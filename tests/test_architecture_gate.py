@@ -242,6 +242,51 @@ def test_import_capability_aliases_fail_closed(tmp_path):
     assert {f"scripts/domain/x{index}.py" for index in range(len(ALIAS_CAPABILITY_ATTACKS))} <= paths
 
 
+SUBPROCESS_FROM_IMPORT_ATTACKS = [
+    "from subprocess import run\nrun(['tool'])\n",
+    "from subprocess import Popen\nPopen(['tool'])\n",
+    "from subprocess import call\ncall(['tool'])\n",
+    "from subprocess import check_call\ncheck_call(['tool'])\n",
+    "from subprocess import check_output\ncheck_output(['tool'])\n",
+    "from subprocess import run as execute\nexecute(['tool'])\n",
+    "from subprocess import Popen as process\nlaunch = process\nlaunch(['tool'])\n",
+]
+def test_subprocess_from_import_apis_aliases_and_indirect_calls_fail_closed(monkeypatch):
+    sources = {
+        f"scripts/domain/process{index}.py": source
+        for index, source in enumerate(SUBPROCESS_FROM_IMPORT_ATTACKS)
+    }
+    monkeypatch.setattr(architecture_gate, "_python_files", lambda _root: sorted(sources))
+    original_read_text = Path.read_text
+    monkeypatch.setattr(
+        Path,
+        "read_text",
+        lambda path, **kwargs: sources[path.relative_to(ROOT).as_posix()]
+        if path.is_relative_to(ROOT) and path.relative_to(ROOT).as_posix() in sources
+        else original_read_text(path, **kwargs),
+    )
+
+    findings = validate_architecture(ROOT, _registry())
+
+    paths = {item.get("path") for item in findings if item["code"] == "PROCESS_EXECUTION_CAPABILITY"}
+    assert {f"scripts/domain/process{index}.py" for index in range(len(SUBPROCESS_FROM_IMPORT_ATTACKS))} <= paths
+
+
+def test_exact_head_check_includes_the_referenced_architecture_constitution(monkeypatch):
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        return architecture_gate.subprocess.CompletedProcess(command, 0, " M docs/arquitetura/constituicao-core-pericial-v1.md\n", "")
+
+    monkeypatch.setattr(architecture_gate.subprocess, "run", fake_run)
+
+    findings = load_and_validate(ROOT)
+
+    assert findings == [{"code": "ARCHITECTURE_WORKTREE_NOT_EXACT_HEAD"}]
+    assert "docs/arquitetura/constituicao-core-pericial-v1.md" in calls[0]
+
+
 def test_governance_code_cannot_hide_dynamic_import_capabilities(tmp_path):
     package = tmp_path / "scripts/quality"; package.mkdir(parents=True)
     (package / "evil.py").write_text(
