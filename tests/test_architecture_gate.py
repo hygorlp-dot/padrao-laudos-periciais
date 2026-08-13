@@ -299,6 +299,10 @@ REFLECTIVE_OS_PROCESS_ATTACKS = [
     "import os\nos.__dict__[capability_name]('tool')\n",
     "import os\nvars(os).get(capability_name)('tool')\n",
     "import os\nos.__dict__.get(capability_name)('tool')\n",
+    "from os import __dict__ as d\nd['system']('tool')\n",
+    "from os import __dict__ as d\nd.get('system')('tool')\n",
+    "import os\nd = os.__dict__\nd['system']('tool')\n",
+    "import os\nd = os.__dict__\nd.get('system')('tool')\n",
 ]
 def test_reflective_os_process_apis_aliases_and_constant_names_fail_closed(monkeypatch):
     sources = {
@@ -319,6 +323,50 @@ def test_reflective_os_process_apis_aliases_and_constant_names_fail_closed(monke
 
     paths = {item.get("path") for item in findings if item["code"] == "PROCESS_EXECUTION_CAPABILITY"}
     assert {f"scripts/domain/reflective_process{index}.py" for index in range(len(sources))} <= paths
+
+
+@pytest.mark.parametrize("source", [
+    "from os import __dict__ as d\nd = {}\n",
+    "import os\nd = os.__dict__\nd = {}\n",
+])
+@pytest.mark.parametrize("call", ["d['system']('tool')", "d.get('system')('tool')"])
+def test_reflective_os_dictionary_provenance_is_invalidated_on_reassignment(source, call):
+    tree = architecture_gate.ast.parse(f"{source}{call}\n")
+    _, findings = architecture_gate._imports(tree, "scripts.domain.shadowed", False, set())
+
+    assert not any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "import os as operating_system\nif False:\n    operating_system = {}\noperating_system.system('tool')\n",
+    "from os import __dict__ as d\nif False:\n    d = {}\nd['system']('tool')\n",
+])
+def test_conditional_reassignment_cannot_erase_process_provenance(source):
+    tree = architecture_gate.ast.parse(source)
+    _, findings = architecture_gate._imports(tree, "scripts.domain.conditional", False, set())
+
+    assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
+@pytest.mark.parametrize("call", ["d['system']('tool')", "d.get('system')('tool')"])
+def test_later_reassignment_cannot_erase_earlier_process_capability(call):
+    tree = architecture_gate.ast.parse(f"from os import __dict__ as d\n{call}\nd = {{}}\n")
+    _, findings = architecture_gate._imports(tree, "scripts.domain.earlier", False, set())
+
+    assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "from os import __dict__ as d; d['system']('tool')",
+    "from os import __dict__ as d; d.get('system')('tool')",
+    "import os; d = os.__dict__; d['system']('tool')",
+    "import os; d = os.__dict__; d.get('system')('tool')",
+])
+def test_same_line_reflective_process_provenance_fails_closed(source):
+    tree = architecture_gate.ast.parse(source)
+    _, findings = architecture_gate._imports(tree, "scripts.domain.same_line", False, set())
+
+    assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
 
 
 def test_exact_head_check_includes_the_referenced_architecture_constitution(monkeypatch):

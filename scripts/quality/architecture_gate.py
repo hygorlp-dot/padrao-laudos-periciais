@@ -28,7 +28,7 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "c39bcbb955becd64d51d7dc369e62d9b85bc20e77bfb7a73e71523f62a815bae"
-EXPECTED_DETECTOR_AST_SHA256 = "6db23a4127e86f5db02f44b9267dc7a7f69cd365eeee2744f7270ed0b0d398fd"
+EXPECTED_DETECTOR_AST_SHA256 = "fab4aa49656ca4f044199946ec2280edfad632c6971478cdfc1256842e9a679d"
 EXPECTED_ANALYZER_PROCESS_FINGERPRINT = "d053267e664b9f173031fa71140e427ae0abf1bbad320c0c329b62c572fb7e2d"
 
 
@@ -77,6 +77,7 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
     edges: set[tuple[str, int, bool]] = set()
     dynamic: list[dict] = []
     aliases: dict[str, str] = {}
+    reflective_aliases: dict[str, list[tuple[tuple[int, int], str | None]]] = {}
     loader_roots = {"importlib", "runpy", "pkgutil", "pydoc", "zipimport", "pkg_resources", "ctypes", "pickle"}
     detector = next((node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "_imports"), None)
     detector_is_pinned = bool(detector and hashlib.sha256(ast.dump(detector, include_attributes=False).encode()).hexdigest() == EXPECTED_DETECTOR_AST_SHA256)
@@ -89,20 +90,31 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             subject = subject.args[0]
         elif isinstance(subject, ast.Attribute) and subject.attr == "__dict__":
             subject = subject.value
-        return aliases.get(subject.id, subject.id) if isinstance(subject, ast.Name) else None
+        if not isinstance(subject, ast.Name):
+            return None
+        bindings = reflective_aliases.get(subject.id, [])
+        position = (subject.lineno, subject.col_offset)
+        origin = next((value for binding, value in reversed(bindings) if binding < position), subject.id)
+        if origin is None:
+            return None
+        return origin.removesuffix(".__dict__")
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in {"exec", "eval"} and not is_detector_implementation(node):
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in {"compile", "FunctionType"} and not is_detector_implementation(node):
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Import):
-            for alias in node.names: aliases[alias.asname or alias.name.split(".")[0]] = alias.name
+            for alias in node.names:
+                name = alias.asname or alias.name.split(".")[0]; aliases[name] = alias.name
+                reflective_aliases.setdefault(name, []).append(((node.lineno, node.col_offset), alias.name))
             if any(alias.name == "subprocess" for alias in node.names):
                 dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
             if any(alias.name.split(".", 1)[0] in loader_roots for alias in node.names):
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         elif isinstance(node, ast.ImportFrom):
-            for alias in node.names: aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}" if node.module else alias.name
+            for alias in node.names:
+                name = alias.asname or alias.name; origin = f"{node.module}.{alias.name}" if node.module else alias.name
+                aliases[name] = origin; reflective_aliases.setdefault(name, []).append(((node.lineno, node.col_offset), origin))
             if node.module == "subprocess" and any(alias.name in {"run", "Popen", "call", "check_call", "check_output"} for alias in node.names):
                 dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
             if (node.module or "").split(".", 1)[0] in loader_roots:
@@ -113,10 +125,13 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             for alias, target in aliases.items():
                 origin = re.sub(rf"\b{re.escape(alias)}\b", lambda _match, value=target: value, origin)
             if re.fullmatch(
-                    r"(?:os\.(?:system|popen|startfile|spawn\w*|exec\w*)|"
+                    r"(?:os\.(?:__dict__|system|popen|startfile|spawn\w*|exec\w*)|"
                     r"asyncio\.create_subprocess_(?:exec|shell)|codeop\.compile_command|types\.FunctionType)",
                     origin):
                 aliases[node.targets[0].id] = origin
+                reflective_aliases.setdefault(node.targets[0].id, []).append(((node.lineno, node.col_offset), origin))
+            elif isinstance(tree, ast.Module) and node in tree.body:
+                reflective_aliases.setdefault(node.targets[0].id, []).append(((node.lineno, node.col_offset), None))
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             edges.update((alias.name, node.lineno, True) for alias in node.names)
