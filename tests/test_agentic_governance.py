@@ -795,3 +795,13 @@ def test_python_dependency_research_policy_is_fail_closed_and_auditable():
     for source_field in ("URL_OR_IDENTIFIER", "SOURCE_ENTITY", "VERSION_OR_ACCESS_DATE", "SUPPORTED_CLAIM"):
         assert source_field in protocol
     assert "SCORE = 0..4 | NOT_APPLICABLE" in protocol
+    for aggregation_rule in (
+        "ELIGIBILITY_GATE_BEFORE_RANKING",
+        "NORMALIZED_SCORE = 100 * SUM(SCORE_i * WEIGHT_i) / SUM(4 * WEIGHT_i)",
+        "ROUND_HALF_EVEN",
+        "DECIMAL_PLACES = 2",
+        "TIE_BREAK_1 = FEWER_OPEN_UNCERTAINTIES",
+        "TIE_BREAK_2 = GREATER_APPLICABLE_CRITERIA_COUNT",
+        "TIE_BREAK_3 = CANONICAL_PACKAGE_NAME_ASCENDING",
+    ):
+        assert aggregation_rule in protocol

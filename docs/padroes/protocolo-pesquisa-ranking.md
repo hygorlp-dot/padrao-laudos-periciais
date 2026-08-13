@@ -105,6 +105,28 @@ Cada entrada em `SOURCES` registra `URL_OR_IDENTIFIER`, `SOURCE_ENTITY`,
 menos uma dessas entradas; ausência de evidência produz incerteza, não score
 positivo presumido.
 
+### Agregação e desempate
+
+`ELIGIBILITY_GATE_BEFORE_RANKING`: candidato sem verificação conclusiva de
+licença, segurança, Windows ou packaging fica `INELIGIBLE` e não pode vencer
+por score numérico. Sua exclusão e evidências permanecem no relatório.
+
+Para candidato elegível, usar pesos inteiros positivos predeclarados (peso 1
+para todos quando não houver pesos específicos) e excluir `NOT_APPLICABLE` do
+numerador e denominador:
+
+`NORMALIZED_SCORE = 100 * SUM(SCORE_i * WEIGHT_i) / SUM(4 * WEIGHT_i)`
+
+Calcular com decimal exato, `ROUND_HALF_EVEN` e `DECIMAL_PLACES = 2`. É inválido
+rankear candidato sem ao menos um critério aplicável. Publicar scores, pesos,
+itens não aplicáveis, numerador, denominador e resultado para reprodução.
+
+Empates no score normalizado usam, nesta ordem:
+
+1. `TIE_BREAK_1 = FEWER_OPEN_UNCERTAINTIES`
+2. `TIE_BREAK_2 = GREATER_APPLICABLE_CRITERIA_COUNT`
+3. `TIE_BREAK_3 = CANONICAL_PACKAGE_NAME_ASCENDING`
+
 ## Contrato de saída
 
 Persistir síntese auditável, não chain-of-thought, com:
