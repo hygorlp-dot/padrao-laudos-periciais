@@ -152,17 +152,20 @@ def test_debt_evidence_and_component_cycles_are_mechanically_checked(tmp_path):
     assert "NEW_ARCHITECTURE_CYCLE" in codes
 
 
-@pytest.mark.parametrize("source", [
+ALIAS_CAPABILITY_ATTACKS = [
     "import sys as s\ns.path.insert(0,'x')\n",
     "import site\nsite.addsitedir('x')\n",
     "import os\nos.environ['PYTHONPATH']='x'\n",
     "import importlib as il\nf=il.import_module\nf(name)\n",
     "import builtins\nbuiltins.exec(code)\n",
-])
-def test_import_capability_aliases_fail_closed(tmp_path, source):
+]
+def test_import_capability_aliases_fail_closed(tmp_path):
     package = tmp_path / "scripts/domain"; package.mkdir(parents=True)
-    (package / "x.py").write_text(source, encoding="utf-8")
-    assert any(item["code"] == "DYNAMIC_IMPORT_CAPABILITY" for item in validate_architecture(tmp_path, _registry()))
+    for index, source in enumerate(ALIAS_CAPABILITY_ATTACKS):
+        (package / f"x{index}.py").write_text(source, encoding="utf-8")
+    findings = validate_architecture(tmp_path, _registry())
+    paths = {item.get("path") for item in findings if item["code"] == "DYNAMIC_IMPORT_CAPABILITY"}
+    assert {f"scripts/domain/x{index}.py" for index in range(len(ALIAS_CAPABILITY_ATTACKS))} <= paths
 
 
 def test_governance_code_cannot_hide_dynamic_import_capabilities(tmp_path):
@@ -183,7 +186,7 @@ def test_duplicate_architecture_debt_is_rejected(tmp_path):
     assert any(item["code"] == "DUPLICATE_ARCHITECTURE_EXCEPTION" for item in findings)
 
 
-@pytest.mark.parametrize("source", [
+REFLECTIVE_LOADER_ATTACKS = [
     "import importlib\nvars(importlib)['import_module'](name)\n",
     "import importlib\nimportlib.__dict__['import_module'](name)\n",
     "import importlib\ngetattr(importlib, 'import_' + 'module')(name)\n",
@@ -202,8 +205,11 @@ def test_duplicate_architecture_debt_is_rejected(tmp_path):
     "import pydoc\npydoc.locate(name)\n",
     "import zipimport\nzipimport.zipimporter(path).load_module(name)\n",
     "import pkg_resources\npkg_resources.load_entry_point(dist, group, name)\n",
-])
-def test_reflective_stdlib_import_execution_fails_closed(tmp_path, source):
+]
+def test_reflective_stdlib_import_execution_fails_closed(tmp_path):
     package = tmp_path / "scripts/domain"; package.mkdir(parents=True)
-    (package / "x.py").write_text(source, encoding="utf-8")
-    assert any(item["code"] == "DYNAMIC_IMPORT_CAPABILITY" for item in validate_architecture(tmp_path, _registry()))
+    for index, source in enumerate(REFLECTIVE_LOADER_ATTACKS):
+        (package / f"r{index}.py").write_text(source, encoding="utf-8")
+    findings = validate_architecture(tmp_path, _registry())
+    paths = {item.get("path") for item in findings if item["code"] == "DYNAMIC_IMPORT_CAPABILITY"}
+    assert {f"scripts/domain/r{index}.py" for index in range(len(REFLECTIVE_LOADER_ATTACKS))} <= paths
