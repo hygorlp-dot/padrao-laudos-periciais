@@ -285,6 +285,9 @@ REFLECTIVE_LOADER_ATTACKS = [
     "__spec__.loader.exec_module(module)\n",
     "import ctypes\nctypes.pythonapi.PyImport_ImportModule(name)\n",
     "import pickle\npickle.loads(payload)\n",
+    "globals()['__buil'+'tins__']['__im'+'port__'](name)\n",
+    "getattr(globals()['__buil'+'tins__'], '__im'+'port__')(name)\n",
+    "globals()['__buil'+'tins__']['ex'+'ec']('import scripts.motor_vicios.motor')\n",
 ]
 def test_reflective_stdlib_import_execution_fails_closed(tmp_path):
     package = tmp_path / "scripts/domain"; package.mkdir(parents=True)
