@@ -1,5 +1,7 @@
 import json
+import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,21 @@ from scripts.quality.verify_core import GateResult, check_private_tracking, run_
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL regression")
+def test_pytest_tmp_path_keeps_the_test_runner_write_access(tmp_path):
+    probe = tmp_path / "write-probe.txt"
+    probe.write_text("writable", encoding="utf-8")
+    assert probe.read_text(encoding="utf-8") == "writable"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL regression")
+def test_stdlib_temporary_directory_keeps_the_test_runner_write_access():
+    with tempfile.TemporaryDirectory(prefix="quality-gate-") as temporary:
+        probe = Path(temporary) / "write-probe.txt"
+        probe.write_text("writable", encoding="utf-8")
+        assert probe.read_text(encoding="utf-8") == "writable"
 
 
 def _write(path: Path, data) -> None:
