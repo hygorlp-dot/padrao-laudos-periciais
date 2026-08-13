@@ -22,7 +22,9 @@ O mesmo AST pode produzir dois findings independentes. Nenhum analisador filtra 
 
 Todos os Python first-party tracked no HEAD candidato e novos arquivos Python candidatos sob roots versionadas são inventariados. Tests, fixtures, vendor e generated recebem classificação explícita; não desaparecem por heurística de conteúdo.
 
-O input obrigatório é `(candidateCommitSha, candidateTreeSha)`. `SAME_CANDIDATE_TREE_BYTES = TRUE`: inventário e conteúdo lido/parsing vêm do mesmo Git tree exato, nunca da working tree. SHA inválido, objeto ausente, symlink, arquivo não regular, erro de leitura/encoding ou parse bloqueiam.
+O input obrigatório é `(candidateCommitSha, candidateTreeSha)`. `COMMIT_TREE_MATCH_REQUIRED = TRUE`: o bootstrap valida que o primeiro objeto é commit, o segundo é tree e `candidateTreeSha == tree(candidateCommitSha)`; qualquer divergência bloqueia. `SAME_CANDIDATE_TREE_BYTES = TRUE`: inventário e conteúdo lido/parsing vêm desse mesmo Git tree exato, nunca da working tree. SHA inválido, objeto ausente, symlink, arquivo não regular, erro de leitura/encoding ou parse bloqueiam.
+
+`MODULE_PATH_CONSISTENCY_REQUIRED = TRUE`: paths são relativos, NFC, separados apenas por `/`, sem segmentos vazios, `.` ou `..`, e sob root de produção; módulo é derivado deterministicamente do path e deve coincidir. A mesma canonicalização vale para findings e exceções.
 
 ## Exceções e bootstrap
 

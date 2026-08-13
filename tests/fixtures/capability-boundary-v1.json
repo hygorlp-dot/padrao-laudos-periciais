@@ -26,15 +26,19 @@
     {"id":"P1-PARSE","boundaryFamily":"PARSE_FAILURE","capabilityClass":"UNKNOWN_SENSITIVE_REFLECTION","source":"def broken(","expected":"BLOCK","severity":"P1"},
     {"id":"P1-NONREGULAR","boundaryFamily":"NONREGULAR_FILE","capabilityClass":"UNKNOWN_SENSITIVE_REFLECTION","source":"<nonregular candidate>","expected":"BLOCK","severity":"P1"},
     {"id":"P1-SYMLINK","boundaryFamily":"SYMLINK_ESCAPE","capabilityClass":"UNKNOWN_SENSITIVE_REFLECTION","source":"<symlink outside tree>","expected":"BLOCK","severity":"P1"},
+    {"id":"P1-COMMIT-TREE-MISMATCH","boundaryFamily":"COMMIT_TREE_MISMATCH","capabilityClass":"UNKNOWN_SENSITIVE_REFLECTION","source":"<candidate tree is not commit tree>","expected":"BLOCK","severity":"P1"},
     {"id":"P1-EXCEPTION-DUP","boundaryFamily":"EXCEPTION_DUPLICATE","capabilityClass":"OS_PROCESS_MEMBER_ACQUISITION","source":"<duplicate exact exception>","expected":"BLOCK","severity":"P1"},
     {"id":"P1-EXCEPTION-STALE","boundaryFamily":"EXCEPTION_STALE","capabilityClass":"OS_PROCESS_MEMBER_ACQUISITION","source":"<stale exception>","expected":"BLOCK","severity":"P1"},
     {"id":"P1-EXCEPTION-EXPIRED","boundaryFamily":"EXCEPTION_EXPIRED","capabilityClass":"OS_PROCESS_MEMBER_ACQUISITION","source":"<expired reviewBy>","expected":"BLOCK","severity":"P1"},
     {"id":"P1-EXCEPTION-BLOB","boundaryFamily":"EXCEPTION_BLOB_MISMATCH","capabilityClass":"OS_PROCESS_MEMBER_ACQUISITION","source":"<whole-file mismatch>","expected":"BLOCK","severity":"P1"},
     {"id":"P1-EXCEPTION-BASELINE","boundaryFamily":"EXCEPTION_BASELINE_MISMATCH","capabilityClass":"OS_PROCESS_MEMBER_ACQUISITION","source":"<non-ancestor or new-head exception>","expected":"BLOCK","severity":"P1"},
-    {"id":"P1-DUAL","boundaryFamily":"DUAL_FINDING","capabilityClass":"DYNAMIC_IMPORT_ACQUISITION","source":"__import__(first_party_name)","expected":"BLOCK","severity":"P1"},
+    {"id":"P0-DUAL","boundaryFamily":"DUAL_FINDING","capabilityClass":"DYNAMIC_IMPORT_ACQUISITION","source":"__import__(first_party_name)","expected":"BLOCK","severity":"P0"},
     {"id":"P1-INDEPENDENCE","boundaryFamily":"ANALYZER_INDEPENDENCE","capabilityClass":"UNKNOWN_SENSITIVE_REFLECTION","source":"<cross-analyzer suppression attempt>","expected":"BLOCK","severity":"P1"},
     {"id":"SAFE-OS-PATH","boundaryFamily":"SAFE_STATIC_OS","capabilityClass":null,"source":"os.path.join('a','b')","expected":"ALLOW","severity":null},
     {"id":"SAFE-OS-ENVIRON","boundaryFamily":"SAFE_STATIC_OS","capabilityClass":null,"source":"os.environ.get('X')","expected":"ALLOW","severity":null},
-    {"id":"SAFE-NON-SENSITIVE-REFLECTION","boundaryFamily":"SAFE_REFLECTION","capabilityClass":null,"source":"getattr(local, 'value')","expected":"ALLOW","severity":null}
+    {"id":"SAFE-NON-SENSITIVE-REFLECTION","boundaryFamily":"SAFE_REFLECTION","capabilityClass":null,"source":"getattr(local, 'value')","expected":"ALLOW","severity":null},
+    {"id":"SAFE-FIRST-PARTY-IMPORT","boundaryFamily":"SAFE_STATIC_IMPORT","capabilityClass":null,"source":"from scripts.motor_vicios import pipeline","expected":"ALLOW","severity":null},
+    {"id":"SAFE-STDLIB-IMPORT","boundaryFamily":"SAFE_STATIC_IMPORT","capabilityClass":null,"source":"import json","expected":"ALLOW","severity":null},
+    {"id":"SAFE-OS-GETCWD","boundaryFamily":"SAFE_STATIC_OS","capabilityClass":null,"source":"os.getcwd()","expected":"ALLOW","severity":null}
   ]
 }
