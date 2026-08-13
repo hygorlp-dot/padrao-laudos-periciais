@@ -24,6 +24,7 @@ class GateResult:
     checks: tuple[tuple[str, bool], ...]
     findings: tuple[dict, ...]
     duration_seconds: float
+    component_durations: tuple[tuple[str, float], ...] = ()
 
 
 def _finding(invariant: str, boundary: str, test: str, reason: str, severity: str = "P1") -> dict:
@@ -40,11 +41,13 @@ def _run(runner, command: list[str], root: Path):
 
 
 def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_files: list[str] | None = None) -> GateResult:
-    started = time.perf_counter(); findings: list[dict] = []; checks: list[tuple[str, bool]] = []
+    started = time.perf_counter(); findings: list[dict] = []; checks: list[tuple[str, bool]] = []; durations: dict[str, float] = {}
+    architecture_started = time.perf_counter()
     architecture_errors = [
         _finding("ARCHITECTURE_DIRECTION", "QUALITY_GATE", item.get("code", "ARCHITECTURE_INVALID"), str(item), "P1")
         for item in validate_architecture(root)
     ]
+    durations["architecture"] = time.perf_counter() - architecture_started
     direct = (("invariants", validate_configuration(root)), ("fixtures", validate_fixture_registry(root)),
               ("architecture", architecture_errors))
     for name, errors in direct:
@@ -73,7 +76,9 @@ def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_fil
     if (root / ".git").exists():
         commands.append(("diff check", ["git", "diff", "--check"], "NO_SILENT_OVERWRITE", "REPOSITORY"))
     for name, command, invariant, boundary in commands:
-        completed = _run(runner, command, root); passed = completed.returncode == 0; checks.append((name, passed))
+        component_started = time.perf_counter(); completed = _run(runner, command, root)
+        durations[name] = time.perf_counter() - component_started
+        passed = completed.returncode == 0; checks.append((name, passed))
         if not passed:
             reason = (completed.stderr or completed.stdout or f"exit {completed.returncode}").strip().splitlines()[-1]
             findings.append(_finding(invariant, boundary, name, reason, "P0" if name in {"regression", "E2E negative", "privacy"} else "P1"))
@@ -86,7 +91,8 @@ def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_fil
             complexity = analyze_complexity(paths, base=root)
             elapsed = time.perf_counter() - started
             quality_findings = validate_quality_baseline(
-                baseline, parse_coverage_totals(report), complexity, duration_seconds=elapsed
+                baseline, parse_coverage_totals(report), complexity, duration_seconds=elapsed,
+                component_durations=durations,
             )
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             quality_findings = [{"code": "QUALITY_MEASUREMENT_INVALID", "detail": str(exc)}]
@@ -94,7 +100,9 @@ def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_fil
         for item in quality_findings:
             findings.append(_finding("QUALITY_NON_REGRESSION", "QUALITY_GATE", item["code"], str(item), "P1"))
     passed = not findings and all(ok for _, ok in checks)
-    return GateResult("PASS" if passed else "FAIL", 0 if passed else 1, tuple(checks), tuple(findings), round(time.perf_counter() - started, 3))
+    return GateResult("PASS" if passed else "FAIL", 0 if passed else 1, tuple(checks), tuple(findings),
+                      round(time.perf_counter() - started, 3),
+                      tuple((name, round(value, 3)) for name, value in sorted(durations.items())))
 
 
 def _print(result: GateResult) -> None:
@@ -105,6 +113,8 @@ def _print(result: GateResult) -> None:
     if result.findings:
         for item in result.findings:
             print(" | ".join(str(item[key]) for key in ("invariant", "boundary", "teste", "motivo", "severidade")))
+    for name, duration in result.component_durations:
+        print(f"COMPONENT_DURATION_SECONDS: {name}={duration:.3f}")
     print(f"DURATION_SECONDS: {result.duration_seconds:.3f}")
 
 

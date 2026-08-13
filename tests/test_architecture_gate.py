@@ -158,6 +158,10 @@ ALIAS_CAPABILITY_ATTACKS = [
     "import os\nos.environ['PYTHONPATH']='x'\n",
     "import importlib as il\nf=il.import_module\nf(name)\n",
     "import builtins\nbuiltins.exec(code)\n",
+    "runner=exec\nrunner(code)\n",
+    "runner=eval\nrunner(expr)\n",
+    "def run(code, runner=exec):\n    return runner(code)\n",
+    "runner=[exec][0]\nrunner(code)\n",
 ]
 def test_import_capability_aliases_fail_closed(tmp_path):
     package = tmp_path / "scripts/domain"; package.mkdir(parents=True)
@@ -205,6 +209,12 @@ REFLECTIVE_LOADER_ATTACKS = [
     "import pydoc\npydoc.locate(name)\n",
     "import zipimport\nzipimport.zipimporter(path).load_module(name)\n",
     "import pkg_resources\npkg_resources.load_entry_point(dist, group, name)\n",
+    "import sys\nsys.meta_path.insert(0, finder)\n",
+    "import sys\ngetattr(sys.modules[key], method)(name)\n",
+    "__loader__.load_module(name)\n",
+    "__spec__.loader.exec_module(module)\n",
+    "import ctypes\nctypes.pythonapi.PyImport_ImportModule(name)\n",
+    "import pickle\npickle.loads(payload)\n",
 ]
 def test_reflective_stdlib_import_execution_fails_closed(tmp_path):
     package = tmp_path / "scripts/domain"; package.mkdir(parents=True)
