@@ -1,6 +1,25 @@
 {
   "schemaVersion": "1.0.0",
+  "baselineSha": "0fe2d659f7cfabcb28563651306f2504e09945b3",
   "constitution": "docs/arquitetura/constituicao-core-pericial-v1.md",
+  "allowedLayerEdges": [
+    {"source": "QUALITY_GOVERNANCE", "target": "QUALITY_GOVERNANCE"},
+    {"source": "DOMAIN_CORE", "target": "DOMAIN_CORE"},
+    {"source": "APPLICATION", "target": "APPLICATION"},
+    {"source": "APPLICATION", "target": "DOMAIN_CORE"},
+    {"source": "INFRASTRUCTURE", "target": "INFRASTRUCTURE"},
+    {"source": "INFRASTRUCTURE", "target": "APPLICATION"},
+    {"source": "INFRASTRUCTURE", "target": "DOMAIN_CORE"}
+  ],
+  "externalImportRoots": ["PIL", "jsonschema", "pdfplumber", "pypdf", "referencing"],
+  "acceptedRuntimePathMutations": [
+    "scripts.auditoria_pericial.executar_evals",
+    "scripts.planejamento_pericial.aprofundar_delimitacao",
+    "scripts.planejamento_pericial.gerar_processo",
+    "scripts.planejamento_pericial.validar_resultados",
+    "scripts.vistoria_estruturada.gerar_vistoria"
+  ],
+  "acceptedComponentCycles": [["AUDIT", "MOTOR", "PLANNING"]],
   "components": [
     {
       "id": "GOVERNANCE",
