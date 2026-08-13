@@ -385,21 +385,39 @@ def test_review_package_marks_test_claims_untrusted_and_requires_head_paths(tmp_
 
 def test_review_package_contract_is_independent_of_outer_checkout_topology(tmp_path, monkeypatch):
     import subprocess
-    package_module, base, head = _isolated_review_repository(tmp_path, monkeypatch)
+    review_root = tmp_path / "review-repository"
+    review_root.mkdir()
+    package_module, base, head = _isolated_review_repository(review_root, monkeypatch)
+    ambient = tmp_path / "ambient-repository"
+    ambient.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=ambient, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=ambient, check=True)
+    subprocess.run(["git", "config", "user.name", "Synthetic Test"], cwd=ambient, check=True)
+    (ambient / "ambient.txt").write_text("main\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=ambient, check=True)
+    subprocess.run(["git", "commit", "-qm", "ambient main"], cwd=ambient, check=True)
+    subprocess.run(["git", "switch", "-c", "feature"], cwd=ambient, check=True,
+                   stdout=subprocess.DEVNULL)
+    (ambient / "ambient.txt").write_text("feature\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-am", "ambient feature", "-q"], cwd=ambient, check=True)
+    ambient_feature_head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ambient, text=True,
+    ).strip()
     checkout_modes = (
         ["git", "switch", "main"],
-        ["git", "switch", "-c", "feature-review"],
-        ["git", "switch", "--detach", head],
+        ["git", "switch", "feature"],
+        ["git", "switch", "--detach", ambient_feature_head],
     )
     for command in checkout_modes:
-        subprocess.run(command, cwd=tmp_path, check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(command, cwd=ambient, check=True, stdout=subprocess.DEVNULL)
+        monkeypatch.chdir(ambient)
         package = package_module.build_review_package(
-            issue=36, base_sha=base, head_sha=head, changed_files=[], repository_root=tmp_path,
+            issue=36, base_sha=base, head_sha=head, changed_files=[], repository_root=review_root,
         )
         assert package["base_sha"] == base and package["head_sha"] == head
     with pytest.raises(ValueError, match="distinct base and head"):
         package_module.build_review_package(
-            issue=36, base_sha=head, head_sha=head, changed_files=[], repository_root=tmp_path,
+            issue=36, base_sha=head, head_sha=head, changed_files=[], repository_root=review_root,
         )
 
 
