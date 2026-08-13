@@ -462,6 +462,48 @@ REFLECTIVE_LOADER_ATTACKS = [
     "import subprocess\nsubprocess.run(['python', '-m', 'scripts.motor_vicios.motor'])\n",
     "import subprocess, sys\nexe = sys.executable\nsubprocess.run([exe, '-m', 'scripts.motor_vicios.motor'])\n",
 ]
+
+
+@pytest.mark.parametrize("source", [
+    """\
+a = ''.join(map(chr, [95,95,98,117,105,108,116,105,110,115,95,95]))
+b = ''.join(map(chr, [95,95,105,109,112,111,114,116,95,95]))
+c = globals()
+d = c[a]
+e = d[b]
+e("scripts.quality.verify_core")
+""",
+    """\
+key = decode_external_value()
+namespace = globals()
+namespace[key]
+""",
+])
+def test_computed_reflective_global_acquisition_fails_closed(source):
+
+    _, findings = architecture_gate._imports(
+        architecture_gate.ast.parse(source),
+        "scripts.domain.computed_reflection",
+        False,
+        set(),
+    )
+
+    assert any(item["code"] == "DYNAMIC_IMPORT_CAPABILITY" for item in findings)
+
+
+def test_globals_iteration_without_reflective_lookup_remains_allowed():
+    source = "__all__ = [name for name in globals() if not name.startswith('_')]\n"
+
+    _, findings = architecture_gate._imports(
+        architecture_gate.ast.parse(source),
+        "scripts.backend_contract",
+        False,
+        set(),
+    )
+
+    assert not any(item["code"] == "DYNAMIC_IMPORT_CAPABILITY" for item in findings)
+
+
 def test_reflective_stdlib_import_execution_fails_closed(tmp_path):
     package = tmp_path / "scripts/domain"; package.mkdir(parents=True)
     for index, source in enumerate(REFLECTIVE_LOADER_ATTACKS):

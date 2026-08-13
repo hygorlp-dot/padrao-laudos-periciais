@@ -28,7 +28,7 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "c39bcbb955becd64d51d7dc369e62d9b85bc20e77bfb7a73e71523f62a815bae"
-EXPECTED_DETECTOR_AST_SHA256 = "f30a077ec1e8b9f6ffbbcd34fcbe5de7f38fae49cd3b224261d55d80ff72e0fe"
+EXPECTED_DETECTOR_AST_SHA256 = "926e49c447037b00a78eac74a8697f096218f445cdbe472edd3e2a2f59fe7b16"
 EXPECTED_ANALYZER_PROCESS_FINGERPRINT = "d053267e664b9f173031fa71140e427ae0abf1bbad320c0c329b62c572fb7e2d"
 
 
@@ -86,6 +86,9 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
                     and detector.lineno <= getattr(node, "lineno", -1) <= detector.end_lineno)
     def reflective_origin(subject: ast.AST) -> str | None:
         if (isinstance(subject, ast.Call) and isinstance(subject.func, ast.Name)
+                and subject.func.id == "globals" and not subject.args):
+            return "globals"
+        if (isinstance(subject, ast.Call) and isinstance(subject.func, ast.Name)
                 and subject.func.id == "vars" and len(subject.args) == 1):
             subject = subject.args[0]
         elif isinstance(subject, ast.Attribute) and subject.attr == "__dict__":
@@ -133,7 +136,9 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             origin = ast.unparse(node.value)
             for alias, target in aliases.items():
                 origin = re.sub(rf"\b{re.escape(alias)}\b", lambda _match, value=target: value, origin)
-            if re.fullmatch(
+            if origin == "globals()":
+                reflective_aliases.setdefault(node.targets[0].id, []).append(((node.lineno, node.col_offset), "globals"))
+            elif re.fullmatch(
                     r"(?:os\.(?:__dict__|system|popen|startfile|spawn\w*|exec\w*)|"
                     r"asyncio\.create_subprocess_(?:exec|shell)|codeop\.compile_command|types\.FunctionType)",
                     origin):
@@ -211,6 +216,9 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             )
             if reflective & {"__builtins__", "builtins", "__import__", "exec", "eval", "PYTHONPATH"}:
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+        if (isinstance(node, ast.Subscript) and reflective_origin(node.value) == "globals"
+                and not is_detector_implementation(node)):
+            dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Subscript):
             attribute = _constant_string(node.func.slice)
             origin = reflective_origin(node.func.value)
