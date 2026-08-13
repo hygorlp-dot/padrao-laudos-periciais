@@ -797,6 +797,13 @@ def test_python_dependency_research_policy_is_fail_closed_and_auditable():
     assert "SCORE = 0..4 | NOT_APPLICABLE" in protocol
     for aggregation_rule in (
         "ELIGIBILITY_GATE_BEFORE_RANKING",
+        "LICENSE_ACCEPTABLE = TRUE",
+        "SECURITY_ACCEPTABLE = TRUE",
+        "WINDOWS_COMPATIBLE = TRUE",
+        "PACKAGING_IMPACT_ACCEPTABLE = TRUE",
+        "ADVERSE_OR_UNRESOLVED_GATE = INELIGIBLE",
+        "SCORE_0 = WORST_OR_UNACCEPTABLE",
+        "SCORE_4 = BEST_OR_LOWEST_RISK",
         "NORMALIZED_SCORE = 100 * SUM(SCORE_i * WEIGHT_i) / SUM(4 * WEIGHT_i)",
         "ROUND_HALF_EVEN",
         "DECIMAL_PLACES = 2",
