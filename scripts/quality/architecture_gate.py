@@ -28,7 +28,7 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "c39bcbb955becd64d51d7dc369e62d9b85bc20e77bfb7a73e71523f62a815bae"
-EXPECTED_DETECTOR_AST_SHA256 = "7d8306edbb1a8a1f2ac47a1bd8787ded144fe5b8ff06cfecc4e23ed9a869c73a"
+EXPECTED_DETECTOR_AST_SHA256 = "0ad3ee26da7b3150f1503cce6c0b4e035ff3a910902e541c4d9761941739851b"
 EXPECTED_ANALYZER_PROCESS_FINGERPRINT = "d053267e664b9f173031fa71140e427ae0abf1bbad320c0c329b62c572fb7e2d"
 
 
@@ -157,7 +157,7 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             for alias in node.names:
                 name = alias.asname or alias.name.split(".")[0]; aliases[name] = alias.name
                 reflective_aliases.setdefault(name, []).append(((node.lineno, node.col_offset), alias.name))
-            if any(alias.name == "subprocess" for alias in node.names):
+            if any(alias.name in {"subprocess", "multiprocessing", "_winapi", "_posixsubprocess"} for alias in node.names):
                 dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
             if any(alias.name.split(".", 1)[0] in loader_roots for alias in node.names):
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
@@ -165,7 +165,11 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             for alias in node.names:
                 name = alias.asname or alias.name; origin = f"{node.module}.{alias.name}" if node.module else alias.name
                 aliases[name] = origin; reflective_aliases.setdefault(name, []).append(((node.lineno, node.col_offset), origin))
-            if node.module == "subprocess" and any(alias.name in {"run", "Popen", "call", "check_call", "check_output"} for alias in node.names):
+            if ((node.module == "subprocess" and any(alias.name in {"run", "Popen", "call", "check_call", "check_output"} for alias in node.names))
+                    or (node.module == "multiprocessing" and any(alias.name in {"Process", "Pool"} for alias in node.names))
+                    or (node.module == "_winapi" and any(alias.name == "CreateProcess" for alias in node.names))
+                    or (node.module == "_posixsubprocess" and any(alias.name == "fork_exec" for alias in node.names))
+                    or (node.module == "os" and any(re.fullmatch(r"fork\w*|posix_spawn\w*", alias.name) for alias in node.names))):
                 dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
             if (node.module or "").split(".", 1)[0] in loader_roots:
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
@@ -240,11 +244,11 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
         call_origin = qualified_origin(node.func) if isinstance(node, ast.Call) else None
         if isinstance(node, ast.Call) and (
                 re.search(
-                    r"\b(?:os\.(?:system|popen|startfile|spawn\w*|exec\w*)|asyncio\.create_subprocess_(?:exec|shell))\b",
+                    r"\b(?:os\.(?:system|popen|startfile|spawn\w*|exec\w*|fork\w*|posix_spawn\w*)|asyncio\.create_subprocess_(?:exec|shell)|concurrent\.futures\.ProcessPoolExecutor)\b",
                     expanded,
                 )
                 or bool(call_origin and re.fullmatch(
-                    r"(?:os\.(?:system|popen|startfile|spawn\w*|exec\w*)|asyncio\.create_subprocess_(?:exec|shell))",
+                    r"(?:os\.(?:system|popen|startfile|spawn\w*|exec\w*|fork\w*|posix_spawn\w*)|asyncio\.create_subprocess_(?:exec|shell)|concurrent\.futures\.ProcessPoolExecutor)",
                     call_origin,
                 ))):
             dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
