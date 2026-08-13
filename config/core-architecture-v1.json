@@ -17,13 +17,16 @@
     "da300430935318953aa16c797d310df1251bc5ca914defd306ed149da73ed728",
     "d30e506eaebd5fddbe1f350195540c3af90778059cf76db5f19214819b315a9d",
     "3e98779a9b6bd1dd20a50f468cd3714634290782e75267fb17cb1cc7e7ccfb82",
-    "998ee874d607027fd1a9d4a8be57cbe636f8d64255921387cae3065579259b0a"
+    "998ee874d607027fd1a9d4a8be57cbe636f8d64255921387cae3065579259b0a",
+    "71309e4fb5701e8ddcb4fa9175d6695be250fb4b4cdc362ce368664659fa6b8d",
+    "5c71a45b2e931c7a1355728c459cd822459dac6cb8ffec045d4475540631e2ea"
   ],
   "acceptedImportCapabilityBlobs": {
     "scripts.auditoria_pericial.executar_evals": "125b9d0394566b96d99859602671333b6a477724867350f27288811ff090b16c",
     "scripts.planejamento_pericial.aprofundar_delimitacao": "ce859d0b14f9a795c5957fb515c19578e5176ffea800af99657792a3ee31afa3",
     "scripts.planejamento_pericial.gerar_processo": "63379e1fa887504a559224dcfe1b0f52354c201f0d1939df315f049d795b0e87",
     "scripts.planejamento_pericial.validar_resultados": "dbebae3a0c45bef362f568c4680b1289c97715bcf7273abc4eae61b0631969fc",
+    "scripts.quality.fixture_registry": "cbb0454d2895cf47e0b6842e610fda327074edf6e86c684612bd3ef74cf1e97e",
     "scripts.vistoria_estruturada.gerar_vistoria": "b5973f97db30fd7aea306ae1fb663f13fb0d12dcd973675c65aefe2e79da6eb2"
   },
   "acceptedComponentCycles": [["AUDIT", "MOTOR", "PLANNING"]],

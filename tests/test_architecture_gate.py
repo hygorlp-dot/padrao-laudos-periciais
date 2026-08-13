@@ -181,3 +181,21 @@ def test_duplicate_architecture_debt_is_rejected(tmp_path):
            "classification": "POTENTIAL_VIOLATION", "evidence": "x:1", "disposition": "REMOVE"}
     findings = validate_architecture(tmp_path, _registry(acceptedCurrentDependencies=[row, row]))
     assert any(item["code"] == "DUPLICATE_ARCHITECTURE_EXCEPTION" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "import importlib\nvars(importlib)['import_module'](name)\n",
+    "import importlib\nimportlib.__dict__['import_module'](name)\n",
+    "import importlib\ngetattr(importlib, 'import_' + 'module')(name)\n",
+    "import runpy\nrunpy.run_module(name)\n",
+    "import importlib\ngetattr(importlib, capability_name)(module_name)\n",
+    "import sys\ngetattr(sys, field).insert(0, 'x')\n",
+    "import sys\nsetattr(sys, attr, [])\n",
+    "import builtins\nbuiltins.__dict__['__import__'](name)\n",
+    "__builtins__['__import__'](name)\n",
+    "globals()['__builtins__']['__import__'](name)\n",
+])
+def test_reflective_stdlib_import_execution_fails_closed(tmp_path, source):
+    package = tmp_path / "scripts/domain"; package.mkdir(parents=True)
+    (package / "x.py").write_text(source, encoding="utf-8")
+    assert any(item["code"] == "DYNAMIC_IMPORT_CAPABILITY" for item in validate_architecture(tmp_path, _registry()))
