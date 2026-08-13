@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import validate_configuration
+from .architecture_gate import load_and_validate as validate_architecture
 from .fixture_registry import validate_fixture_registry
 from .metrics import analyze_complexity, parse_coverage_totals, validate_quality_baseline
 
@@ -40,7 +41,12 @@ def _run(runner, command: list[str], root: Path):
 
 def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_files: list[str] | None = None) -> GateResult:
     started = time.perf_counter(); findings: list[dict] = []; checks: list[tuple[str, bool]] = []
-    direct = (("invariants", validate_configuration(root)), ("fixtures", validate_fixture_registry(root)))
+    architecture_errors = [
+        _finding("ARCHITECTURE_DIRECTION", "QUALITY_GATE", item.get("code", "ARCHITECTURE_INVALID"), str(item), "P1")
+        for item in validate_architecture(root)
+    ]
+    direct = (("invariants", validate_configuration(root)), ("fixtures", validate_fixture_registry(root)),
+              ("architecture", architecture_errors))
     for name, errors in direct:
         checks.append((name, not errors)); findings.extend(errors)
     if tracked_files is None:
