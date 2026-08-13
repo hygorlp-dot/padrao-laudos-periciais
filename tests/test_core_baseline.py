@@ -5,13 +5,18 @@ from pathlib import Path
 
 import pytest
 
-from scripts.quality.core_baseline import build_baseline, canonical_bytes, semantic_bytes, validate_evidence, verify_baseline
+from scripts.quality.core_baseline import _safe_path, build_baseline, canonical_bytes, semantic_bytes, validate_evidence, verify_baseline
 
 
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ["git", *args], cwd=repo, check=True, capture_output=True, text=True
     ).stdout.strip()
+
+
+def test_baseline_rejects_noncanonical_backslash_paths():
+    with pytest.raises(ValueError, match="noncanonical path"):
+        _safe_path(r"referencias\privadas\caso.json")
 
 
 def _synthetic_repo(tmp_path: Path) -> tuple[Path, str]:
