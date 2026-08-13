@@ -4,7 +4,8 @@
 
 - `BASELINE_VERSION`: `V1`
 - `CORE_BASE_SHA`: `8530584c82061fb35018afd6638032ba8798b105`
-- `BASELINE_FINGERPRINT_SHA256`: `2f1bd545eb574ca175ddbda3c49c2a8755104df0aca9b4b4d5aaabe6d13a9c3c`
+- `BASELINE_FINGERPRINT_SHA256`: `f822feb75bbe2be68b31b916dfe4ea22d4d85e84ca21ac1f98b8b69aee5736b0`
+- `ANALYZER_VERSION`: `1.0.0`
 - `BASELINE_IS_OBSERVATIONAL`: `TRUE`
 - `CORE_FEATURE_FREEZE`: `TRUE`
 - `CORE_RUNTIME_SEMANTICS_CHANGED`: `FALSE`
@@ -25,9 +26,11 @@ IDs de CI e UUIDs não entram no payload semântico. Paths são POSIX relativos,
 listas e chaves são ordenadas, bytes são hasheados crus e a serialização é JSON
 UTF-8 compacta com newline final.
 
-O arquivo `config/core-stable-baseline-v1.sha256` é o SHA-256 dos bytes exatos de
-`config/core-stable-baseline-v1.json`. Os três artefatos da baseline são
-excluídos do manifesto para impedir autorreferência. Assim:
+O arquivo `config/core-stable-baseline-v1.sha256` é o SHA-256 da serialização
+canônica do payload semântico, isto é, o JSON sem o campo
+`semanticFingerprint`. O arquivo JSON completo inclui esse valor para consulta,
+mas seus bytes integrais naturalmente possuem outro hash. Os três artefatos da
+baseline são excluídos do manifesto para impedir autorreferência. Assim:
 
 `SAME_SHA + SAME_TRACKED_CONTENT + SAME_BASELINE_VERSION = SAME_BASELINE_FINGERPRINT`.
 
@@ -43,7 +46,7 @@ python -m scripts.quality.core_baseline `
 
 ## Inventário canônico
 
-O manifesto possui 379 arquivos da fronteira Core + assurance:
+O manifesto possui 384 arquivos da fronteira Core + assurance:
 
 | Categoria | Quantidade |
 |---|---:|
@@ -55,13 +58,13 @@ O manifesto possui 379 arquivos da fronteira Core + assurance:
 | `INVARIANT` | 1 |
 | `BOUNDARY` | 1 |
 | `QUALITY_CONFIG` | 5 |
-| `GOVERNANCE_RELEVANT_TO_CORE` | 177 |
+| `GOVERNANCE_RELEVANT_TO_CORE` | 182 |
 
 Os 39 itens de categoria `FIXTURE` incluem o próprio registry; há 38 fixtures
 registradas. O validador atual exercita 34 fixtures de schema, número distinto
 e intencionalmente reportado no baseline comportamental.
 
-Foram extraídos estaticamente 98 módulos Python, 349 símbolos top-level e 106
+Foram extraídos estaticamente 98 módulos Python, 349 símbolos top-level e 127
 arestas de import first-party. `EXPORTED` decorre de `__all__`; na ausência dele,
 `PUBLIC_BY_CONVENTION` e `INTERNAL` são heurísticas por nome, não promessa nova
 de API. Dependências externas observadas em imports são `PIL`, `jsonschema`,
