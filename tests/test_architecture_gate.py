@@ -785,3 +785,34 @@ def test_process_capability_general_expression_and_import_sweep_fails_closed(sou
         architecture_gate.ast.parse(source), "scripts.domain.process_general_sweep", False, set()
     )
     assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "import os\nfor run in (os.system,):\n    run('tool')\n",
+    "import asyncio\nfor (run,) in [(asyncio.create_subprocess_exec,)]:\n    run('tool')\n",
+    "import os\n[f('tool') for f in (os.system,)]\n",
+    "import os\nfor _ in (f('tool') for f in (os.system,)):\n    pass\n",
+    "import os\nmatch os.system:\n    case run:\n        run('tool')\n",
+])
+def test_process_capability_control_flow_binding_fails_closed(source):
+    _, findings = architecture_gate._imports(
+        architecture_gate.ast.parse(source), "scripts.domain.process_control_flow", False, set()
+    )
+    assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "import os\nbox=[]\nbox += [os.system]\nbox[0]('tool')\n",
+    "import os\nh.run: object = os.system\nh.run('tool')\n",
+    "from asyncio.subprocess import create_subprocess_exec as run\nrun('tool')\n",
+    "import asyncio.subprocess as asp\nasp.create_subprocess_exec('tool')\n",
+    "from multiprocessing.pool import Pool\nPool()\n",
+    "import multiprocessing.pool as mp\nmp.Pool()\n",
+    "from subprocess import getoutput\ngetoutput('tool')\n",
+    "from subprocess import getstatusoutput as run\nrun('tool')\n",
+])
+def test_process_capability_remaining_stdlib_surfaces_fail_closed(source):
+    _, findings = architecture_gate._imports(
+        architecture_gate.ast.parse(source), "scripts.domain.process_surfaces", False, set()
+    )
+    assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
