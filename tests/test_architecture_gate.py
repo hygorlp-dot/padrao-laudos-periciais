@@ -272,6 +272,42 @@ def test_subprocess_from_import_apis_aliases_and_indirect_calls_fail_closed(monk
     assert {f"scripts/domain/process{index}.py" for index in range(len(SUBPROCESS_FROM_IMPORT_ATTACKS))} <= paths
 
 
+REFLECTIVE_OS_PROCESS_ATTACKS = [
+    "import os\nvars(os)['system']('tool')\n",
+    "import os\nos.__dict__['popen']('tool')\n",
+    "import os as operating_system\nvars(operating_system)['spawn' + 'l'](0, 'tool')\n",
+    "import os as operating_system\noperating_system.__dict__['ex' + 'ecl']('tool', 'tool')\n",
+    "import os as operating_system\ngetattr(operating_system, 'sys' + 'tem')('tool')\n",
+    "import os\nvars(os).get('sys' + 'tem')('tool')\n",
+    "import os\nos.__dict__.get('system')('tool')\n",
+    "import os\ngetattr(vars(os), 'system')('tool')\n",
+    "import os\ngetattr(os, capability_name)('tool')\n",
+    "import os\nvars(os)[capability_name]('tool')\n",
+    "import os\nos.__dict__[capability_name]('tool')\n",
+    "import os\nvars(os).get(capability_name)('tool')\n",
+    "import os\nos.__dict__.get(capability_name)('tool')\n",
+]
+def test_reflective_os_process_apis_aliases_and_constant_names_fail_closed(monkeypatch):
+    sources = {
+        f"scripts/domain/reflective_process{index}.py": source
+        for index, source in enumerate(REFLECTIVE_OS_PROCESS_ATTACKS)
+    }
+    monkeypatch.setattr(architecture_gate, "_python_files", lambda _root: sorted(sources))
+    original_read_text = Path.read_text
+    monkeypatch.setattr(
+        Path,
+        "read_text",
+        lambda path, **kwargs: sources[path.relative_to(ROOT).as_posix()]
+        if path.is_relative_to(ROOT) and path.relative_to(ROOT).as_posix() in sources
+        else original_read_text(path, **kwargs),
+    )
+
+    findings = validate_architecture(ROOT, _registry())
+
+    paths = {item.get("path") for item in findings if item["code"] == "PROCESS_EXECUTION_CAPABILITY"}
+    assert {f"scripts/domain/reflective_process{index}.py" for index in range(len(sources))} <= paths
+
+
 def test_exact_head_check_includes_the_referenced_architecture_constitution(monkeypatch):
     calls = []
 
