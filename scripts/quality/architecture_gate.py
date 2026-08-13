@@ -28,7 +28,7 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "08f6b99f4a4997374c2b9b2767f901607b076bd2c85897f1c83ed01aa62c6763"
-EXPECTED_DETECTOR_AST_SHA256 = "df4071b861885b0545c851868ded9d18d01fe51455ed6646cd8d1b607a282f9e"
+EXPECTED_DETECTOR_AST_SHA256 = "28a2bd529085aadcd90a1ec25650517704c3f181a25b3a4525924b25f34ff227"
 
 
 def _constant_string(node: ast.AST) -> str | None:
@@ -80,6 +80,8 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in {"exec", "eval"} and not is_detector_implementation(node):
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in {"compile", "FunctionType"} and not is_detector_implementation(node):
+            dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Import):
             for alias in node.names: aliases[alias.asname or alias.name.split(".")[0]] = alias.name
             if any(alias.name.split(".", 1)[0] in loader_roots for alias in node.names):
@@ -112,6 +114,10 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             dynamic.append({"code": "RUNTIME_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"exec", "eval"}:
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+        if isinstance(node, ast.Call) and "subprocess" in ast.unparse(node) and "sys.executable" in ast.unparse(node):
+            arguments = {_constant_string(child) for child in ast.walk(node)}
+            if "-m" in arguments:
+                dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.ImportFrom) and node.module in {"sys", "importlib", "site", "builtins"}:
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         text = ast.unparse(node) if isinstance(node, (ast.Call, ast.Assign, ast.AugAssign)) else ""
