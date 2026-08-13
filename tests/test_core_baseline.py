@@ -14,9 +14,24 @@ def _git(repo: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def test_baseline_rejects_noncanonical_backslash_paths():
+@pytest.mark.parametrize(
+    "path",
+    [
+        r"referencias\privadas\caso.json",
+        "C:/Users/private/case.json",
+        "C:relative/file.json",
+        "scripts//motor.py",
+        "scripts/./motor.py",
+    ],
+)
+def test_baseline_rejects_noncanonical_or_drive_qualified_paths(path):
     with pytest.raises(ValueError, match="noncanonical path"):
-        _safe_path(r"referencias\privadas\caso.json")
+        _safe_path(path)
+
+
+def test_baseline_rejects_case_variant_private_paths():
+    with pytest.raises(ValueError, match="private path"):
+        _safe_path("REFERENCIAS/PRIVADAS/case.json")
 
 
 def _synthetic_repo(tmp_path: Path) -> tuple[Path, str]:

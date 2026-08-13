@@ -7,7 +7,7 @@ import hashlib
 import json
 import subprocess
 import sys
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 
 BASELINE_OUTPUTS = {
@@ -79,14 +79,18 @@ def validate_evidence(evidence: dict, *, baseline_version: str, sha: str) -> str
 
 
 def _safe_path(path: str) -> str:
-    if "\\" in path:
-        raise ValueError(f"noncanonical path: {path}")
+    windows_path = PureWindowsPath(path)
     normalized = PurePosixPath(path).as_posix()
+    if "\\" in path or windows_path.drive:
+        raise ValueError(f"noncanonical path: {path}")
     if normalized.startswith("/") or ".." in PurePosixPath(normalized).parts:
         raise ValueError(f"unsafe path: {path}")
     if normalized.casefold() == PRIVATE_PREFIX.rstrip("/").casefold() or normalized.casefold().startswith(PRIVATE_PREFIX.casefold()):
         raise ValueError(f"private path forbidden: {path}")
-    return normalized
+    canonical = normalized + "/" if path.endswith("/") else normalized
+    if canonical != path:
+        raise ValueError(f"noncanonical path: {path}")
+    return canonical
 
 
 def _expand_path(spec: str, tracked: set[str]) -> set[str]:
