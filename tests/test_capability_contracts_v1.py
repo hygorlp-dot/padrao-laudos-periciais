@@ -55,7 +55,7 @@ def test_contract_schemas_accept_exact_examples_and_reject_wildcard_exception():
     exception = _json("tests/fixtures/capability-exception-v1-valid.json")
     schema = _json("schemas/capability-exception-v1.schema.json")
     jsonschema.validate(exception, schema)
-    for invalid_path in ["scripts/*", "/scripts/x.py", r"C:\scripts\x.py", "scripts/../x.py", "tests/x.py"]:
+    for invalid_path in ["scripts/*", "/scripts/x.py", r"C:\scripts\x.py", "scripts/../x.py", "scripts/./x.py", "scripts//x.py", "tests/x.py"]:
         invalid = dict(exception, canonicalPath=invalid_path)
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate(invalid, schema)
@@ -63,6 +63,9 @@ def test_contract_schemas_accept_exact_examples_and_reject_wildcard_exception():
         invalid = dict(exception, **{field: value})
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate(invalid, schema)
+    mismatched = dict(exception, findingCode="DYNAMIC_IMPORT_ACQUISITION", capabilityClass="PROCESS_NAMESPACE_ACQUISITION")
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(mismatched, schema)
 
 
 def test_p0_p1_fixture_matrix_covers_boundaries_and_positive_controls():
@@ -79,7 +82,7 @@ def test_p0_p1_fixture_matrix_covers_boundaries_and_positive_controls():
         "MULTIPROCESSING_CONTEXT", "CONCURRENT_PROCESS_POOL", "OS_MEMBER_IMPORT",
         "GETATTR_ESCAPE", "GETATTRIBUTE_ESCAPE", "DICT_ESCAPE", "DYNAMIC_MAPPING_ESCAPE",
         "INVENTORY_FAILURE", "READ_FAILURE", "PARSE_FAILURE", "NONREGULAR_FILE",
-        "SYMLINK_ESCAPE", "EXCEPTION_DUPLICATE", "EXCEPTION_STALE", "EXCEPTION_EXPIRED",
+        "SYMLINK_ESCAPE", "COMMIT_TREE_MISMATCH", "EXCEPTION_DUPLICATE", "EXCEPTION_STALE", "EXCEPTION_EXPIRED",
         "EXCEPTION_BLOB_MISMATCH", "EXCEPTION_BASELINE_MISMATCH", "DUAL_FINDING",
         "ANALYZER_INDEPENDENCE",
     }
@@ -90,10 +93,13 @@ def test_policy_closes_namespace_member_and_bootstrap_contracts():
     policy = _json("config/capability-policy-v1.json")
     assert policy["candidateIdentity"]["inventorySource"] == "EXACT_GIT_TREE"
     assert policy["candidateIdentity"]["contentSource"] == "SAME_EXACT_GIT_TREE"
+    assert policy["candidateIdentity"]["commitTreeRelation"] == "COMMIT_TREE_MATCH_REQUIRED"
     roots = policy["processNamespaces"]
     for root in ["subprocess", "asyncio.subprocess", "pty", "posix", "multiprocessing.managers", "multiprocessing.pool", "multiprocessing.context", "concurrent.futures.process"]:
         assert root in roots
-    assert {"system", "fork", "posix_spawn", "posix_spawnp", "spawnl", "spawnv"} <= set(policy["mixedNamespaceMembers"]["os"])
+    assert {"system", "fork", "posix_spawn", "posix_spawnp", "spawnl", "spawnv", "startfile", "execl", "execle", "execlp", "execlpe"} <= set(policy["mixedNamespaceMembers"]["os"])
+    assert {item["findingCode"] for item in policy["ruleMappings"]} == set(policy["capabilityClasses"])
+    assert all(item["findingCode"] == item["capabilityClass"] for item in policy["ruleMappings"])
     bootstrap = policy["integrityBootstrap"]
     assert bootstrap["failurePolicy"] == "FAIL_CLOSED"
     assert bootstrap["ordinaryExceptionsMayAuthorizeBootstrap"] is False
@@ -102,7 +108,7 @@ def test_policy_closes_namespace_member_and_bootstrap_contracts():
 def test_exception_lifecycle_and_atomic_topology_are_fail_closed():
     contract = (ROOT / "docs/arquitetura/contratos/analisadores-arquitetura-capability-v1.md").read_text(encoding="utf-8")
     migration = (ROOT / "docs/arquitetura/planos/migracao-capability-boundary-v1.md").read_text(encoding="utf-8")
-    for token in ["BASELINE_MUST_BE_ANCESTOR", "EXCEPTION_MUST_PREEXIST_IN_BASELINE", "EXPIRED_EXCEPTION_BLOCKS", "DUPLICATE_EXCEPTION_BLOCKS", "SAME_CANDIDATE_TREE_BYTES"]:
+    for token in ["BASELINE_MUST_BE_ANCESTOR", "EXCEPTION_MUST_PREEXIST_IN_BASELINE", "EXPIRED_EXCEPTION_BLOCKS", "DUPLICATE_EXCEPTION_BLOCKS", "SAME_CANDIDATE_TREE_BYTES", "COMMIT_TREE_MATCH_REQUIRED", "MODULE_PATH_CONSISTENCY_REQUIRED"]:
         assert token in contract
     for token in ["NO_DEPLOYED_LEGACY_ORACLE", "NEW_GATE_BLOCKS_ON_INTRODUCTION", "REVERSE_ORDER_ROLLBACK"]:
         assert token in migration

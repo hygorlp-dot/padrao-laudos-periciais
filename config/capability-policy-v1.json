@@ -21,6 +21,7 @@
     "requiredInputs": ["candidateCommitSha", "candidateTreeSha"],
     "inventorySource": "EXACT_GIT_TREE",
     "contentSource": "SAME_EXACT_GIT_TREE",
+    "commitTreeRelation": "COMMIT_TREE_MATCH_REQUIRED",
     "identityFailurePolicy": "FAIL_CLOSED"
   },
   "processNamespaceCategories": ["SUBPROCESS", "ASYNCIO_SUBPROCESS", "MULTIPROCESSING", "PTY_POSIX", "WINDOWS_PROCESS", "CONCURRENT_PROCESS"],
@@ -29,7 +30,16 @@
   "dynamicExecutionSurfaces": ["eval", "exec", "compile", "types.CodeType", "types.FunctionType"],
   "nativeOrExecutableDeserializationSurfaces": ["ctypes", "pickle.load", "pickle.loads", "marshal.load", "marshal.loads"],
   "mixedNamespaces": ["os"],
-  "mixedNamespaceMembers": {"os": ["system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe", "execv", "execve", "execvp", "execvpe"]},
+  "mixedNamespaceMembers": {"os": ["system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe", "execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp", "execvpe", "startfile"]},
+  "ruleMappings": [
+    {"findingCode":"DYNAMIC_IMPORT_ACQUISITION","capabilityClass":"DYNAMIC_IMPORT_ACQUISITION","severity":"P0"},
+    {"findingCode":"DYNAMIC_EXECUTION_ACQUISITION","capabilityClass":"DYNAMIC_EXECUTION_ACQUISITION","severity":"P0"},
+    {"findingCode":"EXECUTABLE_DESERIALIZATION_OR_NATIVE_LOADING","capabilityClass":"EXECUTABLE_DESERIALIZATION_OR_NATIVE_LOADING","severity":"P1"},
+    {"findingCode":"PROCESS_NAMESPACE_ACQUISITION","capabilityClass":"PROCESS_NAMESPACE_ACQUISITION","severity":"P1"},
+    {"findingCode":"OS_PROCESS_MEMBER_ACQUISITION","capabilityClass":"OS_PROCESS_MEMBER_ACQUISITION","severity":"P1"},
+    {"findingCode":"SENSITIVE_NAMESPACE_ESCAPE","capabilityClass":"SENSITIVE_NAMESPACE_ESCAPE","severity":"P1"},
+    {"findingCode":"UNKNOWN_SENSITIVE_REFLECTION","capabilityClass":"UNKNOWN_SENSITIVE_REFLECTION","severity":"P1"}
+  ],
   "integrityBootstrap": {
     "verifier": "CAPABILITY_BOOTSTRAP_V1",
     "activationState": "CONTRACT_ONLY",

@@ -7,10 +7,19 @@
     "schemaVersion": {"const": "1.0.0"}, "policyVersion": {"const": "1.0.0"}, "analyzerVersion": {"type": "string", "minLength": 1}, "ruleVersion": {"type": "string", "minLength": 1},
     "findingCode": {"enum": ["DYNAMIC_IMPORT_ACQUISITION", "DYNAMIC_EXECUTION_ACQUISITION", "EXECUTABLE_DESERIALIZATION_OR_NATIVE_LOADING", "PROCESS_NAMESPACE_ACQUISITION", "OS_PROCESS_MEMBER_ACQUISITION", "SENSITIVE_NAMESPACE_ESCAPE", "UNKNOWN_SENSITIVE_REFLECTION"]},
     "capabilityClass": {"enum": ["DYNAMIC_IMPORT_ACQUISITION", "DYNAMIC_EXECUTION_ACQUISITION", "EXECUTABLE_DESERIALIZATION_OR_NATIVE_LOADING", "PROCESS_NAMESPACE_ACQUISITION", "OS_PROCESS_MEMBER_ACQUISITION", "SENSITIVE_NAMESPACE_ESCAPE", "UNKNOWN_SENSITIVE_REFLECTION"]},
-    "canonicalPath": {"type": "string", "pattern": "^scripts/(?!.*(?:\\*|\\.\\.|\\\\))[A-Za-z0-9_./-]+\\.py$"}, "module": {"type": "string", "pattern": "^[a-zA-Z_][a-zA-Z0-9_.]*$"},
+    "canonicalPath": {"type": "string", "pattern": "^scripts/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*\\.py$"}, "module": {"type": "string", "pattern": "^[a-zA-Z_][a-zA-Z0-9_.]*$"},
     "acquisitionLocation": {"type": "object", "additionalProperties": false, "required": ["line", "column"], "properties": {"line": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 0}}},
     "normalizedAcquisitionAstSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "wholeFileSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "baselineCommit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "acquiredCapability": {"type": "string", "minLength": 1}, "justification": {"type": "string", "minLength": 20}, "owner": {"type": "string", "minLength": 1},
     "reviewEvidence": {"type": "string", "minLength": 1}, "disposition": {"enum": ["ACCEPT_BASELINE", "REMOVE_BY_EXPIRY"]}, "reviewBy": {"type": "string", "format": "date"}
-  }
+  },
+  "allOf": [
+    {"if":{"properties":{"findingCode":{"const":"DYNAMIC_IMPORT_ACQUISITION"}}},"then":{"properties":{"capabilityClass":{"const":"DYNAMIC_IMPORT_ACQUISITION"}}}},
+    {"if":{"properties":{"findingCode":{"const":"DYNAMIC_EXECUTION_ACQUISITION"}}},"then":{"properties":{"capabilityClass":{"const":"DYNAMIC_EXECUTION_ACQUISITION"}}}},
+    {"if":{"properties":{"findingCode":{"const":"EXECUTABLE_DESERIALIZATION_OR_NATIVE_LOADING"}}},"then":{"properties":{"capabilityClass":{"const":"EXECUTABLE_DESERIALIZATION_OR_NATIVE_LOADING"}}}},
+    {"if":{"properties":{"findingCode":{"const":"PROCESS_NAMESPACE_ACQUISITION"}}},"then":{"properties":{"capabilityClass":{"const":"PROCESS_NAMESPACE_ACQUISITION"}}}},
+    {"if":{"properties":{"findingCode":{"const":"OS_PROCESS_MEMBER_ACQUISITION"}}},"then":{"properties":{"capabilityClass":{"const":"OS_PROCESS_MEMBER_ACQUISITION"}}}},
+    {"if":{"properties":{"findingCode":{"const":"SENSITIVE_NAMESPACE_ESCAPE"}}},"then":{"properties":{"capabilityClass":{"const":"SENSITIVE_NAMESPACE_ESCAPE"}}}},
+    {"if":{"properties":{"findingCode":{"const":"UNKNOWN_SENSITIVE_REFLECTION"}}},"then":{"properties":{"capabilityClass":{"const":"UNKNOWN_SENSITIVE_REFLECTION"}}}}
+  ]
 }
