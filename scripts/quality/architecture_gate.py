@@ -28,7 +28,7 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "e9eeb8eefc3460ad5898e2d8230a3219cf7b38fd1d22cb893dadb99aa07ce04e"
-EXPECTED_DETECTOR_AST_SHA256 = "435da5622d44ab7e5bba324b1517c2c81b6788d48e67aec38108c1a48b02b9e9"
+EXPECTED_DETECTOR_AST_SHA256 = "2e512ff1dc577470edb22c59f4ab3a9226b3532fc423ec9f401b4930c8379f78"
 EXPECTED_ANALYZER_PROCESS_FINGERPRINT = "d053267e664b9f173031fa71140e427ae0abf1bbad320c0c329b62c572fb7e2d"
 
 
@@ -208,7 +208,7 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             for alias in node.names:
                 name = alias.asname or alias.name.split(".")[0]; aliases[name] = alias.name
                 reflective_aliases.setdefault(name, []).append(((node.lineno, node.col_offset), alias.name))
-            if any(alias.name in {"subprocess", "multiprocessing", "_winapi", "_posixsubprocess"} for alias in node.names):
+            if any(alias.name in {"subprocess", "multiprocessing", "multiprocessing.pool", "asyncio.subprocess", "_winapi", "_posixsubprocess"} for alias in node.names):
                 dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
             if any(alias.name == "concurrent.futures.process" for alias in node.names):
                 dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
@@ -218,11 +218,12 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             for alias in node.names:
                 name = alias.asname or alias.name; origin = f"{node.module}.{alias.name}" if node.module else alias.name
                 aliases[name] = origin; reflective_aliases.setdefault(name, []).append(((node.lineno, node.col_offset), origin))
-            if ((node.module == "subprocess" and any(alias.name in {"run", "Popen", "call", "check_call", "check_output"} for alias in node.names))
+            if ((node.module == "subprocess" and any(alias.name in {"run", "Popen", "call", "check_call", "check_output", "getoutput", "getstatusoutput"} for alias in node.names))
                     or (node.module == "multiprocessing" and any(alias.name in {"Process", "Pool"} for alias in node.names))
                     or (node.module == "multiprocessing" and any(alias.name in {"get_context", "*"} for alias in node.names))
                     or (node.module == "multiprocessing" and any(alias.name == "context" for alias in node.names))
                     or (node.module == "multiprocessing.context" and any(alias.name in {"Process", "Pool", "*"} for alias in node.names))
+                    or (node.module == "multiprocessing.pool" and any(alias.name in {"Pool", "*"} for alias in node.names))
                     or (node.module == "_winapi" and any(alias.name == "CreateProcess" for alias in node.names))
                     or (node.module == "_posixsubprocess" and any(alias.name == "fork_exec" for alias in node.names))
                     or (node.module == "os" and any(re.fullmatch(r"system|popen|startfile|spawn\w*|exec\w*|fork\w*|posix_spawn\w*", alias.name) for alias in node.names))
@@ -232,6 +233,8 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
                     or (node.module == "asyncio" and any(re.fullmatch(r"create_subprocess_(?:exec|shell)", alias.name) for alias in node.names))):
                 dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
             if node.module == "asyncio" and any(alias.name == "subprocess" for alias in node.names):
+                dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+            if node.module == "asyncio.subprocess" and any(alias.name == "*" or re.fullmatch(r"create_subprocess_(?:exec|shell)", alias.name) for alias in node.names):
                 dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
             if node.module == "os" and any(alias.name == "*" for alias in node.names):
                 dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
@@ -313,10 +316,17 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
         for alias, origin in aliases.items():
             expanded = re.sub(rf"\b{re.escape(alias)}\b", lambda _match, value=origin: value, expanded)
         call_origin = qualified_origin(node.func) if isinstance(node, ast.Call) else None
+        if (isinstance(node, ast.expr) and not isinstance(node, (ast.Name, ast.Constant))
+                and any(is_process_origin(origin) for origin in process_origins(node))):
+            dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         acquired_origins = set()
         if isinstance(node, ast.Assign):
             acquired_origins.update(process_origins(node.value))
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value:
+            acquired_origins.update(process_origins(node.value))
+        elif isinstance(node, ast.AnnAssign) and node.value:
+            acquired_origins.update(process_origins(node.value))
+        elif isinstance(node, ast.AugAssign):
             acquired_origins.update(process_origins(node.value))
         elif isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name):
             acquired_origins.update(process_origins(node.value))
