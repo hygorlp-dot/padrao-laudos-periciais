@@ -28,7 +28,7 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "c39bcbb955becd64d51d7dc369e62d9b85bc20e77bfb7a73e71523f62a815bae"
-EXPECTED_DETECTOR_AST_SHA256 = "fab4aa49656ca4f044199946ec2280edfad632c6971478cdfc1256842e9a679d"
+EXPECTED_DETECTOR_AST_SHA256 = "f30a077ec1e8b9f6ffbbcd34fcbe5de7f38fae49cd3b224261d55d80ff72e0fe"
 EXPECTED_ANALYZER_PROCESS_FINGERPRINT = "d053267e664b9f173031fa71140e427ae0abf1bbad320c0c329b62c572fb7e2d"
 
 
@@ -98,6 +98,15 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
         if origin is None:
             return None
         return origin.removesuffix(".__dict__")
+    def qualified_origin(subject: ast.AST) -> str | None:
+        if isinstance(subject, ast.Name):
+            bindings = reflective_aliases.get(subject.id, [])
+            position = (subject.lineno, subject.col_offset)
+            return next((value for binding, value in reversed(bindings) if binding < position), None)
+        if isinstance(subject, ast.Attribute):
+            parent = qualified_origin(subject.value)
+            return f"{parent}.{subject.attr}" if parent else None
+        return None
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in {"exec", "eval"} and not is_detector_implementation(node):
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
@@ -132,6 +141,16 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
                 reflective_aliases.setdefault(node.targets[0].id, []).append(((node.lineno, node.col_offset), origin))
             elif isinstance(tree, ast.Module) and node in tree.body:
                 reflective_aliases.setdefault(node.targets[0].id, []).append(((node.lineno, node.col_offset), None))
+        elif (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], (ast.Tuple, ast.List))):
+            origins = {
+                qualified_origin(child) for child in ast.walk(node.value)
+                if isinstance(child, ast.Attribute)
+            }
+            if any(origin and re.fullmatch(
+                    r"os\.(?:__dict__|system|popen|startfile|spawn\w*|exec\w*)",
+                    origin) for origin in origins):
+                dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             edges.update((alias.name, node.lineno, True) for alias in node.names)
@@ -201,6 +220,14 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
                 and isinstance(node.func.func, ast.Attribute) and node.func.func.attr == "get"):
             origin = reflective_origin(node.func.func.value)
             attribute = _constant_string(node.func.args[0]) if node.func.args else None
+            if origin == "os" and (attribute is None or re.fullmatch(r"system|popen|startfile|spawn\w*|exec\w*", attribute)):
+                dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Call)
+                and isinstance(node.func.func, ast.Call) and node.func.func.args
+                and qualified_origin(node.func.func.func) == "operator.attrgetter"):
+            attribute = _constant_string(node.func.func.args[0])
+            subject = node.func.args[0] if node.func.args else None
+            origin = qualified_origin(subject) if subject else None
             if origin == "os" and (attribute is None or re.fullmatch(r"system|popen|startfile|spawn\w*|exec\w*", attribute)):
                 dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"getattr", "setattr"} and node.args:

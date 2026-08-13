@@ -326,6 +326,32 @@ def test_reflective_os_process_apis_aliases_and_constant_names_fail_closed(monke
 
 
 @pytest.mark.parametrize("source", [
+    "import os\nd, = (os.__dict__,)\nd['system']('tool')\n",
+    "import os\nf, = [os.system]\nf('tool')\n",
+    "import os\nfrom operator import attrgetter\nattrgetter('system')(os)('tool')\n",
+    "import os\nimport operator as op\nop.attrgetter('system')(os)('tool')\n",
+])
+def test_process_capability_acquisition_transformations_fail_closed(source):
+    tree = architecture_gate.ast.parse(source)
+    _, findings = architecture_gate._imports(tree, "scripts.domain.transformed", False, set())
+
+    assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "label, = ('os.system',)\n",
+    "class Local:\n    system = object()\nos = Local()\nvalue, = (os.system,)\n",
+    "import os\nclass Local:\n    system = object()\nos = Local()\nvalue, = (os.system,)\n",
+    "import os as operating_system\nclass Local:\n    system = object()\noperating_system = Local()\nvalue, = (operating_system.system,)\n",
+])
+def test_benign_destructuring_does_not_claim_process_capability(source):
+    tree = architecture_gate.ast.parse(source)
+    _, findings = architecture_gate._imports(tree, "scripts.domain.benign", False, set())
+
+    assert not any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
     "from os import __dict__ as d\nd = {}\n",
     "import os\nd = os.__dict__\nd = {}\n",
 ])
