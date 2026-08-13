@@ -2,11 +2,17 @@
 from __future__ import annotations
 
 import ast
+import math
 from pathlib import Path
 
 
 BRANCH_NODES = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.IfExp, ast.Match, ast.comprehension)
 REQUIRED_PERFORMANCE_COMPONENTS = frozenset({"architecture", "historical critical mutation suite", "regression"})
+MAX_PERFORMANCE_COMPONENT_SECONDS = {
+    "architecture": 15.0,
+    "historical critical mutation suite": 20.0,
+    "regression": 45.0,
+}
 
 
 def _function_complexity(node: ast.FunctionDef | ast.AsyncFunctionDef) -> int:
@@ -65,8 +71,12 @@ def validate_quality_baseline(
     budgets = baseline.get("performance_component_max_seconds")
     if component_durations is not None:
         if (not isinstance(budgets, dict) or set(budgets) != REQUIRED_PERFORMANCE_COMPONENTS
-                or any(type(value) not in {int, float} or value <= 0 for value in budgets.values())
-                or not REQUIRED_PERFORMANCE_COMPONENTS <= set(component_durations)):
+                or any(type(value) not in {int, float} or not math.isfinite(value) or value <= 0
+                       or value > MAX_PERFORMANCE_COMPONENT_SECONDS[name] for name, value in budgets.items())
+                or not REQUIRED_PERFORMANCE_COMPONENTS <= set(component_durations)
+                or any(type(component_durations[name]) not in {int, float}
+                       or not math.isfinite(component_durations[name]) or component_durations[name] < 0
+                       for name in REQUIRED_PERFORMANCE_COMPONENTS)):
             findings.append({"code": "PERFORMANCE_COMPONENT_BUDGET_INVALID", "severity": "P1"})
         else:
             for component in sorted(REQUIRED_PERFORMANCE_COMPONENTS):

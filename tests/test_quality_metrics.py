@@ -1,5 +1,6 @@
 import ast
 import json
+import math
 from pathlib import Path
 
 from scripts.quality.metrics import analyze_complexity, parse_coverage_totals, validate_quality_baseline
@@ -70,6 +71,20 @@ def test_performance_gate_cannot_self_disable_by_omitting_required_budgets():
         component_durations={"architecture":5.0,"historical critical mutation suite":12.0,"regression":30.0},
     )
     assert {item["code"] for item in findings} == {"PERFORMANCE_COMPONENT_BUDGET_INVALID"}
+
+
+def test_performance_gate_rejects_budget_inflation_and_nonfinite_numbers():
+    base = {"coverage":{"line_percent":80.0,"branch_percent":70.0},"hotspots":[],
+            "performance_component_max_seconds":{"architecture":15.0,
+                "historical critical mutation suite":20.0,"regression":45.0}}
+    durations = {"architecture":5.0,"historical critical mutation suite":12.0,"regression":30.0}
+    inflated = json.loads(json.dumps(base)); inflated["performance_component_max_seconds"]["architecture"] = 15.1
+    assert {item["code"] for item in validate_quality_baseline(inflated, base["coverage"], [], component_durations=durations)} == {"PERFORMANCE_COMPONENT_BUDGET_INVALID"}
+    for value in (math.nan, math.inf, -math.inf):
+        bad_budget = json.loads(json.dumps(base)); bad_budget["performance_component_max_seconds"]["architecture"] = value
+        assert {item["code"] for item in validate_quality_baseline(bad_budget, base["coverage"], [], component_durations=durations)} == {"PERFORMANCE_COMPONENT_BUDGET_INVALID"}
+        bad_duration = dict(durations); bad_duration["architecture"] = value
+        assert {item["code"] for item in validate_quality_baseline(base, base["coverage"], [], component_durations=bad_duration)} == {"PERFORMANCE_COMPONENT_BUDGET_INVALID"}
 
 
 def test_metrics_module_uses_ast_not_source_execution():
