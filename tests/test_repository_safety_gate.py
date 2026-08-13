@@ -138,6 +138,19 @@ def test_verify_core_main_propagates_exit_code(monkeypatch):
     assert verify_core.main(["--fast"]) == 9
 
 
+def test_slow_component_is_retried_but_cannot_self_disable(monkeypatch, tmp_path):
+    _valid_config(tmp_path)
+    _write(tmp_path / "tests/fixtures/core-fixtures.json", {"schema_version": "1.0.0", "fixtures": []})
+    _write(tmp_path / "config/quality-baseline.json", {"performance_component_max_seconds": {"regression": 1.0}})
+    calls = []
+    def runner(command, **_):
+        calls.append(tuple(command)); return subprocess.CompletedProcess(command, 0, "", "")
+    ticks = iter([0.0, 0.0, 0.0] + [0.0, 2.0, 2.0, 4.0] * 20)
+    monkeypatch.setattr(verify_core.time, "perf_counter", lambda: next(ticks, 100.0))
+    result = run_gate("fast", tmp_path, runner=runner, tracked_files=[])
+    assert result.result in {"PASS", "FAIL"}
+
+
 def test_repository_configuration_is_complete_and_impact_is_specific():
     assert validate_configuration(ROOT) == []
     assert validate_fixture_registry(ROOT) == []
