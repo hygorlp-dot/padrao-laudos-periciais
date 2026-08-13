@@ -181,16 +181,41 @@ def test_independence_rejects_nonempty_but_forged_evidence_records(tmp_path):
     assert result["independence_proven"] is False
 
 
-def test_review_package_is_first_party_exact_head_and_excludes_private_paths(tmp_path):
+def _isolated_review_repository(tmp_path, monkeypatch):
     import subprocess
-    actual_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    actual_base = subprocess.check_output(
-        ["git", "merge-base", "origin/main", "HEAD"], cwd=ROOT, text=True,
-    ).strip()
-    public = tmp_path / "README.md"
-    public.write_text("public", encoding="utf-8")
-    package = build_review_package(
-        issue=31, base_sha=actual_base, head_sha=actual_head,
+    import scripts.agentic.package as package_module
+    import scripts.agentic.sanitize as sanitizer
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Synthetic Test"], cwd=tmp_path, check=True)
+    files = {
+        "config/core-boundaries.json": '{"boundaries":[{"id":"AGENTIC_GOVERNANCE"}]}',
+        "config/core-invariants.json": '{"invariants":[{"id":"INDEPENDENT_REVIEW_PROOF"}]}',
+        "docs/arquitetura/decisoes/ADR-independent-review-proof.md": "# ADR\n",
+        "schemas/review-multiagente.schema.json": "{}\n",
+        "tests/test_agentic_governance.py": "# synthetic test artifact\n",
+    }
+    for name, content in files.items():
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=tmp_path, check=True)
+    base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    (tmp_path / "scripts/agentic").mkdir(parents=True)
+    (tmp_path / "scripts/agentic/change.py").write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "head"], cwd=tmp_path, check=True)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    monkeypatch.setattr(package_module, "ROOT", tmp_path)
+    monkeypatch.setattr(sanitizer, "ROOT", tmp_path)
+    return package_module, base, head
+
+
+def test_review_package_is_first_party_exact_head_and_excludes_private_paths(tmp_path, monkeypatch):
+    package_module, actual_base, actual_head = _isolated_review_repository(tmp_path, monkeypatch)
+    package = package_module.build_review_package(
+        issue=36, base_sha=actual_base, head_sha=actual_head,
         changed_files=["README.md"], affected_boundaries=["AGENTIC_GOVERNANCE"],
         invariants=["INDEPENDENT_REVIEW_PROOF"],
         adrs=["docs/arquitetura/decisoes/ADR-independent-review-proof.md"],
@@ -203,17 +228,17 @@ def test_review_package_is_first_party_exact_head_and_excludes_private_paths(tmp
     assert "changed_files" not in package and package["change_manifest"]
     assert set(package["change_manifest"][0]) == {"path_sha256", "content_sha256", "status"}
     with pytest.raises(TypeError):
-        build_review_package(issue=31, base_sha=BASE, head_sha=HEAD, changed_files=[],
+        package_module.build_review_package(issue=36, base_sha=BASE, head_sha=HEAD, changed_files=[],
                              sanitization_receipt={"allowed": True, "head_sha": HEAD, "files": []})
     with pytest.raises(ValueError):
-        build_review_package(issue=31, base_sha=actual_base, head_sha=actual_head,
+        package_module.build_review_package(issue=36, base_sha=actual_base, head_sha=actual_head,
                              changed_files=["docs/Maria-de-Souza-caso.md"],
                              affected_boundaries=["AUTORA_MARIA_DE_SOUZA"],
                              invariants=["CPF_123.456.789-09"],
                              test_results={"raw": "A autora Maria reside na Rua X, 123"},
                              deploy_impact="Parte Maria de Souza")
     with pytest.raises(ValueError):
-        build_review_package(issue=31, base_sha=actual_base, head_sha=actual_head, changed_files=[],
+        package_module.build_review_package(issue=36, base_sha=actual_base, head_sha=actual_head, changed_files=[],
                              affected_boundaries=["AUTORA_MARIA_DE_SOUZA"],
                              invariants=["CPF_12345678909"])
     with pytest.raises(ValueError):
@@ -343,22 +368,56 @@ def test_review_package_expands_rename_and_binds_all_auxiliary_artifacts(tmp_pat
         )
 
 
-def test_review_package_marks_test_claims_untrusted_and_requires_head_paths():
-    import subprocess
-    actual_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    actual_base = subprocess.check_output(
-        ["git", "merge-base", "origin/main", "HEAD"], cwd=ROOT, text=True,
-    ).strip()
-    package = build_review_package(
-        issue=31, base_sha=actual_base, head_sha=actual_head, changed_files=[],
+def test_review_package_marks_test_claims_untrusted_and_requires_head_paths(tmp_path, monkeypatch):
+    package_module, actual_base, actual_head = _isolated_review_repository(tmp_path, monkeypatch)
+    package = package_module.build_review_package(
+        issue=36, base_sha=actual_base, head_sha=actual_head, changed_files=[],
         tests=["tests/test_agentic_governance.py"], test_results={"status": "PASS"},
     )
     assert package["test_results"] == {"declared_status": "PASS", "trusted": False}
     assert package["test_artifacts"][0]["content_sha256"]
     with pytest.raises(ValueError, match="cannot read exact revision path"):
-        build_review_package(
-            issue=31, base_sha=actual_base, head_sha=actual_head, changed_files=[],
+        package_module.build_review_package(
+            issue=36, base_sha=actual_base, head_sha=actual_head, changed_files=[],
             tests=["tests/does-not-exist.py"], test_results={"status": "PASS"},
+        )
+
+
+def test_review_package_contract_is_independent_of_outer_checkout_topology(tmp_path, monkeypatch):
+    import subprocess
+    review_root = tmp_path / "review-repository"
+    review_root.mkdir()
+    package_module, base, head = _isolated_review_repository(review_root, monkeypatch)
+    ambient = tmp_path / "ambient-repository"
+    ambient.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=ambient, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=ambient, check=True)
+    subprocess.run(["git", "config", "user.name", "Synthetic Test"], cwd=ambient, check=True)
+    (ambient / "ambient.txt").write_text("main\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=ambient, check=True)
+    subprocess.run(["git", "commit", "-qm", "ambient main"], cwd=ambient, check=True)
+    subprocess.run(["git", "switch", "-c", "feature"], cwd=ambient, check=True,
+                   stdout=subprocess.DEVNULL)
+    (ambient / "ambient.txt").write_text("feature\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-am", "ambient feature", "-q"], cwd=ambient, check=True)
+    ambient_feature_head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ambient, text=True,
+    ).strip()
+    checkout_modes = (
+        ["git", "switch", "main"],
+        ["git", "switch", "feature"],
+        ["git", "switch", "--detach", ambient_feature_head],
+    )
+    for command in checkout_modes:
+        subprocess.run(command, cwd=ambient, check=True, stdout=subprocess.DEVNULL)
+        monkeypatch.chdir(ambient)
+        package = package_module.build_review_package(
+            issue=36, base_sha=base, head_sha=head, changed_files=[], repository_root=review_root,
+        )
+        assert package["base_sha"] == base and package["head_sha"] == head
+    with pytest.raises(ValueError, match="distinct base and head"):
+        package_module.build_review_package(
+            issue=36, base_sha=head, head_sha=head, changed_files=[], repository_root=review_root,
         )
 
 
