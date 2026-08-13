@@ -147,7 +147,7 @@ def test_exact_baseline_rejects_stale_exception_on_real_repository():
         }],
     }
     checked = apply_exact_baseline(ROOT, result, baseline)
-    assert any(item["detail"] == "stale exception without matching finding" for item in checked["findings"])
+    assert any(item["code"] == "ARCHITECTURE_BASELINE_INVALID" for item in checked["findings"])
 
 
 def test_repository_architecture_gate_is_clean():
