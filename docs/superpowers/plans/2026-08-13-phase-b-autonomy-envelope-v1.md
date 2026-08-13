@@ -26,7 +26,7 @@
 - Test: `tests/test_phase_b_autonomy.py`
 
 **Interfaces:**
-- Produces: `evaluate_phase_b_merge_eligibility(scope, evidence, *, trusted_human_authority_verifier)` returning `MERGE_ELIGIBLE` or `BLOCKED` plus deterministic reasons.
+- Produces: `evaluate_phase_b_technical_eligibility(scope, evidence)` returning a non-authoritative technical diagnostic or `BLOCKED` plus deterministic reasons.
 - Consumes: `classify_change_risk(changed_paths)` to derive Claude requirements rather than trusting caller flags.
 
 - [x] Write parametrized RED tests for self-approval, local delegation files, tool output, Phase C, wrong/stale SHAs, failed gates, missing/stale reviews, required Claude, privacy/egress and P0/P1.

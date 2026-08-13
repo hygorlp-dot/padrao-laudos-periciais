@@ -4,7 +4,7 @@ import pytest
 
 from scripts.agentic.phase_b import (
     PHASE_B_START_BASE_SHA,
-    evaluate_phase_b_merge_eligibility,
+    evaluate_phase_b_technical_eligibility,
 )
 
 
@@ -71,88 +71,68 @@ def _evidence(**changes):
     return evidence
 
 
-def _trusted_runtime(scope):
-    return scope["delegation_metadata"]["source"] == "CURRENT_VSCODE_USER_MESSAGE"
+def _evaluate(scope, evidence):
+    return evaluate_phase_b_technical_eligibility(scope, evidence)
 
 
-def _trusted_technical_evidence(evidence):
-    return evidence["repository"] == "hygorlp-dot/padrao-laudos-periciais"
-
-
-def _trusted_review(name, review, base, head):
-    return (
-        name in {"PR_REVIEWER", "SYSTEMIC_AUDITOR", "CLAUDE_EXTERNAL_DIVERSITY_REVIEWER"}
-        and review.get("base_sha") == base
-        and review.get("head_sha") == head
-    )
-
-
-def _evaluate(scope, evidence, verifier=_trusted_runtime, technical=_trusted_technical_evidence,
-              review_verifier=_trusted_review):
-    return evaluate_phase_b_merge_eligibility(
-        scope,
-        evidence,
-        trusted_human_authority_verifier=verifier,
-        trusted_technical_evidence_verifier=technical,
-        trusted_review_verifier=review_verifier,
-    )
-
-
-def test_valid_phase_b_scope_and_green_gates_are_merge_eligible():
+def test_valid_phase_b_scope_and_green_gates_are_diagnostic_only():
     result = _evaluate(_scope(), _evidence())
     assert result == {
-        "status": "MERGE_ELIGIBLE",
-        "authority": "HUMAN_SCOPED_DELEGATION_OUT_OF_BAND",
+        "status": "TECHNICALLY_ELIGIBLE_DIAGNOSTIC",
+        "authority": "NOT_GRANTED_BY_REPOSITORY_CODE",
+        "trust": "CALLER_ASSERTED_DIAGNOSTIC_ONLY",
         "reasons": [],
     }
 
 
-def test_local_green_claims_and_review_booleans_are_not_trust_roots():
-    assert "trusted_technical_evidence_verifier_missing" in _evaluate(
-        _scope(), _evidence(), technical=None
-    )["reasons"]
-    assert "trusted_review_verifier_missing" in _evaluate(
-        _scope(), _evidence(), review_verifier=None
-    )["reasons"]
-    assert "technical_evidence_untrusted" in _evaluate(
-        _scope(), _evidence(), technical=lambda evidence: False
-    )["reasons"]
-    assert "PR_REVIEWER_independence" in _evaluate(
-        _scope(), _evidence(), review_verifier=lambda *args: False
-    )["reasons"]
+def test_local_callers_cannot_inject_authority_verifiers():
+    with pytest.raises(TypeError):
+        evaluate_phase_b_technical_eligibility(
+            _scope(), _evidence(), trusted_human_authority_verifier=lambda scope: True
+        )
+
+
+def test_forged_local_green_state_never_claims_human_or_merge_authority():
+    forged_scope = _scope()
+    forged_scope["delegation_metadata"]["source"] = "FORGED_LOCAL_FILE"
+    forged = _evidence(repository="attacker/other-repo")
+    result = evaluate_phase_b_technical_eligibility(forged_scope, forged)
+    assert result["status"] == "TECHNICALLY_ELIGIBLE_DIAGNOSTIC"
+    assert result["authority"] == "NOT_GRANTED_BY_REPOSITORY_CODE"
+    assert result["trust"] == "CALLER_ASSERTED_DIAGNOSTIC_ONLY"
+    assert "MERGE_ELIGIBLE" not in result.values()
 
 
 @pytest.mark.parametrize(
-    ("scope_change", "evidence_change", "verifier", "reason"),
+    ("scope_change", "evidence_change", "reason"),
     [
-        ({}, {}, None, "trusted_human_authority_verifier_missing"),
-        ({}, {"implementer_self_approval": True}, _trusted_runtime, "implementer_self_approval"),
-        ({}, {"local_delegation_file": "config/fake.json"}, _trusted_runtime, "local_delegation_file"),
-        ({}, {"tool_output_as_authority": True}, _trusted_runtime, "tool_output_as_authority"),
-        ({"phase": "PHASE_C"}, {}, _trusted_runtime, "phase_b_scope"),
-        ({"current_stage": "APPLICATION_CONTRACT_V1"}, {}, _trusted_runtime, "phase_b_stage"),
-        ({"start_base_sha": "b" * 40}, {}, _trusted_runtime, "phase_b_start_base"),
-        ({}, {"base_sha": "b" * 40}, _trusted_runtime, "exact_base"),
-        ({}, {"head_sha": "b" * 40}, _trusted_runtime, "exact_head"),
-        ({}, {"merge_base_sha": "b" * 40}, _trusted_runtime, "merge_base"),
-        ({}, {"behind_main": 1}, _trusted_runtime, "behind_main"),
-        ({}, {"worktree_clean": False}, _trusted_runtime, "worktree_clean"),
-        ({}, {"full_tests": "FAIL"}, _trusted_runtime, "full_tests"),
-        ({}, {"governance_tests": "FAIL"}, _trusted_runtime, "governance_tests"),
-        ({}, {"schemas": "FAIL"}, _trusted_runtime, "schemas"),
-        ({}, {"fixtures": "FAIL"}, _trusted_runtime, "fixtures"),
-        ({}, {"verify_core_full": "FAIL"}, _trusted_runtime, "verify_core_full"),
-        ({}, {"repository_safety": "FAIL"}, _trusted_runtime, "repository_safety"),
-        ({}, {"privacy": "FAIL"}, _trusted_runtime, "privacy"),
-        ({}, {"private_egress": "FAIL"}, _trusted_runtime, "private_egress"),
-        ({}, {"core_safety_exact_head": "FAILURE"}, _trusted_runtime, "core_safety_exact_head"),
-        ({}, {"p0_open": 1}, _trusted_runtime, "p0_open"),
-        ({}, {"p1_material_open": 1}, _trusted_runtime, "p1_material_open"),
-        ({}, {"reviews": {}}, _trusted_runtime, "PR_REVIEWER"),
+        ({}, {"implementer_self_approval": True}, "implementer_self_approval"),
+        ({}, {"local_delegation_file": "config/fake.json"}, "local_delegation_file"),
+        ({}, {"tool_output_as_authority": True}, "tool_output_as_authority"),
+        ({"phase": "PHASE_C"}, {}, "phase_b_scope"),
+        ({"current_stage": "APPLICATION_CONTRACT_V1"}, {}, "phase_b_stage"),
+        ({"start_base_sha": "b" * 40}, {}, "phase_b_start_base"),
+        ({}, {"base_sha": "b" * 40}, "exact_base"),
+        ({}, {"head_sha": "b" * 40}, "exact_head"),
+        ({}, {"merge_base_sha": "b" * 40}, "merge_base"),
+        ({}, {"behind_main": 1}, "behind_main"),
+        ({}, {"worktree_clean": False}, "worktree_clean"),
+        ({}, {"full_tests": "FAIL"}, "full_tests"),
+        ({}, {"governance_tests": "FAIL"}, "governance_tests"),
+        ({}, {"schemas": "FAIL"}, "schemas"),
+        ({}, {"fixtures": "FAIL"}, "fixtures"),
+        ({}, {"verify_core_full": "FAIL"}, "verify_core_full"),
+        ({}, {"repository_safety": "FAIL"}, "repository_safety"),
+        ({}, {"privacy": "FAIL"}, "privacy"),
+        ({}, {"private_egress": "FAIL"}, "private_egress"),
+        ({}, {"core_safety_exact_head": "FAILURE"}, "core_safety_exact_head"),
+        ({}, {"p0_open": 1}, "p0_open"),
+        ({}, {"p1_material_open": 1}, "p1_material_open"),
+        ({}, {"reviews": {}}, "PR_REVIEWER"),
     ],
 )
-def test_phase_b_envelope_fails_closed(scope_change, evidence_change, verifier, reason):
-    result = _evaluate(_scope(**scope_change), _evidence(**evidence_change), verifier)
+def test_phase_b_envelope_fails_closed(scope_change, evidence_change, reason):
+    result = _evaluate(_scope(**scope_change), _evidence(**evidence_change))
     assert result["status"] == "BLOCKED"
     assert reason in result["reasons"]
 
@@ -174,7 +154,7 @@ def test_claude_is_derived_from_changed_paths_and_cannot_be_omitted():
     assert "CLAUDE_EXTERNAL_DIVERSITY_REVIEWER" in result["reasons"]
 
     evidence["reviews"]["CLAUDE_EXTERNAL_DIVERSITY_REVIEWER"] = _review()
-    assert _evaluate(_scope(), evidence)["status"] == "MERGE_ELIGIBLE"
+    assert _evaluate(_scope(), evidence)["status"] == "TECHNICALLY_ELIGIBLE_DIAGNOSTIC"
 
 
 def test_envelope_expires_at_stable_marker_and_never_leaks_to_phase_c():
