@@ -382,3 +382,45 @@ def test_reflective_stdlib_import_execution_fails_closed(tmp_path):
     findings = validate_architecture(tmp_path, _registry())
     paths = {item.get("path") for item in findings if item["code"] in {"DYNAMIC_IMPORT_CAPABILITY", "PROCESS_EXECUTION_CAPABILITY"}}
     assert {f"scripts/domain/r{index}.py" for index in range(len(REFLECTIVE_LOADER_ATTACKS))} <= paths
+
+
+EXECUTION_CAPABILITY_ATTACKS = [
+    "import codeop, types\ntypes.FunctionType(\n    codeop.compile_command('import scripts.motor_vicios.motor'),\n    globals(),\n)()\n",
+    "import asyncio\nasyncio.create_subprocess_exec('tool')\n",
+    "import os\nos.startfile('tool')\n",
+    "import asyncio\nlaunch = asyncio.create_subprocess_exec\nlaunch('tool')\n",
+    "import os\nlaunch = os.startfile\nlaunch('tool')\n",
+    "import os\ngetattr(os, 'startfile')('tool')\n",
+    "import os\nvars(os)['startfile']('tool')\n",
+    "import os\nos.__dict__.get('startfile')('tool')\n",
+]
+
+
+def test_additional_stdlib_execution_capabilities_fail_closed(monkeypatch):
+    sources = {
+        f"scripts/domain/process_runtime{index}.py": source
+        for index, source in enumerate(EXECUTION_CAPABILITY_ATTACKS)
+    }
+    monkeypatch.setattr(architecture_gate, "_python_files", lambda _root: sorted(sources))
+    original_read_text = Path.read_text
+    monkeypatch.setattr(
+        Path,
+        "read_text",
+        lambda path, **kwargs: sources[path.relative_to(ROOT).as_posix()]
+        if path.is_relative_to(ROOT) and path.relative_to(ROOT).as_posix() in sources
+        else original_read_text(path, **kwargs),
+    )
+
+    findings = validate_architecture(ROOT, _registry())
+
+    capabilities = {(item["code"], item.get("path")) for item in findings}
+    assert {
+        ("DYNAMIC_IMPORT_CAPABILITY", "scripts/domain/process_runtime0.py"),
+        ("PROCESS_EXECUTION_CAPABILITY", "scripts/domain/process_runtime1.py"),
+        ("PROCESS_EXECUTION_CAPABILITY", "scripts/domain/process_runtime2.py"),
+        ("PROCESS_EXECUTION_CAPABILITY", "scripts/domain/process_runtime3.py"),
+        ("PROCESS_EXECUTION_CAPABILITY", "scripts/domain/process_runtime4.py"),
+        ("PROCESS_EXECUTION_CAPABILITY", "scripts/domain/process_runtime5.py"),
+        ("PROCESS_EXECUTION_CAPABILITY", "scripts/domain/process_runtime6.py"),
+        ("PROCESS_EXECUTION_CAPABILITY", "scripts/domain/process_runtime7.py"),
+    } <= capabilities
