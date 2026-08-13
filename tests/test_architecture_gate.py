@@ -238,7 +238,7 @@ def test_import_capability_aliases_fail_closed(tmp_path):
     for index, source in enumerate(ALIAS_CAPABILITY_ATTACKS):
         (package / f"x{index}.py").write_text(source, encoding="utf-8")
     findings = validate_architecture(tmp_path, _registry())
-    paths = {item.get("path") for item in findings if item["code"] == "DYNAMIC_IMPORT_CAPABILITY"}
+    paths = {item.get("path") for item in findings if item["code"] in {"DYNAMIC_IMPORT_CAPABILITY", "PROCESS_EXECUTION_CAPABILITY"}}
     assert {f"scripts/domain/x{index}.py" for index in range(len(ALIAS_CAPABILITY_ATTACKS))} <= paths
 
 
@@ -290,11 +290,14 @@ REFLECTIVE_LOADER_ATTACKS = [
     "globals()['__buil'+'tins__']['ex'+'ec']('import scripts.motor_vicios.motor')\n",
     "import subprocess, sys\nsubprocess.run([sys.executable, '-m', 'scripts.motor_vicios.motor'])\n",
     "import types\ntypes.FunctionType(compile('import scripts.motor_vicios.motor', 'x', 'exec'), globals())()\n",
+    "import os, sys\nos.system(f'{sys.executable} -m scripts.motor_vicios.motor')\n",
+    "import subprocess\nsubprocess.run(['python', '-m', 'scripts.motor_vicios.motor'])\n",
+    "import subprocess, sys\nexe = sys.executable\nsubprocess.run([exe, '-m', 'scripts.motor_vicios.motor'])\n",
 ]
 def test_reflective_stdlib_import_execution_fails_closed(tmp_path):
     package = tmp_path / "scripts/domain"; package.mkdir(parents=True)
     for index, source in enumerate(REFLECTIVE_LOADER_ATTACKS):
         (package / f"r{index}.py").write_text(source, encoding="utf-8")
     findings = validate_architecture(tmp_path, _registry())
-    paths = {item.get("path") for item in findings if item["code"] == "DYNAMIC_IMPORT_CAPABILITY"}
+    paths = {item.get("path") for item in findings if item["code"] in {"DYNAMIC_IMPORT_CAPABILITY", "PROCESS_EXECUTION_CAPABILITY"}}
     assert {f"scripts/domain/r{index}.py" for index in range(len(REFLECTIVE_LOADER_ATTACKS))} <= paths
