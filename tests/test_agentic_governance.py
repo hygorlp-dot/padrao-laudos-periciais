@@ -743,3 +743,40 @@ def test_governance_documents_encode_claude_budget_and_stacked_dependency():
     autonomy = (ROOT / "docs/padroes/protocolo-autonomia-agente.md").read_text(encoding="utf-8")
     assert "DEFAULT_ACTION = DECIDE_AND_PROCEED" in autonomy
     assert "HUMAN_ESCALATION = EXCEPTION_ONLY" in autonomy
+
+
+def test_python_dependency_research_policy_is_fail_closed_and_auditable():
+    skill = (ROOT / ".agents/skills/research-ranking/SKILL.md").read_text(encoding="utf-8")
+    protocol = (ROOT / "docs/padroes/protocolo-pesquisa-ranking.md").read_text(encoding="utf-8")
+    policy = skill + "\n" + protocol
+    for invariant in (
+        "PYTHON_DEPENDENCY_DISCOVERY_V1 = TRUE",
+        "CATALOG_ENTRY != APPROVAL",
+        "POPULARITY != QUALITY",
+        "STAR_COUNT != SECURITY",
+        "DISCOVERY_SOURCE != PRIMARY_TECHNICAL_AUTHORITY",
+        "OFFICIAL_DOCS_AND_UPSTREAM_ARE_PRIMARY_FOR_TECHNICAL_FACTS",
+        "NO_DEPENDENCY_ADOPTION_WITHOUT_LICENSE_CHECK",
+        "NO_DEPENDENCY_ADOPTION_WITHOUT_SECURITY_CHECK",
+        "NO_DEPENDENCY_ADOPTION_WITHOUT_WINDOWS_COMPATIBILITY_CHECK",
+        "NO_DEPENDENCY_ADOPTION_WITHOUT_PACKAGING_IMPACT_CHECK",
+        "NO_GO_JUST_TO_USE_AWESOME_GO",
+        "RESEARCH_EVIDENCE_MUST_BE_IDENTIFIABLE = TRUE",
+        "RANKING_MUST_BE_REPRODUCIBLE = TRUE",
+        "MATERIAL_RECOMMENDATION_MUST_BE_REPOSITORY_SPECIFIC = TRUE",
+    ):
+        assert invariant in policy
+    for source in (
+        "vinta/awesome-python", "lukasmasuch/best-of-python",
+        "ml-tooling/best-of-python-dev", "avelino/awesome-go",
+        "PyPI", "deps.dev", "OpenSSF Scorecard",
+    ):
+        assert source in protocol
+    for field in (
+        "RESEARCH_QUESTION", "REPOSITORY_CONTEXT", "REQUIREMENTS", "CANDIDATES",
+        "SOURCES", "VERSIONS_CHECKED", "LICENSES", "SECURITY_FINDINGS",
+        "COMPATIBILITY", "TRANSITIVE_DEPENDENCY_NOTES", "PACKAGING_IMPACT",
+        "PRIVACY_EGRESS_IMPACT", "REVERSIBILITY", "RISKS", "RANKING",
+        "RECOMMENDATION", "CONFIDENCE", "MATERIALITY", "OPEN_UNCERTAINTIES",
+    ):
+        assert field in protocol
