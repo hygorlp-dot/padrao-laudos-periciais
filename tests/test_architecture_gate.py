@@ -194,6 +194,14 @@ def test_duplicate_architecture_debt_is_rejected(tmp_path):
     "import builtins\nbuiltins.__dict__['__import__'](name)\n",
     "__builtins__['__import__'](name)\n",
     "globals()['__builtins__']['__import__'](name)\n",
+    "import importlib as il\nvars(il)[name](target)\n",
+    "import runpy as r\ngetattr(r, method)(name)\n",
+    "import sys as s\nvars(s)[field].insert(0, 'x')\n",
+    "import builtins as b\nvars(b)[key](code)\n",
+    "import pkgutil\npkgutil.resolve_name(name)\n",
+    "import pydoc\npydoc.locate(name)\n",
+    "import zipimport\nzipimport.zipimporter(path).load_module(name)\n",
+    "import pkg_resources\npkg_resources.load_entry_point(dist, group, name)\n",
 ])
 def test_reflective_stdlib_import_execution_fails_closed(tmp_path, source):
     package = tmp_path / "scripts/domain"; package.mkdir(parents=True)
