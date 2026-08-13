@@ -795,6 +795,12 @@ def test_python_dependency_research_policy_is_fail_closed_and_auditable():
     for source_field in ("URL_OR_IDENTIFIER", "SOURCE_ENTITY", "VERSION_OR_ACCESS_DATE", "SUPPORTED_CLAIM"):
         assert source_field in protocol
     assert "SCORE = 0..4 | NOT_APPLICABLE" in protocol
+    for preserved_code_ranking_rule in (
+        "INTRINSIC_RISK",
+        "ROBUSTNESS",
+        "ENGINEERING_PRIORITY",
+    ):
+        assert preserved_code_ranking_rule in protocol
     for aggregation_rule in (
         "ELIGIBILITY_GATE_BEFORE_RANKING",
         "LICENSE_ACCEPTABLE = TRUE",
