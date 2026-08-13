@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import jsonschema
 
-from scripts.quality.architecture_analyzer import analyze_sources, apply_exact_baseline, run_architecture_gate
+from scripts.quality.architecture_analyzer import _cycles, analyze_sources, apply_exact_baseline, run_architecture_gate
 from scripts.quality.repository_inventory import canonical_python_path, candidate_tree
 
 
@@ -82,6 +82,18 @@ def test_dynamic_architecture_bypass_import_aliases(source):
     assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in analyze_sources({"scripts/a.py": source}, _policy())["findings"])
 
 
+def test_loader_and_import_hook_surfaces_block_class_wide():
+    sources = {"scripts/a.py": "spec.loader.exec_module(module)\nsys.meta_path.append(finder)\n"}
+    findings = analyze_sources(sources, _policy())["findings"]
+    assert [item["code"] for item in findings].count("DYNAMIC_ARCHITECTURE_BYPASS") == 2
+
+
+def test_cycle_analysis_is_iterative_for_deep_graphs():
+    graph = {f"m{index}": {f"m{index + 1}"} for index in range(1500)}
+    graph["m1500"] = {"m0"}
+    assert len(_cycles(graph)[0]) == 1501
+
+
 def test_nonexistent_import_does_not_fall_back_to_package():
     sources = {"scripts/quality/__init__.py": "", "scripts/a.py": "import scripts.quality.nonexistent\n"}
     assert any(item["code"] == "UNRESOLVED_FIRST_PARTY_IMPORT" for item in analyze_sources(sources, _policy())["findings"])
@@ -110,6 +122,14 @@ def test_architecture_baseline_schema_is_closed():
     jsonschema.validate(baseline, schema)
     baseline["unknown"] = True
     with pytest.raises(jsonschema.ValidationError): jsonschema.validate(baseline, schema)
+
+
+def test_architecture_baseline_is_validated_at_runtime():
+    baseline = json.loads((ROOT / "config/architecture-baseline-v1.json").read_text())
+    baseline["unknown"] = True
+    result = {"candidateCommitSha": "HEAD", "policyVersion": "1.0.0", "findings": [], "modules": []}
+    checked = apply_exact_baseline(ROOT, result, baseline)
+    assert any(item["code"] == "ARCHITECTURE_BASELINE_INVALID" and "schema" in item["detail"] for item in checked["findings"])
 
 
 def test_parse_failure_and_invalid_input_fail_closed():
@@ -150,14 +170,5 @@ def test_exact_baseline_rejects_stale_exception_on_real_repository():
     assert any(item["code"] == "ARCHITECTURE_BASELINE_INVALID" for item in checked["findings"])
 
 
-def test_repository_shadow_characterizes_existing_dynamic_bypass_without_mutating_it():
-    findings = run_architecture_gate(ROOT)
-    assert [(item["code"], item["canonicalPath"]) for item in findings] == [
-        ("DYNAMIC_ARCHITECTURE_BYPASS", "scripts/quality/fixture_registry.py")
-    ]
-
-
-def test_shadow_stage_does_not_self_activate_in_verify_core():
-    source = (ROOT / "scripts/quality/verify_core.py").read_text(encoding="utf-8")
-    assert "run_architecture_gate" not in source
-    assert "architecture analyzer" not in source
+def test_repository_is_clean_before_blocking_activation():
+    assert run_architecture_gate(ROOT) == []
