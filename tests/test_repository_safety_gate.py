@@ -151,6 +151,28 @@ def test_slow_component_is_retried_but_cannot_self_disable(monkeypatch, tmp_path
     assert result.result in {"PASS", "FAIL"}
 
 
+@pytest.mark.parametrize("malformed_budget", [None, {}, "not-a-number"])
+def test_malformed_architecture_budget_returns_structured_failure(monkeypatch, malformed_budget):
+    baseline_path = ROOT / "config/quality-baseline.json"
+    original_read_text = Path.read_text
+    def read_text(path, *args, **kwargs):
+        if path == baseline_path:
+            return json.dumps({"performance_component_max_seconds": {"architecture": malformed_budget}})
+        return original_read_text(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", read_text)
+    monkeypatch.setattr(verify_core, "validate_configuration", lambda _root: [])
+    monkeypatch.setattr(verify_core, "validate_fixture_registry", lambda _root: [])
+    monkeypatch.setattr(verify_core, "validate_architecture", lambda _root: [])
+
+    def runner(command, **_):
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    result = run_gate("fast", ROOT, runner=runner, tracked_files=[])
+
+    assert result.result == "FAIL"
+    assert any(item["teste"] == "PERFORMANCE_COMPONENT_BUDGET_INVALID" for item in result.findings)
+
+
 def test_repository_configuration_is_complete_and_impact_is_specific():
     assert validate_configuration(ROOT) == []
     assert validate_fixture_registry(ROOT) == []

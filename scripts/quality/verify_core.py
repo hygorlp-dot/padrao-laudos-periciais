@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 import time
@@ -47,13 +48,26 @@ def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_fil
         performance_budgets = json.loads((root / "config/quality-baseline.json").read_text(encoding="utf-8")).get("performance_component_max_seconds", {})
     except (OSError, json.JSONDecodeError):
         pass
+    if not isinstance(performance_budgets, dict):
+        findings.append(_finding("QUALITY_NON_REGRESSION", "QUALITY_GATE", "PERFORMANCE_COMPONENT_BUDGET_INVALID", str(performance_budgets), "P1"))
+        performance_budgets = {}
+    else:
+        invalid_budgets = {
+            name: value for name, value in performance_budgets.items()
+            if type(value) not in {int, float} or not math.isfinite(value) or value <= 0
+        }
+        if invalid_budgets:
+            findings.append(_finding("QUALITY_NON_REGRESSION", "QUALITY_GATE", "PERFORMANCE_COMPONENT_BUDGET_INVALID", str(invalid_budgets), "P1"))
+            performance_budgets = {
+                name: value for name, value in performance_budgets.items() if name not in invalid_budgets
+            }
     architecture_started = time.perf_counter()
     architecture_errors = [
         _finding("ARCHITECTURE_DIRECTION", "QUALITY_GATE", item.get("code", "ARCHITECTURE_INVALID"), str(item), "P1")
         for item in validate_architecture(root)
     ]
     durations["architecture"] = time.perf_counter() - architecture_started
-    if durations["architecture"] > float(performance_budgets.get("architecture", float("inf"))):
+    if durations["architecture"] > performance_budgets.get("architecture", float("inf")):
         retry_started = time.perf_counter(); retry_errors = validate_architecture(root)
         durations["architecture"] = min(durations["architecture"], time.perf_counter() - retry_started)
         architecture_errors.extend(_finding("ARCHITECTURE_DIRECTION", "QUALITY_GATE", item.get("code", "ARCHITECTURE_INVALID"), str(item), "P1") for item in retry_errors)
@@ -87,7 +101,7 @@ def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_fil
     for name, command, invariant, boundary in commands:
         component_started = time.perf_counter(); completed = _run(runner, command, root)
         durations[name] = time.perf_counter() - component_started
-        if completed.returncode == 0 and name in performance_budgets and durations[name] > float(performance_budgets[name]):
+        if completed.returncode == 0 and name in performance_budgets and durations[name] > performance_budgets[name]:
             retry_started = time.perf_counter(); retry = _run(runner, command, root)
             durations[name] = min(durations[name], time.perf_counter() - retry_started)
             if retry.returncode != 0:

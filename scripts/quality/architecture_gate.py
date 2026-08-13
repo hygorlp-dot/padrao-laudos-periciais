@@ -350,5 +350,7 @@ def load_and_validate(root: Path) -> list[dict]:
             return result
         registry = json.loads((root / "config/core-architecture-v1.json").read_text(encoding="utf-8"), object_pairs_hook=strict_object)
         return validate_architecture(root, registry)
+    except RuntimeError as exc:
+        return [{"code": "ARCHITECTURE_INVENTORY_INVALID", "detail": str(exc)}]
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
         return [{"code": "ARCHITECTURE_REGISTRY_INVALID", "detail": str(exc)}]
