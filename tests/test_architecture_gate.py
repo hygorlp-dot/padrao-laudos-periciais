@@ -297,6 +297,9 @@ def test_subprocess_from_import_apis_aliases_and_indirect_calls_fail_closed(monk
     "from _posixsubprocess import fork_exec\nfork_exec(*args)\n",
     "from concurrent.futures import ProcessPoolExecutor\nProcessPoolExecutor()\n",
     "import concurrent.futures as futures\nfutures.ProcessPoolExecutor()\n",
+    "import posix\nposix.system('tool')\n",
+    "from posix import system as launch\nlaunch('tool')\n",
+    "import pty\npty.spawn(['/bin/echo', 'tool'])\n",
 ])
 def test_stdlib_process_acquisition_surfaces_fail_closed(source):
     tree = architecture_gate.ast.parse(source)
