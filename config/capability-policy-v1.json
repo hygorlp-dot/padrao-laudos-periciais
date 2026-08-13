@@ -1,0 +1,67 @@
+{
+  "policyVersion": "1.0.0",
+  "analyzerContractVersion": "1.0.0",
+  "capabilityClasses": [
+    "DYNAMIC_IMPORT_ACQUISITION",
+    "DYNAMIC_EXECUTION_ACQUISITION",
+    "EXECUTABLE_DESERIALIZATION_OR_NATIVE_LOADING",
+    "PROCESS_NAMESPACE_ACQUISITION",
+    "OS_PROCESS_MEMBER_ACQUISITION",
+    "SENSITIVE_NAMESPACE_ESCAPE",
+    "UNKNOWN_SENSITIVE_REFLECTION"
+  ],
+  "scanUniverse": {
+    "productionRoots": ["scripts/"],
+    "classifiedNonProductionRoots": ["tests/"],
+    "candidateHeadNewFilesIncluded": true,
+    "inventoryFailurePolicy": "FAIL_CLOSED",
+    "readParseFailurePolicy": "FAIL_CLOSED"
+  },
+  "candidateIdentity": {
+    "requiredInputs": ["candidateCommitSha", "candidateTreeSha"],
+    "inventorySource": "EXACT_GIT_TREE",
+    "contentSource": "SAME_EXACT_GIT_TREE",
+    "commitTreeRelation": "COMMIT_TREE_MATCH_REQUIRED",
+    "identityFailurePolicy": "FAIL_CLOSED"
+  },
+  "processNamespaceCategories": ["SUBPROCESS", "ASYNCIO_SUBPROCESS", "MULTIPROCESSING", "PTY_POSIX", "WINDOWS_PROCESS", "CONCURRENT_PROCESS"],
+  "processNamespaces": ["subprocess", "asyncio.subprocess", "pty", "posix", "multiprocessing", "multiprocessing.managers", "multiprocessing.pool", "multiprocessing.context", "concurrent.futures.process", "_winapi"],
+  "dynamicImportSurfaces": ["__import__", "importlib", "importlib.import_module", "importlib.machinery", "importlib.util", "pkgutil", "runpy", "pydoc", "zipimport", "sys.meta_path", "sys.path_hooks", "sys.modules", "importlib.metadata.entry_points"],
+  "dynamicExecutionSurfaces": ["eval", "exec", "compile", "types.CodeType", "types.FunctionType"],
+  "nativeOrExecutableDeserializationSurfaces": ["ctypes", "pickle.load", "pickle.loads", "marshal.load", "marshal.loads"],
+  "mixedNamespaces": ["os", "asyncio", "concurrent.futures", "pickle"],
+  "mixedNamespaceMembers": {
+    "os": ["system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe", "execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp", "execvpe", "startfile"],
+    "asyncio": ["create_subprocess_exec", "create_subprocess_shell"],
+    "concurrent.futures": ["ProcessPoolExecutor"],
+    "pickle": ["load", "loads", "Unpickler"]
+  },
+  "ruleMappings": [
+    {"findingCode":"DYNAMIC_IMPORT_ACQUISITION","capabilityClass":"DYNAMIC_IMPORT_ACQUISITION","severity":"P0"},
+    {"findingCode":"DYNAMIC_EXECUTION_ACQUISITION","capabilityClass":"DYNAMIC_EXECUTION_ACQUISITION","severity":"P0"},
+    {"findingCode":"EXECUTABLE_DESERIALIZATION_OR_NATIVE_LOADING","capabilityClass":"EXECUTABLE_DESERIALIZATION_OR_NATIVE_LOADING","severity":"P1"},
+    {"findingCode":"PROCESS_NAMESPACE_ACQUISITION","capabilityClass":"PROCESS_NAMESPACE_ACQUISITION","severity":"P1"},
+    {"findingCode":"OS_PROCESS_MEMBER_ACQUISITION","capabilityClass":"OS_PROCESS_MEMBER_ACQUISITION","severity":"P1"},
+    {"findingCode":"SENSITIVE_NAMESPACE_ESCAPE","capabilityClass":"SENSITIVE_NAMESPACE_ESCAPE","severity":"P1"},
+    {"findingCode":"UNKNOWN_SENSITIVE_REFLECTION","capabilityClass":"UNKNOWN_SENSITIVE_REFLECTION","severity":"P1"}
+  ],
+  "integrityBootstrap": {
+    "verifier": "CAPABILITY_BOOTSTRAP_V1",
+    "activationState": "CONTRACT_ONLY",
+    "verifierProvenance": "PROTECTED_BASE_BLOB_NOT_CANDIDATE",
+    "workflowProvenance": "PROTECTED_BASE_WORKFLOW",
+    "protectedWorkflow": ".github/workflows/core-safety.yml",
+    "candidateEnforcementArtifacts": ["scripts/quality/capability_bootstrap.py", "scripts/quality/repository_inventory.py", "scripts/quality/ast_inventory.py", "scripts/quality/capability_analyzer.py", "scripts/quality/capability_gate_adapter.py", "scripts/quality/verify_core.py", "config/capability-policy-v1.json", "schemas/capability-policy-v1.schema.json", "schemas/capability-exception-v1.schema.json", "schemas/quality-finding-v1.schema.json"],
+    "digestAlgorithm": "SHA-256",
+    "trustRoot": "BRANCH_PROTECTED_PIN_REGISTRY",
+    "failurePolicy": "FAIL_CLOSED",
+    "ordinaryExceptionsMayAuthorizeBootstrap": false,
+    "pinUpdateProtocol": "DEDICATED_PR_EXACT_CI_THREE_INDEPENDENT_REVIEWS",
+    "activationRequirements": ["EXTERNAL_PIN_REGISTRY_WITH_SHA256_PER_ARTIFACT", "BOOTSTRAP_IMPLEMENTATION_CAPABILITY_FREE", "INERT_TRUST_ANCHOR_PREEXISTS_IN_PROTECTED_BASE", "PROTECTED_BASE_LOADS_AND_EXECUTES_VERIFIER", "ALL_CANDIDATE_ENFORCEMENT_ARTIFACTS_PINNED", "ATOMIC_BLOCKING_CUTOVER"]
+  },
+  "inlineSuppressionsAllowed": false,
+  "wildcardExceptionsAllowed": false,
+  "unknownSensitiveReflectionPolicy": "FAIL_CLOSED",
+  "dynamicImportPolicy": "DENY_UNLESS_EXACT_BASELINE_EXCEPTION",
+  "dynamicExecutionPolicy": "DENY_UNLESS_EXACT_BASELINE_EXCEPTION"
+}
