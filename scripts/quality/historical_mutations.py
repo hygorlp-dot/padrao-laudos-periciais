@@ -79,7 +79,7 @@ def validate_mutant_definitions(mutants: list[dict], root: Path) -> list[dict]:
 
 
 def _copy_workspace(root: Path, target: Path) -> None:
-    ignored = shutil.ignore_patterns(".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", "referencias")
+    ignored = shutil.ignore_patterns(".*", "*-temp", "*-temp-*", "venv", "__pycache__", "referencias")
     shutil.copytree(root, target, ignore=ignored, dirs_exist_ok=True)
 
 

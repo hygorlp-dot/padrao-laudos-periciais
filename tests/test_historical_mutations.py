@@ -1,12 +1,25 @@
 import json
 from pathlib import Path
 
-from scripts.quality.historical_mutations import execute_historical_suite, load_mutants, validate_mutant_definitions
+from scripts.quality.historical_mutations import _copy_workspace, execute_historical_suite, load_mutants, validate_mutant_definitions
 from scripts.redacao_pericial.autocorrigir_redacao import autocorrigir
 from scripts.triagem_pericial.gerar_delimitacao import _classificar_pertinencia
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_historical_sandbox_ignores_unrelated_temporary_artifacts(tmp_path):
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    (source / "tracked").mkdir(parents=True)
+    (source / "tracked/module.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (source / "untracked-temp").mkdir()
+    (source / "untracked-temp/probe.txt").write_text("must not be read\n", encoding="utf-8")
+    _copy_workspace(source, target)
+
+    assert (target / "tracked/module.py").is_file()
+    assert not (target / "untracked-temp").exists()
 
 
 def test_historical_mutant_definitions_are_complete_and_applicable():
