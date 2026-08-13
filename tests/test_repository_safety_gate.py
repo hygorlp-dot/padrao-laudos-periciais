@@ -138,17 +138,32 @@ def test_verify_core_main_propagates_exit_code(monkeypatch):
     assert verify_core.main(["--fast"]) == 9
 
 
-def test_slow_component_is_retried_but_cannot_self_disable(monkeypatch, tmp_path):
-    _valid_config(tmp_path)
-    _write(tmp_path / "tests/fixtures/core-fixtures.json", {"schema_version": "1.0.0", "fixtures": []})
-    _write(tmp_path / "config/quality-baseline.json", {"performance_component_max_seconds": {"regression": 1.0}})
-    calls = []
-    def runner(command, **_):
-        calls.append(tuple(command)); return subprocess.CompletedProcess(command, 0, "", "")
-    ticks = iter([0.0, 0.0, 0.0] + [0.0, 2.0, 2.0, 4.0] * 20)
-    monkeypatch.setattr(verify_core.time, "perf_counter", lambda: next(ticks, 100.0))
-    result = run_gate("fast", tmp_path, runner=runner, tracked_files=[])
-    assert result.result in {"PASS", "FAIL"}
+@pytest.mark.parametrize(
+    ("samples", "expected"),
+    [([16.0, 1.0, 16.0], "FAIL"), ([16.0, 1.0, 1.0], "PASS")],
+)
+def test_architecture_duration_confirmation_uses_three_sample_median(monkeypatch, samples, expected):
+    baseline_path = ROOT / "config/quality-baseline.json"
+    original_read_text = Path.read_text
+    monkeypatch.setattr(Path, "read_text", lambda path, *args, **kwargs:
+        json.dumps({"performance_component_max_seconds": {"architecture": 15.0}})
+        if path == baseline_path else original_read_text(path, *args, **kwargs))
+    monkeypatch.setattr(verify_core, "validate_configuration", lambda _root: [])
+    monkeypatch.setattr(verify_core, "validate_fixture_registry", lambda _root: [])
+    monkeypatch.setattr(verify_core, "validate_architecture", lambda _root: [])
+    ticks = [0.0]
+    elapsed = 0.0
+    for sample in samples:
+        ticks.extend([elapsed, elapsed + sample]); elapsed += sample
+    ticks.extend([elapsed] * 100)
+    clock = iter(ticks)
+    monkeypatch.setattr(verify_core.time, "perf_counter", lambda: next(clock))
+    runner = lambda command, **_: subprocess.CompletedProcess(command, 0, "", "")
+
+    result = run_gate("fast", ROOT, runner=runner, tracked_files=[])
+
+    assert result.result == expected
+    assert dict(result.component_durations)["architecture"] == sorted(samples)[1]
 
 
 @pytest.mark.parametrize("malformed_budget", [None, {}, "not-a-number"])
