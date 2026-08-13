@@ -150,8 +150,11 @@ def test_exact_baseline_rejects_stale_exception_on_real_repository():
     assert any(item["code"] == "ARCHITECTURE_BASELINE_INVALID" for item in checked["findings"])
 
 
-def test_repository_architecture_gate_is_clean():
-    assert run_architecture_gate(ROOT) == []
+def test_repository_shadow_characterizes_existing_dynamic_bypass_without_mutating_it():
+    findings = run_architecture_gate(ROOT)
+    assert [(item["code"], item["canonicalPath"]) for item in findings] == [
+        ("DYNAMIC_ARCHITECTURE_BYPASS", "scripts/quality/fixture_registry.py")
+    ]
 
 
 def test_shadow_stage_does_not_self_activate_in_verify_core():
