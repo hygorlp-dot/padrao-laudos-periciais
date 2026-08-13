@@ -28,7 +28,7 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "77dc717ace9efb829744db69b7e528893b7fc1e9ebd27acded318ed79598b470"
-EXPECTED_DETECTOR_AST_SHA256 = "1a1224475762957e6cbecff4865084f0a0eb5b2075909df355aa0cf3fc5c9467"
+EXPECTED_DETECTOR_AST_SHA256 = "c183c0d0c5500caf97886888fc357a470d36272f9ac324130d3e8b12987d0b3f"
 EXPECTED_ANALYZER_PROCESS_FINGERPRINT = "d053267e664b9f173031fa71140e427ae0abf1bbad320c0c329b62c572fb7e2d"
 
 
@@ -83,6 +83,13 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
     def is_detector_implementation(node: ast.AST) -> bool:
         return bool(source == "scripts.quality.architecture_gate" and detector_is_pinned
                     and detector.lineno <= getattr(node, "lineno", -1) <= detector.end_lineno)
+    def reflective_origin(subject: ast.AST) -> str | None:
+        if (isinstance(subject, ast.Call) and isinstance(subject.func, ast.Name)
+                and subject.func.id == "vars" and len(subject.args) == 1):
+            subject = subject.args[0]
+        elif isinstance(subject, ast.Attribute) and subject.attr == "__dict__":
+            subject = subject.value
+        return aliases.get(subject.id, subject.id) if isinstance(subject, ast.Name) else None
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in {"exec", "eval"} and not is_detector_implementation(node):
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
@@ -155,11 +162,25 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             )
             if reflective & {"__builtins__", "builtins", "__import__", "exec", "eval", "PYTHONPATH"}:
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Subscript):
+            attribute = _constant_string(node.func.slice)
+            origin = reflective_origin(node.func.value)
+            if origin == "os" and (attribute is None or re.fullmatch(r"system|popen|spawn\w*|exec\w*", attribute)):
+                dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Call)
+                and isinstance(node.func.func, ast.Attribute) and node.func.func.attr == "get"):
+            origin = reflective_origin(node.func.func.value)
+            attribute = _constant_string(node.func.args[0]) if node.func.args else None
+            if origin == "os" and (attribute is None or re.fullmatch(r"system|popen|spawn\w*|exec\w*", attribute)):
+                dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"getattr", "setattr"} and node.args:
             subject = ast.unparse(node.args[0]); origin = aliases.get(subject, subject)
-            attribute = node.args[1].value if len(node.args) > 1 and isinstance(node.args[1], ast.Constant) else None
+            reflective_subject = reflective_origin(node.args[0])
+            attribute = _constant_string(node.args[1]) if len(node.args) > 1 else None
             if origin in {"sys", "site", "importlib", "runpy", "builtins"} and (attribute is None or attribute in {"path", "addsitedir", "import_module", "run_module", "run_path", "exec", "eval"}):
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+            if (origin == "os" or reflective_subject == "os") and (attribute is None or re.fullmatch(r"system|popen|spawn\w*|exec\w*", attribute)):
+                dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Assign) and "__import__" in ast.unparse(node):
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, (ast.Assign, ast.AugAssign, ast.Call)) and "PYTHON" in ast.unparse(node) and "PATH" in ast.unparse(node):
