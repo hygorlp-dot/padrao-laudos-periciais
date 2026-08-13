@@ -79,6 +79,8 @@ def validate_evidence(evidence: dict, *, baseline_version: str, sha: str) -> str
 
 
 def _safe_path(path: str) -> str:
+    if "\\" in path:
+        raise ValueError(f"noncanonical path: {path}")
     normalized = PurePosixPath(path).as_posix()
     if normalized.startswith("/") or ".." in PurePosixPath(normalized).parts:
         raise ValueError(f"unsafe path: {path}")
