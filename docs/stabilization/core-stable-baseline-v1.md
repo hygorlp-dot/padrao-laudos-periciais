@@ -4,7 +4,7 @@
 
 - `BASELINE_VERSION`: `V1`
 - `CORE_BASE_SHA`: `8530584c82061fb35018afd6638032ba8798b105`
-- `BASELINE_FINGERPRINT_SHA256`: `c832b3179c523cd97cf355b34b19a0d2ffdbe0dbd7fd60aaef0821ceefb683ef`
+- `BASELINE_FINGERPRINT_SHA256`: `084fe96eaff716fd85449819e3d4e06f381446cc59077ad5bde2fdfd279ddae8`
 - `ANALYZER_VERSION`: `1.0.0`
 - `BASELINE_IS_OBSERVATIONAL`: `TRUE`
 - `CORE_FEATURE_FREEZE`: `TRUE`
@@ -37,7 +37,10 @@ baseline são excluídos do manifesto para impedir autorreferência. Assim:
 `baselineVersion=V1` aceita somente `analyzerVersion=1.0.0`. Resultados de
 execução não são presumidos pelo analisador: são lidos do receipt
 `config/core-stable-baseline-evidence-v1.json`, cujo `coreBaseSha` deve coincidir
-com o commit analisado. Sem receipt, o resultado é `NOT_YET_PROVEN`.
+com o commit analisado. Para V1, seu digest canônico também é pinado pelo
+analisador e registrado como `evidenceReceiptSha256`; um dicionário apenas
+autodeclarado com o mesmo SHA é rejeitado. Sem receipt, o resultado é
+`NOT_YET_PROVEN`.
 
 Comando de reprodução:
 

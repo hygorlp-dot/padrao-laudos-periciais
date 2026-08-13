@@ -46,9 +46,20 @@
     }
   },
   "gateBaseline": [
-    "invariants", "fixtures", "privacy", "property tests", "gate tests",
-    "compileall", "historical critical mutation suite", "quality V2",
-    "schemas", "regression", "coverage report", "E2E positive",
-    "E2E negative", "diff check", "quality non-regression"
+    {"name": "invariants", "status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"},
+    {"name": "fixtures", "status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"},
+    {"name": "privacy", "status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"},
+    {"name": "property tests", "status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"},
+    {"name": "gate tests", "status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"},
+    {"name": "compileall", "status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"},
+    {"name": "historical critical mutation suite", "status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"},
+    {"name": "quality V2", "status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"},
+    {"name": "schemas", "status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"},
+    {"name": "regression", "status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"},
+    {"name": "coverage report", "status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"},
+    {"name": "E2E positive", "status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"},
+    {"name": "E2E negative", "status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"},
+    {"name": "diff check", "status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"},
+    {"name": "quality non-regression", "status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"}
   ]
 }

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.quality.core_baseline import build_baseline, canonical_bytes, semantic_bytes, verify_baseline
+from scripts.quality.core_baseline import build_baseline, canonical_bytes, semantic_bytes, validate_evidence, verify_baseline
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -97,6 +97,12 @@ def test_baseline_inventory_and_fingerprint_are_canonical(tmp_path):
     assert baseline["behavioralBaseline"]["status"] == "NOT_YET_PROVEN"
     with pytest.raises(ValueError, match="evidence SHA mismatch"):
         build_baseline(repo, sha, baseline_version="V1", evidence={"coreBaseSha": "0" * 40})
+    with pytest.raises(ValueError, match="not the pinned V1 receipt"):
+        build_baseline(repo, sha, baseline_version="V1", evidence={
+            "coreBaseSha": sha,
+            "behavioralBaseline": {"fullPytest": {"passed": 999999, "status": "PASS"}},
+            "gateBaseline": ["imaginary gate"],
+        })
     assert baseline["riskRegister"]
     assert {item["area"] for item in baseline["gapMatrix"]} >= {"Architecture Gate", "Replay", "Fault Injection"}
     fingerprint = hashlib.sha256(semantic_bytes(baseline)).hexdigest()
@@ -131,3 +137,14 @@ def test_baseline_rejects_registered_prefix_without_tracked_match(tmp_path):
 
     with pytest.raises(ValueError, match="matches no tracked content"):
         build_baseline(repo, _git(repo, "rev-parse", "HEAD"), baseline_version="V1")
+
+
+def test_official_evidence_receipt_is_pinned_and_dirty_copy_is_rejected():
+    root = Path(__file__).resolve().parents[1]
+    evidence = json.loads((root / "config/core-stable-baseline-evidence-v1.json").read_text(encoding="utf-8"))
+    digest = validate_evidence(evidence, baseline_version="V1", sha=evidence["coreBaseSha"])
+    assert digest == "1be3a4c334a1c317b5b79f52d246b201eed76020b4274f23533669327a4942a9"
+
+    evidence["behavioralBaseline"]["fullPytest"]["passed"] = 999999
+    with pytest.raises(ValueError, match="not the pinned V1 receipt"):
+        validate_evidence(evidence, baseline_version="V1", sha=evidence["coreBaseSha"])
