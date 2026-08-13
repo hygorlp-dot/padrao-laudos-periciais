@@ -304,6 +304,22 @@
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Aprovação sem independência",
                          "expected":  "INVALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/capability-boundary-v1.json",
+                         "dominio":  "CAPABILITY_SAFETY",
+                         "schema":  null,
+                         "consumer":  "tests/test_capability_contracts_v1.py::test_p0_p1_fixture_matrix_covers_boundaries_and_positive_controls",
+                         "finalidade":  "Matriz contratual P0/P1 e controles positivos do limite de aquisicao V1",
+                         "expected":  "DATASET"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/capability-exception-v1-valid.json",
+                         "dominio":  "CAPABILITY_SAFETY",
+                         "schema":  "capability-exception-v1.schema.json",
+                         "consumer":  "tests/test_capability_contracts_v1.py::test_contract_schemas_accept_exact_examples_and_reject_wildcard_exception",
+                         "finalidade":  "Excecao de capability exata vinculada a baseline imutavel",
+                         "expected":  "VALID"
                      }
                  ]
 }

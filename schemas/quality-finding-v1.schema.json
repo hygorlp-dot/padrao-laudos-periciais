@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/quality-finding-v1.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schemaVersion", "analyzer", "policyVersion", "code", "severity", "canonicalPath", "module", "location", "normalizedAstSha256"],
+  "properties": {
+    "schemaVersion": {"const": "1.0.0"}, "analyzer": {"enum": ["ARCHITECTURE_ANALYZER_V1", "CAPABILITY_ANALYZER_V1"]},
+    "policyVersion": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}, "code": {"type": "string", "minLength": 1},
+    "severity": {"enum": ["P0", "P1", "P2"]}, "canonicalPath": {"type": "string", "pattern": "^scripts/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*\\.py$"},
+    "module": {"type": "string", "minLength": 1}, "location": {"type": "object", "required": ["line", "column"], "additionalProperties": false, "properties": {"line": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 0}}},
+    "normalizedAstSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "allOf": [
+    {"if":{"properties":{"code":{"enum":["DYNAMIC_IMPORT_ACQUISITION","DYNAMIC_EXECUTION_ACQUISITION"]}},"required":["code"]},"then":{"properties":{"severity":{"const":"P0"}}}},
+    {"if":{"properties":{"code":{"enum":["EXECUTABLE_DESERIALIZATION_OR_NATIVE_LOADING","PROCESS_NAMESPACE_ACQUISITION","OS_PROCESS_MEMBER_ACQUISITION","SENSITIVE_NAMESPACE_ESCAPE","UNKNOWN_SENSITIVE_REFLECTION"]}},"required":["code"]},"then":{"properties":{"severity":{"const":"P1"}}}}
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "1.0.0", "policyVersion": "1.0.0", "analyzerVersion": "1.0.0", "ruleVersion": "1.0.0",
+  "findingCode": "PROCESS_NAMESPACE_ACQUISITION", "capabilityClass": "PROCESS_NAMESPACE_ACQUISITION",
+  "canonicalPath": "scripts/quality/example.py", "module": "scripts.quality.example", "acquisitionLocation": {"line": 7, "column": 0},
+  "normalizedAcquisitionAstSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "wholeFileSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "baselineCommit": "cccccccccccccccccccccccccccccccccccccccc", "acquiredCapability": "subprocess",
+  "justification": "Ferramenta de qualidade executa processo controlado e auditado.", "owner": "QUALITY_GOVERNANCE",
+  "reviewEvidence": "REVIEW-EXAMPLE-001", "disposition": "REMOVE_BY_EXPIRY", "reviewBy": "2027-01-31"
+}
