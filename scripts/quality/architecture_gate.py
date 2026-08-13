@@ -28,7 +28,7 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "08f6b99f4a4997374c2b9b2767f901607b076bd2c85897f1c83ed01aa62c6763"
-EXPECTED_DETECTOR_AST_SHA256 = "a6beef1eea16097f2e872ac54bdcd4d822c1f191d25ddc4c0f339a0362a14489"
+EXPECTED_DETECTOR_AST_SHA256 = "da111e2e0afa0e078b47667b01514830a3ddd48b782aceb539322256777176f3"
 
 
 def _python_files(root: Path) -> list[str]:
@@ -59,7 +59,7 @@ def _resolve_from(node: ast.ImportFrom, source: str, is_package: bool) -> str:
 
 
 def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) -> tuple[list[dict], list[dict]]:
-    edges: set[tuple[str, int]] = set()
+    edges: set[tuple[str, int, bool]] = set()
     dynamic: list[dict] = []
     aliases: dict[str, str] = {}
     loader_roots = {"importlib", "runpy", "pkgutil", "pydoc", "zipimport", "pkg_resources", "ctypes", "pickle"}
@@ -81,12 +81,12 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            edges.update((alias.name, node.lineno) for alias in node.names)
+            edges.update((alias.name, node.lineno, True) for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             base = _resolve_from(node, source, is_package)
             for alias in node.names:
                 candidate = f"{base}.{alias.name}" if base and alias.name != "*" else base
-                edges.add((candidate if candidate in modules else base, node.lineno))
+                edges.add((candidate if candidate in modules else base, node.lineno, False))
         elif isinstance(node, ast.Call):
             name = node.func.id if isinstance(node.func, ast.Name) else (
                 node.func.attr if isinstance(node.func, ast.Attribute) else ""
@@ -98,7 +98,7 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
                         or not isinstance(node.args[0].value, str) or node.args[0].value.startswith(".")):
                     dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
                 else:
-                    edges.add((node.args[0].value, node.lineno))
+                    edges.add((node.args[0].value, node.lineno, False))
         if isinstance(node, (ast.AugAssign, ast.Assign)) and "sys.path" in ast.unparse(node):
             dynamic.append({"code": "RUNTIME_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"exec", "eval"}:
@@ -130,7 +130,8 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
         source == "scripts.quality.architecture_gate" and detector_is_pinned
         and detector.lineno <= item["line"] <= detector.end_lineno
     )]
-    return ([{"target": target, "line": line} for target, line in sorted(edges)], dynamic)
+    return ([{"target": target, "line": line, "exact": exact}
+             for target, line, exact in sorted(edges)], dynamic)
 
 
 def _owner(path: str, components: list[dict]) -> list[str]:
@@ -183,7 +184,9 @@ def analyze_architecture(root: Path, registry: dict) -> dict:
             findings.append({"code": item["code"], "path": path, "module": module, "line": item["line"], "fingerprint": fingerprint})
         for item in imported:
             target = item["target"]
-            candidates = [known for known in modules if target == known or target.startswith(known + ".")]
+            candidates = [known for known in modules if target == known or (
+                not item["exact"] and target.startswith(known + ".")
+            )]
             sibling = source_package = module if path.endswith("/__init__.py") else module.rsplit(".", 1)[0]
             sibling = f"{source_package}.{target}"
             if sibling in modules: candidates.append(sibling)

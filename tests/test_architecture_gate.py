@@ -104,6 +104,56 @@ def test_relative_package_imports_resolve_and_dynamic_imports_fail_closed(tmp_pa
     assert any(item["code"] == "DYNAMIC_IMPORT_CAPABILITY" for item in validate_architecture(tmp_path, _registry()))
 
 
+@pytest.mark.parametrize("statement", [
+    "import scripts.domain.does_not_exist",
+    "import scripts.domain.does_not_exist as missing",
+    "import scripts.domain, scripts.domain.does_not_exist",
+])
+def test_plain_import_requires_the_full_first_party_module(monkeypatch, statement):
+    sources = {
+        "scripts/domain/__init__.py": "",
+        "scripts/domain/consumer.py": f"{statement}\n",
+    }
+    monkeypatch.setattr(architecture_gate, "_python_files", lambda _root: sorted(sources))
+    original_read_text = Path.read_text
+    monkeypatch.setattr(
+        Path,
+        "read_text",
+        lambda path, **kwargs: sources[path.relative_to(ROOT).as_posix()]
+        if path.is_relative_to(ROOT) and path.relative_to(ROOT).as_posix() in sources
+        else original_read_text(path, **kwargs),
+    )
+
+    findings = analyze_architecture(ROOT, _registry())["findings"]
+
+    assert any(
+        item["code"] == "FIRST_PARTY_IMPORT_UNRESOLVED"
+        and item["target"] == "scripts.domain.does_not_exist"
+        for item in findings
+    )
+
+
+def test_from_import_can_resolve_an_attribute_from_an_existing_package(monkeypatch):
+    sources = {
+        "scripts/domain/__init__.py": "EXPORTED = 1\n",
+        "scripts/domain/consumer.py": "from scripts.domain import EXPORTED\n",
+    }
+    monkeypatch.setattr(architecture_gate, "_python_files", lambda _root: sorted(sources))
+    original_read_text = Path.read_text
+    monkeypatch.setattr(
+        Path,
+        "read_text",
+        lambda path, **kwargs: sources[path.relative_to(ROOT).as_posix()]
+        if path.is_relative_to(ROOT) and path.relative_to(ROOT).as_posix() in sources
+        else original_read_text(path, **kwargs),
+    )
+
+    report = analyze_architecture(ROOT, _registry())
+
+    assert not any(item["code"] == "FIRST_PARTY_IMPORT_UNRESOLVED" for item in report["findings"])
+    assert any(edge["target"] == "scripts.domain" for edge in report["edges"])
+
+
 def test_parse_failure_is_not_silently_skipped(tmp_path):
     package = tmp_path / "scripts/domain"
     package.mkdir(parents=True)
