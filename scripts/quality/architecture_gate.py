@@ -30,10 +30,20 @@ EXPECTED_POLICY_SHA256 = "b45ec4989e2648c6c31a2416a7d28a60223f2f77bc79f455a23484
 
 
 def _python_files(root: Path) -> list[str]:
-    completed = subprocess.run(["git", "ls-files", "-z", "scripts/*.py", "scripts/**/*.py"], cwd=root, capture_output=True)
+    completed = subprocess.run(["git", "ls-files", "-s", "-z", "scripts/*.py", "scripts/**/*.py"], cwd=root, capture_output=True)
     if completed.returncode:
         return sorted(_safe_path(path.relative_to(root).as_posix()) for path in (root / "scripts").rglob("*.py"))
-    return sorted(_safe_path(item.decode("utf-8")) for item in completed.stdout.split(b"\0") if item and item.endswith(b".py"))
+    paths = []
+    for item in completed.stdout.split(b"\0"):
+        if not item:
+            continue
+        metadata, raw_path = item.split(b"\t", 1)
+        mode = metadata.split(b" ", 1)[0]
+        if mode not in {b"100644", b"100755"}:
+            raise ValueError(f"non-regular architecture source: {raw_path.decode('utf-8', errors='replace')}")
+        if raw_path.endswith(b".py"):
+            paths.append(_safe_path(raw_path.decode("utf-8")))
+    return sorted(paths)
 
 
 def _resolve_from(node: ast.ImportFrom, source: str, is_package: bool) -> str:
@@ -48,6 +58,10 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
     edges: set[tuple[str, int]] = set()
     dynamic: list[dict] = []
     aliases: dict[str, str] = {}
+    detector = next((node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "_imports"), None)
+    def is_detector_implementation(node: ast.AST) -> bool:
+        return bool(source == "scripts.quality.architecture_gate" and detector
+                    and detector.lineno <= getattr(node, "lineno", -1) <= detector.end_lineno)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names: aliases[alias.asname or alias.name.split(".")[0]] = alias.name
@@ -82,7 +96,7 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
         text = ast.unparse(node) if isinstance(node, (ast.Call, ast.Assign, ast.AugAssign)) else ""
         expanded = text
         for alias, origin in aliases.items(): expanded = expanded.replace(alias + ".", origin + ".")
-        if source != "scripts.quality.architecture_gate" and any(token in expanded for token in ("sys.path", "site.addsitedir", "importlib.import_module", "builtins.exec", "builtins.eval", "PYTHONPATH")):
+        if not is_detector_implementation(node) and any(token in expanded for token in ("sys.path", "site.addsitedir", "importlib.import_module", "builtins.exec", "builtins.eval", "PYTHONPATH", "sys.__dict__")):
             if isinstance(node, (ast.Call, ast.Assign, ast.AugAssign)):
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"getattr", "setattr"} and node.args:
@@ -94,6 +108,10 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, (ast.Assign, ast.AugAssign, ast.Call)) and "PYTHON" in ast.unparse(node) and "PATH" in ast.unparse(node):
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+    dynamic = [item for item in dynamic if not (
+        source == "scripts.quality.architecture_gate" and detector
+        and detector.lineno <= item["line"] <= detector.end_lineno
+    )]
     return ([{"target": target, "line": line} for target, line in sorted(edges)], dynamic)
 
 
@@ -142,7 +160,7 @@ def analyze_architecture(root: Path, registry: dict) -> dict:
             findings.append({"code": "ARCHITECTURE_SOURCE_UNPARSEABLE", "path": path, "detail": type(exc).__name__})
             continue
         imported, dynamic = _imports(tree, module, path.endswith("/__init__.py"), modules)
-        for item in dynamic if module != "scripts.quality.architecture_gate" else []:
+        for item in dynamic:
             fingerprint = hashlib.sha256(f'{module}:{item["line"]}:{item["ast"]}'.encode()).hexdigest()
             findings.append({"code": item["code"], "path": path, "module": module, "line": item["line"], "fingerprint": fingerprint})
         for item in imported:
@@ -172,7 +190,10 @@ def validate_architecture(root: Path, registry: dict) -> list[dict]:
     layers_by_component = {item.get("id"): item.get("layer") for item in registry.get("components", [])}
     allowed_layers = {(item.get("source"), item.get("target")) for item in registry.get("allowedLayerEdges", [])}
     forbidden = {(item["source"], item["target"]): item["rule"] for item in registry.get("forbiddenComponentEdges", [])}
-    debt = {(item["source"], item["target"]): item for item in registry.get("acceptedCurrentDependencies", [])}
+    debt_rows = registry.get("acceptedCurrentDependencies", [])
+    debt = {(item["source"], item["target"]): item for item in debt_rows}
+    if len(debt) != len(debt_rows):
+        findings.append({"code": "DUPLICATE_ARCHITECTURE_EXCEPTION"})
     observed_cross: set[tuple[str, str]] = set()
     observed_lines: dict[tuple[str, str], set[str]] = {}
     for edge in report["edges"]:

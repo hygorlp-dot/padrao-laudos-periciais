@@ -163,3 +163,21 @@ def test_import_capability_aliases_fail_closed(tmp_path, source):
     package = tmp_path / "scripts/domain"; package.mkdir(parents=True)
     (package / "x.py").write_text(source, encoding="utf-8")
     assert any(item["code"] == "DYNAMIC_IMPORT_CAPABILITY" for item in validate_architecture(tmp_path, _registry()))
+
+
+def test_governance_code_cannot_hide_dynamic_import_capabilities(tmp_path):
+    package = tmp_path / "scripts/quality"; package.mkdir(parents=True)
+    (package / "evil.py").write_text(
+        "import importlib\ngetattr(importlib, 'import_module')(name)\n",
+        encoding="utf-8",
+    )
+    assert any(item["code"] == "DYNAMIC_IMPORT_CAPABILITY" for item in validate_architecture(tmp_path, _registry()))
+
+
+def test_duplicate_architecture_debt_is_rejected(tmp_path):
+    package = tmp_path / "scripts/domain"; package.mkdir(parents=True)
+    (package / "x.py").write_text("VALUE=1\n", encoding="utf-8")
+    row = {"source": "scripts.application.a", "target": "scripts.domain.x",
+           "classification": "POTENTIAL_VIOLATION", "evidence": "x:1", "disposition": "REMOVE"}
+    findings = validate_architecture(tmp_path, _registry(acceptedCurrentDependencies=[row, row]))
+    assert any(item["code"] == "DUPLICATE_ARCHITECTURE_EXCEPTION" for item in findings)
