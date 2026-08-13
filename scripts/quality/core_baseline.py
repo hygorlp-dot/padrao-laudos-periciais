@@ -18,6 +18,9 @@ BASELINE_OUTPUTS = {
 PRIVATE_PREFIX = "referencias/privadas/"
 ANALYZER_VERSION = "1.0.0"
 SUPPORTED_BASELINES = {"V1": ANALYZER_VERSION}
+TRUSTED_EVIDENCE = {
+    ("V1", "8530584c82061fb35018afd6638032ba8798b105"): "1be3a4c334a1c317b5b79f52d246b201eed76020b4274f23533669327a4942a9"
+}
 CORE_CONFIGS = {
     "config/core-boundaries.json", "config/core-invariants.json",
     "config/core-registry-lock.json", "config/quality-baseline.json",
@@ -64,6 +67,15 @@ def _blob(repo: Path, sha: str, path: str) -> bytes:
 
 def _json_blob(repo: Path, sha: str, path: str) -> dict:
     return json.loads(_blob(repo, sha, path).decode("utf-8-sig"))
+
+
+def validate_evidence(evidence: dict, *, baseline_version: str, sha: str) -> str:
+    if evidence.get("coreBaseSha") != sha:
+        raise ValueError("behavioral evidence SHA mismatch")
+    digest = hashlib.sha256(canonical_bytes(evidence)).hexdigest()
+    if TRUSTED_EVIDENCE.get((baseline_version, sha)) != digest:
+        raise ValueError("behavioral evidence is not the pinned V1 receipt")
+    return digest
 
 
 def _safe_path(path: str) -> str:
@@ -185,8 +197,7 @@ def build_baseline(repo: Path, revision: str, *, baseline_version: str = "V1", e
     if SUPPORTED_BASELINES.get(baseline_version) != ANALYZER_VERSION:
         raise ValueError("baseline/analyzer version mismatch")
     sha = _exact_sha(repo, revision)
-    if evidence is not None and evidence.get("coreBaseSha") != sha:
-        raise ValueError("behavioral evidence SHA mismatch")
+    evidence_digest = validate_evidence(evidence, baseline_version=baseline_version, sha=sha) if evidence is not None else None
     boundaries = _json_blob(repo, sha, "config/core-boundaries.json")
     invariants = _json_blob(repo, sha, "config/core-invariants.json")
     fixtures = _json_blob(repo, sha, "tests/fixtures/core-fixtures.json")
@@ -249,6 +260,7 @@ def build_baseline(repo: Path, revision: str, *, baseline_version: str = "V1", e
         "baselineVersion": baseline_version,
         "analyzerVersion": ANALYZER_VERSION,
         "coreBaseSha": sha,
+        "evidenceReceiptSha256": evidence_digest,
         "coreManifest": manifest,
         "moduleInventory": sorted(modules, key=lambda item: item["path"]),
         "symbolInventory": sorted(symbols, key=lambda item: (item["path"], item["line"], item["name"])),
