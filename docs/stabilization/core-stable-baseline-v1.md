@@ -4,7 +4,7 @@
 
 - `BASELINE_VERSION`: `V1`
 - `CORE_BASE_SHA`: `8530584c82061fb35018afd6638032ba8798b105`
-- `BASELINE_FINGERPRINT_SHA256`: `f822feb75bbe2be68b31b916dfe4ea22d4d85e84ca21ac1f98b8b69aee5736b0`
+- `BASELINE_FINGERPRINT_SHA256`: `c832b3179c523cd97cf355b34b19a0d2ffdbe0dbd7fd60aaef0821ceefb683ef`
 - `ANALYZER_VERSION`: `1.0.0`
 - `BASELINE_IS_OBSERVATIONAL`: `TRUE`
 - `CORE_FEATURE_FREEZE`: `TRUE`
@@ -32,13 +32,19 @@ canônica do payload semântico, isto é, o JSON sem o campo
 mas seus bytes integrais naturalmente possuem outro hash. Os três artefatos da
 baseline são excluídos do manifesto para impedir autorreferência. Assim:
 
-`SAME_SHA + SAME_TRACKED_CONTENT + SAME_BASELINE_VERSION = SAME_BASELINE_FINGERPRINT`.
+`SAME_SHA + SAME_TRACKED_CONTENT + SAME_BASELINE_VERSION + SAME_ANALYZER_VERSION + SAME_EVIDENCE_RECEIPT = SAME_BASELINE_FINGERPRINT`.
+
+`baselineVersion=V1` aceita somente `analyzerVersion=1.0.0`. Resultados de
+execução não são presumidos pelo analisador: são lidos do receipt
+`config/core-stable-baseline-evidence-v1.json`, cujo `coreBaseSha` deve coincidir
+com o commit analisado. Sem receipt, o resultado é `NOT_YET_PROVEN`.
 
 Comando de reprodução:
 
 ```powershell
 python -m scripts.quality.core_baseline `
   --sha 8530584c82061fb35018afd6638032ba8798b105 `
+  --evidence config/core-stable-baseline-evidence-v1.json `
   --output config/core-stable-baseline-v1.json `
   --fingerprint config/core-stable-baseline-v1.sha256 `
   --check
@@ -108,7 +114,7 @@ declarado, seus boundaries e testes. Entre os conceitos registrados estão
 `FAIL_CLOSED`, `PRODUCER_NOT_VALIDATOR`, `NO_SILENT_LOSS`,
 `CORRECTION_PERSISTENCE`, `SEMANTIC_MONOTONICITY`, `IDEMPOTENCE`,
 `ORDER_INVARIANCE`, fidelidades de valor/unidade/data/norma/grounding,
-`NO_CERTAINTY_INFLATION`, `PROVENANCE_PRESERVATION` e
+`NO_CERTAINTY_INFLATION`, `PROVENANCE_FIDELITY` e
 `PROPOSAL_NOT_EFFECTIVE_WITHOUT_DECISION`.
 
 O modelo observado permanece:

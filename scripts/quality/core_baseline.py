@@ -17,6 +17,7 @@ BASELINE_OUTPUTS = {
 }
 PRIVATE_PREFIX = "referencias/privadas/"
 ANALYZER_VERSION = "1.0.0"
+SUPPORTED_BASELINES = {"V1": ANALYZER_VERSION}
 CORE_CONFIGS = {
     "config/core-boundaries.json", "config/core-invariants.json",
     "config/core-registry-lock.json", "config/quality-baseline.json",
@@ -77,7 +78,10 @@ def _safe_path(path: str) -> str:
 def _expand_path(spec: str, tracked: set[str]) -> set[str]:
     spec = _safe_path(spec)
     if spec not in tracked:
-        return {path for path in tracked if path.startswith(spec)}
+        matches = {path for path in tracked if path.startswith(spec)}
+        if not matches:
+            raise ValueError(f"registered path matches no tracked content: {spec}")
+        return matches
     return {spec}
 
 
@@ -176,9 +180,13 @@ def semantic_bytes(payload: dict) -> bytes:
     return canonical_bytes(semantic)
 
 
-def build_baseline(repo: Path, revision: str, *, baseline_version: str = "V1") -> dict:
+def build_baseline(repo: Path, revision: str, *, baseline_version: str = "V1", evidence: dict | None = None) -> dict:
     repo = repo.resolve()
+    if SUPPORTED_BASELINES.get(baseline_version) != ANALYZER_VERSION:
+        raise ValueError("baseline/analyzer version mismatch")
     sha = _exact_sha(repo, revision)
+    if evidence is not None and evidence.get("coreBaseSha") != sha:
+        raise ValueError("behavioral evidence SHA mismatch")
     boundaries = _json_blob(repo, sha, "config/core-boundaries.json")
     invariants = _json_blob(repo, sha, "config/core-invariants.json")
     fixtures = _json_blob(repo, sha, "tests/fixtures/core-fixtures.json")
@@ -234,6 +242,9 @@ def build_baseline(repo: Path, revision: str, *, baseline_version: str = "V1") -
             hotspot_metrics.append(metrics[(path, function)])
     invariant_inventory = [{key: item.get(key) for key in ("id", "severidade", "global", "bloqueante", "boundaries", "testes")} for item in invariants["invariants"]]
     boundary_inventory = [{key: item.get(key) for key in ("id", "paths", "invariants", "schemas", "tests", "consumers")} for item in boundaries["boundaries"]]
+    behavioral = evidence.get("behavioralBaseline") if evidence else {
+        "status": "NOT_YET_PROVEN", "evidenceLevel": "NOT_YET_PROVEN"
+    }
     payload = {
         "baselineVersion": baseline_version,
         "analyzerVersion": ANALYZER_VERSION,
@@ -250,22 +261,14 @@ def build_baseline(repo: Path, revision: str, *, baseline_version: str = "V1") -
         "configDependencies": sorted(item["path"] for item in manifest if item["category"] in {"INVARIANT", "BOUNDARY", "QUALITY_CONFIG"}),
         "fixtureBaseline": {"registeredCount": len(fixtures.get("fixtures", [])), "paths": sorted(item["arquivo"] for item in fixtures.get("fixtures", []))},
         "testBaseline": {
-            "fullPytest": {"passed": 512, "subtestsPassed": 100, "status": "PASS", "evidenceLevel": "PROVEN_BY_TEST"},
-            "governance": {"passed": 46, "status": "PASS", "evidenceLevel": "PROVEN_BY_TEST"},
             "testFiles": sorted(item["path"] for item in manifest if item["category"] == "TEST"),
             "propertyTests": ["tests/test_core_properties.py", "tests/test_core_properties_v2.py"],
             "e2ePositive": "tests/test_final_closure_r7.py",
             "e2eNegative": "tests/test_aceitacao_final_motor_v1.py",
             "evidenceLevels": ["PROVEN_BY_TEST", "PROTECTED_BY_GATE", "DOCUMENTED_ONLY", "NOT_YET_PROVEN"],
         },
-        "behavioralBaseline": {
-            "schemas": {"validated": 20, "status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"},
-            "fixtures": {"validated": 34, "registered": len(fixtures.get("fixtures", [])), "status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"},
-            "verifyCoreFull": {"status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"},
-            "repositorySafety": {"status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"},
-            "privacy": {"status": "PASS", "trackedPrivatePaths": 0, "evidenceLevel": "PROTECTED_BY_GATE"},
-        },
-        "gateBaseline": [{"name": name, "status": "PASS", "evidenceLevel": "PROTECTED_BY_GATE"} for name in ["invariants", "fixtures", "privacy", "property tests", "gate tests", "compileall", "historical critical mutation suite", "quality V2", "schemas", "regression", "coverage report", "E2E positive", "E2E negative", "diff check", "quality non-regression"]],
+        "behavioralBaseline": behavioral,
+        "gateBaseline": evidence.get("gateBaseline", []) if evidence else [],
         "hotspotMetrics": hotspot_metrics,
         "metricDefinition": {"version": "1.0.0", "decisionCountCandidate": "1 + AST branch nodes + boolean operands + try paths", "complexityIsAutomaticRefactorTrigger": False},
         "riskRegister": [
@@ -304,9 +307,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sha", required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--fingerprint", type=Path)
+    parser.add_argument("--evidence", type=Path)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args(argv)
-    payload = build_baseline(args.repo, args.sha)
+    evidence = json.loads(args.evidence.read_text(encoding="utf-8")) if args.evidence else None
+    payload = build_baseline(args.repo, args.sha, evidence=evidence)
     data = canonical_bytes(payload)
     digest = hashlib.sha256(semantic_bytes(payload)).hexdigest()
     if args.check:

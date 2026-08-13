@@ -94,9 +94,9 @@ def test_baseline_inventory_and_fingerprint_are_canonical(tmp_path):
     assert baseline["boundaryInventory"][0]["id"] == "MOTOR"
     assert baseline["fixtureBaseline"]["registeredCount"] == 1
     assert baseline["analyzerVersion"] == "1.0.0"
-    assert baseline["testBaseline"]["fullPytest"]["status"] == "PASS"
-    assert baseline["behavioralBaseline"]["verifyCoreFull"]["status"] == "PASS"
-    assert baseline["behavioralBaseline"]["privacy"]["trackedPrivatePaths"] == 0
+    assert baseline["behavioralBaseline"]["status"] == "NOT_YET_PROVEN"
+    with pytest.raises(ValueError, match="evidence SHA mismatch"):
+        build_baseline(repo, sha, baseline_version="V1", evidence={"coreBaseSha": "0" * 40})
     assert baseline["riskRegister"]
     assert {item["area"] for item in baseline["gapMatrix"]} >= {"Architecture Gate", "Replay", "Fault Injection"}
     fingerprint = hashlib.sha256(semantic_bytes(baseline)).hexdigest()
@@ -118,3 +118,16 @@ def test_baseline_rejects_unknown_or_private_tracked_boundary_paths(tmp_path):
 
     with pytest.raises(ValueError, match="private path"):
         build_baseline(repo, private_sha, baseline_version="V1")
+
+
+def test_baseline_rejects_registered_prefix_without_tracked_match(tmp_path):
+    repo, sha = _synthetic_repo(tmp_path)
+    path = repo / "config/core-boundaries.json"
+    doc = json.loads(_git(repo, "show", f"{sha}:config/core-boundaries.json"))
+    doc["boundaries"][0]["paths"] = ["scripts/does-not-exist-"]
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    _git(repo, "add", "--", "config/core-boundaries.json")
+    _git(repo, "commit", "-m", "unknown boundary")
+
+    with pytest.raises(ValueError, match="matches no tracked content"):
+        build_baseline(repo, _git(repo, "rev-parse", "HEAD"), baseline_version="V1")
