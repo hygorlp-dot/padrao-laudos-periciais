@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import statistics
 import subprocess
 import sys
 import time
@@ -68,9 +69,17 @@ def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_fil
     ]
     durations["architecture"] = time.perf_counter() - architecture_started
     if durations["architecture"] > performance_budgets.get("architecture", float("inf")):
-        retry_started = time.perf_counter(); retry_errors = validate_architecture(root)
-        durations["architecture"] = min(durations["architecture"], time.perf_counter() - retry_started)
-        architecture_errors.extend(_finding("ARCHITECTURE_DIRECTION", "QUALITY_GATE", item.get("code", "ARCHITECTURE_INVALID"), str(item), "P1") for item in retry_errors)
+        samples = [durations["architecture"]]
+        for _ in range(2):
+            retry_started = time.perf_counter(); retry_errors = validate_architecture(root)
+            samples.append(time.perf_counter() - retry_started)
+            architecture_errors.extend(_finding("ARCHITECTURE_DIRECTION", "QUALITY_GATE", item.get("code", "ARCHITECTURE_INVALID"), str(item), "P1") for item in retry_errors)
+        durations["architecture"] = statistics.median(samples)
+        if durations["architecture"] > performance_budgets["architecture"]:
+            findings.append(_finding(
+                "QUALITY_NON_REGRESSION", "QUALITY_GATE", "GATE_COMPONENT_DURATION_REGRESSION",
+                f"architecture median={durations['architecture']:.3f}s budget={performance_budgets['architecture']:.3f}s", "P1",
+            ))
     direct = (("invariants", validate_configuration(root)), ("fixtures", validate_fixture_registry(root)),
               ("architecture", architecture_errors))
     for name, errors in direct:
@@ -102,10 +111,18 @@ def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_fil
         component_started = time.perf_counter(); completed = _run(runner, command, root)
         durations[name] = time.perf_counter() - component_started
         if completed.returncode == 0 and name in performance_budgets and durations[name] > performance_budgets[name]:
-            retry_started = time.perf_counter(); retry = _run(runner, command, root)
-            durations[name] = min(durations[name], time.perf_counter() - retry_started)
-            if retry.returncode != 0:
-                completed = retry
+            samples = [durations[name]]
+            for _ in range(2):
+                retry_started = time.perf_counter(); retry = _run(runner, command, root)
+                samples.append(time.perf_counter() - retry_started)
+                if retry.returncode != 0:
+                    completed = retry
+            durations[name] = statistics.median(samples)
+            if durations[name] > performance_budgets[name]:
+                findings.append(_finding(
+                    "QUALITY_NON_REGRESSION", "QUALITY_GATE", "GATE_COMPONENT_DURATION_REGRESSION",
+                    f"{name} median={durations[name]:.3f}s budget={performance_budgets[name]:.3f}s", "P1",
+                ))
         passed = completed.returncode == 0; checks.append((name, passed))
         if not passed:
             reason = (completed.stderr or completed.stdout or f"exit {completed.returncode}").strip().splitlines()[-1]
