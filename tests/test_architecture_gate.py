@@ -677,3 +677,31 @@ def test_additional_stdlib_execution_capabilities_fail_closed(monkeypatch):
         ("PROCESS_EXECUTION_CAPABILITY", "scripts/domain/process_runtime6.py"),
         ("PROCESS_EXECUTION_CAPABILITY", "scripts/domain/process_runtime7.py"),
     } <= capabilities
+
+
+@pytest.mark.parametrize("source", [
+    "import os\nrun = os.system if flag else safe\nrun('tool')\n",
+    "import os\ndef f(run=os.system):\n    run('tool')\n",
+    "from os import system as run\nrun('tool')\n",
+    "import asyncio\nrun = asyncio.create_subprocess_exec if flag else safe\nrun('tool')\n",
+    "import pty\nrun = pty.spawn\nrun(['tool'])\n",
+    "from concurrent.futures import ProcessPoolExecutor as Pool\nPool()\n",
+    "import os\nbox = [os.system if flag else safe]\nbox[0]('tool')\n",
+])
+def test_process_capability_branch_defaults_and_direct_imports_fail_closed(source):
+    _, findings = architecture_gate._imports(
+        architecture_gate.ast.parse(source), "scripts.domain.process_acquisition", False, set()
+    )
+    assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "import platform\ngetattr(platform, 'os').system('tool')\n",
+    "import platform\nplatform.__dict__['os'].system('tool')\n",
+    "import platform\nvars(platform)['os'].system('tool')\n",
+])
+def test_reflective_platform_os_process_acquisition_fails_closed(source):
+    _, findings = architecture_gate._imports(
+        architecture_gate.ast.parse(source), "scripts.domain.platform_reflection", False, set()
+    )
+    assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
