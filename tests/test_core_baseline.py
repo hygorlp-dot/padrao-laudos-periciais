@@ -143,7 +143,7 @@ def test_official_evidence_receipt_is_pinned_and_dirty_copy_is_rejected():
     root = Path(__file__).resolve().parents[1]
     evidence = json.loads((root / "config/core-stable-baseline-evidence-v1.json").read_text(encoding="utf-8"))
     digest = validate_evidence(evidence, baseline_version="V1", sha=evidence["coreBaseSha"])
-    assert digest == "1be3a4c334a1c317b5b79f52d246b201eed76020b4274f23533669327a4942a9"
+    assert digest == "ee132b36672e7d5c8c5392124c8977bb70c7d6b478cec801b02f9ec642f0680c"
 
     evidence["behavioralBaseline"]["fullPytest"]["passed"] = 999999
     with pytest.raises(ValueError, match="not the pinned V1 receipt"):

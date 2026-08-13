@@ -11,7 +11,7 @@
     },
     "governance": {
       "command": "python -m pytest tests/test_agentic_governance.py -q",
-      "passed": 46,
+      "passed": 47,
       "status": "PASS",
       "evidenceLevel": "PROVEN_BY_TEST"
     },
