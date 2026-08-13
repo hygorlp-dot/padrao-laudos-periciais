@@ -1,0 +1,12 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://padrao-laudos-periciais.local/schemas/architecture-baseline-v1.schema.json",
+  "type":"object","additionalProperties":false,
+  "required":["schemaVersion","baselineCommit","policyVersion","policySha256","allowedDispositions","exceptions"],
+  "properties":{
+    "schemaVersion":{"const":"1.0.0"},"baselineCommit":{"type":"string","pattern":"^[0-9a-f]{40}$"},
+    "policyVersion":{"const":"1.0.0"},"policySha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "allowedDispositions":{"const":["REMOVE_BY_ARCHITECTURE_DEBT"]},
+    "exceptions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["code","canonicalPath","line","normalizedAstSha256","wholeFileSha256","owner","justification","disposition","reviewBy"],"properties":{"code":{"enum":["DYNAMIC_ARCHITECTURE_BYPASS","DISALLOWED_COMPONENT_DEPENDENCY","DISALLOWED_LAYER_DEPENDENCY","ARCHITECTURE_CYCLE"]},"canonicalPath":{"type":"string","pattern":"^scripts/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*\\.py$"},"line":{"type":"integer","minimum":1},"normalizedAstSha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"wholeFileSha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"owner":{"type":"string","minLength":1},"justification":{"type":"string","minLength":20},"disposition":{"const":"REMOVE_BY_ARCHITECTURE_DEBT"},"reviewBy":{"type":"string","format":"date"}}}}
+  }
+}

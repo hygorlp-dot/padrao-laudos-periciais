@@ -1,17 +1,8 @@
 {
   "schemaVersion": "1.0.0",
   "baselineCommit": "c1dda7b34ab6c68475f1992029203554205a2ec7",
-  "exceptions": [
-    {
-      "code": "DYNAMIC_ARCHITECTURE_BYPASS",
-      "canonicalPath": "scripts/quality/fixture_registry.py",
-      "line": 30,
-      "normalizedAstSha256": "ecf5d3ccb40c5e9d98c34f82640fe5a2b403d714c683c3d457c162ab493f9de6",
-      "wholeFileSha256": "cbb0454d2895cf47e0b6842e610fda327074edf6e86c684612bd3ef74cf1e97e",
-      "owner": "QUALITY_GOVERNANCE",
-      "justification": "Registry loads the repository-owned schema validator to inspect its declared fixture discovery roots without importing production domain modules.",
-      "disposition": "REMOVE_BY_ARCHITECTURE_DEBT",
-      "reviewBy": "2026-12-31"
-    }
-  ]
+  "policyVersion": "1.0.0",
+  "policySha256": "cd904739cc012290a659bd3aea16872e9a15a65e8bc582c74f031b0e401912c9",
+  "allowedDispositions": ["REMOVE_BY_ARCHITECTURE_DEBT"],
+  "exceptions": []
 }

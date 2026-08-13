@@ -1,6 +1,14 @@
 {
   "policyVersion": "1.0.0",
   "productionRoots": ["scripts/"],
+  "allowedLayerDependencies": {
+    "INGESTION": ["INGESTION"],
+    "DOMAIN": ["INGESTION", "DOMAIN", "ASSURANCE", "SUPPORT"],
+    "OUTPUT": ["DOMAIN", "ASSURANCE", "SUPPORT"],
+    "ASSURANCE": ["DOMAIN", "OUTPUT", "SUPPORT"],
+    "SUPPORT": ["SUPPORT"],
+    "GOVERNANCE": ["GOVERNANCE"]
+  },
   "components": [
     {"id":"PJE","layer":"INGESTION","paths":["scripts/extracao_pje/"],"allowedDependencies":[]},
     {"id":"TRIAGE","layer":"DOMAIN","paths":["scripts/triagem_pericial/"],"allowedDependencies":["PJE"]},

@@ -1,4 +1,4 @@
-"""Policy-free deterministic inventory of candidate Git-tree Python sources."""
+"""Policy-free deterministic inventory and blob reads from one exact Git tree."""
 from __future__ import annotations
 
 import subprocess
@@ -16,18 +16,37 @@ def canonical_python_path(path: str, roots: tuple[str, ...]) -> str:
     return path
 
 
-def tracked_python_inventory(root, roots: tuple[str, ...] = ("scripts/",)) -> tuple[str, ...]:
-    completed = subprocess.run(["git", "ls-files", "-s", "-z", "--", *roots], cwd=root, capture_output=True)
+def _git(root, *args: str, text: bool = True):
+    completed = subprocess.run(["git", *args], cwd=root, capture_output=True, text=text)
     if completed.returncode:
-        raise RuntimeError("tracked Python inventory unavailable")
-    paths: list[str] = []
-    for record in completed.stdout.split(b"\0"):
+        raise RuntimeError((completed.stderr if text else completed.stderr.decode(errors="replace")) or "Git object unavailable")
+    return completed.stdout
+
+
+def candidate_tree(root, commitish: str, *, expected_tree: str | None = None) -> tuple[str, str]:
+    commit = _git(root, "rev-parse", f"{commitish}^{{commit}}").strip()
+    tree = _git(root, "rev-parse", f"{commit}^{{tree}}").strip()
+    if expected_tree is not None and tree != expected_tree:
+        raise ValueError("candidate commit/tree mismatch")
+    if len(commit) != 40 or len(tree) != 40:
+        raise ValueError("candidate identity is not SHA-1 object identity")
+    return commit, tree
+
+
+def tree_python_sources(root, tree: str, roots: tuple[str, ...] = ("scripts/",)) -> dict[str, str]:
+    raw = _git(root, "ls-tree", "-r", "-z", tree, "--", *roots, text=False)
+    sources: dict[str, str] = {}
+    for record in raw.split(b"\0"):
         if not record:
             continue
         metadata, raw_path = record.split(b"\t", 1)
-        if metadata.split(b" ", 1)[0] not in {b"100644", b"100755"}:
-            raise ValueError(f"non-regular architecture source: {raw_path!r}")
+        mode, kind, blob = metadata.split(b" ", 2)
         path = raw_path.decode("utf-8", errors="strict")
-        if path.endswith(".py"):
-            paths.append(canonical_python_path(path, roots))
-    return tuple(sorted(paths))
+        if not path.endswith(".py"):
+            continue
+        if mode not in {b"100644", b"100755"} or kind != b"blob":
+            raise ValueError(f"non-regular architecture source: {path}")
+        path = canonical_python_path(path, roots)
+        content = _git(root, "cat-file", "blob", blob.decode(), text=False)
+        sources[path] = content.decode("utf-8", errors="strict")
+    return dict(sorted(sources.items()))
