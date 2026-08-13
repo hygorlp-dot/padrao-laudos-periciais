@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import validate_configuration
+from .architecture_analyzer import run_architecture_gate
 from .fixture_registry import validate_fixture_registry
 from .metrics import analyze_complexity, parse_coverage_totals, validate_quality_baseline
 
@@ -49,6 +50,9 @@ def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_fil
         if git.returncode != 0:
             findings.append(_finding("FAIL_CLOSED", "REPOSITORY", "git ls-files", git.stderr or "git indisponível", "P1"))
     privacy = check_private_tracking(tracked_files); checks.append(("privacy", not privacy)); findings.extend(privacy)
+    architecture = run_architecture_gate(root); checks.append(("architecture analyzer", not architecture))
+    for item in architecture:
+        findings.append(_finding("FAIL_CLOSED", "ARCHITECTURE", item.get("canonicalPath", "architecture analyzer"), item.get("detail", item.get("code", "architecture finding")), item.get("severity", "P1")))
     commands = [
         ("property tests", [sys.executable, "-m", "pytest", "-q", "tests/test_core_properties.py"], "SEMANTIC_MONOTONICITY", "CORE"),
         ("gate tests", [sys.executable, "-m", "pytest", "-q", "tests/test_repository_safety_gate.py"], "FAIL_CLOSED", "REPOSITORY"),

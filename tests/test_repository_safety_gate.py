@@ -132,6 +132,16 @@ def test_verify_core_propagates_error_and_never_reports_false_pass(tmp_path):
     assert any(item["teste"] == "property tests" for item in result.findings)
 
 
+def test_architecture_findings_block_the_integrated_gate(monkeypatch, tmp_path):
+    monkeypatch.setattr(verify_core, "validate_configuration", lambda _root: [])
+    monkeypatch.setattr(verify_core, "validate_fixture_registry", lambda _root: [])
+    monkeypatch.setattr(verify_core, "run_architecture_gate", lambda _root: [{"code": "ARCHITECTURE_CYCLE", "canonicalPath": "scripts/a.py", "detail": "cycle"}])
+    runner = lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "", "")
+    result = verify_core.run_gate("fast", tmp_path, runner=runner, tracked_files=[])
+    assert result.result == "FAIL"
+    assert any(item["boundary"] == "ARCHITECTURE" for item in result.findings)
+
+
 def test_verify_core_main_propagates_exit_code(monkeypatch):
     failed = GateResult("FAIL", 9, (), ({"invariant":"FAIL_CLOSED","boundary":"CORE","teste":"x","motivo":"y","severidade":"P0"},), 0.0)
     monkeypatch.setattr(verify_core, "run_gate", lambda *_args, **_kwargs: failed)
