@@ -27,7 +27,7 @@ def _synthetic_repo(tmp_path: Path) -> tuple[Path, str]:
         },
         "config/core-boundaries.json": {
             "schema_version": "1.0.0",
-            "boundaries": [{"id": "MOTOR", "paths": ["scripts/motor/"], "invariants": ["FAIL_CLOSED"], "schemas": ["schemas/motor.schema.json"], "tests": ["tests/test_motor.py"], "consumers": []}],
+            "boundaries": [{"id": "MOTOR", "paths": ["scripts/motor/", "docs/padroes/protocolo-"], "invariants": ["FAIL_CLOSED"], "schemas": ["schemas/motor.schema.json"], "tests": ["tests/test_motor.py"], "consumers": []}],
         },
         "tests/fixtures/core-fixtures.json": {
             "schema_version": "1.0.0",
@@ -42,6 +42,8 @@ def _synthetic_repo(tmp_path: Path) -> tuple[Path, str]:
         "tests/test_motor.py": "def test_motor():\n    assert True\n",
         "tests/fixtures/motor.json": {"ok": True},
         "requirements.txt": "jsonschema==4.0.0\n",
+        "docs/padroes/protocolo-one.md": "# Protocol one\n",
+        "docs/padroes/protocolo-two.md": "# Protocol two\n",
     }
     for relative, content in files.items():
         path = repo / relative
@@ -81,10 +83,20 @@ def test_baseline_inventory_and_fingerprint_are_canonical(tmp_path):
     assert baseline["baselineVersion"] == "V1"
     assert [item["path"] for item in baseline["coreManifest"]] == sorted(item["path"] for item in baseline["coreManifest"])
     assert baseline["moduleInventory"][0]["path"] == "scripts/motor/__init__.py"
+    assert {item["path"] for item in baseline["coreManifest"]} >= {
+        "docs/padroes/protocolo-one.md", "docs/padroes/protocolo-two.md"
+    }
+    assert {tuple(edge.values()) for edge in baseline["dependencyEdges"]} >= {
+        ("scripts.motor", "scripts.motor.core")
+    }
     assert any(symbol["name"] == "executar" for symbol in baseline["symbolInventory"])
     assert baseline["invariantInventory"][0]["id"] == "FAIL_CLOSED"
     assert baseline["boundaryInventory"][0]["id"] == "MOTOR"
     assert baseline["fixtureBaseline"]["registeredCount"] == 1
+    assert baseline["analyzerVersion"] == "1.0.0"
+    assert baseline["testBaseline"]["fullPytest"]["status"] == "PASS"
+    assert baseline["behavioralBaseline"]["verifyCoreFull"]["status"] == "PASS"
+    assert baseline["behavioralBaseline"]["privacy"]["trackedPrivatePaths"] == 0
     assert baseline["riskRegister"]
     assert {item["area"] for item in baseline["gapMatrix"]} >= {"Architecture Gate", "Replay", "Fault Injection"}
     fingerprint = hashlib.sha256(semantic_bytes(baseline)).hexdigest()
