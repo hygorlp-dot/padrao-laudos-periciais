@@ -11,14 +11,24 @@ def _registry(**changes):
     data = {
         "schemaVersion": "1.0.0",
         "components": [
-            {"id": "DOMAIN", "prefixes": ["scripts/domain/"]},
-            {"id": "APPLICATION", "prefixes": ["scripts/application/"]},
-            {"id": "GOVERNANCE", "prefixes": ["scripts/quality/"]},
+            {"id": "DOMAIN", "layer": "DOMAIN_CORE", "prefixes": ["scripts/domain/"]},
+            {"id": "APPLICATION", "layer": "APPLICATION", "prefixes": ["scripts/application/"]},
+            {"id": "GOVERNANCE", "layer": "QUALITY_GOVERNANCE", "prefixes": ["scripts/quality/"]},
+            {"id": "INFRA", "layer": "INFRASTRUCTURE", "prefixes": ["scripts/infra/"]},
+        ],
+        "baselineSha": "0" * 40,
+        "allowedLayerEdges": [
+            {"source": "DOMAIN_CORE", "target": "DOMAIN_CORE"},
+            {"source": "APPLICATION", "target": "APPLICATION"},
+            {"source": "APPLICATION", "target": "DOMAIN_CORE"},
+            {"source": "QUALITY_GOVERNANCE", "target": "QUALITY_GOVERNANCE"},
+            {"source": "INFRASTRUCTURE", "target": "INFRASTRUCTURE"},
         ],
         "allowedInternalEdges": [],
         "acceptedCurrentDependencies": [],
         "forbiddenComponentEdges": [
             {"source": "DOMAIN", "target": "APPLICATION", "rule": "DOMAIN_INDEPENDENT"},
+            {"source": "DOMAIN", "target": "GOVERNANCE", "rule": "CORE_NOT_GOVERNANCE"},
             {"source": "DOMAIN", "target": "GOVERNANCE", "rule": "CORE_NOT_GOVERNANCE"},
             {"source": "APPLICATION", "target": "GOVERNANCE", "rule": "PRODUCTION_NOT_GOVERNANCE"},
         ],
@@ -30,7 +40,7 @@ def _registry(**changes):
 def test_current_repository_architecture_is_registered_and_green():
     registry = json.loads((ROOT / "config/core-architecture-v1.json").read_text(encoding="utf-8"))
     report = analyze_architecture(ROOT, registry)
-    assert report["findings"] == []
+    assert validate_architecture(ROOT, registry) == []
     assert report["modules"]
     assert report["edges"]
 
@@ -59,7 +69,7 @@ def test_new_cross_component_edge_requires_exact_debt_record(tmp_path):
         "classification": "ACCEPTED_CURRENT_DEPENDENCY", "evidence": "synthetic",
         "disposition": "CHARACTERIZE_BEFORE_REFACTOR",
     }])
-    assert validate_architecture(tmp_path, registry) == []
+    assert any(item["code"] == "ARCHITECTURE_EXCEPTION_NOT_IN_BASELINE" for item in validate_architecture(tmp_path, registry))
 
 
 def test_unknown_module_duplicate_owner_and_stale_debt_fail_closed(tmp_path):
@@ -105,3 +115,38 @@ def test_parse_failure_is_not_silently_skipped(tmp_path):
 def test_report_is_deterministic():
     registry = json.loads((ROOT / "config/core-architecture-v1.json").read_text(encoding="utf-8"))
     assert analyze_architecture(ROOT, registry) == analyze_architecture(ROOT, registry)
+
+
+def test_registry_cannot_collapse_the_constitution(tmp_path):
+    (tmp_path / "scripts/domain").mkdir(parents=True)
+    (tmp_path / "scripts/domain/rule.py").write_text("VALUE=1\n", encoding="utf-8")
+    collapsed = {"schemaVersion": "evil", "components": [{"id": "ALL", "prefixes": ["scripts/"]}],
+                 "forbiddenComponentEdges": [], "acceptedCurrentDependencies": []}
+    assert any(item["code"] == "ARCHITECTURE_REGISTRY_POLICY_INVALID" for item in validate_architecture(tmp_path, collapsed))
+
+
+def test_relative_dynamic_import_and_sys_path_mutation_fail_closed(tmp_path):
+    package = tmp_path / "scripts/domain"; package.mkdir(parents=True)
+    (package / "rule.py").write_text("VALUE=1\n", encoding="utf-8")
+    (package / "dynamic.py").write_text(
+        "import importlib,sys\nimportlib.import_module('.rule','scripts.domain')\nsys.path.insert(0,'x')\n",
+        encoding="utf-8",
+    )
+    codes = {item["code"] for item in validate_architecture(tmp_path, _registry())}
+    assert {"DYNAMIC_IMPORT_UNRESOLVED", "RUNTIME_IMPORT_PATH_MUTATION"} <= codes
+
+
+def test_debt_evidence_and_component_cycles_are_mechanically_checked(tmp_path):
+    for package in ("domain", "application", "infra", "quality"):
+        (tmp_path / f"scripts/{package}").mkdir(parents=True)
+    (tmp_path / "scripts/domain/a.py").write_text("from scripts.application import b\n", encoding="utf-8")
+    (tmp_path / "scripts/application/b.py").write_text("from scripts.domain import a\n", encoding="utf-8")
+    (tmp_path / "scripts/infra/x.py").write_text("VALUE=1\n", encoding="utf-8")
+    (tmp_path / "scripts/quality/q.py").write_text("VALUE=1\n", encoding="utf-8")
+    registry = _registry(acceptedCurrentDependencies=[
+        {"source": "scripts.domain.a", "target": "scripts.application.b", "classification": "POTENTIAL_VIOLATION", "evidence": "wrong:99", "disposition": "REMOVE"},
+        {"source": "scripts.application.b", "target": "scripts.domain.a", "classification": "POTENTIAL_VIOLATION", "evidence": "scripts/application/b.py:1", "disposition": "REMOVE"},
+    ])
+    codes = {item["code"] for item in validate_architecture(tmp_path, registry)}
+    assert "ARCHITECTURE_EXCEPTION_EVIDENCE_MISMATCH" in codes
+    assert "NEW_ARCHITECTURE_CYCLE" in codes
