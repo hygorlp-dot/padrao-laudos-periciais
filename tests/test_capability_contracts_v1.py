@@ -88,6 +88,7 @@ def test_p0_p1_fixture_matrix_covers_boundaries_and_positive_controls():
         "ASYNCIO_PUBLIC_PROCESS", "CONCURRENT_PUBLIC_PROCESS_POOL", "EXECUTABLE_DESERIALIZER_CLASS",
         "EXCEPTION_MODULE_PATH_MISMATCH", "BOOTSTRAP_ANALYZER_DIGEST_MISMATCH",
         "BOOTSTRAP_POLICY_DIGEST_MISMATCH", "BOOTSTRAP_SCHEMA_DIGEST_MISMATCH", "BOOTSTRAP_PIN_REGISTRY_TAMPER",
+        "BOOTSTRAP_VERIFIER_TAMPER", "BOOTSTRAP_INVENTORY_PARSER_TAMPER", "BOOTSTRAP_BLOCKING_ADAPTER_TAMPER",
     }
     assert required_families <= {case["boundaryFamily"] for case in matrix["cases"]}
 
@@ -109,6 +110,16 @@ def test_policy_closes_namespace_member_and_bootstrap_contracts():
     bootstrap = policy["integrityBootstrap"]
     assert bootstrap["failurePolicy"] == "FAIL_CLOSED"
     assert bootstrap["ordinaryExceptionsMayAuthorizeBootstrap"] is False
+    assert bootstrap["verifierProvenance"] == "PROTECTED_BASE_BLOB_NOT_CANDIDATE"
+    assert bootstrap["workflowProvenance"] == "PROTECTED_BASE_WORKFLOW"
+    required_tcb = {
+        "scripts/quality/capability_bootstrap.py", "scripts/quality/repository_inventory.py",
+        "scripts/quality/ast_inventory.py", "scripts/quality/capability_analyzer.py",
+        "scripts/quality/capability_gate_adapter.py", "scripts/quality/verify_core.py",
+        "config/capability-policy-v1.json", "schemas/capability-policy-v1.schema.json",
+        "schemas/capability-exception-v1.schema.json", "schemas/quality-finding-v1.schema.json",
+    }
+    assert required_tcb <= set(bootstrap["candidateEnforcementArtifacts"])
 
 
 def test_exception_lifecycle_and_atomic_topology_are_fail_closed():

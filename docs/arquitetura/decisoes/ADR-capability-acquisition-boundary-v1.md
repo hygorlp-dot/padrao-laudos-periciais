@@ -17,5 +17,5 @@ O subset Python seguro é restrito e fail-closed. Import dinâmico, execução d
 - Não há interpretação abstrata downstream de containers ou controle de fluxo.
 - Um AST pode gerar findings independentes nos dois analisadores.
 - A infraestrutura compartilhada é policy-free.
-- O cutover é atômico e o gate legado permanece bloqueante até paridade comprovada.
+- Não há oracle legado implantado em `main`: o código experimental do PR #44 permanece congelado e nunca é mergeado. O gate novo entra bloqueante atomicamente no PR-C; paridade ou proteção superior é provada contra fixtures offline de caracterização do PR #44, não contra runtime legado.
 - O capability analyzer não pode se autoautorizar; bootstrap de integridade é separado.
