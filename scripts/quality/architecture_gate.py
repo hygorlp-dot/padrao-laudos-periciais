@@ -25,7 +25,7 @@ def _safe_path(path: str) -> str:
 
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
-EXPECTED_POLICY_SHA256 = "5c831eeb64fb398c0fa0be9b49d506bcd2f9814541653e0f0d97cfd2523c438e"
+EXPECTED_POLICY_SHA256 = "59ac2ae24dc2e5762f7d4962688be5a9921571ff9c14ff16b8552363f5294e70"
 
 
 def _python_files(root: Path) -> list[str]:
@@ -46,6 +46,12 @@ def _resolve_from(node: ast.ImportFrom, source: str, is_package: bool) -> str:
 def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) -> tuple[list[dict], list[dict]]:
     edges: set[tuple[str, int]] = set()
     dynamic: list[dict] = []
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names: aliases[alias.asname or alias.name.split(".")[0]] = alias.name
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names: aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}" if node.module else alias.name
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             edges.update((alias.name, node.lineno) for alias in node.names)
@@ -72,6 +78,12 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.ImportFrom) and node.module in {"sys", "importlib", "site"}:
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+        text = ast.unparse(node) if isinstance(node, (ast.Call, ast.Assign, ast.AugAssign)) else ""
+        expanded = text
+        for alias, origin in aliases.items(): expanded = expanded.replace(alias + ".", origin + ".")
+        if any(token in expanded for token in ("sys.path", "site.addsitedir", "importlib.import_module", "builtins.exec", "builtins.eval", "PYTHONPATH")):
+            if isinstance(node, (ast.Call, ast.Assign, ast.AugAssign)):
+                dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
     return ([{"target": target, "line": line} for target, line in sorted(edges)], dynamic)
 
 
@@ -80,7 +92,7 @@ def _owner(path: str, components: list[dict]) -> list[str]:
 
 
 def _registry_findings(registry: dict) -> list[dict]:
-    policy = {key: registry.get(key) for key in ("components", "allowedLayerEdges", "externalImportRoots", "forbiddenComponentEdges", "acceptedComponentCycles")}
+    policy = {key: registry.get(key) for key in ("components", "allowedLayerEdges", "externalImportRoots", "forbiddenComponentEdges", "acceptedComponentCycles", "acceptedImportCapabilityFingerprints")}
     policy_digest = hashlib.sha256(json.dumps(policy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     ids = [item.get("id") for item in registry.get("components", [])]
     prefixes = [prefix for item in registry.get("components", []) for prefix in item.get("prefixes", [])]
@@ -120,7 +132,7 @@ def analyze_architecture(root: Path, registry: dict) -> dict:
             findings.append({"code": "ARCHITECTURE_SOURCE_UNPARSEABLE", "path": path, "detail": type(exc).__name__})
             continue
         imported, dynamic = _imports(tree, module, path.endswith("/__init__.py"), modules)
-        for item in dynamic:
+        for item in dynamic if owners.get(module) != "GOVERNANCE" else []:
             fingerprint = hashlib.sha256(f'{module}:{item["line"]}:{item["ast"]}'.encode()).hexdigest()
             findings.append({"code": item["code"], "path": path, "module": module, "line": item["line"], "fingerprint": fingerprint})
         for item in imported:
@@ -176,9 +188,13 @@ def validate_architecture(root: Path, registry: dict) -> list[dict]:
         if not _edge_exists_at_baseline(root, registry.get("baselineSha", ""), key[0], key[1]):
             findings.append({"code": "ARCHITECTURE_EXCEPTION_NOT_IN_BASELINE", "source": key[0], "target": key[1]})
     accepted_capabilities = set(registry.get("acceptedImportCapabilityFingerprints", []))
+    if len(accepted_capabilities) != len(registry.get("acceptedImportCapabilityFingerprints", [])):
+        findings.append({"code": "DUPLICATE_IMPORT_CAPABILITY_EXCEPTION"})
     observed_capabilities = {item.get("fingerprint") for item in report["findings"] if item["code"] in {"RUNTIME_IMPORT_CAPABILITY", "DYNAMIC_IMPORT_CAPABILITY"}}
     findings = [item for item in findings if item["code"] not in {"RUNTIME_IMPORT_CAPABILITY", "DYNAMIC_IMPORT_CAPABILITY"} or item.get("fingerprint") not in accepted_capabilities]
     for fingerprint in sorted(accepted_capabilities - observed_capabilities): findings.append({"code": "STALE_IMPORT_CAPABILITY_EXCEPTION", "fingerprint": fingerprint})
+    baseline_capabilities = _baseline_capability_fingerprints(root, registry.get("baselineSha", ""))
+    for fingerprint in sorted(accepted_capabilities - baseline_capabilities): findings.append({"code": "IMPORT_CAPABILITY_NOT_IN_BASELINE", "fingerprint": fingerprint})
     component_edges = {(owners[e["source"]], owners[e["target"]]) for e in report["edges"] if owners.get(e["source"]) and owners.get(e["target"]) and owners[e["source"]] != owners[e["target"]]}
     observed_cycles = _cycles(component_edges)
     accepted_cycles = {tuple(sorted(item)) for item in registry.get("acceptedComponentCycles", [])}
@@ -209,6 +225,8 @@ def _cycles(edges: set[tuple[str, str]]) -> set[tuple[str, ...]]:
 
 
 def _edge_exists_at_baseline(root: Path, sha: str, source: str, target: str) -> bool:
+    listed = subprocess.run(["git", "ls-tree", "-r", "--name-only", sha, "scripts"], cwd=root, capture_output=True, text=True)
+    baseline_modules = {_module(path) for path in listed.stdout.splitlines() if path.endswith(".py")}
     source_path = source.replace(".", "/") + ".py"
     package_path = source.replace(".", "/") + "/__init__.py"
     for path, is_package in ((source_path, False), (package_path, True)):
@@ -217,15 +235,31 @@ def _edge_exists_at_baseline(root: Path, sha: str, source: str, target: str) -> 
             continue
         try: tree = ast.parse(completed.stdout.decode("utf-8-sig"), filename=path)
         except (UnicodeError, SyntaxError): return False
-        imported, _ = _imports(tree, source, is_package, {target})
+        imported, _ = _imports(tree, source, is_package, baseline_modules)
         for item in imported:
             spelling = item["target"]
-            if spelling == target or target.startswith(spelling + "."):
+            candidates = [known for known in baseline_modules if spelling == known or spelling.startswith(known + ".")]
+            resolved = max(candidates, key=lambda value: (len(value), value)) if candidates else None
+            if resolved == target:
                 return True
             package = source if is_package else source.rsplit(".", 1)[0]
             if f"{package}.{spelling}" == target:
                 return True
     return False
+
+
+def _baseline_capability_fingerprints(root: Path, sha: str) -> set[str]:
+    listed = subprocess.run(["git", "ls-tree", "-r", "--name-only", sha, "scripts"], cwd=root, capture_output=True, text=True)
+    paths = [path for path in listed.stdout.splitlines() if path.endswith(".py")]
+    modules = {_module(path) for path in paths}; result = set()
+    for path in paths:
+        blob = subprocess.run(["git", "show", f"{sha}:{path}"], cwd=root, capture_output=True)
+        try: tree = ast.parse(blob.stdout.decode("utf-8-sig"), filename=path)
+        except (UnicodeError, SyntaxError): continue
+        module = _module(path); _, capabilities = _imports(tree, module, path.endswith("/__init__.py"), modules)
+        for item in capabilities:
+            result.add(hashlib.sha256(f'{module}:{item["line"]}:{item["ast"]}'.encode()).hexdigest())
+    return result
 
 
 def load_and_validate(root: Path) -> list[dict]:

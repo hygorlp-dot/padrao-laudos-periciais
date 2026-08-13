@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import pytest
 
 from scripts.quality.architecture_gate import analyze_architecture, validate_architecture
 
@@ -150,3 +151,16 @@ def test_debt_evidence_and_component_cycles_are_mechanically_checked(tmp_path):
     codes = {item["code"] for item in validate_architecture(tmp_path, registry)}
     assert "ARCHITECTURE_EXCEPTION_EVIDENCE_MISMATCH" in codes
     assert "NEW_ARCHITECTURE_CYCLE" in codes
+
+
+@pytest.mark.parametrize("source", [
+    "import sys as s\ns.path.insert(0,'x')\n",
+    "import site\nsite.addsitedir('x')\n",
+    "import os\nos.environ['PYTHONPATH']='x'\n",
+    "import importlib as il\nf=il.import_module\nf(name)\n",
+    "import builtins\nbuiltins.exec(code)\n",
+])
+def test_import_capability_aliases_fail_closed(tmp_path, source):
+    package = tmp_path / "scripts/domain"; package.mkdir(parents=True)
+    (package / "x.py").write_text(source, encoding="utf-8")
+    assert any(item["code"] == "DYNAMIC_IMPORT_CAPABILITY" for item in validate_architecture(tmp_path, _registry()))
