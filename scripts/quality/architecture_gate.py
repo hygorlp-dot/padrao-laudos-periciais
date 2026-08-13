@@ -28,7 +28,7 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "08f6b99f4a4997374c2b9b2767f901607b076bd2c85897f1c83ed01aa62c6763"
-EXPECTED_DETECTOR_AST_SHA256 = "28a2bd529085aadcd90a1ec25650517704c3f181a25b3a4525924b25f34ff227"
+EXPECTED_DETECTOR_AST_SHA256 = "b57dca3efc8fc50a0f60beb2e4397e4add771c4fbe0b43cfcc01b7834967e6f0"
 
 
 def _constant_string(node: ast.AST) -> str | None:
@@ -84,6 +84,8 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Import):
             for alias in node.names: aliases[alias.asname or alias.name.split(".")[0]] = alias.name
+            if any(alias.name == "subprocess" for alias in node.names):
+                dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
             if any(alias.name.split(".", 1)[0] in loader_roots for alias in node.names):
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         elif isinstance(node, ast.ImportFrom):
@@ -124,6 +126,8 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
         expanded = text
         for alias, origin in aliases.items():
             expanded = re.sub(rf"\b{re.escape(alias)}\b", origin, expanded)
+        if isinstance(node, ast.Call) and re.search(r"\bos\.(?:system|popen|spawn\w*|exec\w*)\b", expanded):
+            dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if not is_detector_implementation(node) and any(token in expanded for token in (
             "sys.path", "vars(sys", "site.addsitedir", "vars(site", "importlib", "runpy",
             "pkgutil", "pydoc", "zipimport", "pkg_resources", "ctypes.pythonapi", "pickle.loads",
@@ -275,6 +279,8 @@ def validate_architecture(root: Path, registry: dict) -> list[dict]:
         path = item.get("path"); expected = accepted_blobs.get(item.get("module"))
         return bool(expected and path and hashlib.sha256((root / path).read_bytes()).hexdigest() == expected)
     findings = [item for item in findings if item["code"] not in {"RUNTIME_IMPORT_CAPABILITY", "DYNAMIC_IMPORT_CAPABILITY"} or not capability_accepted(item)]
+    findings = [item for item in findings if item["code"] != "PROCESS_EXECUTION_CAPABILITY"
+                or owners.get(item.get("module")) not in {"GOVERNANCE", "THIRD_PARTY_TOOLING"}]
     for fingerprint in sorted(accepted_capabilities - observed_capabilities): findings.append({"code": "STALE_IMPORT_CAPABILITY_EXCEPTION", "fingerprint": fingerprint})
     baseline_capabilities = _baseline_capability_fingerprints(root, registry.get("baselineSha", ""))
     for fingerprint in sorted(accepted_capabilities - baseline_capabilities): findings.append({"code": "IMPORT_CAPABILITY_NOT_IN_BASELINE", "fingerprint": fingerprint})
