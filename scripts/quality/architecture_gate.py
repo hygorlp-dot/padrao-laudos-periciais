@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import hashlib
+from functools import lru_cache
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 
@@ -225,15 +226,14 @@ def _cycles(edges: set[tuple[str, str]]) -> set[tuple[str, ...]]:
 
 
 def _edge_exists_at_baseline(root: Path, sha: str, source: str, target: str) -> bool:
-    listed = subprocess.run(["git", "ls-tree", "-r", "--name-only", sha, "scripts"], cwd=root, capture_output=True, text=True)
-    baseline_modules = {_module(path) for path in listed.stdout.splitlines() if path.endswith(".py")}
+    baseline_modules = set(_baseline_modules(str(root), sha))
     source_path = source.replace(".", "/") + ".py"
     package_path = source.replace(".", "/") + "/__init__.py"
     for path, is_package in ((source_path, False), (package_path, True)):
-        completed = subprocess.run(["git", "show", f"{sha}:{path}"], cwd=root, capture_output=True)
-        if completed.returncode:
+        content = _baseline_blob(str(root), sha, path)
+        if content is None:
             continue
-        try: tree = ast.parse(completed.stdout.decode("utf-8-sig"), filename=path)
+        try: tree = ast.parse(content.decode("utf-8-sig"), filename=path)
         except (UnicodeError, SyntaxError): return False
         imported, _ = _imports(tree, source, is_package, baseline_modules)
         for item in imported:
@@ -249,17 +249,38 @@ def _edge_exists_at_baseline(root: Path, sha: str, source: str, target: str) -> 
 
 
 def _baseline_capability_fingerprints(root: Path, sha: str) -> set[str]:
-    listed = subprocess.run(["git", "ls-tree", "-r", "--name-only", sha, "scripts"], cwd=root, capture_output=True, text=True)
-    paths = [path for path in listed.stdout.splitlines() if path.endswith(".py")]
-    modules = {_module(path) for path in paths}; result = set()
-    for path in paths:
-        blob = subprocess.run(["git", "show", f"{sha}:{path}"], cwd=root, capture_output=True)
-        try: tree = ast.parse(blob.stdout.decode("utf-8-sig"), filename=path)
+    modules = set(_baseline_modules(str(root), sha)); result = set()
+    for module in registry_capability_modules(root):
+        path = module.replace(".", "/") + ".py"; content = _baseline_blob(str(root), sha, path)
+        if content is None: continue
+        try: tree = ast.parse(content.decode("utf-8-sig"), filename=path)
         except (UnicodeError, SyntaxError): continue
-        module = _module(path); _, capabilities = _imports(tree, module, path.endswith("/__init__.py"), modules)
+        _, capabilities = _imports(tree, module, False, modules)
         for item in capabilities:
             result.add(hashlib.sha256(f'{module}:{item["line"]}:{item["ast"]}'.encode()).hexdigest())
     return result
+
+
+def registry_capability_modules(root: Path) -> set[str]:
+    return {
+        "scripts.auditoria_pericial.executar_evals",
+        "scripts.planejamento_pericial.aprofundar_delimitacao",
+        "scripts.planejamento_pericial.gerar_processo",
+        "scripts.planejamento_pericial.validar_resultados",
+        "scripts.vistoria_estruturada.gerar_vistoria",
+    }
+
+
+@lru_cache(maxsize=8)
+def _baseline_modules(root: str, sha: str) -> tuple[str, ...]:
+    listed = subprocess.run(["git", "ls-tree", "-r", "--name-only", sha, "scripts"], cwd=root, capture_output=True, text=True)
+    return tuple(sorted(_module(path) for path in listed.stdout.splitlines() if path.endswith(".py")))
+
+
+@lru_cache(maxsize=256)
+def _baseline_blob(root: str, sha: str, path: str) -> bytes | None:
+    completed = subprocess.run(["git", "show", f"{sha}:{path}"], cwd=root, capture_output=True)
+    return completed.stdout if completed.returncode == 0 else None
 
 
 def load_and_validate(root: Path) -> list[dict]:
