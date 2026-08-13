@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import validate_configuration
-from .architecture_analyzer import run_architecture_gate
 from .fixture_registry import validate_fixture_registry
 from .metrics import analyze_complexity, parse_coverage_totals, validate_quality_baseline
 
@@ -44,12 +43,6 @@ def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_fil
     direct = (("invariants", validate_configuration(root)), ("fixtures", validate_fixture_registry(root)))
     for name, errors in direct:
         checks.append((name, not errors)); findings.extend(errors)
-    architecture_errors = run_architecture_gate(root)
-    checks.append(("architecture analyzer", not architecture_errors))
-    findings.extend(
-        _finding("FAIL_CLOSED", "ARCHITECTURE", item.get("canonicalPath", item["code"]), item.get("detail", item["code"]), item.get("severity", "P1"))
-        for item in architecture_errors
-    )
     if tracked_files is None:
         git = _run(runner, ["git", "ls-files"], root)
         tracked_files = git.stdout.splitlines() if git.returncode == 0 else []

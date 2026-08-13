@@ -152,3 +152,9 @@ def test_exact_baseline_rejects_stale_exception_on_real_repository():
 
 def test_repository_architecture_gate_is_clean():
     assert run_architecture_gate(ROOT) == []
+
+
+def test_shadow_stage_does_not_self_activate_in_verify_core():
+    source = (ROOT / "scripts/quality/verify_core.py").read_text(encoding="utf-8")
+    assert "run_architecture_gate" not in source
+    assert "architecture analyzer" not in source
