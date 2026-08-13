@@ -28,7 +28,7 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "c39bcbb955becd64d51d7dc369e62d9b85bc20e77bfb7a73e71523f62a815bae"
-EXPECTED_DETECTOR_AST_SHA256 = "926e49c447037b00a78eac74a8697f096218f445cdbe472edd3e2a2f59fe7b16"
+EXPECTED_DETECTOR_AST_SHA256 = "7ad2b7359862ec850739c79fec8d462eda35d956c26583ea584e24f7bea251c9"
 EXPECTED_ANALYZER_PROCESS_FINGERPRINT = "d053267e664b9f173031fa71140e427ae0abf1bbad320c0c329b62c572fb7e2d"
 
 
@@ -78,6 +78,7 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
     dynamic: list[dict] = []
     aliases: dict[str, str] = {}
     reflective_aliases: dict[str, list[tuple[tuple[int, int], str | None]]] = {}
+    string_aliases: dict[str, list[tuple[tuple[int, int], str | None]]] = {}
     loader_roots = {"importlib", "runpy", "pkgutil", "pydoc", "zipimport", "pkg_resources", "ctypes", "pickle"}
     detector = next((node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "_imports"), None)
     detector_is_pinned = bool(detector and hashlib.sha256(ast.dump(detector, include_attributes=False).encode()).hexdigest() == EXPECTED_DETECTOR_AST_SHA256)
@@ -110,6 +111,40 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             parent = qualified_origin(subject.value)
             return f"{parent}.{subject.attr}" if parent else None
         return None
+    def attribute_name(subject: ast.AST) -> str | None:
+        constant = _constant_string(subject)
+        if constant is not None or not isinstance(subject, ast.Name):
+            return constant
+        position = (subject.lineno, subject.col_offset)
+        return next((value for binding, value in reversed(string_aliases.get(subject.id, []))
+                     if binding < position), None)
+    def getattribute_origin(call: ast.AST) -> str | None:
+        if not isinstance(call, ast.Call):
+            return None
+        subject = None
+        attribute_node = None
+        if (isinstance(call.func, ast.Attribute)
+                and call.func.attr == "__getattribute__" and call.args
+                and not (isinstance(call.func.value, ast.Name)
+                         and call.func.value.id == "object")):
+            subject, attribute_node = call.func.value, call.args[0]
+        elif (isinstance(call.func, ast.Attribute)
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id == "object"
+                and call.func.attr == "__getattribute__"
+                and len(call.args) > 1):
+            subject, attribute_node = call.args[0], call.args[1]
+        if subject is None or attribute_node is None:
+            return None
+        origin = qualified_origin(subject)
+        attribute = attribute_name(attribute_node)
+        if origin == "os" and (attribute is None or re.fullmatch(
+                r"system|popen|startfile|spawn\w*|exec\w*", attribute)):
+            return f"os.{attribute or 'system'}"
+        if origin == "asyncio" and (attribute is None or re.fullmatch(
+                r"create_subprocess_(?:exec|shell)", attribute)):
+            return f"asyncio.{attribute or 'create_subprocess_exec'}"
+        return None
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in {"exec", "eval"} and not is_detector_implementation(node):
             dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
@@ -133,7 +168,10 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
                 dynamic.append({"code": "DYNAMIC_IMPORT_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         elif (isinstance(node, ast.Assign) and len(node.targets) == 1
                 and isinstance(node.targets[0], ast.Name)):
-            origin = ast.unparse(node.value)
+            origin = getattribute_origin(node.value) or ast.unparse(node.value)
+            string_aliases.setdefault(node.targets[0].id, []).append(
+                ((node.lineno, node.col_offset), _constant_string(node.value))
+            )
             for alias, target in aliases.items():
                 origin = re.sub(rf"\b{re.escape(alias)}\b", lambda _match, value=target: value, origin)
             if origin == "globals()":
@@ -238,6 +276,35 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             origin = qualified_origin(subject) if subject else None
             if origin == "os" and (attribute is None or re.fullmatch(r"system|popen|startfile|spawn\w*|exec\w*", attribute)):
                 dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Call):
+            accessor = node.func
+            subject = None
+            attribute_node = None
+            if (isinstance(accessor.func, ast.Attribute)
+                    and accessor.func.attr == "__getattribute__" and accessor.args
+                    and not (isinstance(accessor.func.value, ast.Name)
+                             and accessor.func.value.id == "object")):
+                subject, attribute_node = accessor.func.value, accessor.args[0]
+            elif (isinstance(accessor.func, ast.Attribute)
+                    and isinstance(accessor.func.value, ast.Name)
+                    and accessor.func.value.id == "object"
+                    and accessor.func.attr == "__getattribute__"
+                    and len(accessor.args) > 1):
+                subject, attribute_node = accessor.args[0], accessor.args[1]
+            if subject is not None and attribute_node is not None:
+                origin = qualified_origin(subject)
+                attribute = attribute_name(attribute_node)
+                process_attribute = (
+                    origin == "os" and (attribute is None or re.fullmatch(
+                        r"system|popen|startfile|spawn\w*|exec\w*", attribute
+                    ))
+                ) or (
+                    origin == "asyncio" and (attribute is None or re.fullmatch(
+                        r"create_subprocess_(?:exec|shell)", attribute
+                    ))
+                )
+                if process_attribute:
+                    dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"getattr", "setattr"} and node.args:
             subject = ast.unparse(node.args[0]); origin = aliases.get(subject, subject)
             reflective_subject = reflective_origin(node.args[0])

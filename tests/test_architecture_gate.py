@@ -339,6 +339,37 @@ def test_process_capability_acquisition_transformations_fail_closed(source):
 
 
 @pytest.mark.parametrize("source", [
+    "import os\nos.__getattribute__('system')('tool')\n",
+    "import asyncio\nasyncio.__getattribute__('create_' + 'subprocess_shell')('tool')\n",
+    "import os as operating_system\nname = 'sys' + 'tem'\noperating_system.__getattribute__(name)('tool')\n",
+    "import os\nobject.__getattribute__(os, 'popen')('tool')\n",
+    "import asyncio as aio\nname = 'create_subprocess_exec'\nobject.__getattribute__(aio, name)('tool')\n",
+    "import os\nrun = os.__getattribute__('system')\nrun('tool')\n",
+    "import asyncio as aio\nname = 'create_' + 'subprocess_exec'\nrun = object.__getattribute__(aio, name)\nrun('tool')\n",
+    "import os\nrun = os.__getattribute__(capability_name)\nrun('tool')\n",
+    "import asyncio\nrun = object.__getattribute__(asyncio, capability_name)\nrun('tool')\n",
+])
+def test_getattribute_process_capability_acquisition_fails_closed(source):
+    tree = architecture_gate.ast.parse(source)
+    _, findings = architecture_gate._imports(tree, "scripts.domain.getattribute", False, set())
+
+    assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "import os\nos.__getattribute__('getcwd')()\n",
+    "import asyncio\nasyncio.__getattribute__('sleep')(0)\n",
+    "class Local:\n    system = object()\nlocal = Local()\nlocal.__getattribute__('system')\n",
+    "class Local:\n    system = object()\nlocal = Local()\nobject.__getattribute__(local, 'system')\n",
+])
+def test_benign_getattribute_does_not_claim_process_capability(source):
+    tree = architecture_gate.ast.parse(source)
+    _, findings = architecture_gate._imports(tree, "scripts.domain.benign_getattribute", False, set())
+
+    assert not any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
     "label, = ('os.system',)\n",
     "class Local:\n    system = object()\nos = Local()\nvalue, = (os.system,)\n",
     "import os\nclass Local:\n    system = object()\nos = Local()\nvalue, = (os.system,)\n",
