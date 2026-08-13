@@ -102,7 +102,7 @@ def test_relative_package_imports_resolve_and_dynamic_imports_fail_closed(tmp_pa
         ("scripts.domain", "scripts.domain.rule")
     }
     (package / "dynamic.py").write_text("import importlib\nimportlib.import_module(name)\n", encoding="utf-8")
-    assert any(item["code"] == "DYNAMIC_IMPORT_UNRESOLVED" for item in validate_architecture(tmp_path, _registry()))
+    assert any(item["code"] == "DYNAMIC_IMPORT_CAPABILITY" for item in validate_architecture(tmp_path, _registry()))
 
 
 def test_parse_failure_is_not_silently_skipped(tmp_path):
@@ -133,7 +133,7 @@ def test_relative_dynamic_import_and_sys_path_mutation_fail_closed(tmp_path):
         encoding="utf-8",
     )
     codes = {item["code"] for item in validate_architecture(tmp_path, _registry())}
-    assert {"DYNAMIC_IMPORT_UNRESOLVED", "RUNTIME_IMPORT_PATH_MUTATION"} <= codes
+    assert {"DYNAMIC_IMPORT_CAPABILITY", "RUNTIME_IMPORT_CAPABILITY"} <= codes
 
 
 def test_debt_evidence_and_component_cycles_are_mechanically_checked(tmp_path):
