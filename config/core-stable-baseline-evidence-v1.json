@@ -1,0 +1,54 @@
+{
+  "schemaVersion": "1.0.0",
+  "coreBaseSha": "8530584c82061fb35018afd6638032ba8798b105",
+  "behavioralBaseline": {
+    "fullPytest": {
+      "command": "python -m pytest tests -q",
+      "passed": 512,
+      "subtestsPassed": 100,
+      "status": "PASS",
+      "evidenceLevel": "PROVEN_BY_TEST"
+    },
+    "governance": {
+      "command": "python -m pytest tests/test_agentic_governance.py -q",
+      "passed": 46,
+      "status": "PASS",
+      "evidenceLevel": "PROVEN_BY_TEST"
+    },
+    "schemas": {
+      "command": "python scripts/validar_schemas.py",
+      "validated": 20,
+      "status": "PASS",
+      "evidenceLevel": "PROTECTED_BY_GATE"
+    },
+    "fixtures": {
+      "command": "python scripts/validar_schemas.py",
+      "validated": 34,
+      "registered": 38,
+      "status": "PASS",
+      "evidenceLevel": "PROTECTED_BY_GATE"
+    },
+    "verifyCoreFull": {
+      "command": "python -m scripts.quality.verify_core --full",
+      "status": "PASS",
+      "evidenceLevel": "PROTECTED_BY_GATE"
+    },
+    "repositorySafety": {
+      "command": "python -m scripts.quality.verify_core --full",
+      "status": "PASS",
+      "evidenceLevel": "PROTECTED_BY_GATE"
+    },
+    "privacy": {
+      "command": "git ls-files referencias/privadas/*",
+      "status": "PASS",
+      "trackedPrivatePaths": 0,
+      "evidenceLevel": "PROTECTED_BY_GATE"
+    }
+  },
+  "gateBaseline": [
+    "invariants", "fixtures", "privacy", "property tests", "gate tests",
+    "compileall", "historical critical mutation suite", "quality V2",
+    "schemas", "regression", "coverage report", "E2E positive",
+    "E2E negative", "diff check", "quality non-regression"
+  ]
+}
