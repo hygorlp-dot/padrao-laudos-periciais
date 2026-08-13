@@ -816,3 +816,25 @@ def test_process_capability_remaining_stdlib_surfaces_fail_closed(source):
         architecture_gate.ast.parse(source), "scripts.domain.process_surfaces", False, set()
     )
     assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
+ESCALATED_CANONICAL_PROCESS_PROVENANCE_CASES = [
+    "import os\nfrom functools import partial\nrun=partial(getattr, os, 'system')()\nrun('tool')\n",
+    "import os\nfrom operator import methodcaller\nrun=methodcaller('__getattribute__', 'system')(os)\nrun('tool')\n",
+    "import os\nrun=os.__dict__.pop('system')\nrun('tool')\n",
+    "import os\nrun=vars(os).pop('system')\nrun('tool')\n",
+    "import pty\npty.fork()\n",
+    "from pty import fork as create\ncreate()\n",
+    "import posix\nposix.fork()\n",
+    "from posix import posix_spawn\nposix_spawn('tool', ['tool'], {})\n",
+    "import multiprocessing.managers as managers\nmanagers.BaseManager().start()\n",
+    "from multiprocessing.managers import BaseManager\nBaseManager().start()\n",
+]
+
+
+@pytest.mark.parametrize("source", ESCALATED_CANONICAL_PROCESS_PROVENANCE_CASES)
+def test_escalated_canonical_process_provenance_model_fails_closed(source):
+    _, findings = architecture_gate._imports(
+        architecture_gate.ast.parse(source), "scripts.domain.escalated_process_model", False, set()
+    )
+    assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)

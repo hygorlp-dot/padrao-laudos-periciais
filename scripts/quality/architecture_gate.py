@@ -28,7 +28,7 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "e9eeb8eefc3460ad5898e2d8230a3219cf7b38fd1d22cb893dadb99aa07ce04e"
-EXPECTED_DETECTOR_AST_SHA256 = "2e512ff1dc577470edb22c59f4ab3a9226b3532fc423ec9f401b4930c8379f78"
+EXPECTED_DETECTOR_AST_SHA256 = "bb3c1421477bc7c63f39dbcb90d129997d82709195070d3ff2305b2dc1fd472a"
 EXPECTED_ANALYZER_PROCESS_FINGERPRINT = "d053267e664b9f173031fa71140e427ae0abf1bbad320c0c329b62c572fb7e2d"
 
 
@@ -73,9 +73,100 @@ def _resolve_from(node: ast.ImportFrom, source: str, is_package: bool) -> str:
     return node.module or ""
 
 
+class _ProcessCapabilityProvenance:
+    """Canonical, conservative provenance model for process-producing values."""
+
+    PROCESS_NAMESPACES = (
+        "subprocess", "asyncio.subprocess", "multiprocessing", "pty", "posix",
+        "_winapi", "_posixsubprocess", "concurrent.futures.process",
+    )
+    OS_MEMBER = re.compile(r"system|popen|startfile|spawn\w*|exec\w*|fork\w*|posix_spawn\w*")
+    REFLECTION_OPERATIONS = frozenset({
+        "getattr", "__getattribute__", "get", "pop", "attrgetter", "methodcaller", "partial",
+    })
+
+    def __init__(self, tree: ast.AST):
+        self.tree = tree
+        self.bindings: dict[str, str] = {}
+
+    @classmethod
+    def _is_process_namespace(cls, origin: str) -> bool:
+        return any(origin == root or origin.startswith(root + ".") for root in cls.PROCESS_NAMESPACES)
+
+    @classmethod
+    def _is_capability_origin(cls, origin: str) -> bool:
+        if cls._is_process_namespace(origin):
+            return True
+        return bool(origin.startswith("os.") and cls.OS_MEMBER.fullmatch(origin.rsplit(".", 1)[-1]))
+
+    def _register_imports(self):
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    self.bindings[alias.asname or alias.name.split(".")[0]] = alias.name
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                for alias in node.names:
+                    if alias.name != "*":
+                        self.bindings[alias.asname or alias.name] = f"{module}.{alias.name}"
+
+    def _origin(self, node: ast.AST) -> str | None:
+        if isinstance(node, ast.Name):
+            return self.bindings.get(node.id)
+        if isinstance(node, ast.Attribute):
+            parent = self._origin(node.value)
+            return f"{parent}.{node.attr}" if parent else None
+        return None
+
+    def _expression_has_capability(self, node: ast.AST) -> bool:
+        origins = {origin for child in ast.walk(node) if (origin := self._origin(child))}
+        os_present = "os" in origins or "platform" in origins
+        if not os_present:
+            return False
+        strings = {
+            value for child in ast.walk(node)
+            if isinstance(child, ast.Constant) and isinstance((value := child.value), str)
+        }
+        operations = {
+            child.id for child in ast.walk(node) if isinstance(child, ast.Name)
+        } | {
+            child.attr for child in ast.walk(node) if isinstance(child, ast.Attribute)
+        }
+        reflective = bool(operations & self.REFLECTION_OPERATIONS)
+        process_key = any(self.OS_MEMBER.fullmatch(value) for value in strings)
+        unknown_reflective_key = reflective and any(
+            isinstance(child, ast.Name) and child.id not in self.bindings
+            for child in ast.walk(node)
+        )
+        return reflective and (process_key or unknown_reflective_key)
+
+    def findings(self) -> list[dict]:
+        self._register_imports()
+        findings = []
+        for node in ast.walk(self.tree):
+            acquired = False
+            if isinstance(node, ast.Import):
+                acquired = any(self._is_process_namespace(alias.name) for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                acquired = self._is_process_namespace(module) or any(
+                    module == "os" and (alias.name == "*" or self.OS_MEMBER.fullmatch(alias.name))
+                    for alias in node.names
+                )
+            elif isinstance(node, ast.expr):
+                acquired = self._expression_has_capability(node)
+            if acquired:
+                findings.append({
+                    "code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno,
+                    "ast": ast.dump(node, include_attributes=False),
+                })
+        return findings
+
+
 def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) -> tuple[list[dict], list[dict]]:
     edges: set[tuple[str, int, bool]] = set()
     dynamic: list[dict] = []
+    dynamic.extend(_ProcessCapabilityProvenance(tree).findings())
     aliases: dict[str, str] = {}
     reflective_aliases: dict[str, list[tuple[tuple[int, int], str | None]]] = {}
     string_aliases: dict[str, list[tuple[tuple[int, int], str | None]]] = {}
