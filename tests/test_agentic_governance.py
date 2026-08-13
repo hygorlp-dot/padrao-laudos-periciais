@@ -743,3 +743,78 @@ def test_governance_documents_encode_claude_budget_and_stacked_dependency():
     autonomy = (ROOT / "docs/padroes/protocolo-autonomia-agente.md").read_text(encoding="utf-8")
     assert "DEFAULT_ACTION = DECIDE_AND_PROCEED" in autonomy
     assert "HUMAN_ESCALATION = EXCEPTION_ONLY" in autonomy
+
+
+def test_python_dependency_research_policy_is_fail_closed_and_auditable():
+    skill = (ROOT / ".agents/skills/research-ranking/SKILL.md").read_text(encoding="utf-8")
+    protocol = (ROOT / "docs/padroes/protocolo-pesquisa-ranking.md").read_text(encoding="utf-8")
+    policy = skill + "\n" + protocol
+    for invariant in (
+        "PYTHON_DEPENDENCY_DISCOVERY_V1 = TRUE",
+        "CATALOG_ENTRY != APPROVAL",
+        "POPULARITY != QUALITY",
+        "STAR_COUNT != SECURITY",
+        "DISCOVERY_SOURCE != PRIMARY_TECHNICAL_AUTHORITY",
+        "OFFICIAL_DOCS_AND_UPSTREAM_ARE_PRIMARY_FOR_TECHNICAL_FACTS",
+        "NO_DEPENDENCY_ADOPTION_WITHOUT_LICENSE_CHECK",
+        "NO_DEPENDENCY_ADOPTION_WITHOUT_SECURITY_CHECK",
+        "NO_DEPENDENCY_ADOPTION_WITHOUT_WINDOWS_COMPATIBILITY_CHECK",
+        "NO_DEPENDENCY_ADOPTION_WITHOUT_PACKAGING_IMPACT_CHECK",
+        "NO_GO_JUST_TO_USE_AWESOME_GO",
+        "RESEARCH_EVIDENCE_MUST_BE_IDENTIFIABLE = TRUE",
+        "RANKING_MUST_BE_REPRODUCIBLE = TRUE",
+        "MATERIAL_RECOMMENDATION_MUST_BE_REPOSITORY_SPECIFIC = TRUE",
+    ):
+        assert invariant in policy
+    for source in (
+        "vinta/awesome-python", "lukasmasuch/best-of-python",
+        "ml-tooling/best-of-python-dev", "avelino/awesome-go",
+        "PyPI", "deps.dev", "OpenSSF Scorecard",
+    ):
+        assert source in protocol
+    for field in (
+        "RESEARCH_QUESTION", "REPOSITORY_CONTEXT", "REQUIREMENTS", "CANDIDATES",
+        "SOURCES", "VERSIONS_CHECKED", "LICENSES", "SECURITY_FINDINGS",
+        "COMPATIBILITY", "TRANSITIVE_DEPENDENCY_NOTES", "PACKAGING_IMPACT",
+        "PRIVACY_EGRESS_IMPACT", "REVERSIBILITY", "RISKS", "RANKING",
+        "RECOMMENDATION", "CONFIDENCE", "MATERIALITY", "OPEN_UNCERTAINTIES",
+    ):
+        assert field in protocol
+    criteria = (
+        "CORRECTNESS_FIT", "ARCHITECTURAL_FIT", "PYTHON_COMPATIBILITY",
+        "WINDOWS_COMPATIBILITY", "MAINTENANCE_ACTIVITY", "RELEASE_CADENCE",
+        "API_DOCUMENTATION_QUALITY", "LICENSE", "KNOWN_VULNERABILITIES",
+        "TRANSITIVE_DEPENDENCY_RISK", "SUPPLY_CHAIN_SIGNALS", "TEST_QUALITY",
+        "ECOSYSTEM_MATURITY", "PACKAGE_SIZE_COMPLEXITY", "PACKAGING_IMPACT",
+        "OFFLINE_LOCAL_OPERATION", "PRIVACY", "EXTERNAL_EGRESS", "LOCK_IN",
+        "REVERSIBILITY", "OPERATIONAL_COST", "ABANDONMENT_RISK",
+        "MIGRATION_COST", "REPRODUCIBLE_BUILDS_IMPACT",
+    )
+    assert len(criteria) == 24
+    assert all(f"`{criterion}`" in protocol for criterion in criteria)
+    for source_field in ("URL_OR_IDENTIFIER", "SOURCE_ENTITY", "VERSION_OR_ACCESS_DATE", "SUPPORTED_CLAIM"):
+        assert source_field in protocol
+    assert "SCORE = 0..4 | NOT_APPLICABLE" in protocol
+    for preserved_code_ranking_rule in (
+        "INTRINSIC_RISK",
+        "ROBUSTNESS",
+        "ENGINEERING_PRIORITY",
+    ):
+        assert preserved_code_ranking_rule in protocol
+    for aggregation_rule in (
+        "ELIGIBILITY_GATE_BEFORE_RANKING",
+        "LICENSE_ACCEPTABLE = TRUE",
+        "SECURITY_ACCEPTABLE = TRUE",
+        "WINDOWS_COMPATIBLE = TRUE",
+        "PACKAGING_IMPACT_ACCEPTABLE = TRUE",
+        "ADVERSE_OR_UNRESOLVED_GATE = INELIGIBLE",
+        "SCORE_0 = WORST_OR_UNACCEPTABLE",
+        "SCORE_4 = BEST_OR_LOWEST_RISK",
+        "NORMALIZED_SCORE = 100 * SUM(SCORE_i * WEIGHT_i) / SUM(4 * WEIGHT_i)",
+        "ROUND_HALF_EVEN",
+        "DECIMAL_PLACES = 2",
+        "TIE_BREAK_1 = FEWER_OPEN_UNCERTAINTIES",
+        "TIE_BREAK_2 = GREATER_APPLICABLE_CRITERIA_COUNT",
+        "TIE_BREAK_3 = CANONICAL_PACKAGE_NAME_ASCENDING",
+    ):
+        assert aggregation_rule in protocol
