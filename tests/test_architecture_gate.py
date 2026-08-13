@@ -361,6 +361,18 @@ def test_process_capability_acquisition_transformations_fail_closed(source):
     assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
 
 
+@pytest.mark.parametrize("source", [
+    "from os import system as launch\nbox = [launch]\nbox[0]('tool')\n",
+    "import os\nbox = {'launch': os.system}\nbox['launch']('tool')\n",
+    "import os\nbox = (os.popen,)\nbox[0]('tool')\n",
+])
+def test_process_capability_stored_in_container_and_invoked_by_index_fails_closed(source):
+    tree = architecture_gate.ast.parse(source)
+    _, findings = architecture_gate._imports(tree, "scripts.domain.container_process", False, set())
+
+    assert any(item["code"] == "PROCESS_EXECUTION_CAPABILITY" for item in findings)
+
+
 def test_platform_os_named_expression_process_capability_fails_closed():
     tree = architecture_gate.ast.parse(
         "import platform\n(p := platform.os).system('tool')\n"

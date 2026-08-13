@@ -28,7 +28,7 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "c39bcbb955becd64d51d7dc369e62d9b85bc20e77bfb7a73e71523f62a815bae"
-EXPECTED_DETECTOR_AST_SHA256 = "0ad3ee26da7b3150f1503cce6c0b4e035ff3a910902e541c4d9761941739851b"
+EXPECTED_DETECTOR_AST_SHA256 = "9dc7c286699ffbe16490ac1c10c3f395c90f9fd714763ebf4a1f3f593b61adff"
 EXPECTED_ANALYZER_PROCESS_FINGERPRINT = "d053267e664b9f173031fa71140e427ae0abf1bbad320c0c329b62c572fb7e2d"
 
 
@@ -79,6 +79,7 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
     aliases: dict[str, str] = {}
     reflective_aliases: dict[str, list[tuple[tuple[int, int], str | None]]] = {}
     string_aliases: dict[str, list[tuple[tuple[int, int], str | None]]] = {}
+    container_aliases: dict[str, list[tuple[tuple[int, int], dict[object, str]]]] = {}
     loader_roots = {"importlib", "runpy", "pkgutil", "pydoc", "zipimport", "pkg_resources", "ctypes", "pickle"}
     detector = next((node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "_imports"), None)
     detector_is_pinned = bool(detector and hashlib.sha256(ast.dump(detector, include_attributes=False).encode()).hexdigest() == EXPECTED_DETECTOR_AST_SHA256)
@@ -113,6 +114,12 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             parent = qualified_origin(subject.value)
             origin = f"{parent}.{subject.attr}" if parent else None
             return "os" if origin == "platform.os" else origin
+        if isinstance(subject, ast.Subscript) and isinstance(subject.value, ast.Name):
+            position = (subject.lineno, subject.col_offset)
+            contents = next((value for binding, value in reversed(
+                container_aliases.get(subject.value.id, [])) if binding < position), {})
+            key = subject.slice.value if isinstance(subject.slice, ast.Constant) else None
+            return contents.get(key)
         return None
     def attribute_name(subject: ast.AST) -> str | None:
         constant = _constant_string(subject)
@@ -176,6 +183,17 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
         elif (isinstance(node, ast.Assign) and len(node.targets) == 1
                 and isinstance(node.targets[0], ast.Name)):
             origin = getattribute_origin(node.value) or ast.unparse(node.value)
+            contents = {}
+            if isinstance(node.value, (ast.List, ast.Tuple)):
+                contents = {index: value for index, item in enumerate(node.value.elts)
+                            if (value := qualified_origin(item)) is not None}
+            elif isinstance(node.value, ast.Dict):
+                contents = {key.value: value for key, item in zip(node.value.keys, node.value.values)
+                            if isinstance(key, ast.Constant)
+                            and (value := qualified_origin(item)) is not None}
+            container_aliases.setdefault(node.targets[0].id, []).append(
+                ((node.lineno, node.col_offset), contents)
+            )
             string_aliases.setdefault(node.targets[0].id, []).append(
                 ((node.lineno, node.col_offset), _constant_string(node.value))
             )
