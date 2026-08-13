@@ -28,7 +28,7 @@ def _safe_path(path: str) -> str:
 
 EXPECTED_BASELINE_SHA = "0fe2d659f7cfabcb28563651306f2504e09945b3"
 EXPECTED_POLICY_SHA256 = "c39bcbb955becd64d51d7dc369e62d9b85bc20e77bfb7a73e71523f62a815bae"
-EXPECTED_DETECTOR_AST_SHA256 = "7ad2b7359862ec850739c79fec8d462eda35d956c26583ea584e24f7bea251c9"
+EXPECTED_DETECTOR_AST_SHA256 = "7d8306edbb1a8a1f2ac47a1bd8787ded144fe5b8ff06cfecc4e23ed9a869c73a"
 EXPECTED_ANALYZER_PROCESS_FINGERPRINT = "d053267e664b9f173031fa71140e427ae0abf1bbad320c0c329b62c572fb7e2d"
 
 
@@ -107,9 +107,12 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
             bindings = reflective_aliases.get(subject.id, [])
             position = (subject.lineno, subject.col_offset)
             return next((value for binding, value in reversed(bindings) if binding < position), None)
+        if isinstance(subject, ast.NamedExpr):
+            return qualified_origin(subject.value)
         if isinstance(subject, ast.Attribute):
             parent = qualified_origin(subject.value)
-            return f"{parent}.{subject.attr}" if parent else None
+            origin = f"{parent}.{subject.attr}" if parent else None
+            return "os" if origin == "platform.os" else origin
         return None
     def attribute_name(subject: ast.AST) -> str | None:
         constant = _constant_string(subject)
@@ -194,6 +197,12 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
                     r"os\.(?:__dict__|system|popen|startfile|spawn\w*|exec\w*)",
                     origin) for origin in origins):
                 dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
+        elif isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name):
+            origin = qualified_origin(node.value)
+            if origin:
+                reflective_aliases.setdefault(node.target.id, []).append(
+                    ((node.lineno, node.col_offset), origin)
+                )
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             edges.update((alias.name, node.lineno, True) for alias in node.names)
@@ -228,9 +237,16 @@ def _imports(tree: ast.AST, source: str, is_package: bool, modules: set[str]) ->
         expanded = text
         for alias, origin in aliases.items():
             expanded = re.sub(rf"\b{re.escape(alias)}\b", lambda _match, value=origin: value, expanded)
-        if isinstance(node, ast.Call) and re.search(
-                r"\b(?:os\.(?:system|popen|startfile|spawn\w*|exec\w*)|asyncio\.create_subprocess_(?:exec|shell))\b",
-                expanded):
+        call_origin = qualified_origin(node.func) if isinstance(node, ast.Call) else None
+        if isinstance(node, ast.Call) and (
+                re.search(
+                    r"\b(?:os\.(?:system|popen|startfile|spawn\w*|exec\w*)|asyncio\.create_subprocess_(?:exec|shell))\b",
+                    expanded,
+                )
+                or bool(call_origin and re.fullmatch(
+                    r"(?:os\.(?:system|popen|startfile|spawn\w*|exec\w*)|asyncio\.create_subprocess_(?:exec|shell))",
+                    call_origin,
+                ))):
             dynamic.append({"code": "PROCESS_EXECUTION_CAPABILITY", "line": node.lineno, "ast": ast.dump(node, include_attributes=False)})
         if (isinstance(node, ast.Call) and not is_detector_implementation(node)
                 and re.search(r"\b(?:codeop\.compile_command|types\.FunctionType)\b", expanded)):
