@@ -36,8 +36,8 @@ first-party e GitHub no HEAD exato e, fora do repositório, combina esse resulta
 com a delegação humana para decidir `MERGE_ELIGIBLE`. Nenhum output desta API é
 token, assinatura ou trust root.
 
-Qualquer HEAD novo invalida reviews. Falha de verifier, escopo, CI, review,
-privacidade, egress ou topologia bloqueia fechado.
+Qualquer HEAD novo invalida reviews. Falha na verificação externa do orquestrador,
+no escopo, CI, review, privacidade, egress ou topologia bloqueia fechado.
 
 ## Expiração
 
