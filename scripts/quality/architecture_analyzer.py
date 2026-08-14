@@ -131,13 +131,45 @@ def _attribute_name(node: ast.AST) -> str | None:
 
 def _resolve_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
     dotted = _attribute_name(node)
-    if dotted is None:
-        return None
-    if dotted in bindings:
-        return bindings[dotted]
-    root, separator, remainder = dotted.partition(".")
-    resolved = bindings.get(root, root)
-    return f"{resolved}.{remainder}" if separator else resolved
+    if dotted is not None:
+        if dotted in bindings:
+            return bindings[dotted]
+        root, separator, remainder = dotted.partition(".")
+        resolved = bindings.get(root, root)
+        return f"{resolved}.{remainder}" if separator else resolved
+    if isinstance(node, ast.Attribute):
+        owner = _resolve_binding(node.value, bindings)
+        if owner:
+            return f"{owner}.{node.attr}"
+        if node.attr in {"exec_module", "load_module"}:
+            return f"dynamic.loader.{node.attr}"
+    if isinstance(node, ast.Subscript):
+        owner = _resolve_binding(node.value, bindings)
+        member = _constant_string(node.slice)
+        namespace = owner.removesuffix(".__dict__") if owner else None
+        if namespace in {"__builtins__", "builtins", "globals.__builtins__"} and member == "__import__":
+            return "builtins.__import__"
+        if namespace in {"importlib", "runpy"} and member in {"import_module", "run_module", "run_path"}:
+            return f"{namespace}.{member}"
+        if owner == "globals" and member == "__builtins__":
+            return "globals.__builtins__"
+        if owner == "sys.modules" and member == "importlib":
+            return "importlib"
+        if owner and member:
+            return f"{owner}.{member}"
+    if isinstance(node, ast.Call):
+        function = _resolve_binding(node.func, bindings)
+        if function == "globals" and not node.args:
+            return "globals"
+        if function == "operator.attrgetter" and node.args:
+            member = _constant_string(node.args[0])
+            if member:
+                return f"operator.attrgetter:{member}"
+        if function and function.startswith("operator.attrgetter:") and node.args:
+            owner = _resolve_binding(node.args[0], bindings)
+            if owner:
+                return f"{owner}.{function.partition(':')[2]}"
+    return None
 
 
 def _constant_string(node: ast.AST) -> str | None:
