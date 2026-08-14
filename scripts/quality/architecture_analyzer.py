@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import os
 import subprocess
 from datetime import date
 from pathlib import Path
@@ -141,10 +142,14 @@ def analyze_sources(sources: dict[str, str], policy: dict) -> dict:
             elif isinstance(node, ast.ImportFrom):
                 for alias in node.names:
                     if alias.name != "*": bindings[alias.asname or alias.name] = f"{node.module or ''}.{alias.name}".strip(".")
-            elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-                resolved = _resolve_binding(node.value, bindings)
+            elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+                value = node.value
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                resolved = _resolve_binding(value, bindings)
                 if resolved:
-                    bindings[node.targets[0].id] = resolved
+                    for target in targets:
+                        if isinstance(target, ast.Name):
+                            bindings[target.id] = resolved
         for node in ast.walk(tree):
             targets: list[str] = []
             if isinstance(node, ast.Import):
@@ -205,7 +210,7 @@ def analyze_repository(root: Path, policy: dict, candidate: str = "HEAD", expect
     return result
 
 
-def apply_exact_baseline(root: Path, result: dict, baseline: dict) -> dict:
+def apply_exact_baseline(root: Path, result: dict, baseline: dict, *, protected_base: str | None = None) -> dict:
     commit = baseline.get("baselineCommit", "")
     candidate = result.get("candidateCommitSha", "HEAD")
     ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", commit, candidate], cwd=root, capture_output=True)
@@ -213,6 +218,10 @@ def apply_exact_baseline(root: Path, result: dict, baseline: dict) -> dict:
         result["findings"].append(_finding("ARCHITECTURE_BASELINE_INVALID", "scripts/quality/architecture_analyzer.py", 1, "baseline is not an ancestor"))
         return result
     try:
+        if protected_base:
+            protected_registry = json.loads(subprocess.check_output(["git", "show", f"{protected_base}:config/architecture-baseline-v1.json"], cwd=root, text=True))
+            if commit not in {protected_base, protected_registry.get("baselineCommit")}:
+                result["findings"].append(_finding("ARCHITECTURE_BASELINE_INVALID", "config/architecture-baseline-v1.json", 1, "baseline is not authorized by protected base")); return result
         candidate_baseline = json.loads(subprocess.check_output(["git", "show", f"{candidate}:config/architecture-baseline-v1.json"], cwd=root, text=True))
         schema_blob = subprocess.check_output(["git", "show", f"{commit}:schemas/architecture-baseline-v1.schema.json"], cwd=root)
         jsonschema.validate(baseline, json.loads(schema_blob))
@@ -276,8 +285,12 @@ def apply_exact_baseline(root: Path, result: dict, baseline: dict) -> dict:
 def run_architecture_gate(root: Path, candidate: str = "HEAD") -> list[dict]:
     try:
         commit, tree = candidate_tree(root, candidate)
-        policy = json.loads(subprocess.check_output(["git", "show", f"{commit}:config/architecture-policy-v1.json"], cwd=root, text=True))
+        expected = os.environ.get("ARCHITECTURE_EXPECTED_HEAD_SHA")
+        if expected and commit != expected:
+            return [_finding("ARCHITECTURE_ANALYZER_FAILURE", "scripts/quality/architecture_analyzer.py", 1, "candidate does not match exact expected head")]
         baseline = json.loads(subprocess.check_output(["git", "show", f"{commit}:config/architecture-baseline-v1.json"], cwd=root, text=True))
-        return apply_exact_baseline(root, analyze_repository(root, policy, commit, tree), baseline)["findings"]
-    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+        policy = json.loads(subprocess.check_output(["git", "show", f"{baseline['baselineCommit']}:config/architecture-policy-v1.json"], cwd=root, text=True))
+        protected_base = os.environ.get("ARCHITECTURE_PROTECTED_BASE_SHA") or None
+        return apply_exact_baseline(root, analyze_repository(root, policy, commit, tree), baseline, protected_base=protected_base)["findings"]
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
         return [_finding("ARCHITECTURE_ANALYZER_FAILURE", "scripts/quality/architecture_analyzer.py", 1, str(exc))]
