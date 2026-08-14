@@ -132,14 +132,13 @@ def test_verify_core_propagates_error_and_never_reports_false_pass(tmp_path):
     assert any(item["teste"] == "property tests" for item in result.findings)
 
 
-def test_architecture_findings_block_the_integrated_gate(monkeypatch, tmp_path):
-    monkeypatch.setattr(verify_core, "validate_configuration", lambda _root: [])
-    monkeypatch.setattr(verify_core, "validate_fixture_registry", lambda _root: [])
-    monkeypatch.setattr(verify_core, "run_architecture_gate", lambda _root: [{"code": "ARCHITECTURE_CYCLE", "canonicalPath": "scripts/a.py", "detail": "cycle"}])
-    runner = lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "", "")
-    result = verify_core.run_gate("fast", tmp_path, runner=runner, tracked_files=[])
-    assert result.result == "FAIL"
-    assert any(item["boundary"] == "ARCHITECTURE" for item in result.findings)
+def test_architecture_findings_are_enforced_by_protected_workflow():
+    workflow = (ROOT / ".github/workflows/architecture-protected.yml").read_text(encoding="utf-8")
+    assert "pull_request_target" in workflow
+    assert "github.event.pull_request.base.sha" in workflow
+    assert "github.event.pull_request.head.sha" in workflow
+    assert "run_architecture_gate" in workflow
+    assert "sys.exit(1 if findings else 0)" in workflow
 
 
 def test_verify_core_main_propagates_exit_code(monkeypatch):

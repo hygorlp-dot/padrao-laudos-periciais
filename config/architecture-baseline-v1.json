@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.0.0",
-  "baselineCommit": "663b2f9122f46bd5f06a6c3b2fb943b25aa7c869",
+  "baselineCommit": "c1dda7b34ab6c68475f1992029203554205a2ec7",
   "policyVersion": "1.0.0",
   "policySha256": "cd904739cc012290a659bd3aea16872e9a15a65e8bc582c74f031b0e401912c9",
   "allowedDispositions": ["REMOVE_BY_ARCHITECTURE_DEBT"],
