@@ -212,6 +212,17 @@ def test_dynamic_architecture_bypass_variable_generic_descriptor_member(source):
 
 
 @pytest.mark.parametrize("source", [
+    "import sys\nsys.modules.get('importlib').import_module(name)\n",
+    "eval(\"__import__('scripts.quality.target')\")\n",
+    "exec(\"import scripts.quality.target\")\n",
+    "evaluate = eval\nevaluate(compile(source, '<dynamic>', 'exec'))\n",
+])
+def test_dynamic_architecture_bypass_mapping_lookup_and_string_execution(source):
+    findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
+    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
     "__builtins__['len'](items)\n",
     "globals()['ordinary'](value)\n",
     "import sys\nsys.modules['decimal'].Decimal('1')\n",
@@ -227,6 +238,7 @@ def test_dynamic_architecture_bypass_variable_generic_descriptor_member(source):
     "def factory():\n    import math as local_math\n    return local_math.sqrt\nroot = factory()\nroot(value)\n",
     "from importlib import import_module\nload = import_module\nload = safe\nload(name)\n",
     "import importlib\nmember = 'ordinary'\nobject.__getattribute__(importlib, member)(value)\n",
+    "import sys\nsys.modules.get('decimal').Decimal('1')\n",
 ])
 def test_ordinary_inline_reflection_is_not_a_dynamic_architecture_bypass(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]

@@ -174,6 +174,12 @@ def _resolve_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
             return f"{owner}.{member}"
     if isinstance(node, ast.Call):
         function = _resolve_binding(node.func, bindings)
+        if function == "sys.modules.get" and node.args:
+            member = _constant_string(node.args[0], bindings)
+            if member == "importlib":
+                return "importlib"
+            if member:
+                return f"sys.modules.{member}"
         if function == "type" and node.args:
             owner = _resolve_binding(node.args[0], bindings)
             if owner:
@@ -361,7 +367,10 @@ def analyze_sources(sources: dict[str, str], policy: dict) -> dict:
         elif owner is None:
             findings.append(_finding("UNOWNED_FIRST_PARTY_MODULE", path, 1, "no component owns source"))
     edges: set[tuple[str, str, int]] = set()
-    dynamic_functions = {"__import__", "importlib.import_module", "runpy.run_module", "runpy.run_path"}
+    dynamic_functions = {
+        "__import__", "builtins.__import__", "eval", "builtins.eval", "exec", "builtins.exec",
+        "importlib.import_module", "runpy.run_module", "runpy.run_path",
+    }
     for source, (path, tree) in sorted(parsed.items()):
         package = path.endswith("/__init__.py")
         bindings: dict[str, str] = {"__import__": "builtins.__import__"}
