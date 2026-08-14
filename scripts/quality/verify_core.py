@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import Future, ThreadPoolExecutor
 import json
 import subprocess
 import sys
@@ -66,11 +67,22 @@ def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_fil
         ])
     if (root / ".git").exists():
         commands.append(("diff check", ["git", "diff", "--check"], "NO_SILENT_OVERWRITE", "REPOSITORY"))
-    for name, command, invariant, boundary in commands:
-        completed = _run(runner, command, root); passed = completed.returncode == 0; checks.append((name, passed))
-        if not passed:
-            reason = (completed.stderr or completed.stdout or f"exit {completed.returncode}").strip().splitlines()[-1]
-            findings.append(_finding(invariant, boundary, name, reason, "P0" if name in {"regression", "E2E negative", "privacy"} else "P1"))
+    concurrent: dict[str, Future] = {}
+    executor = ThreadPoolExecutor(max_workers=2) if mode == "full" else None
+    try:
+        for name, command, invariant, boundary in commands:
+            if name == "historical critical mutation suite" and executor is not None:
+                regression = next(item for item in commands if item[0] == "regression")
+                concurrent[name] = executor.submit(_run, runner, command, root)
+                concurrent["regression"] = executor.submit(_run, runner, regression[1], root)
+            completed = concurrent[name].result() if name in concurrent else _run(runner, command, root)
+            passed = completed.returncode == 0; checks.append((name, passed))
+            if not passed:
+                reason = (completed.stderr or completed.stdout or f"exit {completed.returncode}").strip().splitlines()[-1]
+                findings.append(_finding(invariant, boundary, name, reason, "P0" if name in {"regression", "E2E negative", "privacy"} else "P1"))
+    finally:
+        if executor is not None:
+            executor.shutdown()
     if mode == "full":
         quality_findings: list[dict] = []
         try:

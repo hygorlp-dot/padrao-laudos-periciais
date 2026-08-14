@@ -1,0 +1,46 @@
+{
+  "decisionId": "ARCHITECTURE_DYNAMIC_BOUNDARY_SEPARATION_V2",
+  "originalHead": "9a7815adb6f9bf61dacfff5e9410c5a08307715d",
+  "sourceAnalyzer": "ARCHITECTURE_ANALYZER_V1",
+  "destinationAnalyzer": "CAPABILITY_ANALYZER_V1",
+  "defaultPolicy": "DENY",
+  "wildcardExceptionsAllowed": false,
+  "findings": [
+    {
+      "findingId": "PR50-HIGHER-ORDER-STRING-EXECUTION-BYPASS",
+      "classification": "DYNAMIC_CAPABILITY_MATERIAL",
+      "severity": "P1",
+      "sourceReview": "PR50-TERMINAL-9A7815A-R1",
+      "reproducers": ["__builtins__['eval'](\"__import__('scripts.quality.target')\")", "globals()['__builtins__']['exec'](\"import scripts.quality.target\")", "def factory(): return eval\nrunner=factory()\nrunner(import_payload)", "runners={'load': eval}\nrunners['load'](import_payload)", "types.FunctionType(compile(import_source, '<x>', 'exec'), globals())()"],
+      "destinationStage": "CAPABILITY_CUTOVER_V1",
+      "closureCondition": "Blocking CAPABILITY_ANALYZER_V1 detects every reproducer on one exact CI/reviewed HEAD"
+    },
+    {
+      "findingId": "PR50-SYS-MODULES-RETRIEVAL-BYPASS",
+      "classification": "DYNAMIC_CAPABILITY_MATERIAL",
+      "severity": "P1",
+      "sourceReview": "PR50-TERMINAL-9A7815A-R1",
+      "reproducers": ["sys.modules.__getitem__('importlib').import_module(name)", "operator.getitem(sys.modules, 'importlib').import_module(name)", "key=''.join(['import','lib'])\nsys.modules.get(key).import_module(name)"],
+      "destinationStage": "CAPABILITY_CUTOVER_V1",
+      "closureCondition": "Blocking CAPABILITY_ANALYZER_V1 denies alternate sensitive module acquisition on one exact CI/reviewed HEAD"
+    },
+    {
+      "findingId": "PR50-IMPORT-HOOK-WRITE-BYPASS",
+      "classification": "DYNAMIC_CAPABILITY_MATERIAL",
+      "severity": "P1",
+      "sourceReview": "PR50-TERMINAL-9A7815A-R1",
+      "reproducers": ["sys.meta_path = [finder]", "sys.path_hooks = [hook]", "sys.meta_path[:] = [finder]"],
+      "destinationStage": "CAPABILITY_CUTOVER_V1",
+      "closureCondition": "Blocking CAPABILITY_ANALYZER_V1 denies import-hook mutation on one exact CI/reviewed HEAD"
+    },
+    {
+      "findingId": "PR50-SYS-9A7815A-001",
+      "classification": "DYNAMIC_CAPABILITY_MATERIAL",
+      "severity": "P1",
+      "sourceReview": "pr50-systemic-terminal-9a7815a",
+      "reproducers": ["__builtins__['eval'](payload)", "globals()['__builtins__']['eval'](payload)", "def execute(operation=eval):\n    return operation(payload)\nexecute()", "def execute(operation=exec):\n    return operation(payload)\nexecute()"],
+      "destinationStage": "CAPABILITY_CUTOVER_V1",
+      "closureCondition": "Blocking CAPABILITY_ANALYZER_V1 detects builtin-subscript and default-capture execution on one exact CI/reviewed HEAD"
+    }
+  ]
+}

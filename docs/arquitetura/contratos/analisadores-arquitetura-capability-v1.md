@@ -32,4 +32,13 @@ O input obrigatório é `(candidateCommitSha, candidateTreeSha)`. `COMMIT_TREE_M
 
 O bootstrap de integridade é um verificador mínimo separado, sem imports/capabilities cobertos e fora do analyzer e do registro ordinário. Ele compara blobs do analyzer, policy e schema com digests SHA-256 pinados em configuração protegida pelo branch gate. Falha de leitura, digest, pin ou schema bloqueia. O analyzer não pode autorizar o bootstrap. Atualizar pins exige PR próprio, CI exato e as três revisões independentes.
 
+Uma rotação de trust anchor usa `config/architecture-protected-transition-v1.json`,
+validado exclusivamente pelo verificador proveniente do base protegido. O manifesto
+declara o SHA do base e os blob IDs exatos anterior e candidato de cada artefato
+alterado. A transição falha fechada se houver remoção, identidade divergente,
+artefato omitido/duplicado ou alteração de produção fora do conjunto protegido;
+somente testes e documentação arquitetural podem acompanhar a rotação. O manifesto
+não concede autoridade: o PR dedicado continua condicionado a CI exato e às três
+revisões independentes.
+
 A TCB mínima inclui o próprio bootstrap, workflow bloqueante, inventário Git, leitor/parser AST, capability analyzer, policy e schemas, adaptador que entrega findings e `verify_core` que os torna bloqueantes. `PROTECTED_BASE_LOADS_AND_EXECUTES_VERIFIER = TRUE`: CI obtém workflow, verifier e pin registry do commit-base protegido, nunca aceita esses bytes do candidato como autoridade sobre si mesmos. Todos os demais artefatos de enforcement no candidato têm SHA-256 individual no registro externo. Ausência, alteração, conjunto divergente, digest divergente ou tentativa de exceção ordinária bloqueia antes da análise.
