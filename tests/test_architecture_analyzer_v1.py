@@ -19,6 +19,7 @@ from scripts.quality.repository_inventory import canonical_python_path, candidat
 
 
 ROOT = Path(__file__).parents[1]
+_SHARED_GIT_BASELINES = {}
 
 
 @pytest.fixture(autouse=True)
@@ -31,6 +32,44 @@ def _deterministic_git_identity(monkeypatch):
 
 def _policy():
     return json.loads((ROOT / "config/architecture-policy-v1.json").read_text(encoding="utf-8"))
+
+
+def _record_shared_git_repo(root):
+    git_dir = root / ".git"
+    _SHARED_GIT_BASELINES[root.resolve()] = {
+        "config": (git_dir / "config").read_bytes(),
+        "refs": {
+            path.relative_to(git_dir).as_posix(): path.read_bytes()
+            for path in (git_dir / "refs").rglob("*") if path.is_file()
+        },
+    }
+
+
+def _reset_shared_git_repo(root, protected_base):
+    top_level = Path(subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], cwd=root, text=True,
+    ).strip()).resolve()
+    if top_level != root.resolve():
+        raise RuntimeError("shared Git fixture root mismatch")
+    subprocess.run(["git", "reset", "--hard", "-q", protected_base], cwd=root, check=True)
+    subprocess.run(["git", "clean", "-fdx", "-q"], cwd=root, check=True)
+    baseline = _SHARED_GIT_BASELINES[root.resolve()]
+    git_dir = root / ".git"
+    config = git_dir / "config"
+    if config.read_bytes() != baseline["config"]:
+        config.write_bytes(baseline["config"])
+    current_refs = {
+        path.relative_to(git_dir).as_posix(): path
+        for path in (git_dir / "refs").rglob("*") if path.is_file()
+    }
+    for relative, path in current_refs.items():
+        if relative not in baseline["refs"]:
+            path.unlink()
+    for relative, content in baseline["refs"].items():
+        path = git_dir / relative
+        if not path.exists() or path.read_bytes() != content:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
 
 
 def test_canonical_python_path_rejects_aliases_and_non_production_paths():
@@ -450,13 +489,14 @@ def protected_enforcement_repo(tmp_path_factory):
     subprocess.run(["git", "add", "."], cwd=root, check=True)
     subprocess.run(["git", "commit", "-qm", "protected base"], cwd=root, check=True)
     protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    _record_shared_git_repo(root)
     return root, protected_base
 
 
 @pytest.fixture
 def clean_protected_enforcement_repo(protected_enforcement_repo):
     root, protected_base = protected_enforcement_repo
-    subprocess.run(["git", "reset", "--hard", "-q", protected_base], cwd=root, check=True)
+    _reset_shared_git_repo(root, protected_base)
     return root, protected_base
 
 
@@ -555,22 +595,6 @@ def _commit_protected_transition(
 
 
 @pytest.fixture(scope="module")
-def protected_transition_repo(tmp_path_factory):
-    root = tmp_path_factory.mktemp("protected-transition-repo")
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    analyzer = root / "scripts/quality/architecture_analyzer.py"
-    analyzer.parent.mkdir(parents=True)
-    analyzer.write_text("# protected base\n", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=root, check=True)
-    subprocess.run([
-        "git", "-c", "user.email=test@example.invalid", "-c", "user.name=Test",
-        "commit", "-qm", "protected base",
-    ], cwd=root, check=True)
-    protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
-    return root, protected_base
-
-
-@pytest.fixture(scope="module")
 def reusable_protected_transition_repo(tmp_path_factory):
     root = tmp_path_factory.mktemp("clean-protected-transition-repo")
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
@@ -582,14 +606,37 @@ def reusable_protected_transition_repo(tmp_path_factory):
     subprocess.run(["git", "add", "."], cwd=root, check=True)
     subprocess.run(["git", "commit", "-qm", "protected base"], cwd=root, check=True)
     protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    _record_shared_git_repo(root)
     return root, protected_base
 
 
 @pytest.fixture
 def clean_protected_transition_repo(reusable_protected_transition_repo):
     root, protected_base = reusable_protected_transition_repo
-    subprocess.run(["git", "reset", "--hard", "-q", protected_base], cwd=root, check=True)
+    _reset_shared_git_repo(root, protected_base)
     return root, protected_base
+
+
+def test_shared_git_repo_reset_removes_cross_test_state(reusable_protected_transition_repo):
+    root, protected_base = reusable_protected_transition_repo
+    (root / "untracked.tmp").write_text("leak\n", encoding="utf-8")
+    subprocess.run(["git", "config", "fixture.leak", "true"], cwd=root, check=True)
+    subprocess.run(["git", "tag", "fixture-leak"], cwd=root, check=True)
+    analyzer = root / "scripts/quality/architecture_analyzer.py"
+    analyzer.write_text("# staged leak\n", encoding="utf-8")
+    subprocess.run(["git", "add", analyzer], cwd=root, check=True)
+
+    _reset_shared_git_repo(root, protected_base)
+
+    assert not (root / "untracked.tmp").exists()
+    assert subprocess.run(
+        ["git", "config", "--local", "--get", "fixture.leak"], cwd=root,
+        capture_output=True,
+    ).returncode == 1
+    assert subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", "refs/tags/fixture-leak"], cwd=root,
+    ).returncode == 1
+    assert subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True) == ""
 
 
 def test_exact_dedicated_transition_can_rotate_protected_artifact(clean_protected_transition_repo):
@@ -770,9 +817,9 @@ def test_v1_transition_cannot_authorize_undeclared_mode_change(clean_protected_t
     ("2.0.0", lambda row: row.update(candidateBlobSha="0" * 40)),
 ])
 def test_transition_schema_dispatch_rejects_unknown_hybrid_malformed_and_mismatch(
-    protected_transition_repo, schema_version, row_mutation,
+    clean_protected_transition_repo, schema_version, row_mutation,
 ):
-    tmp_path, protected_base = protected_transition_repo
+    tmp_path, protected_base = clean_protected_transition_repo
 
     candidate = _commit_protected_transition(
         tmp_path, protected_base, schema_version=schema_version, row_mutation=row_mutation,
@@ -789,9 +836,9 @@ def test_transition_schema_dispatch_rejects_unknown_hybrid_malformed_and_mismatc
     lambda transition: transition.update(artifacts=transition["artifacts"] * 2),
 ])
 def test_transition_rejects_unknown_wrong_base_omitted_and_duplicate_rows(
-    protected_transition_repo, transition_mutation,
+    clean_protected_transition_repo, transition_mutation,
 ):
-    tmp_path, protected_base = protected_transition_repo
+    tmp_path, protected_base = clean_protected_transition_repo
 
     candidate = _commit_protected_transition(
         tmp_path, protected_base, schema_version="2.0.0", transition_mutation=transition_mutation,
