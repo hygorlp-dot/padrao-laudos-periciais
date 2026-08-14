@@ -39,8 +39,8 @@ def _protected_transition_valid(
     root: Path,
     protected_base: str,
     candidate: str,
-    base_blobs: dict[str, str],
-    candidate_blobs: dict[str, str],
+    base_objects: dict[str, tuple[str, str, str]],
+    candidate_objects: dict[str, tuple[str, str, str]],
     changed_artifacts: list[str],
 ) -> bool:
     try:
@@ -62,24 +62,31 @@ def _protected_transition_valid(
         if not isinstance(rows, list) or len(rows) != len(changed_artifacts):
             return False
         expected = {
-            path: (base_blobs.get(path), candidate_blobs.get(path))
+            path: (base_objects.get(path), candidate_objects.get(path))
             for path in changed_artifacts
         }
         if any(
-            (base_blob is not None and (not isinstance(base_blob, str) or not base_blob))
-            or not isinstance(candidate_blob, str)
-            or not candidate_blob
-            for base_blob, candidate_blob in expected.values()
+            (base_object is not None and base_object[:2] not in {("100644", "blob"), ("100755", "blob")})
+            or candidate_object is None
+            or candidate_object[:2] not in {("100644", "blob"), ("100755", "blob")}
+            for base_object, candidate_object in expected.values()
         ):
             return False
         declared = {}
         for row in rows:
-            if not isinstance(row, dict) or set(row) != {"path", "baseBlobSha", "candidateBlobSha"}:
+            if not isinstance(row, dict) or set(row) != {
+                "path", "baseMode", "baseObjectType", "baseBlobSha",
+                "candidateMode", "candidateObjectType", "candidateBlobSha",
+            }:
                 return False
             path = row.get("path")
             if path in declared or path not in expected:
                 return False
-            declared[path] = (row.get("baseBlobSha"), row.get("candidateBlobSha"))
+            declared[path] = (
+                None if row.get("baseMode") is None and row.get("baseObjectType") is None and row.get("baseBlobSha") is None
+                else (row.get("baseMode"), row.get("baseObjectType"), row.get("baseBlobSha")),
+                (row.get("candidateMode"), row.get("candidateObjectType"), row.get("candidateBlobSha")),
+            )
         if declared != expected:
             return False
         diff = subprocess.run(
@@ -111,7 +118,7 @@ def _protected_artifact_findings(root: Path, protected_base: str, candidate: str
             1,
             "protected base is not an ancestor of candidate",
         )]
-    def tree_blobs(commit: str) -> dict[str, str] | None:
+    def tree_objects(commit: str) -> dict[str, tuple[str, str, str]] | None:
         result = subprocess.run(
             ["git", "ls-tree", commit, "--", *PROTECTED_ARCHITECTURE_ARTIFACTS],
             cwd=root,
@@ -120,16 +127,16 @@ def _protected_artifact_findings(root: Path, protected_base: str, candidate: str
         )
         if result.returncode:
             return None
-        blobs = {}
+        objects = {}
         for line in result.stdout.splitlines():
             metadata, path = line.split("\t", 1)
             mode, object_type, object_id = metadata.split()
-            blobs[path] = object_id if mode in {"100644", "100755"} and object_type == "blob" else ""
-        return blobs
+            objects[path] = (mode, object_type, object_id)
+        return objects
 
-    base_blobs = tree_blobs(protected_base)
-    candidate_blobs = tree_blobs(candidate)
-    if base_blobs is None or candidate_blobs is None:
+    base_objects = tree_objects(protected_base)
+    candidate_objects = tree_objects(candidate)
+    if base_objects is None or candidate_objects is None:
         return [_finding(
             "ARCHITECTURE_PROTECTED_ARTIFACT_UNAVAILABLE",
             "scripts/quality/architecture_analyzer.py",
@@ -138,12 +145,12 @@ def _protected_artifact_findings(root: Path, protected_base: str, candidate: str
         )]
     changed_artifacts = [
         path for path in PROTECTED_ARCHITECTURE_ARTIFACTS
-        if base_blobs.get(path) != candidate_blobs.get(path)
+        if base_objects.get(path) != candidate_objects.get(path)
     ]
     if not changed_artifacts:
         return []
     if _protected_transition_valid(
-        root, protected_base, candidate, base_blobs, candidate_blobs, changed_artifacts,
+        root, protected_base, candidate, base_objects, candidate_objects, changed_artifacts,
     ):
         return []
     findings = [_finding(
