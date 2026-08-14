@@ -107,6 +107,13 @@ def _resolve_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
 
 
 def _protected_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
+    if (isinstance(node, ast.Call) and _resolve_binding(node.func, bindings) == "getattr"
+            and len(node.args) >= 2 and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)):
+        owner = _resolve_binding(node.args[0], bindings)
+        reflected = f"{owner}.{node.args[1].value}" if owner else None
+        if reflected in {"builtins.__import__", "importlib.import_module", "runpy.run_module", "runpy.run_path"}:
+            return reflected
     for part in ast.walk(node):
         resolved = _resolve_binding(part, bindings)
         if resolved and (resolved in {"builtins.__import__", "importlib.import_module", "runpy.run_module", "runpy.run_path"} or resolved.endswith((".exec_module", ".load_module")) or resolved.startswith(("sys.meta_path", "sys.path_hooks"))):
@@ -155,21 +162,27 @@ def analyze_sources(sources: dict[str, str], policy: dict) -> dict:
     for source, (path, tree) in sorted(parsed.items()):
         package = path.endswith("/__init__.py")
         bindings: dict[str, str] = {"__import__": "builtins.__import__"}
-        for node in ast.walk(tree):
+        ordered_nodes = sorted(ast.walk(tree), key=lambda item: (getattr(item, "lineno", 0), getattr(item, "col_offset", 0)))
+        for node in ordered_nodes:
             if isinstance(node, ast.Import):
                 for alias in node.names: bindings[alias.asname or alias.name.split(".")[0]] = alias.name
             elif isinstance(node, ast.ImportFrom):
                 for alias in node.names:
                     if alias.name != "*": bindings[alias.asname or alias.name] = f"{node.module or ''}.{alias.name}".strip(".")
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                protected = _protected_binding(node, bindings)
+                if protected:
+                    bindings[node.name] = protected
             elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
                 value = node.value
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 resolved = (_resolve_binding(value, bindings) or _protected_binding(value, bindings)) if value is not None else None
-                if resolved:
-                    for target in targets:
-                        for name in _binding_targets(target):
+                for target in targets:
+                    for name in _binding_targets(target):
+                        if resolved:
                             bindings[name] = resolved
-        for node in ast.walk(tree):
+                        else:
+                            bindings.pop(name, None)
             targets: list[str] = []
             if isinstance(node, ast.Import):
                 targets = [alias.name for alias in node.names if alias.name == "scripts" or alias.name.startswith("scripts.")]

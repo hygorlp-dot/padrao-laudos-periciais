@@ -106,6 +106,24 @@ def test_dynamic_architecture_bypass_assignment_aliases(source):
     assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
 
 
+@pytest.mark.parametrize("source", [
+    "from importlib import import_module\nimport_module(name)\nimport_module = safe\n",
+    "from importlib import import_module as load\nload(name)\nload = safe\n",
+])
+def test_dynamic_architecture_bypass_uses_binding_at_call_time(source):
+    findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
+    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "import importlib\nload = getattr(importlib, 'import_module')\nload(name)\n",
+    "from importlib import import_module\ndef factory():\n    return import_module\nload = factory()\nload(name)\n",
+])
+def test_dynamic_architecture_bypass_reflection_and_factory_aliases(source):
+    findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
+    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+
+
 def test_cycle_analysis_is_iterative_for_deep_graphs():
     graph = {f"m{index}": {f"m{index + 1}"} for index in range(1500)}
     graph["m1500"] = {"m0"}
@@ -215,4 +233,3 @@ def test_staging_does_not_self_activate_in_verify_core():
     source = (ROOT / "scripts/quality/verify_core.py").read_text(encoding="utf-8")
     assert "run_architecture_gate" not in source
     assert "architecture analyzer" not in source
-
