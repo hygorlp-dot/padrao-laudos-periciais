@@ -166,12 +166,26 @@ def test_dynamic_architecture_bypass_descriptor_dispatch(source):
 
 
 @pytest.mark.parametrize("source", [
+    "import importlib\nobject.__getattribute__.__call__(object.__getattribute__, importlib, 'import_module')(name)\n",
+    "import builtins\nobject.__dict__['__getattribute__'](builtins, '__import__')(name)\n",
+    "import importlib, types\ntypes.ModuleType.__getattribute__(importlib, 'import_module')(name)\n",
+    "import importlib, operator\noperator.methodcaller('__getattribute__', 'import_module')(importlib)(name)\n",
+])
+def test_dynamic_architecture_bypass_unbound_descriptor_dispatch(source):
+    findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
+    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
     "__builtins__['len'](items)\n",
     "globals()['ordinary'](value)\n",
     "import sys\nsys.modules['decimal'].Decimal('1')\n",
     "import operator\noperator.attrgetter('ordinary')(holder)(value)\n",
     "ordinary.__call__(value)\n",
     "object.__getattribute__(holder, 'ordinary')(value)\n",
+    "object.__dict__['__getattribute__'](holder, 'ordinary')(value)\n",
+    "import types\ntypes.ModuleType.__getattribute__(holder, 'ordinary')(value)\n",
+    "import operator\noperator.methodcaller('__getattribute__', 'ordinary')(holder)(value)\n",
 ])
 def test_ordinary_inline_reflection_is_not_a_dynamic_architecture_bypass(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
@@ -308,6 +322,26 @@ def test_protected_enforcement_artifacts_cannot_be_removed_or_changed(tmp_path, 
 
     findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
     assert any(item["code"] == "ARCHITECTURE_PROTECTED_ARTIFACT_MISMATCH" for item in findings)
+
+
+def test_protected_base_must_be_candidate_ancestor(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    policy = tmp_path / "config/architecture-policy-v1.json"
+    policy.parent.mkdir(parents=True)
+    policy.write_text('{"policyVersion":"1.0.0"}\n', encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "protected base"], cwd=tmp_path, check=True)
+    protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+    subprocess.run(["git", "checkout", "--orphan", "divergent", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "divergent candidate"], cwd=tmp_path, check=True)
+    candidate = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_BASE_INVALID" for item in findings)
 
 
 def test_staging_does_not_self_activate_in_verify_core():

@@ -26,6 +26,18 @@ PROTECTED_ARCHITECTURE_ARTIFACTS = (
 
 
 def _protected_artifact_findings(root: Path, protected_base: str, candidate: str) -> list[dict]:
+    ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", protected_base, candidate],
+        cwd=root,
+        capture_output=True,
+    )
+    if ancestor.returncode:
+        return [_finding(
+            "ARCHITECTURE_PROTECTED_BASE_INVALID",
+            "scripts/quality/architecture_analyzer.py",
+            1,
+            "protected base is not an ancestor of candidate",
+        )]
     findings = []
     for path in PROTECTED_ARCHITECTURE_ARTIFACTS:
         def blob(commit: str) -> str | None:
@@ -156,6 +168,8 @@ def _resolve_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
             return "globals.__builtins__"
         if owner == "sys.modules" and member == "importlib":
             return "importlib"
+        if owner and owner.endswith(".__dict__") and member:
+            return f"{owner.removesuffix('.__dict__')}.{member}"
         if owner and member:
             return f"{owner}.{member}"
     if isinstance(node, ast.Call):
@@ -169,9 +183,15 @@ def _resolve_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
             member = _constant_string(node.args[1]) if len(node.args) >= 2 else None
             if owner and member:
                 return f"{owner}.{member}"
-        if function == "object.__getattribute__" and len(node.args) >= 2:
-            owner = _resolve_binding(node.args[0], bindings)
-            member = _constant_string(node.args[1])
+        unbound_getattribute = function in {"object.__getattribute__", "types.ModuleType.__getattribute__"}
+        explicit_descriptor_self = (
+            unbound_getattribute and len(node.args) >= 3
+            and _resolve_binding(node.args[0], bindings) == function
+        )
+        if unbound_getattribute and len(node.args) >= 2:
+            offset = 1 if explicit_descriptor_self else 0
+            owner = _resolve_binding(node.args[offset], bindings)
+            member = _constant_string(node.args[offset + 1])
             if owner and member:
                 return f"{owner}.{member}"
         if function and function.endswith(".__getattribute__") and node.args:
@@ -182,7 +202,16 @@ def _resolve_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
             member = _constant_string(node.args[0])
             if member:
                 return f"operator.attrgetter:{member}"
+        if function == "operator.methodcaller" and len(node.args) >= 2:
+            method = _constant_string(node.args[0])
+            member = _constant_string(node.args[1])
+            if method == "__getattribute__" and member:
+                return f"operator.methodcaller:{member}"
         if function and function.startswith("operator.attrgetter:") and node.args:
+            owner = _resolve_binding(node.args[0], bindings)
+            if owner:
+                return f"{owner}.{function.partition(':')[2]}"
+        if function and function.startswith("operator.methodcaller:") and node.args:
             owner = _resolve_binding(node.args[0], bindings)
             if owner:
                 return f"{owner}.{function.partition(':')[2]}"
