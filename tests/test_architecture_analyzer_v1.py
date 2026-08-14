@@ -145,6 +145,9 @@ def test_dynamic_architecture_bypass_reflection_and_factory_aliases(source):
     "globals()['__builtins__']['__import__'](name)\n",
     "import sys\nsys.modules['importlib'].import_module(name)\n",
     "import importlib\nimport operator\noperator.attrgetter('import_module')(importlib)(name)\n",
+    "getattr(spec.loader, 'exec_module')(module)\n",
+    "vars(spec.loader)['exec_module'](module)\n",
+    "import importlib\nimportlib.__getattribute__('import_module')(name)\n",
 ])
 def test_dynamic_architecture_bypass_inline_reflection_chains(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
