@@ -37,6 +37,8 @@ def _policy():
 def _record_shared_git_repo(root):
     git_dir = root / ".git"
     _SHARED_GIT_BASELINES[root.resolve()] = {
+        "head": (git_dir / "HEAD").read_bytes(),
+        "packed_refs": (git_dir / "packed-refs").read_bytes() if (git_dir / "packed-refs").exists() else None,
         "config": (git_dir / "config").read_bytes(),
         "refs": {
             path.relative_to(git_dir).as_posix(): path.read_bytes()
@@ -51,10 +53,19 @@ def _reset_shared_git_repo(root, protected_base):
     ).strip()).resolve()
     if top_level != root.resolve():
         raise RuntimeError("shared Git fixture root mismatch")
-    subprocess.run(["git", "reset", "--hard", "-q", protected_base], cwd=root, check=True)
-    subprocess.run(["git", "clean", "-fdx", "-q"], cwd=root, check=True)
     baseline = _SHARED_GIT_BASELINES[root.resolve()]
     git_dir = root / ".git"
+    head = git_dir / "HEAD"
+    if head.read_bytes() != baseline["head"]:
+        head.write_bytes(baseline["head"])
+    packed_refs = git_dir / "packed-refs"
+    if baseline["packed_refs"] is None:
+        if packed_refs.exists():
+            packed_refs.unlink()
+    elif not packed_refs.exists() or packed_refs.read_bytes() != baseline["packed_refs"]:
+        packed_refs.write_bytes(baseline["packed_refs"])
+    subprocess.run(["git", "reset", "--hard", "-q", protected_base], cwd=root, check=True)
+    subprocess.run(["git", "clean", "-fdx", "-q"], cwd=root, check=True)
     config = git_dir / "config"
     if config.read_bytes() != baseline["config"]:
         config.write_bytes(baseline["config"])
@@ -619,16 +630,20 @@ def clean_protected_transition_repo(reusable_protected_transition_repo):
 
 def test_shared_git_repo_reset_removes_cross_test_state(reusable_protected_transition_repo):
     root, protected_base = reusable_protected_transition_repo
+    expected_head = subprocess.check_output(["git", "symbolic-ref", "HEAD"], cwd=root, text=True).strip()
     (root / "untracked.tmp").write_text("leak\n", encoding="utf-8")
     subprocess.run(["git", "config", "fixture.leak", "true"], cwd=root, check=True)
     subprocess.run(["git", "tag", "fixture-leak"], cwd=root, check=True)
     analyzer = root / "scripts/quality/architecture_analyzer.py"
     analyzer.write_text("# staged leak\n", encoding="utf-8")
     subprocess.run(["git", "add", analyzer], cwd=root, check=True)
+    subprocess.run(["git", "symbolic-ref", "HEAD", "refs/heads/fixture-leaked-head"], cwd=root, check=True)
+    subprocess.run(["git", "pack-refs", "--all", "--prune"], cwd=root, check=True)
 
     _reset_shared_git_repo(root, protected_base)
 
     assert not (root / "untracked.tmp").exists()
+    assert subprocess.check_output(["git", "symbolic-ref", "HEAD"], cwd=root, text=True).strip() == expected_head
     assert subprocess.run(
         ["git", "config", "--local", "--get", "fixture.leak"], cwd=root,
         capture_output=True,
