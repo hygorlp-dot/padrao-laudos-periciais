@@ -113,7 +113,7 @@ def _protected_artifact_findings(root: Path, protected_base: str, candidate: str
         )]
     def tree_blobs(commit: str) -> dict[str, str] | None:
         result = subprocess.run(
-            ["git", "ls-tree", "-r", commit, "--", *PROTECTED_ARCHITECTURE_ARTIFACTS],
+            ["git", "ls-tree", commit, "--", *PROTECTED_ARCHITECTURE_ARTIFACTS],
             cwd=root,
             capture_output=True,
             text=True,

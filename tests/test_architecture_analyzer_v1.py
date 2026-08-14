@@ -369,8 +369,8 @@ def test_protected_artifact_identity_is_loaded_in_one_query_per_commit(monkeypat
 
     assert _protected_artifact_findings(ROOT, candidate, candidate) == []
     assert artifact_queries == [
-        ["git", "ls-tree", "-r", candidate, "--", *PROTECTED_ARCHITECTURE_ARTIFACTS],
-        ["git", "ls-tree", "-r", candidate, "--", *PROTECTED_ARCHITECTURE_ARTIFACTS],
+        ["git", "ls-tree", candidate, "--", *PROTECTED_ARCHITECTURE_ARTIFACTS],
+        ["git", "ls-tree", candidate, "--", *PROTECTED_ARCHITECTURE_ARTIFACTS],
     ]
 
 
@@ -567,6 +567,39 @@ def test_creation_transition_rejects_non_regular_git_objects(tmp_path, mode, obj
     }), encoding="utf-8")
     subprocess.run(["git", "add", "config/architecture-protected-transition-v1.json"], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-qm", "invalid protected object"], cwd=tmp_path, check=True)
+    candidate = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
+def test_creation_transition_rejects_tree_at_protected_path(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
+    analyzer.parent.mkdir(parents=True)
+    analyzer.write_text("# protected base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "protected base"], cwd=tmp_path, check=True)
+    protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+    artifact_path = "scripts/quality/capability_trust_anchor.py"
+    payload = tmp_path / artifact_path / "payload.py"
+    payload.mkdir(parents=True)
+    (payload / "content.txt").write_text("not a regular protected artifact\n", encoding="utf-8")
+    subprocess.run(["git", "add", artifact_path], cwd=tmp_path, check=True)
+    object_id = subprocess.check_output(["git", "write-tree", "--prefix", f"{artifact_path}/"], cwd=tmp_path, text=True).strip()
+    transition = tmp_path / "config/architecture-protected-transition-v1.json"
+    transition.parent.mkdir(parents=True, exist_ok=True)
+    transition.write_text(json.dumps({
+        "schemaVersion": "1.0.0",
+        "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
+        "protectedBaseSha": protected_base,
+        "artifacts": [{"path": artifact_path, "baseBlobSha": None, "candidateBlobSha": object_id}],
+    }), encoding="utf-8")
+    subprocess.run(["git", "add", "config/architecture-protected-transition-v1.json"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "invalid protected tree"], cwd=tmp_path, check=True)
     candidate = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
 
     findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
