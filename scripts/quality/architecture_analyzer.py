@@ -158,7 +158,7 @@ def _resolve_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
             return f"dynamic.loader.{node.attr}"
     if isinstance(node, ast.Subscript):
         owner = _resolve_binding(node.value, bindings)
-        member = _constant_string(node.slice)
+        member = _constant_string(node.slice, bindings)
         namespace = owner.removesuffix(".__dict__") if owner else None
         if namespace in {"__builtins__", "builtins", "globals.__builtins__"} and member == "__import__":
             return "builtins.__import__"
@@ -184,7 +184,7 @@ def _resolve_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
             owner = _resolve_binding(node.args[0], bindings)
             if function == "vars" and owner:
                 return f"{owner}.__dict__"
-            member = _constant_string(node.args[1]) if len(node.args) >= 2 else None
+            member = _constant_string(node.args[1], bindings) if len(node.args) >= 2 else None
             if owner and member:
                 return f"{owner}.{member}"
         explicit_descriptor_self = (
@@ -193,25 +193,25 @@ def _resolve_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
         )
         unbound_getattribute = bool(
             function and function.endswith(".__getattribute__") and len(node.args) >= 2
-            and (explicit_descriptor_self or _constant_string(node.args[1]) is not None)
+            and (explicit_descriptor_self or _constant_string(node.args[1], bindings) is not None)
         )
         if unbound_getattribute and len(node.args) >= 2:
             offset = 1 if explicit_descriptor_self else 0
             owner = _resolve_binding(node.args[offset], bindings)
-            member = _constant_string(node.args[offset + 1])
+            member = _constant_string(node.args[offset + 1], bindings)
             if owner and member:
                 return f"{owner}.{member}"
         if function and function.endswith(".__getattribute__") and node.args:
-            member = _constant_string(node.args[0])
+            member = _constant_string(node.args[0], bindings)
             if member:
                 return f"{function.removesuffix('.__getattribute__')}.{member}"
         if function == "operator.attrgetter" and node.args:
-            member = _constant_string(node.args[0])
+            member = _constant_string(node.args[0], bindings)
             if member:
                 return f"operator.attrgetter:{member}"
         if function == "operator.methodcaller" and len(node.args) >= 2:
-            method = _constant_string(node.args[0])
-            member = _constant_string(node.args[1])
+            method = _constant_string(node.args[0], bindings)
+            member = _constant_string(node.args[1], bindings)
             if method == "__getattribute__" and member:
                 return f"operator.methodcaller:{member}"
         if function and function.startswith("operator.attrgetter:") and node.args:
@@ -225,11 +225,15 @@ def _resolve_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
     return None
 
 
-def _constant_string(node: ast.AST) -> str | None:
+def _constant_string(node: ast.AST, bindings: dict[str, str] | None = None) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
+    if isinstance(node, ast.Name) and bindings:
+        value = bindings.get(node.id, "")
+        if value.startswith("constant_string:"):
+            return value.removeprefix("constant_string:")
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        left, right = _constant_string(node.left), _constant_string(node.right)
+        left, right = _constant_string(node.left, bindings), _constant_string(node.right, bindings)
         if left is not None and right is not None:
             return left + right
     return None
@@ -245,6 +249,22 @@ def _protected_namespace_reflection(node: ast.AST, bindings: dict[str, str]) -> 
         if owner and owner.split(".", 1)[0] in protected:
             return True
         return _protected_namespace_reflection(node.args[0], bindings)
+    if isinstance(node, ast.Call):
+        function = _resolve_binding(node.func, bindings)
+        if function and function.endswith(".__getattribute__") and len(node.args) >= 2:
+            explicit_self = len(node.args) >= 3 and _resolve_binding(node.args[0], bindings) == function
+            offset = 1 if explicit_self else 0
+            owner = _resolve_binding(node.args[offset], bindings)
+            member = _constant_string(node.args[offset + 1], bindings)
+            if owner and owner.split(".", 1)[0] in protected and member is None:
+                return True
+        if (isinstance(node.func, ast.Call)
+                and _resolve_binding(node.func.func, bindings) == "operator.attrgetter"
+                and node.args):
+            owner = _resolve_binding(node.args[0], bindings)
+            member = _constant_string(node.func.args[0], bindings) if node.func.args else None
+            if owner and owner.split(".", 1)[0] in protected and member is None:
+                return True
     if isinstance(node, (ast.Attribute, ast.Subscript, ast.Call)):
         return any(_protected_namespace_reflection(child, bindings) for child in ast.iter_child_nodes(node))
     return False
@@ -256,14 +276,14 @@ def _protected_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
     if (isinstance(node, ast.Call) and _resolve_binding(node.func, bindings) == "getattr"
             and len(node.args) >= 2):
         owner = _resolve_binding(node.args[0], bindings)
-        member = _constant_string(node.args[1])
+        member = _constant_string(node.args[1], bindings)
         reflected = f"{owner}.{member}" if owner and member else None
         if reflected in {"builtins.__import__", "importlib.import_module", "runpy.run_module", "runpy.run_path"}:
             return reflected
     if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Call)
             and _resolve_binding(node.value.func, bindings) == "vars" and node.value.args):
         owner = _resolve_binding(node.value.args[0], bindings)
-        member = _constant_string(node.slice)
+        member = _constant_string(node.slice, bindings)
         reflected = f"{owner}.{member}" if owner and member else None
         if reflected in {"builtins.__import__", "importlib.import_module", "runpy.run_module", "runpy.run_path"}:
             return reflected
@@ -304,6 +324,15 @@ def _binding_targets(node: ast.AST) -> list[str]:
     return []
 
 
+def _inside_conditional_control_flow(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
+    parent = parents.get(node)
+    while parent is not None and not isinstance(parent, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        if isinstance(parent, (ast.If, ast.IfExp, ast.For, ast.AsyncFor, ast.While, ast.Try, ast.Match)):
+            return True
+        parent = parents.get(parent)
+    return False
+
+
 def analyze_sources(sources: dict[str, str], policy: dict) -> dict:
     if policy.get("policyVersion") != "1.0.0" or not isinstance(policy.get("components"), list):
         raise ValueError("architecture policy invalid")
@@ -336,6 +365,7 @@ def analyze_sources(sources: dict[str, str], policy: dict) -> dict:
     for source, (path, tree) in sorted(parsed.items()):
         package = path.endswith("/__init__.py")
         bindings: dict[str, str] = {"__import__": "builtins.__import__"}
+        parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
         ordered_nodes = sorted(ast.walk(tree), key=lambda item: (getattr(item, "lineno", 0), getattr(item, "col_offset", 0)))
         for node in ordered_nodes:
             if isinstance(node, ast.Import):
@@ -351,11 +381,19 @@ def analyze_sources(sources: dict[str, str], policy: dict) -> dict:
                 value = node.value
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 resolved = (_resolve_binding(value, bindings) or _protected_binding(value, bindings)) if value is not None else None
+                constant = _constant_string(value, bindings) if value is not None else None
+                if constant is not None:
+                    resolved = f"constant_string:{constant}"
                 for target in targets:
                     for name in _binding_targets(target):
-                        if resolved:
+                        preserve_protected_join = (
+                            _inside_conditional_control_flow(node, parents)
+                            and _is_protected_dynamic_identity(bindings.get(name))
+                            and not _is_protected_dynamic_identity(resolved)
+                        )
+                        if resolved and not preserve_protected_join:
                             bindings[name] = resolved
-                        else:
+                        elif not preserve_protected_join:
                             bindings.pop(name, None)
             targets: list[str] = []
             if isinstance(node, ast.Import):
