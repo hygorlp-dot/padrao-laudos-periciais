@@ -139,6 +139,29 @@ def test_dynamic_architecture_bypass_reflection_and_factory_aliases(source):
     assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
 
 
+@pytest.mark.parametrize("source", [
+    "import importlib\nimportlib.util.find_spec(name).loader.exec_module(module)\n",
+    "__builtins__['__import__'](name)\n",
+    "globals()['__builtins__']['__import__'](name)\n",
+    "import sys\nsys.modules['importlib'].import_module(name)\n",
+    "import importlib\nimport operator\noperator.attrgetter('import_module')(importlib)(name)\n",
+])
+def test_dynamic_architecture_bypass_inline_reflection_chains(source):
+    findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
+    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "__builtins__['len'](items)\n",
+    "globals()['ordinary'](value)\n",
+    "import sys\nsys.modules['decimal'].Decimal('1')\n",
+    "import operator\noperator.attrgetter('ordinary')(holder)(value)\n",
+])
+def test_ordinary_inline_reflection_is_not_a_dynamic_architecture_bypass(source):
+    findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
+    assert all(item["code"] != "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+
+
 def test_cycle_analysis_is_iterative_for_deep_graphs():
     graph = {f"m{index}": {f"m{index + 1}"} for index in range(1500)}
     graph["m1500"] = {"m0"}
