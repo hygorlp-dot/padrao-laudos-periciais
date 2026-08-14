@@ -212,3 +212,10 @@ def test_staging_does_not_self_activate_in_verify_core():
     source = (ROOT / "scripts/quality/verify_core.py").read_text(encoding="utf-8")
     assert "run_architecture_gate" not in source
     assert "architecture analyzer" not in source
+
+
+def test_protected_mode_uses_protected_base_artifacts(monkeypatch):
+    candidate, _tree = candidate_tree(ROOT, "HEAD")
+    monkeypatch.setenv("ARCHITECTURE_EXPECTED_HEAD_SHA", candidate)
+    monkeypatch.setenv("ARCHITECTURE_PROTECTED_BASE_SHA", "663b2f9122f46bd5f06a6c3b2fb943b25aa7c869")
+    assert run_architecture_gate(ROOT, candidate) == []
