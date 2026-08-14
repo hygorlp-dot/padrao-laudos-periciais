@@ -2,18 +2,20 @@ import ast
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import jsonschema
 
 from scripts.quality.architecture_analyzer import (
+    PROTECTED_ARCHITECTURE_ARTIFACTS,
     _cycles,
     _protected_artifact_findings,
     analyze_sources,
     apply_exact_baseline,
     run_architecture_gate,
 )
-from scripts.quality.repository_inventory import canonical_python_path, candidate_tree
+from scripts.quality.repository_inventory import canonical_python_path, candidate_tree, tree_python_sources
 
 
 ROOT = Path(__file__).parents[1]
@@ -351,6 +353,58 @@ def test_repository_is_clean_in_protected_mode(monkeypatch):
     monkeypatch.setenv("ARCHITECTURE_EXPECTED_HEAD_SHA", candidate)
     monkeypatch.setenv("ARCHITECTURE_PROTECTED_BASE_SHA", candidate)
     assert run_architecture_gate(ROOT, candidate) == []
+
+
+def test_protected_artifact_identity_is_loaded_in_one_query_per_commit(monkeypatch):
+    candidate, _tree = candidate_tree(ROOT, "HEAD")
+    real_run = subprocess.run
+    artifact_queries = []
+
+    def recording_run(command, *args, **kwargs):
+        if command[:2] == ["git", "ls-tree"] or command[:2] == ["git", "rev-parse"]:
+            artifact_queries.append(command)
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr("scripts.quality.architecture_analyzer.subprocess.run", recording_run)
+
+    assert _protected_artifact_findings(ROOT, candidate, candidate) == []
+    assert artifact_queries == [
+        ["git", "ls-tree", "-r", candidate, "--", *PROTECTED_ARCHITECTURE_ARTIFACTS],
+        ["git", "ls-tree", "-r", candidate, "--", *PROTECTED_ARCHITECTURE_ARTIFACTS],
+    ]
+
+
+def test_python_blobs_are_loaded_in_one_batch_query(monkeypatch):
+    _candidate, tree = candidate_tree(ROOT, "HEAD")
+    real_run = subprocess.run
+    blob_queries = []
+
+    def recording_run(command, *args, **kwargs):
+        if command[:3] == ["git", "cat-file", "blob"] or command[:3] == ["git", "cat-file", "--batch"]:
+            blob_queries.append(command)
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr("scripts.quality.repository_inventory.subprocess.run", recording_run)
+
+    sources = tree_python_sources(ROOT, tree)
+    assert "scripts/quality/architecture_analyzer.py" in sources
+    assert blob_queries == [["git", "cat-file", "--batch"]]
+
+
+@pytest.mark.parametrize("batch_output", [b"", b"0" * 40 + b" tree 1\nx\n"])
+def test_python_blob_batch_fails_closed_on_invalid_output(monkeypatch, batch_output):
+    _candidate, tree = candidate_tree(ROOT, "HEAD")
+    real_run = subprocess.run
+
+    def invalid_batch(command, *args, **kwargs):
+        if command == ["git", "cat-file", "--batch"]:
+            return SimpleNamespace(returncode=0, stdout=batch_output, stderr=b"")
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr("scripts.quality.repository_inventory.subprocess.run", invalid_batch)
+
+    with pytest.raises(RuntimeError):
+        tree_python_sources(ROOT, tree)
 
 
 @pytest.mark.parametrize("mutation", [

@@ -39,20 +39,33 @@ def _protected_artifact_findings(root: Path, protected_base: str, candidate: str
             1,
             "protected base is not an ancestor of candidate",
         )]
+    def tree_blobs(commit: str) -> dict[str, str] | None:
+        result = subprocess.run(
+            ["git", "ls-tree", "-r", commit, "--", *PROTECTED_ARCHITECTURE_ARTIFACTS],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode:
+            return None
+        blobs = {}
+        for line in result.stdout.splitlines():
+            metadata, path = line.split("\t", 1)
+            blobs[path] = metadata.split()[2]
+        return blobs
+
+    base_blobs = tree_blobs(protected_base)
+    candidate_blobs = tree_blobs(candidate)
+    if base_blobs is None or candidate_blobs is None:
+        return [_finding(
+            "ARCHITECTURE_PROTECTED_ARTIFACT_UNAVAILABLE",
+            "scripts/quality/architecture_analyzer.py",
+            1,
+            "protected artifact identity could not be loaded",
+        )]
     findings = []
     for path in PROTECTED_ARCHITECTURE_ARTIFACTS:
-        def blob(commit: str) -> str | None:
-            result = subprocess.run(
-                ["git", "rev-parse", f"{commit}:{path}"],
-                cwd=root,
-                capture_output=True,
-                text=True,
-            )
-            return result.stdout.strip() if result.returncode == 0 else None
-
-        base_blob = blob(protected_base)
-        candidate_blob = blob(candidate)
-        if base_blob != candidate_blob:
+        if base_blobs.get(path) != candidate_blobs.get(path):
             findings.append(_finding(
                 "ARCHITECTURE_PROTECTED_ARTIFACT_MISMATCH",
                 path,
