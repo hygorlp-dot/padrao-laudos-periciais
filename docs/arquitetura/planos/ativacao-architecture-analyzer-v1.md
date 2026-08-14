@@ -11,6 +11,13 @@ definição protegida da base e executa o analyzer/policy/schema provenientes do
 base para validar a mudança de ativação. PR-B2 adiciona composição bloqueante ao
 `verify_core` somente depois da prova de identidade dos blobs-base.
 
+Como um workflow novo não pode proteger o mesmo PR candidato que o introduz,
+PR-B2 é executado em duas transições delimitadas: primeiro o bootstrap
+observacional mergeia o analyzer endurecido e o workflow `pull_request_target`
+sem ativar `verify_core` nem mover o baseline; depois a ativação parte desse
+HEAD protegido e é validada pelo executável da base. Nenhuma das transições pode
+autorizar a si própria.
+
 PR-B2 deve também concluir antes da ativação: leitura de exceções somente por
 blob candidato exato; validação runtime do schema; SCC iterativo ou limite
 fail-closed; superfícies de loader/import-hook class-wide; baseline/policy

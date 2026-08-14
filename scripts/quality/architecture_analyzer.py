@@ -237,11 +237,12 @@ def apply_exact_baseline(root: Path, result: dict, baseline: dict, *, protected_
             if commit not in {protected_base, protected_registry.get("baselineCommit")}:
                 result["findings"].append(_finding("ARCHITECTURE_BASELINE_INVALID", "config/architecture-baseline-v1.json", 1, "baseline is not authorized by protected base")); return result
         candidate_baseline = json.loads(subprocess.check_output(["git", "show", f"{candidate}:config/architecture-baseline-v1.json"], cwd=root, text=True))
-        schema_blob = subprocess.check_output(["git", "show", f"{commit}:schemas/architecture-baseline-v1.schema.json"], cwd=root)
+        artifact_source = commit if protected_base else candidate
+        schema_blob = subprocess.check_output(["git", "show", f"{artifact_source}:schemas/architecture-baseline-v1.schema.json"], cwd=root)
         jsonschema.validate(baseline, json.loads(schema_blob))
         if candidate_baseline != baseline:
             result["findings"].append(_finding("ARCHITECTURE_BASELINE_INVALID", "config/architecture-baseline-v1.json", 1, "baseline does not match exact candidate blob")); return result
-        policy_blob = subprocess.check_output(["git", "show", f"{commit}:config/architecture-policy-v1.json"], cwd=root)
+        policy_blob = subprocess.check_output(["git", "show", f"{artifact_source}:config/architecture-policy-v1.json"], cwd=root)
     except (jsonschema.ValidationError, jsonschema.SchemaError, json.JSONDecodeError) as exc:
         result["findings"].append(_finding("ARCHITECTURE_BASELINE_INVALID", "config/architecture-baseline-v1.json", 1, f"schema validation failed: {exc.message}")); return result
     except subprocess.CalledProcessError:
@@ -303,8 +304,9 @@ def run_architecture_gate(root: Path, candidate: str = "HEAD") -> list[dict]:
         if expected and commit != expected:
             return [_finding("ARCHITECTURE_ANALYZER_FAILURE", "scripts/quality/architecture_analyzer.py", 1, "candidate does not match exact expected head")]
         baseline = json.loads(subprocess.check_output(["git", "show", f"{commit}:config/architecture-baseline-v1.json"], cwd=root, text=True))
-        policy = json.loads(subprocess.check_output(["git", "show", f"{baseline['baselineCommit']}:config/architecture-policy-v1.json"], cwd=root, text=True))
         protected_base = os.environ.get("ARCHITECTURE_PROTECTED_BASE_SHA") or None
+        policy_source = baseline["baselineCommit"] if protected_base else commit
+        policy = json.loads(subprocess.check_output(["git", "show", f"{policy_source}:config/architecture-policy-v1.json"], cwd=root, text=True))
         return apply_exact_baseline(root, analyze_repository(root, policy, commit, tree), baseline, protected_base=protected_base)["findings"]
     except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
         return [_finding("ARCHITECTURE_ANALYZER_FAILURE", "scripts/quality/architecture_analyzer.py", 1, str(exc))]
