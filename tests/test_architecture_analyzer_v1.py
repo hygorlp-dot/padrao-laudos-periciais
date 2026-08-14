@@ -533,6 +533,22 @@ def _commit_protected_transition(
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
 
 
+@pytest.fixture(scope="module")
+def protected_transition_repo(tmp_path_factory):
+    root = tmp_path_factory.mktemp("protected-transition-repo")
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    analyzer = root / "scripts/quality/architecture_analyzer.py"
+    analyzer.parent.mkdir(parents=True)
+    analyzer.write_text("# protected base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run([
+        "git", "-c", "user.email=test@example.invalid", "-c", "user.name=Test",
+        "commit", "-qm", "protected base",
+    ], cwd=root, check=True)
+    protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    return root, protected_base
+
+
 def test_exact_dedicated_transition_can_rotate_protected_artifact(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
@@ -742,15 +758,9 @@ def test_v1_transition_cannot_authorize_undeclared_mode_change(tmp_path):
     ("2.0.0", lambda row: row.update(candidateBlobSha="0" * 40)),
 ])
 def test_transition_schema_dispatch_rejects_unknown_hybrid_malformed_and_mismatch(
-    tmp_path, schema_version, row_mutation,
+    protected_transition_repo, schema_version, row_mutation,
 ):
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
-    analyzer.parent.mkdir(parents=True)
-    analyzer.write_text("# protected base\n", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-qm", "protected base"], cwd=tmp_path, check=True)
-    protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    tmp_path, protected_base = protected_transition_repo
 
     candidate = _commit_protected_transition(
         tmp_path, protected_base, schema_version=schema_version, row_mutation=row_mutation,
@@ -766,14 +776,10 @@ def test_transition_schema_dispatch_rejects_unknown_hybrid_malformed_and_mismatc
     lambda transition: transition.update(artifacts=[]),
     lambda transition: transition.update(artifacts=transition["artifacts"] * 2),
 ])
-def test_transition_rejects_unknown_wrong_base_omitted_and_duplicate_rows(tmp_path, transition_mutation):
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
-    analyzer.parent.mkdir(parents=True)
-    analyzer.write_text("# protected base\n", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-qm", "protected base"], cwd=tmp_path, check=True)
-    protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+def test_transition_rejects_unknown_wrong_base_omitted_and_duplicate_rows(
+    protected_transition_repo, transition_mutation,
+):
+    tmp_path, protected_base = protected_transition_repo
 
     candidate = _commit_protected_transition(
         tmp_path, protected_base, schema_version="2.0.0", transition_mutation=transition_mutation,
