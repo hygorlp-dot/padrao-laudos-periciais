@@ -72,10 +72,10 @@ def test_overlapping_ownership_fails_closed():
     assert any(item["code"] == "AMBIGUOUS_COMPONENT_OWNERSHIP" for item in result["findings"])
 
 
-def test_dynamic_architecture_bypass_is_reported_but_no_capability_code_exists():
+def test_dynamic_capability_is_outside_static_architecture_boundary():
     sources = {"scripts/a.py": "import importlib\nname='scripts.b'\nimportlib.import_module(name)\n"}
     findings = analyze_sources(sources, _policy())["findings"]
-    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+    assert all(item["code"] != "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
     assert all("CAPABILITY" not in item["code"] for item in findings)
 
 
@@ -85,14 +85,14 @@ def test_dynamic_architecture_bypass_is_reported_but_no_capability_code_exists()
     "import runpy as r\nr.run_module(name)\n",
     "import builtins\nbuiltins.__import__(name)\n",
 ])
-def test_dynamic_architecture_bypass_import_aliases(source):
-    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in analyze_sources({"scripts/a.py": source}, _policy())["findings"])
+def test_import_alias_capabilities_are_not_interpreted(source):
+    assert all(item["code"] != "DYNAMIC_ARCHITECTURE_BYPASS" for item in analyze_sources({"scripts/a.py": source}, _policy())["findings"])
 
 
-def test_loader_and_import_hook_surfaces_block_class_wide():
+def test_loader_and_import_hook_capabilities_are_not_interpreted():
     sources = {"scripts/a.py": "spec.loader.exec_module(module)\nsys.meta_path.append(finder)\n"}
     findings = analyze_sources(sources, _policy())["findings"]
-    assert [item["code"] for item in findings].count("DYNAMIC_ARCHITECTURE_BYPASS") == 2
+    assert all(item["code"] != "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
 
 
 @pytest.mark.parametrize("source", [
@@ -107,18 +107,18 @@ def test_loader_and_import_hook_surfaces_block_class_wide():
     "from importlib import import_module\nload = import_module if enabled else safe\nload(name)\n",
     "from importlib import import_module\nholder.load = import_module\nholder.load(name)\n",
 ])
-def test_dynamic_architecture_bypass_assignment_aliases(source):
+def test_assignment_alias_capabilities_are_not_interpreted(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
-    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+    assert all(item["code"] != "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
 
 
 @pytest.mark.parametrize("source", [
     "from importlib import import_module\nimport_module(name)\nimport_module = safe\n",
     "from importlib import import_module as load\nload(name)\nload = safe\n",
 ])
-def test_dynamic_architecture_bypass_uses_binding_at_call_time(source):
+def test_binding_time_capabilities_are_not_interpreted(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
-    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+    assert all(item["code"] != "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
 
 
 @pytest.mark.parametrize("source", [
@@ -134,9 +134,9 @@ def test_dynamic_architecture_bypass_uses_binding_at_call_time(source):
     "import importlib\nimportlib.__dict__['import_module'](name)\n",
     "import importlib\ngetattr(importlib, ''.join(['import_', 'module']))(name)\n",
 ])
-def test_dynamic_architecture_bypass_reflection_and_factory_aliases(source):
+def test_reflection_and_factory_capabilities_are_not_interpreted(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
-    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+    assert all(item["code"] != "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
 
 
 @pytest.mark.parametrize("source", [
@@ -149,9 +149,9 @@ def test_dynamic_architecture_bypass_reflection_and_factory_aliases(source):
     "vars(spec.loader)['exec_module'](module)\n",
     "import importlib\nimportlib.__getattribute__('import_module')(name)\n",
 ])
-def test_dynamic_architecture_bypass_inline_reflection_chains(source):
+def test_inline_reflection_capabilities_are_not_interpreted(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
-    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+    assert all(item["code"] != "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
 
 
 @pytest.mark.parametrize("source", [
@@ -160,9 +160,9 @@ def test_dynamic_architecture_bypass_inline_reflection_chains(source):
     "spec.loader.exec_module.__call__(module)\n",
     "import importlib\nobject.__getattribute__(importlib, 'import_module')(name)\n",
 ])
-def test_dynamic_architecture_bypass_descriptor_dispatch(source):
+def test_descriptor_dispatch_capabilities_are_not_interpreted(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
-    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+    assert all(item["code"] != "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
 
 
 @pytest.mark.parametrize("source", [
@@ -171,9 +171,9 @@ def test_dynamic_architecture_bypass_descriptor_dispatch(source):
     "import importlib, types\ntypes.ModuleType.__getattribute__(importlib, 'import_module')(name)\n",
     "import importlib, operator\noperator.methodcaller('__getattribute__', 'import_module')(importlib)(name)\n",
 ])
-def test_dynamic_architecture_bypass_unbound_descriptor_dispatch(source):
+def test_unbound_descriptor_capabilities_are_not_interpreted(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
-    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+    assert all(item["code"] != "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
 
 
 @pytest.mark.parametrize("source", [
@@ -185,9 +185,9 @@ def test_dynamic_architecture_bypass_unbound_descriptor_dispatch(source):
     "import importlib\ntype(importlib).__getattribute__(importlib, 'import_module')(name)\n",
     "import importlib, types\ntype.__getattribute__(types.ModuleType, '__getattribute__')(importlib, 'import_module')(name)\n",
 ])
-def test_dynamic_architecture_bypass_higher_order_and_generic_descriptors(source):
+def test_higher_order_capabilities_are_not_interpreted(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
-    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+    assert all(item["code"] != "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
 
 
 @pytest.mark.parametrize("source", [
@@ -195,9 +195,9 @@ def test_dynamic_architecture_bypass_higher_order_and_generic_descriptors(source
     "from importlib import import_module\nload = import_module\ntry:\n    operation()\nexcept Exception:\n    load = safe\nload(name)\n",
     "from importlib import import_module\nload = import_module\nfor item in []:\n    load = safe\nload(name)\n",
 ])
-def test_dynamic_architecture_bypass_survives_control_flow_join(source):
+def test_control_flow_capabilities_are_not_interpreted(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
-    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+    assert all(item["code"] != "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
 
 
 @pytest.mark.parametrize("source", [
@@ -206,9 +206,9 @@ def test_dynamic_architecture_bypass_survives_control_flow_join(source):
     "import importlib, types\nmember = supplied\ntypes.ModuleType.__getattribute__(importlib, member)(name)\n",
     "import importlib, operator\nmember = supplied\noperator.attrgetter(member)(importlib)(name)\n",
 ])
-def test_dynamic_architecture_bypass_variable_generic_descriptor_member(source):
+def test_variable_descriptor_capabilities_are_not_interpreted(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
-    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+    assert all(item["code"] != "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
 
 
 @pytest.mark.parametrize("source", [
@@ -220,9 +220,9 @@ def test_dynamic_architecture_bypass_variable_generic_descriptor_member(source):
     "invoke(eval, payload)\n",
     "runner = exec\nif disabled:\n    runner = safe\nrunner(payload)\n",
 ])
-def test_dynamic_architecture_bypass_mapping_lookup_and_string_execution(source):
+def test_mapping_and_string_execution_capabilities_are_not_interpreted(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
-    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+    assert all(item["code"] != "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
 
 
 @pytest.mark.parametrize("source", [
@@ -243,7 +243,7 @@ def test_dynamic_architecture_bypass_mapping_lookup_and_string_execution(source)
     "import importlib\nmember = 'ordinary'\nobject.__getattribute__(importlib, member)(value)\n",
     "import sys\nsys.modules.get('decimal').Decimal('1')\n",
 ])
-def test_ordinary_inline_reflection_is_not_a_dynamic_architecture_bypass(source):
+def test_ordinary_reflection_remains_outside_static_architecture_boundary(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
     assert all(item["code"] != "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
 
