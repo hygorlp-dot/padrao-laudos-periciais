@@ -66,9 +66,10 @@ def _protected_transition_valid(
             for path in changed_artifacts
         }
         if any(
-            not isinstance(blob, str) or not blob
-            for identities in expected.values()
-            for blob in identities
+            (base_blob is not None and (not isinstance(base_blob, str) or not base_blob))
+            or not isinstance(candidate_blob, str)
+            or not candidate_blob
+            for base_blob, candidate_blob in expected.values()
         ):
             return False
         declared = {}
