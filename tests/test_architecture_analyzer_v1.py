@@ -574,6 +574,54 @@ def test_exact_v2_transition_can_create_already_custodied_artifact(tmp_path):
     assert _protected_artifact_findings(tmp_path, protected_base, candidate) == []
 
 
+@pytest.mark.parametrize("mode,object_type", [("160000", "commit"), ("120000", "blob")])
+def test_creation_transition_rejects_non_regular_git_objects(tmp_path, mode, object_type):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
+    analyzer.parent.mkdir(parents=True)
+    analyzer.write_text("# protected base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "protected base"], cwd=tmp_path, check=True)
+    protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+    if object_type == "commit":
+        object_id = protected_base
+    else:
+        object_id = subprocess.check_output(
+            ["git", "hash-object", "-w", "--stdin"], cwd=tmp_path, input="target\n", text=True,
+        ).strip()
+    artifact_path = "scripts/quality/capability_trust_anchor.py"
+    subprocess.run(
+        ["git", "update-index", "--add", "--cacheinfo", f"{mode},{object_id},{artifact_path}"],
+        cwd=tmp_path,
+        check=True,
+    )
+    transition = tmp_path / "config/architecture-protected-transition-v1.json"
+    transition.parent.mkdir(parents=True, exist_ok=True)
+    transition.write_text(json.dumps({
+        "schemaVersion": "2.0.0",
+        "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
+        "protectedBaseSha": protected_base,
+        "artifacts": [{
+            "path": artifact_path,
+            "baseMode": None,
+            "baseObjectType": None,
+            "baseBlobSha": None,
+            "candidateMode": mode,
+            "candidateObjectType": object_type,
+            "candidateBlobSha": object_id,
+        }],
+    }), encoding="utf-8")
+    subprocess.run(["git", "add", "config/architecture-protected-transition-v1.json"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "invalid protected object"], cwd=tmp_path, check=True)
+    candidate = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
 def test_v1_transition_cannot_authorize_undeclared_mode_change(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
