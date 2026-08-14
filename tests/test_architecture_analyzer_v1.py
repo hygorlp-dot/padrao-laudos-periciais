@@ -191,6 +191,27 @@ def test_dynamic_architecture_bypass_higher_order_and_generic_descriptors(source
 
 
 @pytest.mark.parametrize("source", [
+    "from importlib import import_module\nload = import_module\nif disabled:\n    load = safe\nload(name)\n",
+    "from importlib import import_module\nload = import_module\ntry:\n    operation()\nexcept Exception:\n    load = safe\nload(name)\n",
+    "from importlib import import_module\nload = import_module\nfor item in []:\n    load = safe\nload(name)\n",
+])
+def test_dynamic_architecture_bypass_survives_control_flow_join(source):
+    findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
+    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "import importlib\nmember = supplied\nobject.__getattribute__(importlib, member)(name)\n",
+    "import importlib\nmember = supplied\ntype(importlib).__getattribute__(importlib, member)(name)\n",
+    "import importlib, types\nmember = supplied\ntypes.ModuleType.__getattribute__(importlib, member)(name)\n",
+    "import importlib, operator\nmember = supplied\noperator.attrgetter(member)(importlib)(name)\n",
+])
+def test_dynamic_architecture_bypass_variable_generic_descriptor_member(source):
+    findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
+    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
     "__builtins__['len'](items)\n",
     "globals()['ordinary'](value)\n",
     "import sys\nsys.modules['decimal'].Decimal('1')\n",
@@ -204,6 +225,8 @@ def test_dynamic_architecture_bypass_higher_order_and_generic_descriptors(source
     "list(map(str, values))\n",
     "type(holder).__getattribute__(holder, 'ordinary')(value)\n",
     "def factory():\n    import math as local_math\n    return local_math.sqrt\nroot = factory()\nroot(value)\n",
+    "from importlib import import_module\nload = import_module\nload = safe\nload(name)\n",
+    "import importlib\nmember = 'ordinary'\nobject.__getattribute__(importlib, member)(value)\n",
 ])
 def test_ordinary_inline_reflection_is_not_a_dynamic_architecture_bypass(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
