@@ -140,12 +140,29 @@ def _resolve_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
     return f"{resolved}.{remainder}" if separator else resolved
 
 
+def _constant_string(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _constant_string(node.left), _constant_string(node.right)
+        if left is not None and right is not None:
+            return left + right
+    return None
+
+
 def _protected_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
     if (isinstance(node, ast.Call) and _resolve_binding(node.func, bindings) == "getattr"
-            and len(node.args) >= 2 and isinstance(node.args[1], ast.Constant)
-            and isinstance(node.args[1].value, str)):
+            and len(node.args) >= 2):
         owner = _resolve_binding(node.args[0], bindings)
-        reflected = f"{owner}.{node.args[1].value}" if owner else None
+        member = _constant_string(node.args[1])
+        reflected = f"{owner}.{member}" if owner and member else None
+        if reflected in {"builtins.__import__", "importlib.import_module", "runpy.run_module", "runpy.run_path"}:
+            return reflected
+    if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Call)
+            and _resolve_binding(node.value.func, bindings) == "vars" and node.value.args):
+        owner = _resolve_binding(node.value.args[0], bindings)
+        member = _constant_string(node.slice)
+        reflected = f"{owner}.{member}" if owner and member else None
         if reflected in {"builtins.__import__", "importlib.import_module", "runpy.run_module", "runpy.run_path"}:
             return reflected
     for part in ast.walk(node):
@@ -227,7 +244,7 @@ def analyze_sources(sources: dict[str, str], policy: dict) -> dict:
                 if base == "scripts" or base.startswith("scripts."):
                     targets = [f"{base}.{alias.name}" if alias.name != "*" else base for alias in node.names]
             elif isinstance(node, ast.Call):
-                func = _resolve_binding(node.func, bindings)
+                func = _resolve_binding(node.func, bindings) or _protected_binding(node.func, bindings)
                 if func in dynamic_functions or func == "builtins.__import__" or (func and func.endswith((".exec_module", ".load_module"))) or (func and func.startswith(("sys.meta_path.", "sys.path_hooks."))):
                     findings.append(_finding("DYNAMIC_ARCHITECTURE_BYPASS", path, node.lineno, ast.dump(node, include_attributes=False)))
             for target in targets:

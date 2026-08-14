@@ -124,6 +124,9 @@ def test_dynamic_architecture_bypass_uses_binding_at_call_time(source):
 @pytest.mark.parametrize("source", [
     "import importlib\nload = getattr(importlib, 'import_module')\nload(name)\n",
     "from importlib import import_module\ndef factory():\n    return import_module\nload = factory()\nload(name)\n",
+    "import importlib\ngetattr(importlib, 'import_' + 'module')(name)\n",
+    "import importlib\nvars(importlib)['import_module'](name)\n",
+    "import builtins\ngetattr(builtins, '__' + 'import__')(name)\n",
 ])
 def test_dynamic_architecture_bypass_reflection_and_factory_aliases(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
