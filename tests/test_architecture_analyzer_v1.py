@@ -434,6 +434,8 @@ def test_python_blob_batch_fails_closed_on_invalid_output(monkeypatch, batch_out
 def protected_enforcement_repo(tmp_path_factory):
     root = tmp_path_factory.mktemp("protected-enforcement-repo")
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
     workflow = root / ".github/workflows/architecture-protected.yml"
     policy = root / "config/architecture-policy-v1.json"
     transfer_ledger = root / "config/architecture-capability-transfers-v2.json"
@@ -572,6 +574,8 @@ def protected_transition_repo(tmp_path_factory):
 def reusable_protected_transition_repo(tmp_path_factory):
     root = tmp_path_factory.mktemp("clean-protected-transition-repo")
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
     analyzer = root / "scripts/quality/architecture_analyzer.py"
     analyzer.parent.mkdir(parents=True)
     analyzer.write_text("# protected base\n", encoding="utf-8")
