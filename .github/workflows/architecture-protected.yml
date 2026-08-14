@@ -1,0 +1,41 @@
+name: architecture-protected
+
+on:
+  pull_request_target:
+
+permissions:
+  contents: read
+
+jobs:
+  architecture-protected:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout protected base executable
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          path: trusted
+      - name: Checkout exact candidate tree
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          path: candidate
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: trusted/requirements-dev.txt
+      - name: Install trusted analyzer dependencies
+        working-directory: trusted
+        run: python -m pip install -r requirements-dev.txt
+      - name: Analyze candidate with protected base executable
+        working-directory: trusted
+        env:
+          ARCHITECTURE_CANDIDATE_ROOT: ${{ github.workspace }}/candidate
+          ARCHITECTURE_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ARCHITECTURE_PROTECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python -c "import os,sys; from pathlib import Path; from scripts.quality.architecture_analyzer import run_architecture_gate; findings=run_architecture_gate(Path(os.environ['ARCHITECTURE_CANDIDATE_ROOT']), os.environ['ARCHITECTURE_EXPECTED_HEAD_SHA']); print(findings); sys.exit(1 if findings else 0)"

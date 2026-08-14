@@ -99,9 +99,28 @@ def _resolve_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
     dotted = _attribute_name(node)
     if dotted is None:
         return None
+    if dotted in bindings:
+        return bindings[dotted]
     root, separator, remainder = dotted.partition(".")
     resolved = bindings.get(root, root)
     return f"{resolved}.{remainder}" if separator else resolved
+
+
+def _protected_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
+    for part in ast.walk(node):
+        resolved = _resolve_binding(part, bindings)
+        if resolved and (resolved in {"builtins.__import__", "importlib.import_module", "runpy.run_module", "runpy.run_path"} or resolved.endswith((".exec_module", ".load_module")) or resolved.startswith(("sys.meta_path", "sys.path_hooks"))):
+            return resolved
+    return None
+
+
+def _binding_targets(node: ast.AST) -> list[str]:
+    dotted = _attribute_name(node)
+    if dotted:
+        return [dotted]
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return [item for child in node.elts for item in _binding_targets(child)]
+    return []
 
 
 def analyze_sources(sources: dict[str, str], policy: dict) -> dict:
@@ -145,11 +164,11 @@ def analyze_sources(sources: dict[str, str], policy: dict) -> dict:
             elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
                 value = node.value
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                resolved = _resolve_binding(value, bindings)
+                resolved = (_resolve_binding(value, bindings) or _protected_binding(value, bindings)) if value is not None else None
                 if resolved:
                     for target in targets:
-                        if isinstance(target, ast.Name):
-                            bindings[target.id] = resolved
+                        for name in _binding_targets(target):
+                            bindings[name] = resolved
         for node in ast.walk(tree):
             targets: list[str] = []
             if isinstance(node, ast.Import):
@@ -161,13 +180,8 @@ def analyze_sources(sources: dict[str, str], policy: dict) -> dict:
                 if base == "scripts" or base.startswith("scripts."):
                     targets = [f"{base}.{alias.name}" if alias.name != "*" else base for alias in node.names]
             elif isinstance(node, ast.Call):
-                func = bindings.get(node.func.id, node.func.id) if isinstance(node.func, ast.Name) else None
-                if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
-                    func = f"{bindings.get(node.func.value.id, node.func.value.id)}.{node.func.attr}"
+                func = _resolve_binding(node.func, bindings)
                 if func in dynamic_functions or func == "builtins.__import__" or (func and func.endswith((".exec_module", ".load_module"))) or (func and func.startswith(("sys.meta_path.", "sys.path_hooks."))):
-                    findings.append(_finding("DYNAMIC_ARCHITECTURE_BYPASS", path, node.lineno, ast.dump(node, include_attributes=False)))
-                dotted = _attribute_name(node.func)
-                if dotted and (dotted.endswith((".exec_module", ".load_module")) or dotted.startswith(("sys.meta_path.", "sys.path_hooks."))):
                     findings.append(_finding("DYNAMIC_ARCHITECTURE_BYPASS", path, node.lineno, ast.dump(node, include_attributes=False)))
             for target in targets:
                 resolved = _target_exists(target, modules, import_from=isinstance(node, ast.ImportFrom))

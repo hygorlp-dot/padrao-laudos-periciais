@@ -1,5 +1,6 @@
 import ast
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -95,6 +96,10 @@ def test_loader_and_import_hook_surfaces_block_class_wide():
     "from importlib import import_module\nload: object = import_module\nload(name)\n",
     "from importlib import import_module\nfirst = second = import_module\nsecond(name)\n",
     "from importlib import import_module\nif (load := import_module):\n    load(name)\n",
+    "from importlib import import_module\n(load,) = (import_module,)\nload(name)\n",
+    "from importlib import import_module\nloads = [import_module]\nload = loads[0]\nload(name)\n",
+    "from importlib import import_module\nload = import_module if enabled else safe\nload(name)\n",
+    "from importlib import import_module\nholder.load = import_module\nholder.load(name)\n",
 ])
 def test_dynamic_architecture_bypass_assignment_aliases(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
@@ -138,7 +143,7 @@ def test_architecture_baseline_schema_is_closed():
 
 
 def test_architecture_baseline_is_validated_at_runtime():
-    baseline = json.loads((ROOT / "config/architecture-baseline-v1.json").read_text())
+    baseline = json.loads(subprocess.check_output(["git", "show", "HEAD:config/architecture-baseline-v1.json"], cwd=ROOT, text=True))
     baseline["unknown"] = True
     result = {"candidateCommitSha": "HEAD", "policyVersion": "1.0.0", "findings": [], "modules": []}
     checked = apply_exact_baseline(ROOT, result, baseline)
@@ -199,5 +204,11 @@ def test_exact_baseline_rejects_stale_exception_on_real_repository():
     assert any(item["code"] == "ARCHITECTURE_BASELINE_INVALID" for item in checked["findings"])
 
 
-def test_repository_is_clean_before_blocking_activation():
+def test_repository_is_clean_before_protected_activation():
     assert run_architecture_gate(ROOT) == []
+
+
+def test_staging_does_not_self_activate_in_verify_core():
+    source = (ROOT / "scripts/quality/verify_core.py").read_text(encoding="utf-8")
+    assert "run_architecture_gate" not in source
+    assert "architecture analyzer" not in source
