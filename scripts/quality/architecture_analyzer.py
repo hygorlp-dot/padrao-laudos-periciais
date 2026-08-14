@@ -39,8 +39,8 @@ def _protected_transition_valid(
     root: Path,
     protected_base: str,
     candidate: str,
-    base_blobs: dict[str, str],
-    candidate_blobs: dict[str, str],
+    base_objects: dict[str, tuple[str, str, str]],
+    candidate_objects: dict[str, tuple[str, str, str]],
     changed_artifacts: list[str],
 ) -> bool:
     try:
@@ -52,7 +52,8 @@ def _protected_transition_valid(
         transition = json.loads(raw)
         if set(transition) != {"schemaVersion", "transitionId", "protectedBaseSha", "artifacts"}:
             return False
-        if transition.get("schemaVersion") != "1.0.0":
+        schema_version = transition.get("schemaVersion")
+        if schema_version not in {"1.0.0", "2.0.0"}:
             return False
         if transition.get("transitionId") != "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1":
             return False
@@ -62,24 +63,44 @@ def _protected_transition_valid(
         if not isinstance(rows, list) or len(rows) != len(changed_artifacts):
             return False
         expected = {
-            path: (base_blobs.get(path), candidate_blobs.get(path))
+            path: (base_objects.get(path), candidate_objects.get(path))
             for path in changed_artifacts
         }
         if any(
-            not isinstance(blob, str) or not blob
-            for identities in expected.values()
-            for blob in identities
+            base_object is None or candidate_object is None
+            or base_object[:2] not in {("100644", "blob"), ("100755", "blob")}
+            or candidate_object[:2] not in {("100644", "blob"), ("100755", "blob")}
+            for base_object, candidate_object in expected.values()
         ):
             return False
         declared = {}
         for row in rows:
-            if not isinstance(row, dict) or set(row) != {"path", "baseBlobSha", "candidateBlobSha"}:
+            row_keys = (
+                {"path", "baseBlobSha", "candidateBlobSha"}
+                if schema_version == "1.0.0"
+                else {
+                    "path", "baseMode", "baseObjectType", "baseBlobSha",
+                    "candidateMode", "candidateObjectType", "candidateBlobSha",
+                }
+            )
+            if not isinstance(row, dict) or set(row) != row_keys:
                 return False
             path = row.get("path")
             if path in declared or path not in expected:
                 return False
-            declared[path] = (row.get("baseBlobSha"), row.get("candidateBlobSha"))
-        if declared != expected:
+            if schema_version == "1.0.0":
+                declared[path] = (row.get("baseBlobSha"), row.get("candidateBlobSha"))
+            else:
+                declared[path] = (
+                    (row.get("baseMode"), row.get("baseObjectType"), row.get("baseBlobSha")),
+                    (row.get("candidateMode"), row.get("candidateObjectType"), row.get("candidateBlobSha")),
+                )
+        exact_expected = (
+            {path: (base[2], candidate_object[2]) for path, (base, candidate_object) in expected.items()}
+            if schema_version == "1.0.0"
+            else expected
+        )
+        if declared != exact_expected:
             return False
         diff = subprocess.run(
             ["git", "diff", "--name-only", "-z", protected_base, candidate],
@@ -93,7 +114,7 @@ def _protected_transition_valid(
             path in allowed_exact or path.startswith(PROTECTED_TRANSITION_SUPPORT_PREFIXES)
             for path in changed_paths
         )
-    except (OSError, UnicodeError, json.JSONDecodeError, subprocess.CalledProcessError):
+    except (OSError, TypeError, ValueError, UnicodeError, json.JSONDecodeError, subprocess.CalledProcessError):
         return False
 
 
@@ -110,24 +131,30 @@ def _protected_artifact_findings(root: Path, protected_base: str, candidate: str
             1,
             "protected base is not an ancestor of candidate",
         )]
-    def tree_blobs(commit: str) -> dict[str, str] | None:
+    def tree_objects(commit: str) -> dict[str, tuple[str, str, str]] | None:
         result = subprocess.run(
-            ["git", "ls-tree", "-r", commit, "--", *PROTECTED_ARCHITECTURE_ARTIFACTS],
+            ["git", "ls-tree", commit, "--", *PROTECTED_ARCHITECTURE_ARTIFACTS],
             cwd=root,
             capture_output=True,
             text=True,
         )
         if result.returncode:
             return None
-        blobs = {}
-        for line in result.stdout.splitlines():
-            metadata, path = line.split("\t", 1)
-            blobs[path] = metadata.split()[2]
-        return blobs
+        objects = {}
+        try:
+            for line in result.stdout.splitlines():
+                metadata, path = line.split("\t", 1)
+                mode, object_type, object_id = metadata.split()
+                if path in objects or path not in PROTECTED_ARCHITECTURE_ARTIFACTS:
+                    return None
+                objects[path] = (mode, object_type, object_id)
+        except (TypeError, ValueError):
+            return None
+        return objects
 
-    base_blobs = tree_blobs(protected_base)
-    candidate_blobs = tree_blobs(candidate)
-    if base_blobs is None or candidate_blobs is None:
+    base_objects = tree_objects(protected_base)
+    candidate_objects = tree_objects(candidate)
+    if base_objects is None or candidate_objects is None:
         return [_finding(
             "ARCHITECTURE_PROTECTED_ARTIFACT_UNAVAILABLE",
             "scripts/quality/architecture_analyzer.py",
@@ -136,12 +163,12 @@ def _protected_artifact_findings(root: Path, protected_base: str, candidate: str
         )]
     changed_artifacts = [
         path for path in PROTECTED_ARCHITECTURE_ARTIFACTS
-        if base_blobs.get(path) != candidate_blobs.get(path)
+        if base_objects.get(path) != candidate_objects.get(path)
     ]
     if not changed_artifacts:
         return []
     if _protected_transition_valid(
-        root, protected_base, candidate, base_blobs, candidate_blobs, changed_artifacts,
+        root, protected_base, candidate, base_objects, candidate_objects, changed_artifacts,
     ):
         return []
     findings = [_finding(
