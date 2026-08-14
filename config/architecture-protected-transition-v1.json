@@ -6,7 +6,7 @@
     {
       "path": "scripts/quality/architecture_analyzer.py",
       "baseBlobSha": "151da06afd64b6b500d3690a61b24a6f56e7c090",
-      "candidateBlobSha": "5aad47a32dda00e2031cc002eb24c3448452e2e6"
+      "candidateBlobSha": "d3fbb521dd6db6ef5a35d43811ff3e710969ed5e"
     }
   ]
 }

@@ -73,6 +73,11 @@ def _protected_transition_valid(
             for base_object, candidate_object in expected.values()
         ):
             return False
+        if schema_version == "1.0.0" and any(
+            base_object[:2] != candidate_object[:2]
+            for base_object, candidate_object in expected.values()
+        ):
+            return False
         declared = {}
         for row in rows:
             row_keys = (
@@ -132,6 +137,7 @@ def _protected_artifact_findings(root: Path, protected_base: str, candidate: str
             "protected base is not an ancestor of candidate",
         )]
     def tree_objects(commit: str) -> dict[str, tuple[str, str, str]] | None:
+        # Exact-path lookup preserves a tree at a protected file path for fail-closed type validation.
         result = subprocess.run(
             ["git", "ls-tree", commit, "--", *PROTECTED_ARCHITECTURE_ARTIFACTS],
             cwd=root,

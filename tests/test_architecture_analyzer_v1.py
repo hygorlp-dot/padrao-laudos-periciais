@@ -552,6 +552,37 @@ def test_exact_v2_transition_can_rotate_protected_artifact_with_mode_identity(tm
     assert _protected_artifact_findings(tmp_path, protected_base, candidate) == []
 
 
+def test_v1_transition_cannot_authorize_undeclared_mode_change(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    artifact_path = "scripts/quality/architecture_analyzer.py"
+    analyzer = tmp_path / artifact_path
+    analyzer.parent.mkdir(parents=True)
+    analyzer.write_text("# protected base\n", encoding="utf-8")
+    subprocess.run(["git", "add", artifact_path], cwd=tmp_path, check=True)
+    subprocess.run(["git", "update-index", "--chmod=-x", artifact_path], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "protected base"], cwd=tmp_path, check=True)
+    protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    blob = subprocess.check_output(["git", "rev-parse", f"{protected_base}:{artifact_path}"], cwd=tmp_path, text=True).strip()
+
+    subprocess.run(["git", "update-index", "--chmod=+x", artifact_path], cwd=tmp_path, check=True)
+    transition = tmp_path / "config/architecture-protected-transition-v1.json"
+    transition.parent.mkdir(parents=True)
+    transition.write_text(json.dumps({
+        "schemaVersion": "1.0.0",
+        "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
+        "protectedBaseSha": protected_base,
+        "artifacts": [{"path": artifact_path, "baseBlobSha": blob, "candidateBlobSha": blob}],
+    }), encoding="utf-8")
+    subprocess.run(["git", "add", "config/architecture-protected-transition-v1.json"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "attempt legacy mode authorization"], cwd=tmp_path, check=True)
+    candidate = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
 @pytest.mark.parametrize("schema_version,row_mutation", [
     ("3.0.0", None),
     ("1.0.0", lambda row: row.update(baseMode="100644")),
