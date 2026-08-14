@@ -560,3 +560,11 @@ def test_staging_does_not_self_activate_in_verify_core():
     source = (ROOT / "scripts/quality/verify_core.py").read_text(encoding="utf-8")
     assert "run_architecture_gate" not in source
     assert "architecture analyzer" not in source
+
+
+def test_architecture_anchor_custodies_inert_capability_trust_root():
+    assert {
+        ".github/workflows/capability-protected.yml",
+        "config/capability-protected-artifacts-v1.json",
+        "scripts/quality/capability_trust_anchor.py",
+    } <= set(PROTECTED_ARCHITECTURE_ARTIFACTS)
