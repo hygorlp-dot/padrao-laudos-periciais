@@ -17,6 +17,7 @@ from .repository_inventory import candidate_tree, canonical_python_path, tree_py
 
 PROTECTED_ARCHITECTURE_ARTIFACTS = (
     ".github/workflows/architecture-protected.yml",
+    "config/architecture-capability-transfers-v2.json",
     "config/architecture-policy-v1.json",
     "schemas/architecture-baseline-v1.schema.json",
     "scripts/quality/architecture_analyzer.py",

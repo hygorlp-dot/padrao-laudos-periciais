@@ -353,25 +353,42 @@ def test_repository_is_clean_in_protected_mode(monkeypatch):
     assert run_architecture_gate(ROOT, candidate) == []
 
 
-@pytest.mark.parametrize("mutation", ["delete_workflow", "change_policy"])
+@pytest.mark.parametrize("mutation", [
+    "delete_workflow",
+    "change_policy",
+    "delete_transfer_ledger",
+    "weaken_transfer_ledger",
+])
 def test_protected_enforcement_artifacts_cannot_be_removed_or_changed(tmp_path, mutation):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     workflow = tmp_path / ".github/workflows/architecture-protected.yml"
     policy = tmp_path / "config/architecture-policy-v1.json"
+    transfer_ledger = tmp_path / "config/architecture-capability-transfers-v2.json"
     workflow.parent.mkdir(parents=True)
     policy.parent.mkdir(parents=True)
     workflow.write_text("name: protected\n", encoding="utf-8")
     policy.write_text('{"policyVersion":"1.0.0"}\n', encoding="utf-8")
+    transfer_ledger.write_text(
+        '{"defaultPolicy":"DENY","wildcardExceptionsAllowed":false,"findings":[{"severity":"P1"}]}\n',
+        encoding="utf-8",
+    )
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-qm", "protected base"], cwd=tmp_path, check=True)
     protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
 
     if mutation == "delete_workflow":
         workflow.unlink()
-    else:
+    elif mutation == "change_policy":
         policy.write_text('{"policyVersion":"disabled"}\n', encoding="utf-8")
+    elif mutation == "delete_transfer_ledger":
+        transfer_ledger.unlink()
+    else:
+        transfer_ledger.write_text(
+            '{"defaultPolicy":"ALLOW","wildcardExceptionsAllowed":true,"findings":[]}\n',
+            encoding="utf-8",
+        )
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-qm", "candidate mutation"], cwd=tmp_path, check=True)
     candidate = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
