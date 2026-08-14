@@ -315,7 +315,10 @@ def _scope_import_bindings(node: ast.AST, bindings: dict[str, str]) -> dict[str,
 
 def _is_protected_dynamic_identity(value: str | None) -> bool:
     return bool(value and (
-        value in {"builtins.__import__", "importlib.import_module", "runpy.run_module", "runpy.run_path"}
+        value in {
+            "builtins.__import__", "eval", "builtins.eval", "exec", "builtins.exec",
+            "importlib.import_module", "runpy.run_module", "runpy.run_path",
+        }
         or value.endswith((".exec_module", ".load_module", ".protected_namespace_reflection"))
         or value.startswith(("sys.meta_path.", "sys.path_hooks."))
     ))

@@ -216,6 +216,9 @@ def test_dynamic_architecture_bypass_variable_generic_descriptor_member(source):
     "eval(\"__import__('scripts.quality.target')\")\n",
     "exec(\"import scripts.quality.target\")\n",
     "evaluate = eval\nevaluate(compile(source, '<dynamic>', 'exec'))\n",
+    "runner = eval\nif disabled:\n    runner = safe\nrunner(payload)\n",
+    "invoke(eval, payload)\n",
+    "runner = exec\nif disabled:\n    runner = safe\nrunner(payload)\n",
 ])
 def test_dynamic_architecture_bypass_mapping_lookup_and_string_execution(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
