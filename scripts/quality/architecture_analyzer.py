@@ -24,6 +24,74 @@ PROTECTED_ARCHITECTURE_ARTIFACTS = (
     "scripts/quality/ast_inventory.py",
     "scripts/quality/repository_inventory.py",
 )
+PROTECTED_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
+PROTECTED_TRANSITION_SUPPORT_PREFIXES = (
+    "docs/arquitetura/",
+    "docs/superpowers/plans/",
+    "tests/test_architecture",
+)
+
+
+def _protected_transition_valid(
+    root: Path,
+    protected_base: str,
+    candidate: str,
+    base_blobs: dict[str, str],
+    candidate_blobs: dict[str, str],
+    changed_artifacts: list[str],
+) -> bool:
+    try:
+        raw = subprocess.check_output(
+            ["git", "show", f"{candidate}:{PROTECTED_TRANSITION_PATH}"],
+            cwd=root,
+            text=True,
+        )
+        transition = json.loads(raw)
+        if set(transition) != {"schemaVersion", "transitionId", "protectedBaseSha", "artifacts"}:
+            return False
+        if transition.get("schemaVersion") != "1.0.0":
+            return False
+        if transition.get("transitionId") != "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1":
+            return False
+        if transition.get("protectedBaseSha") != protected_base:
+            return False
+        rows = transition.get("artifacts")
+        if not isinstance(rows, list) or len(rows) != len(changed_artifacts):
+            return False
+        expected = {
+            path: (base_blobs.get(path), candidate_blobs.get(path))
+            for path in changed_artifacts
+        }
+        if any(
+            not isinstance(blob, str) or not blob
+            for identities in expected.values()
+            for blob in identities
+        ):
+            return False
+        declared = {}
+        for row in rows:
+            if not isinstance(row, dict) or set(row) != {"path", "baseBlobSha", "candidateBlobSha"}:
+                return False
+            path = row.get("path")
+            if path in declared or path not in expected:
+                return False
+            declared[path] = (row.get("baseBlobSha"), row.get("candidateBlobSha"))
+        if declared != expected:
+            return False
+        diff = subprocess.run(
+            ["git", "diff", "--name-only", "-z", protected_base, candidate],
+            cwd=root,
+            capture_output=True,
+            check=True,
+        ).stdout
+        changed_paths = {item.decode("utf-8") for item in diff.split(b"\0") if item}
+        allowed_exact = set(changed_artifacts) | {PROTECTED_TRANSITION_PATH}
+        return all(
+            path in allowed_exact or path.startswith(PROTECTED_TRANSITION_SUPPORT_PREFIXES)
+            for path in changed_paths
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, subprocess.CalledProcessError):
+        return False
 
 
 def _protected_artifact_findings(root: Path, protected_base: str, candidate: str) -> list[dict]:
@@ -63,15 +131,29 @@ def _protected_artifact_findings(root: Path, protected_base: str, candidate: str
             1,
             "protected artifact identity could not be loaded",
         )]
-    findings = []
-    for path in PROTECTED_ARCHITECTURE_ARTIFACTS:
-        if base_blobs.get(path) != candidate_blobs.get(path):
-            findings.append(_finding(
-                "ARCHITECTURE_PROTECTED_ARTIFACT_MISMATCH",
-                path,
-                1,
-                "candidate enforcement artifact differs from protected base",
-            ))
+    changed_artifacts = [
+        path for path in PROTECTED_ARCHITECTURE_ARTIFACTS
+        if base_blobs.get(path) != candidate_blobs.get(path)
+    ]
+    if not changed_artifacts:
+        return []
+    if _protected_transition_valid(
+        root, protected_base, candidate, base_blobs, candidate_blobs, changed_artifacts,
+    ):
+        return []
+    findings = [_finding(
+        "ARCHITECTURE_PROTECTED_TRANSITION_INVALID",
+        PROTECTED_TRANSITION_PATH,
+        1,
+        "protected artifact change lacks an exact dedicated transition",
+    )]
+    for path in changed_artifacts:
+        findings.append(_finding(
+            "ARCHITECTURE_PROTECTED_ARTIFACT_MISMATCH",
+            path,
+            1,
+            "candidate enforcement artifact differs from protected base",
+        ))
     return findings
 
 
