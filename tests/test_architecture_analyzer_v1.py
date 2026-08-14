@@ -92,6 +92,9 @@ def test_loader_and_import_hook_surfaces_block_class_wide():
     "import sys\nmp = sys.meta_path\nmp.append(finder)\n",
     "execute = spec.loader.exec_module\nexecute(module)\n",
     "from importlib import import_module\nload = import_module\nload(name)\n",
+    "from importlib import import_module\nload: object = import_module\nload(name)\n",
+    "from importlib import import_module\nfirst = second = import_module\nsecond(name)\n",
+    "from importlib import import_module\nif (load := import_module):\n    load(name)\n",
 ])
 def test_dynamic_architecture_bypass_assignment_aliases(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
@@ -149,6 +152,13 @@ def test_architecture_baseline_cannot_self_bootstrap_from_candidate():
     result = {"candidateCommitSha": candidate, "policyVersion": "1.0.0", "findings": [], "modules": []}
     checked = apply_exact_baseline(ROOT, result, baseline)
     assert any(item["code"] == "ARCHITECTURE_BASELINE_INVALID" for item in checked["findings"])
+
+
+def test_architecture_baseline_is_authorized_by_protected_base():
+    baseline = json.loads((ROOT / "config/architecture-baseline-v1.json").read_text())
+    result = {"candidateCommitSha": candidate_tree(ROOT, "HEAD")[0], "policyVersion": "1.0.0", "findings": [], "modules": []}
+    checked = apply_exact_baseline(ROOT, result, baseline, protected_base="c1dda7b34ab6c68475f1992029203554205a2ec7")
+    assert any(item["code"] == "ARCHITECTURE_BASELINE_INVALID" and "protected base" in item["detail"] for item in checked["findings"])
 
 
 def test_parse_failure_and_invalid_input_fail_closed():
