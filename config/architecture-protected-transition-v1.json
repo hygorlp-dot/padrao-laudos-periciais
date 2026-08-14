@@ -1,12 +1,12 @@
 {
   "schemaVersion": "1.0.0",
   "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "d96e3dda05d52590e4882f92834191cf65ea1f21",
+  "protectedBaseSha": "d4eba0d95d5734db01744878e205a0e17a10fdea",
   "artifacts": [
     {
       "path": "scripts/quality/architecture_analyzer.py",
-      "baseBlobSha": "a585a426b21d4883ee89744864defe570c83e9ed",
-      "candidateBlobSha": "151da06afd64b6b500d3690a61b24a6f56e7c090"
+      "baseBlobSha": "151da06afd64b6b500d3690a61b24a6f56e7c090",
+      "candidateBlobSha": "a73b6414956980afadc616d6ba4bceb6fb7e2bc0"
     }
   ]
 }
