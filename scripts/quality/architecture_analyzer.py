@@ -123,7 +123,8 @@ def _protected_artifact_findings(root: Path, protected_base: str, candidate: str
         blobs = {}
         for line in result.stdout.splitlines():
             metadata, path = line.split("\t", 1)
-            blobs[path] = metadata.split()[2]
+            mode, object_type, object_id = metadata.split()
+            blobs[path] = object_id if mode in {"100644", "100755"} and object_type == "blob" else ""
         return blobs
 
     base_blobs = tree_blobs(protected_base)
