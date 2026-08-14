@@ -177,6 +177,20 @@ def test_dynamic_architecture_bypass_unbound_descriptor_dispatch(source):
 
 
 @pytest.mark.parametrize("source", [
+    "invoke(__import__)\n",
+    "loader = lambda fn: fn(name)\nloader(__import__)\n",
+    "list(map(__import__, names))\n",
+    "import builtins\ntype(builtins).__getattribute__(builtins, '__import__')(name)\n",
+    "def factory():\n    import importlib as il\n    return il.import_module\nload = factory()\nload(name)\n",
+    "import importlib\ntype(importlib).__getattribute__(importlib, 'import_module')(name)\n",
+    "import importlib, types\ntype.__getattribute__(types.ModuleType, '__getattribute__')(importlib, 'import_module')(name)\n",
+])
+def test_dynamic_architecture_bypass_higher_order_and_generic_descriptors(source):
+    findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
+    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
     "__builtins__['len'](items)\n",
     "globals()['ordinary'](value)\n",
     "import sys\nsys.modules['decimal'].Decimal('1')\n",
@@ -186,6 +200,10 @@ def test_dynamic_architecture_bypass_unbound_descriptor_dispatch(source):
     "object.__dict__['__getattribute__'](holder, 'ordinary')(value)\n",
     "import types\ntypes.ModuleType.__getattribute__(holder, 'ordinary')(value)\n",
     "import operator\noperator.methodcaller('__getattribute__', 'ordinary')(holder)(value)\n",
+    "invoke(ordinary)\n",
+    "list(map(str, values))\n",
+    "type(holder).__getattribute__(holder, 'ordinary')(value)\n",
+    "def factory():\n    import math as local_math\n    return local_math.sqrt\nroot = factory()\nroot(value)\n",
 ])
 def test_ordinary_inline_reflection_is_not_a_dynamic_architecture_bypass(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]

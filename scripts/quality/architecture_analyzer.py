@@ -174,6 +174,10 @@ def _resolve_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
             return f"{owner}.{member}"
     if isinstance(node, ast.Call):
         function = _resolve_binding(node.func, bindings)
+        if function == "type" and node.args:
+            owner = _resolve_binding(node.args[0], bindings)
+            if owner:
+                return f"type({owner})"
         if function == "globals" and not node.args:
             return "globals"
         if function in {"getattr", "vars"} and node.args:
@@ -183,10 +187,13 @@ def _resolve_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
             member = _constant_string(node.args[1]) if len(node.args) >= 2 else None
             if owner and member:
                 return f"{owner}.{member}"
-        unbound_getattribute = function in {"object.__getattribute__", "types.ModuleType.__getattribute__"}
         explicit_descriptor_self = (
-            unbound_getattribute and len(node.args) >= 3
+            bool(function and function.endswith(".__getattribute__")) and len(node.args) >= 3
             and _resolve_binding(node.args[0], bindings) == function
+        )
+        unbound_getattribute = bool(
+            function and function.endswith(".__getattribute__") and len(node.args) >= 2
+            and (explicit_descriptor_self or _constant_string(node.args[1]) is not None)
         )
         if unbound_getattribute and len(node.args) >= 2:
             offset = 1 if explicit_descriptor_self else 0
@@ -267,6 +274,27 @@ def _protected_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
     return None
 
 
+def _scope_import_bindings(node: ast.AST, bindings: dict[str, str]) -> dict[str, str]:
+    scoped = dict(bindings)
+    for part in ast.walk(node):
+        if isinstance(part, ast.Import):
+            for alias in part.names:
+                scoped[alias.asname or alias.name.split(".")[0]] = alias.name
+        elif isinstance(part, ast.ImportFrom):
+            for alias in part.names:
+                if alias.name != "*":
+                    scoped[alias.asname or alias.name] = f"{part.module or ''}.{alias.name}".strip(".")
+    return scoped
+
+
+def _is_protected_dynamic_identity(value: str | None) -> bool:
+    return bool(value and (
+        value in {"builtins.__import__", "importlib.import_module", "runpy.run_module", "runpy.run_path"}
+        or value.endswith((".exec_module", ".load_module", ".protected_namespace_reflection"))
+        or value.startswith(("sys.meta_path.", "sys.path_hooks."))
+    ))
+
+
 def _binding_targets(node: ast.AST) -> list[str]:
     dotted = _attribute_name(node)
     if dotted:
@@ -316,7 +344,7 @@ def analyze_sources(sources: dict[str, str], policy: dict) -> dict:
                 for alias in node.names:
                     if alias.name != "*": bindings[alias.asname or alias.name] = f"{node.module or ''}.{alias.name}".strip(".")
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                protected = _protected_binding(node, bindings)
+                protected = _protected_binding(node, _scope_import_bindings(node, bindings))
                 if protected:
                     bindings[node.name] = protected
             elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
@@ -340,7 +368,13 @@ def analyze_sources(sources: dict[str, str], policy: dict) -> dict:
                     targets = [f"{base}.{alias.name}" if alias.name != "*" else base for alias in node.names]
             elif isinstance(node, ast.Call):
                 func = _resolve_binding(node.func, bindings) or _protected_binding(node.func, bindings)
-                if func in dynamic_functions or func == "builtins.__import__" or (func and func.endswith((".exec_module", ".load_module", ".protected_namespace_reflection"))) or (func and func.startswith(("sys.meta_path.", "sys.path_hooks."))):
+                protected_argument = any(
+                    _is_protected_dynamic_identity(
+                        _resolve_binding(argument, bindings) or _protected_binding(argument, bindings)
+                    )
+                    for argument in (*node.args, *(keyword.value for keyword in node.keywords))
+                )
+                if func in dynamic_functions or _is_protected_dynamic_identity(func) or protected_argument:
                     findings.append(_finding("DYNAMIC_ARCHITECTURE_BYPASS", path, node.lineno, ast.dump(node, include_attributes=False)))
             for target in targets:
                 resolved = _target_exists(target, modules, import_from=isinstance(node, ast.ImportFrom))
