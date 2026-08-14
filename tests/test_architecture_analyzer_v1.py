@@ -21,6 +21,14 @@ from scripts.quality.repository_inventory import canonical_python_path, candidat
 ROOT = Path(__file__).parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _deterministic_git_identity(monkeypatch):
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Test")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@example.invalid")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "Test")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "test@example.invalid")
+
+
 def _policy():
     return json.loads((ROOT / "config/architecture-policy-v1.json").read_text(encoding="utf-8"))
 
@@ -430,8 +438,6 @@ def test_python_blob_batch_fails_closed_on_invalid_output(monkeypatch, batch_out
 ])
 def test_protected_enforcement_artifacts_cannot_be_removed_or_changed(tmp_path, mutation):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     workflow = tmp_path / ".github/workflows/architecture-protected.yml"
     policy = tmp_path / "config/architecture-policy-v1.json"
     transfer_ledger = tmp_path / "config/architecture-capability-transfers-v2.json"
@@ -529,8 +535,6 @@ def _commit_protected_transition(
 
 def test_exact_dedicated_transition_can_rotate_protected_artifact(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
     analyzer.parent.mkdir(parents=True)
     analyzer.write_text("# protected base\n", encoding="utf-8")
@@ -545,8 +549,6 @@ def test_exact_dedicated_transition_can_rotate_protected_artifact(tmp_path):
 
 def test_exact_v2_transition_can_rotate_protected_artifact_with_mode_identity(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
     analyzer.parent.mkdir(parents=True)
     analyzer.write_text("# protected base\n", encoding="utf-8")
@@ -561,8 +563,6 @@ def test_exact_v2_transition_can_rotate_protected_artifact_with_mode_identity(tm
 
 def test_exact_v2_transition_can_create_already_custodied_artifact(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
     analyzer.parent.mkdir(parents=True)
     analyzer.write_text("# protected base\n", encoding="utf-8")
@@ -579,8 +579,6 @@ def test_exact_v2_transition_can_create_already_custodied_artifact(tmp_path):
 
 def test_protected_git_mode_identity_is_exact_in_both_directions(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     artifact_path = "scripts/quality/architecture_analyzer.py"
     analyzer = tmp_path / artifact_path
     analyzer.parent.mkdir(parents=True)
@@ -622,8 +620,6 @@ def test_protected_git_mode_identity_is_exact_in_both_directions(tmp_path):
 @pytest.mark.parametrize("mode,object_type", [("160000", "commit"), ("120000", "blob")])
 def test_creation_transition_rejects_non_regular_git_objects(tmp_path, mode, object_type):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
     analyzer.parent.mkdir(parents=True)
     analyzer.write_text("# protected base\n", encoding="utf-8")
@@ -669,8 +665,6 @@ def test_creation_transition_rejects_non_regular_git_objects(tmp_path, mode, obj
 
 def test_creation_transition_rejects_tree_at_protected_path(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
     analyzer.parent.mkdir(parents=True)
     analyzer.write_text("# protected base\n", encoding="utf-8")
@@ -712,8 +706,6 @@ def test_creation_transition_rejects_tree_at_protected_path(tmp_path):
 
 def test_v1_transition_cannot_authorize_undeclared_mode_change(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     artifact_path = "scripts/quality/architecture_analyzer.py"
     analyzer = tmp_path / artifact_path
     analyzer.parent.mkdir(parents=True)
@@ -753,8 +745,6 @@ def test_transition_schema_dispatch_rejects_unknown_hybrid_malformed_and_mismatc
     tmp_path, schema_version, row_mutation,
 ):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
     analyzer.parent.mkdir(parents=True)
     analyzer.write_text("# protected base\n", encoding="utf-8")
@@ -778,8 +768,6 @@ def test_transition_schema_dispatch_rejects_unknown_hybrid_malformed_and_mismatc
 ])
 def test_transition_rejects_unknown_wrong_base_omitted_and_duplicate_rows(tmp_path, transition_mutation):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
     analyzer.parent.mkdir(parents=True)
     analyzer.write_text("# protected base\n", encoding="utf-8")
@@ -797,8 +785,6 @@ def test_transition_rejects_unknown_wrong_base_omitted_and_duplicate_rows(tmp_pa
 
 def test_transition_cannot_mix_protected_rotation_with_production_change(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
     analyzer.parent.mkdir(parents=True)
     analyzer.write_text("# protected base\n", encoding="utf-8")
@@ -814,8 +800,6 @@ def test_transition_cannot_mix_protected_rotation_with_production_change(tmp_pat
 
 def test_transition_cannot_authorize_protected_artifact_deletion(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
     analyzer.parent.mkdir(parents=True)
     analyzer.write_text("# protected base\n", encoding="utf-8")
@@ -831,8 +815,6 @@ def test_transition_cannot_authorize_protected_artifact_deletion(tmp_path):
 
 def test_protected_base_must_be_candidate_ancestor(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     policy = tmp_path / "config/architecture-policy-v1.json"
     policy.parent.mkdir(parents=True)
     policy.write_text('{"policyVersion":"1.0.0"}\n', encoding="utf-8")
