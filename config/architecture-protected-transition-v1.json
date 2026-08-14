@@ -5,8 +5,12 @@
   "artifacts": [
     {
       "path": "scripts/quality/architecture_analyzer.py",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
       "baseBlobSha": "151da06afd64b6b500d3690a61b24a6f56e7c090",
-      "candidateBlobSha": "3320a083f1cc61168a5c856cabe96bd6c6705c7e"
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "dc04b4f97c4085ba14e35ab2352b18235012b646"
     }
   ]
 }
