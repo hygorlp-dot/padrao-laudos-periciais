@@ -67,14 +67,14 @@ def _protected_transition_valid(
             for path in changed_artifacts
         }
         if any(
-            base_object is None or candidate_object is None
-            or base_object[:2] not in {("100644", "blob"), ("100755", "blob")}
+            (base_object is not None and base_object[:2] not in {("100644", "blob"), ("100755", "blob")})
+            or candidate_object is None
             or candidate_object[:2] not in {("100644", "blob"), ("100755", "blob")}
             for base_object, candidate_object in expected.values()
         ):
             return False
         if schema_version == "1.0.0" and any(
-            base_object[:2] != candidate_object[:2]
+            base_object is None or base_object[:2] != candidate_object[:2]
             for base_object, candidate_object in expected.values()
         ):
             return False
