@@ -94,6 +94,15 @@ def _attribute_name(node: ast.AST) -> str | None:
     return None
 
 
+def _resolve_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
+    dotted = _attribute_name(node)
+    if dotted is None:
+        return None
+    root, separator, remainder = dotted.partition(".")
+    resolved = bindings.get(root, root)
+    return f"{resolved}.{remainder}" if separator else resolved
+
+
 def analyze_sources(sources: dict[str, str], policy: dict) -> dict:
     if policy.get("policyVersion") != "1.0.0" or not isinstance(policy.get("components"), list):
         raise ValueError("architecture policy invalid")
@@ -132,6 +141,10 @@ def analyze_sources(sources: dict[str, str], policy: dict) -> dict:
             elif isinstance(node, ast.ImportFrom):
                 for alias in node.names:
                     if alias.name != "*": bindings[alias.asname or alias.name] = f"{node.module or ''}.{alias.name}".strip(".")
+            elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                resolved = _resolve_binding(node.value, bindings)
+                if resolved:
+                    bindings[node.targets[0].id] = resolved
         for node in ast.walk(tree):
             targets: list[str] = []
             if isinstance(node, ast.Import):
@@ -146,7 +159,7 @@ def analyze_sources(sources: dict[str, str], policy: dict) -> dict:
                 func = bindings.get(node.func.id, node.func.id) if isinstance(node.func, ast.Name) else None
                 if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
                     func = f"{bindings.get(node.func.value.id, node.func.value.id)}.{node.func.attr}"
-                if func in dynamic_functions or func == "builtins.__import__":
+                if func in dynamic_functions or func == "builtins.__import__" or (func and func.endswith((".exec_module", ".load_module"))) or (func and func.startswith(("sys.meta_path.", "sys.path_hooks."))):
                     findings.append(_finding("DYNAMIC_ARCHITECTURE_BYPASS", path, node.lineno, ast.dump(node, include_attributes=False)))
                 dotted = _attribute_name(node.func)
                 if dotted and (dotted.endswith((".exec_module", ".load_module")) or dotted.startswith(("sys.meta_path.", "sys.path_hooks."))):
@@ -200,8 +213,11 @@ def apply_exact_baseline(root: Path, result: dict, baseline: dict) -> dict:
         result["findings"].append(_finding("ARCHITECTURE_BASELINE_INVALID", "scripts/quality/architecture_analyzer.py", 1, "baseline is not an ancestor"))
         return result
     try:
+        candidate_baseline = json.loads(subprocess.check_output(["git", "show", f"{candidate}:config/architecture-baseline-v1.json"], cwd=root, text=True))
         schema_blob = subprocess.check_output(["git", "show", f"{commit}:schemas/architecture-baseline-v1.schema.json"], cwd=root)
         jsonschema.validate(baseline, json.loads(schema_blob))
+        if candidate_baseline != baseline:
+            result["findings"].append(_finding("ARCHITECTURE_BASELINE_INVALID", "config/architecture-baseline-v1.json", 1, "baseline does not match exact candidate blob")); return result
         policy_blob = subprocess.check_output(["git", "show", f"{commit}:config/architecture-policy-v1.json"], cwd=root)
     except (jsonschema.ValidationError, jsonschema.SchemaError, json.JSONDecodeError) as exc:
         result["findings"].append(_finding("ARCHITECTURE_BASELINE_INVALID", "config/architecture-baseline-v1.json", 1, f"schema validation failed: {exc.message}")); return result
