@@ -161,6 +161,17 @@ def _resolve_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
         function = _resolve_binding(node.func, bindings)
         if function == "globals" and not node.args:
             return "globals"
+        if function in {"getattr", "vars"} and node.args:
+            owner = _resolve_binding(node.args[0], bindings)
+            if function == "vars" and owner:
+                return f"{owner}.__dict__"
+            member = _constant_string(node.args[1]) if len(node.args) >= 2 else None
+            if owner and member:
+                return f"{owner}.{member}"
+        if function and function.endswith(".__getattribute__") and node.args:
+            member = _constant_string(node.args[0])
+            if member:
+                return f"{function.removesuffix('.__getattribute__')}.{member}"
         if function == "operator.attrgetter" and node.args:
             member = _constant_string(node.args[0])
             if member:
