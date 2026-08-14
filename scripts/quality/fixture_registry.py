@@ -1,14 +1,33 @@
 """Validate the global fixture registry without opening private references."""
 from __future__ import annotations
 
+import ast
 import json
 import re
-import runpy
 from pathlib import Path
 
 
 def _finding(reason: str, test: str, detail: str) -> dict:
     return {"invariant": "NO_SILENT_LOSS", "boundary": "REPOSITORY", "teste": test, "motivo": reason, "severidade": "P1", "detalhe": detail}
+
+
+def _fixture_directories(source: str, root: Path) -> set[Path]:
+    tree = ast.parse(source)
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or not any(isinstance(target, ast.Name) and target.id == "PASTAS_FIXTURES" for target in node.targets):
+            continue
+        if not isinstance(node.value, (ast.Tuple, ast.List)):
+            return set()
+        directories: set[Path] = set()
+        for item in node.value.elts:
+            parts: list[str] = []
+            while isinstance(item, ast.BinOp) and isinstance(item.op, ast.Div) and isinstance(item.right, ast.Constant) and isinstance(item.right.value, str):
+                parts.append(item.right.value); item = item.left
+            if not isinstance(item, ast.Name) or item.id != "RAIZ":
+                return set()
+            directories.add(root.joinpath(*reversed(parts)).resolve())
+        return directories
+    return set()
 
 
 def validate_fixture_registry(root: Path) -> list[dict]:
@@ -27,9 +46,8 @@ def validate_fixture_registry(root: Path) -> list[dict]:
     validator_path=root/"scripts/validar_schemas.py"
     if validator_path.is_file():
         try:
-            namespace=runpy.run_path(str(validator_path))
-            discovery_directories={Path(path).resolve() for path in namespace.get("PASTAS_FIXTURES",())}
-        except Exception:
+            discovery_directories=_fixture_directories(validator_path.read_text(encoding="utf-8"), root)
+        except (OSError, SyntaxError, ValueError):
             discovery_directories=set()
     for entry in entries:
         if not isinstance(entry, dict) or not required <= set(entry):

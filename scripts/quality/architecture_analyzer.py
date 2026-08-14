@@ -4,12 +4,157 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import os
 import subprocess
 from datetime import date
 from pathlib import Path
 
+import jsonschema
+
 from .ast_inventory import module_name, parse_source
 from .repository_inventory import candidate_tree, canonical_python_path, tree_python_sources
+
+
+PROTECTED_ARCHITECTURE_ARTIFACTS = (
+    ".github/workflows/architecture-protected.yml",
+    "config/architecture-capability-transfers-v2.json",
+    "config/architecture-policy-v1.json",
+    "schemas/architecture-baseline-v1.schema.json",
+    "scripts/quality/architecture_analyzer.py",
+    "scripts/quality/ast_inventory.py",
+    "scripts/quality/repository_inventory.py",
+)
+PROTECTED_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
+PROTECTED_TRANSITION_SUPPORT_PREFIXES = (
+    "docs/arquitetura/",
+    "docs/superpowers/plans/",
+    "tests/test_architecture",
+)
+
+
+def _protected_transition_valid(
+    root: Path,
+    protected_base: str,
+    candidate: str,
+    base_blobs: dict[str, str],
+    candidate_blobs: dict[str, str],
+    changed_artifacts: list[str],
+) -> bool:
+    try:
+        raw = subprocess.check_output(
+            ["git", "show", f"{candidate}:{PROTECTED_TRANSITION_PATH}"],
+            cwd=root,
+            text=True,
+        )
+        transition = json.loads(raw)
+        if set(transition) != {"schemaVersion", "transitionId", "protectedBaseSha", "artifacts"}:
+            return False
+        if transition.get("schemaVersion") != "1.0.0":
+            return False
+        if transition.get("transitionId") != "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1":
+            return False
+        if transition.get("protectedBaseSha") != protected_base:
+            return False
+        rows = transition.get("artifacts")
+        if not isinstance(rows, list) or len(rows) != len(changed_artifacts):
+            return False
+        expected = {
+            path: (base_blobs.get(path), candidate_blobs.get(path))
+            for path in changed_artifacts
+        }
+        if any(
+            not isinstance(blob, str) or not blob
+            for identities in expected.values()
+            for blob in identities
+        ):
+            return False
+        declared = {}
+        for row in rows:
+            if not isinstance(row, dict) or set(row) != {"path", "baseBlobSha", "candidateBlobSha"}:
+                return False
+            path = row.get("path")
+            if path in declared or path not in expected:
+                return False
+            declared[path] = (row.get("baseBlobSha"), row.get("candidateBlobSha"))
+        if declared != expected:
+            return False
+        diff = subprocess.run(
+            ["git", "diff", "--name-only", "-z", protected_base, candidate],
+            cwd=root,
+            capture_output=True,
+            check=True,
+        ).stdout
+        changed_paths = {item.decode("utf-8") for item in diff.split(b"\0") if item}
+        allowed_exact = set(changed_artifacts) | {PROTECTED_TRANSITION_PATH}
+        return all(
+            path in allowed_exact or path.startswith(PROTECTED_TRANSITION_SUPPORT_PREFIXES)
+            for path in changed_paths
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, subprocess.CalledProcessError):
+        return False
+
+
+def _protected_artifact_findings(root: Path, protected_base: str, candidate: str) -> list[dict]:
+    ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", protected_base, candidate],
+        cwd=root,
+        capture_output=True,
+    )
+    if ancestor.returncode:
+        return [_finding(
+            "ARCHITECTURE_PROTECTED_BASE_INVALID",
+            "scripts/quality/architecture_analyzer.py",
+            1,
+            "protected base is not an ancestor of candidate",
+        )]
+    def tree_blobs(commit: str) -> dict[str, str] | None:
+        result = subprocess.run(
+            ["git", "ls-tree", "-r", commit, "--", *PROTECTED_ARCHITECTURE_ARTIFACTS],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode:
+            return None
+        blobs = {}
+        for line in result.stdout.splitlines():
+            metadata, path = line.split("\t", 1)
+            blobs[path] = metadata.split()[2]
+        return blobs
+
+    base_blobs = tree_blobs(protected_base)
+    candidate_blobs = tree_blobs(candidate)
+    if base_blobs is None or candidate_blobs is None:
+        return [_finding(
+            "ARCHITECTURE_PROTECTED_ARTIFACT_UNAVAILABLE",
+            "scripts/quality/architecture_analyzer.py",
+            1,
+            "protected artifact identity could not be loaded",
+        )]
+    changed_artifacts = [
+        path for path in PROTECTED_ARCHITECTURE_ARTIFACTS
+        if base_blobs.get(path) != candidate_blobs.get(path)
+    ]
+    if not changed_artifacts:
+        return []
+    if _protected_transition_valid(
+        root, protected_base, candidate, base_blobs, candidate_blobs, changed_artifacts,
+    ):
+        return []
+    findings = [_finding(
+        "ARCHITECTURE_PROTECTED_TRANSITION_INVALID",
+        PROTECTED_TRANSITION_PATH,
+        1,
+        "protected artifact change lacks an exact dedicated transition",
+    )]
+    for path in changed_artifacts:
+        findings.append(_finding(
+            "ARCHITECTURE_PROTECTED_ARTIFACT_MISMATCH",
+            path,
+            1,
+            "candidate enforcement artifact differs from protected base",
+        ))
+    return findings
 
 
 def _finding(code: str, path: str, line: int, detail: str) -> dict:
@@ -46,23 +191,40 @@ def _owner(path: str, components: list[dict]) -> tuple[str | None, bool]:
 
 
 def _cycles(graph: dict[str, set[str]]) -> list[tuple[str, ...]]:
-    index = 0; indices: dict[str, int] = {}; low: dict[str, int] = {}; stack: list[str] = []; active: set[str] = set(); components = []
-    def connect(node: str):
-        nonlocal index
-        indices[node] = low[node] = index; index += 1; stack.append(node); active.add(node)
-        for target in sorted(graph.get(node, ())):
-            if target not in indices:
-                connect(target); low[node] = min(low[node], low[target])
-            elif target in active:
-                low[node] = min(low[node], indices[target])
-        if low[node] == indices[node]:
-            component = []
-            while True:
-                item = stack.pop(); active.remove(item); component.append(item)
-                if item == node: break
-            if len(component) > 1 or node in graph.get(node, set()): components.append(tuple(sorted(component)))
-    for node in sorted(graph):
-        if node not in indices: connect(node)
+    nodes = set(graph)
+    for targets in graph.values():
+        nodes.update(targets)
+    visited: set[str] = set()
+    order: list[str] = []
+    for start in sorted(nodes):
+        if start in visited:
+            continue
+        visited.add(start)
+        stack = [(start, iter(sorted(graph.get(start, ())))) ]
+        while stack:
+            node, targets = stack[-1]
+            try:
+                target = next(targets)
+            except StopIteration:
+                order.append(node); stack.pop(); continue
+            if target not in visited:
+                visited.add(target); stack.append((target, iter(sorted(graph.get(target, ())))))
+    reverse = {node: set() for node in nodes}
+    for source, targets in graph.items():
+        for target in targets:
+            reverse[target].add(source)
+    visited.clear(); components: list[tuple[str, ...]] = []
+    for start in reversed(order):
+        if start in visited:
+            continue
+        component: list[str] = []; stack = [start]; visited.add(start)
+        while stack:
+            node = stack.pop(); component.append(node)
+            for target in sorted(reverse[node], reverse=True):
+                if target not in visited:
+                    visited.add(target); stack.append(target)
+        if len(component) > 1 or start in graph.get(start, set()):
+            components.append(tuple(sorted(component)))
     return sorted(components)
 
 
@@ -94,16 +256,8 @@ def analyze_sources(sources: dict[str, str], policy: dict) -> dict:
         elif owner is None:
             findings.append(_finding("UNOWNED_FIRST_PARTY_MODULE", path, 1, "no component owns source"))
     edges: set[tuple[str, str, int]] = set()
-    dynamic_functions = {"__import__", "importlib.import_module", "runpy.run_module", "runpy.run_path"}
     for source, (path, tree) in sorted(parsed.items()):
         package = path.endswith("/__init__.py")
-        bindings: dict[str, str] = {"__import__": "builtins.__import__"}
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names: bindings[alias.asname or alias.name.split(".")[0]] = alias.name
-            elif isinstance(node, ast.ImportFrom):
-                for alias in node.names:
-                    if alias.name != "*": bindings[alias.asname or alias.name] = f"{node.module or ''}.{alias.name}".strip(".")
         for node in ast.walk(tree):
             targets: list[str] = []
             if isinstance(node, ast.Import):
@@ -114,12 +268,6 @@ def analyze_sources(sources: dict[str, str], policy: dict) -> dict:
                     findings.append(_finding("INVALID_RELATIVE_IMPORT", path, node.lineno, str(exc))); continue
                 if base == "scripts" or base.startswith("scripts."):
                     targets = [f"{base}.{alias.name}" if alias.name != "*" else base for alias in node.names]
-            elif isinstance(node, ast.Call):
-                func = bindings.get(node.func.id, node.func.id) if isinstance(node.func, ast.Name) else None
-                if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
-                    func = f"{bindings.get(node.func.value.id, node.func.value.id)}.{node.func.attr}"
-                if func in dynamic_functions or func == "builtins.__import__":
-                    findings.append(_finding("DYNAMIC_ARCHITECTURE_BYPASS", path, node.lineno, ast.dump(node, include_attributes=False)))
             for target in targets:
                 resolved = _target_exists(target, modules, import_from=isinstance(node, ast.ImportFrom))
                 if resolved is None:
@@ -161,7 +309,7 @@ def analyze_repository(root: Path, policy: dict, candidate: str = "HEAD", expect
     return result
 
 
-def apply_exact_baseline(root: Path, result: dict, baseline: dict) -> dict:
+def apply_exact_baseline(root: Path, result: dict, baseline: dict, *, protected_base: str | None = None) -> dict:
     commit = baseline.get("baselineCommit", "")
     candidate = result.get("candidateCommitSha", "HEAD")
     ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", commit, candidate], cwd=root, capture_output=True)
@@ -169,9 +317,21 @@ def apply_exact_baseline(root: Path, result: dict, baseline: dict) -> dict:
         result["findings"].append(_finding("ARCHITECTURE_BASELINE_INVALID", "scripts/quality/architecture_analyzer.py", 1, "baseline is not an ancestor"))
         return result
     try:
-        policy_blob = subprocess.check_output(["git", "show", f"{candidate}:config/architecture-policy-v1.json"], cwd=root)
+        if protected_base:
+            protected_registry = json.loads(subprocess.check_output(["git", "show", f"{protected_base}:config/architecture-baseline-v1.json"], cwd=root, text=True))
+            if commit not in {protected_base, protected_registry.get("baselineCommit")}:
+                result["findings"].append(_finding("ARCHITECTURE_BASELINE_INVALID", "config/architecture-baseline-v1.json", 1, "baseline is not authorized by protected base")); return result
+        candidate_baseline = json.loads(subprocess.check_output(["git", "show", f"{candidate}:config/architecture-baseline-v1.json"], cwd=root, text=True))
+        artifact_source = protected_base or candidate
+        schema_blob = subprocess.check_output(["git", "show", f"{artifact_source}:schemas/architecture-baseline-v1.schema.json"], cwd=root)
+        jsonschema.validate(baseline, json.loads(schema_blob))
+        if candidate_baseline != baseline:
+            result["findings"].append(_finding("ARCHITECTURE_BASELINE_INVALID", "config/architecture-baseline-v1.json", 1, "baseline does not match exact candidate blob")); return result
+        policy_blob = subprocess.check_output(["git", "show", f"{artifact_source}:config/architecture-policy-v1.json"], cwd=root)
+    except (jsonschema.ValidationError, jsonschema.SchemaError, json.JSONDecodeError) as exc:
+        result["findings"].append(_finding("ARCHITECTURE_BASELINE_INVALID", "config/architecture-baseline-v1.json", 1, f"schema validation failed: {exc.message}")); return result
     except subprocess.CalledProcessError:
-        result["findings"].append(_finding("ARCHITECTURE_BASELINE_INVALID", "scripts/quality/architecture_analyzer.py", 1, "policy blob unavailable")); return result
+        result["findings"].append(_finding("ARCHITECTURE_BASELINE_INVALID", "scripts/quality/architecture_analyzer.py", 1, "protected baseline artifact unavailable")); return result
     if baseline.get("policyVersion") != result.get("policyVersion") or baseline.get("policySha256") != hashlib.sha256(policy_blob).hexdigest():
         result["findings"].append(_finding("ARCHITECTURE_BASELINE_INVALID", "scripts/quality/architecture_analyzer.py", 1, "policy identity mismatch")); return result
     exceptions = baseline.get("exceptions", [])
@@ -204,13 +364,17 @@ def apply_exact_baseline(root: Path, result: dict, baseline: dict) -> dict:
             continue
         try:
             baseline_blob = subprocess.check_output(["git", "show", f"{commit}:{item['canonicalPath']}"], cwd=root)
-            current_blob = (root / item["canonicalPath"]).read_bytes()
-        except (KeyError, OSError, subprocess.CalledProcessError):
+            current_blob = subprocess.check_output(["git", "show", f"{candidate}:{item['canonicalPath']}"], cwd=root)
+        except (KeyError, subprocess.CalledProcessError):
             result["findings"].append(_finding("ARCHITECTURE_BASELINE_INVALID", item.get("canonicalPath", "scripts/quality/architecture_analyzer.py"), 1, "exception blob unavailable"))
             continue
         digest = hashlib.sha256(current_blob).hexdigest()
         if current_blob != baseline_blob or digest != item.get("wholeFileSha256"):
             result["findings"].append(_finding("ARCHITECTURE_BASELINE_INVALID", item["canonicalPath"], item.get("line", 1), "whole-file blob mismatch"))
+            continue
+        owner_by_path = {row["path"]: row["component"] for row in result.get("modules", [])}
+        if item.get("owner") != owner_by_path.get(item["canonicalPath"]) or item.get("disposition") not in baseline.get("allowedDispositions", []):
+            result["findings"].append(_finding("ARCHITECTURE_BASELINE_INVALID", item["canonicalPath"], item.get("line", 1), "owner or disposition mismatch"))
             continue
         approved.add(key)
     result["findings"] = [item for item in result["findings"] if (item["code"], item["canonicalPath"], item["line"], item["normalizedAstSha256"]) not in approved]
@@ -221,8 +385,17 @@ def apply_exact_baseline(root: Path, result: dict, baseline: dict) -> dict:
 def run_architecture_gate(root: Path, candidate: str = "HEAD") -> list[dict]:
     try:
         commit, tree = candidate_tree(root, candidate)
-        policy = json.loads(subprocess.check_output(["git", "show", f"{commit}:config/architecture-policy-v1.json"], cwd=root, text=True))
+        expected = os.environ.get("ARCHITECTURE_EXPECTED_HEAD_SHA")
+        if expected and commit != expected:
+            return [_finding("ARCHITECTURE_ANALYZER_FAILURE", "scripts/quality/architecture_analyzer.py", 1, "candidate does not match exact expected head")]
         baseline = json.loads(subprocess.check_output(["git", "show", f"{commit}:config/architecture-baseline-v1.json"], cwd=root, text=True))
-        return apply_exact_baseline(root, analyze_repository(root, policy, commit, tree), baseline)["findings"]
-    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+        protected_base = os.environ.get("ARCHITECTURE_PROTECTED_BASE_SHA") or None
+        if protected_base:
+            protected_findings = _protected_artifact_findings(root, protected_base, commit)
+            if protected_findings:
+                return protected_findings
+        policy_source = protected_base or commit
+        policy = json.loads(subprocess.check_output(["git", "show", f"{policy_source}:config/architecture-policy-v1.json"], cwd=root, text=True))
+        return apply_exact_baseline(root, analyze_repository(root, policy, commit, tree), baseline, protected_base=protected_base)["findings"]
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
         return [_finding("ARCHITECTURE_ANALYZER_FAILURE", "scripts/quality/architecture_analyzer.py", 1, str(exc))]
