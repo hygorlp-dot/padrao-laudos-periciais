@@ -600,7 +600,7 @@ def test_protected_git_mode_identity_is_exact_in_both_directions(tmp_path):
         assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
 
         transition.write_text(json.dumps({
-            "schemaVersion": "1.0.0",
+            "schemaVersion": "2.0.0",
             "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
             "protectedBaseSha": protected_base,
             "artifacts": [{

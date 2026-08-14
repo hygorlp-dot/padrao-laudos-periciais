@@ -97,7 +97,11 @@ def _protected_transition_valid(
                 declared[path] = (row.get("baseBlobSha"), row.get("candidateBlobSha"))
             else:
                 declared[path] = (
-                    (row.get("baseMode"), row.get("baseObjectType"), row.get("baseBlobSha")),
+                    None
+                    if row.get("baseMode") is None
+                    and row.get("baseObjectType") is None
+                    and row.get("baseBlobSha") is None
+                    else (row.get("baseMode"), row.get("baseObjectType"), row.get("baseBlobSha")),
                     (row.get("candidateMode"), row.get("candidateObjectType"), row.get("candidateBlobSha")),
                 )
         exact_expected = (
