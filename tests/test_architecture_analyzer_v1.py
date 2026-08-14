@@ -127,6 +127,12 @@ def test_dynamic_architecture_bypass_uses_binding_at_call_time(source):
     "import importlib\ngetattr(importlib, 'import_' + 'module')(name)\n",
     "import importlib\nvars(importlib)['import_module'](name)\n",
     "import builtins\ngetattr(builtins, '__' + 'import__')(name)\n",
+    "import importlib\nvars(importlib).get('import_' + 'module')(name)\n",
+    "import builtins\nvars(builtins).get('__' + 'import__')(name)\n",
+    "import importlib\ngetattr(vars(importlib), 'g' + 'et')('import_module')(name)\n",
+    "import builtins\nbuiltins.__dict__['__import__'](name)\n",
+    "import importlib\nimportlib.__dict__['import_module'](name)\n",
+    "import importlib\ngetattr(importlib, ''.join(['import_', 'module']))(name)\n",
 ])
 def test_dynamic_architecture_bypass_reflection_and_factory_aliases(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]

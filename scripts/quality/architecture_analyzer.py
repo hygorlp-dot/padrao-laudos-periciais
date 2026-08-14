@@ -150,7 +150,24 @@ def _constant_string(node: ast.AST) -> str | None:
     return None
 
 
+def _protected_namespace_reflection(node: ast.AST, bindings: dict[str, str]) -> bool:
+    protected = {"builtins", "importlib", "runpy"}
+    if isinstance(node, ast.Attribute) and node.attr == "__dict__":
+        owner = _resolve_binding(node.value, bindings)
+        return bool(owner and owner.split(".", 1)[0] in protected)
+    if isinstance(node, ast.Call) and _resolve_binding(node.func, bindings) in {"getattr", "vars"} and node.args:
+        owner = _resolve_binding(node.args[0], bindings)
+        if owner and owner.split(".", 1)[0] in protected:
+            return True
+        return _protected_namespace_reflection(node.args[0], bindings)
+    if isinstance(node, (ast.Attribute, ast.Subscript, ast.Call)):
+        return any(_protected_namespace_reflection(child, bindings) for child in ast.iter_child_nodes(node))
+    return False
+
+
 def _protected_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
+    if _protected_namespace_reflection(node, bindings):
+        return "dynamic.protected_namespace_reflection"
     if (isinstance(node, ast.Call) and _resolve_binding(node.func, bindings) == "getattr"
             and len(node.args) >= 2):
         owner = _resolve_binding(node.args[0], bindings)
@@ -245,7 +262,7 @@ def analyze_sources(sources: dict[str, str], policy: dict) -> dict:
                     targets = [f"{base}.{alias.name}" if alias.name != "*" else base for alias in node.names]
             elif isinstance(node, ast.Call):
                 func = _resolve_binding(node.func, bindings) or _protected_binding(node.func, bindings)
-                if func in dynamic_functions or func == "builtins.__import__" or (func and func.endswith((".exec_module", ".load_module"))) or (func and func.startswith(("sys.meta_path.", "sys.path_hooks."))):
+                if func in dynamic_functions or func == "builtins.__import__" or (func and func.endswith((".exec_module", ".load_module", ".protected_namespace_reflection"))) or (func and func.startswith(("sys.meta_path.", "sys.path_hooks."))):
                     findings.append(_finding("DYNAMIC_ARCHITECTURE_BYPASS", path, node.lineno, ast.dump(node, include_attributes=False)))
             for target in targets:
                 resolved = _target_exists(target, modules, import_from=isinstance(node, ast.ImportFrom))
