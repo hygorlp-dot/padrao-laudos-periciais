@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 import jsonschema
 
-from scripts.quality.architecture_analyzer import _cycles, analyze_sources, apply_exact_baseline, run_architecture_gate
+from scripts.quality.architecture_analyzer import (
+    _cycles,
+    _protected_artifact_findings,
+    analyze_sources,
+    apply_exact_baseline,
+    run_architecture_gate,
+)
 from scripts.quality.repository_inventory import canonical_python_path, candidate_tree
 
 
@@ -225,8 +231,35 @@ def test_exact_baseline_rejects_stale_exception_on_real_repository():
 def test_repository_is_clean_in_protected_mode(monkeypatch):
     candidate, _tree = candidate_tree(ROOT, "HEAD")
     monkeypatch.setenv("ARCHITECTURE_EXPECTED_HEAD_SHA", candidate)
-    monkeypatch.setenv("ARCHITECTURE_PROTECTED_BASE_SHA", "663b2f9122f46bd5f06a6c3b2fb943b25aa7c869")
+    monkeypatch.setenv("ARCHITECTURE_PROTECTED_BASE_SHA", candidate)
     assert run_architecture_gate(ROOT, candidate) == []
+
+
+@pytest.mark.parametrize("mutation", ["delete_workflow", "change_policy"])
+def test_protected_enforcement_artifacts_cannot_be_removed_or_changed(tmp_path, mutation):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    workflow = tmp_path / ".github/workflows/architecture-protected.yml"
+    policy = tmp_path / "config/architecture-policy-v1.json"
+    workflow.parent.mkdir(parents=True)
+    policy.parent.mkdir(parents=True)
+    workflow.write_text("name: protected\n", encoding="utf-8")
+    policy.write_text('{"policyVersion":"1.0.0"}\n', encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "protected base"], cwd=tmp_path, check=True)
+    protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+    if mutation == "delete_workflow":
+        workflow.unlink()
+    else:
+        policy.write_text('{"policyVersion":"disabled"}\n', encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "candidate mutation"], cwd=tmp_path, check=True)
+    candidate = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_ARTIFACT_MISMATCH" for item in findings)
 
 
 def test_staging_does_not_self_activate_in_verify_core():
