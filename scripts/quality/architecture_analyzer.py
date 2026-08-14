@@ -15,6 +15,40 @@ from .ast_inventory import module_name, parse_source
 from .repository_inventory import candidate_tree, canonical_python_path, tree_python_sources
 
 
+PROTECTED_ARCHITECTURE_ARTIFACTS = (
+    ".github/workflows/architecture-protected.yml",
+    "config/architecture-policy-v1.json",
+    "schemas/architecture-baseline-v1.schema.json",
+    "scripts/quality/architecture_analyzer.py",
+    "scripts/quality/ast_inventory.py",
+    "scripts/quality/repository_inventory.py",
+)
+
+
+def _protected_artifact_findings(root: Path, protected_base: str, candidate: str) -> list[dict]:
+    findings = []
+    for path in PROTECTED_ARCHITECTURE_ARTIFACTS:
+        def blob(commit: str) -> str | None:
+            result = subprocess.run(
+                ["git", "rev-parse", f"{commit}:{path}"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+            )
+            return result.stdout.strip() if result.returncode == 0 else None
+
+        base_blob = blob(protected_base)
+        candidate_blob = blob(candidate)
+        if base_blob != candidate_blob:
+            findings.append(_finding(
+                "ARCHITECTURE_PROTECTED_ARTIFACT_MISMATCH",
+                path,
+                1,
+                "candidate enforcement artifact differs from protected base",
+            ))
+    return findings
+
+
 def _finding(code: str, path: str, line: int, detail: str) -> dict:
     return {"analyzer": "ARCHITECTURE_ANALYZER_V1", "code": code, "severity": "P1", "canonicalPath": path, "line": line, "detail": detail, "normalizedAstSha256": hashlib.sha256(detail.encode()).hexdigest()}
 
@@ -318,6 +352,10 @@ def run_architecture_gate(root: Path, candidate: str = "HEAD") -> list[dict]:
             return [_finding("ARCHITECTURE_ANALYZER_FAILURE", "scripts/quality/architecture_analyzer.py", 1, "candidate does not match exact expected head")]
         baseline = json.loads(subprocess.check_output(["git", "show", f"{commit}:config/architecture-baseline-v1.json"], cwd=root, text=True))
         protected_base = os.environ.get("ARCHITECTURE_PROTECTED_BASE_SHA") or None
+        if protected_base:
+            protected_findings = _protected_artifact_findings(root, protected_base, commit)
+            if protected_findings:
+                return protected_findings
         policy_source = protected_base or commit
         policy = json.loads(subprocess.check_output(["git", "show", f"{policy_source}:config/architecture-policy-v1.json"], cwd=root, text=True))
         return apply_exact_baseline(root, analyze_repository(root, policy, commit, tree), baseline, protected_base=protected_base)["findings"]
