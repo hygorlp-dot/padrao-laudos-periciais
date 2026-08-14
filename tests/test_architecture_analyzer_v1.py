@@ -369,9 +369,24 @@ def test_protected_artifact_identity_is_loaded_in_one_query_per_commit(monkeypat
 
     assert _protected_artifact_findings(ROOT, candidate, candidate) == []
     assert artifact_queries == [
-        ["git", "ls-tree", "-r", candidate, "--", *PROTECTED_ARCHITECTURE_ARTIFACTS],
-        ["git", "ls-tree", "-r", candidate, "--", *PROTECTED_ARCHITECTURE_ARTIFACTS],
+        ["git", "ls-tree", candidate, "--", *PROTECTED_ARCHITECTURE_ARTIFACTS],
+        ["git", "ls-tree", candidate, "--", *PROTECTED_ARCHITECTURE_ARTIFACTS],
     ]
+
+
+def test_protected_artifact_malformed_git_tree_output_fails_closed(monkeypatch):
+    candidate, _tree = candidate_tree(ROOT, "HEAD")
+    real_run = subprocess.run
+
+    def malformed_tree(command, *args, **kwargs):
+        if command[:2] == ["git", "ls-tree"]:
+            return SimpleNamespace(returncode=0, stdout="malformed\n", stderr="")
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr("scripts.quality.architecture_analyzer.subprocess.run", malformed_tree)
+
+    findings = _protected_artifact_findings(ROOT, candidate, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_ARTIFACT_UNAVAILABLE" for item in findings)
 
 
 def test_python_blobs_are_loaded_in_one_batch_query(monkeypatch):
@@ -451,7 +466,10 @@ def test_protected_enforcement_artifacts_cannot_be_removed_or_changed(tmp_path, 
     assert any(item["code"] == "ARCHITECTURE_PROTECTED_ARTIFACT_MISMATCH" for item in findings)
 
 
-def _commit_protected_transition(tmp_path, protected_base, *, mixed_production_change=False, delete_artifact=False):
+def _commit_protected_transition(
+    tmp_path, protected_base, *, schema_version="1.0.0", row_mutation=None, transition_mutation=None,
+    mixed_production_change=False, delete_artifact=False,
+):
     analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
     analyzer.parent.mkdir(parents=True, exist_ok=True)
     if delete_artifact:
@@ -471,16 +489,32 @@ def _commit_protected_transition(tmp_path, protected_base, *, mixed_production_c
     ).strip()
     transition = tmp_path / "config/architecture-protected-transition-v1.json"
     transition.parent.mkdir(parents=True, exist_ok=True)
-    transition.write_text(json.dumps({
-        "schemaVersion": "1.0.0",
+    row = {
+        "path": "scripts/quality/architecture_analyzer.py",
+        "baseBlobSha": base_blob,
+        "candidateBlobSha": candidate_blob,
+    }
+    if schema_version == "2.0.0":
+        row = {
+            "path": "scripts/quality/architecture_analyzer.py",
+            "baseMode": "100644",
+            "baseObjectType": "blob",
+            "baseBlobSha": base_blob,
+            "candidateMode": "100644",
+            "candidateObjectType": "blob",
+            "candidateBlobSha": candidate_blob,
+        }
+    if row_mutation:
+        row_mutation(row)
+    transition_payload = {
+        "schemaVersion": schema_version,
         "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
         "protectedBaseSha": protected_base,
-        "artifacts": [{
-            "path": "scripts/quality/architecture_analyzer.py",
-            "baseBlobSha": base_blob,
-            "candidateBlobSha": candidate_blob,
-        }],
-    }), encoding="utf-8")
+        "artifacts": [row],
+    }
+    if transition_mutation:
+        transition_mutation(transition_payload)
+    transition.write_text(json.dumps(transition_payload), encoding="utf-8")
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-qm", "rotate protected anchor"], cwd=tmp_path, check=True)
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
@@ -500,6 +534,107 @@ def test_exact_dedicated_transition_can_rotate_protected_artifact(tmp_path):
     candidate = _commit_protected_transition(tmp_path, protected_base)
 
     assert _protected_artifact_findings(tmp_path, protected_base, candidate) == []
+
+
+def test_exact_v2_transition_can_rotate_protected_artifact_with_mode_identity(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
+    analyzer.parent.mkdir(parents=True)
+    analyzer.write_text("# protected base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "protected base"], cwd=tmp_path, check=True)
+    protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+    candidate = _commit_protected_transition(tmp_path, protected_base, schema_version="2.0.0")
+
+    assert _protected_artifact_findings(tmp_path, protected_base, candidate) == []
+
+
+def test_v1_transition_cannot_authorize_undeclared_mode_change(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    artifact_path = "scripts/quality/architecture_analyzer.py"
+    analyzer = tmp_path / artifact_path
+    analyzer.parent.mkdir(parents=True)
+    analyzer.write_text("# protected base\n", encoding="utf-8")
+    subprocess.run(["git", "add", artifact_path], cwd=tmp_path, check=True)
+    subprocess.run(["git", "update-index", "--chmod=-x", artifact_path], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "protected base"], cwd=tmp_path, check=True)
+    protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    blob = subprocess.check_output(["git", "rev-parse", f"{protected_base}:{artifact_path}"], cwd=tmp_path, text=True).strip()
+
+    subprocess.run(["git", "update-index", "--chmod=+x", artifact_path], cwd=tmp_path, check=True)
+    transition = tmp_path / "config/architecture-protected-transition-v1.json"
+    transition.parent.mkdir(parents=True)
+    transition.write_text(json.dumps({
+        "schemaVersion": "1.0.0",
+        "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
+        "protectedBaseSha": protected_base,
+        "artifacts": [{"path": artifact_path, "baseBlobSha": blob, "candidateBlobSha": blob}],
+    }), encoding="utf-8")
+    subprocess.run(["git", "add", "config/architecture-protected-transition-v1.json"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "attempt legacy mode authorization"], cwd=tmp_path, check=True)
+    candidate = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
+@pytest.mark.parametrize("schema_version,row_mutation", [
+    ("3.0.0", None),
+    ("1.0.0", lambda row: row.update(baseMode="100644")),
+    ("2.0.0", lambda row: row.pop("candidateMode")),
+    ("2.0.0", lambda row: row.update(candidateMode="100755")),
+    ("2.0.0", lambda row: row.update(candidateObjectType="tree")),
+    ("2.0.0", lambda row: row.update(candidateBlobSha="0" * 40)),
+])
+def test_transition_schema_dispatch_rejects_unknown_hybrid_malformed_and_mismatch(
+    tmp_path, schema_version, row_mutation,
+):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
+    analyzer.parent.mkdir(parents=True)
+    analyzer.write_text("# protected base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "protected base"], cwd=tmp_path, check=True)
+    protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+    candidate = _commit_protected_transition(
+        tmp_path, protected_base, schema_version=schema_version, row_mutation=row_mutation,
+    )
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
+@pytest.mark.parametrize("transition_mutation", [
+    lambda transition: transition.update(unknown=True),
+    lambda transition: transition.update(protectedBaseSha="0" * 40),
+    lambda transition: transition.update(artifacts=[]),
+    lambda transition: transition.update(artifacts=transition["artifacts"] * 2),
+])
+def test_transition_rejects_unknown_wrong_base_omitted_and_duplicate_rows(tmp_path, transition_mutation):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
+    analyzer.parent.mkdir(parents=True)
+    analyzer.write_text("# protected base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "protected base"], cwd=tmp_path, check=True)
+    protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+    candidate = _commit_protected_transition(
+        tmp_path, protected_base, schema_version="2.0.0", transition_mutation=transition_mutation,
+    )
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
 
 
 def test_transition_cannot_mix_protected_rotation_with_production_change(tmp_path):
