@@ -1,16 +1,34 @@
 {
   "schemaVersion": "2.0.0",
   "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "01536616685527b1ec4dcdc8527359c35d404bce",
+  "protectedBaseSha": "cee9450dbc6b43d4409cb0ea120e027c3c3599a2",
   "artifacts": [
     {
-      "path": "scripts/quality/architecture_analyzer.py",
-      "baseMode": "100644",
-      "baseObjectType": "blob",
-      "baseBlobSha": "d3fbb521dd6db6ef5a35d43811ff3e710969ed5e",
+      "path": ".github/workflows/capability-protected.yml",
+      "baseMode": null,
+      "baseObjectType": null,
+      "baseBlobSha": null,
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "d60659e5bd0e2a3604e4122b81d9b18e692f2d8f"
+      "candidateBlobSha": "3ba826b7799bef39edb69896a2010fd235eb5056"
+    },
+    {
+      "path": "config/capability-protected-artifacts-v1.json",
+      "baseMode": null,
+      "baseObjectType": null,
+      "baseBlobSha": null,
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "e0837c8d5147cdd7205314e1e602137108b870ed"
+    },
+    {
+      "path": "scripts/quality/capability_trust_anchor.py",
+      "baseMode": null,
+      "baseObjectType": null,
+      "baseBlobSha": null,
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "6d6f8941ab2240e5568fcd5ae266e482a0b6c73a"
     }
   ]
 }

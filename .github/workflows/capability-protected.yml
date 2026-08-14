@@ -1,0 +1,35 @@
+name: capability-protected
+
+on:
+  pull_request_target:
+
+permissions:
+  contents: read
+
+jobs:
+  capability-protected:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout protected base verifier
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          path: trusted
+          persist-credentials: false
+      - name: Checkout exact candidate tree
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          path: candidate
+          persist-credentials: false
+      - name: Validate inert capability custody
+        working-directory: trusted
+        env:
+          CAPABILITY_CANDIDATE_ROOT: ${{ github.workspace }}/candidate
+          CAPABILITY_PROTECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CAPABILITY_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python -c "import os,sys; from pathlib import Path; from scripts.quality.capability_trust_anchor import validate_inert_trust_anchor; findings=validate_inert_trust_anchor(Path(os.environ['CAPABILITY_CANDIDATE_ROOT']), os.environ['CAPABILITY_PROTECTED_BASE_SHA'], os.environ['CAPABILITY_EXPECTED_HEAD_SHA']); print(findings); sys.exit(1 if findings else 0)"
