@@ -17,11 +17,14 @@ from .repository_inventory import candidate_tree, canonical_python_path, tree_py
 
 PROTECTED_ARCHITECTURE_ARTIFACTS = (
     ".github/workflows/architecture-protected.yml",
+    ".github/workflows/capability-protected.yml",
     "config/architecture-capability-transfers-v2.json",
     "config/architecture-policy-v1.json",
+    "config/capability-protected-artifacts-v1.json",
     "schemas/architecture-baseline-v1.schema.json",
     "scripts/quality/architecture_analyzer.py",
     "scripts/quality/ast_inventory.py",
+    "scripts/quality/capability_trust_anchor.py",
     "scripts/quality/repository_inventory.py",
 )
 PROTECTED_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
