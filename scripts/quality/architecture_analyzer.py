@@ -67,14 +67,14 @@ def _protected_transition_valid(
             for path in changed_artifacts
         }
         if any(
-            base_object is None or candidate_object is None
-            or base_object[:2] not in {("100644", "blob"), ("100755", "blob")}
+            (base_object is not None and base_object[:2] not in {("100644", "blob"), ("100755", "blob")})
+            or candidate_object is None
             or candidate_object[:2] not in {("100644", "blob"), ("100755", "blob")}
             for base_object, candidate_object in expected.values()
         ):
             return False
         if schema_version == "1.0.0" and any(
-            base_object[:2] != candidate_object[:2]
+            base_object is None or base_object[:2] != candidate_object[:2]
             for base_object, candidate_object in expected.values()
         ):
             return False
@@ -97,7 +97,11 @@ def _protected_transition_valid(
                 declared[path] = (row.get("baseBlobSha"), row.get("candidateBlobSha"))
             else:
                 declared[path] = (
-                    (row.get("baseMode"), row.get("baseObjectType"), row.get("baseBlobSha")),
+                    None
+                    if row.get("baseMode") is None
+                    and row.get("baseObjectType") is None
+                    and row.get("baseBlobSha") is None
+                    else (row.get("baseMode"), row.get("baseObjectType"), row.get("baseBlobSha")),
                     (row.get("candidateMode"), row.get("candidateObjectType"), row.get("candidateBlobSha")),
                 )
         exact_expected = (
