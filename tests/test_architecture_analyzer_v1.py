@@ -155,10 +155,23 @@ def test_dynamic_architecture_bypass_inline_reflection_chains(source):
 
 
 @pytest.mark.parametrize("source", [
+    "import importlib\nimportlib.import_module.__call__(name)\n",
+    "import builtins\nbuiltins.__import__.__call__(name)\n",
+    "spec.loader.exec_module.__call__(module)\n",
+    "import importlib\nobject.__getattribute__(importlib, 'import_module')(name)\n",
+])
+def test_dynamic_architecture_bypass_descriptor_dispatch(source):
+    findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]
+    assert any(item["code"] == "DYNAMIC_ARCHITECTURE_BYPASS" for item in findings)
+
+
+@pytest.mark.parametrize("source", [
     "__builtins__['len'](items)\n",
     "globals()['ordinary'](value)\n",
     "import sys\nsys.modules['decimal'].Decimal('1')\n",
     "import operator\noperator.attrgetter('ordinary')(holder)(value)\n",
+    "ordinary.__call__(value)\n",
+    "object.__getattribute__(holder, 'ordinary')(value)\n",
 ])
 def test_ordinary_inline_reflection_is_not_a_dynamic_architecture_bypass(source):
     findings = analyze_sources({"scripts/a.py": source}, _policy())["findings"]

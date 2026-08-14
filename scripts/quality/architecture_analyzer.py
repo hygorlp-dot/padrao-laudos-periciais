@@ -136,7 +136,8 @@ def _resolve_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
             return bindings[dotted]
         root, separator, remainder = dotted.partition(".")
         resolved = bindings.get(root, root)
-        return f"{resolved}.{remainder}" if separator else resolved
+        resolved = f"{resolved}.{remainder}" if separator else resolved
+        return resolved.removesuffix(".__call__")
     if isinstance(node, ast.Attribute):
         owner = _resolve_binding(node.value, bindings)
         if owner:
@@ -166,6 +167,11 @@ def _resolve_binding(node: ast.AST, bindings: dict[str, str]) -> str | None:
             if function == "vars" and owner:
                 return f"{owner}.__dict__"
             member = _constant_string(node.args[1]) if len(node.args) >= 2 else None
+            if owner and member:
+                return f"{owner}.{member}"
+        if function == "object.__getattribute__" and len(node.args) >= 2:
+            owner = _resolve_binding(node.args[0], bindings)
+            member = _constant_string(node.args[1])
             if owner and member:
                 return f"{owner}.{member}"
         if function and function.endswith(".__getattribute__") and node.args:
