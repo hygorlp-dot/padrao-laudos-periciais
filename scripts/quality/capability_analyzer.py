@@ -193,6 +193,11 @@ class _CapabilityVisitor(ast.NodeVisitor):
         return self._resolved_name(target.value) if isinstance(target, ast.Subscript) else self._resolved_name(target)
 
     def visit_Assign(self, node: ast.Assign) -> None:
+        resolved_value = self._resolved_name(node.value)
+        if resolved_value:
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    self._aliases[target.id] = resolved_value
         if any(self._assignment_name(target) in {"sys.meta_path", "sys.path_hooks"} for target in node.targets):
             self._add("SENSITIVE_NAMESPACE_ESCAPE", node)
         self.generic_visit(node)
