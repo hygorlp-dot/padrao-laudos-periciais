@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "2.0.0",
+  "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
+  "protectedBaseSha": "066dbcf400654a223d32d91d359cba6d8cbe3280",
+  "artifacts": [
+    {
+      "path": ".github/workflows/capability-protected.yml",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "3ba826b7799bef39edb69896a2010fd235eb5056",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "edfafe1aba4a8bc9dcdaea8b156b296ad23c96c3"
+    },
+    {
+      "path": "config/capability-protected-artifacts-v1.json",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "e0837c8d5147cdd7205314e1e602137108b870ed",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "32d2e3c3835a31683ffed27b7a266e1faddd7510"
+    },
+    {
+      "path": "scripts/quality/capability_trust_anchor.py",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "6d6f8941ab2240e5568fcd5ae266e482a0b6c73a",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "1f8012475025802baeea0c91d96625c487d684c0"
+    }
+  ]
+}
