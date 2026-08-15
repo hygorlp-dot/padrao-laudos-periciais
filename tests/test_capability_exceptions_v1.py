@@ -70,10 +70,7 @@ def exception_repo(_shared_exception_repo):
     subprocess.run(["git", "checkout", "-q", branch], cwd=repo, check=True)
     subprocess.run(["git", "reset", "--hard", "-q", candidate], cwd=repo, check=True)
     subprocess.run(["git", "clean", "-fdx", "-q"], cwd=repo, check=True)
-    yield repo, baseline, candidate, finding, exception
-    subprocess.run(["git", "checkout", "-q", branch], cwd=repo, check=True)
-    subprocess.run(["git", "reset", "--hard", "-q", candidate], cwd=repo, check=True)
-    subprocess.run(["git", "clean", "-fdx", "-q"], cwd=repo, check=True)
+    return repo, baseline, candidate, finding, exception
 
 
 def _apply(repo, baseline, candidate, finding, **kwargs):

@@ -58,6 +58,23 @@
         "objectType": "blob",
         "blobSha": "d0c91fae0be77aad738f182412ac0dfa382ff37f"
       }
+    },
+    {
+      "path": "scripts/quality/verify_core.py",
+      "base": {
+        "path": "scripts/quality/verify_core.py",
+        "state": "PRESENT",
+        "mode": "100644",
+        "objectType": "blob",
+        "blobSha": "3791f733792d9a3f1a8cb5f0108881c176b30600"
+      },
+      "candidate": {
+        "path": "scripts/quality/verify_core.py",
+        "state": "PRESENT",
+        "mode": "100644",
+        "objectType": "blob",
+        "blobSha": "b1858090ff650102918a4152fb9c899e47c9aded"
+      }
     }
   ]
 }
