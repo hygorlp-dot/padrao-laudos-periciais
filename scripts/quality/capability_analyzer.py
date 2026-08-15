@@ -68,6 +68,15 @@ class _CapabilityVisitor(ast.NodeVisitor):
         self.findings: list[dict] = []
         self._seen: set[tuple[str, int, int]] = set()
         self._severity = {row["findingCode"]: row["severity"] for row in policy["ruleMappings"]}
+        self._aliases: dict[str, str] = {}
+
+    def _resolved_name(self, node: ast.AST) -> str | None:
+        name = _qualified_name(node)
+        if not name:
+            return None
+        root, separator, remainder = name.partition(".")
+        resolved = self._aliases.get(root, root)
+        return f"{resolved}.{remainder}" if separator else resolved
 
     def _add(self, code: str, node: ast.AST) -> None:
         location = (code, node.lineno, node.col_offset)
@@ -105,14 +114,16 @@ class _CapabilityVisitor(ast.NodeVisitor):
             return None
         return node.slice.value if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str) else None
 
-    @staticmethod
-    def _contains_sys_modules(node: ast.AST) -> bool:
-        return any(_qualified_name(part) == "sys.modules" for part in ast.walk(node))
+    def _contains_sys_modules(self, node: ast.AST) -> bool:
+        return any(self._resolved_name(part) == "sys.modules" for part in ast.walk(node))
 
     def visit_Call(self, node: ast.Call) -> None:
-        name = _qualified_name(node.func)
+        name = self._resolved_name(node.func)
         builtin_name = self._builtin_subscript_name(node.func)
-        if name in {"eval", "exec", "compile", "types.CodeType", "types.FunctionType"} or builtin_name in {
+        if name in {
+            "eval", "exec", "compile", "builtins.eval", "builtins.exec", "builtins.compile",
+            "types.CodeType", "types.FunctionType",
+        } or builtin_name in {
             "eval",
             "exec",
             "compile",
@@ -127,7 +138,7 @@ class _CapabilityVisitor(ast.NodeVisitor):
         elif name in {f"os.{member}" for member in self.policy["mixedNamespaceMembers"]["os"]}:
             self._add("OS_PROCESS_MEMBER_ACQUISITION", node)
         elif name in {"getattr", "operator.getitem"} and any(
-            _qualified_name(part) in set(self.policy["mixedNamespaces"]) or
+            self._resolved_name(part) in set(self.policy["mixedNamespaces"]) or
             (isinstance(part, ast.Call) and _qualified_name(part.func) == "vars")
             for part in ast.walk(node)
         ):
@@ -139,12 +150,17 @@ class _CapabilityVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            self._aliases[alias.asname or alias.name.split(".", 1)[0]] = alias.name
         if any(any(alias.name == root or alias.name.startswith(root + ".") for root in self.policy["processNamespaces"]) for alias in node.names):
             self._add("PROCESS_NAMESPACE_ACQUISITION", node)
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         module = node.module or ""
+        for alias in node.names:
+            if alias.name != "*":
+                self._aliases[alias.asname or alias.name] = f"{module}.{alias.name}" if module else alias.name
         if any(module == root or module.startswith(root + ".") for root in self.policy["processNamespaces"]):
             self._add("PROCESS_NAMESPACE_ACQUISITION", node)
         if module == "os" and any(alias.name in self.policy["mixedNamespaceMembers"]["os"] for alias in node.names):
@@ -152,7 +168,7 @@ class _CapabilityVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
-        name = _qualified_name(node)
+        name = self._resolved_name(node)
         if name in {f"os.{member}" for member in self.policy["mixedNamespaceMembers"]["os"]}:
             self._add("OS_PROCESS_MEMBER_ACQUISITION", node)
         elif name and name.endswith(".__dict__") and name.split(".", 1)[0] in self.policy["mixedNamespaces"]:
@@ -161,17 +177,20 @@ class _CapabilityVisitor(ast.NodeVisitor):
 
     def visit_arguments(self, node: ast.arguments) -> None:
         for default in [*node.defaults, *node.kw_defaults]:
-            if isinstance(default, ast.Name) and default.id in {"eval", "exec", "compile"}:
+            if self._resolved_name(default) in {
+                "eval", "exec", "compile", "builtins.eval", "builtins.exec", "builtins.compile",
+            }:
                 self._add("DYNAMIC_EXECUTION_ACQUISITION", default)
         self.generic_visit(node)
 
     def visit_Name(self, node: ast.Name) -> None:
-        if isinstance(node.ctx, ast.Load) and node.id in {"eval", "exec", "compile"}:
+        if isinstance(node.ctx, ast.Load) and self._resolved_name(node) in {
+            "eval", "exec", "compile", "builtins.eval", "builtins.exec", "builtins.compile",
+        }:
             self._add("DYNAMIC_EXECUTION_ACQUISITION", node)
 
-    @staticmethod
-    def _assignment_name(target: ast.AST) -> str | None:
-        return _qualified_name(target.value) if isinstance(target, ast.Subscript) else _qualified_name(target)
+    def _assignment_name(self, target: ast.AST) -> str | None:
+        return self._resolved_name(target.value) if isinstance(target, ast.Subscript) else self._resolved_name(target)
 
     def visit_Assign(self, node: ast.Assign) -> None:
         if any(self._assignment_name(target) in {"sys.meta_path", "sys.path_hooks"} for target in node.targets):

@@ -129,3 +129,39 @@ def test_all_recorded_transfer_reproducers_block(tmp_path, source, expected_code
 ])
 def test_closed_policy_taxonomy_blocks_representative_acquisitions(tmp_path, source, expected_code):
     assert expected_code in {finding["code"] for finding in _analyze(tmp_path, source)}
+
+
+@pytest.mark.parametrize(("source", "expected_code"), [
+    (
+        "from importlib import import_module\nimport_module(name)\n",
+        "DYNAMIC_IMPORT_ACQUISITION",
+    ),
+    (
+        "import importlib as i\ni.import_module(name)\n",
+        "DYNAMIC_IMPORT_ACQUISITION",
+    ),
+    (
+        "from builtins import eval as e\ne(payload)\n",
+        "DYNAMIC_EXECUTION_ACQUISITION",
+    ),
+    (
+        "import os as safe\nsafe.system('tool')\n",
+        "OS_PROCESS_MEMBER_ACQUISITION",
+    ),
+    (
+        "import pickle as serializer\nserializer.loads(payload)\n",
+        "EXECUTABLE_DESERIALIZATION_OR_NATIVE_LOADING",
+    ),
+    (
+        "import os as safe\nvalue = getattr(safe, name)\n",
+        "SENSITIVE_NAMESPACE_ESCAPE",
+    ),
+    (
+        "import sys as runtime\nruntime.meta_path = [finder]\n",
+        "SENSITIVE_NAMESPACE_ESCAPE",
+    ),
+])
+def test_sensitive_acquisition_aliases_remain_blocked(source, expected_code):
+    assert expected_code in {
+        finding["code"] for finding in analyze_source("scripts/target.py", source, policy_path=POLICY)
+    }
