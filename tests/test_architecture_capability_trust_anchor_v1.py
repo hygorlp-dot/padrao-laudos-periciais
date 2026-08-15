@@ -194,7 +194,13 @@ def test_base_state_ignores_windows_casefold_alias_not_present_at_canonical_git_
         "--cacheinfo",
         f"100644,{blob},Scripts/quality/capability_bootstrap.py",
     )
-    alias_base = _commit(root, "record noncanonical casefold alias")
+    # Commit the index directly: ``git add -A`` would remove this intentionally
+    # index-only alias because no matching worktree file exists.
+    _git(root, "commit", "-q", "-m", "record noncanonical casefold alias")
+    alias_base = _git(root, "rev-parse", "HEAD")
+
+    assert _git(root, "ls-tree", alias_base, "--", "Scripts/quality/capability_bootstrap.py")
+    assert not _git(root, "ls-tree", alias_base, "--", FUTURE_PATH)
 
     assert trust_anchor._protected_base_bootstrap_present(root, alias_base) is False
 
