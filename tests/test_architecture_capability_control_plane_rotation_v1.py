@@ -13,17 +13,17 @@ FUTURE_PATHS = {
 }
 
 
-def test_registry_predeclares_only_contractual_future_artifacts_as_absent():
+def test_pr_c_registry_custodies_exact_shadow_artifacts_as_present():
     registry = json.loads(
         (ROOT / "config/capability-protected-artifacts-v1.json").read_text(encoding="utf-8")
     )
-    absent = {
+    present = {
         row["path"]
         for row in registry["artifacts"]
-        if row["state"] == "ABSENT"
+        if row["path"] in FUTURE_PATHS and row["state"] == "PRESENT"
     }
-    assert absent == FUTURE_PATHS
-    assert all(not (ROOT / path).exists() for path in absent)
+    assert present == FUTURE_PATHS
+    assert all((ROOT / path).is_file() for path in present)
 
 
 def test_workflow_selects_capability_state_from_trusted_base_only():
@@ -38,8 +38,16 @@ def test_workflow_selects_capability_state_from_trusted_base_only():
     assert "from scripts.quality.capability_trust_anchor import validate_inert_trust_anchor" in workflow
 
 
-def test_pr_c0_contains_no_capability_judge_or_exception_registry():
-    assert all(not (ROOT / path).exists() for path in FUTURE_PATHS)
+def test_pr_c_installs_shadow_judge_and_empty_exception_registry_without_activation():
+    assert all((ROOT / path).is_file() for path in FUTURE_PATHS)
+    exceptions = json.loads(
+        (ROOT / "config/capability-exceptions-v1.json").read_text(encoding="utf-8")
+    )
+    assert exceptions == {"schemaVersion": "1.0.0", "exceptions": []}
+    policy = json.loads(
+        (ROOT / "config/capability-policy-v1.json").read_text(encoding="utf-8")
+    )
+    assert policy["integrityBootstrap"]["activationState"] == "CONTRACT_ONLY"
 
 
 def test_transferred_capability_findings_remain_exactly_open():
