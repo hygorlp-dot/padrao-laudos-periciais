@@ -10,7 +10,7 @@
       "baseBlobSha": "3ba826b7799bef39edb69896a2010fd235eb5056",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "ac9be64f2f36b4a295501c2d3c60f5be34b7e742"
+      "candidateBlobSha": "edfafe1aba4a8bc9dcdaea8b156b296ad23c96c3"
     },
     {
       "path": "config/capability-protected-artifacts-v1.json",
@@ -28,7 +28,7 @@
       "baseBlobSha": "6d6f8941ab2240e5568fcd5ae266e482a0b6c73a",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "a8e194a14e9791fed98c167a7b009d0df7d9f604"
+      "candidateBlobSha": "1f8012475025802baeea0c91d96625c487d684c0"
     }
   ]
 }
