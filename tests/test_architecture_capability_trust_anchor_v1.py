@@ -201,6 +201,12 @@ def test_base_state_ignores_windows_casefold_alias_not_present_at_canonical_git_
 
     assert _git(root, "ls-tree", alias_base, "--", "Scripts/quality/capability_bootstrap.py")
     assert not _git(root, "ls-tree", alias_base, "--", FUTURE_PATH)
+    _git(root, "reset", "--hard", "-q", alias_base)
+    assert (root / "Scripts/quality/capability_bootstrap.py").is_file()
+    if os.name == "nt":
+        # The old Test-Path selector saw this case-folded filesystem alias as
+        # the canonical protected path even though the exact Git path is absent.
+        assert (root / FUTURE_PATH).is_file()
 
     assert trust_anchor._protected_base_bootstrap_present(root, alias_base) is False
 
