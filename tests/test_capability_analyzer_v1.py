@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.quality.capability_analyzer import analyze_capabilities
+from scripts.quality.capability_analyzer import analyze_capabilities, analyze_source
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,8 +31,16 @@ def _candidate_repo(tmp_path: Path, source: str) -> tuple[Path, str, str]:
 
 
 def _analyze(tmp_path: Path, source: str) -> list[dict]:
+    return analyze_source("scripts/target.py", source, policy_path=POLICY)
+
+
+def test_exact_git_tree_analysis_matches_pure_source_analysis(tmp_path):
+    source = "import subprocess\n"
     repo, commit, tree = _candidate_repo(tmp_path, source)
-    return analyze_capabilities(repo, commit, tree, policy_path=POLICY)
+
+    assert analyze_capabilities(repo, commit, tree, policy_path=POLICY) == analyze_source(
+        "scripts/target.py", source, policy_path=POLICY
+    )
 
 
 @pytest.mark.parametrize(

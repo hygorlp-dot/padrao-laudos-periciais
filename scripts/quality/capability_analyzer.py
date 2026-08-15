@@ -179,6 +179,18 @@ class _CapabilityVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+def analyze_source(path: str, source: str, *, policy_path: Path) -> list[dict]:
+    """Analyze one canonical Python source without Git or filesystem side effects."""
+    policy = _load_policy(policy_path)
+    parsed = parse_source(path, source)
+    visitor = _CapabilityVisitor(path, policy)
+    visitor.visit(parsed)
+    return sorted(
+        visitor.findings,
+        key=lambda item: (item["canonicalPath"], item["location"]["line"], item["location"]["column"], item["code"]),
+    )
+
+
 def analyze_capabilities(
     repo: Path,
     candidate_commit_sha: str,
