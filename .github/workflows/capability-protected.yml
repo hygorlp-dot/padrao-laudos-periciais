@@ -25,7 +25,25 @@ jobs:
           fetch-depth: 0
           path: candidate
           persist-credentials: false
-      - name: Validate inert capability custody
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: trusted/requirements-dev.txt
+      - name: Install trusted capability dependencies
+        working-directory: trusted
+        run: python -m pip install -r requirements-dev.txt
+      - name: Select capability judge from protected base
+        working-directory: trusted
+        shell: pwsh
+        env:
+          CAPABILITY_PROTECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          $state = python -c "import os,sys; from pathlib import Path; from scripts.quality.capability_trust_anchor import _protected_base_bootstrap_present; state=_protected_base_bootstrap_present(Path.cwd(), os.environ['CAPABILITY_PROTECTED_BASE_SHA']); sys.exit(1) if state is None else print('true' if state else 'false')"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "CAPABILITY_BASE_BOOTSTRAP_PRESENT=$state" >> $env:GITHUB_ENV
+      - name: Validate base-owned capability custody
+        if: env.CAPABILITY_BASE_BOOTSTRAP_PRESENT != 'true'
         working-directory: trusted
         env:
           CAPABILITY_CANDIDATE_ROOT: ${{ github.workspace }}/candidate
@@ -33,3 +51,11 @@ jobs:
           CAPABILITY_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           python -c "import os,sys; from pathlib import Path; from scripts.quality.capability_trust_anchor import validate_inert_trust_anchor; findings=validate_inert_trust_anchor(Path(os.environ['CAPABILITY_CANDIDATE_ROOT']), os.environ['CAPABILITY_PROTECTED_BASE_SHA'], os.environ['CAPABILITY_EXPECTED_HEAD_SHA']); print(findings); sys.exit(1 if findings else 0)"
+      - name: Enforce with base-owned capability judge
+        if: env.CAPABILITY_BASE_BOOTSTRAP_PRESENT == 'true'
+        working-directory: trusted
+        env:
+          CAPABILITY_CANDIDATE_ROOT: ${{ github.workspace }}/candidate
+          CAPABILITY_PROTECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CAPABILITY_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python -m scripts.quality.capability_bootstrap

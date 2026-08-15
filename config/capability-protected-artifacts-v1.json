@@ -3,6 +3,10 @@
   "registryId": "CAPABILITY_PROTECTED_ARTIFACTS_V1",
   "artifacts": [
     {
+      "path": "config/capability-exceptions-v1.json",
+      "state": "ABSENT"
+    },
+    {
       "path": "config/capability-policy-v1.json",
       "state": "PRESENT",
       "mode": "100644",
