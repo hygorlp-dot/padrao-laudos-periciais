@@ -36,6 +36,24 @@ def _key_from_exception(item: dict) -> tuple:
     )
 
 
+def _validated_exception_key(item: object, finding_keys: set[tuple], schema: dict, now: date) -> tuple | None:
+    """Return the exact finding key only for a valid, current exception contract."""
+    try:
+        if not isinstance(item, dict):
+            return None
+        jsonschema.validate(item, schema)
+        key = _key_from_exception(item)
+        if key not in finding_keys or item["ruleVersion"] != "1.0.0":
+            return None
+        if module_name(item["canonicalPath"]) != item["module"]:
+            return None
+        if date.fromisoformat(item["reviewBy"]) < now:
+            return None
+        return key
+    except (ValueError, TypeError, KeyError, jsonschema.ValidationError, jsonschema.SchemaError):
+        return None
+
+
 def apply_exact_exceptions(
     repo: Path,
     findings: list[dict],
@@ -67,13 +85,9 @@ def apply_exact_exceptions(
             return original
         finding_keys = {_key_from_finding(item) for item in original}
         approved: set[tuple] = set()
-        for row, key in zip(rows, keys):
-            jsonschema.validate(row, schema)
-            if key not in finding_keys or row["ruleVersion"] != "1.0.0":
-                return original
-            if module_name(row["canonicalPath"]) != row["module"]:
-                return original
-            if date.fromisoformat(row["reviewBy"]) < now:
+        for row in rows:
+            key = _validated_exception_key(row, finding_keys, schema, now)
+            if key is None:
                 return original
             source_commit = row["baselineCommit"]
             if _git(repo, "merge-base", "--is-ancestor", source_commit, protected_baseline).strip():
