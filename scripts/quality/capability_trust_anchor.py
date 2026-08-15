@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 
 REGISTRY_PATH = "config/capability-protected-artifacts-v1.json"
 TRANSITION_PATH = "config/capability-protected-transition-v1.json"
+BOOTSTRAP_PATH = "scripts/quality/capability_bootstrap.py"
 _IDENTITY_KEYS = {"path", "state", "mode", "objectType", "blobSha"}
 
 
@@ -101,6 +102,23 @@ def _candidate_registry_valid(
         return False
     expected = [candidate_identities[path] for path in base_paths]
     return candidate_registry == expected
+
+
+def _protected_base_bootstrap_present(root: Path, protected_base: str) -> bool | None:
+    """Select the workflow state from the exact base Git identity, never filesystem lookup."""
+    try:
+        registry = _load_registry(root, protected_base)
+        if registry is None:
+            return None
+        matches = [row for row in registry if row["path"] == BOOTSTRAP_PATH]
+        if len(matches) != 1:
+            return None
+        identities = _tree_identities(root, protected_base, [BOOTSTRAP_PATH])
+        if identities is None or identities.get(BOOTSTRAP_PATH) != matches[0]:
+            return None
+        return matches[0]["state"] == "PRESENT"
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError, subprocess.CalledProcessError):
+        return None
 
 
 def _ancestry_error(returncode: int) -> str | None:

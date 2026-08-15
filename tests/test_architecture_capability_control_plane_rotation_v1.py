@@ -29,7 +29,8 @@ def test_registry_predeclares_only_contractual_future_artifacts_as_absent():
 def test_workflow_selects_capability_state_from_trusted_base_only():
     workflow = (ROOT / ".github/workflows/capability-protected.yml").read_text(encoding="utf-8")
     assert "CAPABILITY_BASE_BOOTSTRAP_PRESENT" in workflow
-    assert 'Test-Path -LiteralPath "scripts/quality/capability_bootstrap.py"' in workflow
+    assert "_protected_base_bootstrap_present" in workflow
+    assert "Test-Path" not in workflow
     assert "python -m scripts.quality.capability_bootstrap" in workflow
     assert "candidate/scripts/quality/capability_bootstrap.py" not in workflow
     assert "working-directory: trusted" in workflow

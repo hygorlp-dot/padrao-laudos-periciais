@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.quality import capability_trust_anchor as trust_anchor
 from scripts.quality.capability_trust_anchor import (
     _ancestry_error,
     _candidate_registry_valid,
@@ -161,6 +162,7 @@ def test_absent_to_present_requires_mechanically_advanced_candidate_registry(ine
     candidate = _commit(root, "advance exact protected registry")
 
     assert validate_inert_trust_anchor(root, base, candidate) == []
+    assert trust_anchor._protected_base_bootstrap_present(root, candidate) is True
 
 
 @pytest.mark.parametrize("mutation", ["added", "removed", "reordered"])
@@ -179,6 +181,22 @@ def test_candidate_registry_cannot_change_base_owned_path_set_or_order(inert_rep
 
     findings = validate_inert_trust_anchor(root, base, candidate)
     assert {item["code"] for item in findings} == {"CAPABILITY_PROTECTED_REGISTRY_ADVANCEMENT_INVALID"}
+
+
+def test_base_state_ignores_windows_casefold_alias_not_present_at_canonical_git_path(inert_repo):
+    root, _base = inert_repo
+    _git(root, "config", "core.ignorecase", "false")
+    blob = _git(root, "hash-object", "-w", "--stdin", input_text="casefold alias\n")
+    _git(
+        root,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        f"100644,{blob},Scripts/quality/capability_bootstrap.py",
+    )
+    alias_base = _commit(root, "record noncanonical casefold alias")
+
+    assert trust_anchor._protected_base_bootstrap_present(root, alias_base) is False
 
 
 @pytest.mark.parametrize(

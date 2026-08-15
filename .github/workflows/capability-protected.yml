@@ -36,12 +36,12 @@ jobs:
       - name: Select capability judge from protected base
         working-directory: trusted
         shell: pwsh
+        env:
+          CAPABILITY_PROTECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          if (Test-Path -LiteralPath "scripts/quality/capability_bootstrap.py" -PathType Leaf) {
-            "CAPABILITY_BASE_BOOTSTRAP_PRESENT=true" >> $env:GITHUB_ENV
-          } else {
-            "CAPABILITY_BASE_BOOTSTRAP_PRESENT=false" >> $env:GITHUB_ENV
-          }
+          $state = python -c "import os,sys; from pathlib import Path; from scripts.quality.capability_trust_anchor import _protected_base_bootstrap_present; state=_protected_base_bootstrap_present(Path.cwd(), os.environ['CAPABILITY_PROTECTED_BASE_SHA']); sys.exit(1) if state is None else print('true' if state else 'false')"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "CAPABILITY_BASE_BOOTSTRAP_PRESENT=$state" >> $env:GITHUB_ENV
       - name: Validate base-owned capability custody
         if: env.CAPABILITY_BASE_BOOTSTRAP_PRESENT != 'true'
         working-directory: trusted
