@@ -166,6 +166,14 @@ def test_closed_policy_taxonomy_blocks_representative_acquisitions(tmp_path, sou
         "import sys as runtime\nruntime.meta_path = [finder]\n",
         "SENSITIVE_NAMESPACE_ESCAPE",
     ),
+    (
+        "import importlib as i\nloader = i.import_module\nloader(name)\n",
+        "DYNAMIC_IMPORT_ACQUISITION",
+    ),
+    (
+        "import builtins as b\nrunner = b.eval\nrunner(payload)\n",
+        "DYNAMIC_EXECUTION_ACQUISITION",
+    ),
 ])
 def test_sensitive_acquisition_aliases_remain_blocked(source, expected_code):
     assert expected_code in {

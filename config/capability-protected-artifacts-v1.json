@@ -49,7 +49,7 @@
       "state": "PRESENT",
       "mode": "100644",
       "objectType": "blob",
-      "blobSha": "7d43fa7ff28a185bfb32c2b2411ec0d77b87e094"
+      "blobSha": "ba64b45c6e5bdb80b8082c1d8017940403c572c5"
     },
     {
       "path": "scripts/quality/capability_bootstrap.py",
