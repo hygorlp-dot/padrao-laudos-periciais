@@ -34,9 +34,15 @@ def _analyze(tmp_path: Path, source: str) -> list[dict]:
     return analyze_source("scripts/target.py", source, policy_path=POLICY)
 
 
-def test_exact_git_tree_analysis_matches_pure_source_analysis(tmp_path):
+@pytest.fixture(scope="module")
+def candidate_repo(tmp_path_factory):
     source = "import subprocess\n"
-    repo, commit, tree = _candidate_repo(tmp_path, source)
+    repo, commit, tree = _candidate_repo(tmp_path_factory.mktemp("capability-candidate"), source)
+    return repo, commit, tree, source
+
+
+def test_exact_git_tree_analysis_matches_pure_source_analysis(candidate_repo):
+    repo, commit, tree, source = candidate_repo
 
     assert analyze_capabilities(repo, commit, tree, policy_path=POLICY) == analyze_source(
         "scripts/target.py", source, policy_path=POLICY
@@ -93,8 +99,8 @@ def test_contract_safe_sources_are_allowed(tmp_path, source):
     assert _analyze(tmp_path, source) == []
 
 
-def test_candidate_commit_tree_mismatch_blocks_before_analysis(tmp_path):
-    repo, commit, _ = _candidate_repo(tmp_path, "value = 1\n")
+def test_candidate_commit_tree_mismatch_blocks_before_analysis(candidate_repo):
+    repo, commit, _, _source = candidate_repo
     other_tree = "0" * 40
 
     with pytest.raises(ValueError, match="commit/tree mismatch"):

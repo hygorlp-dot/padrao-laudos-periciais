@@ -55,22 +55,37 @@ def _fixture(tmp_path: Path):
     baseline = _git(repo, "rev-parse", "HEAD")
     subprocess.run(["git", "commit", "--allow-empty", "-qm", "candidate"], cwd=repo, check=True)
     candidate = _git(repo, "rev-parse", "HEAD")
-    return repo, baseline, candidate, finding, exception
+    (repo / finding["canonicalPath"]).write_bytes(b"import os\n")
+    subprocess.run(["git", "add", finding["canonicalPath"]], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "change protected source"], cwd=repo, check=True)
+    source_mismatch = _git(repo, "rev-parse", "HEAD")
+
+    registry_candidates = []
+    for rows in ([exception, copy.deepcopy(exception)], []):
+        subprocess.run(["git", "reset", "--hard", "-q", candidate], cwd=repo, check=True)
+        (repo / REGISTRY).write_text(json.dumps({"schemaVersion": "1.0.0", "exceptions": rows}), encoding="utf-8")
+        subprocess.run(["git", "add", REGISTRY], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "candidate registry"], cwd=repo, check=True)
+        registry_candidates.append(_git(repo, "rev-parse", "HEAD"))
+
+    subprocess.run(["git", "checkout", "-q", "--orphan", "other"], cwd=repo, check=True)
+    subprocess.run(["git", "read-tree", "--empty"], cwd=repo, check=True)
+    (repo / "unrelated").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "add", "unrelated"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "unrelated"], cwd=repo, check=True)
+    unrelated = _git(repo, "rev-parse", "HEAD")
+
+    variants = {
+        "source_mismatch": source_mismatch,
+        "registry_candidates": tuple(registry_candidates),
+        "unrelated": unrelated,
+    }
+    return repo, baseline, candidate, finding, exception, variants
 
 
 @pytest.fixture(scope="module")
-def _shared_exception_repo(tmp_path_factory):
+def exception_repo(tmp_path_factory):
     return _fixture(tmp_path_factory.mktemp("capability-exceptions"))
-
-
-@pytest.fixture
-def exception_repo(_shared_exception_repo):
-    repo, baseline, candidate, finding, exception = _shared_exception_repo
-    branch = _git(repo, "branch", "--show-current")
-    subprocess.run(["git", "checkout", "-q", branch], cwd=repo, check=True)
-    subprocess.run(["git", "reset", "--hard", "-q", candidate], cwd=repo, check=True)
-    subprocess.run(["git", "clean", "-fdx", "-q"], cwd=repo, check=True)
-    return repo, baseline, candidate, finding, exception
 
 
 def _apply(repo, baseline, candidate, finding, **kwargs):
@@ -100,7 +115,7 @@ def _contract_rows():
 
 
 def test_exact_preexisting_unexpired_exception_authorizes_only_matching_finding(exception_repo):
-    repo, baseline, candidate, finding, _ = exception_repo
+    repo, baseline, candidate, finding, _, _variants = exception_repo
     assert _apply(repo, baseline, candidate, finding) == []
 
 
@@ -125,31 +140,17 @@ def test_mismatch_or_expiry_fails_pure_exception_contract(field, value):
 
 
 def test_whole_file_mismatch_blocks_closed(exception_repo):
-    repo, baseline, _, finding, _ = exception_repo
-    (repo / finding["canonicalPath"]).write_bytes(b"import os\n")
-    subprocess.run(["git", "add", finding["canonicalPath"]], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-qm", "change protected source"], cwd=repo, check=True)
-    candidate = _git(repo, "rev-parse", "HEAD")
-
-    assert _apply(repo, baseline, candidate, finding) == [finding]
+    repo, baseline, _, finding, _, variants = exception_repo
+    assert _apply(repo, baseline, variants["source_mismatch"], finding) == [finding]
 
 
 def test_duplicate_or_candidate_only_registry_blocks_closed(exception_repo):
-    repo, baseline, candidate, finding, exception = exception_repo
-    for rows in ([exception, copy.deepcopy(exception)], []):
-        (repo / REGISTRY).write_text(json.dumps({"schemaVersion": "1.0.0", "exceptions": rows}), encoding="utf-8")
-        subprocess.run(["git", "add", REGISTRY], cwd=repo, check=True)
-        subprocess.run(["git", "commit", "-qm", "candidate registry"], cwd=repo, check=True)
-        candidate = _git(repo, "rev-parse", "HEAD")
+    repo, baseline, _, finding, _, variants = exception_repo
+    for candidate in variants["registry_candidates"]:
         assert _apply(repo, baseline, candidate, finding) == [finding]
 
 
 def test_nonancestor_baseline_and_git_read_failure_block_closed(exception_repo):
-    repo, baseline, candidate, finding, _ = exception_repo
-    subprocess.run(["git", "checkout", "-q", "--orphan", "other"], cwd=repo, check=True)
-    (repo / "unrelated").write_text("x", encoding="utf-8")
-    subprocess.run(["git", "add", "unrelated"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-qm", "unrelated"], cwd=repo, check=True)
-    unrelated = _git(repo, "rev-parse", "HEAD")
-    assert _apply(repo, unrelated, candidate, finding) == [finding]
+    repo, baseline, candidate, finding, _, variants = exception_repo
+    assert _apply(repo, variants["unrelated"], candidate, finding) == [finding]
     assert _apply(repo, baseline, "f" * 40, finding) == [finding]
