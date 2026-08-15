@@ -69,8 +69,8 @@ def _valid_identity(value: object, path: str) -> bool:
     )
 
 
-def _load_registry(root: Path, protected_base: str) -> list[dict] | None:
-    value = json.loads(_git(root, "show", f"{protected_base}:{REGISTRY_PATH}"))
+def _load_registry(root: Path, commit: str) -> list[dict] | None:
+    value = json.loads(_git(root, "show", f"{commit}:{REGISTRY_PATH}"))
     if not isinstance(value, dict) or set(value) != {"schemaVersion", "registryId", "artifacts"}:
         return None
     if value.get("schemaVersion") != "1.0.0" or value.get("registryId") != "CAPABILITY_PROTECTED_ARTIFACTS_V1":
@@ -84,6 +84,23 @@ def _load_registry(root: Path, protected_base: str) -> list[dict] | None:
     if any(_canonical_path(path) is None or not _valid_identity(row, path) for path, row in zip(paths, rows)):
         return None
     return rows
+
+
+def _candidate_registry_valid(
+    root: Path,
+    candidate: str,
+    base_registry: list[dict],
+    candidate_identities: dict[str, dict],
+) -> bool:
+    """Require the candidate registry to be the exact base-owned path set with current identities."""
+    candidate_registry = _load_registry(root, candidate)
+    if candidate_registry is None:
+        return False
+    base_paths = [row["path"] for row in base_registry]
+    if [row["path"] for row in candidate_registry] != base_paths:
+        return False
+    expected = [candidate_identities[path] for path in base_paths]
+    return candidate_registry == expected
 
 
 def _ancestry_error(returncode: int) -> str | None:
@@ -143,7 +160,7 @@ def _transition_document_valid(
             return False
         if row.get("base") != base_identity or row.get("candidate") != candidate_identity:
             return False
-    allowed = set(changed) | {TRANSITION_PATH}
+    allowed = set(changed) | {REGISTRY_PATH, TRANSITION_PATH}
     return changed_paths <= allowed | {path for path in changed_paths if path.startswith("tests/") or path.startswith("docs/arquitetura/")}
 
 
@@ -185,6 +202,11 @@ def validate_inert_trust_anchor(root: Path, protected_base: str, candidate: str)
         identity_error, changed = _identity_changes(registry, base_identities, candidate_identities)
         if identity_error:
             return [_finding(identity_error, "protected identity mismatch")]
+        if not _candidate_registry_valid(root, candidate, registry, candidate_identities):
+            return [_finding(
+                "CAPABILITY_PROTECTED_REGISTRY_ADVANCEMENT_INVALID",
+                "candidate registry is not the exact base-owned path set with candidate identities",
+            )]
         if not changed:
             return []
         if _transition_valid(root, protected_base, candidate, changed):
