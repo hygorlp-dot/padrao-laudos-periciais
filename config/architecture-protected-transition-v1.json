@@ -31,7 +31,7 @@
       "baseBlobSha": null,
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "0a0915e6067b696b251570d5eef9a59e462b0fb6"
+      "candidateBlobSha": "c3979535f8fb552393ab8739bcecd9372cc32eb5"
     },
     {
       "path": "scripts/quality/capability_analyzer.py",
