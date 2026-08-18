@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "transitionId": "CAPABILITY_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "94092c7c56a0f502bf92cf27b35edadfe23ae372",
+  "protectedBaseSha": "a65689280ae35c553153dce6250dcd25cff0a7d3",
   "artifacts": [
     {
       "path": "config/capability-exceptions-v1.json",
