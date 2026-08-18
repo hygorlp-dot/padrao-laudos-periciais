@@ -209,9 +209,21 @@ def test_core_safety_workflow_never_hoists_env_above_step_level():
     workflow_lines = (ROOT / ".github/workflows/core-safety.yml").read_text(encoding="utf-8").splitlines()
     non_step_env_lines = [line for line in workflow_lines if line in {"env:", "    env:"}]
     assert non_step_env_lines == []
-    # The partition lives in the workflow's PYTEST_ADDOPTS, not in verify_core.py's
-    # own command list — scripts/quality/verify_core.py is capability-protected, so
-    # keeping it byte-identical to main avoids an unrelated capability rotation.
+
+
+def test_verify_core_regression_command_excludes_heavy_trust_boundary_suites():
+    # Superseded design note: the original architecture-only partition (PR #63/#64)
+    # deliberately kept verify_core.py byte-identical to main and injected the
+    # exclusion purely via the workflow's PYTEST_ADDOPTS, specifically to avoid
+    # touching a capability-protected artifact before the cross-control-plane
+    # handshake existed (see PR #65/#66). That handshake now lets a real
+    # capability rotation also authorize an exact verify_core.py change, so this
+    # PR's own rotation legitimately hardcodes the growing set of heavy
+    # architecture/capability trust-boundary suites directly into the "regression"
+    # command's ignore list (in addition to, not instead of, the workflow-level
+    # PYTEST_ADDOPTS for the architecture suite specifically) — every excluded
+    # suite still runs, just outside the 60-second timed budget, either via its
+    # own dedicated CI step or a separate explicit verify_core stage.
     captured = {}
 
     def runner(command, **_):
@@ -222,7 +234,15 @@ def test_core_safety_workflow_never_hoists_env_above_step_level():
 
     run_gate("full", ROOT, runner=runner, tracked_files=[])
 
-    assert "--ignore=tests/test_architecture_analyzer_v1.py" not in captured["regression"]
+    for excluded in (
+        "--ignore=tests/test_architecture_analyzer_v1.py",
+        "--ignore=tests/test_architecture_capability_trust_anchor_v1.py",
+        "--ignore=tests/test_architecture_capability_control_plane_rotation_v1.py",
+        "--ignore=tests/test_capability_analyzer_v1.py",
+        "--ignore=tests/test_capability_exceptions_v1.py",
+        "--ignore=tests/test_capability_contracts_v1.py",
+    ):
+        assert excluded in captured["regression"]
 
 
 def test_verify_core_main_propagates_exit_code(monkeypatch):
