@@ -38,6 +38,22 @@ PROTECTED_TRANSITION_SUPPORT_SCOPES = (
 )
 
 
+def _git_path_identity(root: Path, commit: str, path: str) -> tuple[str, str, str] | None:
+    result = subprocess.run(
+        ["git", "ls-tree", commit, "--", path],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode or not result.stdout.strip():
+        return None
+    metadata, listed_path = result.stdout.splitlines()[0].split("\t", 1)
+    if listed_path != path:
+        return None
+    mode, object_type, object_id = metadata.split()
+    return (mode, object_type, object_id)
+
+
 def _protected_transition_valid(
     root: Path,
     protected_base: str,
@@ -126,18 +142,17 @@ def _protected_transition_valid(
             support_rows = transition.get("supportArtifacts")
             if not isinstance(support_rows, list):
                 return False
-            declared_support: dict[str, tuple[str | None, str]] = {}
+            support_row_keys = {
+                "path", "baseMode", "baseObjectType", "baseBlobSha",
+                "candidateMode", "candidateObjectType", "candidateBlobSha",
+            }
+            allowed_regular = {("100644", "blob"), ("100755", "blob")}
+            declared_support: dict[str, tuple[tuple[str, str, str] | None, tuple[str, str, str]]] = {}
             for support_row in support_rows:
-                if not isinstance(support_row, dict) or set(support_row) != {
-                    "path", "baseBlobSha", "candidateBlobSha",
-                }:
+                if not isinstance(support_row, dict) or set(support_row) != support_row_keys:
                     return False
                 support_path = support_row.get("path")
-                support_base_sha = support_row.get("baseBlobSha")
-                support_candidate_sha = support_row.get("candidateBlobSha")
-                if not isinstance(support_path, str) or not isinstance(support_candidate_sha, str):
-                    return False
-                if support_base_sha is not None and not isinstance(support_base_sha, str):
+                if not isinstance(support_path, str):
                     return False
                 if (
                     support_path in declared_support
@@ -145,26 +160,31 @@ def _protected_transition_valid(
                     or support_path in PROTECTED_ARCHITECTURE_ARTIFACTS
                 ):
                     return False
-                declared_support[support_path] = (support_base_sha, support_candidate_sha)
-            for support_path, (support_base_sha, support_candidate_sha) in declared_support.items():
-                if support_base_sha is None:
-                    base_check = subprocess.run(
-                        ["git", "cat-file", "-e", f"{protected_base}:{support_path}"],
-                        cwd=root,
-                        capture_output=True,
-                    )
-                    if base_check.returncode == 0:
-                        return False
+                base_triple_raw = (
+                    support_row.get("baseMode"), support_row.get("baseObjectType"), support_row.get("baseBlobSha"),
+                )
+                candidate_triple_raw = (
+                    support_row.get("candidateMode"),
+                    support_row.get("candidateObjectType"),
+                    support_row.get("candidateBlobSha"),
+                )
+                if all(item is None for item in base_triple_raw):
+                    declared_base: tuple[str, str, str] | None = None
+                elif all(isinstance(item, str) for item in base_triple_raw) and base_triple_raw[:2] in allowed_regular:
+                    declared_base = base_triple_raw
                 else:
-                    actual_base_sha = subprocess.check_output(
-                        ["git", "rev-parse", f"{protected_base}:{support_path}"], cwd=root, text=True,
-                    ).strip()
-                    if actual_base_sha != support_base_sha:
-                        return False
-                actual_candidate_sha = subprocess.check_output(
-                    ["git", "rev-parse", f"{candidate}:{support_path}"], cwd=root, text=True,
-                ).strip()
-                if actual_candidate_sha != support_candidate_sha:
+                    return False
+                if not all(isinstance(item, str) for item in candidate_triple_raw):
+                    return False
+                if candidate_triple_raw[:2] not in allowed_regular:
+                    return False
+                declared_support[support_path] = (declared_base, candidate_triple_raw)
+            for support_path, (declared_base, declared_candidate) in declared_support.items():
+                actual_base = _git_path_identity(root, protected_base, support_path)
+                if actual_base != declared_base:
+                    return False
+                actual_candidate = _git_path_identity(root, candidate, support_path)
+                if actual_candidate != declared_candidate:
                     return False
             support_paths = set(declared_support)
         diff = subprocess.run(

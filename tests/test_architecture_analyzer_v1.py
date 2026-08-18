@@ -598,7 +598,15 @@ def _commit_protected_transition(
         support_file = tmp_path / support_path
         support_file.parent.mkdir(parents=True, exist_ok=True)
         support_file.write_text(f"# support artifact {support_path}\n", encoding="utf-8")
-        support_rows.append({"path": support_path, "baseBlobSha": None, "candidateBlobSha": None})
+        support_rows.append({
+            "path": support_path,
+            "baseMode": None,
+            "baseObjectType": None,
+            "baseBlobSha": None,
+            "candidateMode": "100644",
+            "candidateObjectType": "blob",
+            "candidateBlobSha": None,
+        })
     if extra_undeclared_change:
         undeclared = tmp_path / "scripts/quality/undeclared_support.py"
         undeclared.write_text("# not declared as a support artifact\n", encoding="utf-8")
@@ -991,10 +999,22 @@ def test_v3_transition_rejects_protected_artifact_declared_as_support_artifact(
     tmp_path, protected_base = clean_protected_transition_repo
 
     def _smuggle(support_rows):
+        smuggled_path = "scripts/quality/ast_inventory.py"
+        smuggled_file = tmp_path / smuggled_path
+        smuggled_file.parent.mkdir(parents=True, exist_ok=True)
+        smuggled_file.write_text("# protected artifact smuggled as support\n", encoding="utf-8")
+        subprocess.run(["git", "add", smuggled_path], cwd=tmp_path, check=True)
+        candidate_sha = subprocess.check_output(
+            ["git", "hash-object", smuggled_path], cwd=tmp_path, text=True,
+        ).strip()
         support_rows.append({
-            "path": "scripts/quality/ast_inventory.py",
+            "path": smuggled_path,
+            "baseMode": None,
+            "baseObjectType": None,
             "baseBlobSha": None,
-            "candidateBlobSha": "0" * 40,
+            "candidateMode": "100644",
+            "candidateObjectType": "blob",
+            "candidateBlobSha": candidate_sha,
         })
 
     candidate = _commit_protected_transition(
@@ -1037,6 +1057,149 @@ def test_v3_transition_rejects_malformed_support_artifact_row(clean_protected_tr
         support_artifacts=["scripts/quality/verify_core.py"],
         support_artifact_mutation=_malform,
     )
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
+def _v3_repo_with_existing_support_file(tmp_path, *, support_path, support_mode):
+    """Fresh repo: a protected artifact plus a pre-existing support-path file at `support_mode`."""
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
+    analyzer.parent.mkdir(parents=True, exist_ok=True)
+    analyzer.write_text("# protected base\n", encoding="utf-8")
+    support_file = tmp_path / support_path
+    support_file.parent.mkdir(parents=True, exist_ok=True)
+    support_file.write_text("# pre-existing support file\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "update-index", "--chmod=+x" if support_mode == "100755" else "--chmod=-x", support_path],
+        cwd=tmp_path, check=True,
+    )
+    subprocess.run(["git", "commit", "-qm", "protected base"], cwd=tmp_path, check=True)
+    protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    return protected_base
+
+
+def _v3_commit_rotation_with_support_row(tmp_path, protected_base, support_path, support_row):
+    analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
+    analyzer.write_text("# rotated trust anchor\n", encoding="utf-8")
+    base_blob = subprocess.check_output(
+        ["git", "rev-parse", f"{protected_base}:scripts/quality/architecture_analyzer.py"], cwd=tmp_path, text=True,
+    ).strip()
+    candidate_blob = subprocess.check_output(
+        ["git", "hash-object", "scripts/quality/architecture_analyzer.py"], cwd=tmp_path, text=True,
+    ).strip()
+    transition = tmp_path / "config/architecture-protected-transition-v1.json"
+    transition.parent.mkdir(parents=True, exist_ok=True)
+    transition.write_text(json.dumps({
+        "schemaVersion": "3.0.0",
+        "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
+        "protectedBaseSha": protected_base,
+        "artifacts": [{
+            "path": "scripts/quality/architecture_analyzer.py",
+            "baseMode": "100644",
+            "baseObjectType": "blob",
+            "baseBlobSha": base_blob,
+            "candidateMode": "100644",
+            "candidateObjectType": "blob",
+            "candidateBlobSha": candidate_blob,
+        }],
+        "supportScope": "CAPABILITY_BOOTSTRAP_V1",
+        "supportArtifacts": [support_row],
+    }), encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "scripts/quality/architecture_analyzer.py", "config/architecture-protected-transition-v1.json"],
+        cwd=tmp_path, check=True,
+    )
+    subprocess.run(["git", "commit", "-qm", "rotate with support artifact"], cwd=tmp_path, check=True)
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+
+def test_v3_support_artifact_mode_only_change_with_stale_declared_identity_is_blocked(tmp_path):
+    support_path = "scripts/quality/verify_core.py"
+    protected_base = _v3_repo_with_existing_support_file(tmp_path, support_path=support_path, support_mode="100644")
+    blob = subprocess.check_output(
+        ["git", "rev-parse", f"{protected_base}:{support_path}"], cwd=tmp_path, text=True,
+    ).strip()
+    subprocess.run(["git", "update-index", "--chmod=+x", support_path], cwd=tmp_path, check=True)
+    # Declared identity still claims the OLD (100644) mode on both sides even though the
+    # real candidate file is now 100755 with the SAME blob — the bypass this fix closes.
+    stale_row = {
+        "path": support_path,
+        "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": blob,
+        "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": blob,
+    }
+    candidate = _v3_commit_rotation_with_support_row(tmp_path, protected_base, support_path, stale_row)
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
+def test_v3_support_artifact_mode_change_with_exact_declared_identity_is_accepted(tmp_path):
+    support_path = "scripts/quality/verify_core.py"
+    protected_base = _v3_repo_with_existing_support_file(tmp_path, support_path=support_path, support_mode="100644")
+    blob = subprocess.check_output(
+        ["git", "rev-parse", f"{protected_base}:{support_path}"], cwd=tmp_path, text=True,
+    ).strip()
+    subprocess.run(["git", "update-index", "--chmod=+x", support_path], cwd=tmp_path, check=True)
+    exact_row = {
+        "path": support_path,
+        "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": blob,
+        "candidateMode": "100755", "candidateObjectType": "blob", "candidateBlobSha": blob,
+    }
+    candidate = _v3_commit_rotation_with_support_row(tmp_path, protected_base, support_path, exact_row)
+
+    assert _protected_artifact_findings(tmp_path, protected_base, candidate) == []
+
+
+def test_v3_support_artifact_with_wrong_base_identity_for_existing_file_is_blocked(tmp_path):
+    support_path = "scripts/quality/verify_core.py"
+    protected_base = _v3_repo_with_existing_support_file(tmp_path, support_path=support_path, support_mode="100644")
+    (tmp_path / support_path).write_text("# modified support file\n", encoding="utf-8")
+    subprocess.run(["git", "add", support_path], cwd=tmp_path, check=True)
+    candidate_blob = subprocess.check_output(
+        ["git", "hash-object", support_path], cwd=tmp_path, text=True,
+    ).strip()
+    wrong_base_row = {
+        "path": support_path,
+        "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "0" * 40,
+        "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": candidate_blob,
+    }
+    candidate = _v3_commit_rotation_with_support_row(tmp_path, protected_base, support_path, wrong_base_row)
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
+@pytest.mark.parametrize("mode,object_type", [("120000", "blob"), ("160000", "commit")])
+def test_v3_support_artifact_non_regular_git_object_is_blocked(tmp_path, mode, object_type):
+    support_path = "scripts/quality/capability_bootstrap.py"
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
+    analyzer.parent.mkdir(parents=True, exist_ok=True)
+    analyzer.write_text("# protected base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "protected base"], cwd=tmp_path, check=True)
+    protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+    analyzer.write_text("# rotated trust anchor\n", encoding="utf-8")
+    if object_type == "commit":
+        object_id = protected_base
+    else:
+        object_id = subprocess.check_output(
+            ["git", "hash-object", "-w", "--stdin"], cwd=tmp_path, input="target\n", text=True,
+        ).strip()
+    subprocess.run(
+        ["git", "update-index", "--add", "--cacheinfo", f"{mode},{object_id},{support_path}"],
+        cwd=tmp_path, check=True,
+    )
+    non_regular_row = {
+        "path": support_path,
+        "baseMode": None, "baseObjectType": None, "baseBlobSha": None,
+        "candidateMode": mode, "candidateObjectType": object_type, "candidateBlobSha": object_id,
+    }
+    candidate = _v3_commit_rotation_with_support_row(tmp_path, protected_base, support_path, non_regular_row)
 
     findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
     assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
