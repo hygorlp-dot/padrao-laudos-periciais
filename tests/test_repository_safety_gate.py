@@ -159,6 +159,62 @@ def test_architecture_findings_are_enforced_by_protected_workflow():
     assert "sys.exit(1 if findings else 0)" in workflow
 
 
+def test_architecture_trust_boundary_suite_is_partitioned_from_timed_regression():
+    # scripts/quality/verify_core.py itself must stay untouched: it is also a
+    # capability-protected artifact, and this partition is deliberately kept
+    # workflow-owned (PYTEST_ADDOPTS) to avoid a second, unrelated trust-boundary
+    # rotation for a change that is really about CI orchestration only.
+    workflow = (ROOT / ".github/workflows/core-safety.yml").read_text(encoding="utf-8")
+    step_blocks = workflow.split("\n      - ")
+
+    architecture_blocks = [
+        block for block in step_blocks if "tests/test_architecture_analyzer_v1.py" in block
+        and "PYTEST_ADDOPTS" not in block
+    ]
+    assert len(architecture_blocks) == 1
+    architecture_step = architecture_blocks[0]
+    assert "run: python -m pytest -q tests/test_architecture_analyzer_v1.py" in architecture_step
+    assert "continue-on-error" not in architecture_step
+    assert "\n        if:" not in architecture_step
+
+    verify_core_blocks = [
+        block for block in step_blocks if "scripts.quality.verify_core --full" in block
+    ]
+    assert len(verify_core_blocks) == 1
+    verify_core_step = verify_core_blocks[0]
+    assert 'PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py"' in verify_core_step
+    assert "continue-on-error" not in verify_core_step
+    assert "\n        if:" not in verify_core_step
+
+
+def test_core_safety_workflow_never_hoists_env_above_step_level():
+    # PYTEST_ADDOPTS must stay step-scoped (8-space indent under the Verify
+    # frozen Core V1 step). A future job-level (4-space) or workflow-level
+    # (0-space) `env:` block would apply to every step in the job, including
+    # "Architecture trust-boundary suite" — and unlike --ignore, a filter such
+    # as -k/-m/--deselect silently zeroes out that step's explicit-path pytest
+    # invocation (0 collected, exit code 0) rather than erroring, so the
+    # per-step string checks above would not catch it. Guard the YAML
+    # structure directly instead of relying on step-block text alone.
+    workflow_lines = (ROOT / ".github/workflows/core-safety.yml").read_text(encoding="utf-8").splitlines()
+    non_step_env_lines = [line for line in workflow_lines if line in {"env:", "    env:"}]
+    assert non_step_env_lines == []
+    # The partition lives in the workflow's PYTEST_ADDOPTS, not in verify_core.py's
+    # own command list — scripts/quality/verify_core.py is capability-protected, so
+    # keeping it byte-identical to main avoids an unrelated capability rotation.
+    captured = {}
+
+    def runner(command, **_):
+        joined = " ".join(command)
+        if "coverage run" in joined:
+            captured["regression"] = command
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    run_gate("full", ROOT, runner=runner, tracked_files=[])
+
+    assert "--ignore=tests/test_architecture_analyzer_v1.py" not in captured["regression"]
+
+
 def test_verify_core_main_propagates_exit_code(monkeypatch):
     failed = GateResult("FAIL", 9, (), ({"invariant":"FAIL_CLOSED","boundary":"CORE","teste":"x","motivo":"y","severidade":"P0"},), 0.0)
     monkeypatch.setattr(verify_core, "run_gate", lambda *_args, **_kwargs: failed)

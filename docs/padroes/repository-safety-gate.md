@@ -15,6 +15,13 @@ O modo rápido valida registros, fixtures, property tests, infraestrutura,
 imports e privacidade. O modo completo acrescenta regressão integral, schemas,
 fixtures e E2Es positivo e negativo. Todo PR material exige o modo completo.
 
+Localmente, `verify_core --full` continua executando
+`tests/test_architecture_analyzer_v1.py` como sempre (o arquivo
+`scripts/quality/verify_core.py` não muda). Na CI, essa suíte roda como
+etapa própria antes de `verify_core --full`, fora do orçamento cronometrado
+de 60s — a exclusão é aplicada só ali, via `PYTEST_ADDOPTS` no workflow (ver
+seção CI abaixo), sem alterar o script.
+
 ## Fontes canônicas
 
 - Invariantes: `config/core-invariants.json`.
@@ -39,6 +46,25 @@ O workflow `.github/workflows/core-safety.yml` executa somente o gate first-part
 em pull requests e pushes para `main`. Não usa secrets, não faz deploy e não
 acessa referências privadas. A proteção de branch deve tornar `core-safety`
 obrigatório por configuração administrativa posterior.
+
+O job `core-safety` roda a suíte de arquitetura (`tests/test_architecture_analyzer_v1.py`)
+como etapa própria, antes de `verify_core --full`: qualquer falha ali também
+bloqueia o job, mas fora do orçamento cronometrado de 60s (essa suíte não
+mede cobertura de nenhum diretório rastreado por `--source` na etapa de
+regressão, então sua execução ali só custava tempo, sem benefício de
+cobertura). Falhas nessa etapa aparecem como falha de step do GitHub
+Actions, não como finding estruturado do `verify_core` — não têm
+`invariant`/`boundary`/`severidade` da mesma taxonomia.
+
+A etapa `Verify frozen Core V1` define `PYTEST_ADDOPTS: --ignore=tests/test_architecture_analyzer_v1.py`
+para excluir a suíte da regressão cronometrada — a exclusão vive só no
+workflow, não em `scripts/quality/verify_core.py`. Isso é deliberado:
+`verify_core.py` é também um artefato protegido pelo sistema de capability
+(`config/capability-protected-artifacts-v1.json`), separado do de
+arquitetura; alterá-lo exigiria uma rotação nesse outro sistema, sem
+mecanismo de escopo/support-artifact equivalente ao construído para
+arquitetura. Manter o script intacto evita essa segunda autorização para
+uma mudança que é puramente de orquestração de CI.
 
 ## Evolução
 
