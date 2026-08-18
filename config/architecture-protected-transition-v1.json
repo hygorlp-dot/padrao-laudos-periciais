@@ -1,7 +1,7 @@
 {
   "schemaVersion": "3.0.0",
   "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "a65689280ae35c553153dce6250dcd25cff0a7d3",
+  "protectedBaseSha": "680287dd200e4a3f1ac6a02aa2ba651fd003622f",
   "artifacts": [
     {
       "path": "config/capability-protected-artifacts-v1.json",
@@ -31,7 +31,7 @@
       "baseBlobSha": null,
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "c3979535f8fb552393ab8739bcecd9372cc32eb5"
+      "candidateBlobSha": "3f685cbe98cc063fa542fb260346af62f1191508"
     },
     {
       "path": "scripts/quality/capability_analyzer.py",
