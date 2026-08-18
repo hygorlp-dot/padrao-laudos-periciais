@@ -28,11 +28,49 @@ PROTECTED_ARCHITECTURE_ARTIFACTS = (
     "scripts/quality/repository_inventory.py",
 )
 PROTECTED_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
+REGULAR_FILE_MODE_TYPES = {("100644", "blob"), ("100755", "blob")}
 PROTECTED_TRANSITION_SUPPORT_PREFIXES = (
     "docs/arquitetura/",
     "docs/superpowers/plans/",
     "tests/test_architecture",
 )
+PROTECTED_TRANSITION_SUPPORT_SCOPES = {
+    "CAPABILITY_BOOTSTRAP_V1": {
+        "prefixes": (
+            "scripts/quality/capability_",
+            "tests/test_capability_",
+        ),
+        "paths": (
+            "config/capability-exceptions-v1.json",
+            "config/capability-protected-transition-v1.json",
+            "scripts/quality/verify_core.py",
+            "tests/test_repository_safety_gate.py",
+        ),
+    },
+}
+
+
+def _support_path_in_scope(scope: str, path: str) -> bool:
+    scope_rule = PROTECTED_TRANSITION_SUPPORT_SCOPES.get(scope)
+    if scope_rule is None:
+        return False
+    return path in scope_rule["paths"] or path.startswith(scope_rule["prefixes"])
+
+
+def _git_path_identity(root: Path, commit: str, path: str) -> tuple[str, str, str] | None:
+    result = subprocess.run(
+        ["git", "ls-tree", commit, "--", path],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode or not result.stdout.strip():
+        return None
+    metadata, listed_path = result.stdout.splitlines()[0].split("\t", 1)
+    if listed_path != path:
+        return None
+    mode, object_type, object_id = metadata.split()
+    return (mode, object_type, object_id)
 
 
 def _protected_transition_valid(
@@ -50,10 +88,15 @@ def _protected_transition_valid(
             text=True,
         )
         transition = json.loads(raw)
-        if set(transition) != {"schemaVersion", "transitionId", "protectedBaseSha", "artifacts"}:
-            return False
         schema_version = transition.get("schemaVersion")
-        if schema_version not in {"1.0.0", "2.0.0"}:
+        expected_keys = (
+            {"schemaVersion", "transitionId", "protectedBaseSha", "artifacts", "supportScope", "supportArtifacts"}
+            if schema_version == "3.0.0"
+            else {"schemaVersion", "transitionId", "protectedBaseSha", "artifacts"}
+        )
+        if set(transition) != expected_keys:
+            return False
+        if schema_version not in {"1.0.0", "2.0.0", "3.0.0"}:
             return False
         if transition.get("transitionId") != "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1":
             return False
@@ -67,9 +110,9 @@ def _protected_transition_valid(
             for path in changed_artifacts
         }
         if any(
-            (base_object is not None and base_object[:2] not in {("100644", "blob"), ("100755", "blob")})
+            (base_object is not None and base_object[:2] not in REGULAR_FILE_MODE_TYPES)
             or candidate_object is None
-            or candidate_object[:2] not in {("100644", "blob"), ("100755", "blob")}
+            or candidate_object[:2] not in REGULAR_FILE_MODE_TYPES
             for base_object, candidate_object in expected.values()
         ):
             return False
@@ -111,6 +154,59 @@ def _protected_transition_valid(
         )
         if declared != exact_expected:
             return False
+        support_paths: set[str] = set()
+        if schema_version == "3.0.0":
+            support_scope = transition.get("supportScope")
+            if support_scope not in PROTECTED_TRANSITION_SUPPORT_SCOPES:
+                return False
+            support_rows = transition.get("supportArtifacts")
+            if not isinstance(support_rows, list):
+                return False
+            support_row_keys = {
+                "path", "baseMode", "baseObjectType", "baseBlobSha",
+                "candidateMode", "candidateObjectType", "candidateBlobSha",
+            }
+            declared_support: dict[str, tuple[tuple[str, str, str] | None, tuple[str, str, str]]] = {}
+            for support_row in support_rows:
+                if not isinstance(support_row, dict) or set(support_row) != support_row_keys:
+                    return False
+                support_path = support_row.get("path")
+                if not isinstance(support_path, str):
+                    return False
+                if (
+                    support_path in declared_support
+                    or support_path in expected
+                    or support_path in PROTECTED_ARCHITECTURE_ARTIFACTS
+                    or not _support_path_in_scope(support_scope, support_path)
+                ):
+                    return False
+                base_triple_raw = (
+                    support_row.get("baseMode"), support_row.get("baseObjectType"), support_row.get("baseBlobSha"),
+                )
+                candidate_triple_raw = (
+                    support_row.get("candidateMode"),
+                    support_row.get("candidateObjectType"),
+                    support_row.get("candidateBlobSha"),
+                )
+                if all(item is None for item in base_triple_raw):
+                    declared_base: tuple[str, str, str] | None = None
+                elif all(isinstance(item, str) for item in base_triple_raw) and base_triple_raw[:2] in REGULAR_FILE_MODE_TYPES:
+                    declared_base = base_triple_raw
+                else:
+                    return False
+                if not all(isinstance(item, str) for item in candidate_triple_raw):
+                    return False
+                if candidate_triple_raw[:2] not in REGULAR_FILE_MODE_TYPES:
+                    return False
+                declared_support[support_path] = (declared_base, candidate_triple_raw)
+            for support_path, (declared_base, declared_candidate) in declared_support.items():
+                actual_base = _git_path_identity(root, protected_base, support_path)
+                if actual_base != declared_base:
+                    return False
+                actual_candidate = _git_path_identity(root, candidate, support_path)
+                if actual_candidate != declared_candidate:
+                    return False
+            support_paths = set(declared_support)
         diff = subprocess.run(
             ["git", "diff", "--name-only", "-z", protected_base, candidate],
             cwd=root,
@@ -118,7 +214,7 @@ def _protected_transition_valid(
             check=True,
         ).stdout
         changed_paths = {item.decode("utf-8") for item in diff.split(b"\0") if item}
-        allowed_exact = set(changed_artifacts) | {PROTECTED_TRANSITION_PATH}
+        allowed_exact = set(changed_artifacts) | {PROTECTED_TRANSITION_PATH} | support_paths
         return all(
             path in allowed_exact or path.startswith(PROTECTED_TRANSITION_SUPPORT_PREFIXES)
             for path in changed_paths
