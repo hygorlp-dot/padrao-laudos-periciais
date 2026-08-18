@@ -28,6 +28,7 @@ PROTECTED_ARCHITECTURE_ARTIFACTS = (
     "scripts/quality/repository_inventory.py",
 )
 PROTECTED_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
+REGULAR_FILE_MODE_TYPES = {("100644", "blob"), ("100755", "blob")}
 PROTECTED_TRANSITION_SUPPORT_PREFIXES = (
     "docs/arquitetura/",
     "docs/superpowers/plans/",
@@ -109,9 +110,9 @@ def _protected_transition_valid(
             for path in changed_artifacts
         }
         if any(
-            (base_object is not None and base_object[:2] not in {("100644", "blob"), ("100755", "blob")})
+            (base_object is not None and base_object[:2] not in REGULAR_FILE_MODE_TYPES)
             or candidate_object is None
-            or candidate_object[:2] not in {("100644", "blob"), ("100755", "blob")}
+            or candidate_object[:2] not in REGULAR_FILE_MODE_TYPES
             for base_object, candidate_object in expected.values()
         ):
             return False
@@ -165,7 +166,6 @@ def _protected_transition_valid(
                 "path", "baseMode", "baseObjectType", "baseBlobSha",
                 "candidateMode", "candidateObjectType", "candidateBlobSha",
             }
-            allowed_regular = {("100644", "blob"), ("100755", "blob")}
             declared_support: dict[str, tuple[tuple[str, str, str] | None, tuple[str, str, str]]] = {}
             for support_row in support_rows:
                 if not isinstance(support_row, dict) or set(support_row) != support_row_keys:
@@ -190,13 +190,13 @@ def _protected_transition_valid(
                 )
                 if all(item is None for item in base_triple_raw):
                     declared_base: tuple[str, str, str] | None = None
-                elif all(isinstance(item, str) for item in base_triple_raw) and base_triple_raw[:2] in allowed_regular:
+                elif all(isinstance(item, str) for item in base_triple_raw) and base_triple_raw[:2] in REGULAR_FILE_MODE_TYPES:
                     declared_base = base_triple_raw
                 else:
                     return False
                 if not all(isinstance(item, str) for item in candidate_triple_raw):
                     return False
-                if candidate_triple_raw[:2] not in allowed_regular:
+                if candidate_triple_raw[:2] not in REGULAR_FILE_MODE_TYPES:
                     return False
                 declared_support[support_path] = (declared_base, candidate_triple_raw)
             for support_path, (declared_base, declared_candidate) in declared_support.items():
