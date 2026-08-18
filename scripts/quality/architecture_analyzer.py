@@ -33,6 +33,9 @@ PROTECTED_TRANSITION_SUPPORT_PREFIXES = (
     "docs/superpowers/plans/",
     "tests/test_architecture",
 )
+PROTECTED_TRANSITION_SUPPORT_SCOPES = (
+    "CAPABILITY_BOOTSTRAP_V1",
+)
 
 
 def _protected_transition_valid(
@@ -50,10 +53,15 @@ def _protected_transition_valid(
             text=True,
         )
         transition = json.loads(raw)
-        if set(transition) != {"schemaVersion", "transitionId", "protectedBaseSha", "artifacts"}:
-            return False
         schema_version = transition.get("schemaVersion")
-        if schema_version not in {"1.0.0", "2.0.0"}:
+        expected_keys = (
+            {"schemaVersion", "transitionId", "protectedBaseSha", "artifacts", "supportScope", "supportArtifacts"}
+            if schema_version == "3.0.0"
+            else {"schemaVersion", "transitionId", "protectedBaseSha", "artifacts"}
+        )
+        if set(transition) != expected_keys:
+            return False
+        if schema_version not in {"1.0.0", "2.0.0", "3.0.0"}:
             return False
         if transition.get("transitionId") != "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1":
             return False
@@ -111,6 +119,54 @@ def _protected_transition_valid(
         )
         if declared != exact_expected:
             return False
+        support_paths: set[str] = set()
+        if schema_version == "3.0.0":
+            if transition.get("supportScope") not in PROTECTED_TRANSITION_SUPPORT_SCOPES:
+                return False
+            support_rows = transition.get("supportArtifacts")
+            if not isinstance(support_rows, list):
+                return False
+            declared_support: dict[str, tuple[str | None, str]] = {}
+            for support_row in support_rows:
+                if not isinstance(support_row, dict) or set(support_row) != {
+                    "path", "baseBlobSha", "candidateBlobSha",
+                }:
+                    return False
+                support_path = support_row.get("path")
+                support_base_sha = support_row.get("baseBlobSha")
+                support_candidate_sha = support_row.get("candidateBlobSha")
+                if not isinstance(support_path, str) or not isinstance(support_candidate_sha, str):
+                    return False
+                if support_base_sha is not None and not isinstance(support_base_sha, str):
+                    return False
+                if (
+                    support_path in declared_support
+                    or support_path in expected
+                    or support_path in PROTECTED_ARCHITECTURE_ARTIFACTS
+                ):
+                    return False
+                declared_support[support_path] = (support_base_sha, support_candidate_sha)
+            for support_path, (support_base_sha, support_candidate_sha) in declared_support.items():
+                if support_base_sha is None:
+                    base_check = subprocess.run(
+                        ["git", "cat-file", "-e", f"{protected_base}:{support_path}"],
+                        cwd=root,
+                        capture_output=True,
+                    )
+                    if base_check.returncode == 0:
+                        return False
+                else:
+                    actual_base_sha = subprocess.check_output(
+                        ["git", "rev-parse", f"{protected_base}:{support_path}"], cwd=root, text=True,
+                    ).strip()
+                    if actual_base_sha != support_base_sha:
+                        return False
+                actual_candidate_sha = subprocess.check_output(
+                    ["git", "rev-parse", f"{candidate}:{support_path}"], cwd=root, text=True,
+                ).strip()
+                if actual_candidate_sha != support_candidate_sha:
+                    return False
+            support_paths = set(declared_support)
         diff = subprocess.run(
             ["git", "diff", "--name-only", "-z", protected_base, candidate],
             cwd=root,
@@ -118,7 +174,7 @@ def _protected_transition_valid(
             check=True,
         ).stdout
         changed_paths = {item.decode("utf-8") for item in diff.split(b"\0") if item}
-        allowed_exact = set(changed_artifacts) | {PROTECTED_TRANSITION_PATH}
+        allowed_exact = set(changed_artifacts) | {PROTECTED_TRANSITION_PATH} | support_paths
         return all(
             path in allowed_exact or path.startswith(PROTECTED_TRANSITION_SUPPORT_PREFIXES)
             for path in changed_paths

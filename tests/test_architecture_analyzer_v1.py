@@ -547,6 +547,8 @@ def test_protected_enforcement_artifacts_cannot_be_removed_or_changed(
 def _commit_protected_transition(
     tmp_path, protected_base, *, schema_version="1.0.0", row_mutation=None, transition_mutation=None,
     mixed_production_change=False, delete_artifact=False, create_artifact=False,
+    support_scope=None, support_artifacts=None, support_artifact_mutation=None,
+    extra_undeclared_change=False,
 ):
     analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
     analyzer.parent.mkdir(parents=True, exist_ok=True)
@@ -579,7 +581,7 @@ def _commit_protected_transition(
         "baseBlobSha": base_blob,
         "candidateBlobSha": candidate_blob,
     }
-    if schema_version == "2.0.0":
+    if schema_version in {"2.0.0", "3.0.0"}:
         row = {
             "path": artifact_path,
             "baseMode": None if create_artifact else "100644",
@@ -591,15 +593,36 @@ def _commit_protected_transition(
         }
     if row_mutation:
         row_mutation(row)
+    support_rows = []
+    for support_path in support_artifacts or []:
+        support_file = tmp_path / support_path
+        support_file.parent.mkdir(parents=True, exist_ok=True)
+        support_file.write_text(f"# support artifact {support_path}\n", encoding="utf-8")
+        support_rows.append({"path": support_path, "baseBlobSha": None, "candidateBlobSha": None})
+    if extra_undeclared_change:
+        undeclared = tmp_path / "scripts/quality/undeclared_support.py"
+        undeclared.write_text("# not declared as a support artifact\n", encoding="utf-8")
     transition_payload = {
         "schemaVersion": schema_version,
         "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
         "protectedBaseSha": protected_base,
         "artifacts": [row],
     }
+    if schema_version == "3.0.0":
+        transition_payload["supportScope"] = support_scope or "CAPABILITY_BOOTSTRAP_V1"
+        transition_payload["supportArtifacts"] = support_rows
+    if support_artifact_mutation:
+        support_artifact_mutation(transition_payload["supportArtifacts"])
     if transition_mutation:
         transition_mutation(transition_payload)
     transition.write_text(json.dumps(transition_payload), encoding="utf-8")
+    for support_row in support_rows:
+        if support_row["candidateBlobSha"] is None:
+            support_row["candidateBlobSha"] = subprocess.check_output(
+                ["git", "hash-object", support_row["path"]], cwd=tmp_path, text=True,
+            ).strip()
+    if support_rows:
+        transition.write_text(json.dumps(transition_payload), encoding="utf-8")
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-qm", "rotate protected anchor"], cwd=tmp_path, check=True)
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
@@ -824,7 +847,7 @@ def test_v1_transition_cannot_authorize_undeclared_mode_change(clean_protected_t
 
 
 @pytest.mark.parametrize("schema_version,row_mutation", [
-    ("3.0.0", None),
+    ("4.0.0", None),
     ("1.0.0", lambda row: row.update(baseMode="100644")),
     ("2.0.0", lambda row: row.pop("candidateMode")),
     ("2.0.0", lambda row: row.update(candidateMode="100755")),
@@ -867,6 +890,153 @@ def test_transition_cannot_mix_protected_rotation_with_production_change(clean_p
     tmp_path, protected_base = clean_protected_transition_repo
 
     candidate = _commit_protected_transition(tmp_path, protected_base, mixed_production_change=True)
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
+def test_v3_transition_accepts_exact_declared_support_artifacts(clean_protected_transition_repo):
+    tmp_path, protected_base = clean_protected_transition_repo
+
+    candidate = _commit_protected_transition(
+        tmp_path,
+        protected_base,
+        schema_version="3.0.0",
+        support_artifacts=["scripts/quality/verify_core.py", "tests/test_repository_safety_gate.py"],
+    )
+
+    assert _protected_artifact_findings(tmp_path, protected_base, candidate) == []
+
+
+def test_v3_transition_rejects_undeclared_file_even_with_valid_support_artifacts(
+    clean_protected_transition_repo,
+):
+    tmp_path, protected_base = clean_protected_transition_repo
+
+    candidate = _commit_protected_transition(
+        tmp_path,
+        protected_base,
+        schema_version="3.0.0",
+        support_artifacts=["scripts/quality/verify_core.py"],
+        extra_undeclared_change=True,
+    )
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
+def test_v3_transition_rejects_support_artifact_with_wrong_candidate_hash(
+    clean_protected_transition_repo,
+):
+    tmp_path, protected_base = clean_protected_transition_repo
+
+    def _tamper(support_rows):
+        support_rows[0]["candidateBlobSha"] = "0" * 40
+
+    candidate = _commit_protected_transition(
+        tmp_path,
+        protected_base,
+        schema_version="3.0.0",
+        support_artifacts=["scripts/quality/verify_core.py"],
+        support_artifact_mutation=_tamper,
+    )
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
+def test_v3_transition_rejects_support_artifact_with_wrong_declared_base_hash(
+    clean_protected_transition_repo,
+):
+    tmp_path, protected_base = clean_protected_transition_repo
+
+    def _tamper(support_rows):
+        # scripts/quality/verify_core.py does not exist at protected_base; falsely
+        # declaring a base hash for it must still fail closed.
+        support_rows[0]["baseBlobSha"] = "0" * 40
+
+    candidate = _commit_protected_transition(
+        tmp_path,
+        protected_base,
+        schema_version="3.0.0",
+        support_artifacts=["scripts/quality/verify_core.py"],
+        support_artifact_mutation=_tamper,
+    )
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
+def test_v3_transition_rejects_duplicate_support_artifact_path(clean_protected_transition_repo):
+    tmp_path, protected_base = clean_protected_transition_repo
+
+    def _duplicate(support_rows):
+        support_rows.append(dict(support_rows[0]))
+
+    candidate = _commit_protected_transition(
+        tmp_path,
+        protected_base,
+        schema_version="3.0.0",
+        support_artifacts=["scripts/quality/verify_core.py"],
+        support_artifact_mutation=_duplicate,
+    )
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
+def test_v3_transition_rejects_protected_artifact_declared_as_support_artifact(
+    clean_protected_transition_repo,
+):
+    tmp_path, protected_base = clean_protected_transition_repo
+
+    def _smuggle(support_rows):
+        support_rows.append({
+            "path": "scripts/quality/ast_inventory.py",
+            "baseBlobSha": None,
+            "candidateBlobSha": "0" * 40,
+        })
+
+    candidate = _commit_protected_transition(
+        tmp_path,
+        protected_base,
+        schema_version="3.0.0",
+        support_artifacts=["scripts/quality/verify_core.py"],
+        support_artifact_mutation=_smuggle,
+    )
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
+def test_v3_transition_rejects_unrecognized_support_scope(clean_protected_transition_repo):
+    tmp_path, protected_base = clean_protected_transition_repo
+
+    candidate = _commit_protected_transition(
+        tmp_path,
+        protected_base,
+        schema_version="3.0.0",
+        support_scope="UNREGISTERED_SCOPE",
+        support_artifacts=["scripts/quality/verify_core.py"],
+    )
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
+def test_v3_transition_rejects_malformed_support_artifact_row(clean_protected_transition_repo):
+    tmp_path, protected_base = clean_protected_transition_repo
+
+    def _malform(support_rows):
+        support_rows[0].pop("baseBlobSha")
+
+    candidate = _commit_protected_transition(
+        tmp_path,
+        protected_base,
+        schema_version="3.0.0",
+        support_artifacts=["scripts/quality/verify_core.py"],
+        support_artifact_mutation=_malform,
+    )
 
     findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
     assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
