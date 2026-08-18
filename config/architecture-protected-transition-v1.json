@@ -1,16 +1,109 @@
 {
-  "schemaVersion": "2.0.0",
+  "schemaVersion": "3.0.0",
   "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "bac4b5e1350ed4c9adeb3abf65839a9a67af477a",
+  "protectedBaseSha": "a65689280ae35c553153dce6250dcd25cff0a7d3",
   "artifacts": [
     {
-      "path": "scripts/quality/architecture_analyzer.py",
+      "path": "config/capability-protected-artifacts-v1.json",
       "baseMode": "100644",
       "baseObjectType": "blob",
-      "baseBlobSha": "d60659e5bd0e2a3604e4122b81d9b18e692f2d8f",
+      "baseBlobSha": "32d2e3c3835a31683ffed27b7a266e1faddd7510",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "996aa949c8064cf1470f5f8ced28eb1b8a1bfcb5"
+      "candidateBlobSha": "cc2d3223287808f60ef3c0d0f29665ecb41cc243"
+    }
+  ],
+  "supportScope": "CAPABILITY_BOOTSTRAP_V1",
+  "supportArtifacts": [
+    {
+      "path": "config/capability-exceptions-v1.json",
+      "baseMode": null,
+      "baseObjectType": null,
+      "baseBlobSha": null,
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "36a3ad9eebd44e5687e686ab1c59dd3154f289e0"
+    },
+    {
+      "path": "config/capability-protected-transition-v1.json",
+      "baseMode": null,
+      "baseObjectType": null,
+      "baseBlobSha": null,
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "0a0915e6067b696b251570d5eef9a59e462b0fb6"
+    },
+    {
+      "path": "scripts/quality/capability_analyzer.py",
+      "baseMode": null,
+      "baseObjectType": null,
+      "baseBlobSha": null,
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "ba64b45c6e5bdb80b8082c1d8017940403c572c5"
+    },
+    {
+      "path": "scripts/quality/capability_bootstrap.py",
+      "baseMode": null,
+      "baseObjectType": null,
+      "baseBlobSha": null,
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "bb62702efa2bdbe1936a3a11f4038004f9d555c2"
+    },
+    {
+      "path": "scripts/quality/capability_gate_adapter.py",
+      "baseMode": null,
+      "baseObjectType": null,
+      "baseBlobSha": null,
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "d0c91fae0be77aad738f182412ac0dfa382ff37f"
+    },
+    {
+      "path": "scripts/quality/verify_core.py",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "3791f733792d9a3f1a8cb5f0108881c176b30600",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "0de23f1301c23d5c1df2646f9d08009481136e9b"
+    },
+    {
+      "path": "tests/test_capability_analyzer_v1.py",
+      "baseMode": null,
+      "baseObjectType": null,
+      "baseBlobSha": null,
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "e3c035ba1aca2671ade0c7145ec302660de5c6a7"
+    },
+    {
+      "path": "tests/test_capability_contracts_v1.py",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "f5b15af2f16ccea9dc6e5b03d401d222bfdaf897",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "74741fb7b3cc6633fc3a378d0bbcb63710d7fe22"
+    },
+    {
+      "path": "tests/test_capability_exceptions_v1.py",
+      "baseMode": null,
+      "baseObjectType": null,
+      "baseBlobSha": null,
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "c65c90f4903459a769aa32eb2ee2412372eb9f23"
+    },
+    {
+      "path": "tests/test_repository_safety_gate.py",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "9cdc26c1f625e3287c76ce7819662dd5e7f2c2d9",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "7b83a3c86f2ff5c06e00f6c427ad7eb2bfb48834"
     }
   ]
 }
