@@ -659,6 +659,33 @@ def clean_protected_transition_repo(reusable_protected_transition_repo):
     return root, protected_base
 
 
+@pytest.fixture(scope="module")
+def reusable_v3_support_mode_repo(tmp_path_factory):
+    """Shared base: a protected artifact plus a pre-existing 100644 support-path file."""
+    root = tmp_path_factory.mktemp("v3-support-mode-repo")
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+    analyzer = root / "scripts/quality/architecture_analyzer.py"
+    analyzer.parent.mkdir(parents=True)
+    analyzer.write_text("# protected base\n", encoding="utf-8")
+    support_file = root / "scripts/quality/verify_core.py"
+    support_file.write_text("# pre-existing support file\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(["git", "update-index", "--chmod=-x", "scripts/quality/verify_core.py"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "protected base"], cwd=root, check=True)
+    protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    _record_shared_git_repo(root)
+    return root, protected_base
+
+
+@pytest.fixture
+def clean_v3_support_mode_repo(reusable_v3_support_mode_repo):
+    root, protected_base = reusable_v3_support_mode_repo
+    _reset_shared_git_repo(root, protected_base)
+    return root, protected_base
+
+
 def test_shared_git_repo_reset_removes_cross_test_state(reusable_protected_transition_repo):
     root, protected_base = reusable_protected_transition_repo
     expected_head = subprocess.check_output(["git", "symbolic-ref", "HEAD"], cwd=root, text=True).strip()
@@ -1065,25 +1092,6 @@ def test_v3_transition_rejects_malformed_support_artifact_row(clean_protected_tr
     assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
 
 
-def _v3_repo_with_existing_support_file(tmp_path, *, support_path, support_mode):
-    """Fresh repo: a protected artifact plus a pre-existing support-path file at `support_mode`."""
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
-    analyzer.parent.mkdir(parents=True, exist_ok=True)
-    analyzer.write_text("# protected base\n", encoding="utf-8")
-    support_file = tmp_path / support_path
-    support_file.parent.mkdir(parents=True, exist_ok=True)
-    support_file.write_text("# pre-existing support file\n", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
-    subprocess.run(
-        ["git", "update-index", "--chmod=+x" if support_mode == "100755" else "--chmod=-x", support_path],
-        cwd=tmp_path, check=True,
-    )
-    subprocess.run(["git", "commit", "-qm", "protected base"], cwd=tmp_path, check=True)
-    protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
-    return protected_base
-
-
 def _v3_commit_rotation_with_support_row(tmp_path, protected_base, support_path, support_row):
     analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
     analyzer.write_text("# rotated trust anchor\n", encoding="utf-8")
@@ -1119,9 +1127,11 @@ def _v3_commit_rotation_with_support_row(tmp_path, protected_base, support_path,
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
 
 
-def test_v3_support_artifact_mode_only_change_with_stale_declared_identity_is_blocked(tmp_path):
+def test_v3_support_artifact_mode_only_change_with_stale_declared_identity_is_blocked(
+    clean_v3_support_mode_repo,
+):
+    tmp_path, protected_base = clean_v3_support_mode_repo
     support_path = "scripts/quality/verify_core.py"
-    protected_base = _v3_repo_with_existing_support_file(tmp_path, support_path=support_path, support_mode="100644")
     blob = subprocess.check_output(
         ["git", "rev-parse", f"{protected_base}:{support_path}"], cwd=tmp_path, text=True,
     ).strip()
@@ -1139,9 +1149,11 @@ def test_v3_support_artifact_mode_only_change_with_stale_declared_identity_is_bl
     assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
 
 
-def test_v3_support_artifact_mode_change_with_exact_declared_identity_is_accepted(tmp_path):
+def test_v3_support_artifact_mode_change_with_exact_declared_identity_is_accepted(
+    clean_v3_support_mode_repo,
+):
+    tmp_path, protected_base = clean_v3_support_mode_repo
     support_path = "scripts/quality/verify_core.py"
-    protected_base = _v3_repo_with_existing_support_file(tmp_path, support_path=support_path, support_mode="100644")
     blob = subprocess.check_output(
         ["git", "rev-parse", f"{protected_base}:{support_path}"], cwd=tmp_path, text=True,
     ).strip()
@@ -1156,9 +1168,11 @@ def test_v3_support_artifact_mode_change_with_exact_declared_identity_is_accepte
     assert _protected_artifact_findings(tmp_path, protected_base, candidate) == []
 
 
-def test_v3_support_artifact_with_wrong_base_identity_for_existing_file_is_blocked(tmp_path):
+def test_v3_support_artifact_with_wrong_base_identity_for_existing_file_is_blocked(
+    clean_v3_support_mode_repo,
+):
+    tmp_path, protected_base = clean_v3_support_mode_repo
     support_path = "scripts/quality/verify_core.py"
-    protected_base = _v3_repo_with_existing_support_file(tmp_path, support_path=support_path, support_mode="100644")
     (tmp_path / support_path).write_text("# modified support file\n", encoding="utf-8")
     subprocess.run(["git", "add", support_path], cwd=tmp_path, check=True)
     candidate_blob = subprocess.check_output(
@@ -1214,16 +1228,12 @@ def test_v3_transition_accepts_capability_bootstrap_scope_support_artifacts(
 
 
 @pytest.mark.parametrize("mode,object_type", [("120000", "blob"), ("160000", "commit")])
-def test_v3_support_artifact_non_regular_git_object_is_blocked(tmp_path, mode, object_type):
+def test_v3_support_artifact_non_regular_git_object_is_blocked(
+    clean_protected_transition_repo, mode, object_type,
+):
+    tmp_path, protected_base = clean_protected_transition_repo
     support_path = "scripts/quality/capability_bootstrap.py"
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
-    analyzer.parent.mkdir(parents=True, exist_ok=True)
-    analyzer.write_text("# protected base\n", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-qm", "protected base"], cwd=tmp_path, check=True)
-    protected_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
-
     analyzer.write_text("# rotated trust anchor\n", encoding="utf-8")
     if object_type == "commit":
         object_id = protected_base
