@@ -33,9 +33,27 @@ PROTECTED_TRANSITION_SUPPORT_PREFIXES = (
     "docs/superpowers/plans/",
     "tests/test_architecture",
 )
-PROTECTED_TRANSITION_SUPPORT_SCOPES = (
-    "CAPABILITY_BOOTSTRAP_V1",
-)
+PROTECTED_TRANSITION_SUPPORT_SCOPES = {
+    "CAPABILITY_BOOTSTRAP_V1": {
+        "prefixes": (
+            "scripts/quality/capability_",
+            "tests/test_capability_",
+        ),
+        "paths": (
+            "config/capability-exceptions-v1.json",
+            "config/capability-protected-transition-v1.json",
+            "scripts/quality/verify_core.py",
+            "tests/test_repository_safety_gate.py",
+        ),
+    },
+}
+
+
+def _support_path_in_scope(scope: str, path: str) -> bool:
+    scope_rule = PROTECTED_TRANSITION_SUPPORT_SCOPES.get(scope)
+    if scope_rule is None:
+        return False
+    return path in scope_rule["paths"] or path.startswith(scope_rule["prefixes"])
 
 
 def _git_path_identity(root: Path, commit: str, path: str) -> tuple[str, str, str] | None:
@@ -137,7 +155,8 @@ def _protected_transition_valid(
             return False
         support_paths: set[str] = set()
         if schema_version == "3.0.0":
-            if transition.get("supportScope") not in PROTECTED_TRANSITION_SUPPORT_SCOPES:
+            support_scope = transition.get("supportScope")
+            if support_scope not in PROTECTED_TRANSITION_SUPPORT_SCOPES:
                 return False
             support_rows = transition.get("supportArtifacts")
             if not isinstance(support_rows, list):
@@ -158,6 +177,7 @@ def _protected_transition_valid(
                     support_path in declared_support
                     or support_path in expected
                     or support_path in PROTECTED_ARCHITECTURE_ARTIFACTS
+                    or not _support_path_in_scope(support_scope, support_path)
                 ):
                     return False
                 base_triple_raw = (

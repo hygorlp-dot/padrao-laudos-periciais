@@ -1172,6 +1172,44 @@ def test_v3_support_artifact_with_wrong_base_identity_for_existing_file_is_block
     assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
 
 
+@pytest.mark.parametrize("out_of_scope_path", [
+    "scripts/motor_vicios/motor.py",
+    "scripts/quality/unrelated.py",
+    "tests/test_unrelated.py",
+])
+def test_v3_transition_rejects_out_of_scope_support_artifact_even_with_exact_identity(
+    clean_protected_transition_repo, out_of_scope_path,
+):
+    tmp_path, protected_base = clean_protected_transition_repo
+
+    candidate = _commit_protected_transition(
+        tmp_path, protected_base, schema_version="3.0.0", support_artifacts=[out_of_scope_path],
+    )
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
+@pytest.mark.parametrize("in_scope_path", [
+    "scripts/quality/capability_example.py",
+    "tests/test_capability_example.py",
+    "scripts/quality/verify_core.py",
+    "tests/test_repository_safety_gate.py",
+    "config/capability-exceptions-v1.json",
+    "config/capability-protected-transition-v1.json",
+])
+def test_v3_transition_accepts_capability_bootstrap_scope_support_artifacts(
+    clean_protected_transition_repo, in_scope_path,
+):
+    tmp_path, protected_base = clean_protected_transition_repo
+
+    candidate = _commit_protected_transition(
+        tmp_path, protected_base, schema_version="3.0.0", support_artifacts=[in_scope_path],
+    )
+
+    assert _protected_artifact_findings(tmp_path, protected_base, candidate) == []
+
+
 @pytest.mark.parametrize("mode,object_type", [("120000", "blob"), ("160000", "commit")])
 def test_v3_support_artifact_non_regular_git_object_is_blocked(tmp_path, mode, object_type):
     support_path = "scripts/quality/capability_bootstrap.py"
