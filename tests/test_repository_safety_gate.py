@@ -159,6 +159,23 @@ def test_architecture_findings_are_enforced_by_protected_workflow():
     assert "sys.exit(1 if findings else 0)" in workflow
 
 
+def test_architecture_trust_boundary_suite_is_partitioned_from_timed_regression():
+    captured = {}
+
+    def runner(command, **_):
+        joined = " ".join(command)
+        if "coverage run" in joined:
+            captured["regression"] = command
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    run_gate("full", ROOT, runner=runner, tracked_files=[])
+
+    assert "--ignore=tests/test_architecture_analyzer_v1.py" in captured["regression"]
+
+    workflow = (ROOT / ".github/workflows/core-safety.yml").read_text(encoding="utf-8")
+    assert "pytest -q tests/test_architecture_analyzer_v1.py" in workflow
+
+
 def test_verify_core_main_propagates_exit_code(monkeypatch):
     failed = GateResult("FAIL", 9, (), ({"invariant":"FAIL_CLOSED","boundary":"CORE","teste":"x","motivo":"y","severidade":"P0"},), 0.0)
     monkeypatch.setattr(verify_core, "run_gate", lambda *_args, **_kwargs: failed)
