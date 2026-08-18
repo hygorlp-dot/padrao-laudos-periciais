@@ -187,7 +187,18 @@ def test_architecture_trust_boundary_suite_is_partitioned_from_timed_regression(
     assert "\n        if:" not in verify_core_step
 
 
-def test_verify_core_own_regression_command_does_not_hardcode_architecture_ignore():
+def test_core_safety_workflow_never_hoists_env_above_step_level():
+    # PYTEST_ADDOPTS must stay step-scoped (8-space indent under the Verify
+    # frozen Core V1 step). A future job-level (4-space) or workflow-level
+    # (0-space) `env:` block would apply to every step in the job, including
+    # "Architecture trust-boundary suite" — and unlike --ignore, a filter such
+    # as -k/-m/--deselect silently zeroes out that step's explicit-path pytest
+    # invocation (0 collected, exit code 0) rather than erroring, so the
+    # per-step string checks above would not catch it. Guard the YAML
+    # structure directly instead of relying on step-block text alone.
+    workflow_lines = (ROOT / ".github/workflows/core-safety.yml").read_text(encoding="utf-8").splitlines()
+    non_step_env_lines = [line for line in workflow_lines if line in {"env:", "    env:"}]
+    assert non_step_env_lines == []
     # The partition lives in the workflow's PYTEST_ADDOPTS, not in verify_core.py's
     # own command list — scripts/quality/verify_core.py is capability-protected, so
     # keeping it byte-identical to main avoids an unrelated capability rotation.
