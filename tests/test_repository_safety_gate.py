@@ -173,7 +173,15 @@ def test_architecture_trust_boundary_suite_is_partitioned_from_timed_regression(
     assert "--ignore=tests/test_architecture_analyzer_v1.py" in captured["regression"]
 
     workflow = (ROOT / ".github/workflows/core-safety.yml").read_text(encoding="utf-8")
-    assert "pytest -q tests/test_architecture_analyzer_v1.py" in workflow
+    step_blocks = workflow.split("\n      - ")
+    architecture_blocks = [
+        block for block in step_blocks if "tests/test_architecture_analyzer_v1.py" in block
+    ]
+    assert len(architecture_blocks) == 1
+    block = architecture_blocks[0]
+    assert "run: python -m pytest -q tests/test_architecture_analyzer_v1.py" in block
+    assert "continue-on-error" not in block
+    assert "\n        if:" not in block
 
 
 def test_verify_core_main_propagates_exit_code(monkeypatch):
