@@ -1,16 +1,16 @@
 {
   "schemaVersion": "2.0.0",
   "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "bac4b5e1350ed4c9adeb3abf65839a9a67af477a",
+  "protectedBaseSha": "a65689280ae35c553153dce6250dcd25cff0a7d3",
   "artifacts": [
     {
-      "path": "scripts/quality/architecture_analyzer.py",
+      "path": "scripts/quality/capability_trust_anchor.py",
       "baseMode": "100644",
       "baseObjectType": "blob",
-      "baseBlobSha": "d60659e5bd0e2a3604e4122b81d9b18e692f2d8f",
+      "baseBlobSha": "1f8012475025802baeea0c91d96625c487d684c0",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "996aa949c8064cf1470f5f8ced28eb1b8a1bfcb5"
+      "candidateBlobSha": "1607e29bcfe6c79d9c9c0c2549b054804ffe5c05"
     }
   ]
 }

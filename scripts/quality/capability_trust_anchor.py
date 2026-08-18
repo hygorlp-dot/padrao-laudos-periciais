@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 REGISTRY_PATH = "config/capability-protected-artifacts-v1.json"
 TRANSITION_PATH = "config/capability-protected-transition-v1.json"
 BOOTSTRAP_PATH = "scripts/quality/capability_bootstrap.py"
+ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
 _IDENTITY_KEYS = {"path", "state", "mode", "objectType", "blobSha"}
 
 
@@ -179,6 +180,15 @@ def _transition_document_valid(
         if row.get("base") != base_identity or row.get("candidate") != candidate_identity:
             return False
     allowed = set(changed) | {REGISTRY_PATH, TRANSITION_PATH}
+    if REGISTRY_PATH in changed_paths:
+        # A real capability-registry rotation legitimately requires updating the
+        # architecture trust-boundary system's own transition manifest (its
+        # protectedBaseSha always tracks the real base at CI time, and
+        # config/capability-protected-artifacts-v1.json is itself an
+        # architecture-protected artifact). architecture-protected remains the
+        # sole semantic authority over that file's content; this only accounts
+        # for its presence in the diff, exact path, no prefix, no wildcard.
+        allowed = allowed | {ARCHITECTURE_TRANSITION_PATH}
     return changed_paths <= allowed | {path for path in changed_paths if path.startswith("tests/") or path.startswith("docs/arquitetura/")}
 
 
