@@ -135,19 +135,29 @@ def test_verify_core_propagates_error_and_never_reports_false_pass(tmp_path):
 
 def test_full_gate_overlaps_independent_mutation_and_regression_suites():
     regression_started = threading.Event()
-    overlapped = []
+    e2e_started = threading.Event()
+    capability_started = threading.Event()
+    overlaps = {}
 
     def runner(command, **_):
         joined = " ".join(command)
-        if "historical_critical_mutants_are_all_killed" in joined:
-            overlapped.append(regression_started.wait(timeout=0.5))
-        elif "coverage run" in joined:
+        if "coverage run" in joined:
             regression_started.set()
+            overlaps["e2e"] = e2e_started.wait(timeout=0.5)
+            overlaps["capability"] = capability_started.wait(timeout=0.5)
+        elif "historical_critical_mutants_are_all_killed" in joined:
+            overlaps["mutation"] = regression_started.wait(timeout=0.5)
+        elif joined.endswith("tests/test_core_properties.py"):
+            overlaps["property"] = regression_started.wait(timeout=0.5)
+        elif "test_final_closure_r7.py" in joined:
+            e2e_started.set()
+        elif "pytest -q tests/test_capability_analyzer_v1.py" in joined:
+            capability_started.set()
         return subprocess.CompletedProcess(command, 0, "", "")
 
     run_gate("full", ROOT, runner=runner, tracked_files=[])
 
-    assert overlapped == [True]
+    assert overlaps == {"property": True, "mutation": True, "e2e": True, "capability": True}
 
 
 def test_architecture_findings_are_enforced_by_protected_workflow():
