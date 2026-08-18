@@ -999,7 +999,10 @@ def test_v3_transition_rejects_protected_artifact_declared_as_support_artifact(
     tmp_path, protected_base = clean_protected_transition_repo
 
     def _smuggle(support_rows):
-        smuggled_path = "scripts/quality/ast_inventory.py"
+        # Deliberately a path that also matches the CAPABILITY_BOOTSTRAP_V1 scope prefix
+        # (scripts/quality/capability_), so this isolates the PROTECTED_ARCHITECTURE_ARTIFACTS
+        # membership guard itself rather than being redundant with the out-of-scope tests.
+        smuggled_path = "scripts/quality/capability_trust_anchor.py"
         smuggled_file = tmp_path / smuggled_path
         smuggled_file.parent.mkdir(parents=True, exist_ok=True)
         smuggled_file.write_text("# protected artifact smuggled as support\n", encoding="utf-8")
