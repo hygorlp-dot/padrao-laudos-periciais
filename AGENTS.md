@@ -27,7 +27,11 @@
   demonstrado com evidência fresca.
 - Antes de entregar alteração material, aplicar a Skill
   `repository-safety-gate` e executar `python -m scripts.quality.verify_core
-  --full`.
+  --full`. Alterações em `scripts/quality/architecture_analyzer.py` ou
+  `config/architecture-protected-transition-v1.json` também exigem `python -m
+  pytest -q tests/test_architecture_analyzer_v1.py`: essa suíte é bloqueante
+  no `core-safety` da CI, mas fica fora do orçamento cronometrado do
+  `verify_core --full` e não é executada por ele.
 - Para code review, usar subagente independente quando disponível. Se estiver
   indisponível, gerar `review package` com requisitos, diff, testes e riscos e
   exigir revisão externa do PR antes do merge. Nunca declarar revisão

@@ -15,6 +15,13 @@ O modo rápido valida registros, fixtures, property tests, infraestrutura,
 imports e privacidade. O modo completo acrescenta regressão integral, schemas,
 fixtures e E2Es positivo e negativo. Todo PR material exige o modo completo.
 
+`verify_core` não executa `tests/test_architecture_analyzer_v1.py` — essa
+suíte é bloqueante na CI (`core-safety`), mas roda como etapa própria fora do
+orçamento cronometrado de `verify_core --full` (ver seção CI abaixo). Ao tocar
+`scripts/quality/architecture_analyzer.py` ou
+`config/architecture-protected-transition-v1.json`, executar
+`python -m pytest -q tests/test_architecture_analyzer_v1.py` separadamente.
+
 ## Fontes canônicas
 
 - Invariantes: `config/core-invariants.json`.
@@ -39,6 +46,15 @@ O workflow `.github/workflows/core-safety.yml` executa somente o gate first-part
 em pull requests e pushes para `main`. Não usa secrets, não faz deploy e não
 acessa referências privadas. A proteção de branch deve tornar `core-safety`
 obrigatório por configuração administrativa posterior.
+
+O job `core-safety` roda a suíte de arquitetura (`tests/test_architecture_analyzer_v1.py`)
+como etapa própria, antes de `verify_core --full`: qualquer falha ali também
+bloqueia o job, mas fora do orçamento cronometrado de 60s do `verify_core`
+(essa suíte não mede cobertura de nenhum diretório rastreado por
+`--source` na etapa de regressão, então sua execução ali só custava tempo,
+sem benefício de cobertura). Falhas nessa etapa aparecem como falha de step
+do GitHub Actions, não como finding estruturado do `verify_core` — não têm
+`invariant`/`boundary`/`severidade` da mesma taxonomia.
 
 ## Evolução
 

@@ -11,7 +11,12 @@ description: Mapear impacto e executar os gates first-party do Core Pericial V1 
    `config/core-boundaries.json`.
 3. Auditar somente os boundaries tocados e os invariantes globais aplicáveis.
 4. Executar primeiro os testes específicos indicados pelo mapa de impacto.
-5. Executar `python -m scripts.quality.verify_core --full` antes da entrega do PR.
+5. Executar `python -m scripts.quality.verify_core --full` antes da entrega do
+   PR. Ao tocar `scripts/quality/architecture_analyzer.py` ou
+   `config/architecture-protected-transition-v1.json`, executar também
+   `python -m pytest -q tests/test_architecture_analyzer_v1.py` — essa suíte
+   é bloqueante na CI (`core-safety`) mas roda fora do orçamento cronometrado
+   do `verify_core --full`.
 6. Bloquear a entrega diante de P0/P1 material, configuração incompleta, teste
    não executado, referência privada rastreada ou egress desconhecido.
 7. Reportar somente exceções que exijam decisão; nunca usar teste verde como
