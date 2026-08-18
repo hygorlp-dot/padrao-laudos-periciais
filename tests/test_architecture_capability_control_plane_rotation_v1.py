@@ -203,13 +203,11 @@ def test_existing_fail_closed_behavior_on_missing_transition_is_unchanged(tmp_pa
     assert any(item["code"] == "CAPABILITY_PROTECTED_TRANSITION_INVALID" for item in findings)
 
 
-def test_predecessor_itself_passes_the_current_base_owned_capability_judge():
-    # This predecessor changes scripts/quality/capability_trust_anchor.py,
-    # config/architecture-protected-transition-v1.json, and this test file only — no
-    # capability-registry-tracked artifact changes, so `changed` is empty and
-    # validate_inert_trust_anchor must exit before ever needing a transition document,
-    # using the CURRENT (unmodified) base-owned judge exactly as real CI will.
-    findings = validate_inert_trust_anchor(
-        ROOT, "a65689280ae35c553153dce6250dcd25cff0a7d3", "HEAD",
-    )
-    assert findings == []
+# A test asserting that PR #65/#66's own commit alone (with no capability-registry
+# rotation) passed the base-owned judge at HEAD used to live here. That was a
+# point-in-time fact about that specific, now-merged commit — evaluating it at a
+# floating "HEAD" broke the moment a later commit (this capability bootstrap)
+# legitimately performs a real registry rotation on top, which is exactly what
+# the fix that commit shipped was meant to allow. The real, ongoing regression
+# coverage for the handshake mechanism itself lives in the tests above
+# (accepted-alongside-rotation / rejected-without-rotation / lookalike-rejected).
