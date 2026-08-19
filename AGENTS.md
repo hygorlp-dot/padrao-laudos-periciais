@@ -54,6 +54,35 @@
   destrutiva sem rollback, login/MFA, decisão pericial ou divergência material
   irresolúvel.
 
+## Autonomia operacional durável
+
+Uma vez que o usuário autorizou expressamente um objetivo de engenharia, item
+de roadmap ou Issue existente, a mecânica ordinária de implementação dentro
+desse escopo não exige confirmação humana passo a passo. O contrato completo
+está em `docs/padroes/protocolo-autonomia-agente.md`: ações leitura/análise e
+engenharia local são sempre autônomas; ações remotas ordinárias (Issue, push,
+PR, CI, revisão limitada ao risco, merge normal, fechamento de Issue,
+avanço para o próximo item já autorizado do roadmap) são autônomas quando
+todas as precondições explícitas do protocolo estão satisfeitas. Autoridade
+humana permanece obrigatória para configuração de segurança, operação
+destrutiva/irreversível, nova autoridade de trust boundary, decisão de
+produto/profissional com alternativas materialmente viáveis e desvio
+estrutural (novo predecessor, desvio material de roadmap).
+
+Esta seção governa a operação interativa do Claude Code em chat com o
+usuário. Ela não substitui nem satisfaz por si só a prova formal de
+independência de `scripts/agentic/gates.py` (`evaluate_merge_gate`,
+`evaluate_repository_merge_gate`), que exige raiz de confiança externa
+verificável e nunca aceita evidência de revisão local ao mesmo produtor,
+mesmo quando plausível e bem formatada. Também não reabre nem estende a
+delegação expirada de `docs/padroes/protocolo-autonomia-phase-b.md`
+(`PHASE_B_AUTONOMY_ENVELOPE`), que permanece um envelope específico e já
+encerrado. `TRUST_INFRASTRUCTURE_PHASE = TERMINATED`: qualquer proposta cujo
+objetivo principal seja bootstrap de capability, preparação de trust anchor,
+plumbing de transição architecture/capability, redesenho de judge protegido
+ou "mais um PR de hardening" é tratada como suspeita de regressão de loop,
+não como continuação natural, e não é implementada automaticamente.
+
 ## Escopo
 
 - Tratar este repositório como o padrão de trabalho do perito, nunca como arquivo de autos de processos reais.
