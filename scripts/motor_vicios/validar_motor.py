@@ -1,5 +1,6 @@
 """Valida schema e relações essenciais do resultado do motor."""
-import argparse,json
+import argparse
+import json
 from pathlib import Path
 from jsonschema import Draft202012Validator,FormatChecker
 from referencing import Registry,Resource
@@ -49,7 +50,7 @@ def validar(obj, processo=None, delimitacao=None, plano=None, vistoria=None, nor
 def main():
     p=argparse.ArgumentParser();p.add_argument("arquivos",nargs="+",type=Path);falhas=0
     for f in p.parse_args().arquivos:
-        e=validar(json.loads(f.read_text(encoding="utf-8")));print(("APROVADO" if not e else "FALHA")+f": {f}");
+        e=validar(json.loads(f.read_text(encoding="utf-8")));print(("APROVADO" if not e else "FALHA")+f": {f}")
         if e:falhas+=1;print("\n".join("- "+x for x in e))
     return bool(falhas)
 if __name__=="__main__":raise SystemExit(main())

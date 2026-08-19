@@ -1,7 +1,10 @@
 """Orquestra manifestações, hipóteses, PAT, saneamento, quesitos e gate de redação."""
 
 from __future__ import annotations
-import argparse,hashlib,json,re
+import argparse
+import hashlib
+import json
+import re
 from pathlib import Path
 from scripts.triagem_pericial.semantica import intencoes
 from .auditar import auditar

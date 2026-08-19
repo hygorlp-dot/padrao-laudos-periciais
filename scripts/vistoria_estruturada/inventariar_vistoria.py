@@ -1,7 +1,11 @@
 """Inventaria arquivos privados de vistoria de forma incremental, sem interpretar causalidade."""
 
 from __future__ import annotations
-import argparse, csv, hashlib, json, zipfile
+import argparse
+import csv
+import hashlib
+import json
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from xml.etree import ElementTree

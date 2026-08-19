@@ -1,4 +1,7 @@
-import copy,json,tempfile,unittest
+import copy
+import json
+import tempfile
+import unittest
 from pathlib import Path
 from jsonschema import Draft202012Validator,FormatChecker
 from referencing import Registry,Resource

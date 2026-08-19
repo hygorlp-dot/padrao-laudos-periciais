@@ -1,4 +1,6 @@
-import copy,json,unittest
+import copy
+import json
+import unittest
 from pathlib import Path
 
 from scripts.auditoria_pericial import auditar_aspecto,executar_detector

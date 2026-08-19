@@ -1,0 +1,29 @@
+# Ruff configuration — deliberately minimal scope.
+#
+# Only the default rule set (E4/E7/E9 pycodestyle errors + F pyflakes:
+# unused imports, undefined names, syntax errors) is enabled. No extended
+# rule sets (complexity, pyupgrade, bugbear, import sorting) and no
+# auto-formatting of the existing codebase yet — that waits for
+# HOTSPOT_CHARACTERIZATION_V1 / GOLDEN_FORENSIC_CORPUS_V1 to provide a
+# behavioral safety net first. See Issue #73.
+
+target-version = "py313"
+line-length = 200
+
+[lint]
+# Ruff's own out-of-box default is much broader than E4/E7/E9/F (it also
+# enables B/UP/RUF and more, confirmed against the current official docs
+# on adoption -- an earlier draft of this config wrongly assumed the old,
+# narrower default and must not be trusted). Pinned explicitly here so the
+# scope stays exactly what Issue #73 authorized: pycodestyle errors plus
+# pyflakes (unused imports, undefined names, syntax errors) only.
+select = ["E4", "E7", "E9", "F"]
+# E701/E702 (multiple statements via colon/semicolon) fire ~1900 times --
+# this codebase's existing, pervasive dense multi-statement-per-line style,
+# not a defect. Reformatting that is a real, separate refactoring decision
+# for the maintainability program, not something this tooling-adoption
+# issue mass-applies. Every other E7/E4/E9/F code stays active.
+ignore = ["E701", "E702"]
+
+[format]
+# Formatter not wired into CI or run against the existing tree yet.
