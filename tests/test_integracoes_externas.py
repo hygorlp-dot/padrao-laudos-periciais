@@ -1,4 +1,6 @@
-import re,subprocess,unittest
+import re
+import subprocess
+import unittest
 from pathlib import Path
 from scripts.terceiros.catalogar_repositorios import _frontmatter,_licenca
 RAIZ=Path(__file__).resolve().parents[1]

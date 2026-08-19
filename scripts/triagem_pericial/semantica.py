@@ -1,6 +1,7 @@
 """Utilitários determinísticos para vínculos semânticos auditáveis."""
 from __future__ import annotations
-import re, unicodedata
+import re
+import unicodedata
 
 PARADAS={"a","ao","as","com","da","das","de","do","dos","e","em","na","no","o","os","ou","para","por","que","se","um","uma"}
 INTENCOES={"JURIDICO":("indenizar","responsavel","responsabilizar","culpa","prescricao","decadencia","legitimidade","obrigacao de pagar"),"ORCAMENTO":("custo","valor do reparo","orcamento","quantificar"),"CAUSALIDADE":("causa","decorre","provocou","motivo","por que"),"ORIGEM":("origem","endogena","exogena","construtiva","funcional"),"MECANISMO":("mecanismo",),"EXISTENCIA":("existe","presente","constatada","há fissura","ha fissura"),"SEGURANCA":("risco","seguranca","estrutural"),"REPARO":("reparo","corrigir","solucao"),"CONFORMIDADE":("norma","conforme","requisito"),"METODOLOGIA":("metodo","procedimento","ensaio")}

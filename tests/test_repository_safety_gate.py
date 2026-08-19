@@ -3,7 +3,6 @@ import subprocess
 import threading
 from pathlib import Path
 
-import pytest
 
 from scripts.quality.change_impact import impact_for_paths, main as impact_main
 from scripts.quality.config import registry_lock, validate_configuration

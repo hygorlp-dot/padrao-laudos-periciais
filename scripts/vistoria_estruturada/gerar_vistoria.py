@@ -1,6 +1,11 @@
 """Converte inventário privado em evidências de campo estruturadas e rastreáveis."""
 from __future__ import annotations
-import argparse,csv,io,json,re,sys
+import argparse
+import csv
+import io
+import json
+import re
+import sys
 from pathlib import Path
 RAIZ=Path(__file__).resolve().parents[2]
 if str(RAIZ) not in sys.path:sys.path.insert(0,str(RAIZ))
@@ -117,6 +122,9 @@ def gerar(inventario,plano=None,numero_processo=None):
             registro=bool(item.get("_vinculo_registro") and registros.get(item["_vinculo_registro"])==obs["id"])
             atividade_univoca=bool(item.get("atividade") and atividades_univocas.get(item["atividade"])==obs["id"])
             atividade=bool(obs.get("atividade") and item.get("atividade") and item.get("atividade")==obs.get("atividade"))
+            # TODO(#74): normalizar() is undefined here -- dormant NameError risk,
+            # currently unreachable because no producer sets "elemento" on
+            # medicoes/fotos. Do not add an "elemento" key without resolving #74.
             elemento=bool(obs.get("elemento") and item.get("elemento") and normalizar(obs.get("elemento"))==normalizar(item.get("elemento")))
             manifestacao=bool(obs.get("manifestacao") and item.get("manifestacao") and normalizar(obs.get("manifestacao"))==normalizar(item.get("manifestacao")))
             return explicito or registro or atividade_univoca or (atividade and elemento and manifestacao)

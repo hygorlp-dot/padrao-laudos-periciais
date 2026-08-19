@@ -1,14 +1,13 @@
 import unittest
 import re
 from pathlib import Path
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from types import MappingProxyType
 
 from scripts.backend_contract import (
     ArtifactStatus,
     AuditEvent,
     AuditLog,
-    Authority,
     CapabilityRegistry,
     CapabilityStatus,
     CaseId,

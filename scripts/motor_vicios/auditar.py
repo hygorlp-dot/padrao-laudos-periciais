@@ -1,5 +1,6 @@
 """Autoauditoria causal e relacional do resultado do motor."""
-import re, unicodedata
+import re
+import unicodedata
 from decimal import Decimal, InvalidOperation
 
 CONVERSOES={("mm","cm"):Decimal("0.1"),("cm","mm"):Decimal("10"),("m","cm"):Decimal("100"),("cm","m"):Decimal("0.01")}

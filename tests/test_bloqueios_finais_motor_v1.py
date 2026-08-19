@@ -1,4 +1,3 @@
-import copy
 import json
 import unittest
 from pathlib import Path
@@ -8,7 +7,6 @@ from scripts.motor_vicios.hipoteses import gerar
 from scripts.motor_vicios.pipeline import executar_pipeline_motor
 from scripts.motor_vicios.regras import (avaliar_consequencias, classificacoes,
     derivar_criticidade, estruturar_reparo, inferir_origem, tipo_vicio)
-from scripts.vistoria_estruturada.gerar_vistoria import gerar as gerar_vistoria
 
 RAIZ=Path(__file__).resolve().parents[1]
 def load(p):return json.loads((RAIZ/p).read_text(encoding="utf-8"))
