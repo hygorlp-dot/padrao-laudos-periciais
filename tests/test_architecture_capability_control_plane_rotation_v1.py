@@ -73,7 +73,16 @@ def test_pr_c_installs_shadow_judge_bytes_without_activation():
     assert policy["integrityBootstrap"]["activationState"] == "CONTRACT_ONLY"
 
 
-def test_transferred_capability_findings_remain_exactly_open():
+def test_transferred_capability_findings_ledger_shape_is_unchanged():
+    # This ledger's own declarative content is left untouched by design --
+    # closure must come from executable evidence, not an administrative
+    # status field invented after the fact. That evidence is
+    # tests/test_capability_base_owned_blocking_topology_v1.py, which proves
+    # by real execution (via the actual capability_bootstrap.run_protected_capability_gate
+    # entrypoint) that every one of these four findingIds' reproducers is
+    # blocked by the current base-owned judge. This test only guards that the
+    # ledger's own shape (the thing the closure proof depends on staying
+    # exact) hasn't silently drifted.
     ledger = json.loads(
         (ROOT / "config/architecture-capability-transfers-v2.json").read_text(encoding="utf-8")
     )
