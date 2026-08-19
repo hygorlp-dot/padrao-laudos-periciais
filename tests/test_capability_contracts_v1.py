@@ -132,7 +132,27 @@ def test_exception_lifecycle_and_atomic_topology_are_fail_closed():
         assert token in migration
 
 
-def test_pr_c_installs_shadow_judge_bytes_without_candidate_activation():
+def test_capability_judge_bytes_exist_with_legacy_non_authoritative_activation_label():
+    # The runtime authority for capability enforcement is the base-owned
+    # capability-protected CI judge (scripts/quality/capability_bootstrap.py,
+    # invoked from the protected base per .github/workflows/capability-protected.yml)
+    # -- it has been genuinely blocking since capability_bootstrap.py became
+    # PRESENT in the protected registry (post-#60) and has a working baseline
+    # exception set (post-#67/#68). This is proven end-to-end, by real
+    # execution, in tests/test_capability_base_owned_blocking_topology_v1.py.
+    #
+    # config/capability-policy-v1.json's integrityBootstrap.activationState
+    # still literally reads "CONTRACT_ONLY". That value is NOT consulted by
+    # any enforcement code path (grep confirms it) -- it is legacy contract
+    # text, not a runtime switch. It is left unchanged here deliberately:
+    # flipping it requires editing capability-policy-v1.json and its schema,
+    # both capability-registry-tracked, which cascades into extending
+    # architecture_analyzer.py's CAPABILITY_BOOTSTRAP_V1 support scope --
+    # and CODE_UNDER_REVIEW_CANNOT_CONTROL_ITS_JUDGE means that extension
+    # cannot take effect within the same PR that uses it (the protected base's
+    # unextended copy is what actually judges the PR). Closing this requires
+    # a dedicated predecessor PR and is tracked as accepted P2 documentation
+    # debt, not a functional gap.
     for path in [
         "scripts/quality/capability_analyzer.py",
         "scripts/quality/capability_bootstrap.py",
@@ -140,7 +160,9 @@ def test_pr_c_installs_shadow_judge_bytes_without_candidate_activation():
     ]:
         assert (ROOT / path).is_file(), f"missing atomic cutover artifact: {path}"
     policy = _json("config/capability-policy-v1.json")
-    assert policy["integrityBootstrap"]["activationState"] == "CONTRACT_ONLY"
+    assert policy["integrityBootstrap"]["activationState"] == "CONTRACT_ONLY", (
+        "known non-authoritative legacy label -- see comment above"
+    )
     verify_core = (ROOT / "scripts/quality/verify_core.py").read_text(encoding="utf-8")
     assert "run_capability_gate" not in verify_core
     architecture = ROOT / "scripts/quality/architecture_analyzer.py"
