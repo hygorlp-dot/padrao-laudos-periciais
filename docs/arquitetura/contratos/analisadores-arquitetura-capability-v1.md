@@ -42,3 +42,7 @@ não concede autoridade: o PR dedicado continua condicionado a CI exato e às tr
 revisões independentes.
 
 A TCB mínima inclui o próprio bootstrap, workflow bloqueante, inventário Git, leitor/parser AST, capability analyzer, policy e schemas, adaptador que entrega findings e `verify_core` que os torna bloqueantes. `PROTECTED_BASE_LOADS_AND_EXECUTES_VERIFIER = TRUE`: CI obtém workflow, verifier e pin registry do commit-base protegido, nunca aceita esses bytes do candidato como autoridade sobre si mesmos. Todos os demais artefatos de enforcement no candidato têm SHA-256 individual no registro externo. Ausência, alteração, conjunto divergente, digest divergente ou tentativa de exceção ordinária bloqueia antes da análise.
+
+## Declaração legada versus autoridade de runtime
+
+A autoridade real é o comportamento do bootstrap executado a partir do base protegido, não qualquer campo declarativo em `config/capability-policy-v1.json`. Nenhum código de enforcement lê `integrityBootstrap.activationState`; esse campo é texto de contrato histórico, verificável apenas por leitura, nunca por efeito. A prova de bloqueio real está em execução — `tests/test_capability_base_owned_blocking_topology_v1.py` exercita `capability_bootstrap.run_protected_capability_gate` de ponta a ponta contra um base sintético e confirma: candidato seguro produz `[]`, mutação do próprio registro de exceções falha fechado, e cada reproducer transferido continua bloqueado.

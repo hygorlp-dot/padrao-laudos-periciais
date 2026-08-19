@@ -11,3 +11,9 @@
 Extração usa matriz commit → arquivo → hunk → dependência → teste contra `main`; cherry-pick amplo do PR #44 é proibido. Findings históricos viram fixtures por classe, nunca design de dataflow.
 
 Sequência: PR-A contratos → PR-B architecture analyzer → PR-T trust anchor inerte → PR-C capability boundary e cutover → PR-D baseline/supersession. Não avançar antes do post-main green de cada etapa. `TRUST_ANCHOR_MUST_PREEXIST_CUTOVER = TRUE`; PR-C bloqueia se o base protegido não contiver verifier, workflow e pin loader esperados.
+
+## PR-C: estado real pós-recovery
+
+PR #60 instalou os bytes do PR-C de forma não-dispositiva (`NON_DISPOSITIVE_TRUST_BOOTSTRAP`); os PRs #67/#68 fecharam o deadlock de bootstrap dos findings pré-existentes. O gate `capability-protected` já é bloqueante de fato para qualquer PR contra `main` desde então — provado por execução real, incluindo o próprio CI do PR #68 falhando exatamente pelos 16 findings de baseline conhecidos. Esse cutover final consolida essa prova como cobertura de regressão permanente (`tests/test_capability_base_owned_blocking_topology_v1.py`) e não introduz nenhum mecanismo novo.
+
+O único item não fechado é declarativo: `config/capability-policy-v1.json`'s `activationState` continua `CONTRACT_ONLY`, um rótulo não-autoritativo (nenhum código o lê). Corrigi-lo exige um predecessor dedicado que estenda o `supportScope` `CAPABILITY_BOOTSTRAP_V1` em `architecture_analyzer.py` antes que o próprio PR que muda `capability-policy-v1.json` possa ser julgado sob esse escopo — `CODE_UNDER_REVIEW_CANNOT_CONTROL_ITS_JUDGE` proíbe fechar isso no mesmo PR. Rastreado como dívida P2.
