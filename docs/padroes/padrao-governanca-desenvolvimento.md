@@ -11,6 +11,16 @@ alteração de infraestrutura deve seguir:
 emergencial expressa; mesmo nesse caso, criar Issue retrospectiva antes de
 merge ou release.
 
+Depois que o usuário autoriza expressamente um objetivo de engenharia, item
+de roadmap ou Issue existente, esta sequência inteira — Issue → Branch →
+Implementação → Testes → Auditoria → Commit → Push → Pull Request → CI →
+Review → Merge → Issue concluída — pode ser executada autonomamente pelo
+agente, sem confirmação humana passo a passo, nas condições e com os limites
+exatos definidos em `docs/padroes/protocolo-autonomia-agente.md`. Isso não
+altera a sequência em si, nem os limites humano-apenas ali definidos
+(segurança/administração, operação destrutiva, nova trust boundary, decisão
+de produto/profissional, desvio estrutural).
+
 ## Antes de alterar o repositório
 
 1. Ler `AGENTS.md` e os padrões aplicáveis.
