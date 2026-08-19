@@ -67,7 +67,7 @@
       "baseBlobSha": "3791f733792d9a3f1a8cb5f0108881c176b30600",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "0de23f1301c23d5c1df2646f9d08009481136e9b"
+      "candidateBlobSha": "9ac253ad26f35e814e7f089ecf1acdfd5c110c42"
     },
     {
       "path": "tests/test_capability_analyzer_v1.py",
