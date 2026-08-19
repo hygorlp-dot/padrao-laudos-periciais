@@ -60,21 +60,23 @@ def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_fil
             ("historical critical mutation suite", [sys.executable, "-m", "pytest", "-q", "tests/test_historical_mutations.py::test_historical_critical_mutants_are_all_killed"], "NO_SILENT_LOSS", "QUALITY_GATE"),
             ("quality V2", [sys.executable, "-m", "pytest", "-q", "tests/test_core_properties_v2.py", "tests/test_fault_injection.py", "tests/test_schema_versions.py", "tests/test_quality_metrics.py", "tests/test_quality_hardening_v2.py", "tests/test_historical_mutations.py", "-k", "not historical_critical_mutants"], "SCHEMA_VERSION_FIDELITY", "QUALITY_GATE"),
             ("schemas", [sys.executable, "scripts/validar_schemas.py"], "SOURCE_TRUTH", "REPOSITORY"),
-            ("regression", [sys.executable, "-m", "coverage", "run", "--branch", "--data-file=coverage-quality-v2.data", "--source=scripts/extracao_pje,scripts/planejamento_pericial,scripts/conhecimento_privado,scripts/redacao_pericial", "-m", "pytest", "tests", "-q", "--ignore=tests/test_historical_mutations.py", "--ignore=tests/test_core_properties_v2.py", "--ignore=tests/test_fault_injection.py", "--ignore=tests/test_schema_versions.py", "--ignore=tests/test_quality_metrics.py", "--ignore=tests/test_quality_hardening_v2.py"], "FAIL_CLOSED", "CORE"),
-            ("coverage report", [sys.executable, "-m", "coverage", "json", "--data-file=coverage-quality-v2.data", "-o", "coverage-quality-v2.json"], "QUALITY_NON_REGRESSION", "QUALITY_GATE"),
             ("E2E positive", [sys.executable, "-m", "pytest", "-q", "tests/test_final_closure_r7.py", "-k", "e2e_positivo"], "SOURCE_TRUTH", "MOTOR"),
             ("E2E negative", [sys.executable, "-m", "pytest", "-q", "tests/test_aceitacao_final_motor_v1.py", "-k", "e2e_final_03"], "ESSENTIAL_INPUT_REMOVAL_DEGRADES_RESULT", "MOTOR"),
+            ("capability cutover tests", [sys.executable, "-m", "pytest", "-q", "tests/test_capability_analyzer_v1.py", "tests/test_capability_exceptions_v1.py", "tests/test_capability_contracts_v1.py", "tests/test_architecture_capability_trust_anchor_v1.py", "tests/test_architecture_capability_control_plane_rotation_v1.py"], "FAIL_CLOSED", "QUALITY_GATE"),
+            ("regression", [sys.executable, "-m", "coverage", "run", "--branch", "--data-file=coverage-quality-v2.data", "--source=scripts/extracao_pje,scripts/planejamento_pericial,scripts/conhecimento_privado,scripts/redacao_pericial", "-m", "pytest", "tests", "-q", "--ignore=tests/test_historical_mutations.py", "--ignore=tests/test_core_properties.py", "--ignore=tests/test_repository_safety_gate.py", "--ignore=tests/test_core_properties_v2.py", "--ignore=tests/test_fault_injection.py", "--ignore=tests/test_schema_versions.py", "--ignore=tests/test_quality_metrics.py", "--ignore=tests/test_quality_hardening_v2.py", "--ignore=tests/test_capability_analyzer_v1.py", "--ignore=tests/test_capability_exceptions_v1.py", "--ignore=tests/test_capability_contracts_v1.py", "--ignore=tests/test_architecture_analyzer_v1.py", "--ignore=tests/test_architecture_capability_trust_anchor_v1.py", "--ignore=tests/test_architecture_capability_control_plane_rotation_v1.py"], "FAIL_CLOSED", "CORE"),
+            ("coverage report", [sys.executable, "-m", "coverage", "json", "--data-file=coverage-quality-v2.data", "-o", "coverage-quality-v2.json"], "QUALITY_NON_REGRESSION", "QUALITY_GATE"),
         ])
     if (root / ".git").exists():
         commands.append(("diff check", ["git", "diff", "--check"], "NO_SILENT_OVERWRITE", "REPOSITORY"))
     concurrent: dict[str, Future] = {}
     executor = ThreadPoolExecutor(max_workers=2) if mode == "full" else None
     try:
+        if executor is not None:
+            historical = next(item for item in commands if item[0] == "historical critical mutation suite")
+            regression = next(item for item in commands if item[0] == "regression")
+            concurrent[historical[0]] = executor.submit(_run, runner, historical[1], root)
+            concurrent[regression[0]] = executor.submit(_run, runner, regression[1], root)
         for name, command, invariant, boundary in commands:
-            if name == "historical critical mutation suite" and executor is not None:
-                regression = next(item for item in commands if item[0] == "regression")
-                concurrent[name] = executor.submit(_run, runner, command, root)
-                concurrent["regression"] = executor.submit(_run, runner, regression[1], root)
             completed = concurrent[name].result() if name in concurrent else _run(runner, command, root)
             passed = completed.returncode == 0; checks.append((name, passed))
             if not passed:

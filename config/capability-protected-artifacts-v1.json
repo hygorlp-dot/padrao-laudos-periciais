@@ -4,7 +4,10 @@
   "artifacts": [
     {
       "path": "config/capability-exceptions-v1.json",
-      "state": "ABSENT"
+      "state": "PRESENT",
+      "mode": "100644",
+      "objectType": "blob",
+      "blobSha": "36a3ad9eebd44e5687e686ab1c59dd3154f289e0"
     },
     {
       "path": "config/capability-policy-v1.json",
@@ -43,15 +46,24 @@
     },
     {
       "path": "scripts/quality/capability_analyzer.py",
-      "state": "ABSENT"
+      "state": "PRESENT",
+      "mode": "100644",
+      "objectType": "blob",
+      "blobSha": "ba64b45c6e5bdb80b8082c1d8017940403c572c5"
     },
     {
       "path": "scripts/quality/capability_bootstrap.py",
-      "state": "ABSENT"
+      "state": "PRESENT",
+      "mode": "100644",
+      "objectType": "blob",
+      "blobSha": "bb62702efa2bdbe1936a3a11f4038004f9d555c2"
     },
     {
       "path": "scripts/quality/capability_gate_adapter.py",
-      "state": "ABSENT"
+      "state": "PRESENT",
+      "mode": "100644",
+      "objectType": "blob",
+      "blobSha": "d0c91fae0be77aad738f182412ac0dfa382ff37f"
     },
     {
       "path": "scripts/quality/repository_inventory.py",
@@ -65,7 +77,7 @@
       "state": "PRESENT",
       "mode": "100644",
       "objectType": "blob",
-      "blobSha": "3791f733792d9a3f1a8cb5f0108881c176b30600"
+      "blobSha": "9ac253ad26f35e814e7f089ecf1acdfd5c110c42"
     }
   ]
 }

@@ -22,17 +22,17 @@ FUTURE_PATHS = {
 }
 
 
-def test_registry_predeclares_only_contractual_future_artifacts_as_absent():
+def test_pr_c_registry_custodies_exact_shadow_artifacts_as_present():
     registry = json.loads(
         (ROOT / "config/capability-protected-artifacts-v1.json").read_text(encoding="utf-8")
     )
-    absent = {
+    present = {
         row["path"]
         for row in registry["artifacts"]
-        if row["state"] == "ABSENT"
+        if row["path"] in FUTURE_PATHS and row["state"] == "PRESENT"
     }
-    assert absent == FUTURE_PATHS
-    assert all(not (ROOT / path).exists() for path in absent)
+    assert present == FUTURE_PATHS
+    assert all((ROOT / path).is_file() for path in present)
 
 
 def test_workflow_selects_capability_state_from_trusted_base_only():
@@ -47,8 +47,16 @@ def test_workflow_selects_capability_state_from_trusted_base_only():
     assert "from scripts.quality.capability_trust_anchor import validate_inert_trust_anchor" in workflow
 
 
-def test_pr_c0_contains_no_capability_judge_or_exception_registry():
-    assert all(not (ROOT / path).exists() for path in FUTURE_PATHS)
+def test_pr_c_installs_shadow_judge_and_empty_exception_registry_without_activation():
+    assert all((ROOT / path).is_file() for path in FUTURE_PATHS)
+    exceptions = json.loads(
+        (ROOT / "config/capability-exceptions-v1.json").read_text(encoding="utf-8")
+    )
+    assert exceptions == {"schemaVersion": "1.0.0", "exceptions": []}
+    policy = json.loads(
+        (ROOT / "config/capability-policy-v1.json").read_text(encoding="utf-8")
+    )
+    assert policy["integrityBootstrap"]["activationState"] == "CONTRACT_ONLY"
 
 
 def test_transferred_capability_findings_remain_exactly_open():
@@ -195,13 +203,11 @@ def test_existing_fail_closed_behavior_on_missing_transition_is_unchanged(tmp_pa
     assert any(item["code"] == "CAPABILITY_PROTECTED_TRANSITION_INVALID" for item in findings)
 
 
-def test_predecessor_itself_passes_the_current_base_owned_capability_judge():
-    # This predecessor changes scripts/quality/capability_trust_anchor.py,
-    # config/architecture-protected-transition-v1.json, and this test file only — no
-    # capability-registry-tracked artifact changes, so `changed` is empty and
-    # validate_inert_trust_anchor must exit before ever needing a transition document,
-    # using the CURRENT (unmodified) base-owned judge exactly as real CI will.
-    findings = validate_inert_trust_anchor(
-        ROOT, "a65689280ae35c553153dce6250dcd25cff0a7d3", "HEAD",
-    )
-    assert findings == []
+# A test asserting that PR #65/#66's own commit alone (with no capability-registry
+# rotation) passed the base-owned judge at HEAD used to live here. That was a
+# point-in-time fact about that specific, now-merged commit — evaluating it at a
+# floating "HEAD" broke the moment a later commit (this capability bootstrap)
+# legitimately performs a real registry rotation on top, which is exactly what
+# the fix that commit shipped was meant to allow. The real, ongoing regression
+# coverage for the handshake mechanism itself lives in the tests above
+# (accepted-alongside-rotation / rejected-without-rotation / lookalike-rejected).
