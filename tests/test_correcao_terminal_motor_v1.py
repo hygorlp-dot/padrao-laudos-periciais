@@ -1,4 +1,6 @@
-import copy,json,unittest
+import copy
+import json
+import unittest
 from pathlib import Path
 
 from scripts.auditoria_pericial.deep_audit import executar_deep_audit

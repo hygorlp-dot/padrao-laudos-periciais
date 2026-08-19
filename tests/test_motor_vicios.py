@@ -1,10 +1,11 @@
-import json, tempfile, unittest
+import json
+import tempfile
+import unittest
 from pathlib import Path
 
 from scripts.motor_vicios.auditar import auditar
 from scripts.motor_vicios.motor import executar
 from scripts.motor_vicios.granularizar_questoes import granularizar
-from scripts.motor_vicios.hipoteses import gerar as gerar_hipoteses
 from scripts.motor_vicios.regras import classificacoes, situacao
 from scripts.motor_vicios.validar_motor import validar
 from scripts.motor_vicios.cenarios import executar_cenario
