@@ -4,6 +4,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import jsonschema
 import pytest
 
 from scripts.quality.capability_trust_anchor import (
@@ -47,12 +48,25 @@ def test_workflow_selects_capability_state_from_trusted_base_only():
     assert "from scripts.quality.capability_trust_anchor import validate_inert_trust_anchor" in workflow
 
 
-def test_pr_c_installs_shadow_judge_and_empty_exception_registry_without_activation():
+def test_pr_c_installs_shadow_judge_bytes_without_activation():
+    # The exceptions registry was empty when this shadow-judge bootstrap first
+    # landed; it now legitimately carries exact, schema-validated baseline
+    # exceptions seeded by the CAPABILITY_BASELINE_SEED_RECOVERY_V1 predecessor
+    # (see docstring at the bottom of this file), so this test no longer
+    # asserts emptiness -- only that every entry is a well-formed exact
+    # exception. Real regression coverage for exception semantics (exact-match
+    # authorization, staleness, duplication, self-authorization) lives in
+    # tests/test_capability_exceptions_v1.py.
     assert all((ROOT / path).is_file() for path in FUTURE_PATHS)
     exceptions = json.loads(
         (ROOT / "config/capability-exceptions-v1.json").read_text(encoding="utf-8")
     )
-    assert exceptions == {"schemaVersion": "1.0.0", "exceptions": []}
+    assert exceptions["schemaVersion"] == "1.0.0"
+    schema = json.loads(
+        (ROOT / "schemas/capability-exception-v1.schema.json").read_text(encoding="utf-8")
+    )
+    for item in exceptions["exceptions"]:
+        jsonschema.validate(item, schema)
     policy = json.loads(
         (ROOT / "config/capability-policy-v1.json").read_text(encoding="utf-8")
     )
