@@ -12,7 +12,6 @@ from scripts.triagem_pericial.classificar_tipo import classificar
 from scripts.motor_vicios.hipoteses import _independentes
 from scripts.motor_vicios.evidencias import associar_documentos_ensaios
 from scripts.motor_vicios.normas import (
-    aplicabilidade_temporal,
     avaliar_conformidade_normativa,
     normalizar_fonte_normativa,
 )

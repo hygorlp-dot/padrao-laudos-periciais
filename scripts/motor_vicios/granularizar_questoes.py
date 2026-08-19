@@ -1,6 +1,7 @@
 """Propõe QT específicas por manifestação/local/sistema, sem duplicar alegações equivalentes."""
 from __future__ import annotations
-import re,unicodedata
+import re
+import unicodedata
 
 def _n(s):return re.sub(r"\W+"," ",unicodedata.normalize("NFKD",s or "").encode("ascii","ignore").decode().lower()).strip()
 def granularizar(processo,delimitacao):

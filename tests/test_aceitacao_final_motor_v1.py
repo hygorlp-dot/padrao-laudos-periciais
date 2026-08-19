@@ -1,10 +1,13 @@
-import copy,json,re,tempfile,time,unittest
+import copy
+import json
+import tempfile
+import time
+import unittest
 from pathlib import Path
 
 from scripts.auditoria_pericial.grounding import auditar_claim
 from scripts.auditoria_pericial.proposition import auditar_proposicoes
 from scripts.conhecimento_privado.pesquisa_online import reconciliar_fontes
-from scripts.motor_vicios.autocorrigir import autocorrigir
 from scripts.motor_vicios.normas import aplicabilidade_temporal
 from scripts.motor_vicios.pipeline import executar_pipeline_motor
 from scripts.motor_vicios.regras import classificacoes

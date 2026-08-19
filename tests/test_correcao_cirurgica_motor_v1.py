@@ -1,4 +1,3 @@
-import copy
 import unittest
 
 from scripts.auditoria_pericial.deep_audit import executar_deep_audit

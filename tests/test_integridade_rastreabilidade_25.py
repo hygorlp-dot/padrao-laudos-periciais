@@ -1,4 +1,6 @@
-import copy,json,tempfile,unittest
+import json
+import tempfile
+import unittest
 from pathlib import Path
 from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject,NameObject,StreamObject
