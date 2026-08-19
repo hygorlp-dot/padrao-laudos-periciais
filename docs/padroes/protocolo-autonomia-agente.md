@@ -24,6 +24,14 @@ Vale somente depois que o usuário autorizou expressamente um objetivo de
 engenharia, item de roadmap ou Issue existente. Dentro desse escopo, a
 mecânica ordinária de execução não exige confirmação humana passo a passo.
 
+Não existe artefato canônico único listando "o roadmap" neste repositório.
+"Item de roadmap já autorizado" só vale quando ancorado a uma Issue
+existente e nomeada, ou a uma sequência de itens que o usuário enumerou
+explicitamente na própria autorização — nunca a uma menção abstrata ou a uma
+inferência sobre o que "provavelmente" viria a seguir. Autorização de um item
+não se estende automaticamente ao próximo; cada item novo exige sua própria
+Issue ou menção explícita do usuário antes de virar mecânica autônoma.
+
 ### Ações sempre autônomas
 
 Leitura/análise: inspecionar repositório e histórico Git, estado read-only do
@@ -117,6 +125,13 @@ material. `NO_REVIEW_LOOP = TRUE`: se os revisores terminais exigidos
 retornam `P0=0`/`P1=0`, parar de revisar — sem revisor extra por reasseguro.
 Um novo HEAD invalida somente a garantia materialmente afetada por essa
 mudança.
+
+Mudança em arquivo de governança (`AGENTS.md`, `docs/padroes/`) sempre passa
+pelo classificador de risco first-party já existente (`scripts/agentic/risk.py`),
+cujo default fail-closed marca qualquer path fora do allowlist como
+`MATERIAL_ARCHITECTURE_CHANGE`/`HIGH`. Esta seção não cria exceção para
+mudança de governança nem reduz o que esse classificador já exige — inclusive
+quando o próprio contrato de revisão sendo alterado é o objeto do PR.
 
 ### Comportamento de relato
 
