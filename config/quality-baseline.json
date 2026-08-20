@@ -5,7 +5,11 @@
   "coverage": {"line_percent": 84.493, "branch_percent": 72.654, "policy": "NON_REGRESSION_ON_CRITICAL_MODULES"},
   "hotspots": [
     {"path":"scripts/motor_vicios/motor.py","function":"executar","complexity":130},
+    {"path":"scripts/vistoria_estruturada/gerar_vistoria.py","function":"gerar","complexity":117},
     {"path":"scripts/triagem_pericial/gerar_delimitacao.py","function":"gerar","complexity":96},
+    {"path":"scripts/extracao_pje/validar_integridade.py","function":"validar_integridade","complexity":76},
+    {"path":"scripts/motor_vicios/autocorrigir.py","function":"autocorrigir","complexity":72},
+    {"path":"scripts/motor_vicios/auditar.py","function":"auditar","complexity":58},
     {"path":"scripts/planejamento_pericial/gerar_plano.py","function":"gerar","complexity":57},
     {"path":"scripts/redacao_pericial/pipeline.py","function":"executar_pipeline_redacao","complexity":41},
     {"path":"scripts/motor_vicios/pipeline.py","function":"executar_pipeline_motor","complexity":27}
