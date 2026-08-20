@@ -320,6 +320,46 @@
                          "consumer":  "tests/test_capability_contracts_v1.py::test_contract_schemas_accept_exact_examples_and_reject_wildcard_exception",
                          "finalidade":  "Excecao de capability exata vinculada a baseline imutavel",
                          "expected":  "VALID"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/golden_corpus/validar_integridade.json",
+                         "dominio":  "GOLDEN_CORPUS_VALIDAR_INTEGRIDADE",
+                         "schema":  null,
+                         "consumer":  "tests/test_golden_forensic_corpus_v1.py::GoldenCorpusRegistryDrivenTest::test_validar_integridade_corpus_is_registered_with_golden_cases",
+                         "finalidade":  "Corpus dourado - HOTSPOT-04 validar_integridade",
+                         "expected":  "DATASET"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/golden_corpus/motor_executar.json",
+                         "dominio":  "GOLDEN_CORPUS_MOTOR_EXECUTAR",
+                         "schema":  null,
+                         "consumer":  "tests/test_golden_forensic_corpus_v1.py::GoldenCorpusRegistryDrivenTest::test_motor_executar_corpus_is_registered_with_approved_cases",
+                         "finalidade":  "Corpus dourado - HOTSPOT-01 motor.executar",
+                         "expected":  "DATASET"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/golden_corpus/gerar_vistoria.json",
+                         "dominio":  "GOLDEN_CORPUS_GERAR_VISTORIA",
+                         "schema":  null,
+                         "consumer":  "tests/test_golden_forensic_corpus_v1.py::GoldenCorpusRegistryDrivenTest::test_gerar_vistoria_corpus_is_registered_with_approved_cases",
+                         "finalidade":  "Corpus dourado - HOTSPOT-02 gerar_vistoria",
+                         "expected":  "DATASET"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/golden_corpus/autocorrigir.json",
+                         "dominio":  "GOLDEN_CORPUS_AUTOCORRIGIR",
+                         "schema":  null,
+                         "consumer":  "tests/test_golden_forensic_corpus_v1.py::GoldenCorpusRegistryDrivenTest::test_autocorrigir_corpus_is_registered_with_approved_cases",
+                         "finalidade":  "Corpus dourado - HOTSPOT-05 autocorrigir",
+                         "expected":  "DATASET"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/golden_corpus/gerar_delimitacao.json",
+                         "dominio":  "GOLDEN_CORPUS_GERAR_DELIMITACAO",
+                         "schema":  null,
+                         "consumer":  "tests/test_golden_forensic_corpus_v1.py::GoldenCorpusRegistryDrivenTest::test_gerar_delimitacao_corpus_is_registered_with_approved_cases",
+                         "finalidade":  "Corpus dourado - HOTSPOT-03 gerar_delimitacao",
+                         "expected":  "DATASET"
                      }
                  ]
 }
