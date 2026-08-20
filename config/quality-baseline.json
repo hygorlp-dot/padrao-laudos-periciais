@@ -14,5 +14,5 @@
     {"path":"scripts/redacao_pericial/pipeline.py","function":"executar_pipeline_redacao","complexity":41},
     {"path":"scripts/motor_vicios/pipeline.py","function":"executar_pipeline_motor","complexity":27}
   ],
-  "full_gate_max_seconds": 90.0
+  "full_gate_max_seconds": 60.0
 }

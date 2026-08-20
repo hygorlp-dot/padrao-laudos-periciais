@@ -239,7 +239,19 @@ class GoldenCorpusRunnerLogicTest(unittest.TestCase):
 
 class GoldenCorpusRegistryDrivenTest(unittest.TestCase):
     """Drives every fixture currently registered under GOLDEN_CORPUS_* in
-    tests/fixtures/core-fixtures.json through the real hotspot entrypoints."""
+    tests/fixtures/core-fixtures.json through the real hotspot entrypoints.
+
+    load_corpus()/build_coverage_map() each re-read and re-parse all 5
+    fixture files (~650KB combined) from disk; cached once per class run
+    (SYSTEMIC_AUDITOR runtime characterization, PR #79) instead of once per
+    test method -- structural-only tests below don't need a fresh disk read,
+    only test_all_registered_golden_corpora_match_current_behavior actually
+    exercises the entrypoints, and it does so exactly once."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.corpora_by_hotspot = {c["hotspot_id"]: c for c in load_corpus(ROOT)}
+        cls.coverage = build_coverage_map(ROOT)
 
     def test_all_registered_golden_corpora_match_current_behavior(self):
         findings = validate_golden_corpus(ROOT, adapters=ADAPTERS)
@@ -247,21 +259,21 @@ class GoldenCorpusRegistryDrivenTest(unittest.TestCase):
 
     def test_validar_integridade_corpus_is_registered_with_golden_cases(self):
         # tests/fixtures/golden_corpus/validar_integridade.json
-        corpora = {c["hotspot_id"]: c for c in load_corpus(ROOT)}
+        corpora = self.corpora_by_hotspot
         self.assertIn("HOTSPOT-04", corpora)
         approved = [c for c in corpora["HOTSPOT-04"]["cases"] if c["status"] == "APPROVED"]
         self.assertGreaterEqual(len(approved), 10)
 
     def test_motor_executar_corpus_is_registered_with_approved_cases(self):
         # tests/fixtures/golden_corpus/motor_executar.json
-        corpora = {c["hotspot_id"]: c for c in load_corpus(ROOT)}
+        corpora = self.corpora_by_hotspot
         self.assertIn("HOTSPOT-01", corpora)
         approved = [c for c in corpora["HOTSPOT-01"]["cases"] if c["status"] == "APPROVED"]
         self.assertGreaterEqual(len(approved), 5)
 
     def test_gerar_vistoria_corpus_is_registered_with_approved_cases(self):
         # tests/fixtures/golden_corpus/gerar_vistoria.json
-        corpora = {c["hotspot_id"]: c for c in load_corpus(ROOT)}
+        corpora = self.corpora_by_hotspot
         self.assertIn("HOTSPOT-02", corpora)
         approved = [c for c in corpora["HOTSPOT-02"]["cases"] if c["status"] == "APPROVED"]
         self.assertGreaterEqual(len(approved), 4)
@@ -270,14 +282,14 @@ class GoldenCorpusRegistryDrivenTest(unittest.TestCase):
 
     def test_autocorrigir_corpus_is_registered_with_approved_cases(self):
         # tests/fixtures/golden_corpus/autocorrigir.json
-        corpora = {c["hotspot_id"]: c for c in load_corpus(ROOT)}
+        corpora = self.corpora_by_hotspot
         self.assertIn("HOTSPOT-05", corpora)
         approved = [c for c in corpora["HOTSPOT-05"]["cases"] if c["status"] == "APPROVED"]
         self.assertGreaterEqual(len(approved), 5)
 
     def test_gerar_delimitacao_corpus_is_registered_with_approved_cases(self):
         # tests/fixtures/golden_corpus/gerar_delimitacao.json
-        corpora = {c["hotspot_id"]: c for c in load_corpus(ROOT)}
+        corpora = self.corpora_by_hotspot
         self.assertIn("HOTSPOT-03", corpora)
         approved = [c for c in corpora["HOTSPOT-03"]["cases"] if c["status"] == "APPROVED"]
         self.assertGreaterEqual(len(approved), 8)
@@ -285,11 +297,10 @@ class GoldenCorpusRegistryDrivenTest(unittest.TestCase):
         self.assertEqual(statuses.get("GC-DELIM-008"), "CHARACTERIZED_NOT_APPROVED")
 
     def test_all_five_hotspots_are_represented(self):
-        corpora = {c["hotspot_id"] for c in load_corpus(ROOT)}
-        self.assertEqual(corpora, {"HOTSPOT-01", "HOTSPOT-02", "HOTSPOT-03", "HOTSPOT-04", "HOTSPOT-05"})
+        self.assertEqual(set(self.corpora_by_hotspot), {"HOTSPOT-01", "HOTSPOT-02", "HOTSPOT-03", "HOTSPOT-04", "HOTSPOT-05"})
 
     def test_coverage_map_only_counts_approved_status_cases(self):
-        coverage = build_coverage_map(ROOT)
+        coverage = self.coverage
         self.assertIn("HOTSPOT-04", coverage["hotspots"])
         integridade_cases = {
             case_id for family_row in coverage["matrix"].values() for case_id in family_row.get("HOTSPOT-04", [])
@@ -297,8 +308,7 @@ class GoldenCorpusRegistryDrivenTest(unittest.TestCase):
         self.assertNotIn("GC-INTEGRIDADE-012", integridade_cases)
 
     def test_coverage_map_surfaces_known_unreachable_paths(self):
-        coverage = build_coverage_map(ROOT)
-        locations = {entry["location"] for entry in coverage["known_unreachable"]}
+        locations = {entry["location"] for entry in self.coverage["known_unreachable"]}
         self.assertTrue(any("normalizar(obs.get('elemento'))" in loc for loc in locations))
 
     def test_committed_coverage_map_matches_the_generator_byte_for_byte(self):
@@ -309,7 +319,7 @@ class GoldenCorpusRegistryDrivenTest(unittest.TestCase):
         # hand-edited. This test is what actually enforces "não editar
         # manualmente", not just the doc's own header comment.
         committed = (ROOT / "docs/stabilization/golden-forensic-corpus-v1-coverage.md").read_text(encoding="utf-8")
-        generated = render_coverage_map(build_coverage_map(ROOT))
+        generated = render_coverage_map(self.coverage)
         self.assertEqual(committed, generated)
 
 
