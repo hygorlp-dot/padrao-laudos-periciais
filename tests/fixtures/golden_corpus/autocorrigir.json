@@ -1,0 +1,1071 @@
+{
+  "schema_version": "1.0.0",
+  "hotspot_id": "HOTSPOT-05",
+  "entrypoint": "scripts/motor_vicios/autocorrigir.py::autocorrigir",
+  "cases": [
+    {
+      "case_id": "GC-AUTOCORRIGIR-001",
+      "purpose": "Claim de causa reprovada em auditoria reduz a patologia a estado inconclusivo e registra ressalva de causalidade.",
+      "status": "APPROVED",
+      "semantic_families": [
+        "ai_proposal_not_effective_alone",
+        "correction_persistence",
+        "inconclusive_findings"
+      ],
+      "invariants_exercised": [
+        "CORRECTION_PERSISTENCE",
+        "CORRECTION_TRACEABILITY"
+      ],
+      "input": {
+        "resultado": {
+          "patologias": [
+            {
+              "id": "PAT-001",
+              "constatacao": {
+                "situacao": "ANOMALIA"
+              },
+              "causa": "Infiltração por falha de vedação na interface.",
+              "mecanismo": "Percolação de água através de selagem deteriorada.",
+              "origem": "ENDOGENA_CONSTRUTIVA",
+              "criticidade": "MODERADA",
+              "analise_causal": {
+                "causa_provavel": "Falha de vedação na interface.",
+                "grau_certeza": "ALTA"
+              },
+              "vicio_construtivo": {
+                "caracterizado": true,
+                "tipo": "CONSTRUTIVO",
+                "fundamentacao": "Execução divergente do projeto."
+              },
+              "reparabilidade": "REPARAVEL",
+              "recomendacao": {
+                "necessaria": true,
+                "descricao": "Refazer a vedação da interface."
+              },
+              "elegibilidade_orcamento": "ELEGIVEL_ORCAMENTO_VICIO",
+              "ressalvas": [],
+              "conclusao_tecnica": "Manifestação constatada com causa individualizada.",
+              "normas_relacionadas": []
+            }
+          ],
+          "catalogo_evidencias": [],
+          "questoes_saneadas": [],
+          "cobertura_quesitos": []
+        },
+        "claims": [
+          {
+            "id": "CLM-001",
+            "tipo": "CAUSA",
+            "patologia": "PAT-001"
+          }
+        ],
+        "auditorias": [
+          {
+            "claim_id": "CLM-001",
+            "veredito": "UNSUBSTANTIATED",
+            "evidencias": [
+              "OBS-001"
+            ]
+          }
+        ]
+      },
+      "expected_output_mode": "EXACT",
+      "expected_output": {
+        "final": {
+          "patologias": [
+            {
+              "id": "PAT-001",
+              "constatacao": {
+                "situacao": "ANOMALIA"
+              },
+              "causa": null,
+              "mecanismo": "Percolação de água através de selagem deteriorada.",
+              "origem": "INCONCLUSIVA",
+              "criticidade": "MODERADA",
+              "analise_causal": {
+                "causa_provavel": null,
+                "grau_certeza": "INCONCLUSIVO"
+              },
+              "vicio_construtivo": {
+                "caracterizado": false,
+                "tipo": "INCONCLUSIVO",
+                "fundamentacao": null
+              },
+              "reparabilidade": "NECESSITA_INVESTIGACAO",
+              "recomendacao": {
+                "necessaria": false,
+                "descricao": null
+              },
+              "elegibilidade_orcamento": "PENDENTE",
+              "ressalvas": [
+                "Causalidade inconclusiva após auditoria do suporte probatório."
+              ],
+              "conclusao_tecnica": "A manifestação foi constatada, mas os elementos disponíveis não permitem individualizar com segurança sua causa.",
+              "normas_relacionadas": []
+            }
+          ],
+          "catalogo_evidencias": [],
+          "questoes_saneadas": [],
+          "cobertura_quesitos": [],
+          "estado_analise": "PAT_FINAL",
+          "status_execucao": "ANALISE_CONCLUIDA"
+        },
+        "historico": [
+          {
+            "id": "AUT-001",
+            "alvo": "CLM-001",
+            "claim": "CLM-001",
+            "valor_antes": "Infiltração por falha de vedação na interface.",
+            "veredito": "UNSUBSTANTIATED",
+            "evidencia": "OBS-001",
+            "acao": "REDUZIR_CLAIM",
+            "valor_depois": "None",
+            "motivo": "Suporte insuficiente para manter formulação causal específica.",
+            "achado_originador": "CLM-001"
+          },
+          {
+            "id": "AUT-002",
+            "alvo": "PAT_FINAL",
+            "claim": null,
+            "valor_antes": "{'patologias': [{'id': 'PAT-001', 'constatacao': {'situacao': 'ANOMALIA'}, 'causa': None, 'mecanismo': 'Percolação de água através de selagem deteriorada.', 'origem': 'INCONCLUSIVA', 'criticidade': 'MODERADA', 'analise_causal': {'causa_provavel': None, 'grau_certeza': 'INCONCLUSIVO'}, 'vicio_construtivo': {'caracterizado': False, 'tipo': 'INCONCLUSIVO', 'fundamentacao': None}, 'reparabilidade': 'NECESSITA_INVESTIGACAO', 'recomendacao': {'necessaria': False, 'descricao': None}, 'elegibilidade_orcamento': 'PENDENTE', 'ressalvas': ['Causalidade inconclusiva após auditoria do suporte probatório.'], 'conclusao_tecnica': 'A manifestação foi constatada, mas os elementos disponíveis não permitem individualizar com segurança sua causa.', 'normas_relacionadas': []}], 'catalogo_evidencias': [], 'questoes_saneadas': [], 'cobertura_quesitos': []}",
+            "veredito": null,
+            "evidencia": "",
+            "acao": "FINALIZAR_ESTADO_CORRIGIDO",
+            "valor_depois": "{'patologias': [{'id': 'PAT-001', 'constatacao': {'situacao': 'ANOMALIA'}, 'causa': None, 'mecanismo': 'Percolação de água através de selagem deteriorada.', 'origem': 'INCONCLUSIVA', 'criticidade': 'MODERADA', 'analise_causal': {'causa_provavel': None, 'grau_certeza': 'INCONCLUSIVO'}, 'vicio_construtivo': {'caracterizado': False, 'tipo': 'INCONCLUSIVO', 'fundamentacao': None}, 'reparabilidade': 'NECESSITA_INVESTIGACAO', 'recomendacao': {'necessaria': False, 'descricao': None}, 'elegibilidade_orcamento': 'PENDENTE', 'ressalvas': ['Causalidade inconclusiva após auditoria do suporte probatório.'], 'conclusao_tecnica': 'A manifestação foi constatada, mas os elementos disponíveis não permitem individualizar com segurança sua causa.', 'normas_relacionadas': []}], 'catalogo_evidencias': [], 'questoes_saneadas': [], 'cobertura_quesitos': [], 'estado_analise': 'PAT_FINAL', 'status_execucao': 'ANALISE_CONCLUIDA'}",
+            "motivo": "Estado final e projeções derivadas recalculados após as correções.",
+            "achado_originador": "FINALIZACAO_AUTOCORRECAO"
+          }
+        ]
+      },
+      "non_semantic_fields_ignored": [],
+      "check_deterministic_replay": false,
+      "notes": "Ver docs/stabilization/golden-forensic-corpus-v1-design.md#HOTSPOT-05 (GC-AUTOCORRIGIR-001). Exercita o loop de redução de claims (autocorrigir.py linhas ~13-38), ramo tipo=CAUSA.",
+      "expected_classifications": {
+        "final.patologias.0.causa": null,
+        "final.patologias.0.origem": "INCONCLUSIVA",
+        "final.patologias.0.vicio_construtivo.caracterizado": false,
+        "final.patologias.0.reparabilidade": "NECESSITA_INVESTIGACAO",
+        "final.patologias.0.elegibilidade_orcamento": "PENDENTE",
+        "final.patologias.0.analise_causal.grau_certeza": "INCONCLUSIVO"
+      },
+      "expected_provenance": null,
+      "expected_warnings": null,
+      "expected_inconclusivity": "analise_causal.grau_certeza==INCONCLUSIVO apos auditoria reprovar o claim de causa (CORRECTION_PERSISTENCE: rejeicao de IA nao vira decisao efetiva sem correcao explicita do motor)."
+    },
+    {
+      "case_id": "GC-AUTOCORRIGIR-002",
+      "purpose": "Claim de mecanismo reprovada em auditoria limpa apenas o mecanismo, preservando a causa da patologia.",
+      "status": "APPROVED",
+      "semantic_families": [
+        "ai_proposal_not_effective_alone",
+        "correction_persistence"
+      ],
+      "invariants_exercised": [
+        "CORRECTION_PERSISTENCE",
+        "CORRECTION_TRACEABILITY"
+      ],
+      "input": {
+        "resultado": {
+          "patologias": [
+            {
+              "id": "PAT-001",
+              "constatacao": {
+                "situacao": "ANOMALIA"
+              },
+              "causa": "Infiltração por falha de vedação na interface.",
+              "mecanismo": "Percolação de água através de selagem deteriorada.",
+              "origem": "ENDOGENA_CONSTRUTIVA",
+              "criticidade": "MODERADA",
+              "analise_causal": {
+                "causa_provavel": "Falha de vedação na interface.",
+                "grau_certeza": "ALTA"
+              },
+              "vicio_construtivo": {
+                "caracterizado": true,
+                "tipo": "CONSTRUTIVO",
+                "fundamentacao": "Execução divergente do projeto."
+              },
+              "reparabilidade": "REPARAVEL",
+              "recomendacao": {
+                "necessaria": true,
+                "descricao": "Refazer a vedação da interface."
+              },
+              "elegibilidade_orcamento": "ELEGIVEL_ORCAMENTO_VICIO",
+              "ressalvas": [],
+              "conclusao_tecnica": "Manifestação constatada com causa individualizada.",
+              "normas_relacionadas": []
+            }
+          ],
+          "catalogo_evidencias": [],
+          "questoes_saneadas": [],
+          "cobertura_quesitos": []
+        },
+        "claims": [
+          {
+            "id": "CLM-002",
+            "tipo": "MECANISMO",
+            "patologia": "PAT-001"
+          }
+        ],
+        "auditorias": [
+          {
+            "claim_id": "CLM-002",
+            "veredito": "INTERPOLATED",
+            "evidencias": [
+              "OBS-002"
+            ]
+          }
+        ]
+      },
+      "expected_output_mode": "EXACT",
+      "expected_output": {
+        "final": {
+          "patologias": [
+            {
+              "id": "PAT-001",
+              "constatacao": {
+                "situacao": "ANOMALIA"
+              },
+              "causa": "Infiltração por falha de vedação na interface.",
+              "mecanismo": null,
+              "origem": "ENDOGENA_CONSTRUTIVA",
+              "criticidade": "MODERADA",
+              "analise_causal": {
+                "causa_provavel": "Falha de vedação na interface.",
+                "grau_certeza": "INCONCLUSIVO"
+              },
+              "vicio_construtivo": {
+                "caracterizado": true,
+                "tipo": "CONSTRUTIVO",
+                "fundamentacao": "Execução divergente do projeto."
+              },
+              "reparabilidade": "REPARAVEL",
+              "recomendacao": {
+                "necessaria": true,
+                "descricao": "Refazer a vedação da interface."
+              },
+              "elegibilidade_orcamento": "ELEGIVEL_ORCAMENTO_VICIO",
+              "ressalvas": [
+                "Causalidade inconclusiva após auditoria do suporte probatório."
+              ],
+              "conclusao_tecnica": "A manifestação foi constatada, mas os elementos disponíveis não permitem individualizar com segurança sua causa.",
+              "normas_relacionadas": []
+            }
+          ],
+          "catalogo_evidencias": [],
+          "questoes_saneadas": [],
+          "cobertura_quesitos": [],
+          "estado_analise": "PAT_FINAL",
+          "status_execucao": "ANALISE_CONCLUIDA"
+        },
+        "historico": [
+          {
+            "id": "AUT-001",
+            "alvo": "CLM-002",
+            "claim": "CLM-002",
+            "valor_antes": "Percolação de água através de selagem deteriorada.",
+            "veredito": "INTERPOLATED",
+            "evidencia": "OBS-002",
+            "acao": "REDUZIR_CLAIM",
+            "valor_depois": "None",
+            "motivo": "Suporte insuficiente para manter formulação causal específica.",
+            "achado_originador": "CLM-002"
+          },
+          {
+            "id": "AUT-002",
+            "alvo": "PAT_FINAL",
+            "claim": null,
+            "valor_antes": "{'patologias': [{'id': 'PAT-001', 'constatacao': {'situacao': 'ANOMALIA'}, 'causa': 'Infiltração por falha de vedação na interface.', 'mecanismo': None, 'origem': 'ENDOGENA_CONSTRUTIVA', 'criticidade': 'MODERADA', 'analise_causal': {'causa_provavel': 'Falha de vedação na interface.', 'grau_certeza': 'INCONCLUSIVO'}, 'vicio_construtivo': {'caracterizado': True, 'tipo': 'CONSTRUTIVO', 'fundamentacao': 'Execução divergente do projeto.'}, 'reparabilidade': 'REPARAVEL', 'recomendacao': {'necessaria': True, 'descricao': 'Refazer a vedação da interface.'}, 'elegibilidade_orcamento': 'ELEGIVEL_ORCAMENTO_VICIO', 'ressalvas': ['Causalidade inconclusiva após auditoria do suporte probatório.'], 'conclusao_tecnica': 'A manifestação foi constatada, mas os elementos disponíveis não permitem individualizar com segurança sua causa.', 'normas_relacionadas': []}], 'catalogo_evidencias': [], 'questoes_saneadas': [], 'cobertura_quesitos': []}",
+            "veredito": null,
+            "evidencia": "",
+            "acao": "FINALIZAR_ESTADO_CORRIGIDO",
+            "valor_depois": "{'patologias': [{'id': 'PAT-001', 'constatacao': {'situacao': 'ANOMALIA'}, 'causa': 'Infiltração por falha de vedação na interface.', 'mecanismo': None, 'origem': 'ENDOGENA_CONSTRUTIVA', 'criticidade': 'MODERADA', 'analise_causal': {'causa_provavel': 'Falha de vedação na interface.', 'grau_certeza': 'INCONCLUSIVO'}, 'vicio_construtivo': {'caracterizado': True, 'tipo': 'CONSTRUTIVO', 'fundamentacao': 'Execução divergente do projeto.'}, 'reparabilidade': 'REPARAVEL', 'recomendacao': {'necessaria': True, 'descricao': 'Refazer a vedação da interface.'}, 'elegibilidade_orcamento': 'ELEGIVEL_ORCAMENTO_VICIO', 'ressalvas': ['Causalidade inconclusiva após auditoria do suporte probatório.'], 'conclusao_tecnica': 'A manifestação foi constatada, mas os elementos disponíveis não permitem individualizar com segurança sua causa.', 'normas_relacionadas': []}], 'catalogo_evidencias': [], 'questoes_saneadas': [], 'cobertura_quesitos': [], 'estado_analise': 'PAT_FINAL', 'status_execucao': 'ANALISE_CONCLUIDA'}",
+            "motivo": "Estado final e projeções derivadas recalculados após as correções.",
+            "achado_originador": "FINALIZACAO_AUTOCORRECAO"
+          }
+        ]
+      },
+      "non_semantic_fields_ignored": [],
+      "check_deterministic_replay": false,
+      "notes": "Ver docs/stabilization/golden-forensic-corpus-v1-design.md#HOTSPOT-05 (GC-AUTOCORRIGIR-002). Detector direto de regressão para a bifurcação 'if tipo==CAUSA ... else: pat[\"mecanismo\"]=None' em autocorrigir.py linha 23 -- prova que apenas o campo mutado difere de GC-AUTOCORRIGIR-001.",
+      "expected_classifications": {
+        "final.patologias.0.mecanismo": null,
+        "final.patologias.0.causa": "Infiltração por falha de vedação na interface."
+      },
+      "expected_provenance": null,
+      "expected_warnings": null,
+      "expected_inconclusivity": null
+    },
+    {
+      "case_id": "GC-AUTOCORRIGIR-003",
+      "purpose": "Claim de vício construtivo reprovada em auditoria força caracterizado=False e reabre elegibilidade orçamentária, revertendo uma inflação de certeza previamente produzida pelo motor.",
+      "status": "APPROVED",
+      "semantic_families": [
+        "engine_decision",
+        "correction_persistence",
+        "ai_proposal_not_effective_alone"
+      ],
+      "invariants_exercised": [
+        "CORRECTION_PERSISTENCE",
+        "CORRECTION_TRACEABILITY",
+        "NO_CERTAINTY_INFLATION"
+      ],
+      "input": {
+        "resultado": {
+          "patologias": [
+            {
+              "id": "PAT-001",
+              "constatacao": {
+                "situacao": "ANOMALIA"
+              },
+              "causa": "Infiltração por falha de vedação na interface.",
+              "mecanismo": "Percolação de água através de selagem deteriorada.",
+              "origem": "ENDOGENA_CONSTRUTIVA",
+              "criticidade": "MODERADA",
+              "analise_causal": {
+                "causa_provavel": "Falha de vedação na interface.",
+                "grau_certeza": "ALTA"
+              },
+              "vicio_construtivo": {
+                "caracterizado": true,
+                "tipo": "CONSTRUTIVO",
+                "fundamentacao": "Execução divergente do projeto."
+              },
+              "reparabilidade": "REPARAVEL",
+              "recomendacao": {
+                "necessaria": true,
+                "descricao": "Refazer a vedação da interface."
+              },
+              "elegibilidade_orcamento": "ELEGIVEL_ORCAMENTO_VICIO",
+              "ressalvas": [],
+              "conclusao_tecnica": "Manifestação constatada com causa individualizada.",
+              "normas_relacionadas": []
+            }
+          ],
+          "catalogo_evidencias": [],
+          "questoes_saneadas": [],
+          "cobertura_quesitos": []
+        },
+        "claims": [
+          {
+            "id": "CLM-003",
+            "tipo": "VICIO_CONSTRUTIVO",
+            "patologia": "PAT-001"
+          }
+        ],
+        "auditorias": [
+          {
+            "claim_id": "CLM-003",
+            "veredito": "CONTRADICTED",
+            "evidencias": [
+              "OBS-003"
+            ]
+          }
+        ]
+      },
+      "expected_output_mode": "EXACT",
+      "expected_output": {
+        "final": {
+          "patologias": [
+            {
+              "id": "PAT-001",
+              "constatacao": {
+                "situacao": "ANOMALIA"
+              },
+              "causa": "Infiltração por falha de vedação na interface.",
+              "mecanismo": "Percolação de água através de selagem deteriorada.",
+              "origem": "ENDOGENA_CONSTRUTIVA",
+              "criticidade": "MODERADA",
+              "analise_causal": {
+                "causa_provavel": "Falha de vedação na interface.",
+                "grau_certeza": "ALTA"
+              },
+              "vicio_construtivo": {
+                "caracterizado": false,
+                "tipo": "INCONCLUSIVO",
+                "fundamentacao": null
+              },
+              "reparabilidade": "REPARAVEL",
+              "recomendacao": {
+                "necessaria": true,
+                "descricao": "Refazer a vedação da interface."
+              },
+              "elegibilidade_orcamento": "PENDENTE",
+              "ressalvas": [],
+              "conclusao_tecnica": "Manifestação constatada com causa individualizada.",
+              "normas_relacionadas": []
+            }
+          ],
+          "catalogo_evidencias": [],
+          "questoes_saneadas": [],
+          "cobertura_quesitos": [],
+          "estado_analise": "PAT_FINAL",
+          "status_execucao": "ANALISE_CONCLUIDA"
+        },
+        "historico": [
+          {
+            "id": "AUT-001",
+            "alvo": "CLM-003",
+            "claim": "CLM-003",
+            "valor_antes": "True",
+            "veredito": "CONTRADICTED",
+            "evidencia": "OBS-003",
+            "acao": "REMOVER_CARACTERIZACAO",
+            "valor_depois": "False",
+            "motivo": "Caracterização dependia de origem/causa não sustentada.",
+            "achado_originador": "CLM-003"
+          },
+          {
+            "id": "AUT-002",
+            "alvo": "PAT_FINAL",
+            "claim": null,
+            "valor_antes": "{'patologias': [{'id': 'PAT-001', 'constatacao': {'situacao': 'ANOMALIA'}, 'causa': 'Infiltração por falha de vedação na interface.', 'mecanismo': 'Percolação de água através de selagem deteriorada.', 'origem': 'ENDOGENA_CONSTRUTIVA', 'criticidade': 'MODERADA', 'analise_causal': {'causa_provavel': 'Falha de vedação na interface.', 'grau_certeza': 'ALTA'}, 'vicio_construtivo': {'caracterizado': False, 'tipo': 'INCONCLUSIVO', 'fundamentacao': None}, 'reparabilidade': 'REPARAVEL', 'recomendacao': {'necessaria': True, 'descricao': 'Refazer a vedação da interface.'}, 'elegibilidade_orcamento': 'PENDENTE', 'ressalvas': [], 'conclusao_tecnica': 'Manifestação constatada com causa individualizada.', 'normas_relacionadas': []}], 'catalogo_evidencias': [], 'questoes_saneadas': [], 'cobertura_quesitos': []}",
+            "veredito": null,
+            "evidencia": "",
+            "acao": "FINALIZAR_ESTADO_CORRIGIDO",
+            "valor_depois": "{'patologias': [{'id': 'PAT-001', 'constatacao': {'situacao': 'ANOMALIA'}, 'causa': 'Infiltração por falha de vedação na interface.', 'mecanismo': 'Percolação de água através de selagem deteriorada.', 'origem': 'ENDOGENA_CONSTRUTIVA', 'criticidade': 'MODERADA', 'analise_causal': {'causa_provavel': 'Falha de vedação na interface.', 'grau_certeza': 'ALTA'}, 'vicio_construtivo': {'caracterizado': False, 'tipo': 'INCONCLUSIVO', 'fundamentacao': None}, 'reparabilidade': 'REPARAVEL', 'recomendacao': {'necessaria': True, 'descricao': 'Refazer a vedação da interface.'}, 'elegibilidade_orcamento': 'PENDENTE', 'ressalvas': [], 'conclusao_tecnica': 'Manifestação constatada com causa individualizada.', 'normas_relacionadas': []}], 'catalogo_evidencias': [], 'questoes_saneadas': [], 'cobertura_quesitos': [], 'estado_analise': 'PAT_FINAL', 'status_execucao': 'ANALISE_CONCLUIDA'}",
+            "motivo": "Estado final e projeções derivadas recalculados após as correções.",
+            "achado_originador": "FINALIZACAO_AUTOCORRECAO"
+          }
+        ]
+      },
+      "non_semantic_fields_ignored": [],
+      "check_deterministic_replay": false,
+      "notes": "Ver docs/stabilization/golden-forensic-corpus-v1-design.md#HOTSPOT-05 (GC-AUTOCORRIGIR-003). caracterizado=True vindo de motor.executar não sobrevive a uma auditoria CONTRADICTED.",
+      "expected_classifications": {
+        "final.patologias.0.vicio_construtivo.caracterizado": false,
+        "final.patologias.0.elegibilidade_orcamento": "PENDENTE"
+      },
+      "expected_provenance": null,
+      "expected_warnings": null,
+      "expected_inconclusivity": null
+    },
+    {
+      "case_id": "GC-AUTOCORRIGIR-004",
+      "purpose": "Claim de conformidade normativa reprovada em auditoria filtra da patologia as normas não verificadas ou sem aplicabilidade temporal.",
+      "status": "APPROVED",
+      "semantic_families": [
+        "normative_references",
+        "correction_persistence"
+      ],
+      "invariants_exercised": [
+        "CORRECTION_PERSISTENCE",
+        "NORMATIVE_FIDELITY"
+      ],
+      "input": {
+        "resultado": {
+          "patologias": [
+            {
+              "id": "PAT-001",
+              "constatacao": {
+                "situacao": "ANOMALIA"
+              },
+              "causa": "Infiltração por falha de vedação na interface.",
+              "mecanismo": "Percolação de água através de selagem deteriorada.",
+              "origem": "ENDOGENA_CONSTRUTIVA",
+              "criticidade": "MODERADA",
+              "analise_causal": {
+                "causa_provavel": "Falha de vedação na interface.",
+                "grau_certeza": "ALTA"
+              },
+              "vicio_construtivo": {
+                "caracterizado": true,
+                "tipo": "CONSTRUTIVO",
+                "fundamentacao": "Execução divergente do projeto."
+              },
+              "reparabilidade": "REPARAVEL",
+              "recomendacao": {
+                "necessaria": true,
+                "descricao": "Refazer a vedação da interface."
+              },
+              "elegibilidade_orcamento": "ELEGIVEL_ORCAMENTO_VICIO",
+              "ressalvas": [],
+              "conclusao_tecnica": "Manifestação constatada com causa individualizada.",
+              "normas_relacionadas": [
+                {
+                  "id": "NOR-001",
+                  "verificada": true,
+                  "aplicabilidade_temporal": "APLICAVEL"
+                },
+                {
+                  "id": "NOR-002",
+                  "verificada": false,
+                  "aplicabilidade_temporal": "APLICAVEL"
+                },
+                {
+                  "id": "NOR-003",
+                  "verificada": true,
+                  "aplicabilidade_temporal": "NAO_APLICAVEL"
+                }
+              ]
+            }
+          ],
+          "catalogo_evidencias": [],
+          "questoes_saneadas": [],
+          "cobertura_quesitos": []
+        },
+        "claims": [
+          {
+            "id": "CLM-004",
+            "tipo": "CONFORMIDADE_NORMATIVA",
+            "patologia": "PAT-001"
+          }
+        ],
+        "auditorias": [
+          {
+            "claim_id": "CLM-004",
+            "veredito": "CONTRADICTED",
+            "evidencias": [
+              "OBS-004"
+            ]
+          }
+        ]
+      },
+      "expected_output_mode": "EXACT",
+      "expected_output": {
+        "final": {
+          "patologias": [
+            {
+              "id": "PAT-001",
+              "constatacao": {
+                "situacao": "ANOMALIA"
+              },
+              "causa": "Infiltração por falha de vedação na interface.",
+              "mecanismo": "Percolação de água através de selagem deteriorada.",
+              "origem": "ENDOGENA_CONSTRUTIVA",
+              "criticidade": "MODERADA",
+              "analise_causal": {
+                "causa_provavel": "Falha de vedação na interface.",
+                "grau_certeza": "ALTA"
+              },
+              "vicio_construtivo": {
+                "caracterizado": true,
+                "tipo": "CONSTRUTIVO",
+                "fundamentacao": "Execução divergente do projeto."
+              },
+              "reparabilidade": "REPARAVEL",
+              "recomendacao": {
+                "necessaria": true,
+                "descricao": "Refazer a vedação da interface."
+              },
+              "elegibilidade_orcamento": "ELEGIVEL_ORCAMENTO_VICIO",
+              "ressalvas": [],
+              "conclusao_tecnica": "Manifestação constatada com causa individualizada.",
+              "normas_relacionadas": [
+                {
+                  "id": "NOR-001",
+                  "verificada": true,
+                  "aplicabilidade_temporal": "APLICAVEL"
+                }
+              ]
+            }
+          ],
+          "catalogo_evidencias": [],
+          "questoes_saneadas": [],
+          "cobertura_quesitos": [],
+          "estado_analise": "PAT_FINAL",
+          "status_execucao": "ANALISE_CONCLUIDA"
+        },
+        "historico": [
+          {
+            "id": "AUT-001",
+            "alvo": "CLM-004",
+            "claim": "CLM-004",
+            "valor_antes": "3",
+            "veredito": "CONTRADICTED",
+            "evidencia": "OBS-004",
+            "acao": "REMOVER_FUNDAMENTO_NORMATIVO",
+            "valor_depois": "1",
+            "motivo": "Norma ou requisito não verificável.",
+            "achado_originador": "CLM-004"
+          },
+          {
+            "id": "AUT-002",
+            "alvo": "PAT_FINAL",
+            "claim": null,
+            "valor_antes": "{'patologias': [{'id': 'PAT-001', 'constatacao': {'situacao': 'ANOMALIA'}, 'causa': 'Infiltração por falha de vedação na interface.', 'mecanismo': 'Percolação de água através de selagem deteriorada.', 'origem': 'ENDOGENA_CONSTRUTIVA', 'criticidade': 'MODERADA', 'analise_causal': {'causa_provavel': 'Falha de vedação na interface.', 'grau_certeza': 'ALTA'}, 'vicio_construtivo': {'caracterizado': True, 'tipo': 'CONSTRUTIVO', 'fundamentacao': 'Execução divergente do projeto.'}, 'reparabilidade': 'REPARAVEL', 'recomendacao': {'necessaria': True, 'descricao': 'Refazer a vedação da interface.'}, 'elegibilidade_orcamento': 'ELEGIVEL_ORCAMENTO_VICIO', 'ressalvas': [], 'conclusao_tecnica': 'Manifestação constatada com causa individualizada.', 'normas_relacionadas': [{'id': 'NOR-001', 'verificada': True, 'aplicabilidade_temporal': 'APLICAVEL'}]}], 'catalogo_evidencias': [], 'questoes_saneadas': [], 'cobertura_quesitos': []}",
+            "veredito": null,
+            "evidencia": "",
+            "acao": "FINALIZAR_ESTADO_CORRIGIDO",
+            "valor_depois": "{'patologias': [{'id': 'PAT-001', 'constatacao': {'situacao': 'ANOMALIA'}, 'causa': 'Infiltração por falha de vedação na interface.', 'mecanismo': 'Percolação de água através de selagem deteriorada.', 'origem': 'ENDOGENA_CONSTRUTIVA', 'criticidade': 'MODERADA', 'analise_causal': {'causa_provavel': 'Falha de vedação na interface.', 'grau_certeza': 'ALTA'}, 'vicio_construtivo': {'caracterizado': True, 'tipo': 'CONSTRUTIVO', 'fundamentacao': 'Execução divergente do projeto.'}, 'reparabilidade': 'REPARAVEL', 'recomendacao': {'necessaria': True, 'descricao': 'Refazer a vedação da interface.'}, 'elegibilidade_orcamento': 'ELEGIVEL_ORCAMENTO_VICIO', 'ressalvas': [], 'conclusao_tecnica': 'Manifestação constatada com causa individualizada.', 'normas_relacionadas': [{'id': 'NOR-001', 'verificada': True, 'aplicabilidade_temporal': 'APLICAVEL'}]}], 'catalogo_evidencias': [], 'questoes_saneadas': [], 'cobertura_quesitos': [], 'estado_analise': 'PAT_FINAL', 'status_execucao': 'ANALISE_CONCLUIDA'}",
+            "motivo": "Estado final e projeções derivadas recalculados após as correções.",
+            "achado_originador": "FINALIZACAO_AUTOCORRECAO"
+          }
+        ]
+      },
+      "non_semantic_fields_ignored": [],
+      "check_deterministic_replay": false,
+      "notes": "Ver docs/stabilization/golden-forensic-corpus-v1-design.md#HOTSPOT-05 (GC-AUTOCORRIGIR-004). Confirmado empiricamente: historico[0].valor_antes/valor_depois armazenam len(before)/len(after) como strings ('3'/'1'), não a lista completa de normas -- pinado como está, não 'corrigido'.",
+      "expected_classifications": {
+        "historico.0.acao": "REMOVER_FUNDAMENTO_NORMATIVO"
+      },
+      "expected_provenance": null,
+      "expected_warnings": null,
+      "expected_inconclusivity": null
+    },
+    {
+      "case_id": "GC-AUTOCORRIGIR-005",
+      "purpose": "Achado NEGACAO_CONVERTIDA_EM_FATO corrige a polaridade no catálogo de evidências, movendo o aspecto negado de suportado para contraditado.",
+      "status": "APPROVED",
+      "semantic_families": [
+        "contradictory_evidence",
+        "engine_decision",
+        "correction_persistence"
+      ],
+      "invariants_exercised": [
+        "CORRECTION_PERSISTENCE",
+        "CORRECTION_TRACEABILITY"
+      ],
+      "input": {
+        "resultado": {
+          "patologias": [
+            {
+              "id": "PAT-001",
+              "constatacao": {
+                "situacao": "ANOMALIA"
+              },
+              "causa": "Infiltração por falha de vedação na interface.",
+              "mecanismo": "Percolação de água através de selagem deteriorada.",
+              "origem": "ENDOGENA_CONSTRUTIVA",
+              "criticidade": "MODERADA",
+              "analise_causal": {
+                "causa_provavel": "Falha de vedação na interface.",
+                "grau_certeza": "ALTA"
+              },
+              "vicio_construtivo": {
+                "caracterizado": true,
+                "tipo": "CONSTRUTIVO",
+                "fundamentacao": "Execução divergente do projeto."
+              },
+              "reparabilidade": "REPARAVEL",
+              "recomendacao": {
+                "necessaria": true,
+                "descricao": "Refazer a vedação da interface."
+              },
+              "elegibilidade_orcamento": "ELEGIVEL_ORCAMENTO_VICIO",
+              "ressalvas": [],
+              "conclusao_tecnica": "Manifestação constatada com causa individualizada.",
+              "normas_relacionadas": []
+            }
+          ],
+          "catalogo_evidencias": [
+            {
+              "id": "EVD-001",
+              "aspectos_suportados": [
+                "IMPACTO_REGISTRADO",
+                "OUTRO_ASPECTO"
+              ],
+              "aspectos_contraditos": [],
+              "auditoria_aspectos": [
+                {
+                  "aspecto": "IMPACTO_REGISTRADO",
+                  "polaridade": "NEGADO"
+                }
+              ]
+            }
+          ],
+          "questoes_saneadas": [],
+          "cobertura_quesitos": []
+        },
+        "claims": [],
+        "auditorias": [],
+        "achados": [
+          {
+            "tipo": "NEGACAO_CONVERTIDA_EM_FATO",
+            "claim_id": "EVD-001"
+          }
+        ]
+      },
+      "expected_output_mode": "EXACT",
+      "expected_output": {
+        "final": {
+          "patologias": [
+            {
+              "id": "PAT-001",
+              "constatacao": {
+                "situacao": "ANOMALIA"
+              },
+              "causa": "Infiltração por falha de vedação na interface.",
+              "mecanismo": "Percolação de água através de selagem deteriorada.",
+              "origem": "ENDOGENA_CONSTRUTIVA",
+              "criticidade": "MODERADA",
+              "analise_causal": {
+                "causa_provavel": "Falha de vedação na interface.",
+                "grau_certeza": "ALTA"
+              },
+              "vicio_construtivo": {
+                "caracterizado": true,
+                "tipo": "CONSTRUTIVO",
+                "fundamentacao": "Execução divergente do projeto."
+              },
+              "reparabilidade": "REPARAVEL",
+              "recomendacao": {
+                "necessaria": true,
+                "descricao": "Refazer a vedação da interface."
+              },
+              "elegibilidade_orcamento": "ELEGIVEL_ORCAMENTO_VICIO",
+              "ressalvas": [],
+              "conclusao_tecnica": "Manifestação constatada com causa individualizada.",
+              "normas_relacionadas": []
+            }
+          ],
+          "catalogo_evidencias": [
+            {
+              "id": "EVD-001",
+              "aspectos_suportados": [
+                "OUTRO_ASPECTO"
+              ],
+              "aspectos_contraditos": [
+                "IMPACTO_REGISTRADO"
+              ],
+              "auditoria_aspectos": [
+                {
+                  "aspecto": "IMPACTO_REGISTRADO",
+                  "polaridade": "NEGADO"
+                }
+              ]
+            }
+          ],
+          "questoes_saneadas": [],
+          "cobertura_quesitos": [],
+          "estado_analise": "PAT_FINAL",
+          "status_execucao": "ANALISE_CONCLUIDA"
+        },
+        "historico": [
+          {
+            "id": "AUT-001",
+            "alvo": "EVD-001",
+            "claim": "EVD-001",
+            "valor_antes": "{'id': 'EVD-001', 'aspectos_suportados': ['IMPACTO_REGISTRADO', 'OUTRO_ASPECTO'], 'aspectos_contraditos': [], 'auditoria_aspectos': [{'aspecto': 'IMPACTO_REGISTRADO', 'polaridade': 'NEGADO'}]}",
+            "veredito": null,
+            "evidencia": "",
+            "acao": "CORRIGIR_POLARIDADE",
+            "valor_depois": "{'id': 'EVD-001', 'aspectos_suportados': ['OUTRO_ASPECTO'], 'aspectos_contraditos': ['IMPACTO_REGISTRADO'], 'auditoria_aspectos': [{'aspecto': 'IMPACTO_REGISTRADO', 'polaridade': 'NEGADO'}]}",
+            "motivo": "Aspecto negado não pode permanecer como suporte positivo.",
+            "achado_originador": "NEGACAO_CONVERTIDA_EM_FATO"
+          },
+          {
+            "id": "AUT-002",
+            "alvo": "EVD-001",
+            "claim": "EVD-001",
+            "valor_antes": "{'patologias': [{'id': 'PAT-001', 'constatacao': {'situacao': 'ANOMALIA'}, 'causa': 'Infiltração por falha de vedação na interface.', 'mecanismo': 'Percolação de água através de selagem deteriorada.', 'origem': 'ENDOGENA_CONSTRUTIVA', 'criticidade': 'MODERADA', 'analise_causal': {'causa_provavel': 'Falha de vedação na interface.', 'grau_certeza': 'ALTA'}, 'vicio_construtivo': {'caracterizado': True, 'tipo': 'CONSTRUTIVO', 'fundamentacao': 'Execução divergente do projeto.'}, 'reparabilidade': 'REPARAVEL', 'recomendacao': {'necessaria': True, 'descricao': 'Refazer a vedação da interface.'}, 'elegibilidade_orcamento': 'ELEGIVEL_ORCAMENTO_VICIO', 'ressalvas': [], 'conclusao_tecnica': 'Manifestação constatada com causa individualizada.', 'normas_relacionadas': []}], 'catalogo_evidencias': [{'id': 'EVD-001', 'aspectos_suportados': ['IMPACTO_REGISTRADO', 'OUTRO_ASPECTO'], 'aspectos_contraditos': [], 'auditoria_aspectos': [{'aspecto': 'IMPACTO_REGISTRADO', 'polaridade': 'NEGADO'}]}], 'questoes_saneadas': [], 'cobertura_quesitos': []}",
+            "veredito": null,
+            "evidencia": "",
+            "acao": "APLICAR_CORRECAO_DETECTOR",
+            "valor_depois": "{'patologias': [{'id': 'PAT-001', 'constatacao': {'situacao': 'ANOMALIA'}, 'causa': 'Infiltração por falha de vedação na interface.', 'mecanismo': 'Percolação de água através de selagem deteriorada.', 'origem': 'ENDOGENA_CONSTRUTIVA', 'criticidade': 'MODERADA', 'analise_causal': {'causa_provavel': 'Falha de vedação na interface.', 'grau_certeza': 'ALTA'}, 'vicio_construtivo': {'caracterizado': True, 'tipo': 'CONSTRUTIVO', 'fundamentacao': 'Execução divergente do projeto.'}, 'reparabilidade': 'REPARAVEL', 'recomendacao': {'necessaria': True, 'descricao': 'Refazer a vedação da interface.'}, 'elegibilidade_orcamento': 'ELEGIVEL_ORCAMENTO_VICIO', 'ressalvas': [], 'conclusao_tecnica': 'Manifestação constatada com causa individualizada.', 'normas_relacionadas': []}], 'catalogo_evidencias': [{'id': 'EVD-001', 'aspectos_suportados': ['OUTRO_ASPECTO'], 'aspectos_contraditos': ['IMPACTO_REGISTRADO'], 'auditoria_aspectos': [{'aspecto': 'IMPACTO_REGISTRADO', 'polaridade': 'NEGADO'}]}], 'questoes_saneadas': [], 'cobertura_quesitos': []}",
+            "motivo": "Correção determinística motivada por achado reproduzível.",
+            "achado_originador": "NEGACAO_CONVERTIDA_EM_FATO"
+          },
+          {
+            "id": "AUT-003",
+            "alvo": "PAT_FINAL",
+            "claim": null,
+            "valor_antes": "{'patologias': [{'id': 'PAT-001', 'constatacao': {'situacao': 'ANOMALIA'}, 'causa': 'Infiltração por falha de vedação na interface.', 'mecanismo': 'Percolação de água através de selagem deteriorada.', 'origem': 'ENDOGENA_CONSTRUTIVA', 'criticidade': 'MODERADA', 'analise_causal': {'causa_provavel': 'Falha de vedação na interface.', 'grau_certeza': 'ALTA'}, 'vicio_construtivo': {'caracterizado': True, 'tipo': 'CONSTRUTIVO', 'fundamentacao': 'Execução divergente do projeto.'}, 'reparabilidade': 'REPARAVEL', 'recomendacao': {'necessaria': True, 'descricao': 'Refazer a vedação da interface.'}, 'elegibilidade_orcamento': 'ELEGIVEL_ORCAMENTO_VICIO', 'ressalvas': [], 'conclusao_tecnica': 'Manifestação constatada com causa individualizada.', 'normas_relacionadas': []}], 'catalogo_evidencias': [{'id': 'EVD-001', 'aspectos_suportados': ['OUTRO_ASPECTO'], 'aspectos_contraditos': ['IMPACTO_REGISTRADO'], 'auditoria_aspectos': [{'aspecto': 'IMPACTO_REGISTRADO', 'polaridade': 'NEGADO'}]}], 'questoes_saneadas': [], 'cobertura_quesitos': []}",
+            "veredito": null,
+            "evidencia": "",
+            "acao": "FINALIZAR_ESTADO_CORRIGIDO",
+            "valor_depois": "{'patologias': [{'id': 'PAT-001', 'constatacao': {'situacao': 'ANOMALIA'}, 'causa': 'Infiltração por falha de vedação na interface.', 'mecanismo': 'Percolação de água através de selagem deteriorada.', 'origem': 'ENDOGENA_CONSTRUTIVA', 'criticidade': 'MODERADA', 'analise_causal': {'causa_provavel': 'Falha de vedação na interface.', 'grau_certeza': 'ALTA'}, 'vicio_construtivo': {'caracterizado': True, 'tipo': 'CONSTRUTIVO', 'fundamentacao': 'Execução divergente do projeto.'}, 'reparabilidade': 'REPARAVEL', 'recomendacao': {'necessaria': True, 'descricao': 'Refazer a vedação da interface.'}, 'elegibilidade_orcamento': 'ELEGIVEL_ORCAMENTO_VICIO', 'ressalvas': [], 'conclusao_tecnica': 'Manifestação constatada com causa individualizada.', 'normas_relacionadas': []}], 'catalogo_evidencias': [{'id': 'EVD-001', 'aspectos_suportados': ['OUTRO_ASPECTO'], 'aspectos_contraditos': ['IMPACTO_REGISTRADO'], 'auditoria_aspectos': [{'aspecto': 'IMPACTO_REGISTRADO', 'polaridade': 'NEGADO'}]}], 'questoes_saneadas': [], 'cobertura_quesitos': [], 'estado_analise': 'PAT_FINAL', 'status_execucao': 'ANALISE_CONCLUIDA'}",
+            "motivo": "Estado final e projeções derivadas recalculados após as correções.",
+            "achado_originador": "FINALIZACAO_AUTOCORRECAO"
+          }
+        ]
+      },
+      "non_semantic_fields_ignored": [],
+      "check_deterministic_replay": false,
+      "notes": "Ver docs/stabilization/golden-forensic-corpus-v1-design.md#HOTSPOT-05 (GC-AUTOCORRIGIR-005). Exercita o loop orientado a achados (autocorrigir.py linhas ~39-78), estruturalmente distinto do loop de claims. Confirmado empiricamente: a auto-correção gera 3 entradas em historico (CORRIGIR_POLARIDADE por evidência, APLICAR_CORRECAO_DETECTOR agregando o achado, e FINALIZAR_ESTADO_CORRIGIDO no fechamento) -- todas pinadas em expected_output.",
+      "expected_classifications": {
+        "historico.0.acao": "CORRIGIR_POLARIDADE"
+      },
+      "expected_provenance": null,
+      "expected_warnings": null,
+      "expected_inconclusivity": null
+    },
+    {
+      "case_id": "GC-AUTOCORRIGIR-006",
+      "purpose": "Duas execuções independentes de autocorrigir sobre input idêntico (deep-copiado) produzem exatamente o mesmo final e historico (idempotência/determinismo interno).",
+      "status": "APPROVED",
+      "semantic_families": [
+        "deterministic_replay"
+      ],
+      "invariants_exercised": [
+        "IDEMPOTENCE"
+      ],
+      "input": {
+        "resultado": {
+          "patologias": [
+            {
+              "id": "PAT-001",
+              "constatacao": {
+                "situacao": "ANOMALIA"
+              },
+              "causa": "Infiltração por falha de vedação na interface.",
+              "mecanismo": "Percolação de água através de selagem deteriorada.",
+              "origem": "ENDOGENA_CONSTRUTIVA",
+              "criticidade": "MODERADA",
+              "analise_causal": {
+                "causa_provavel": "Falha de vedação na interface.",
+                "grau_certeza": "ALTA"
+              },
+              "vicio_construtivo": {
+                "caracterizado": true,
+                "tipo": "CONSTRUTIVO",
+                "fundamentacao": "Execução divergente do projeto."
+              },
+              "reparabilidade": "REPARAVEL",
+              "recomendacao": {
+                "necessaria": true,
+                "descricao": "Refazer a vedação da interface."
+              },
+              "elegibilidade_orcamento": "ELEGIVEL_ORCAMENTO_VICIO",
+              "ressalvas": [],
+              "conclusao_tecnica": "Manifestação constatada com causa individualizada.",
+              "normas_relacionadas": []
+            }
+          ],
+          "catalogo_evidencias": [],
+          "questoes_saneadas": [],
+          "cobertura_quesitos": []
+        },
+        "claims": [
+          {
+            "id": "CLM-001",
+            "tipo": "CAUSA",
+            "patologia": "PAT-001"
+          }
+        ],
+        "auditorias": [
+          {
+            "claim_id": "CLM-001",
+            "veredito": "UNSUBSTANTIATED",
+            "evidencias": [
+              "OBS-001"
+            ]
+          }
+        ]
+      },
+      "expected_output_mode": "EXACT",
+      "expected_output": {
+        "final": {
+          "patologias": [
+            {
+              "id": "PAT-001",
+              "constatacao": {
+                "situacao": "ANOMALIA"
+              },
+              "causa": null,
+              "mecanismo": "Percolação de água através de selagem deteriorada.",
+              "origem": "INCONCLUSIVA",
+              "criticidade": "MODERADA",
+              "analise_causal": {
+                "causa_provavel": null,
+                "grau_certeza": "INCONCLUSIVO"
+              },
+              "vicio_construtivo": {
+                "caracterizado": false,
+                "tipo": "INCONCLUSIVO",
+                "fundamentacao": null
+              },
+              "reparabilidade": "NECESSITA_INVESTIGACAO",
+              "recomendacao": {
+                "necessaria": false,
+                "descricao": null
+              },
+              "elegibilidade_orcamento": "PENDENTE",
+              "ressalvas": [
+                "Causalidade inconclusiva após auditoria do suporte probatório."
+              ],
+              "conclusao_tecnica": "A manifestação foi constatada, mas os elementos disponíveis não permitem individualizar com segurança sua causa.",
+              "normas_relacionadas": []
+            }
+          ],
+          "catalogo_evidencias": [],
+          "questoes_saneadas": [],
+          "cobertura_quesitos": [],
+          "estado_analise": "PAT_FINAL",
+          "status_execucao": "ANALISE_CONCLUIDA"
+        },
+        "historico": [
+          {
+            "id": "AUT-001",
+            "alvo": "CLM-001",
+            "claim": "CLM-001",
+            "valor_antes": "Infiltração por falha de vedação na interface.",
+            "veredito": "UNSUBSTANTIATED",
+            "evidencia": "OBS-001",
+            "acao": "REDUZIR_CLAIM",
+            "valor_depois": "None",
+            "motivo": "Suporte insuficiente para manter formulação causal específica.",
+            "achado_originador": "CLM-001"
+          },
+          {
+            "id": "AUT-002",
+            "alvo": "PAT_FINAL",
+            "claim": null,
+            "valor_antes": "{'patologias': [{'id': 'PAT-001', 'constatacao': {'situacao': 'ANOMALIA'}, 'causa': None, 'mecanismo': 'Percolação de água através de selagem deteriorada.', 'origem': 'INCONCLUSIVA', 'criticidade': 'MODERADA', 'analise_causal': {'causa_provavel': None, 'grau_certeza': 'INCONCLUSIVO'}, 'vicio_construtivo': {'caracterizado': False, 'tipo': 'INCONCLUSIVO', 'fundamentacao': None}, 'reparabilidade': 'NECESSITA_INVESTIGACAO', 'recomendacao': {'necessaria': False, 'descricao': None}, 'elegibilidade_orcamento': 'PENDENTE', 'ressalvas': ['Causalidade inconclusiva após auditoria do suporte probatório.'], 'conclusao_tecnica': 'A manifestação foi constatada, mas os elementos disponíveis não permitem individualizar com segurança sua causa.', 'normas_relacionadas': []}], 'catalogo_evidencias': [], 'questoes_saneadas': [], 'cobertura_quesitos': []}",
+            "veredito": null,
+            "evidencia": "",
+            "acao": "FINALIZAR_ESTADO_CORRIGIDO",
+            "valor_depois": "{'patologias': [{'id': 'PAT-001', 'constatacao': {'situacao': 'ANOMALIA'}, 'causa': None, 'mecanismo': 'Percolação de água através de selagem deteriorada.', 'origem': 'INCONCLUSIVA', 'criticidade': 'MODERADA', 'analise_causal': {'causa_provavel': None, 'grau_certeza': 'INCONCLUSIVO'}, 'vicio_construtivo': {'caracterizado': False, 'tipo': 'INCONCLUSIVO', 'fundamentacao': None}, 'reparabilidade': 'NECESSITA_INVESTIGACAO', 'recomendacao': {'necessaria': False, 'descricao': None}, 'elegibilidade_orcamento': 'PENDENTE', 'ressalvas': ['Causalidade inconclusiva após auditoria do suporte probatório.'], 'conclusao_tecnica': 'A manifestação foi constatada, mas os elementos disponíveis não permitem individualizar com segurança sua causa.', 'normas_relacionadas': []}], 'catalogo_evidencias': [], 'questoes_saneadas': [], 'cobertura_quesitos': [], 'estado_analise': 'PAT_FINAL', 'status_execucao': 'ANALISE_CONCLUIDA'}",
+            "motivo": "Estado final e projeções derivadas recalculados após as correções.",
+            "achado_originador": "FINALIZACAO_AUTOCORRECAO"
+          }
+        ]
+      },
+      "non_semantic_fields_ignored": [],
+      "check_deterministic_replay": true,
+      "notes": "Ver docs/stabilization/golden-forensic-corpus-v1-design.md#HOTSPOT-05 (GC-AUTOCORRIGIR-006). A numeração AUT-NNN de historico reinicia em 1 a cada chamada, portanto duas execuções independentes do MESMO input produzem historico idêntico byte-a-byte (nenhuma colisão/discrepância de numeração neste caso, verificado empiricamente) -- sem necessidade de non_semantic_fields_ignored.",
+      "expected_classifications": null,
+      "expected_provenance": null,
+      "expected_warnings": null,
+      "expected_inconclusivity": null
+    },
+    {
+      "case_id": "GC-AUTOCORRIGIR-006B",
+      "purpose": "Reaplicar autocorrigir usando o próprio final da execução anterior como novo resultado não duplica a ressalva de causalidade inconclusiva (guarda 'if ress not in pat[ressalvas]' confirmada empiricamente).",
+      "status": "CHARACTERIZED_NOT_APPROVED",
+      "semantic_families": [
+        "correction_persistence",
+        "duplicate_inputs"
+      ],
+      "invariants_exercised": [
+        "CORRECTION_PERSISTENCE",
+        "CORRECTION_TRACEABILITY"
+      ],
+      "input": {
+        "resultado": {
+          "patologias": [
+            {
+              "id": "PAT-001",
+              "constatacao": {
+                "situacao": "ANOMALIA"
+              },
+              "causa": null,
+              "mecanismo": "Percolação de água através de selagem deteriorada.",
+              "origem": "INCONCLUSIVA",
+              "criticidade": "MODERADA",
+              "analise_causal": {
+                "causa_provavel": null,
+                "grau_certeza": "INCONCLUSIVO"
+              },
+              "vicio_construtivo": {
+                "caracterizado": false,
+                "tipo": "INCONCLUSIVO",
+                "fundamentacao": null
+              },
+              "reparabilidade": "NECESSITA_INVESTIGACAO",
+              "recomendacao": {
+                "necessaria": false,
+                "descricao": null
+              },
+              "elegibilidade_orcamento": "PENDENTE",
+              "ressalvas": [
+                "Causalidade inconclusiva após auditoria do suporte probatório."
+              ],
+              "conclusao_tecnica": "A manifestação foi constatada, mas os elementos disponíveis não permitem individualizar com segurança sua causa.",
+              "normas_relacionadas": []
+            }
+          ],
+          "catalogo_evidencias": [],
+          "questoes_saneadas": [],
+          "cobertura_quesitos": [],
+          "estado_analise": "PAT_FINAL",
+          "status_execucao": "ANALISE_CONCLUIDA"
+        },
+        "claims": [
+          {
+            "id": "CLM-001",
+            "tipo": "CAUSA",
+            "patologia": "PAT-001"
+          }
+        ],
+        "auditorias": [
+          {
+            "claim_id": "CLM-001",
+            "veredito": "UNSUBSTANTIATED",
+            "evidencias": [
+              "OBS-001"
+            ]
+          }
+        ]
+      },
+      "expected_output_mode": "EXACT",
+      "expected_output": {
+        "final": {
+          "patologias": [
+            {
+              "id": "PAT-001",
+              "constatacao": {
+                "situacao": "ANOMALIA"
+              },
+              "causa": null,
+              "mecanismo": "Percolação de água através de selagem deteriorada.",
+              "origem": "INCONCLUSIVA",
+              "criticidade": "MODERADA",
+              "analise_causal": {
+                "causa_provavel": null,
+                "grau_certeza": "INCONCLUSIVO"
+              },
+              "vicio_construtivo": {
+                "caracterizado": false,
+                "tipo": "INCONCLUSIVO",
+                "fundamentacao": null
+              },
+              "reparabilidade": "NECESSITA_INVESTIGACAO",
+              "recomendacao": {
+                "necessaria": false,
+                "descricao": null
+              },
+              "elegibilidade_orcamento": "PENDENTE",
+              "ressalvas": [
+                "Causalidade inconclusiva após auditoria do suporte probatório."
+              ],
+              "conclusao_tecnica": "A manifestação foi constatada, mas os elementos disponíveis não permitem individualizar com segurança sua causa.",
+              "normas_relacionadas": []
+            }
+          ],
+          "catalogo_evidencias": [],
+          "questoes_saneadas": [],
+          "cobertura_quesitos": [],
+          "estado_analise": "PAT_FINAL",
+          "status_execucao": "ANALISE_CONCLUIDA"
+        },
+        "historico": [
+          {
+            "id": "AUT-001",
+            "alvo": "CLM-001",
+            "claim": "CLM-001",
+            "valor_antes": "None",
+            "veredito": "UNSUBSTANTIATED",
+            "evidencia": "OBS-001",
+            "acao": "REDUZIR_CLAIM",
+            "valor_depois": "None",
+            "motivo": "Suporte insuficiente para manter formulação causal específica.",
+            "achado_originador": "CLM-001"
+          }
+        ]
+      },
+      "non_semantic_fields_ignored": [],
+      "check_deterministic_replay": false,
+      "notes": "Ver docs/stabilization/golden-forensic-corpus-v1-design.md#HOTSPOT-05 (GC-AUTOCORRIGIR-006, sub-caso bônus). CONFIRMADO: a ressalva não duplica (guarda da linha ~25 funciona como esperado) e 'final' da reaplicação é byte-a-byte idêntico ao final da primeira aplicação. SURPRESA CARACTERIZADA (não endossada): historico da reaplicação tem apenas 1 entrada (REDUZIR_CLAIM, valor_antes=valor_depois='None') -- a entrada FINALIZAR_ESTADO_CORRIGIDO que aparece em toda outra execução (inclusive GC-AUTOCORRIGIR-006) SOME nesta reaplicação, porque o 'resultado' de entrada já carrega estado_analise='PAT_FINAL'/status_execucao='ANALISE_CONCLUIDA' (herdados do final anterior), então o diff antes/depois da finalização (autocorrigir.py linhas 79-88) não detecta mudança e registrar_achado descarta silenciosamente o registro ('if antes==depois:return', linha 11). Isso reduz a rastreabilidade auditável da segunda passada mesmo que o REDUZIR_CLAIM em si seja reaplicado e registrado -- preservado como está, não endossado como comportamento correto; marcado CHARACTERIZED_NOT_APPROVED por instrução explícita do objetivo (comportamento surpreendente não deve ser silenciosamente aceito como golden).",
+      "expected_classifications": {
+        "historico": [
+          {
+            "id": "AUT-001",
+            "alvo": "CLM-001",
+            "claim": "CLM-001",
+            "valor_antes": "None",
+            "veredito": "UNSUBSTANTIATED",
+            "evidencia": "OBS-001",
+            "acao": "REDUZIR_CLAIM",
+            "valor_depois": "None",
+            "motivo": "Suporte insuficiente para manter formulação causal específica.",
+            "achado_originador": "CLM-001"
+          }
+        ]
+      },
+      "expected_provenance": null,
+      "expected_warnings": "Achado de traco/traceability: FINALIZAR_ESTADO_CORRIGIDO nao reaparece na reaplicacao pois o estado ja estava finalizado (diff antes==depois suprime o registro) -- gap de rastreabilidade em re-aplicacao, preservado e nao endossado.",
+      "expected_inconclusivity": null
+    }
+  ]
+}
