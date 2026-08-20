@@ -10350,7 +10350,7 @@
         "identificacao.data_geracao"
       ],
       "check_deterministic_replay": false,
-      "notes": "Pinado como CHARACTERIZED_NOT_APPROVED (nao KNOWN_BUG): a decisao tecnica em si e order-invariant; o que nao e garantido e a estabilidade do ID QUE-NNN, que hoje depende de sorted(glob(*.json)) sobre os NOMES de arquivo, nao do documento_id/texto. Em producao os arquivos sao sempre nomeados DOC-PJE-NNN.json na ordem do manifesto, entao esta condicao normalmente nao se manifesta -- mas o corpus a pina caso isso mude."
+      "notes": "Pinado como CHARACTERIZED_NOT_APPROVED (nao KNOWN_BUG): a decisao tecnica em si e order-invariant; o que nao e garantido e a estabilidade do ID QUE-NNN, que hoje depende de sorted(glob(*.json)) sobre os NOMES de arquivo, nao do documento_id/texto. Em producao os arquivos sao sempre nomeados DOC-PJE-NNN.json na ordem do manifesto, entao esta condicao normalmente nao se manifesta -- mas o corpus a pina caso isso mude. Segundo eixo de sensibilidade a ordem, identificado em review (PR#79): questoes_tecnicas[].evidencias_disponiveis tambem reflete a ordem de descoberta dos arquivos (mesmo conjunto, ordem distinta entre GC-DELIM-001 e este caso) -- nao invalida a alegacao (a decisao tecnica de pertinencia/status_cobertura nao muda), mas se um refactor do Stage 3 normalizar essa lista, o gate vai reportar sob STABLE_IDENTITY apontando para os IDs posicionais, que e um diagnostico parcial: verifique tambem evidencias_disponiveis antes de assumir que so o ID mudou."
     },
     {
       "case_id": "GC-DELIM-009",
