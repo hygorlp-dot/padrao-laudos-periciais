@@ -7,20 +7,75 @@ drives every registered golden-corpus fixture end to end against its real
 hotspot entrypoint, so a behavioral drift in any of the 5 characterized
 hotspots (docs/stabilization/hotspot-characterization-v1.md) is caught here
 before MAINTAINABILITY_REFACTORING_V1 touches them.
+
+The per-hotspot adapters live here, not in scripts/quality/golden_corpus.py:
+QUALITY (scripts/quality/, layer GOVERNANCE) may only depend on AGENTIC
+(config/architecture-policy-v1.json) and may not import DOMAIN modules
+(MOTOR/TRIAGE/INSPECTION/PJE). tests/ sits outside productionRoots, so it is
+free to import domain code directly -- the same pattern every other test
+file in this repository already uses.
 """
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
+from scripts.extracao_pje.validar_integridade import validar_integridade
+from scripts.motor_vicios.autocorrigir import autocorrigir
+from scripts.motor_vicios.motor import executar as motor_executar
 from scripts.quality.golden_corpus import (
     ROOT,
     _canonical,
     _check_no_real_case_private_data,
+    _materialize,
     _pop_path,
     _run_case,
     build_coverage_map,
     load_corpus,
     validate_golden_corpus,
 )
+from scripts.triagem_pericial.gerar_delimitacao import gerar as gerar_delimitacao
+from scripts.vistoria_estruturada.gerar_vistoria import gerar as gerar_vistoria
+
+
+def _adapter_motor(case_input):
+    return motor_executar(**case_input)
+
+
+def _adapter_vistoria(case_input):
+    return gerar_vistoria(**case_input)
+
+
+def _adapter_delimitacao(case_input):
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        diretorio = base / "casos" / "caso-001" / "derivados"
+        diretorio.mkdir(parents=True, exist_ok=True)
+        _materialize(diretorio, case_input.get("diretorio_layout", {}))
+        private_root = diretorio.parent.parent
+        _materialize(private_root, case_input.get("private_root_layout", {}))
+        return gerar_delimitacao(diretorio)
+
+
+def _adapter_validar_integridade(case_input):
+    erros, alertas = validar_integridade(case_input["manifesto"])
+    return {"erros": erros, "alertas": alertas}
+
+
+def _adapter_autocorrigir(case_input):
+    final, historico = autocorrigir(
+        case_input["resultado"], case_input["claims"], case_input["auditorias"], case_input.get("achados")
+    )
+    return {"final": final, "historico": historico}
+
+
+ADAPTERS = {
+    "HOTSPOT-01": _adapter_motor,
+    "HOTSPOT-02": _adapter_vistoria,
+    "HOTSPOT-03": _adapter_delimitacao,
+    "HOTSPOT-04": _adapter_validar_integridade,
+    "HOTSPOT-05": _adapter_autocorrigir,
+}
 
 
 class GoldenCorpusRunnerLogicTest(unittest.TestCase):
@@ -156,7 +211,7 @@ class GoldenCorpusRegistryDrivenTest(unittest.TestCase):
     tests/fixtures/core-fixtures.json through the real hotspot entrypoints."""
 
     def test_all_registered_golden_corpora_match_current_behavior(self):
-        findings = validate_golden_corpus(ROOT)
+        findings = validate_golden_corpus(ROOT, adapters=ADAPTERS)
         self.assertEqual(findings, [], msg=json.dumps(findings, ensure_ascii=False, indent=2))
 
     def test_validar_integridade_corpus_is_registered_with_golden_cases(self):
