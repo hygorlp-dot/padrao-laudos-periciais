@@ -1,0 +1,1079 @@
+{
+  "schema_version": "1.0.0",
+  "hotspot_id": "HOTSPOT-02",
+  "entrypoint": "scripts/vistoria_estruturada/gerar_vistoria.py::gerar",
+  "cases": [
+    {
+      "case_id": "GC-VISTORIA-001",
+      "purpose": "Fotografia do inventário é associada à fotografia planejada por correspondência explícita de ID no nome/caminho do arquivo.",
+      "status": "CHARACTERIZED_NOT_APPROVED",
+      "semantic_families": [
+        "provenance"
+      ],
+      "invariants_exercised": [
+        "PROVENANCE_FIDELITY"
+      ],
+      "input": {
+        "inventario": {
+          "arquivos": [
+            {
+              "id": "ARQ-VIS-001",
+              "nome": "FOT-001_fachada.jpg",
+              "caminho_relativo": "fotos/FOT-001_fachada.jpg",
+              "categoria": "FOTOGRAFIA",
+              "metodo_ingestao": "EXIF",
+              "metadados": {
+                "data_hora_captura": "2026-01-05T10:00:00-03:00",
+                "orientacao": "1",
+                "coordenadas": null,
+                "texto_original": null
+              }
+            }
+          ]
+        },
+        "plano": {
+          "fotografias": [
+            {
+              "id": "FOT-001",
+              "finalidade": "Registrar fachada frontal do imóvel",
+              "enquadramento": "Vista geral da fachada",
+              "ambiente": "Fachada",
+              "sistema": "VEDACOES",
+              "atividade": "ATV-001",
+              "questoes_tecnicas": [
+                "QT-001"
+              ],
+              "quesitos": [
+                "QUE-001"
+              ],
+              "alegacoes": [
+                "ALG-001"
+              ]
+            }
+          ]
+        },
+        "numero_processo": "0000001-00.2026.4.00.0001"
+      },
+      "expected_output_mode": "EXACT",
+      "expected_output": {
+        "schema_version": "2.0.0",
+        "numero_processo": "0000001-00.2026.4.00.0001",
+        "status": "VISTORIA_ESTRUTURADA",
+        "data": null,
+        "hora_inicio": null,
+        "hora_fim": null,
+        "local": null,
+        "coordenadas": null,
+        "condicoes": {
+          "clima": null,
+          "temperatura": null,
+          "umidade_relativa": null,
+          "campo_examinado": null
+        },
+        "participantes": [],
+        "atividades_executadas": [],
+        "equipamentos": [],
+        "limitacoes": [],
+        "fotografias": [
+          {
+            "id": "FOT-001",
+            "arquivo_inventario": "ARQ-VIS-001",
+            "fotografia_planejada": "FOT-001",
+            "finalidade_planejada": "Registrar fachada frontal do imóvel",
+            "descricao_visual_observada": null,
+            "estado_interpretacao": "NAO_INTERPRETADA",
+            "candidatos_planejamento": [
+              {
+                "id": "FOT-001",
+                "score": 0.1
+              }
+            ],
+            "metodo_associacao": "ID_PLANEJADO_EXPLICITO",
+            "data_hora": "2026-01-05T10:00:00-03:00",
+            "coordenadas": null,
+            "orientacao": "1",
+            "ambiente": "Fachada",
+            "sistema": "VEDACOES",
+            "descricao_objetiva": null,
+            "atividade": "ATV-001",
+            "questoes": [
+              "QT-001"
+            ],
+            "quesitos": [
+              "QUE-001"
+            ],
+            "alegacoes": [
+              "ALG-001"
+            ],
+            "confianca": {
+              "nivel": "MEDIA"
+            },
+            "proveniencia": [
+              "ARQ-VIS-001"
+            ]
+          }
+        ],
+        "videos": [],
+        "medicoes": [],
+        "ensaios": [],
+        "documentos_obtidos": [],
+        "declaracoes": [],
+        "observacoes": [],
+        "relacoes_evidencia": [],
+        "cobertura": [
+          {
+            "tipo": "FOTOGRAFIA",
+            "planejado": "FOT-001",
+            "status": "EXECUTADO",
+            "executado": [
+              "FOT-001"
+            ],
+            "evidencia_equivalente": [],
+            "equivalencia": null,
+            "justificativa_equivalencia": null,
+            "impacto": null
+          }
+        ],
+        "inventario_fonte": "inventario-vistoria.json",
+        "proveniencia": [
+          "inventario-vistoria.json"
+        ]
+      },
+      "non_semantic_fields_ignored": [],
+      "check_deterministic_replay": false,
+      "notes": "Quirk congelado (não endossado): mesmo com correspondência explícita e inequívoca de ID planejado, a fórmula `\"BAIXA\" if ambiguo or not melhor else \"MEDIA\"` (linha 79) nunca produz confianca.nivel==\"ALTA\" -- o nível MEDIA aqui reflete essa limitação estrutural da fórmula, não uma avaliação real de incerteza sobre o vínculo. Ver OPEN_QUESTIONS #8 no design doc. Caso mantido como CHARACTERIZED_NOT_APPROVED para não endossar esse subdimensionamento de confiança como comportamento correto.",
+      "expected_classifications": {
+        "fotografias.0.metodo_associacao": "ID_PLANEJADO_EXPLICITO",
+        "fotografias.0.fotografia_planejada": "FOT-001",
+        "fotografias.0.confianca.nivel": "MEDIA"
+      },
+      "expected_provenance": null,
+      "expected_warnings": "Peculiaridade caracterizada: mesmo com ID explicito e inequivoco, confianca.nivel nunca alcanca ALTA -- a formula so distingue ambiguo/nao-ambiguo, nao o metodo de associacao. Nao corrigido nesta etapa.",
+      "expected_inconclusivity": null
+    },
+    {
+      "case_id": "GC-VISTORIA-002",
+      "purpose": "Duas fotografias planejadas com escores de afinidade empatados (diferença <=0.05) produzem associação ambígua sem seleção forçada.",
+      "status": "APPROVED",
+      "semantic_families": [
+        "unverifiable_information",
+        "inconclusive_findings"
+      ],
+      "invariants_exercised": [
+        "NO_CERTAINTY_INFLATION"
+      ],
+      "input": {
+        "inventario": {
+          "arquivos": [
+            {
+              "id": "ARQ-VIS-001",
+              "nome": "IMG_0001.jpg",
+              "caminho_relativo": "fotos/sala/fissura_parede.jpg",
+              "categoria": "FOTOGRAFIA",
+              "metodo_ingestao": "EXIF",
+              "metadados": {
+                "data_hora_captura": "2026-01-05T10:05:00-03:00",
+                "orientacao": null,
+                "coordenadas": null,
+                "texto_original": null
+              }
+            }
+          ]
+        },
+        "plano": {
+          "fotografias": [
+            {
+              "id": "FOT-101",
+              "finalidade": "Registrar fissura na parede da sala",
+              "enquadramento": "Vista geral aproximada",
+              "ambiente": "Sala",
+              "sistema": "VEDACOES",
+              "atividade": "ATV-001",
+              "questoes_tecnicas": [
+                "QT-001"
+              ],
+              "quesitos": [
+                "QUE-001"
+              ],
+              "alegacoes": [
+                "ALG-001"
+              ]
+            },
+            {
+              "id": "FOT-102",
+              "finalidade": "Registrar fissura na parede da sala",
+              "enquadramento": "Vista geral aproximada",
+              "ambiente": "Sala",
+              "sistema": "VEDACOES",
+              "atividade": "ATV-001",
+              "questoes_tecnicas": [
+                "QT-001"
+              ],
+              "quesitos": [
+                "QUE-001"
+              ],
+              "alegacoes": [
+                "ALG-001"
+              ]
+            }
+          ]
+        },
+        "numero_processo": "0000001-00.2026.4.00.0001"
+      },
+      "expected_output_mode": "EXACT",
+      "expected_output": {
+        "schema_version": "2.0.0",
+        "numero_processo": "0000001-00.2026.4.00.0001",
+        "status": "VISTORIA_ESTRUTURADA",
+        "data": null,
+        "hora_inicio": null,
+        "hora_fim": null,
+        "local": null,
+        "coordenadas": null,
+        "condicoes": {
+          "clima": null,
+          "temperatura": null,
+          "umidade_relativa": null,
+          "campo_examinado": null
+        },
+        "participantes": [],
+        "atividades_executadas": [],
+        "equipamentos": [],
+        "limitacoes": [],
+        "fotografias": [
+          {
+            "id": "FOT-001",
+            "arquivo_inventario": "ARQ-VIS-001",
+            "fotografia_planejada": null,
+            "finalidade_planejada": null,
+            "descricao_visual_observada": null,
+            "estado_interpretacao": "NAO_INTERPRETADA",
+            "candidatos_planejamento": [
+              {
+                "id": "FOT-101",
+                "score": 0.2727
+              },
+              {
+                "id": "FOT-102",
+                "score": 0.2727
+              }
+            ],
+            "metodo_associacao": "ASSOCIACAO_AMBIGUA",
+            "data_hora": "2026-01-05T10:05:00-03:00",
+            "coordenadas": null,
+            "orientacao": null,
+            "ambiente": null,
+            "sistema": null,
+            "descricao_objetiva": null,
+            "atividade": null,
+            "questoes": [],
+            "quesitos": [],
+            "alegacoes": [],
+            "confianca": {
+              "nivel": "BAIXA"
+            },
+            "proveniencia": [
+              "ARQ-VIS-001"
+            ]
+          }
+        ],
+        "videos": [],
+        "medicoes": [],
+        "ensaios": [],
+        "documentos_obtidos": [],
+        "declaracoes": [],
+        "observacoes": [],
+        "relacoes_evidencia": [],
+        "cobertura": [
+          {
+            "tipo": "FOTOGRAFIA",
+            "planejado": "FOT-101",
+            "status": "NAO_EXECUTADO",
+            "executado": [],
+            "evidencia_equivalente": [],
+            "equivalencia": null,
+            "justificativa_equivalencia": null,
+            "impacto": "Ausência ainda não avaliada tecnicamente."
+          },
+          {
+            "tipo": "FOTOGRAFIA",
+            "planejado": "FOT-102",
+            "status": "NAO_EXECUTADO",
+            "executado": [],
+            "evidencia_equivalente": [],
+            "equivalencia": null,
+            "justificativa_equivalencia": null,
+            "impacto": "Ausência ainda não avaliada tecnicamente."
+          }
+        ],
+        "inventario_fonte": "inventario-vistoria.json",
+        "proveniencia": [
+          "inventario-vistoria.json"
+        ]
+      },
+      "non_semantic_fields_ignored": [],
+      "check_deterministic_replay": false,
+      "expected_classifications": {
+        "fotografias.0.metodo_associacao": "ASSOCIACAO_AMBIGUA",
+        "fotografias.0.fotografia_planejada": null,
+        "fotografias.0.confianca.nivel": "BAIXA"
+      },
+      "expected_provenance": null,
+      "expected_warnings": null,
+      "expected_inconclusivity": "confianca.nivel==BAIXA e fotografia_planejada=null quando dois candidatos empatam por score -- associacao deliberadamente nao resolvida (NO_CERTAINTY_INFLATION)."
+    },
+    {
+      "case_id": "GC-VISTORIA-003",
+      "purpose": "Anotação de campo mista (relato do morador seguido de constatação do perito) gera uma declaração e, separadamente, uma observação sintetizada.",
+      "status": "APPROVED",
+      "semantic_families": [
+        "allegations",
+        "observations"
+      ],
+      "invariants_exercised": [
+        "DECLARATION_NOT_OBSERVATION",
+        "ALLEGATION_NOT_OBSERVATION"
+      ],
+      "input": {
+        "inventario": {
+          "arquivos": [
+            {
+              "id": "ARQ-VIS-001",
+              "nome": "campo.txt",
+              "caminho_relativo": "campo.txt",
+              "categoria": "ANOTACAO",
+              "metodo_ingestao": "TEXTO_SIMPLES",
+              "metadados": {
+                "texto_original": "O morador informou que houve infiltração; perito constatou fissura na parede."
+              }
+            }
+          ]
+        },
+        "numero_processo": "0000001-00.2026.4.00.0001"
+      },
+      "expected_output_mode": "EXACT",
+      "expected_output": {
+        "schema_version": "2.0.0",
+        "numero_processo": "0000001-00.2026.4.00.0001",
+        "status": "VISTORIA_ESTRUTURADA",
+        "data": null,
+        "hora_inicio": null,
+        "hora_fim": null,
+        "local": null,
+        "coordenadas": null,
+        "condicoes": {
+          "clima": null,
+          "temperatura": null,
+          "umidade_relativa": null,
+          "campo_examinado": null
+        },
+        "participantes": [],
+        "atividades_executadas": [],
+        "equipamentos": [],
+        "limitacoes": [],
+        "fotografias": [],
+        "videos": [],
+        "medicoes": [],
+        "ensaios": [],
+        "documentos_obtidos": [],
+        "declaracoes": [
+          {
+            "id": "DEC-VIS-001",
+            "natureza": "DECLARADO_POR_TERCEIRO",
+            "declarante": "morador",
+            "texto_original": "houve infiltração",
+            "questoes": [],
+            "alegacoes": [],
+            "proveniencia": [
+              "ARQ-VIS-001"
+            ]
+          }
+        ],
+        "observacoes": [
+          {
+            "id": "OBS-001",
+            "local": null,
+            "ambiente": null,
+            "sistema": null,
+            "elemento": null,
+            "descricao_objetiva": "fissura na parede.",
+            "manifestacao": "fissura",
+            "resultado": "OBSERVADO",
+            "campo_examinado": "Campo descrito na anotação estruturada",
+            "metodo": [
+              "REGISTRO_DE_CAMPO"
+            ],
+            "atividade": null,
+            "fotografias": [],
+            "medicoes": [],
+            "alegacoes": [],
+            "questoes": [],
+            "quesitos": [],
+            "confianca": {
+              "nivel": "MEDIA"
+            },
+            "proveniencia": [
+              "ARQ-VIS-001"
+            ],
+            "limitacoes": [],
+            "aspectos_suportados": []
+          }
+        ],
+        "relacoes_evidencia": [],
+        "cobertura": [],
+        "inventario_fonte": "inventario-vistoria.json",
+        "proveniencia": [
+          "inventario-vistoria.json"
+        ]
+      },
+      "non_semantic_fields_ignored": [],
+      "check_deterministic_replay": false,
+      "expected_classifications": {
+        "declaracoes.0.natureza": "DECLARADO_POR_TERCEIRO"
+      },
+      "expected_provenance": null,
+      "expected_warnings": null,
+      "expected_inconclusivity": null
+    },
+    {
+      "case_id": "GC-VISTORIA-004",
+      "purpose": "Observação de campo com negador textual explícito produz resultado NAO_CONSTATADO_NA_VISTORIA com polaridade NEGADO, sem afirmar inexistência.",
+      "status": "APPROVED",
+      "semantic_families": [
+        "not_observed",
+        "absent_information"
+      ],
+      "invariants_exercised": [
+        "NAO_CONSTATADO_NOT_INEXISTENTE"
+      ],
+      "input": {
+        "inventario": {
+          "arquivos": [
+            {
+              "id": "ARQ-VIS-001",
+              "nome": "campo.txt",
+              "caminho_relativo": "campo.txt",
+              "categoria": "ANOTACAO",
+              "metodo_ingestao": "TEXTO_SIMPLES",
+              "metadados": {
+                "texto_original": "Não foram observados indícios de infiltração na parede da sala."
+              }
+            }
+          ]
+        },
+        "numero_processo": "0000001-00.2026.4.00.0001"
+      },
+      "expected_output_mode": "EXACT",
+      "expected_output": {
+        "schema_version": "2.0.0",
+        "numero_processo": "0000001-00.2026.4.00.0001",
+        "status": "VISTORIA_ESTRUTURADA",
+        "data": null,
+        "hora_inicio": null,
+        "hora_fim": null,
+        "local": null,
+        "coordenadas": null,
+        "condicoes": {
+          "clima": null,
+          "temperatura": null,
+          "umidade_relativa": null,
+          "campo_examinado": null
+        },
+        "participantes": [],
+        "atividades_executadas": [],
+        "equipamentos": [],
+        "limitacoes": [],
+        "fotografias": [],
+        "videos": [],
+        "medicoes": [],
+        "ensaios": [],
+        "documentos_obtidos": [],
+        "declaracoes": [],
+        "observacoes": [
+          {
+            "id": "OBS-001",
+            "local": null,
+            "ambiente": "PAREDE",
+            "sistema": null,
+            "elemento": null,
+            "descricao_objetiva": "nao foram observados indicios de infiltracao na parede da sala.",
+            "manifestacao": "infiltração ativa",
+            "resultado": "NAO_CONSTATADO_NA_VISTORIA",
+            "campo_examinado": "Campo descrito na anotação estruturada",
+            "metodo": [
+              "REGISTRO_DE_CAMPO"
+            ],
+            "atividade": null,
+            "fotografias": [],
+            "medicoes": [],
+            "alegacoes": [],
+            "questoes": [],
+            "quesitos": [],
+            "confianca": {
+              "nivel": "MEDIA"
+            },
+            "proveniencia": [
+              "ARQ-VIS-001"
+            ],
+            "limitacoes": [],
+            "aspectos_suportados": []
+          }
+        ],
+        "relacoes_evidencia": [],
+        "cobertura": [],
+        "inventario_fonte": "inventario-vistoria.json",
+        "proveniencia": [
+          "inventario-vistoria.json"
+        ]
+      },
+      "non_semantic_fields_ignored": [],
+      "check_deterministic_replay": false,
+      "notes": "Alimenta diretamente a garantia NAO_CONSTATADO_NOT_INEXISTENTE do HOTSPOT-01 a jusante -- ver tests/test_motor_vicios.py::test_nao_constatado_nao_vira_inexistente.",
+      "expected_classifications": {
+        "observacoes.0.resultado": "NAO_CONSTATADO_NA_VISTORIA",
+        "observacoes.0.polaridade": null
+      },
+      "expected_provenance": null,
+      "expected_warnings": null,
+      "expected_inconclusivity": null
+    },
+    {
+      "case_id": "GC-VISTORIA-005",
+      "purpose": "Medição extraída de texto livre na mesma linha de uma observação compartilha registro_id e é vinculada à observação por VINCULO_REGISTRO_EXPLICITO.",
+      "status": "APPROVED",
+      "semantic_families": [
+        "measurements",
+        "provenance",
+        "deterministic_replay"
+      ],
+      "invariants_exercised": [
+        "PROVENANCE_FIDELITY",
+        "VALUE_UNIT_FIDELITY",
+        "IDEMPOTENCE"
+      ],
+      "input": {
+        "inventario": {
+          "arquivos": [
+            {
+              "id": "ARQ-VIS-001",
+              "nome": "campo.txt",
+              "caminho_relativo": "campo.txt",
+              "categoria": "ANOTACAO",
+              "metodo_ingestao": "TEXTO_SIMPLES",
+              "metadados": {
+                "texto_original": "Fissura na parede, abertura 3,5 mm."
+              }
+            }
+          ]
+        },
+        "numero_processo": "0000001-00.2026.4.00.0001"
+      },
+      "expected_output_mode": "EXACT",
+      "expected_output": {
+        "schema_version": "2.0.0",
+        "numero_processo": "0000001-00.2026.4.00.0001",
+        "status": "VISTORIA_ESTRUTURADA",
+        "data": null,
+        "hora_inicio": null,
+        "hora_fim": null,
+        "local": null,
+        "coordenadas": null,
+        "condicoes": {
+          "clima": null,
+          "temperatura": null,
+          "umidade_relativa": null,
+          "campo_examinado": null
+        },
+        "participantes": [],
+        "atividades_executadas": [],
+        "equipamentos": [],
+        "limitacoes": [],
+        "fotografias": [],
+        "videos": [],
+        "medicoes": [
+          {
+            "id": "MED-001",
+            "medicao_planejada": null,
+            "grandeza": "abertura_fissura",
+            "valor": 3.5,
+            "unidade": "mm",
+            "local": null,
+            "ambiente": null,
+            "sistema": null,
+            "instrumento": null,
+            "precisao": null,
+            "data_hora": null,
+            "responsavel": null,
+            "metodo": "REGISTRO_DE_CAMPO",
+            "questoes": [],
+            "quesitos": [],
+            "alegacoes": [],
+            "observacoes": [
+              "OBS-001"
+            ],
+            "fotografias": [],
+            "proveniencia": [
+              "ARQ-VIS-001"
+            ]
+          }
+        ],
+        "ensaios": [],
+        "documentos_obtidos": [],
+        "declaracoes": [],
+        "observacoes": [
+          {
+            "id": "OBS-001",
+            "local": null,
+            "ambiente": "PAREDE",
+            "sistema": null,
+            "elemento": null,
+            "descricao_objetiva": "fissura na parede, abertura 3,5 mm.",
+            "manifestacao": "fissura",
+            "resultado": "OBSERVADO",
+            "campo_examinado": "Campo descrito na anotação estruturada",
+            "metodo": [
+              "REGISTRO_DE_CAMPO"
+            ],
+            "atividade": null,
+            "fotografias": [],
+            "medicoes": [
+              "MED-001"
+            ],
+            "alegacoes": [],
+            "questoes": [],
+            "quesitos": [],
+            "confianca": {
+              "nivel": "MEDIA"
+            },
+            "proveniencia": [
+              "ARQ-VIS-001"
+            ],
+            "limitacoes": [],
+            "aspectos_suportados": []
+          }
+        ],
+        "relacoes_evidencia": [
+          {
+            "observacao": "OBS-001",
+            "evidencia": "MED-001",
+            "motivo": "VINCULO_REGISTRO_EXPLICITO",
+            "origem": "REGISTRO_CAMPO_COMUM"
+          }
+        ],
+        "cobertura": [],
+        "inventario_fonte": "inventario-vistoria.json",
+        "proveniencia": [
+          "inventario-vistoria.json"
+        ]
+      },
+      "non_semantic_fields_ignored": [],
+      "check_deterministic_replay": true,
+      "expected_classifications": {
+        "medicoes.0.grandeza": "abertura_fissura",
+        "medicoes.0.valor": 3.5
+      },
+      "expected_provenance": [
+        "MED-001"
+      ],
+      "expected_warnings": null,
+      "expected_inconclusivity": null
+    },
+    {
+      "case_id": "GC-VISTORIA-006",
+      "purpose": "Cobertura planejado-vs-executado é computada para os cinco tipos rastreados, marcando itens ausentes como NAO_EXECUTADO sem descartá-los silenciosamente.",
+      "status": "APPROVED",
+      "semantic_families": [
+        "absent_information"
+      ],
+      "invariants_exercised": [
+        "EXACT_ITEM_ACCOUNTING",
+        "NO_SILENT_LOSS"
+      ],
+      "input": {
+        "inventario": {
+          "arquivos": [
+            {
+              "id": "ARQ-VIS-001",
+              "nome": "FOT-001_fachada.jpg",
+              "caminho_relativo": "fotos/FOT-001_fachada.jpg",
+              "categoria": "FOTOGRAFIA",
+              "metodo_ingestao": "EXIF",
+              "metadados": {
+                "data_hora_captura": "2026-01-05T10:00:00-03:00",
+                "orientacao": null,
+                "coordenadas": null,
+                "texto_original": null
+              }
+            },
+            {
+              "id": "ARQ-VIS-002",
+              "nome": "campo.txt",
+              "caminho_relativo": "campo.txt",
+              "categoria": "ANOTACAO",
+              "metodo_ingestao": "TEXTO_SIMPLES",
+              "metadados": {
+                "texto_original": "tipo=MED;grandeza=abertura_fissura;valor=3,5;unidade=mm;medicao_planejada=MED-PLAN-001"
+              }
+            },
+            {
+              "id": "ARQ-VIS-003",
+              "nome": "ensaio.txt",
+              "caminho_relativo": "ensaio.txt",
+              "categoria": "ANOTACAO",
+              "metodo_ingestao": "TEXTO_SIMPLES",
+              "metadados": {
+                "texto_original": "tipo=ENSAIO;descricao=Ensaio de estanqueidade;ensaio_planejado=ENS-001;resultado=NEGATIVO;unidade=NA"
+              }
+            }
+          ]
+        },
+        "plano": {
+          "atividades": [
+            {
+              "id": "ATV-001",
+              "verificar": "Condição fictícia A",
+              "questoes_tecnicas": [
+                "QT-001"
+              ],
+              "quesitos": [
+                "QUE-001"
+              ],
+              "alegacoes": [
+                "ALG-001"
+              ]
+            },
+            {
+              "id": "ATV-002",
+              "verificar": "Condição fictícia B",
+              "questoes_tecnicas": [
+                "QT-002"
+              ],
+              "quesitos": [],
+              "alegacoes": []
+            }
+          ],
+          "medicoes": [
+            {
+              "id": "MED-PLAN-001",
+              "questoes_tecnicas": [
+                "QT-001"
+              ],
+              "quesitos": [],
+              "alegacoes": []
+            },
+            {
+              "id": "MED-PLAN-002",
+              "questoes_tecnicas": [],
+              "quesitos": [],
+              "alegacoes": []
+            }
+          ],
+          "fotografias": [
+            {
+              "id": "FOT-001",
+              "finalidade": "Registrar fachada",
+              "enquadramento": "Vista geral",
+              "ambiente": "Fachada",
+              "sistema": "VEDACOES",
+              "atividade": null,
+              "questoes_tecnicas": [],
+              "quesitos": [],
+              "alegacoes": []
+            },
+            {
+              "id": "FOT-002",
+              "finalidade": "Registrar telhado",
+              "enquadramento": "Vista geral",
+              "ambiente": "Telhado",
+              "sistema": "COBERTURA",
+              "atividade": null,
+              "questoes_tecnicas": [],
+              "quesitos": [],
+              "alegacoes": []
+            }
+          ],
+          "ensaios": [
+            {
+              "id": "ENS-001",
+              "questoes_tecnicas": []
+            },
+            {
+              "id": "ENS-002",
+              "questoes_tecnicas": []
+            }
+          ],
+          "documentos_a_solicitar": [
+            {
+              "id": "DOC-PLAN-001",
+              "questoes_tecnicas": []
+            },
+            {
+              "id": "DOC-PLAN-002",
+              "questoes_tecnicas": []
+            }
+          ]
+        },
+        "numero_processo": "0000001-00.2026.4.00.0001"
+      },
+      "expected_output_mode": "EXACT",
+      "expected_output": {
+        "schema_version": "2.0.0",
+        "numero_processo": "0000001-00.2026.4.00.0001",
+        "status": "VISTORIA_ESTRUTURADA",
+        "data": null,
+        "hora_inicio": null,
+        "hora_fim": null,
+        "local": null,
+        "coordenadas": null,
+        "condicoes": {
+          "clima": null,
+          "temperatura": null,
+          "umidade_relativa": null,
+          "campo_examinado": null
+        },
+        "participantes": [],
+        "atividades_executadas": [],
+        "equipamentos": [],
+        "limitacoes": [],
+        "fotografias": [
+          {
+            "id": "FOT-001",
+            "arquivo_inventario": "ARQ-VIS-001",
+            "fotografia_planejada": "FOT-001",
+            "finalidade_planejada": "Registrar fachada",
+            "descricao_visual_observada": null,
+            "estado_interpretacao": "NAO_INTERPRETADA",
+            "candidatos_planejamento": [
+              {
+                "id": "FOT-001",
+                "score": 0.125
+              },
+              {
+                "id": "FOT-002",
+                "score": 0.0
+              }
+            ],
+            "metodo_associacao": "ID_PLANEJADO_EXPLICITO",
+            "data_hora": "2026-01-05T10:00:00-03:00",
+            "coordenadas": null,
+            "orientacao": null,
+            "ambiente": "Fachada",
+            "sistema": "VEDACOES",
+            "descricao_objetiva": null,
+            "atividade": null,
+            "questoes": [],
+            "quesitos": [],
+            "alegacoes": [],
+            "confianca": {
+              "nivel": "MEDIA"
+            },
+            "proveniencia": [
+              "ARQ-VIS-001"
+            ]
+          }
+        ],
+        "videos": [],
+        "medicoes": [
+          {
+            "id": "MED-001",
+            "medicao_planejada": "MED-PLAN-001",
+            "grandeza": "abertura_fissura",
+            "valor": 3.5,
+            "unidade": "mm",
+            "local": null,
+            "ambiente": null,
+            "sistema": null,
+            "instrumento": null,
+            "precisao": null,
+            "data_hora": null,
+            "responsavel": null,
+            "metodo": "REGISTRO_DE_CAMPO",
+            "questoes": [
+              "QT-001"
+            ],
+            "quesitos": [],
+            "alegacoes": [],
+            "observacoes": [],
+            "fotografias": [],
+            "proveniencia": [
+              "ARQ-VIS-002"
+            ]
+          }
+        ],
+        "ensaios": [
+          {
+            "id": "ENS-001",
+            "ensaio_planejado": "ENS-001",
+            "nome": "Ensaio de estanqueidade",
+            "status": "EXECUTADO",
+            "resultado": "NEGATIVO",
+            "unidade": "NA",
+            "metodo": null,
+            "questoes": [],
+            "proveniencia": [
+              "ARQ-VIS-003"
+            ]
+          }
+        ],
+        "documentos_obtidos": [],
+        "declaracoes": [],
+        "observacoes": [],
+        "relacoes_evidencia": [],
+        "cobertura": [
+          {
+            "tipo": "ATIVIDADE",
+            "planejado": "ATV-001",
+            "status": "NAO_EXECUTADO",
+            "executado": [],
+            "evidencia_equivalente": [],
+            "equivalencia": null,
+            "justificativa_equivalencia": null,
+            "impacto": "Ausência ainda não avaliada tecnicamente."
+          },
+          {
+            "tipo": "ATIVIDADE",
+            "planejado": "ATV-002",
+            "status": "NAO_EXECUTADO",
+            "executado": [],
+            "evidencia_equivalente": [],
+            "equivalencia": null,
+            "justificativa_equivalencia": null,
+            "impacto": "Ausência ainda não avaliada tecnicamente."
+          },
+          {
+            "tipo": "MEDICAO",
+            "planejado": "MED-PLAN-001",
+            "status": "EXECUTADO",
+            "executado": [
+              "MED-001"
+            ],
+            "evidencia_equivalente": [],
+            "equivalencia": null,
+            "justificativa_equivalencia": null,
+            "impacto": null
+          },
+          {
+            "tipo": "MEDICAO",
+            "planejado": "MED-PLAN-002",
+            "status": "NAO_EXECUTADO",
+            "executado": [],
+            "evidencia_equivalente": [],
+            "equivalencia": null,
+            "justificativa_equivalencia": null,
+            "impacto": "Ausência ainda não avaliada tecnicamente."
+          },
+          {
+            "tipo": "FOTOGRAFIA",
+            "planejado": "FOT-001",
+            "status": "EXECUTADO",
+            "executado": [
+              "FOT-001"
+            ],
+            "evidencia_equivalente": [],
+            "equivalencia": null,
+            "justificativa_equivalencia": null,
+            "impacto": null
+          },
+          {
+            "tipo": "FOTOGRAFIA",
+            "planejado": "FOT-002",
+            "status": "NAO_EXECUTADO",
+            "executado": [],
+            "evidencia_equivalente": [],
+            "equivalencia": null,
+            "justificativa_equivalencia": null,
+            "impacto": "Ausência ainda não avaliada tecnicamente."
+          },
+          {
+            "tipo": "ENSAIO",
+            "planejado": "ENS-001",
+            "status": "EXECUTADO",
+            "executado": [
+              "ENS-001"
+            ],
+            "evidencia_equivalente": [],
+            "equivalencia": null,
+            "justificativa_equivalencia": null,
+            "impacto": null
+          },
+          {
+            "tipo": "ENSAIO",
+            "planejado": "ENS-002",
+            "status": "NAO_EXECUTADO",
+            "executado": [],
+            "evidencia_equivalente": [],
+            "equivalencia": null,
+            "justificativa_equivalencia": null,
+            "impacto": "Ausência ainda não avaliada tecnicamente."
+          },
+          {
+            "tipo": "DOCUMENTO",
+            "planejado": "DOC-PLAN-001",
+            "status": "NAO_EXECUTADO",
+            "executado": [],
+            "evidencia_equivalente": [],
+            "equivalencia": null,
+            "justificativa_equivalencia": null,
+            "impacto": "Ausência ainda não avaliada tecnicamente."
+          },
+          {
+            "tipo": "DOCUMENTO",
+            "planejado": "DOC-PLAN-002",
+            "status": "NAO_EXECUTADO",
+            "executado": [],
+            "evidencia_equivalente": [],
+            "equivalencia": null,
+            "justificativa_equivalencia": null,
+            "impacto": "Ausência ainda não avaliada tecnicamente."
+          }
+        ],
+        "inventario_fonte": "inventario-vistoria.json",
+        "proveniencia": [
+          "inventario-vistoria.json"
+        ]
+      },
+      "non_semantic_fields_ignored": [],
+      "check_deterministic_replay": false,
+      "expected_classifications": null,
+      "expected_provenance": null,
+      "expected_warnings": null,
+      "expected_inconclusivity": null
+    }
+  ],
+  "not_applicable": [
+    {
+      "hotspot_id": "HOTSPOT-02",
+      "family": "professional_override",
+      "reason": "gerar() é uma função pura de estruturação de evidências sem superfície de decisão de motor ou revisão/override profissional; isso pertence a scripts/motor_vicios (HOTSPOT-01)."
+    },
+    {
+      "hotspot_id": "HOTSPOT-02",
+      "family": "ai_proposal_not_effective_alone",
+      "reason": "gerar() não produz nem consome propostas de IA; é determinística, baseada em regex/regras sobre o inventário e o plano."
+    },
+    {
+      "hotspot_id": "HOTSPOT-02",
+      "family": "correction_persistence",
+      "reason": "gerar() é invocada uma vez por snapshot de inventário, sem laço de correção persistindo estado entre execuções; isso pertence a scripts/motor_vicios/autocorrigir.py (HOTSPOT-05)."
+    },
+    {
+      "hotspot_id": "HOTSPOT-02",
+      "family": "normative_references",
+      "reason": "gerar() não avalia conformidade normativa; a camada normativa fica em scripts/motor_vicios/normas.py, a jusante da vistoria estruturada."
+    },
+    {
+      "hotspot_id": "HOTSPOT-02",
+      "family": "technical_inference",
+      "reason": "gerar() permanece deliberadamente na camada de registro/observação de campo; não infere causa, origem ou vício construtivo (camada de inferência técnica é HOTSPOT-01)."
+    }
+  ],
+  "known_unreachable": [
+    {
+      "location": "scripts/vistoria_estruturada/gerar_vistoria.py:128 normalizar(obs.get('elemento'))",
+      "reachability_today": false,
+      "latent_defect": true,
+      "golden_execution_case": null,
+      "reason": "Nenhum caminho first-party de gerar() popula uma chave 'elemento' nos dicts de medicoes/fotos (nem o literal de medicoes.append em ~linha 90 nem o de fotos.append em ~linha 79 define essa chave) -- ver Issue #74 e docs/stabilization/hotspot-characterization-v1.md. Construir manualmente um dict intermediario com 'elemento' preenchido para exercitar essa linha criaria um contrato artificial para um caminho morto, nao uma caracterizacao de comportamento real. Sem caso golden ate que exista uma entrada first-party legitima que torne o caminho alcancavel."
+    }
+  ]
+}
