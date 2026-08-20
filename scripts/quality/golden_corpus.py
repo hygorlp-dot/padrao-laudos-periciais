@@ -11,6 +11,16 @@ warnings/inconclusivity, invariants_exercised) in addition to its raw
 expected_output, so a drift finding names the broken invariant/case, not just
 "JSON differs" -- this matters most once MAINTAINABILITY_REFACTORING_V1 starts
 touching these entrypoints.
+
+This module is intentionally domain-agnostic: the QUALITY component
+(scripts/quality/, layer GOVERNANCE) is only allowed to depend on AGENTIC
+(config/architecture-policy-v1.json) -- it may not import DOMAIN-layer
+hotspot modules (MOTOR/TRIAGE/INSPECTION/PJE). The per-hotspot adapters that
+actually call motor.executar/gerar_vistoria/gerar_delimitacao/
+validar_integridade/autocorrigir live in tests/test_golden_forensic_corpus_v1.py
+instead (tests/ sits outside productionRoots, matching every other test
+file's existing pattern of importing domain code directly) and are passed
+in via the `adapters` parameter.
 """
 from __future__ import annotations
 
@@ -18,15 +28,8 @@ import argparse
 import copy
 import json
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any, Callable
-
-from scripts.extracao_pje.validar_integridade import validar_integridade
-from scripts.motor_vicios.autocorrigir import autocorrigir
-from scripts.motor_vicios.motor import executar as motor_executar
-from scripts.triagem_pericial.gerar_delimitacao import gerar as gerar_delimitacao
-from scripts.vistoria_estruturada.gerar_vistoria import gerar as gerar_vistoria
 
 ROOT = Path(__file__).resolve().parents[2]
 PRIVATE_MARKER = "referencias/privadas"
@@ -63,46 +66,6 @@ def _materialize(root: Path, layout: dict) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(content, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
 
-
-def _adapter_motor(case_input: dict) -> dict:
-    return motor_executar(**case_input)
-
-
-def _adapter_vistoria(case_input: dict) -> dict:
-    return gerar_vistoria(**case_input)
-
-
-def _adapter_delimitacao(case_input: dict) -> dict:
-    with tempfile.TemporaryDirectory() as tmp:
-        base = Path(tmp)
-        diretorio = base / "casos" / "caso-001" / "derivados"
-        diretorio.mkdir(parents=True, exist_ok=True)
-        _materialize(diretorio, case_input.get("diretorio_layout", {}))
-        private_root = diretorio.parent.parent
-        _materialize(private_root, case_input.get("private_root_layout", {}))
-        return gerar_delimitacao(diretorio)
-
-
-def _adapter_validar_integridade(case_input: dict) -> dict:
-    manifesto = case_input["manifesto"]
-    erros, alertas = validar_integridade(manifesto)
-    return {"erros": erros, "alertas": alertas}
-
-
-def _adapter_autocorrigir(case_input: dict) -> dict:
-    final, historico = autocorrigir(
-        case_input["resultado"], case_input["claims"], case_input["auditorias"], case_input.get("achados")
-    )
-    return {"final": final, "historico": historico}
-
-
-ADAPTERS: dict[str, Callable[[dict], Any]] = {
-    "HOTSPOT-01": _adapter_motor,
-    "HOTSPOT-02": _adapter_vistoria,
-    "HOTSPOT-03": _adapter_delimitacao,
-    "HOTSPOT-04": _adapter_validar_integridade,
-    "HOTSPOT-05": _adapter_autocorrigir,
-}
 
 SEMANTIC_FAMILIES = {
     "allegations", "documentary_evidence", "observations", "measurements",
@@ -196,13 +159,13 @@ def _check_known_unreachable(corpus: dict, hotspot_id: str) -> list[dict]:
     return findings
 
 
-def validate_golden_corpus(root: Path = ROOT) -> list[dict]:
+def validate_golden_corpus(root: Path = ROOT, *, adapters: dict[str, Callable[[dict], Any]]) -> list[dict]:
     findings: list[dict] = []
     for corpus in load_corpus(root):
         hotspot_id = corpus.get("hotspot_id", "UNKNOWN")
         findings.extend(_check_no_real_case_private_data(corpus, hotspot_id))
         findings.extend(_check_known_unreachable(corpus, hotspot_id))
-        adapter = ADAPTERS.get(hotspot_id)
+        adapter = adapters.get(hotspot_id)
         if adapter is None:
             findings.append(_finding("*", hotspot_id, "HOTSPOT_SEM_ADAPTER", "nenhum adapter registrado para este hotspot_id"))
             continue
@@ -258,19 +221,20 @@ def render_coverage_map(coverage: dict) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--check", action="store_true")
-    parser.add_argument("--coverage-map", action="store_true")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Golden Forensic Corpus V1 utilities. This module cannot execute the "
+            "hotspot entrypoints itself (GOVERNANCE/QUALITY may not import DOMAIN "
+            "modules, config/architecture-policy-v1.json). To actually verify the "
+            "corpus against real behavior, run: pytest tests/test_golden_forensic_corpus_v1.py"
+        )
+    )
+    parser.add_argument("--coverage-map", action="store_true", help="Render the semantic-family x hotspot coverage map to stdout.")
     args = parser.parse_args(argv)
     if args.coverage_map:
         sys.stdout.write(render_coverage_map(build_coverage_map()))
         return 0
-    findings = validate_golden_corpus()
-    if findings:
-        for item in findings:
-            print(" | ".join(str(item[key]) for key in ("invariant", "boundary", "teste", "motivo", "severidade", "detalhe")))
-        return 1
-    print("GOLDEN_CORPUS_OK")
+    parser.print_help()
     return 0
 
 
