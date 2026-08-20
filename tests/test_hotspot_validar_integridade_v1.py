@@ -115,6 +115,22 @@ class ValidarIntegridadeCaracterizacaoTest(unittest.TestCase):
         erros, _ = validar_integridade(manifesto)
         self.assertTrue(any("Status VALIDADO incompatível" in e for e in erros))
 
+    def test_conflito_aberto_na_mesma_pagina_de_um_documento_e_erro(self):
+        """Control case establishing the page really does collide: an ABERTO
+        (not RESOLVIDO_POR_FONTE_PRIMARIA) conflict placed on the same page
+        already owned by DOC-PJE-001 (page 3) must be caught by the
+        page-overlap loop, proving the fixture used by the next test is a
+        genuine collision, not an inert page nothing else touches."""
+        manifesto = _manifesto()
+        manifesto["metricas_extracao"]["conflitos_abertos"] = 1
+        manifesto["conflitos"] = [{
+            "conflito_id": "CONF-001", "status": "ABERTO", "bloqueante": False,
+            "pagina_pdf_inicio": 3, "pagina_pdf_fim": 3, "total_paginas": 1,
+            "itens_indice_relacionados": ["DOC-PJE-001"],
+        }]
+        erros, _ = validar_integridade(manifesto)
+        self.assertTrue(any("owners incompatíveis" in e for e in erros))
+
     def test_conflito_resolvido_por_fonte_primaria_nao_bloqueia_status_validado(self):
         """KNOWN characterized behavior, not necessarily approved as ideal: a
         RESOLVIDO_POR_FONTE_PRIMARIA conflict is fully skipped by both the
@@ -124,19 +140,26 @@ class ValidarIntegridadeCaracterizacaoTest(unittest.TestCase):
         item. This is CHARACTERIZED_NOT_APPROVED: preserved as-is here, not
         endorsed as correct behavior for this maintainability program.
 
+        Placed on the SAME page (3) already owned by DOC-PJE-001 -- the
+        preceding test proves that exact placement collides and produces an
+        error when status is ABERTO. Using the identical colliding page here
+        (rather than an unoccupied one) makes the skip's page-overlap-loop
+        branch genuinely load-bearing for this assertion, not just the
+        accounting-loop branch.
+
         Also characterizes a naming/behavior mismatch found while writing
         this test: metricas_extracao.conflitos_abertos is verified against
         len(manifesto["conflitos"]) (line 72 of validar_integridade.py) --
         i.e. total conflict count, not a count filtered by status=="ABERTO"
         despite the field's name. Set to 1 here (matching the one conflict
-        entry added, regardless of its RESOLVIDO status) purely to isolate
-        the accounting-loop-skip behavior under test from this separate,
-        unrelated metric-mismatch branch."""
+        entry added, regardless of its RESOLVIDO status) to isolate the
+        skip behavior under test from this separate, unrelated metric-
+        mismatch branch."""
         manifesto = _manifesto()
         manifesto["metricas_extracao"]["conflitos_abertos"] = 1
         manifesto["conflitos"] = [{
             "conflito_id": "CONF-001", "status": "RESOLVIDO_POR_FONTE_PRIMARIA",
-            "pagina_pdf_inicio": 10, "pagina_pdf_fim": 10, "total_paginas": 1,
+            "pagina_pdf_inicio": 3, "pagina_pdf_fim": 3, "total_paginas": 1,
             "itens_indice_relacionados": ["DOC-PJE-001"],
         }]
         erros, _ = validar_integridade(manifesto)
