@@ -76,6 +76,48 @@ class MotorViciosTest(unittest.TestCase):
         r=executar(self.processo,self.delimitacao,self.plano,self.vistoria(self.obs("CONFORME",None)))
         self.assertEqual(r["gate_redacao"],"BLOQUEADO_PARA_REDACAO")
 
+    def test_contexto_override_explicito_afeta_ressalvas_mas_nao_sobrevive_a_segunda_passada(self):
+        """HOTSPOT-01 characterization (docs/stabilization/hotspot-characterization-v1.md).
+        contexto={"_modo":"OVERRIDE_EXPLICITO", mid:{...}} is only consulted
+        inside the first PAT-building pass (motor.py:48-57). evidencias_ausentes
+        durably lands in ressalvas/analise_causal.limitacoes (neither field is
+        rewritten by the second pass). causalidade overrides (origem, etc.) are
+        merged into the first pass's local causalidade dict and DO influence
+        that pass's own classificacoes() call, but the second pass (lines 58-79)
+        rebuilds origem/criticidade/vicio_construtivo/elegibilidade_orcamento
+        from scratch via p.get("causa") and a fresh causal dict that never
+        references ctx -- so a causalidade override's effect on those four
+        fields is silently discarded by the second pass. This is
+        CHARACTERIZED_NOT_APPROVED: preserved as observed, not endorsed as
+        the intended contract for contexto overrides."""
+        ctx={"_modo":"OVERRIDE_EXPLICITO","MAN-001":{"causalidade":{"origem":"ENDOGENA_CONSTRUTIVA"},"evidencias_ausentes":["LIMIT-001"]}}
+        r=executar(self.processo,self.delimitacao,self.plano,self.vistoria(self.obs()),contexto=ctx)
+        p=r["patologias"][0]
+        self.assertEqual(p["ressalvas"],["LIMIT-001"])
+        self.assertEqual(p["analise_causal"]["limitacoes"],["LIMIT-001"])
+        self.assertEqual(p["origem"],"INCONCLUSIVA")  # override discarded by the second pass, not "ENDOGENA_CONSTRUTIVA"
+
+    def test_norma_recuperada_e_avaliada_no_laco_de_conformidade_da_segunda_passada(self):
+        """HOTSPOT-01 characterization: a norma matched via
+        conhecimento={"normas":[...]} to the manifestação's sistema
+        (sistema in norma["sistemas"]) is recovered, normalized, and run
+        through avaliar_conformidade_normativa in the per-PAT norm loop
+        (motor.py:76-79). Without matching MEDICAO evidence for the
+        criterio's grandeza, the conformity result is INCONCLUSIVO -- this
+        characterizes that the loop executes and the norm is projected
+        (avaliacao_conformidade present, aplicabilidade_temporal computed),
+        not that a specific ATENDE/NAO_ATENDE verdict is reached."""
+        norma={"id":"NOR-001","sistemas":["IMPERMEABILIZACAO"],"classificacao_fonte":"FONTE_TECNICA_LOCAL_VERIFICADA",
+               "status_verificacao":"VERIFICADO","proveniencia":["doc-x"],"entidade":"ABNT","numero":"123",
+               "verificada":True,"requisito":"Requisito fictício","vigencia_inicio":"2020-01-01",
+               "metodo_verificacao":"ENSAIO_X","criterio":{"operador":"<=","valor":"5","grandeza":"abertura"}}
+        conhecimento={"normas":[norma],"data_relevante":"2026-01-01"}
+        r=executar(self.processo,self.delimitacao,self.plano,self.vistoria(self.obs()),conhecimento=conhecimento)
+        relacionada=r["patologias"][0]["normas_relacionadas"][0]
+        self.assertEqual(relacionada["id"],"NOR-001")
+        self.assertEqual(relacionada["aplicabilidade_temporal"],"APLICAVEL_PRINCIPAL")
+        self.assertEqual(relacionada["avaliacao_conformidade"]["resultado"],"INCONCLUSIVO")
+
     def test_trinta_cenarios_de_risco_executam_comportamento(self):
         cen=carregar("tests/fixtures/motor-vicios-cenarios.json");self.assertEqual(len(cen),30);relatorio=[]
         for caso in cen:

@@ -61,15 +61,32 @@ untested (see below) — best fix-cost-to-risk-reduction ratio.
   if the PAT-id↔MAN-id numeric-suffix invariant is ever broken.
 - **CURRENT_TEST_COVERAGE**: ~9 direct unit tests in `tests/test_motor_vicios.py`
   cover the readiness gate, wrong-tipo early return, and each `situacao()`
-  branch individually. NOT directly asserted: causal-chain-established path
-  (`MAIS_PROVAVEL` hypothesis → `causa`/`mecanismo` populated),
-  `vicio_construtivo.caracterizado=True` end-to-end, `elegibilidade_orcamento
-  == "ELEGIVEL_ORCAMENTO_VICIO"`, the norm-conformity loop, `contexto` override
-  branches, and the saneamento status matrix — all only touched incidentally
-  by full-pipeline E2E tests that assert pipeline-level outcomes, not
-  `executar`'s own intermediate values.
-- **CHARACTERIZATION_CONFIDENCE**: LOW on the branches listed above; MEDIUM on
-  the gate/situação dispatch (well covered).
+  branch individually. This PR adds 2 more, targeting the two cheapest-to-reach
+  previously-untested branches (both reachable via existing fixture
+  scaffolding, no evidencia/hipótese wiring needed):
+  `test_contexto_override_explicito_afeta_ressalvas_mas_nao_sobrevive_a_segunda_passada`
+  and `test_norma_recuperada_e_avaliada_no_laco_de_conformidade_da_segunda_passada`.
+  The first empirically discovered and now documents a genuine
+  `CHARACTERIZED_NOT_APPROVED` finding: `contexto` override's
+  `evidencias_ausentes` durably lands in `ressalvas`/`analise_causal.limitacoes`
+  (neither field is rewritten by the second pass), but a `causalidade`
+  override's effect on `origem`/`criticidade`/`vicio_construtivo`/
+  `elegibilidade_orcamento` is silently discarded by the second pass, which
+  rebuilds those four fields from `p.get("causa")` with no reference to `ctx`
+  at all — i.e. the override mechanism is only partially effective today, in
+  a way that isn't documented anywhere else in the codebase. Still NOT
+  directly asserted (deferred to `GOLDEN_FORENSIC_CORPUS_V1`, which requires
+  cross-module evidencia/hipótese fixture wiring beyond this stage's scope):
+  causal-chain-established path (`MAIS_PROVAVEL` hypothesis →
+  `causa`/`mecanismo` populated end-to-end through both passes),
+  `vicio_construtivo.caracterizado=True`, `elegibilidade_orcamento ==
+  "ELEGIVEL_ORCAMENTO_VICIO"`, a norm reaching an `ATENDE`/`NAO_ATENDE`
+  verdict (requires matching MEDICAO evidence), and the saneamento status
+  matrix.
+- **CHARACTERIZATION_CONFIDENCE**: LOW on the causal-chain/vício/elegibilidade
+  branches; MEDIUM-HIGH on the gate/situação dispatch and the two branches
+  this PR now covers (contexto-override field survival, norm-conformity loop
+  reachability).
 - **RECOMMENDED_BOUNDARY**: leave orchestration shape alone until Golden Corpus
   exists; the two-pass PAT computation (compute-then-overwrite) is the most
   promising extraction boundary for `MAINTAINABILITY_REFACTORING_V1` once
@@ -147,6 +164,16 @@ untested (see below) — best fix-cost-to-risk-reduction ratio.
   (accepted, never read) — `AMBIGUOUS_BEHAVIOR`, not a bug but worth a
   decision (remove from signature vs. document why it's reserved) before any
   refactor touches the function signature.
+- `scripts/motor_vicios/motor.py::executar` lines 48-54 vs. 58-79: `contexto`
+  override's `causalidade` merge only reaches the function's FIRST pass;
+  the second pass rebuilds `origem`/`criticidade`/`vicio_construtivo.caracterizado`/
+  `elegibilidade_orcamento` from `p.get("causa")` with no reference to `ctx`,
+  silently discarding the override's effect on those four fields.
+  `evidencias_ausentes` survives (it lands in fields the second pass never
+  rewrites). `AMBIGUOUS_BEHAVIOR`, empirically confirmed and now regression-
+  tested (`tests/test_motor_vicios.py::test_contexto_override_explicito_afeta_ressalvas_mas_nao_sobrevive_a_segunda_passada`) --
+  not fixed here; whether the override SHOULD survive the second pass is a
+  product decision, not a mechanical one.
 - `scripts/extracao_pje/validar_integridade.py` line 72:
   `metricas_extracao.conflitos_abertos` is verified against
   `len(manifesto["conflitos"])` — total conflict count, not conflicts
