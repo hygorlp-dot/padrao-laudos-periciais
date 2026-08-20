@@ -26,12 +26,14 @@ from scripts.motor_vicios.motor import executar as motor_executar
 from scripts.quality.golden_corpus import (
     ROOT,
     _canonical,
+    _check_known_unreachable,
     _check_no_real_case_private_data,
     _materialize,
     _pop_path,
     _run_case,
     build_coverage_map,
     load_corpus,
+    render_coverage_map,
     validate_golden_corpus,
 )
 from scripts.triagem_pericial.gerar_delimitacao import gerar as gerar_delimitacao
@@ -205,6 +207,35 @@ class GoldenCorpusRunnerLogicTest(unittest.TestCase):
         corpus = {"cases": [{"input": {"path": "tests/fixtures/pje/manifesto-minimo-valido.json"}}]}
         self.assertEqual(_check_no_real_case_private_data(corpus, "HOTSPOT-TEST"), [])
 
+    def _unreachable_entry(self, **overrides):
+        entry = {
+            "location": "some/file.py:1 f()", "reachability_today": False,
+            "latent_defect": True, "golden_execution_case": None, "reason": "motivo",
+        }
+        entry.update(overrides)
+        return entry
+
+    def test_known_unreachable_accepts_the_expected_shape(self):
+        corpus = {"known_unreachable": [self._unreachable_entry()]}
+        self.assertEqual(_check_known_unreachable(corpus, "HOTSPOT-TEST"), [])
+
+    def test_known_unreachable_flags_missing_required_keys(self):
+        corpus = {"known_unreachable": [{"location": "x"}]}
+        findings = _check_known_unreachable(corpus, "HOTSPOT-TEST")
+        self.assertEqual([f["motivo"] for f in findings], ["KNOWN_UNREACHABLE_INCOMPLETO"])
+
+    def test_known_unreachable_flags_case_present_when_marked_unreachable(self):
+        corpus = {"known_unreachable": [self._unreachable_entry(golden_execution_case="GC-X-001")]}
+        findings = _check_known_unreachable(corpus, "HOTSPOT-TEST")
+        self.assertEqual([f["motivo"] for f in findings], ["KNOWN_UNREACHABLE_INCONSISTENTE"])
+
+    def test_known_unreachable_flags_reachable_path_with_no_pinning_case(self):
+        # PR_REVIEWER P1-3: the more dangerous direction -- a path declared
+        # reachable today with nothing pinning its behavior.
+        corpus = {"known_unreachable": [self._unreachable_entry(reachability_today=True, golden_execution_case=None)]}
+        findings = _check_known_unreachable(corpus, "HOTSPOT-TEST")
+        self.assertEqual([f["motivo"] for f in findings], ["KNOWN_UNREACHABLE_INCONSISTENTE"])
+
 
 class GoldenCorpusRegistryDrivenTest(unittest.TestCase):
     """Drives every fixture currently registered under GOLDEN_CORPUS_* in
@@ -269,6 +300,17 @@ class GoldenCorpusRegistryDrivenTest(unittest.TestCase):
         coverage = build_coverage_map(ROOT)
         locations = {entry["location"] for entry in coverage["known_unreachable"]}
         self.assertTrue(any("normalizar(obs.get('elemento'))" in loc for loc in locations))
+
+    def test_committed_coverage_map_matches_the_generator_byte_for_byte(self):
+        # PR_REVIEWER P1-1/P1-2: the committed doc must be produced by
+        # Path.write_text(..., encoding="utf-8") from this exact generator --
+        # never by shell-redirecting stdout (which silently picks up the
+        # console's default encoding, e.g. cp1252 on Windows) and never
+        # hand-edited. This test is what actually enforces "não editar
+        # manualmente", not just the doc's own header comment.
+        committed = (ROOT / "docs/stabilization/golden-forensic-corpus-v1-coverage.md").read_text(encoding="utf-8")
+        generated = render_coverage_map(build_coverage_map(ROOT))
+        self.assertEqual(committed, generated)
 
 
 if __name__ == "__main__":

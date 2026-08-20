@@ -156,6 +156,8 @@ def _check_known_unreachable(corpus: dict, hotspot_id: str) -> list[dict]:
             findings.append(_finding("*", hotspot_id, "KNOWN_UNREACHABLE_INCOMPLETO", f"campos ausentes {sorted(missing)} em {entry}"))
         elif entry.get("golden_execution_case") is not None and entry.get("reachability_today") is False:
             findings.append(_finding("*", hotspot_id, "KNOWN_UNREACHABLE_INCONSISTENTE", "reachability_today=false mas golden_execution_case não é null"))
+        elif entry.get("reachability_today") is True and entry.get("golden_execution_case") is None:
+            findings.append(_finding("*", hotspot_id, "KNOWN_UNREACHABLE_INCONSISTENTE", "reachability_today=true mas golden_execution_case é null -- caminho alcançável sem nenhum caso golden pinando-o"))
     return findings
 
 

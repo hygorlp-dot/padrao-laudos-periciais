@@ -1,10 +1,10 @@
 # Golden Forensic Corpus V1 -- Coverage Map
 
-Gerado por `python -m scripts.quality.golden_corpus --coverage-map`. N„o editar manualmente.
+Gerado por `python -m scripts.quality.golden_corpus --coverage-map`. N√£o editar manualmente.
 
-Apenas casos com `status: APPROVED` contam para a cobertura abaixo. Casos `CHARACTERIZED_NOT_APPROVED`/`KNOWN_BUG` continuam pinados (qualquer drift ainda quebra o gate), mas ficam fora da contagem de cobertura -- ver docs/stabilization/hotspot-characterization-v1.md e o prÛprio corpus para o detalhe de cada um.
+Apenas casos com `status: APPROVED` contam para a cobertura abaixo. Casos `CHARACTERIZED_NOT_APPROVED`/`KNOWN_BUG` continuam pinados (qualquer drift ainda quebra o gate), mas ficam fora da contagem de cobertura -- ver docs/stabilization/hotspot-characterization-v1.md e o pr√≥prio corpus para o detalhe de cada um.
 
-| FamÌlia sem‚ntica | HOTSPOT-01 | HOTSPOT-02 | HOTSPOT-03 | HOTSPOT-04 | HOTSPOT-05 |
+| Fam√≠lia sem√¢ntica | HOTSPOT-01 | HOTSPOT-02 | HOTSPOT-03 | HOTSPOT-04 | HOTSPOT-05 |
 | --- | --- | --- | --- | --- | --- |
 | absent_information |  | GC-VISTORIA-004, GC-VISTORIA-006 | GC-DELIM-001 | GC-INTEGRIDADE-013 |  |
 | ai_proposal_not_effective_alone |  | N/A | N/A | N/A | GC-AUTOCORRIGIR-001, GC-AUTOCORRIGIR-002, GC-AUTOCORRIGIR-003 |
@@ -28,6 +28,6 @@ Apenas casos com `status: APPROVED` contam para a cobertura abaixo. Casos `CHARA
 | technical_inference | GC-MOTOR-001, GC-MOTOR-002 | N/A | GC-DELIM-001, GC-DELIM-002, GC-DELIM-003, GC-DELIM-004, GC-DELIM-005 |  |  |
 | unverifiable_information |  | GC-VISTORIA-002 | GC-DELIM-010 | GC-INTEGRIDADE-009 |  |
 
-## Caminhos conhecidos como inalcanÁ·veis hoje (sem caso golden)
+## Caminhos conhecidos como inalcan√ß√°veis hoje (sem caso golden)
 
 - **HOTSPOT-02** `scripts/vistoria_estruturada/gerar_vistoria.py:128 normalizar(obs.get('elemento'))` -- `latent_defect=True`, `golden_execution_case=None`. Nenhum caminho first-party de gerar() popula uma chave 'elemento' nos dicts de medicoes/fotos (nem o literal de medicoes.append em ~linha 90 nem o de fotos.append em ~linha 79 define essa chave) -- ver Issue #74 e docs/stabilization/hotspot-characterization-v1.md. Construir manualmente um dict intermediario com 'elemento' preenchido para exercitar essa linha criaria um contrato artificial para um caminho morto, nao uma caracterizacao de comportamento real. Sem caso golden ate que exista uma entrada first-party legitima que torne o caminho alcancavel.
