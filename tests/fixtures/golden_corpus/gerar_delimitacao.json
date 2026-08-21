@@ -13077,6 +13077,1433 @@
       ],
       "check_deterministic_replay": false,
       "notes": "Cobertura fail-closed mantida como caso extra (11o caso) alem dos 10 obrigatorios, conforme instrucao explicita para nao deixar cair esta cobertura quando GC-DELIM-010 passou a cobrir o cenario conceitualmente distinto de confianca BAIXA sem excecao."
+    },
+    {
+      "case_id": "GC-DELIM-011",
+      "purpose": "Lacuna real de cobertura de branch encontrada proativamente antes da revisao do HOTSPOT-03 (coverage --branch, arcos 170->168/175->173 nunca exercitados): nenhum caso existente incluia um MOD-*.json/NOR-*.json que NAO batesse com tipo_pericia/sistemas do perfil -- o ramo 'nao qualifica, pular' dos lacos de descoberta de conhecimento privado nunca era exercitado. Pina que arquivos de conhecimento privado nao-correspondentes sao corretamente filtrados (nao aparecem em itens_recuperados) enquanto os correspondentes continuam sendo recuperados.",
+      "status": "APPROVED",
+      "semantic_families": [
+        "absent_information",
+        "engine_decision"
+      ],
+      "invariants_exercised": [
+        "FAIL_CLOSED"
+      ],
+      "input": {
+        "diretorio_layout": {
+          "manifesto-pje.json": {
+            "schema_version": "1.1.0",
+            "arquivo": {
+              "nome": "processo-ficticio.pdf",
+              "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+              "total_paginas": 4,
+              "data_exportacao": "2026-01-01"
+            },
+            "processo": {
+              "numero_cnj": {
+                "valor": "0000001-00.2026.4.00.0001",
+                "proveniencia": {
+                  "arquivo": "processo-ficticio.pdf",
+                  "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                  "documento_id": null,
+                  "id_pje": null,
+                  "pagina_pdf": 1,
+                  "pagina_documento": null,
+                  "pagina_original": null,
+                  "trecho": "Número fictício",
+                  "natureza": "DOCUMENTADO",
+                  "metodo_extracao": "CAMPO_ESTRUTURADO",
+                  "confianca": {
+                    "nivel": "ALTA"
+                  },
+                  "status_verificacao": "VERIFICADO"
+                }
+              },
+              "tribunal": {
+                "valor": "Tribunal Fictício",
+                "motivo_ausencia": null,
+                "proveniencia": {
+                  "arquivo": "processo-ficticio.pdf",
+                  "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                  "documento_id": null,
+                  "id_pje": null,
+                  "pagina_pdf": 1,
+                  "pagina_documento": null,
+                  "pagina_original": null,
+                  "trecho": "Tribunal Fictício",
+                  "natureza": "DOCUMENTADO",
+                  "metodo_extracao": "CAMPO_ESTRUTURADO",
+                  "confianca": {
+                    "nivel": "ALTA"
+                  },
+                  "status_verificacao": "VERIFICADO"
+                }
+              },
+              "secao": {
+                "valor": "Seção Fictícia",
+                "motivo_ausencia": null,
+                "proveniencia": {
+                  "arquivo": "processo-ficticio.pdf",
+                  "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                  "documento_id": null,
+                  "id_pje": null,
+                  "pagina_pdf": 1,
+                  "pagina_documento": null,
+                  "pagina_original": null,
+                  "trecho": "Seção Fictícia",
+                  "natureza": "DOCUMENTADO",
+                  "metodo_extracao": "CAMPO_ESTRUTURADO",
+                  "confianca": {
+                    "nivel": "ALTA"
+                  },
+                  "status_verificacao": "VERIFICADO"
+                }
+              },
+              "subsecao": {
+                "valor": null,
+                "motivo_ausencia": "NAO_LOCALIZADO",
+                "proveniencia": {
+                  "arquivo": "processo-ficticio.pdf",
+                  "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                  "documento_id": null,
+                  "id_pje": null,
+                  "pagina_pdf": 1,
+                  "pagina_documento": null,
+                  "pagina_original": null,
+                  "trecho": null,
+                  "natureza": "INCONCLUSIVO",
+                  "metodo_extracao": "CAMPO_ESTRUTURADO",
+                  "confianca": {
+                    "nivel": "BAIXA"
+                  },
+                  "status_verificacao": "INCONCLUSIVO"
+                }
+              },
+              "orgao_julgador": {
+                "valor": "Vara Fictícia",
+                "motivo_ausencia": null,
+                "proveniencia": {
+                  "arquivo": "processo-ficticio.pdf",
+                  "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                  "documento_id": null,
+                  "id_pje": null,
+                  "pagina_pdf": 1,
+                  "pagina_documento": null,
+                  "pagina_original": null,
+                  "trecho": "Vara Fictícia",
+                  "natureza": "DOCUMENTADO",
+                  "metodo_extracao": "CAMPO_ESTRUTURADO",
+                  "confianca": {
+                    "nivel": "ALTA"
+                  },
+                  "status_verificacao": "VERIFICADO"
+                }
+              },
+              "classe": {
+                "valor": "Classe Fictícia",
+                "motivo_ausencia": null,
+                "proveniencia": {
+                  "arquivo": "processo-ficticio.pdf",
+                  "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                  "documento_id": null,
+                  "id_pje": null,
+                  "pagina_pdf": 1,
+                  "pagina_documento": null,
+                  "pagina_original": null,
+                  "trecho": "Classe Fictícia",
+                  "natureza": "DOCUMENTADO",
+                  "metodo_extracao": "CAMPO_ESTRUTURADO",
+                  "confianca": {
+                    "nivel": "ALTA"
+                  },
+                  "status_verificacao": "VERIFICADO"
+                }
+              },
+              "assuntos": [
+                {
+                  "valor": "Direito Civil - Vícios Redibitórios",
+                  "proveniencia": {
+                    "arquivo": "processo-ficticio.pdf",
+                    "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                    "documento_id": null,
+                    "id_pje": null,
+                    "pagina_pdf": 1,
+                    "pagina_documento": null,
+                    "pagina_original": null,
+                    "trecho": "Direito Civil - Vícios Redibitórios",
+                    "natureza": "DOCUMENTADO",
+                    "metodo_extracao": "CAMPO_ESTRUTURADO",
+                    "confianca": {
+                      "nivel": "ALTA"
+                    },
+                    "status_verificacao": "VERIFICADO"
+                  }
+                }
+              ],
+              "valor_causa": {
+                "valor": null,
+                "moeda": null,
+                "motivo_ausencia": "NAO_LOCALIZADO",
+                "proveniencia": {
+                  "arquivo": "processo-ficticio.pdf",
+                  "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                  "documento_id": null,
+                  "id_pje": null,
+                  "pagina_pdf": 1,
+                  "pagina_documento": null,
+                  "pagina_original": null,
+                  "trecho": null,
+                  "natureza": "INCONCLUSIVO",
+                  "metodo_extracao": "CAMPO_ESTRUTURADO",
+                  "confianca": {
+                    "nivel": "BAIXA"
+                  },
+                  "status_verificacao": "INCONCLUSIVO"
+                }
+              },
+              "flags": {
+                "segredo_justica": {
+                  "valor": false,
+                  "motivo_ausencia": null,
+                  "proveniencia": {
+                    "arquivo": "processo-ficticio.pdf",
+                    "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                    "documento_id": null,
+                    "id_pje": null,
+                    "pagina_pdf": 1,
+                    "pagina_documento": null,
+                    "pagina_original": null,
+                    "trecho": "NÃO",
+                    "natureza": "DOCUMENTADO",
+                    "metodo_extracao": "CAMPO_ESTRUTURADO",
+                    "confianca": {
+                      "nivel": "ALTA"
+                    },
+                    "status_verificacao": "VERIFICADO"
+                  }
+                },
+                "justica_gratuita": {
+                  "valor": true,
+                  "motivo_ausencia": null,
+                  "proveniencia": {
+                    "arquivo": "processo-ficticio.pdf",
+                    "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                    "documento_id": null,
+                    "id_pje": null,
+                    "pagina_pdf": 1,
+                    "pagina_documento": null,
+                    "pagina_original": null,
+                    "trecho": "SIM",
+                    "natureza": "DOCUMENTADO",
+                    "metodo_extracao": "CAMPO_ESTRUTURADO",
+                    "confianca": {
+                      "nivel": "ALTA"
+                    },
+                    "status_verificacao": "VERIFICADO"
+                  }
+                },
+                "pedido_liminar": {
+                  "valor": null,
+                  "motivo_ausencia": "NAO_LOCALIZADO",
+                  "proveniencia": {
+                    "arquivo": "processo-ficticio.pdf",
+                    "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                    "documento_id": null,
+                    "id_pje": null,
+                    "pagina_pdf": 1,
+                    "pagina_documento": null,
+                    "pagina_original": null,
+                    "trecho": null,
+                    "natureza": "INCONCLUSIVO",
+                    "metodo_extracao": "CAMPO_ESTRUTURADO",
+                    "confianca": {
+                      "nivel": "BAIXA"
+                    },
+                    "status_verificacao": "INCONCLUSIVO"
+                  }
+                }
+              }
+            },
+            "pessoas": [],
+            "vinculos_processuais": [],
+            "representacoes": [],
+            "indice": {
+              "paginas": [
+                1
+              ],
+              "itens": [
+                {
+                  "documento_id_interno": "DOC-PJE-001",
+                  "id_pje": "900101",
+                  "data": "2026-01-01",
+                  "hora": "10:00:00",
+                  "titulo_original": "Decisão saneadora",
+                  "tipo_original": "Decisão",
+                  "ordem_indice": 1,
+                  "pagina_destino_link": 2,
+                  "pagina_origem_indice": 1,
+                  "metodo_associacao_link": "LINK_ID_INEQUIVOCO",
+                  "candidatos_destino_link": [
+                    2
+                  ],
+                  "destino_escolhido_link": 2,
+                  "texto_bruto": "900101 01/01/2026 Decisão saneadora",
+                  "confianca": {
+                    "nivel": "ALTA",
+                    "score": 1.0
+                  }
+                },
+                {
+                  "documento_id_interno": "DOC-PJE-002",
+                  "id_pje": "900102",
+                  "data": "2026-01-01",
+                  "hora": "10:00:00",
+                  "titulo_original": "Petição inicial",
+                  "tipo_original": "Petição inicial",
+                  "ordem_indice": 2,
+                  "pagina_destino_link": 3,
+                  "pagina_origem_indice": 1,
+                  "metodo_associacao_link": "LINK_ID_INEQUIVOCO",
+                  "candidatos_destino_link": [
+                    3
+                  ],
+                  "destino_escolhido_link": 3,
+                  "texto_bruto": "900102 01/01/2026 Petição inicial",
+                  "confianca": {
+                    "nivel": "ALTA",
+                    "score": 1.0
+                  }
+                },
+                {
+                  "documento_id_interno": "DOC-PJE-003",
+                  "id_pje": "900103",
+                  "data": "2026-01-01",
+                  "hora": "10:00:00",
+                  "titulo_original": "Contestação",
+                  "tipo_original": "Contestação",
+                  "ordem_indice": 3,
+                  "pagina_destino_link": 4,
+                  "pagina_origem_indice": 1,
+                  "metodo_associacao_link": "LINK_ID_INEQUIVOCO",
+                  "candidatos_destino_link": [
+                    4
+                  ],
+                  "destino_escolhido_link": 4,
+                  "texto_bruto": "900103 01/01/2026 Contestação",
+                  "confianca": {
+                    "nivel": "ALTA",
+                    "score": 1.0
+                  }
+                }
+              ],
+              "possui_links_internos": true,
+              "confianca": {
+                "nivel": "ALTA"
+              }
+            },
+            "documentos": [
+              {
+                "documento_id": "DOC-PJE-001",
+                "id_pje": "900101",
+                "titulo_original": "Decisão saneadora",
+                "tipo_original": "Decisão",
+                "classe_normalizada": "DECISAO",
+                "subclasse_normalizada": null,
+                "prioridade": "A_ESSENCIAL",
+                "ordem_indice": 1,
+                "data_hora": "2026-01-01T11:00:00-03:00",
+                "pagina_pdf_inicio": 2,
+                "pagina_pdf_fim": 2,
+                "total_paginas": 1,
+                "possui_texto": true,
+                "possui_imagens": false,
+                "possui_tabelas": false,
+                "possui_anexos_internos": false,
+                "requer_ocr": false,
+                "confianca_segmentacao": {
+                  "nivel": "ALTA",
+                  "score": 1.0
+                },
+                "confianca_classificacao": {
+                  "nivel": "ALTA"
+                },
+                "status_reconciliacao": {
+                  "status": "CONFIRMADO",
+                  "id_indice": "900101",
+                  "id_rodape": "900101",
+                  "pagina_destino_link": 2,
+                  "primeira_pagina_detectada": 2,
+                  "ultima_pagina_detectada": 2,
+                  "evidencias": [],
+                  "motivos": [],
+                  "confianca": {
+                    "nivel": "ALTA"
+                  }
+                },
+                "referencia_documento_pje": "documentos/DOC-PJE-001.json"
+              },
+              {
+                "documento_id": "DOC-PJE-002",
+                "id_pje": "900102",
+                "titulo_original": "Petição inicial",
+                "tipo_original": "Petição inicial",
+                "classe_normalizada": "PETICAO_INICIAL",
+                "subclasse_normalizada": null,
+                "prioridade": "A_ESSENCIAL",
+                "ordem_indice": 2,
+                "data_hora": "2026-01-01T12:00:00-03:00",
+                "pagina_pdf_inicio": 3,
+                "pagina_pdf_fim": 3,
+                "total_paginas": 1,
+                "possui_texto": true,
+                "possui_imagens": false,
+                "possui_tabelas": false,
+                "possui_anexos_internos": false,
+                "requer_ocr": false,
+                "confianca_segmentacao": {
+                  "nivel": "ALTA",
+                  "score": 1.0
+                },
+                "confianca_classificacao": {
+                  "nivel": "ALTA"
+                },
+                "status_reconciliacao": {
+                  "status": "CONFIRMADO",
+                  "id_indice": "900102",
+                  "id_rodape": "900102",
+                  "pagina_destino_link": 3,
+                  "primeira_pagina_detectada": 3,
+                  "ultima_pagina_detectada": 3,
+                  "evidencias": [],
+                  "motivos": [],
+                  "confianca": {
+                    "nivel": "ALTA"
+                  }
+                },
+                "referencia_documento_pje": "documentos/DOC-PJE-002.json"
+              },
+              {
+                "documento_id": "DOC-PJE-003",
+                "id_pje": "900103",
+                "titulo_original": "Contestação",
+                "tipo_original": "Contestação",
+                "classe_normalizada": "CONTESTACAO",
+                "subclasse_normalizada": null,
+                "prioridade": "A_ESSENCIAL",
+                "ordem_indice": 3,
+                "data_hora": "2026-01-01T13:00:00-03:00",
+                "pagina_pdf_inicio": 4,
+                "pagina_pdf_fim": 4,
+                "total_paginas": 1,
+                "possui_texto": true,
+                "possui_imagens": false,
+                "possui_tabelas": false,
+                "possui_anexos_internos": false,
+                "requer_ocr": false,
+                "confianca_segmentacao": {
+                  "nivel": "ALTA",
+                  "score": 1.0
+                },
+                "confianca_classificacao": {
+                  "nivel": "ALTA"
+                },
+                "status_reconciliacao": {
+                  "status": "CONFIRMADO",
+                  "id_indice": "900103",
+                  "id_rodape": "900103",
+                  "pagina_destino_link": 4,
+                  "primeira_pagina_detectada": 4,
+                  "ultima_pagina_detectada": 4,
+                  "evidencias": [],
+                  "motivos": [],
+                  "confianca": {
+                    "nivel": "ALTA"
+                  }
+                },
+                "referencia_documento_pje": "documentos/DOC-PJE-003.json"
+              }
+            ],
+            "paginas": [
+              {
+                "pagina_pdf": 1,
+                "classificacao": "TEXTO_DIGITAL",
+                "quantidade_caracteres": 100,
+                "densidade_textual": 0.1,
+                "quantidade_imagens": 0,
+                "cobertura_visual": 0,
+                "possui_rodape_pje": false,
+                "id_pje_detectado": null,
+                "pagina_documento_detectada": null,
+                "requer_inspecao_visual": false,
+                "requer_ocr": false,
+                "motivo_ocr": null,
+                "confianca": {
+                  "nivel": "ALTA"
+                }
+              },
+              {
+                "pagina_pdf": 2,
+                "classificacao": "TEXTO_DIGITAL",
+                "quantidade_caracteres": 500,
+                "densidade_textual": 0.5,
+                "quantidade_imagens": 0,
+                "cobertura_visual": 0,
+                "possui_rodape_pje": true,
+                "id_pje_detectado": "900101",
+                "pagina_documento_detectada": 1,
+                "requer_inspecao_visual": false,
+                "requer_ocr": false,
+                "motivo_ocr": null,
+                "confianca": {
+                  "nivel": "ALTA"
+                }
+              },
+              {
+                "pagina_pdf": 3,
+                "classificacao": "TEXTO_DIGITAL",
+                "quantidade_caracteres": 500,
+                "densidade_textual": 0.5,
+                "quantidade_imagens": 0,
+                "cobertura_visual": 0,
+                "possui_rodape_pje": true,
+                "id_pje_detectado": "900102",
+                "pagina_documento_detectada": 1,
+                "requer_inspecao_visual": false,
+                "requer_ocr": false,
+                "motivo_ocr": null,
+                "confianca": {
+                  "nivel": "ALTA"
+                }
+              },
+              {
+                "pagina_pdf": 4,
+                "classificacao": "TEXTO_DIGITAL",
+                "quantidade_caracteres": 500,
+                "densidade_textual": 0.5,
+                "quantidade_imagens": 0,
+                "cobertura_visual": 0,
+                "possui_rodape_pje": true,
+                "id_pje_detectado": "900103",
+                "pagina_documento_detectada": 1,
+                "requer_inspecao_visual": false,
+                "requer_ocr": false,
+                "motivo_ocr": null,
+                "confianca": {
+                  "nivel": "ALTA"
+                }
+              }
+            ],
+            "eventos": [],
+            "conflitos": [],
+            "pendencias": [],
+            "metricas_extracao": {
+              "documentos_indice": 3,
+              "documentos_segmentados": 3,
+              "documentos_confirmados": 3,
+              "paginas_com_rodape": 3,
+              "paginas_sem_texto_util": 0,
+              "paginas_candidatas_ocr": 0,
+              "conflitos_abertos": 0
+            },
+            "status_validacao": "VALIDADO"
+          },
+          "documentos/DOC-PJE-001.json": {
+            "documento_id": "DOC-PJE-001",
+            "id_pje": "900101",
+            "titulo_original": "Decisão saneadora",
+            "tipo_original": "Decisão",
+            "classe_normalizada": "DECISAO",
+            "ordem_indice": 1,
+            "paginas": [
+              {
+                "texto_bruto": "Defiro a perícia de avaliação imobiliária para apurar o valor de mercado e o valor do aluguel do imóvel locado, mediante método comparativo direto e dados de mercado, observada a NBR 14653. A finalidade da perícia é determinar o valor locativo na data de referência dentro do encargo delimitado nos autos.",
+                "referencia": {
+                  "pagina_pdf": 2,
+                  "pagina_documento": 1,
+                  "pagina_original": null
+                }
+              }
+            ],
+            "blocos_texto": [
+              {
+                "pagina": {
+                  "pagina_pdf": 2
+                },
+                "proveniencia": {
+                  "arquivo": "processo-ficticio.pdf",
+                  "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                  "documento_id": "DOC-PJE-001",
+                  "id_pje": "900101",
+                  "pagina_pdf": 2,
+                  "pagina_documento": 1,
+                  "pagina_original": null,
+                  "trecho": "Defiro a perícia de avaliação imobiliária para apurar o valor de mercado e o valor do aluguel do imóvel locado, mediante método comparativo direto e dados de mercado, observada a NBR 14653. A finalida",
+                  "natureza": "DOCUMENTADO",
+                  "metodo_extracao": "TEXTO_DIGITAL",
+                  "confianca": {
+                    "nivel": "ALTA"
+                  },
+                  "status_verificacao": "VERIFICADO"
+                }
+              }
+            ]
+          },
+          "documentos/DOC-PJE-002.json": {
+            "documento_id": "DOC-PJE-002",
+            "id_pje": "900102",
+            "titulo_original": "Petição inicial",
+            "tipo_original": "Petição inicial",
+            "classe_normalizada": "PETICAO_INICIAL",
+            "ordem_indice": 2,
+            "paginas": [
+              {
+                "texto_bruto": "O autor requer a revisão do valor locativo do imóvel objeto do contrato de locação, mediante prova pericial de avaliação imobiliária.\nQuesitos da parte autora:\n1. Qual o valor de mercado locativo atual do imóvel?\n2. O método comparativo aplicado é compatível com os dados de mercado disponíveis?\n",
+                "referencia": {
+                  "pagina_pdf": 3,
+                  "pagina_documento": 1,
+                  "pagina_original": null
+                }
+              }
+            ],
+            "blocos_texto": [
+              {
+                "pagina": {
+                  "pagina_pdf": 3
+                },
+                "proveniencia": {
+                  "arquivo": "processo-ficticio.pdf",
+                  "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                  "documento_id": "DOC-PJE-002",
+                  "id_pje": "900102",
+                  "pagina_pdf": 3,
+                  "pagina_documento": 1,
+                  "pagina_original": null,
+                  "trecho": "O autor requer a revisão do valor locativo do imóvel objeto do contrato de locação, mediante prova pericial de avaliação imobiliária.\nQuesitos da parte autora:\n1. Qual o valor de mercado locativo atua",
+                  "natureza": "DOCUMENTADO",
+                  "metodo_extracao": "TEXTO_DIGITAL",
+                  "confianca": {
+                    "nivel": "ALTA"
+                  },
+                  "status_verificacao": "VERIFICADO"
+                }
+              }
+            ]
+          },
+          "documentos/DOC-PJE-003.json": {
+            "documento_id": "DOC-PJE-003",
+            "id_pje": "900103",
+            "titulo_original": "Contestação",
+            "tipo_original": "Contestação",
+            "classe_normalizada": "CONTESTACAO",
+            "ordem_indice": 3,
+            "paginas": [
+              {
+                "texto_bruto": "O réu impugna o valor pretendido e sustenta que o valor do aluguel atual está compatível com o mercado.\nQuesitos da parte ré:\n1. O imóvel apresenta atributos que justifiquem valor diverso do praticado?\n",
+                "referencia": {
+                  "pagina_pdf": 4,
+                  "pagina_documento": 1,
+                  "pagina_original": null
+                }
+              }
+            ],
+            "blocos_texto": [
+              {
+                "pagina": {
+                  "pagina_pdf": 4
+                },
+                "proveniencia": {
+                  "arquivo": "processo-ficticio.pdf",
+                  "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                  "documento_id": "DOC-PJE-003",
+                  "id_pje": "900103",
+                  "pagina_pdf": 4,
+                  "pagina_documento": 1,
+                  "pagina_original": null,
+                  "trecho": "O réu impugna o valor pretendido e sustenta que o valor do aluguel atual está compatível com o mercado.\nQuesitos da parte ré:\n1. O imóvel apresenta atributos que justifiquem valor diverso do praticado",
+                  "natureza": "DOCUMENTADO",
+                  "metodo_extracao": "TEXTO_DIGITAL",
+                  "confianca": {
+                    "nivel": "ALTA"
+                  },
+                  "status_verificacao": "VERIFICADO"
+                }
+              }
+            ]
+          }
+        },
+        "private_root_layout": {
+          "modelos-referenciais/modelo-parecer-avaliacao.json": {
+            "nota": "Modelo referencial sintetico de parecer de avaliacao imobiliaria (first-party, sem dados reais)."
+          },
+          "normas/nbr-14653-ficticia.json": {
+            "nota": "Excerto normativo sintetico (first-party) representando a NBR 14653."
+          },
+          "conhecimento/modelos/MOD-001.json": {
+            "id": "MOD-001",
+            "tipo_pericia": "AVALIACAO_IMOBILIARIA",
+            "sistemas": [
+              "OUTRO"
+            ],
+            "resumo": "Modelo sintetico de parecer de avaliacao imobiliaria."
+          },
+          "conhecimento/normas/NOR-001.json": {
+            "id": "NOR-001",
+            "sistemas": [
+              "AVALIACAO_IMOBILIARIA"
+            ],
+            "proveniencia": [
+              "NOR-LOCAL-001"
+            ],
+            "resumo": "Norma sintetica (ficticia) equivalente a NBR 14653."
+          },
+          "conhecimento/modelos/MOD-002.json": {
+            "id": "MOD-002",
+            "tipo_pericia": "VICIOS_CONSTRUTIVOS",
+            "sistemas": [
+              "IMPERMEABILIZACAO"
+            ],
+            "resumo": "Modelo de vicios construtivos -- nao deve ser recuperado para um caso AVALIACAO_IMOBILIARIA/OUTRO."
+          },
+          "conhecimento/normas/NOR-002.json": {
+            "id": "NOR-002",
+            "sistemas": [
+              "IMPERMEABILIZACAO"
+            ],
+            "proveniencia": [
+              "NOR-LOCAL-002"
+            ],
+            "resumo": "Norma de vicios construtivos -- nao deve ser recuperada para um caso AVALIACAO_IMOBILIARIA/OUTRO."
+          }
+        }
+      },
+      "expected_output_mode": "EXACT",
+      "expected_output": {
+        "schema_version": "1.0.0",
+        "identificacao": {
+          "processo_cnj": "0000001-00.2026.4.00.0001",
+          "manifesto_sha256": "9f002aacd6d816fd1c1a6313f487255a1c385b49811d1e5748c858c9e505ee67",
+          "data_geracao": "2026-08-21T10:56:31-03:00"
+        },
+        "tipo_pericia": {
+          "tipo": "AVALIACAO_IMOBILIARIA",
+          "confianca": {
+            "nivel": "ALTA",
+            "score": 0.99
+          },
+          "evidencias": [
+            "terminologia convergente: avaliacao imobiliaria",
+            "terminologia convergente: dados de mercado",
+            "terminologia convergente: metodo comparativo",
+            "terminologia convergente: nbr 14653",
+            "terminologia convergente: valor de mercado",
+            "terminologia convergente: valor do aluguel",
+            "terminologia convergente: valor locativo"
+          ],
+          "documentos_fonte": [
+            "DOC-PJE-001",
+            "DOC-PJE-002",
+            "DOC-PJE-003"
+          ],
+          "criterios": [
+            "convergência entre múltiplas peças independentes",
+            "ponderação pela autoridade documental"
+          ],
+          "alternativas_consideradas": []
+        },
+        "subtipos_pericia": [],
+        "assunto_processual": {
+          "texto": "Direito Civil - Vícios Redibitórios",
+          "confianca": {
+            "nivel": "ALTA"
+          },
+          "documentos_fonte": [],
+          "status_verificacao": "VERIFICADO"
+        },
+        "controversia_processual": {
+          "texto": "A finalidade da perícia é determinar o valor locativo na data de referência dentro do encargo delimitado nos autos.",
+          "confianca": {
+            "nivel": "ALTA"
+          },
+          "documentos_fonte": [
+            "DOC-PJE-001"
+          ],
+          "status_verificacao": "PENDENTE_VALIDACAO_PERITO"
+        },
+        "tema_controvertido": {
+          "texto": "A finalidade da perícia é determinar o valor locativo na data de referência dentro do encargo delimitado nos autos.",
+          "confianca": {
+            "nivel": "ALTA"
+          },
+          "documentos_fonte": [
+            "DOC-PJE-001"
+          ],
+          "status_verificacao": "PENDENTE_VALIDACAO_PERITO"
+        },
+        "objeto_material": {
+          "texto": "O autor requer a revisão do valor locativo do imóvel objeto do contrato de locação, mediante prova pericial de avaliação imobiliária.",
+          "confianca": {
+            "nivel": "MEDIA"
+          },
+          "documentos_fonte": [
+            "DOC-PJE-002"
+          ],
+          "status_verificacao": "PENDENTE_VALIDACAO_PERITO"
+        },
+        "objetivo_pericial": {
+          "texto": "A finalidade da perícia é determinar o valor locativo na data de referência dentro do encargo delimitado nos autos.",
+          "confianca": {
+            "nivel": "ALTA"
+          },
+          "documentos_fonte": [
+            "DOC-PJE-001"
+          ],
+          "status_verificacao": "PENDENTE_VALIDACAO_PERITO"
+        },
+        "questoes_tecnicas": [
+          {
+            "id": "QT-001",
+            "descricao": "Caracterizar o imóvel, sua localização, uso, estado e atributos relevantes para avaliação.",
+            "origem": "Decisão/documentos delimitadores, quesitos e alegações pertinentes",
+            "necessidade_para_saneamento": "Componente necessário para responder ao tema controvertido sem antecipar conclusão.",
+            "quesitos_relacionados": [
+              "QUE-003"
+            ],
+            "alegacoes_relacionadas": [],
+            "evidencias_disponiveis": [
+              "Documentos PJe estruturalmente extraídos",
+              "QUE-003"
+            ],
+            "evidencias_necessarias": [
+              "Vistoria e documentação técnica pertinente"
+            ],
+            "documentos_relacionados": [
+              "DOC-PJE-003"
+            ],
+            "ressalvas": [
+              "RES-001",
+              "RES-002"
+            ],
+            "status_saneamento": "A_SANEAR",
+            "confianca": {
+              "nivel": "MEDIA"
+            },
+            "proveniencia": [
+              {
+                "arquivo": "processo-ficticio.pdf",
+                "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                "documento_id": "DOC-PJE-003",
+                "id_pje": "900103",
+                "pagina_pdf": 4,
+                "pagina_documento": 1,
+                "pagina_original": null,
+                "trecho": "O imóvel apresenta atributos que justifiquem valor diverso do praticado?",
+                "natureza": "DOCUMENTADO",
+                "metodo_extracao": "TEXTO_DIGITAL",
+                "confianca": {
+                  "nivel": "ALTA"
+                },
+                "status_verificacao": "VERIFICADO"
+              }
+            ]
+          },
+          {
+            "id": "QT-002",
+            "descricao": "Definir e aplicar método de avaliação compatível com os dados de mercado disponíveis.",
+            "origem": "Decisão/documentos delimitadores, quesitos e alegações pertinentes",
+            "necessidade_para_saneamento": "Componente necessário para responder ao tema controvertido sem antecipar conclusão.",
+            "quesitos_relacionados": [
+              "QUE-002"
+            ],
+            "alegacoes_relacionadas": [],
+            "evidencias_disponiveis": [
+              "Documentos PJe estruturalmente extraídos",
+              "QUE-002",
+              "Defiro a perícia de avaliação imobiliária para apurar o valor de mercado e o valor do aluguel do imóvel locado, mediante método comparativo direto e dados de mercado, observada a NBR 14653.",
+              "O réu impugna o valor pretendido e sustenta que o valor do aluguel atual está compatível com o mercado."
+            ],
+            "evidencias_necessarias": [
+              "Vistoria e documentação técnica pertinente"
+            ],
+            "documentos_relacionados": [
+              "DOC-PJE-001",
+              "DOC-PJE-002",
+              "DOC-PJE-003"
+            ],
+            "ressalvas": [
+              "RES-001",
+              "RES-002"
+            ],
+            "status_saneamento": "A_SANEAR",
+            "confianca": {
+              "nivel": "ALTA"
+            },
+            "proveniencia": [
+              {
+                "arquivo": "processo-ficticio.pdf",
+                "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                "documento_id": "DOC-PJE-002",
+                "id_pje": "900102",
+                "pagina_pdf": 3,
+                "pagina_documento": 1,
+                "pagina_original": null,
+                "trecho": "O método comparativo aplicado é compatível com os dados de mercado disponíveis?",
+                "natureza": "DOCUMENTADO",
+                "metodo_extracao": "TEXTO_DIGITAL",
+                "confianca": {
+                  "nivel": "ALTA"
+                },
+                "status_verificacao": "VERIFICADO"
+              },
+              {
+                "arquivo": "processo-ficticio.pdf",
+                "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                "documento_id": "DOC-PJE-001",
+                "id_pje": "900101",
+                "pagina_pdf": 2,
+                "pagina_documento": 1,
+                "pagina_original": null,
+                "trecho": "Defiro a perícia de avaliação imobiliária para apurar o valor de mercado e o valor do aluguel do imóvel locado, mediante método comparativo direto e dados de mercado, observada a NBR 14653.",
+                "natureza": "DOCUMENTADO",
+                "metodo_extracao": "TEXTO_DIGITAL",
+                "confianca": {
+                  "nivel": "ALTA"
+                },
+                "status_verificacao": "VERIFICADO"
+              },
+              {
+                "arquivo": "processo-ficticio.pdf",
+                "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                "documento_id": "DOC-PJE-001",
+                "id_pje": "900101",
+                "pagina_pdf": 2,
+                "pagina_documento": 1,
+                "pagina_original": null,
+                "trecho": "O réu impugna o valor pretendido e sustenta que o valor do aluguel atual está compatível com o mercado.",
+                "natureza": "DOCUMENTADO",
+                "metodo_extracao": "TEXTO_DIGITAL",
+                "confianca": {
+                  "nivel": "ALTA"
+                },
+                "status_verificacao": "VERIFICADO"
+              }
+            ]
+          },
+          {
+            "id": "QT-003",
+            "descricao": "Determinar o valor locativo na data de referência e explicitar incertezas e fatores de influência.",
+            "origem": "Decisão/documentos delimitadores, quesitos e alegações pertinentes",
+            "necessidade_para_saneamento": "Componente necessário para responder ao tema controvertido sem antecipar conclusão.",
+            "quesitos_relacionados": [
+              "QUE-001"
+            ],
+            "alegacoes_relacionadas": [],
+            "evidencias_disponiveis": [
+              "Documentos PJe estruturalmente extraídos",
+              "QUE-001",
+              "A finalidade da perícia é determinar o valor locativo na data de referência dentro do encargo delimitado nos autos."
+            ],
+            "evidencias_necessarias": [
+              "Vistoria e documentação técnica pertinente"
+            ],
+            "documentos_relacionados": [
+              "DOC-PJE-001",
+              "DOC-PJE-002"
+            ],
+            "ressalvas": [
+              "RES-001",
+              "RES-002"
+            ],
+            "status_saneamento": "A_SANEAR",
+            "confianca": {
+              "nivel": "ALTA"
+            },
+            "proveniencia": [
+              {
+                "arquivo": "processo-ficticio.pdf",
+                "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                "documento_id": "DOC-PJE-002",
+                "id_pje": "900102",
+                "pagina_pdf": 3,
+                "pagina_documento": 1,
+                "pagina_original": null,
+                "trecho": "Qual o valor de mercado locativo atual do imóvel?",
+                "natureza": "DOCUMENTADO",
+                "metodo_extracao": "TEXTO_DIGITAL",
+                "confianca": {
+                  "nivel": "ALTA"
+                },
+                "status_verificacao": "VERIFICADO"
+              },
+              {
+                "arquivo": "processo-ficticio.pdf",
+                "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                "documento_id": "DOC-PJE-001",
+                "id_pje": "900101",
+                "pagina_pdf": 2,
+                "pagina_documento": 1,
+                "pagina_original": null,
+                "trecho": "A finalidade da perícia é determinar o valor locativo na data de referência dentro do encargo delimitado nos autos.",
+                "natureza": "DOCUMENTADO",
+                "metodo_extracao": "TEXTO_DIGITAL",
+                "confianca": {
+                  "nivel": "ALTA"
+                },
+                "status_verificacao": "VERIFICADO"
+              }
+            ]
+          }
+        ],
+        "quesitos": [
+          {
+            "id": "QUE-001",
+            "origem": "AUTOR",
+            "documento_id": "DOC-PJE-002",
+            "id_pje": "900102",
+            "numero_original": "1",
+            "caminho_original": "1",
+            "ordem_real": 1,
+            "texto_integral": "Qual o valor de mercado locativo atual do imóvel?",
+            "subitens": [],
+            "paginas": [
+              {
+                "pagina_pdf": 3,
+                "pagina_documento": 1,
+                "pagina_original": null
+              }
+            ],
+            "pertinencia": "PERTINENTE_TECNICO",
+            "questoes_tecnicas_relacionadas": [
+              "QT-003"
+            ],
+            "evidencias_necessarias": [
+              "Evidência documental e/ou de vistoria compatível com o conteúdo do quesito"
+            ],
+            "ressalvas_aplicaveis": [
+              "RES-001",
+              "RES-002"
+            ],
+            "status_cobertura": "PARCIAL",
+            "materia_tecnica": "Qual o valor de mercado locativo atual do imóvel?",
+            "materia_juridica_associada": null,
+            "secoes_laudisticas_previstas": [
+              "Análise técnica vinculada à questão QT-003"
+            ],
+            "proveniencia": [
+              {
+                "arquivo": "processo-ficticio.pdf",
+                "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                "documento_id": "DOC-PJE-002",
+                "id_pje": "900102",
+                "pagina_pdf": 3,
+                "pagina_documento": 1,
+                "pagina_original": null,
+                "trecho": "Qual o valor de mercado locativo atual do imóvel?",
+                "natureza": "DOCUMENTADO",
+                "metodo_extracao": "TEXTO_DIGITAL",
+                "confianca": {
+                  "nivel": "ALTA"
+                },
+                "status_verificacao": "VERIFICADO"
+              }
+            ]
+          },
+          {
+            "id": "QUE-002",
+            "origem": "AUTOR",
+            "documento_id": "DOC-PJE-002",
+            "id_pje": "900102",
+            "numero_original": "2",
+            "caminho_original": "2",
+            "ordem_real": 2,
+            "texto_integral": "O método comparativo aplicado é compatível com os dados de mercado disponíveis?",
+            "subitens": [],
+            "paginas": [
+              {
+                "pagina_pdf": 3,
+                "pagina_documento": 1,
+                "pagina_original": null
+              }
+            ],
+            "pertinencia": "PERTINENTE_TECNICO",
+            "questoes_tecnicas_relacionadas": [
+              "QT-002"
+            ],
+            "evidencias_necessarias": [
+              "Evidência documental e/ou de vistoria compatível com o conteúdo do quesito"
+            ],
+            "ressalvas_aplicaveis": [
+              "RES-001",
+              "RES-002"
+            ],
+            "status_cobertura": "PARCIAL",
+            "materia_tecnica": "O método comparativo aplicado é compatível com os dados de mercado disponíveis?",
+            "materia_juridica_associada": null,
+            "secoes_laudisticas_previstas": [
+              "Análise técnica vinculada à questão QT-002"
+            ],
+            "proveniencia": [
+              {
+                "arquivo": "processo-ficticio.pdf",
+                "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                "documento_id": "DOC-PJE-002",
+                "id_pje": "900102",
+                "pagina_pdf": 3,
+                "pagina_documento": 1,
+                "pagina_original": null,
+                "trecho": "O método comparativo aplicado é compatível com os dados de mercado disponíveis?",
+                "natureza": "DOCUMENTADO",
+                "metodo_extracao": "TEXTO_DIGITAL",
+                "confianca": {
+                  "nivel": "ALTA"
+                },
+                "status_verificacao": "VERIFICADO"
+              }
+            ]
+          },
+          {
+            "id": "QUE-003",
+            "origem": "REU",
+            "documento_id": "DOC-PJE-003",
+            "id_pje": "900103",
+            "numero_original": "1",
+            "caminho_original": "1",
+            "ordem_real": 3,
+            "texto_integral": "O imóvel apresenta atributos que justifiquem valor diverso do praticado?",
+            "subitens": [],
+            "paginas": [
+              {
+                "pagina_pdf": 4,
+                "pagina_documento": 1,
+                "pagina_original": null
+              }
+            ],
+            "pertinencia": "PERTINENTE_TECNICO",
+            "questoes_tecnicas_relacionadas": [
+              "QT-001"
+            ],
+            "evidencias_necessarias": [
+              "Evidência documental e/ou de vistoria compatível com o conteúdo do quesito"
+            ],
+            "ressalvas_aplicaveis": [
+              "RES-001",
+              "RES-002"
+            ],
+            "status_cobertura": "PARCIAL",
+            "materia_tecnica": "O imóvel apresenta atributos que justifiquem valor diverso do praticado?",
+            "materia_juridica_associada": null,
+            "secoes_laudisticas_previstas": [
+              "Análise técnica vinculada à questão QT-001"
+            ],
+            "proveniencia": [
+              {
+                "arquivo": "processo-ficticio.pdf",
+                "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                "documento_id": "DOC-PJE-003",
+                "id_pje": "900103",
+                "pagina_pdf": 4,
+                "pagina_documento": 1,
+                "pagina_original": null,
+                "trecho": "O imóvel apresenta atributos que justifiquem valor diverso do praticado?",
+                "natureza": "DOCUMENTADO",
+                "metodo_extracao": "TEXTO_DIGITAL",
+                "confianca": {
+                  "nivel": "ALTA"
+                },
+                "status_verificacao": "VERIFICADO"
+              }
+            ]
+          }
+        ],
+        "matriz_cobertura": [
+          {
+            "quesito_id": "QUE-001",
+            "questoes_tecnicas": [
+              "QT-003"
+            ],
+            "secoes_laudisticas": [
+              "Análise técnica vinculada à questão QT-003"
+            ],
+            "status": "PARCIAL"
+          },
+          {
+            "quesito_id": "QUE-002",
+            "questoes_tecnicas": [
+              "QT-002"
+            ],
+            "secoes_laudisticas": [
+              "Análise técnica vinculada à questão QT-002"
+            ],
+            "status": "PARCIAL"
+          },
+          {
+            "quesito_id": "QUE-003",
+            "questoes_tecnicas": [
+              "QT-001"
+            ],
+            "secoes_laudisticas": [
+              "Análise técnica vinculada à questão QT-001"
+            ],
+            "status": "PARCIAL"
+          }
+        ],
+        "ressalvas": [
+          {
+            "id": "RES-001",
+            "categoria": "LIMITACAO_DE_VISTORIA",
+            "descricao": "A vistoria e as constatações de campo ainda não integram esta etapa.",
+            "causa": "Etapa ou fonte ainda indisponível",
+            "evidencia": "Inventário local das fontes da triagem",
+            "questoes_afetadas": [
+              "QT-001",
+              "QT-002",
+              "QT-003"
+            ],
+            "quesitos_afetados": [
+              "QUE-001",
+              "QUE-002",
+              "QUE-003"
+            ],
+            "conclusoes_impedidas": [
+              "Conclusão técnica de mérito"
+            ],
+            "conclusoes_ainda_permitidas": [
+              "Classificação e planejamento preliminares"
+            ],
+            "efeito_no_grau_de_certeza": "A classificação pode orientar o plano, mas não autoriza conclusão técnica.",
+            "proveniencia": [
+              {
+                "arquivo": "processo-ficticio.pdf",
+                "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                "documento_id": "DOC-PJE-001",
+                "id_pje": "900101",
+                "pagina_pdf": 2,
+                "pagina_documento": 1,
+                "pagina_original": null,
+                "trecho": "Defiro a perícia de avaliação imobiliária para apurar o valor de mercado e o valor do aluguel do imóvel locado, mediante método comparativo direto e dados de mercado, observada a NBR 14653. A finalida",
+                "natureza": "DOCUMENTADO",
+                "metodo_extracao": "TEXTO_DIGITAL",
+                "confianca": {
+                  "nivel": "ALTA"
+                },
+                "status_verificacao": "VERIFICADO"
+              }
+            ]
+          },
+          {
+            "id": "RES-002",
+            "categoria": "DADO_NAO_VERIFICAVEL",
+            "descricao": "Fontes privadas de conhecimento existem, mas sua extração e verificação ainda não foram concluídas.",
+            "causa": "Etapa ou fonte ainda indisponível",
+            "evidencia": "Inventário local das fontes da triagem",
+            "questoes_afetadas": [
+              "QT-001",
+              "QT-002",
+              "QT-003"
+            ],
+            "quesitos_afetados": [
+              "QUE-001",
+              "QUE-002",
+              "QUE-003"
+            ],
+            "conclusoes_impedidas": [
+              "Conclusão técnica de mérito"
+            ],
+            "conclusoes_ainda_permitidas": [
+              "Classificação e planejamento preliminares"
+            ],
+            "efeito_no_grau_de_certeza": "A classificação pode orientar o plano, mas não autoriza conclusão técnica.",
+            "proveniencia": [
+              {
+                "arquivo": "processo-ficticio.pdf",
+                "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+                "documento_id": "DOC-PJE-001",
+                "id_pje": "900101",
+                "pagina_pdf": 2,
+                "pagina_documento": 1,
+                "pagina_original": null,
+                "trecho": "Defiro a perícia de avaliação imobiliária para apurar o valor de mercado e o valor do aluguel do imóvel locado, mediante método comparativo direto e dados de mercado, observada a NBR 14653. A finalida",
+                "natureza": "DOCUMENTADO",
+                "metodo_extracao": "TEXTO_DIGITAL",
+                "confianca": {
+                  "nivel": "ALTA"
+                },
+                "status_verificacao": "VERIFICADO"
+              }
+            ]
+          }
+        ],
+        "fatores_limitantes": [
+          "A vistoria e as constatações de campo ainda não integram esta etapa.",
+          "Fontes privadas de conhecimento existem, mas sua extração e verificação ainda não foram concluídas."
+        ],
+        "conflitos": [],
+        "materias_excluidas": [
+          {
+            "descricao": "Responsabilidade civil, culpa, prescrição, decadência e dever de indenizar.",
+            "motivo": "MATERIA_JURIDICA",
+            "tratamento_tecnico": "Delimitar e responder apenas o aspecto técnico associado."
+          }
+        ],
+        "documentos_relevantes": [
+          {
+            "documento_id": "DOC-PJE-001",
+            "papel": "Fonte principal da delimitação preliminar",
+            "autoridade": "DELIMITACAO_PRIMARIA",
+            "justificativa": "Peça de maior autoridade disponível entre as evidências classificatórias."
+          }
+        ],
+        "documentos_ausentes": [],
+        "metodologia_preliminar": [
+          "Leitura cruzada das peças",
+          "Vistoria planejada",
+          "Análise técnica com rastreabilidade"
+        ],
+        "modulos_tecnicos": [
+          {
+            "nome": "AVALIACAO_IMOBILIARIA",
+            "prioridade": "PRINCIPAL",
+            "sistemas": [
+              "OUTRO"
+            ]
+          }
+        ],
+        "plano_pericial_preliminar": {
+          "o_que_verificar": [
+            "Caracterizar o imóvel, sua localização, uso, estado e atributos relevantes para avaliação.",
+            "Definir e aplicar método de avaliação compatível com os dados de mercado disponíveis.",
+            "Determinar o valor locativo na data de referência e explicitar incertezas e fatores de influência."
+          ],
+          "o_que_fotografar": [
+            "Imóvel objeto da relação locatícia e respectivo valor de mercado para locação."
+          ],
+          "o_que_medir": [
+            "Grandezas exigidas pelas questões técnicas e verificáveis na diligência"
+          ],
+          "ensaios_sugeridos": [
+            "Somente após confirmação de aplicabilidade e necessidade"
+          ],
+          "equipamentos_sugeridos": [
+            "Instrumentos compatíveis com as grandezas efetivamente definidas"
+          ],
+          "documentos_a_solicitar": [
+            "Documentação técnica mencionada nos autos e ainda não disponível"
+          ],
+          "pontos_criticos": [
+            "Não converter alegação em constatação",
+            "Distinguir condição atual da histórica quando aplicável"
+          ],
+          "questoes_que_dependem_da_vistoria": [
+            "QT-001",
+            "QT-002",
+            "QT-003"
+          ]
+        },
+        "memoria_referencial": {
+          "fontes_disponiveis": 1,
+          "itens_recuperados": [
+            "MOD-001"
+          ],
+          "status": "DISPONIVEL"
+        },
+        "conhecimento_normativo": {
+          "fontes_disponiveis": 1,
+          "itens_recuperados": [
+            "NOR-001"
+          ],
+          "fontes": [
+            {
+              "id": "NOR-001",
+              "proveniencia": [
+                "NOR-LOCAL-001"
+              ]
+            }
+          ],
+          "status": "PENDENTE_VERIFICACAO_NORMATIVA"
+        },
+        "autoauditoria": [
+          {
+            "criterio": "Classificação usa múltiplas peças e não o número do processo",
+            "resultado": "APROVADO",
+            "observacao": "DOC-PJE-001, DOC-PJE-002, DOC-PJE-003"
+          },
+          {
+            "criterio": "Normas usadas possuem proveniência",
+            "resultado": "APROVADO",
+            "observacao": "Fontes estruturadas: NOR-001."
+          },
+          {
+            "criterio": "Modelos não contaminam fatos do caso",
+            "resultado": "APROVADO",
+            "observacao": "Modelos recuperados apenas como experiência: MOD-001."
+          },
+          {
+            "criterio": "Tema e objeto possuem fonte identificável",
+            "resultado": "APROVADO",
+            "observacao": "Formulação preliminar requer validação semântica final do perito."
+          },
+          {
+            "criterio": "Capability de delimitação disponível",
+            "resultado": "APROVADO",
+            "observacao": "PERFIL_IMPLEMENTADO_MOTOR_NAO_IMPLEMENTADO"
+          },
+          {
+            "criterio": "Quesitos juridicos permanecem fora das questoes tecnicas",
+            "resultado": "APROVADO",
+            "observacao": "Critério recalculado no boundary."
+          }
+        ],
+        "status": "APTO_PARA_PLANEJAMENTO",
+        "proveniencia": [
+          {
+            "arquivo": "processo-ficticio.pdf",
+            "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+            "documento_id": null,
+            "id_pje": null,
+            "pagina_pdf": 1,
+            "pagina_documento": null,
+            "pagina_original": null,
+            "trecho": "Direito Civil - Vícios Redibitórios",
+            "natureza": "DOCUMENTADO",
+            "metodo_extracao": "CAMPO_ESTRUTURADO",
+            "confianca": {
+              "nivel": "ALTA"
+            },
+            "status_verificacao": "VERIFICADO"
+          },
+          {
+            "arquivo": "processo-ficticio.pdf",
+            "sha256": "00000000000000000000000000000000000000000000000000000000000000000000",
+            "documento_id": "DOC-PJE-001",
+            "id_pje": "900101",
+            "pagina_pdf": 2,
+            "pagina_documento": 1,
+            "pagina_original": null,
+            "trecho": "Defiro a perícia de avaliação imobiliária para apurar o valor de mercado e o valor do aluguel do imóvel locado, mediante método comparativo direto e dados de mercado, observada a NBR 14653. A finalida",
+            "natureza": "DOCUMENTADO",
+            "metodo_extracao": "TEXTO_DIGITAL",
+            "confianca": {
+              "nivel": "ALTA"
+            },
+            "status_verificacao": "VERIFICADO"
+          }
+        ]
+      },
+      "expected_provenance": null,
+      "expected_classifications": {
+        "memoria_referencial.itens_recuperados": [
+          "MOD-001"
+        ],
+        "conhecimento_normativo.itens_recuperados": [
+          "NOR-001"
+        ]
+      },
+      "expected_warnings": null,
+      "expected_inconclusivity": null,
+      "non_semantic_fields_ignored": [
+        "identificacao.data_geracao"
+      ],
+      "check_deterministic_replay": false,
+      "notes": "Verificado tambem contra a implementacao PRE-refactor (scripts/triagem_pericial/gerar_delimitacao.py @ main antes da PR do HOTSPOT-03): saida identica byte a byte (exceto identificacao.data_geracao)."
     }
   ],
   "not_applicable": [
