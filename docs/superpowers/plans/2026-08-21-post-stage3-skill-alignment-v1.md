@@ -97,7 +97,8 @@ Expected: PASS.
 
 **Interfaces:**
 - Consumes: completed Phase A diff.
-- Produces: exact-head assurance package for PR #91.
+- Produces: exact-head assurance package for the PR that closes Issue #91
+  (PR #92 in this execution).
 
 - [ ] **Step 1: Run provenance, focused governance, diff, privacy, and Ruff checks**
 

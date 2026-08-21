@@ -88,6 +88,10 @@ As categorias são `REQUIRED`, `RECOMMENDED`, `CONDITIONAL` e
 - design-motion-principles
 - engenharia-seguranca-pericial
 - test-driven-development
+- verification-before-completion
+- repository-safety-gate
+- requesting-code-review
+- receiving-code-review
 - revisão independente
 - Skills first-party do domínio Processo/Caso
 
@@ -104,6 +108,10 @@ As categorias são `REQUIRED`, `RECOMMENDED`, `CONDITIONAL` e
 - design-motion-principles
 - engenharia-seguranca-pericial
 - test-driven-development
+- verification-before-completion
+- repository-safety-gate
+- requesting-code-review
+- receiving-code-review
 - planejamento-pericial-autonomo
 - motor-vicios-construtivos
 - revisão independente
@@ -121,6 +129,10 @@ As categorias são `REQUIRED`, `RECOMMENDED`, `CONDITIONAL` e
 - design-motion-principles
 - engenharia-seguranca-pericial
 - test-driven-development
+- verification-before-completion
+- repository-safety-gate
+- requesting-code-review
+- receiving-code-review
 - auditoria-grounding-pericial
 - trilha-auditoria-pericial
 - revisão independente
@@ -138,6 +150,10 @@ As categorias são `REQUIRED`, `RECOMMENDED`, `CONDITIONAL` e
 - design-motion-principles
 - engenharia-seguranca-pericial
 - test-driven-development
+- verification-before-completion
+- repository-safety-gate
+- requesting-code-review
+- receiving-code-review
 - auditoria-pericial-integrada
 - motor-vicios-construtivos
 - revisão independente
@@ -155,6 +171,10 @@ As categorias são `REQUIRED`, `RECOMMENDED`, `CONDITIONAL` e
 - design-motion-principles
 - engenharia-seguranca-pericial
 - test-driven-development
+- verification-before-completion
+- repository-safety-gate
+- requesting-code-review
+- receiving-code-review
 - redacao-laudo-pericial
 - revisao-laudo-pericial
 - revisão independente
@@ -172,6 +192,10 @@ As categorias são `REQUIRED`, `RECOMMENDED`, `CONDITIONAL` e
 - design-motion-principles
 - engenharia-seguranca-pericial
 - test-driven-development
+- verification-before-completion
+- repository-safety-gate
+- requesting-code-review
+- receiving-code-review
 - Skills first-party de orçamento e fidelidade valor/unidade
 - revisão independente
 

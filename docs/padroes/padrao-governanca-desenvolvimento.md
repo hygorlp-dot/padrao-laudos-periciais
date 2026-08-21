@@ -75,8 +75,9 @@ auditoria, sem expor complexidade avançada no fluxo normal.
 
 ## UI, motion e operações assíncronas
 
-Consultar as Skills `design-motion-principles` e `ui-pericial`. Movimento é
-funcional, não decorativo. Interações frequentes e por teclado devem ter pouco
+Consultar as Skills `ui-pericial`, `frontend-design` e
+`design-motion-principles`, nessa ordem. Movimento é funcional, não decorativo.
+Interações frequentes e por teclado devem ter pouco
 ou nenhum movimento; entradas são curtas e saídas mais sutis. Respeitar
 `prefers-reduced-motion` e preferir `transform`, `opacity` e `filter`.
 

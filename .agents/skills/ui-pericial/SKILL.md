@@ -5,7 +5,8 @@ description: Adaptar UI, UX e motion ao aplicativo pericial de produtividade, co
 
 # UI pericial
 
-1. Ler `../design-motion-principles/SKILL.md` e o workflow aplicável.
+1. Ler `../frontend-design/SKILL.md`, depois
+   `../design-motion-principles/SKILL.md` e o workflow aplicável.
 2. Tratar o produto como `PRODUCTIVITY_TOOL`.
 3. Ponderar Emil Kowalski como `PRIMARY`, Jakub Krehel como `SECONDARY` e
    Jhey Tompkins como `SELECTIVE`, apenas para onboarding, empty states e
