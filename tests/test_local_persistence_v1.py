@@ -145,11 +145,50 @@ def test_state_guard_bootstrap_error_closes_and_maps_connection(monkeypatch):
 
     connection = FailingGuardConnection()
     monkeypatch.setattr(sqlite_store.sqlite3, "connect", lambda *args, **kwargs: connection)
-    monkeypatch.setattr(sqlite_store, "migrate", lambda _connection: None)
+    monkeypatch.setattr(
+        sqlite_store,
+        "migrate",
+        lambda candidate: sqlite_store._database_state_token(candidate),
+    )
     with pytest.raises(RepositoryError) as raised:
         SQLiteApplicationStore("safe.db")
     assert not isinstance(raised.value, sqlite3.Error)
     assert connection.closed
+
+
+def test_post_migration_commit_is_not_absorbed_by_initial_guard(monkeypatch, tmp_path):
+    path = tmp_path / "initial-token-race.db"
+    with SQLiteApplicationStore(path) as store:
+        store.workspaces.create(workspace())
+        for revision_id, created_at in (
+            (REVISION_1, CREATED_1),
+            (REVISION_2, CREATED_2),
+        ):
+            store.revisions.append(
+                workspace_id=WorkspaceId.parse(WORKSPACE_1),
+                artifact_kind="LAUDO",
+                artifact_id="LAU-001",
+                revision_id=revision_id,
+                created_at=created_at,
+                payload={},
+            )
+    original_migrate = sqlite_store.migrate
+
+    def migrate_then_corrupt(connection):
+        trusted_token = original_migrate(connection)
+        with sqlite3.connect(path) as external:
+            external.execute(
+                "DELETE FROM artifact_revisions WHERE revision_id = ?",
+                (REVISION_1,),
+            )
+        return trusted_token
+
+    monkeypatch.setattr(sqlite_store, "migrate", migrate_then_corrupt)
+    with SQLiteApplicationStore(path) as store:
+        with pytest.raises(RepositoryIntegrityError, match="sequência|histórico"):
+            store.revisions.list_all(
+                WorkspaceId.parse(WORKSPACE_1), "LAUDO", "LAU-001"
+            )
 
 
 @pytest.mark.parametrize("target", ("", "   ", ":memory:", "file::memory:"))

@@ -240,9 +240,13 @@ def _database_state_token(connection: sqlite3.Connection) -> tuple[int, int, int
 
 
 class _DatabaseStateGuard:
-    def __init__(self, connection: sqlite3.Connection):
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        trusted_token: tuple[int, int, int, int],
+    ):
         self._connection = connection
-        self._trusted_token = _database_state_token(connection)
+        self._trusted_token = trusted_token
 
     def validate(self) -> None:
         current = _database_state_token(self._connection)
@@ -259,7 +263,7 @@ class _DatabaseStateGuard:
         self._trusted_token = _database_state_token(self._connection)
 
 
-def migrate(connection: sqlite3.Connection) -> None:
+def migrate(connection: sqlite3.Connection) -> tuple[int, int, int, int]:
     """Aplica migrações conhecidas numa única transação e valida o schema exato."""
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -276,7 +280,9 @@ def migrate(connection: sqlite3.Connection) -> None:
                 connection.execute(statement)
             connection.execute(f"PRAGMA user_version = {target}")
         _validate_database_state(connection)
+        trusted_token = _database_state_token(connection)
         connection.commit()
+        return trusted_token
     except Exception as exc:
         try:
             connection.rollback()
@@ -610,9 +616,9 @@ class SQLiteApplicationStore:
             )
             self._connection.row_factory = sqlite3.Row
             self._connection.execute("PRAGMA foreign_keys = ON")
-            migrate(self._connection)
+            trusted_token = migrate(self._connection)
             lock = RLock()
-            state_guard = _DatabaseStateGuard(self._connection)
+            state_guard = _DatabaseStateGuard(self._connection, trusted_token)
             self.workspaces = SQLiteWorkspaceRepository(
                 self._connection, lock, state_guard
             )
