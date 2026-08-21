@@ -3,7 +3,7 @@ import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from threading import Barrier, Event
+from threading import Barrier, Event, Thread
 
 import pytest
 
@@ -128,6 +128,28 @@ def test_setup_error_remains_application_error_when_cleanup_also_fails(
     with pytest.raises(expected) as raised:
         SQLiteApplicationStore("safe.db")
     assert not isinstance(raised.value, sqlite3.Error)
+
+
+def test_state_guard_bootstrap_error_closes_and_maps_connection(monkeypatch):
+    class FailingGuardConnection:
+        row_factory = None
+        closed = False
+
+        def execute(self, statement):
+            if statement == "PRAGMA foreign_keys = ON":
+                return None
+            raise sqlite3.OperationalError("guard-bootstrap")
+
+        def close(self):
+            self.closed = True
+
+    connection = FailingGuardConnection()
+    monkeypatch.setattr(sqlite_store.sqlite3, "connect", lambda *args, **kwargs: connection)
+    monkeypatch.setattr(sqlite_store, "migrate", lambda _connection: None)
+    with pytest.raises(RepositoryError) as raised:
+        SQLiteApplicationStore("safe.db")
+    assert not isinstance(raised.value, sqlite3.Error)
+    assert connection.closed
 
 
 @pytest.mark.parametrize("target", ("", "   ", ":memory:", "file::memory:"))
@@ -330,6 +352,78 @@ def test_trusted_own_writes_do_not_repeat_full_database_scan(monkeypatch, tmp_pa
         store.close()
 
 
+def test_validation_token_cannot_absorb_same_connection_schema_race(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "validation-token-race.db"
+    store = SQLiteApplicationStore(path)
+    store.workspaces.create(workspace())
+    with sqlite3.connect(path) as external:
+        external.execute(
+            "UPDATE workspaces SET name = ? WHERE workspace_id = ?",
+            ("valid external change", WORKSPACE_1),
+        )
+    original_validate = sqlite_store._validate_database_state
+
+    def validate_then_mutate_schema(connection):
+        original_validate(connection)
+        connection.execute(
+            "CREATE TRIGGER unvalidated AFTER INSERT ON workspaces BEGIN SELECT 1; END"
+        )
+
+    monkeypatch.setattr(sqlite_store, "_validate_database_state", validate_then_mutate_schema)
+    try:
+        with pytest.raises(RepositoryIntegrityError, match="validação|estado"):
+            store.workspaces.list_all()
+    finally:
+        store.close()
+
+
+def test_external_commit_between_write_and_token_acceptance_is_not_trusted(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "write-token-race.db"
+    store = SQLiteApplicationStore(path)
+    store.workspaces.create(workspace())
+    external = sqlite3.connect(path, timeout=2, check_same_thread=False)
+    external.execute("PRAGMA ignore_check_constraints = ON")
+    ready = Event()
+    committed = Event()
+
+    def corrupt_after_write_unlock():
+        ready.wait(timeout=2)
+        external.execute(
+            "UPDATE workspaces SET name = ? WHERE workspace_id = ?",
+            (sqlite3.Binary(b"corrupt"), WORKSPACE_1),
+        )
+        external.commit()
+        committed.set()
+
+    thread = Thread(target=corrupt_after_write_unlock)
+    thread.start()
+    guard = store.workspaces._state_guard
+    original_accept = guard.accept_current
+
+    def race_acceptance():
+        ready.set()
+        committed.wait(timeout=0.2)
+        original_accept()
+
+    monkeypatch.setattr(guard, "accept_current", race_acceptance)
+    try:
+        store.workspaces.create(workspace(WORKSPACE_2, "Second", CREATED_2))
+        thread.join(timeout=3)
+        assert committed.is_set()
+        with pytest.raises(RepositoryIntegrityError):
+            store.workspaces.get(
+                WorkspaceId.parse("33333333-3333-4333-8333-333333333333")
+            )
+    finally:
+        thread.join(timeout=3)
+        external.close()
+        store.close()
+
+
 def test_failed_migration_rolls_back_schema_and_version(monkeypatch):
     connection = sqlite3.connect(":memory:", isolation_level=None)
     monkeypatch.setattr(
@@ -467,6 +561,30 @@ def test_revision_round_trip_is_append_only_monotonic_and_exact(repository):
     assert repository.revisions.list_all(
         first.workspace_id, "LAUDO", "LAU-001"
     ) == (first, second)
+
+
+def test_detectable_append_only_revision_gap_fails_closed_on_open(tmp_path):
+    path = tmp_path / "revision-gap.db"
+    with SQLiteApplicationStore(path) as store:
+        store.workspaces.create(workspace())
+        for revision_id, created_at in (
+            (REVISION_1, CREATED_1),
+            (REVISION_2, CREATED_2),
+        ):
+            store.revisions.append(
+                workspace_id=WorkspaceId.parse(WORKSPACE_1),
+                artifact_kind="LAUDO",
+                artifact_id="LAU-001",
+                revision_id=revision_id,
+                created_at=created_at,
+                payload={},
+            )
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "DELETE FROM artifact_revisions WHERE revision_id = ?", (REVISION_1,)
+        )
+    with pytest.raises(RepositoryIntegrityError, match="sequência|histórico"):
+        SQLiteApplicationStore(path)
 
 
 def test_revision_workspace_isolation_and_missing_workspace(repository):

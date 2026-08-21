@@ -202,6 +202,7 @@ def _revision_from_values(
 
 def _validate_persisted_records(connection: sqlite3.Connection) -> None:
     workspace_ids = set()
+    revision_sequences: dict[tuple[str, str, str], list[int]] = {}
     for values in connection.execute(
         "SELECT workspace_id, name, created_at FROM workspaces"
     ):
@@ -214,6 +215,11 @@ def _validate_persisted_records(connection: sqlite3.Connection) -> None:
         record = _revision_from_values(*values)
         if str(record.workspace_id) not in workspace_ids:
             raise RepositoryIntegrityError("revisão persistida referencia workspace ausente")
+        key = (str(record.workspace_id), record.artifact_kind, record.artifact_id)
+        revision_sequences.setdefault(key, []).append(record.revision)
+    for revisions in revision_sequences.values():
+        if sorted(revisions) != list(range(1, len(revisions) + 1)):
+            raise RepositoryIntegrityError("histórico persistido possui sequência incompleta")
 
 
 def _validate_database_state(connection: sqlite3.Connection) -> None:
@@ -242,7 +248,12 @@ class _DatabaseStateGuard:
         current = _database_state_token(self._connection)
         if current != self._trusted_token:
             _validate_database_state(self._connection)
-            self._trusted_token = _database_state_token(self._connection)
+            validated = _database_state_token(self._connection)
+            if validated != current:
+                raise RepositoryIntegrityError(
+                    "estado SQLite mudou durante a validação"
+                )
+            self._trusted_token = validated
 
     def accept_current(self) -> None:
         self._trusted_token = _database_state_token(self._connection)
@@ -309,8 +320,23 @@ class _SQLiteRepository:
                 self._connection.execute("BEGIN IMMEDIATE")
                 self._state_guard.validate()
                 yield
-                self._connection.commit()
                 self._state_guard.accept_current()
+                self._connection.commit()
+            except Exception:
+                try:
+                    self._connection.rollback()
+                except sqlite3.Error:
+                    pass
+                raise
+
+    @contextmanager
+    def _read(self):
+        with self._lock:
+            try:
+                self._connection.execute("BEGIN")
+                self._state_guard.validate()
+                yield
+                self._connection.commit()
             except Exception:
                 try:
                     self._connection.rollback()
@@ -320,16 +346,14 @@ class _SQLiteRepository:
 
     def _fetchone(self, query: str, parameters: tuple = ()) -> sqlite3.Row | None:
         try:
-            with self._lock:
-                self._state_guard.validate()
+            with self._read():
                 return self._connection.execute(query, parameters).fetchone()
         except sqlite3.Error as exc:
             raise RepositoryError("falha SQLite de leitura") from exc
 
     def _fetchall(self, query: str, parameters: tuple = ()) -> tuple[sqlite3.Row, ...]:
         try:
-            with self._lock:
-                self._state_guard.validate()
+            with self._read():
                 return tuple(self._connection.execute(query, parameters).fetchall())
         except sqlite3.Error as exc:
             raise RepositoryError("falha SQLite de leitura") from exc
@@ -587,6 +611,14 @@ class SQLiteApplicationStore:
             self._connection.row_factory = sqlite3.Row
             self._connection.execute("PRAGMA foreign_keys = ON")
             migrate(self._connection)
+            lock = RLock()
+            state_guard = _DatabaseStateGuard(self._connection)
+            self.workspaces = SQLiteWorkspaceRepository(
+                self._connection, lock, state_guard
+            )
+            self.revisions = SQLiteArtifactRevisionRepository(
+                self._connection, lock, state_guard
+            )
         except RepositoryError:
             try:
                 self._connection.close()
@@ -600,12 +632,6 @@ class SQLiteApplicationStore:
                 except sqlite3.Error:
                     pass
             raise RepositoryError("falha ao abrir armazenamento SQLite") from exc
-        lock = RLock()
-        state_guard = _DatabaseStateGuard(self._connection)
-        self.workspaces = SQLiteWorkspaceRepository(self._connection, lock, state_guard)
-        self.revisions = SQLiteArtifactRevisionRepository(
-            self._connection, lock, state_guard
-        )
 
     def close(self) -> None:
         try:
