@@ -9,7 +9,7 @@
     {"path":"scripts/motor_vicios/motor.py","function":"_sanear_questao","complexity":32},
     {"path":"scripts/motor_vicios/motor.py","function":"_recalcular_patologia","complexity":20},
     {"path":"scripts/vistoria_estruturada/gerar_vistoria.py","function":"gerar","complexity":9},
-    {"path":"scripts/vistoria_estruturada/gerar_vistoria.py","function":"_processar_linha","complexity":37},
+    {"path":"scripts/vistoria_estruturada/gerar_vistoria.py","function":"_processar_linha","complexity":25},
     {"path":"scripts/vistoria_estruturada/gerar_vistoria.py","function":"_linhas","complexity":31},
     {"path":"scripts/vistoria_estruturada/gerar_vistoria.py","function":"_processar_arquivo","complexity":28},
     {"path":"scripts/triagem_pericial/gerar_delimitacao.py","function":"gerar","complexity":96},

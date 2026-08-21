@@ -84,6 +84,20 @@ def _processar_arquivo(a,planejadas,plano,fotos,videos,docs):
         docs.append({"id":f"DOC-VIS-{len(docs)+1:03d}","arquivo_inventario":a["id"],"documento_planejado":planejado if item else None,"descricao":a["nome"],"questoes":item.get("questoes_tecnicas",[]),"proveniencia":[a["id"]]})
 
 
+def _processar_observacao(r,a,plano,descricao,atividades,declaracoes,observacoes):
+    if _linguagem_declarativa(descricao):
+        declaracoes.append({"id":f"DEC-VIS-{len(declaracoes)+1:03d}","natureza":"DECLARADO_POR_TERCEIRO","declarante":r.get("declarante"),"texto_original":descricao,"questoes":[],"alegacoes":[],"proveniencia":[a["id"]]});return
+    vinculos=_vinculos(descricao,plano,r.get("atividade_planejada"))
+    if vinculos["atividade"] and not any(x.get("atividade_planejada")==vinculos["atividade"] for x in atividades):
+        atividades.append({"id":f"ATV-EXEC-{len(atividades)+1:03d}","atividade_planejada":vinculos["atividade"],"descricao":"Atividade documentada por observação de campo rastreável.","status":"EXECUTADO","questoes":vinculos["questoes"],"evidencias":[a["id"]],"impacto_nao_execucao":None})
+    aspectos=r.get("aspectos_suportados",[])
+    if isinstance(aspectos,str):aspectos=[x.strip() for x in aspectos.split(",") if x.strip()]
+    proposicoes=proposicoes_observacionais(descricao);polaridades={p["polaridade"] for p in proposicoes};resultado=r.get("resultado","OBSERVADO")
+    if polaridades=={"NEGADO"}:resultado="NAO_CONSTATADO_NA_VISTORIA"
+    elif polaridades and polaridades<={"INCERTO","HIPOTETICO"}:resultado="INCONCLUSIVO"
+    observacoes.append({"id":f"OBS-{len(observacoes)+1:03d}","local":r.get("local"),"ambiente":r.get("ambiente"),"sistema":r.get("sistema"),"elemento":r.get("elemento"),"descricao_objetiva":descricao,"manifestacao":r.get("manifestacao") or (proposicoes[0]["manifestacao"] if len(proposicoes)==1 else None),"resultado":resultado,"campo_examinado":r.get("campo_examinado","Campo descrito na anotação estruturada"),"metodo":[r.get("metodo","REGISTRO_DE_CAMPO")],"atividade":vinculos["atividade"],"fotografias":[],"medicoes":[],"alegacoes":vinculos["alegacoes"],"questoes":vinculos["questoes"],"quesitos":vinculos["quesitos"],"confianca":{"nivel":"MEDIA"},"proveniencia":[a["id"]],"limitacoes":[],"aspectos_suportados":aspectos,"_registro_id":r.get("registro_id")})
+
+
 def _processar_linha(r,a,plano,medicoes,atividades,ensaios,declaracoes,limitacoes,observacoes):
     tipo=str(r.get("tipo") or r.get("natureza") or "").upper();valor=_numero(r.get("valor"));descricao=r.get("descricao") or r.get("texto")
     if valor is not None and r.get("grandeza") and r.get("unidade"):
@@ -98,17 +112,7 @@ def _processar_linha(r,a,plano,medicoes,atividades,ensaios,declaracoes,limitacoe
     if tipo.startswith("DECLAR") and descricao:declaracoes.append({"id":f"DEC-VIS-{len(declaracoes)+1:03d}","natureza":r.get("natureza_declaracao","DECLARADO_POR_TERCEIRO"),"declarante":r.get("declarante"),"texto_original":descricao,"questoes":[],"alegacoes":[],"proveniencia":[a["id"]]})
     elif tipo.startswith("LIMIT") and descricao:limitacoes.append({"id":f"LIM-{len(limitacoes)+1:03d}","descricao":descricao,"campo_afetado":r.get("campo_afetado"),"consequencia_tecnica":r.get("consequencia","Extensão da análise limitada ao campo efetivamente acessível.")})
     elif tipo in {"OBS","OBSERVACAO","CONSTATAÇÃO","CONSTATACAO"} and descricao:
-        if _linguagem_declarativa(descricao):
-            declaracoes.append({"id":f"DEC-VIS-{len(declaracoes)+1:03d}","natureza":"DECLARADO_POR_TERCEIRO","declarante":r.get("declarante"),"texto_original":descricao,"questoes":[],"alegacoes":[],"proveniencia":[a["id"]]});return
-        vinculos=_vinculos(descricao,plano,r.get("atividade_planejada"))
-        if vinculos["atividade"] and not any(x.get("atividade_planejada")==vinculos["atividade"] for x in atividades):
-            atividades.append({"id":f"ATV-EXEC-{len(atividades)+1:03d}","atividade_planejada":vinculos["atividade"],"descricao":"Atividade documentada por observação de campo rastreável.","status":"EXECUTADO","questoes":vinculos["questoes"],"evidencias":[a["id"]],"impacto_nao_execucao":None})
-        aspectos=r.get("aspectos_suportados",[])
-        if isinstance(aspectos,str):aspectos=[x.strip() for x in aspectos.split(",") if x.strip()]
-        proposicoes=proposicoes_observacionais(descricao);polaridades={p["polaridade"] for p in proposicoes};resultado=r.get("resultado","OBSERVADO")
-        if polaridades=={"NEGADO"}:resultado="NAO_CONSTATADO_NA_VISTORIA"
-        elif polaridades and polaridades<={"INCERTO","HIPOTETICO"}:resultado="INCONCLUSIVO"
-        observacoes.append({"id":f"OBS-{len(observacoes)+1:03d}","local":r.get("local"),"ambiente":r.get("ambiente"),"sistema":r.get("sistema"),"elemento":r.get("elemento"),"descricao_objetiva":descricao,"manifestacao":r.get("manifestacao") or (proposicoes[0]["manifestacao"] if len(proposicoes)==1 else None),"resultado":resultado,"campo_examinado":r.get("campo_examinado","Campo descrito na anotação estruturada"),"metodo":[r.get("metodo","REGISTRO_DE_CAMPO")],"atividade":vinculos["atividade"],"fotografias":[],"medicoes":[],"alegacoes":vinculos["alegacoes"],"questoes":vinculos["questoes"],"quesitos":vinculos["quesitos"],"confianca":{"nivel":"MEDIA"},"proveniencia":[a["id"]],"limitacoes":[],"aspectos_suportados":aspectos,"_registro_id":r.get("registro_id")})
+        _processar_observacao(r,a,plano,descricao,atividades,declaracoes,observacoes)
 
 
 def _univocos(itens,campo):
