@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
+from uuid import UUID
 
 from .models import ArtifactRevision, PericiaWorkspace, WorkspaceId
 
@@ -19,12 +21,24 @@ class WorkspaceNotFound(RepositoryError):
     """Workspace exigido pela operação não existe."""
 
 
+class ArtifactRevisionNotFound(RepositoryError):
+    """Revisão de artefato exigida pela operação não existe."""
+
+
 class RepositoryIntegrityError(RepositoryError):
     """Dados persistidos não satisfazem o contrato de integridade."""
 
 
 class PersistenceSchemaError(RepositoryError):
     """Schema ausente, malformado ou de versão não suportada."""
+
+
+class Clock(Protocol):
+    def now(self) -> datetime: ...
+
+
+class IdGenerator(Protocol):
+    def new_uuid(self) -> UUID: ...
 
 
 class WorkspaceRepository(Protocol):

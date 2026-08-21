@@ -1,5 +1,7 @@
+import ast
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import get_type_hints
 from uuid import UUID
 
@@ -14,6 +16,8 @@ from scripts.backend_contract.application.models import (
 )
 from scripts.backend_contract.application.ports import (
     ArtifactRevisionRepository,
+    Clock,
+    IdGenerator,
     WorkspaceRepository,
 )
 
@@ -176,3 +180,31 @@ def test_ports_expose_only_explicit_application_operations():
     assert revision_methods == {"append", "latest", "get_revision", "list_all"}
     assert get_type_hints(WorkspaceRepository.get)["return"] == PericiaWorkspace | None
     assert get_type_hints(ArtifactRevisionRepository.latest)["return"] == ArtifactRevision | None
+
+
+def test_technical_generators_have_narrow_deterministic_ports():
+    assert {name for name in Clock.__dict__ if not name.startswith("_")} == {"now"}
+    assert {name for name in IdGenerator.__dict__ if not name.startswith("_")} == {
+        "new_uuid"
+    }
+    assert get_type_hints(Clock.now)["return"] is datetime
+    assert get_type_hints(IdGenerator.new_uuid)["return"] is UUID
+
+
+def test_application_services_do_not_import_infrastructure_or_sqlite():
+    services = Path("scripts/backend_contract/application/services.py").read_text(
+        encoding="utf-8"
+    )
+    tree = ast.parse(services)
+    imported = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {
+        node.module or ""
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+    }
+    assert "sqlite3" not in imported
+    assert not any("infrastructure" in module for module in imported)
