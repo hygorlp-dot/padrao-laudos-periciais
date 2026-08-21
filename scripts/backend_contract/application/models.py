@@ -116,9 +116,10 @@ class ArtifactRevision:
         if type(self.revision_id) is not str:
             raise TypeError("revision_id inválido")
         try:
-            UUID(self.revision_id)
+            canonical_revision_id = str(UUID(self.revision_id))
         except ValueError as exc:
             raise ValueError("revision_id inválido") from exc
+        object.__setattr__(self, "revision_id", canonical_revision_id)
         if type(self.revision) is not int or self.revision < 1:
             raise ValueError("revision inválida")
         _timestamp(self.created_at, "created_at")

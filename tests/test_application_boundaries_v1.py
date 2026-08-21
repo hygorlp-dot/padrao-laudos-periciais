@@ -19,13 +19,17 @@ from scripts.backend_contract.application.ports import (
 
 
 WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
-JSON_SCALARS = st.none() | st.booleans() | st.integers() | st.floats(
-    allow_nan=False, allow_infinity=False
-) | st.text()
+JSON_SCALARS = (
+    st.none()
+    | st.booleans()
+    | st.integers(min_value=-(10**12), max_value=10**12)
+    | st.floats(allow_nan=False, allow_infinity=False, width=64)
+    | st.text(max_size=64)
+)
 JSON_VALUES = st.recursive(
     JSON_SCALARS,
     lambda children: st.lists(children, max_size=5)
-    | st.dictionaries(st.text(), children, max_size=5),
+    | st.dictionaries(st.text(max_size=32), children, max_size=5),
     max_leaves=20,
 )
 
@@ -145,6 +149,20 @@ def test_artifact_revision_rejects_invalid_identity(field, value):
     values[field] = value
     with pytest.raises((TypeError, ValueError)):
         ArtifactRevision(**values)
+
+
+def test_artifact_revision_normalizes_revision_id_to_canonical_uuid():
+    revision = ArtifactRevision(
+        workspace_id=WorkspaceId.parse(WORKSPACE_ID),
+        artifact_kind="LAUDO",
+        artifact_id="LAU-001",
+        revision_id="{22222222222242228222222222222222}",
+        revision=1,
+        created_at="2026-08-21T12:00:00+00:00",
+        checksum_sha256="a" * 64,
+        payload={},
+    )
+    assert revision.revision_id == "22222222-2222-4222-8222-222222222222"
 
 
 def test_ports_expose_only_explicit_application_operations():

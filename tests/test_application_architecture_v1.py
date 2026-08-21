@@ -4,14 +4,28 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "scripts" / "backend_contract"
+PRODUCTION = ROOT / "scripts"
 APPLICATION_PREFIX = "scripts.backend_contract.application"
 INFRASTRUCTURE_PREFIX = "scripts.backend_contract.infrastructure"
+CORE_FORBIDDEN_IMPORTS = (APPLICATION_PREFIX, INFRASTRUCTURE_PREFIX, "sqlite3")
+
+
+def _matches_namespace(module: str, prefix: str) -> bool:
+    return module == prefix or module.startswith(f"{prefix}.")
+
+
+def test_forbidden_namespace_matching_is_exact_and_core_includes_sqlite():
+    assert "sqlite3" in CORE_FORBIDDEN_IMPORTS
+    for prefix in CORE_FORBIDDEN_IMPORTS:
+        assert _matches_namespace(prefix, prefix)
+        assert _matches_namespace(f"{prefix}.child", prefix)
+        assert not _matches_namespace(f"{prefix}_helpers", prefix)
 
 
 def _module_name(path: Path) -> str:
-    relative = path.relative_to(BACKEND).with_suffix("").parts
+    relative = path.relative_to(ROOT).with_suffix("").parts
     suffix = relative[:-1] if relative[-1] == "__init__" else relative
-    return ".".join(("scripts", "backend_contract", *suffix))
+    return ".".join(suffix)
 
 
 def _imports(path: Path, module=None) -> set[str]:
@@ -27,7 +41,7 @@ def _imports(path: Path, module=None) -> set[str]:
                 target = ".".join([*base, *(node.module or "").split(".")]).rstrip(".")
             else:
                 target = node.module or ""
-            if node.module:
+            if node.module or any(alias.name == "*" for alias in node.names):
                 imports.add(target)
             imports.update(
                 f"{target}.{alias.name}"
@@ -60,17 +74,51 @@ def test_import_resolver_tracks_from_import_aliases_without_package_self_cycle(t
     package.write_text("from . import harmless\n", encoding="utf-8")
     assert _imports(package, APPLICATION_PREFIX) == {f"{APPLICATION_PREFIX}.harmless"}
 
+    wildcard = tmp_path / "cycle_a.py"
+    wildcard.write_text("from . import *\n", encoding="utf-8")
+    assert _imports(wildcard, f"{APPLICATION_PREFIX}.cycle_a") == {
+        APPLICATION_PREFIX
+    }
+
 
 def _production_files():
     return tuple(path for path in BACKEND.rglob("*.py") if "__pycache__" not in path.parts)
 
 
+def _core_files(production=PRODUCTION):
+    boundaries = {
+        ("backend_contract", "application"),
+        ("backend_contract", "infrastructure"),
+    }
+    return tuple(
+        path
+        for path in production.rglob("*.py")
+        if tuple(path.relative_to(production).parts[:2]) not in boundaries
+        and "__pycache__" not in path.parts
+    )
+
+
+def test_core_inventory_includes_nested_unknown_packages(tmp_path):
+    production = tmp_path / "scripts"
+    backend = production / "backend_contract"
+    nested = backend / "helpers" / "bridge.py"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("from .. import infrastructure\n", encoding="utf-8")
+    domain = production / "planejamento_pericial" / "bridge.py"
+    domain.parent.mkdir(parents=True)
+    domain.write_text(
+        "from scripts.backend_contract import infrastructure\n", encoding="utf-8"
+    )
+    assert set(_core_files(production)) == {nested, domain}
+
+
 def test_core_does_not_import_application_or_infrastructure():
-    core_files = tuple(path for path in BACKEND.glob("*.py"))
-    forbidden = (APPLICATION_PREFIX, INFRASTRUCTURE_PREFIX)
+    core_files = _core_files()
     violations = {
         path.relative_to(ROOT).as_posix(): sorted(
-            item for item in _imports(path) if item.startswith(forbidden)
+            item
+            for item in _imports(path)
+            if any(_matches_namespace(item, prefix) for prefix in CORE_FORBIDDEN_IMPORTS)
         )
         for path in core_files
     }
@@ -83,7 +131,9 @@ def test_application_does_not_import_sqlite_or_infrastructure():
     forbidden = ("sqlite3", INFRASTRUCTURE_PREFIX)
     violations = {
         path.relative_to(ROOT).as_posix(): sorted(
-            item for item in _imports(path) if item.startswith(forbidden)
+            item
+            for item in _imports(path)
+            if any(_matches_namespace(item, prefix) for prefix in forbidden)
         )
         for path in application_files
     }
@@ -94,7 +144,7 @@ def test_infrastructure_boundary_exists_and_may_depend_on_application():
     marker = BACKEND / "infrastructure" / "__init__.py"
     assert marker.is_file()
     assert not any(
-        item.startswith(INFRASTRUCTURE_PREFIX)
+        _matches_namespace(item, INFRASTRUCTURE_PREFIX)
         for path in (BACKEND / "application").rglob("*.py")
         for item in _imports(path)
     )
