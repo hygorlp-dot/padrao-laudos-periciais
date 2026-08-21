@@ -160,6 +160,14 @@ def _validate_persisted_identities(connection: sqlite3.Connection) -> None:
             raise RepositoryIntegrityError("revisão persistida referencia workspace ausente")
 
 
+def _validate_database_state(connection: sqlite3.Connection) -> None:
+    version = connection.execute("PRAGMA user_version").fetchone()[0]
+    if type(version) is not int or version != CURRENT_SCHEMA_VERSION:
+        raise PersistenceSchemaError(f"versão inesperada do schema SQLite: {version}")
+    _validate_schema(connection)
+    _validate_persisted_identities(connection)
+
+
 def migrate(connection: sqlite3.Connection) -> None:
     """Aplica migrações conhecidas numa única transação e valida o schema exato."""
     try:
@@ -176,8 +184,7 @@ def migrate(connection: sqlite3.Connection) -> None:
             for statement in statements:
                 connection.execute(statement)
             connection.execute(f"PRAGMA user_version = {target}")
-        _validate_schema(connection)
-        _validate_persisted_identities(connection)
+        _validate_database_state(connection)
         connection.commit()
     except Exception as exc:
         try:
@@ -188,8 +195,18 @@ def migrate(connection: sqlite3.Connection) -> None:
             raise
         if isinstance(exc, sqlite3.Error):
             error_code = getattr(exc, "sqlite_errorcode", 0) or 0
-            if (error_code & 0xFF) in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
-                raise RepositoryError("armazenamento SQLite ocupado") from exc
+            if (error_code & 0xFF) in {
+                sqlite3.SQLITE_ABORT,
+                sqlite3.SQLITE_BUSY,
+                sqlite3.SQLITE_CANTOPEN,
+                sqlite3.SQLITE_FULL,
+                sqlite3.SQLITE_INTERRUPT,
+                sqlite3.SQLITE_IOERR,
+                sqlite3.SQLITE_LOCKED,
+                sqlite3.SQLITE_NOMEM,
+                sqlite3.SQLITE_READONLY,
+            }:
+                raise RepositoryError("falha operacional durante migração SQLite") from exc
             raise PersistenceSchemaError("migração SQLite falhou") from exc
         raise
 
@@ -204,7 +221,7 @@ class _SQLiteRepository:
         with self._lock:
             try:
                 self._connection.execute("BEGIN IMMEDIATE")
-                _validate_persisted_identities(self._connection)
+                _validate_database_state(self._connection)
                 yield
                 self._connection.commit()
             except Exception:
@@ -217,7 +234,7 @@ class _SQLiteRepository:
     def _fetchone(self, query: str, parameters: tuple = ()) -> sqlite3.Row | None:
         try:
             with self._lock:
-                _validate_persisted_identities(self._connection)
+                _validate_database_state(self._connection)
                 return self._connection.execute(query, parameters).fetchone()
         except sqlite3.Error as exc:
             raise RepositoryError("falha SQLite de leitura") from exc
@@ -225,7 +242,7 @@ class _SQLiteRepository:
     def _fetchall(self, query: str, parameters: tuple = ()) -> tuple[sqlite3.Row, ...]:
         try:
             with self._lock:
-                _validate_persisted_identities(self._connection)
+                _validate_database_state(self._connection)
                 return tuple(self._connection.execute(query, parameters).fetchall())
         except sqlite3.Error as exc:
             raise RepositoryError("falha SQLite de leitura") from exc
@@ -440,21 +457,33 @@ class SQLiteApplicationStore:
         target = str(database)
         reserved = {
             "CON",
+            "CONIN$",
+            "CONOUT$",
             "PRN",
             "AUX",
             "NUL",
+            "CLOCK$",
             *(f"COM{number}" for number in range(1, 10)),
             *(f"LPT{number}" for number in range(1, 10)),
         }
         windows_target = target.replace("/", "\\")
-        without_drive = (
-            windows_target[2:]
-            if len(windows_target) >= 2 and windows_target[1] == ":"
-            else windows_target
+        has_drive_prefix = len(windows_target) >= 2 and windows_target[1] == ":"
+        has_absolute_drive = (
+            has_drive_prefix
+            and windows_target[0].isalpha()
+            and len(windows_target) >= 3
+            and windows_target[2] == "\\"
         )
+        without_drive = windows_target[2:] if has_drive_prefix else windows_target
         target_parts = tuple(part for part in windows_target.split("\\") if part)
+        superscript_digits = str.maketrans({"¹": "1", "²": "2", "³": "3"})
         reserved_part = any(
-            part.rstrip(" .").split(":", 1)[0].split(".", 1)[0].upper() in reserved
+            part.split(":", 1)[0]
+            .split(".", 1)[0]
+            .rstrip(" .")
+            .translate(superscript_digits)
+            .upper()
+            in reserved
             for part in target_parts
         )
         if (
@@ -462,7 +491,8 @@ class SQLiteApplicationStore:
             or target == ":memory:"
             or target.lower().startswith("file:")
             or "\x00" in target
-            or windows_target.startswith(("\\\\.\\", "\\\\?\\"))
+            or windows_target.startswith("\\\\")
+            or (has_drive_prefix and not has_absolute_drive)
             or ":" in without_drive
             or reserved_part
         ):
@@ -504,4 +534,10 @@ class SQLiteApplicationStore:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
-        self.close()
+        if exc_type is None:
+            self.close()
+            return
+        try:
+            self.close()
+        except RepositoryError:
+            pass

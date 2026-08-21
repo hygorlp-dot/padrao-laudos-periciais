@@ -66,15 +66,19 @@ def canonical_payload_json(value) -> str:
     """Codifica um payload JSON validado sem perder Unicode ou ordem de listas."""
     try:
         mutable = thaw_payload(_freeze_payload(value))
-        return json.dumps(
+        encoded = json.dumps(
             mutable,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
             allow_nan=False,
         )
+        encoded.encode("utf-8")
+        return encoded
     except RecursionError as exc:
         raise ValueError("payload JSON excede profundidade suportada") from exc
+    except UnicodeEncodeError as exc:
+        raise ValueError("payload JSON contém Unicode inválido") from exc
 
 
 @dataclass(frozen=True, slots=True)
