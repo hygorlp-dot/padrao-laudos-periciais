@@ -14,8 +14,8 @@ def _module_name(path: Path) -> str:
     return ".".join(("scripts", "backend_contract", *suffix))
 
 
-def _imports(path: Path) -> set[str]:
-    module = _module_name(path)
+def _imports(path: Path, module=None) -> set[str]:
+    module = _module_name(path) if module is None else module
     package = module.split(".") if path.name == "__init__.py" else module.split(".")[:-1]
     imports = set()
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
@@ -27,8 +27,38 @@ def _imports(path: Path) -> set[str]:
                 target = ".".join([*base, *(node.module or "").split(".")]).rstrip(".")
             else:
                 target = node.module or ""
-            imports.add(target)
+            if node.module:
+                imports.add(target)
+            imports.update(
+                f"{target}.{alias.name}"
+                for alias in node.names
+                if alias.name != "*"
+            )
     return imports
+
+
+def test_import_resolver_tracks_from_import_aliases_without_package_self_cycle(tmp_path):
+    core = tmp_path / "core.py"
+    core.write_text(
+        "from . import application\n"
+        "from scripts.backend_contract import infrastructure\n",
+        encoding="utf-8",
+    )
+    assert _imports(core, "scripts.backend_contract.core") == {
+        "scripts.backend_contract",
+        APPLICATION_PREFIX,
+        INFRASTRUCTURE_PREFIX,
+    }
+
+    cycle = tmp_path / "cycle_a.py"
+    cycle.write_text("from . import cycle_b\n", encoding="utf-8")
+    assert _imports(cycle, f"{APPLICATION_PREFIX}.cycle_a") == {
+        f"{APPLICATION_PREFIX}.cycle_b"
+    }
+
+    package = tmp_path / "__init__.py"
+    package.write_text("from . import harmless\n", encoding="utf-8")
+    assert _imports(package, APPLICATION_PREFIX) == {f"{APPLICATION_PREFIX}.harmless"}
 
 
 def _production_files():
