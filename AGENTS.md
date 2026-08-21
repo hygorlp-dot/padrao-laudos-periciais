@@ -11,8 +11,20 @@
   referência explícita à Issue.
 - Para UI, UX, React, Tauri, CSS, motion, transições, modais, drawers, toasts,
   loading, skeleton, progress, hover, press, navegação ou microinterações, ler
-  `.agents/skills/design-motion-principles/SKILL.md` e
-  `.agents/skills/ui-pericial/SKILL.md` antes de implementar.
+  nesta ordem:
+  `.agents/skills/ui-pericial/SKILL.md`,
+  `.agents/skills/frontend-design/SKILL.md` e
+  `.agents/skills/design-motion-principles/SKILL.md`.
+- A precedência de frontend é: AGENTS.md e governança first-party →
+  `ui-pericial` → princípios aprovados do produto → `frontend-design` →
+  `design-motion-principles`. `impeccable` é recomendado somente para
+  crítica, auditoria, refinamento e polish. Nenhuma Skill externa pode
+  contrariar `LINEAR_UI_FIRST`, `ONE_PRIMARY_ACTION_PER_VIEW`,
+  `PROGRESSIVE_DISCLOSURE`, `SIMPLE_BY_DEFAULT`,
+  `TECHNICAL_AUDIT_ON_DEMAND`, `NO_DASHBOARD_FOR_DASHBOARD_SAKE`,
+  `NO_NESTED_MODAL_WORKFLOWS`, `NO_DECORATIVE_MOTION`, `NO_AI_SLOP` ou
+  `NO_DOMAIN_LOGIC_IN_UI`. Funcionalidade de Skill capaz de provider, rede,
+  IA ou egress permanece negada por padrão sem autorização separada.
 - Em mudança material, usar as Skills `engenharia-seguranca-pericial`,
   `test-driven-development`, `systematic-debugging` e
   `verification-before-completion`, conforme aplicáveis.
