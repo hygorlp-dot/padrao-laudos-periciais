@@ -154,6 +154,10 @@ def test_durable_store_rejects_ephemeral_or_ambiguous_targets(target):
         r"\\server\share\application.db",
         "//server/share/application.db",
         r"C:relative.db",
+        "application.db ",
+        "application.db.",
+        r"folder.\application.db",
+        "invalid\ud800.db",
     ),
 )
 def test_unsafe_windows_targets_are_rejected_before_sqlite_open(monkeypatch, target):
@@ -168,6 +172,30 @@ def test_unsafe_windows_targets_are_rejected_before_sqlite_open(monkeypatch, tar
     with pytest.raises(RepositoryError):
         SQLiteApplicationStore(target)
     assert not opened
+
+
+def test_workspace_name_rejects_unpaired_unicode_surrogate():
+    with pytest.raises(ValueError, match="Unicode"):
+        workspace(name="\ud800")
+
+
+@pytest.mark.parametrize(
+    ("artifact_kind", "artifact_id"),
+    (("\ud800", "LAU-001"), ("LAUDO", "\ud800")),
+)
+def test_artifact_keys_reject_unpaired_unicode_surrogate(
+    repository, artifact_kind, artifact_id
+):
+    repository.workspaces.create(workspace())
+    with pytest.raises(ValueError, match="Unicode"):
+        repository.revisions.append(
+            workspace_id=WorkspaceId.parse(WORKSPACE_1),
+            artifact_kind=artifact_kind,
+            artifact_id=artifact_id,
+            revision_id=REVISION_1,
+            created_at=CREATED_1,
+            payload={},
+        )
 
 
 def test_context_manager_preserves_body_exception_when_close_also_fails(monkeypatch, tmp_path):
@@ -249,6 +277,55 @@ def test_schema_mutation_after_open_fails_closed_before_write(tmp_path):
         with pytest.raises(PersistenceSchemaError):
             store.workspaces.create(workspace(name="expected"))
         assert store._connection.execute("SELECT COUNT(*) FROM workspaces").fetchone()[0] == 0
+    finally:
+        store.close()
+
+
+def test_external_data_mutation_invalidates_trusted_state_before_read(tmp_path):
+    path = tmp_path / "external-corruption.db"
+    store = SQLiteApplicationStore(path)
+    try:
+        store.workspaces.create(workspace())
+        with sqlite3.connect(path) as external:
+            external.execute("PRAGMA ignore_check_constraints = ON")
+            external.execute(
+                "UPDATE workspaces SET name = ? WHERE workspace_id = ?",
+                (sqlite3.Binary(b"corrupt"), WORKSPACE_1),
+            )
+        with pytest.raises(RepositoryIntegrityError):
+            store.workspaces.list_all()
+    finally:
+        store.close()
+
+
+def test_trusted_own_writes_do_not_repeat_full_database_scan(monkeypatch, tmp_path):
+    store = SQLiteApplicationStore(tmp_path / "linear-writes.db")
+    scans = 0
+    original_validate = sqlite_store._validate_database_state
+
+    def count_scan(connection):
+        nonlocal scans
+        scans += 1
+        return original_validate(connection)
+
+    monkeypatch.setattr(sqlite_store, "_validate_database_state", count_scan)
+    try:
+        store.workspaces.create(workspace())
+        for index in range(10):
+            store.revisions.append(
+                workspace_id=WorkspaceId.parse(WORKSPACE_1),
+                artifact_kind="LAUDO",
+                artifact_id="LAU-001",
+                revision_id=f"{index + 1:08x}-0000-4000-8000-000000000000",
+                created_at=CREATED_1,
+                payload={"index": index},
+            )
+        assert len(
+            store.revisions.list_all(
+                WorkspaceId.parse(WORKSPACE_1), "LAUDO", "LAU-001"
+            )
+        ) == 10
+        assert scans == 0
     finally:
         store.close()
 
@@ -587,6 +664,42 @@ def test_noncanonical_workspace_uuid_corruption_fails_closed_on_read(tmp_path):
         SQLiteApplicationStore(path)
 
 
+@pytest.mark.parametrize(
+    ("table", "column"),
+    (
+        ("workspaces", "name"),
+        ("workspaces", "created_at"),
+        ("artifact_revisions", "artifact_kind"),
+        ("artifact_revisions", "artifact_id"),
+        ("artifact_revisions", "created_at"),
+        ("artifact_revisions", "checksum_sha256"),
+        ("artifact_revisions", "payload_json"),
+    ),
+)
+def test_non_text_persisted_fields_fail_closed_on_open(tmp_path, table, column):
+    path = tmp_path / f"non-text-{table}-{column}.db"
+    with SQLiteApplicationStore(path) as store:
+        store.workspaces.create(workspace())
+        store.revisions.append(
+            workspace_id=WorkspaceId.parse(WORKSPACE_1),
+            artifact_kind="LAUDO",
+            artifact_id="LAU-001",
+            revision_id=REVISION_1,
+            created_at=CREATED_1,
+            payload={},
+        )
+    key_column = "workspace_id" if table == "workspaces" else "revision_id"
+    key_value = WORKSPACE_1 if table == "workspaces" else REVISION_1
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA ignore_check_constraints = ON")
+        connection.execute(
+            f"UPDATE {table} SET {column} = ? WHERE {key_column} = ?",
+            (sqlite3.Binary(b"corrupt"), key_value),
+        )
+    with pytest.raises(RepositoryIntegrityError):
+        SQLiteApplicationStore(path)
+
+
 def test_workspace_and_revision_round_trip_survive_reopen(tmp_path):
     path = tmp_path / "round-trip.db"
     with SQLiteApplicationStore(path) as store:
@@ -624,14 +737,8 @@ def test_payload_corruption_is_detected_on_read(tmp_path):
             "UPDATE artifact_revisions SET payload_json = ? WHERE revision_id = ?",
             ('{"corrompido":true}', REVISION_1),
         )
-    repo = SQLiteApplicationStore(path)
-    try:
-        with pytest.raises(RepositoryIntegrityError, match="checksum"):
-            repo.revisions.latest(
-                WorkspaceId.parse(WORKSPACE_1), "LAUDO", "LAU-001"
-            )
-    finally:
-        repo.close()
+    with pytest.raises(RepositoryIntegrityError, match="checksum"):
+        SQLiteApplicationStore(path)
 
 
 def test_excessively_deep_persisted_json_is_explicit_integrity_error(tmp_path):
@@ -656,11 +763,8 @@ def test_excessively_deep_persisted_json_is_explicit_integrity_error(tmp_path):
                 payload_json,
             ),
         )
-    with SQLiteApplicationStore(path) as reopened:
-        with pytest.raises(RepositoryIntegrityError):
-            reopened.revisions.latest(
-                WorkspaceId.parse(WORKSPACE_1), "LAUDO", "LAU-001"
-            )
+    with pytest.raises(RepositoryIntegrityError):
+        SQLiteApplicationStore(path)
 
 
 def test_excessively_deep_append_is_explicit_and_rolls_back(repository):
