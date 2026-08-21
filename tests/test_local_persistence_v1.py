@@ -138,9 +138,25 @@ def test_durable_store_rejects_ephemeral_or_ambiguous_targets(target):
 
 @pytest.mark.parametrize(
     "target",
-    ("NUL:", "COM1:", "CON ", r"\\.\NUL", r"C:\tmp\NUL::$DATA"),
+    (
+        "NUL:",
+        "COM1:",
+        "CON ",
+        "NUL .txt",
+        "COM1 .db",
+        "CONIN$",
+        "CONOUT$",
+        "COM¹",
+        "LPT¹",
+        "AUX .sqlite",
+        r"\\.\NUL",
+        r"C:\tmp\NUL::$DATA",
+        r"\\server\share\application.db",
+        "//server/share/application.db",
+        r"C:relative.db",
+    ),
 )
-def test_reserved_windows_targets_are_rejected_before_sqlite_open(monkeypatch, target):
+def test_unsafe_windows_targets_are_rejected_before_sqlite_open(monkeypatch, target):
     opened = False
 
     def unexpected_connect(*args, **kwargs):
@@ -152,6 +168,39 @@ def test_reserved_windows_targets_are_rejected_before_sqlite_open(monkeypatch, t
     with pytest.raises(RepositoryError):
         SQLiteApplicationStore(target)
     assert not opened
+
+
+def test_context_manager_preserves_body_exception_when_close_also_fails(monkeypatch, tmp_path):
+    store = SQLiteApplicationStore(tmp_path / "cleanup.db")
+
+    def fail_close():
+        raise RepositoryError("cleanup-failed")
+
+    monkeypatch.setattr(store, "close", fail_close)
+    with pytest.raises(ValueError, match="body-failed"):
+        with store:
+            raise ValueError("body-failed")
+
+
+@pytest.mark.parametrize(
+    "error_code",
+    (sqlite3.SQLITE_IOERR, sqlite3.SQLITE_FULL, sqlite3.SQLITE_READONLY),
+)
+def test_migration_operational_failures_are_not_schema_errors(error_code):
+    class ForcedOperationalError(sqlite3.OperationalError):
+        sqlite_errorcode = error_code
+
+    class FailingConnection:
+        def execute(self, _statement):
+            raise ForcedOperationalError("operational")
+
+        def rollback(self):
+            return None
+
+    with pytest.raises(RepositoryError) as raised:
+        sqlite_store.migrate(FailingConnection())
+    assert not isinstance(raised.value, PersistenceSchemaError)
+    assert not isinstance(raised.value, sqlite3.Error)
 
 
 def test_store_open_lock_is_operational_repository_error(tmp_path):
@@ -188,6 +237,20 @@ def test_malformed_or_extra_current_schema_fails_closed(tmp_path):
             connection.execute(object_sql)
         with pytest.raises(PersistenceSchemaError):
             SQLiteApplicationStore(extra)
+
+
+def test_schema_mutation_after_open_fails_closed_before_write(tmp_path):
+    store = SQLiteApplicationStore(tmp_path / "runtime-schema-tamper.db")
+    try:
+        store._connection.execute(
+            "CREATE TRIGGER tamper AFTER INSERT ON workspaces "
+            "BEGIN UPDATE workspaces SET name = 'tampered'; END"
+        )
+        with pytest.raises(PersistenceSchemaError):
+            store.workspaces.create(workspace(name="expected"))
+        assert store._connection.execute("SELECT COUNT(*) FROM workspaces").fetchone()[0] == 0
+    finally:
+        store.close()
 
 
 def test_failed_migration_rolls_back_schema_and_version(monkeypatch):
@@ -623,6 +686,22 @@ def test_excessively_deep_append_is_explicit_and_rolls_back(repository):
         payload={},
     )
     assert recovered.revision == 1
+
+
+def test_unpaired_unicode_surrogate_is_rejected_before_append(repository):
+    repository.workspaces.create(workspace())
+    with pytest.raises(ValueError, match="Unicode"):
+        repository.revisions.append(
+            workspace_id=WorkspaceId.parse(WORKSPACE_1),
+            artifact_kind="LAUDO",
+            artifact_id="LAU-001",
+            revision_id=REVISION_1,
+            created_at=CREATED_1,
+            payload={"invalid": "\ud800"},
+        )
+    assert repository.revisions.list_all(
+        WorkspaceId.parse(WORKSPACE_1), "LAUDO", "LAU-001"
+    ) == ()
 
 
 def test_concurrent_append_allocates_unique_monotonic_revisions(tmp_path):
