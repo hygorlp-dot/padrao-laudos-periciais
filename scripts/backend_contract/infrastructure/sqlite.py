@@ -30,7 +30,8 @@ CURRENT_SCHEMA_VERSION = 1
 _WORKSPACES_SQL = """
 CREATE TABLE workspaces (
     workspace_id TEXT PRIMARY KEY NOT NULL CHECK (
-        length(workspace_id) = 36
+        typeof(workspace_id) = 'text'
+        AND length(workspace_id) = 36
         AND workspace_id = lower(workspace_id)
         AND substr(workspace_id, 9, 1) = '-'
         AND substr(workspace_id, 14, 1) = '-'
@@ -39,18 +40,23 @@ CREATE TABLE workspaces (
         AND length(replace(workspace_id, '-', '')) = 32
         AND workspace_id NOT GLOB '*[^0-9a-f-]*'
     ),
-    name TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    name TEXT NOT NULL CHECK (typeof(name) = 'text' AND length(trim(name)) > 0),
+    created_at TEXT NOT NULL CHECK (typeof(created_at) = 'text')
 )
 """
 
 _REVISIONS_SQL = """
 CREATE TABLE artifact_revisions (
-    workspace_id TEXT NOT NULL,
-    artifact_kind TEXT NOT NULL,
-    artifact_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL CHECK (typeof(workspace_id) = 'text'),
+    artifact_kind TEXT NOT NULL CHECK (
+        typeof(artifact_kind) = 'text' AND length(trim(artifact_kind)) > 0
+    ),
+    artifact_id TEXT NOT NULL CHECK (
+        typeof(artifact_id) = 'text' AND length(trim(artifact_id)) > 0
+    ),
     revision_id TEXT PRIMARY KEY NOT NULL CHECK (
-        length(revision_id) = 36
+        typeof(revision_id) = 'text'
+        AND length(revision_id) = 36
         AND revision_id = lower(revision_id)
         AND substr(revision_id, 9, 1) = '-'
         AND substr(revision_id, 14, 1) = '-'
@@ -59,10 +65,10 @@ CREATE TABLE artifact_revisions (
         AND length(replace(revision_id, '-', '')) = 32
         AND revision_id NOT GLOB '*[^0-9a-f-]*'
     ),
-    revision INTEGER NOT NULL CHECK (revision >= 1),
-    created_at TEXT NOT NULL,
-    checksum_sha256 TEXT NOT NULL,
-    payload_json TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK (typeof(revision) = 'integer' AND revision >= 1),
+    created_at TEXT NOT NULL CHECK (typeof(created_at) = 'text'),
+    checksum_sha256 TEXT NOT NULL CHECK (typeof(checksum_sha256) = 'text'),
+    payload_json TEXT NOT NULL CHECK (typeof(payload_json) = 'text'),
     UNIQUE (workspace_id, artifact_kind, artifact_id, revision),
     FOREIGN KEY (workspace_id) REFERENCES workspaces(workspace_id) ON DELETE RESTRICT
 )
@@ -146,17 +152,67 @@ def _canonical_uuid(raw_value, field: str) -> str:
     return canonical
 
 
-def _validate_persisted_identities(connection: sqlite3.Connection) -> None:
-    workspace_ids = {
-        _canonical_uuid(row[0], "workspace_id")
-        for row in connection.execute("SELECT workspace_id FROM workspaces")
-    }
-    for workspace_id, revision_id in connection.execute(
-        "SELECT workspace_id, revision_id FROM artifact_revisions"
+def _workspace_from_values(workspace_id, name, created_at) -> PericiaWorkspace:
+    try:
+        canonical_id = _canonical_uuid(workspace_id, "workspace_id")
+        return PericiaWorkspace(WorkspaceId.parse(canonical_id), name, created_at)
+    except RepositoryIntegrityError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise RepositoryIntegrityError("workspace persistido inválido") from exc
+
+
+def _revision_from_values(
+    workspace_id,
+    artifact_kind,
+    artifact_id,
+    revision_id,
+    revision,
+    created_at,
+    checksum_sha256,
+    payload_json,
+) -> ArtifactRevision:
+    try:
+        canonical_workspace_id = _canonical_uuid(workspace_id, "workspace_id")
+        canonical_revision_id = _canonical_uuid(revision_id, "revision_id")
+        if type(payload_json) is not str:
+            raise TypeError("payload_json persistido não é texto")
+        payload = json.loads(payload_json)
+        canonical_json = canonical_payload_json(payload)
+        if canonical_json != payload_json:
+            raise RepositoryIntegrityError("payload persistido não é JSON canônico")
+        checksum = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        if checksum != checksum_sha256:
+            raise RepositoryIntegrityError("checksum do payload persistido diverge")
+        return ArtifactRevision(
+            workspace_id=WorkspaceId.parse(canonical_workspace_id),
+            artifact_kind=artifact_kind,
+            artifact_id=artifact_id,
+            revision_id=canonical_revision_id,
+            revision=revision,
+            created_at=created_at,
+            checksum_sha256=checksum_sha256,
+            payload=payload,
+        )
+    except RepositoryIntegrityError:
+        raise
+    except (json.JSONDecodeError, RecursionError, TypeError, ValueError) as exc:
+        raise RepositoryIntegrityError("revisão persistida inválida") from exc
+
+
+def _validate_persisted_records(connection: sqlite3.Connection) -> None:
+    workspace_ids = set()
+    for values in connection.execute(
+        "SELECT workspace_id, name, created_at FROM workspaces"
     ):
-        canonical_workspace = _canonical_uuid(workspace_id, "workspace_id")
-        _canonical_uuid(revision_id, "revision_id")
-        if canonical_workspace not in workspace_ids:
+        record = _workspace_from_values(*values)
+        workspace_ids.add(str(record.workspace_id))
+    for values in connection.execute(
+        "SELECT workspace_id, artifact_kind, artifact_id, revision_id, revision, "
+        "created_at, checksum_sha256, payload_json FROM artifact_revisions"
+    ):
+        record = _revision_from_values(*values)
+        if str(record.workspace_id) not in workspace_ids:
             raise RepositoryIntegrityError("revisão persistida referencia workspace ausente")
 
 
@@ -165,7 +221,31 @@ def _validate_database_state(connection: sqlite3.Connection) -> None:
     if type(version) is not int or version != CURRENT_SCHEMA_VERSION:
         raise PersistenceSchemaError(f"versão inesperada do schema SQLite: {version}")
     _validate_schema(connection)
-    _validate_persisted_identities(connection)
+    _validate_persisted_records(connection)
+
+
+def _database_state_token(connection: sqlite3.Connection) -> tuple[int, int, int, int]:
+    return (
+        connection.execute("PRAGMA data_version").fetchone()[0],
+        connection.execute("PRAGMA schema_version").fetchone()[0],
+        connection.execute("PRAGMA user_version").fetchone()[0],
+        connection.total_changes,
+    )
+
+
+class _DatabaseStateGuard:
+    def __init__(self, connection: sqlite3.Connection):
+        self._connection = connection
+        self._trusted_token = _database_state_token(connection)
+
+    def validate(self) -> None:
+        current = _database_state_token(self._connection)
+        if current != self._trusted_token:
+            _validate_database_state(self._connection)
+            self._trusted_token = _database_state_token(self._connection)
+
+    def accept_current(self) -> None:
+        self._trusted_token = _database_state_token(self._connection)
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -212,18 +292,25 @@ def migrate(connection: sqlite3.Connection) -> None:
 
 
 class _SQLiteRepository:
-    def __init__(self, connection: sqlite3.Connection, lock: RLock):
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        lock: RLock,
+        state_guard: _DatabaseStateGuard,
+    ):
         self._connection = connection
         self._lock = lock
+        self._state_guard = state_guard
 
     @contextmanager
     def _write(self):
         with self._lock:
             try:
                 self._connection.execute("BEGIN IMMEDIATE")
-                _validate_database_state(self._connection)
+                self._state_guard.validate()
                 yield
                 self._connection.commit()
+                self._state_guard.accept_current()
             except Exception:
                 try:
                     self._connection.rollback()
@@ -234,7 +321,7 @@ class _SQLiteRepository:
     def _fetchone(self, query: str, parameters: tuple = ()) -> sqlite3.Row | None:
         try:
             with self._lock:
-                _validate_database_state(self._connection)
+                self._state_guard.validate()
                 return self._connection.execute(query, parameters).fetchone()
         except sqlite3.Error as exc:
             raise RepositoryError("falha SQLite de leitura") from exc
@@ -242,7 +329,7 @@ class _SQLiteRepository:
     def _fetchall(self, query: str, parameters: tuple = ()) -> tuple[sqlite3.Row, ...]:
         try:
             with self._lock:
-                _validate_database_state(self._connection)
+                self._state_guard.validate()
                 return tuple(self._connection.execute(query, parameters).fetchall())
         except sqlite3.Error as exc:
             raise RepositoryError("falha SQLite de leitura") from exc
@@ -265,15 +352,9 @@ class SQLiteWorkspaceRepository(_SQLiteRepository):
         return workspace
 
     def _from_row(self, row: sqlite3.Row) -> PericiaWorkspace:
-        try:
-            workspace_id = WorkspaceId.parse(row["workspace_id"])
-            if str(workspace_id) != row["workspace_id"]:
-                raise RepositoryIntegrityError("identidade UUID do workspace não canônica")
-            return PericiaWorkspace(workspace_id, row["name"], row["created_at"])
-        except RepositoryIntegrityError:
-            raise
-        except (TypeError, ValueError) as exc:
-            raise RepositoryIntegrityError("workspace persistido inválido") from exc
+        return _workspace_from_values(
+            row["workspace_id"], row["name"], row["created_at"]
+        )
 
     def get(self, workspace_id: WorkspaceId) -> PericiaWorkspace | None:
         if type(workspace_id) is not WorkspaceId:
@@ -294,16 +375,28 @@ class SQLiteWorkspaceRepository(_SQLiteRepository):
 
 class SQLiteArtifactRevisionRepository(_SQLiteRepository):
     @staticmethod
+    def _text_key(value, field: str) -> str:
+        if type(value) is not str or not value.strip():
+            raise ValueError(f"{field} inválido")
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ValueError(f"{field} contém Unicode inválido") from exc
+        return value
+
+    @staticmethod
     def _key(
         workspace_id: WorkspaceId, artifact_kind: str, artifact_id: str
     ) -> tuple[str, str, str]:
         if type(workspace_id) is not WorkspaceId:
             raise TypeError("workspace_id inválido")
-        if type(artifact_kind) is not str or not artifact_kind.strip():
-            raise ValueError("artifact_kind inválido")
-        if type(artifact_id) is not str or not artifact_id.strip():
-            raise ValueError("artifact_id inválido")
-        return str(workspace_id), artifact_kind, artifact_id
+        return (
+            str(workspace_id),
+            SQLiteArtifactRevisionRepository._text_key(
+                artifact_kind, "artifact_kind"
+            ),
+            SQLiteArtifactRevisionRepository._text_key(artifact_id, "artifact_id"),
+        )
 
     def append(
         self,
@@ -370,35 +463,16 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
         return record
 
     def _from_row(self, row: sqlite3.Row) -> ArtifactRevision:
-        try:
-            workspace_id = WorkspaceId.parse(row["workspace_id"])
-            revision_id = str(UUID(row["revision_id"]))
-            if (
-                str(workspace_id) != row["workspace_id"]
-                or revision_id != row["revision_id"]
-            ):
-                raise RepositoryIntegrityError("identidade UUID da revisão não canônica")
-            payload = json.loads(row["payload_json"])
-            canonical_json = canonical_payload_json(payload)
-            if canonical_json != row["payload_json"]:
-                raise RepositoryIntegrityError("payload persistido não é JSON canônico")
-            checksum = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
-            if checksum != row["checksum_sha256"]:
-                raise RepositoryIntegrityError("checksum do payload persistido diverge")
-            return ArtifactRevision(
-                workspace_id=workspace_id,
-                artifact_kind=row["artifact_kind"],
-                artifact_id=row["artifact_id"],
-                revision_id=revision_id,
-                revision=row["revision"],
-                created_at=row["created_at"],
-                checksum_sha256=row["checksum_sha256"],
-                payload=payload,
-            )
-        except RepositoryIntegrityError:
-            raise
-        except (json.JSONDecodeError, RecursionError, TypeError, ValueError) as exc:
-            raise RepositoryIntegrityError("revisão persistida inválida") from exc
+        return _revision_from_values(
+            row["workspace_id"],
+            row["artifact_kind"],
+            row["artifact_id"],
+            row["revision_id"],
+            row["revision"],
+            row["created_at"],
+            row["checksum_sha256"],
+            row["payload_json"],
+        )
 
     def _select_one(self, query: str, parameters: tuple) -> ArtifactRevision | None:
         row = self._fetchone(query, parameters)
@@ -476,6 +550,11 @@ class SQLiteApplicationStore:
         )
         without_drive = windows_target[2:] if has_drive_prefix else windows_target
         target_parts = tuple(part for part in windows_target.split("\\") if part)
+        try:
+            target.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise RepositoryError("target SQLite contém Unicode inválido") from exc
+        ambiguous_part = any(part != part.rstrip(" .") for part in target_parts)
         superscript_digits = str.maketrans({"¹": "1", "²": "2", "³": "3"})
         reserved_part = any(
             part.split(":", 1)[0]
@@ -494,6 +573,7 @@ class SQLiteApplicationStore:
             or windows_target.startswith("\\\\")
             or (has_drive_prefix and not has_absolute_drive)
             or ":" in without_drive
+            or ambiguous_part
             or reserved_part
         ):
             raise RepositoryError("target SQLite efêmero ou ambíguo")
@@ -521,8 +601,11 @@ class SQLiteApplicationStore:
                     pass
             raise RepositoryError("falha ao abrir armazenamento SQLite") from exc
         lock = RLock()
-        self.workspaces = SQLiteWorkspaceRepository(self._connection, lock)
-        self.revisions = SQLiteArtifactRevisionRepository(self._connection, lock)
+        state_guard = _DatabaseStateGuard(self._connection)
+        self.workspaces = SQLiteWorkspaceRepository(self._connection, lock, state_guard)
+        self.revisions = SQLiteArtifactRevisionRepository(
+            self._connection, lock, state_guard
+        )
 
     def close(self) -> None:
         try:

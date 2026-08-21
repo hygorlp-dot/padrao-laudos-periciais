@@ -14,9 +14,18 @@ from uuid import UUID
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
-def _timestamp(value: str, field: str) -> str:
-    if type(value) is not str or not value:
+def _validated_text(value: str, field: str) -> str:
+    if type(value) is not str or not value.strip():
         raise ValueError(f"{field} inválido")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{field} contém Unicode inválido") from exc
+    return value
+
+
+def _timestamp(value: str, field: str) -> str:
+    _validated_text(value, field)
     try:
         parsed = datetime.fromisoformat(value)
     except ValueError as exc:
@@ -108,8 +117,7 @@ class PericiaWorkspace:
     def __post_init__(self):
         if type(self.workspace_id) is not WorkspaceId:
             raise TypeError("workspace_id inválido")
-        if type(self.name) is not str or not self.name.strip():
-            raise ValueError("name inválido")
+        _validated_text(self.name, "name")
         _timestamp(self.created_at, "created_at")
 
 
@@ -131,8 +139,7 @@ class ArtifactRevision:
             ("artifact_kind", self.artifact_kind),
             ("artifact_id", self.artifact_id),
         ):
-            if type(value) is not str or not value.strip():
-                raise ValueError(f"{field} inválido")
+            _validated_text(value, field)
         if type(self.revision_id) is not str:
             raise TypeError("revision_id inválido")
         try:
