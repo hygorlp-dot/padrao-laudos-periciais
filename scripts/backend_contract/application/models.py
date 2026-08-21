@@ -64,14 +64,17 @@ def thaw_payload(value):
 
 def canonical_payload_json(value) -> str:
     """Codifica um payload JSON validado sem perder Unicode ou ordem de listas."""
-    mutable = thaw_payload(_freeze_payload(value))
-    return json.dumps(
-        mutable,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
+    try:
+        mutable = thaw_payload(_freeze_payload(value))
+        return json.dumps(
+            mutable,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except RecursionError as exc:
+        raise ValueError("payload JSON excede profundidade suportada") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,4 +144,8 @@ class ArtifactRevision:
             or _SHA256.fullmatch(self.checksum_sha256) is None
         ):
             raise ValueError("checksum_sha256 inválido")
-        object.__setattr__(self, "payload", _freeze_payload(self.payload))
+        try:
+            frozen_payload = _freeze_payload(self.payload)
+        except RecursionError as exc:
+            raise ValueError("payload JSON excede profundidade suportada") from exc
+        object.__setattr__(self, "payload", frozen_payload)

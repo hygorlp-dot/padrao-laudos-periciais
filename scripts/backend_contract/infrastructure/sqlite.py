@@ -36,6 +36,7 @@ CREATE TABLE workspaces (
         AND substr(workspace_id, 14, 1) = '-'
         AND substr(workspace_id, 19, 1) = '-'
         AND substr(workspace_id, 24, 1) = '-'
+        AND length(replace(workspace_id, '-', '')) = 32
         AND workspace_id NOT GLOB '*[^0-9a-f-]*'
     ),
     name TEXT NOT NULL,
@@ -55,6 +56,7 @@ CREATE TABLE artifact_revisions (
         AND substr(revision_id, 14, 1) = '-'
         AND substr(revision_id, 19, 1) = '-'
         AND substr(revision_id, 24, 1) = '-'
+        AND length(replace(revision_id, '-', '')) = 32
         AND revision_id NOT GLOB '*[^0-9a-f-]*'
     ),
     revision INTEGER NOT NULL CHECK (revision >= 1),
@@ -134,6 +136,30 @@ def _validate_schema(connection: sqlite3.Connection) -> None:
         raise PersistenceSchemaError("foreign key SQLite malformada")
 
 
+def _canonical_uuid(raw_value, field: str) -> str:
+    try:
+        canonical = str(UUID(raw_value))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise RepositoryIntegrityError(f"identidade UUID persistida inválida: {field}") from exc
+    if canonical != raw_value:
+        raise RepositoryIntegrityError(f"identidade UUID persistida não canônica: {field}")
+    return canonical
+
+
+def _validate_persisted_identities(connection: sqlite3.Connection) -> None:
+    workspace_ids = {
+        _canonical_uuid(row[0], "workspace_id")
+        for row in connection.execute("SELECT workspace_id FROM workspaces")
+    }
+    for workspace_id, revision_id in connection.execute(
+        "SELECT workspace_id, revision_id FROM artifact_revisions"
+    ):
+        canonical_workspace = _canonical_uuid(workspace_id, "workspace_id")
+        _canonical_uuid(revision_id, "revision_id")
+        if canonical_workspace not in workspace_ids:
+            raise RepositoryIntegrityError("revisão persistida referencia workspace ausente")
+
+
 def migrate(connection: sqlite3.Connection) -> None:
     """Aplica migrações conhecidas numa única transação e valida o schema exato."""
     try:
@@ -151,6 +177,7 @@ def migrate(connection: sqlite3.Connection) -> None:
                 connection.execute(statement)
             connection.execute(f"PRAGMA user_version = {target}")
         _validate_schema(connection)
+        _validate_persisted_identities(connection)
         connection.commit()
     except Exception as exc:
         try:
@@ -160,6 +187,9 @@ def migrate(connection: sqlite3.Connection) -> None:
         if isinstance(exc, PersistenceSchemaError):
             raise
         if isinstance(exc, sqlite3.Error):
+            error_code = getattr(exc, "sqlite_errorcode", 0) or 0
+            if (error_code & 0xFF) in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+                raise RepositoryError("armazenamento SQLite ocupado") from exc
             raise PersistenceSchemaError("migração SQLite falhou") from exc
         raise
 
@@ -174,6 +204,7 @@ class _SQLiteRepository:
         with self._lock:
             try:
                 self._connection.execute("BEGIN IMMEDIATE")
+                _validate_persisted_identities(self._connection)
                 yield
                 self._connection.commit()
             except Exception:
@@ -186,6 +217,7 @@ class _SQLiteRepository:
     def _fetchone(self, query: str, parameters: tuple = ()) -> sqlite3.Row | None:
         try:
             with self._lock:
+                _validate_persisted_identities(self._connection)
                 return self._connection.execute(query, parameters).fetchone()
         except sqlite3.Error as exc:
             raise RepositoryError("falha SQLite de leitura") from exc
@@ -193,6 +225,7 @@ class _SQLiteRepository:
     def _fetchall(self, query: str, parameters: tuple = ()) -> tuple[sqlite3.Row, ...]:
         try:
             with self._lock:
+                _validate_persisted_identities(self._connection)
                 return tuple(self._connection.execute(query, parameters).fetchall())
         except sqlite3.Error as exc:
             raise RepositoryError("falha SQLite de leitura") from exc
@@ -347,7 +380,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
             )
         except RepositoryIntegrityError:
             raise
-        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        except (json.JSONDecodeError, RecursionError, TypeError, ValueError) as exc:
             raise RepositoryIntegrityError("revisão persistida inválida") from exc
 
     def _select_one(self, query: str, parameters: tuple) -> ArtifactRevision | None:
@@ -413,12 +446,25 @@ class SQLiteApplicationStore:
             *(f"COM{number}" for number in range(1, 10)),
             *(f"LPT{number}" for number in range(1, 10)),
         }
+        windows_target = target.replace("/", "\\")
+        without_drive = (
+            windows_target[2:]
+            if len(windows_target) >= 2 and windows_target[1] == ":"
+            else windows_target
+        )
+        target_parts = tuple(part for part in windows_target.split("\\") if part)
+        reserved_part = any(
+            part.rstrip(" .").split(":", 1)[0].split(".", 1)[0].upper() in reserved
+            for part in target_parts
+        )
         if (
             not target.strip()
             or target == ":memory:"
             or target.lower().startswith("file:")
             or "\x00" in target
-            or any(part.split(".", 1)[0].upper() in reserved for part in Path(target).parts)
+            or windows_target.startswith(("\\\\.\\", "\\\\?\\"))
+            or ":" in without_drive
+            or reserved_part
         ):
             raise RepositoryError("target SQLite efêmero ou ambíguo")
         try:
@@ -431,12 +477,18 @@ class SQLiteApplicationStore:
             self._connection.row_factory = sqlite3.Row
             self._connection.execute("PRAGMA foreign_keys = ON")
             migrate(self._connection)
-        except PersistenceSchemaError:
-            self._connection.close()
+        except RepositoryError:
+            try:
+                self._connection.close()
+            except sqlite3.Error:
+                pass
             raise
         except sqlite3.Error as exc:
             if hasattr(self, "_connection"):
-                self._connection.close()
+                try:
+                    self._connection.close()
+                except sqlite3.Error:
+                    pass
             raise RepositoryError("falha ao abrir armazenamento SQLite") from exc
         lock = RLock()
         self.workspaces = SQLiteWorkspaceRepository(self._connection, lock)
