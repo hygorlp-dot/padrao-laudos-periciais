@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
-import subprocess
 from pathlib import Path
 
 
@@ -13,9 +13,9 @@ MANIFEST = ROOT / "docs" / "terceiros" / "frontend-design-blobs.json"
 
 
 def _blob(path: Path) -> str:
-    return subprocess.check_output(
-        ["git", "hash-object", "--", str(path)], text=True
-    ).strip()
+    content = path.read_bytes()
+    git_object = f"blob {len(content)}\0".encode("ascii") + content
+    return hashlib.sha1(git_object, usedforsecurity=False).hexdigest()
 
 
 def verificar() -> list[str]:
