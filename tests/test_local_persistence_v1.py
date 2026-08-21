@@ -102,10 +102,70 @@ def test_non_database_file_fails_with_application_schema_error(tmp_path):
     assert not isinstance(raised.value, sqlite3.Error)
 
 
+@pytest.mark.parametrize(
+    "setup_error",
+    (PersistenceSchemaError("schema"), sqlite3.OperationalError("setup")),
+)
+def test_setup_error_remains_application_error_when_cleanup_also_fails(
+    monkeypatch, setup_error
+):
+    class FailingCloseConnection:
+        row_factory = None
+
+        def execute(self, _statement):
+            return None
+
+        def close(self):
+            raise sqlite3.OperationalError("close")
+
+    monkeypatch.setattr(sqlite_store.sqlite3, "connect", lambda *args, **kwargs: FailingCloseConnection())
+
+    def fail_setup(_connection):
+        raise setup_error
+
+    monkeypatch.setattr(sqlite_store, "migrate", fail_setup)
+    expected = PersistenceSchemaError if isinstance(setup_error, PersistenceSchemaError) else RepositoryError
+    with pytest.raises(expected) as raised:
+        SQLiteApplicationStore("safe.db")
+    assert not isinstance(raised.value, sqlite3.Error)
+
+
 @pytest.mark.parametrize("target", ("", "   ", ":memory:", "file::memory:"))
 def test_durable_store_rejects_ephemeral_or_ambiguous_targets(target):
     with pytest.raises(RepositoryError):
         SQLiteApplicationStore(target)
+
+
+@pytest.mark.parametrize(
+    "target",
+    ("NUL:", "COM1:", "CON ", r"\\.\NUL", r"C:\tmp\NUL::$DATA"),
+)
+def test_reserved_windows_targets_are_rejected_before_sqlite_open(monkeypatch, target):
+    opened = False
+
+    def unexpected_connect(*args, **kwargs):
+        nonlocal opened
+        opened = True
+        raise AssertionError("sqlite3.connect não deve receber device path")
+
+    monkeypatch.setattr(sqlite_store.sqlite3, "connect", unexpected_connect)
+    with pytest.raises(RepositoryError):
+        SQLiteApplicationStore(target)
+    assert not opened
+
+
+def test_store_open_lock_is_operational_repository_error(tmp_path):
+    path = tmp_path / "open-locked.db"
+    owner = SQLiteApplicationStore(path)
+    owner._connection.execute("BEGIN EXCLUSIVE")
+    try:
+        with pytest.raises(RepositoryError) as raised:
+            SQLiteApplicationStore(path, timeout=0.01)
+        assert not isinstance(raised.value, PersistenceSchemaError)
+        assert not isinstance(raised.value, sqlite3.Error)
+    finally:
+        owner._connection.rollback()
+        owner.close()
 
 
 def test_malformed_or_extra_current_schema_fails_closed(tmp_path):
@@ -402,6 +462,11 @@ def test_database_constraints_reject_noncanonical_uuid_storage(tmp_path):
                 "INSERT INTO workspaces (workspace_id, name, created_at) VALUES (?, ?, ?)",
                 ("AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA", "Uppercase", CREATED_1),
             )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO workspaces (workspace_id, name, created_at) VALUES (?, ?, ?)",
+                ("11111111-1111-4111-8111-11111111111-", "Malformed", CREATED_1),
+            )
         connection.execute(
             "INSERT INTO workspaces (workspace_id, name, created_at) VALUES (?, ?, ?)",
             (WORKSPACE_1, "Canonical", CREATED_1),
@@ -442,11 +507,8 @@ def test_noncanonical_uuid_corruption_fails_closed_on_read(tmp_path):
         connection.execute(
             "UPDATE artifact_revisions SET revision_id = upper(revision_id)"
         )
-    with SQLiteApplicationStore(path) as reopened:
-        with pytest.raises(RepositoryIntegrityError, match="identidade|UUID"):
-            reopened.revisions.latest(
-                WorkspaceId.parse(WORKSPACE_1), "LAUDO", "LAU-001"
-            )
+    with pytest.raises(RepositoryIntegrityError, match="identidade|UUID"):
+        SQLiteApplicationStore(path)
 
 
 def test_noncanonical_workspace_uuid_corruption_fails_closed_on_read(tmp_path):
@@ -458,9 +520,8 @@ def test_noncanonical_workspace_uuid_corruption_fails_closed_on_read(tmp_path):
     with sqlite3.connect(path) as connection:
         connection.execute("PRAGMA ignore_check_constraints = ON")
         connection.execute("UPDATE workspaces SET workspace_id = upper(workspace_id)")
-    with SQLiteApplicationStore(path) as reopened:
-        with pytest.raises(RepositoryIntegrityError, match="identidade|UUID"):
-            reopened.workspaces.list_all()
+    with pytest.raises(RepositoryIntegrityError, match="identidade|UUID"):
+        SQLiteApplicationStore(path)
 
 
 def test_workspace_and_revision_round_trip_survive_reopen(tmp_path):
@@ -508,6 +569,60 @@ def test_payload_corruption_is_detected_on_read(tmp_path):
             )
     finally:
         repo.close()
+
+
+def test_excessively_deep_persisted_json_is_explicit_integrity_error(tmp_path):
+    path = tmp_path / "deep-corrupt.db"
+    store = SQLiteApplicationStore(path)
+    store.workspaces.create(workspace())
+    store.close()
+    payload_json = "[" * 1500 + "0" + "]" * 1500
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT INTO artifact_revisions "
+            "(workspace_id, artifact_kind, artifact_id, revision_id, revision, "
+            "created_at, checksum_sha256, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                WORKSPACE_1,
+                "LAUDO",
+                "LAU-001",
+                REVISION_1,
+                1,
+                CREATED_1,
+                hashlib.sha256(payload_json.encode("utf-8")).hexdigest(),
+                payload_json,
+            ),
+        )
+    with SQLiteApplicationStore(path) as reopened:
+        with pytest.raises(RepositoryIntegrityError):
+            reopened.revisions.latest(
+                WorkspaceId.parse(WORKSPACE_1), "LAUDO", "LAU-001"
+            )
+
+
+def test_excessively_deep_append_is_explicit_and_rolls_back(repository):
+    repository.workspaces.create(workspace())
+    payload = 0
+    for _ in range(1500):
+        payload = [payload]
+    with pytest.raises(ValueError, match="profundidade"):
+        repository.revisions.append(
+            workspace_id=WorkspaceId.parse(WORKSPACE_1),
+            artifact_kind="LAUDO",
+            artifact_id="LAU-001",
+            revision_id=REVISION_1,
+            created_at=CREATED_1,
+            payload=payload,
+        )
+    recovered = repository.revisions.append(
+        workspace_id=WorkspaceId.parse(WORKSPACE_1),
+        artifact_kind="LAUDO",
+        artifact_id="LAU-001",
+        revision_id=REVISION_2,
+        created_at=CREATED_2,
+        payload={},
+    )
+    assert recovered.revision == 1
 
 
 def test_concurrent_append_allocates_unique_monotonic_revisions(tmp_path):
