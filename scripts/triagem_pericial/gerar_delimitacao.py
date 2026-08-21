@@ -144,7 +144,7 @@ def _elemento_dos_autos(documentos,termos,fallback):
     return {"texto":trecho,"confianca":_confianca("ALTA" if doc.get("classe_normalizada") in {"DECISAO","DESPACHO"} else "MEDIA"),"documentos_fonte":[doc["documento_id"]],"status_verificacao":"PENDENTE_VALIDACAO_PERITO"}
 
 
-def gerar(diretorio: Path) -> dict[str, Any]:
+def _carregar_manifesto_e_documentos(diretorio: Path):
     manifesto_path = diretorio / "manifesto-pje.json"
     manifesto = json.loads(manifesto_path.read_text(encoding="utf-8"))
     from scripts.extracao_pje.validar_integridade import validar_integridade
@@ -152,6 +152,10 @@ def gerar(diretorio: Path) -> dict[str, Any]:
     if manifesto.get("status_validacao")!="VALIDADO" or erros_manifesto:raise ValueError("Manifesto PJe não validado; triagem bloqueada")
     documentos = [json.loads(path.read_text(encoding="utf-8")) for path in sorted((diretorio / "documentos").glob("*.json"))]
     resultado = classificar(documentos)
+    return manifesto, manifesto_path, documentos, resultado
+
+
+def _resolver_conhecimento_privado(diretorio: Path, resultado):
     raiz_privada = diretorio.parent.parent
     modelos = list((raiz_privada / "modelos-referenciais").glob("**/*")) if (raiz_privada / "modelos-referenciais").exists() else []
     normas = list((raiz_privada / "normas").glob("**/*")) if (raiz_privada / "normas").exists() else []
@@ -173,13 +177,12 @@ def gerar(diretorio: Path) -> dict[str, Any]:
             prov_norma=dado.get("proveniencia") or dado.get("fonte",{}).get("proveniencia") or [str(caminho)]
             if isinstance(prov_norma,dict):prov_norma=[json.dumps(prov_norma,sort_keys=True)]
             conhecimento_normas_fontes.append({"id":dado["id"],"proveniencia":[str(x) for x in prov_norma]})
-    fonte = _fonte(documentos, resultado.documentos_fonte)
-    prov = fonte["proveniencia"]
-    docs_por_id = {d["documento_id"]: d for d in documentos}
-    agora = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    return {"raiz_privada":raiz_privada,"modelos":modelos,"normas":normas,"perfil":perfil,"capacidade":capacidade,
+            "conhecimento_modelos":conhecimento_modelos,"conhecimento_normas":conhecimento_normas,
+            "conhecimento_normas_fontes":conhecimento_normas_fontes}
 
-    res_ids = ["RES-001", "RES-002"] + (["RES-003"] if resultado.nivel == "MEDIA" else [])
-    extraidos = extrair(documentos)
+
+def _montar_questoes_tecnicas(documentos, extraidos, perfil, resultado, res_ids, prov):
     esqueletos = [{"id": f"QT-{i:03d}", "descricao": descricao} for i, descricao in enumerate(perfil["questoes"], 1)]
     fontes_qt = {q["id"]: {"quesitos": [], "passagens": []} for q in esqueletos}
     for item in extraidos:
@@ -208,7 +211,10 @@ def gerar(diretorio: Path) -> dict[str, Any]:
             "proveniencia": ([x["proveniencia"] for x in fontes["quesitos"]] +
                               [{**{k:v for k,v in pag.get("proveniencia",prov).items() if k != "bbox"},"trecho":trecho} for _,pag,trecho in fontes["passagens"]]) if derivada else [prov],
         })
+    return questoes, fontes_qt
 
+
+def _montar_quesitos(extraidos, questoes, docs_por_id, res_ids):
     vistos_texto: dict[str, str] = {}
     quesitos = []
     for ordem, item in enumerate(extraidos, 1):
@@ -241,7 +247,10 @@ def gerar(diretorio: Path) -> dict[str, Any]:
             "secoes_laudisticas_previstas": ["Análise técnica vinculada à questão " + q for q in questoes_relacionadas],
             "proveniencia": [item["proveniencia"]],
         })
+    return quesitos
 
+
+def _atualizar_questoes_com_quesitos(questoes, quesitos, fontes_qt):
     # PERFIS orientam a decomposição, mas as QTs registram as fontes reais que
     # as especializam: quesitos e passagens pertinentes dos autos.
     for questao in questoes:
@@ -254,6 +263,8 @@ def gerar(diretorio: Path) -> dict[str, Any]:
                         "evidencias_disponiveis":list(dict.fromkeys(questao["evidencias_disponiveis"]+[q["id"] for q in ligados]+[t for _,_,t in passagens])),
                         "confianca":_confianca("ALTA" if passagens and ligados else "MEDIA" if passagens or ligados else "BAIXA")})
 
+
+def _montar_cobertura_e_ressalvas(questoes, quesitos, resultado, modelos, normas, prov):
     cobertura = [{"quesito_id": q["id"], "questoes_tecnicas": q["questoes_tecnicas_relacionadas"],
                   "secoes_laudisticas": q["secoes_laudisticas_previstas"], "status": q["status_cobertura"]}
                  for q in quesitos]
@@ -277,8 +288,10 @@ def gerar(diretorio: Path) -> dict[str, Any]:
             "efeito_no_grau_de_certeza": "A classificação pode orientar o plano, mas não autoriza conclusão técnica.",
             "proveniencia": [prov],
         })
-    status = "PENDENTE_EVIDENCIAS_ADICIONAIS" if resultado.nivel == "BAIXA" else "APTO_PARA_PLANEJAMENTO"
-    sha_manifesto = hashlib.sha256(manifesto_path.read_bytes()).hexdigest()
+    return cobertura, ressalvas
+
+
+def _montar_tema_e_assunto(documentos, manifesto, perfil, resultado, prov):
     tema_extraido,passagem_tema=_tema_dos_autos(documentos,perfil["tema"])
     analise = lambda texto: {"texto": texto, "confianca": _confianca(resultado.nivel),
                              "documentos_fonte": resultado.documentos_fonte,
@@ -291,6 +304,38 @@ def gerar(diretorio: Path) -> dict[str, Any]:
                "status_verificacao": "VERIFICADO" if assuntos else "INCONCLUSIVO"}
     tema_analise=analise(tema_extraido)
     if passagem_tema:tema_analise.update({"documentos_fonte":[passagem_tema["documento_id"]],"status_verificacao":"PENDENTE_VALIDACAO_PERITO"})
+    return tema_analise, assunto, proveniencias_gerais
+
+
+def _montar_autoauditoria(resultado, conhecimento_normas, conhecimento_normas_fontes, conhecimento_modelos, capacidade):
+    return [
+        {"criterio": "Classificação usa múltiplas peças e não o número do processo", "resultado": resultado_criterio(len(resultado.documentos_fonte)>=2), "observacao": ", ".join(resultado.documentos_fonte)},
+        {"criterio": "Tema e objeto possuem fonte identificável", "resultado": "ALERTA", "observacao": "Formulação preliminar requer validação semântica final do perito."},
+        {"criterio": "Normas usadas possuem proveniência", "resultado": "APROVADO" if conhecimento_normas and conhecimento_normas_fontes else "ALERTA", "observacao": f"Fontes estruturadas: {', '.join(conhecimento_normas) or 'nenhuma norma usada nesta etapa'}."},
+        {"criterio": "Modelos não contaminam fatos do caso", "resultado": resultado_criterio(not any(str(d).startswith("MOD-") for d in resultado.documentos_fonte)), "observacao": f"Modelos recuperados apenas como experiência: {', '.join(conhecimento_modelos) or 'nenhum disponível'}."},
+        {"criterio":"Capability de delimitação disponível","resultado":"APROVADO" if capacidade["PERFIL_DELIMITACAO"] else "BLOQUEADO","observacao":capacidade["STATUS"]},
+    ]
+
+
+def gerar(diretorio: Path) -> dict[str, Any]:
+    manifesto, manifesto_path, documentos, resultado = _carregar_manifesto_e_documentos(diretorio)
+    ctx = _resolver_conhecimento_privado(diretorio, resultado)
+    modelos, normas, perfil, capacidade = ctx["modelos"], ctx["normas"], ctx["perfil"], ctx["capacidade"]
+    conhecimento_modelos, conhecimento_normas, conhecimento_normas_fontes = ctx["conhecimento_modelos"], ctx["conhecimento_normas"], ctx["conhecimento_normas_fontes"]
+    fonte = _fonte(documentos, resultado.documentos_fonte)
+    prov = fonte["proveniencia"]
+    docs_por_id = {d["documento_id"]: d for d in documentos}
+    agora = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+    res_ids = ["RES-001", "RES-002"] + (["RES-003"] if resultado.nivel == "MEDIA" else [])
+    extraidos = extrair(documentos)
+    questoes, fontes_qt = _montar_questoes_tecnicas(documentos, extraidos, perfil, resultado, res_ids, prov)
+    quesitos = _montar_quesitos(extraidos, questoes, docs_por_id, res_ids)
+    _atualizar_questoes_com_quesitos(questoes, quesitos, fontes_qt)
+    cobertura, ressalvas = _montar_cobertura_e_ressalvas(questoes, quesitos, resultado, modelos, normas, prov)
+    status = "PENDENTE_EVIDENCIAS_ADICIONAIS" if resultado.nivel == "BAIXA" else "APTO_PARA_PLANEJAMENTO"
+    sha_manifesto = hashlib.sha256(manifesto_path.read_bytes()).hexdigest()
+    tema_analise, assunto, proveniencias_gerais = _montar_tema_e_assunto(documentos, manifesto, perfil, resultado, prov)
     saida={
         "schema_version": "1.0.0",
         "identificacao": {"processo_cnj": manifesto["processo"]["numero_cnj"]["valor"], "manifesto_sha256": sha_manifesto, "data_geracao": agora},
@@ -325,13 +370,7 @@ def gerar(diretorio: Path) -> dict[str, Any]:
         },
         "memoria_referencial": {"fontes_disponiveis": len(modelos), "itens_recuperados": conhecimento_modelos, "status": "DISPONIVEL" if modelos else "INDISPONIVEL"},
         "conhecimento_normativo": {"fontes_disponiveis": len(normas), "itens_recuperados": conhecimento_normas, "fontes":conhecimento_normas_fontes, "status": "PENDENTE_VERIFICACAO_NORMATIVA" if normas else "INDISPONIVEL"},
-        "autoauditoria": [
-            {"criterio": "Classificação usa múltiplas peças e não o número do processo", "resultado": resultado_criterio(len(resultado.documentos_fonte)>=2), "observacao": ", ".join(resultado.documentos_fonte)},
-            {"criterio": "Tema e objeto possuem fonte identificável", "resultado": "ALERTA", "observacao": "Formulação preliminar requer validação semântica final do perito."},
-            {"criterio": "Normas usadas possuem proveniência", "resultado": "APROVADO" if conhecimento_normas and conhecimento_normas_fontes else "ALERTA", "observacao": f"Fontes estruturadas: {', '.join(conhecimento_normas) or 'nenhuma norma usada nesta etapa'}."},
-            {"criterio": "Modelos não contaminam fatos do caso", "resultado": resultado_criterio(not any(str(d).startswith("MOD-") for d in resultado.documentos_fonte)), "observacao": f"Modelos recuperados apenas como experiência: {', '.join(conhecimento_modelos) or 'nenhum disponível'}."},
-            {"criterio":"Capability de delimitação disponível","resultado":"APROVADO" if capacidade["PERFIL_DELIMITACAO"] else "BLOQUEADO","observacao":capacidade["STATUS"]},
-        ],
+        "autoauditoria": _montar_autoauditoria(resultado, conhecimento_normas, conhecimento_normas_fontes, conhecimento_modelos, capacidade),
         "status": status, "proveniencia": proveniencias_gerais,
     }
     from scripts.triagem_pericial.validar_delimitacao import recalcular_autoauditoria,status_derivado
