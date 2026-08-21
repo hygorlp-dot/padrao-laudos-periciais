@@ -60,4 +60,3 @@ Para informação pericial, normativa ou técnica pública, a precedência é:
 
 Public APIs nunca autoriza envio de dados de caso. `APPLICATION_LAYER_V1` é
 inteiramente local e usa zero providers/APIs externas.
-

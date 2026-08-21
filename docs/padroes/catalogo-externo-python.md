@@ -46,4 +46,3 @@ são fontes primárias para fatos técnicos; a entrada no catálogo é apenas um
 pista de discovery.
 
 Nenhum pacote pode ser adotado somente porque aparece no Awesome Python.
-

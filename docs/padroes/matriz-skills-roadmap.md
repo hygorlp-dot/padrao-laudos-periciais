@@ -204,4 +204,3 @@ As categorias são `REQUIRED`, `RECOMMENDED`, `CONDITIONAL` e
 `AI_PROPOSAL` nunca se torna efetiva sozinha. Ativação de provider, egress,
 secrets ou envio de dados exige autorização própria e todos os gates de
 privacidade/trust.
-
