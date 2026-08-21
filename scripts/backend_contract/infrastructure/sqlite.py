@@ -19,6 +19,7 @@ from ..application.models import (
 from ..application.ports import (
     PersistenceSchemaError,
     RepositoryConflict,
+    RepositoryError,
     RepositoryIntegrityError,
     WorkspaceNotFound,
 )
@@ -28,7 +29,15 @@ CURRENT_SCHEMA_VERSION = 1
 
 _WORKSPACES_SQL = """
 CREATE TABLE workspaces (
-    workspace_id TEXT PRIMARY KEY NOT NULL,
+    workspace_id TEXT PRIMARY KEY NOT NULL CHECK (
+        length(workspace_id) = 36
+        AND workspace_id = lower(workspace_id)
+        AND substr(workspace_id, 9, 1) = '-'
+        AND substr(workspace_id, 14, 1) = '-'
+        AND substr(workspace_id, 19, 1) = '-'
+        AND substr(workspace_id, 24, 1) = '-'
+        AND workspace_id NOT GLOB '*[^0-9a-f-]*'
+    ),
     name TEXT NOT NULL,
     created_at TEXT NOT NULL
 )
@@ -39,7 +48,15 @@ CREATE TABLE artifact_revisions (
     workspace_id TEXT NOT NULL,
     artifact_kind TEXT NOT NULL,
     artifact_id TEXT NOT NULL,
-    revision_id TEXT PRIMARY KEY NOT NULL,
+    revision_id TEXT PRIMARY KEY NOT NULL CHECK (
+        length(revision_id) = 36
+        AND revision_id = lower(revision_id)
+        AND substr(revision_id, 9, 1) = '-'
+        AND substr(revision_id, 14, 1) = '-'
+        AND substr(revision_id, 19, 1) = '-'
+        AND substr(revision_id, 24, 1) = '-'
+        AND revision_id NOT GLOB '*[^0-9a-f-]*'
+    ),
     revision INTEGER NOT NULL CHECK (revision >= 1),
     created_at TEXT NOT NULL,
     checksum_sha256 TEXT NOT NULL,
@@ -119,13 +136,13 @@ def _validate_schema(connection: sqlite3.Connection) -> None:
 
 def migrate(connection: sqlite3.Connection) -> None:
     """Aplica migrações conhecidas numa única transação e valida o schema exato."""
-    version = connection.execute("PRAGMA user_version").fetchone()[0]
-    if type(version) is not int or version < 0 or version > CURRENT_SCHEMA_VERSION:
-        raise PersistenceSchemaError(
-            f"versão futura ou inválida do schema SQLite: {version}"
-        )
     try:
         connection.execute("BEGIN IMMEDIATE")
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        if type(version) is not int or version < 0 or version > CURRENT_SCHEMA_VERSION:
+            raise PersistenceSchemaError(
+                f"versão futura ou inválida do schema SQLite: {version}"
+            )
         for target in range(version + 1, CURRENT_SCHEMA_VERSION + 1):
             statements = MIGRATIONS.get(target)
             if not statements:
@@ -136,7 +153,10 @@ def migrate(connection: sqlite3.Connection) -> None:
         _validate_schema(connection)
         connection.commit()
     except Exception as exc:
-        connection.rollback()
+        try:
+            connection.rollback()
+        except sqlite3.Error:
+            pass
         if isinstance(exc, PersistenceSchemaError):
             raise
         if isinstance(exc, sqlite3.Error):
@@ -157,8 +177,25 @@ class _SQLiteRepository:
                 yield
                 self._connection.commit()
             except Exception:
-                self._connection.rollback()
+                try:
+                    self._connection.rollback()
+                except sqlite3.Error:
+                    pass
                 raise
+
+    def _fetchone(self, query: str, parameters: tuple = ()) -> sqlite3.Row | None:
+        try:
+            with self._lock:
+                return self._connection.execute(query, parameters).fetchone()
+        except sqlite3.Error as exc:
+            raise RepositoryError("falha SQLite de leitura") from exc
+
+    def _fetchall(self, query: str, parameters: tuple = ()) -> tuple[sqlite3.Row, ...]:
+        try:
+            with self._lock:
+                return tuple(self._connection.execute(query, parameters).fetchall())
+        except sqlite3.Error as exc:
+            raise RepositoryError("falha SQLite de leitura") from exc
 
 
 class SQLiteWorkspaceRepository(_SQLiteRepository):
@@ -173,36 +210,51 @@ class SQLiteWorkspaceRepository(_SQLiteRepository):
                 )
         except sqlite3.IntegrityError as exc:
             raise RepositoryConflict("workspace já existe") from exc
+        except sqlite3.Error as exc:
+            raise RepositoryError("falha SQLite ao criar workspace") from exc
         return workspace
 
     def _from_row(self, row: sqlite3.Row) -> PericiaWorkspace:
         try:
-            return PericiaWorkspace(
-                WorkspaceId.parse(row["workspace_id"]), row["name"], row["created_at"]
-            )
+            workspace_id = WorkspaceId.parse(row["workspace_id"])
+            if str(workspace_id) != row["workspace_id"]:
+                raise RepositoryIntegrityError("identidade UUID do workspace não canônica")
+            return PericiaWorkspace(workspace_id, row["name"], row["created_at"])
+        except RepositoryIntegrityError:
+            raise
         except (TypeError, ValueError) as exc:
             raise RepositoryIntegrityError("workspace persistido inválido") from exc
 
     def get(self, workspace_id: WorkspaceId) -> PericiaWorkspace | None:
         if type(workspace_id) is not WorkspaceId:
             raise TypeError("workspace_id inválido")
-        with self._lock:
-            row = self._connection.execute(
-                "SELECT workspace_id, name, created_at FROM workspaces WHERE workspace_id = ?",
-                (str(workspace_id),),
-            ).fetchone()
+        row = self._fetchone(
+            "SELECT workspace_id, name, created_at FROM workspaces WHERE workspace_id = ?",
+            (str(workspace_id),),
+        )
         return None if row is None else self._from_row(row)
 
     def list_all(self) -> tuple[PericiaWorkspace, ...]:
-        with self._lock:
-            rows = self._connection.execute(
-                "SELECT workspace_id, name, created_at FROM workspaces "
-                "ORDER BY created_at, workspace_id"
-            ).fetchall()
+        rows = self._fetchall(
+            "SELECT workspace_id, name, created_at FROM workspaces "
+            "ORDER BY created_at, workspace_id"
+        )
         return tuple(self._from_row(row) for row in rows)
 
 
 class SQLiteArtifactRevisionRepository(_SQLiteRepository):
+    @staticmethod
+    def _key(
+        workspace_id: WorkspaceId, artifact_kind: str, artifact_id: str
+    ) -> tuple[str, str, str]:
+        if type(workspace_id) is not WorkspaceId:
+            raise TypeError("workspace_id inválido")
+        if type(artifact_kind) is not str or not artifact_kind.strip():
+            raise ValueError("artifact_kind inválido")
+        if type(artifact_id) is not str or not artifact_id.strip():
+            raise ValueError("artifact_id inválido")
+        return str(workspace_id), artifact_kind, artifact_id
+
     def append(
         self,
         *,
@@ -213,9 +265,11 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
         created_at: str,
         payload: object,
     ) -> ArtifactRevision:
-        if type(workspace_id) is not WorkspaceId:
-            raise TypeError("workspace_id inválido")
+        workspace_key, artifact_kind, artifact_id = self._key(
+            workspace_id, artifact_kind, artifact_id
+        )
         canonical_json = canonical_payload_json(payload)
+        payload_snapshot = json.loads(canonical_json)
         checksum = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
         try:
             canonical_revision_id = str(UUID(revision_id))
@@ -225,14 +279,14 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
             with self._write():
                 exists = self._connection.execute(
                     "SELECT 1 FROM workspaces WHERE workspace_id = ?",
-                    (str(workspace_id),),
+                    (workspace_key,),
                 ).fetchone()
                 if exists is None:
                     raise WorkspaceNotFound(f"workspace não encontrado: {workspace_id}")
                 revision = self._connection.execute(
                     "SELECT COALESCE(MAX(revision), 0) + 1 FROM artifact_revisions "
                     "WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ?",
-                    (str(workspace_id), artifact_kind, artifact_id),
+                    (workspace_key, artifact_kind, artifact_id),
                 ).fetchone()[0]
                 record = ArtifactRevision(
                     workspace_id=workspace_id,
@@ -242,7 +296,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
                     revision=revision,
                     created_at=created_at,
                     checksum_sha256=checksum,
-                    payload=payload,
+                    payload=payload_snapshot,
                 )
                 self._connection.execute(
                     "INSERT INTO artifact_revisions "
@@ -261,10 +315,19 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
                 )
         except sqlite3.IntegrityError as exc:
             raise RepositoryConflict("conflito de identidade de revisão") from exc
+        except sqlite3.Error as exc:
+            raise RepositoryError("falha SQLite ao anexar revisão") from exc
         return record
 
     def _from_row(self, row: sqlite3.Row) -> ArtifactRevision:
         try:
+            workspace_id = WorkspaceId.parse(row["workspace_id"])
+            revision_id = str(UUID(row["revision_id"]))
+            if (
+                str(workspace_id) != row["workspace_id"]
+                or revision_id != row["revision_id"]
+            ):
+                raise RepositoryIntegrityError("identidade UUID da revisão não canônica")
             payload = json.loads(row["payload_json"])
             canonical_json = canonical_payload_json(payload)
             if canonical_json != row["payload_json"]:
@@ -273,10 +336,10 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
             if checksum != row["checksum_sha256"]:
                 raise RepositoryIntegrityError("checksum do payload persistido diverge")
             return ArtifactRevision(
-                workspace_id=WorkspaceId.parse(row["workspace_id"]),
+                workspace_id=workspace_id,
                 artifact_kind=row["artifact_kind"],
                 artifact_id=row["artifact_id"],
-                revision_id=row["revision_id"],
+                revision_id=revision_id,
                 revision=row["revision"],
                 created_at=row["created_at"],
                 checksum_sha256=row["checksum_sha256"],
@@ -288,8 +351,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
             raise RepositoryIntegrityError("revisão persistida inválida") from exc
 
     def _select_one(self, query: str, parameters: tuple) -> ArtifactRevision | None:
-        with self._lock:
-            row = self._connection.execute(query, parameters).fetchone()
+        row = self._fetchone(query, parameters)
         return None if row is None else self._from_row(row)
 
     def latest(
@@ -298,10 +360,11 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
         artifact_kind: str,
         artifact_id: str,
     ) -> ArtifactRevision | None:
+        key = self._key(workspace_id, artifact_kind, artifact_id)
         return self._select_one(
             "SELECT * FROM artifact_revisions WHERE workspace_id = ? "
             "AND artifact_kind = ? AND artifact_id = ? ORDER BY revision DESC LIMIT 1",
-            (str(workspace_id), artifact_kind, artifact_id),
+            key,
         )
 
     def get_revision(
@@ -311,10 +374,13 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
         artifact_id: str,
         revision: int,
     ) -> ArtifactRevision | None:
+        key = self._key(workspace_id, artifact_kind, artifact_id)
+        if type(revision) is not int or revision < 1:
+            raise ValueError("revision inválida")
         return self._select_one(
             "SELECT * FROM artifact_revisions WHERE workspace_id = ? "
             "AND artifact_kind = ? AND artifact_id = ? AND revision = ?",
-            (str(workspace_id), artifact_kind, artifact_id, revision),
+            (*key, revision),
         )
 
     def list_all(
@@ -323,12 +389,12 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
         artifact_kind: str,
         artifact_id: str,
     ) -> tuple[ArtifactRevision, ...]:
-        with self._lock:
-            rows = self._connection.execute(
-                "SELECT * FROM artifact_revisions WHERE workspace_id = ? "
-                "AND artifact_kind = ? AND artifact_id = ? ORDER BY revision",
-                (str(workspace_id), artifact_kind, artifact_id),
-            ).fetchall()
+        key = self._key(workspace_id, artifact_kind, artifact_id)
+        rows = self._fetchall(
+            "SELECT * FROM artifact_revisions WHERE workspace_id = ? "
+            "AND artifact_kind = ? AND artifact_id = ? ORDER BY revision",
+            key,
+        )
         return tuple(self._from_row(row) for row in rows)
 
 
@@ -336,25 +402,51 @@ class SQLiteApplicationStore:
     """Sessão local que expõe separadamente os dois ports de persistência."""
 
     def __init__(self, database: str | Path, *, timeout: float = 5.0):
-        self._connection = sqlite3.connect(
-            str(database),
-            timeout=timeout,
-            isolation_level=None,
-            check_same_thread=False,
-        )
-        self._connection.row_factory = sqlite3.Row
-        self._connection.execute("PRAGMA foreign_keys = ON")
+        if not isinstance(database, (str, Path)):
+            raise RepositoryError("target SQLite inválido")
+        target = str(database)
+        reserved = {
+            "CON",
+            "PRN",
+            "AUX",
+            "NUL",
+            *(f"COM{number}" for number in range(1, 10)),
+            *(f"LPT{number}" for number in range(1, 10)),
+        }
+        if (
+            not target.strip()
+            or target == ":memory:"
+            or target.lower().startswith("file:")
+            or "\x00" in target
+            or any(part.split(".", 1)[0].upper() in reserved for part in Path(target).parts)
+        ):
+            raise RepositoryError("target SQLite efêmero ou ambíguo")
         try:
+            self._connection = sqlite3.connect(
+                target,
+                timeout=timeout,
+                isolation_level=None,
+                check_same_thread=False,
+            )
+            self._connection.row_factory = sqlite3.Row
+            self._connection.execute("PRAGMA foreign_keys = ON")
             migrate(self._connection)
-        except Exception:
+        except PersistenceSchemaError:
             self._connection.close()
             raise
+        except sqlite3.Error as exc:
+            if hasattr(self, "_connection"):
+                self._connection.close()
+            raise RepositoryError("falha ao abrir armazenamento SQLite") from exc
         lock = RLock()
         self.workspaces = SQLiteWorkspaceRepository(self._connection, lock)
         self.revisions = SQLiteArtifactRevisionRepository(self._connection, lock)
 
     def close(self) -> None:
-        self._connection.close()
+        try:
+            self._connection.close()
+        except sqlite3.Error as exc:
+            raise RepositoryError("falha ao fechar armazenamento SQLite") from exc
 
     def __enter__(self) -> SQLiteApplicationStore:
         return self
