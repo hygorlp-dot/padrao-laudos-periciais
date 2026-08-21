@@ -1,3 +1,4 @@
+import json
 import re
 import subprocess
 import unittest
@@ -18,6 +19,21 @@ class IntegracoesExternasTest(unittest.TestCase):
             pasta=RAIZ/".agents/skills"/nome;self.assertTrue((pasta/"SKILL.md").exists());self.assertTrue((pasta/"LICENSE").exists())
     def test_nenhum_hook_codex_foi_inventado(self):self.assertFalse((RAIZ/".codex/hooks.json").exists())
     def test_skill_agpl_nao_foi_copiada(self):self.assertFalse((RAIZ/".agents/skills/ai-audit-trail").exists())
+    def test_frontend_design_oficial_esta_pinado_e_integro(self):
+        manifesto_path=RAIZ/"docs/terceiros/frontend-design-blobs.json"
+        self.assertTrue(manifesto_path.is_file())
+        manifesto=json.loads(manifesto_path.read_text(encoding="utf-8"))
+        self.assertEqual(manifesto["repo"],"https://github.com/anthropics/claude-plugins-official")
+        self.assertEqual(manifesto["commit"],"67a666efc8524ff7abaa266f84e514aa77aee48f")
+        self.assertEqual(manifesto["upstream_path"],"plugins/frontend-design/skills/frontend-design")
+        self.assertEqual(manifesto["license"],"Apache-2.0")
+        self.assertEqual(manifesto["mode"],"THIRD_PARTY_SKILL_PINNED_BYTE_EXACT")
+        self.assertEqual(manifesto["destination"],".agents/skills/frontend-design")
+        self.assertEqual(set(manifesto["blobs"]),{"SKILL.md","LICENSE.txt"})
+        pasta=RAIZ/manifesto["destination"]
+        self.assertEqual({p.name for p in pasta.iterdir() if p.is_file()},{"SKILL.md","LICENSE.txt"})
+        from scripts.terceiros.verificar_frontend_design import verificar
+        self.assertEqual(verificar(),[])
     def test_catalogador_identifica_licencas(self):
         self.assertEqual(_licenca(RAIZ/".agents/skills/claim-audit/LICENSE"),"MIT");self.assertEqual(_licenca(RAIZ/".agents/skills/impeccable/LICENSE"),"Apache-2.0")
         self.assertIn("name",_frontmatter(RAIZ/".agents/skills/proposition-audit/SKILL.md"))
