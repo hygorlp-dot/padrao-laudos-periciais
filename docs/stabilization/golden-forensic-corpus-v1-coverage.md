@@ -6,7 +6,7 @@ Apenas casos com `status: APPROVED` contam para a cobertura abaixo. Casos `CHARA
 
 | Família semântica | HOTSPOT-01 | HOTSPOT-02 | HOTSPOT-03 | HOTSPOT-04 | HOTSPOT-05 |
 | --- | --- | --- | --- | --- | --- |
-| absent_information |  | GC-VISTORIA-004, GC-VISTORIA-006 | GC-DELIM-001 | GC-INTEGRIDADE-013 |  |
+| absent_information | GC-MOTOR-010 | GC-VISTORIA-004, GC-VISTORIA-006 | GC-DELIM-001 | GC-INTEGRIDADE-013 |  |
 | ai_proposal_not_effective_alone |  | N/A | N/A | N/A | GC-AUTOCORRIGIR-001, GC-AUTOCORRIGIR-002, GC-AUTOCORRIGIR-003 |
 | allegations |  | GC-VISTORIA-003 | GC-DELIM-001, GC-DELIM-006 |  |  |
 | contradictory_evidence | GC-MOTOR-002 |  | N/A | GC-INTEGRIDADE-001, GC-INTEGRIDADE-002, GC-INTEGRIDADE-004, GC-INTEGRIDADE-005, GC-INTEGRIDADE-007, GC-INTEGRIDADE-008, GC-INTEGRIDADE-010, GC-INTEGRIDADE-011, GC-INTEGRIDADE-014 | GC-AUTOCORRIGIR-005 |
@@ -14,9 +14,9 @@ Apenas casos com `status: APPROVED` contam para a cobertura abaixo. Casos `CHARA
 | deterministic_replay | GC-MOTOR-006 | GC-VISTORIA-005 | GC-DELIM-001 | GC-INTEGRIDADE-000 | GC-AUTOCORRIGIR-006 |
 | documentary_evidence |  |  | GC-DELIM-001, GC-DELIM-002, GC-DELIM-003 |  |  |
 | duplicate_inputs |  |  | GC-DELIM-005, GC-DELIM-009 | GC-INTEGRIDADE-003 |  |
-| engine_decision | GC-MOTOR-001, GC-MOTOR-004, GC-MOTOR-005 |  | GC-DELIM-001, GC-DELIM-002, GC-DELIM-003, GC-DELIM-004, GC-DELIM-005, GC-DELIM-006, GC-DELIM-007, GC-DELIM-010B | GC-INTEGRIDADE-001 | GC-AUTOCORRIGIR-003, GC-AUTOCORRIGIR-005 |
+| engine_decision | GC-MOTOR-001, GC-MOTOR-004, GC-MOTOR-005, GC-MOTOR-008, GC-MOTOR-010 |  | GC-DELIM-001, GC-DELIM-002, GC-DELIM-003, GC-DELIM-004, GC-DELIM-005, GC-DELIM-006, GC-DELIM-007, GC-DELIM-010B | GC-INTEGRIDADE-001 | GC-AUTOCORRIGIR-003, GC-AUTOCORRIGIR-005 |
 | equivalent_input_representations |  |  | GC-DELIM-009 | N/A |  |
-| inconclusive_findings | GC-MOTOR-005 | GC-VISTORIA-002 | GC-DELIM-007, GC-DELIM-010 |  | GC-AUTOCORRIGIR-001 |
+| inconclusive_findings | GC-MOTOR-005, GC-MOTOR-009 | GC-VISTORIA-002 | GC-DELIM-007, GC-DELIM-010 |  | GC-AUTOCORRIGIR-001 |
 | measurements | GC-MOTOR-004 | GC-VISTORIA-005 | N/A | GC-INTEGRIDADE-006, GC-INTEGRIDADE-007, GC-INTEGRIDADE-008 |  |
 | normative_references | GC-MOTOR-004 | N/A | GC-DELIM-002 | N/A | GC-AUTOCORRIGIR-004 |
 | not_observed |  | GC-VISTORIA-004 | N/A |  |  |
@@ -25,7 +25,7 @@ Apenas casos com `status: APPROVED` contam para a cobertura abaixo. Casos `CHARA
 | provenance | GC-MOTOR-001, GC-MOTOR-007 | GC-VISTORIA-005 | GC-DELIM-001, GC-DELIM-002 | GC-INTEGRIDADE-005, GC-INTEGRIDADE-006, GC-INTEGRIDADE-009 |  |
 | reordered_inputs | GC-MOTOR-007 |  |  | N/A |  |
 | source_value |  |  | GC-DELIM-001 |  |  |
-| technical_inference | GC-MOTOR-001, GC-MOTOR-002 | N/A | GC-DELIM-001, GC-DELIM-002, GC-DELIM-003, GC-DELIM-004, GC-DELIM-005 |  |  |
+| technical_inference | GC-MOTOR-001, GC-MOTOR-002, GC-MOTOR-008, GC-MOTOR-009 | N/A | GC-DELIM-001, GC-DELIM-002, GC-DELIM-003, GC-DELIM-004, GC-DELIM-005 |  |  |
 | unverifiable_information |  | GC-VISTORIA-002 | GC-DELIM-010 | GC-INTEGRIDADE-009 |  |
 
 ## Caminhos conhecidos como inalcançáveis hoje (sem caso golden)
