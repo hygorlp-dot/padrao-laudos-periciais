@@ -7,6 +7,26 @@ from typing import Protocol
 from .models import ArtifactRevision, PericiaWorkspace, WorkspaceId
 
 
+class RepositoryError(RuntimeError):
+    """Falha explícita no contrato de persistência da Application Layer."""
+
+
+class RepositoryConflict(RepositoryError):
+    """Identidade já existente ou conflito append-only."""
+
+
+class WorkspaceNotFound(RepositoryError):
+    """Workspace exigido pela operação não existe."""
+
+
+class RepositoryIntegrityError(RepositoryError):
+    """Dados persistidos não satisfazem o contrato de integridade."""
+
+
+class PersistenceSchemaError(RepositoryError):
+    """Schema ausente, malformado ou de versão não suportada."""
+
+
 class WorkspaceRepository(Protocol):
     def create(self, workspace: PericiaWorkspace) -> PericiaWorkspace: ...
 
