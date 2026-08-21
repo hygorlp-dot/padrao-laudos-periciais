@@ -11,15 +11,15 @@
     {
       "id": "MUT-002",
       "source": "scripts/extracao_pje/validar_integridade.py",
-      "search": "if pagina not in ocupadas:erros.append(f\"Página {pagina} sem owner na região documental\")",
-      "replacement": "if False and pagina not in ocupadas:erros.append(f\"Página {pagina} sem owner na região documental\")",
+      "search": "if pagina not in ocupadas:\n            erros.append(f\"Página {pagina} sem owner na região documental\")",
+      "replacement": "if False and pagina not in ocupadas:\n            erros.append(f\"Página {pagina} sem owner na região documental\")",
       "test": "tests/test_final_delta_r3.py -k validator_detecta_perda"
     },
     {
       "id": "MUT-003",
       "source": "scripts/extracao_pje/validar_integridade.py",
-      "search": "if pagina in ocupadas:erros.append(f\"Página {pagina} com owners incompatíveis: {ocupadas[pagina]} e {ident}\")",
-      "replacement": "if False and pagina in ocupadas:erros.append(f\"Página {pagina} com owners incompatíveis: {ocupadas[pagina]} e {ident}\")",
+      "search": "if pagina in ocupadas:\n                    erros.append(f\"Página {pagina} com owners incompatíveis: {ocupadas[pagina]} e {ident}\")",
+      "replacement": "if False and pagina in ocupadas:\n                    erros.append(f\"Página {pagina} com owners incompatíveis: {ocupadas[pagina]} e {ident}\")",
       "test": "tests/test_final_delta_r3.py -k validator_detecta_perda"
     },
     {
