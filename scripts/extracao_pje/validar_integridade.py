@@ -126,16 +126,17 @@ def _contabilizar_itens_indice(manifesto, documentos, erros):
 
 
 def _validar_status(manifesto, faltantes, duplicados, erros):
-    conflito_bloqueante = any(
-        conflito.get("bloqueante") and conflito.get("status") == "ABERTO"
-        for conflito in manifesto.get("conflitos", [])
-    )
-    pendencia_bloqueante = any(
-        pendencia.get("bloqueante") and pendencia.get("status") == "ABERTA"
-        for pendencia in manifesto.get("pendencias", [])
-    )
     if manifesto.get("status_validacao") == "VALIDADO" and (
-        faltantes or duplicados or conflito_bloqueante or pendencia_bloqueante
+        faltantes
+        or duplicados
+        or any(
+            conflito.get("bloqueante") and conflito.get("status") == "ABERTO"
+            for conflito in manifesto.get("conflitos", [])
+        )
+        or any(
+            pendencia.get("bloqueante") and pendencia.get("status") == "ABERTA"
+            for pendencia in manifesto.get("pendencias", [])
+        )
     ):
         erros.append("Status VALIDADO incompatível com item não contabilizado, conflito ou pendência")
 
