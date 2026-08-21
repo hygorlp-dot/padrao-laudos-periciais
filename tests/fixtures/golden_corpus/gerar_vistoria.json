@@ -1200,6 +1200,156 @@
       "non_semantic_fields_ignored": [],
       "check_deterministic_replay": false,
       "notes": "Verificado tambem contra a implementacao PRE-refactor: saida identica byte a byte."
+    },
+    {
+      "case_id": "GC-VISTORIA-009",
+      "purpose": "EXTERNAL_DIVERSITY (PR #84) apontou que _vinculos()'s ambiguidade=True (mais de uma atividade planejada com score empatado) so era testada isoladamente (tests/test_adv_safe_hardening.py), nunca fim a fim atraves de gerar() -- coverage --branch nao pega isso porque e uma lacuna de COMBINACAO DE VALOR, nao de branch (a linha e alcancada por outros casos com match unico). Pina o comportamento real: sob empate, a observacao fica sem atividade/questoes/alegacoes vinculadas, e nenhuma entrada espuria de atividade_executada e criada.",
+      "status": "APPROVED",
+      "semantic_families": [
+        "unverifiable_information",
+        "absent_information"
+      ],
+      "invariants_exercised": [
+        "NO_CERTAINTY_INFLATION"
+      ],
+      "input": {
+        "inventario": {
+          "arquivos": [
+            {
+              "id": "ARQ-VIS-020",
+              "nome": "campo-ambiguo.txt",
+              "caminho_relativo": "campo-ambiguo.txt",
+              "categoria": "ANOTACAO",
+              "metodo_ingestao": "TEXTO_SIMPLES",
+              "metadados": {
+                "texto_original": "Existe fissura fachada visivel no trecho examinado."
+              }
+            }
+          ]
+        },
+        "plano": {
+          "atividades": [
+            {
+              "id": "ATV-001",
+              "verificar": "fissura fachada",
+              "metodo": "",
+              "evidencia_esperada": "",
+              "questoes_tecnicas": [
+                "QT-001"
+              ],
+              "quesitos": [],
+              "alegacoes": []
+            },
+            {
+              "id": "ATV-002",
+              "verificar": "fissura fachada",
+              "metodo": "",
+              "evidencia_esperada": "",
+              "questoes_tecnicas": [
+                "QT-002"
+              ],
+              "quesitos": [],
+              "alegacoes": []
+            }
+          ]
+        },
+        "numero_processo": "0000001-00.2026.4.00.0001"
+      },
+      "expected_output_mode": "EXACT",
+      "expected_output": {
+        "schema_version": "2.0.0",
+        "numero_processo": "0000001-00.2026.4.00.0001",
+        "status": "VISTORIA_ESTRUTURADA",
+        "data": null,
+        "hora_inicio": null,
+        "hora_fim": null,
+        "local": null,
+        "coordenadas": null,
+        "condicoes": {
+          "clima": null,
+          "temperatura": null,
+          "umidade_relativa": null,
+          "campo_examinado": null
+        },
+        "participantes": [],
+        "atividades_executadas": [],
+        "equipamentos": [],
+        "limitacoes": [],
+        "fotografias": [],
+        "videos": [],
+        "medicoes": [],
+        "ensaios": [],
+        "documentos_obtidos": [],
+        "declaracoes": [],
+        "observacoes": [
+          {
+            "id": "OBS-001",
+            "local": null,
+            "ambiente": null,
+            "sistema": null,
+            "elemento": null,
+            "descricao_objetiva": "existe fissura fachada visivel no trecho examinado.",
+            "manifestacao": "fissura",
+            "resultado": "OBSERVADO",
+            "campo_examinado": "Campo descrito na anotação estruturada",
+            "metodo": [
+              "REGISTRO_DE_CAMPO"
+            ],
+            "atividade": null,
+            "fotografias": [],
+            "medicoes": [],
+            "alegacoes": [],
+            "questoes": [],
+            "quesitos": [],
+            "confianca": {
+              "nivel": "MEDIA"
+            },
+            "proveniencia": [
+              "ARQ-VIS-020"
+            ],
+            "limitacoes": [],
+            "aspectos_suportados": []
+          }
+        ],
+        "relacoes_evidencia": [],
+        "cobertura": [
+          {
+            "tipo": "ATIVIDADE",
+            "planejado": "ATV-001",
+            "status": "NAO_EXECUTADO",
+            "executado": [],
+            "evidencia_equivalente": [],
+            "equivalencia": null,
+            "justificativa_equivalencia": null,
+            "impacto": "Ausência ainda não avaliada tecnicamente."
+          },
+          {
+            "tipo": "ATIVIDADE",
+            "planejado": "ATV-002",
+            "status": "NAO_EXECUTADO",
+            "executado": [],
+            "evidencia_equivalente": [],
+            "equivalencia": null,
+            "justificativa_equivalencia": null,
+            "impacto": "Ausência ainda não avaliada tecnicamente."
+          }
+        ],
+        "inventario_fonte": "inventario-vistoria.json",
+        "proveniencia": [
+          "inventario-vistoria.json"
+        ]
+      },
+      "expected_provenance": null,
+      "expected_classifications": {
+        "observacoes.0.atividade": null,
+        "observacoes.0.questoes": [],
+        "atividades_executadas": []
+      },
+      "expected_warnings": null,
+      "expected_inconclusivity": "_vinculos retorna ambiguidade=True quando 2+ atividades planejadas empatam por afinidade semantica sem id explicito -- a observacao deliberadamente nao se vincula a nenhuma delas (NO_CERTAINTY_INFLATION), em vez de escolher arbitrariamente a primeira.",
+      "non_semantic_fields_ignored": [],
+      "check_deterministic_replay": true,
+      "notes": "Verificado tambem contra a implementacao PRE-refactor (scripts/vistoria_estruturada/gerar_vistoria.py @ main antes da PR do HOTSPOT-02): saida identica byte a byte."
     }
   ],
   "not_applicable": [
@@ -1242,7 +1392,7 @@
       "reachability_today": false,
       "latent_defect": true,
       "golden_execution_case": null,
-      "reason": "Consequencia direta da Issue #74: _comp()'s 4o disjuntor (atividade and elemento and manifestacao) so pode ser True se 'elemento' for True, e 'elemento' exige item.get('elemento') verdadeiro -- mas nenhum produtor de medicoes/fotos jamais popula a chave 'elemento' (confirmado por leitura: nem o literal de medicoes.append nem o de fotos.append definem essa chave). Logo _comp() so pode retornar True via explicito/registro/atividade_univoca, e o ramo 'else' de motivo/origem em _registrar_relacoes (ATIVIDADE_ELEMENTO_MANIFESTACAO_CONVERGENTES) e inalcancavel pela mesma causa raiz que torna normalizar() morto. Nao construir um caso golden artificial forcando 'elemento' -- isso criaria um contrato para um caminho morto duplo. Sem caso golden ate a Issue #74 ser resolvida de verdade."
+      "reason": "Consequencia direta da Issue #74: _comp()'s 4o disjuntor (atividade and elemento and manifestacao) so pode ser True se 'elemento' for True, e 'elemento' exige item.get('elemento') verdadeiro -- mas nenhum produtor de medicoes/fotos jamais popula a chave 'elemento' (confirmado por leitura: nem o literal de medicoes.append nem o de fotos.append definem essa chave). Logo _comp() so pode retornar True via explicito/registro/atividade_univoca, e o ramo 'else' de motivo/origem em _registrar_relacoes (ATIVIDADE_ELEMENTO_MANIFESTACAO_CONVERGENTES) e inalcancavel pela mesma causa raiz que torna normalizar() morto. Nao construir um caso golden artificial forcando 'elemento' -- isso criaria um contrato para um caminho morto duplo. Sem caso golden ate a Issue #74 ser resolvida de verdade. Modo de falha distinto do de normalizar()/#74: normalizar() indefinida gera NameError auto-anunciado (crash obvio se algum dia alcancado); ja este ramo, se um dia alcancavel (ex: alguem popular \"elemento\" resolvendo apenas a definicao de normalizar(), sem tratar #74 de verdade), NAO quebraria em teste algum -- mudaria silenciosamente motivo/origem de uma relacao de evidencia para ATIVIDADE_ELEMENTO_MANIFESTACAO_CONVERGENTES em vez de SEM_ASSOCIACAO, sem crash. Ao resolver #74, adicionar um caso golden dedicado para este ramo especificamente, nao apenas uma implementacao de normalizar()."
     }
   ]
 }
