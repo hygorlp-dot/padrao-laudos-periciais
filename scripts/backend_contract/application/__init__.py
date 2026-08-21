@@ -8,7 +8,10 @@ from .models import (
     thaw_payload,
 )
 from .ports import (
+    ArtifactRevisionNotFound,
     ArtifactRevisionRepository,
+    Clock,
+    IdGenerator,
     PersistenceSchemaError,
     RepositoryConflict,
     RepositoryError,
@@ -16,10 +19,29 @@ from .ports import (
     WorkspaceNotFound,
     WorkspaceRepository,
 )
+from .services import (
+    AppendArtifactRevision,
+    CreateWorkspace,
+    GetArtifactRevision,
+    GetLatestArtifact,
+    GetWorkspace,
+    ListArtifactRevisions,
+    ListWorkspaces,
+)
 
 __all__ = [
     "ArtifactRevision",
+    "ArtifactRevisionNotFound",
     "ArtifactRevisionRepository",
+    "AppendArtifactRevision",
+    "Clock",
+    "CreateWorkspace",
+    "GetArtifactRevision",
+    "GetLatestArtifact",
+    "GetWorkspace",
+    "IdGenerator",
+    "ListArtifactRevisions",
+    "ListWorkspaces",
     "PersistenceSchemaError",
     "PericiaWorkspace",
     "RepositoryConflict",
