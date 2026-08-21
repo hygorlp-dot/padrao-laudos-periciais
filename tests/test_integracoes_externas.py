@@ -1,3 +1,4 @@
+import ast
 import json
 import re
 import subprocess
@@ -34,6 +35,11 @@ class IntegracoesExternasTest(unittest.TestCase):
         self.assertEqual({p.name for p in pasta.iterdir() if p.is_file()},{"SKILL.md","LICENSE.txt"})
         from scripts.terceiros.verificar_frontend_design import verificar
         self.assertEqual(verificar(),[])
+    def test_guard_frontend_design_nao_adquire_capacidade_de_processo(self):
+        path=RAIZ/"scripts/terceiros/verificar_frontend_design.py"
+        tree=ast.parse(path.read_text(encoding="utf-8"))
+        imports={alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node,(ast.Import,ast.ImportFrom)) for alias in node.names}
+        self.assertNotIn("subprocess",imports)
     def test_catalogador_identifica_licencas(self):
         self.assertEqual(_licenca(RAIZ/".agents/skills/claim-audit/LICENSE"),"MIT");self.assertEqual(_licenca(RAIZ/".agents/skills/impeccable/LICENSE"),"Apache-2.0")
         self.assertIn("name",_frontmatter(RAIZ/".agents/skills/proposition-audit/SKILL.md"))
