@@ -1038,6 +1038,168 @@
       "expected_provenance": null,
       "expected_warnings": null,
       "expected_inconclusivity": null
+    },
+    {
+      "case_id": "GC-VISTORIA-007",
+      "purpose": "categoria=='VIDEO' nunca havia sido exercitada por nenhum caso golden ou teste (lacuna real de cobertura de branch, mapeada proativamente antes do refactor do HOTSPOT-02) -- pina o registro de um item de video real.",
+      "status": "APPROVED",
+      "semantic_families": [
+        "documentary_evidence"
+      ],
+      "invariants_exercised": [
+        "SOURCE_TRUTH"
+      ],
+      "input": {
+        "inventario": {
+          "arquivos": [
+            {
+              "id": "ARQ-VIS-010",
+              "nome": "clipe.mp4",
+              "caminho_relativo": "videos/clipe.mp4",
+              "categoria": "VIDEO",
+              "metodo_ingestao": "TEXTO_SIMPLES",
+              "metadados": {
+                "data_hora_captura": "2026-01-05T10:00:00-03:00"
+              }
+            }
+          ]
+        },
+        "numero_processo": "0000001-00.2026.4.00.0001"
+      },
+      "expected_output_mode": "EXACT",
+      "expected_output": {
+        "schema_version": "2.0.0",
+        "numero_processo": "0000001-00.2026.4.00.0001",
+        "status": "VISTORIA_ESTRUTURADA",
+        "data": null,
+        "hora_inicio": null,
+        "hora_fim": null,
+        "local": null,
+        "coordenadas": null,
+        "condicoes": {
+          "clima": null,
+          "temperatura": null,
+          "umidade_relativa": null,
+          "campo_examinado": null
+        },
+        "participantes": [],
+        "atividades_executadas": [],
+        "equipamentos": [],
+        "limitacoes": [],
+        "fotografias": [],
+        "videos": [
+          {
+            "id": "VID-001",
+            "arquivo_inventario": "ARQ-VIS-010",
+            "data_hora": "2026-01-05T10:00:00-03:00",
+            "ambiente": null,
+            "atividade": null,
+            "questoes": [],
+            "alegacoes": [],
+            "proveniencia": [
+              "ARQ-VIS-010"
+            ]
+          }
+        ],
+        "medicoes": [],
+        "ensaios": [],
+        "documentos_obtidos": [],
+        "declaracoes": [],
+        "observacoes": [],
+        "relacoes_evidencia": [],
+        "cobertura": [],
+        "inventario_fonte": "inventario-vistoria.json",
+        "proveniencia": [
+          "inventario-vistoria.json"
+        ]
+      },
+      "expected_provenance": [
+        "ARQ-VIS-010"
+      ],
+      "expected_classifications": {
+        "videos.0.arquivo_inventario": "ARQ-VIS-010"
+      },
+      "expected_warnings": null,
+      "expected_inconclusivity": null,
+      "non_semantic_fields_ignored": [],
+      "check_deterministic_replay": true,
+      "notes": "Verificado tambem contra a implementacao PRE-refactor (scripts/vistoria_estruturada/gerar_vistoria.py @ main antes da PR do HOTSPOT-02): saida identica byte a byte."
+    },
+    {
+      "case_id": "GC-VISTORIA-008",
+      "purpose": "Linha estruturada cujo 'tipo' nao bate em nenhum ramo de _processar_linha (ATV/ENS/DECLAR/LIMIT/OBS/medicao) -- nunca havia sido exercitada (lacuna real de cobertura, mapeada proativamente). Pina o comportamento real: a linha e silenciosamente descartada, nenhuma lista populada.",
+      "status": "APPROVED",
+      "semantic_families": [
+        "absent_information"
+      ],
+      "invariants_exercised": [
+        "FAIL_CLOSED"
+      ],
+      "input": {
+        "inventario": {
+          "arquivos": [
+            {
+              "id": "ARQ-VIS-011",
+              "nome": "campo2.txt",
+              "caminho_relativo": "campo2.txt",
+              "categoria": "ANOTACAO",
+              "metodo_ingestao": "TEXTO_SIMPLES",
+              "metadados": {
+                "texto_original": "tipo=RUIDO_DESCONHECIDO;descricao=Linha de tipo nao mapeado, deve ser ignorada."
+              }
+            }
+          ]
+        },
+        "numero_processo": "0000001-00.2026.4.00.0001"
+      },
+      "expected_output_mode": "EXACT",
+      "expected_output": {
+        "schema_version": "2.0.0",
+        "numero_processo": "0000001-00.2026.4.00.0001",
+        "status": "VISTORIA_ESTRUTURADA",
+        "data": null,
+        "hora_inicio": null,
+        "hora_fim": null,
+        "local": null,
+        "coordenadas": null,
+        "condicoes": {
+          "clima": null,
+          "temperatura": null,
+          "umidade_relativa": null,
+          "campo_examinado": null
+        },
+        "participantes": [],
+        "atividades_executadas": [],
+        "equipamentos": [],
+        "limitacoes": [],
+        "fotografias": [],
+        "videos": [],
+        "medicoes": [],
+        "ensaios": [],
+        "documentos_obtidos": [],
+        "declaracoes": [],
+        "observacoes": [],
+        "relacoes_evidencia": [],
+        "cobertura": [],
+        "inventario_fonte": "inventario-vistoria.json",
+        "proveniencia": [
+          "inventario-vistoria.json"
+        ]
+      },
+      "expected_provenance": null,
+      "expected_classifications": {
+        "medicoes": [],
+        "atividades_executadas": [],
+        "ensaios": [],
+        "declaracoes": [],
+        "limitacoes": [],
+        "observacoes": []
+      },
+      "expected_warnings": null,
+      "expected_inconclusivity": null,
+      "non_semantic_fields_ignored": [],
+      "check_deterministic_replay": false,
+      "notes": "Verificado tambem contra a implementacao PRE-refactor: saida identica byte a byte."
     }
   ],
   "not_applicable": [
@@ -1074,6 +1236,13 @@
       "latent_defect": true,
       "golden_execution_case": null,
       "reason": "Nenhum caminho first-party de gerar() popula uma chave 'elemento' nos dicts de medicoes/fotos (nem o literal de medicoes.append em ~linha 90 nem o de fotos.append em ~linha 79 define essa chave) -- ver Issue #74 e docs/stabilization/hotspot-characterization-v1.md. Construir manualmente um dict intermediario com 'elemento' preenchido para exercitar essa linha criaria um contrato artificial para um caminho morto, nao uma caracterizacao de comportamento real. Sem caso golden ate que exista uma entrada first-party legitima que torne o caminho alcancavel."
+    },
+    {
+      "location": "scripts/vistoria_estruturada/gerar_vistoria.py _comp() -- motivo/origem 'ATIVIDADE_ELEMENTO_MANIFESTACAO_CONVERGENTES' branch (linha ~137 no arquivo pre-HOTSPOT-02, dentro de _registrar_relacoes pos-refactor)",
+      "reachability_today": false,
+      "latent_defect": true,
+      "golden_execution_case": null,
+      "reason": "Consequencia direta da Issue #74: _comp()'s 4o disjuntor (atividade and elemento and manifestacao) so pode ser True se 'elemento' for True, e 'elemento' exige item.get('elemento') verdadeiro -- mas nenhum produtor de medicoes/fotos jamais popula a chave 'elemento' (confirmado por leitura: nem o literal de medicoes.append nem o de fotos.append definem essa chave). Logo _comp() so pode retornar True via explicito/registro/atividade_univoca, e o ramo 'else' de motivo/origem em _registrar_relacoes (ATIVIDADE_ELEMENTO_MANIFESTACAO_CONVERGENTES) e inalcancavel pela mesma causa raiz que torna normalizar() morto. Nao construir um caso golden artificial forcando 'elemento' -- isso criaria um contrato para um caminho morto duplo. Sem caso golden ate a Issue #74 ser resolvida de verdade."
     }
   ]
 }
