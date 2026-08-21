@@ -1,9 +1,12 @@
 import ast
 import json
 import re
+import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from scripts.terceiros.catalogar_repositorios import _frontmatter,_licenca
 RAIZ=Path(__file__).resolve().parents[1]
 class IntegracoesExternasTest(unittest.TestCase):
@@ -30,11 +33,25 @@ class IntegracoesExternasTest(unittest.TestCase):
         self.assertEqual(manifesto["license"],"Apache-2.0")
         self.assertEqual(manifesto["mode"],"THIRD_PARTY_SKILL_PINNED_BYTE_EXACT")
         self.assertEqual(manifesto["destination"],".agents/skills/frontend-design")
-        self.assertEqual(set(manifesto["blobs"]),{"SKILL.md","LICENSE.txt"})
+        self.assertEqual(manifesto["blobs"],{
+            "LICENSE.txt":"f433b1a53f5b830a205fd2df78e2b34974656c7b",
+            "SKILL.md":"decdff43d05908b4c1fc2cfd2d80fc5743440934",
+        })
         pasta=RAIZ/manifesto["destination"]
         self.assertEqual({p.name for p in pasta.iterdir() if p.is_file()},{"SKILL.md","LICENSE.txt"})
         from scripts.terceiros.verificar_frontend_design import verificar
         self.assertEqual(verificar(),[])
+    def test_guard_rejeita_deriva_coordenada_de_skill_e_manifesto(self):
+        from scripts.terceiros import verificar_frontend_design as guard
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);destination=root/".agents/skills/frontend-design";destination.mkdir(parents=True)
+            for name in ("SKILL.md","LICENSE.txt"):shutil.copy2(RAIZ/".agents/skills/frontend-design"/name,destination/name)
+            skill=destination/"SKILL.md";skill.write_text(skill.read_text(encoding="utf-8")+"\nINSTRUCAO_NAO_UPSTREAM\n",encoding="utf-8")
+            manifest=json.loads((RAIZ/"docs/terceiros/frontend-design-blobs.json").read_text(encoding="utf-8"))
+            manifest["blobs"]["SKILL.md"]=guard._blob(skill)
+            manifest_path=root/"manifest.json";manifest_path.write_text(json.dumps(manifest),encoding="utf-8")
+            with patch.object(guard,"ROOT",root),patch.object(guard,"MANIFEST",manifest_path):
+                self.assertTrue(guard.verificar())
     def test_guard_frontend_design_nao_adquire_capacidade_de_processo(self):
         path=RAIZ/"scripts/terceiros/verificar_frontend_design.py"
         tree=ast.parse(path.read_text(encoding="utf-8"))

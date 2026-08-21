@@ -10,8 +10,8 @@
 - Manter o escopo da Issue, testar, auditar e entregar por Pull Request com
   referência explícita à Issue.
 - Para UI, UX, React, Tauri, CSS, motion, transições, modais, drawers, toasts,
-  loading, skeleton, progress, hover, press, navegação ou microinterações
-  net-new, ler nesta ordem:
+  loading, skeleton, progress, hover, press, navegação ou microinterações, ler
+  nesta ordem:
   `.agents/skills/ui-pericial/SKILL.md`,
   `.agents/skills/frontend-design/SKILL.md` e
   `.agents/skills/design-motion-principles/SKILL.md`.

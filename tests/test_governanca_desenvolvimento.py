@@ -50,8 +50,16 @@ class GovernancaDesenvolvimentoTest(unittest.TestCase):
             self.assertIn(path, agentes)
         self.assertIn("first-party", agentes)
         self.assertIn("NO_DOMAIN_LOGIC_IN_UI", agentes)
+        self.assertNotIn("net-new", agentes)
         positions = [agentes.index(path) for path in required]
         self.assertEqual(positions, sorted(positions))
+
+    def test_roteamento_ui_transitivo_repete_a_ordem_canonica(self):
+        wrapper = (RAIZ / ".agents/skills/ui-pericial/SKILL.md").read_text(encoding="utf-8")
+        governance = (RAIZ / "docs/padroes/padrao-governanca-desenvolvimento.md").read_text(encoding="utf-8")
+        self.assertLess(wrapper.index("frontend-design"), wrapper.index("design-motion-principles"))
+        self.assertLess(governance.index("ui-pericial"), governance.index("frontend-design"))
+        self.assertLess(governance.index("frontend-design"), governance.index("design-motion-principles"))
 
     def test_catalogos_externos_sao_discovery_sem_autorizacao(self):
         python_policy = (RAIZ / "docs/padroes/catalogo-externo-python.md").read_text(encoding="utf-8")
@@ -92,6 +100,14 @@ class GovernancaDesenvolvimentoTest(unittest.TestCase):
         application = matrix[matrix.index("## APPLICATION_LAYER_V1"):matrix.index("## LOCAL_API_V1")]
         self.assertIn("frontend-design", application)
         self.assertIn("NOT_APPLICABLE", application)
+
+    def test_matriz_ui_preserva_gates_globais_obrigatorios(self):
+        matrix = (RAIZ / "docs/padroes/matriz-skills-roadmap.md").read_text(encoding="utf-8")
+        phases = ("PROCESS_CASE_UI","VISTORIA_UI","EVIDENCE_UI","TECHNICAL_FINDINGS_UI","LAUDO_UI","BUDGET_UI","AI_GATEWAY")
+        required = ("verification-before-completion","repository-safety-gate","requesting-code-review","receiving-code-review")
+        for phase,next_phase in zip(phases,phases[1:]):
+            section=matrix[matrix.index(f"## {phase}"):matrix.index(f"## {next_phase}")]
+            for skill in required:self.assertIn(skill,section,f"{phase} sem {skill}")
 
 
 if __name__ == "__main__":
