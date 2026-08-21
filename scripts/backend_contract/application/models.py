@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from dataclasses import dataclass
@@ -59,6 +60,18 @@ def thaw_payload(value):
     if value is None or type(value) in {bool, int, float, str}:
         return value
     raise TypeError(f"payload congelado inválido: {type(value).__name__}")
+
+
+def canonical_payload_json(value) -> str:
+    """Codifica um payload JSON validado sem perder Unicode ou ordem de listas."""
+    mutable = thaw_payload(_freeze_payload(value))
+    return json.dumps(
+        mutable,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
 
 
 @dataclass(frozen=True, slots=True)
