@@ -5,6 +5,9 @@
   "coverage": {"line_percent": 84.493, "branch_percent": 72.654, "policy": "NON_REGRESSION_ON_CRITICAL_MODULES"},
   "hotspots": [
     {"path":"scripts/motor_vicios/motor.py","function":"executar","complexity":13},
+    {"path":"scripts/motor_vicios/motor.py","function":"_construir_manifestacao_e_patologia","complexity":41},
+    {"path":"scripts/motor_vicios/motor.py","function":"_sanear_questao","complexity":32},
+    {"path":"scripts/motor_vicios/motor.py","function":"_recalcular_patologia","complexity":20},
     {"path":"scripts/vistoria_estruturada/gerar_vistoria.py","function":"gerar","complexity":117},
     {"path":"scripts/triagem_pericial/gerar_delimitacao.py","function":"gerar","complexity":96},
     {"path":"scripts/extracao_pje/validar_integridade.py","function":"validar_integridade","complexity":76},
