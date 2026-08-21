@@ -28,6 +28,21 @@ de reinventar.
    mutável compartilhado (`r`), a função extraída recebe `r` como parâmetro
    e o autor confirma explicitamente (por leitura + teste) que ela não lê
    nenhuma chave que o chamador ainda não populou naquele ponto da execução.
+   **Retornar vs. mutar por referência** (achado do `EXTERNAL_DIVERSITY` na
+   PR #84, confirmando que os dois PRs já usam ambas as técnicas
+   consistentemente, não uma divergência): use retorno quando o corpo
+   extraído sempre produz o mesmo conjunto fixo de valores, consumido uma
+   vez no site de chamada (`_construir_manifestacao_e_patologia` no
+   HOTSPOT-01 -- o chamador precisa de `len(hips)` antes de decidir o
+   próximo `hip_seq`); use mutação por referência quando os branches
+   internos da função roteiam para subconjuntos diferentes de múltiplas
+   coleções de destino compartilhadas (`_processar_linha` no HOTSPOT-02 --
+   cada `r` pode ir para `medicoes`, `atividades`, `ensaios`,
+   `declaracoes`, `limitacoes` ou `observacoes` dependendo do `tipo`;
+   inventar um valor de retorno discriminado só para isso adicionaria
+   complexidade de roteamento sem necessidade real). A mesma heurística já
+   convive dentro de um único PR quando faz sentido (`_recalcular_patologia`/
+   `_agregar_cobertura` no HOTSPOT-01 também mutam por referência).
 4. **Ordem de side-effects observáveis é preservada exatamente.** Quando uma
    função passa a *retornar* valores que o código original efeitava
    diretamente em uma estrutura compartilhada (ex: `r["manifestacoes"].append(...)`
