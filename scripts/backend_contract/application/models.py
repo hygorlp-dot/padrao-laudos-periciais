@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from dataclasses import dataclass
@@ -13,9 +14,18 @@ from uuid import UUID
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
-def _timestamp(value: str, field: str) -> str:
-    if type(value) is not str or not value:
+def _validated_text(value: str, field: str) -> str:
+    if type(value) is not str or not value.strip():
         raise ValueError(f"{field} inválido")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{field} contém Unicode inválido") from exc
+    return value
+
+
+def _timestamp(value: str, field: str) -> str:
+    _validated_text(value, field)
     try:
         parsed = datetime.fromisoformat(value)
     except ValueError as exc:
@@ -61,6 +71,25 @@ def thaw_payload(value):
     raise TypeError(f"payload congelado inválido: {type(value).__name__}")
 
 
+def canonical_payload_json(value) -> str:
+    """Codifica um payload JSON validado sem perder Unicode ou ordem de listas."""
+    try:
+        mutable = thaw_payload(_freeze_payload(value))
+        encoded = json.dumps(
+            mutable,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        encoded.encode("utf-8")
+        return encoded
+    except RecursionError as exc:
+        raise ValueError("payload JSON excede profundidade suportada") from exc
+    except UnicodeEncodeError as exc:
+        raise ValueError("payload JSON contém Unicode inválido") from exc
+
+
 @dataclass(frozen=True, slots=True)
 class WorkspaceId:
     value: UUID
@@ -88,8 +117,7 @@ class PericiaWorkspace:
     def __post_init__(self):
         if type(self.workspace_id) is not WorkspaceId:
             raise TypeError("workspace_id inválido")
-        if type(self.name) is not str or not self.name.strip():
-            raise ValueError("name inválido")
+        _validated_text(self.name, "name")
         _timestamp(self.created_at, "created_at")
 
 
@@ -111,8 +139,7 @@ class ArtifactRevision:
             ("artifact_kind", self.artifact_kind),
             ("artifact_id", self.artifact_id),
         ):
-            if type(value) is not str or not value.strip():
-                raise ValueError(f"{field} inválido")
+            _validated_text(value, field)
         if type(self.revision_id) is not str:
             raise TypeError("revision_id inválido")
         try:
@@ -128,4 +155,8 @@ class ArtifactRevision:
             or _SHA256.fullmatch(self.checksum_sha256) is None
         ):
             raise ValueError("checksum_sha256 inválido")
-        object.__setattr__(self, "payload", _freeze_payload(self.payload))
+        try:
+            frozen_payload = _freeze_payload(self.payload)
+        except RecursionError as exc:
+            raise ValueError("payload JSON excede profundidade suportada") from exc
+        object.__setattr__(self, "payload", frozen_payload)
