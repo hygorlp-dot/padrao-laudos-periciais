@@ -61,6 +61,23 @@ class ValidarIntegridadeCaracterizacaoTest(unittest.TestCase):
         erros, _ = validar_integridade(manifesto)
         self.assertTrue(any("documento_id duplicado" in e for e in erros))
 
+    def test_documentos_sobrepostos_preservam_owner_e_mensagem_exatos(self):
+        manifesto = _manifesto()
+        sobreposto = copy.deepcopy(manifesto["documentos"][0])
+        sobreposto["documento_id"] = "DOC-PJE-002"
+        sobreposto["ordem_indice"] = None
+        manifesto["documentos"].append(sobreposto)
+        manifesto["metricas_extracao"]["documentos_segmentados"] = 2
+        manifesto["metricas_extracao"]["documentos_confirmados"] = 2
+
+        erros, alertas = validar_integridade(manifesto)
+
+        self.assertEqual(
+            erros,
+            ["Página 3 sobreposta por DOC-PJE-001 e DOC-PJE-002"],
+        )
+        self.assertEqual(alertas, [])
+
     def test_inicio_posterior_ao_fim_e_erro(self):
         manifesto = _manifesto()
         manifesto["documentos"][0]["pagina_pdf_inicio"] = 3
@@ -173,6 +190,47 @@ class ValidarIntegridadeCaracterizacaoTest(unittest.TestCase):
         }]
         erros, _ = validar_integridade(manifesto)
         self.assertEqual(erros, [])
+
+    def test_intervalo_de_conflito_malformado_preserva_erro_exato(self):
+        manifesto = _manifesto()
+        manifesto["metricas_extracao"]["conflitos_abertos"] = 1
+        manifesto["conflitos"] = [{
+            "conflito_id": "CONF-001", "status": "ABERTO", "bloqueante": False,
+            "pagina_pdf_inicio": "3", "pagina_pdf_fim": 3, "total_paginas": 1,
+            "itens_indice_relacionados": [],
+        }]
+
+        erros, alertas = validar_integridade(manifesto)
+
+        self.assertEqual(erros, ["CONF-001: intervalo de páginas inválido"])
+        self.assertEqual(alertas, [])
+
+    def test_total_de_paginas_do_conflito_inconsistente_preserva_erro_exato(self):
+        manifesto = _manifesto()
+        manifesto["metricas_extracao"]["conflitos_abertos"] = 1
+        manifesto["conflitos"] = [{
+            "conflito_id": "CONF-001", "status": "ABERTO", "bloqueante": False,
+            "pagina_pdf_inicio": 4, "pagina_pdf_fim": 5, "total_paginas": 1,
+            "itens_indice_relacionados": [],
+        }]
+
+        erros, alertas = validar_integridade(manifesto)
+
+        self.assertEqual(erros, ["CONF-001: total de páginas inconsistente"])
+        self.assertEqual(alertas, [])
+
+    def test_item_relacionado_desconhecido_nao_altera_contabilizacao(self):
+        manifesto = _manifesto()
+        manifesto["metricas_extracao"]["conflitos_abertos"] = 1
+        manifesto["conflitos"] = [{
+            "conflito_id": "CONF-001", "status": "ABERTO", "bloqueante": False,
+            "itens_indice_relacionados": ["DOC-PJE-DESCONHECIDO"],
+        }]
+
+        erros, alertas = validar_integridade(manifesto)
+
+        self.assertEqual(erros, [])
+        self.assertEqual(alertas, [])
 
     def test_manifesto_malformado_falha_com_keyerror_nao_degradado(self):
         """Characterizes the documented lack of defensive error handling
