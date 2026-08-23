@@ -19,7 +19,7 @@ export function App() {
   const route = findRoute(currentPath);
 
   useEffect(() => {
-    document.title = `${route?.label ?? "Página não encontrada"} — ARCD`;
+    document.title = `Sistema Pericial — ${route?.label ?? "Página não encontrada"}`;
   }, [currentPath, route]);
 
   return (

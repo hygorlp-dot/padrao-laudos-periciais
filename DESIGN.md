@@ -1,5 +1,5 @@
 ---
-name: ARCD — Calibrated Process Ledger
+name: Pericial Shell — Calibrated Process Ledger
 description: Um ledger técnico sóbrio que mantém o fluxo pericial visível, preciso e auditável.
 colors:
   mineral: "#f2f4f1"
@@ -84,7 +84,7 @@ components:
     height: "5.2rem"
 ---
 
-# Design System: ARCD
+# Design System: Calibrated Process Ledger
 
 ## Overview
 

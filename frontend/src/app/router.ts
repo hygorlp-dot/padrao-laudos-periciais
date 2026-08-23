@@ -1,6 +1,6 @@
 import { useEffect, useState, type MouseEvent } from "react";
 
-const ROUTE_CHANGE_EVENT = "arcd:navigate";
+const ROUTE_CHANGE_EVENT = "pericial:navigate";
 
 export function useCurrentPath() {
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);

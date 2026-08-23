@@ -8,8 +8,8 @@ type SidebarProps = {
 export function Sidebar({ currentPath }: SidebarProps) {
   return (
     <aside className="sidebar">
-      <div className="brand-block" aria-label="ARCD Engenharia pericial">
-        <span className="brand-mark">ARCD</span>
+      <div className="brand-block" aria-label="Sistema Pericial">
+        <span className="brand-mark">Sistema Pericial</span>
         <span className="brand-description">Engenharia pericial</span>
       </div>
 

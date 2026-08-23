@@ -72,3 +72,28 @@ def test_sidebar_focus_indicator_has_non_text_contrast():
     lighter = max(_relative_luminance(focus.group(1)), _relative_luminance(background.group(1)))
     darker = min(_relative_luminance(focus.group(1)), _relative_luminance(background.group(1)))
     assert (lighter + 0.05) / (darker + 0.05) >= 3
+
+
+def test_frontend_shell_does_not_infer_an_unauthorized_product_brand():
+    fixed_surfaces = (
+        ROOT / "PRODUCT.md",
+        ROOT / "DESIGN.md",
+        ROOT / ".impeccable" / "design.json",
+        ROOT / "docs" / "superpowers" / "plans" / "2026-08-23-frontend-shell-v1.md",
+    )
+    frontend_surfaces = production_sources() + tuple(
+        FRONTEND / relative
+        for relative in (
+            "eslint.config.js",
+            "index.html",
+            "package-lock.json",
+            "package.json",
+            "tsconfig.app.json",
+            "tsconfig.json",
+            "tsconfig.node.json",
+            "vite.config.ts",
+        )
+    )
+
+    for surface in (*fixed_surfaces, *frontend_surfaces):
+        assert not re.search(r"\barcd\b", surface.read_text(encoding="utf-8"), re.IGNORECASE), surface

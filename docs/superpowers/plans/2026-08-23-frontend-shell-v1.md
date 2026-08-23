@@ -32,7 +32,7 @@
 
 ```text
 +----------------------+-----------------------------------------------+
-| ARCD                 | Contexto: nenhuma pericia selecionada        |
+| Sistema Pericial     | Contexto: nenhuma pericia selecionada        |
 | 00 Inicio            +-----------------------------------------------+
 | 01 Processo          |                                               |
 | 02 Analise           |  Processo                                     |

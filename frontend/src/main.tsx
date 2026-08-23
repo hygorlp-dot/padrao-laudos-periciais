@@ -9,7 +9,7 @@ import "./styles/shell.css";
 const root = document.getElementById("root");
 
 if (!root) {
-  throw new Error("ARCD frontend root is missing");
+  throw new Error("Pericial frontend root is missing");
 }
 
 createRoot(root).render(

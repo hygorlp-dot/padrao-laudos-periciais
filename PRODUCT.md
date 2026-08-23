@@ -24,9 +24,10 @@ keeps the sequence of work visible without exposing implementation details.
 
 ## Product Purpose
 
-ARCD turns a stable forensic Core, Application Layer, local persistence and
-Local API into usable professional software. Success means the expert can move
-through a clear technical workflow while domain authority remains below the UI.
+The product turns a stable forensic Core, Application Layer, local persistence
+and Local API into usable professional software. Success means the expert can
+move through a clear technical workflow while domain authority remains below
+the UI.
 
 ## Positioning
 
@@ -54,9 +55,12 @@ focus valued over novelty.
 
 ## Brand Commitments
 
-The product name is ARCD. The interface voice is concise, professional,
-technical and action-oriented. It must feel precise and contemporary without
-resembling a generic SaaS dashboard, CRM, AI product or marketing page.
+Product brand has not been defined in this milestone. The shell uses only the
+neutral functional descriptor "Sistema Pericial". No commercial brand, name,
+sigla, logo or tagline may be inferred without an explicit product decision.
+The interface voice is concise, professional, technical and action-oriented.
+It must feel precise and contemporary without resembling a generic SaaS
+dashboard, CRM, AI product or marketing page.
 
 ## Evidence on Hand
 

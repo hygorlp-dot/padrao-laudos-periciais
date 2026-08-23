@@ -87,7 +87,17 @@ describe("application shell routing", () => {
     await user.click(screen.getByRole("link", { name: "Processo" }));
 
     expect(screen.getByRole("status")).toHaveTextContent("Rota atual: Processo");
-    expect(document.title).toBe("Processo — ARCD");
+    expect(document.title).toBe("Sistema Pericial — Processo");
+    expect(document.title).not.toMatch(/arcd/i);
+  });
+
+  test("uses a neutral functional descriptor instead of inferred branding", () => {
+    render(<App />);
+
+    expect(screen.getByLabelText("Sistema Pericial")).toBeInTheDocument();
+    expect(screen.getByText("Sistema Pericial")).toBeInTheDocument();
+    expect(screen.queryByText(/arcd/i)).not.toBeInTheDocument();
+    expect(document.title).toBe("Sistema Pericial — Início");
   });
 
   test("renders semantic landmarks and a working skip link", () => {
