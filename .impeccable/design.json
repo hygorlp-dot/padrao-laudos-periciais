@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-23T16:33:23.1145327-03:00",
+  "generatedAt": "2026-08-23T16:51:41.1778538-03:00",
   "title": "Design System: ARCD",
   "extensions": {
     "colorMeta": {
@@ -69,6 +69,12 @@
         "displayName": "Focus Teal",
         "canonical": "#185f72",
         "tonalRamp": ["oklch(15% 0.08 220)", "oklch(27% 0.08 220)", "oklch(39% 0.08 220)", "oklch(51% 0.08 220)", "oklch(63% 0.08 220)", "oklch(75% 0.08 220)", "oklch(87% 0.08 220)", "oklch(95% 0.08 220)"]
+      },
+      "focus-on-dark": {
+        "role": "tertiary",
+        "displayName": "Focus Teal on Dark",
+        "canonical": "#84cbd6",
+        "tonalRamp": ["oklch(15% 0.07 210)", "oklch(27% 0.07 210)", "oklch(39% 0.07 210)", "oklch(51% 0.07 210)", "oklch(63% 0.07 210)", "oklch(75% 0.07 210)", "oklch(87% 0.07 210)", "oklch(95% 0.07 210)"]
       }
     },
     "typographyMeta": {
@@ -112,7 +118,7 @@
       "refersTo": "workflow-link",
       "description": "Etapa compacta do trilho com coordenada monoespaçada.",
       "html": "<a class=\"ds-workflow-link\" href=\"#\"><span class=\"ds-workflow-index\">04</span><span>Vistoria</span></a>",
-      "css": ".ds-workflow-link { display:grid; grid-template-columns:2.1rem minmax(0,1fr); gap:0.65rem; min-height:2.55rem; padding:0.36rem 0.65rem 0.36rem 0.2rem; align-items:center; color:#bdc5bf; background:transparent; border-radius:0.38rem; font-family:var(--font-body); text-decoration:none; transition:color var(--duration-functional) var(--ease-functional), background-color var(--duration-functional) var(--ease-functional); } .ds-workflow-index { display:grid; width:1.75rem; height:1.75rem; place-items:center; color:#9ba69f; background:var(--color-graphite); border:1px solid var(--color-rule-dark); border-radius:0.26rem; font-family:var(--font-data); font-size:0.7rem; font-variant-numeric:tabular-nums; } .ds-workflow-link:hover { color:var(--color-paper); background:rgb(255 255 255 / 5%); } .ds-workflow-link:focus-visible { outline:3px solid var(--color-focus); outline-offset:3px; }"
+      "css": ".ds-workflow-link { display:grid; grid-template-columns:2.1rem minmax(0,1fr); gap:0.65rem; min-height:2.55rem; padding:0.36rem 0.65rem 0.36rem 0.2rem; align-items:center; color:#bdc5bf; background:transparent; border-radius:0.38rem; font-family:var(--font-body); text-decoration:none; transition:color var(--duration-functional) var(--ease-functional), background-color var(--duration-functional) var(--ease-functional); } .ds-workflow-index { display:grid; width:1.75rem; height:1.75rem; place-items:center; color:#9ba69f; background:var(--color-graphite); border:1px solid var(--color-rule-dark); border-radius:0.26rem; font-family:var(--font-data); font-size:0.7rem; font-variant-numeric:tabular-nums; } .ds-workflow-link:hover { color:var(--color-paper); background:rgb(255 255 255 / 5%); } .ds-workflow-link:focus-visible { outline:3px solid var(--color-focus-on-dark); outline-offset:3px; }"
     },
     {
       "name": "Active Workflow Link",
@@ -120,7 +126,7 @@
       "refersTo": "workflow-index-active",
       "description": "Etapa atual; a pequena placa de índice recebe o único preenchimento de brass.",
       "html": "<a class=\"ds-workflow-link-active\" href=\"#\" aria-current=\"page\"><span class=\"ds-workflow-index-active\">04</span><span>Vistoria</span></a>",
-      "css": ".ds-workflow-link-active { display:grid; grid-template-columns:2.1rem minmax(0,1fr); gap:0.65rem; min-height:2.55rem; padding:0.36rem 0.65rem 0.36rem 0.2rem; align-items:center; color:var(--color-paper); background:rgb(255 255 255 / 7%); border-radius:0.38rem; font-family:var(--font-body); font-weight:650; text-decoration:none; } .ds-workflow-index-active { display:grid; width:1.75rem; height:1.75rem; place-items:center; color:#171c19; background:var(--color-ochre-bright); border:1px solid var(--color-ochre-bright); border-radius:0.26rem; font-family:var(--font-data); font-size:0.7rem; font-variant-numeric:tabular-nums; } .ds-workflow-link-active:hover { background:rgb(255 255 255 / 7%); } .ds-workflow-link-active:focus-visible { outline:3px solid var(--color-focus); outline-offset:3px; }"
+      "css": ".ds-workflow-link-active { display:grid; grid-template-columns:2.1rem minmax(0,1fr); gap:0.65rem; min-height:2.55rem; padding:0.36rem 0.65rem 0.36rem 0.2rem; align-items:center; color:var(--color-paper); background:rgb(255 255 255 / 7%); border-radius:0.38rem; font-family:var(--font-body); font-weight:650; text-decoration:none; } .ds-workflow-index-active { display:grid; width:1.75rem; height:1.75rem; place-items:center; color:#171c19; background:var(--color-ochre-bright); border:1px solid var(--color-ochre-bright); border-radius:0.26rem; font-family:var(--font-data); font-size:0.7rem; font-variant-numeric:tabular-nums; } .ds-workflow-link-active:hover { background:rgb(255 255 255 / 7%); } .ds-workflow-link-active:focus-visible { outline:3px solid var(--color-focus-on-dark); outline-offset:3px; }"
     },
     {
       "name": "Route Position",
@@ -157,7 +163,7 @@
     ],
     "rules": [
       { "name": "The Rare Ochre Rule", "body": "O ocre nunca preenche grandes superfícies; ele existe como marca calibrada de posição, avanço ou ênfase linear.", "section": "colors" },
-      { "name": "The Honest State Color Rule", "body": "Azul-petróleo significa foco e ferrugem significa erro; nenhum deles é usado como decoração.", "section": "colors" },
+      { "name": "The Honest State Color Rule", "body": "Azul-petróleo significa foco e ferrugem significa erro; a variante clara de foco existe somente sobre o trilho grafite, e nenhuma dessas cores é usada como decoração.", "section": "colors" },
       { "name": "The Two Voices Plus Coordinates Rule", "body": "Aptos Display nomeia, Aptos explica e Cascadia Mono localiza; não misture essas responsabilidades.", "section": "typography" },
       { "name": "The One Display Moment Rule", "body": "Cada vista tem um único título display dominante; subtítulos e estados permanecem na escala headline.", "section": "typography" },
       { "name": "The Rail-and-Plane Rule", "body": "O workflow completo permanece no trilho; o plano claro mostra somente a etapa ou estado em foco.", "section": "layout" },

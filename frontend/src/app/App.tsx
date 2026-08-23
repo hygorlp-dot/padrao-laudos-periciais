@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+
 import { findRoute } from "../routes/routeCatalog";
 import { AppShell } from "../ui/AppShell";
 import { PageHeader } from "../ui/PageHeader";
@@ -15,6 +17,10 @@ function ForwardMark() {
 export function App() {
   const currentPath = useCurrentPath();
   const route = findRoute(currentPath);
+
+  useEffect(() => {
+    document.title = `${route?.label ?? "Página não encontrada"} — ARCD`;
+  }, [currentPath, route]);
 
   return (
     <AppShell currentPath={currentPath} currentRoute={route}>

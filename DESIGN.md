@@ -13,6 +13,7 @@ colors:
   ochre-bright: "#c59a2a"
   error: "#9a3f2f"
   focus: "#185f72"
+  focus-on-dark: "#84cbd6"
 typography:
   display:
     fontFamily: '"Aptos Display", Aptos, "Segoe UI", sans-serif'
@@ -118,6 +119,7 @@ A paleta combina neutros minerais levemente verdes com grafite profundo; ocre ma
 ### Tertiary
 
 - **Focus Teal** (`focus`): reserva-se a seleção de texto e ao contorno de foco visível.
+- **Focus Teal on Dark** (`focus-on-dark`): variante funcional usada somente no contorno de foco dos links do workflow sobre o trilho grafite; alcança contraste de 9.10:1.
 - **Forensic Rust** (`error`): comunica falha sem competir com o eixo principal do workflow.
 
 ### Neutral
@@ -132,7 +134,7 @@ A paleta combina neutros minerais levemente verdes com grafite profundo; ocre ma
 
 **The Rare Ochre Rule.** O ocre nunca preenche grandes superfícies; ele existe como marca calibrada de posição, avanço ou ênfase linear.
 
-**The Honest State Color Rule.** Azul-petróleo significa foco e ferrugem significa erro; nenhum deles é usado como decoração.
+**The Honest State Color Rule.** Azul-petróleo significa foco e ferrugem significa erro; a variante clara de foco existe somente sobre o trilho grafite, e nenhuma dessas cores é usada como decoração.
 
 ## Typography
 
@@ -206,6 +208,8 @@ Os cantos são discretamente arredondados e próximos da geometria retangular. C
 ### Navigation
 
 O trilho apresenta dez etapas e o início em uma sequência vertical conectada. Cada link combina um índice monoespaçado de `1.75rem` com um rótulo; o hover recebe papel sobre um véu branco de 5%, e o ativo recebe véu de 7% e peso 650. Somente o índice ativo muda para Calibrated Brass. A posição atual também aparece na topbar como coordenada monoespaçada com borda fina.
+
+O foco dos links do trilho usa exclusivamente Focus Teal on Dark no outline, preservando contraste de 9.10:1 sobre Graphite Rail; superfícies claras continuam usando Focus Teal.
 
 ### Status States
 

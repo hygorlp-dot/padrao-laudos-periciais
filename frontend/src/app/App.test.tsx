@@ -80,6 +80,16 @@ describe("application shell routing", () => {
     ).toBeInTheDocument();
   });
 
+  test("announces route changes and updates the document title", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("link", { name: "Processo" }));
+
+    expect(screen.getByRole("status")).toHaveTextContent("Rota atual: Processo");
+    expect(document.title).toBe("Processo — ARCD");
+  });
+
   test("renders semantic landmarks and a working skip link", () => {
     render(<App />);
 

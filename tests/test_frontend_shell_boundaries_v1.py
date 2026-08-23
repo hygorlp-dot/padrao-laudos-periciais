@@ -47,3 +47,28 @@ def test_frontend_runtime_dependencies_stay_minimal():
     package = json.loads((FRONTEND / "package.json").read_text(encoding="utf-8"))
 
     assert set(package["dependencies"]) == {"react", "react-dom"}
+
+
+def _relative_luminance(hex_color):
+    channels = [int(hex_color[index : index + 2], 16) / 255 for index in (1, 3, 5)]
+    linear = [
+        channel / 12.92
+        if channel <= 0.04045
+        else ((channel + 0.055) / 1.055) ** 2.4
+        for channel in channels
+    ]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def test_sidebar_focus_indicator_has_non_text_contrast():
+    tokens = (SOURCE / "styles" / "tokens.css").read_text(encoding="utf-8")
+    shell = (SOURCE / "styles" / "shell.css").read_text(encoding="utf-8")
+    focus = re.search(r"--color-focus-on-dark:\s*(#[0-9a-f]{6})", tokens)
+    background = re.search(r"--color-graphite:\s*(#[0-9a-f]{6})", tokens)
+
+    assert focus, "a dark-surface focus token is required"
+    assert background
+    assert ".workflow-link:focus-visible" in shell
+    lighter = max(_relative_luminance(focus.group(1)), _relative_luminance(background.group(1)))
+    darker = min(_relative_luminance(focus.group(1)), _relative_luminance(background.group(1)))
+    assert (lighter + 0.05) / (darker + 0.05) >= 3

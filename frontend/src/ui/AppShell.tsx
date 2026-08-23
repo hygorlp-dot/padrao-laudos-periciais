@@ -11,12 +11,17 @@ type AppShellProps = {
 };
 
 export function AppShell({ currentPath, currentRoute, children }: AppShellProps) {
+  const routeLabel = currentRoute?.label ?? "Página não encontrada";
+
   return (
     <>
       <a className="skip-link" href="#main-content">
         Ir para o conteúdo
       </a>
       <div className="app-shell">
+        <p className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">
+          Rota atual: {routeLabel}
+        </p>
         <Sidebar currentPath={currentPath} />
         <div className="workspace-shell">
           <TopBar currentRoute={currentRoute} />
