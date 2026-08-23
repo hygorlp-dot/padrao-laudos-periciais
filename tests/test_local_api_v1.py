@@ -501,16 +501,25 @@ def test_server_configuration_rejects_invalid_ports(port):
         LocalServerConfig(port=port)
 
 
+@pytest.mark.parametrize(
+    "timeout", (0, -1, True, "5", float("nan"), float("inf"), 31)
+)
+def test_server_configuration_rejects_invalid_request_timeout(timeout):
+    with pytest.raises(ValueError, match="timeout"):
+        LocalServerConfig(request_timeout_seconds=timeout)
+
+
 @pytest.mark.parametrize("token", ("", "short", "x" * 31, "á" * 32))
 def test_local_mutation_token_requires_high_entropy_header_safe_shape(token):
     with pytest.raises(ValueError, match="token"):
         LocalApi(services(), token=token)
 
 
-def test_composition_rejects_invalid_token_before_opening_sqlite(tmp_path):
+@pytest.mark.parametrize("token", ("", "short"))
+def test_composition_rejects_invalid_token_before_opening_sqlite(tmp_path, token):
     database = tmp_path / "must-not-open.db"
     with pytest.raises(ValueError, match="token"):
-        build_local_api(database, token="short")
+        build_local_api(database, token=token)
     assert not database.exists()
 
 
@@ -772,6 +781,148 @@ def test_oversized_header_is_sanitized_by_the_parser_error_path():
     assert response.startswith(b"HTTP/1.1 400")
     assert b"BaseHTTP" not in response
     assert b"INVALID_REQUEST" in response
+
+
+def test_http09_request_still_receives_explicit_status_line():
+    server = LocalApiServer(
+        LocalApi(services(), token=TOKEN), LocalServerConfig(port=0)
+    )
+    server.start()
+    client = socket.create_connection(server.address, timeout=5)
+    try:
+        client.sendall(b"GET /v1/workspaces\r\n")
+        client.shutdown(socket.SHUT_WR)
+        chunks = []
+        while chunk := client.recv(65_536):
+            chunks.append(chunk)
+    finally:
+        client.close()
+        server.close()
+
+    response = b"".join(chunks)
+    assert response.startswith(b"HTTP/1.1 400")
+    assert b"INVALID_REQUEST" in response
+
+
+@pytest.mark.parametrize(
+    "request_bytes",
+    (
+        b"BOGUS\r\n\r\n",
+        b"GET /v1/workspaces NOTHTTP\r\nHost: 127.0.0.1\r\n\r\n",
+        b"GET /v1/workspaces HTTP/1.1 EXTRA\r\nHost: 127.0.0.1\r\n\r\n",
+        b"GET /v1/workspaces HTTP/2.0\r\nHost: 127.0.0.1\r\n\r\n",
+    ),
+)
+def test_malformed_request_lines_receive_http_status_and_sanitized_json(request_bytes):
+    server = LocalApiServer(
+        LocalApi(services(), token=TOKEN), LocalServerConfig(port=0)
+    )
+    server.start()
+    client = socket.create_connection(server.address, timeout=5)
+    try:
+        client.sendall(request_bytes)
+        client.shutdown(socket.SHUT_WR)
+        chunks = []
+        while chunk := client.recv(65_536):
+            chunks.append(chunk)
+    finally:
+        client.close()
+        server.close()
+
+    response = b"".join(chunks)
+    assert response.startswith(b"HTTP/1.1 400")
+    assert b"INVALID_REQUEST" in response
+    assert b"BaseHTTP" not in response
+
+
+@pytest.mark.parametrize(
+    ("override", "method", "target", "value"),
+    (
+        ("create_workspace", "POST", "/v1/workspaces", {"name": "Falha"}),
+        ("get_workspace", "GET", f"/v1/workspaces/{WORKSPACE_UUID}", None),
+        ("list_workspaces", "GET", "/v1/workspaces", None),
+        (
+            "append_artifact_revision",
+            "POST",
+            f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions",
+            {"payload": {}},
+        ),
+        (
+            "get_latest_artifact",
+            "GET",
+            f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions/latest",
+            None,
+        ),
+        (
+            "get_artifact_revision",
+            "GET",
+            f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions/1",
+            None,
+        ),
+        (
+            "list_artifact_revisions",
+            "GET",
+            f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions",
+            None,
+        ),
+    ),
+)
+def test_unexpected_service_exception_is_sanitized_without_stderr_leak(
+    capsys, override, method, target, value
+):
+    secret = "PRIVATE_TOKEN_payload_xyz"
+    bundle = services(**{override: FailingService(RuntimeError(secret))})
+    server = LocalApiServer(
+        LocalApi(bundle, token=TOKEN), LocalServerConfig(port=0)
+    )
+    server.start()
+    try:
+        status, _headers, body = http_request(
+            server,
+            method,
+            target,
+            value=value,
+            headers={"X-Local-API-Token": TOKEN} if method == "POST" else None,
+        )
+    finally:
+        server.close()
+
+    assert status == 500
+    assert json.loads(body.decode("utf-8"))["error"]["code"] == (
+        "INTERNAL_SERVER_ERROR"
+    )
+    assert secret not in body.decode("utf-8")
+    assert secret not in capsys.readouterr().err
+
+
+def test_partial_body_times_out_without_unbounded_shutdown_or_traceback(
+    capsys, tmp_path
+):
+    runtime = build_local_api(
+        tmp_path / "partial.db",
+        token=TOKEN,
+        config=LocalServerConfig(request_timeout_seconds=0.1),
+    )
+    runtime.start()
+    client = socket.create_connection(runtime.address, timeout=5)
+    client.sendall(
+        b"POST /v1/workspaces HTTP/1.1\r\n"
+        b"Host: 127.0.0.1\r\n"
+        b"Content-Type: application/json\r\n"
+        b"X-Local-API-Token: "
+        + TOKEN.encode("ascii")
+        + b"\r\nContent-Length: 100\r\n\r\n{"
+    )
+    Event().wait(0.05)
+    closing = Thread(target=runtime.close)
+    closing.start()
+    closing.join(timeout=1)
+    try:
+        assert not closing.is_alive()
+        assert "Traceback" not in capsys.readouterr().err
+    finally:
+        client.close()
+        closing.join(timeout=5)
 
 
 def test_composition_starts_on_dynamic_loopback_port_and_closes_idempotently(tmp_path):

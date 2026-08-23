@@ -96,7 +96,7 @@ def build_local_api(
     """Compõe serviços, SQLite e listener sem esconder suas dependências."""
 
     server_config = config or LocalServerConfig()
-    local_token = token or secrets.token_urlsafe(32)
+    local_token = secrets.token_urlsafe(32) if token is None else token
     _require_local_token(local_token)
     local_clock = clock or _SystemClock()
     local_ids = ids or _UuidGenerator()
