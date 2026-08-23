@@ -70,6 +70,25 @@ def _handler_for(
             super().setup()
             self.connection.settimeout(request_timeout_seconds)
 
+        def parse_request(self):
+            if not super().parse_request():
+                return False
+            try:
+                canonical_request_line = (
+                    self.command.encode("ascii")
+                    + b" "
+                    + self.path.encode("iso-8859-1")
+                    + b" "
+                    + self.protocol_version.encode("ascii")
+                    + b"\r\n"
+                )
+            except UnicodeEncodeError:
+                canonical_request_line = b""
+            if self.raw_requestline != canonical_request_line:
+                self.send_error(400)
+                return False
+            return True
+
         def handle_one_request(self):
             self._deadline_lock = Lock()
             self._deadline_active = True

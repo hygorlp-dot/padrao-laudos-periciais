@@ -1188,6 +1188,41 @@ def test_http09_request_still_receives_explicit_status_line():
 
 
 @pytest.mark.parametrize(
+    "request_line",
+    (
+        b"GET  /v1/workspaces HTTP/1.1",
+        b"GET\t/v1/workspaces\tHTTP/1.1",
+        b" GET /v1/workspaces HTTP/1.1",
+        b"GET /v1/workspaces HTTP/1.1 ",
+    ),
+)
+def test_noncanonical_raw_request_line_is_rejected_before_service_delegation(
+    request_line,
+):
+    listed = RecordingService(())
+    server = LocalApiServer(
+        LocalApi(services(list_workspaces=listed), token=TOKEN),
+        LocalServerConfig(port=0),
+    )
+    server.start()
+    client = socket.create_connection(server.address, timeout=5)
+    try:
+        client.sendall(request_line + b"\r\nHost: 127.0.0.1\r\n\r\n")
+        client.shutdown(socket.SHUT_WR)
+        chunks = []
+        while chunk := client.recv(65_536):
+            chunks.append(chunk)
+    finally:
+        client.close()
+        server.close()
+
+    response = b"".join(chunks)
+    assert response.startswith(b"HTTP/1.1 400")
+    assert b"INVALID_REQUEST" in response
+    assert listed.calls == []
+
+
+@pytest.mark.parametrize(
     "request_bytes",
     (
         b"BOGUS\r\n\r\n",
