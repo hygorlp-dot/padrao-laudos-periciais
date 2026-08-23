@@ -1,4 +1,6 @@
 import ast
+import subprocess
+import sys
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
 from pathlib import Path
@@ -257,3 +259,20 @@ def test_local_api_production_modules_have_no_outbound_network_clients():
     }
     for path in Path("scripts/backend_contract/local_api").glob("*.py"):
         assert _imports_in(path).isdisjoint(forbidden)
+
+
+def test_importing_local_api_transport_does_not_load_sqlite_or_infrastructure():
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import scripts.backend_contract.local_api.transport; "
+            "print('sqlite3' in sys.modules); "
+            "print(any(name.startswith('scripts.backend_contract.infrastructure') "
+            "for name in sys.modules))",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert probe.stdout.splitlines() == ["False", "False"]

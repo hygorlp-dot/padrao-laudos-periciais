@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import string
 from dataclasses import dataclass
 from types import MappingProxyType
 from urllib.parse import unquote_to_bytes, urlsplit
@@ -94,6 +95,13 @@ def _error(
 
 
 def _decode_segment(value: str) -> str:
+    for index, character in enumerate(value):
+        if character == "%" and (
+            index + 2 >= len(value)
+            or value[index + 1] not in string.hexdigits
+            or value[index + 2] not in string.hexdigits
+        ):
+            raise ValueError("percent-encoding inválido")
     decoded = unquote_to_bytes(value).decode("utf-8", errors="strict")
     if not decoded or "\x00" in decoded:
         raise ValueError("segmento de rota inválido")
@@ -315,5 +323,11 @@ class LocalApi:
             return _error(
                 503, "REPOSITORY_UNAVAILABLE", "persistência local indisponível"
             )
-        except (json.JSONDecodeError, UnicodeError, TypeError, ValueError):
+        except (
+            json.JSONDecodeError,
+            RecursionError,
+            UnicodeError,
+            TypeError,
+            ValueError,
+        ):
             return _error(400, "INVALID_REQUEST")

@@ -1,10 +1,12 @@
 import socket
 import sqlite3
+import subprocess
+import sys
 import http.client
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from threading import Lock
+from threading import Event, Lock, Thread
 from urllib.parse import quote
 from uuid import UUID
 
@@ -69,6 +71,19 @@ class SequenceIds:
     def new_uuid(self):
         with self._lock:
             return next(self._values)
+
+
+class BlockingIds:
+    def __init__(self, value):
+        self._value = value
+        self.entered = Event()
+        self.release = Event()
+
+    def new_uuid(self):
+        self.entered.set()
+        if not self.release.wait(timeout=5):
+            raise RuntimeError("test synchronization timed out")
+        return self._value
 
 
 def workspace(name="Perícia sintética"):
@@ -307,6 +322,13 @@ def test_invalid_routes_methods_and_path_values_fail_explicitly(
     assert decoded(response) == {
         "error": {"code": expected_code, "message": "requisição local inválida"}
     }
+
+
+@pytest.mark.parametrize("malformed", ("%", "%Z0", "%0Z"))
+def test_malformed_percent_encoding_is_not_aliased_to_a_literal_path(malformed):
+    response = request(LocalApi(services(), token=TOKEN), "GET", f"/v1/{malformed}")
+    assert response.status == 400
+    assert decoded(response)["error"]["code"] == "INVALID_REQUEST"
 
 
 @pytest.mark.parametrize(
@@ -636,6 +658,122 @@ def test_real_http_server_blocks_cross_origin_mutation_even_with_valid_token():
     assert create.calls == []
 
 
+@pytest.mark.parametrize("method", ("TRACE", "CONNECT", "FROB"))
+def test_real_http_server_sanitizes_every_unsupported_method(method):
+    server = LocalApiServer(
+        LocalApi(services(), token=TOKEN), LocalServerConfig(port=0)
+    )
+    server.start()
+    try:
+        status, headers, body = http_request(server, method, "/v1/workspaces")
+    finally:
+        server.close()
+
+    assert status == 405
+    assert "Server" not in headers
+    assert "Date" not in headers
+    assert json.loads(body.decode("utf-8"))["error"]["code"] == (
+        "METHOD_NOT_ALLOWED"
+    )
+
+
+def test_real_http_head_is_sanitized_without_default_server_fingerprint():
+    server = LocalApiServer(
+        LocalApi(services(), token=TOKEN), LocalServerConfig(port=0)
+    )
+    server.start()
+    try:
+        status, headers, body = http_request(server, "HEAD", "/v1/workspaces")
+    finally:
+        server.close()
+
+    assert status == 405
+    assert "Server" not in headers
+    assert "Date" not in headers
+    assert headers["Content-Length"] == "0"
+    assert body == b""
+
+
+def test_deeply_nested_json_returns_sanitized_error_instead_of_dropping_connection():
+    server = LocalApiServer(
+        LocalApi(services(), token=TOKEN), LocalServerConfig(port=0)
+    )
+    server.start()
+    host, port = server.address
+    body = (
+        '{"payload":' + "[" * 20_000 + "0" + "]" * 20_000 + "}"
+    ).encode("ascii")
+    connection = http.client.HTTPConnection(host, port, timeout=5)
+    try:
+        connection.request(
+            "POST",
+            "/v1/workspaces",
+            body=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-Local-API-Token": TOKEN,
+            },
+        )
+        response = connection.getresponse()
+        response_body = response.read()
+    finally:
+        connection.close()
+        server.close()
+
+    assert response.status == 400
+    assert json.loads(response_body.decode("utf-8"))["error"]["code"] == (
+        "INVALID_REQUEST"
+    )
+
+
+def test_oversized_request_line_is_sanitized_before_method_parsing():
+    server = LocalApiServer(
+        LocalApi(services(), token=TOKEN), LocalServerConfig(port=0)
+    )
+    server.start()
+    client = socket.create_connection(server.address, timeout=5)
+    try:
+        client.sendall(
+            b"GET /" + b"a" * 70_000 + b" HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+        )
+        chunks = []
+        while chunk := client.recv(65_536):
+            chunks.append(chunk)
+    finally:
+        client.close()
+        server.close()
+
+    response = b"".join(chunks)
+    assert response.startswith(b"HTTP/1.1 400")
+    assert b"BaseHTTP" not in response
+    assert b"INVALID_REQUEST" in response
+
+
+def test_oversized_header_is_sanitized_by_the_parser_error_path():
+    server = LocalApiServer(
+        LocalApi(services(), token=TOKEN), LocalServerConfig(port=0)
+    )
+    server.start()
+    client = socket.create_connection(server.address, timeout=5)
+    try:
+        client.sendall(
+            b"GET /v1/workspaces HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Large: "
+            + b"a" * 70_000
+            + b"\r\n\r\n"
+        )
+        chunks = []
+        while chunk := client.recv(65_536):
+            chunks.append(chunk)
+    finally:
+        client.close()
+        server.close()
+
+    response = b"".join(chunks)
+    assert response.startswith(b"HTTP/1.1 400")
+    assert b"BaseHTTP" not in response
+    assert b"INVALID_REQUEST" in response
+
+
 def test_composition_starts_on_dynamic_loopback_port_and_closes_idempotently(tmp_path):
     runtime = build_local_api(
         tmp_path / "local-api.db",
@@ -655,6 +793,49 @@ def test_composition_starts_on_dynamic_loopback_port_and_closes_idempotently(tmp
     finally:
         runtime.close()
         runtime.close()
+
+
+def test_runtime_repr_never_exposes_mutation_token(tmp_path):
+    runtime = build_local_api(tmp_path / "repr.db", token=TOKEN)
+    try:
+        rendered = repr(runtime)
+    finally:
+        runtime.close()
+    assert TOKEN not in rendered
+
+
+def test_runtime_close_drains_accepted_request_before_closing_sqlite(tmp_path):
+    ids = BlockingIds(WORKSPACE_UUID)
+    runtime = build_local_api(
+        tmp_path / "drain.db", token=TOKEN, clock=FixedClock(), ids=ids
+    )
+    runtime.start()
+    result = []
+    client = Thread(
+        target=lambda: result.append(
+            http_request(
+                runtime.server,
+                "POST",
+                "/v1/workspaces",
+                value={"name": "Em voo"},
+                headers={"X-Local-API-Token": TOKEN},
+            )
+        )
+    )
+    client.start()
+    assert ids.entered.wait(timeout=5)
+    closing = Thread(target=runtime.close)
+    closing.start()
+    closing.join(timeout=0.75)
+    close_waited_for_request = closing.is_alive()
+    ids.release.set()
+    client.join(timeout=5)
+    closing.join(timeout=5)
+
+    assert close_waited_for_request
+    assert not client.is_alive()
+    assert not closing.is_alive()
+    assert result[0][0] == 201
 
 
 def test_occupied_port_closes_store_and_raises_sanitized_startup_error(tmp_path):
@@ -677,6 +858,41 @@ def test_occupied_port_closes_store_and_raises_sanitized_startup_error(tmp_path)
     assert "127.0.0.1" not in str(raised.value)
     assert str(port) not in str(raised.value)
     database.unlink()
+
+
+def test_thread_start_failure_closes_listener_and_store_in_subprocess(tmp_path):
+    database = tmp_path / "thread-start.db"
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from pathlib import Path\n"
+            "import socket\n"
+            "from scripts.backend_contract.local_api import server as server_module\n"
+            "from scripts.backend_contract.local_api.composition import "
+            "LocalApiStartupError, build_local_api\n"
+            f"database = Path({str(database)!r})\n"
+            f"runtime = build_local_api(database, token={TOKEN!r})\n"
+            "address = runtime.address\n"
+            "def fail_start(_self):\n"
+            "    raise RuntimeError('private thread failure')\n"
+            "server_module.Thread.start = fail_start\n"
+            "try:\n"
+            "    runtime.start()\n"
+            "except LocalApiStartupError as exc:\n"
+            "    assert 'private' not in str(exc)\n"
+            "else:\n"
+            "    raise AssertionError('startup should fail')\n"
+            "probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+            "probe.bind(address)\n"
+            "probe.close()\n"
+            "database.unlink()\n",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert probe.returncode == 0, probe.stderr
 
 
 def test_future_sqlite_schema_blocks_composition_before_listener(tmp_path):

@@ -27,13 +27,34 @@ class LocalServerConfig:
 
 
 class _ThreadingLocalServer(ThreadingHTTPServer):
-    daemon_threads = True
+    daemon_threads = False
+    block_on_close = True
     allow_reuse_address = False
+
+
+class LocalApiServerStartError(RuntimeError):
+    """Falha sanitizada ao iniciar a thread do listener já criado."""
 
 
 def _handler_for(api: LocalApi, max_body_bytes: int):
     class LocalRequestHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
+
+        def _write_response(self, response):
+            is_head = self.command == "HEAD"
+            self.send_response_only(response.status)
+            for name, value in response.headers.items():
+                if is_head and name.lower() == "content-length":
+                    value = "0"
+                self.send_header(name, value)
+            self.send_header("Connection", "close")
+            self.end_headers()
+            if not is_head:
+                try:
+                    self.wfile.write(response.body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            self.close_connection = True
 
         def _dispatch(self):
             duplicate_sensitive_header = any(
@@ -65,16 +86,14 @@ def _handler_for(api: LocalApi, max_body_bytes: int):
                     response = api.handle(
                         self.command, self.path, dict(self.headers.items()), body
                     )
-            self.send_response_only(response.status)
-            for name, value in response.headers.items():
-                self.send_header(name, value)
-            self.send_header("Connection", "close")
-            self.end_headers()
-            try:
-                self.wfile.write(response.body)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-            self.close_connection = True
+            self._write_response(response)
+
+        def send_error(self, code, _message=None, _explain=None):
+            if code == 501:
+                response = _error(405, "METHOD_NOT_ALLOWED")
+            else:
+                response = _error(400, "INVALID_REQUEST")
+            self._write_response(response)
 
         do_GET = _dispatch
         do_POST = _dispatch
@@ -122,7 +141,13 @@ class LocalApiServer:
             name="local-api-loopback",
             daemon=True,
         )
-        self._thread.start()
+        try:
+            self._thread.start()
+        except RuntimeError as exc:
+            self._thread = None
+            self._closed = True
+            self._server.server_close()
+            raise LocalApiServerStartError("servidor local não pôde iniciar") from exc
         return self.address
 
     def close(self) -> None:

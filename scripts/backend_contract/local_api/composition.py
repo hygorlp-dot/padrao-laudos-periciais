@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -19,7 +19,7 @@ from ..application.services import (
     ListWorkspaces,
 )
 from ..infrastructure.sqlite import SQLiteApplicationStore
-from .server import LocalApiServer, LocalServerConfig
+from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
 
 
@@ -42,8 +42,8 @@ class LocalApiRuntime:
     """Dono explícito do servidor e da sessão SQLite."""
 
     server: LocalApiServer
-    token: str
-    _store: SQLiteApplicationStore
+    token: str = field(repr=False)
+    _store: SQLiteApplicationStore = field(repr=False)
     _closed: bool = False
 
     @property
@@ -53,7 +53,15 @@ class LocalApiRuntime:
     def start(self) -> tuple[str, int]:
         if self._closed:
             raise RuntimeError("runtime local fechado")
-        return self.server.start()
+        try:
+            return self.server.start()
+        except LocalApiServerStartError as exc:
+            self._closed = True
+            try:
+                self._store.close()
+            except RepositoryError:
+                pass
+            raise LocalApiStartupError("servidor local indisponível") from exc
 
     def close(self) -> None:
         if self._closed:
