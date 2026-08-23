@@ -1,4 +1,6 @@
 import ast
+import subprocess
+import sys
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
 from pathlib import Path
@@ -208,3 +210,181 @@ def test_application_services_do_not_import_infrastructure_or_sqlite():
     }
     assert "sqlite3" not in imported
     assert not any("infrastructure" in module for module in imported)
+
+
+def _imports_in(path):
+    tree = ast.parse(Path(path).read_text(encoding="utf-8"))
+    return {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {
+        node.module or ""
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+    }
+
+
+def _canonical_import_targets(source_module, source):
+    tree = ast.parse(source)
+    package = source_module.split(".")[:-1]
+    targets = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            targets.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                keep = len(package) - (node.level - 1)
+                base = package[:keep]
+                if node.module:
+                    base.extend(node.module.split("."))
+                module = ".".join(base)
+            else:
+                module = node.module or ""
+            targets.update(
+                f"{module}.{alias.name}" if module else alias.name
+                for alias in node.names
+            )
+    return targets
+
+
+def _unapproved_backend_dependencies(source_module, source, allowed):
+    backend = "scripts.backend_contract"
+    return {
+        target
+        for target in _canonical_import_targets(source_module, source)
+        if (target == backend or target.startswith(f"{backend}."))
+        and not any(
+            target == prefix or target.startswith(f"{prefix}.")
+            for prefix in allowed
+        )
+    }
+
+
+def _local_api_module_inventory(package):
+    package = Path(package)
+    return {
+        ".".join(path.relative_to(package).with_suffix("").parts): path
+        for path in package.rglob("*.py")
+        if "__pycache__" not in path.parts
+    }
+
+
+def _local_api_persistence_imports(source_module, source):
+    infrastructure = "scripts.backend_contract.infrastructure"
+    return {
+        target
+        for target in _canonical_import_targets(source_module, source)
+        if target == "sqlite3"
+        or target.startswith("sqlite3.")
+        or target == infrastructure
+        or target.startswith(f"{infrastructure}.")
+    }
+
+
+def test_local_api_inventory_is_recursive_and_uses_canonical_module_names(tmp_path):
+    package = tmp_path / "local_api"
+    nested = package / "internal"
+    nested.mkdir(parents=True)
+    (package / "transport.py").write_text("", encoding="utf-8")
+    (nested / "bridge.py").write_text("import sqlite3\n", encoding="utf-8")
+
+    inventory = _local_api_module_inventory(package)
+
+    assert set(inventory) == {"transport", "internal.bridge"}
+    assert inventory["internal.bridge"] == nested / "bridge.py"
+
+
+def test_direct_sqlite_import_is_forbidden_outside_composition():
+    assert _local_api_persistence_imports(
+        "scripts.backend_contract.local_api.internal.bridge",
+        "import sqlite3",
+    ) == {"sqlite3"}
+
+
+def test_local_api_layers_use_only_their_explicit_backend_dependencies():
+    policies = {
+        "__init__": (),
+        "transport": ("scripts.backend_contract.application",),
+        "server": ("scripts.backend_contract.local_api.transport",),
+        "composition": (
+            "scripts.backend_contract.application",
+            "scripts.backend_contract.infrastructure",
+            "scripts.backend_contract.local_api.server",
+            "scripts.backend_contract.local_api.transport",
+        ),
+    }
+    inventory = _local_api_module_inventory(
+        Path("scripts/backend_contract/local_api")
+    )
+    assert set(inventory) == set(policies)
+    for module, path in inventory.items():
+        allowed = policies[module]
+        source_module = f"scripts.backend_contract.local_api.{module}"
+        assert not _unapproved_backend_dependencies(
+            source_module,
+            path.read_text(encoding="utf-8"),
+            allowed,
+        )
+
+
+@pytest.mark.parametrize(
+    "statement",
+    (
+        "from ..revisions import append_revision",
+        "from scripts.backend_contract import revisions",
+        "import scripts.backend_contract.motor",
+    ),
+)
+def test_local_api_dependency_allowlist_rejects_every_core_module(statement):
+    violations = _unapproved_backend_dependencies(
+        "scripts.backend_contract.local_api.transport",
+        statement,
+        ("scripts.backend_contract.application",),
+    )
+    assert violations
+
+
+def test_local_api_sqlite_wiring_is_confined_to_composition_root():
+    inventory = _local_api_module_inventory(
+        Path("scripts/backend_contract/local_api")
+    )
+    importers = {
+        module
+        for module, path in inventory.items()
+        if _local_api_persistence_imports(
+            f"scripts.backend_contract.local_api.{module}",
+            path.read_text(encoding="utf-8"),
+        )
+    }
+    assert importers == {"composition"}
+
+
+def test_local_api_production_modules_have_no_outbound_network_clients():
+    forbidden = {
+        "aiohttp",
+        "http.client",
+        "requests",
+        "urllib.request",
+        "urllib3",
+    }
+    for path in Path("scripts/backend_contract/local_api").rglob("*.py"):
+        assert _imports_in(path).isdisjoint(forbidden)
+
+
+def test_importing_local_api_transport_does_not_load_sqlite_or_infrastructure():
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import scripts.backend_contract.local_api.transport; "
+            "print('sqlite3' in sys.modules); "
+            "print(any(name.startswith('scripts.backend_contract.infrastructure') "
+            "for name in sys.modules))",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert probe.stdout.splitlines() == ["False", "False"]
