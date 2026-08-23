@@ -104,7 +104,9 @@ def build_local_api(
 ) -> LocalApiRuntime:
     """Compõe serviços, SQLite e listener sem esconder suas dependências."""
 
-    server_config = config or LocalServerConfig()
+    if config is not None and type(config) is not LocalServerConfig:
+        raise TypeError("config local invalida")
+    server_config = LocalServerConfig() if config is None else config
     local_token = secrets.token_urlsafe(32) if token is None else token
     _require_local_token(local_token)
     local_clock = clock or _SystemClock()

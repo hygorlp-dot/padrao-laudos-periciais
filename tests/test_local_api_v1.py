@@ -659,6 +659,16 @@ def test_composition_rejects_invalid_token_before_opening_sqlite(tmp_path, token
     assert not database.exists()
 
 
+@pytest.mark.parametrize("config", (object(), False, "invalid"))
+def test_composition_rejects_invalid_config_before_opening_sqlite(tmp_path, config):
+    database = tmp_path / "invalid-config-must-not-open.db"
+
+    with pytest.raises(TypeError, match="config"):
+        build_local_api(database, token=TOKEN, config=config)
+
+    assert not database.exists()
+
+
 @pytest.mark.parametrize(
     "headers",
     (
