@@ -25,6 +25,12 @@ from ..application.ports import (
     WorkspaceNotFound,
 )
 
+_MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
+
+
+class _JsonSerializationError(ValueError):
+    pass
+
 
 @dataclass(frozen=True, slots=True)
 class HttpResponse:
@@ -66,6 +72,7 @@ def _revision_dto(record: ArtifactRevision) -> dict:
 
 
 def _json_response(status: int, value: object) -> HttpResponse:
+    _require_safe_json_integers(value)
     body = json.dumps(
         value,
         ensure_ascii=False,
@@ -171,6 +178,27 @@ def _json_float_without_value_loss(source: str) -> float:
     return value
 
 
+def _json_int_without_value_loss(source: str) -> int:
+    value = int(source)
+    if source == "-0" or abs(value) > _MAX_SAFE_JSON_INTEGER:
+        raise ValueError("inteiro JSON perde fidelidade entre runtimes")
+    return value
+
+
+def _require_safe_json_integers(value: object) -> None:
+    if type(value) is int:
+        if abs(value) > _MAX_SAFE_JSON_INTEGER:
+            raise _JsonSerializationError("inteiro JSON inseguro na resposta")
+        return
+    if type(value) is dict:
+        for item in value.values():
+            _require_safe_json_integers(item)
+        return
+    if type(value) in {list, tuple}:
+        for item in value:
+            _require_safe_json_integers(item)
+
+
 def _parse_content_length(value: str) -> int:
     if (
         type(value) is not str
@@ -227,6 +255,7 @@ class LocalApi:
             object_pairs_hook=_json_object_without_duplicate_keys,
             parse_constant=_reject_nonstandard_json_constant,
             parse_float=_json_float_without_value_loss,
+            parse_int=_json_int_without_value_loss,
         )
         if type(value) is not dict:
             raise TypeError("DTO deve ser objeto JSON")
@@ -336,6 +365,12 @@ class LocalApi:
                 return _error(405, "METHOD_NOT_ALLOWED")
 
             return _error(404, "NOT_FOUND")
+        except _JsonSerializationError:
+            return _error(
+                500,
+                "LOCAL_API_SERIALIZATION_FAILURE",
+                "resposta local invÃ¡lida",
+            )
         except WorkspaceNotFound:
             return _error(404, "WORKSPACE_NOT_FOUND", "workspace não encontrado")
         except ArtifactRevisionNotFound:

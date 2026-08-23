@@ -473,6 +473,65 @@ def test_json_number_that_cannot_round_trip_without_value_loss_is_rejected(numbe
 
 @pytest.mark.parametrize(
     "number",
+    (b"-0", b"9007199254740992", b"-9007199254740992"),
+)
+def test_json_integer_without_cross_runtime_value_fidelity_is_rejected(number):
+    bundle = services()
+    raw_body = b'{"payload":{"measurement":' + number + b"}}"
+    response = LocalApi(bundle, token=TOKEN).handle(
+        "POST",
+        f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions",
+        {
+            "Host": "127.0.0.1",
+            "Content-Type": "application/json",
+            "Content-Length": str(len(raw_body)),
+            "X-Local-API-Token": TOKEN,
+        },
+        raw_body,
+    )
+
+    assert response.status == 400
+    assert decoded(response)["error"]["code"] == "INVALID_REQUEST"
+    assert bundle.append_artifact_revision.calls == []
+
+
+@pytest.mark.parametrize("number", (9007199254740991, -9007199254740991))
+def test_json_safe_integer_boundaries_are_preserved(number):
+    append = RecordingService(revision())
+    bundle = services(append_artifact_revision=append)
+    raw_body = (
+        b'{"payload":{"measurement":' + str(number).encode("ascii") + b"}}"
+    )
+    response = LocalApi(bundle, token=TOKEN).handle(
+        "POST",
+        f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions",
+        {
+            "Host": "127.0.0.1",
+            "Content-Type": "application/json",
+            "Content-Length": str(len(raw_body)),
+            "X-Local-API-Token": TOKEN,
+        },
+        raw_body,
+    )
+
+    assert response.status == 201
+    assert append.calls[0][1]["payload"]["measurement"] == number
+
+
+def test_unsafe_integer_from_application_is_not_serialized_to_http():
+    unsafe = revision(payload={"measurement": 9007199254740992})
+    response = request(
+        LocalApi(services(get_latest_artifact=RecordingService(unsafe)), token=TOKEN),
+        "GET",
+        f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions/latest",
+    )
+
+    assert response.status == 500
+    assert decoded(response)["error"]["code"] == "LOCAL_API_SERIALIZATION_FAILURE"
+
+
+@pytest.mark.parametrize(
+    "number",
     (b"0.1", b"1.0", b"1e0", b"1.25", b"1e20", b"-0.0"),
 )
 def test_json_number_with_value_preserving_float_representation_is_accepted(number):
