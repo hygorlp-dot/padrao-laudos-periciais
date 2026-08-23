@@ -26,8 +26,10 @@ from scripts.backend_contract.application.ports import (
     WorkspaceNotFound,
 )
 from scripts.backend_contract.local_api.transport import LocalApi, LocalApiServices
+from scripts.backend_contract.local_api import server as local_server_module
 from scripts.backend_contract.local_api.server import LocalApiServer, LocalServerConfig
 from scripts.backend_contract.local_api.composition import (
+    LocalApiRuntime,
     LocalApiStartupError,
     build_local_api,
 )
@@ -428,6 +430,61 @@ def test_nonstandard_json_numeric_constants_are_rejected(constant):
     assert bundle.append_artifact_revision.calls == []
 
 
+@pytest.mark.parametrize(
+    "number",
+    (
+        b"0.100000000000000005",
+        b"1.0000000000000000001",
+        b"9007199254740993.0",
+        b"1e400",
+        b"-1e400",
+        b"1e-400",
+    ),
+)
+def test_json_number_that_cannot_round_trip_without_value_loss_is_rejected(number):
+    bundle = services()
+    raw_body = b'{"payload":{"measurement":' + number + b"}}"
+    response = LocalApi(bundle, token=TOKEN).handle(
+        "POST",
+        f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions",
+        {
+            "Host": "127.0.0.1",
+            "Content-Type": "application/json",
+            "Content-Length": str(len(raw_body)),
+            "X-Local-API-Token": TOKEN,
+        },
+        raw_body,
+    )
+
+    assert response.status == 400
+    assert decoded(response)["error"]["code"] == "INVALID_REQUEST"
+    assert bundle.append_artifact_revision.calls == []
+
+
+@pytest.mark.parametrize(
+    "number",
+    (b"0.1", b"1.0", b"1e0", b"1.25", b"1e20", b"-0.0"),
+)
+def test_json_number_with_value_preserving_float_representation_is_accepted(number):
+    append = RecordingService(revision())
+    bundle = services(append_artifact_revision=append)
+    raw_body = b'{"payload":{"measurement":' + number + b"}}"
+    response = LocalApi(bundle, token=TOKEN).handle(
+        "POST",
+        f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions",
+        {
+            "Host": "127.0.0.1",
+            "Content-Type": "application/json",
+            "Content-Length": str(len(raw_body)),
+            "X-Local-API-Token": TOKEN,
+        },
+        raw_body,
+    )
+
+    assert response.status == 201
+    assert append.calls[0][1]["payload"]["measurement"] == float(number)
+
+
 def test_body_larger_than_configured_limit_is_rejected_before_service_call():
     create = RecordingService(workspace())
     bundle = services(create_workspace=create)
@@ -566,13 +623,35 @@ def test_server_configuration_rejects_invalid_request_timeout(timeout):
         LocalServerConfig(request_timeout_seconds=timeout)
 
 
-@pytest.mark.parametrize("token", ("", "short", "x" * 31, "á" * 32, " " * 32))
+@pytest.mark.parametrize(
+    "token",
+    (
+        "",
+        "short",
+        "x" * 31,
+        "á" * 32,
+        " " * 32,
+        " " + "x" * 32,
+        "x" * 32 + " ",
+        "x" * 16 + " " + "x" * 16,
+    ),
+)
 def test_local_mutation_token_requires_high_entropy_header_safe_shape(token):
     with pytest.raises(ValueError, match="token"):
         LocalApi(services(), token=token)
 
 
-@pytest.mark.parametrize("token", ("", "short", " " * 32))
+@pytest.mark.parametrize(
+    "token",
+    (
+        "",
+        "short",
+        " " * 32,
+        " " + "x" * 32,
+        "x" * 32 + " ",
+        "x" * 16 + " " + "x" * 16,
+    ),
+)
 def test_composition_rejects_invalid_token_before_opening_sqlite(tmp_path, token):
     database = tmp_path / "must-not-open.db"
     with pytest.raises(ValueError, match="token"):
@@ -982,6 +1061,77 @@ def test_partial_body_times_out_without_unbounded_shutdown_or_traceback(
         closing.join(timeout=5)
 
 
+def test_short_body_at_eof_is_rejected_before_any_service_call():
+    listed = RecordingService((workspace(),))
+    server = LocalApiServer(
+        LocalApi(services(list_workspaces=listed), token=TOKEN),
+        LocalServerConfig(request_timeout_seconds=1),
+    )
+    server.start()
+    client = socket.create_connection(server.address, timeout=5)
+    try:
+        client.sendall(
+            b"GET /v1/workspaces HTTP/1.1\r\n"
+            b"Host: 127.0.0.1\r\n"
+            b"Content-Length: 10\r\n\r\nabc"
+        )
+        client.shutdown(socket.SHUT_WR)
+        chunks = []
+        while True:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    finally:
+        client.close()
+        server.close()
+
+    response = b"".join(chunks)
+    assert response.startswith(b"HTTP/1.1 400")
+    assert b"INVALID_REQUEST" in response
+    assert listed.calls == []
+
+
+@pytest.mark.parametrize("invalid_style", ("sign", "underscore"))
+def test_non_http_decimal_content_length_is_rejected_before_service(invalid_style):
+    create = RecordingService(workspace())
+    server = LocalApiServer(
+        LocalApi(services(create_workspace=create), token=TOKEN),
+        LocalServerConfig(request_timeout_seconds=1),
+    )
+    server.start()
+    body = b'{"name":"Valid"}'
+    digits = str(len(body))
+    raw_length = (
+        f"+{digits}"
+        if invalid_style == "sign"
+        else f"{digits[:-1]}_{digits[-1]}"
+    )
+    client = socket.create_connection(server.address, timeout=5)
+    try:
+        client.sendall(
+            b"POST /v1/workspaces HTTP/1.1\r\n"
+            b"Host: 127.0.0.1\r\n"
+            b"Content-Type: application/json\r\n"
+            b"X-Local-API-Token: "
+            + TOKEN.encode("ascii")
+            + f"\r\nContent-Length: {raw_length}\r\n\r\n".encode("ascii")
+            + body
+        )
+        chunks = []
+        while True:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    finally:
+        client.close()
+        server.close()
+
+    assert b"".join(chunks).startswith(b"HTTP/1.1 400")
+    assert create.calls == []
+
+
 @pytest.mark.parametrize(
     "request_prefix",
     (
@@ -1074,6 +1224,77 @@ def test_request_deadline_ends_before_valid_service_execution():
     assert status == 201
     assert json.loads(body.decode("utf-8"))["workspace_id"] == str(WORKSPACE_UUID)
     assert len(create.calls) == 1
+
+
+def test_server_start_and_close_are_linearized_without_thread_leak(monkeypatch, capsys):
+    constructor_entered = Event()
+    release_constructor = Event()
+    real_thread = local_server_module.Thread
+
+    def delayed_thread(*args, **kwargs):
+        constructor_entered.set()
+        assert release_constructor.wait(timeout=5)
+        return real_thread(*args, **kwargs)
+
+    monkeypatch.setattr(local_server_module, "Thread", delayed_thread)
+    server = LocalApiServer(LocalApi(services(), token=TOKEN))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        started = pool.submit(server.start)
+        assert constructor_entered.wait(timeout=2)
+        closed = pool.submit(server.close)
+        Event().wait(0.05)
+        try:
+            assert not closed.done()
+        finally:
+            release_constructor.set()
+        assert started.result(timeout=2)[0] == "127.0.0.1"
+        closed.result(timeout=2)
+
+    assert "Traceback" not in capsys.readouterr().err
+
+
+def test_runtime_start_and_close_are_linearized_before_store_close():
+    start_entered = Event()
+    release_start = Event()
+
+    class ControlledServer:
+        address = ("127.0.0.1", 12345)
+
+        def start(self):
+            start_entered.set()
+            assert release_start.wait(timeout=5)
+            return self.address
+
+        def close(self):
+            return None
+
+    class RecordingStore:
+        def __init__(self):
+            self.close_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+
+    store = RecordingStore()
+    runtime = LocalApiRuntime(
+        server=ControlledServer(),
+        token=TOKEN,
+        _store=store,
+    )
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        started = pool.submit(runtime.start)
+        assert start_entered.wait(timeout=2)
+        closed = pool.submit(runtime.close)
+        Event().wait(0.05)
+        try:
+            assert not closed.done()
+            assert store.close_calls == 0
+        finally:
+            release_start.set()
+        assert started.result(timeout=2) == ("127.0.0.1", 12345)
+        closed.result(timeout=2)
+
+    assert store.close_calls == 1
 
 
 def test_composition_starts_on_dynamic_loopback_port_and_closes_idempotently(tmp_path):
@@ -1230,7 +1451,12 @@ def test_real_http_sqlite_round_trip_append_only_and_reopen(tmp_path):
         )
         target = f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions"
         payloads = (
-            {"ordem": [2, 1], "unknown": {"flag": True}, "value": None},
+            {
+                "measurements": [0.1, 1.25, 1e20, -0.0],
+                "ordem": [2, 1],
+                "unknown": {"flag": True},
+                "value": None,
+            },
             {"ordem": [], "status": "NÃO CONSTATADO"},
         )
         appended = [

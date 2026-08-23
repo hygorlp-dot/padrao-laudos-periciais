@@ -6,6 +6,7 @@ import hmac
 import json
 import string
 from dataclasses import dataclass
+from decimal import Decimal
 from types import MappingProxyType
 from urllib.parse import unquote_to_bytes, urlsplit
 
@@ -143,7 +144,7 @@ def _require_local_token(token: str) -> str:
         or len(token) < 32
         or not token.isascii()
         or not token.isprintable()
-        or token.strip() != token
+        or any(character.isspace() for character in token)
     ):
         raise ValueError("token local inválido")
     return token
@@ -159,7 +160,26 @@ def _json_object_without_duplicate_keys(pairs):
 
 
 def _reject_nonstandard_json_constant(_value: str):
-    raise ValueError("constante JSON invÃ¡lida")
+    raise ValueError("constante JSON invalida")
+
+
+def _json_float_without_value_loss(source: str) -> float:
+    value = float(source)
+    canonical = json.dumps(value, allow_nan=False)
+    if Decimal(source) != Decimal(canonical):
+        raise ValueError("numero JSON perde precisao")
+    return value
+
+
+def _parse_content_length(value: str) -> int:
+    if (
+        type(value) is not str
+        or not value
+        or not value.isascii()
+        or not value.isdecimal()
+    ):
+        raise ValueError("Content-Length invalido")
+    return int(value)
 
 
 def _target_segments(target: str) -> tuple[str, ...]:
@@ -197,7 +217,7 @@ class LocalApi:
         if content_type.strip().lower() != "application/json":
             raise ValueError("Content-Type inválido")
         try:
-            length = int(headers.get("content-length", ""))
+            length = _parse_content_length(headers.get("content-length", ""))
         except (TypeError, ValueError) as exc:
             raise ValueError("Content-Length inválido") from exc
         if length != len(body) or length < 1:
@@ -206,6 +226,7 @@ class LocalApi:
             body.decode("utf-8", errors="strict"),
             object_pairs_hook=_json_object_without_duplicate_keys,
             parse_constant=_reject_nonstandard_json_constant,
+            parse_float=_json_float_without_value_loss,
         )
         if type(value) is not dict:
             raise TypeError("DTO deve ser objeto JSON")

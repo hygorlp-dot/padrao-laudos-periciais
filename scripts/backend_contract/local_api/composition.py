@@ -6,6 +6,7 @@ import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Lock
 from uuid import UUID, uuid4
 
 from ..application.ports import Clock, IdGenerator, RepositoryError
@@ -45,32 +46,40 @@ class LocalApiRuntime:
     token: str = field(repr=False)
     _store: SQLiteApplicationStore = field(repr=False)
     _closed: bool = False
+    _lifecycle_lock: object = field(
+        default_factory=Lock,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     @property
     def address(self) -> tuple[str, int]:
         return self.server.address
 
     def start(self) -> tuple[str, int]:
-        if self._closed:
-            raise RuntimeError("runtime local fechado")
-        try:
-            return self.server.start()
-        except LocalApiServerStartError as exc:
-            self._closed = True
+        with self._lifecycle_lock:
+            if self._closed:
+                raise RuntimeError("runtime local fechado")
             try:
-                self._store.close()
-            except RepositoryError:
-                pass
-            raise LocalApiStartupError("servidor local indisponível") from exc
+                return self.server.start()
+            except LocalApiServerStartError as exc:
+                self._closed = True
+                try:
+                    self._store.close()
+                except RepositoryError:
+                    pass
+                raise LocalApiStartupError("servidor local indisponível") from exc
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        try:
-            self.server.close()
-        finally:
-            self._store.close()
+        with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closed = True
+            try:
+                self.server.close()
+            finally:
+                self._store.close()
 
     def __enter__(self) -> LocalApiRuntime:
         return self

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock, Thread, Timer
 
-from .transport import LocalApi, _error
+from .transport import LocalApi, _error, _parse_content_length
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,7 +137,7 @@ def _handler_for(
             else:
                 raw_length = self.headers.get("Content-Length", "0")
                 try:
-                    length = int(raw_length)
+                    length = _parse_content_length(raw_length)
                 except (TypeError, ValueError):
                     length = -1
                 if length < 0 or length > max_body_bytes:
@@ -147,6 +147,8 @@ def _handler_for(
                     try:
                         body = self.rfile.read(length) if length else b""
                     except (TimeoutError, OSError):
+                        return _error(400, "INVALID_REQUEST")
+                    if len(body) != length:
                         return _error(400, "INVALID_REQUEST")
                     if not self._finish_request_acquisition():
                         return _error(400, "INVALID_REQUEST")
@@ -217,6 +219,7 @@ class LocalApiServer:
         )
         self._thread: Thread | None = None
         self._closed = False
+        self._lifecycle_lock = Lock()
 
     @property
     def address(self) -> tuple[str, int]:
@@ -224,32 +227,36 @@ class LocalApiServer:
         return str(host), int(port)
 
     def start(self) -> tuple[str, int]:
-        if self._closed:
-            raise RuntimeError("servidor local fechado")
-        if self._thread is not None:
-            raise RuntimeError("servidor local já iniciado")
-        self._thread = Thread(
-            target=self._serve,
-            name="local-api-loopback",
-            daemon=True,
-        )
-        try:
-            self._thread.start()
-        except RuntimeError as exc:
-            self._thread = None
-            self._closed = True
-            self._server.server_close()
-            raise LocalApiServerStartError("servidor local não pôde iniciar") from exc
-        return self.address
+        with self._lifecycle_lock:
+            if self._closed:
+                raise RuntimeError("servidor local fechado")
+            if self._thread is not None:
+                raise RuntimeError("servidor local já iniciado")
+            self._thread = Thread(
+                target=self._serve,
+                name="local-api-loopback",
+                daemon=True,
+            )
+            try:
+                self._thread.start()
+            except RuntimeError as exc:
+                self._thread = None
+                self._closed = True
+                self._server.server_close()
+                raise LocalApiServerStartError(
+                    "servidor local não pôde iniciar"
+                ) from exc
+            return self.address
 
     def _serve(self) -> None:
         self._server.serve_forever(poll_interval=0.01)
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        if self._thread is not None:
-            self._server.shutdown()
-            self._thread.join(timeout=5)
-        self._server.server_close()
+        with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closed = True
+            if self._thread is not None:
+                self._server.shutdown()
+                self._thread.join(timeout=5)
+            self._server.server_close()
