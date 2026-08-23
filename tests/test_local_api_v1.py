@@ -323,6 +323,18 @@ def test_list_revisions_preserves_order_and_payload_fidelity():
             400,
             "INVALID_REQUEST",
         ),
+        (
+            "GET",
+            f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions/9007199254740992",
+            400,
+            "INVALID_REQUEST",
+        ),
+        (
+            "GET",
+            f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions/9223372036854775808",
+            400,
+            "INVALID_REQUEST",
+        ),
         ("GET", "/v1/workspaces?offset=1", 400, "INVALID_REQUEST"),
     ),
 )
@@ -334,6 +346,46 @@ def test_invalid_routes_methods_and_path_values_fail_explicitly(
     assert decoded(response) == {
         "error": {"code": expected_code, "message": "requisição local inválida"}
     }
+
+
+@pytest.mark.parametrize("host", ("local\thost", "127.0.0.1\r", "127.0.0.1\n"))
+def test_host_with_ascii_control_characters_is_rejected(host):
+    response = request(
+        LocalApi(services(), token=TOKEN),
+        "GET",
+        "/v1/workspaces",
+        headers={"Host": host},
+    )
+
+    assert response.status == 403
+    assert decoded(response)["error"]["code"] == "FORBIDDEN_LOCAL_REQUEST"
+
+
+@pytest.mark.parametrize("control", ("\t", "\r", "\n", "\x7f"))
+def test_target_with_ascii_control_characters_is_rejected(control):
+    response = request(
+        LocalApi(services(), token=TOKEN),
+        "GET",
+        f"/v1/work{control}spaces",
+    )
+
+    assert response.status == 400
+    assert decoded(response)["error"]["code"] == "INVALID_REQUEST"
+
+
+def test_max_safe_json_revision_path_is_delegated_without_transport_overflow():
+    exact = RecordingService(revision())
+    bundle = services(get_artifact_revision=exact)
+    response = request(
+        LocalApi(bundle, token=TOKEN),
+        "GET",
+        f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions/9007199254740991",
+    )
+
+    assert response.status == 200
+    assert exact.calls == [
+        ((WORKSPACE_ID, "LAUDO", "LAU-001", 9007199254740991), {})
+    ]
 
 
 @pytest.mark.parametrize("malformed", ("%", "%Z0", "%0Z"))

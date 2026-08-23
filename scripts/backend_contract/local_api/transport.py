@@ -116,6 +116,10 @@ def _decode_segment(value: str) -> str:
     return decoded
 
 
+def _has_ascii_control(value: str) -> bool:
+    return any(ord(character) < 32 or ord(character) == 127 for character in value)
+
+
 def _normalized_headers(headers) -> dict[str, str]:
     if not hasattr(headers, "items"):
         raise TypeError("headers inválidos")
@@ -128,7 +132,7 @@ def _normalized_headers(headers) -> dict[str, str]:
 
 
 def _local_host_allowed(value: str | None) -> bool:
-    if not value or type(value) is not str:
+    if not value or type(value) is not str or _has_ascii_control(value):
         return False
     try:
         parsed = urlsplit(f"//{value}")
@@ -213,6 +217,8 @@ def _parse_content_length(value: str) -> int:
 def _target_segments(target: str) -> tuple[str, ...]:
     if type(target) is not str:
         raise TypeError("target inválido")
+    if _has_ascii_control(target):
+        raise ValueError("target contains ASCII control")
     parsed = urlsplit(target)
     if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
         raise ValueError("target deve conter somente path")
@@ -356,7 +362,7 @@ class LocalApi:
                         if not segments[7].isdigit():
                             raise ValueError("revision inválida")
                         revision = int(segments[7])
-                        if revision < 1:
+                        if revision < 1 or revision > _MAX_SAFE_JSON_INTEGER:
                             raise ValueError("revision inválida")
                         record = self._services.get_artifact_revision.execute(
                             workspace_id, segments[4], segments[5], revision
