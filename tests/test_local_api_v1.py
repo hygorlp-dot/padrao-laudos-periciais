@@ -616,7 +616,10 @@ def test_unsafe_integer_from_application_is_not_serialized_to_http():
     )
 
     assert response.status == 500
-    assert decoded(response)["error"]["code"] == "LOCAL_API_SERIALIZATION_FAILURE"
+    assert decoded(response)["error"] == {
+        "code": "LOCAL_API_SERIALIZATION_FAILURE",
+        "message": "resposta local invalida",
+    }
 
 
 @pytest.mark.parametrize(

@@ -379,7 +379,7 @@ class LocalApi:
             return _error(
                 500,
                 "LOCAL_API_SERIALIZATION_FAILURE",
-                "resposta local invÃ¡lida",
+                "resposta local invalida",
             )
         except WorkspaceNotFound:
             return _error(404, "WORKSPACE_NOT_FOUND", "workspace não encontrado")
