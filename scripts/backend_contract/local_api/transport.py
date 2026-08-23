@@ -359,7 +359,7 @@ class LocalApi:
                             workspace_id, segments[4], segments[5]
                         )
                     else:
-                        if not segments[7].isdigit():
+                        if not segments[7].isascii() or not segments[7].isdecimal():
                             raise ValueError("revision inválida")
                         revision = int(segments[7])
                         if revision < 1 or revision > _MAX_SAFE_JSON_INTEGER:

@@ -325,6 +325,12 @@ def test_list_revisions_preserves_order_and_payload_fidelity():
         ),
         (
             "GET",
+            f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions/%D9%A1",
+            400,
+            "INVALID_REQUEST",
+        ),
+        (
+            "GET",
             f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions/9007199254740992",
             400,
             "INVALID_REQUEST",
