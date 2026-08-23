@@ -331,6 +331,18 @@ def test_list_revisions_preserves_order_and_payload_fidelity():
         ),
         (
             "GET",
+            f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions/01",
+            400,
+            "INVALID_REQUEST",
+        ),
+        (
+            "GET",
+            f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions/%30%31",
+            400,
+            "INVALID_REQUEST",
+        ),
+        (
+            "GET",
             f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions/9007199254740992",
             400,
             "INVALID_REQUEST",
@@ -377,6 +389,25 @@ def test_target_with_ascii_control_characters_is_rejected(control):
 
     assert response.status == 400
     assert decoded(response)["error"]["code"] == "INVALID_REQUEST"
+
+
+@pytest.mark.parametrize("encoded_control", ("%01", "%09", "%0A", "%7F"))
+@pytest.mark.parametrize("segment", ("artifact-kind", "artifact-id"))
+def test_percent_decoded_ascii_controls_are_rejected_before_service(
+    encoded_control, segment
+):
+    latest = RecordingService(revision())
+    artifact_kind = encoded_control if segment == "artifact-kind" else "LAUDO"
+    artifact_id = encoded_control if segment == "artifact-id" else "LAU-001"
+    response = request(
+        LocalApi(services(get_latest_artifact=latest), token=TOKEN),
+        "GET",
+        f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/{artifact_kind}/{artifact_id}/revisions/latest",
+    )
+
+    assert response.status == 400
+    assert decoded(response)["error"]["code"] == "INVALID_REQUEST"
+    assert latest.calls == []
 
 
 def test_max_safe_json_revision_path_is_delegated_without_transport_overflow():

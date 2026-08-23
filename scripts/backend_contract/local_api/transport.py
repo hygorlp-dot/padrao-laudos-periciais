@@ -111,7 +111,7 @@ def _decode_segment(value: str) -> str:
         ):
             raise ValueError("percent-encoding inválido")
     decoded = unquote_to_bytes(value).decode("utf-8", errors="strict")
-    if not decoded or "\x00" in decoded:
+    if not decoded or _has_ascii_control(decoded):
         raise ValueError("segmento de rota inválido")
     return decoded
 
@@ -362,7 +362,11 @@ class LocalApi:
                         if not segments[7].isascii() or not segments[7].isdecimal():
                             raise ValueError("revision inválida")
                         revision = int(segments[7])
-                        if revision < 1 or revision > _MAX_SAFE_JSON_INTEGER:
+                        if (
+                            revision < 1
+                            or revision > _MAX_SAFE_JSON_INTEGER
+                            or str(revision) != segments[7]
+                        ):
                             raise ValueError("revision inválida")
                         record = self._services.get_artifact_revision.execute(
                             workspace_id, segments[4], segments[5], revision
