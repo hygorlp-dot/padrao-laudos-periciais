@@ -424,6 +424,28 @@ def test_target_with_ascii_control_characters_is_rejected(control):
     assert decoded(response)["error"]["code"] == "INVALID_REQUEST"
 
 
+@pytest.mark.parametrize(
+    "target",
+    (
+        "/v1/workspaces?",
+        "/v1/workspaces#",
+        " /v1/workspaces",
+        "/v1/work spaces",
+    ),
+)
+def test_raw_target_delimiters_and_whitespace_cannot_be_normalized_away(target):
+    listed = RecordingService((workspace(),))
+    response = request(
+        LocalApi(services(list_workspaces=listed), token=TOKEN),
+        "GET",
+        target,
+    )
+
+    assert response.status == 400
+    assert decoded(response)["error"]["code"] == "INVALID_REQUEST"
+    assert listed.calls == []
+
+
 @pytest.mark.parametrize("encoded_control", ("%01", "%09", "%0A", "%7F"))
 @pytest.mark.parametrize("segment", ("artifact-kind", "artifact-id"))
 def test_percent_decoded_ascii_controls_are_rejected_before_service(

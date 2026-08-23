@@ -222,8 +222,13 @@ def _parse_content_length(value: str) -> int:
 def _target_segments(target: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
     if type(target) is not str:
         raise TypeError("target inválido")
-    if _has_ascii_control(target):
-        raise ValueError("target contains ASCII control")
+    if (
+        _has_ascii_control(target)
+        or any(character.isspace() for character in target)
+        or "?" in target
+        or "#" in target
+    ):
+        raise ValueError("target contains noncanonical syntax")
     parsed = urlsplit(target)
     if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
         raise ValueError("target deve conter somente path")
