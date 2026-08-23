@@ -89,6 +89,7 @@ def _core_files(production=PRODUCTION):
     boundaries = {
         ("backend_contract", "application"),
         ("backend_contract", "infrastructure"),
+        ("backend_contract", "local_api"),
     }
     return tuple(
         path
@@ -109,6 +110,9 @@ def test_core_inventory_includes_nested_unknown_packages(tmp_path):
     domain.write_text(
         "from scripts.backend_contract import infrastructure\n", encoding="utf-8"
     )
+    local_api = backend / "local_api" / "transport.py"
+    local_api.parent.mkdir(parents=True)
+    local_api.write_text("from .. import application\n", encoding="utf-8")
     assert set(_core_files(production)) == {nested, domain}
 
 

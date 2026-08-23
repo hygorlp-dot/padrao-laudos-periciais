@@ -208,3 +208,52 @@ def test_application_services_do_not_import_infrastructure_or_sqlite():
     }
     assert "sqlite3" not in imported
     assert not any("infrastructure" in module for module in imported)
+
+
+def _imports_in(path):
+    tree = ast.parse(Path(path).read_text(encoding="utf-8"))
+    return {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {
+        node.module or ""
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+    }
+
+
+def test_local_api_transport_and_server_depend_on_application_not_infrastructure():
+    for path in (
+        "scripts/backend_contract/local_api/transport.py",
+        "scripts/backend_contract/local_api/server.py",
+    ):
+        imported = _imports_in(path)
+        assert "sqlite3" not in imported
+        assert not any("infrastructure" in module for module in imported)
+        assert not any("scripts.motor_vicios" in module for module in imported)
+        assert not any("scripts.triagem_pericial" in module for module in imported)
+        assert not any("scripts.planejamento_pericial" in module for module in imported)
+
+
+def test_local_api_sqlite_wiring_is_confined_to_composition_root():
+    local_api_paths = tuple(Path("scripts/backend_contract/local_api").glob("*.py"))
+    importers = {
+        path.name
+        for path in local_api_paths
+        if any("infrastructure" in module for module in _imports_in(path))
+    }
+    assert importers == {"composition.py"}
+
+
+def test_local_api_production_modules_have_no_outbound_network_clients():
+    forbidden = {
+        "aiohttp",
+        "http.client",
+        "requests",
+        "urllib.request",
+        "urllib3",
+    }
+    for path in Path("scripts/backend_contract/local_api").glob("*.py"):
+        assert _imports_in(path).isdisjoint(forbidden)
