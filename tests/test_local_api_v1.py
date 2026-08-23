@@ -75,6 +75,16 @@ class SequenceIds:
             return next(self._values)
 
 
+class FalseyClock(FixedClock):
+    def __bool__(self):
+        return False
+
+
+class FalseyIds(SequenceIds):
+    def __bool__(self):
+        return False
+
+
 class BlockingIds:
     def __init__(self, value):
         self._value = value
@@ -1299,6 +1309,22 @@ def test_server_start_fails_closed_if_serve_loop_exits_before_ready():
     server.close()
 
 
+def test_server_start_fails_closed_if_serve_loop_stops_after_signaling_ready():
+    server = LocalApiServer(LocalApi(services(), token=TOKEN))
+
+    def fail_after_ready(*, poll_interval):
+        assert poll_interval == 0.01
+        server._server.serve_ready.set()
+        raise RuntimeError("synthetic serve failure")
+
+    server._server.serve_forever = fail_after_ready
+
+    with pytest.raises(local_server_module.LocalApiServerStartError):
+        server.start()
+
+    assert server._closed
+
+
 def test_runtime_start_and_close_are_linearized_before_store_close():
     start_entered = Event()
     release_start = Event()
@@ -1362,6 +1388,31 @@ def test_composition_starts_on_dynamic_loopback_port_and_closes_idempotently(tmp
     finally:
         runtime.close()
         runtime.close()
+
+
+def test_composition_preserves_explicit_falsey_clock_and_id_generator(tmp_path):
+    runtime = build_local_api(
+        tmp_path / "falsey-collaborators.db",
+        token=TOKEN,
+        clock=FalseyClock(),
+        ids=FalseyIds([WORKSPACE_UUID]),
+    )
+    runtime.start()
+    try:
+        status, _headers, body = http_request(
+            runtime.server,
+            "POST",
+            "/v1/workspaces",
+            value={"name": "Pericia sintetica"},
+            headers={"X-Local-API-Token": TOKEN},
+        )
+    finally:
+        runtime.close()
+
+    assert status == 201
+    created = json.loads(body.decode("utf-8"))
+    assert created["workspace_id"] == str(WORKSPACE_UUID)
+    assert created["created_at"] == CREATED_AT
 
 
 def test_runtime_repr_never_exposes_mutation_token(tmp_path):

@@ -267,6 +267,15 @@ class LocalApiServer:
                 self._thread.join(timeout=5)
                 self._thread = None
                 raise LocalApiServerStartError("servidor local indisponivel")
+            if self._serve_stopped.is_set() or not self._thread.is_alive():
+                cause = self._serve_error
+                self._closed = True
+                self._server.server_close()
+                self._thread.join(timeout=5)
+                self._thread = None
+                raise LocalApiServerStartError(
+                    "servidor local indisponivel"
+                ) from cause
             return self.address
 
     def _serve(self) -> None:

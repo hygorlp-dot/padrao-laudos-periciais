@@ -109,8 +109,8 @@ def build_local_api(
     server_config = LocalServerConfig() if config is None else config
     local_token = secrets.token_urlsafe(32) if token is None else token
     _require_local_token(local_token)
-    local_clock = clock or _SystemClock()
-    local_ids = ids or _UuidGenerator()
+    local_clock = _SystemClock() if clock is None else clock
+    local_ids = _UuidGenerator() if ids is None else ids
     store = SQLiteApplicationStore(database)
     services = LocalApiServices(
         create_workspace=CreateWorkspace(store.workspaces, local_clock, local_ids),

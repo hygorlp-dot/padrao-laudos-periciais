@@ -262,6 +262,47 @@ def _unapproved_backend_dependencies(source_module, source, allowed):
     }
 
 
+def _local_api_module_inventory(package):
+    package = Path(package)
+    return {
+        ".".join(path.relative_to(package).with_suffix("").parts): path
+        for path in package.rglob("*.py")
+        if "__pycache__" not in path.parts
+    }
+
+
+def _local_api_persistence_imports(source_module, source):
+    infrastructure = "scripts.backend_contract.infrastructure"
+    return {
+        target
+        for target in _canonical_import_targets(source_module, source)
+        if target == "sqlite3"
+        or target.startswith("sqlite3.")
+        or target == infrastructure
+        or target.startswith(f"{infrastructure}.")
+    }
+
+
+def test_local_api_inventory_is_recursive_and_uses_canonical_module_names(tmp_path):
+    package = tmp_path / "local_api"
+    nested = package / "internal"
+    nested.mkdir(parents=True)
+    (package / "transport.py").write_text("", encoding="utf-8")
+    (nested / "bridge.py").write_text("import sqlite3\n", encoding="utf-8")
+
+    inventory = _local_api_module_inventory(package)
+
+    assert set(inventory) == {"transport", "internal.bridge"}
+    assert inventory["internal.bridge"] == nested / "bridge.py"
+
+
+def test_direct_sqlite_import_is_forbidden_outside_composition():
+    assert _local_api_persistence_imports(
+        "scripts.backend_contract.local_api.internal.bridge",
+        "import sqlite3",
+    ) == {"sqlite3"}
+
+
 def test_local_api_layers_use_only_their_explicit_backend_dependencies():
     policies = {
         "__init__": (),
@@ -274,12 +315,12 @@ def test_local_api_layers_use_only_their_explicit_backend_dependencies():
             "scripts.backend_contract.local_api.transport",
         ),
     }
-    actual_modules = {
-        path.stem for path in Path("scripts/backend_contract/local_api").glob("*.py")
-    }
-    assert actual_modules == set(policies)
-    for module, allowed in policies.items():
-        path = Path(f"scripts/backend_contract/local_api/{module}.py")
+    inventory = _local_api_module_inventory(
+        Path("scripts/backend_contract/local_api")
+    )
+    assert set(inventory) == set(policies)
+    for module, path in inventory.items():
+        allowed = policies[module]
         source_module = f"scripts.backend_contract.local_api.{module}"
         assert not _unapproved_backend_dependencies(
             source_module,
@@ -306,13 +347,18 @@ def test_local_api_dependency_allowlist_rejects_every_core_module(statement):
 
 
 def test_local_api_sqlite_wiring_is_confined_to_composition_root():
-    local_api_paths = tuple(Path("scripts/backend_contract/local_api").glob("*.py"))
+    inventory = _local_api_module_inventory(
+        Path("scripts/backend_contract/local_api")
+    )
     importers = {
-        path.name
-        for path in local_api_paths
-        if any("infrastructure" in module for module in _imports_in(path))
+        module
+        for module, path in inventory.items()
+        if _local_api_persistence_imports(
+            f"scripts.backend_contract.local_api.{module}",
+            path.read_text(encoding="utf-8"),
+        )
     }
-    assert importers == {"composition.py"}
+    assert importers == {"composition"}
 
 
 def test_local_api_production_modules_have_no_outbound_network_clients():
@@ -323,7 +369,7 @@ def test_local_api_production_modules_have_no_outbound_network_clients():
         "urllib.request",
         "urllib3",
     }
-    for path in Path("scripts/backend_contract/local_api").glob("*.py"):
+    for path in Path("scripts/backend_contract/local_api").rglob("*.py"):
         assert _imports_in(path).isdisjoint(forbidden)
 
 
