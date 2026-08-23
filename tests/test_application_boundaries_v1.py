@@ -274,6 +274,10 @@ def test_local_api_layers_use_only_their_explicit_backend_dependencies():
             "scripts.backend_contract.local_api.transport",
         ),
     }
+    actual_modules = {
+        path.stem for path in Path("scripts/backend_contract/local_api").glob("*.py")
+    }
+    assert actual_modules == set(policies)
     for module, allowed in policies.items():
         path = Path(f"scripts/backend_contract/local_api/{module}.py")
         source_module = f"scripts.backend_contract.local_api.{module}"

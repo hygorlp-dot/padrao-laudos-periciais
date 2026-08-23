@@ -1253,6 +1253,42 @@ def test_server_start_and_close_are_linearized_without_thread_leak(monkeypatch, 
     assert "Traceback" not in capsys.readouterr().err
 
 
+def test_server_start_waits_until_serve_forever_is_ready_before_close():
+    serve_target_entered = Event()
+    release_serve_target = Event()
+    server = LocalApiServer(LocalApi(services(), token=TOKEN))
+    real_serve = server._serve
+
+    def delayed_serve():
+        serve_target_entered.set()
+        assert release_serve_target.wait(timeout=5)
+        real_serve()
+
+    server._serve = delayed_serve
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        started = pool.submit(server.start)
+        assert serve_target_entered.wait(timeout=2)
+        closed = pool.submit(server.close)
+        Event().wait(0.05)
+        try:
+            assert not started.done()
+            assert not closed.done()
+        finally:
+            release_serve_target.set()
+        assert started.result(timeout=2)[0] == "127.0.0.1"
+        closed.result(timeout=2)
+
+
+def test_server_start_fails_closed_if_serve_loop_exits_before_ready():
+    server = LocalApiServer(LocalApi(services(), token=TOKEN))
+    server._serve = lambda: None
+
+    with pytest.raises(local_server_module.LocalApiServerStartError):
+        server.start()
+
+    server.close()
+
+
 def test_runtime_start_and_close_are_linearized_before_store_close():
     start_entered = Event()
     release_start = Event()

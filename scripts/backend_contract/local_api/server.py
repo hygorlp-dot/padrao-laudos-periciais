@@ -6,7 +6,7 @@ import math
 import socket
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Lock, Thread, Timer
+from threading import Event, Lock, Thread, Timer
 
 from .transport import LocalApi, _error, _parse_content_length
 
@@ -41,6 +41,14 @@ class _ThreadingLocalServer(ThreadingHTTPServer):
     daemon_threads = False
     block_on_close = True
     allow_reuse_address = False
+
+    def __init__(self, *args, **kwargs):
+        self.serve_ready = Event()
+        super().__init__(*args, **kwargs)
+
+    def service_actions(self):
+        super().service_actions()
+        self.serve_ready.set()
 
     def handle_error(self, _request, _client_address):
         return
@@ -218,6 +226,8 @@ class LocalApiServer:
             ),
         )
         self._thread: Thread | None = None
+        self._serve_stopped = Event()
+        self._serve_error: Exception | None = None
         self._closed = False
         self._lifecycle_lock = Lock()
 
@@ -246,10 +256,26 @@ class LocalApiServer:
                 raise LocalApiServerStartError(
                     "servidor local não pôde iniciar"
                 ) from exc
+            for _ in range(500):
+                if self._server.serve_ready.wait(timeout=0.01):
+                    break
+                if self._serve_stopped.is_set():
+                    break
+            if not self._server.serve_ready.is_set():
+                self._closed = True
+                self._server.server_close()
+                self._thread.join(timeout=5)
+                self._thread = None
+                raise LocalApiServerStartError("servidor local indisponivel")
             return self.address
 
     def _serve(self) -> None:
-        self._server.serve_forever(poll_interval=0.01)
+        try:
+            self._server.serve_forever(poll_interval=0.01)
+        except Exception as exc:
+            self._serve_error = exc
+        finally:
+            self._serve_stopped.set()
 
     def close(self) -> None:
         with self._lifecycle_lock:
