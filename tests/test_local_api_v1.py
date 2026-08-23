@@ -1301,7 +1301,11 @@ def test_server_start_waits_until_serve_forever_is_ready_before_close():
 
 def test_server_start_fails_closed_if_serve_loop_exits_before_ready():
     server = LocalApiServer(LocalApi(services(), token=TOKEN))
-    server._serve = lambda: None
+
+    def stop_before_ready():
+        server._serve_stopped.set()
+
+    server._serve = stop_before_ready
 
     with pytest.raises(local_server_module.LocalApiServerStartError):
         server.start()
