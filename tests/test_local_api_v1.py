@@ -826,7 +826,7 @@ def test_runtime_close_drains_accepted_request_before_closing_sqlite(tmp_path):
     assert ids.entered.wait(timeout=5)
     closing = Thread(target=runtime.close)
     closing.start()
-    closing.join(timeout=0.75)
+    closing.join(timeout=0.15)
     close_waited_for_request = closing.is_alive()
     ids.release.set()
     client.join(timeout=5)

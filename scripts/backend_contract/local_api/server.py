@@ -137,7 +137,7 @@ class LocalApiServer:
         if self._thread is not None:
             raise RuntimeError("servidor local já iniciado")
         self._thread = Thread(
-            target=self._server.serve_forever,
+            target=self._serve,
             name="local-api-loopback",
             daemon=True,
         )
@@ -149,6 +149,9 @@ class LocalApiServer:
             self._server.server_close()
             raise LocalApiServerStartError("servidor local não pôde iniciar") from exc
         return self.address
+
+    def _serve(self) -> None:
+        self._server.serve_forever(poll_interval=0.01)
 
     def close(self) -> None:
         if self._closed:
