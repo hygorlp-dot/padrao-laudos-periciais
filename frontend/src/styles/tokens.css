@@ -1,0 +1,35 @@
+:root {
+  color-scheme: light;
+  font-family: Aptos, "Segoe UI", Arial, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+
+  --color-mineral: #f2f4f1;
+  --color-paper: #fcfdfb;
+  --color-graphite: #18201d;
+  --color-graphite-soft: #25302b;
+  --color-slate: #5c655f;
+  --color-rule: #d6dcd7;
+  --color-rule-dark: #3b4741;
+  --color-ochre: #7b570d;
+  --color-ochre-bright: #c59a2a;
+  --color-error: #9a3f2f;
+  --color-focus: #185f72;
+  --color-focus-on-dark: #84cbd6;
+
+  --font-display: "Aptos Display", Aptos, "Segoe UI", sans-serif;
+  --font-body: Aptos, "Segoe UI", Arial, sans-serif;
+  --font-data: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4.5rem;
+
+  --ease-functional: cubic-bezier(0.22, 1, 0.36, 1);
+  --duration-functional: 140ms;
+}

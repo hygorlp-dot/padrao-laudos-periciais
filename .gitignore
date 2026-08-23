@@ -211,6 +211,11 @@ tempCodeRunnerFile.py
 # Ruff stuff:
 .ruff_cache/
 
+# Frontend build and dependency output
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+
 # PyPI configuration file
 .pypirc
 
