@@ -366,6 +366,39 @@ def test_invalid_routes_methods_and_path_values_fail_explicitly(
     }
 
 
+@pytest.mark.parametrize(
+    ("target", "status"),
+    (
+        ("/%76%31/workspaces", 404),
+        ("/v1/%77orkspaces", 404),
+        (
+            f"/v1/workspaces/{WORKSPACE_UUID}/%61rtifacts/LAUDO/LAU-001/revisions",
+            404,
+        ),
+        (
+            f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/%72evisions",
+            404,
+        ),
+        (
+            f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions/%6catest",
+            400,
+        ),
+        (
+            f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions/%31",
+            400,
+        ),
+        ("/v1/workspaces/AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA", 400),
+        (f"/v1/workspaces/{{{WORKSPACE_UUID}}}", 400),
+        (f"/v1/workspaces/{str(WORKSPACE_UUID).replace('-', '')}", 400),
+    ),
+)
+def test_structural_route_and_identity_spellings_are_canonical(target, status):
+    response = request(LocalApi(services(), token=TOKEN), "GET", target)
+
+    assert response.status == status
+    assert decoded(response)["error"]["code"] in {"NOT_FOUND", "INVALID_REQUEST"}
+
+
 @pytest.mark.parametrize("host", ("local\thost", "127.0.0.1\r", "127.0.0.1\n"))
 def test_host_with_ascii_control_characters_is_rejected(host):
     response = request(
@@ -622,6 +655,21 @@ def test_unsafe_integer_from_application_is_not_serialized_to_http():
     }
 
 
+def test_invalid_unicode_from_application_is_a_serialization_failure():
+    invalid = revision(payload={"text": "\ud800"})
+    response = request(
+        LocalApi(services(get_latest_artifact=RecordingService(invalid)), token=TOKEN),
+        "GET",
+        f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions/latest",
+    )
+
+    assert response.status == 500
+    assert decoded(response)["error"] == {
+        "code": "LOCAL_API_SERIALIZATION_FAILURE",
+        "message": "resposta local invalida",
+    }
+
+
 @pytest.mark.parametrize(
     "number",
     (b"0.1", b"1.0", b"1e0", b"1.25", b"1e20", b"-0.0"),
@@ -800,6 +848,12 @@ def test_server_configuration_rejects_invalid_request_timeout(timeout):
 def test_local_mutation_token_requires_high_entropy_header_safe_shape(token):
     with pytest.raises(ValueError, match="token"):
         LocalApi(services(), token=token)
+
+
+@pytest.mark.parametrize("config", (False, 0, ""))
+def test_server_rejects_falsey_non_config_values(config):
+    with pytest.raises(TypeError, match="config"):
+        LocalApiServer(LocalApi(services(), token=TOKEN), config)
 
 
 @pytest.mark.parametrize(

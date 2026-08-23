@@ -72,14 +72,19 @@ def _revision_dto(record: ArtifactRevision) -> dict:
 
 
 def _json_response(status: int, value: object) -> HttpResponse:
-    _require_safe_json_integers(value)
-    body = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
+    try:
+        _require_safe_json_integers(value)
+        body = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except _JsonSerializationError:
+        raise
+    except (RecursionError, TypeError, UnicodeError, ValueError) as exc:
+        raise _JsonSerializationError("resposta JSON invalida") from exc
     return HttpResponse(
         status=status,
         headers=MappingProxyType(
@@ -214,7 +219,7 @@ def _parse_content_length(value: str) -> int:
     return int(value)
 
 
-def _target_segments(target: str) -> tuple[str, ...]:
+def _target_segments(target: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
     if type(target) is not str:
         raise TypeError("target inválido")
     if _has_ascii_control(target):
@@ -224,7 +229,8 @@ def _target_segments(target: str) -> tuple[str, ...]:
         raise ValueError("target deve conter somente path")
     if not parsed.path.startswith("/"):
         raise ValueError("path absoluto obrigatório")
-    return tuple(_decode_segment(item) for item in parsed.path.split("/")[1:])
+    raw_segments = tuple(parsed.path.split("/")[1:])
+    return raw_segments, tuple(_decode_segment(item) for item in raw_segments)
 
 
 class LocalApi:
@@ -269,7 +275,10 @@ class LocalApi:
 
     @staticmethod
     def _workspace_id(value: str) -> WorkspaceId:
-        return WorkspaceId.parse(value)
+        workspace_id = WorkspaceId.parse(value)
+        if str(workspace_id) != value:
+            raise ValueError("workspace_id nao canonico")
+        return workspace_id
 
     def handle(self, method: str, target: str, headers, body: bytes) -> HttpResponse:
         try:
@@ -290,7 +299,7 @@ class LocalApi:
                     "FORBIDDEN_LOCAL_REQUEST",
                     "requisição local não autorizada",
                 )
-            segments = _target_segments(target)
+            raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
             if normalized_method == "POST" and not hmac.compare_digest(
                 request_headers.get("x-local-api-token", ""), self._token
@@ -303,7 +312,7 @@ class LocalApi:
             if "transfer-encoding" in request_headers:
                 raise ValueError("Transfer-Encoding não suportado")
 
-            if segments == ("v1", "workspaces"):
+            if raw_segments == ("v1", "workspaces"):
                 if normalized_method == "GET":
                     records = self._services.list_workspaces.execute()
                     return _json_response(
@@ -319,19 +328,22 @@ class LocalApi:
                     return _json_response(201, _workspace_dto(record))
                 return _error(405, "METHOD_NOT_ALLOWED")
 
-            if len(segments) == 3 and segments[:2] == ("v1", "workspaces"):
+            if len(raw_segments) == 3 and raw_segments[:2] == (
+                "v1",
+                "workspaces",
+            ):
                 if normalized_method != "GET":
                     return _error(405, "METHOD_NOT_ALLOWED")
                 record = self._services.get_workspace.execute(
-                    self._workspace_id(segments[2])
+                    self._workspace_id(raw_segments[2])
                 )
                 return _json_response(200, _workspace_dto(record))
 
             artifact_route = (
-                len(segments) in {7, 8}
-                and segments[:2] == ("v1", "workspaces")
-                and segments[3] == "artifacts"
-                and segments[6] == "revisions"
+                len(raw_segments) in {7, 8}
+                and raw_segments[:2] == ("v1", "workspaces")
+                and raw_segments[3] == "artifacts"
+                and raw_segments[6] == "revisions"
             )
             if artifact_route:
                 if len(segments) == 7 and normalized_method == "POST":
@@ -339,7 +351,7 @@ class LocalApi:
                     if set(dto) != {"payload"}:
                         raise ValueError("payload ausente")
                     record = self._services.append_artifact_revision.execute(
-                        workspace_id=self._workspace_id(segments[2]),
+                        workspace_id=self._workspace_id(raw_segments[2]),
                         artifact_kind=segments[4],
                         artifact_id=segments[5],
                         payload=dto["payload"],
@@ -347,25 +359,28 @@ class LocalApi:
                     return _json_response(201, _revision_dto(record))
                 if len(segments) == 7 and normalized_method == "GET":
                     records = self._services.list_artifact_revisions.execute(
-                        self._workspace_id(segments[2]), segments[4], segments[5]
+                        self._workspace_id(raw_segments[2]),
+                        segments[4],
+                        segments[5],
                     )
                     return _json_response(
                         200, {"items": [_revision_dto(item) for item in records]}
                     )
                 if len(segments) == 8 and normalized_method == "GET":
-                    workspace_id = self._workspace_id(segments[2])
-                    if segments[7] == "latest":
+                    workspace_id = self._workspace_id(raw_segments[2])
+                    if raw_segments[7] == "latest":
                         record = self._services.get_latest_artifact.execute(
                             workspace_id, segments[4], segments[5]
                         )
                     else:
-                        if not segments[7].isascii() or not segments[7].isdecimal():
+                        revision_text = raw_segments[7]
+                        if not revision_text.isascii() or not revision_text.isdecimal():
                             raise ValueError("revision inválida")
-                        revision = int(segments[7])
+                        revision = int(revision_text)
                         if (
                             revision < 1
                             or revision > _MAX_SAFE_JSON_INTEGER
-                            or str(revision) != segments[7]
+                            or str(revision) != revision_text
                         ):
                             raise ValueError("revision inválida")
                         record = self._services.get_artifact_revision.execute(

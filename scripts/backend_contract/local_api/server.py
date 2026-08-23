@@ -214,7 +214,7 @@ class LocalApiServer:
     ):
         if type(api) is not LocalApi:
             raise TypeError("LocalApi inválida")
-        self._config = config or LocalServerConfig()
+        self._config = LocalServerConfig() if config is None else config
         if type(self._config) is not LocalServerConfig:
             raise TypeError("configuração local inválida")
         self._server = _ThreadingLocalServer(
