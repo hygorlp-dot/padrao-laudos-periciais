@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import math
+import socket
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Thread
+from threading import Lock, Thread, Timer
 
 from .transport import LocalApi, _error
 
@@ -61,6 +62,43 @@ def _handler_for(
             super().setup()
             self.connection.settimeout(request_timeout_seconds)
 
+        def handle_one_request(self):
+            self._deadline_lock = Lock()
+            self._deadline_active = True
+            self._deadline_expired = False
+            self._deadline_timer = Timer(
+                request_timeout_seconds,
+                self._expire_request_acquisition,
+            )
+            self._deadline_timer.daemon = True
+            self._deadline_timer.start()
+            try:
+                return super().handle_one_request()
+            finally:
+                self._finish_request_acquisition()
+
+        def _expire_request_acquisition(self):
+            with self._deadline_lock:
+                if not self._deadline_active:
+                    return
+                self._deadline_expired = True
+                try:
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+        def _finish_request_acquisition(self) -> bool:
+            deadline = getattr(self, "_deadline_timer", None)
+            if deadline is None:
+                return not getattr(self, "_deadline_expired", False)
+            with self._deadline_lock:
+                self._deadline_active = False
+                expired = self._deadline_expired
+            deadline.cancel()
+            deadline.join()
+            self._deadline_timer = None
+            return not expired
+
         def _write_response(self, response):
             is_head = getattr(self, "command", None) == "HEAD"
             self.request_version = self.protocol_version
@@ -110,6 +148,8 @@ def _handler_for(
                         body = self.rfile.read(length) if length else b""
                     except (TimeoutError, OSError):
                         return _error(400, "INVALID_REQUEST")
+                    if not self._finish_request_acquisition():
+                        return _error(400, "INVALID_REQUEST")
                     response = api.handle(
                         self.command, self.path, dict(self.headers.items()), body
                     )
@@ -124,12 +164,16 @@ def _handler_for(
                     "INTERNAL_SERVER_ERROR",
                     "falha interna da API local",
                 )
+            acquisition_complete = self._finish_request_acquisition()
+            if not acquisition_complete:
+                response = _error(400, "INVALID_REQUEST")
             try:
                 self._write_response(response)
             except ConnectionError:
                 self.close_connection = True
 
         def send_error(self, code, _message=None, _explain=None):
+            self._finish_request_acquisition()
             if code == 501:
                 response = _error(405, "METHOD_NOT_ALLOWED")
             else:

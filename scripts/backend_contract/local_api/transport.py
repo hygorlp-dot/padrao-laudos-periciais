@@ -143,9 +143,23 @@ def _require_local_token(token: str) -> str:
         or len(token) < 32
         or not token.isascii()
         or not token.isprintable()
+        or token.strip() != token
     ):
         raise ValueError("token local inválido")
     return token
+
+
+def _json_object_without_duplicate_keys(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("chave JSON duplicada")
+        value[key] = item
+    return value
+
+
+def _reject_nonstandard_json_constant(_value: str):
+    raise ValueError("constante JSON invÃ¡lida")
 
 
 def _target_segments(target: str) -> tuple[str, ...]:
@@ -188,7 +202,11 @@ class LocalApi:
             raise ValueError("Content-Length inválido") from exc
         if length != len(body) or length < 1:
             raise ValueError("Content-Length diverge")
-        value = json.loads(body.decode("utf-8", errors="strict"))
+        value = json.loads(
+            body.decode("utf-8", errors="strict"),
+            object_pairs_hook=_json_object_without_duplicate_keys,
+            parse_constant=_reject_nonstandard_json_constant,
+        )
         if type(value) is not dict:
             raise TypeError("DTO deve ser objeto JSON")
         return value

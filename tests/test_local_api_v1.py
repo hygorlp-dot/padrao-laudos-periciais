@@ -371,6 +371,63 @@ def test_malformed_utf8_json_and_non_object_json_fail_explicitly():
         assert decoded(response)["error"]["code"] == "INVALID_REQUEST"
 
 
+@pytest.mark.parametrize(
+    ("target", "raw_body", "service_name"),
+    (
+        (
+            "/v1/workspaces",
+            b'{"name":"FIRST","name":"SECOND"}',
+            "create_workspace",
+        ),
+        (
+            f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions",
+            b'{"payload":{"status":"FIRST","status":"SECOND"}}',
+            "append_artifact_revision",
+        ),
+    ),
+)
+def test_duplicate_json_object_keys_are_rejected_at_any_depth(
+    target, raw_body, service_name
+):
+    bundle = services()
+    response = LocalApi(bundle, token=TOKEN).handle(
+        "POST",
+        target,
+        {
+            "Host": "127.0.0.1",
+            "Content-Type": "application/json",
+            "Content-Length": str(len(raw_body)),
+            "X-Local-API-Token": TOKEN,
+        },
+        raw_body,
+    )
+
+    assert response.status == 400
+    assert decoded(response)["error"]["code"] == "INVALID_REQUEST"
+    assert getattr(bundle, service_name).calls == []
+
+
+@pytest.mark.parametrize("constant", (b"NaN", b"Infinity", b"-Infinity"))
+def test_nonstandard_json_numeric_constants_are_rejected(constant):
+    bundle = services()
+    raw_body = b'{"payload":{"measurement":' + constant + b"}}"
+    response = LocalApi(bundle, token=TOKEN).handle(
+        "POST",
+        f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions",
+        {
+            "Host": "127.0.0.1",
+            "Content-Type": "application/json",
+            "Content-Length": str(len(raw_body)),
+            "X-Local-API-Token": TOKEN,
+        },
+        raw_body,
+    )
+
+    assert response.status == 400
+    assert decoded(response)["error"]["code"] == "INVALID_REQUEST"
+    assert bundle.append_artifact_revision.calls == []
+
+
 def test_body_larger_than_configured_limit_is_rejected_before_service_call():
     create = RecordingService(workspace())
     bundle = services(create_workspace=create)
@@ -509,13 +566,13 @@ def test_server_configuration_rejects_invalid_request_timeout(timeout):
         LocalServerConfig(request_timeout_seconds=timeout)
 
 
-@pytest.mark.parametrize("token", ("", "short", "x" * 31, "á" * 32))
+@pytest.mark.parametrize("token", ("", "short", "x" * 31, "á" * 32, " " * 32))
 def test_local_mutation_token_requires_high_entropy_header_safe_shape(token):
     with pytest.raises(ValueError, match="token"):
         LocalApi(services(), token=token)
 
 
-@pytest.mark.parametrize("token", ("", "short"))
+@pytest.mark.parametrize("token", ("", "short", " " * 32))
 def test_composition_rejects_invalid_token_before_opening_sqlite(tmp_path, token):
     database = tmp_path / "must-not-open.db"
     with pytest.raises(ValueError, match="token"):
@@ -923,6 +980,100 @@ def test_partial_body_times_out_without_unbounded_shutdown_or_traceback(
     finally:
         client.close()
         closing.join(timeout=5)
+
+
+@pytest.mark.parametrize(
+    "request_prefix",
+    (
+        (
+            b"POST /v1/workspaces HTTP/1.1\r\n"
+            b"Host: 127.0.0.1\r\n"
+            b"Content-Type: application/json\r\n"
+            b"X-Local-API-Token: "
+            + TOKEN.encode("ascii")
+            + b"\r\nContent-Length: 100\r\n\r\n{"
+        ),
+        b"POST /v1/workspaces HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Slow-Header:",
+    ),
+)
+def test_slow_drip_cannot_extend_total_request_deadline(tmp_path, request_prefix):
+    runtime = build_local_api(
+        tmp_path / "slow-drip.db",
+        token=TOKEN,
+        config=LocalServerConfig(request_timeout_seconds=0.1),
+    )
+    runtime.start()
+    client = socket.create_connection(runtime.address, timeout=5)
+    client.sendall(request_prefix)
+    stop_drip = Event()
+
+    def drip_body():
+        while not stop_drip.wait(0.04):
+            try:
+                client.sendall(b" ")
+            except OSError:
+                return
+
+    dripper = Thread(target=drip_body)
+    dripper.start()
+    for _ in range(50):
+        request_threads = getattr(runtime.server._server, "_threads", ())
+        if any(thread.is_alive() for thread in request_threads):
+            break
+        Event().wait(0.01)
+    else:
+        pytest.fail("request worker did not start")
+
+    closing = Thread(target=runtime.close)
+    closing.start()
+    try:
+        closing.join(timeout=0.5)
+        assert not closing.is_alive()
+    finally:
+        stop_drip.set()
+        client.close()
+        dripper.join(timeout=5)
+        closing.join(timeout=5)
+
+
+def test_request_deadline_ends_before_valid_service_execution():
+    entered = Event()
+    release = Event()
+
+    class SlowCreateService(RecordingService):
+        def execute(self, *args, **kwargs):
+            entered.set()
+            if not release.wait(timeout=5):
+                raise RuntimeError("test synchronization timed out")
+            return super().execute(*args, **kwargs)
+
+    create = SlowCreateService(workspace())
+    server = LocalApiServer(
+        LocalApi(services(create_workspace=create), token=TOKEN),
+        LocalServerConfig(request_timeout_seconds=0.1),
+    )
+    server.start()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(
+                http_request,
+                server,
+                "POST",
+                "/v1/workspaces",
+                value={"name": "PerÃ­cia sintÃ©tica"},
+                headers={"X-Local-API-Token": TOKEN},
+            )
+            assert entered.wait(timeout=2)
+            Event().wait(0.2)
+            release.set()
+            status, _headers, body = future.result(timeout=2)
+    finally:
+        release.set()
+        server.close()
+
+    assert status == 201
+    assert json.loads(body.decode("utf-8"))["workspace_id"] == str(WORKSPACE_UUID)
+    assert len(create.calls) == 1
 
 
 def test_composition_starts_on_dynamic_loopback_port_and_closes_idempotently(tmp_path):

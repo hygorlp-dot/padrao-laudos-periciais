@@ -226,17 +226,79 @@ def _imports_in(path):
     }
 
 
-def test_local_api_transport_and_server_depend_on_application_not_infrastructure():
-    for path in (
-        "scripts/backend_contract/local_api/transport.py",
-        "scripts/backend_contract/local_api/server.py",
-    ):
-        imported = _imports_in(path)
-        assert "sqlite3" not in imported
-        assert not any("infrastructure" in module for module in imported)
-        assert not any("scripts.motor_vicios" in module for module in imported)
-        assert not any("scripts.triagem_pericial" in module for module in imported)
-        assert not any("scripts.planejamento_pericial" in module for module in imported)
+def _canonical_import_targets(source_module, source):
+    tree = ast.parse(source)
+    package = source_module.split(".")[:-1]
+    targets = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            targets.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                keep = len(package) - (node.level - 1)
+                base = package[:keep]
+                if node.module:
+                    base.extend(node.module.split("."))
+                module = ".".join(base)
+            else:
+                module = node.module or ""
+            targets.update(
+                f"{module}.{alias.name}" if module else alias.name
+                for alias in node.names
+            )
+    return targets
+
+
+def _unapproved_backend_dependencies(source_module, source, allowed):
+    backend = "scripts.backend_contract"
+    return {
+        target
+        for target in _canonical_import_targets(source_module, source)
+        if (target == backend or target.startswith(f"{backend}."))
+        and not any(
+            target == prefix or target.startswith(f"{prefix}.")
+            for prefix in allowed
+        )
+    }
+
+
+def test_local_api_layers_use_only_their_explicit_backend_dependencies():
+    policies = {
+        "__init__": (),
+        "transport": ("scripts.backend_contract.application",),
+        "server": ("scripts.backend_contract.local_api.transport",),
+        "composition": (
+            "scripts.backend_contract.application",
+            "scripts.backend_contract.infrastructure",
+            "scripts.backend_contract.local_api.server",
+            "scripts.backend_contract.local_api.transport",
+        ),
+    }
+    for module, allowed in policies.items():
+        path = Path(f"scripts/backend_contract/local_api/{module}.py")
+        source_module = f"scripts.backend_contract.local_api.{module}"
+        assert not _unapproved_backend_dependencies(
+            source_module,
+            path.read_text(encoding="utf-8"),
+            allowed,
+        )
+
+
+@pytest.mark.parametrize(
+    "statement",
+    (
+        "from ..revisions import append_revision",
+        "from scripts.backend_contract import revisions",
+        "import scripts.backend_contract.motor",
+    ),
+)
+def test_local_api_dependency_allowlist_rejects_every_core_module(statement):
+    violations = _unapproved_backend_dependencies(
+        "scripts.backend_contract.local_api.transport",
+        statement,
+        ("scripts.backend_contract.application",),
+    )
+    assert violations
 
 
 def test_local_api_sqlite_wiring_is_confined_to_composition_root():
