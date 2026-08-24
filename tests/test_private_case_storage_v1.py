@@ -1163,6 +1163,30 @@ def test_interrupted_torn_wal_completion_is_restartable(tmp_path, monkeypatch):
         assert reopened.list_all(WORKSPACE_A) == ()
 
 
+def test_abrupt_first_torn_wal_uses_durable_intent_provenance(tmp_path):
+    root = tmp_path / "private"
+    nonce = "3" * 32
+    prefix = f"{WORKSPACE_A}.{CONTENT_A}"
+    intent = root / f".intent.{prefix}.{nonce}"
+    intent.write_bytes(b"")
+    (root / ".commit-log").write_bytes(prefix.encode("ascii")[:12])
+
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
+    assert (root / ".commit-log").read_bytes() == b""
+
+
+def test_crash_after_physical_intent_before_wal_is_recovered_as_abort(tmp_path):
+    root = tmp_path / "private"
+    nonce = "4" * 32
+    prefix = f"{WORKSPACE_A}.{CONTENT_A}"
+    (root / f".intent.{prefix}.{nonce}").write_bytes(b"")
+
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
+    assert (root / f".aborted.{nonce}").exists()
+
+
 def test_recovery_revalidates_every_path_after_retirement_before_consuming_wal(
     tmp_path, monkeypatch
 ):
@@ -1201,6 +1225,45 @@ def test_recovery_revalidates_every_path_after_retirement_before_consuming_wal(
     assert target.read_bytes() == b"independent post-retirement replacement"
 
 
+def test_recovery_rechecks_after_wal_truncation_without_losing_provenance(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    paths = _record_paths(root)
+    paths["commit"].unlink()
+    (root / ".commit-anchor").write_bytes(b"")
+    target = paths["commit"]
+    original_truncate = LocalPrivateContentStore._truncate_ledger
+    injected = False
+
+    def inject_before_truncation(descriptor, size):
+        nonlocal injected
+        if not injected:
+            injected = True
+            target.write_bytes(b"independent late replacement")
+        return original_truncate(descriptor, size)
+
+    monkeypatch.setattr(
+        LocalPrivateContentStore,
+        "_truncate_ledger",
+        staticmethod(inject_before_truncation),
+    )
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
+    assert target.read_bytes() == b"independent late replacement"
+
+    monkeypatch.setattr(
+        LocalPrivateContentStore,
+        "_truncate_ledger",
+        staticmethod(original_truncate),
+    )
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
+
+
 def test_retirement_marks_owned_inode_without_any_unlink(tmp_path, monkeypatch):
     target = tmp_path / "owned"
     target.write_bytes(b"owned bytes")
@@ -1221,6 +1284,87 @@ def test_standalone_retirement_marker_fails_closed(tmp_path):
     (root / f".retired.{'0' * 32}").write_bytes(b"unbound marker")
 
     with pytest.raises(RepositoryIntegrityError, match="aposentado|v.nculo"):
+        LocalPrivateContentStore(root)
+
+
+def test_hardlinked_retirement_markers_without_transaction_fail_closed(tmp_path):
+    root = tmp_path / "private"
+    first = root / f".retired.{'0' * 32}"
+    second = root / f".retired.{'1' * 32}"
+    first.write_bytes(b"unbound markers")
+    os.link(first, second)
+
+    with pytest.raises(RepositoryIntegrityError, match="aposent|proveni|invent.rio"):
+        LocalPrivateContentStore(root)
+
+
+def test_forged_final_and_retirement_marker_without_intent_fail_closed(tmp_path):
+    root = tmp_path / "private"
+    final = _record_paths(root)["content.bin"]
+    marker = root / f".retired.{'2' * 32}"
+    final.write_bytes(b"unbound private-shaped bytes")
+    os.link(final, marker)
+
+    with pytest.raises(RepositoryIntegrityError, match="intent|proveni|invent.rio"):
+        LocalPrivateContentStore(root)
+
+
+def test_retired_private_inode_with_external_hardlink_fails_closed(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    original_write = private_filesystem._write_fsynced
+    writes = 0
+
+    def fail_second_write(path, payload, **kwargs):
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise OSError("synthetic aborted transaction")
+        return original_write(path, payload, **kwargs)
+
+    with LocalPrivateContentStore(root) as private_store:
+        monkeypatch.setattr(
+            private_filesystem, "_write_fsynced", fail_second_write
+        )
+        with pytest.raises(RepositoryError, match="armazenar"):
+            private_store.store(metadata, b"synthetic private bytes")
+    marker = next(root.glob(".retired.*"))
+    owned_alias = next(
+        path
+        for path in root.glob(".staging.*")
+        if private_filesystem._same_identity(path.stat(), marker.stat())
+    )
+    os.link(owned_alias, tmp_path / "external-private-hardlink")
+
+    with pytest.raises(RepositoryIntegrityError, match="hard link|extern|invent.rio"):
+        LocalPrivateContentStore(root)
+
+
+def test_committed_intent_with_external_hardlink_fails_closed(tmp_path):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    intent = next(root.glob(".intent.*"))
+    os.link(intent, tmp_path / "external-intent-hardlink")
+
+    with pytest.raises(RepositoryIntegrityError, match="hard link"):
+        LocalPrivateContentStore(root)
+
+
+def test_staging_nonce_must_match_its_physical_intent(tmp_path):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    stage = next(root.glob(".staging.*.content"))
+    segments = stage.name.split(".")
+    segments[-2] = "5" * 32
+    stage.rename(stage.with_name(".".join(segments)))
+
+    with pytest.raises(RepositoryIntegrityError, match="staging.*intent"):
         LocalPrivateContentStore(root)
 
 
@@ -1791,6 +1935,19 @@ def test_unprovisioned_private_root_is_rejected_without_creating_it(tmp_path):
     with pytest.raises(RepositoryError, match="provisionado"):
         LocalPrivateContentStore(root)
     assert not root.exists()
+
+
+def test_windows_unc_private_root_is_rejected_before_any_filesystem_probe(monkeypatch):
+    probed = []
+
+    def forbidden_probe(path):
+        probed.append(str(path))
+        raise AssertionError("UNC root reached the filesystem")
+
+    monkeypatch.setattr(private_filesystem.os.path, "lexists", forbidden_probe)
+    with pytest.raises(RepositoryError, match="local|private root"):
+        LocalPrivateContentStore(r"\\server.invalid\private-share")
+    assert probed == []
 
 
 def test_provisioned_root_without_lock_is_rejected_before_journal_creation(tmp_path):

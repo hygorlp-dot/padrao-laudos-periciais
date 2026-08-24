@@ -64,6 +64,11 @@ _STAGING_NAME = re.compile(
     r"(?P<nonce>[0-9a-f]{32})\."
     r"(?P<member>content|metadata|metadata-sha256|commit)$"
 )
+_INTENT_NAME = re.compile(
+    rf"^\.intent\.(?P<workspace>{_UUID})\.(?P<content>{_UUID})\."
+    r"(?P<nonce>[0-9a-f]{32})$"
+)
+_ABORTED_NAME = re.compile(r"^\.aborted\.(?P<nonce>[0-9a-f]{32})$")
 _RETIRED_NAME = re.compile(r"^\.retired\.(?P<nonce>[0-9a-f]{32})$")
 _REPARSE_ATTRIBUTE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
@@ -250,6 +255,30 @@ def _write_fsynced(
         os.close(descriptor)
 
 
+def _create_empty_fsynced(path: Path, *, root_fd: int | None) -> os.stat_result:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN_BINARY | _OPEN_NOFOLLOW
+    if root_fd is None:
+        descriptor = os.open(path, flags, 0o600)
+    else:
+        descriptor = os.open(_entry_name(path), flags, 0o600, dir_fd=root_fd)
+    try:
+        opened = os.fstat(descriptor)
+        _validate_regular(opened, expected_links=1)
+        if opened.st_size != 0:
+            raise RepositoryIntegrityError("intent privado inválido")
+        observed = _lstat(path, root_fd=root_fd)
+        if not _same_identity(opened, observed):
+            raise RepositoryIntegrityError(
+                "identidade do intent privado mudou durante a criação"
+            )
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    if root_fd is not None:
+        os.fsync(root_fd)
+    return opened
+
+
 def _read_exact(descriptor: int, size: int) -> bytes:
     result = bytearray()
     while len(result) < size:
@@ -405,6 +434,37 @@ def _retire_if_owned(
         os.fsync(root_fd)
 
 
+def _mark_intent_aborted(
+    intent: Path,
+    expected: os.stat_result,
+    nonce: str,
+    *,
+    root_fd: int | None,
+) -> None:
+    observed = _lstat(intent, root_fd=root_fd)
+    _validate_regular(observed, expected_links=1)
+    if observed.st_size != 0 or not _same_identity(expected, observed):
+        raise RepositoryIntegrityError("identidade do intent privado diverge")
+    aborted = intent.parent / f".aborted.{nonce}"
+    if root_fd is None:
+        os.link(intent, aborted, follow_symlinks=False)
+        aborted_details = os.lstat(aborted)
+    else:
+        os.link(
+            _entry_name(intent),
+            _entry_name(aborted),
+            src_dir_fd=root_fd,
+            dst_dir_fd=root_fd,
+            follow_symlinks=False,
+        )
+        aborted_details = _lstat(aborted, root_fd=root_fd)
+    _validate_regular(aborted_details, expected_links=2)
+    if not _same_identity(expected, aborted_details):
+        raise RepositoryIntegrityError("intent privado abortado sem identidade exata")
+    if root_fd is not None:
+        os.fsync(root_fd)
+
+
 def _canonical_manifest(payload: dict) -> bytes:
     try:
         encoded = json.dumps(
@@ -506,6 +566,8 @@ class LocalPrivateContentStore:
         raw = str(private_root)
         if not raw.strip() or "\x00" in raw:
             raise RepositoryError("private root inválido")
+        if raw.startswith(("\\\\", "//")):
+            raise RepositoryError("private root deve ser armazenamento local")
         if type(max_content_bytes) is not int or max_content_bytes < 0:
             raise RepositoryError("limite privado inválido")
         root = Path(private_root)
@@ -562,7 +624,7 @@ class LocalPrivateContentStore:
             self._acquire_singleton()
             self._open_journal()
             self._open_anchor()
-            self._committed = self._recover()
+            self._committed, self._known_prefixes = self._recover()
         except (RepositoryError, RepositoryIntegrityError):
             self.close()
             raise
@@ -739,21 +801,115 @@ class LocalPrivateContentStore:
     ) -> None:
         _retire_if_owned(path, expected, root_fd=self._root_fd)
 
-    def _all_existing_paths_retired(self, paths) -> bool:
+    def _validate_namespace_provenance(
+        self,
+        intents,
+        aborted,
+        stages,
+        finals,
+        retired_markers,
+    ) -> tuple[set[tuple[int, int, int]], set[str], set[str]]:
+        intents_by_nonce = {}
+        for prefix, (nonce, _, details) in intents.items():
+            if nonce in intents_by_nonce:
+                raise RepositoryIntegrityError("nonce de intent privado duplicado")
+            _validate_regular(details, expected_links=None)
+            if details.st_size != 0:
+                raise RepositoryIntegrityError("intent privado inválido")
+            intents_by_nonce[nonce] = (prefix, details)
+
+        aborted_prefixes = set()
+        for nonce, (_, details) in aborted.items():
+            intent = intents_by_nonce.get(nonce)
+            if intent is None or not _same_identity(intent[1], details):
+                raise RepositoryIntegrityError("intent privado abortado sem proveniência")
+            _validate_regular(details, expected_links=2)
+            _validate_regular(intent[1], expected_links=2)
+            aborted_prefixes.add(intent[0])
+        for prefix, (_, _, details) in intents.items():
+            if prefix not in aborted_prefixes:
+                _validate_regular(details, expected_links=1)
+
+        objects = [
+            (prefix, member, nonce, details)
+            for prefix, member, nonce, _, details in stages
+        ] + [
+            (prefix, member, None, details)
+            for prefix, member, _, details in finals
+        ]
+        for prefix, _, nonce, _ in objects:
+            intent = intents.get(prefix)
+            if intent is None:
+                raise RepositoryIntegrityError(
+                    "inventário privado sem intent durável ou proveniência"
+                )
+            if nonce is not None and nonce != intent[0]:
+                raise RepositoryIntegrityError("staging privado diverge do intent")
+
+        root_link_counts: dict[tuple[int, int, int], int] = {}
+        bindings: dict[tuple[int, int, int], set[tuple[str, str]]] = {}
+        for prefix, member, _, details in objects:
+            identity = _identity_key(details)
+            root_link_counts[identity] = root_link_counts.get(identity, 0) + 1
+            bindings.setdefault(identity, set()).add((prefix, member))
+        marker_details: dict[tuple[int, int, int], os.stat_result] = {}
+        for _, details in retired_markers:
+            identity = _identity_key(details)
+            root_link_counts[identity] = root_link_counts.get(identity, 0) + 1
+            marker_details[identity] = details
+
+        retired_prefixes = set()
+        for identity, details in marker_details.items():
+            exact_bindings = bindings.get(identity, set())
+            if len(exact_bindings) != 1:
+                raise RepositoryIntegrityError(
+                    "marcador aposentado sem proveniência de transação"
+                )
+            prefix, _ = next(iter(exact_bindings))
+            if prefix not in intents:
+                raise RepositoryIntegrityError(
+                    "marcador aposentado sem intent durável"
+                )
+            if details.st_nlink != root_link_counts[identity]:
+                raise RepositoryIntegrityError(
+                    "objeto privado aposentado possui hard link externo"
+                )
+            retired_prefixes.add(prefix)
+        return set(marker_details), aborted_prefixes, retired_prefixes
+
+    def _all_prefix_paths_retired(self, prefixes: set[str]) -> bool:
         retired_identities = set()
-        for name in self._root_names():
+        names = self._root_names()
+        for name in names:
             if not _RETIRED_NAME.fullmatch(name):
                 continue
             details = _lstat(self._root / name, root_fd=self._root_fd)
             _validate_retired(details)
             retired_identities.add(_identity_key(details))
-        for path in paths:
-            if not _entry_exists(path, root_fd=self._root_fd):
+        for name in names:
+            stage = _STAGING_NAME.fullmatch(name)
+            final = _FINAL_NAME.fullmatch(name)
+            if stage:
+                prefix = f"{stage['workspace']}.{stage['content']}"
+            elif final:
+                prefix = f"{final['workspace']}.{final['content']}"
+            else:
                 continue
-            details = _lstat(path, root_fd=self._root_fd)
+            if prefix not in prefixes:
+                continue
+            details = _lstat(self._root / name, root_fd=self._root_fd)
             if _identity_key(details) not in retired_identities:
                 return False
         return True
+
+    def _abort_intent(self, prefix: str, intents) -> None:
+        nonce, path, details = intents[prefix]
+        _mark_intent_aborted(
+            path,
+            details,
+            nonce,
+            root_fd=self._root_fd,
+        )
 
     def _audit_runtime_inventory(self) -> None:
         self._validate_control_identity(
@@ -773,25 +929,51 @@ class LocalPrivateContentStore:
         )
         groups: dict[str, set[str]] = {}
         stage_groups: dict[str, set[str]] = {}
+        intents = {}
+        aborted = {}
         stages = []
         finals = []
-        retired_identities = set()
+        retired_markers = []
         for name in self._root_names():
             if name in {_LOCK_NAME, _JOURNAL_NAME, _ANCHOR_NAME}:
                 continue
+            intent = _INTENT_NAME.fullmatch(name)
+            if intent:
+                prefix = f"{intent['workspace']}.{intent['content']}"
+                if prefix in intents:
+                    raise RepositoryIntegrityError("intent privado duplicado")
+                path = self._root / name
+                intents[prefix] = (
+                    intent["nonce"],
+                    path,
+                    _lstat(path, root_fd=self._root_fd),
+                )
+                continue
+            aborted_match = _ABORTED_NAME.fullmatch(name)
+            if aborted_match:
+                nonce = aborted_match["nonce"]
+                if nonce in aborted:
+                    raise RepositoryIntegrityError("intent abortado duplicado")
+                path = self._root / name
+                aborted[nonce] = (path, _lstat(path, root_fd=self._root_fd))
+                continue
             if _RETIRED_NAME.fullmatch(name):
-                details = _lstat(self._root / name, root_fd=self._root_fd)
+                path = self._root / name
+                details = _lstat(path, root_fd=self._root_fd)
                 _validate_retired(details)
-                retired_identities.add(_identity_key(details))
+                retired_markers.append((path, details))
                 continue
             stage = _STAGING_NAME.fullmatch(name)
             if stage:
-                details = _lstat(self._root / name, root_fd=self._root_fd)
+                path = self._root / name
+                details = _lstat(path, root_fd=self._root_fd)
                 _validate_regular(details, expected_links=None)
                 stages.append(
                     (
                         f"{stage['workspace']}.{stage['content']}",
                         stage["member"],
+                        stage["nonce"],
+                        path,
                         details,
                     )
                 )
@@ -800,21 +982,38 @@ class LocalPrivateContentStore:
             if final is None:
                 raise RepositoryIntegrityError("objeto inesperado no private root")
             prefix = f"{final['workspace']}.{final['content']}"
-            details = _lstat(self._root / name, root_fd=self._root_fd)
+            path = self._root / name
+            details = _lstat(path, root_fd=self._root_fd)
             _validate_regular(details, expected_links=None)
-            finals.append((prefix, final["member"], details))
+            finals.append((prefix, final["member"], path, details))
+
+        retired_identities, aborted_prefixes, retired_prefixes = (
+            self._validate_namespace_provenance(
+                intents,
+                aborted,
+                stages,
+                finals,
+                retired_markers,
+            )
+        )
+        if not retired_prefixes.issubset(aborted_prefixes):
+            raise RepositoryIntegrityError("aposentadoria privada sem intent abortado")
+        if set(intents) != self._known_prefixes or self._known_prefixes != (
+            self._committed | aborted_prefixes
+        ):
+            raise RepositoryIntegrityError("inventário de intents privados diverge")
 
         def is_retired(details: os.stat_result) -> bool:
             return _identity_key(details) in retired_identities
 
-        stages = [item for item in stages if not is_retired(item[2])]
-        finals = [item for item in finals if not is_retired(item[2])]
+        stages = [item for item in stages if not is_retired(item[4])]
+        finals = [item for item in finals if not is_retired(item[3])]
         finals_by_key = {
-            (prefix, member): details for prefix, member, details in finals
+            (prefix, member): details for prefix, member, _, details in finals
         }
-        for prefix, member, _ in stages:
+        for prefix, member, _, _, _ in stages:
             stage_groups.setdefault(prefix, set()).add(member)
-        for prefix, member, _ in finals:
+        for prefix, member, _, _ in finals:
             groups.setdefault(prefix, set()).add(member)
         if set(groups) != self._committed or any(
             members != _COMMITTED_MEMBERS for members in groups.values()
@@ -822,7 +1021,7 @@ class LocalPrivateContentStore:
             members != _COMMITTED_MEMBERS for members in stage_groups.values()
         ):
             raise RepositoryIntegrityError("inventário privado diverge do estado confirmado")
-        for prefix, member, stage_details in stages:
+        for prefix, member, _, _, stage_details in stages:
             final_details = finals_by_key.get((prefix, member))
             if final_details is None or not _same_identity(
                 stage_details, final_details
@@ -846,19 +1045,41 @@ class LocalPrivateContentStore:
         ):
             raise RepositoryIntegrityError("journal privado diverge do estado confirmado")
 
-    def _recover(self) -> set[str]:
+    def _recover(self) -> tuple[set[str], set[str]]:
         groups: dict[str, set[str]] = {}
-        stages: list[tuple[str, str, Path, os.stat_result]] = []
+        intents = {}
+        aborted = {}
+        stages: list[tuple[str, str, str, Path, os.stat_result]] = []
         final_objects: list[tuple[str, str, Path, os.stat_result]] = []
-        retired_identities = set()
+        retired_markers = []
         for name in self._root_names():
             if name in {_LOCK_NAME, _JOURNAL_NAME, _ANCHOR_NAME}:
+                continue
+            intent = _INTENT_NAME.fullmatch(name)
+            if intent:
+                prefix = f"{intent['workspace']}.{intent['content']}"
+                if prefix in intents:
+                    raise RepositoryIntegrityError("intent privado duplicado")
+                path = self._root / name
+                intents[prefix] = (
+                    intent["nonce"],
+                    path,
+                    _lstat(path, root_fd=self._root_fd),
+                )
+                continue
+            aborted_match = _ABORTED_NAME.fullmatch(name)
+            if aborted_match:
+                nonce = aborted_match["nonce"]
+                if nonce in aborted:
+                    raise RepositoryIntegrityError("intent abortado duplicado")
+                path = self._root / name
+                aborted[nonce] = (path, _lstat(path, root_fd=self._root_fd))
                 continue
             if _RETIRED_NAME.fullmatch(name):
                 retired_path = self._root / name
                 retired_details = _lstat(retired_path, root_fd=self._root_fd)
                 _validate_retired(retired_details)
-                retired_identities.add(_identity_key(retired_details))
+                retired_markers.append((retired_path, retired_details))
                 continue
             stage = _STAGING_NAME.fullmatch(name)
             if stage:
@@ -867,7 +1088,13 @@ class LocalPrivateContentStore:
                 _validate_regular(stage_details, expected_links=None)
                 stage_prefix = f"{stage['workspace']}.{stage['content']}"
                 stages.append(
-                    (stage_prefix, stage["member"], stage_path, stage_details)
+                    (
+                        stage_prefix,
+                        stage["member"],
+                        stage["nonce"],
+                        stage_path,
+                        stage_details,
+                    )
                 )
                 continue
             final = _FINAL_NAME.fullmatch(name)
@@ -884,12 +1111,20 @@ class LocalPrivateContentStore:
                 )
             )
 
+        retired_identities, aborted_prefixes, retired_prefixes = (
+            self._validate_namespace_provenance(
+                intents,
+                aborted,
+                stages,
+                final_objects,
+                retired_markers,
+            )
+        )
+
         def is_retired(details: os.stat_result) -> bool:
             return _identity_key(details) in retired_identities
 
-        all_stages = stages
-        all_final_objects = final_objects
-        stages = [item for item in stages if not is_retired(item[3])]
+        stages = [item for item in stages if not is_retired(item[4])]
         final_objects = [item for item in final_objects if not is_retired(item[3])]
         finals_by_key = {
             (prefix, member): (path, details)
@@ -918,19 +1153,23 @@ class LocalPrivateContentStore:
         journal_extra = journal[len(anchor) :]
         if len(journal_extra) > 1 or (journal_extra and journal_tail):
             raise RepositoryIntegrityError("journal privado perdeu proveniência")
+        if not (set(journal) | set(anchor)).issubset(intents):
+            raise RepositoryIntegrityError("ledger privado sem intent durável")
         committed_groups = {
-            prefix for prefix, members in groups.items() if "commit" in members
+            prefix
+            for prefix, members in groups.items()
+            if "commit" in members and prefix not in aborted_prefixes
         }
-        uncommitted_groups = set(groups) - committed_groups
-
+        unmarked_intents = set(intents) - aborted_prefixes - set(common)
         pending_prefix = journal_extra[0] if journal_extra else None
+        pending_without_wal = False
         if journal_tail is not None:
             if anchor_tail is not None:
                 raise RepositoryIntegrityError("journal privado perdeu proveniência")
             fragment = journal_tail.decode("ascii")
             candidates = [
                 prefix
-                for prefix in uncommitted_groups
+                for prefix in unmarked_intents | set(groups)
                 if prefix.startswith(fragment)
             ]
             if len(candidates) != 1:
@@ -938,6 +1177,15 @@ class LocalPrivateContentStore:
                     "journal privado truncado sem proveniência"
                 )
             pending_prefix = candidates[0]
+        elif pending_prefix is None:
+            candidates = unmarked_intents - set(journal)
+            if len(candidates) > 1:
+                raise RepositoryIntegrityError("intents privados pendentes ambíguos")
+            if candidates:
+                pending_prefix = next(iter(candidates))
+                pending_without_wal = True
+        if pending_prefix is not None and pending_prefix not in intents:
+            raise RepositoryIntegrityError("intent privado pendente ausente")
         if anchor_tail is not None:
             if (
                 pending_prefix is None
@@ -955,12 +1203,19 @@ class LocalPrivateContentStore:
         if expected_commits != committed_groups:
             raise RepositoryIntegrityError("journal privado diverge de commits confirmados")
 
+        pending_is_committed = pending_prefix in committed_groups
+        cleanup_prefixes = set(aborted_prefixes)
+        if pending_prefix is not None and not pending_is_committed:
+            cleanup_prefixes.add(pending_prefix)
+        if not retired_prefixes.issubset(cleanup_prefixes):
+            raise RepositoryIntegrityError("aposentadoria privada sem intent abortado")
+
         linked_members: dict[str, set[str]] = {}
-        for stage_prefix, stage_member, stage_path, stage_details in stages:
-            if stage_prefix != pending_prefix and stage_prefix not in committed_groups:
-                raise RepositoryIntegrityError("staging privado sem proveniência durável")
-            if stage_prefix == pending_prefix and stage_prefix not in committed_groups:
+        for stage_prefix, stage_member, _, stage_path, stage_details in stages:
+            if stage_prefix in cleanup_prefixes:
                 continue
+            if stage_prefix not in committed_groups:
+                raise RepositoryIntegrityError("staging privado sem proveniência durável")
             if stage_details.st_nlink == 1:
                 raise RepositoryIntegrityError(
                     "staging privado confirmado sem destino exato"
@@ -989,7 +1244,7 @@ class LocalPrivateContentStore:
         for prefix, member, final_path, details in final_objects:
             expected_links = (
                 None
-                if prefix == pending_prefix and prefix not in committed_groups
+                if prefix in cleanup_prefixes
                 else 2 if member in linked_members.get(prefix, set()) else 1
             )
             _validate_regular(details, expected_links=expected_links)
@@ -1014,11 +1269,8 @@ class LocalPrivateContentStore:
                 )
                 committed.add(prefix)
                 continue
-            if "commit" not in members:
-                if (
-                    prefix != pending_prefix
-                    or not members.issubset(set(_MEMBERS))
-                ):
+            if prefix in cleanup_prefixes:
+                if not members.issubset(_COMMITTED_MEMBERS):
                     raise RepositoryIntegrityError(
                         "registro privado sem proveniência durável"
                     )
@@ -1036,44 +1288,48 @@ class LocalPrivateContentStore:
                         )
                     )
                 continue
-            raise RepositoryIntegrityError("registro privado confirmado incompleto")
+            raise RepositoryIntegrityError("registro privado sem proveniência durável")
 
         common_bytes = sum(len(entry) + 1 for entry in common)
-        pending_is_committed = pending_prefix in committed_groups
+        mutated = False
         if journal_tail is not None:
             if pending_prefix is None:
                 raise RepositoryIntegrityError(
                     "journal privado truncado sem proveniência"
                 )
             self._complete_torn_intent(pending_prefix, journal_tail)
+            mutated = True
         for final_path, final_details in cleanup_finals:
             self._retire_internal(final_path, expected=final_details)
-        for stage_prefix, _, stage_path, stage_details in stages:
-            if stage_prefix not in committed_groups:
+            mutated = True
+        for stage_prefix, _, _, stage_path, stage_details in stages:
+            if stage_prefix in cleanup_prefixes:
                 self._retire_internal(stage_path, expected=stage_details)
-        pending_paths = [
-            path
-            for prefix, _, path, _ in (*all_final_objects, *all_stages)
-            if prefix == pending_prefix
-        ]
-        if (
-            pending_prefix is not None
-            and not pending_is_committed
-            and not self._all_existing_paths_retired(pending_paths)
-        ):
+                mutated = True
+        if cleanup_prefixes and not self._all_prefix_paths_retired(cleanup_prefixes):
             raise RepositoryIntegrityError(
                 "rollback privado sem aposentadoria durável completa"
             )
+        for prefix in cleanup_prefixes - aborted_prefixes:
+            self._abort_intent(prefix, intents)
+            mutated = True
         if journal_tail is not None or (
-            pending_prefix is not None and not pending_is_committed
+            pending_prefix is not None
+            and not pending_is_committed
+            and not pending_without_wal
         ):
             self._truncate_ledger(self._journal_fd, common_bytes)
+            mutated = True
         if pending_is_committed:
             self._truncate_ledger(self._anchor_fd, common_bytes)
             self._append_ledger(self._anchor_fd, pending_prefix)
+            mutated = True
         elif anchor_bytes != common_bytes or anchor_tail is not None:
             self._truncate_ledger(self._anchor_fd, common_bytes)
-        return committed
+            mutated = True
+        if mutated:
+            return self._recover()
+        return committed, set(intents)
 
     def _ensure_open(self) -> None:
         if self._closed or self._close_failed:
@@ -1198,18 +1454,19 @@ class LocalPrivateContentStore:
         with self._mutex:
             self._ensure_open()
             self._audit_runtime_inventory()
-            if prefix in self._committed or any(
+            if prefix in self._known_prefixes or any(
                 _entry_exists(path, root_fd=self._root_fd)
                 for path in paths.values()
             ):
                 raise RepositoryConflict("identidade de conteúdo privado já existe")
-            if len(self._committed) >= _MAX_JOURNAL_ENTRIES:
+            if len(self._known_prefixes) >= _MAX_JOURNAL_ENTRIES:
                 raise RepositoryError("armazenamento privado atingiu limite de registros")
             nonce = uuid4().hex
             stages = {
                 member: self._root / f".staging.{prefix}.{nonce}.{member}"
                 for member in (*_MEMBERS, "commit")
             }
+            intent_path = self._root / f".intent.{prefix}.{nonce}"
             manifest = _canonical_manifest(_manifest_for(metadata))
             metadata_checksum = hashlib.sha256(manifest).hexdigest().encode("ascii")
             published: list[tuple[Path, os.stat_result]] = []
@@ -1217,7 +1474,13 @@ class LocalPrivateContentStore:
             journal_start = os.lseek(self._journal_fd, 0, os.SEEK_END)
             anchor_start = os.lseek(self._anchor_fd, 0, os.SEEK_END)
             commit_created = False
+            intent_identity = None
             try:
+                intent_identity = _create_empty_fsynced(
+                    intent_path,
+                    root_fd=self._root_fd,
+                )
+                self._known_prefixes.add(prefix)
                 self._append_intent(prefix)
                 _write_fsynced(stages["content"], record.content, root_fd=self._root_fd)
                 stage_identities[stages["content"]] = _lstat(
@@ -1286,7 +1549,7 @@ class LocalPrivateContentStore:
             except OSError as exc:
                 raise RepositoryError("falha ao armazenar conteúdo privado") from exc
             finally:
-                if not commit_created:
+                if not commit_created and intent_identity is not None:
                     cleanup_complete = True
                     for path, identity in published:
                         try:
@@ -1307,17 +1570,21 @@ class LocalPrivateContentStore:
                             cleanup_complete = False
                     try:
                         cleanup_complete = cleanup_complete and (
-                            self._all_existing_paths_retired(
-                                (*paths.values(), *stages.values())
-                            )
+                            self._all_prefix_paths_retired({prefix})
                         )
                     except (OSError, RepositoryIntegrityError):
                         cleanup_complete = False
                     if cleanup_complete:
                         try:
+                            _mark_intent_aborted(
+                                intent_path,
+                                intent_identity,
+                                nonce,
+                                root_fd=self._root_fd,
+                            )
                             self._truncate_ledger(self._journal_fd, journal_start)
                             self._truncate_ledger(self._anchor_fd, anchor_start)
-                        except OSError:
+                        except (OSError, RepositoryIntegrityError):
                             pass
 
     @_controlled_filesystem_errors("falha ao ler conteúdo privado")

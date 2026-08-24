@@ -49,6 +49,10 @@ onde Python não oferece `dir_fd`/`O_NOFOLLOW`:
   .store-lock
   .commit-log
   .commit-anchor
+  .intent.<workspace-uuid>.<content-uuid>.<nonce>
+  .aborted.<nonce>                         # somente transação abortada
+  .staging.<workspace-uuid>.<content-uuid>.<nonce>.<member>
+  .retired.<nonce>                         # somente inode abortado
   <workspace-uuid>.<content-uuid>.content
   <workspace-uuid>.<content-uuid>.metadata
   <workspace-uuid>.<content-uuid>.metadata-sha256
@@ -59,9 +63,11 @@ No Windows, `.store-lock` permanece aberto e exclusivamente travado durante a
 vida do adapter; o handle impede que o único diretório ancestral seja removido
 ou renomeado. No POSIX, o root permanece aberto e todas as operações abaixo
 dele usam `dir_fd` e `O_NOFOLLOW`. Arquivos são abertos somente após comparação
-de identidade `lstat/fstat/lstat`, devem ser regulares, não-reparse e ter um
-único hard link no estado confirmado. Nenhum metadado do chamador participa de
-um nome físico.
+de identidade `lstat/fstat/lstat` e devem ser regulares e não-reparse. Controles
+e intents confirmados têm um link; cada membro confirmado tem exatamente os
+dois aliases staging/final. Objetos abortados reconciliam `st_nlink` com todos
+os seus aliases observados dentro do root e rejeitam qualquer hardlink externo.
+Nenhum metadado do chamador participa de um nome físico.
 
 ## Escrita e duplicidade
 
@@ -71,13 +77,14 @@ global nem compartilhamento físico entre workspaces. Não existe update/delete
 no port V1 e uma colisão de UUID nunca sobrescreve o registro existente.
 
 A instância adquire um singleton de processo por root; writers da mesma
-instância são serializados. Antes da primeira mutação, a escrita sincroniza a
-intenção no journal. Os nomes staging vinculam workspace, conteúdo e nonce no
+instância são serializados. Antes da primeira mutação de dados, a escrita cria
+e sincroniza um intent físico vazio com workspace, conteúdo e nonce; depois
+sincroniza a intenção no journal. Os nomes staging vinculam os mesmos valores no
 mesmo root. Cada arquivo é publicado por hard link `no-replace`, mantendo o
 staging como prova de identidade até a confirmação; nunca há rename que possa
 sobrescrever:
 
-`journal-intent fsync → exclusive write → fsync → hard-link no-replace
+`physical-intent fsync → journal-intent fsync → exclusive write → fsync → hard-link no-replace
 → verificação integral → commit staging fsync → commit hard-link
 → anchor-confirmation fsync → aliases staging preservados → retorno`
 
@@ -94,8 +101,10 @@ sobrescrever. Falha anterior ao commit não apaga nomes após uma verificação
 separada. Em vez disso, cria um hardlink aleatório `.retired.*` com semântica
 `no-replace` e confirma que ele aponta ao inode capturado. Qualquer inode assim
 marcado fica permanentemente inerte para catálogo/leitura. Os nomes e bytes
-permanecem preservados como evidência, e o WAL só é consumido depois que todos
-os membros da transação estão aposentados de forma durável.
+permanecem preservados como evidência. Um hardlink `.aborted.*` no intent fixa
+o estado abortado; marcadores `.retired.*` só são aceitos quando ligados a um
+membro canônico dessa mesma transação. O WAL só é consumido depois que todos os
+membros estão aposentados e o intent abortado está durável.
 
 ## Integridade e reopen
 
@@ -114,11 +123,13 @@ sem qualquer mutação. Somente depois de tudo ser válido, reconcilia aliases
 staging→final que correspondem à única intenção durável pendente e aposenta
 componentes ainda não visíveis por marcadores hardlink, sem `unlink`. Um crash
 ou erro durante esse rollback mantém a intenção e permite repetição idempotente.
-Uma intenção truncada mecanicamente vinculada é completada e fsyncada antes da
-primeira aposentadoria, preservando sua identidade integral caso haja uma nova
-queda. Antes de consumir o WAL, a recuperação reabre o inventário e exige que
-todo nome existente da transação esteja ligado a um marcador aposentado válido.
-Um nome staging/final sem WAL ou marcador correspondente nunca é adotado nem
+Uma intenção truncada é vinculada ao único intent físico ainda não confirmado
+nem abortado, completada e fsyncada antes da primeira aposentadoria. Isso cobre
+inclusive a queda no primeiro append, antes de qualquer staging existir. Antes
+de consumir o WAL, a recuperação reabre todo o prefixo e exige que cada nome
+existente esteja ligado a um marcador aposentado válido; depois reexecuta a
+recuperação sobre o estado persistido. Um nome staging/final sem intent e estado
+durável correspondente nunca é adotado nem
 apagado: bloqueia a abertura e preserva a evidência. O
 journal é write-ahead: contém no máximo uma intenção além do anchor. Se a queda
 ocorre depois do commit e antes da confirmação, somente esse registro integral,

@@ -78,7 +78,8 @@
   its existing trust-anchor lock without creating bytes, bind directory identity
   across acquisition, hold
   one exclusive kernel singleton, derive only flat canonical UUID names, fsync
-  the write-ahead intent before any mutation, write workspace/content/nonce-bound
+  a physical workspace/content/nonce intent before any data mutation, then fsync
+  the matching write-ahead journal entry and write workspace/content/nonce-bound
   staging files directly below the anchored root, fsync them, publish by
   no-replace hard links while retaining identity aliases, atomically publish the
   staged visibility marker, fsync the independent confirmation anchor, and keep
@@ -100,10 +101,12 @@
   adding no-replace `.retired.*` hardlinks bound to captured inode identity;
   never unlink after a separate identity check, and consume WAL only after all
   members are durably inert. Canonicalize and fsync a uniquely attributable
-  torn intent before retirement, require all four final/staging identity pairs
-  for every committed record, and re-audit all pending paths after retirement
-  before consuming WAL. Unknown valid-shaped names and replacements fail closed
-  or become inert without destructive cleanup.
+  torn intent before retirement, using a pre-WAL fsynced physical intent to
+  recover even the first partial append. Require all four final/staging identity
+  pairs for every committed record. Bind every retired inode to an exact aborted
+  intent, reconcile its link count against all root-owned aliases, and re-audit
+  the complete prefix after retirement before consuming WAL. Unknown valid-shaped
+  names and replacements fail closed or become inert without destructive cleanup.
 
 ### Task 3: Prove containment, isolation and privacy
 
