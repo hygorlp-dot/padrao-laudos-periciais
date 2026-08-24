@@ -17,6 +17,15 @@ export type ResolvedRoute =
 
 const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+export const DIRECTORY_ROUTE: ShellRoute = {
+  path: "/",
+  index: "00",
+  label: "Perícias",
+  description:
+    "Abra uma perícia técnica existente ou inicie um novo workspace local.",
+  kind: "home",
+};
+
 export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
   {
     path: "/",
@@ -143,7 +152,7 @@ export function resolveRoute(pathname: string): ResolvedRoute {
       kind: "directory",
       pathname: "/",
       workspaceId: undefined,
-      route: WORKFLOW_ROUTES[0],
+      route: DIRECTORY_ROUTE,
     };
   }
 

@@ -31,16 +31,22 @@ def test_frontend_production_source_is_present_and_confined_to_ui():
         assert not forbidden_imports.search(source.read_text(encoding="utf-8")), source
 
 
-def test_frontend_production_source_has_no_secret_or_network_capability():
+def test_frontend_production_source_has_no_secret_or_unbounded_network_capability():
     forbidden = re.compile(
-        r"\b(?:fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(|"
-        r"navigator\.sendBeacon|X-Local-API-Token|Bearer\s|"
+        r"\b(?:XMLHttpRequest|WebSocket|EventSource)\s*\(|"
+        r"navigator\.sendBeacon|X-Local-API-Token|Bearer\s|https?://|"
         r"localStorage|sessionStorage|indexedDB|api[_-]?key",
         re.IGNORECASE,
     )
 
+    fetch_sources = []
     for source in production_sources():
-        assert not forbidden.search(source.read_text(encoding="utf-8")), source
+        text = source.read_text(encoding="utf-8")
+        assert not forbidden.search(text), source
+        if re.search(r"\bfetch\s*\(", text):
+            fetch_sources.append(source.relative_to(ROOT).as_posix())
+
+    assert fetch_sources == ["frontend/src/data/workspaces.ts"]
 
 
 def test_frontend_runtime_dependencies_stay_minimal():

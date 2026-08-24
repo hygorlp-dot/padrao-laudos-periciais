@@ -1,63 +1,60 @@
 import { useEffect } from "react";
 
-import { findRoute } from "../routes/routeCatalog";
+import { resolveRoute, type ShellRoute } from "../routes/routeCatalog";
 import { AppShell } from "../ui/AppShell";
 import { PageHeader } from "../ui/PageHeader";
-import { StatusState } from "../ui/StatusState";
+import { WorkspaceDirectory } from "../workspaces/WorkspaceDirectory";
+import { WorkspaceView } from "../workspaces/WorkspaceView";
 import { navigate, useCurrentPath } from "./router";
-
-function ForwardMark() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 20 20">
-      <path d="M4 10h11M11 5l5 5-5 5" />
-    </svg>
-  );
-}
 
 export function App() {
   const currentPath = useCurrentPath();
-  const route = findRoute(currentPath);
+  const resolved = resolveRoute(currentPath);
 
   useEffect(() => {
-    document.title = `Sistema Pericial — ${route?.label ?? "Página não encontrada"}`;
-  }, [currentPath, route]);
+    const label = resolved.kind === "missing" ? "Página não encontrada" : resolved.route.label;
+    document.title = `Sistema Pericial — ${label}`;
+    document.getElementById("main-content")?.focus();
+  }, [currentPath, resolved]);
+
+  if (resolved.kind === "directory") {
+    return <WorkspaceDirectory />;
+  }
+
+  if (resolved.kind === "workspace") {
+    return (
+      <WorkspaceView
+        key={resolved.workspaceId}
+        currentPath={resolved.pathname}
+        workspaceId={resolved.workspaceId}
+        route={resolved.route}
+      />
+    );
+  }
+
+  const missingRoute: ShellRoute = {
+    path: currentPath,
+    index: "—",
+    label: "Página não encontrada",
+    description: "Este endereço não pertence à estrutura atual do ambiente pericial.",
+    kind: "missing",
+  };
 
   return (
-    <AppShell currentPath={currentPath} currentRoute={route}>
-      {route ? (
-        <article className="route-view" aria-labelledby="page-title">
-          <PageHeader route={route} />
-          {route.kind === "home" ? (
-            <StatusState kind="empty" onNavigate={navigate} />
-          ) : (
-            <StatusState kind="ready" stage={route.label} />
-          )}
-          {route.next ? (
-            <a
-              className="primary-action"
-              href={route.next.path}
-              onClick={navigate}
-            >
-              <span>Avançar para {route.next.label}</span>
-              <ForwardMark />
+    <AppShell currentPath={currentPath} currentRoute={missingRoute}>
+      <article className="route-view" aria-labelledby="page-title">
+        <PageHeader route={missingRoute} />
+        <section className="status-state status-state--error" role="alert">
+          <span className="state-mark" aria-hidden="true">!</span>
+          <div>
+            <h2>Não foi possível mostrar este endereço</h2>
+            <p>Volte à lista de perícias e tente novamente.</p>
+            <a className="text-action" href="/" onClick={navigate}>
+              Voltar às perícias
             </a>
-          ) : null}
-        </article>
-      ) : (
-        <article className="route-view" aria-labelledby="page-title">
-          <PageHeader
-            route={{
-              path: currentPath,
-              index: "—",
-              label: "Página não encontrada",
-              description:
-                "Este endereço não pertence à estrutura atual do ambiente pericial.",
-              kind: "missing",
-            }}
-          />
-          <StatusState kind="error" onNavigate={navigate} />
-        </article>
-      )}
+          </div>
+        </section>
+      </article>
     </AppShell>
   );
 }

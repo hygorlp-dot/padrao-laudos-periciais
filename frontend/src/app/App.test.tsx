@@ -1,108 +1,216 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { App } from "./App";
-import { StatusState } from "../ui/StatusState";
 
-const ROUTES = [
-  ["/", "Início"],
-  ["/processo", "Processo"],
-  ["/analise", "Análise"],
-  ["/planejamento", "Planejamento"],
-  ["/vistoria", "Vistoria"],
-  ["/evidencias", "Evidências"],
-  ["/constatacoes", "Constatações"],
-  ["/analise-tecnica", "Análise técnica"],
-  ["/laudo", "Laudo"],
-  ["/revisao", "Revisão"],
-  ["/exportar", "Exportar"],
-] as const;
+const ID = "11111111-1111-4111-8111-111111111111";
+const WORKSPACE = {
+  workspace_id: ID,
+  name: "Perícia de teste",
+  created_at: "2026-08-24T12:30:00+00:00",
+};
+
+function jsonResponse(status: number, value: object) {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+  });
+}
 
 beforeEach(() => {
   window.history.replaceState(null, "", "/");
   vi.unstubAllGlobals();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(200, { items: [] }))),
+  );
 });
 
-describe("application shell routing", () => {
-  test.each(ROUTES)("renders the canonical route %s", (path, heading) => {
-    window.history.replaceState(null, "", path);
+describe("pericia directory", () => {
+  test("announces loading before showing the real empty state", async () => {
+    let resolveRequest: (response: Response) => void = () => undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockReturnValue(
+        new Promise<Response>((resolve) => {
+          resolveRequest = resolve;
+        }),
+      ),
+    );
 
     render(<App />);
 
+    expect(screen.getByRole("status")).toHaveTextContent("Carregando perícias locais");
+    resolveRequest(jsonResponse(200, { items: [] }));
     expect(
-      screen.getByRole("heading", { level: 1, name: heading }),
+      await screen.findByRole("heading", { name: "Nenhuma perícia cadastrada" }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: heading, current: "page" }),
-    ).toHaveAttribute("href", path);
   });
 
-  test("renders a controlled fallback for an unknown route", () => {
-    window.history.replaceState(null, "", "/rota-inexistente");
+  test("offers one clear action when no workspace exists", async () => {
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Nenhuma perícia cadastrada" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Nova perícia" })).toBeInTheDocument();
+    expect(screen.queryByText(/dashboard|progresso|status/i)).not.toBeInTheDocument();
+  });
+
+  test("lists only persisted facts and opens an existing workspace", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { items: [WORKSPACE] }))
+      .mockResolvedValueOnce(jsonResponse(200, WORKSPACE));
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByText(WORKSPACE.name)).toBeInTheDocument();
+    expect(screen.getByRole("time")).toHaveAttribute("dateTime", WORKSPACE.created_at);
+    expect(screen.queryByText(ID)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("link", { name: `Abrir ${WORKSPACE.name}` }));
+
+    await waitFor(() => expect(window.location.pathname).toBe(`/pericias/${ID}`));
+    expect(await screen.findByRole("heading", { name: WORKSPACE.name })).toBeInTheDocument();
+    expect(screen.getByRole("banner")).toHaveTextContent(WORKSPACE.name);
+  });
+
+  test("creates with one labeled field and enters the persisted workspace", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { items: [] }))
+      .mockResolvedValueOnce(jsonResponse(201, WORKSPACE))
+      .mockResolvedValueOnce(jsonResponse(200, WORKSPACE));
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Nova perícia" }));
+    const input = screen.getByRole("textbox", { name: "Nome da perícia" });
+    await user.type(input, WORKSPACE.name);
+    await user.click(screen.getByRole("button", { name: "Criar perícia" }));
+
+    await waitFor(() => expect(window.location.pathname).toBe(`/pericias/${ID}`));
+    expect(await screen.findByRole("heading", { name: WORKSPACE.name })).toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByRole("main"));
+    expect(fetchSpy.mock.calls[1][1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ name: WORKSPACE.name }),
+    });
+  });
+
+  test("rejects whitespace locally and associates the error with the name field", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(jsonResponse(200, { items: [] })));
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Nova perícia" }));
+    const input = screen.getByRole("textbox", { name: "Nome da perícia" });
+    await user.type(input, "   ");
+    await user.click(screen.getByRole("button", { name: "Criar perícia" }));
+
+    const error = screen.getByText("Informe o nome da perícia");
+    expect(error).toHaveAttribute("id");
+    expect(input).toHaveAttribute("aria-describedby", error.id);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test("shows a sanitized recoverable API error instead of an endless spinner", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(503, { error: { code: "SQLITE_BUSY", message: "token secret" } }),
+      ),
+    );
+    render(<App />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Armazenamento local indisponível");
+    expect(alert).not.toHaveTextContent(/sqlite|token|http|503/i);
+    expect(screen.getByRole("button", { name: "Tentar novamente" })).toBeInTheDocument();
+  });
+});
+
+describe("workspace-aware routing", () => {
+  test("deep-links to a real workspace with the active stage and title", async () => {
+    window.history.replaceState(null, "", `/pericias/${ID}/vistoria`);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, WORKSPACE)));
 
     render(<App />);
 
     expect(
-      screen.getByRole("heading", { name: "Página não encontrada" }),
+      await screen.findByRole("heading", { level: 1, name: "Vistoria" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Voltar ao início" })).toHaveAttribute(
+    expect(screen.getByRole("banner")).toHaveTextContent(WORKSPACE.name);
+    expect(screen.getByRole("link", { name: "Vistoria", current: "page" })).toHaveAttribute(
+      "href",
+      `/pericias/${ID}/vistoria`,
+    );
+    expect(screen.getByRole("link", { name: "Processo" })).toHaveAttribute(
+      "href",
+      `/pericias/${ID}/processo`,
+    );
+    expect(document.title).toBe("Sistema Pericial — Vistoria");
+  });
+
+  test("keeps the workspace identity through browser history changes", async () => {
+    window.history.replaceState(null, "", `/pericias/${ID}/processo`);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, WORKSPACE)));
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Processo" })).toBeInTheDocument();
+
+    window.history.pushState(null, "", `/pericias/${ID}/vistoria`);
+    act(() => window.dispatchEvent(new PopStateEvent("popstate")));
+    expect(await screen.findByRole("heading", { name: "Vistoria" })).toBeInTheDocument();
+    expect(screen.getByRole("banner")).toHaveTextContent(WORKSPACE.name);
+  });
+
+  test("renders a controlled workspace-not-found state", async () => {
+    window.history.replaceState(null, "", `/pericias/${ID}/vistoria`);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(404, { error: { code: "WORKSPACE_NOT_FOUND", message: "internal" } }),
+      ),
+    );
+
+    render(<App />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Perícia não encontrada");
+    expect(alert).not.toHaveTextContent(/uuid|workspace|internal|http/i);
+    expect(screen.getByRole("link", { name: "Voltar às perícias" })).toHaveAttribute(
       "href",
       "/",
     );
   });
 
-  test("activates workflow links with the keyboard and updates the route", async () => {
-    const user = userEvent.setup();
+  test("keeps a distinct controlled fallback for an invalid route", () => {
+    window.history.replaceState(null, "", "/teste-inexistente");
     render(<App />);
-    const processLink = screen.getByRole("link", { name: "Processo" });
 
-    processLink.focus();
-    await user.keyboard("{Enter}");
-
-    expect(window.location.pathname).toBe("/processo");
-    expect(
-      screen.getByRole("heading", { level: 1, name: "Processo" }),
-    ).toBeInTheDocument();
-    expect(processLink).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { name: "Página não encontrada" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Voltar às perícias" })).toHaveAttribute(
+      "href",
+      "/",
+    );
+    expect(fetch).not.toHaveBeenCalled();
   });
+});
 
-  test("restores the matching view when browser history changes", () => {
+describe("shell invariants", () => {
+  test("keeps neutral descriptor, semantic landmarks and skip link", async () => {
     render(<App />);
-    window.history.pushState(null, "", "/vistoria");
-
-    act(() => {
-      window.dispatchEvent(new PopStateEvent("popstate"));
-    });
-
-    expect(
-      screen.getByRole("heading", { level: 1, name: "Vistoria" }),
-    ).toBeInTheDocument();
-  });
-
-  test("announces route changes and updates the document title", async () => {
-    const user = userEvent.setup();
-    render(<App />);
-
-    await user.click(screen.getByRole("link", { name: "Processo" }));
-
-    expect(screen.getByRole("status")).toHaveTextContent("Rota atual: Processo");
-    expect(document.title).toBe("Sistema Pericial — Processo");
-    expect(document.title).not.toMatch(/arcd/i);
-  });
-
-  test("uses a neutral functional descriptor instead of inferred branding", () => {
-    render(<App />);
+    await screen.findByRole("heading", { name: "Nenhuma perícia cadastrada" });
 
     expect(screen.getByLabelText("Sistema Pericial")).toBeInTheDocument();
-    expect(screen.getByText("Sistema Pericial")).toBeInTheDocument();
     expect(screen.queryByText(/arcd/i)).not.toBeInTheDocument();
-    expect(document.title).toBe("Sistema Pericial — Início");
-  });
-
-  test("renders semantic landmarks and a working skip link", () => {
-    render(<App />);
-
     expect(screen.getByRole("navigation", { name: "Fluxo pericial" })).toBeInTheDocument();
     expect(screen.getByRole("banner")).toBeInTheDocument();
     expect(screen.getByRole("main")).toHaveAttribute("id", "main-content");
@@ -110,50 +218,5 @@ describe("application shell routing", () => {
       "href",
       "#main-content",
     );
-  });
-
-  test("does not start a network request while rendering or navigating", async () => {
-    const fetchSpy = vi.fn();
-    vi.stubGlobal("fetch", fetchSpy);
-    const user = userEvent.setup();
-    render(<App />);
-
-    await user.click(screen.getByRole("link", { name: "Processo" }));
-
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-});
-
-describe("presentation states", () => {
-  test("loading is announced without fabricated progress", () => {
-    render(<StatusState kind="loading" />);
-
-    expect(screen.getByRole("status")).toHaveTextContent("Preparando esta etapa");
-    expect(screen.queryByText(/%/)).not.toBeInTheDocument();
-  });
-
-  test("empty state gives one clear next action", () => {
-    render(<StatusState kind="empty" />);
-
-    expect(screen.getByRole("heading", { name: "Nenhuma perícia selecionada" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Conhecer o fluxo" })).toHaveAttribute(
-      "href",
-      "/processo",
-    );
-  });
-
-  test("error state is actionable and contains no internal detail", () => {
-    render(<StatusState kind="error" />);
-
-    const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent("Não foi possível mostrar esta etapa");
-    expect(alert).toHaveTextContent("Volte ao início e tente novamente");
-    expect(alert).not.toHaveTextContent(/sqlite|traceback|exception|token/i);
-  });
-
-  test("ready state identifies the current workflow stage", () => {
-    render(<StatusState kind="ready" stage="Vistoria" />);
-
-    expect(screen.getByText("Vistoria está pronta para receber o fluxo futuro.")).toBeInTheDocument();
   });
 });

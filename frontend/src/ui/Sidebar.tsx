@@ -1,11 +1,13 @@
 import { navigate } from "../app/router";
-import { WORKFLOW_ROUTES } from "../routes/routeCatalog";
+import { WORKFLOW_ROUTES, workspacePath } from "../routes/routeCatalog";
 
 type SidebarProps = {
   currentPath: string;
+  workspaceId?: string;
+  workspaceName?: string;
 };
 
-export function Sidebar({ currentPath }: SidebarProps) {
+export function Sidebar({ currentPath, workspaceId, workspaceName }: SidebarProps) {
   return (
     <aside className="sidebar">
       <div className="brand-block" aria-label="Sistema Pericial">
@@ -16,28 +18,46 @@ export function Sidebar({ currentPath }: SidebarProps) {
       <nav className="workflow-nav" aria-label="Fluxo pericial">
         <ol>
           {WORKFLOW_ROUTES.map((route) => {
-            const isActive = route.path === currentPath;
+            const href = workspaceId
+              ? workspacePath(workspaceId, route.kind === "stage" ? route.path.slice(1) : undefined)
+              : route.kind === "home"
+                ? "/"
+                : undefined;
+            const isActive = href === currentPath;
+            const content = (
+              <>
+                <span className="workflow-index" aria-hidden="true">
+                  {route.index}
+                </span>
+                <span>{route.label}</span>
+              </>
+            );
             return (
               <li key={route.path}>
-                <a
-                  className="workflow-link"
-                  data-active={isActive || undefined}
-                  href={route.path}
-                  aria-current={isActive ? "page" : undefined}
-                  onClick={navigate}
-                >
-                  <span className="workflow-index" aria-hidden="true">
-                    {route.index}
+                {href ? (
+                  <a
+                    className="workflow-link"
+                    data-active={isActive || undefined}
+                    href={href}
+                    aria-current={isActive ? "page" : undefined}
+                    onClick={navigate}
+                  >
+                    {content}
+                  </a>
+                ) : (
+                  <span className="workflow-link" data-disabled>
+                    {content}
                   </span>
-                  <span>{route.label}</span>
-                </a>
+                )}
               </li>
             );
           })}
         </ol>
       </nav>
 
-      <p className="sidebar-note">Estrutura local · nenhum caso ativo</p>
+      <p className="sidebar-note">
+        {workspaceName ? `Perícia ativa · ${workspaceName}` : "Estrutura local · nenhuma perícia ativa"}
+      </p>
     </aside>
   );
 }
