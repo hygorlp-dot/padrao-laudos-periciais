@@ -15,20 +15,6 @@ from urllib.parse import urlsplit
 _CANONICAL_UUID = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 )
-_STAGES = frozenset(
-    {
-        "processo",
-        "analise",
-        "planejamento",
-        "vistoria",
-        "evidencias",
-        "constatacoes",
-        "analise-tecnica",
-        "laudo",
-        "revisao",
-        "exportar",
-    }
-)
 _ASSET_PATH = re.compile(r"/assets/[A-Za-z0-9][A-Za-z0-9._-]*")
 _SECURITY_HEADERS = {
     "Content-Security-Policy": (
@@ -92,15 +78,8 @@ def _canonical_path(target: str) -> str:
 def _is_spa_path(path: str) -> bool:
     if path == "/":
         return True
-    segments = path.split("/")
-    if (
-        len(segments) not in {3, 4}
-        or segments[0] != ""
-        or segments[1] != "pericias"
-        or _CANONICAL_UUID.fullmatch(segments[2]) is None
-    ):
-        return False
-    return len(segments) == 3 or segments[3] in _STAGES
+    segments = path.removeprefix("/").split("/")
+    return all(segment not in {"", ".", ".."} for segment in segments)
 
 
 def _proxy_target(path: str, method: str) -> str | None:
@@ -169,12 +148,14 @@ class ProductBridge:
     def _static(self, path: str, method: str) -> BridgeResponse:
         if method not in {"GET", "HEAD"}:
             return _error(405, "METHOD_NOT_ALLOWED", "método não permitido")
-        if _is_spa_path(path):
-            candidate = self._frontend_root / "index.html"
-            cache = "no-store"
-        elif _ASSET_PATH.fullmatch(path):
+        if path == "/assets" or path.startswith("/assets/"):
+            if _ASSET_PATH.fullmatch(path) is None:
+                return _error(404, "NOT_FOUND", "recurso local não encontrado")
             candidate = self._frontend_root / path.removeprefix("/")
             cache = "public, max-age=31536000, immutable"
+        elif _is_spa_path(path):
+            candidate = self._frontend_root / "index.html"
+            cache = "no-store"
         else:
             return _error(404, "NOT_FOUND", "recurso local não encontrado")
         resolved = candidate.resolve()

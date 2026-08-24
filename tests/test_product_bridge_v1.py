@@ -97,6 +97,86 @@ def test_product_bridge_serves_build_and_spa_deep_links_without_secret(tmp_path)
         runtime.close()
 
 
+def test_unknown_browser_route_loads_the_spa_router(tmp_path):
+    root = frontend_build(tmp_path)
+    runtime = build_product_runtime(tmp_path / "unknown-route.db", root, token=TOKEN)
+    try:
+        runtime.start()
+        status, headers, body = request(runtime, "GET", "/teste-inexistente")
+    finally:
+        runtime.close()
+
+    assert status == 200
+    assert headers["Content-Type"] == "text/html"
+    assert body == (root / "index.html").read_bytes()
+
+
+def test_unknown_browser_route_supports_head_without_a_body(tmp_path):
+    root = frontend_build(tmp_path)
+    runtime = build_product_runtime(tmp_path / "unknown-head.db", root, token=TOKEN)
+    try:
+        runtime.start()
+        status, headers, body = request(runtime, "HEAD", "/teste-inexistente")
+    finally:
+        runtime.close()
+
+    assert status == 200
+    assert headers["Content-Type"] == "text/html"
+    assert headers["Content-Length"] == "0"
+    assert body == b""
+
+
+def test_missing_asset_never_falls_back_to_the_spa(tmp_path):
+    root = frontend_build(tmp_path)
+    runtime = build_product_runtime(tmp_path / "missing-asset.db", root, token=TOKEN)
+    try:
+        runtime.start()
+        status, headers, body = request(runtime, "GET", "/assets/inexistente.js")
+    finally:
+        runtime.close()
+
+    assert status == 404
+    assert headers["Content-Type"] == "application/json; charset=utf-8"
+    assert body != (root / "index.html").read_bytes()
+    assert json.loads(body)["error"]["code"] == "NOT_FOUND"
+
+
+def test_unknown_app_api_route_never_falls_back_to_the_spa(tmp_path):
+    root = frontend_build(tmp_path)
+    runtime = build_product_runtime(tmp_path / "unknown-api.db", root, token=TOKEN)
+    try:
+        runtime.start()
+        status, headers, body = request(runtime, "GET", "/app-api/rota-inexistente")
+    finally:
+        runtime.close()
+
+    assert status == 404
+    assert headers["Content-Type"] == "application/json; charset=utf-8"
+    assert body != (root / "index.html").read_bytes()
+    assert json.loads(body)["error"]["code"] == "NOT_FOUND"
+
+
+def test_non_get_browser_route_never_falls_back_to_the_spa(tmp_path):
+    root = frontend_build(tmp_path)
+    runtime = build_product_runtime(tmp_path / "unknown-post.db", root, token=TOKEN)
+    try:
+        runtime.start()
+        status, headers, body = request(
+            runtime,
+            "POST",
+            "/teste-inexistente",
+            headers=browser_mutation_headers(runtime),
+            body={"name": "não é navegação"},
+        )
+    finally:
+        runtime.close()
+
+    assert status == 405
+    assert headers["Content-Type"] == "application/json; charset=utf-8"
+    assert body != (root / "index.html").read_bytes()
+    assert json.loads(body)["error"]["code"] == "METHOD_NOT_ALLOWED"
+
+
 @pytest.mark.parametrize(
     "headers",
     (
@@ -232,7 +312,9 @@ def test_upstream_failure_is_sanitized_and_token_never_reaches_public_bytes(tmp_
     bridge.start()
     try:
         status, _headers, body = request(bridge, "GET", "/app-api/v1/workspaces")
-        missing_status, _missing_headers, missing_body = request(bridge, "GET", "/missing")
+        missing_status, _missing_headers, missing_body = request(
+            bridge, "GET", "/assets/missing.js"
+        )
     finally:
         bridge.close()
 
@@ -252,7 +334,9 @@ def test_upstream_failure_is_sanitized_and_token_never_reaches_public_bytes(tmp_
         ("DELETE", "/app-api/v1/workspaces"),
         ("POST", "/app-api/v1/other"),
         ("GET", "/../scripts/backend_contract/application/models.py"),
+        ("GET", "/assets/../index.html"),
         ("GET", "/%2e%2e/scripts/backend_contract/application/models.py"),
+        ("GET", "/..\\scripts\\backend_contract\\application\\models.py"),
     ),
 )
 def test_bridge_exposes_only_the_workspace_slice(tmp_path, method, target):
