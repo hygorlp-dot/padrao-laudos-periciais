@@ -3,6 +3,8 @@
 from .models import (
     ArtifactRevision,
     PericiaWorkspace,
+    ProcessCaseData,
+    ProcessCaseSnapshot,
     WorkspaceId,
     canonical_payload_json,
     thaw_payload,
@@ -24,9 +26,11 @@ from .services import (
     CreateWorkspace,
     GetArtifactRevision,
     GetLatestArtifact,
+    GetProcessCase,
     GetWorkspace,
     ListArtifactRevisions,
     ListWorkspaces,
+    SaveProcessCase,
 )
 
 __all__ = [
@@ -44,12 +48,16 @@ __all__ = [
     "ListWorkspaces",
     "PersistenceSchemaError",
     "PericiaWorkspace",
+    "ProcessCaseData",
+    "ProcessCaseSnapshot",
     "RepositoryConflict",
     "RepositoryError",
     "RepositoryIntegrityError",
+    "SaveProcessCase",
     "WorkspaceId",
     "WorkspaceNotFound",
     "WorkspaceRepository",
+    "GetProcessCase",
     "canonical_payload_json",
     "thaw_payload",
 ]

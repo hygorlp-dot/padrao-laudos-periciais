@@ -61,6 +61,18 @@ class ArtifactRevisionRepository(Protocol):
         payload: object,
     ) -> ArtifactRevision: ...
 
+    def append_if_latest(
+        self,
+        *,
+        workspace_id: WorkspaceId,
+        artifact_kind: str,
+        artifact_id: str,
+        revision_id: str,
+        created_at: str,
+        payload: object,
+        expected_revision: int | None,
+    ) -> ArtifactRevision: ...
+
     def latest(
         self,
         workspace_id: WorkspaceId,

@@ -121,6 +121,77 @@ class PericiaWorkspace:
         _timestamp(self.created_at, "created_at")
 
 
+_PROCESS_CASE_FIELDS = (
+    "numero_processo",
+    "tribunal",
+    "vara",
+    "comarca_municipio",
+    "uf",
+    "parte_requerente",
+    "parte_requerida",
+)
+
+
+def _process_case_text(value: str, field: str) -> str:
+    if type(value) is not str:
+        raise TypeError(f"{field} deve ser texto")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{field} contém Unicode inválido") from exc
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessCaseData:
+    numero_processo: str
+    tribunal: str
+    vara: str
+    comarca_municipio: str
+    uf: str
+    parte_requerente: str
+    parte_requerida: str
+
+    def __post_init__(self):
+        for field in _PROCESS_CASE_FIELDS:
+            _process_case_text(getattr(self, field), field)
+
+    @classmethod
+    def empty(cls) -> ProcessCaseData:
+        return cls(**{field: "" for field in _PROCESS_CASE_FIELDS})
+
+    @classmethod
+    def from_mapping(cls, value: object) -> ProcessCaseData:
+        if type(value) is not dict or set(value) != set(_PROCESS_CASE_FIELDS):
+            raise ValueError("dados processuais exigem campos exatos")
+        return cls(**{field: value[field] for field in _PROCESS_CASE_FIELDS})
+
+    def as_dict(self) -> dict[str, str]:
+        return {field: getattr(self, field) for field in _PROCESS_CASE_FIELDS}
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessCaseSnapshot:
+    workspace_id: WorkspaceId
+    revision: int | None
+    updated_at: str | None
+    data: ProcessCaseData
+
+    def __post_init__(self):
+        if type(self.workspace_id) is not WorkspaceId:
+            raise TypeError("workspace_id inválido")
+        if self.revision is not None and (
+            type(self.revision) is not int or self.revision < 1
+        ):
+            raise ValueError("revision inválida")
+        if self.updated_at is not None:
+            _timestamp(self.updated_at, "updated_at")
+        if (self.revision is None) != (self.updated_at is None):
+            raise ValueError("metadados de revisão incompletos")
+        if type(self.data) is not ProcessCaseData:
+            raise TypeError("dados processuais inválidos")
+
+
 @dataclass(frozen=True, slots=True)
 class ArtifactRevision:
     workspace_id: WorkspaceId

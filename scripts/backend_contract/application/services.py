@@ -10,17 +10,25 @@ from uuid import UUID
 from .models import (
     ArtifactRevision,
     PericiaWorkspace,
+    ProcessCaseData,
+    ProcessCaseSnapshot,
     WorkspaceId,
     canonical_payload_json,
+    thaw_payload,
 )
 from .ports import (
     ArtifactRevisionNotFound,
     ArtifactRevisionRepository,
     Clock,
     IdGenerator,
+    RepositoryIntegrityError,
     WorkspaceNotFound,
     WorkspaceRepository,
 )
+
+
+_PROCESS_CASE_ARTIFACT_KIND = "PROCESS_CASE"
+_PROCESS_CASE_ARTIFACT_ID = "PROCESS_CASE"
 
 
 def _generated_uuid(ids: IdGenerator) -> UUID:
@@ -105,6 +113,92 @@ class ListWorkspaces:
         return self.repository.list_all()
 
 
+def _require_workspace(
+    repository: WorkspaceRepository, workspace_id: WorkspaceId
+) -> WorkspaceId:
+    workspace_id = _workspace_key(workspace_id)
+    if repository.get(workspace_id) is None:
+        raise WorkspaceNotFound(f"workspace não encontrado: {workspace_id}")
+    return workspace_id
+
+
+def _process_case_snapshot(
+    record: ArtifactRevision, expected_workspace_id: WorkspaceId
+) -> ProcessCaseSnapshot:
+    try:
+        if (
+            record.workspace_id != expected_workspace_id
+            or record.artifact_kind != _PROCESS_CASE_ARTIFACT_KIND
+            or record.artifact_id != _PROCESS_CASE_ARTIFACT_ID
+        ):
+            raise ValueError("identidade processual divergente")
+        data = ProcessCaseData.from_mapping(thaw_payload(record.payload))
+        return ProcessCaseSnapshot(
+            workspace_id=record.workspace_id,
+            revision=record.revision,
+            updated_at=record.created_at,
+            data=data,
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise RepositoryIntegrityError(
+            "dados processuais persistidos são inválidos"
+        ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class GetProcessCase:
+    workspaces: WorkspaceRepository
+    revisions: ArtifactRevisionRepository
+
+    def execute(self, workspace_id: WorkspaceId) -> ProcessCaseSnapshot:
+        workspace_id = _require_workspace(self.workspaces, workspace_id)
+        record = self.revisions.latest(
+            workspace_id,
+            _PROCESS_CASE_ARTIFACT_KIND,
+            _PROCESS_CASE_ARTIFACT_ID,
+        )
+        if record is None:
+            return ProcessCaseSnapshot(
+                workspace_id=workspace_id,
+                revision=None,
+                updated_at=None,
+                data=ProcessCaseData.empty(),
+            )
+        return _process_case_snapshot(record, workspace_id)
+
+
+@dataclass(frozen=True, slots=True)
+class SaveProcessCase:
+    workspaces: WorkspaceRepository
+    revisions: ArtifactRevisionRepository
+    clock: Clock
+    ids: IdGenerator
+
+    def execute(
+        self,
+        workspace_id: WorkspaceId,
+        data: ProcessCaseData,
+        expected_revision: int | None,
+    ) -> ProcessCaseSnapshot:
+        workspace_id = _require_workspace(self.workspaces, workspace_id)
+        if type(data) is not ProcessCaseData:
+            raise TypeError("dados processuais inválidos")
+        if expected_revision is not None and (
+            type(expected_revision) is not int or expected_revision < 1
+        ):
+            raise ValueError("expected_revision inválida")
+        record = self.revisions.append_if_latest(
+            workspace_id=workspace_id,
+            artifact_kind=_PROCESS_CASE_ARTIFACT_KIND,
+            artifact_id=_PROCESS_CASE_ARTIFACT_ID,
+            revision_id=str(_generated_uuid(self.ids)),
+            created_at=_generated_timestamp(self.clock),
+            payload=data.as_dict(),
+            expected_revision=expected_revision,
+        )
+        return _process_case_snapshot(record, workspace_id)
+
+
 @dataclass(frozen=True, slots=True)
 class AppendArtifactRevision:
     repository: ArtifactRevisionRepository
@@ -122,6 +216,11 @@ class AppendArtifactRevision:
         workspace_id = _workspace_key(workspace_id)
         artifact_kind = _artifact_key(artifact_kind, "artifact_kind")
         artifact_id = _artifact_key(artifact_id, "artifact_id")
+        if (
+            artifact_kind == _PROCESS_CASE_ARTIFACT_KIND
+            and artifact_id == _PROCESS_CASE_ARTIFACT_ID
+        ):
+            raise ValueError("identidade de artefato reservada")
         payload_snapshot = json.loads(canonical_payload_json(payload))
         revision_id = str(_generated_uuid(self.ids))
         created_at = _generated_timestamp(self.clock)

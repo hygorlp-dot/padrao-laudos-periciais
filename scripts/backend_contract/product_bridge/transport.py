@@ -86,6 +86,13 @@ def _proxy_target(path: str, method: str) -> str | None:
     if path == "/app-api/v1/workspaces" and method in {"GET", "POST"}:
         return "/v1/workspaces"
     prefix = "/app-api/v1/workspaces/"
+    process_case_suffix = "/process-case"
+    if method in {"GET", "POST"} and path.startswith(prefix) and path.endswith(
+        process_case_suffix
+    ):
+        workspace_id = path[len(prefix) : -len(process_case_suffix)]
+        if _CANONICAL_UUID.fullmatch(workspace_id):
+            return f"/v1/workspaces/{workspace_id}/process-case"
     if method == "GET" and path.startswith(prefix):
         workspace_id = path[len(prefix) :]
         if _CANONICAL_UUID.fullmatch(workspace_id):

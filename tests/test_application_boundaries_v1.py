@@ -179,7 +179,13 @@ def test_ports_expose_only_explicit_application_operations():
         name for name in ArtifactRevisionRepository.__dict__ if not name.startswith("_")
     }
     assert workspace_methods == {"create", "get", "list_all"}
-    assert revision_methods == {"append", "latest", "get_revision", "list_all"}
+    assert revision_methods == {
+        "append",
+        "append_if_latest",
+        "latest",
+        "get_revision",
+        "list_all",
+    }
     assert get_type_hints(WorkspaceRepository.get)["return"] == PericiaWorkspace | None
     assert get_type_hints(ArtifactRevisionRepository.latest)["return"] == ArtifactRevision | None
 

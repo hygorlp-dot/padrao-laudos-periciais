@@ -403,6 +403,9 @@ class SQLiteWorkspaceRepository(_SQLiteRepository):
         return tuple(self._from_row(row) for row in rows)
 
 
+_NO_REVISION_PRECONDITION = object()
+
+
 class SQLiteArtifactRevisionRepository(_SQLiteRepository):
     @staticmethod
     def _text_key(value, field: str) -> str:
@@ -438,6 +441,52 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
         created_at: str,
         payload: object,
     ) -> ArtifactRevision:
+        return self._append(
+            workspace_id=workspace_id,
+            artifact_kind=artifact_kind,
+            artifact_id=artifact_id,
+            revision_id=revision_id,
+            created_at=created_at,
+            payload=payload,
+            expected_revision=_NO_REVISION_PRECONDITION,
+        )
+
+    def append_if_latest(
+        self,
+        *,
+        workspace_id: WorkspaceId,
+        artifact_kind: str,
+        artifact_id: str,
+        revision_id: str,
+        created_at: str,
+        payload: object,
+        expected_revision: int | None,
+    ) -> ArtifactRevision:
+        if expected_revision is not None and (
+            type(expected_revision) is not int or expected_revision < 1
+        ):
+            raise ValueError("expected_revision inválida")
+        return self._append(
+            workspace_id=workspace_id,
+            artifact_kind=artifact_kind,
+            artifact_id=artifact_id,
+            revision_id=revision_id,
+            created_at=created_at,
+            payload=payload,
+            expected_revision=expected_revision,
+        )
+
+    def _append(
+        self,
+        *,
+        workspace_id: WorkspaceId,
+        artifact_kind: str,
+        artifact_id: str,
+        revision_id: str,
+        created_at: str,
+        payload: object,
+        expected_revision: object,
+    ) -> ArtifactRevision:
         workspace_key, artifact_kind, artifact_id = self._key(
             workspace_id, artifact_kind, artifact_id
         )
@@ -456,11 +505,16 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
                 ).fetchone()
                 if exists is None:
                     raise WorkspaceNotFound(f"workspace não encontrado: {workspace_id}")
-                revision = self._connection.execute(
-                    "SELECT COALESCE(MAX(revision), 0) + 1 FROM artifact_revisions "
+                current_revision = self._connection.execute(
+                    "SELECT COALESCE(MAX(revision), 0) FROM artifact_revisions "
                     "WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ?",
                     (workspace_key, artifact_kind, artifact_id),
                 ).fetchone()[0]
+                if expected_revision is not _NO_REVISION_PRECONDITION:
+                    expected_current = 0 if expected_revision is None else expected_revision
+                    if current_revision != expected_current:
+                        raise RepositoryConflict("revisão processual desatualizada")
+                revision = current_revision + 1
                 record = ArtifactRevision(
                     workspace_id=workspace_id,
                     artifact_kind=artifact_kind,

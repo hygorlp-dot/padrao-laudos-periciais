@@ -46,7 +46,10 @@ def test_frontend_production_source_has_no_secret_or_unbounded_network_capabilit
         if re.search(r"\bfetch\s*\(", text):
             fetch_sources.append(source.relative_to(ROOT).as_posix())
 
-    assert fetch_sources == ["frontend/src/data/workspaces.ts"]
+    assert sorted(fetch_sources) == [
+        "frontend/src/data/processCase.ts",
+        "frontend/src/data/workspaces.ts",
+    ]
 
 
 def test_frontend_runtime_dependencies_stay_minimal():

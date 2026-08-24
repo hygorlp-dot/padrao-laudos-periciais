@@ -40,7 +40,7 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
     index: "01",
     label: "Processo",
     description:
-      "Ponto de entrada do fluxo. A identificação e o contexto do trabalho ocuparão esta etapa.",
+      "Registre a identificação processual básica vinculada a esta perícia.",
     kind: "stage",
     next: { path: "/analise", label: "Análise" },
   },

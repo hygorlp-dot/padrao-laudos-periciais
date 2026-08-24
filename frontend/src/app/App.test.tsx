@@ -191,6 +191,37 @@ describe("pericia directory", () => {
 });
 
 describe("workspace-aware routing", () => {
+  test("renders the real process case form as the only primary action on Processo", async () => {
+    window.history.replaceState(null, "", `/pericias/${ID}/processo`);
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, WORKSPACE))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          workspace_id: ID,
+          revision: null,
+          updated_at: null,
+          data: {
+            numero_processo: "",
+            tribunal: "",
+            vara: "",
+            comarca_municipio: "",
+            uf: "",
+            parte_requerente: "",
+            parte_requerida: "",
+          },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Identificação do processo" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Salvar dados do processo" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Avançar para Análise" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /salvar dados do processo/i })).toHaveLength(1);
+  });
+
   test("deep-links to a real workspace with the active stage and title", async () => {
     window.history.replaceState(null, "", `/pericias/${ID}/vistoria`);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, WORKSPACE)));

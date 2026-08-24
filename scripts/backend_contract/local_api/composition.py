@@ -15,9 +15,11 @@ from ..application.services import (
     CreateWorkspace,
     GetArtifactRevision,
     GetLatestArtifact,
+    GetProcessCase,
     GetWorkspace,
     ListArtifactRevisions,
     ListWorkspaces,
+    SaveProcessCase,
 )
 from ..infrastructure.sqlite import SQLiteApplicationStore
 from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
@@ -122,6 +124,10 @@ def build_local_api(
         get_latest_artifact=GetLatestArtifact(store.revisions),
         get_artifact_revision=GetArtifactRevision(store.revisions),
         list_artifact_revisions=ListArtifactRevisions(store.revisions),
+        get_process_case=GetProcessCase(store.workspaces, store.revisions),
+        save_process_case=SaveProcessCase(
+            store.workspaces, store.revisions, local_clock, local_ids
+        ),
     )
     api = LocalApi(
         services,

@@ -535,7 +535,13 @@ def test_public_adapters_implement_only_append_only_port_operations():
         if not name.startswith("_")
     }
     assert workspace_methods == {"create", "get", "list_all"}
-    assert revision_methods == {"append", "latest", "get_revision", "list_all"}
+    assert revision_methods == {
+        "append",
+        "append_if_latest",
+        "latest",
+        "get_revision",
+        "list_all",
+    }
     assert not ({"update", "delete", "replace"} & (workspace_methods | revision_methods))
 
 
