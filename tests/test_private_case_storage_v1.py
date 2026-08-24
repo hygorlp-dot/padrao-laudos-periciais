@@ -827,6 +827,32 @@ def test_journal_entry_count_is_bounded_before_inventory_reconciliation(
         LocalPrivateContentStore(root)
 
 
+def test_store_rejects_ledger_capacity_before_any_persistent_mutation(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    monkeypatch.setattr(private_filesystem, "_MAX_JOURNAL_ENTRIES", 1)
+    first = _metadata(content=b"first")
+    second = _metadata(content_id=CONTENT_B, content=b"second")
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(first, b"first")
+        before = {
+            path.name: path.read_bytes()
+            for path in root.iterdir()
+            if path.name != ".store-lock"
+        }
+        with pytest.raises(RepositoryError, match="limite"):
+            private_store.store(second, b"second")
+        assert {
+            path.name: path.read_bytes()
+            for path in root.iterdir()
+            if path.name != ".store-lock"
+        } == before
+
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == (first,)
+
+
 def test_root_inventory_count_is_bounded_before_sorting(tmp_path, monkeypatch):
     root = tmp_path / "private"
     monkeypatch.setattr(private_filesystem, "_MAX_ROOT_ENTRIES", 4)
@@ -1457,6 +1483,55 @@ def test_closed_private_store_rejects_further_operations(tmp_path):
     store.close()
     with pytest.raises(RepositoryError, match="fechado"):
         store.list_all(WORKSPACE_A)
+
+
+def test_context_manager_preserves_body_exception_when_close_also_fails(
+    tmp_path, monkeypatch
+):
+    store = LocalPrivateContentStore(tmp_path / "private")
+    original_close = store.close
+
+    def fail_close():
+        raise RepositoryError("controlled close failure")
+
+    monkeypatch.setattr(store, "close", fail_close)
+    try:
+        with pytest.raises(ValueError, match="body failure") as captured:
+            with store:
+                raise ValueError("body failure")
+        assert any(
+            "controlled close failure" in note
+            for note in getattr(captured.value, "__notes__", ())
+        )
+    finally:
+        monkeypatch.setattr(store, "close", original_close)
+        original_close()
+
+
+@pytest.mark.parametrize("operation", ("store", "get", "list"))
+def test_public_operations_translate_raw_filesystem_errors_without_path_leakage(
+    tmp_path, monkeypatch, operation
+):
+    root = tmp_path / "private"
+    first = _metadata(content=b"first")
+    second = _metadata(content_id=CONTENT_B, content=b"second")
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(first, b"first")
+
+        def fail_inventory():
+            raise OSError("synthetic secret path C:/private/case")
+
+        monkeypatch.setattr(private_store, "_root_names", fail_inventory)
+        with pytest.raises(RepositoryError) as captured:
+            if operation == "store":
+                private_store.store(second, b"second")
+            elif operation == "get":
+                private_store.get(WORKSPACE_A, first.content_id)
+            else:
+                private_store.list_all(WORKSPACE_A)
+
+    assert "C:/private/case" not in str(captured.value)
+    assert isinstance(captured.value.__cause__, OSError)
 
 
 def test_private_storage_introduces_no_network_import_or_log_egress(tmp_path, caplog):

@@ -8,6 +8,7 @@ import os
 import re
 import stat
 import threading
+from functools import wraps
 from pathlib import Path
 from uuid import uuid4
 
@@ -63,6 +64,22 @@ _STAGING_NAME = re.compile(
     r"(?P<member>content|metadata|metadata-sha256|commit)$"
 )
 _REPARSE_ATTRIBUTE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+
+
+def _controlled_filesystem_errors(message: str):
+    def decorate(operation):
+        @wraps(operation)
+        def guarded(*args, **kwargs):
+            try:
+                return operation(*args, **kwargs)
+            except RepositoryError:
+                raise
+            except OSError as exc:
+                raise RepositoryError(message) from exc
+
+        return guarded
+
+    return decorate
 
 
 def _path_is_link_or_reparse(path: Path) -> bool:
@@ -651,7 +668,7 @@ class LocalPrivateContentStore:
                 if not re.fullmatch(rf"{_UUID}\.{_UUID}", entry) or entry in seen:
                     raise RepositoryIntegrityError(f"{label} privado inválido")
                 if len(entries) >= _MAX_JOURNAL_ENTRIES:
-                    raise RepositoryIntegrityError("journal privado excede limite")
+                    raise RepositoryIntegrityError(f"{label} privado excede limite")
                 entries.append(entry)
                 seen.add(entry)
                 confirmed_bytes += len(raw) + 1
@@ -994,6 +1011,7 @@ class LocalPrivateContentStore:
         except (TypeError, ValueError) as exc:
             raise RepositoryIntegrityError("conteúdo privado corrompido") from exc
 
+    @_controlled_filesystem_errors("falha ao armazenar conteúdo privado")
     def store(
         self,
         metadata: PrivateContentMetadata,
@@ -1019,6 +1037,8 @@ class LocalPrivateContentStore:
                 for path in paths.values()
             ):
                 raise RepositoryConflict("identidade de conteúdo privado já existe")
+            if len(self._committed) >= _MAX_JOURNAL_ENTRIES:
+                raise RepositoryError("armazenamento privado atingiu limite de registros")
             nonce = uuid4().hex
             stages = {
                 member: self._root / f".staging.{nonce}.{member}"
@@ -1125,6 +1145,7 @@ class LocalPrivateContentStore:
                     except OSError:
                         pass
 
+    @_controlled_filesystem_errors("falha ao ler conteúdo privado")
     def get(
         self,
         workspace_id: WorkspaceId,
@@ -1143,6 +1164,7 @@ class LocalPrivateContentStore:
                 raise RepositoryIntegrityError("conteúdo privado inválido")
             return result
 
+    @_controlled_filesystem_errors("falha ao listar conteúdo privado")
     def list_all(
         self,
         workspace_id: WorkspaceId,
@@ -1164,6 +1186,7 @@ class LocalPrivateContentStore:
                 records.append(result)
             return tuple(records)
 
+    @_controlled_filesystem_errors("falha ao fechar armazenamento privado")
     def close(self) -> None:
         mutex = getattr(self, "_mutex", None)
         if mutex is None:
@@ -1203,5 +1226,12 @@ class LocalPrivateContentStore:
         self._ensure_open()
         return self
 
-    def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
-        self.close()
+    def __exit__(self, _exc_type, exc_value, _traceback) -> None:
+        try:
+            self.close()
+        except RepositoryError as close_error:
+            if exc_value is None:
+                raise
+            exc_value.add_note(
+                f"falha adicional ao fechar armazenamento privado: {close_error}"
+            )

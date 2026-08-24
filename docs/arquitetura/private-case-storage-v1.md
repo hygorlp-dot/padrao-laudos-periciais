@@ -126,6 +126,9 @@ manifesto pertencem a milestones próprios.
 
 - O adapter usa somente stdlib local e não importa cliente de rede.
 - Conteúdo não é incluído em mensagens de erro ou logs.
+- Falhas de I/O do sistema operacional nas operações públicas são traduzidas
+  para `RepositoryError` controlado; paths e mensagens privadas do host ficam
+  somente na causa técnica, não na mensagem do port.
 - `StorePrivateContent` mantém seu limite explícito e o adapter reaplica um
   teto defensivo configurável (`max_content_bytes`, default documentado de
   64 MiB) em escrita e leitura. Manifestos têm teto independente de 64 KiB e
