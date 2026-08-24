@@ -141,12 +141,13 @@ def test_missing_asset_never_falls_back_to_the_spa(tmp_path):
     assert json.loads(body)["error"]["code"] == "NOT_FOUND"
 
 
-def test_unknown_app_api_route_never_falls_back_to_the_spa(tmp_path):
+@pytest.mark.parametrize("target", ("/app-api", "/app-api/rota-inexistente"))
+def test_unknown_app_api_route_never_falls_back_to_the_spa(tmp_path, target):
     root = frontend_build(tmp_path)
     runtime = build_product_runtime(tmp_path / "unknown-api.db", root, token=TOKEN)
     try:
         runtime.start()
-        status, headers, body = request(runtime, "GET", "/app-api/rota-inexistente")
+        status, headers, body = request(runtime, "GET", target)
     finally:
         runtime.close()
 

@@ -228,7 +228,7 @@ class ProductBridge:
                     "requisição local não autorizada",
                 )
             upstream_target = _proxy_target(path, normalized_method)
-            if path.startswith("/app-api/"):
+            if path == "/app-api" or path.startswith("/app-api/"):
                 if upstream_target is None:
                     status = 405 if path == "/app-api/v1/workspaces" else 404
                     return _error(status, "NOT_FOUND", "rota local não disponível")
