@@ -40,6 +40,7 @@ from scripts.backend_contract.infrastructure.private_filesystem import (
     LocalPrivateContentStore,
 )
 from scripts.backend_contract.infrastructure.sqlite import SQLiteApplicationStore
+from scripts.quality.capability_analyzer import analyze_source
 
 
 WORKSPACE_A = WorkspaceId.parse("11111111-1111-4111-8111-111111111111")
@@ -47,6 +48,7 @@ WORKSPACE_B = WorkspaceId.parse("22222222-2222-4222-8222-222222222222")
 CONTENT_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 CONTENT_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 IMPORTED_AT = "2026-08-24T12:30:00+00:00"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
 class FixedClock:
@@ -60,6 +62,20 @@ class SequenceIds:
 
     def new_uuid(self):
         return next(self._values)
+
+
+def test_private_filesystem_does_not_escape_the_sensitive_os_namespace():
+    source_path = REPOSITORY_ROOT / (
+        "scripts/backend_contract/infrastructure/private_filesystem.py"
+    )
+
+    findings = analyze_source(
+        source_path.relative_to(REPOSITORY_ROOT).as_posix(),
+        source_path.read_text(encoding="utf-8"),
+        policy_path=REPOSITORY_ROOT / "config/capability-policy-v1.json",
+    )
+
+    assert findings == []
 
 
 def _workspace(workspace_id, name):

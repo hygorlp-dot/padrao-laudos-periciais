@@ -27,6 +27,15 @@ _MANIFEST_SCHEMA_VERSION = 1
 _RECORD_FILES = frozenset({"content.bin", "metadata.json", "metadata.sha256"})
 _REPARSE_ATTRIBUTE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
+if os.name == "nt":
+    _OPEN_BINARY = os.O_BINARY
+    _OPEN_NOFOLLOW = 0
+elif os.name == "posix":
+    _OPEN_BINARY = 0
+    _OPEN_NOFOLLOW = os.O_NOFOLLOW
+else:  # pragma: no cover - fail closed on unsupported operating systems
+    raise RuntimeError("sistema operacional sem contrato de armazenamento privado")
+
 
 def _path_is_link_or_reparse(path: Path) -> bool:
     details = os.lstat(path)
@@ -209,9 +218,7 @@ class LocalPrivateContentStore:
                 raise RepositoryIntegrityError(
                     "arquivo simbólico ou reparse no armazenamento privado"
                 )
-            flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(
-                os, "O_NOFOLLOW", 0
-            )
+            flags = os.O_RDONLY | _OPEN_BINARY | _OPEN_NOFOLLOW
             descriptor = os.open(path, flags)
             try:
                 if not stat.S_ISREG(os.fstat(descriptor).st_mode):
