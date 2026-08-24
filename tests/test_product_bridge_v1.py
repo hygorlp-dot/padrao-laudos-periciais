@@ -54,6 +54,19 @@ def browser_mutation_headers(runtime):
     }
 
 
+def raw_request(runtime, payload: bytes) -> bytes:
+    client = socket.create_connection(runtime.address, timeout=5)
+    try:
+        client.sendall(payload)
+        client.shutdown(socket.SHUT_WR)
+        chunks = []
+        while chunk := client.recv(65_536):
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        client.close()
+
+
 def test_product_bridge_config_requires_literal_loopback():
     with pytest.raises(ValueError, match="loopback"):
         ProductBridgeConfig(host="0.0.0.0")
@@ -142,6 +155,91 @@ def test_same_origin_mutation_is_forwarded_and_token_stays_server_side(tmp_path)
         assert TOKEN not in repr(runtime)
     finally:
         runtime.close()
+
+
+@pytest.mark.parametrize(
+    "duplicate_headers",
+    (
+        "Host: attacker.invalid\r\n",
+        "Origin: http://attacker.invalid\r\n",
+        "Content-Length: 2\r\n",
+    ),
+)
+def test_duplicate_security_headers_fail_closed(tmp_path, duplicate_headers):
+    runtime = build_product_runtime(
+        tmp_path / "duplicates.db", frontend_build(tmp_path), token=TOKEN
+    )
+    runtime.start()
+    try:
+        payload = (
+            "POST /app-api/v1/workspaces HTTP/1.1\r\n"
+            f"Host: {runtime.address[0]}:{runtime.address[1]}\r\n"
+            f"Origin: {runtime.origin}\r\n"
+            "Sec-Fetch-Site: same-origin\r\n"
+            "Content-Type: application/json\r\n"
+            "Content-Length: 2\r\n"
+            f"{duplicate_headers}"
+            "\r\n{}"
+        ).encode("ascii")
+        response = raw_request(runtime, payload)
+    finally:
+        runtime.close()
+
+    assert response.split(b"\r\n", 1)[0].endswith(b" 400 Bad Request")
+    assert TOKEN.encode() not in response
+
+
+def test_absolute_form_and_truncated_body_fail_closed(tmp_path):
+    runtime = build_product_runtime(
+        tmp_path / "framing.db", frontend_build(tmp_path), token=TOKEN
+    )
+    runtime.start()
+    host = f"{runtime.address[0]}:{runtime.address[1]}"
+    try:
+        absolute = raw_request(
+            runtime,
+            (
+                f"GET http://{host}/ HTTP/1.1\r\n"
+                f"Host: {host}\r\n\r\n"
+            ).encode("ascii"),
+        )
+        truncated = raw_request(
+            runtime,
+            (
+                "POST /app-api/v1/workspaces HTTP/1.1\r\n"
+                f"Host: {host}\r\n"
+                f"Origin: {runtime.origin}\r\n"
+                "Sec-Fetch-Site: same-origin\r\n"
+                "Content-Type: application/json\r\n"
+                "Content-Length: 10\r\n\r\n{}"
+            ).encode("ascii"),
+        )
+    finally:
+        runtime.close()
+
+    assert absolute.split(b"\r\n", 1)[0].endswith(b" 400 Bad Request")
+    assert truncated.split(b"\r\n", 1)[0].endswith(b" 400 Bad Request")
+
+
+def test_upstream_failure_is_sanitized_and_token_never_reaches_public_bytes(tmp_path):
+    root = frontend_build(tmp_path)
+    assert all(TOKEN.encode() not in path.read_bytes() for path in root.rglob("*.*"))
+    bridge = ProductBridgeServer(
+        frontend_root=root,
+        upstream_address=("127.0.0.1", 9),
+        token=TOKEN,
+    )
+    bridge.start()
+    try:
+        status, _headers, body = request(bridge, "GET", "/app-api/v1/workspaces")
+        missing_status, _missing_headers, missing_body = request(bridge, "GET", "/missing")
+    finally:
+        bridge.close()
+
+    assert status == 503
+    assert json.loads(body)["error"]["code"] == "LOCAL_API_UNAVAILABLE"
+    assert missing_status == 404
+    assert TOKEN.encode() not in body + missing_body
 
 
 @pytest.mark.parametrize(
@@ -296,6 +394,21 @@ def test_serve_loop_failure_before_ready_fails_closed(tmp_path):
     with pytest.raises(ProductBridgeServerStartError):
         bridge.start()
     bridge.close()
+
+
+def test_partial_product_runtime_startup_closes_owned_local_api(tmp_path):
+    runtime = build_product_runtime(
+        tmp_path / "partial.db", frontend_build(tmp_path), token=TOKEN
+    )
+
+    def fail_bridge_start():
+        raise ProductBridgeServerStartError("bridge indisponível")
+
+    runtime._bridge.start = fail_bridge_start
+    with pytest.raises(ProductBridgeServerStartError):
+        runtime.start()
+    assert runtime._local_api._closed is True
+    assert runtime._bridge._closed is True
 
 
 def test_unsupported_method_uses_sanitized_bridge_response(tmp_path):

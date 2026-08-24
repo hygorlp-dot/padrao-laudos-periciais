@@ -136,7 +136,7 @@ export async function getWorkspace(
   );
 }
 
-export async function createWorkspace(name: string): Promise<Workspace> {
+export async function createWorkspace(name: string, signal?: AbortSignal): Promise<Workspace> {
   if (typeof name !== "string" || !name.trim()) {
     throw new WorkspaceApiError("invalid-request", "Informe o nome da perícia");
   }
@@ -145,6 +145,7 @@ export async function createWorkspace(name: string): Promise<Workspace> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
+      signal,
     }),
   );
 }

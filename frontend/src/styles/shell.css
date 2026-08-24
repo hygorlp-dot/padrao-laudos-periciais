@@ -54,6 +54,22 @@
   letter-spacing: 0.025em;
 }
 
+.directory-link {
+  margin: 0.8rem 1.5rem 0;
+  color: #cbd2cd;
+  font-size: 0.76rem;
+  font-weight: 650;
+  text-underline-offset: 0.2em;
+}
+
+.directory-link:hover {
+  color: var(--color-paper);
+}
+
+.directory-link:focus-visible {
+  outline-color: var(--color-focus-on-dark);
+}
+
 .workflow-nav {
   position: relative;
   flex: 1;

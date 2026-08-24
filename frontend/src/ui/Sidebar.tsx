@@ -15,6 +15,12 @@ export function Sidebar({ currentPath, workspaceId, workspaceName }: SidebarProp
         <span className="brand-description">Engenharia pericial</span>
       </div>
 
+      {workspaceId ? (
+        <a className="directory-link" href="/" onClick={navigate}>
+          Todas as perícias
+        </a>
+      ) : null}
+
       <nav className="workflow-nav" aria-label="Fluxo pericial">
         <ol>
           {WORKFLOW_ROUTES.map((route) => {

@@ -13,7 +13,8 @@ export function App() {
   const previousPath = useRef(currentPath);
 
   useEffect(() => {
-    const label = resolved.kind === "missing" ? "Página não encontrada" : resolved.route.label;
+    const routeLabel = resolved.kind === "missing" ? "Página não encontrada" : resolved.route.label;
+    const label = document.getElementById("page-title")?.textContent?.trim() || routeLabel;
     document.title = `Sistema Pericial — ${label}`;
     if (previousPath.current !== currentPath) {
       document.getElementById("page-title")?.focus();

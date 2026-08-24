@@ -103,6 +103,34 @@ describe("pericia directory", () => {
     });
   });
 
+  test("does not let a stale creation completion replace a newer route", async () => {
+    let resolveCreate: (response: Response) => void = () => undefined;
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { items: [] }))
+      .mockReturnValueOnce(
+        new Promise<Response>((resolve) => {
+          resolveCreate = resolve;
+        }),
+      );
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Nova perícia" }));
+    await user.type(screen.getByRole("textbox", { name: "Nome da perícia" }), WORKSPACE.name);
+    await user.click(screen.getByRole("button", { name: "Criar perícia" }));
+
+    window.history.pushState(null, "", "/teste-inexistente");
+    act(() => window.dispatchEvent(new PopStateEvent("popstate")));
+    expect(await screen.findByRole("heading", { name: "Página não encontrada" })).toBeInTheDocument();
+    expect(fetchSpy.mock.calls[1][1]).toMatchObject({ signal: expect.any(AbortSignal) });
+    expect((fetchSpy.mock.calls[1][1] as RequestInit).signal).toHaveProperty("aborted", true);
+
+    await act(async () => resolveCreate(jsonResponse(201, WORKSPACE)));
+    expect(window.location.pathname).toBe("/teste-inexistente");
+  });
+
   test("rejects whitespace locally and associates the error with the name field", async () => {
     const fetchSpy = vi
       .fn()
@@ -181,6 +209,7 @@ describe("workspace-aware routing", () => {
       "href",
       `/pericias/${ID}/processo`,
     );
+    expect(screen.getByRole("link", { name: "Todas as perícias" })).toHaveAttribute("href", "/");
     expect(document.title).toBe("Sistema Pericial — Vistoria");
   });
 
@@ -215,6 +244,11 @@ describe("workspace-aware routing", () => {
       "href",
       "/",
     );
+
+    window.history.pushState(null, "", `/pericias/${ID}/processo`);
+    act(() => window.dispatchEvent(new PopStateEvent("popstate")));
+    expect(screen.getByRole("heading", { level: 1, name: "Perícia não encontrada" })).toBeInTheDocument();
+    expect(document.title).toBe("Sistema Pericial — Perícia não encontrada");
   });
 
   test("keeps a distinct controlled fallback for an invalid route", () => {

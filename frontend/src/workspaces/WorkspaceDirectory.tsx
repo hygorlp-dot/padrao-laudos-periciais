@@ -33,6 +33,7 @@ export function WorkspaceDirectory() {
   const inputRef = useRef<HTMLInputElement>(null);
   const createButtonRef = useRef<HTMLButtonElement>(null);
   const wasCreating = useRef(false);
+  const createRequestRef = useRef<AbortController | null>(null);
 
   const load = useCallback(() => {
     setState({ kind: "loading" });
@@ -68,6 +69,13 @@ export function WorkspaceDirectory() {
     if (formError && !submitting) inputRef.current?.focus();
   }, [formError, submitting]);
 
+  useEffect(
+    () => () => {
+      createRequestRef.current?.abort();
+    },
+    [],
+  );
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!name.trim()) {
@@ -75,14 +83,22 @@ export function WorkspaceDirectory() {
       inputRef.current?.focus();
       return;
     }
+    const request = new AbortController();
+    createRequestRef.current = request;
     setSubmitting(true);
     setFormError("");
     try {
-      const workspace = await createWorkspace(name);
+      const workspace = await createWorkspace(name, request.signal);
+      if (request.signal.aborted) return;
       navigateTo(workspacePath(workspace.workspace_id));
     } catch (error) {
+      if (request.signal.aborted) return;
       setFormError(errorMessage(error));
       setSubmitting(false);
+    } finally {
+      if (createRequestRef.current === request) {
+        createRequestRef.current = null;
+      }
     }
   }
 
