@@ -43,8 +43,14 @@ DEFAULT_PRIVATE_CONTENT_LIMIT_BYTES = 64 * 1024 * 1024
 _MANIFEST_SCHEMA_VERSION = 1
 _MAX_MANIFEST_BYTES = 64 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
+_MAX_JOURNAL_ENTRIES = 10_000
+_MAX_ROOT_ENTRIES = (
+    _MAX_JOURNAL_ENTRIES
+    * len(("content", "metadata", "metadata-sha256", "commit"))
+) + 16
 _LOCK_NAME = ".store-lock"
 _JOURNAL_NAME = ".commit-log"
+_ANCHOR_NAME = ".commit-anchor"
 _MEMBERS = ("content", "metadata", "metadata-sha256")
 _COMMITTED_MEMBERS = frozenset((*_MEMBERS, "commit"))
 _UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -206,8 +212,8 @@ def _write_fsynced(
         descriptor = os.open(path, flags, 0o600)
     else:
         descriptor = os.open(_entry_name(path), flags, 0o600, dir_fd=root_fd)
+    opened = os.fstat(descriptor)
     try:
-        opened = os.fstat(descriptor)
         _validate_regular(opened, expected_links=1)
         observed = _lstat(path, root_fd=root_fd)
         if not _same_identity(opened, observed):
@@ -216,7 +222,14 @@ def _write_fsynced(
             )
         _write_all(descriptor, payload)
         os.fsync(descriptor)
-    finally:
+    except Exception:
+        os.close(descriptor)
+        try:
+            _unlink_if_owned(path, opened, root_fd=root_fd)
+        except (OSError, RepositoryIntegrityError):
+            pass
+        raise
+    else:
         os.close(descriptor)
 
 
@@ -303,11 +316,11 @@ def _publish_durable(
     *,
     root_fd: int | None = None,
 ) -> None:
-    destination_created = False
+    destination_identity = None
     try:
         if root_fd is None:
             os.link(source, destination, follow_symlinks=False)
-            destination_created = True
+            destination_identity = os.lstat(destination)
             source.unlink()
         else:
             os.link(
@@ -317,22 +330,39 @@ def _publish_durable(
                 dst_dir_fd=root_fd,
                 follow_symlinks=False,
             )
-            destination_created = True
+            destination_identity = _lstat(destination, root_fd=root_fd)
             os.unlink(_entry_name(source), dir_fd=root_fd)
             os.fsync(root_fd)
     except FileExistsError:
         raise
     except OSError:
-        if destination_created:
+        if destination_identity is not None:
             try:
-                if root_fd is None:
-                    destination.unlink()
-                else:
-                    os.unlink(_entry_name(destination), dir_fd=root_fd)
-                    os.fsync(root_fd)
-            except OSError:
+                _unlink_if_owned(
+                    destination,
+                    destination_identity,
+                    root_fd=root_fd,
+                )
+            except (OSError, RepositoryIntegrityError):
                 pass
         raise
+
+
+def _unlink_if_owned(
+    path: Path,
+    expected: os.stat_result,
+    *,
+    root_fd: int | None,
+) -> None:
+    observed = _lstat(path, root_fd=root_fd)
+    _validate_regular(observed, expected_links=None)
+    if not _same_identity(expected, observed):
+        raise RepositoryIntegrityError(
+            "identidade do objeto privado mudou antes da limpeza"
+        )
+    _unlink(path, root_fd=root_fd)
+    if root_fd is not None:
+        os.fsync(root_fd)
 
 
 def _canonical_manifest(payload: dict) -> bytes:
@@ -344,7 +374,7 @@ def _canonical_manifest(payload: dict) -> bytes:
             separators=(",", ":"),
             allow_nan=False,
         ).encode("utf-8")
-    except (TypeError, ValueError, UnicodeEncodeError) as exc:
+    except (RecursionError, TypeError, ValueError, UnicodeEncodeError) as exc:
         raise RepositoryIntegrityError("metadados privados inválidos") from exc
     if len(encoded) > _MAX_MANIFEST_BYTES:
         raise RepositoryIntegrityError("manifesto privado excede limite")
@@ -447,6 +477,8 @@ class LocalPrivateContentStore:
         self._lock_identity = None
         self._journal_fd = None
         self._journal_identity = None
+        self._anchor_fd = None
+        self._anchor_identity = None
         self._root_fd = None
         self._root_identity = None
         self._max_content_bytes = max_content_bytes
@@ -487,6 +519,7 @@ class LocalPrivateContentStore:
                     )
             self._acquire_singleton()
             self._open_journal()
+            self._open_anchor()
             self._committed = self._recover()
         except (RepositoryError, RepositoryIntegrityError):
             self.close()
@@ -497,7 +530,15 @@ class LocalPrivateContentStore:
 
     def _root_names(self) -> tuple[str, ...]:
         target = self._root if self._root_fd is None else self._root_fd
-        return tuple(sorted(os.listdir(target)))
+        names = []
+        with os.scandir(target) as entries:
+            for entry in entries:
+                if len(names) >= _MAX_ROOT_ENTRIES:
+                    raise RepositoryIntegrityError(
+                        "inventário privado excede limite operacional"
+                    )
+                names.append(entry.name)
+        return tuple(sorted(names))
 
     def _acquire_singleton(self) -> None:
         lock_path = self._root / _LOCK_NAME
@@ -543,6 +584,17 @@ class LocalPrivateContentStore:
         self._journal_fd = descriptor
         self._journal_identity = identity
 
+    def _open_anchor(self) -> None:
+        descriptor, identity = _open_control_regular(
+            self._root / _ANCHOR_NAME,
+            root_fd=self._root_fd,
+        )
+        os.fsync(descriptor)
+        if self._root_fd is not None:
+            os.fsync(self._root_fd)
+        self._anchor_fd = descriptor
+        self._anchor_identity = identity
+
     def _validate_control_identity(
         self,
         name: str,
@@ -572,64 +624,70 @@ class LocalPrivateContentStore:
             for index, character in enumerate(value)
         )
 
-    def _journal_entries(
+    def _ledger_entries(
         self,
+        descriptor: int,
         *,
-        recoverable_prefixes: set[str] | None = None,
-    ) -> tuple[set[str], int | None]:
-        os.lseek(self._journal_fd, 0, os.SEEK_SET)
+        label: str,
+    ) -> tuple[tuple[str, ...], int, bytes | None]:
+        os.lseek(descriptor, 0, os.SEEK_SET)
         pending = bytearray()
-        entries = set()
+        entries = []
+        seen = set()
         confirmed_bytes = 0
         while True:
-            block = os.read(self._journal_fd, _READ_CHUNK_BYTES)
+            block = os.read(descriptor, _READ_CHUNK_BYTES)
             if not block:
                 break
             pending.extend(block)
             while b"\n" in pending:
                 raw, _, pending = pending.partition(b"\n")
                 if len(raw) > 80:
-                    raise RepositoryIntegrityError("journal privado inválido")
+                    raise RepositoryIntegrityError(f"{label} privado inválido")
                 try:
                     entry = raw.decode("ascii")
                 except UnicodeDecodeError as exc:
-                    raise RepositoryIntegrityError("journal privado inválido") from exc
-                if not re.fullmatch(rf"{_UUID}\.{_UUID}", entry) or entry in entries:
-                    raise RepositoryIntegrityError("journal privado inválido")
-                entries.add(entry)
+                    raise RepositoryIntegrityError(f"{label} privado inválido") from exc
+                if not re.fullmatch(rf"{_UUID}\.{_UUID}", entry) or entry in seen:
+                    raise RepositoryIntegrityError(f"{label} privado inválido")
+                if len(entries) >= _MAX_JOURNAL_ENTRIES:
+                    raise RepositoryIntegrityError("journal privado excede limite")
+                entries.append(entry)
+                seen.add(entry)
                 confirmed_bytes += len(raw) + 1
             if len(pending) > 80:
-                raise RepositoryIntegrityError("journal privado inválido")
+                raise RepositoryIntegrityError(f"{label} privado inválido")
         if pending:
             raw_tail = bytes(pending)
             if not self._is_partial_journal_entry(raw_tail):
-                raise RepositoryIntegrityError("journal privado truncado")
-            tail = raw_tail.decode("ascii")
-            matching = (
-                []
-                if recoverable_prefixes is None
-                else [
-                    prefix
-                    for prefix in recoverable_prefixes
-                    if prefix not in entries and prefix.startswith(tail)
-                ]
-            )
-            if len(matching) != 1:
-                raise RepositoryIntegrityError("journal privado truncado sem proveniência")
-            return entries, confirmed_bytes
-        return entries, None
+                raise RepositoryIntegrityError(f"{label} privado truncado")
+            return tuple(entries), confirmed_bytes, raw_tail
+        return tuple(entries), confirmed_bytes, None
 
-    def _append_journal(self, prefix: str) -> None:
-        os.lseek(self._journal_fd, 0, os.SEEK_END)
-        _write_all(self._journal_fd, prefix.encode("ascii") + b"\n")
-        os.fsync(self._journal_fd)
+    @staticmethod
+    def _append_ledger(descriptor: int, prefix: str) -> None:
+        os.lseek(descriptor, 0, os.SEEK_END)
+        _write_all(descriptor, prefix.encode("ascii") + b"\n")
+        os.fsync(descriptor)
 
-    def _safe_unlink_internal(self, path: Path) -> None:
-        details = _lstat(path, root_fd=self._root_fd)
-        _validate_regular(details, expected_links=None)
-        _unlink(path, root_fd=self._root_fd)
-        if self._root_fd is not None:
-            os.fsync(self._root_fd)
+    @staticmethod
+    def _truncate_ledger(descriptor: int, size: int) -> None:
+        os.ftruncate(descriptor, size)
+        os.fsync(descriptor)
+
+    def _append_intent(self, prefix: str) -> None:
+        self._append_ledger(self._journal_fd, prefix)
+
+    def _confirm_intent(self, prefix: str) -> None:
+        self._append_ledger(self._anchor_fd, prefix)
+
+    def _safe_unlink_internal(
+        self,
+        path: Path,
+        *,
+        expected: os.stat_result,
+    ) -> None:
+        _unlink_if_owned(path, expected, root_fd=self._root_fd)
 
     def _audit_runtime_inventory(self) -> None:
         self._validate_control_identity(
@@ -642,9 +700,14 @@ class LocalPrivateContentStore:
             self._journal_fd,
             self._journal_identity,
         )
+        self._validate_control_identity(
+            _ANCHOR_NAME,
+            self._anchor_fd,
+            self._anchor_identity,
+        )
         groups: dict[str, set[str]] = {}
         for name in self._root_names():
-            if name in {_LOCK_NAME, _JOURNAL_NAME}:
+            if name in {_LOCK_NAME, _JOURNAL_NAME, _ANCHOR_NAME}:
                 continue
             final = _FINAL_NAME.fullmatch(name)
             if final is None:
@@ -655,47 +718,117 @@ class LocalPrivateContentStore:
             members != _COMMITTED_MEMBERS for members in groups.values()
         ):
             raise RepositoryIntegrityError("inventário privado diverge do estado confirmado")
-        journal, pending_truncation = self._journal_entries()
-        if pending_truncation is not None or journal != self._committed:
+        journal, _, journal_tail = self._ledger_entries(
+            self._journal_fd, label="journal"
+        )
+        anchor, _, anchor_tail = self._ledger_entries(
+            self._anchor_fd, label="anchor"
+        )
+        if (
+            journal_tail is not None
+            or anchor_tail is not None
+            or journal != anchor
+            or set(journal) != self._committed
+        ):
             raise RepositoryIntegrityError("journal privado diverge do estado confirmado")
 
     def _recover(self) -> set[str]:
         groups: dict[str, set[str]] = {}
-        stages: list[tuple[str, Path]] = []
-        final_objects: list[tuple[str, str, Path]] = []
+        stages: list[tuple[str, Path, os.stat_result]] = []
+        final_objects: list[tuple[str, str, Path, os.stat_result]] = []
         for name in self._root_names():
-            if name in {_LOCK_NAME, _JOURNAL_NAME}:
+            if name in {_LOCK_NAME, _JOURNAL_NAME, _ANCHOR_NAME}:
                 continue
             stage = _STAGING_NAME.fullmatch(name)
             if stage:
-                stages.append((stage["member"], self._root / name))
+                stage_path = self._root / name
+                stage_details = _lstat(stage_path, root_fd=self._root_fd)
+                _validate_regular(stage_details, expected_links=None)
+                stages.append((stage["member"], stage_path, stage_details))
                 continue
             final = _FINAL_NAME.fullmatch(name)
             if final is None:
                 raise RepositoryIntegrityError("objeto inesperado no private root")
             prefix = f"{final['workspace']}.{final['content']}"
             groups.setdefault(prefix, set()).add(final["member"])
-            final_objects.append((prefix, final["member"], self._root / name))
+            final_path = self._root / name
+            final_objects.append(
+                (
+                    prefix,
+                    final["member"],
+                    final_path,
+                    _lstat(final_path, root_fd=self._root_fd),
+                )
+            )
 
-        journal, pending_truncation = self._journal_entries(
-            recoverable_prefixes={
-                prefix for prefix, members in groups.items() if "commit" in members
-            }
+        journal, _, journal_tail = self._ledger_entries(
+            self._journal_fd, label="journal"
         )
-        if journal - set(groups):
+        anchor, anchor_bytes, anchor_tail = self._ledger_entries(
+            self._anchor_fd, label="anchor"
+        )
+
+        common_length = 0
+        for journal_entry, anchor_entry in zip(journal, anchor):
+            if journal_entry != anchor_entry:
+                break
+            common_length += 1
+        if common_length != min(len(journal), len(anchor)):
+            raise RepositoryIntegrityError("journal e anchor privados divergem")
+        if len(anchor) > len(journal):
+            raise RepositoryIntegrityError("journal privado perdeu proveniência")
+        common = list(anchor)
+        journal_extra = journal[len(anchor) :]
+        if len(journal_extra) > 1 or (journal_extra and journal_tail):
+            raise RepositoryIntegrityError("journal privado perdeu proveniência")
+        committed_groups = {
+            prefix for prefix, members in groups.items() if "commit" in members
+        }
+        uncommitted_groups = set(groups) - committed_groups
+
+        pending_prefix = journal_extra[0] if journal_extra else None
+        if journal_tail is not None:
+            if anchor_tail is not None:
+                raise RepositoryIntegrityError("journal privado perdeu proveniência")
+            fragment = journal_tail.decode("ascii")
+            candidates = [
+                prefix
+                for prefix in uncommitted_groups
+                if prefix.startswith(fragment)
+            ]
+            if len(candidates) != 1:
+                raise RepositoryIntegrityError(
+                    "journal privado truncado sem proveniência"
+                )
+            pending_prefix = candidates[0]
+        if anchor_tail is not None:
+            if (
+                pending_prefix is None
+                or not pending_prefix.startswith(anchor_tail.decode("ascii"))
+                or pending_prefix not in committed_groups
+            ):
+                raise RepositoryIntegrityError(
+                    "anchor privado truncado sem proveniência"
+                )
+        if any(prefix not in committed_groups for prefix in common):
+            raise RepositoryIntegrityError("journal privado diverge de commits confirmados")
+        if pending_prefix is not None and pending_prefix not in groups:
             raise RepositoryIntegrityError("journal referencia conteúdo privado ausente")
+        expected_commits = set(common)
+        if pending_prefix in committed_groups:
+            expected_commits.add(pending_prefix)
+        if expected_commits != committed_groups:
+            raise RepositoryIntegrityError("journal privado diverge de commits confirmados")
 
         linked_members: dict[str, set[str]] = {}
-        for stage_member, stage_path in stages:
-            stage_details = _lstat(stage_path, root_fd=self._root_fd)
-            _validate_regular(stage_details, expected_links=None)
+        for stage_member, stage_path, stage_details in stages:
             if stage_details.st_nlink == 1:
                 continue
             if stage_details.st_nlink != 2:
                 raise RepositoryIntegrityError("staging privado possui hard link inesperado")
             matching = [
                 (prefix, member)
-                for prefix, member, final_path in final_objects
+                for prefix, member, final_path, _ in final_objects
                 if member == stage_member
                 and _same_identity(
                     stage_details,
@@ -707,19 +840,18 @@ class LocalPrivateContentStore:
             prefix, member = matching[0]
             linked_members.setdefault(prefix, set()).add(member)
 
-        for prefix, member, final_path in final_objects:
-            details = _lstat(final_path, root_fd=self._root_fd)
+        for prefix, member, final_path, details in final_objects:
             expected_links = 2 if member in linked_members.get(prefix, set()) else 1
             _validate_regular(details, expected_links=expected_links)
 
         committed = set()
-        cleanup_finals = []
+        cleanup_finals: list[tuple[Path, os.stat_result]] = []
         for prefix, members in groups.items():
             workspace_raw, content_raw = prefix.split(".", 1)
             workspace_id = WorkspaceId.parse(workspace_raw)
             content_id = PrivateContentId.parse(content_raw)
             paths = _record_paths(self._root, workspace_id, content_id)
-            if prefix in journal:
+            if prefix in committed_groups:
                 if members != _COMMITTED_MEMBERS:
                     raise RepositoryIntegrityError(
                         "registro privado confirmado incompleto"
@@ -734,27 +866,35 @@ class LocalPrivateContentStore:
                 continue
             if "commit" not in members:
                 for member in members:
-                    cleanup_finals.append(paths[member])
+                    cleanup_path = paths[member]
+                    cleanup_finals.append(
+                        (
+                            cleanup_path,
+                            next(
+                                details
+                                for item_prefix, item_member, _, details in final_objects
+                                if item_prefix == prefix and item_member == member
+                            ),
+                        )
+                    )
                 continue
-            if members != _COMMITTED_MEMBERS:
-                raise RepositoryIntegrityError("registro privado confirmado incompleto")
-            self._read_record(
-                workspace_id,
-                content_id,
-                load_content=False,
-                recovery_link_members=frozenset(linked_members.get(prefix, set())),
-            )
-            committed.add(prefix)
+            raise RepositoryIntegrityError("registro privado confirmado incompleto")
 
-        if pending_truncation is not None:
-            os.ftruncate(self._journal_fd, pending_truncation)
-            os.fsync(self._journal_fd)
-        for _, stage_path in stages:
-            self._safe_unlink_internal(stage_path)
-        for final_path in cleanup_finals:
-            self._safe_unlink_internal(final_path)
-        for prefix in sorted(committed - journal):
-            self._append_journal(prefix)
+        common_bytes = sum(len(entry) + 1 for entry in common)
+        pending_is_committed = pending_prefix in committed_groups
+        if journal_tail is not None or (
+            pending_prefix is not None and not pending_is_committed
+        ):
+            self._truncate_ledger(self._journal_fd, common_bytes)
+        for _, stage_path, stage_details in stages:
+            self._safe_unlink_internal(stage_path, expected=stage_details)
+        for final_path, final_details in cleanup_finals:
+            self._safe_unlink_internal(final_path, expected=final_details)
+        if pending_is_committed:
+            self._truncate_ledger(self._anchor_fd, common_bytes)
+            self._append_ledger(self._anchor_fd, pending_prefix)
+        elif anchor_bytes != common_bytes or anchor_tail is not None:
+            self._truncate_ledger(self._anchor_fd, common_bytes)
         return committed
 
     def _ensure_open(self) -> None:
@@ -828,7 +968,7 @@ class LocalPrivateContentStore:
             raise RepositoryIntegrityError("metadados privados divergem do checksum")
         try:
             payload = json.loads(metadata_bytes.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (RecursionError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise RepositoryIntegrityError("metadados privados inválidos") from exc
         if _canonical_manifest(payload) != metadata_bytes:
             raise RepositoryIntegrityError("metadados privados não são canônicos")
@@ -886,15 +1026,27 @@ class LocalPrivateContentStore:
             }
             manifest = _canonical_manifest(_manifest_for(metadata))
             metadata_checksum = hashlib.sha256(manifest).hexdigest().encode("ascii")
-            published = []
+            published: list[tuple[Path, os.stat_result]] = []
+            stage_identities: dict[Path, os.stat_result] = {}
+            journal_start = os.lseek(self._journal_fd, 0, os.SEEK_END)
+            anchor_start = os.lseek(self._anchor_fd, 0, os.SEEK_END)
             commit_created = False
             try:
                 _write_fsynced(stages["content"], record.content, root_fd=self._root_fd)
+                stage_identities[stages["content"]] = _lstat(
+                    stages["content"], root_fd=self._root_fd
+                )
                 _write_fsynced(stages["metadata"], manifest, root_fd=self._root_fd)
+                stage_identities[stages["metadata"]] = _lstat(
+                    stages["metadata"], root_fd=self._root_fd
+                )
                 _write_fsynced(
                     stages["metadata-sha256"],
                     metadata_checksum,
                     root_fd=self._root_fd,
+                )
+                stage_identities[stages["metadata-sha256"]] = _lstat(
+                    stages["metadata-sha256"], root_fd=self._root_fd
                 )
                 for member in _MEMBERS:
                     _publish_durable(
@@ -902,7 +1054,12 @@ class LocalPrivateContentStore:
                         paths[member],
                         root_fd=self._root_fd,
                     )
-                    published.append(paths[member])
+                    published.append(
+                        (
+                            paths[member],
+                            _lstat(paths[member], root_fd=self._root_fd),
+                        )
+                    )
                 verified = self._read_record(
                     metadata.workspace_id,
                     metadata.content_id,
@@ -918,13 +1075,17 @@ class LocalPrivateContentStore:
                     metadata_checksum,
                     root_fd=self._root_fd,
                 )
+                stage_identities[stages["commit"]] = _lstat(
+                    stages["commit"], root_fd=self._root_fd
+                )
+                self._append_intent(prefix)
                 _publish_durable(
                     stages["commit"],
                     paths["commit"],
                     root_fd=self._root_fd,
                 )
                 commit_created = True
-                self._append_journal(prefix)
+                self._confirm_intent(prefix)
                 self._committed.add(prefix)
                 return metadata
             except FileExistsError as exc:
@@ -936,19 +1097,33 @@ class LocalPrivateContentStore:
             except OSError as exc:
                 raise RepositoryError("falha ao armazenar conteúdo privado") from exc
             finally:
+                if not commit_created:
+                    try:
+                        self._truncate_ledger(self._journal_fd, journal_start)
+                    except OSError:
+                        pass
                 for stage in stages.values():
                     try:
-                        if _entry_exists(stage, root_fd=self._root_fd):
-                            self._safe_unlink_internal(stage)
+                        if stage in stage_identities and _entry_exists(
+                            stage, root_fd=self._root_fd
+                        ):
+                            self._safe_unlink_internal(
+                                stage,
+                                expected=stage_identities[stage],
+                            )
                     except (OSError, RepositoryIntegrityError):
                         pass
                 if not commit_created:
-                    for path in published:
+                    for path, identity in published:
                         try:
                             if _entry_exists(path, root_fd=self._root_fd):
-                                self._safe_unlink_internal(path)
+                                self._safe_unlink_internal(path, expected=identity)
                         except (OSError, RepositoryIntegrityError):
                             pass
+                    try:
+                        self._truncate_ledger(self._anchor_fd, anchor_start)
+                    except OSError:
+                        pass
 
     def get(
         self,
@@ -1000,6 +1175,9 @@ class LocalPrivateContentStore:
             if self._journal_fd is not None:
                 os.close(self._journal_fd)
                 self._journal_fd = None
+            if self._anchor_fd is not None:
+                os.close(self._anchor_fd)
+                self._anchor_fd = None
             if self._lock_stream is not None:
                 try:
                     self._lock_stream.seek(0)
@@ -1019,6 +1197,7 @@ class LocalPrivateContentStore:
                 os.close(self._root_fd)
                 self._root_fd = None
             self._journal_identity = None
+            self._anchor_identity = None
 
     def __enter__(self) -> LocalPrivateContentStore:
         self._ensure_open()

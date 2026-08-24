@@ -4,7 +4,7 @@
 
 **Goal:** Persist and reopen private bytes bound to exactly one `PericiaWorkspace`, with deterministic identity, integrity, provenance, atomic visibility and local filesystem isolation.
 
-**Architecture:** Application owns immutable private-content records, a dedicated repository port and three explicit use cases. Infrastructure implements that port under one runtime-configured, singleton-anchored flat private root using UUID-only physical identities, canonical manifests, SHA-256 verification, no-replace hard-link publication, a commit marker and fsynced recovery journal. POSIX operations are root-`dir_fd` relative; Windows keeps the only ancestor anchored by the open singleton. SQLite remains the workspace authority and is not expanded with blobs or an unrelated metadata table.
+**Architecture:** Application owns immutable private-content records, a dedicated repository port and three explicit use cases. Infrastructure implements that port under one runtime-configured, singleton-anchored flat private root using UUID-only physical identities, canonical manifests, SHA-256 verification, no-replace hard-link publication, a commit marker, a write-ahead intent journal and an independent confirmation anchor. POSIX operations are root-`dir_fd` relative; Windows keeps the only ancestor anchored by the open singleton. SQLite remains the workspace authority and is not expanded with blobs or an unrelated metadata table.
 
 **Tech Stack:** Python 3 standard library (`dataclasses`, `enum`, `hashlib`, `json`, `os`, `pathlib`, `tempfile`, `uuid`), existing SQLite workspace repository, pytest/Hypothesis.
 
@@ -63,7 +63,7 @@
 - Produces: `LocalPrivateContentStore(private_root)` implementing
   `PrivateContentRepository`, with `close()` and context-manager lifecycle. The
   runtime pre-provisions the absolute root, regular `.store-lock` trust anchor
-  and empty regular `.commit-log` before adapter composition.
+  and empty regular `.commit-log`/`.commit-anchor` before adapter composition.
 - Layout: um namespace plano sob `<root>` com nomes canônicos
   `<workspace_uuid>.<content_uuid>.<member>`; all caller-facing results omit this path.
 - Manifest fields are exact and schema-versioned; `metadata.sha256` binds canonical manifest bytes; manifest binds content size/hash, workspace and content IDs.
@@ -80,8 +80,10 @@
   one exclusive kernel singleton, derive only flat canonical UUID names, write
   exclusive staging files directly below the anchored root, fsync them, publish
   by no-replace hard links, remove staging, atomically publish the staged
-  visibility marker, and fsync the recovery journal before returning metadata.
-  Analyze every journal/group/staging state before mutation, then recover or
+  write and fsync the journal intent, atomically publish the staged visibility
+  marker, and fsync the independent confirmation anchor before returning
+  metadata. Analyze every journal/anchor/group/staging state before mutation,
+  then recover or
   reject every known crash state on reopen without deleting evidence on a
   failed recovery.
 

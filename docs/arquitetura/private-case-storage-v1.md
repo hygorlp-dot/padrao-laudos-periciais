@@ -19,9 +19,10 @@ usuário fora do checkout Git. Não existe fallback para um path específico de
 máquina, para `referencias/privadas/` ou para o diretório atual. Testes usam
 somente diretórios temporários e bytes sintéticos.
 
-O root, o arquivo regular `.store-lock` contendo `0` e o `.commit-log` regular
-inicialmente vazio são uma precondição de provisioning do runtime e devem
-existir antes da abertura do adapter. O adapter nunca cria esses controles. Ele
+O root, o arquivo regular `.store-lock` contendo `0`, o `.commit-log` e o
+`.commit-anchor`, ambos regulares e inicialmente vazios, são uma precondição de
+provisioning do runtime e devem existir antes da abertura do adapter. O adapter
+nunca cria esses controles. Ele
 os abre sem `O_CREAT`, adquire o singleton e confirma que a identidade do
 diretório observada antes,
 durante e depois da aquisição é a mesma. Isso impede que uma troca concorrente
@@ -47,6 +48,7 @@ onde Python não oferece `dir_fd`/`O_NOFOLLOW`:
 <private-root>/
   .store-lock
   .commit-log
+  .commit-anchor
   <workspace-uuid>.<content-uuid>.content
   <workspace-uuid>.<content-uuid>.metadata
   <workspace-uuid>.<content-uuid>.metadata-sha256
@@ -74,12 +76,14 @@ no mesmo root e publica cada arquivo por hard link `no-replace`, nunca por
 rename que possa sobrescrever:
 
 `exclusive write → fsync → hard-link no-replace → verificação integral
-→ commit staging fsync → commit hard-link → journal fsync → retorno`
+→ commit staging fsync → journal-intent fsync → commit hard-link
+→ anchor-confirmation fsync → retorno`
 
 O marcador `.commit` também é escrito e fsynced em staging; somente depois de
-todos os componentes finais terem sido verificados ele é publicado por hard
-link atômico `no-replace`. Sua existência integral é a única transição de
-visibilidade. A coleção em memória só é atualizada depois de o journal
+todos os componentes finais terem sido verificados e a intenção durável ter
+sido sincronizada ele é publicado por hard link atômico `no-replace`. Sua
+existência integral junto da confirmação independente é a transição de
+visibilidade estável. A coleção em memória só é atualizada depois de o anchor
 persistente ter sido sincronizado. Colisão de qualquer nome final falha sem
 sobrescrever. Falha anterior ao commit remove somente nomes staging/finais
 conhecidos da operação.
@@ -96,19 +100,21 @@ nunca é reparada silenciosamente. O manifesto exige tipos exatos e UUIDs em
 grafia canônica; `true` não equivale à versão inteira `1`.
 
 Após morte abrupta, o lock do kernel é liberado. A próxima abertura exclusiva
-primeiro analisa integralmente journal, staging e todos os registros sem
-qualquer mutação. Somente depois de tudo ser válido, reconcilia o alias exato
+primeiro analisa de forma limitada journal, anchor, staging e todos os registros
+sem qualquer mutação. Somente depois de tudo ser válido, reconcilia o alias exato
 staging→final deixado entre `link` e `unlink`, remove staging parcial conhecido
-e descarta componentes
-finais que não possuem marcador nem entrada confirmada e adota um registro
-integral cujo commit ocorreu antes da queda. Um único tail parcial com framing
-plausível e inequivocamente vinculado a um commit completo, produzido por morte
-durante o append final, é truncado e fsynced sob o lock exclusivo; tail sem
-proveniência, linha grande, byte inválido, duplicidade ou corrupção anterior
-falha fechado sem limpeza parcial. O journal preexistente e fsynced detecta
-qualquer registro confirmado que
-desapareça; sua própria ausência nunca é tratada como store novo. A recuperação
-é executada antes de o adapter aceitar operações.
+e descarta componentes finais que não possuem marcador nem confirmação. O
+journal é write-ahead: contém no máximo uma intenção além do anchor. Se a queda
+ocorre depois do commit e antes da confirmação, somente esse registro integral,
+único e inequivocamente vinculado pode concluir a confirmação. Se ocorre antes
+do commit, a intenção e os componentes não visíveis são revertidos. Tail parcial
+é aceito apenas nessa única transação pendente. Truncamento limpo do journal,
+perda conjunta de journal e registros confirmados, múltiplas intenções,
+divergência de ordem, linha grande, byte inválido ou duplicidade falham fechado
+sem adoção. Ambos os ledgers têm limite explícito de 10.000 entradas e são lidos
+em blocos limitados; o inventário físico também tem teto explícito antes de ser
+ordenado em memória. A ausência de qualquer controle nunca é tratada como store
+novo. A recuperação é executada antes de o adapter aceitar operações.
 
 SHA-256 aqui é evidência de integridade acidental e consistência local, não uma
 assinatura nem prova de autenticidade contra um atacante com capacidade para
@@ -122,7 +128,9 @@ manifesto pertencem a milestones próprios.
 - Conteúdo não é incluído em mensagens de erro ou logs.
 - `StorePrivateContent` mantém seu limite explícito e o adapter reaplica um
   teto defensivo configurável (`max_content_bytes`, default documentado de
-  64 MiB) em escrita e leitura. Manifestos têm teto independente de 64 KiB.
+  64 MiB) em escrita e leitura. Manifestos têm teto independente de 64 KiB e
+  falhas de profundidade do parser são convertidas em erro de integridade
+  controlado.
 - `list_all` valida conteúdo por chunks de 64 KiB sem materializá-lo; `get`
   acumula no máximo o teto configurado porque o port V1 retorna `bytes`.
 - A única origem V1 é `LOCAL_IMPORT`; filename não é proveniência e nenhuma
