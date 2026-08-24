@@ -182,7 +182,8 @@ describe("process case form", () => {
         pendingSaveSignal = init.signal as AbortSignal;
         return pendingSave;
       })
-      .mockResolvedValueOnce(jsonResponse(200, snapshot(undefined, null, OTHER_ID)));
+      .mockResolvedValueOnce(jsonResponse(200, snapshot(undefined, null, OTHER_ID)))
+      .mockResolvedValueOnce(jsonResponse(200, snapshot(DATA, 1, ID)));
     vi.stubGlobal("fetch", fetchSpy);
     const user = userEvent.setup();
     const { rerender } = render(<ProcessCaseView workspaceId={ID} />);
@@ -195,6 +196,12 @@ describe("process case form", () => {
 
     expect(pendingSaveSignal?.aborted).toBe(true);
     expect(await screen.findByRole("textbox", { name: "Tribunal" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Salvar dados do processo" })).toBeEnabled();
+
+    rerender(<ProcessCaseView workspaceId={ID} />);
+
+    expect(await screen.findByRole("textbox", { name: "Tribunal" })).toHaveValue(DATA.tribunal);
+    expect(screen.getByRole("textbox", { name: "Tribunal" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Salvar dados do processo" })).toBeEnabled();
   });
 });

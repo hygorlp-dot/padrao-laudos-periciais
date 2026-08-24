@@ -80,7 +80,16 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
     );
     return () => {
       controller.abort();
-      activeSave.current?.abort();
+      const pendingSave = activeSave.current;
+      if (pendingSave !== null) {
+        pendingSave.abort();
+        activeSave.current = null;
+        setSaveState((current) =>
+          current.kind === "saving" && current.workspaceId === workspaceId
+            ? { kind: "idle" }
+            : current,
+        );
+      }
     };
   }, [workspaceId, loadAttempt]);
 

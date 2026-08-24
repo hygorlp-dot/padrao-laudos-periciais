@@ -75,7 +75,14 @@ def _revision_dto(record: ArtifactRevision) -> dict:
     }
 
 
-def _process_case_dto(record: ProcessCaseSnapshot) -> dict:
+def _process_case_dto(
+    record: ProcessCaseSnapshot, expected_workspace_id: WorkspaceId
+) -> dict:
+    if (
+        type(record) is not ProcessCaseSnapshot
+        or record.workspace_id != expected_workspace_id
+    ):
+        raise RepositoryIntegrityError("identidade processual divergente")
     return {
         "workspace_id": str(record.workspace_id),
         "revision": record.revision,
@@ -365,7 +372,7 @@ class LocalApi:
                 workspace_id = self._workspace_id(raw_segments[2])
                 if normalized_method == "GET":
                     record = self._services.get_process_case.execute(workspace_id)
-                    return _json_response(200, _process_case_dto(record))
+                    return _json_response(200, _process_case_dto(record, workspace_id))
                 if normalized_method == "POST":
                     dto = self._request_dto(request_headers, body)
                     if set(dto) != {"expected_revision", "data"}:
@@ -381,7 +388,7 @@ class LocalApi:
                     record = self._services.save_process_case.execute(
                         workspace_id, data, expected_revision
                     )
-                    return _json_response(200, _process_case_dto(record))
+                    return _json_response(200, _process_case_dto(record, workspace_id))
                 return _error(405, "METHOD_NOT_ALLOWED")
 
             artifact_route = (

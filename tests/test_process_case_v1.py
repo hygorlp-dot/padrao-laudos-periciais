@@ -15,8 +15,16 @@ from scripts.backend_contract.application.models import (
     WorkspaceId,
     thaw_payload,
 )
-from scripts.backend_contract.application.ports import RepositoryConflict, WorkspaceNotFound
-from scripts.backend_contract.application.services import GetProcessCase, SaveProcessCase
+from scripts.backend_contract.application.ports import (
+    RepositoryConflict,
+    RepositoryIntegrityError,
+    WorkspaceNotFound,
+)
+from scripts.backend_contract.application.services import (
+    AppendArtifactRevision,
+    GetProcessCase,
+    SaveProcessCase,
+)
 from scripts.backend_contract.infrastructure.sqlite import SQLiteApplicationStore
 from scripts.backend_contract.local_api.transport import LocalApi, LocalApiServices
 from scripts.backend_contract.product_bridge.composition import build_product_runtime
@@ -276,6 +284,63 @@ def test_application_rejects_a_stale_process_case_correction_atomically(tmp_path
     assert len(history) == 2
 
 
+def test_application_rejects_a_misrouted_process_case_record(tmp_path):
+    with SQLiteApplicationStore(tmp_path / "misrouted-process-case.db") as store:
+        create_workspace(store, WORKSPACE_A, "Perícia A", NOW_1)
+        create_workspace(store, WORKSPACE_B, "Perícia B", NOW_2)
+        save = SaveProcessCase(
+            store.workspaces,
+            store.revisions,
+            SequenceClock(NOW_2),
+            SequenceIds(REVISION_1),
+        )
+        save.execute(WORKSPACE_B, ProcessCaseData.from_mapping(DATA_B), None)
+        wrong_record = store.revisions.latest(
+            WORKSPACE_B, "PROCESS_CASE", "PROCESS_CASE"
+        )
+
+        class MisroutingRevisions:
+            def latest(self, *_args):
+                return wrong_record
+
+        with pytest.raises(RepositoryIntegrityError):
+            GetProcessCase(store.workspaces, MisroutingRevisions()).execute(WORKSPACE_A)
+
+
+def test_generic_append_cannot_bypass_the_reserved_process_case_writer(tmp_path):
+    with SQLiteApplicationStore(tmp_path / "reserved-process-case.db") as store:
+        create_workspace(store, WORKSPACE_A, "Perícia A")
+        typed_save = SaveProcessCase(
+            store.workspaces,
+            store.revisions,
+            SequenceClock(NOW_1),
+            SequenceIds(REVISION_1),
+        )
+        typed_save.execute(WORKSPACE_A, ProcessCaseData.from_mapping(DATA_A), None)
+        generic_append = AppendArtifactRevision(
+            store.revisions,
+            SequenceClock(NOW_2),
+            SequenceIds(REVISION_2),
+        )
+
+        with pytest.raises(ValueError, match="reservada"):
+            generic_append.execute(
+                workspace_id=WORKSPACE_A,
+                artifact_kind="PROCESS_CASE",
+                artifact_id="PROCESS_CASE",
+                payload=DATA_B,
+            )
+
+        latest = GetProcessCase(store.workspaces, store.revisions).execute(WORKSPACE_A)
+        history = store.revisions.list_all(
+            WORKSPACE_A, "PROCESS_CASE", "PROCESS_CASE"
+        )
+
+    assert latest.revision == 1
+    assert latest.data.as_dict() == DATA_A
+    assert len(history) == 1
+
+
 def test_sqlite_allows_only_one_concurrent_save_for_the_same_expected_revision(tmp_path):
     database = tmp_path / "concurrent-process-case.db"
     with SQLiteApplicationStore(database) as setup:
@@ -476,6 +541,34 @@ def test_local_api_maps_stale_process_case_save_to_controlled_conflict():
             "message": "conflito de persistência local",
         }
     }
+
+
+def test_local_api_blocks_a_process_case_snapshot_for_another_workspace():
+    wrong_snapshot = ProcessCaseSnapshot(
+        workspace_id=WORKSPACE_B,
+        revision=1,
+        updated_at=NOW_1.isoformat(),
+        data=ProcessCaseData.from_mapping(DATA_B),
+    )
+    api = LocalApi(
+        local_api_services(get_process_case=RecordingService(wrong_snapshot)),
+        token=TOKEN,
+    )
+
+    response = local_api_request(
+        api,
+        "GET",
+        f"/v1/workspaces/{WORKSPACE_A}/process-case",
+    )
+
+    assert response.status == 500
+    assert decoded(response) == {
+        "error": {
+            "code": "REPOSITORY_INTEGRITY_FAILURE",
+            "message": "integridade da persistência local inválida",
+        }
+    }
+    assert "Parte B" not in response.body.decode("utf-8")
 
 
 @pytest.mark.parametrize(

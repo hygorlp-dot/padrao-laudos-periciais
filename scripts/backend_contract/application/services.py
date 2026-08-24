@@ -122,8 +122,16 @@ def _require_workspace(
     return workspace_id
 
 
-def _process_case_snapshot(record: ArtifactRevision) -> ProcessCaseSnapshot:
+def _process_case_snapshot(
+    record: ArtifactRevision, expected_workspace_id: WorkspaceId
+) -> ProcessCaseSnapshot:
     try:
+        if (
+            record.workspace_id != expected_workspace_id
+            or record.artifact_kind != _PROCESS_CASE_ARTIFACT_KIND
+            or record.artifact_id != _PROCESS_CASE_ARTIFACT_ID
+        ):
+            raise ValueError("identidade processual divergente")
         data = ProcessCaseData.from_mapping(thaw_payload(record.payload))
         return ProcessCaseSnapshot(
             workspace_id=record.workspace_id,
@@ -131,7 +139,7 @@ def _process_case_snapshot(record: ArtifactRevision) -> ProcessCaseSnapshot:
             updated_at=record.created_at,
             data=data,
         )
-    except (TypeError, ValueError) as exc:
+    except (AttributeError, TypeError, ValueError) as exc:
         raise RepositoryIntegrityError(
             "dados processuais persistidos são inválidos"
         ) from exc
@@ -156,7 +164,7 @@ class GetProcessCase:
                 updated_at=None,
                 data=ProcessCaseData.empty(),
             )
-        return _process_case_snapshot(record)
+        return _process_case_snapshot(record, workspace_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,7 +196,7 @@ class SaveProcessCase:
             payload=data.as_dict(),
             expected_revision=expected_revision,
         )
-        return _process_case_snapshot(record)
+        return _process_case_snapshot(record, workspace_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +216,11 @@ class AppendArtifactRevision:
         workspace_id = _workspace_key(workspace_id)
         artifact_kind = _artifact_key(artifact_kind, "artifact_kind")
         artifact_id = _artifact_key(artifact_id, "artifact_id")
+        if (
+            artifact_kind == _PROCESS_CASE_ARTIFACT_KIND
+            and artifact_id == _PROCESS_CASE_ARTIFACT_ID
+        ):
+            raise ValueError("identidade de artefato reservada")
         payload_snapshot = json.loads(canonical_payload_json(payload))
         revision_id = str(_generated_uuid(self.ids))
         created_at = _generated_timestamp(self.clock)

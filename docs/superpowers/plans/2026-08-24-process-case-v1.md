@@ -52,7 +52,7 @@
 - Modify: `scripts/backend_contract/application/__init__.py`
 
 **Interfaces:**
-- Produces: `ProcessCaseData`, `ProcessCaseSnapshot`, `GetProcessCase.execute(workspace_id)`, `SaveProcessCase.execute(workspace_id, data)`.
+- Produces: `ProcessCaseData`, `ProcessCaseSnapshot`, `GetProcessCase.execute(workspace_id)`, `SaveProcessCase.execute(workspace_id, data, expected_revision)`.
 - Consumes: `WorkspaceRepository`, `ArtifactRevisionRepository`, `Clock`, `IdGenerator`.
 
 - [ ] **Step 1: Write literal RED tests for empty/get/save/correction/isolation**
@@ -65,7 +65,7 @@
 
 - [ ] **Step 3: Implement the smallest model/services**
 
-  `ProcessCaseData.from_mapping()` requires the exact seven keys and string values, validates UTF-8 compatibility and preserves content byte-for-byte. `GetProcessCase` checks workspace existence, reads latest fixed artifact, and returns empty state when absent. `SaveProcessCase` checks workspace existence, appends the exact payload and returns the resulting revision metadata.
+  `ProcessCaseData.from_mapping()` requires the exact seven keys and string values, validates UTF-8 compatibility and preserves content byte-for-byte. `GetProcessCase` checks workspace existence, reads the latest fixed artifact, and returns empty state when absent. `SaveProcessCase` checks workspace existence and appends only when `expected_revision` still matches atomically; the generic artifact writer rejects the reserved process-case identity.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -75,7 +75,7 @@
 
 **Files:**
 - Extend: `tests/test_process_case_v1.py`
-- Production: reuse `scripts/backend_contract/infrastructure/sqlite.py` unchanged unless a RED proves a real incompatibility.
+- Production: reuse `scripts/backend_contract/infrastructure/sqlite.py`, adding only the atomic expected-revision append proven necessary by the stale-client RED.
 
 **Interfaces:**
 - Consumes: `SQLiteApplicationStore`, `GetProcessCase`, `SaveProcessCase`.
@@ -106,11 +106,11 @@
 
 **Interfaces:**
 - Produces: GET/POST `/v1/workspaces/{canonical_uuid}/process-case`.
-- Response: exact `{workspace_id,revision,updated_at,data}`; POST body exact `{data:{seven fields}}`.
+- Response: exact `{workspace_id,revision,updated_at,data}`; POST body exact `{expected_revision:int|null,data:{seven fields}}`.
 
 - [ ] **Step 1: Write transport RED tests**
 
-  Cover valid GET, valid POST, missing workspace, malformed/extra/missing body, wrong content type/length, missing token, deterministic DTO, unsupported method, canonical path and sanitized repository failures.
+  Cover valid GET, valid POST, stale-revision conflict 409, response/workspace identity binding, missing workspace, malformed/extra/missing body, wrong content type/length, missing token, deterministic DTO, unsupported method, canonical path and sanitized repository failures.
 
 - [ ] **Step 2: Verify RED**
 
