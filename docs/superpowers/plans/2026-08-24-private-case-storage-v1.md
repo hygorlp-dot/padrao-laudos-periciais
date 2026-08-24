@@ -77,11 +77,12 @@
   Validate the pre-provisioned configured root and both control files, acquire
   its existing trust-anchor lock without creating bytes, bind directory identity
   across acquisition, hold
-  one exclusive kernel singleton, derive only flat canonical UUID names, write
-  exclusive staging files directly below the anchored root, fsync them, publish
-  by no-replace hard links, remove staging, atomically publish the staged
-  write and fsync the journal intent, atomically publish the staged visibility
-  marker, and fsync the independent confirmation anchor before returning
+  one exclusive kernel singleton, derive only flat canonical UUID names, fsync
+  the write-ahead intent before any mutation, write workspace/content/nonce-bound
+  staging files directly below the anchored root, fsync them, publish by
+  no-replace hard links while retaining identity aliases, atomically publish the
+  staged visibility marker, fsync the independent confirmation anchor, and only
+  then remove the staging aliases before returning
   metadata. Analyze every journal/anchor/group/staging state before mutation,
   then recover or
   reject every known crash state on reopen without deleting evidence on a
@@ -95,8 +96,10 @@
 
   Require exact root inventory, grupos completos confirmados, journal coerente,
   objetos regulares não-reparse, JSON canônico, checksum exato do manifesto e
-  verificação model/content. Clean only known staging/final names owned by the
-  failing operation before the commit marker.
+  verificação model/content. Clean only staging/final names linked to the exact
+  pending WAL transaction; quarantine and revalidate captured inode identity
+  before deletion. Unknown valid-shaped names and replacements fail closed
+  without destructive cleanup.
 
 ### Task 3: Prove containment, isolation and privacy
 

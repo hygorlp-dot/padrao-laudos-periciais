@@ -71,22 +71,27 @@ global nem compartilhamento físico entre workspaces. Não existe update/delete
 no port V1 e uma colisão de UUID nunca sobrescreve o registro existente.
 
 A instância adquire um singleton de processo por root; writers da mesma
-instância são serializados. A escrita usa nomes staging aleatórios diretamente
-no mesmo root e publica cada arquivo por hard link `no-replace`, nunca por
-rename que possa sobrescrever:
+instância são serializados. Antes da primeira mutação, a escrita sincroniza a
+intenção no journal. Os nomes staging vinculam workspace, conteúdo e nonce no
+mesmo root. Cada arquivo é publicado por hard link `no-replace`, mantendo o
+staging como prova de identidade até a confirmação; nunca há rename que possa
+sobrescrever:
 
-`exclusive write → fsync → hard-link no-replace → verificação integral
-→ commit staging fsync → journal-intent fsync → commit hard-link
-→ anchor-confirmation fsync → retorno`
+`journal-intent fsync → exclusive write → fsync → hard-link no-replace
+→ verificação integral → commit staging fsync → commit hard-link
+→ anchor-confirmation fsync → limpeza dos aliases staging → retorno`
 
 O marcador `.commit` também é escrito e fsynced em staging; somente depois de
-todos os componentes finais terem sido verificados e a intenção durável ter
-sido sincronizada ele é publicado por hard link atômico `no-replace`. Sua
+todos os componentes finais terem sido verificados ele é publicado por hard
+link atômico `no-replace`. A intenção já foi sincronizada antes de qualquer
+staging existir. Sua
 existência integral junto da confirmação independente é a transição de
 visibilidade estável. A coleção em memória só é atualizada depois de o anchor
 persistente ter sido sincronizado. Colisão de qualquer nome final falha sem
 sobrescrever. Falha anterior ao commit remove somente nomes staging/finais
-conhecidos da operação.
+cuja identidade foi capturada pela operação. A limpeza primeiro move o nome
+para uma quarentena aleatória `no-replace`, revalida a identidade e só então o
+remove; uma substituição é restaurada e a operação falha fechada.
 
 ## Integridade e reopen
 
@@ -101,9 +106,11 @@ grafia canônica; `true` não equivale à versão inteira `1`.
 
 Após morte abrupta, o lock do kernel é liberado. A próxima abertura exclusiva
 primeiro analisa de forma limitada journal, anchor, staging e todos os registros
-sem qualquer mutação. Somente depois de tudo ser válido, reconcilia o alias exato
-staging→final deixado entre `link` e `unlink`, remove staging parcial conhecido
-e descarta componentes finais que não possuem marcador nem confirmação. O
+sem qualquer mutação. Somente depois de tudo ser válido, reconcilia aliases
+staging→final que correspondem à única intenção durável pendente, remove staging
+parcial vinculado a essa intenção e descarta seus componentes finais ainda não
+visíveis. Um nome staging/final sem WAL correspondente nunca é adotado nem
+apagado: bloqueia a abertura e preserva a evidência. O
 journal é write-ahead: contém no máximo uma intenção além do anchor. Se a queda
 ocorre depois do commit e antes da confirmação, somente esse registro integral,
 único e inequivocamente vinculado pode concluir a confirmação. Se ocorre antes

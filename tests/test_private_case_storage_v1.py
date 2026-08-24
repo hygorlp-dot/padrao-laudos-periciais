@@ -2,6 +2,7 @@ import ast
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -900,10 +901,49 @@ def test_recovery_discards_uncommitted_published_components_idempotently(tmp_pat
     paths = _record_paths(root)
     paths["commit"].unlink()
     (root / ".commit-anchor").write_bytes(b"")
+    for member, path_key in {
+        "content": "content.bin",
+        "metadata": "metadata.json",
+        "metadata-sha256": "metadata.sha256",
+    }.items():
+        os.link(
+            paths[path_key],
+            root / f".staging.{WORKSPACE_A}.{CONTENT_A}.{'1' * 32}.{member}",
+        )
 
     for _ in range(2):
         with LocalPrivateContentStore(root) as reopened:
             assert reopened.list_all(WORKSPACE_A) == ()
+    assert not any(path.exists() for path in paths.values())
+
+
+@pytest.mark.parametrize("published_members", range(4))
+def test_recovery_reconciles_every_precommit_publication_boundary(
+    tmp_path, published_members
+):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    paths = _record_paths(root)
+    paths["commit"].unlink()
+    (root / ".commit-anchor").write_bytes(b"")
+    ordered = (
+        ("content", "content.bin"),
+        ("metadata", "metadata.json"),
+        ("metadata-sha256", "metadata.sha256"),
+    )
+    for index, (member, path_key) in enumerate(ordered):
+        if index < published_members:
+            os.link(
+                paths[path_key],
+                root / f".staging.{WORKSPACE_A}.{CONTENT_A}.{'3' * 32}.{member}",
+            )
+        else:
+            paths[path_key].unlink()
+
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
     assert not any(path.exists() for path in paths.values())
 
 
@@ -940,6 +980,15 @@ def test_recovery_cleanup_revalidates_inode_before_unlink(tmp_path, monkeypatch)
     paths = _record_paths(root)
     paths["commit"].unlink()
     (root / ".commit-anchor").write_bytes(b"")
+    for member, path_key in {
+        "content": "content.bin",
+        "metadata": "metadata.json",
+        "metadata-sha256": "metadata.sha256",
+    }.items():
+        os.link(
+            paths[path_key],
+            root / f".staging.{WORKSPACE_A}.{CONTENT_A}.{'2' * 32}.{member}",
+        )
     target = paths["content.bin"]
     original_cleanup = LocalPrivateContentStore._safe_unlink_internal
     replaced = False
@@ -966,7 +1015,7 @@ def test_recovery_reconciles_exact_staging_to_final_hard_link_after_crash(tmp_pa
     with LocalPrivateContentStore(root) as private_store:
         private_store.store(metadata, b"synthetic private bytes")
     final_commit = _record_paths(root)["commit"]
-    stage_commit = root / f".staging.{'1' * 32}.commit"
+    stage_commit = root / f".staging.{WORKSPACE_A}.{CONTENT_A}.{'1' * 32}.commit"
     os.link(final_commit, stage_commit)
 
     with LocalPrivateContentStore(root) as reopened:
@@ -1172,7 +1221,9 @@ def test_publish_failure_does_not_delete_destination_not_created_by_attempt(
 
     monkeypatch.setattr(private_filesystem.os, "link", fail_without_link)
     with pytest.raises(OSError, match="synthetic link failure"):
-        private_filesystem._publish_durable(source, destination)
+        private_filesystem._publish_durable(
+            source, destination, expected_source=source.stat()
+        )
     assert destination.read_bytes() == b"independent winner"
 
 
@@ -1180,18 +1231,24 @@ def test_publish_rollback_revalidates_owned_inode_before_unlink(tmp_path, monkey
     source = tmp_path / "source"
     destination = tmp_path / "destination"
     source.write_bytes(b"owned stage")
-    original_unlink = Path.unlink
+    expected_source = source.stat()
+    original_unlink = private_filesystem._unlink
+    failed = False
 
-    def replace_destination_then_fail(path, *args, **kwargs):
-        if path == source:
-            original_unlink(destination)
+    def replace_destination_then_fail(path, *, root_fd):
+        nonlocal failed
+        if path.name.startswith(".cleanup.") and not failed:
+            failed = True
+            destination.unlink()
             destination.write_bytes(b"independent replacement")
             raise OSError("synthetic source unlink failure")
-        return original_unlink(path, *args, **kwargs)
+        return original_unlink(path, root_fd=root_fd)
 
-    monkeypatch.setattr(Path, "unlink", replace_destination_then_fail)
+    monkeypatch.setattr(private_filesystem, "_unlink", replace_destination_then_fail)
     with pytest.raises(OSError, match="synthetic source unlink failure"):
-        private_filesystem._publish_durable(source, destination)
+        private_filesystem._publish_durable(
+            source, destination, expected_source=expected_source
+        )
     assert destination.read_bytes() == b"independent replacement"
 
 
@@ -1222,6 +1279,10 @@ def test_store_rollback_preserves_replacement_of_published_inode(tmp_path, monke
             private_store.store(metadata, b"synthetic private bytes")
     assert first_destination.read_bytes() == b"independent replacement"
 
+    with pytest.raises(RepositoryIntegrityError, match="proveni|invent.rio|journal"):
+        LocalPrivateContentStore(root)
+    assert first_destination.read_bytes() == b"independent replacement"
+
 
 def test_store_cleanup_preserves_replaced_staging_inode(tmp_path, monkeypatch):
     root = tmp_path / "private"
@@ -1248,6 +1309,68 @@ def test_store_cleanup_preserves_replaced_staging_inode(tmp_path, monkeypatch):
         with pytest.raises(RepositoryError, match="armazenar conteúdo privado"):
             private_store.store(metadata, b"synthetic private bytes")
     assert first_stage.read_bytes() == b"independent staging replacement"
+
+    with pytest.raises(RepositoryIntegrityError, match="proveni|staging|invent.rio"):
+        LocalPrivateContentStore(root)
+    assert first_stage.read_bytes() == b"independent staging replacement"
+
+
+def test_recovery_preserves_valid_shaped_object_without_durable_provenance(tmp_path):
+    root = tmp_path / "private"
+    foreign = _record_paths(root)["content.bin"]
+    foreign.write_bytes(b"independent valid-shaped object")
+
+    with pytest.raises(RepositoryIntegrityError, match="proveni|journal|invent.rio"):
+        LocalPrivateContentStore(root)
+    assert foreign.read_bytes() == b"independent valid-shaped object"
+
+
+def test_publish_rejects_replaced_commit_staging_identity(tmp_path, monkeypatch):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    original_publish = private_filesystem._publish_durable
+    replaced = False
+
+    def replace_commit_stage(source, destination, **kwargs):
+        nonlocal replaced
+        if Path(destination).name.endswith(".commit") and not replaced:
+            replaced = True
+            Path(source).unlink()
+            Path(source).write_bytes(b"independent commit-stage replacement")
+        return original_publish(source, destination, **kwargs)
+
+    with LocalPrivateContentStore(root) as private_store:
+        monkeypatch.setattr(
+            private_filesystem, "_publish_durable", replace_commit_stage
+        )
+        with pytest.raises(
+            RepositoryIntegrityError, match="identidade|mudou|proveni"
+        ):
+            private_store.store(metadata, b"synthetic private bytes")
+    assert replaced
+
+
+def test_cleanup_never_unlinks_replacement_swapped_after_identity_check(
+    tmp_path, monkeypatch
+):
+    target = tmp_path / "owned"
+    target.write_bytes(b"owned")
+    expected = target.stat()
+    original_rename = os.rename
+    swapped = False
+
+    def swap_before_first_rename(source, destination, *args, **kwargs):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            target.unlink()
+            target.write_bytes(b"independent replacement")
+        return original_rename(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(private_filesystem.os, "rename", swap_before_first_rename)
+    with pytest.raises(RepositoryIntegrityError, match="identidade|mudou|ownership"):
+        private_filesystem._unlink_if_owned(target, expected, root_fd=None)
+    assert target.read_bytes() == b"independent replacement"
 
 
 def test_partial_write_failure_exposes_no_record_and_cleans_owned_temp(tmp_path, monkeypatch):
@@ -1506,6 +1629,50 @@ def test_context_manager_preserves_body_exception_when_close_also_fails(
     finally:
         monkeypatch.setattr(store, "close", original_close)
         original_close()
+
+
+def test_close_can_retry_after_a_partial_descriptor_failure(tmp_path, monkeypatch):
+    root = tmp_path / "private"
+    store = LocalPrivateContentStore(root)
+    journal_fd = store._journal_fd
+    original_close = private_filesystem.os.close
+    failed = False
+
+    def fail_journal_once(descriptor):
+        nonlocal failed
+        if descriptor == journal_fd and not failed:
+            failed = True
+            raise OSError("synthetic journal close failure")
+        return original_close(descriptor)
+
+    monkeypatch.setattr(private_filesystem.os, "close", fail_journal_once)
+    with pytest.raises(RepositoryError, match="fechar"):
+        store.close()
+    assert not store._closed
+
+    store.close()
+    assert store._closed
+    with LocalPrivateContentStore(root):
+        pass
+
+
+def test_huge_json_integer_is_a_controlled_integrity_failure(tmp_path):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    paths = _record_paths(root)
+    manifest = paths["metadata.json"].read_text(encoding="utf-8")
+    oversized_integer = "9" * 5_000
+    poisoned = re.sub(r'"byteSize":\d+', f'"byteSize":{oversized_integer}', manifest)
+    poisoned_bytes = poisoned.encode("utf-8")
+    digest = hashlib.sha256(poisoned_bytes).hexdigest().encode("ascii")
+    paths["metadata.json"].write_bytes(poisoned_bytes)
+    paths["metadata.sha256"].write_bytes(digest)
+    paths["commit"].write_bytes(digest)
+
+    with pytest.raises(RepositoryIntegrityError, match="metadados|manifesto"):
+        LocalPrivateContentStore(root)
 
 
 @pytest.mark.parametrize("operation", ("store", "get", "list"))

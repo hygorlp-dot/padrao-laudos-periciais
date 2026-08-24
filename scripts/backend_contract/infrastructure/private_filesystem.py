@@ -60,7 +60,8 @@ _FINAL_NAME = re.compile(
     r"(?P<member>content|metadata|metadata-sha256|commit)$"
 )
 _STAGING_NAME = re.compile(
-    r"^\.staging\.(?P<nonce>[0-9a-f]{32})\."
+    rf"^\.staging\.(?P<workspace>{_UUID})\.(?P<content>{_UUID})\."
+    r"(?P<nonce>[0-9a-f]{32})\."
     r"(?P<member>content|metadata|metadata-sha256|commit)$"
 )
 _REPARSE_ATTRIBUTE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
@@ -109,6 +110,18 @@ def _unlink(path: Path, *, root_fd: int | None) -> None:
         path.unlink()
     else:
         os.unlink(name, dir_fd=root_fd)
+
+
+def _rename(source: Path, destination: Path, *, root_fd: int | None) -> None:
+    if root_fd is None:
+        os.rename(source, destination)
+    else:
+        os.rename(
+            _entry_name(source),
+            _entry_name(destination),
+            src_dir_fd=root_fd,
+            dst_dir_fd=root_fd,
+        )
 
 
 def _entry_exists(path: Path, *, root_fd: int | None) -> bool:
@@ -331,14 +344,21 @@ def _publish_durable(
     source: Path,
     destination: Path,
     *,
+    expected_source: os.stat_result,
+    keep_source: bool = False,
     root_fd: int | None = None,
 ) -> None:
     destination_identity = None
     try:
+        observed_source = _lstat(source, root_fd=root_fd)
+        _validate_regular(observed_source, expected_links=1)
+        if not _same_identity(expected_source, observed_source):
+            raise RepositoryIntegrityError(
+                "identidade do staging privado mudou antes da publicação"
+            )
         if root_fd is None:
             os.link(source, destination, follow_symlinks=False)
             destination_identity = os.lstat(destination)
-            source.unlink()
         else:
             os.link(
                 _entry_name(source),
@@ -348,11 +368,17 @@ def _publish_durable(
                 follow_symlinks=False,
             )
             destination_identity = _lstat(destination, root_fd=root_fd)
-            os.unlink(_entry_name(source), dir_fd=root_fd)
+        if not _same_identity(expected_source, destination_identity):
+            raise RepositoryIntegrityError(
+                "identidade do staging privado mudou durante a publicação"
+            )
+        if not keep_source:
+            _unlink_if_owned(source, expected_source, root_fd=root_fd)
+        if root_fd is not None:
             os.fsync(root_fd)
     except FileExistsError:
         raise
-    except OSError:
+    except (OSError, RepositoryIntegrityError):
         if destination_identity is not None:
             try:
                 _unlink_if_owned(
@@ -377,9 +403,31 @@ def _unlink_if_owned(
         raise RepositoryIntegrityError(
             "identidade do objeto privado mudou antes da limpeza"
         )
-    _unlink(path, root_fd=root_fd)
-    if root_fd is not None:
-        os.fsync(root_fd)
+    quarantine = path.parent / f".cleanup.{uuid4().hex}"
+    moved = False
+    try:
+        _rename(path, quarantine, root_fd=root_fd)
+        moved = True
+        quarantined = _lstat(quarantine, root_fd=root_fd)
+        _validate_regular(quarantined, expected_links=None)
+        if not _same_identity(expected, quarantined):
+            _rename(quarantine, path, root_fd=root_fd)
+            moved = False
+            raise RepositoryIntegrityError(
+                "identidade do objeto privado mudou durante a limpeza"
+            )
+        _unlink(quarantine, root_fd=root_fd)
+        moved = False
+        if root_fd is not None:
+            os.fsync(root_fd)
+    except (OSError, RepositoryIntegrityError):
+        if moved:
+            try:
+                if not _entry_exists(path, root_fd=root_fd):
+                    _rename(quarantine, path, root_fd=root_fd)
+            except (OSError, RepositoryIntegrityError):
+                pass
+        raise
 
 
 def _canonical_manifest(payload: dict) -> bytes:
@@ -490,7 +538,9 @@ class LocalPrivateContentStore:
             raise RepositoryError("private root deve ser absoluto")
         self._mutex = threading.RLock()
         self._closed = False
+        self._close_failed = False
         self._lock_stream = None
+        self._lock_released = False
         self._lock_identity = None
         self._journal_fd = None
         self._journal_identity = None
@@ -751,7 +801,7 @@ class LocalPrivateContentStore:
 
     def _recover(self) -> set[str]:
         groups: dict[str, set[str]] = {}
-        stages: list[tuple[str, Path, os.stat_result]] = []
+        stages: list[tuple[str, str, Path, os.stat_result]] = []
         final_objects: list[tuple[str, str, Path, os.stat_result]] = []
         for name in self._root_names():
             if name in {_LOCK_NAME, _JOURNAL_NAME, _ANCHOR_NAME}:
@@ -761,7 +811,10 @@ class LocalPrivateContentStore:
                 stage_path = self._root / name
                 stage_details = _lstat(stage_path, root_fd=self._root_fd)
                 _validate_regular(stage_details, expected_links=None)
-                stages.append((stage["member"], stage_path, stage_details))
+                stage_prefix = f"{stage['workspace']}.{stage['content']}"
+                stages.append(
+                    (stage_prefix, stage["member"], stage_path, stage_details)
+                )
                 continue
             final = _FINAL_NAME.fullmatch(name)
             if final is None:
@@ -829,8 +882,6 @@ class LocalPrivateContentStore:
                 )
         if any(prefix not in committed_groups for prefix in common):
             raise RepositoryIntegrityError("journal privado diverge de commits confirmados")
-        if pending_prefix is not None and pending_prefix not in groups:
-            raise RepositoryIntegrityError("journal referencia conteúdo privado ausente")
         expected_commits = set(common)
         if pending_prefix in committed_groups:
             expected_commits.add(pending_prefix)
@@ -838,15 +889,22 @@ class LocalPrivateContentStore:
             raise RepositoryIntegrityError("journal privado diverge de commits confirmados")
 
         linked_members: dict[str, set[str]] = {}
-        for stage_member, stage_path, stage_details in stages:
+        for stage_prefix, stage_member, stage_path, stage_details in stages:
+            if stage_prefix != pending_prefix and stage_prefix not in committed_groups:
+                raise RepositoryIntegrityError("staging privado sem proveniência durável")
             if stage_details.st_nlink == 1:
+                if stage_prefix != pending_prefix:
+                    raise RepositoryIntegrityError(
+                        "staging privado confirmado sem destino exato"
+                    )
                 continue
             if stage_details.st_nlink != 2:
                 raise RepositoryIntegrityError("staging privado possui hard link inesperado")
             matching = [
                 (prefix, member)
                 for prefix, member, final_path, _ in final_objects
-                if member == stage_member
+                if prefix == stage_prefix
+                and member == stage_member
                 and _same_identity(
                     stage_details,
                     _lstat(final_path, root_fd=self._root_fd),
@@ -882,6 +940,22 @@ class LocalPrivateContentStore:
                 committed.add(prefix)
                 continue
             if "commit" not in members:
+                if (
+                    prefix != pending_prefix
+                    or not members.issubset(set(_MEMBERS))
+                    or members != linked_members.get(prefix, set())
+                ):
+                    raise RepositoryIntegrityError(
+                        "registro privado sem proveniência durável"
+                    )
+                if members == set(_MEMBERS):
+                    self._read_record(
+                        workspace_id,
+                        content_id,
+                        load_content=False,
+                        require_commit=False,
+                        recovery_link_members=frozenset(members),
+                    )
                 for member in members:
                     cleanup_path = paths[member]
                     cleanup_finals.append(
@@ -903,7 +977,7 @@ class LocalPrivateContentStore:
             pending_prefix is not None and not pending_is_committed
         ):
             self._truncate_ledger(self._journal_fd, common_bytes)
-        for _, stage_path, stage_details in stages:
+        for _, _, stage_path, stage_details in stages:
             self._safe_unlink_internal(stage_path, expected=stage_details)
         for final_path, final_details in cleanup_finals:
             self._safe_unlink_internal(final_path, expected=final_details)
@@ -915,7 +989,7 @@ class LocalPrivateContentStore:
         return committed
 
     def _ensure_open(self) -> None:
-        if self._closed:
+        if self._closed or self._close_failed:
             raise RepositoryError("armazenamento privado fechado")
 
     @staticmethod
@@ -985,7 +1059,12 @@ class LocalPrivateContentStore:
             raise RepositoryIntegrityError("metadados privados divergem do checksum")
         try:
             payload = json.loads(metadata_bytes.decode("utf-8"))
-        except (RecursionError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (
+            RecursionError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            ValueError,
+        ) as exc:
             raise RepositoryIntegrityError("metadados privados inválidos") from exc
         if _canonical_manifest(payload) != metadata_bytes:
             raise RepositoryIntegrityError("metadados privados não são canônicos")
@@ -1041,7 +1120,7 @@ class LocalPrivateContentStore:
                 raise RepositoryError("armazenamento privado atingiu limite de registros")
             nonce = uuid4().hex
             stages = {
-                member: self._root / f".staging.{nonce}.{member}"
+                member: self._root / f".staging.{prefix}.{nonce}.{member}"
                 for member in (*_MEMBERS, "commit")
             }
             manifest = _canonical_manifest(_manifest_for(metadata))
@@ -1052,6 +1131,7 @@ class LocalPrivateContentStore:
             anchor_start = os.lseek(self._anchor_fd, 0, os.SEEK_END)
             commit_created = False
             try:
+                self._append_intent(prefix)
                 _write_fsynced(stages["content"], record.content, root_fd=self._root_fd)
                 stage_identities[stages["content"]] = _lstat(
                     stages["content"], root_fd=self._root_fd
@@ -1072,6 +1152,8 @@ class LocalPrivateContentStore:
                     _publish_durable(
                         stages[member],
                         paths[member],
+                        expected_source=stage_identities[stages[member]],
+                        keep_source=True,
                         root_fd=self._root_fd,
                     )
                     published.append(
@@ -1085,6 +1167,7 @@ class LocalPrivateContentStore:
                     metadata.content_id,
                     load_content=True,
                     require_commit=False,
+                    recovery_link_members=frozenset(_MEMBERS),
                 )
                 if verified != record:
                     raise RepositoryIntegrityError(
@@ -1098,10 +1181,11 @@ class LocalPrivateContentStore:
                 stage_identities[stages["commit"]] = _lstat(
                     stages["commit"], root_fd=self._root_fd
                 )
-                self._append_intent(prefix)
                 _publish_durable(
                     stages["commit"],
                     paths["commit"],
+                    expected_source=stage_identities[stages["commit"]],
+                    keep_source=True,
                     root_fd=self._root_fd,
                 )
                 commit_created = True
@@ -1194,33 +1278,57 @@ class LocalPrivateContentStore:
         with mutex:
             if getattr(self, "_closed", True):
                 return
-            self._closed = True
+            failures = []
             if self._journal_fd is not None:
-                os.close(self._journal_fd)
-                self._journal_fd = None
+                try:
+                    os.close(self._journal_fd)
+                    self._journal_fd = None
+                    self._journal_identity = None
+                except OSError as exc:
+                    failures.append(exc)
             if self._anchor_fd is not None:
-                os.close(self._anchor_fd)
-                self._anchor_fd = None
+                try:
+                    os.close(self._anchor_fd)
+                    self._anchor_fd = None
+                    self._anchor_identity = None
+                except OSError as exc:
+                    failures.append(exc)
             if self._lock_stream is not None:
                 try:
-                    self._lock_stream.seek(0)
-                    if os.name == "nt":
-                        msvcrt.locking(
-                            self._lock_stream.fileno(),
-                            msvcrt.LK_UNLCK,
-                            1,
-                        )
-                    else:
-                        fcntl.flock(self._lock_stream.fileno(), fcntl.LOCK_UN)
-                finally:
+                    if not self._lock_released:
+                        self._lock_stream.seek(0)
+                        if os.name == "nt":
+                            msvcrt.locking(
+                                self._lock_stream.fileno(),
+                                msvcrt.LK_UNLCK,
+                                1,
+                            )
+                        else:
+                            fcntl.flock(self._lock_stream.fileno(), fcntl.LOCK_UN)
+                        self._lock_released = True
                     self._lock_stream.close()
                     self._lock_stream = None
                     self._lock_identity = None
+                except OSError as exc:
+                    failures.append(exc)
             if self._root_fd is not None:
-                os.close(self._root_fd)
-                self._root_fd = None
-            self._journal_identity = None
-            self._anchor_identity = None
+                try:
+                    os.close(self._root_fd)
+                    self._root_fd = None
+                except OSError as exc:
+                    failures.append(exc)
+            self._close_failed = bool(failures)
+            self._closed = not failures and all(
+                resource is None
+                for resource in (
+                    self._journal_fd,
+                    self._anchor_fd,
+                    self._lock_stream,
+                    self._root_fd,
+                )
+            )
+            if failures:
+                raise failures[0]
 
     def __enter__(self) -> LocalPrivateContentStore:
         self._ensure_open()
