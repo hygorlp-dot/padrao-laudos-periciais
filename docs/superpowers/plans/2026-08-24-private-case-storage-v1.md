@@ -4,7 +4,7 @@
 
 **Goal:** Persist and reopen private bytes bound to exactly one `PericiaWorkspace`, with deterministic identity, integrity, provenance, atomic visibility and local filesystem isolation.
 
-**Architecture:** Application owns immutable private-content records, a dedicated repository port and three explicit use cases. Infrastructure implements that port under a runtime-configured private root using UUID-only physical identities, canonical manifests, SHA-256 verification and same-directory atomic finalization. SQLite remains the workspace authority and is not expanded with blobs or an unrelated metadata table.
+**Architecture:** Application owns immutable private-content records, a dedicated repository port and three explicit use cases. Infrastructure implements that port under one runtime-configured, singleton-anchored flat private root using UUID-only physical identities, canonical manifests, SHA-256 verification, no-replace hard-link publication, a commit marker and fsynced recovery journal. POSIX operations are root-`dir_fd` relative; Windows keeps the only ancestor anchored by the open singleton. SQLite remains the workspace authority and is not expanded with blobs or an unrelated metadata table.
 
 **Tech Stack:** Python 3 standard library (`dataclasses`, `enum`, `hashlib`, `json`, `os`, `pathlib`, `tempfile`, `uuid`), existing SQLite workspace repository, pytest/Hypothesis.
 
@@ -61,7 +61,8 @@
 
 **Interfaces:**
 - Produces: `LocalPrivateContentStore(private_root)` implementing `PrivateContentRepository`, with `close()` and context-manager lifecycle.
-- Layout: `<root>/workspaces/<workspace_uuid>/contents/<content_uuid>/{content.bin,metadata.json,metadata.sha256}`; all caller-facing results omit this path.
+- Layout: um namespace plano sob `<root>` com nomes canônicos
+  `<workspace_uuid>.<content_uuid>.<member>`; all caller-facing results omit this path.
 - Manifest fields are exact and schema-versioned; `metadata.sha256` binds canonical manifest bytes; manifest binds content size/hash, workspace and content IDs.
 
 - [ ] **Step 1: Add RED round-trip/reopen tests**
@@ -70,7 +71,7 @@
 
 - [ ] **Step 2: Implement minimal filesystem GREEN**
 
-  Validate/create the configured root, derive only canonical UUID paths, write exclusive files into a generated sibling temp directory, flush/fsync files, reread/verify temp data, then `os.replace` the directory into its final absent identity before returning metadata.
+  Validate/create the configured root, hold one exclusive kernel singleton, derive only flat canonical UUID names, write exclusive staging files directly below the anchored root, fsync them, publish by no-replace hard links, remove staging, create the visibility marker, verify the record and fsync the recovery journal before returning metadata. Recover or reject every known crash state on reopen.
 
 - [ ] **Step 3: Add RED integrity/failure tests**
 
@@ -78,7 +79,10 @@
 
 - [ ] **Step 4: Implement fail-closed read/cleanup GREEN**
 
-  Require exact directory/file inventory, regular non-reparse objects, canonical JSON, exact manifest checksum and model/content verification. Clean only the known temp directory created by the failing operation.
+  Require exact root inventory, grupos completos confirmados, journal coerente,
+  objetos regulares não-reparse, JSON canônico, checksum exato do manifesto e
+  verificação model/content. Clean only known staging/final names owned by the
+  failing operation before the commit marker.
 
 ### Task 3: Prove containment, isolation and privacy
 

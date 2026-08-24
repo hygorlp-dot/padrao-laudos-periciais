@@ -1,10 +1,14 @@
 import ast
 import hashlib
 import json
+import os
 import shutil
 import stat
 import subprocess
+import sys
+import textwrap
 import threading
+import time
 from dataclasses import FrozenInstanceError
 from datetime import datetime
 from pathlib import Path
@@ -121,14 +125,18 @@ def _create_workspaces(sqlite_store):
     sqlite_store.workspaces.create(_workspace(WORKSPACE_B, "Workspace B"))
 
 
-def _content_dir(root, workspace_id=WORKSPACE_A, content_id=CONTENT_A):
-    return (
-        root
-        / "workspaces"
-        / str(workspace_id)
-        / "contents"
-        / str(PrivateContentId.parse(content_id))
-    )
+def _record_paths(root, workspace_id=WORKSPACE_A, content_id=CONTENT_A):
+    prefix = f"{workspace_id}.{PrivateContentId.parse(content_id)}"
+    return {
+        "content.bin": root / f"{prefix}.content",
+        "metadata.json": root / f"{prefix}.metadata",
+        "metadata.sha256": root / f"{prefix}.metadata-sha256",
+        "commit": root / f"{prefix}.commit",
+    }
+
+
+def _record_commits(root):
+    return tuple(sorted(root.glob("*.commit")))
 
 
 def test_private_content_records_are_canonical_immutable_and_path_free():
@@ -301,10 +309,13 @@ def test_caller_filename_is_literal_metadata_never_physical_identity(tmp_path, f
                 origin=PrivateContentOrigin.LOCAL_IMPORT,
             )
             assert get.execute(WORKSPACE_A, metadata.content_id).metadata.original_filename == filename
-            physical = _content_dir(private_root)
-            assert physical.is_dir()
-            assert filename not in physical.as_posix()
-            assert physical.resolve().is_relative_to(private_root.resolve())
+            physical = _record_paths(private_root)
+            assert all(path.is_file() for path in physical.values())
+            assert all(filename not in path.name for path in physical.values())
+            assert all(
+                path.resolve().is_relative_to(private_root.resolve())
+                for path in physical.values()
+            )
 
 
 def test_duplicate_filename_and_identical_bytes_create_distinct_local_records(tmp_path):
@@ -372,11 +383,17 @@ def test_workspace_isolation_blocks_read_list_and_identity_substitution(tmp_path
                 get.execute(WORKSPACE_B, metadata.content_id)
             assert list_contents.execute(WORKSPACE_B) == ()
 
-            source = _content_dir(private_root, WORKSPACE_A, CONTENT_A)
-            substituted = _content_dir(private_root, WORKSPACE_B, CONTENT_A)
-            substituted.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(source, substituted)
-            with pytest.raises(RepositoryIntegrityError, match="workspace"):
+            source = _record_paths(private_root, WORKSPACE_A, CONTENT_A)
+            substituted = _record_paths(private_root, WORKSPACE_B, CONTENT_A)
+            for member in source:
+                shutil.copy2(source[member], substituted[member])
+            substituted_prefix = f"{WORKSPACE_B}.{CONTENT_A}"
+            with (private_root / ".commit-log").open("ab") as journal:
+                journal.write(substituted_prefix.encode("ascii") + b"\n")
+                journal.flush()
+                os.fsync(journal.fileno())
+            private_store._committed.add(substituted_prefix)
+            with pytest.raises(RepositoryIntegrityError, match="identidade"):
                 get.execute(WORKSPACE_B, metadata.content_id)
 
 
@@ -386,8 +403,8 @@ def test_missing_private_storage_member_fails_closed(tmp_path, target):
     metadata = _metadata()
     with LocalPrivateContentStore(root) as private_store:
         private_store.store(metadata, b"synthetic private bytes")
-        (_content_dir(root) / target).unlink()
-        with pytest.raises(RepositoryIntegrityError, match="incompleto"):
+        _record_paths(root)[target].unlink()
+        with pytest.raises(RepositoryIntegrityError, match="inventário|ausente|inacessível"):
             private_store.get(WORKSPACE_A, metadata.content_id)
 
 
@@ -397,7 +414,7 @@ def test_truncated_or_corrupted_content_fails_closed_without_repair(tmp_path):
     metadata = _metadata(content=payload)
     with LocalPrivateContentStore(root) as private_store:
         private_store.store(metadata, payload)
-        content_path = _content_dir(root) / "content.bin"
+        content_path = _record_paths(root)["content.bin"]
         content_path.write_bytes(payload[:-1])
         with pytest.raises(RepositoryIntegrityError, match="conteúdo"):
             private_store.get(WORKSPACE_A, metadata.content_id)
@@ -410,7 +427,7 @@ def test_metadata_and_sidecar_tampering_fail_closed(tmp_path):
     metadata = _metadata(content=payload)
     with LocalPrivateContentStore(root) as private_store:
         private_store.store(metadata, payload)
-        metadata_path = _content_dir(root) / "metadata.json"
+        metadata_path = _record_paths(root)["metadata.json"]
         data = json.loads(metadata_path.read_text(encoding="utf-8"))
         data["originalFilename"] = "tampered.bin"
         metadata_path.write_text(
@@ -421,14 +438,109 @@ def test_metadata_and_sidecar_tampering_fail_closed(tmp_path):
             private_store.get(WORKSPACE_A, metadata.content_id)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("schemaVersion", True),
+        ("workspaceId", "{11111111-1111-4111-8111-111111111111}"),
+    ),
+)
+def test_noncanonical_manifest_identity_or_schema_type_fails_closed(
+    tmp_path, field, value
+):
+    root = tmp_path / "private"
+    payload = b"synthetic private bytes"
+    metadata = _metadata(content=payload)
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, payload)
+        record = _record_paths(root)
+        metadata_path = record["metadata.json"]
+        sidecar_path = record["metadata.sha256"]
+        manifest = json.loads(metadata_path.read_text(encoding="utf-8"))
+        manifest[field] = value
+        encoded = json.dumps(
+            manifest,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        metadata_path.write_bytes(encoded)
+        sidecar_path.write_text(hashlib.sha256(encoded).hexdigest(), encoding="ascii")
+
+        with pytest.raises(RepositoryIntegrityError, match="metadados"):
+            private_store.get(WORKSPACE_A, metadata.content_id)
+
+
+def test_corrupt_oversized_content_is_rejected_before_unbounded_read(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    metadata = _metadata(content=b"x")
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"x")
+        _record_paths(root)["content.bin"].write_bytes(b"x" * (2 * 1024 * 1024))
+        original_read = private_filesystem.os.read
+
+        def bounded_read(descriptor, size):
+            assert 0 <= size <= 64 * 1024
+            return original_read(descriptor, size)
+
+        monkeypatch.setattr(private_filesystem.os, "read", bounded_read)
+        with pytest.raises(RepositoryIntegrityError):
+            private_store.get(WORKSPACE_A, metadata.content_id)
+
+
+def test_forged_manifest_cannot_raise_the_adapter_read_limit(tmp_path, monkeypatch):
+    root = tmp_path / "private"
+    metadata = _metadata(content=b"x")
+    with LocalPrivateContentStore(root, max_content_bytes=1024) as private_store:
+        private_store.store(metadata, b"x")
+        paths = _record_paths(root)
+        forged_content = b"x" * 2048
+        paths["content.bin"].write_bytes(forged_content)
+        manifest = json.loads(paths["metadata.json"].read_text(encoding="utf-8"))
+        manifest["byteSize"] = len(forged_content)
+        manifest["checksumSha256"] = hashlib.sha256(forged_content).hexdigest()
+        encoded = json.dumps(
+            manifest,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        manifest_checksum = hashlib.sha256(encoded).hexdigest()
+        paths["metadata.json"].write_bytes(encoded)
+        paths["metadata.sha256"].write_text(manifest_checksum, encoding="ascii")
+        paths["commit"].write_text(manifest_checksum, encoding="ascii")
+        monkeypatch.setattr(
+            private_filesystem,
+            "_hash_regular",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("content read must not start")
+            ),
+        )
+
+        with pytest.raises(RepositoryIntegrityError, match="limite"):
+            private_store.get(WORKSPACE_A, metadata.content_id)
+
+
 def test_unknown_object_in_private_record_fails_closed(tmp_path):
     root = tmp_path / "private"
     payload = b"synthetic private bytes"
     metadata = _metadata(content=payload)
     with LocalPrivateContentStore(root) as private_store:
         private_store.store(metadata, payload)
-        (_content_dir(root) / "unexpected.tmp").write_text("x", encoding="utf-8")
-        with pytest.raises(RepositoryIntegrityError, match="incompleto"):
+        (root / "unexpected.tmp").write_text("x", encoding="utf-8")
+        with pytest.raises(RepositoryIntegrityError, match="inesperado"):
+            private_store.list_all(WORKSPACE_A)
+
+
+def test_valid_shaped_uncommitted_object_is_rejected_during_runtime(tmp_path):
+    root = tmp_path / "private"
+    with LocalPrivateContentStore(root) as private_store:
+        injected = root / f"{WORKSPACE_B}.{CONTENT_B}.content"
+        injected.write_bytes(b"uncommitted synthetic bytes")
+
+        with pytest.raises(RepositoryIntegrityError, match="inventário"):
             private_store.list_all(WORKSPACE_A)
 
 
@@ -445,20 +557,246 @@ def test_collision_never_overwrites_existing_content(tmp_path):
         )
 
 
+def test_singleton_blocks_a_second_store_and_releases_after_close(tmp_path):
+    root = tmp_path / "private"
+    first = LocalPrivateContentStore(root)
+    try:
+        with pytest.raises(RepositoryConflict, match="já está aberto"):
+            LocalPrivateContentStore(root)
+    finally:
+        first.close()
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
+
+
+def test_open_anchor_prevents_namespace_swap_or_keeps_posix_dirfd_stable(tmp_path):
+    root = tmp_path / "private"
+    moved = tmp_path / "moved-private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+        if os.name == "nt":
+            with pytest.raises(OSError):
+                root.rename(moved)
+        else:
+            root.rename(moved)
+        assert private_store.get(WORKSPACE_A, metadata.content_id) == PrivateContent(
+            metadata, b"synthetic private bytes"
+        )
+
+
+def test_external_hard_link_is_rejected_before_private_read(tmp_path):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+        outside_link = tmp_path / "outside-hard-link.bin"
+        os.link(_record_paths(root)["content.bin"], outside_link)
+        with pytest.raises(RepositoryIntegrityError, match="hard link"):
+            private_store.get(WORKSPACE_A, metadata.content_id)
+
+
+@pytest.mark.parametrize("control_name", (".store-lock", ".commit-log"))
+def test_control_file_identity_change_is_rejected_during_runtime(
+    tmp_path, control_name
+):
+    root = tmp_path / "private"
+    with LocalPrivateContentStore(root) as private_store:
+        external_link = tmp_path / f"external-{control_name[1:]}"
+        os.link(root / control_name, external_link)
+
+        with pytest.raises(RepositoryIntegrityError, match="hard link|controle"):
+            private_store.list_all(WORKSPACE_A)
+
+
+def test_fsynced_journal_detects_confirmed_record_loss_on_reopen(tmp_path):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    _record_paths(root)["commit"].unlink()
+    with pytest.raises(RepositoryIntegrityError, match="journal"):
+        LocalPrivateContentStore(root)
+
+
+def test_runtime_journal_tampering_is_detected_before_read(tmp_path):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+        (root / ".commit-log").write_bytes(b"")
+
+        with pytest.raises(RepositoryIntegrityError, match="journal"):
+            private_store.get(WORKSPACE_A, metadata.content_id)
+
+
+def test_recovery_adopts_complete_commit_missing_from_journal_idempotently(tmp_path):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    (root / ".commit-log").write_bytes(b"")
+
+    for _ in range(2):
+        with LocalPrivateContentStore(root) as reopened:
+            assert reopened.get(WORKSPACE_A, metadata.content_id) == PrivateContent(
+                metadata, b"synthetic private bytes"
+            )
+    assert (root / ".commit-log").read_text(encoding="ascii") == (
+        f"{WORKSPACE_A}.{CONTENT_A}\n"
+    )
+
+
+def test_recovery_discards_uncommitted_published_components_idempotently(tmp_path):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    paths = _record_paths(root)
+    paths["commit"].unlink()
+    (root / ".commit-log").write_bytes(b"")
+
+    for _ in range(2):
+        with LocalPrivateContentStore(root) as reopened:
+            assert reopened.list_all(WORKSPACE_A) == ()
+    assert not any(path.exists() for path in paths.values())
+
+
 def test_finalize_failure_exposes_no_partial_object_and_cleans_owned_temp(tmp_path, monkeypatch):
     root = tmp_path / "private"
     metadata = _metadata()
     with LocalPrivateContentStore(root) as private_store:
         monkeypatch.setattr(
-            private_filesystem.os,
-            "replace",
-            lambda *_args: (_ for _ in ()).throw(OSError("synthetic finalize failure")),
+            private_filesystem,
+            "_publish_durable",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                OSError("synthetic finalize failure")
+            ),
         )
         with pytest.raises(RepositoryError, match="armazenar conteúdo privado"):
             private_store.store(metadata, b"synthetic private bytes")
         assert private_store.get(WORKSPACE_A, metadata.content_id) is None
-        contents = _content_dir(root).parent
-        assert tuple(contents.iterdir()) == ()
+        assert _record_commits(root) == ()
+
+
+def test_abrupt_process_death_is_reconciled_on_next_exclusive_open(tmp_path):
+    root = tmp_path / "private"
+    sentinel = tmp_path / "writer-paused"
+    child = textwrap.dedent(
+        """
+        import hashlib
+        import time
+        from pathlib import Path
+
+        from scripts.backend_contract.application.models import (
+            PrivateContentId,
+            PrivateContentMetadata,
+            PrivateContentOrigin,
+            WorkspaceId,
+        )
+        from scripts.backend_contract.infrastructure import private_filesystem
+        from scripts.backend_contract.infrastructure.private_filesystem import LocalPrivateContentStore
+
+        root = Path(__import__('sys').argv[1])
+        sentinel = Path(__import__('sys').argv[2])
+        payload = b'synthetic crash bytes'
+        metadata = PrivateContentMetadata(
+            workspace_id=WorkspaceId.parse('11111111-1111-4111-8111-111111111111'),
+            content_id=PrivateContentId.parse('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+            original_filename='crash.bin',
+            byte_size=len(payload),
+            checksum_sha256=hashlib.sha256(payload).hexdigest(),
+            media_type=None,
+            imported_at='2026-08-24T12:30:00+00:00',
+            origin=PrivateContentOrigin.LOCAL_IMPORT,
+        )
+        original = private_filesystem._write_fsynced
+
+        def pause_after_private_bytes(path, content, **kwargs):
+            original(path, content, **kwargs)
+            if path.name.endswith('.content'):
+                sentinel.write_text('paused', encoding='ascii')
+                time.sleep(30)
+
+        private_filesystem._write_fsynced = pause_after_private_bytes
+        with LocalPrivateContentStore(root) as store:
+            store.store(metadata, payload)
+        """
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", child, str(root), str(sentinel)],
+        cwd=REPOSITORY_ROOT,
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while not sentinel.exists() and process.poll() is None:
+            if time.monotonic() >= deadline:
+                pytest.fail("child did not reach the controlled crash window")
+            time.sleep(0.02)
+        assert process.poll() is None
+        process.terminate()
+        process.wait(timeout=10)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=10)
+
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
+        assert tuple(root.glob(".staging.*")) == ()
+
+
+def test_private_reads_do_not_use_unanchored_name_based_open(tmp_path, monkeypatch):
+    root = tmp_path / "private"
+    metadata = _metadata(content=b"same bytes")
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"same bytes")
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"same bytes")
+        original_open = private_filesystem.os.open
+        original_read = private_filesystem.os.read
+        redirected = []
+        external_reads = []
+
+        def redirect_unanchored(path, flags, *args, **kwargs):
+            if Path(path).name.endswith(".content") and kwargs.get("dir_fd") is None:
+                redirected.append(Path(path))
+                return original_open(outside, flags, *args, **kwargs)
+            return original_open(path, flags, *args, **kwargs)
+
+        def observed_read(descriptor, size):
+            if redirected:
+                external_reads.append((descriptor, size))
+            return original_read(descriptor, size)
+
+        monkeypatch.setattr(private_filesystem.os, "open", redirect_unanchored)
+        monkeypatch.setattr(private_filesystem.os, "read", observed_read)
+        with pytest.raises(RepositoryIntegrityError, match="identidade física"):
+            private_store.get(WORKSPACE_A, metadata.content_id)
+        assert len(redirected) == 1
+        assert external_reads == []
+
+
+def test_successful_publication_uses_a_durable_directory_commit(tmp_path, monkeypatch):
+    durable_publish = getattr(private_filesystem, "_publish_durable", None)
+    assert callable(durable_publish)
+    calls = []
+
+    def observed_publish(source, destination, **kwargs):
+        result = durable_publish(source, destination, **kwargs)
+        calls.append((Path(source), Path(destination)))
+        return result
+
+    monkeypatch.setattr(private_filesystem, "_publish_durable", observed_publish)
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    assert len(calls) == 3
+    assert {destination for _, destination in calls} == {
+        _record_paths(root)[member]
+        for member in ("content.bin", "metadata.json", "metadata.sha256")
+    }
 
 
 def test_partial_write_failure_exposes_no_record_and_cleans_owned_temp(tmp_path, monkeypatch):
@@ -467,19 +805,19 @@ def test_partial_write_failure_exposes_no_record_and_cleans_owned_temp(tmp_path,
     original = private_filesystem._write_fsynced
     calls = 0
 
-    def fail_second(path, payload):
+    def fail_second(path, payload, **kwargs):
         nonlocal calls
         calls += 1
         if calls == 2:
             raise OSError("synthetic disk failure")
-        return original(path, payload)
+        return original(path, payload, **kwargs)
 
     with LocalPrivateContentStore(root) as private_store:
         monkeypatch.setattr(private_filesystem, "_write_fsynced", fail_second)
         with pytest.raises(RepositoryError, match="armazenar conteúdo privado"):
             private_store.store(metadata, b"synthetic private bytes")
         assert private_store.get(WORKSPACE_A, metadata.content_id) is None
-        assert tuple(_content_dir(root).parent.iterdir()) == ()
+        assert _record_commits(root) == ()
 
 
 def test_in_progress_write_is_not_visible_to_concurrent_listing(tmp_path, monkeypatch):
@@ -487,13 +825,14 @@ def test_in_progress_write_is_not_visible_to_concurrent_listing(tmp_path, monkey
     metadata = _metadata()
     entered = threading.Event()
     release = threading.Event()
-    original_replace = private_filesystem.os.replace
+    original_publish = private_filesystem._publish_durable
     outcome = []
+    listing = []
 
-    def blocked_replace(source, destination):
+    def blocked_publish(source, destination, **kwargs):
         entered.set()
         assert release.wait(timeout=5)
-        return original_replace(source, destination)
+        return original_publish(source, destination, **kwargs)
 
     def writer(private_store):
         try:
@@ -501,17 +840,25 @@ def test_in_progress_write_is_not_visible_to_concurrent_listing(tmp_path, monkey
         except Exception as exc:  # captured for assertion in the coordinating thread
             outcome.append(exc)
 
+    def reader(private_store):
+        listing.append(private_store.list_all(WORKSPACE_A))
+
     with LocalPrivateContentStore(root) as private_store:
-        monkeypatch.setattr(private_filesystem.os, "replace", blocked_replace)
+        monkeypatch.setattr(private_filesystem, "_publish_durable", blocked_publish)
         thread = threading.Thread(target=writer, args=(private_store,))
         thread.start()
         assert entered.wait(timeout=5)
+        reader_thread = threading.Thread(target=reader, args=(private_store,))
+        reader_thread.start()
         try:
-            assert private_store.list_all(WORKSPACE_A) == ()
+            reader_thread.join(timeout=0.1)
+            assert listing == []
         finally:
             release.set()
             thread.join(timeout=5)
+            reader_thread.join(timeout=5)
         assert outcome == [metadata]
+        assert listing == [(metadata,)]
 
 
 def test_concurrent_same_identity_has_exactly_one_winner_without_overwrite(
@@ -522,76 +869,67 @@ def test_concurrent_same_identity_has_exactly_one_winner_without_overwrite(
     second = _metadata(content=b"second")
     first_entered = threading.Event()
     finish_first = threading.Event()
-    call_lock = threading.Lock()
-    replace_calls = 0
-    original_replace = private_filesystem.os.replace
+    second_entered = threading.Event()
+    original_publish = private_filesystem._publish_durable
     results = []
 
-    def permissive_interleaved_replace(source, destination):
-        nonlocal replace_calls
-        with call_lock:
-            replace_calls += 1
-            call_number = replace_calls
-        destination = Path(destination)
-        if call_number == 1:
+    publish_calls = 0
+
+    def blocked_first_publish(source, destination, **kwargs):
+        nonlocal publish_calls
+        publish_calls += 1
+        if publish_calls == 1:
             first_entered.set()
             assert finish_first.wait(timeout=5)
-        if destination.exists():
-            for child in destination.iterdir():
-                child.unlink()
-            destination.rmdir()
-        return original_replace(source, destination)
+        return original_publish(source, destination, **kwargs)
 
     def attempt(store, metadata, content, *, signal=False):
         try:
+            if signal:
+                second_entered.set()
             results.append(store.store(metadata, content))
         except Exception as exc:  # captured for exact winner/loser assertions
             results.append(exc)
-        finally:
-            if signal:
-                finish_first.set()
 
-    with LocalPrivateContentStore(root) as first_store:
-        with LocalPrivateContentStore(root) as second_store:
-            monkeypatch.setattr(
-                private_filesystem.os, "replace", permissive_interleaved_replace
-            )
-            thread_one = threading.Thread(
-                target=attempt, args=(first_store, first, b"first")
-            )
-            thread_one.start()
-            assert first_entered.wait(timeout=5)
-            thread_two = threading.Thread(
-                target=attempt,
-                args=(second_store, second, b"second"),
-                kwargs={"signal": True},
-            )
-            thread_two.start()
-            thread_one.join(timeout=5)
-            thread_two.join(timeout=5)
+    with LocalPrivateContentStore(root) as store:
+        monkeypatch.setattr(
+            private_filesystem, "_publish_durable", blocked_first_publish
+        )
+        thread_one = threading.Thread(target=attempt, args=(store, first, b"first"))
+        thread_one.start()
+        assert first_entered.wait(timeout=5)
+        thread_two = threading.Thread(
+            target=attempt,
+            args=(store, second, b"second"),
+            kwargs={"signal": True},
+        )
+        thread_two.start()
+        assert second_entered.wait(timeout=5)
+        finish_first.set()
+        thread_one.join(timeout=5)
+        thread_two.join(timeout=5)
 
-            winners = [item for item in results if type(item) is PrivateContentMetadata]
-            conflicts = [item for item in results if isinstance(item, RepositoryConflict)]
-            assert len(winners) == 1
-            assert len(conflicts) == 1
-            stored = first_store.get(WORKSPACE_A, PrivateContentId.parse(CONTENT_A))
-            assert stored is not None
-            assert stored.metadata == winners[0]
+        winners = [item for item in results if type(item) is PrivateContentMetadata]
+        conflicts = [item for item in results if isinstance(item, RepositoryConflict)]
+        assert len(winners) == 1
+        assert len(conflicts) == 1
+        stored = store.get(WORKSPACE_A, PrivateContentId.parse(CONTENT_A))
+        assert stored is not None
+        assert stored.metadata == winners[0]
 
 
 def test_symlink_record_is_rejected_when_platform_supports_it(tmp_path):
     root = tmp_path / "private"
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    record_path = _content_dir(root)
-    record_path.parent.mkdir(parents=True)
+    root.mkdir()
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"outside")
+    record_path = _record_paths(root)["content.bin"]
     try:
-        record_path.symlink_to(outside, target_is_directory=True)
+        record_path.symlink_to(outside)
     except OSError as exc:
         pytest.skip(f"symlink indisponível nesta plataforma: {exc}")
-    with LocalPrivateContentStore(root) as private_store:
-        with pytest.raises(RepositoryIntegrityError, match="reparse|simbólico"):
-            private_store.get(WORKSPACE_A, PrivateContentId.parse(CONTENT_A))
+    with pytest.raises(RepositoryIntegrityError, match="objeto inesperado|reparse"):
+        LocalPrivateContentStore(root)
 
 
 def test_windows_reparse_attribute_is_mechanically_recognized(monkeypatch, tmp_path):

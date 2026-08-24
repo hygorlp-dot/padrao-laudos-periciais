@@ -1,13 +1,15 @@
-"""Filesystem local privado com identidade interna, integridade e escrita atômica."""
+"""Filesystem privado plano, ancorado, recuperável e fail-closed."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import re
 import stat
-import tempfile
+import threading
 from pathlib import Path
+from uuid import uuid4
 
 from ..application.models import (
     PrivateContent,
@@ -23,18 +25,38 @@ from ..application.ports import (
 )
 
 
-_MANIFEST_SCHEMA_VERSION = 1
-_RECORD_FILES = frozenset({"content.bin", "metadata.json", "metadata.sha256"})
-_REPARSE_ATTRIBUTE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-
 if os.name == "nt":
+    import msvcrt
+
     _OPEN_BINARY = os.O_BINARY
     _OPEN_NOFOLLOW = 0
 elif os.name == "posix":
+    import fcntl
+
     _OPEN_BINARY = 0
     _OPEN_NOFOLLOW = os.O_NOFOLLOW
-else:  # pragma: no cover - fail closed on unsupported operating systems
+else:  # pragma: no cover
     raise RuntimeError("sistema operacional sem contrato de armazenamento privado")
+
+
+DEFAULT_PRIVATE_CONTENT_LIMIT_BYTES = 64 * 1024 * 1024
+_MANIFEST_SCHEMA_VERSION = 1
+_MAX_MANIFEST_BYTES = 64 * 1024
+_READ_CHUNK_BYTES = 64 * 1024
+_LOCK_NAME = ".store-lock"
+_JOURNAL_NAME = ".commit-log"
+_MEMBERS = ("content", "metadata", "metadata-sha256")
+_COMMITTED_MEMBERS = frozenset((*_MEMBERS, "commit"))
+_UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+_FINAL_NAME = re.compile(
+    rf"^(?P<workspace>{_UUID})\.(?P<content>{_UUID})\."
+    r"(?P<member>content|metadata|metadata-sha256|commit)$"
+)
+_STAGING_NAME = re.compile(
+    r"^\.staging\.(?P<nonce>[0-9a-f]{32})\."
+    r"(?P<member>content|metadata|metadata-sha256)$"
+)
+_REPARSE_ATTRIBUTE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
 
 def _path_is_link_or_reparse(path: Path) -> bool:
@@ -44,11 +66,252 @@ def _path_is_link_or_reparse(path: Path) -> bool:
     )
 
 
-def _write_fsynced(path: Path, payload: bytes) -> None:
-    with path.open("xb") as stream:
-        stream.write(payload)
-        stream.flush()
-        os.fsync(stream.fileno())
+def _entry_name(path: Path) -> str:
+    name = path.name
+    if not name or name in {".", ".."} or "/" in name or "\\" in name:
+        raise RepositoryIntegrityError("nome físico privado inválido")
+    return name
+
+
+def _lstat(path: Path, *, root_fd: int | None) -> os.stat_result:
+    name = _entry_name(path)
+    if root_fd is None:
+        return os.lstat(path)
+    return os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+
+
+def _unlink(path: Path, *, root_fd: int | None) -> None:
+    name = _entry_name(path)
+    if root_fd is None:
+        path.unlink()
+    else:
+        os.unlink(name, dir_fd=root_fd)
+
+
+def _entry_exists(path: Path, *, root_fd: int | None) -> bool:
+    try:
+        _lstat(path, root_fd=root_fd)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def _same_identity(left: os.stat_result, right: os.stat_result) -> bool:
+    return (
+        left.st_dev == right.st_dev
+        and left.st_ino == right.st_ino
+        and stat.S_IFMT(left.st_mode) == stat.S_IFMT(right.st_mode)
+    )
+
+
+def _validate_regular(details: os.stat_result, *, require_single_link: bool) -> None:
+    if not stat.S_ISREG(details.st_mode):
+        raise RepositoryIntegrityError("objeto físico privado não é arquivo regular")
+    if require_single_link and details.st_nlink != 1:
+        raise RepositoryIntegrityError("arquivo privado possui hard link inesperado")
+    if getattr(details, "st_file_attributes", 0) & _REPARSE_ATTRIBUTE:
+        raise RepositoryIntegrityError("arquivo privado é reparse point")
+
+
+def _open_existing_regular(
+    path: Path,
+    *,
+    root_fd: int | None,
+    require_single_link: bool = True,
+) -> tuple[int, os.stat_result]:
+    try:
+        before = _lstat(path, root_fd=root_fd)
+        _validate_regular(before, require_single_link=require_single_link)
+        flags = os.O_RDONLY | _OPEN_BINARY | _OPEN_NOFOLLOW
+        if root_fd is None:
+            descriptor = os.open(path, flags)
+        else:
+            descriptor = os.open(_entry_name(path), flags, dir_fd=root_fd)
+        try:
+            opened = os.fstat(descriptor)
+            _validate_regular(opened, require_single_link=require_single_link)
+            after = _lstat(path, root_fd=root_fd)
+            if not _same_identity(before, opened) or not _same_identity(opened, after):
+                raise RepositoryIntegrityError(
+                    "identidade física privada mudou durante a abertura"
+                )
+            return descriptor, opened
+        except Exception:
+            os.close(descriptor)
+            raise
+    except RepositoryIntegrityError:
+        raise
+    except (FileNotFoundError, OSError) as exc:
+        raise RepositoryIntegrityError("arquivo privado ausente ou inacessível") from exc
+
+
+def _open_control_regular(path: Path, *, root_fd: int | None) -> tuple[int, os.stat_result]:
+    flags = os.O_RDWR | os.O_CREAT | _OPEN_BINARY | _OPEN_NOFOLLOW
+    try:
+        before = None
+        try:
+            before = _lstat(path, root_fd=root_fd)
+            _validate_regular(before, require_single_link=True)
+        except FileNotFoundError:
+            pass
+        if root_fd is None:
+            descriptor = os.open(path, flags, 0o600)
+        else:
+            descriptor = os.open(_entry_name(path), flags, 0o600, dir_fd=root_fd)
+        try:
+            opened = os.fstat(descriptor)
+            _validate_regular(opened, require_single_link=True)
+            after = _lstat(path, root_fd=root_fd)
+            if not _same_identity(opened, after) or (
+                before is not None and not _same_identity(before, opened)
+            ):
+                raise RepositoryIntegrityError(
+                    "identidade do controle privado mudou durante a abertura"
+                )
+            return descriptor, opened
+        except Exception:
+            os.close(descriptor)
+            raise
+    except RepositoryIntegrityError:
+        raise
+    except (FileNotFoundError, OSError) as exc:
+        raise RepositoryIntegrityError("controle privado ausente ou inacessível") from exc
+
+
+def _write_all(descriptor: int, payload: bytes) -> None:
+    offset = 0
+    while offset < len(payload):
+        written = os.write(descriptor, payload[offset : offset + _READ_CHUNK_BYTES])
+        if written <= 0:
+            raise OSError("escrita privada não avançou")
+        offset += written
+
+
+def _write_fsynced(
+    path: Path,
+    payload: bytes,
+    *,
+    root_fd: int | None = None,
+) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN_BINARY | _OPEN_NOFOLLOW
+    if root_fd is None:
+        descriptor = os.open(path, flags, 0o600)
+    else:
+        descriptor = os.open(_entry_name(path), flags, 0o600, dir_fd=root_fd)
+    try:
+        opened = os.fstat(descriptor)
+        _validate_regular(opened, require_single_link=True)
+        observed = _lstat(path, root_fd=root_fd)
+        if not _same_identity(opened, observed):
+            raise RepositoryIntegrityError(
+                "identidade física privada mudou durante a criação"
+            )
+        _write_all(descriptor, payload)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _read_exact(descriptor: int, size: int) -> bytes:
+    result = bytearray()
+    while len(result) < size:
+        block = os.read(descriptor, min(_READ_CHUNK_BYTES, size - len(result)))
+        if not block:
+            break
+        result.extend(block)
+    return bytes(result)
+
+
+def _read_regular(
+    path: Path,
+    *,
+    root_fd: int | None,
+    maximum_bytes: int,
+    expected_size: int | None = None,
+) -> bytes:
+    descriptor, opened = _open_existing_regular(path, root_fd=root_fd)
+    try:
+        if opened.st_size > maximum_bytes:
+            raise RepositoryIntegrityError("arquivo privado excede limite operacional")
+        if expected_size is not None and opened.st_size != expected_size:
+            raise RepositoryIntegrityError("tamanho de arquivo privado diverge")
+        payload = _read_exact(descriptor, opened.st_size)
+        if len(payload) != opened.st_size or os.read(descriptor, 1):
+            raise RepositoryIntegrityError("arquivo privado mudou durante a leitura")
+        after = os.fstat(descriptor)
+        if not _same_identity(opened, after) or after.st_size != opened.st_size:
+            raise RepositoryIntegrityError("arquivo privado mudou durante a leitura")
+        return payload
+    finally:
+        os.close(descriptor)
+
+
+def _hash_regular(
+    path: Path,
+    *,
+    root_fd: int | None,
+    maximum_bytes: int,
+    expected_size: int,
+    load_content: bool,
+) -> tuple[str, bytes | None]:
+    descriptor, opened = _open_existing_regular(path, root_fd=root_fd)
+    try:
+        if opened.st_size > maximum_bytes or opened.st_size != expected_size:
+            raise RepositoryIntegrityError("tamanho do conteúdo privado diverge")
+        digest = hashlib.sha256()
+        content = bytearray() if load_content else None
+        remaining = opened.st_size
+        while remaining:
+            block = os.read(descriptor, min(_READ_CHUNK_BYTES, remaining))
+            if not block:
+                raise RepositoryIntegrityError("conteúdo privado truncado")
+            digest.update(block)
+            if content is not None:
+                content.extend(block)
+            remaining -= len(block)
+        if os.read(descriptor, 1):
+            raise RepositoryIntegrityError("conteúdo privado cresceu durante a leitura")
+        after = os.fstat(descriptor)
+        if not _same_identity(opened, after) or after.st_size != opened.st_size:
+            raise RepositoryIntegrityError("conteúdo privado mudou durante a leitura")
+        return digest.hexdigest(), bytes(content) if content is not None else None
+    finally:
+        os.close(descriptor)
+
+
+def _publish_durable(
+    source: Path,
+    destination: Path,
+    *,
+    root_fd: int | None = None,
+) -> None:
+    try:
+        if root_fd is None:
+            os.link(source, destination, follow_symlinks=False)
+            source.unlink()
+        else:
+            os.link(
+                _entry_name(source),
+                _entry_name(destination),
+                src_dir_fd=root_fd,
+                dst_dir_fd=root_fd,
+                follow_symlinks=False,
+            )
+            os.unlink(_entry_name(source), dir_fd=root_fd)
+            os.fsync(root_fd)
+    except FileExistsError:
+        raise
+    except OSError:
+        try:
+            if root_fd is None:
+                if destination.exists():
+                    destination.unlink()
+            else:
+                os.unlink(_entry_name(destination), dir_fd=root_fd)
+                os.fsync(root_fd)
+        except OSError:
+            pass
+        raise
 
 
 def _canonical_manifest(payload: dict) -> bytes:
@@ -62,6 +325,8 @@ def _canonical_manifest(payload: dict) -> bytes:
         ).encode("utf-8")
     except (TypeError, ValueError, UnicodeEncodeError) as exc:
         raise RepositoryIntegrityError("metadados privados inválidos") from exc
+    if len(encoded) > _MAX_MANIFEST_BYTES:
+        raise RepositoryIntegrityError("manifesto privado excede limite")
     return encoded
 
 
@@ -94,11 +359,22 @@ def _metadata_from_manifest(payload: object) -> PrivateContentMetadata:
     try:
         if type(payload) is not dict or set(payload) != expected:
             raise ValueError("campos de manifesto divergentes")
-        if payload["schemaVersion"] != _MANIFEST_SCHEMA_VERSION:
+        if (
+            type(payload["schemaVersion"]) is not int
+            or payload["schemaVersion"] != _MANIFEST_SCHEMA_VERSION
+        ):
             raise ValueError("versão de manifesto desconhecida")
+        raw_workspace = payload["workspaceId"]
+        raw_content = payload["contentId"]
+        if type(raw_workspace) is not str or type(raw_content) is not str:
+            raise ValueError("identidade privada inválida")
+        workspace_id = WorkspaceId.parse(raw_workspace)
+        content_id = PrivateContentId.parse(raw_content)
+        if str(workspace_id) != raw_workspace or str(content_id) != raw_content:
+            raise ValueError("identidade privada não canônica")
         return PrivateContentMetadata(
-            workspace_id=WorkspaceId.parse(payload["workspaceId"]),
-            content_id=PrivateContentId.parse(payload["contentId"]),
+            workspace_id=workspace_id,
+            content_id=content_id,
             original_filename=payload["originalFilename"],
             byte_size=payload["byteSize"],
             checksum_sha256=payload["checksumSha256"],
@@ -110,18 +386,48 @@ def _metadata_from_manifest(payload: object) -> PrivateContentMetadata:
         raise RepositoryIntegrityError("metadados privados inválidos") from exc
 
 
-class LocalPrivateContentStore:
-    """Implementa o port privado sob um root explícito e sem expor paths."""
+def _prefix(workspace_id: WorkspaceId, content_id: PrivateContentId) -> str:
+    return f"{workspace_id}.{content_id}"
 
-    def __init__(self, private_root: str | Path):
+
+def _record_paths(
+    root: Path,
+    workspace_id: WorkspaceId,
+    content_id: PrivateContentId,
+) -> dict[str, Path]:
+    prefix = _prefix(workspace_id, content_id)
+    return {
+        member: root / f"{prefix}.{member}" for member in _COMMITTED_MEMBERS
+    }
+
+
+class LocalPrivateContentStore:
+    """Implementa o port privado em um namespace plano e ancorado."""
+
+    def __init__(
+        self,
+        private_root: str | Path,
+        *,
+        max_content_bytes: int = DEFAULT_PRIVATE_CONTENT_LIMIT_BYTES,
+    ):
         if not isinstance(private_root, (str, Path)):
             raise RepositoryError("private root inválido")
         raw = str(private_root)
         if not raw.strip() or "\x00" in raw:
             raise RepositoryError("private root inválido")
+        if type(max_content_bytes) is not int or max_content_bytes < 0:
+            raise RepositoryError("limite privado inválido")
         root = Path(private_root)
         if not root.is_absolute():
             raise RepositoryError("private root deve ser absoluto")
+        self._mutex = threading.RLock()
+        self._closed = False
+        self._lock_stream = None
+        self._lock_identity = None
+        self._journal_fd = None
+        self._journal_identity = None
+        self._root_fd = None
+        self._max_content_bytes = max_content_bytes
         try:
             if os.path.lexists(root) and _path_is_link_or_reparse(root):
                 raise RepositoryIntegrityError(
@@ -131,283 +437,405 @@ class LocalPrivateContentStore:
             if _path_is_link_or_reparse(root) or not root.is_dir():
                 raise RepositoryIntegrityError("private root inválido")
             self._root = root.resolve(strict=True)
-            self._workspaces = self._root / "workspaces"
-            self._staging = self._root / ".staging"
-            self._leases = self._root / ".leases"
-            self._workspaces.mkdir(exist_ok=True)
-            self._staging.mkdir(exist_ok=True)
-            self._leases.mkdir(exist_ok=True)
-            for internal in (self._workspaces, self._staging, self._leases):
-                self._assert_safe_path(internal)
+            if os.name == "posix":
+                self._root_fd = os.open(
+                    self._root,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                )
+            self._acquire_singleton()
+            self._open_journal()
+            self._committed = self._recover()
         except (RepositoryError, RepositoryIntegrityError):
+            self.close()
             raise
         except OSError as exc:
+            self.close()
             raise RepositoryError("falha ao abrir armazenamento privado") from exc
-        self._closed = False
+
+    def _root_names(self) -> tuple[str, ...]:
+        target = self._root if self._root_fd is None else self._root_fd
+        return tuple(sorted(os.listdir(target)))
+
+    def _acquire_singleton(self) -> None:
+        lock_path = self._root / _LOCK_NAME
+        descriptor, identity = _open_control_regular(
+            lock_path, root_fd=self._root_fd
+        )
+        stream = os.fdopen(descriptor, "r+b", buffering=0)
+        try:
+            if os.fstat(descriptor).st_size == 0:
+                stream.write(b"0")
+                stream.flush()
+                os.fsync(descriptor)
+                if self._root_fd is not None:
+                    os.fsync(self._root_fd)
+            stream.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if _path_is_link_or_reparse(self._root):
+                raise RepositoryIntegrityError("private root mudou durante a abertura")
+        except (OSError, RepositoryIntegrityError) as exc:
+            stream.close()
+            if isinstance(exc, RepositoryIntegrityError):
+                raise
+            raise RepositoryConflict("armazenamento privado já está aberto") from exc
+        self._lock_stream = stream
+        self._lock_identity = identity
+
+    def _open_journal(self) -> None:
+        descriptor, identity = _open_control_regular(
+            self._root / _JOURNAL_NAME, root_fd=self._root_fd
+        )
+        os.fsync(descriptor)
+        if self._root_fd is not None:
+            os.fsync(self._root_fd)
+        self._journal_fd = descriptor
+        self._journal_identity = identity
+
+    def _validate_control_identity(
+        self,
+        name: str,
+        descriptor: int,
+        expected: os.stat_result,
+    ) -> None:
+        observed = _lstat(self._root / name, root_fd=self._root_fd)
+        opened = os.fstat(descriptor)
+        _validate_regular(observed, require_single_link=True)
+        _validate_regular(opened, require_single_link=True)
+        if not _same_identity(expected, opened) or not _same_identity(opened, observed):
+            raise RepositoryIntegrityError("identidade do controle privado diverge")
+
+    def _journal_entries(self) -> set[str]:
+        os.lseek(self._journal_fd, 0, os.SEEK_SET)
+        pending = bytearray()
+        entries = set()
+        while True:
+            block = os.read(self._journal_fd, _READ_CHUNK_BYTES)
+            if not block:
+                break
+            pending.extend(block)
+            while b"\n" in pending:
+                raw, _, pending = pending.partition(b"\n")
+                if len(raw) > 80:
+                    raise RepositoryIntegrityError("journal privado inválido")
+                try:
+                    entry = raw.decode("ascii")
+                except UnicodeDecodeError as exc:
+                    raise RepositoryIntegrityError("journal privado inválido") from exc
+                if not re.fullmatch(rf"{_UUID}\.{_UUID}", entry) or entry in entries:
+                    raise RepositoryIntegrityError("journal privado inválido")
+                entries.add(entry)
+        if pending:
+            raise RepositoryIntegrityError("journal privado truncado")
+        return entries
+
+    def _append_journal(self, prefix: str) -> None:
+        os.lseek(self._journal_fd, 0, os.SEEK_END)
+        _write_all(self._journal_fd, prefix.encode("ascii") + b"\n")
+        os.fsync(self._journal_fd)
+
+    def _safe_unlink_internal(self, path: Path) -> None:
+        details = _lstat(path, root_fd=self._root_fd)
+        _validate_regular(details, require_single_link=False)
+        _unlink(path, root_fd=self._root_fd)
+        if self._root_fd is not None:
+            os.fsync(self._root_fd)
+
+    def _audit_runtime_inventory(self) -> None:
+        self._validate_control_identity(
+            _LOCK_NAME,
+            self._lock_stream.fileno(),
+            self._lock_identity,
+        )
+        self._validate_control_identity(
+            _JOURNAL_NAME,
+            self._journal_fd,
+            self._journal_identity,
+        )
+        groups: dict[str, set[str]] = {}
+        for name in self._root_names():
+            if name in {_LOCK_NAME, _JOURNAL_NAME}:
+                continue
+            final = _FINAL_NAME.fullmatch(name)
+            if final is None:
+                raise RepositoryIntegrityError("objeto inesperado no private root")
+            prefix = f"{final['workspace']}.{final['content']}"
+            groups.setdefault(prefix, set()).add(final["member"])
+        if set(groups) != self._committed or any(
+            members != _COMMITTED_MEMBERS for members in groups.values()
+        ):
+            raise RepositoryIntegrityError("inventário privado diverge do estado confirmado")
+        if self._journal_entries() != self._committed:
+            raise RepositoryIntegrityError("journal privado diverge do estado confirmado")
+
+    def _recover(self) -> set[str]:
+        groups: dict[str, set[str]] = {}
+        for name in self._root_names():
+            if name in {_LOCK_NAME, _JOURNAL_NAME}:
+                continue
+            stage = _STAGING_NAME.fullmatch(name)
+            if stage:
+                self._safe_unlink_internal(self._root / name)
+                continue
+            final = _FINAL_NAME.fullmatch(name)
+            if final is None:
+                raise RepositoryIntegrityError("objeto inesperado no private root")
+            prefix = f"{final['workspace']}.{final['content']}"
+            groups.setdefault(prefix, set()).add(final["member"])
+
+        committed = set()
+        for prefix, members in groups.items():
+            workspace_raw, content_raw = prefix.split(".", 1)
+            workspace_id = WorkspaceId.parse(workspace_raw)
+            content_id = PrivateContentId.parse(content_raw)
+            paths = _record_paths(self._root, workspace_id, content_id)
+            if "commit" not in members:
+                for member in members:
+                    self._safe_unlink_internal(paths[member])
+                continue
+            if members != _COMMITTED_MEMBERS:
+                raise RepositoryIntegrityError("registro privado confirmado incompleto")
+            self._read_record(workspace_id, content_id, load_content=False)
+            committed.add(prefix)
+
+        journal = self._journal_entries()
+        if journal - committed:
+            raise RepositoryIntegrityError("journal referencia conteúdo privado ausente")
+        for prefix in sorted(committed - journal):
+            self._append_journal(prefix)
+        return committed
 
     def _ensure_open(self) -> None:
         if self._closed:
             raise RepositoryError("armazenamento privado fechado")
 
-    def _assert_safe_path(self, path: Path) -> None:
-        try:
-            relative = path.relative_to(self._root)
-        except ValueError as exc:
-            raise RepositoryIntegrityError(
-                "path de armazenamento privado escapou do root"
-            ) from exc
-        current = self._root
-        for part in relative.parts:
-            current = current / part
-            if os.path.lexists(current) and _path_is_link_or_reparse(current):
-                raise RepositoryIntegrityError(
-                    "path simbólico ou reparse no armazenamento privado"
-                )
-        try:
-            resolved = path.resolve(strict=False)
-            resolved.relative_to(self._root)
-        except (OSError, ValueError) as exc:
-            raise RepositoryIntegrityError(
-                "path de armazenamento privado escapou do root"
-            ) from exc
-
     @staticmethod
     def _validate_keys(
-        workspace_id: WorkspaceId, content_id: PrivateContentId | None = None
+        workspace_id: WorkspaceId,
+        content_id: PrivateContentId | None = None,
     ) -> None:
         if type(workspace_id) is not WorkspaceId:
             raise TypeError("workspace_id inválido")
         if content_id is not None and type(content_id) is not PrivateContentId:
             raise TypeError("content_id inválido")
 
-    def _contents_dir(self, workspace_id: WorkspaceId) -> Path:
-        self._validate_keys(workspace_id)
-        return self._workspaces / str(workspace_id) / "contents"
-
-    def _record_dir(
-        self, workspace_id: WorkspaceId, content_id: PrivateContentId
-    ) -> Path:
-        self._validate_keys(workspace_id, content_id)
-        return self._contents_dir(workspace_id) / str(content_id)
-
-    def _lease_path(
-        self, workspace_id: WorkspaceId, content_id: PrivateContentId
-    ) -> Path:
-        self._validate_keys(workspace_id, content_id)
-        return self._leases / f"{workspace_id}.{content_id}.lease"
-
-    def _ensure_contents_dir(self, workspace_id: WorkspaceId) -> Path:
-        contents = self._contents_dir(workspace_id)
-        try:
-            contents.mkdir(parents=True, exist_ok=True)
-            self._assert_safe_path(contents)
-            if not contents.is_dir():
-                raise RepositoryIntegrityError("diretório privado inválido")
-            return contents
-        except (RepositoryIntegrityError, RepositoryError):
-            raise
-        except OSError as exc:
-            raise RepositoryError("falha ao preparar armazenamento privado") from exc
-
-    def _read_regular(self, path: Path) -> bytes:
-        self._assert_safe_path(path)
-        try:
-            if not os.path.lexists(path):
-                raise RepositoryIntegrityError("registro privado incompleto")
-            if _path_is_link_or_reparse(path):
-                raise RepositoryIntegrityError(
-                    "arquivo simbólico ou reparse no armazenamento privado"
-                )
-            flags = os.O_RDONLY | _OPEN_BINARY | _OPEN_NOFOLLOW
-            descriptor = os.open(path, flags)
-            try:
-                if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-                    raise RepositoryIntegrityError("registro privado incompleto")
-                with os.fdopen(descriptor, "rb", closefd=False) as stream:
-                    return stream.read()
-            finally:
-                os.close(descriptor)
-        except RepositoryIntegrityError:
-            raise
-        except OSError as exc:
-            raise RepositoryError("falha ao ler conteúdo privado") from exc
-
     def _read_record(
         self,
-        record_dir: Path,
         workspace_id: WorkspaceId,
         content_id: PrivateContentId,
-    ) -> PrivateContent:
-        self._assert_safe_path(record_dir)
-        try:
-            if _path_is_link_or_reparse(record_dir):
-                raise RepositoryIntegrityError(
-                    "diretório simbólico ou reparse no armazenamento privado"
-                )
-            if not record_dir.is_dir():
-                raise RepositoryIntegrityError("registro privado incompleto")
-            inventory = {item.name for item in record_dir.iterdir()}
-        except RepositoryIntegrityError:
-            raise
-        except OSError as exc:
-            raise RepositoryError("falha ao inspecionar conteúdo privado") from exc
-        if inventory != _RECORD_FILES:
-            raise RepositoryIntegrityError("registro privado incompleto ou inesperado")
-
-        content = self._read_regular(record_dir / "content.bin")
-        metadata_bytes = self._read_regular(record_dir / "metadata.json")
-        checksum_bytes = self._read_regular(record_dir / "metadata.sha256")
+        *,
+        load_content: bool,
+    ) -> PrivateContent | PrivateContentMetadata:
+        paths = _record_paths(self._root, workspace_id, content_id)
+        metadata_bytes = _read_regular(
+            paths["metadata"],
+            root_fd=self._root_fd,
+            maximum_bytes=_MAX_MANIFEST_BYTES,
+        )
+        checksum_bytes = _read_regular(
+            paths["metadata-sha256"],
+            root_fd=self._root_fd,
+            maximum_bytes=64,
+            expected_size=64,
+        )
+        commit_bytes = _read_regular(
+            paths["commit"],
+            root_fd=self._root_fd,
+            maximum_bytes=64,
+            expected_size=64,
+        )
         try:
             declared_metadata_checksum = checksum_bytes.decode("ascii")
+            declared_commit = commit_bytes.decode("ascii")
         except UnicodeDecodeError as exc:
             raise RepositoryIntegrityError("checksum de metadados inválido") from exc
+        actual_metadata_checksum = hashlib.sha256(metadata_bytes).hexdigest()
         if (
             len(declared_metadata_checksum) != 64
-            or any(character not in "0123456789abcdef" for character in declared_metadata_checksum)
-            or hashlib.sha256(metadata_bytes).hexdigest() != declared_metadata_checksum
+            or any(
+                character not in "0123456789abcdef"
+                for character in declared_metadata_checksum
+            )
+            or declared_metadata_checksum != actual_metadata_checksum
+            or declared_commit != actual_metadata_checksum
         ):
             raise RepositoryIntegrityError("metadados privados divergem do checksum")
         try:
-            decoded = metadata_bytes.decode("utf-8")
-            payload = json.loads(decoded)
+            payload = json.loads(metadata_bytes.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise RepositoryIntegrityError("metadados privados inválidos") from exc
         if _canonical_manifest(payload) != metadata_bytes:
             raise RepositoryIntegrityError("metadados privados não são canônicos")
         metadata = _metadata_from_manifest(payload)
-        if metadata.workspace_id != workspace_id:
-            raise RepositoryIntegrityError("workspace do conteúdo privado diverge")
-        if metadata.content_id != content_id:
+        if metadata.workspace_id != workspace_id or metadata.content_id != content_id:
             raise RepositoryIntegrityError("identidade do conteúdo privado diverge")
+        if metadata.byte_size > self._max_content_bytes:
+            raise RepositoryIntegrityError("conteúdo privado excede limite operacional")
+        checksum, content = _hash_regular(
+            paths["content"],
+            root_fd=self._root_fd,
+            maximum_bytes=self._max_content_bytes,
+            expected_size=metadata.byte_size,
+            load_content=load_content,
+        )
+        if checksum != metadata.checksum_sha256:
+            raise RepositoryIntegrityError("conteúdo privado diverge do checksum")
+        if not load_content:
+            return metadata
         try:
             return PrivateContent(metadata, content)
         except (TypeError, ValueError) as exc:
             raise RepositoryIntegrityError("conteúdo privado corrompido") from exc
 
-    @staticmethod
-    def _cleanup_owned_temp(temp_dir: Path) -> None:
-        for name in _RECORD_FILES:
-            candidate = temp_dir / name
-            try:
-                if os.path.lexists(candidate) and not candidate.is_dir():
-                    candidate.unlink()
-            except OSError:
-                pass
-        try:
-            temp_dir.rmdir()
-        except OSError:
-            pass
-
     def store(
-        self, metadata: PrivateContentMetadata, content: bytes
+        self,
+        metadata: PrivateContentMetadata,
+        content: bytes,
     ) -> PrivateContentMetadata:
         self._ensure_open()
-        try:
-            record = PrivateContent(metadata, content)
-        except (TypeError, ValueError):
-            raise
-        self._ensure_contents_dir(metadata.workspace_id)
-        final_dir = self._record_dir(metadata.workspace_id, metadata.content_id)
-        self._assert_safe_path(final_dir)
-        lease = self._lease_path(metadata.workspace_id, metadata.content_id)
-        self._assert_safe_path(lease)
-        try:
-            _write_fsynced(lease, b"PRIVATE_CASE_STORAGE_V1")
-        except FileExistsError as exc:
-            raise RepositoryConflict(
-                "identidade de conteúdo privado já está em escrita"
-            ) from exc
-        except OSError as exc:
-            raise RepositoryError("falha ao reservar conteúdo privado") from exc
-
-        temp_dir = None
-        try:
-            if os.path.lexists(final_dir):
-                if _path_is_link_or_reparse(final_dir):
-                    raise RepositoryIntegrityError(
-                        "identidade privada ocupada por link ou reparse"
-                    )
+        record = PrivateContent(metadata, content)
+        if metadata.byte_size > self._max_content_bytes:
+            raise RepositoryError("conteúdo privado excede limite operacional")
+        self._validate_keys(metadata.workspace_id, metadata.content_id)
+        prefix = _prefix(metadata.workspace_id, metadata.content_id)
+        paths = _record_paths(self._root, metadata.workspace_id, metadata.content_id)
+        with self._mutex:
+            self._audit_runtime_inventory()
+            if prefix in self._committed or any(
+                _entry_exists(path, root_fd=self._root_fd)
+                for path in paths.values()
+            ):
                 raise RepositoryConflict("identidade de conteúdo privado já existe")
-            temp_dir = Path(
-                tempfile.mkdtemp(
-                    prefix=f"{metadata.workspace_id}.{metadata.content_id}.",
-                    dir=self._staging,
-                )
-            )
-            self._assert_safe_path(temp_dir)
+            nonce = uuid4().hex
+            stages = {
+                member: self._root / f".staging.{nonce}.{member}"
+                for member in _MEMBERS
+            }
             manifest = _canonical_manifest(_manifest_for(metadata))
-            _write_fsynced(temp_dir / "content.bin", record.content)
-            _write_fsynced(temp_dir / "metadata.json", manifest)
-            _write_fsynced(
-                temp_dir / "metadata.sha256",
-                hashlib.sha256(manifest).hexdigest().encode("ascii"),
-            )
-            verified = self._read_record(
-                temp_dir, metadata.workspace_id, metadata.content_id
-            )
-            if verified != record:
-                raise RepositoryIntegrityError(
-                    "verificação temporária do conteúdo privado diverge"
-                )
-            os.replace(temp_dir, final_dir)
-            return metadata
-        except (RepositoryConflict, RepositoryIntegrityError):
-            raise
-        except OSError as exc:
-            raise RepositoryError("falha ao armazenar conteúdo privado") from exc
-        finally:
-            if temp_dir is not None:
-                self._cleanup_owned_temp(temp_dir)
+            metadata_checksum = hashlib.sha256(manifest).hexdigest().encode("ascii")
+            published = []
+            commit_created = False
             try:
-                lease.unlink()
-            except FileNotFoundError:
-                pass
-            except OSError:
-                # A lease órfã bloqueia fail-closed uma reutilização futura da
-                # identidade; nunca mascara a falha original nem libera no escuro.
-                pass
+                _write_fsynced(stages["content"], record.content, root_fd=self._root_fd)
+                _write_fsynced(stages["metadata"], manifest, root_fd=self._root_fd)
+                _write_fsynced(
+                    stages["metadata-sha256"],
+                    metadata_checksum,
+                    root_fd=self._root_fd,
+                )
+                for member in _MEMBERS:
+                    _publish_durable(
+                        stages[member],
+                        paths[member],
+                        root_fd=self._root_fd,
+                    )
+                    published.append(paths[member])
+                _write_fsynced(
+                    paths["commit"],
+                    metadata_checksum,
+                    root_fd=self._root_fd,
+                )
+                commit_created = True
+                verified = self._read_record(
+                    metadata.workspace_id,
+                    metadata.content_id,
+                    load_content=True,
+                )
+                if verified != record:
+                    raise RepositoryIntegrityError(
+                        "verificação final do conteúdo privado diverge"
+                    )
+                self._append_journal(prefix)
+                self._committed.add(prefix)
+                return metadata
+            except FileExistsError as exc:
+                raise RepositoryConflict(
+                    "identidade de conteúdo privado já existe"
+                ) from exc
+            except (RepositoryConflict, RepositoryIntegrityError):
+                raise
+            except OSError as exc:
+                raise RepositoryError("falha ao armazenar conteúdo privado") from exc
+            finally:
+                for stage in stages.values():
+                    try:
+                        if _entry_exists(stage, root_fd=self._root_fd):
+                            self._safe_unlink_internal(stage)
+                    except (OSError, RepositoryIntegrityError):
+                        pass
+                if not commit_created:
+                    for path in published:
+                        try:
+                            if _entry_exists(path, root_fd=self._root_fd):
+                                self._safe_unlink_internal(path)
+                        except (OSError, RepositoryIntegrityError):
+                            pass
 
     def get(
-        self, workspace_id: WorkspaceId, content_id: PrivateContentId
+        self,
+        workspace_id: WorkspaceId,
+        content_id: PrivateContentId,
     ) -> PrivateContent | None:
         self._ensure_open()
-        record_dir = self._record_dir(workspace_id, content_id)
-        self._assert_safe_path(record_dir)
-        if not os.path.lexists(record_dir):
-            return None
-        return self._read_record(record_dir, workspace_id, content_id)
+        self._validate_keys(workspace_id, content_id)
+        prefix = _prefix(workspace_id, content_id)
+        with self._mutex:
+            self._audit_runtime_inventory()
+            if prefix not in self._committed:
+                return None
+            result = self._read_record(workspace_id, content_id, load_content=True)
+            if type(result) is not PrivateContent:
+                raise RepositoryIntegrityError("conteúdo privado inválido")
+            return result
 
     def list_all(
-        self, workspace_id: WorkspaceId
+        self,
+        workspace_id: WorkspaceId,
     ) -> tuple[PrivateContentMetadata, ...]:
         self._ensure_open()
-        contents = self._contents_dir(workspace_id)
-        self._assert_safe_path(contents)
-        if not os.path.lexists(contents):
-            return ()
-        try:
-            if _path_is_link_or_reparse(contents) or not contents.is_dir():
-                raise RepositoryIntegrityError("diretório privado inválido")
-            entries = sorted(contents.iterdir(), key=lambda item: item.name)
-        except RepositoryIntegrityError:
-            raise
-        except OSError as exc:
-            raise RepositoryError("falha ao listar conteúdo privado") from exc
-        records = []
-        for entry in entries:
-            try:
-                content_id = PrivateContentId.parse(entry.name)
-            except (TypeError, ValueError) as exc:
-                raise RepositoryIntegrityError(
-                    "identidade física de conteúdo privado inválida"
-                ) from exc
-            records.append(
-                self._read_record(entry, workspace_id, content_id).metadata
-            )
-        return tuple(records)
+        self._validate_keys(workspace_id)
+        with self._mutex:
+            self._audit_runtime_inventory()
+            records = []
+            prefix_start = f"{workspace_id}."
+            for prefix in sorted(self._committed):
+                if not prefix.startswith(prefix_start):
+                    continue
+                content_id = PrivateContentId.parse(prefix[len(prefix_start) :])
+                result = self._read_record(workspace_id, content_id, load_content=False)
+                if type(result) is not PrivateContentMetadata:
+                    raise RepositoryIntegrityError("metadados privados inválidos")
+                records.append(result)
+            return tuple(records)
 
     def close(self) -> None:
+        if getattr(self, "_closed", True):
+            return
         self._closed = True
+        if self._journal_fd is not None:
+            os.close(self._journal_fd)
+            self._journal_fd = None
+        if self._lock_stream is not None:
+            try:
+                self._lock_stream.seek(0)
+                if os.name == "nt":
+                    msvcrt.locking(
+                        self._lock_stream.fileno(),
+                        msvcrt.LK_UNLCK,
+                        1,
+                    )
+                else:
+                    fcntl.flock(self._lock_stream.fileno(), fcntl.LOCK_UN)
+            finally:
+                self._lock_stream.close()
+                self._lock_stream = None
+                self._lock_identity = None
+        if self._root_fd is not None:
+            os.close(self._root_fd)
+            self._root_fd = None
+        self._journal_identity = None
 
     def __enter__(self) -> LocalPrivateContentStore:
         self._ensure_open()

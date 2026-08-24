@@ -23,26 +23,34 @@ Esta entrega não conecta a capability ao browser ou à Local API. A etapa de
 document intake decidirá separadamente como o runtime recebe o root e o limite
 de bytes e como o usuário seleciona um arquivo.
 
-## Identidade e layout físico
+## Identidade, namespace ancorado e layout físico
 
 A identidade pública é o par canônico:
 
 `WorkspaceId + PrivateContentId`
 
 Ambos são UUIDs técnicos. O filename original é metadado literal e nunca
-participa do path. O layout interno V1 é:
+participa do path. O layout interno V1 é deliberadamente plano. Isso elimina
+diretórios internos que poderiam ser trocados entre validação e uso em Windows,
+onde Python não oferece `dir_fd`/`O_NOFOLLOW`:
 
 ```text
 <private-root>/
-  workspaces/<workspace-uuid>/contents/<content-uuid>/
-    content.bin
-    metadata.json
-    metadata.sha256
+  .store-lock
+  .commit-log
+  <workspace-uuid>.<content-uuid>.content
+  <workspace-uuid>.<content-uuid>.metadata
+  <workspace-uuid>.<content-uuid>.metadata-sha256
+  <workspace-uuid>.<content-uuid>.commit
 ```
 
-O modelo Application não expõe esse layout ou qualquer path. Identidades
-malformadas/não canônicas falham antes da resolução física. Cada leitura
-revalida contenção e rejeita symlink/reparse points nos componentes sob o root.
+No Windows, `.store-lock` permanece aberto e exclusivamente travado durante a
+vida do adapter; o handle impede que o único diretório ancestral seja removido
+ou renomeado. No POSIX, o root permanece aberto e todas as operações abaixo
+dele usam `dir_fd` e `O_NOFOLLOW`. Arquivos são abertos somente após comparação
+de identidade `lstat/fstat/lstat`, devem ser regulares, não-reparse e ter um
+único hard link no estado confirmado. Nenhum metadado do chamador participa de
+um nome físico.
 
 ## Escrita e duplicidade
 
@@ -51,26 +59,35 @@ bytes resultam em registros distintos dentro do workspace; não há deduplicaç�
 global nem compartilhamento físico entre workspaces. Não existe update/delete
 no port V1 e uma colisão de UUID nunca sobrescreve o registro existente.
 
-A escrita adquire um lease exclusivo por `workspace + content`, usa staging
-fora da coleção enumerável e finaliza no mesmo filesystem:
+A instância adquire um singleton de processo por root; writers da mesma
+instância são serializados. A escrita usa nomes staging aleatórios diretamente
+no mesmo root e publica cada arquivo por hard link `no-replace`, nunca por
+rename que possa sobrescrever:
 
-`exclusive write → flush/fsync → verificação integral → os.replace → retorno`
+`exclusive write → fsync → hard-link no-replace → remove staging → commit marker
+→ verificação integral → journal fsync → retorno`
 
-O lease impede que writers cooperantes atravessem juntos o precheck e
-sobrescrevam a mesma identidade. Metadados somente são retornados após a
-finalização atômica. Falha controlada
-remove apenas os três arquivos e o diretório temporário criados pela operação;
-nenhum record final parcial é listado como sucesso.
+O marcador `.commit` é a única transição de visibilidade. A coleção em memória
+só é atualizada depois de o journal persistente ter sido sincronizado. Colisão
+de qualquer nome final falha sem sobrescrever. Falha anterior ao commit remove
+somente nomes staging/finais conhecidos da operação.
 
 ## Integridade e reopen
 
 O manifesto JSON é canônico, versionado e contém workspace/content IDs,
 filename literal, tamanho, SHA-256 dos bytes, media type opcional, instante e
 origem controlada. `metadata.sha256` detecta alteração isolada do manifesto.
-Toda leitura exige inventário exato de arquivos, manifesto canônico, checksum
+Toda leitura exige inventário exato do root, manifesto canônico, checksum
 do manifesto, identidade, tamanho e SHA-256 do conteúdo. Ausência, truncamento,
 campo desconhecido, substituição entre workspaces ou corrupção falha fechado e
-nunca é reparada silenciosamente.
+nunca é reparada silenciosamente. O manifesto exige tipos exatos e UUIDs em
+grafia canônica; `true` não equivale à versão inteira `1`.
+
+Após morte abrupta, o lock do kernel é liberado. A próxima abertura exclusiva
+remove staging parcial conhecido, descarta componentes finais sem marcador e
+adota um registro integral cujo commit ocorreu antes da queda. O journal
+fsynced detecta fail-closed qualquer registro confirmado que desapareça. A
+recuperação é executada antes de o adapter aceitar operações.
 
 SHA-256 aqui é evidência de integridade acidental e consistência local, não uma
 assinatura nem prova de autenticidade contra um atacante com capacidade para
@@ -82,8 +99,11 @@ manifesto pertencem a milestones próprios.
 
 - O adapter usa somente stdlib local e não importa cliente de rede.
 - Conteúdo não é incluído em mensagens de erro ou logs.
-- O limite de bytes em memória é configuração obrigatória de
-  `StorePrivateContent`; não há limite oculto ou porcentagem fabricada.
+- `StorePrivateContent` mantém seu limite explícito e o adapter reaplica um
+  teto defensivo configurável (`max_content_bytes`, default documentado de
+  64 MiB) em escrita e leitura. Manifestos têm teto independente de 64 KiB.
+- `list_all` valida conteúdo por chunks de 64 KiB sem materializá-lo; `get`
+  acumula no máximo o teto configurado porque o port V1 retorna `bytes`.
 - A única origem V1 é `LOCAL_IMPORT`; filename não é proveniência e nenhuma
   classificação documental/pericial é inferida.
 - Não há UI, endpoint de upload, OCR, preview, PJe/eproc, AI ou egress nesta
