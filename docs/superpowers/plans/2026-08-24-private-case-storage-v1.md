@@ -81,8 +81,8 @@
   the write-ahead intent before any mutation, write workspace/content/nonce-bound
   staging files directly below the anchored root, fsync them, publish by
   no-replace hard links while retaining identity aliases, atomically publish the
-  staged visibility marker, fsync the independent confirmation anchor, and only
-  then remove the staging aliases before returning
+  staged visibility marker, fsync the independent confirmation anchor, and keep
+  the staging aliases as durable identity evidence before returning
   metadata. Analyze every journal/anchor/group/staging state before mutation,
   then recover or
   reject every known crash state on reopen without deleting evidence on a
@@ -96,10 +96,11 @@
 
   Require exact root inventory, grupos completos confirmados, journal coerente,
   objetos regulares não-reparse, JSON canônico, checksum exato do manifesto e
-  verificação model/content. Clean only staging/final names linked to the exact
-  pending WAL transaction; quarantine and revalidate captured inode identity
-  before deletion. Unknown valid-shaped names and replacements fail closed
-  without destructive cleanup.
+  verificação model/content. Roll back only the exact pending WAL transaction by
+  adding no-replace `.retired.*` hardlinks bound to captured inode identity;
+  never unlink after a separate identity check, and consume WAL only after all
+  members are durably inert. Unknown valid-shaped names and replacements fail
+  closed or become inert without destructive cleanup.
 
 ### Task 3: Prove containment, isolation and privacy
 

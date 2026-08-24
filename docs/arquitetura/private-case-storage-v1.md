@@ -79,19 +79,22 @@ sobrescrever:
 
 `journal-intent fsync → exclusive write → fsync → hard-link no-replace
 → verificação integral → commit staging fsync → commit hard-link
-→ anchor-confirmation fsync → limpeza dos aliases staging → retorno`
+→ anchor-confirmation fsync → aliases staging preservados → retorno`
 
 O marcador `.commit` também é escrito e fsynced em staging; somente depois de
 todos os componentes finais terem sido verificados ele é publicado por hard
 link atômico `no-replace`. A intenção já foi sincronizada antes de qualquer
-staging existir. Sua
+staging existir. Os aliases staging confirmados permanecem como prova física
+da identidade publicada. Sua
 existência integral junto da confirmação independente é a transição de
 visibilidade estável. A coleção em memória só é atualizada depois de o anchor
 persistente ter sido sincronizado. Colisão de qualquer nome final falha sem
-sobrescrever. Falha anterior ao commit remove somente nomes staging/finais
-cuja identidade foi capturada pela operação. A limpeza primeiro move o nome
-para uma quarentena aleatória `no-replace`, revalida a identidade e só então o
-remove; uma substituição é restaurada e a operação falha fechada.
+sobrescrever. Falha anterior ao commit não apaga nomes após uma verificação
+separada. Em vez disso, cria um hardlink aleatório `.retired.*` com semântica
+`no-replace` e confirma que ele aponta ao inode capturado. Qualquer inode assim
+marcado fica permanentemente inerte para catálogo/leitura. Os nomes e bytes
+permanecem preservados como evidência, e o WAL só é consumido depois que todos
+os membros da transação estão aposentados de forma durável.
 
 ## Integridade e reopen
 
@@ -107,9 +110,10 @@ grafia canônica; `true` não equivale à versão inteira `1`.
 Após morte abrupta, o lock do kernel é liberado. A próxima abertura exclusiva
 primeiro analisa de forma limitada journal, anchor, staging e todos os registros
 sem qualquer mutação. Somente depois de tudo ser válido, reconcilia aliases
-staging→final que correspondem à única intenção durável pendente, remove staging
-parcial vinculado a essa intenção e descarta seus componentes finais ainda não
-visíveis. Um nome staging/final sem WAL correspondente nunca é adotado nem
+staging→final que correspondem à única intenção durável pendente e aposenta
+componentes ainda não visíveis por marcadores hardlink, sem `unlink`. Um crash
+ou erro durante esse rollback mantém a intenção e permite repetição idempotente.
+Um nome staging/final sem WAL ou marcador correspondente nunca é adotado nem
 apagado: bloqueia a abertura e preserva a evidência. O
 journal é write-ahead: contém no máximo uma intenção além do anchor. Se a queda
 ocorre depois do commit e antes da confirmação, somente esse registro integral,

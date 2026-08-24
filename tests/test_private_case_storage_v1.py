@@ -92,6 +92,22 @@ def test_private_filesystem_does_not_escape_the_sensitive_os_namespace():
     assert findings == []
 
 
+def test_private_filesystem_has_no_destructive_namespace_operation():
+    source_path = REPOSITORY_ROOT / (
+        "scripts/backend_contract/infrastructure/private_filesystem.py"
+    )
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    destructive_calls = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"remove", "rename", "replace", "rmdir", "unlink"}
+    }
+
+    assert destructive_calls == set()
+
+
 def _workspace(workspace_id, name):
     return PericiaWorkspace(workspace_id, name, "2026-08-24T12:00:00+00:00")
 
@@ -403,7 +419,9 @@ def test_workspace_isolation_blocks_read_list_and_identity_substitution(tmp_path
                 journal.flush()
                 os.fsync(journal.fileno())
             private_store._committed.add(substituted_prefix)
-            with pytest.raises(RepositoryIntegrityError, match="identidade|journal"):
+            with pytest.raises(
+                RepositoryIntegrityError, match="identidade|journal|invent.rio"
+            ):
                 get.execute(WORKSPACE_B, metadata.content_id)
 
 
@@ -901,20 +919,11 @@ def test_recovery_discards_uncommitted_published_components_idempotently(tmp_pat
     paths = _record_paths(root)
     paths["commit"].unlink()
     (root / ".commit-anchor").write_bytes(b"")
-    for member, path_key in {
-        "content": "content.bin",
-        "metadata": "metadata.json",
-        "metadata-sha256": "metadata.sha256",
-    }.items():
-        os.link(
-            paths[path_key],
-            root / f".staging.{WORKSPACE_A}.{CONTENT_A}.{'1' * 32}.{member}",
-        )
 
     for _ in range(2):
         with LocalPrivateContentStore(root) as reopened:
             assert reopened.list_all(WORKSPACE_A) == ()
-    assert not any(path.exists() for path in paths.values())
+    assert tuple(root.glob(".retired.*"))
 
 
 @pytest.mark.parametrize("published_members", range(4))
@@ -934,17 +943,13 @@ def test_recovery_reconciles_every_precommit_publication_boundary(
         ("metadata-sha256", "metadata.sha256"),
     )
     for index, (member, path_key) in enumerate(ordered):
-        if index < published_members:
-            os.link(
-                paths[path_key],
-                root / f".staging.{WORKSPACE_A}.{CONTENT_A}.{'3' * 32}.{member}",
-            )
-        else:
+        if index >= published_members:
             paths[path_key].unlink()
+            next(root.glob(f".staging.*.{member}")).unlink()
 
     with LocalPrivateContentStore(root) as reopened:
         assert reopened.list_all(WORKSPACE_A) == ()
-    assert not any(path.exists() for path in paths.values())
+    assert tuple(root.glob(".retired.*"))
 
 
 def test_recovery_validates_every_group_before_any_destructive_cleanup(tmp_path):
@@ -972,7 +977,7 @@ def test_recovery_validates_every_group_before_any_destructive_cleanup(tmp_path)
     } == preserved
 
 
-def test_recovery_cleanup_revalidates_inode_before_unlink(tmp_path, monkeypatch):
+def test_recovery_retirement_revalidates_inode_before_link(tmp_path, monkeypatch):
     root = tmp_path / "private"
     metadata = _metadata()
     with LocalPrivateContentStore(root) as private_store:
@@ -980,20 +985,11 @@ def test_recovery_cleanup_revalidates_inode_before_unlink(tmp_path, monkeypatch)
     paths = _record_paths(root)
     paths["commit"].unlink()
     (root / ".commit-anchor").write_bytes(b"")
-    for member, path_key in {
-        "content": "content.bin",
-        "metadata": "metadata.json",
-        "metadata-sha256": "metadata.sha256",
-    }.items():
-        os.link(
-            paths[path_key],
-            root / f".staging.{WORKSPACE_A}.{CONTENT_A}.{'2' * 32}.{member}",
-        )
     target = paths["content.bin"]
-    original_cleanup = LocalPrivateContentStore._safe_unlink_internal
+    original_cleanup = LocalPrivateContentStore._retire_internal
     replaced = False
 
-    def replace_before_unlink(store, path, *, expected):
+    def replace_before_retirement(store, path, *, expected):
         nonlocal replaced
         if Path(path) == target and not replaced:
             replaced = True
@@ -1002,11 +998,71 @@ def test_recovery_cleanup_revalidates_inode_before_unlink(tmp_path, monkeypatch)
         return original_cleanup(store, path, expected=expected)
 
     monkeypatch.setattr(
-        LocalPrivateContentStore, "_safe_unlink_internal", replace_before_unlink
+        LocalPrivateContentStore, "_retire_internal", replace_before_retirement
     )
-    with pytest.raises(RepositoryIntegrityError, match="identidade|mudou|ownership"):
+    with pytest.raises(RepositoryIntegrityError, match="identidade|mudou"):
         LocalPrivateContentStore(root)
+    assert (root / ".commit-log").read_bytes() == (
+        f"{WORKSPACE_A}.{CONTENT_A}\n".encode("ascii")
+    )
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
     assert target.read_bytes() == b"independent recovery replacement"
+
+
+def test_recovery_retirement_failure_keeps_wal_and_is_retryable(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    _record_paths(root)["commit"].unlink()
+    (root / ".commit-anchor").write_bytes(b"")
+    original_retire = LocalPrivateContentStore._retire_internal
+    failed = False
+
+    def fail_first_retirement(store, path, *, expected):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError("synthetic retirement interruption")
+        return original_retire(store, path, expected=expected)
+
+    monkeypatch.setattr(
+        LocalPrivateContentStore, "_retire_internal", fail_first_retirement
+    )
+    with pytest.raises(RepositoryError, match="abrir"):
+        LocalPrivateContentStore(root)
+    expected_wal = f"{WORKSPACE_A}.{CONTENT_A}\n".encode("ascii")
+    assert (root / ".commit-log").read_bytes() == expected_wal
+
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
+    assert (root / ".commit-log").read_bytes() == b""
+
+
+def test_retirement_marks_owned_inode_without_any_unlink(tmp_path, monkeypatch):
+    target = tmp_path / "owned"
+    target.write_bytes(b"owned bytes")
+    expected = target.stat()
+
+    def forbidden_unlink(*_args, **_kwargs):
+        raise AssertionError("retirement must not unlink")
+
+    monkeypatch.setattr(private_filesystem.os, "unlink", forbidden_unlink)
+    private_filesystem._retire_if_owned(target, expected, root_fd=None)
+    assert target.read_bytes() == b"owned bytes"
+    marker = next(tmp_path.glob(".retired.*"))
+    assert private_filesystem._same_identity(target.stat(), marker.stat())
+
+
+def test_standalone_retirement_marker_fails_closed(tmp_path):
+    root = tmp_path / "private"
+    (root / f".retired.{'0' * 32}").write_bytes(b"unbound marker")
+
+    with pytest.raises(RepositoryIntegrityError, match="aposentado|v.nculo"):
+        LocalPrivateContentStore(root)
 
 
 def test_recovery_reconciles_exact_staging_to_final_hard_link_after_crash(tmp_path):
@@ -1015,15 +1071,14 @@ def test_recovery_reconciles_exact_staging_to_final_hard_link_after_crash(tmp_pa
     with LocalPrivateContentStore(root) as private_store:
         private_store.store(metadata, b"synthetic private bytes")
     final_commit = _record_paths(root)["commit"]
-    stage_commit = root / f".staging.{WORKSPACE_A}.{CONTENT_A}.{'1' * 32}.commit"
-    os.link(final_commit, stage_commit)
+    stage_commit = next(root.glob(".staging.*.commit"))
 
     with LocalPrivateContentStore(root) as reopened:
         assert reopened.get(WORKSPACE_A, metadata.content_id) == PrivateContent(
             metadata, b"synthetic private bytes"
         )
-    assert not stage_commit.exists()
-    assert final_commit.stat().st_nlink == 1
+    assert stage_commit.exists()
+    assert final_commit.stat().st_nlink == 2
 
 
 def test_deep_manifest_is_reported_as_controlled_integrity_failure(tmp_path):
@@ -1083,8 +1138,9 @@ def test_partial_commit_marker_write_never_reaches_the_visible_final_name(
             private_store.store(metadata, b"synthetic private bytes")
 
     assert tuple(root.glob("*.commit")) == ()
-    assert tuple(root.glob(".staging.*")) == ()
-    assert all(not path.exists() for path in _record_paths(root).values())
+    assert tuple(root.glob(".retired.*"))
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
 
 
 def test_abrupt_process_death_is_reconciled_on_next_exclusive_open(tmp_path):
@@ -1151,7 +1207,7 @@ def test_abrupt_process_death_is_reconciled_on_next_exclusive_open(tmp_path):
 
     with LocalPrivateContentStore(root) as reopened:
         assert reopened.list_all(WORKSPACE_A) == ()
-        assert tuple(root.glob(".staging.*")) == ()
+        assert tuple(root.glob(".retired.*"))
 
 
 def test_private_reads_do_not_use_unanchored_name_based_open(tmp_path, monkeypatch):
@@ -1179,7 +1235,9 @@ def test_private_reads_do_not_use_unanchored_name_based_open(tmp_path, monkeypat
 
         monkeypatch.setattr(private_filesystem.os, "open", redirect_unanchored)
         monkeypatch.setattr(private_filesystem.os, "read", observed_read)
-        with pytest.raises(RepositoryIntegrityError, match="identidade física"):
+        with pytest.raises(
+            RepositoryIntegrityError, match="identidade física|hard link"
+        ):
             private_store.get(WORKSPACE_A, metadata.content_id)
         assert len(redirected) == 1
         assert external_reads == []
@@ -1227,27 +1285,30 @@ def test_publish_failure_does_not_delete_destination_not_created_by_attempt(
     assert destination.read_bytes() == b"independent winner"
 
 
-def test_publish_rollback_revalidates_owned_inode_before_unlink(tmp_path, monkeypatch):
+def test_publish_rollback_preserves_destination_swapped_after_link(
+    tmp_path, monkeypatch
+):
     source = tmp_path / "source"
     destination = tmp_path / "destination"
     source.write_bytes(b"owned stage")
     expected_source = source.stat()
-    original_unlink = private_filesystem._unlink
-    failed = False
+    original_lstat = private_filesystem.os.lstat
+    swapped = False
 
-    def replace_destination_then_fail(path, *, root_fd):
-        nonlocal failed
-        if path.name.startswith(".cleanup.") and not failed:
-            failed = True
+    def replace_destination_before_observation(path, *args, **kwargs):
+        nonlocal swapped
+        if Path(path) == destination and destination.exists() and not swapped:
+            swapped = True
             destination.unlink()
             destination.write_bytes(b"independent replacement")
-            raise OSError("synthetic source unlink failure")
-        return original_unlink(path, root_fd=root_fd)
+        return original_lstat(path, *args, **kwargs)
 
-    monkeypatch.setattr(private_filesystem, "_unlink", replace_destination_then_fail)
-    with pytest.raises(OSError, match="synthetic source unlink failure"):
+    monkeypatch.setattr(private_filesystem.os, "lstat", replace_destination_before_observation)
+    with pytest.raises(RepositoryIntegrityError, match="identidade|mudou"):
         private_filesystem._publish_durable(
-            source, destination, expected_source=expected_source
+            source,
+            destination,
+            expected_source=expected_source,
         )
     assert destination.read_bytes() == b"independent replacement"
 
@@ -1278,9 +1339,12 @@ def test_store_rollback_preserves_replacement_of_published_inode(tmp_path, monke
         with pytest.raises(RepositoryError, match="armazenar conteúdo privado"):
             private_store.store(metadata, b"synthetic private bytes")
     assert first_destination.read_bytes() == b"independent replacement"
+    assert (root / ".commit-log").read_bytes() == (
+        f"{WORKSPACE_A}.{CONTENT_A}\n".encode("ascii")
+    )
 
-    with pytest.raises(RepositoryIntegrityError, match="proveni|invent.rio|journal"):
-        LocalPrivateContentStore(root)
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
     assert first_destination.read_bytes() == b"independent replacement"
 
 
@@ -1310,8 +1374,8 @@ def test_store_cleanup_preserves_replaced_staging_inode(tmp_path, monkeypatch):
             private_store.store(metadata, b"synthetic private bytes")
     assert first_stage.read_bytes() == b"independent staging replacement"
 
-    with pytest.raises(RepositoryIntegrityError, match="proveni|staging|invent.rio"):
-        LocalPrivateContentStore(root)
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
     assert first_stage.read_bytes() == b"independent staging replacement"
 
 
@@ -1356,20 +1420,20 @@ def test_cleanup_never_unlinks_replacement_swapped_after_identity_check(
     target = tmp_path / "owned"
     target.write_bytes(b"owned")
     expected = target.stat()
-    original_rename = os.rename
+    original_link = os.link
     swapped = False
 
-    def swap_before_first_rename(source, destination, *args, **kwargs):
+    def swap_before_retirement_link(source, destination, *args, **kwargs):
         nonlocal swapped
-        if not swapped:
+        if Path(destination).name.startswith(".retired.") and not swapped:
             swapped = True
             target.unlink()
             target.write_bytes(b"independent replacement")
-        return original_rename(source, destination, *args, **kwargs)
+        return original_link(source, destination, *args, **kwargs)
 
-    monkeypatch.setattr(private_filesystem.os, "rename", swap_before_first_rename)
+    monkeypatch.setattr(private_filesystem.os, "link", swap_before_retirement_link)
     with pytest.raises(RepositoryIntegrityError, match="identidade|mudou|ownership"):
-        private_filesystem._unlink_if_owned(target, expected, root_fd=None)
+        private_filesystem._retire_if_owned(target, expected, root_fd=None)
     assert target.read_bytes() == b"independent replacement"
 
 
