@@ -167,18 +167,26 @@ class SaveProcessCase:
     ids: IdGenerator
 
     def execute(
-        self, workspace_id: WorkspaceId, data: ProcessCaseData
+        self,
+        workspace_id: WorkspaceId,
+        data: ProcessCaseData,
+        expected_revision: int | None,
     ) -> ProcessCaseSnapshot:
         workspace_id = _require_workspace(self.workspaces, workspace_id)
         if type(data) is not ProcessCaseData:
             raise TypeError("dados processuais inválidos")
-        record = self.revisions.append(
+        if expected_revision is not None and (
+            type(expected_revision) is not int or expected_revision < 1
+        ):
+            raise ValueError("expected_revision inválida")
+        record = self.revisions.append_if_latest(
             workspace_id=workspace_id,
             artifact_kind=_PROCESS_CASE_ARTIFACT_KIND,
             artifact_id=_PROCESS_CASE_ARTIFACT_ID,
             revision_id=str(_generated_uuid(self.ids)),
             created_at=_generated_timestamp(self.clock),
             payload=data.as_dict(),
+            expected_revision=expected_revision,
         )
         return _process_case_snapshot(record)
 

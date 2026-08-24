@@ -36,6 +36,12 @@ type ViewState =
     }
   | { kind: "load-error"; workspaceId: string; message: string };
 
+type SaveState =
+  | { kind: "idle" }
+  | { kind: "saving"; workspaceId: string }
+  | { kind: "saved"; workspaceId: string }
+  | { kind: "error"; workspaceId: string; message: string };
+
 function errorMessage(error: unknown) {
   return error instanceof ProcessCaseApiError
     ? error.message
@@ -44,11 +50,10 @@ function errorMessage(error: unknown) {
 
 export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
   const [state, setState] = useState<ViewState>({ kind: "loading" });
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string>();
-  const [saved, setSaved] = useState(false);
+  const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
   const [loadAttempt, setLoadAttempt] = useState(0);
   const activeSave = useRef<AbortController | null>(null);
+  const saveButton = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -79,26 +84,38 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
     };
   }, [workspaceId, loadAttempt]);
 
+  useEffect(() => {
+    if (
+      (saveState.kind === "saved" || saveState.kind === "error") &&
+      saveState.workspaceId === workspaceId
+    ) {
+      saveButton.current?.focus();
+    }
+  }, [saveState, workspaceId]);
+
   function update(field: keyof ProcessCaseData, value: string) {
     setState((current) =>
       current.kind === "ready" && current.workspaceId === workspaceId
         ? { ...current, draft: { ...current.draft, [field]: value } }
         : current,
     );
-    setSaveError(undefined);
-    setSaved(false);
+    setSaveState({ kind: "idle" });
   }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const saving = saveState.kind === "saving" && saveState.workspaceId === workspaceId;
     if (state.kind !== "ready" || state.workspaceId !== workspaceId || saving) return;
     const controller = new AbortController();
     activeSave.current = controller;
-    setSaving(true);
-    setSaveError(undefined);
-    setSaved(false);
+    setSaveState({ kind: "saving", workspaceId });
     try {
-      const snapshot = await saveProcessCase(workspaceId, state.draft, controller.signal);
+      const snapshot = await saveProcessCase(
+        workspaceId,
+        state.draft,
+        state.snapshot.revision,
+        controller.signal,
+      );
       if (!controller.signal.aborted) {
         setState({
           kind: "ready",
@@ -106,12 +123,13 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
           snapshot,
           draft: { ...snapshot.data },
         });
-        setSaved(true);
+        setSaveState({ kind: "saved", workspaceId });
       }
     } catch (error) {
-      if (!controller.signal.aborted) setSaveError(errorMessage(error));
+      if (!controller.signal.aborted) {
+        setSaveState({ kind: "error", workspaceId, message: errorMessage(error) });
+      }
     } finally {
-      if (!controller.signal.aborted) setSaving(false);
       if (activeSave.current === controller) activeSave.current = null;
     }
   }
@@ -120,6 +138,12 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
     state.kind !== "loading" && state.workspaceId !== workspaceId
       ? ({ kind: "loading" } as const)
       : state;
+  const saving = saveState.kind === "saving" && saveState.workspaceId === workspaceId;
+  const saveError =
+    saveState.kind === "error" && saveState.workspaceId === workspaceId
+      ? saveState.message
+      : undefined;
+  const saved = saveState.kind === "saved" && saveState.workspaceId === workspaceId;
 
   if (visibleState.kind === "loading") {
     return (
@@ -186,7 +210,7 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
         </p>
       ) : null}
       <div className="form-actions">
-        <button className="primary-action" type="submit" disabled={saving}>
+        <button ref={saveButton} className="primary-action" type="submit" disabled={saving}>
           {saving ? "Salvando…" : "Salvar dados do processo"}
         </button>
         {!saved && visibleState.snapshot.revision !== null ? (

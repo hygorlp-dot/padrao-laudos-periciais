@@ -1,7 +1,9 @@
 import http.client
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Barrier
 from uuid import UUID
 
 import pytest
@@ -13,7 +15,7 @@ from scripts.backend_contract.application.models import (
     WorkspaceId,
     thaw_payload,
 )
-from scripts.backend_contract.application.ports import WorkspaceNotFound
+from scripts.backend_contract.application.ports import RepositoryConflict, WorkspaceNotFound
 from scripts.backend_contract.application.services import GetProcessCase, SaveProcessCase
 from scripts.backend_contract.infrastructure.sqlite import SQLiteApplicationStore
 from scripts.backend_contract.local_api.transport import LocalApi, LocalApiServices
@@ -220,8 +222,8 @@ def test_application_saves_reads_and_corrects_without_silent_loss(tmp_path):
         )
         get = GetProcessCase(store.workspaces, store.revisions)
 
-        first = save.execute(WORKSPACE_A, ProcessCaseData.from_mapping(DATA_A))
-        second = save.execute(WORKSPACE_A, ProcessCaseData.from_mapping(CORRECTED_A))
+        first = save.execute(WORKSPACE_A, ProcessCaseData.from_mapping(DATA_A), None)
+        second = save.execute(WORKSPACE_A, ProcessCaseData.from_mapping(CORRECTED_A), 1)
         latest = get.execute(WORKSPACE_A)
         persisted_first = store.revisions.get_revision(
             WORKSPACE_A, "PROCESS_CASE", "PROCESS_CASE", 1
@@ -234,6 +236,77 @@ def test_application_saves_reads_and_corrects_without_silent_loss(tmp_path):
     assert latest.data.tribunal == "  Tribunal de Justiça da Bahia  "
     assert persisted_first is not None
     assert thaw_payload(persisted_first.payload) == DATA_A
+
+
+def test_application_rejects_a_stale_process_case_correction_atomically(tmp_path):
+    database = tmp_path / "stale-process-case.db"
+    with SQLiteApplicationStore(database) as store:
+        create_workspace(store, WORKSPACE_A, "Perícia A")
+        save = SaveProcessCase(
+            store.workspaces,
+            store.revisions,
+            SequenceClock(NOW_1, NOW_2, NOW_3),
+            SequenceIds(REVISION_1, REVISION_2, REVISION_3),
+        )
+        get = GetProcessCase(store.workspaces, store.revisions)
+        first = save.execute(WORKSPACE_A, ProcessCaseData.from_mapping(DATA_A), None)
+        stale_revision = first.revision
+        accepted = save.execute(
+            WORKSPACE_A,
+            ProcessCaseData.from_mapping({**DATA_A, "tribunal": "Tribunal corrigido"}),
+            stale_revision,
+        )
+
+        with pytest.raises(RepositoryConflict):
+            save.execute(
+                WORKSPACE_A,
+                ProcessCaseData.from_mapping({**DATA_A, "vara": "Vara obsoleta"}),
+                stale_revision,
+            )
+
+        latest = get.execute(WORKSPACE_A)
+        history = store.revisions.list_all(
+            WORKSPACE_A, "PROCESS_CASE", "PROCESS_CASE"
+        )
+
+    assert accepted.revision == 2
+    assert latest == accepted
+    assert latest.data.tribunal == "Tribunal corrigido"
+    assert latest.data.vara == DATA_A["vara"]
+    assert len(history) == 2
+
+
+def test_sqlite_allows_only_one_concurrent_save_for_the_same_expected_revision(tmp_path):
+    database = tmp_path / "concurrent-process-case.db"
+    with SQLiteApplicationStore(database) as setup:
+        create_workspace(setup, WORKSPACE_A, "Perícia A")
+    stores = [SQLiteApplicationStore(database), SQLiteApplicationStore(database)]
+    barrier = Barrier(2)
+
+    def save(index):
+        barrier.wait(timeout=5)
+        try:
+            return stores[index].revisions.append_if_latest(
+                workspace_id=WORKSPACE_A,
+                artifact_kind="PROCESS_CASE",
+                artifact_id="PROCESS_CASE",
+                revision_id=str((REVISION_1, REVISION_2)[index]),
+                created_at=(NOW_1, NOW_2)[index].isoformat(),
+                payload=(DATA_A, DATA_B)[index],
+                expected_revision=None,
+            )
+        except RepositoryConflict:
+            return None
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = tuple(executor.map(save, range(2)))
+    finally:
+        for store in stores:
+            store.close()
+
+    assert sum(outcome is None for outcome in outcomes) == 1
+    assert {outcome.revision for outcome in outcomes if outcome is not None} == {1}
 
 
 def test_application_missing_workspace_fails_for_get_and_save(tmp_path):
@@ -249,7 +322,7 @@ def test_application_missing_workspace_fails_for_get_and_save(tmp_path):
         with pytest.raises(WorkspaceNotFound):
             get.execute(WORKSPACE_A)
         with pytest.raises(WorkspaceNotFound):
-            save.execute(WORKSPACE_A, ProcessCaseData.from_mapping(DATA_A))
+            save.execute(WORKSPACE_A, ProcessCaseData.from_mapping(DATA_A), None)
 
 
 @pytest.mark.parametrize(
@@ -277,9 +350,9 @@ def test_sqlite_reopen_keeps_latest_corrections_and_workspace_isolation(tmp_path
             SequenceClock(NOW_1, NOW_2, NOW_3),
             SequenceIds(REVISION_1, REVISION_2, REVISION_3),
         )
-        save.execute(WORKSPACE_A, ProcessCaseData.from_mapping(DATA_A))
-        save.execute(WORKSPACE_B, ProcessCaseData.from_mapping(DATA_B))
-        save.execute(WORKSPACE_A, ProcessCaseData.from_mapping(CORRECTED_A))
+        save.execute(WORKSPACE_A, ProcessCaseData.from_mapping(DATA_A), None)
+        save.execute(WORKSPACE_B, ProcessCaseData.from_mapping(DATA_B), None)
+        save.execute(WORKSPACE_A, ProcessCaseData.from_mapping(CORRECTED_A), 1)
 
     with SQLiteApplicationStore(database) as reopened:
         get = GetProcessCase(reopened.workspaces, reopened.revisions)
@@ -341,7 +414,7 @@ def test_local_api_post_process_case_preserves_exact_data_and_returns_revision()
         api,
         "POST",
         f"/v1/workspaces/{WORKSPACE_A}/process-case",
-        body={"data": CORRECTED_A},
+        body={"expected_revision": 1, "data": CORRECTED_A},
     )
 
     assert response.status == 200
@@ -355,6 +428,7 @@ def test_local_api_post_process_case_preserves_exact_data_and_returns_revision()
     assert kwargs == {}
     assert args[0] == WORKSPACE_A
     assert args[1].as_dict() == CORRECTED_A
+    assert args[2] == 1
 
 
 def test_local_api_process_case_maps_missing_workspace_without_leaking_identity():
@@ -380,10 +454,38 @@ def test_local_api_process_case_maps_missing_workspace_without_leaking_identity(
     }
 
 
+def test_local_api_maps_stale_process_case_save_to_controlled_conflict():
+    api = LocalApi(
+        local_api_services(
+            save_process_case=FailingService(RepositoryConflict("private revision"))
+        ),
+        token=TOKEN,
+    )
+
+    response = local_api_request(
+        api,
+        "POST",
+        f"/v1/workspaces/{WORKSPACE_A}/process-case",
+        body={"expected_revision": 1, "data": CORRECTED_A},
+    )
+
+    assert response.status == 409
+    assert decoded(response) == {
+        "error": {
+            "code": "REPOSITORY_CONFLICT",
+            "message": "conflito de persistência local",
+        }
+    }
+
+
 @pytest.mark.parametrize(
     "body",
     (
         {},
+        {"expected_revision": None},
+        {"expected_revision": True, "data": DATA_A},
+        {"expected_revision": 0, "data": DATA_A},
+        {"expected_revision": 1.5, "data": DATA_A},
         {"data": {key: value for key, value in DATA_A.items() if key != "uf"}},
         {"data": {**DATA_A, "unexpected": "value"}},
         {"data": {**DATA_A, "uf": None}},
@@ -411,7 +513,13 @@ def test_local_api_process_case_requires_token_and_rejects_unsupported_method():
     api = LocalApi(bundle, token=TOKEN)
     target = f"/v1/workspaces/{WORKSPACE_A}/process-case"
 
-    forbidden = local_api_request(api, "POST", target, body={"data": DATA_A}, token=None)
+    forbidden = local_api_request(
+        api,
+        "POST",
+        target,
+        body={"expected_revision": None, "data": DATA_A},
+        token=None,
+    )
     unsupported = local_api_request(api, "PUT", target)
 
     assert forbidden.status == 403
@@ -438,7 +546,7 @@ def test_product_bridge_forwards_only_exact_process_case_route_end_to_end(tmp_pa
 
         empty_status, empty = bridge_request(runtime, "GET", target)
         saved_status, saved = bridge_request(
-            runtime, "POST", target, body={"data": DATA_A}
+            runtime, "POST", target, body={"expected_revision": None, "data": DATA_A}
         )
         restored_status, restored = bridge_request(runtime, "GET", target)
         near_miss_status, near_miss = bridge_request(runtime, "GET", target + "/extra")
@@ -473,7 +581,7 @@ def test_product_bridge_process_case_mutation_requires_exact_same_origin(tmp_pat
             runtime,
             "POST",
             target,
-            body={"data": DATA_A},
+            body={"expected_revision": None, "data": DATA_A},
             headers={
                 "Origin": "https://attacker.invalid",
                 "Sec-Fetch-Site": "cross-site",
@@ -512,13 +620,22 @@ def test_real_vertical_slice_corrects_reopens_and_isolates_workspaces(tmp_path):
 
         empty_status, empty_a = bridge_request(first_runtime, "GET", target_a)
         first_status, first_a = bridge_request(
-            first_runtime, "POST", target_a, body={"data": DATA_A}
+            first_runtime,
+            "POST",
+            target_a,
+            body={"expected_revision": None, "data": DATA_A},
         )
         saved_b_status, saved_b = bridge_request(
-            first_runtime, "POST", target_b, body={"data": DATA_B}
+            first_runtime,
+            "POST",
+            target_b,
+            body={"expected_revision": None, "data": DATA_B},
         )
         corrected_status, corrected_a = bridge_request(
-            first_runtime, "POST", target_a, body={"data": CORRECTED_A}
+            first_runtime,
+            "POST",
+            target_a,
+            body={"expected_revision": 1, "data": CORRECTED_A},
         )
     finally:
         first_runtime.close()
@@ -541,3 +658,55 @@ def test_real_vertical_slice_corrects_reopens_and_isolates_workspaces(tmp_path):
     )
     assert (restored_a_status, restored_a) == (200, corrected_a)
     assert (restored_b_status, restored_b) == (200, saved_b)
+
+
+def test_real_vertical_slice_prevents_stale_browser_overwrite(tmp_path):
+    runtime = build_product_runtime(
+        tmp_path / "stale-browser-process-case.db",
+        frontend_build(tmp_path),
+        token=TOKEN,
+    )
+    try:
+        runtime.start()
+        _, workspace = bridge_request(
+            runtime,
+            "POST",
+            "/app-api/v1/workspaces",
+            body={"name": "Perícia concorrente"},
+        )
+        target = f"/app-api/v1/workspaces/{workspace['workspace_id']}/process-case"
+        _, initial = bridge_request(runtime, "GET", target)
+        _, first = bridge_request(
+            runtime,
+            "POST",
+            target,
+            body={"expected_revision": initial["revision"], "data": DATA_A},
+        )
+        _, stale_client = bridge_request(runtime, "GET", target)
+        accepted_status, accepted = bridge_request(
+            runtime,
+            "POST",
+            target,
+            body={
+                "expected_revision": first["revision"],
+                "data": {**DATA_A, "tribunal": "Tribunal corrigido"},
+            },
+        )
+        rejected_status, rejected = bridge_request(
+            runtime,
+            "POST",
+            target,
+            body={
+                "expected_revision": stale_client["revision"],
+                "data": {**DATA_A, "vara": "Vara obsoleta"},
+            },
+        )
+        _, latest = bridge_request(runtime, "GET", target)
+    finally:
+        runtime.close()
+
+    assert accepted_status == 200
+    assert accepted["revision"] == 2
+    assert rejected_status == 409
+    assert rejected["error"]["code"] == "REPOSITORY_CONFLICT"
+    assert latest == accepted

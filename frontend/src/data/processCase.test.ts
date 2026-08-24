@@ -52,13 +52,29 @@ describe("process case data boundary", () => {
     const draft = { ...DATA };
 
     expect(fetchSpy).not.toHaveBeenCalled();
-    await expect(saveProcessCase(ID, draft)).resolves.toEqual(SNAPSHOT);
+    await expect(saveProcessCase(ID, draft, 1)).resolves.toEqual(SNAPSHOT);
 
     const [url, request] = fetchSpy.mock.calls[0] as [string, RequestInit];
     expect(url).toBe(`/app-api/v1/workspaces/${ID}/process-case`);
     expect(request.method).toBe("POST");
     expect(request.headers).toEqual({ "Content-Type": "application/json" });
-    expect(JSON.parse(request.body as string)).toEqual({ data: DATA });
+    expect(JSON.parse(request.body as string)).toEqual({ expected_revision: 1, data: DATA });
+  });
+
+  test.each(["GET", "POST"])("rejects a %s response bound to another workspace", async (method) => {
+    const otherWorkspace = "22222222-2222-4222-8222-222222222222";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(200, { ...SNAPSHOT, workspace_id: otherWorkspace }),
+      ),
+    );
+
+    const result =
+      method === "GET"
+        ? getProcessCase(ID)
+        : saveProcessCase(ID, DATA, SNAPSHOT.revision);
+    await expect(result).rejects.toMatchObject({ kind: "invalid-response" });
   });
 
   test.each([
@@ -92,9 +108,26 @@ describe("process case data boundary", () => {
       ),
     );
 
-    const error = await saveProcessCase(ID, DATA).catch((value) => value);
+    const error = await saveProcessCase(ID, DATA, 1).catch((value) => value);
     expect(error).toBeInstanceOf(ProcessCaseApiError);
     expect(error).toMatchObject({ kind: "unavailable" });
     expect(String(error)).not.toMatch(/sqlite|token|secret|503/i);
+  });
+
+  test("maps stale saves and load failures to operation-specific messages", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(409, { error: { code: "REPOSITORY_CONFLICT" } }))
+      .mockResolvedValueOnce(jsonResponse(500, { error: { code: "BROKEN" } }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(saveProcessCase(ID, DATA, 1)).rejects.toMatchObject({
+      kind: "conflict",
+      message: "Os dados foram alterados em outra sessão. Atualize a página antes de salvar novamente",
+    });
+    await expect(getProcessCase(ID)).rejects.toMatchObject({
+      kind: "local-failure",
+      message: "Não foi possível carregar os dados do processo",
+    });
   });
 });

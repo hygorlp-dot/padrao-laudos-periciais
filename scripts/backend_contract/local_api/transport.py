@@ -368,10 +368,19 @@ class LocalApi:
                     return _json_response(200, _process_case_dto(record))
                 if normalized_method == "POST":
                     dto = self._request_dto(request_headers, body)
-                    if set(dto) != {"data"}:
+                    if set(dto) != {"expected_revision", "data"}:
                         raise ValueError("data invalida")
+                    expected_revision = dto["expected_revision"]
+                    if expected_revision is not None and (
+                        type(expected_revision) is not int
+                        or expected_revision < 1
+                        or expected_revision > _MAX_SAFE_JSON_INTEGER
+                    ):
+                        raise ValueError("expected_revision invalida")
                     data = ProcessCaseData.from_mapping(dto["data"])
-                    record = self._services.save_process_case.execute(workspace_id, data)
+                    record = self._services.save_process_case.execute(
+                        workspace_id, data, expected_revision
+                    )
                     return _json_response(200, _process_case_dto(record))
                 return _error(405, "METHOD_NOT_ALLOWED")
 

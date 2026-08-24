@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 
 import { getWorkspace, WorkspaceApiError, type Workspace } from "../data/workspaces";
 import { navigate } from "../app/router";
@@ -68,7 +68,7 @@ export function WorkspaceView({ currentPath, workspaceId, route }: WorkspaceView
     return () => controller.abort();
   }, [workspaceId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (state.kind === "not-found") {
       document.title = "Sistema Pericial — Perícia não encontrada";
     }

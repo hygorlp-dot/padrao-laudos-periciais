@@ -17,9 +17,13 @@ const DATA = {
   parte_requerida: "Pessoa requerida",
 };
 
-function snapshot(data = emptyProcessCaseData(), revision: number | null = null) {
+function snapshot(
+  data = emptyProcessCaseData(),
+  revision: number | null = null,
+  workspaceId = ID,
+) {
   return {
-    workspace_id: ID,
+    workspace_id: workspaceId,
     revision,
     updated_at: revision === null ? null : "2026-08-24T15:01:00+00:00",
     data,
@@ -66,7 +70,11 @@ describe("process case form", () => {
     expect(await screen.findByText("Dados do processo salvos")).toBeInTheDocument();
     expect(screen.getByText("Revisão 1")).toBeInTheDocument();
     expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(fetchSpy.mock.calls[1][1].body)).toEqual({ data: DATA });
+    expect(JSON.parse(fetchSpy.mock.calls[1][1].body)).toEqual({
+      expected_revision: null,
+      data: DATA,
+    });
+    expect(save).toHaveFocus();
   });
 
   test("loads persisted values and records an explicit correction", async () => {
@@ -87,6 +95,7 @@ describe("process case form", () => {
     await user.click(screen.getByRole("button", { name: "Salvar dados do processo" }));
 
     expect(await screen.findByText("Revisão 2")).toBeInTheDocument();
+    expect(JSON.parse(fetchSpy.mock.calls[1][1].body).expected_revision).toBe(1);
     expect(JSON.parse(fetchSpy.mock.calls[1][1].body).data.vara).toBe(corrected.vara);
   });
 
@@ -109,7 +118,9 @@ describe("process case form", () => {
     expect(alert).toHaveTextContent("Armazenamento local indisponível");
     expect(alert).not.toHaveTextContent(/sqlite|token|secret|503/i);
     expect(tribunal).toHaveValue(DATA.tribunal);
-    expect(screen.getByRole("button", { name: "Salvar dados do processo" })).toBeEnabled();
+    const save = screen.getByRole("button", { name: "Salvar dados do processo" });
+    expect(save).toBeEnabled();
+    expect(save).toHaveFocus();
   });
 
   test("recovers a sanitized load failure through an explicit retry", async () => {
@@ -159,5 +170,31 @@ describe("process case form", () => {
       }),
     );
     expect(await screen.findByRole("textbox", { name: "Tribunal" })).toHaveValue("");
+  });
+
+  test("does not leave the next workspace disabled when a previous save is aborted", async () => {
+    let pendingSaveSignal: AbortSignal | undefined;
+    const pendingSave = new Promise<Response>(() => undefined);
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, snapshot(DATA, 1)))
+      .mockImplementationOnce((_url: string, init: RequestInit) => {
+        pendingSaveSignal = init.signal as AbortSignal;
+        return pendingSave;
+      })
+      .mockResolvedValueOnce(jsonResponse(200, snapshot(undefined, null, OTHER_ID)));
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    const { rerender } = render(<ProcessCaseView workspaceId={ID} />);
+
+    await screen.findByRole("textbox", { name: "Tribunal" });
+    await user.click(screen.getByRole("button", { name: "Salvar dados do processo" }));
+    expect(screen.getByRole("button", { name: "Salvando…" })).toBeDisabled();
+
+    rerender(<ProcessCaseView workspaceId={OTHER_ID} />);
+
+    expect(pendingSaveSignal?.aborted).toBe(true);
+    expect(await screen.findByRole("textbox", { name: "Tribunal" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Salvar dados do processo" })).toBeEnabled();
   });
 });

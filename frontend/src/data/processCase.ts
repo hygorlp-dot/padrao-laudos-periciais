@@ -17,6 +17,7 @@ export type ProcessCaseSnapshot = {
 
 export type ProcessCaseApiErrorKind =
   | "not-found"
+  | "conflict"
   | "unavailable"
   | "local-failure"
   | "invalid-request"
@@ -78,7 +79,7 @@ function parseData(value: unknown): ProcessCaseData {
   return Object.fromEntries(DATA_FIELDS.map((field) => [field, record[field]])) as ProcessCaseData;
 }
 
-function parseSnapshot(value: unknown): ProcessCaseSnapshot {
+function parseSnapshot(value: unknown, expectedWorkspaceId: string): ProcessCaseSnapshot {
   if (
     typeof value !== "object" ||
     value === null ||
@@ -103,6 +104,7 @@ function parseSnapshot(value: unknown): ProcessCaseSnapshot {
   if (
     typeof record.workspace_id !== "string" ||
     !CANONICAL_UUID.test(record.workspace_id) ||
+    record.workspace_id !== expectedWorkspaceId ||
     (!neverSaved && !persisted)
   ) {
     throw new ProcessCaseApiError("invalid-response", "Resposta local inválida");
@@ -128,24 +130,35 @@ function validateRequest(workspaceId: string, data?: ProcessCaseData) {
   }
 }
 
-function mappedError(status: number) {
+function mappedError(status: number, operation: "load" | "save") {
   if (status === 404) {
     return new ProcessCaseApiError("not-found", "Perícia não encontrada");
   }
   if (status === 503) {
     return new ProcessCaseApiError("unavailable", "Armazenamento local indisponível");
   }
-  return new ProcessCaseApiError("local-failure", "Não foi possível salvar os dados do processo");
+  if (status === 409 && operation === "save") {
+    return new ProcessCaseApiError(
+      "conflict",
+      "Os dados foram alterados em outra sessão. Atualize a página antes de salvar novamente",
+    );
+  }
+  return new ProcessCaseApiError(
+    "local-failure",
+    operation === "load"
+      ? "Não foi possível carregar os dados do processo"
+      : "Não foi possível salvar os dados do processo",
+  );
 }
 
-async function requestJson(url: string, init: RequestInit) {
+async function requestJson(url: string, init: RequestInit, operation: "load" | "save") {
   let response: Response;
   try {
     response = await fetch(url, { credentials: "same-origin", cache: "no-store", ...init });
   } catch {
     throw new ProcessCaseApiError("unavailable", "Serviço local indisponível");
   }
-  if (!response.ok) throw mappedError(response.status);
+  if (!response.ok) throw mappedError(response.status, operation);
   if (!response.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
     throw new ProcessCaseApiError("invalid-response", "Resposta local inválida");
   }
@@ -166,22 +179,31 @@ export async function getProcessCase(
       method: "GET",
       headers: {},
       signal,
-    }),
+    }, "load"),
+    workspaceId,
   );
 }
 
 export async function saveProcessCase(
   workspaceId: string,
   data: ProcessCaseData,
+  expectedRevision: number | null,
   signal?: AbortSignal,
 ): Promise<ProcessCaseSnapshot> {
   validateRequest(workspaceId, data);
+  if (
+    expectedRevision !== null &&
+    (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1)
+  ) {
+    throw new ProcessCaseApiError("invalid-request", "Revisão dos dados inválida");
+  }
   return parseSnapshot(
     await requestJson(`/app-api/v1/workspaces/${workspaceId}/process-case`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data }),
+      body: JSON.stringify({ expected_revision: expectedRevision, data }),
       signal,
-    }),
+    }, "save"),
+    workspaceId,
   );
 }
