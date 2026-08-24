@@ -54,7 +54,7 @@ _FINAL_NAME = re.compile(
 )
 _STAGING_NAME = re.compile(
     r"^\.staging\.(?P<nonce>[0-9a-f]{32})\."
-    r"(?P<member>content|metadata|metadata-sha256)$"
+    r"(?P<member>content|metadata|metadata-sha256|commit)$"
 )
 _REPARSE_ATTRIBUTE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
@@ -145,8 +145,15 @@ def _open_existing_regular(
         raise RepositoryIntegrityError("arquivo privado ausente ou inacessível") from exc
 
 
-def _open_control_regular(path: Path, *, root_fd: int | None) -> tuple[int, os.stat_result]:
-    flags = os.O_RDWR | os.O_CREAT | _OPEN_BINARY | _OPEN_NOFOLLOW
+def _open_control_regular(
+    path: Path,
+    *,
+    root_fd: int | None,
+    create: bool,
+) -> tuple[int, os.stat_result]:
+    flags = os.O_RDWR | _OPEN_BINARY | _OPEN_NOFOLLOW
+    if create:
+        flags |= os.O_CREAT
     try:
         before = None
         try:
@@ -427,21 +434,43 @@ class LocalPrivateContentStore:
         self._journal_fd = None
         self._journal_identity = None
         self._root_fd = None
+        self._root_identity = None
         self._max_content_bytes = max_content_bytes
         try:
-            if os.path.lexists(root) and _path_is_link_or_reparse(root):
+            if not os.path.lexists(root):
+                raise RepositoryError(
+                    "private root deve ser provisionado antes da abertura"
+                )
+            if _path_is_link_or_reparse(root):
                 raise RepositoryIntegrityError(
                     "private root simbólico ou reparse não é permitido"
                 )
-            root.mkdir(parents=True, exist_ok=True)
-            if _path_is_link_or_reparse(root) or not root.is_dir():
+            root_identity = os.lstat(root)
+            if not stat.S_ISDIR(root_identity.st_mode):
                 raise RepositoryIntegrityError("private root inválido")
+            configured_root = root.absolute()
             self._root = root.resolve(strict=True)
+            observed_root = os.lstat(configured_root)
+            resolved_root = os.lstat(self._root)
+            if (
+                _path_is_link_or_reparse(configured_root)
+                or not _same_identity(root_identity, observed_root)
+                or not _same_identity(observed_root, resolved_root)
+            ):
+                raise RepositoryIntegrityError(
+                    "identidade do private root mudou durante a abertura"
+                )
+            self._configured_root = configured_root
+            self._root_identity = root_identity
             if os.name == "posix":
                 self._root_fd = os.open(
                     self._root,
                     os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                 )
+                if not _same_identity(root_identity, os.fstat(self._root_fd)):
+                    raise RepositoryIntegrityError(
+                        "identidade do private root mudou durante a abertura"
+                    )
             self._acquire_singleton()
             self._open_journal()
             self._committed = self._recover()
@@ -459,22 +488,28 @@ class LocalPrivateContentStore:
     def _acquire_singleton(self) -> None:
         lock_path = self._root / _LOCK_NAME
         descriptor, identity = _open_control_regular(
-            lock_path, root_fd=self._root_fd
+            lock_path,
+            root_fd=self._root_fd,
+            create=False,
         )
         stream = os.fdopen(descriptor, "r+b", buffering=0)
         try:
-            if os.fstat(descriptor).st_size == 0:
-                stream.write(b"0")
-                stream.flush()
-                os.fsync(descriptor)
-                if self._root_fd is not None:
-                    os.fsync(self._root_fd)
+            if os.fstat(descriptor).st_size != 1:
+                raise RepositoryIntegrityError("trust anchor privado inválido")
+            stream.seek(0)
+            if stream.read(1) != b"0":
+                raise RepositoryIntegrityError("trust anchor privado inválido")
             stream.seek(0)
             if os.name == "nt":
                 msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
             else:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            if _path_is_link_or_reparse(self._root):
+            observed_root = os.lstat(self._configured_root)
+            if (
+                _path_is_link_or_reparse(self._configured_root)
+                or not _same_identity(self._root_identity, observed_root)
+                or not _same_identity(observed_root, os.lstat(self._root))
+            ):
                 raise RepositoryIntegrityError("private root mudou durante a abertura")
         except (OSError, RepositoryIntegrityError) as exc:
             stream.close()
@@ -486,7 +521,9 @@ class LocalPrivateContentStore:
 
     def _open_journal(self) -> None:
         descriptor, identity = _open_control_regular(
-            self._root / _JOURNAL_NAME, root_fd=self._root_fd
+            self._root / _JOURNAL_NAME,
+            root_fd=self._root_fd,
+            create=True,
         )
         os.fsync(descriptor)
         if self._root_fd is not None:
@@ -507,10 +544,27 @@ class LocalPrivateContentStore:
         if not _same_identity(expected, opened) or not _same_identity(opened, observed):
             raise RepositoryIntegrityError("identidade do controle privado diverge")
 
-    def _journal_entries(self) -> set[str]:
+    @staticmethod
+    def _is_partial_journal_entry(raw: bytes) -> bool:
+        if not raw or len(raw) >= 73:
+            return False
+        try:
+            value = raw.decode("ascii")
+        except UnicodeDecodeError:
+            return False
+        separators = {8: "-", 13: "-", 18: "-", 23: "-", 36: ".", 45: "-", 50: "-", 55: "-", 60: "-"}
+        return all(
+            character == separators[index]
+            if index in separators
+            else character in "0123456789abcdef"
+            for index, character in enumerate(value)
+        )
+
+    def _journal_entries(self, *, recover_tail: bool = False) -> set[str]:
         os.lseek(self._journal_fd, 0, os.SEEK_SET)
         pending = bytearray()
         entries = set()
+        confirmed_bytes = 0
         while True:
             block = os.read(self._journal_fd, _READ_CHUNK_BYTES)
             if not block:
@@ -527,8 +581,14 @@ class LocalPrivateContentStore:
                 if not re.fullmatch(rf"{_UUID}\.{_UUID}", entry) or entry in entries:
                     raise RepositoryIntegrityError("journal privado inválido")
                 entries.add(entry)
+                confirmed_bytes += len(raw) + 1
+            if len(pending) > 80:
+                raise RepositoryIntegrityError("journal privado inválido")
         if pending:
-            raise RepositoryIntegrityError("journal privado truncado")
+            if not recover_tail or not self._is_partial_journal_entry(bytes(pending)):
+                raise RepositoryIntegrityError("journal privado truncado")
+            os.ftruncate(self._journal_fd, confirmed_bytes)
+            os.fsync(self._journal_fd)
         return entries
 
     def _append_journal(self, prefix: str) -> None:
@@ -572,12 +632,13 @@ class LocalPrivateContentStore:
 
     def _recover(self) -> set[str]:
         groups: dict[str, set[str]] = {}
+        stages = []
         for name in self._root_names():
             if name in {_LOCK_NAME, _JOURNAL_NAME}:
                 continue
             stage = _STAGING_NAME.fullmatch(name)
             if stage:
-                self._safe_unlink_internal(self._root / name)
+                stages.append(self._root / name)
                 continue
             final = _FINAL_NAME.fullmatch(name)
             if final is None:
@@ -585,12 +646,24 @@ class LocalPrivateContentStore:
             prefix = f"{final['workspace']}.{final['content']}"
             groups.setdefault(prefix, set()).add(final["member"])
 
+        journal = self._journal_entries(recover_tail=True)
+        if journal - set(groups):
+            raise RepositoryIntegrityError("journal referencia conteúdo privado ausente")
+
         committed = set()
         for prefix, members in groups.items():
             workspace_raw, content_raw = prefix.split(".", 1)
             workspace_id = WorkspaceId.parse(workspace_raw)
             content_id = PrivateContentId.parse(content_raw)
             paths = _record_paths(self._root, workspace_id, content_id)
+            if prefix in journal:
+                if members != _COMMITTED_MEMBERS:
+                    raise RepositoryIntegrityError(
+                        "registro privado confirmado incompleto"
+                    )
+                self._read_record(workspace_id, content_id, load_content=False)
+                committed.add(prefix)
+                continue
             if "commit" not in members:
                 for member in members:
                     self._safe_unlink_internal(paths[member])
@@ -600,11 +673,10 @@ class LocalPrivateContentStore:
             self._read_record(workspace_id, content_id, load_content=False)
             committed.add(prefix)
 
-        journal = self._journal_entries()
-        if journal - committed:
-            raise RepositoryIntegrityError("journal referencia conteúdo privado ausente")
         for prefix in sorted(committed - journal):
             self._append_journal(prefix)
+        for stage in stages:
+            self._safe_unlink_internal(stage)
         return committed
 
     def _ensure_open(self) -> None:
@@ -627,6 +699,7 @@ class LocalPrivateContentStore:
         content_id: PrivateContentId,
         *,
         load_content: bool,
+        require_commit: bool = True,
     ) -> PrivateContent | PrivateContentMetadata:
         paths = _record_paths(self._root, workspace_id, content_id)
         metadata_bytes = _read_regular(
@@ -640,15 +713,19 @@ class LocalPrivateContentStore:
             maximum_bytes=64,
             expected_size=64,
         )
-        commit_bytes = _read_regular(
-            paths["commit"],
-            root_fd=self._root_fd,
-            maximum_bytes=64,
-            expected_size=64,
-        )
+        commit_bytes = None
+        if require_commit:
+            commit_bytes = _read_regular(
+                paths["commit"],
+                root_fd=self._root_fd,
+                maximum_bytes=64,
+                expected_size=64,
+            )
         try:
             declared_metadata_checksum = checksum_bytes.decode("ascii")
-            declared_commit = commit_bytes.decode("ascii")
+            declared_commit = (
+                commit_bytes.decode("ascii") if commit_bytes is not None else None
+            )
         except UnicodeDecodeError as exc:
             raise RepositoryIntegrityError("checksum de metadados inválido") from exc
         actual_metadata_checksum = hashlib.sha256(metadata_bytes).hexdigest()
@@ -659,7 +736,10 @@ class LocalPrivateContentStore:
                 for character in declared_metadata_checksum
             )
             or declared_metadata_checksum != actual_metadata_checksum
-            or declared_commit != actual_metadata_checksum
+            or (
+                declared_commit is not None
+                and declared_commit != actual_metadata_checksum
+            )
         ):
             raise RepositoryIntegrityError("metadados privados divergem do checksum")
         try:
@@ -711,7 +791,7 @@ class LocalPrivateContentStore:
             nonce = uuid4().hex
             stages = {
                 member: self._root / f".staging.{nonce}.{member}"
-                for member in _MEMBERS
+                for member in (*_MEMBERS, "commit")
             }
             manifest = _canonical_manifest(_manifest_for(metadata))
             metadata_checksum = hashlib.sha256(manifest).hexdigest().encode("ascii")
@@ -732,21 +812,27 @@ class LocalPrivateContentStore:
                         root_fd=self._root_fd,
                     )
                     published.append(paths[member])
-                _write_fsynced(
-                    paths["commit"],
-                    metadata_checksum,
-                    root_fd=self._root_fd,
-                )
-                commit_created = True
                 verified = self._read_record(
                     metadata.workspace_id,
                     metadata.content_id,
                     load_content=True,
+                    require_commit=False,
                 )
                 if verified != record:
                     raise RepositoryIntegrityError(
                         "verificação final do conteúdo privado diverge"
                     )
+                _write_fsynced(
+                    stages["commit"],
+                    metadata_checksum,
+                    root_fd=self._root_fd,
+                )
+                _publish_durable(
+                    stages["commit"],
+                    paths["commit"],
+                    root_fd=self._root_fd,
+                )
+                commit_created = True
                 self._append_journal(prefix)
                 self._committed.add(prefix)
                 return metadata

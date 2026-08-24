@@ -55,6 +55,13 @@ IMPORTED_AT = "2026-08-24T12:30:00+00:00"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _provision_default_private_root(tmp_path):
+    root = tmp_path / "private"
+    root.mkdir()
+    (root / ".store-lock").write_bytes(b"0")
+
+
 class FixedClock:
     def now(self):
         return datetime.fromisoformat(IMPORTED_AT)
@@ -585,6 +592,31 @@ def test_open_anchor_prevents_namespace_swap_or_keeps_posix_dirfd_stable(tmp_pat
         )
 
 
+def test_root_identity_swap_before_anchor_fails_without_writing_to_replacement(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    original_root = tmp_path / "original-private"
+    replacement = tmp_path / "replacement-private"
+    replacement.mkdir()
+    (replacement / ".store-lock").write_bytes(b"0")
+    original_resolve = Path.resolve
+    swapped = False
+
+    def swap_before_resolve(path, *args, **kwargs):
+        nonlocal swapped
+        if path == root and not swapped:
+            swapped = True
+            root.rename(original_root)
+            replacement.rename(root)
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", swap_before_resolve)
+    with pytest.raises(RepositoryIntegrityError, match="private root"):
+        LocalPrivateContentStore(root)
+    assert set(path.name for path in root.iterdir()) == {".store-lock"}
+
+
 def test_external_hard_link_is_rejected_before_private_read(tmp_path):
     root = tmp_path / "private"
     metadata = _metadata()
@@ -614,9 +646,78 @@ def test_fsynced_journal_detects_confirmed_record_loss_on_reopen(tmp_path):
     metadata = _metadata()
     with LocalPrivateContentStore(root) as private_store:
         private_store.store(metadata, b"synthetic private bytes")
-    _record_paths(root)["commit"].unlink()
+    paths = _record_paths(root)
+    paths["commit"].unlink()
+    preserved = {name: path.read_bytes() for name, path in paths.items() if path.exists()}
+    with pytest.raises(RepositoryIntegrityError, match="journal|confirmado"):
+        LocalPrivateContentStore(root)
+    assert {
+        name: path.read_bytes() for name, path in paths.items() if path.exists()
+    } == preserved
+
+
+def test_truncated_journal_line_is_rejected_before_unbounded_accumulation(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    (root / ".commit-log").write_bytes(b"x" * (2 * 1024 * 1024))
+    original_read = private_filesystem.os.read
+    bytes_read = 0
+
+    def bounded_observed_read(descriptor, size):
+        nonlocal bytes_read
+        block = original_read(descriptor, size)
+        bytes_read += len(block)
+        return block
+
+    monkeypatch.setattr(private_filesystem.os, "read", bounded_observed_read)
     with pytest.raises(RepositoryIntegrityError, match="journal"):
         LocalPrivateContentStore(root)
+    assert bytes_read <= 64 * 1024
+
+
+def test_plausible_torn_journal_tail_is_recovered_once_and_fsynced(tmp_path):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    with (root / ".commit-log").open("ab") as journal:
+        journal.write(b"bbbbbbbb-bbbb")
+        journal.flush()
+        os.fsync(journal.fileno())
+
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.get(WORKSPACE_A, metadata.content_id) == PrivateContent(
+            metadata, b"synthetic private bytes"
+        )
+    assert (root / ".commit-log").read_text(encoding="ascii") == (
+        f"{WORKSPACE_A}.{CONTENT_A}\n"
+    )
+
+
+def test_interrupted_first_journal_append_recovers_committed_record(tmp_path, monkeypatch):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    private_store = LocalPrivateContentStore(root)
+
+    def torn_append(prefix):
+        os.lseek(private_store._journal_fd, 0, os.SEEK_END)
+        os.write(private_store._journal_fd, prefix.encode("ascii")[:12])
+        os.fsync(private_store._journal_fd)
+        raise OSError("synthetic journal interruption")
+
+    monkeypatch.setattr(private_store, "_append_journal", torn_append)
+    with pytest.raises(RepositoryError, match="armazenar conteúdo privado"):
+        private_store.store(metadata, b"synthetic private bytes")
+    private_store.close()
+
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.get(WORKSPACE_A, metadata.content_id) == PrivateContent(
+            metadata, b"synthetic private bytes"
+        )
+    assert (root / ".commit-log").read_text(encoding="ascii") == (
+        f"{WORKSPACE_A}.{CONTENT_A}\n"
+    )
 
 
 def test_runtime_journal_tampering_is_detected_before_read(tmp_path):
@@ -677,6 +778,31 @@ def test_finalize_failure_exposes_no_partial_object_and_cleans_owned_temp(tmp_pa
             private_store.store(metadata, b"synthetic private bytes")
         assert private_store.get(WORKSPACE_A, metadata.content_id) is None
         assert _record_commits(root) == ()
+
+
+def test_partial_commit_marker_write_never_reaches_the_visible_final_name(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    original = private_filesystem._write_fsynced
+
+    def fail_during_commit_write(path, payload, **kwargs):
+        if Path(path).name.endswith(".commit"):
+            original(path, b"partial", **kwargs)
+            raise OSError("synthetic commit write interruption")
+        return original(path, payload, **kwargs)
+
+    with LocalPrivateContentStore(root) as private_store:
+        monkeypatch.setattr(
+            private_filesystem, "_write_fsynced", fail_during_commit_write
+        )
+        with pytest.raises(RepositoryError, match="armazenar conteúdo privado"):
+            private_store.store(metadata, b"synthetic private bytes")
+
+    assert tuple(root.glob("*.commit")) == ()
+    assert tuple(root.glob(".staging.*")) == ()
+    assert all(not path.exists() for path in _record_paths(root).values())
 
 
 def test_abrupt_process_death_is_reconciled_on_next_exclusive_open(tmp_path):
@@ -792,11 +918,12 @@ def test_successful_publication_uses_a_durable_directory_commit(tmp_path, monkey
     metadata = _metadata()
     with LocalPrivateContentStore(root) as private_store:
         private_store.store(metadata, b"synthetic private bytes")
-    assert len(calls) == 3
+    assert len(calls) == 4
     assert {destination for _, destination in calls} == {
         _record_paths(root)[member]
-        for member in ("content.bin", "metadata.json", "metadata.sha256")
+        for member in ("content.bin", "metadata.json", "metadata.sha256", "commit")
     }
+    assert calls[-1][1] == _record_paths(root)["commit"]
 
 
 def test_partial_write_failure_exposes_no_record_and_cleans_owned_temp(tmp_path, monkeypatch):
@@ -920,7 +1047,6 @@ def test_concurrent_same_identity_has_exactly_one_winner_without_overwrite(
 
 def test_symlink_record_is_rejected_when_platform_supports_it(tmp_path):
     root = tmp_path / "private"
-    root.mkdir()
     outside = tmp_path / "outside.bin"
     outside.write_bytes(b"outside")
     record_path = _record_paths(root)["content.bin"]
@@ -928,8 +1054,40 @@ def test_symlink_record_is_rejected_when_platform_supports_it(tmp_path):
         record_path.symlink_to(outside)
     except OSError as exc:
         pytest.skip(f"symlink indisponível nesta plataforma: {exc}")
-    with pytest.raises(RepositoryIntegrityError, match="objeto inesperado|reparse"):
+    with pytest.raises(
+        RepositoryIntegrityError,
+        match="objeto inesperado|reparse|arquivo regular",
+    ):
         LocalPrivateContentStore(root)
+
+
+def test_unprovisioned_private_root_is_rejected_without_creating_it(tmp_path):
+    root = tmp_path / "not-provisioned"
+    with pytest.raises(RepositoryError, match="provisionado"):
+        LocalPrivateContentStore(root)
+    assert not root.exists()
+
+
+def test_provisioned_root_without_lock_is_rejected_before_journal_creation(tmp_path):
+    root = tmp_path / "missing-lock"
+    root.mkdir()
+    with pytest.raises(RepositoryIntegrityError, match="controle"):
+        LocalPrivateContentStore(root)
+    assert tuple(root.iterdir()) == ()
+
+
+@pytest.mark.parametrize("lock_bytes", (b"", b"1", b"00"))
+def test_malformed_preprovisioned_lock_is_rejected_without_mutation(
+    tmp_path, lock_bytes
+):
+    root = tmp_path / f"invalid-lock-{len(lock_bytes)}-{lock_bytes.hex()}"
+    root.mkdir()
+    lock = root / ".store-lock"
+    lock.write_bytes(lock_bytes)
+    with pytest.raises(RepositoryIntegrityError, match="trust anchor"):
+        LocalPrivateContentStore(root)
+    assert lock.read_bytes() == lock_bytes
+    assert set(path.name for path in root.iterdir()) == {".store-lock"}
 
 
 def test_windows_reparse_attribute_is_mechanically_recognized(monkeypatch, tmp_path):

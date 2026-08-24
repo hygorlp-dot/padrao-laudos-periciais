@@ -19,6 +19,14 @@ usuário fora do checkout Git. Não existe fallback para um path específico de
 máquina, para `referencias/privadas/` ou para o diretório atual. Testes usam
 somente diretórios temporários e bytes sintéticos.
 
+O root e o arquivo regular `.store-lock`, inicialmente contendo `0`, são uma
+precondição de provisioning do runtime e devem existir antes da abertura do
+adapter. O adapter nunca cria esse trust anchor. Ele abre o lock sem `O_CREAT`,
+adquire o singleton e confirma que a identidade do diretório observada antes,
+durante e depois da aquisição é a mesma. Isso impede que uma troca concorrente
+do path redirecione a primeira escrita para outro namespace. A etapa de intake
+deve fornecer esse provisioning local antes de compor o store.
+
 Esta entrega não conecta a capability ao browser ou à Local API. A etapa de
 document intake decidirá separadamente como o runtime recebe o root e o limite
 de bytes e como o usuário seleciona um arquivo.
@@ -64,13 +72,16 @@ instância são serializados. A escrita usa nomes staging aleatórios diretament
 no mesmo root e publica cada arquivo por hard link `no-replace`, nunca por
 rename que possa sobrescrever:
 
-`exclusive write → fsync → hard-link no-replace → remove staging → commit marker
-→ verificação integral → journal fsync → retorno`
+`exclusive write → fsync → hard-link no-replace → verificação integral
+→ commit staging fsync → commit hard-link → journal fsync → retorno`
 
-O marcador `.commit` é a única transição de visibilidade. A coleção em memória
-só é atualizada depois de o journal persistente ter sido sincronizado. Colisão
-de qualquer nome final falha sem sobrescrever. Falha anterior ao commit remove
-somente nomes staging/finais conhecidos da operação.
+O marcador `.commit` também é escrito e fsynced em staging; somente depois de
+todos os componentes finais terem sido verificados ele é publicado por hard
+link atômico `no-replace`. Sua existência integral é a única transição de
+visibilidade. A coleção em memória só é atualizada depois de o journal
+persistente ter sido sincronizado. Colisão de qualquer nome final falha sem
+sobrescrever. Falha anterior ao commit remove somente nomes staging/finais
+conhecidos da operação.
 
 ## Integridade e reopen
 
@@ -84,10 +95,14 @@ nunca é reparada silenciosamente. O manifesto exige tipos exatos e UUIDs em
 grafia canônica; `true` não equivale à versão inteira `1`.
 
 Após morte abrupta, o lock do kernel é liberado. A próxima abertura exclusiva
-remove staging parcial conhecido, descarta componentes finais sem marcador e
-adota um registro integral cujo commit ocorreu antes da queda. O journal
-fsynced detecta fail-closed qualquer registro confirmado que desapareça. A
-recuperação é executada antes de o adapter aceitar operações.
+primeiro valida o journal e registros anteriormente confirmados, sem apagar
+evidência. Somente depois remove staging parcial conhecido, descarta componentes
+finais que não possuem marcador nem entrada confirmada e adota um registro
+integral cujo commit ocorreu antes da queda. Um único tail parcial com framing
+plausível, produzido por morte durante o append final, é truncado e fsynced sob
+o lock exclusivo; linha grande, byte inválido, duplicidade ou corrupção anterior
+falha fechado. O journal fsynced detecta qualquer registro confirmado que
+desapareça. A recuperação é executada antes de o adapter aceitar operações.
 
 SHA-256 aqui é evidência de integridade acidental e consistência local, não uma
 assinatura nem prova de autenticidade contra um atacante com capacidade para
