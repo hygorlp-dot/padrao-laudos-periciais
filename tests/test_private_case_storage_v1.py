@@ -769,6 +769,50 @@ def test_commit_before_anchor_confirmation_recovers_exactly_one_record(
     assert (root / ".commit-anchor").read_bytes() == expected
 
 
+@pytest.mark.parametrize("missing_member", (*private_filesystem._MEMBERS, "commit"))
+def test_pending_commit_missing_any_staging_identity_fails_before_anchor_mutation(
+    tmp_path, missing_member
+):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    next(root.glob(f".staging.*.{missing_member}")).unlink()
+    (root / ".commit-anchor").write_bytes(b"")
+
+    with pytest.raises(RepositoryIntegrityError, match="staging|identidade"):
+        LocalPrivateContentStore(root)
+    assert (root / ".commit-anchor").read_bytes() == b""
+
+
+@pytest.mark.parametrize("namespace", ("final", "staging"))
+@pytest.mark.parametrize("missing_member", (*private_filesystem._MEMBERS, "commit"))
+def test_confirmed_record_missing_any_identity_alias_fails_closed(
+    tmp_path, namespace, missing_member
+):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    if namespace == "staging":
+        next(root.glob(f".staging.*.{missing_member}")).unlink()
+    else:
+        final_key = {
+            "content": "content.bin",
+            "metadata": "metadata.json",
+            "metadata-sha256": "metadata.sha256",
+            "commit": "commit",
+        }[missing_member]
+        _record_paths(root)[final_key].unlink()
+    journal_before = (root / ".commit-log").read_bytes()
+    anchor_before = (root / ".commit-anchor").read_bytes()
+
+    with pytest.raises(RepositoryIntegrityError):
+        LocalPrivateContentStore(root)
+    assert (root / ".commit-log").read_bytes() == journal_before
+    assert (root / ".commit-anchor").read_bytes() == anchor_before
+
+
 def test_short_torn_tail_binds_to_only_unjournaled_commit_in_same_workspace(
     tmp_path, monkeypatch
 ):
@@ -1040,6 +1084,121 @@ def test_recovery_retirement_failure_keeps_wal_and_is_retryable(
     with LocalPrivateContentStore(root) as reopened:
         assert reopened.list_all(WORKSPACE_A) == ()
     assert (root / ".commit-log").read_bytes() == b""
+
+
+def test_torn_wal_remains_recoverable_after_crash_before_wal_consumption(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    _record_paths(root)["commit"].unlink()
+    (root / ".commit-anchor").write_bytes(b"")
+    prefix = f"{WORKSPACE_A}.{CONTENT_A}"
+    (root / ".commit-log").write_bytes(prefix.encode("ascii")[:12])
+    original_truncate = LocalPrivateContentStore._truncate_ledger
+    failed = False
+
+    def fail_first_truncation(descriptor, size):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError("synthetic crash before WAL consumption")
+        return original_truncate(descriptor, size)
+
+    monkeypatch.setattr(
+        LocalPrivateContentStore,
+        "_truncate_ledger",
+        staticmethod(fail_first_truncation),
+    )
+    with pytest.raises(RepositoryError, match="abrir"):
+        LocalPrivateContentStore(root)
+    assert (root / ".commit-log").read_bytes() == (
+        prefix.encode("ascii") + b"\n"
+    )
+
+    monkeypatch.setattr(
+        LocalPrivateContentStore,
+        "_truncate_ledger",
+        staticmethod(original_truncate),
+    )
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
+    assert (root / ".commit-log").read_bytes() == b""
+
+
+def test_interrupted_torn_wal_completion_is_restartable(tmp_path, monkeypatch):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    _record_paths(root)["commit"].unlink()
+    (root / ".commit-anchor").write_bytes(b"")
+    prefix = f"{WORKSPACE_A}.{CONTENT_A}"
+    fragment = prefix.encode("ascii")[:12]
+    (root / ".commit-log").write_bytes(fragment)
+    original_complete = LocalPrivateContentStore._complete_torn_intent
+
+    def interrupt_completion(store, exact_prefix, exact_fragment):
+        suffix = exact_prefix.encode("ascii")[len(exact_fragment) :] + b"\n"
+        os.lseek(store._journal_fd, 0, os.SEEK_END)
+        os.write(store._journal_fd, suffix[:7])
+        os.fsync(store._journal_fd)
+        raise OSError("synthetic torn-WAL completion interruption")
+
+    monkeypatch.setattr(
+        LocalPrivateContentStore, "_complete_torn_intent", interrupt_completion
+    )
+    with pytest.raises(RepositoryError, match="abrir"):
+        LocalPrivateContentStore(root)
+    assert (root / ".commit-log").read_bytes() == fragment + (
+        prefix.encode("ascii")[len(fragment) :] + b"\n"
+    )[:7]
+
+    monkeypatch.setattr(
+        LocalPrivateContentStore, "_complete_torn_intent", original_complete
+    )
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
+
+
+def test_recovery_revalidates_every_path_after_retirement_before_consuming_wal(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    paths = _record_paths(root)
+    paths["commit"].unlink()
+    (root / ".commit-anchor").write_bytes(b"")
+    target = paths["content.bin"]
+    original_retire = LocalPrivateContentStore._retire_internal
+    swapped = False
+
+    def swap_after_retirement(store, path, *, expected):
+        nonlocal swapped
+        result = original_retire(store, path, expected=expected)
+        if Path(path) == target and not swapped:
+            swapped = True
+            target.unlink()
+            target.write_bytes(b"independent post-retirement replacement")
+        return result
+
+    monkeypatch.setattr(
+        LocalPrivateContentStore, "_retire_internal", swap_after_retirement
+    )
+    with pytest.raises(RepositoryIntegrityError, match="aposent|proveni|identidade"):
+        LocalPrivateContentStore(root)
+    expected_wal = f"{WORKSPACE_A}.{CONTENT_A}\n".encode("ascii")
+    assert (root / ".commit-log").read_bytes() == expected_wal
+    assert target.read_bytes() == b"independent post-retirement replacement"
+
+    monkeypatch.setattr(LocalPrivateContentStore, "_retire_internal", original_retire)
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
+    assert target.read_bytes() == b"independent post-retirement replacement"
 
 
 def test_retirement_marks_owned_inode_without_any_unlink(tmp_path, monkeypatch):

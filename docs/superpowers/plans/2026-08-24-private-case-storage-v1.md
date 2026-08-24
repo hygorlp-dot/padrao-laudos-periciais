@@ -99,8 +99,11 @@
   verificação model/content. Roll back only the exact pending WAL transaction by
   adding no-replace `.retired.*` hardlinks bound to captured inode identity;
   never unlink after a separate identity check, and consume WAL only after all
-  members are durably inert. Unknown valid-shaped names and replacements fail
-  closed or become inert without destructive cleanup.
+  members are durably inert. Canonicalize and fsync a uniquely attributable
+  torn intent before retirement, require all four final/staging identity pairs
+  for every committed record, and re-audit all pending paths after retirement
+  before consuming WAL. Unknown valid-shaped names and replacements fail closed
+  or become inert without destructive cleanup.
 
 ### Task 3: Prove containment, isolation and privacy
 

@@ -720,6 +720,14 @@ class LocalPrivateContentStore:
     def _append_intent(self, prefix: str) -> None:
         self._append_ledger(self._journal_fd, prefix)
 
+    def _complete_torn_intent(self, prefix: str, fragment: bytes) -> None:
+        encoded = prefix.encode("ascii")
+        if not encoded.startswith(fragment):
+            raise RepositoryIntegrityError("journal privado truncado sem proveniência")
+        os.lseek(self._journal_fd, 0, os.SEEK_END)
+        _write_all(self._journal_fd, encoded[len(fragment) :] + b"\n")
+        os.fsync(self._journal_fd)
+
     def _confirm_intent(self, prefix: str) -> None:
         self._append_ledger(self._anchor_fd, prefix)
 
@@ -879,6 +887,8 @@ class LocalPrivateContentStore:
         def is_retired(details: os.stat_result) -> bool:
             return _identity_key(details) in retired_identities
 
+        all_stages = stages
+        all_final_objects = final_objects
         stages = [item for item in stages if not is_retired(item[3])]
         final_objects = [item for item in final_objects if not is_retired(item[3])]
         finals_by_key = {
@@ -968,6 +978,14 @@ class LocalPrivateContentStore:
                 raise RepositoryIntegrityError("hard link de staging sem destino exato")
             linked_members.setdefault(stage_prefix, set()).add(stage_member)
 
+        if any(
+            linked_members.get(prefix, set()) != _COMMITTED_MEMBERS
+            for prefix in committed_groups
+        ):
+            raise RepositoryIntegrityError(
+                "registro privado confirmado sem staging de identidade completo"
+            )
+
         for prefix, member, final_path, details in final_objects:
             expected_links = (
                 None
@@ -992,7 +1010,7 @@ class LocalPrivateContentStore:
                     workspace_id,
                     content_id,
                     load_content=False,
-                    recovery_link_members=frozenset(linked_members.get(prefix, set())),
+                    recovery_link_members=_COMMITTED_MEMBERS,
                 )
                 committed.add(prefix)
                 continue
@@ -1022,11 +1040,30 @@ class LocalPrivateContentStore:
 
         common_bytes = sum(len(entry) + 1 for entry in common)
         pending_is_committed = pending_prefix in committed_groups
+        if journal_tail is not None:
+            if pending_prefix is None:
+                raise RepositoryIntegrityError(
+                    "journal privado truncado sem proveniência"
+                )
+            self._complete_torn_intent(pending_prefix, journal_tail)
         for final_path, final_details in cleanup_finals:
             self._retire_internal(final_path, expected=final_details)
         for stage_prefix, _, stage_path, stage_details in stages:
             if stage_prefix not in committed_groups:
                 self._retire_internal(stage_path, expected=stage_details)
+        pending_paths = [
+            path
+            for prefix, _, path, _ in (*all_final_objects, *all_stages)
+            if prefix == pending_prefix
+        ]
+        if (
+            pending_prefix is not None
+            and not pending_is_committed
+            and not self._all_existing_paths_retired(pending_paths)
+        ):
+            raise RepositoryIntegrityError(
+                "rollback privado sem aposentadoria durável completa"
+            )
         if journal_tail is not None or (
             pending_prefix is not None and not pending_is_committed
         ):

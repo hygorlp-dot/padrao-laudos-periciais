@@ -85,7 +85,8 @@ O marcador `.commit` também é escrito e fsynced em staging; somente depois de
 todos os componentes finais terem sido verificados ele é publicado por hard
 link atômico `no-replace`. A intenção já foi sincronizada antes de qualquer
 staging existir. Os aliases staging confirmados permanecem como prova física
-da identidade publicada. Sua
+da identidade publicada: os quatro pares staging/final são obrigatórios,
+apontam ao mesmo inode regular e possuem exatamente dois links. Sua
 existência integral junto da confirmação independente é a transição de
 visibilidade estável. A coleção em memória só é atualizada depois de o anchor
 persistente ter sido sincronizado. Colisão de qualquer nome final falha sem
@@ -113,6 +114,10 @@ sem qualquer mutação. Somente depois de tudo ser válido, reconcilia aliases
 staging→final que correspondem à única intenção durável pendente e aposenta
 componentes ainda não visíveis por marcadores hardlink, sem `unlink`. Um crash
 ou erro durante esse rollback mantém a intenção e permite repetição idempotente.
+Uma intenção truncada mecanicamente vinculada é completada e fsyncada antes da
+primeira aposentadoria, preservando sua identidade integral caso haja uma nova
+queda. Antes de consumir o WAL, a recuperação reabre o inventário e exige que
+todo nome existente da transação esteja ligado a um marcador aposentado válido.
 Um nome staging/final sem WAL ou marcador correspondente nunca é adotado nem
 apagado: bloqueia a abertura e preserva a evidência. O
 journal é write-ahead: contém no máximo uma intenção além do anchor. Se a queda
