@@ -10,6 +10,13 @@ export type ShellRoute = {
   };
 };
 
+export type ResolvedRoute =
+  | { kind: "directory"; pathname: "/"; workspaceId?: undefined; route: ShellRoute }
+  | { kind: "workspace"; pathname: string; workspaceId: string; route: ShellRoute }
+  | { kind: "missing"; pathname: string };
+
+const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
   {
     path: "/",
@@ -112,4 +119,59 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
 
 export function findRoute(pathname: string) {
   return WORKFLOW_ROUTES.find((route) => route.path === pathname);
+}
+
+export function workspacePath(workspaceId: string, stage?: string) {
+  if (!CANONICAL_UUID.test(workspaceId)) {
+    throw new Error("workspace identity is not canonical");
+  }
+  if (stage === undefined) {
+    return `/pericias/${workspaceId}`;
+  }
+  const route = WORKFLOW_ROUTES.find(
+    (candidate) => candidate.kind === "stage" && candidate.path === `/${stage}`,
+  );
+  if (!route) {
+    throw new Error("workspace stage is not canonical");
+  }
+  return `/pericias/${workspaceId}/${stage}`;
+}
+
+export function resolveRoute(pathname: string): ResolvedRoute {
+  if (pathname === "/") {
+    return {
+      kind: "directory",
+      pathname: "/",
+      workspaceId: undefined,
+      route: WORKFLOW_ROUTES[0],
+    };
+  }
+
+  const segments = pathname.split("/");
+  if (
+    segments[0] !== "" ||
+    segments[1] !== "pericias" ||
+    !CANONICAL_UUID.test(segments[2] ?? "")
+  ) {
+    return { kind: "missing", pathname };
+  }
+  const workspaceId = segments[2];
+  if (segments.length === 3) {
+    return {
+      kind: "workspace",
+      pathname,
+      workspaceId,
+      route: WORKFLOW_ROUTES[0],
+    };
+  }
+  if (segments.length === 4) {
+    const route = WORKFLOW_ROUTES.find(
+      (candidate) =>
+        candidate.kind === "stage" && candidate.path === `/${segments[3]}`,
+    );
+    if (route) {
+      return { kind: "workspace", pathname, workspaceId, route };
+    }
+  }
+  return { kind: "missing", pathname };
 }
