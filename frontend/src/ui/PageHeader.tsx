@@ -11,7 +11,7 @@ export function PageHeader({ route }: PageHeaderProps) {
         <span className="page-index" aria-hidden="true">
           {route.index}
         </span>
-        <h1 id="page-title">{route.label}</h1>
+        <h1 id="page-title" tabIndex={-1}>{route.label}</h1>
       </div>
       <p>{route.description}</p>
     </div>

@@ -82,4 +82,3 @@ def test_product_bridge_scope_has_no_process_case_domain_fields():
     scoped = list(BRIDGE.glob("*.py")) + list(production_frontend_sources())
     for path in scoped:
         assert not forbidden.search(path.read_text(encoding="utf-8")), path
-

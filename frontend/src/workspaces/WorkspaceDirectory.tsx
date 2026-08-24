@@ -31,6 +31,8 @@ export function WorkspaceDirectory() {
   const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const createButtonRef = useRef<HTMLButtonElement>(null);
+  const wasCreating = useRef(false);
 
   const load = useCallback(() => {
     setState({ kind: "loading" });
@@ -54,8 +56,17 @@ export function WorkspaceDirectory() {
   }, []);
 
   useEffect(() => {
-    if (creating) inputRef.current?.focus();
+    if (creating) {
+      inputRef.current?.focus();
+    } else if (wasCreating.current) {
+      createButtonRef.current?.focus();
+    }
+    wasCreating.current = creating;
   }, [creating]);
+
+  useEffect(() => {
+    if (formError && !submitting) inputRef.current?.focus();
+  }, [formError, submitting]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -72,7 +83,6 @@ export function WorkspaceDirectory() {
     } catch (error) {
       setFormError(errorMessage(error));
       setSubmitting(false);
-      inputRef.current?.focus();
     }
   }
 
@@ -182,7 +192,12 @@ export function WorkspaceDirectory() {
                 </div>
               </form>
             ) : (
-              <button className="primary-action" type="button" onClick={() => setCreating(true)}>
+              <button
+                ref={createButtonRef}
+                className="primary-action"
+                type="button"
+                onClick={() => setCreating(true)}
+              >
                 Nova perícia
               </button>
             )}

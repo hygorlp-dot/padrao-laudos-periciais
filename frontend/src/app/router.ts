@@ -8,7 +8,6 @@ export function useCurrentPath() {
   useEffect(() => {
     const updatePath = () => {
       setCurrentPath(window.location.pathname);
-      document.getElementById("main-content")?.focus();
     };
     window.addEventListener("popstate", updatePath);
     window.addEventListener(ROUTE_CHANGE_EVENT, updatePath);
@@ -29,7 +28,6 @@ export function navigateTo(pathname: string) {
     window.history.pushState(null, "", pathname);
     window.dispatchEvent(new Event(ROUTE_CHANGE_EVENT));
   }
-  document.getElementById("main-content")?.focus();
 }
 
 export function navigate(event: MouseEvent<HTMLAnchorElement>) {

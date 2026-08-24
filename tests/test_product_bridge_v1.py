@@ -59,6 +59,8 @@ def test_product_bridge_config_requires_literal_loopback():
         ProductBridgeConfig(host="0.0.0.0")
     with pytest.raises(ValueError, match="loopback"):
         ProductBridgeConfig(host="localhost")
+    with pytest.raises(ValueError, match="porta"):
+        ProductBridgeConfig(port=80)
 
 
 def test_product_bridge_serves_build_and_spa_deep_links_without_secret(tmp_path):

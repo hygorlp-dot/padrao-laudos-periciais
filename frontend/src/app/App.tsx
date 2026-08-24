@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import { resolveRoute, type ShellRoute } from "../routes/routeCatalog";
 import { AppShell } from "../ui/AppShell";
@@ -10,11 +10,15 @@ import { navigate, useCurrentPath } from "./router";
 export function App() {
   const currentPath = useCurrentPath();
   const resolved = resolveRoute(currentPath);
+  const previousPath = useRef(currentPath);
 
   useEffect(() => {
     const label = resolved.kind === "missing" ? "Página não encontrada" : resolved.route.label;
     document.title = `Sistema Pericial — ${label}`;
-    document.getElementById("main-content")?.focus();
+    if (previousPath.current !== currentPath) {
+      document.getElementById("page-title")?.focus();
+      previousPath.current = currentPath;
+    }
   }, [currentPath, resolved]);
 
   if (resolved.kind === "directory") {

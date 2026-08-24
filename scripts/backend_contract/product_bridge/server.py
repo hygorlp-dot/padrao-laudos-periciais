@@ -23,6 +23,8 @@ class ProductBridgeConfig:
             raise ValueError("product bridge exige loopback literal")
         if type(self.port) is not int or not 0 <= self.port <= 65_535:
             raise ValueError("porta local inválida")
+        if self.port == 80:
+            raise ValueError("porta 80 não preserva a origem local canônica")
         if type(self.max_body_bytes) is not int or self.max_body_bytes < 1:
             raise ValueError("limite de body inválido")
         if (

@@ -54,6 +54,7 @@ describe("pericia directory", () => {
     expect(
       await screen.findByRole("heading", { name: "Nenhuma perícia cadastrada" }),
     ).toBeInTheDocument();
+    expect(document.activeElement).toBe(document.body);
     expect(screen.getByRole("button", { name: "Nova perícia" })).toBeInTheDocument();
     expect(screen.queryByText(/dashboard|progresso|status/i)).not.toBeInTheDocument();
   });
@@ -95,7 +96,7 @@ describe("pericia directory", () => {
 
     await waitFor(() => expect(window.location.pathname).toBe(`/pericias/${ID}`));
     expect(await screen.findByRole("heading", { name: WORKSPACE.name })).toBeInTheDocument();
-    expect(document.activeElement).toBe(screen.getByRole("main"));
+    expect(document.activeElement).toBe(screen.getByRole("heading", { level: 1 }));
     expect(fetchSpy.mock.calls[1][1]).toMatchObject({
       method: "POST",
       body: JSON.stringify({ name: WORKSPACE.name }),
@@ -119,6 +120,30 @@ describe("pericia directory", () => {
     expect(error).toHaveAttribute("id");
     expect(input).toHaveAttribute("aria-describedby", error.id);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test("restores focus after a failed creation and after canceling", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { items: [] }))
+      .mockResolvedValueOnce(
+        jsonResponse(503, { error: { code: "SERVICE_UNAVAILABLE", message: "internal" } }),
+      );
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Nova perícia" }));
+    const input = screen.getByRole("textbox", { name: "Nome da perícia" });
+    await user.type(input, WORKSPACE.name);
+    await user.click(screen.getByRole("button", { name: "Criar perícia" }));
+
+    await screen.findByText("Armazenamento local indisponível");
+    await waitFor(() => expect(input).toHaveFocus());
+    expect(input).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(screen.getByRole("button", { name: "Nova perícia" })).toHaveFocus();
   });
 
   test("shows a sanitized recoverable API error instead of an endless spinner", async () => {
