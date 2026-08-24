@@ -6,7 +6,9 @@ export function useCurrentPath() {
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
 
   useEffect(() => {
-    const updatePath = () => setCurrentPath(window.location.pathname);
+    const updatePath = () => {
+      setCurrentPath(window.location.pathname);
+    };
     window.addEventListener("popstate", updatePath);
     window.addEventListener(ROUTE_CHANGE_EVENT, updatePath);
     return () => {
@@ -16,6 +18,16 @@ export function useCurrentPath() {
   }, []);
 
   return currentPath;
+}
+
+export function navigateTo(pathname: string) {
+  if (!pathname.startsWith("/") || pathname.startsWith("//")) {
+    throw new Error("navigation path must be same-origin");
+  }
+  if (pathname !== window.location.pathname) {
+    window.history.pushState(null, "", pathname);
+    window.dispatchEvent(new Event(ROUTE_CHANGE_EVENT));
+  }
 }
 
 export function navigate(event: MouseEvent<HTMLAnchorElement>) {
@@ -36,8 +48,5 @@ export function navigate(event: MouseEvent<HTMLAnchorElement>) {
   }
 
   event.preventDefault();
-  if (destination.pathname !== window.location.pathname) {
-    window.history.pushState(null, "", destination.pathname);
-    window.dispatchEvent(new Event(ROUTE_CHANGE_EVENT));
-  }
+  navigateTo(destination.pathname);
 }

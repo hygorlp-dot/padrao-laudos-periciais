@@ -2,9 +2,10 @@ import type { ShellRoute } from "../routes/routeCatalog";
 
 type TopBarProps = {
   currentRoute?: ShellRoute;
+  workspaceName?: string;
 };
 
-export function TopBar({ currentRoute }: TopBarProps) {
+export function TopBar({ currentRoute, workspaceName }: TopBarProps) {
   const routePosition =
     currentRoute?.kind === "stage"
       ? `Etapa ${currentRoute.index} de 10`
@@ -14,7 +15,7 @@ export function TopBar({ currentRoute }: TopBarProps) {
     <header className="topbar">
       <div>
         <span className="topbar-label">Contexto de trabalho</span>
-        <strong>Nenhuma perícia selecionada</strong>
+        <strong>{workspaceName ?? "Nenhuma perícia selecionada"}</strong>
       </div>
       <span className="route-position">{routePosition}</span>
     </header>

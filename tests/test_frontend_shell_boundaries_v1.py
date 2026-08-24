@@ -31,16 +31,22 @@ def test_frontend_production_source_is_present_and_confined_to_ui():
         assert not forbidden_imports.search(source.read_text(encoding="utf-8")), source
 
 
-def test_frontend_production_source_has_no_secret_or_network_capability():
+def test_frontend_production_source_has_no_secret_or_unbounded_network_capability():
     forbidden = re.compile(
-        r"\b(?:fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(|"
-        r"navigator\.sendBeacon|X-Local-API-Token|Bearer\s|"
+        r"\b(?:XMLHttpRequest|WebSocket|EventSource)\s*\(|"
+        r"navigator\.sendBeacon|X-Local-API-Token|Bearer\s|https?://|"
         r"localStorage|sessionStorage|indexedDB|api[_-]?key",
         re.IGNORECASE,
     )
 
+    fetch_sources = []
     for source in production_sources():
-        assert not forbidden.search(source.read_text(encoding="utf-8")), source
+        text = source.read_text(encoding="utf-8")
+        assert not forbidden.search(text), source
+        if re.search(r"\bfetch\s*\(", text):
+            fetch_sources.append(source.relative_to(ROOT).as_posix())
+
+    assert fetch_sources == ["frontend/src/data/workspaces.ts"]
 
 
 def test_frontend_runtime_dependencies_stay_minimal():
@@ -72,6 +78,22 @@ def test_sidebar_focus_indicator_has_non_text_contrast():
     lighter = max(_relative_luminance(focus.group(1)), _relative_luminance(background.group(1)))
     darker = min(_relative_luminance(focus.group(1)), _relative_luminance(background.group(1)))
     assert (lighter + 0.05) / (darker + 0.05) >= 3
+
+
+def test_persisted_workspace_names_cannot_force_shell_overflow():
+    shell = (SOURCE / "styles" / "shell.css").read_text(encoding="utf-8")
+
+    assert re.search(
+        r"\.workspace-list li > div\s*\{[^}]*min-width:\s*0",
+        shell,
+        re.DOTALL,
+    )
+    assert re.search(
+        r"\.workspace-list strong,[^{]*\.topbar strong,[^{]*\.sidebar-note\s*"
+        r"\{[^}]*overflow-wrap:\s*anywhere",
+        shell,
+        re.DOTALL,
+    )
 
 
 def test_frontend_shell_does_not_infer_an_unauthorized_product_brand():
