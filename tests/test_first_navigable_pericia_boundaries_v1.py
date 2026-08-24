@@ -71,14 +71,25 @@ def test_frontend_network_access_is_narrow_and_never_contains_local_api_token():
         assert "X-Local-API-Token" not in source
         assert not re.search(r"\b(?:localStorage|sessionStorage|indexedDB)\b", source)
         assert not re.search(r"https?://", source)
-    assert network_sources == ["frontend/src/data/workspaces.ts"]
+    assert sorted(network_sources) == [
+        "frontend/src/data/processCase.ts",
+        "frontend/src/data/workspaces.ts",
+    ]
 
 
-def test_product_bridge_scope_has_no_process_case_domain_fields():
+def test_process_case_domain_fields_stay_out_of_bridge_and_in_exact_frontend_modules():
     forbidden = re.compile(
-        r"\b(?:numero_do_processo|process_number|vara|comarca|juiz|honorarios|cnae)\b",
+        r"\b(?:numero_processo|tribunal|vara|comarca_municipio|uf|parte_requerente|parte_requerida)\b",
         re.IGNORECASE,
     )
-    scoped = list(BRIDGE.glob("*.py")) + list(production_frontend_sources())
-    for path in scoped:
+    for path in BRIDGE.glob("*.py"):
         assert not forbidden.search(path.read_text(encoding="utf-8")), path
+    frontend_domain_sources = {
+        path.relative_to(ROOT).as_posix()
+        for path in production_frontend_sources()
+        if forbidden.search(path.read_text(encoding="utf-8"))
+    }
+    assert frontend_domain_sources == {
+        "frontend/src/data/processCase.ts",
+        "frontend/src/workspaces/ProcessCaseView.tsx",
+    }

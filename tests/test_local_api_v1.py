@@ -124,6 +124,8 @@ def services(**overrides):
         "get_latest_artifact": RecordingService(revision()),
         "get_artifact_revision": RecordingService(revision()),
         "list_artifact_revisions": RecordingService((revision(),)),
+        "get_process_case": RecordingService(None),
+        "save_process_case": RecordingService(None),
     }
     defaults.update(overrides)
     return LocalApiServices(**defaults)

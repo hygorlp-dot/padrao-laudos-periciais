@@ -10,17 +10,25 @@ from uuid import UUID
 from .models import (
     ArtifactRevision,
     PericiaWorkspace,
+    ProcessCaseData,
+    ProcessCaseSnapshot,
     WorkspaceId,
     canonical_payload_json,
+    thaw_payload,
 )
 from .ports import (
     ArtifactRevisionNotFound,
     ArtifactRevisionRepository,
     Clock,
     IdGenerator,
+    RepositoryIntegrityError,
     WorkspaceNotFound,
     WorkspaceRepository,
 )
+
+
+_PROCESS_CASE_ARTIFACT_KIND = "PROCESS_CASE"
+_PROCESS_CASE_ARTIFACT_ID = "PROCESS_CASE"
 
 
 def _generated_uuid(ids: IdGenerator) -> UUID:
@@ -103,6 +111,76 @@ class ListWorkspaces:
 
     def execute(self) -> tuple[PericiaWorkspace, ...]:
         return self.repository.list_all()
+
+
+def _require_workspace(
+    repository: WorkspaceRepository, workspace_id: WorkspaceId
+) -> WorkspaceId:
+    workspace_id = _workspace_key(workspace_id)
+    if repository.get(workspace_id) is None:
+        raise WorkspaceNotFound(f"workspace não encontrado: {workspace_id}")
+    return workspace_id
+
+
+def _process_case_snapshot(record: ArtifactRevision) -> ProcessCaseSnapshot:
+    try:
+        data = ProcessCaseData.from_mapping(thaw_payload(record.payload))
+        return ProcessCaseSnapshot(
+            workspace_id=record.workspace_id,
+            revision=record.revision,
+            updated_at=record.created_at,
+            data=data,
+        )
+    except (TypeError, ValueError) as exc:
+        raise RepositoryIntegrityError(
+            "dados processuais persistidos são inválidos"
+        ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class GetProcessCase:
+    workspaces: WorkspaceRepository
+    revisions: ArtifactRevisionRepository
+
+    def execute(self, workspace_id: WorkspaceId) -> ProcessCaseSnapshot:
+        workspace_id = _require_workspace(self.workspaces, workspace_id)
+        record = self.revisions.latest(
+            workspace_id,
+            _PROCESS_CASE_ARTIFACT_KIND,
+            _PROCESS_CASE_ARTIFACT_ID,
+        )
+        if record is None:
+            return ProcessCaseSnapshot(
+                workspace_id=workspace_id,
+                revision=None,
+                updated_at=None,
+                data=ProcessCaseData.empty(),
+            )
+        return _process_case_snapshot(record)
+
+
+@dataclass(frozen=True, slots=True)
+class SaveProcessCase:
+    workspaces: WorkspaceRepository
+    revisions: ArtifactRevisionRepository
+    clock: Clock
+    ids: IdGenerator
+
+    def execute(
+        self, workspace_id: WorkspaceId, data: ProcessCaseData
+    ) -> ProcessCaseSnapshot:
+        workspace_id = _require_workspace(self.workspaces, workspace_id)
+        if type(data) is not ProcessCaseData:
+            raise TypeError("dados processuais inválidos")
+        record = self.revisions.append(
+            workspace_id=workspace_id,
+            artifact_kind=_PROCESS_CASE_ARTIFACT_KIND,
+            artifact_id=_PROCESS_CASE_ARTIFACT_ID,
+            revision_id=str(_generated_uuid(self.ids)),
+            created_at=_generated_timestamp(self.clock),
+            payload=data.as_dict(),
+        )
+        return _process_case_snapshot(record)
 
 
 @dataclass(frozen=True, slots=True)

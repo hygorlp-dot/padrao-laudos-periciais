@@ -366,6 +366,74 @@ main {
   border-radius: 0.38rem;
 }
 
+.process-case-form {
+  display: grid;
+  gap: var(--space-6);
+  padding: var(--space-6) 0 var(--space-7);
+  border-top: 1px solid var(--color-rule);
+  border-bottom: 1px solid var(--color-rule);
+}
+
+.process-case-intro {
+  display: grid;
+  max-width: 58ch;
+  gap: var(--space-2);
+}
+
+.process-case-intro h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  letter-spacing: -0.015em;
+}
+
+.process-case-intro p {
+  margin: 0;
+  color: var(--color-slate);
+}
+
+.process-case-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-5) var(--space-6);
+}
+
+.process-case-fields .field-group:first-child,
+.process-case-fields .field-group:nth-child(2) {
+  grid-column: 1 / -1;
+}
+
+.process-case-fields input {
+  background: var(--color-paper);
+}
+
+.process-case-message {
+  display: flex;
+  width: fit-content;
+  margin: 0;
+  padding: 0.65rem 0.8rem;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--color-graphite);
+  background: color-mix(in srgb, var(--color-ochre-bright) 13%, var(--color-paper));
+  border-left: 3px solid var(--color-ochre);
+  font-size: 0.82rem;
+}
+
+.process-case-message span,
+.revision-note {
+  color: var(--color-slate);
+  font-family: var(--font-data);
+  font-size: 0.73rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.process-case-message--error {
+  color: var(--color-error);
+  background: color-mix(in srgb, var(--color-error) 8%, var(--color-paper));
+  border-left-color: var(--color-error);
+}
+
 .field-group {
   display: grid;
   gap: var(--space-2);
@@ -551,5 +619,16 @@ button.text-action {
   main {
     padding-right: 2.25rem;
     padding-left: 2.25rem;
+  }
+}
+
+@media (max-width: 840px) {
+  .process-case-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .process-case-fields .field-group:first-child,
+  .process-case-fields .field-group:nth-child(2) {
+    grid-column: auto;
   }
 }

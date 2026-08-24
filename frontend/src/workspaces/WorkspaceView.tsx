@@ -6,6 +6,7 @@ import { workspacePath, type ShellRoute } from "../routes/routeCatalog";
 import { AppShell } from "../ui/AppShell";
 import { PageHeader } from "../ui/PageHeader";
 import { StatusState } from "../ui/StatusState";
+import { ProcessCaseView } from "./ProcessCaseView";
 
 type WorkspaceViewProps = {
   currentPath: string;
@@ -143,10 +144,13 @@ export function WorkspaceView({ currentPath, workspaceId, route }: WorkspaceView
             </div>
           </section>
         ) : null}
-        {state.kind === "ready" && route.kind === "stage" ? (
+        {state.kind === "ready" && route.path === "/processo" ? (
+          <ProcessCaseView workspaceId={workspaceId} />
+        ) : null}
+        {state.kind === "ready" && route.kind === "stage" && route.path !== "/processo" ? (
           <StatusState kind="ready" stage={route.label} />
         ) : null}
-        {state.kind === "ready" && route.next ? (
+        {state.kind === "ready" && route.next && route.path !== "/processo" ? (
           <a
             className="primary-action"
             href={workspacePath(workspaceId, route.next.path.slice(1))}

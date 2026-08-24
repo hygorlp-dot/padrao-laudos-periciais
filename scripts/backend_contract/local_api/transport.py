@@ -13,6 +13,8 @@ from urllib.parse import unquote_to_bytes, urlsplit
 from ..application.models import (
     ArtifactRevision,
     PericiaWorkspace,
+    ProcessCaseData,
+    ProcessCaseSnapshot,
     WorkspaceId,
     thaw_payload,
 )
@@ -48,6 +50,8 @@ class LocalApiServices:
     get_latest_artifact: object
     get_artifact_revision: object
     list_artifact_revisions: object
+    get_process_case: object
+    save_process_case: object
 
 
 def _workspace_dto(record: PericiaWorkspace) -> dict:
@@ -68,6 +72,15 @@ def _revision_dto(record: ArtifactRevision) -> dict:
         "created_at": record.created_at,
         "checksum_sha256": record.checksum_sha256,
         "payload": thaw_payload(record.payload),
+    }
+
+
+def _process_case_dto(record: ProcessCaseSnapshot) -> dict:
+    return {
+        "workspace_id": str(record.workspace_id),
+        "revision": record.revision,
+        "updated_at": record.updated_at,
+        "data": record.data.as_dict(),
     }
 
 
@@ -343,6 +356,24 @@ class LocalApi:
                     self._workspace_id(raw_segments[2])
                 )
                 return _json_response(200, _workspace_dto(record))
+
+            if (
+                len(raw_segments) == 4
+                and raw_segments[:2] == ("v1", "workspaces")
+                and raw_segments[3] == "process-case"
+            ):
+                workspace_id = self._workspace_id(raw_segments[2])
+                if normalized_method == "GET":
+                    record = self._services.get_process_case.execute(workspace_id)
+                    return _json_response(200, _process_case_dto(record))
+                if normalized_method == "POST":
+                    dto = self._request_dto(request_headers, body)
+                    if set(dto) != {"data"}:
+                        raise ValueError("data invalida")
+                    data = ProcessCaseData.from_mapping(dto["data"])
+                    record = self._services.save_process_case.execute(workspace_id, data)
+                    return _json_response(200, _process_case_dto(record))
+                return _error(405, "METHOD_NOT_ALLOWED")
 
             artifact_route = (
                 len(raw_segments) in {7, 8}
