@@ -107,6 +107,11 @@
   intent, reconcile its link count against all root-owned aliases, and re-audit
   the complete prefix after retirement before consuming WAL. Unknown valid-shaped
   names and replacements fail closed or become inert without destructive cleanup.
+  Attribute short torn WAL only to an unmarked physical intent, reject a complete
+  group without WAL before anchor mutation, reserve the full 18-entry abort
+  footprint before the first mutation, flush every newly published hardlink
+  identity on Windows, bind Windows storage to the runtime's trusted local
+  volume, and detach raw descriptors before any potentially ambiguous close.
 
 ### Task 3: Prove containment, isolation and privacy
 

@@ -7,6 +7,7 @@ import json
 import os
 import re
 import stat
+import sys
 import threading
 from functools import wraps
 from pathlib import Path
@@ -45,9 +46,10 @@ _MANIFEST_SCHEMA_VERSION = 1
 _MAX_MANIFEST_BYTES = 64 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
 _MAX_JOURNAL_ENTRIES = 10_000
+_MAX_TRANSACTION_ROOT_ENTRIES = 18
 _MAX_ROOT_ENTRIES = (
     _MAX_JOURNAL_ENTRIES
-    * 16
+    * _MAX_TRANSACTION_ROOT_ENTRIES
 ) + 16
 _LOCK_NAME = ".store-lock"
 _JOURNAL_NAME = ".commit-log"
@@ -150,11 +152,12 @@ def _open_existing_regular(
     *,
     root_fd: int | None,
     expected_links: int = 1,
+    writable: bool = False,
 ) -> tuple[int, os.stat_result]:
     try:
         before = _lstat(path, root_fd=root_fd)
         _validate_regular(before, expected_links=expected_links)
-        flags = os.O_RDONLY | _OPEN_BINARY | _OPEN_NOFOLLOW
+        flags = (os.O_RDWR if writable else os.O_RDONLY) | _OPEN_BINARY | _OPEN_NOFOLLOW
         if root_fd is None:
             descriptor = os.open(path, flags)
         else:
@@ -387,6 +390,25 @@ def _publish_durable(
             raise RepositoryIntegrityError(
                 "identidade do staging privado mudou durante a publicação"
             )
+        descriptor, opened = _open_existing_regular(
+            destination,
+            root_fd=root_fd,
+            expected_links=2,
+            writable=True,
+        )
+        try:
+            if not _same_identity(destination_identity, opened):
+                raise RepositoryIntegrityError(
+                    "identidade publicada mudou antes da barreira durável"
+                )
+            os.fsync(descriptor)
+            after = os.fstat(descriptor)
+            if not _same_identity(opened, after) or after.st_nlink != 2:
+                raise RepositoryIntegrityError(
+                    "identidade publicada mudou durante a barreira durável"
+                )
+        finally:
+            os.close(descriptor)
         if root_fd is not None:
             os.fsync(root_fd)
     except FileExistsError:
@@ -598,6 +620,12 @@ class LocalPrivateContentStore:
             root_identity = os.lstat(root)
             if not stat.S_ISDIR(root_identity.st_mode):
                 raise RepositoryIntegrityError("private root inválido")
+            if os.name == "nt":
+                trusted_volume = os.stat(Path(sys.executable).anchor)
+                if root_identity.st_dev != trusted_volume.st_dev:
+                    raise RepositoryError(
+                        "private root deve ser armazenamento local confiável"
+                    )
             configured_root = root.absolute()
             self._root = root.resolve(strict=True)
             observed_root = os.lstat(configured_root)
@@ -1168,9 +1196,7 @@ class LocalPrivateContentStore:
                 raise RepositoryIntegrityError("journal privado perdeu proveniência")
             fragment = journal_tail.decode("ascii")
             candidates = [
-                prefix
-                for prefix in unmarked_intents | set(groups)
-                if prefix.startswith(fragment)
+                prefix for prefix in unmarked_intents if prefix.startswith(fragment)
             ]
             if len(candidates) != 1:
                 raise RepositoryIntegrityError(
@@ -1184,6 +1210,10 @@ class LocalPrivateContentStore:
             if candidates:
                 pending_prefix = next(iter(candidates))
                 pending_without_wal = True
+        if pending_without_wal and pending_prefix in committed_groups:
+            raise RepositoryIntegrityError(
+                "commit privado completo sem proveniência no journal"
+            )
         if pending_prefix is not None and pending_prefix not in intents:
             raise RepositoryIntegrityError("intent privado pendente ausente")
         if anchor_tail is not None:
@@ -1461,6 +1491,11 @@ class LocalPrivateContentStore:
                 raise RepositoryConflict("identidade de conteúdo privado já existe")
             if len(self._known_prefixes) >= _MAX_JOURNAL_ENTRIES:
                 raise RepositoryError("armazenamento privado atingiu limite de registros")
+            if (
+                len(self._root_names()) + _MAX_TRANSACTION_ROOT_ENTRIES
+                > _MAX_ROOT_ENTRIES
+            ):
+                raise RepositoryError("armazenamento privado atingiu limite físico")
             nonce = uuid4().hex
             stages = {
                 member: self._root / f".staging.{prefix}.{nonce}.{member}"
@@ -1638,45 +1673,49 @@ class LocalPrivateContentStore:
                 return
             failures = []
             if self._journal_fd is not None:
+                descriptor = self._journal_fd
+                self._journal_fd = None
+                self._journal_identity = None
                 try:
-                    os.close(self._journal_fd)
-                    self._journal_fd = None
-                    self._journal_identity = None
+                    os.close(descriptor)
                 except OSError as exc:
                     failures.append(exc)
             if self._anchor_fd is not None:
+                descriptor = self._anchor_fd
+                self._anchor_fd = None
+                self._anchor_identity = None
                 try:
-                    os.close(self._anchor_fd)
-                    self._anchor_fd = None
-                    self._anchor_identity = None
+                    os.close(descriptor)
                 except OSError as exc:
                     failures.append(exc)
             if self._lock_stream is not None:
+                stream = self._lock_stream
+                self._lock_stream = None
+                self._lock_identity = None
                 try:
                     if not self._lock_released:
-                        self._lock_stream.seek(0)
+                        stream.seek(0)
                         if os.name == "nt":
                             msvcrt.locking(
-                                self._lock_stream.fileno(),
+                                stream.fileno(),
                                 msvcrt.LK_UNLCK,
                                 1,
                             )
                         else:
-                            fcntl.flock(self._lock_stream.fileno(), fcntl.LOCK_UN)
+                            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
                         self._lock_released = True
-                    self._lock_stream.close()
-                    self._lock_stream = None
-                    self._lock_identity = None
+                    stream.close()
                 except OSError as exc:
                     failures.append(exc)
             if self._root_fd is not None:
+                descriptor = self._root_fd
+                self._root_fd = None
                 try:
-                    os.close(self._root_fd)
-                    self._root_fd = None
+                    os.close(descriptor)
                 except OSError as exc:
                     failures.append(exc)
             self._close_failed = bool(failures)
-            self._closed = not failures and all(
+            self._closed = all(
                 resource is None
                 for resource in (
                     self._journal_fd,

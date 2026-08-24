@@ -19,6 +19,13 @@ usuário fora do checkout Git. Não existe fallback para um path específico de
 máquina, para `referencias/privadas/` ou para o diretório atual. Testes usam
 somente diretórios temporários e bytes sintéticos.
 
+No Windows, o root também deve pertencer ao mesmo volume físico confiável que
+contém o executável Python do runtime. A comparação por identidade de volume é
+feita antes da abertura dos controles; UNC, drive mapeado e volume divergente
+falham fechados. Esta restrição deliberada evita que uma configuração com
+aparência local envie bytes privados a um compartilhamento remoto. Suporte a
+outro volume local exigiria uma autoridade de provisioning explícita posterior.
+
 O root, o arquivo regular `.store-lock` contendo `0`, o `.commit-log` e o
 `.commit-anchor`, ambos regulares e inicialmente vazios, são uma precondição de
 provisioning do runtime e devem existir antes da abertura do adapter. O adapter
@@ -85,7 +92,8 @@ staging como prova de identidade até a confirmação; nunca há rename que poss
 sobrescrever:
 
 `physical-intent fsync → journal-intent fsync → exclusive write → fsync → hard-link no-replace
-→ verificação integral → commit staging fsync → commit hard-link
+→ fsync da identidade publicada → verificação integral → commit staging fsync
+→ commit hard-link → fsync da identidade publicada
 → anchor-confirmation fsync → aliases staging preservados → retorno`
 
 O marcador `.commit` também é escrito e fsynced em staging; somente depois de
@@ -135,12 +143,17 @@ journal é write-ahead: contém no máximo uma intenção além do anchor. Se a 
 ocorre depois do commit e antes da confirmação, somente esse registro integral,
 único e inequivocamente vinculado pode concluir a confirmação. Se ocorre antes
 do commit, a intenção e os componentes não visíveis são revertidos. Tail parcial
-é aceito apenas nessa única transação pendente. Truncamento limpo do journal,
+é aceito apenas nessa única transação pendente; grupos já confirmados nunca
+competem pela atribuição do fragmento. Um grupo físico completo sem entrada WAL
+é ambíguo/corrompido e bloqueia antes de qualquer mutação do anchor. Truncamento limpo do journal,
 perda conjunta de journal e registros confirmados, múltiplas intenções,
 divergência de ordem, linha grande, byte inválido ou duplicidade falham fechado
 sem adoção. Ambos os ledgers têm limite explícito de 10.000 entradas e são lidos
 em blocos limitados; o inventário físico também tem teto explícito antes de ser
-ordenado em memória. A ausência de qualquer controle nunca é tratada como store
+ordenado em memória. Cada nova escrita reserva, antes do primeiro intent, as 18
+entradas do pior rollback persistente (intent, aborted, oito aliases e oito
+marcadores retired); assim uma falha não ultrapassa o próprio teto físico. A
+ausência de qualquer controle nunca é tratada como store
 novo. A recuperação é executada antes de o adapter aceitar operações.
 
 SHA-256 aqui é evidência de integridade acidental e consistência local, não uma
@@ -165,5 +178,8 @@ manifesto pertencem a milestones próprios.
   acumula no máximo o teto configurado porque o port V1 retorna `bytes`.
 - A única origem V1 é `LOCAL_IMPORT`; filename não é proveniência e nenhuma
   classificação documental/pericial é inferida.
+- O fechamento invalida cada handle na instância antes da chamada de sistema.
+  Uma falha ambígua de `close` torna a instância fechada/falha e nunca permite
+  repetir um número de descritor que já possa ter sido reutilizado pelo processo.
 - Não há UI, endpoint de upload, OCR, preview, PJe/eproc, AI ou egress nesta
   entrega.

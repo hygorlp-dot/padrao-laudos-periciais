@@ -837,6 +837,42 @@ def test_short_torn_tail_binds_to_only_unjournaled_commit_in_same_workspace(
         assert reopened.list_all(WORKSPACE_A) == (first,)
 
 
+def test_process_death_with_short_torn_wal_ignores_prior_committed_groups(tmp_path):
+    root = tmp_path / "private"
+    first = _metadata(content=b"first")
+    second = _metadata(content_id=CONTENT_B, content=b"second")
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(first, b"first")
+
+    second_prefix = f"{WORKSPACE_A}.{second.content_id}"
+    nonce = "1" * 32
+    intent = root / f".intent.{second_prefix}.{nonce}"
+    intent.write_bytes(b"")
+    with (root / ".commit-log").open("ab") as journal:
+        journal.write(second_prefix.encode("ascii")[:12])
+        journal.flush()
+        os.fsync(journal.fileno())
+
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == (first,)
+    assert (root / f".aborted.{nonce}").exists()
+
+
+def test_complete_group_without_wal_never_mutates_confirmation_anchor(tmp_path):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    (root / ".commit-log").write_bytes(b"")
+    (root / ".commit-anchor").write_bytes(b"")
+
+    with pytest.raises(RepositoryIntegrityError, match="journal|proveni"):
+        LocalPrivateContentStore(root)
+
+    assert (root / ".commit-log").read_bytes() == b""
+    assert (root / ".commit-anchor").read_bytes() == b""
+
+
 def test_runtime_journal_tampering_is_detected_before_read(tmp_path):
     root = tmp_path / "private"
     metadata = _metadata()
@@ -924,6 +960,20 @@ def test_root_inventory_count_is_bounded_before_sorting(tmp_path, monkeypatch):
 
     with pytest.raises(RepositoryIntegrityError, match="inventário.*limite"):
         LocalPrivateContentStore(root)
+
+
+def test_store_reserves_worst_case_abort_footprint_before_first_mutation(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    before = {path.name: path.read_bytes() for path in root.iterdir()}
+    monkeypatch.setattr(private_filesystem, "_MAX_ROOT_ENTRIES", 20)
+
+    with LocalPrivateContentStore(root) as private_store:
+        with pytest.raises(RepositoryError, match="limite"):
+            private_store.store(_metadata(), b"synthetic private bytes")
+
+    assert {path.name: path.read_bytes() for path in root.iterdir()} == before
 
 
 def test_missing_preprovisioned_journal_fails_closed_even_if_records_are_removed(
@@ -1569,6 +1619,37 @@ def test_successful_publication_uses_a_durable_directory_commit(tmp_path, monkey
     assert calls[-1][1] == _record_paths(root)["commit"]
 
 
+def test_windows_publication_flushes_link_identity_after_hardlink(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.write_bytes(b"owned stage")
+    events = []
+    original_link = private_filesystem.os.link
+    original_fsync = private_filesystem.os.fsync
+
+    def observed_link(*args, **kwargs):
+        result = original_link(*args, **kwargs)
+        events.append("link")
+        return result
+
+    def observed_fsync(descriptor):
+        events.append("fsync")
+        return original_fsync(descriptor)
+
+    monkeypatch.setattr(private_filesystem.os, "link", observed_link)
+    monkeypatch.setattr(private_filesystem.os, "fsync", observed_fsync)
+    private_filesystem._publish_durable(
+        source,
+        destination,
+        expected_source=source.stat(),
+        root_fd=None,
+    )
+
+    assert events == ["link", "fsync"]
+
+
 def test_publish_failure_does_not_delete_destination_not_created_by_attempt(
     tmp_path, monkeypatch
 ):
@@ -2011,29 +2092,59 @@ def test_context_manager_preserves_body_exception_when_close_also_fails(
         original_close()
 
 
-def test_close_can_retry_after_a_partial_descriptor_failure(tmp_path, monkeypatch):
+def test_ambiguous_close_failure_never_retries_a_reused_descriptor(
+    tmp_path, monkeypatch
+):
     root = tmp_path / "private"
     store = LocalPrivateContentStore(root)
     journal_fd = store._journal_fd
     original_close = private_filesystem.os.close
     failed = False
+    probes = []
 
     def fail_journal_once(descriptor):
         nonlocal failed
         if descriptor == journal_fd and not failed:
             failed = True
-            raise OSError("synthetic journal close failure")
+            original_close(descriptor)
+            raise OSError("synthetic ambiguous journal close failure")
         return original_close(descriptor)
 
     monkeypatch.setattr(private_filesystem.os, "close", fail_journal_once)
     with pytest.raises(RepositoryError, match="fechar"):
         store.close()
-    assert not store._closed
-
-    store.close()
-    assert store._closed
+    try:
+        while journal_fd not in probes:
+            probes.append(os.open(root / ".commit-log", os.O_RDONLY))
+        store.close()
+        os.fstat(journal_fd)
+    finally:
+        for descriptor in probes:
+            try:
+                original_close(descriptor)
+            except OSError:
+                pass
     with LocalPrivateContentStore(root):
         pass
+
+
+@pytest.mark.skipif(os.name != "nt", reason="política de volume Windows")
+def test_private_root_on_untrusted_windows_volume_is_rejected(tmp_path, monkeypatch):
+    root = tmp_path / "private"
+    original_stat = private_filesystem.os.stat
+    trusted_anchor = Path(sys.executable).anchor
+
+    def remote_volume_for_runtime(path, *args, **kwargs):
+        observed = original_stat(path, *args, **kwargs)
+        if Path(path) == Path(trusted_anchor):
+            return SimpleNamespace(st_dev=observed.st_dev + 1)
+        return observed
+
+    monkeypatch.setattr(private_filesystem.os, "stat", remote_volume_for_runtime)
+    before = {path.name: path.read_bytes() for path in root.iterdir()}
+    with pytest.raises(RepositoryError, match="local"):
+        LocalPrivateContentStore(root)
+    assert {path.name: path.read_bytes() for path in root.iterdir()} == before
 
 
 def test_huge_json_integer_is_a_controlled_integrity_failure(tmp_path):
