@@ -19,10 +19,11 @@ usuário fora do checkout Git. Não existe fallback para um path específico de
 máquina, para `referencias/privadas/` ou para o diretório atual. Testes usam
 somente diretórios temporários e bytes sintéticos.
 
-O root e o arquivo regular `.store-lock`, inicialmente contendo `0`, são uma
-precondição de provisioning do runtime e devem existir antes da abertura do
-adapter. O adapter nunca cria esse trust anchor. Ele abre o lock sem `O_CREAT`,
-adquire o singleton e confirma que a identidade do diretório observada antes,
+O root, o arquivo regular `.store-lock` contendo `0` e o `.commit-log` regular
+inicialmente vazio são uma precondição de provisioning do runtime e devem
+existir antes da abertura do adapter. O adapter nunca cria esses controles. Ele
+os abre sem `O_CREAT`, adquire o singleton e confirma que a identidade do
+diretório observada antes,
 durante e depois da aquisição é a mesma. Isso impede que uma troca concorrente
 do path redirecione a primeira escrita para outro namespace. A etapa de intake
 deve fornecer esse provisioning local antes de compor o store.
@@ -95,14 +96,19 @@ nunca é reparada silenciosamente. O manifesto exige tipos exatos e UUIDs em
 grafia canônica; `true` não equivale à versão inteira `1`.
 
 Após morte abrupta, o lock do kernel é liberado. A próxima abertura exclusiva
-primeiro valida o journal e registros anteriormente confirmados, sem apagar
-evidência. Somente depois remove staging parcial conhecido, descarta componentes
+primeiro analisa integralmente journal, staging e todos os registros sem
+qualquer mutação. Somente depois de tudo ser válido, reconcilia o alias exato
+staging→final deixado entre `link` e `unlink`, remove staging parcial conhecido
+e descarta componentes
 finais que não possuem marcador nem entrada confirmada e adota um registro
 integral cujo commit ocorreu antes da queda. Um único tail parcial com framing
-plausível, produzido por morte durante o append final, é truncado e fsynced sob
-o lock exclusivo; linha grande, byte inválido, duplicidade ou corrupção anterior
-falha fechado. O journal fsynced detecta qualquer registro confirmado que
-desapareça. A recuperação é executada antes de o adapter aceitar operações.
+plausível e inequivocamente vinculado a um commit completo, produzido por morte
+durante o append final, é truncado e fsynced sob o lock exclusivo; tail sem
+proveniência, linha grande, byte inválido, duplicidade ou corrupção anterior
+falha fechado sem limpeza parcial. O journal preexistente e fsynced detecta
+qualquer registro confirmado que
+desapareça; sua própria ausência nunca é tratada como store novo. A recuperação
+é executada antes de o adapter aceitar operações.
 
 SHA-256 aqui é evidência de integridade acidental e consistência local, não uma
 assinatura nem prova de autenticidade contra um atacante com capacidade para

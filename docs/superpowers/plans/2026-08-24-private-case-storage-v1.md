@@ -62,8 +62,8 @@
 **Interfaces:**
 - Produces: `LocalPrivateContentStore(private_root)` implementing
   `PrivateContentRepository`, with `close()` and context-manager lifecycle. The
-  runtime pre-provisions the absolute root and its regular `.store-lock` trust
-  anchor before adapter composition.
+  runtime pre-provisions the absolute root, regular `.store-lock` trust anchor
+  and empty regular `.commit-log` before adapter composition.
 - Layout: um namespace plano sob `<root>` com nomes canônicos
   `<workspace_uuid>.<content_uuid>.<member>`; all caller-facing results omit this path.
 - Manifest fields are exact and schema-versioned; `metadata.sha256` binds canonical manifest bytes; manifest binds content size/hash, workspace and content IDs.
@@ -74,14 +74,16 @@
 
 - [ ] **Step 2: Implement minimal filesystem GREEN**
 
-  Validate the pre-provisioned configured root, acquire its existing trust-anchor
-  lock without creating bytes, bind directory identity across acquisition, hold
+  Validate the pre-provisioned configured root and both control files, acquire
+  its existing trust-anchor lock without creating bytes, bind directory identity
+  across acquisition, hold
   one exclusive kernel singleton, derive only flat canonical UUID names, write
   exclusive staging files directly below the anchored root, fsync them, publish
   by no-replace hard links, remove staging, atomically publish the staged
   visibility marker, and fsync the recovery journal before returning metadata.
-  Recover or reject every known crash state on reopen without deleting evidence
-  before journal validation.
+  Analyze every journal/group/staging state before mutation, then recover or
+  reject every known crash state on reopen without deleting evidence on a
+  failed recovery.
 
 - [ ] **Step 3: Add RED integrity/failure tests**
 

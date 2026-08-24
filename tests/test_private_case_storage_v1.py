@@ -60,6 +60,7 @@ def _provision_default_private_root(tmp_path):
     root = tmp_path / "private"
     root.mkdir()
     (root / ".store-lock").write_bytes(b"0")
+    (root / ".commit-log").write_bytes(b"")
 
 
 class FixedClock:
@@ -676,7 +677,7 @@ def test_truncated_journal_line_is_rejected_before_unbounded_accumulation(
     assert bytes_read <= 64 * 1024
 
 
-def test_plausible_torn_journal_tail_is_recovered_once_and_fsynced(tmp_path):
+def test_unrelated_plausible_journal_tail_fails_closed_without_truncation(tmp_path):
     root = tmp_path / "private"
     metadata = _metadata()
     with LocalPrivateContentStore(root) as private_store:
@@ -686,23 +687,23 @@ def test_plausible_torn_journal_tail_is_recovered_once_and_fsynced(tmp_path):
         journal.flush()
         os.fsync(journal.fileno())
 
-    with LocalPrivateContentStore(root) as reopened:
-        assert reopened.get(WORKSPACE_A, metadata.content_id) == PrivateContent(
-            metadata, b"synthetic private bytes"
-        )
-    assert (root / ".commit-log").read_text(encoding="ascii") == (
-        f"{WORKSPACE_A}.{CONTENT_A}\n"
-    )
+    before = (root / ".commit-log").read_bytes()
+    with pytest.raises(RepositoryIntegrityError, match="proveniência"):
+        LocalPrivateContentStore(root)
+    assert (root / ".commit-log").read_bytes() == before
 
 
-def test_interrupted_first_journal_append_recovers_committed_record(tmp_path, monkeypatch):
+@pytest.mark.parametrize("cutoff", (12, 73))
+def test_interrupted_first_journal_append_recovers_committed_record(
+    tmp_path, monkeypatch, cutoff
+):
     root = tmp_path / "private"
     metadata = _metadata()
     private_store = LocalPrivateContentStore(root)
 
     def torn_append(prefix):
         os.lseek(private_store._journal_fd, 0, os.SEEK_END)
-        os.write(private_store._journal_fd, prefix.encode("ascii")[:12])
+        os.write(private_store._journal_fd, prefix.encode("ascii")[:cutoff])
         os.fsync(private_store._journal_fd)
         raise OSError("synthetic journal interruption")
 
@@ -720,6 +721,30 @@ def test_interrupted_first_journal_append_recovers_committed_record(tmp_path, mo
     )
 
 
+def test_short_torn_tail_binds_to_only_unjournaled_commit_in_same_workspace(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    first = _metadata(content=b"first")
+    second = _metadata(content_id=CONTENT_B, content=b"second")
+    private_store = LocalPrivateContentStore(root)
+    private_store.store(first, b"first")
+
+    def torn_append(prefix):
+        os.lseek(private_store._journal_fd, 0, os.SEEK_END)
+        os.write(private_store._journal_fd, prefix.encode("ascii")[:12])
+        os.fsync(private_store._journal_fd)
+        raise OSError("synthetic journal interruption")
+
+    monkeypatch.setattr(private_store, "_append_journal", torn_append)
+    with pytest.raises(RepositoryError):
+        private_store.store(second, b"second")
+    private_store.close()
+
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == (first, second)
+
+
 def test_runtime_journal_tampering_is_detected_before_read(tmp_path):
     root = tmp_path / "private"
     metadata = _metadata()
@@ -729,6 +754,24 @@ def test_runtime_journal_tampering_is_detected_before_read(tmp_path):
 
         with pytest.raises(RepositoryIntegrityError, match="journal"):
             private_store.get(WORKSPACE_A, metadata.content_id)
+
+
+def test_missing_preprovisioned_journal_fails_closed_even_if_records_are_removed(
+    tmp_path,
+):
+    root = tmp_path / "private"
+    first = _metadata(content=b"first")
+    second = _metadata(content_id=CONTENT_B, content=b"second")
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(first, b"first")
+        private_store.store(second, b"second")
+    for path in _record_paths(root, content_id=CONTENT_B).values():
+        path.unlink()
+    (root / ".commit-log").unlink()
+
+    with pytest.raises(RepositoryIntegrityError, match="controle"):
+        LocalPrivateContentStore(root)
+    assert _record_paths(root)["content.bin"].read_bytes() == b"first"
 
 
 def test_recovery_adopts_complete_commit_missing_from_journal_idempotently(tmp_path):
@@ -761,6 +804,52 @@ def test_recovery_discards_uncommitted_published_components_idempotently(tmp_pat
         with LocalPrivateContentStore(root) as reopened:
             assert reopened.list_all(WORKSPACE_A) == ()
     assert not any(path.exists() for path in paths.values())
+
+
+def test_recovery_validates_every_group_before_any_destructive_cleanup(tmp_path):
+    root = tmp_path / "private"
+    uncommitted = _metadata(content=b"uncommitted")
+    confirmed = _metadata(content_id=CONTENT_B, content=b"confirmed")
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(uncommitted, b"uncommitted")
+        private_store.store(confirmed, b"confirmed")
+    uncommitted_paths = _record_paths(root)
+    uncommitted_paths["commit"].unlink()
+    (root / ".commit-log").write_text(
+        f"{WORKSPACE_A}.{CONTENT_B}\n", encoding="ascii"
+    )
+    _record_paths(root, content_id=CONTENT_B)["content.bin"].write_bytes(b"corrupt")
+    preserved = {
+        name: path.read_bytes()
+        for name, path in uncommitted_paths.items()
+        if path.exists()
+    }
+
+    with pytest.raises(RepositoryIntegrityError):
+        LocalPrivateContentStore(root)
+    assert {
+        name: path.read_bytes()
+        for name, path in uncommitted_paths.items()
+        if path.exists()
+    } == preserved
+
+
+def test_recovery_reconciles_exact_staging_to_final_hard_link_after_crash(tmp_path):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    final_commit = _record_paths(root)["commit"]
+    stage_commit = root / f".staging.{'1' * 32}.commit"
+    os.link(final_commit, stage_commit)
+    (root / ".commit-log").write_bytes(b"")
+
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.get(WORKSPACE_A, metadata.content_id) == PrivateContent(
+            metadata, b"synthetic private bytes"
+        )
+    assert not stage_commit.exists()
+    assert final_commit.stat().st_nlink == 1
 
 
 def test_finalize_failure_exposes_no_partial_object_and_cleans_owned_temp(tmp_path, monkeypatch):
@@ -926,6 +1015,23 @@ def test_successful_publication_uses_a_durable_directory_commit(tmp_path, monkey
     assert calls[-1][1] == _record_paths(root)["commit"]
 
 
+def test_publish_failure_does_not_delete_destination_not_created_by_attempt(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.write_bytes(b"owned stage")
+
+    def fail_without_link(_source, target, **_kwargs):
+        Path(target).write_bytes(b"independent winner")
+        raise OSError("synthetic link failure")
+
+    monkeypatch.setattr(private_filesystem.os, "link", fail_without_link)
+    with pytest.raises(OSError, match="synthetic link failure"):
+        private_filesystem._publish_durable(source, destination)
+    assert destination.read_bytes() == b"independent winner"
+
+
 def test_partial_write_failure_exposes_no_record_and_cleans_owned_temp(tmp_path, monkeypatch):
     root = tmp_path / "private"
     metadata = _metadata()
@@ -986,6 +1092,61 @@ def test_in_progress_write_is_not_visible_to_concurrent_listing(tmp_path, monkey
             reader_thread.join(timeout=5)
         assert outcome == [metadata]
         assert listing == [(metadata,)]
+
+
+def test_close_waits_for_active_writer_before_releasing_singleton(tmp_path, monkeypatch):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    entered = threading.Event()
+    release = threading.Event()
+    closed = threading.Event()
+    outcome = []
+    original_publish = private_filesystem._publish_durable
+
+    def blocked_publish(source, destination, **kwargs):
+        entered.set()
+        assert release.wait(timeout=5)
+        return original_publish(source, destination, **kwargs)
+
+    store = LocalPrivateContentStore(root)
+    monkeypatch.setattr(private_filesystem, "_publish_durable", blocked_publish)
+    writer = threading.Thread(
+        target=lambda: outcome.append(
+            store.store(metadata, b"synthetic private bytes")
+        )
+    )
+    closer = threading.Thread(target=lambda: (store.close(), closed.set()))
+    writer.start()
+    assert entered.wait(timeout=5)
+    closer.start()
+    try:
+        assert not closed.wait(timeout=0.1)
+        with pytest.raises(RepositoryConflict):
+            LocalPrivateContentStore(root)
+    finally:
+        release.set()
+        writer.join(timeout=5)
+        closer.join(timeout=5)
+    assert outcome == [metadata]
+    assert closed.is_set()
+
+
+def test_adapter_rejects_oversize_before_constructing_or_hashing_record(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    content = b"oversize"
+    metadata = _metadata(content=content)
+    with LocalPrivateContentStore(root, max_content_bytes=1) as store:
+        monkeypatch.setattr(
+            private_filesystem,
+            "PrivateContent",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("record construction must not start")
+            ),
+        )
+        with pytest.raises(RepositoryError, match="limite"):
+            store.store(metadata, content)
 
 
 def test_concurrent_same_identity_has_exactly_one_winner_without_overwrite(
