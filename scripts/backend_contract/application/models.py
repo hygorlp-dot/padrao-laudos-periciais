@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from types import MappingProxyType
 from uuid import UUID
 
@@ -106,6 +108,82 @@ class WorkspaceId:
 
     def __str__(self) -> str:
         return str(self.value)
+
+
+@dataclass(frozen=True, slots=True)
+class PrivateContentId:
+    value: UUID
+
+    def __post_init__(self):
+        if type(self.value) is not UUID:
+            raise TypeError("PrivateContentId exige UUID")
+
+    @classmethod
+    def parse(cls, value: str) -> PrivateContentId:
+        if type(value) is not str:
+            raise TypeError("content_id deve ser texto UUID canônico")
+        try:
+            parsed = UUID(value)
+        except ValueError as exc:
+            raise ValueError("content_id inválido") from exc
+        if str(parsed) != value:
+            raise ValueError("content_id deve ser UUID canônico")
+        return cls(parsed)
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+
+class PrivateContentOrigin(Enum):
+    LOCAL_IMPORT = "LOCAL_IMPORT"
+
+
+@dataclass(frozen=True, slots=True)
+class PrivateContentMetadata:
+    workspace_id: WorkspaceId
+    content_id: PrivateContentId
+    original_filename: str
+    byte_size: int
+    checksum_sha256: str
+    media_type: str | None
+    imported_at: str
+    origin: PrivateContentOrigin
+
+    def __post_init__(self):
+        if type(self.workspace_id) is not WorkspaceId:
+            raise TypeError("workspace_id inválido")
+        if type(self.content_id) is not PrivateContentId:
+            raise TypeError("content_id inválido")
+        _validated_text(self.original_filename, "original_filename")
+        if type(self.byte_size) is not int or self.byte_size < 0:
+            raise ValueError("byte_size inválido")
+        if (
+            type(self.checksum_sha256) is not str
+            or _SHA256.fullmatch(self.checksum_sha256) is None
+        ):
+            raise ValueError("checksum_sha256 inválido")
+        if self.media_type is not None:
+            _validated_text(self.media_type, "media_type")
+        _timestamp(self.imported_at, "imported_at")
+        if type(self.origin) is not PrivateContentOrigin:
+            raise TypeError("origin inválida")
+
+
+@dataclass(frozen=True, slots=True)
+class PrivateContent:
+    metadata: PrivateContentMetadata
+    content: bytes
+
+    def __post_init__(self):
+        if type(self.metadata) is not PrivateContentMetadata:
+            raise TypeError("metadata de conteúdo privado inválida")
+        if type(self.content) is not bytes:
+            raise TypeError("conteúdo privado exige bytes")
+        if len(self.content) != self.metadata.byte_size:
+            raise ValueError("conteúdo privado diverge do tamanho declarado")
+        checksum = hashlib.sha256(self.content).hexdigest()
+        if checksum != self.metadata.checksum_sha256:
+            raise ValueError("conteúdo privado diverge do checksum declarado")
 
 
 @dataclass(frozen=True, slots=True)

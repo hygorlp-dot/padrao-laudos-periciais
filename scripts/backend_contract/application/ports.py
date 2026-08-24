@@ -6,7 +6,14 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from .models import ArtifactRevision, PericiaWorkspace, WorkspaceId
+from .models import (
+    ArtifactRevision,
+    PericiaWorkspace,
+    PrivateContent,
+    PrivateContentId,
+    PrivateContentMetadata,
+    WorkspaceId,
+)
 
 
 class RepositoryError(RuntimeError):
@@ -23,6 +30,10 @@ class WorkspaceNotFound(RepositoryError):
 
 class ArtifactRevisionNotFound(RepositoryError):
     """Revisão de artefato exigida pela operação não existe."""
+
+
+class PrivateContentNotFound(RepositoryError):
+    """Conteúdo privado exigido pela operação não existe no workspace."""
 
 
 class RepositoryIntegrityError(RepositoryError):
@@ -94,3 +105,17 @@ class ArtifactRevisionRepository(Protocol):
         artifact_kind: str,
         artifact_id: str,
     ) -> tuple[ArtifactRevision, ...]: ...
+
+
+class PrivateContentRepository(Protocol):
+    def store(
+        self, metadata: PrivateContentMetadata, content: bytes
+    ) -> PrivateContentMetadata: ...
+
+    def get(
+        self, workspace_id: WorkspaceId, content_id: PrivateContentId
+    ) -> PrivateContent | None: ...
+
+    def list_all(
+        self, workspace_id: WorkspaceId
+    ) -> tuple[PrivateContentMetadata, ...]: ...

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
@@ -10,6 +11,10 @@ from uuid import UUID
 from .models import (
     ArtifactRevision,
     PericiaWorkspace,
+    PrivateContent,
+    PrivateContentId,
+    PrivateContentMetadata,
+    PrivateContentOrigin,
     ProcessCaseData,
     ProcessCaseSnapshot,
     WorkspaceId,
@@ -21,6 +26,8 @@ from .ports import (
     ArtifactRevisionRepository,
     Clock,
     IdGenerator,
+    PrivateContentNotFound,
+    PrivateContentRepository,
     RepositoryIntegrityError,
     WorkspaceNotFound,
     WorkspaceRepository,
@@ -111,6 +118,98 @@ class ListWorkspaces:
 
     def execute(self) -> tuple[PericiaWorkspace, ...]:
         return self.repository.list_all()
+
+
+@dataclass(frozen=True, slots=True)
+class StorePrivateContent:
+    workspaces: WorkspaceRepository
+    contents: PrivateContentRepository
+    clock: Clock
+    ids: IdGenerator
+    max_content_bytes: int
+
+    def __post_init__(self):
+        if type(self.max_content_bytes) is not int or self.max_content_bytes < 0:
+            raise ValueError("max_content_bytes inválido")
+
+    def execute(
+        self,
+        *,
+        workspace_id: WorkspaceId,
+        original_filename: str,
+        content: bytes,
+        media_type: str | None,
+        origin: PrivateContentOrigin,
+    ) -> PrivateContentMetadata:
+        workspace_id = _require_workspace(self.workspaces, workspace_id)
+        if type(content) is not bytes:
+            raise TypeError("conteúdo privado exige bytes")
+        if len(content) > self.max_content_bytes:
+            raise ValueError("conteúdo privado excede limite configurado")
+        metadata = PrivateContentMetadata(
+            workspace_id=workspace_id,
+            content_id=PrivateContentId(_generated_uuid(self.ids)),
+            original_filename=original_filename,
+            byte_size=len(content),
+            checksum_sha256=hashlib.sha256(content).hexdigest(),
+            media_type=media_type,
+            imported_at=_generated_timestamp(self.clock),
+            origin=origin,
+        )
+        stored = self.contents.store(metadata, content)
+        if type(stored) is not PrivateContentMetadata or stored != metadata:
+            raise RepositoryIntegrityError(
+                "metadados retornados pelo armazenamento privado divergem"
+            )
+        return stored
+
+
+@dataclass(frozen=True, slots=True)
+class GetPrivateContent:
+    workspaces: WorkspaceRepository
+    contents: PrivateContentRepository
+
+    def execute(
+        self, workspace_id: WorkspaceId, content_id: PrivateContentId
+    ) -> PrivateContent:
+        workspace_id = _require_workspace(self.workspaces, workspace_id)
+        if type(content_id) is not PrivateContentId:
+            raise TypeError("content_id inválido")
+        record = self.contents.get(workspace_id, content_id)
+        if record is None:
+            raise PrivateContentNotFound(
+                f"conteúdo privado não encontrado: {workspace_id}/{content_id}"
+            )
+        if (
+            type(record) is not PrivateContent
+            or record.metadata.workspace_id != workspace_id
+            or record.metadata.content_id != content_id
+        ):
+            raise RepositoryIntegrityError(
+                "identidade retornada pelo armazenamento privado diverge"
+            )
+        return record
+
+
+@dataclass(frozen=True, slots=True)
+class ListPrivateContents:
+    workspaces: WorkspaceRepository
+    contents: PrivateContentRepository
+
+    def execute(
+        self, workspace_id: WorkspaceId
+    ) -> tuple[PrivateContentMetadata, ...]:
+        workspace_id = _require_workspace(self.workspaces, workspace_id)
+        records = self.contents.list_all(workspace_id)
+        if type(records) is not tuple or any(
+            type(record) is not PrivateContentMetadata
+            or record.workspace_id != workspace_id
+            for record in records
+        ):
+            raise RepositoryIntegrityError(
+                "listagem retornada pelo armazenamento privado diverge"
+            )
+        return records
 
 
 def _require_workspace(
