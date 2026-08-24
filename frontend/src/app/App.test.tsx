@@ -185,6 +185,7 @@ describe("workspace-aware routing", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Perícia não encontrada");
     expect(alert).not.toHaveTextContent(/uuid|workspace|internal|http/i);
+    expect(document.title).toBe("Sistema Pericial — Perícia não encontrada");
     expect(screen.getByRole("link", { name: "Voltar às perícias" })).toHaveAttribute(
       "href",
       "/",

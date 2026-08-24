@@ -80,6 +80,22 @@ def test_sidebar_focus_indicator_has_non_text_contrast():
     assert (lighter + 0.05) / (darker + 0.05) >= 3
 
 
+def test_persisted_workspace_names_cannot_force_shell_overflow():
+    shell = (SOURCE / "styles" / "shell.css").read_text(encoding="utf-8")
+
+    assert re.search(
+        r"\.workspace-list li > div\s*\{[^}]*min-width:\s*0",
+        shell,
+        re.DOTALL,
+    )
+    assert re.search(
+        r"\.workspace-list strong,[^{]*\.topbar strong,[^{]*\.sidebar-note\s*"
+        r"\{[^}]*overflow-wrap:\s*anywhere",
+        shell,
+        re.DOTALL,
+    )
+
+
 def test_frontend_shell_does_not_infer_an_unauthorized_product_brand():
     fixed_surfaces = (
         ROOT / "PRODUCT.md",

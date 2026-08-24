@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import math
+import socket
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Event, Lock, Thread
+from threading import Event, Lock, Thread, Timer
 
 from .transport import ProductBridge, _error
 
@@ -51,12 +52,53 @@ class _ProductHttpServer(ThreadingHTTPServer):
         return
 
 
+class ProductBridgeServerStartError(RuntimeError):
+    """Falha sanitizada ao iniciar o listener do produto local."""
+
+
 class _ProductRequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def setup(self):
         super().setup()
         self.connection.settimeout(self.server.request_timeout_seconds)
+
+    def handle_one_request(self):
+        self._deadline_lock = Lock()
+        self._deadline_active = True
+        self._deadline_expired = False
+        self._deadline_timer = Timer(
+            self.server.request_timeout_seconds,
+            self._expire_request_acquisition,
+        )
+        self._deadline_timer.daemon = True
+        self._deadline_timer.start()
+        try:
+            return super().handle_one_request()
+        finally:
+            self._finish_request_acquisition()
+
+    def _expire_request_acquisition(self):
+        with self._deadline_lock:
+            if not self._deadline_active:
+                return
+            self._deadline_expired = True
+            try:
+                self.connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    def _finish_request_acquisition(self) -> bool:
+        deadline = getattr(self, "_deadline_timer", None)
+        if deadline is None:
+            return not getattr(self, "_deadline_expired", False)
+        with self._deadline_lock:
+            self._deadline_active = False
+            expired = self._deadline_expired
+        deadline.cancel()
+        deadline.join()
+        self._deadline_timer = None
+        return not expired
 
     def _write_response(self, response):
         self.send_response_only(response.status)
@@ -73,48 +115,77 @@ class _ProductRequestHandler(BaseHTTPRequestHandler):
                 pass
         self.close_connection = True
 
-    def _dispatch(self):
-        try:
-            duplicate = any(
-                len(self.headers.get_all(name, [])) != 1 for name in ("Host",)
-            ) or any(
-                len(self.headers.get_all(name, [])) > 1
-                for name in (
-                    "Content-Length",
-                    "Content-Type",
-                    "Origin",
-                    "Sec-Fetch-Site",
-                    "Transfer-Encoding",
-                )
+    def _handle_request(self):
+        duplicate = any(
+            len(self.headers.get_all(name, [])) != 1 for name in ("Host",)
+        ) or any(
+            len(self.headers.get_all(name, [])) > 1
+            for name in (
+                "Content-Length",
+                "Content-Type",
+                "Origin",
+                "Sec-Fetch-Site",
+                "Transfer-Encoding",
             )
-            if duplicate or "Transfer-Encoding" in self.headers:
+        )
+        if duplicate or "Transfer-Encoding" in self.headers:
+            response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
+        else:
+            raw_length = self.headers.get("Content-Length", "0")
+            if not raw_length.isascii() or not raw_length.isdecimal():
                 response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
             else:
-                raw_length = self.headers.get("Content-Length", "0")
-                if not raw_length.isascii() or not raw_length.isdecimal():
+                length = int(raw_length)
+                if length > self.server.max_body_bytes:
                     response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
                 else:
-                    length = int(raw_length)
-                    if length > self.server.max_body_bytes:
+                    try:
+                        body = self.rfile.read(length) if length else b""
+                    except (TimeoutError, OSError):
+                        return _error(
+                            400,
+                            "INVALID_PRODUCT_REQUEST",
+                            "requisição local inválida",
+                        )
+                    if len(body) != length:
+                        response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
+                    elif not self._finish_request_acquisition():
                         response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
                     else:
-                        body = self.rfile.read(length) if length else b""
-                        if len(body) != length:
-                            response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
+                        bridge = self.server.bridge
+                        if bridge is None:
+                            response = _error(503, "PRODUCT_BRIDGE_UNAVAILABLE", "serviço local indisponível")
                         else:
-                            bridge = self.server.bridge
-                            if bridge is None:
-                                response = _error(503, "PRODUCT_BRIDGE_UNAVAILABLE", "serviço local indisponível")
-                            else:
-                                response = bridge.handle(
-                                    self.command,
-                                    self.path,
-                                    dict(self.headers.items()),
-                                    body,
-                                )
+                            response = bridge.handle(
+                                self.command,
+                                self.path,
+                                dict(self.headers.items()),
+                                body,
+                            )
+        return response
+
+    def _dispatch(self):
+        try:
+            response = self._handle_request()
         except Exception:
             response = _error(500, "PRODUCT_BRIDGE_FAILURE", "falha local")
-        self._write_response(response)
+        if not self._finish_request_acquisition():
+            response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
+        try:
+            self._write_response(response)
+        except OSError:
+            self.close_connection = True
+
+    def send_error(self, code, _message=None, _explain=None):
+        self._finish_request_acquisition()
+        if code == 501:
+            response = _error(405, "METHOD_NOT_ALLOWED", "método não permitido")
+        else:
+            response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
+        try:
+            self._write_response(response)
+        except OSError:
+            self.close_connection = True
 
     do_GET = _dispatch
     do_POST = _dispatch
@@ -156,6 +227,8 @@ class ProductBridgeServer:
             request_timeout_seconds=self._config.request_timeout_seconds,
         )
         self._thread: Thread | None = None
+        self._serve_stopped = Event()
+        self._serve_error: Exception | None = None
         self._closed = False
         self._lock = Lock()
 
@@ -176,24 +249,46 @@ class ProductBridgeServer:
             if self._thread is not None:
                 raise RuntimeError("product bridge já iniciado")
             self._thread = Thread(
-                target=self._server.serve_forever,
-                kwargs={"poll_interval": 0.01},
+                target=self._serve,
                 name="product-bridge-loopback",
                 daemon=True,
             )
-            self._thread.start()
+            try:
+                self._thread.start()
+            except RuntimeError as exc:
+                self._thread = None
+                self._closed = True
+                self._server.server_close()
+                raise ProductBridgeServerStartError(
+                    "product bridge não pôde iniciar"
+                ) from exc
             for _ in range(500):
                 if self._server.serve_ready.wait(0.01):
                     break
-                if not self._thread.is_alive():
+                if self._serve_stopped.is_set():
                     break
-            if not self._server.serve_ready.is_set() or not self._thread.is_alive():
+            if not self._server.serve_ready.is_set():
                 self._closed = True
                 self._server.server_close()
                 self._thread.join(timeout=5)
                 self._thread = None
-                raise RuntimeError("product bridge indisponível")
+                raise ProductBridgeServerStartError("product bridge indisponível")
+            if self._serve_stopped.is_set() or not self._thread.is_alive():
+                cause = self._serve_error
+                self._closed = True
+                self._server.server_close()
+                self._thread.join(timeout=5)
+                self._thread = None
+                raise ProductBridgeServerStartError("product bridge indisponível") from cause
             return self.address
+
+    def _serve(self) -> None:
+        try:
+            self._server.serve_forever(poll_interval=0.01)
+        except Exception as exc:
+            self._serve_error = exc
+        finally:
+            self._serve_stopped.set()
 
     def close(self) -> None:
         with self._lock:

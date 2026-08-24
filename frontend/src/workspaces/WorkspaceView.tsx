@@ -67,6 +67,12 @@ export function WorkspaceView({ currentPath, workspaceId, route }: WorkspaceView
     return () => controller.abort();
   }, [workspaceId]);
 
+  useEffect(() => {
+    if (state.kind === "not-found") {
+      document.title = "Sistema Pericial — Perícia não encontrada";
+    }
+  }, [state.kind]);
+
   if (state.kind === "not-found") {
     const missingRoute: ShellRoute = {
       path: currentPath,

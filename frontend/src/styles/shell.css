@@ -162,6 +162,7 @@
 
 .topbar > div {
   display: grid;
+  min-width: 0;
   gap: 0.12rem;
 }
 
@@ -314,11 +315,18 @@ main {
 
 .workspace-list li > div {
   display: grid;
+  min-width: 0;
   gap: 0.3rem;
 }
 
 .workspace-list strong {
   font-size: 0.97rem;
+}
+
+.workspace-list strong,
+.topbar strong,
+.sidebar-note {
+  overflow-wrap: anywhere;
 }
 
 .workspace-list time {

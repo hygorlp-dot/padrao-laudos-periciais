@@ -1,11 +1,19 @@
 import http.client
 import json
+import socket
+import subprocess
+import sys
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 
 from scripts.backend_contract.product_bridge.composition import build_product_runtime
-from scripts.backend_contract.product_bridge.server import ProductBridgeConfig
+from scripts.backend_contract.product_bridge.server import (
+    ProductBridgeConfig,
+    ProductBridgeServer,
+    ProductBridgeServerStartError,
+)
 
 
 TOKEN = "product-bridge-test-token-with-sufficient-entropy"
@@ -179,3 +187,127 @@ def test_close_is_idempotent_after_start(tmp_path):
     runtime.close()
     runtime.close()
 
+
+@pytest.mark.parametrize("slow_part", ("body", "header"))
+def test_slow_drip_cannot_hold_product_runtime_shutdown(tmp_path, slow_part):
+    runtime = build_product_runtime(
+        tmp_path / "slow-drip.db",
+        frontend_build(tmp_path),
+        token=TOKEN,
+        config=ProductBridgeConfig(request_timeout_seconds=0.1),
+    )
+    runtime.start()
+    client = socket.create_connection(runtime.address, timeout=5)
+    if slow_part == "body":
+        request_prefix = (
+            b"POST /app-api/v1/workspaces HTTP/1.1\r\n"
+            + f"Host: {runtime.address[0]}:{runtime.address[1]}\r\n".encode("ascii")
+            + f"Origin: {runtime.origin}\r\n".encode("ascii")
+            + b"Sec-Fetch-Site: same-origin\r\n"
+            + b"Content-Type: application/json\r\n"
+            + b"Content-Length: 100\r\n\r\n{"
+        )
+    else:
+        request_prefix = (
+            b"GET / HTTP/1.1\r\n"
+            + f"Host: {runtime.address[0]}:{runtime.address[1]}\r\n".encode("ascii")
+            + b"X-Slow-Header:"
+        )
+    client.sendall(request_prefix)
+    stop_drip = Event()
+
+    def drip_body():
+        while not stop_drip.wait(0.04):
+            try:
+                client.sendall(b" ")
+            except OSError:
+                return
+
+    dripper = Thread(target=drip_body)
+    dripper.start()
+    for _ in range(50):
+        request_threads = getattr(runtime._bridge._server, "_threads", ())
+        if any(thread.is_alive() for thread in request_threads):
+            break
+        Event().wait(0.01)
+    else:
+        pytest.fail("product request worker did not start")
+
+    closing = Thread(target=runtime.close)
+    closing.start()
+    try:
+        closing.join(timeout=0.5)
+        assert not closing.is_alive()
+    finally:
+        stop_drip.set()
+        client.close()
+        dripper.join(timeout=5)
+        closing.join(timeout=5)
+
+
+def test_thread_start_failure_closes_product_bridge_listener(tmp_path):
+    root = frontend_build(tmp_path)
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import socket\n"
+            "from scripts.backend_contract.product_bridge import server as module\n"
+            "from scripts.backend_contract.product_bridge.server import "
+            "ProductBridgeServer, ProductBridgeServerStartError\n"
+            f"server = ProductBridgeServer(frontend_root={str(root)!r}, "
+            f"upstream_address=('127.0.0.1', 9), token={TOKEN!r})\n"
+            "address = server.address\n"
+            "def fail_start(_self):\n"
+            "    raise RuntimeError('private thread failure')\n"
+            "module.Thread.start = fail_start\n"
+            "try:\n"
+            "    server.start()\n"
+            "except ProductBridgeServerStartError as exc:\n"
+            "    assert 'private' not in str(exc)\n"
+            "else:\n"
+            "    raise AssertionError('startup should fail')\n"
+            "server.close()\n"
+            "probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+            "probe.bind(address)\n"
+            "probe.close()\n",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+    assert probe.returncode == 0, probe.stderr
+
+
+def test_serve_loop_failure_before_ready_fails_closed(tmp_path):
+    bridge = ProductBridgeServer(
+        frontend_root=frontend_build(tmp_path),
+        upstream_address=("127.0.0.1", 9),
+        token=TOKEN,
+    )
+
+    def stop_before_ready():
+        bridge._serve_stopped.set()
+
+    bridge._serve = stop_before_ready
+    with pytest.raises(ProductBridgeServerStartError):
+        bridge.start()
+    bridge.close()
+
+
+def test_unsupported_method_uses_sanitized_bridge_response(tmp_path):
+    runtime = build_product_runtime(
+        tmp_path / "unsupported.db", frontend_build(tmp_path), token=TOKEN
+    )
+    runtime.start()
+    try:
+        status, headers, body = request(runtime, "CONNECT", "/")
+    finally:
+        runtime.close()
+
+    assert status == 405
+    assert "Server" not in headers
+    assert "Date" not in headers
+    assert headers["Content-Security-Policy"].startswith("default-src 'self'")
+    assert json.loads(body)["error"]["code"] == "METHOD_NOT_ALLOWED"
