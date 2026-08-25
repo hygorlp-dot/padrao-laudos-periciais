@@ -219,7 +219,7 @@ def _case_document_metadata(record: PrivateContentMetadata) -> PrivateContentMet
     if (
         type(record) is not PrivateContentMetadata
         or record.media_type != "application/pdf"
-        or record.origin is not PrivateContentOrigin.LOCAL_IMPORT
+        or record.origin is not PrivateContentOrigin.USER_IMPORT
     ):
         raise InvalidCaseDocument("documento privado diverge do contrato PDF")
     return record
@@ -253,7 +253,7 @@ class ImportCaseDocument:
                 original_filename=original_filename,
                 content=content,
                 media_type="application/pdf",
-                origin=PrivateContentOrigin.LOCAL_IMPORT,
+                origin=PrivateContentOrigin.USER_IMPORT,
             )
         )
 

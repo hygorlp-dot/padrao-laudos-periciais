@@ -16,7 +16,7 @@ ou autoridade. A identidade pública é sempre `WorkspaceId + PrivateContentId`.
 `ImportCaseDocument`, `ListCaseDocuments` e `ReadCaseDocument` compõem os ports
 privados já existentes. A importação exige assinatura inicial `%PDF-`, marcador
 final `%%EOF`, limite explícito de 16 MiB no runtime de produto e provenance
-`LOCAL_IMPORT`. O store preserva bytes, tamanho, SHA-256, instante e filename.
+`USER_IMPORT`. O store preserva bytes, tamanho, SHA-256, instante e filename.
 
 As rotas permitidas são apenas:
 

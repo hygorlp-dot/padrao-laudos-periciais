@@ -189,8 +189,9 @@ manifesto pertencem a milestones próprios.
   controlado.
 - `list_all` valida conteúdo por chunks de 64 KiB sem materializá-lo; `get`
   acumula no máximo o teto configurado porque o port V1 retorna `bytes`.
-- A única origem V1 é `LOCAL_IMPORT`; filename não é proveniência e nenhuma
-  classificação documental/pericial é inferida.
+- O store preserva a origem tipada sem inferi-la: `LOCAL_IMPORT` permanece para
+  conteúdo local genérico e o intake explícito usa `USER_IMPORT`; filename não é
+  proveniência e nenhuma classificação documental/pericial é inferida.
 - O fechamento invalida cada handle na instância antes da chamada de sistema.
   Uma falha ambígua de `close` torna a instância fechada/falha e nunca permite
   repetir um número de descritor que já possa ter sido reutilizado pelo processo.

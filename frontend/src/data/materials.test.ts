@@ -20,7 +20,7 @@ const ITEM = {
   checksum_sha256: "a".repeat(64),
   media_type: "application/pdf",
   imported_at: "2026-08-25T12:30:00+00:00",
-  origin: "LOCAL_IMPORT",
+  origin: "USER_IMPORT",
 };
 
 function jsonResponse(status: number, value: object) {

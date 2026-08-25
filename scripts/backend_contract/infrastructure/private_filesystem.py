@@ -626,7 +626,9 @@ def _provision_control(
     payload: bytes,
     *,
     root_fd: int | None,
-) -> None:
+    expected_root: os.stat_result | None = None,
+    keep_open: bool = False,
+) -> int | None:
     path = root / name
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN_BINARY | _OPEN_NOFOLLOW
     descriptor = (
@@ -634,9 +636,20 @@ def _provision_control(
         if root_fd is None
         else os.open(name, flags, 0o600, dir_fd=root_fd)
     )
+    retained = False
+    result = None
     try:
         opened = os.fstat(descriptor)
         _validate_regular(opened, expected_links=1)
+        if expected_root is not None:
+            observed_root = os.lstat(root)
+            if (
+                _path_is_link_or_reparse(root)
+                or not _same_identity(expected_root, observed_root)
+            ):
+                raise RepositoryIntegrityError(
+                    "identidade do private root mudou durante o provisioning"
+                )
         _write_all(descriptor, payload)
         os.fsync(descriptor)
         observed = _lstat(path, root_fd=root_fd)
@@ -644,10 +657,14 @@ def _provision_control(
             raise RepositoryIntegrityError(
                 "identidade do controle privado mudou durante o provisioning"
             )
+        retained = keep_open
+        result = descriptor if keep_open else None
     finally:
-        os.close(descriptor)
+        if not retained:
+            os.close(descriptor)
     if root_fd is not None:
         os.fsync(root_fd)
+    return result
 
 
 @_controlled_filesystem_errors("falha ao provisionar armazenamento privado")
@@ -702,13 +719,29 @@ def provision_private_content_root(private_root: str | Path) -> Path:
         raise RepositoryIntegrityError("private root inválido")
     _validate_trusted_local_device(root_identity)
     root_fd = None
+    windows_anchor_fd = None
     try:
         if os.name == "posix":
             root_fd = os.open(configured, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        _provision_control(configured, _LOCK_NAME, b"0", root_fd=root_fd)
+            _provision_control(configured, _LOCK_NAME, b"0", root_fd=root_fd)
+        else:
+            windows_anchor_fd = _provision_control(
+                configured,
+                _LOCK_NAME,
+                b"0",
+                root_fd=None,
+                expected_root=root_identity,
+                keep_open=True,
+            )
         _provision_control(configured, _JOURNAL_NAME, b"", root_fd=root_fd)
         _provision_control(configured, _ANCHOR_NAME, b"", root_fd=root_fd)
+        if not _same_identity(root_identity, os.lstat(configured)):
+            raise RepositoryIntegrityError(
+                "identidade do private root mudou durante o provisioning"
+            )
     finally:
+        if windows_anchor_fd is not None:
+            os.close(windows_anchor_fd)
         if root_fd is not None:
             os.close(root_fd)
     return configured

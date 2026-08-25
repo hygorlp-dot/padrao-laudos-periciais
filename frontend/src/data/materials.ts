@@ -10,7 +10,7 @@ export type MaterialMetadata = {
   checksum_sha256: string;
   media_type: "application/pdf";
   imported_at: string;
-  origin: "LOCAL_IMPORT";
+  origin: "USER_IMPORT";
 };
 
 export type MaterialApiErrorKind =
@@ -55,7 +55,7 @@ function parseMetadata(value: unknown, workspaceId: string): MaterialMetadata {
     record.media_type !== "application/pdf" ||
     typeof record.imported_at !== "string" || !record.imported_at.includes("T") ||
     Number.isNaN(Date.parse(record.imported_at)) ||
-    record.origin !== "LOCAL_IMPORT"
+    record.origin !== "USER_IMPORT"
   ) {
     throw new MaterialApiError("invalid-response", "Resposta local inválida");
   }

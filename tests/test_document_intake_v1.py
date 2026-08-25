@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import http.client
 import json
+import os
 import socket
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,6 +39,7 @@ from scripts.backend_contract.local_api.composition import (
 )
 from scripts.backend_contract.local_api.server import LocalApiServerStartError
 from scripts.backend_contract.product_bridge.composition import build_product_runtime
+from scripts.backend_contract.infrastructure import private_filesystem
 from scripts.backend_contract.infrastructure.private_filesystem import (
     LocalPrivateContentStore,
     provision_private_content_root,
@@ -106,7 +108,7 @@ def metadata() -> PrivateContentMetadata:
         checksum_sha256=hashlib.sha256(PDF).hexdigest(),
         media_type="application/pdf",
         imported_at=IMPORTED_AT,
-        origin=PrivateContentOrigin.LOCAL_IMPORT,
+        origin=PrivateContentOrigin.USER_IMPORT,
     )
 
 
@@ -165,7 +167,7 @@ def test_import_pdf_preserves_exact_bytes_integrity_and_user_import_provenance()
         checksum_sha256=hashlib.sha256(PDF).hexdigest(),
         media_type="application/pdf",
         imported_at=IMPORTED_AT,
-        origin=PrivateContentOrigin.LOCAL_IMPORT,
+        origin=PrivateContentOrigin.USER_IMPORT,
     )
     assert listed.execute(WORKSPACE_ID) == (metadata,)
     assert reader.execute(WORKSPACE_ID, CONTENT_ID) == PrivateContent(metadata, PDF)
@@ -286,7 +288,7 @@ def test_local_api_lists_safe_metadata_and_never_serializes_a_private_path():
                 "checksum_sha256": hashlib.sha256(PDF).hexdigest(),
                 "media_type": "application/pdf",
                 "imported_at": IMPORTED_AT,
-                "origin": "LOCAL_IMPORT",
+                "origin": "USER_IMPORT",
             }
         ]
     }
@@ -384,6 +386,70 @@ def test_private_root_provisioning_rejects_a_control_symlink(tmp_path):
 
     with pytest.raises(Exception, match="regular|reparse|simbólico|controle"):
         provision_private_content_root(root)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows pathname provisioning race")
+def test_private_root_provisioning_rejects_regular_root_swap_before_first_control(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    original_root = tmp_path / "original-private"
+    replacement = tmp_path / "replacement-private"
+    replacement.mkdir()
+    original_open = private_filesystem.os.open
+    swapped = False
+
+    def swap_before_first_control(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        if Path(path) == root / ".store-lock" and not swapped:
+            swapped = True
+            root.rename(original_root)
+            replacement.rename(root)
+        if dir_fd is None:
+            return original_open(path, flags, mode)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(private_filesystem.os, "open", swap_before_first_control)
+
+    with pytest.raises(Exception, match="identidade|private root|provision"):
+        provision_private_content_root(root)
+
+    assert {path.name: path.read_bytes() for path in root.iterdir()} == {
+        ".store-lock": b""
+    }
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows pathname provisioning race")
+def test_private_root_provisioning_holds_anchor_while_creating_later_controls(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    moved = tmp_path / "moved-private"
+    original_open = private_filesystem.os.open
+    rename_blocked = False
+
+    def attempt_swap_before_second_control(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal rename_blocked
+        if Path(path) == root / ".commit-log" and not rename_blocked:
+            with pytest.raises(OSError):
+                root.rename(moved)
+            rename_blocked = True
+        if dir_fd is None:
+            return original_open(path, flags, mode)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(
+        private_filesystem.os, "open", attempt_swap_before_second_control
+    )
+
+    provision_private_content_root(root)
+
+    assert rename_blocked is True
+    assert {path.name: path.read_bytes() for path in root.iterdir()} == {
+        ".store-lock": b"0",
+        ".commit-log": b"",
+        ".commit-anchor": b"",
+    }
 
 
 def test_local_api_start_failure_releases_the_private_store(monkeypatch, tmp_path):
