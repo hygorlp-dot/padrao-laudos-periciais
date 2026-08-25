@@ -9,7 +9,7 @@ permissions:
 jobs:
   capability-protected:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout protected base verifier
         uses: actions/checkout@v4
@@ -59,3 +59,291 @@ jobs:
           CAPABILITY_PROTECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           CAPABILITY_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python -m scripts.quality.capability_bootstrap
+      - name: Enforce timing with base-owned paired judge
+        if: env.CAPABILITY_BASE_BOOTSTRAP_PRESENT == 'true'
+        working-directory: trusted
+        shell: pwsh
+        env:
+          TIMING_BASE_ROOT: ${{ github.workspace }}/trusted
+          TIMING_HEAD_ROOT: ${{ github.workspace }}/candidate
+          TIMING_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          TIMING_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $baseEnvironment = "${{ github.workspace }}/timing-base-venv"
+          $headEnvironment = "${{ github.workspace }}/timing-head-venv"
+          python -m venv $baseEnvironment
+          python -m venv $headEnvironment
+          $basePython = Join-Path $baseEnvironment "Scripts/python.exe"
+          $headPython = Join-Path $headEnvironment "Scripts/python.exe"
+          & $basePython -m pip install --disable-pip-version-check -r "$env:TIMING_BASE_ROOT/requirements-dev.txt"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $headPython -m pip install --disable-pip-version-check -r "$env:TIMING_HEAD_ROOT/requirements-dev.txt"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $timingJudge = Join-Path $env:RUNNER_TEMP "base-owned-timing-gate.py"
+          # TIMING_GATE_PYTHON_START
+          @'
+          from __future__ import annotations
+
+          import argparse
+          import json
+          import math
+          from pathlib import Path
+          import re
+          import subprocess
+          import sys
+
+
+          SHA = re.compile(r"[0-9a-f]{40}")
+          ORDER = (("BASE", 1), ("HEAD", 1), ("HEAD", 2), ("BASE", 2))
+          FULL_CHECKS = (
+              "invariants", "fixtures", "privacy", "property tests", "gate tests", "compileall",
+              "historical critical mutation suite", "quality V2", "schemas", "E2E positive",
+              "E2E negative", "capability cutover tests", "regression", "coverage report",
+              "diff check", "quality non-regression",
+          )
+
+
+          def git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+              return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True)
+
+
+          def capture_identity(root: Path, expected_sha: str) -> dict:
+              if SHA.fullmatch(expected_sha) is None:
+                  raise ValueError("commit identity is malformed")
+              head = git(root, "rev-parse", "HEAD")
+              tree = git(root, "rev-parse", f"{expected_sha}^{{tree}}")
+              dirty = git(root, "diff", "--quiet", expected_sha, "--")
+              tests = git(root, "ls-tree", "-r", expected_sha, "--", "tests")
+              dependency = git(root, "ls-tree", expected_sha, "--", "requirements-dev.txt")
+              if any(item.returncode for item in (head, tree, tests, dependency)):
+                  raise ValueError("Git identity is unavailable")
+              if head.stdout.strip() != expected_sha or dirty.returncode:
+                  raise ValueError("checkout tracked bytes diverge from expected commit")
+              tree_sha = tree.stdout.strip()
+              if SHA.fullmatch(tree_sha) is None:
+                  raise ValueError("tree identity is malformed")
+              test_inventory = [line for line in tests.stdout.splitlines() if line]
+              dependency_lines = [line for line in dependency.stdout.splitlines() if line]
+              if not test_inventory or len(dependency_lines) != 1:
+                  raise ValueError("test or dependency inventory is unavailable")
+              return {
+                  "commitSha": expected_sha,
+                  "treeSha": tree_sha,
+                  "testInventory": test_inventory,
+                  "dependencyIdentity": dependency_lines[0],
+              }
+
+
+          def inventory_paths(rows: object) -> tuple[str, ...] | None:
+              if not isinstance(rows, list) or not rows:
+                  return None
+              paths = []
+              for row in rows:
+                  try:
+                      metadata, path = row.split("\t", 1)
+                      mode, object_type, object_id = metadata.split()
+                  except (AttributeError, ValueError):
+                      return None
+                  if (
+                      mode not in {"100644", "100755"}
+                      or object_type != "blob"
+                      or SHA.fullmatch(object_id) is None
+                      or not path.startswith("tests/")
+                      or "\\" in path
+                  ):
+                      return None
+                  paths.append(path)
+              if paths != sorted(paths) or len(paths) != len(set(paths)):
+                  return None
+              return tuple(paths)
+
+
+          def dependency_valid(value: object) -> bool:
+              try:
+                  metadata, path = value.split("\t", 1)
+                  mode, object_type, object_id = metadata.split()
+              except (AttributeError, ValueError):
+                  return False
+              return (
+                  path == "requirements-dev.txt"
+                  and mode in {"100644", "100755"}
+                  and object_type == "blob"
+                  and SHA.fullmatch(object_id) is not None
+              )
+
+
+          def evaluate(samples: object, base_sha: str, head_sha: str, base_tree: str, head_tree: str,
+                       limit: float) -> dict:
+              if (
+                  not isinstance(samples, list)
+                  or len(samples) != 4
+                  or any(SHA.fullmatch(value) is None for value in (base_sha, head_sha, base_tree, head_tree))
+                  or base_sha == head_sha
+                  or not isinstance(limit, (int, float))
+                  or isinstance(limit, bool)
+                  or not math.isfinite(float(limit))
+                  or limit <= 0
+              ):
+                  return {"allowed": False, "code": "TIMING_EVIDENCE_INVALID"}
+              grouped = {"BASE": [], "HEAD": []}
+              for sample, (role, sequence) in zip(samples, ORDER):
+                  expected_sha = base_sha if role == "BASE" else head_sha
+                  expected_tree = base_tree if role == "BASE" else head_tree
+                  if (
+                      not isinstance(sample, dict)
+                      or set(sample) != {
+                          "role", "sequence", "commitSha", "treeSha", "testInventory",
+                          "dependencyIdentity", "durationSeconds", "semanticPassed",
+                      }
+                      or sample["role"] != role
+                      or sample["sequence"] != sequence
+                      or sample["commitSha"] != expected_sha
+                      or sample["treeSha"] != expected_tree
+                      or inventory_paths(sample["testInventory"]) is None
+                      or not dependency_valid(sample["dependencyIdentity"])
+                      or not isinstance(sample["semanticPassed"], bool)
+                      or not isinstance(sample["durationSeconds"], (int, float))
+                      or isinstance(sample["durationSeconds"], bool)
+                      or not math.isfinite(float(sample["durationSeconds"]))
+                      or sample["durationSeconds"] <= 0
+                  ):
+                      return {"allowed": False, "code": "TIMING_EVIDENCE_INVALID"}
+                  grouped[role].append(sample)
+              for role in ("BASE", "HEAD"):
+                  first, second = grouped[role]
+                  if (
+                      first["testInventory"] != second["testInventory"]
+                      or first["dependencyIdentity"] != second["dependencyIdentity"]
+                  ):
+                      return {"allowed": False, "code": "TIMING_EVIDENCE_INVALID"}
+              base_paths = set(inventory_paths(grouped["BASE"][0]["testInventory"]) or ())
+              head_paths = set(inventory_paths(grouped["HEAD"][0]["testInventory"]) or ())
+              if not base_paths <= head_paths:
+                  return {"allowed": False, "code": "TEST_INVENTORY_REGRESSION"}
+              if any(not sample["semanticPassed"] for sample in samples):
+                  return {"allowed": False, "code": "SEMANTIC_GATE_FAILURE"}
+              base = tuple(float(item["durationSeconds"]) for item in grouped["BASE"])
+              head = tuple(float(item["durationSeconds"]) for item in grouped["HEAD"])
+              if max(head) <= limit:
+                  return {"allowed": True, "code": "ABSOLUTE_DURATION_WITHIN_LIMIT"}
+              if min(base) <= limit:
+                  return {"allowed": False, "code": "ABSOLUTE_TARGET_CROSSING"}
+              if min(head) <= limit:
+                  return {"allowed": False, "code": "TIMING_EVIDENCE_INCONSISTENT"}
+              if min(head) > max(base):
+                  return {"allowed": False, "code": "CANDIDATE_ATTRIBUTABLE_DURATION_REGRESSION"}
+              return {"allowed": True, "code": "ENVIRONMENTAL_EXECUTION_VARIANCE"}
+
+
+          def parse_gate_output(output: str, exit_code: int) -> tuple[float, bool]:
+              lines = [line.strip() for line in output.splitlines() if line.strip()]
+              checks = []
+              findings = []
+              result = None
+              duration = None
+              for line in lines:
+                  if line.startswith("[PASS] "):
+                      checks.append((line[7:], True))
+                  elif line.startswith("[FAIL] "):
+                      checks.append((line[7:], False))
+                  elif line.startswith("RESULT: "):
+                      result = line[8:]
+                  elif line.startswith("DURATION_SECONDS: "):
+                      duration = float(line.split(":", 1)[1].strip())
+                  elif " | " in line:
+                      findings.append(tuple(part.strip() for part in line.split(" | ", 4)))
+              if tuple(name for name, _passed in checks) != FULL_CHECKS or duration is None:
+                  raise ValueError("full gate output is incomplete")
+              if exit_code == 0:
+                  if result != "PASS" or not all(passed for _name, passed in checks) or findings or duration > 60.0:
+                      raise ValueError("passing gate output is inconsistent")
+                  return duration, True
+              timing_only = (
+                  result == "FAIL"
+                  and checks[:-1] == [(name, True) for name in FULL_CHECKS[:-1]]
+                  and checks[-1] == ("quality non-regression", False)
+                  and len(findings) == 1
+                  and findings[0][0:3] == (
+                      "QUALITY_NON_REGRESSION", "QUALITY_GATE", "FULL_GATE_DURATION_REGRESSION",
+                  )
+                  and len(findings[0]) == 5
+                  and findings[0][4] == "P1"
+                  and duration > 60.0
+              )
+              return duration, timing_only
+
+
+          def run_sample(root: Path, expected_sha: str, python: Path, role: str, sequence: int,
+                         initial: dict) -> dict:
+              before = capture_identity(root, expected_sha)
+              if before != initial:
+                  raise ValueError("checkout identity drifted before sample")
+              completed = subprocess.run(
+                  [str(python), "-m", "scripts.quality.verify_core", "--full"],
+                  cwd=root,
+                  capture_output=True,
+                  text=True,
+                  timeout=300,
+              )
+              after = capture_identity(root, expected_sha)
+              if after != before:
+                  raise ValueError("checkout identity drifted during sample")
+              duration, semantic_passed = parse_gate_output(completed.stdout, completed.returncode)
+              return {
+                  "role": role,
+                  "sequence": sequence,
+                  **before,
+                  "durationSeconds": duration,
+                  "semanticPassed": semantic_passed,
+              }
+
+
+          def main() -> int:
+              parser = argparse.ArgumentParser()
+              parser.add_argument("--base-root", type=Path, required=True)
+              parser.add_argument("--head-root", type=Path, required=True)
+              parser.add_argument("--base-sha", required=True)
+              parser.add_argument("--head-sha", required=True)
+              parser.add_argument("--base-python", type=Path, required=True)
+              parser.add_argument("--head-python", type=Path, required=True)
+              args = parser.parse_args()
+              try:
+                  if args.base_python.resolve() == args.head_python.resolve():
+                      raise ValueError("dependency environments are not isolated")
+                  if not args.base_python.is_file() or not args.head_python.is_file():
+                      raise ValueError("dependency environment is unavailable")
+                  identities = {
+                      "BASE": capture_identity(args.base_root, args.base_sha),
+                      "HEAD": capture_identity(args.head_root, args.head_sha),
+                  }
+                  samples = []
+                  for role, sequence in ORDER:
+                      root = args.base_root if role == "BASE" else args.head_root
+                      sha = args.base_sha if role == "BASE" else args.head_sha
+                      python = args.base_python if role == "BASE" else args.head_python
+                      sample = run_sample(root, sha, python, role, sequence, identities[role])
+                      samples.append(sample)
+                      if not sample["semanticPassed"]:
+                          verdict = {"allowed": False, "code": "SEMANTIC_GATE_FAILURE"}
+                          print(json.dumps(verdict, sort_keys=True))
+                          return 1
+                  verdict = evaluate(
+                      samples,
+                      args.base_sha,
+                      args.head_sha,
+                      identities["BASE"]["treeSha"],
+                      identities["HEAD"]["treeSha"],
+                      60.0,
+                  )
+              except (OSError, TypeError, ValueError, subprocess.SubprocessError) as exc:
+                  verdict = {"allowed": False, "code": "TIMING_EVIDENCE_INVALID", "detail": str(exc)}
+              print(json.dumps(verdict, sort_keys=True))
+              return 0 if verdict["allowed"] else 1
+
+
+          if __name__ == "__main__":
+              raise SystemExit(main())
+          '@ | Set-Content -LiteralPath $timingJudge -Encoding utf8
+          # TIMING_GATE_PYTHON_END
+          python $timingJudge --base-root $env:TIMING_BASE_ROOT --head-root $env:TIMING_HEAD_ROOT --base-sha $env:TIMING_BASE_SHA --head-sha $env:TIMING_HEAD_SHA --base-python $basePython --head-python $headPython
