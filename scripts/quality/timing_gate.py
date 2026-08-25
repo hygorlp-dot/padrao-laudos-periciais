@@ -29,7 +29,7 @@ FULL_GATE_CHECKS = (
     "quality non-regression",
 )
 
-_EXPECTED_SAMPLE_IDENTITIES = (("BASE", 1), ("HEAD", 1), ("BASE", 2), ("HEAD", 2))
+_EXPECTED_SAMPLE_IDENTITIES = (("BASE", 1), ("HEAD", 1), ("HEAD", 2), ("BASE", 2))
 _SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 
 
@@ -166,9 +166,15 @@ def evaluate_timing_evidence(
     }
     if max(head) <= float(limit_seconds):
         return TimingDecision(True, "ABSOLUTE_DURATION_WITHIN_LIMIT", **common)
-    if min(head) > max(base):
-        return TimingDecision(False, "CANDIDATE_ATTRIBUTABLE_DURATION_REGRESSION", **common)
-    return TimingDecision(True, "ENVIRONMENTAL_EXECUTION_VARIANCE", **common)
+    expected_head_one = (2 * base[0] + base[1]) / 3
+    expected_head_two = (base[0] + 2 * base[1]) / 3
+    residuals = (head[0] - expected_head_one, head[1] - expected_head_two)
+    detail = "HEAD_RESIDUALS_SECONDS=" + ",".join(f"{value:.3f}" for value in residuals)
+    if all(value > 0 for value in residuals):
+        return TimingDecision(
+            False, "CANDIDATE_ATTRIBUTABLE_DURATION_REGRESSION", detail=detail, **common
+        )
+    return TimingDecision(True, "ENVIRONMENTAL_EXECUTION_VARIANCE", detail=detail, **common)
 
 
 def main(argv: list[str] | None = None) -> int:

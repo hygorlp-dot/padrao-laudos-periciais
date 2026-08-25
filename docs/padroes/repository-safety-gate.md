@@ -69,17 +69,18 @@ uma mudança que é puramente de orquestração de CI.
 ### Atribuição robusta do tempo na CI
 
 O limite `full_gate_max_seconds = 60.0` continua imutável. Em CI, o workflow
-executa o FULL no mesmo runner e ambiente na ordem intercalada
-`BASE → HEAD → BASE → HEAD`. Cada amostra fica vinculada ao SHA exato do
+executa o FULL no mesmo runner e ambiente na ordem contrabalanceada
+`BASE → HEAD → HEAD → BASE`. Cada amostra fica vinculada ao SHA exato do
 checkout, deve conter a lista fechada de checks do FULL e só pode ser tratada
 como amostra de tempo quando a única falha é
 `FULL_GATE_DURATION_REGRESSION`.
 
 Falha semântica, check ausente/duplicado, identidade divergente ou evidência
-malformada continuam bloqueando. Se HEAD ultrapassar 60 segundos e suas duas
-amostras forem integralmente mais lentas que todas as amostras de BASE, o
-resultado é `CANDIDATE_ATTRIBUTABLE_DURATION_REGRESSION`. Quando as faixas se
-sobrepõem — ou HEAD não é mais lento — a ultrapassagem é registrada como
+malformada continuam bloqueando. As duas amostras BASE, nas extremidades,
+definem por interpolação linear o tempo ambiental esperado nas duas posições
+HEAD. Se HEAD ultrapassar 60 segundos e ambas as amostras tiverem resíduo
+positivo, o resultado é `CANDIDATE_ATTRIBUTABLE_DURATION_REGRESSION`. Se ao
+menos um resíduo não for positivo, a ultrapassagem é registrada como
 `ENVIRONMENTAL_EXECUTION_VARIANCE`, sem alterar o limite, a cobertura ou as
 suítes executadas.
 

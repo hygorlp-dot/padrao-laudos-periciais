@@ -42,7 +42,7 @@ def _output(duration: float, *, semantic_failure: bool = False) -> str:
 
 def _evidence(base: tuple[float, float], head: tuple[float, float]) -> dict:
     values = (("BASE", 1, BASE_SHA, base[0]), ("HEAD", 1, HEAD_SHA, head[0]),
-              ("BASE", 2, BASE_SHA, base[1]), ("HEAD", 2, HEAD_SHA, head[1]))
+              ("HEAD", 2, HEAD_SHA, head[1]), ("BASE", 2, BASE_SHA, base[1]))
     return {
         "schemaVersion": "1.0.0",
         "samples": [
@@ -60,7 +60,7 @@ def _evidence(base: tuple[float, float], head: tuple[float, float]) -> dict:
 
 def test_equivalently_slow_base_and_head_are_environmental_variance():
     decision = evaluate_timing_evidence(
-        _evidence((70.0, 72.0), (71.0, 73.0)),
+        _evidence((70.0, 73.0), (71.0, 72.0)),
         expected_base_sha=BASE_SHA,
         expected_head_sha=HEAD_SHA,
         limit_seconds=60.0,
@@ -68,13 +68,13 @@ def test_equivalently_slow_base_and_head_are_environmental_variance():
 
     assert decision.allowed is True
     assert decision.code == "ENVIRONMENTAL_EXECUTION_VARIANCE"
-    assert decision.base_median == 71.0
-    assert decision.head_median == 72.0
+    assert decision.base_median == 71.5
+    assert decision.head_median == 71.5
 
 
 def test_materially_slower_head_is_candidate_attributable_and_blocks():
     decision = evaluate_timing_evidence(
-        _evidence((54.0, 55.0), (65.0, 66.0)),
+        _evidence((54.0, 57.0), (65.0, 66.0)),
         expected_base_sha=BASE_SHA,
         expected_head_sha=HEAD_SHA,
         limit_seconds=60.0,
@@ -82,6 +82,18 @@ def test_materially_slower_head_is_candidate_attributable_and_blocks():
 
     assert decision.allowed is False
     assert decision.code == "CANDIDATE_ATTRIBUTABLE_DURATION_REGRESSION"
+
+
+def test_one_sided_noise_does_not_claim_candidate_attribution():
+    decision = evaluate_timing_evidence(
+        _evidence((58.0, 76.0), (72.0, 70.0)),
+        expected_base_sha=BASE_SHA,
+        expected_head_sha=HEAD_SHA,
+        limit_seconds=60.0,
+    )
+
+    assert decision.allowed is True
+    assert decision.code == "ENVIRONMENTAL_EXECUTION_VARIANCE"
 
 
 def test_semantic_failure_always_blocks_even_when_timing_is_fast():
@@ -203,11 +215,11 @@ def test_paired_runner_executes_base_head_base_head_and_emits_exact_evidence(tmp
     )
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert order_log.read_text(encoding="utf-8").splitlines() == ["base", "head", "base", "head"]
+    assert order_log.read_text(encoding="utf-8").splitlines() == ["base", "head", "head", "base"]
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     assert [(row["role"], row["sequence"], row["commitSha"]) for row in evidence["samples"]] == [
         ("BASE", 1, base_sha), ("HEAD", 1, head_sha),
-        ("BASE", 2, base_sha), ("HEAD", 2, head_sha),
+        ("HEAD", 2, head_sha), ("BASE", 2, base_sha),
     ]
 
 

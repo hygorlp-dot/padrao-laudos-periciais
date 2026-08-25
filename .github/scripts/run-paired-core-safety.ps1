@@ -62,8 +62,8 @@ Assert-ExactCheckout -Root $HeadRoot -ExpectedSha $HeadSha
 $samples = @(
     (Invoke-FullGateSample -Role "BASE" -Sequence 1 -CommitSha $BaseSha -Root $BaseRoot),
     (Invoke-FullGateSample -Role "HEAD" -Sequence 1 -CommitSha $HeadSha -Root $HeadRoot),
-    (Invoke-FullGateSample -Role "BASE" -Sequence 2 -CommitSha $BaseSha -Root $BaseRoot),
-    (Invoke-FullGateSample -Role "HEAD" -Sequence 2 -CommitSha $HeadSha -Root $HeadRoot)
+    (Invoke-FullGateSample -Role "HEAD" -Sequence 2 -CommitSha $HeadSha -Root $HeadRoot),
+    (Invoke-FullGateSample -Role "BASE" -Sequence 2 -CommitSha $BaseSha -Root $BaseRoot)
 )
 $evidence = [ordered]@{
     schemaVersion = "1.0.0"
