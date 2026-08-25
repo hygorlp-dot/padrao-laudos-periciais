@@ -25,6 +25,7 @@ PROTECTED_ARCHITECTURE_ARTIFACTS = (
     "scripts/quality/architecture_analyzer.py",
     "scripts/quality/ast_inventory.py",
     "scripts/quality/capability_trust_anchor.py",
+    "scripts/quality/__init__.py",
     "scripts/quality/repository_inventory.py",
 )
 PROTECTED_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
