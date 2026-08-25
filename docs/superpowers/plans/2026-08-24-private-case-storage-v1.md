@@ -112,6 +112,9 @@
   footprint before the first mutation, flush every newly published hardlink
   identity on Windows, bind Windows storage to the runtime's trusted local
   volume, and detach raw descriptors before any potentially ambiguous close.
+  Revalidate link counts after reads, reject reparse ancestry, close the singleton
+  handle even after unlock failure, prevent inherited-process operations/unlock,
+  flush rollback hardlinks, and compare ledger snapshots before truncation.
 
 ### Task 3: Prove containment, isolation and privacy
 

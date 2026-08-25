@@ -25,6 +25,8 @@ feita antes da abertura dos controles; UNC, drive mapeado e volume divergente
 falham fechados. Esta restrição deliberada evita que uma configuração com
 aparência local envie bytes privados a um compartilhamento remoto. Suporte a
 outro volume local exigiria uma autoridade de provisioning explícita posterior.
+Todos os componentes ancestrais do path configurado também são inspecionados;
+symlink, junction ou reparse em qualquer nível bloqueia a abertura.
 
 O root, o arquivo regular `.store-lock` contendo `0`, o `.commit-log` e o
 `.commit-anchor`, ambos regulares e inicialmente vazios, são uma precondição de
@@ -123,7 +125,9 @@ Toda leitura exige inventário exato do root, manifesto canônico, checksum
 do manifesto, identidade, tamanho e SHA-256 do conteúdo. Ausência, truncamento,
 campo desconhecido, substituição entre workspaces ou corrupção falha fechado e
 nunca é reparada silenciosamente. O manifesto exige tipos exatos e UUIDs em
-grafia canônica; `true` não equivale à versão inteira `1`.
+grafia canônica; `true` não equivale à versão inteira `1`. A contagem exata de
+hardlinks é revalidada depois do último byte lido, fechando a janela entre a
+validação inicial e a conclusão da leitura.
 
 Após morte abrupta, o lock do kernel é liberado. A próxima abertura exclusiva
 primeiro analisa de forma limitada journal, anchor, staging e todos os registros
@@ -155,6 +159,11 @@ entradas do pior rollback persistente (intent, aborted, oito aliases e oito
 marcadores retired); assim uma falha não ultrapassa o próprio teto físico. A
 ausência de qualquer controle nunca é tratada como store
 novo. A recuperação é executada antes de o adapter aceitar operações.
+Qualquer truncagem de rollback compara novamente os bytes integrais do ledger
+com o snapshot validado e com o único sufixo pertencente à transação; divergência
+preserva os bytes e falha fechada. Marcadores `.retired` e `.aborted` recebem a
+mesma barreira de identidade/fsync usada pelos aliases publicados antes de o WAL
+ser consumido.
 
 SHA-256 aqui é evidência de integridade acidental e consistência local, não uma
 assinatura nem prova de autenticidade contra um atacante com capacidade para
@@ -181,5 +190,8 @@ manifesto pertencem a milestones próprios.
 - O fechamento invalida cada handle na instância antes da chamada de sistema.
   Uma falha ambígua de `close` torna a instância fechada/falha e nunca permite
   repetir um número de descritor que já possa ter sido reutilizado pelo processo.
+  O handle do singleton é fechado mesmo se o unlock explícito falhar. A instância
+  registra o PID proprietário; após `fork`, o filho não pode operar o store nem
+  emitir `LOCK_UN` sobre o lock herdado.
 - Não há UI, endpoint de upload, OCR, preview, PJe/eproc, AI ou egress nesta
   entrega.

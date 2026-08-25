@@ -98,6 +98,14 @@ def _path_is_link_or_reparse(path: Path) -> bool:
     )
 
 
+def _validate_plain_ancestry(path: Path) -> None:
+    for component in (path, *path.parents):
+        if _path_is_link_or_reparse(component):
+            raise RepositoryIntegrityError(
+                "private root possui ancestral simbólico ou reparse"
+            )
+
+
 def _entry_name(path: Path) -> str:
     name = path.name
     if not name or name in {".", ".."} or "/" in name or "\\" in name:
@@ -178,6 +186,35 @@ def _open_existing_regular(
         raise
     except (FileNotFoundError, OSError) as exc:
         raise RepositoryIntegrityError("arquivo privado ausente ou inacessível") from exc
+
+
+def _flush_link_identity(
+    path: Path,
+    expected: os.stat_result,
+    *,
+    expected_links: int,
+    root_fd: int | None,
+) -> None:
+    descriptor, opened = _open_existing_regular(
+        path,
+        root_fd=root_fd,
+        expected_links=expected_links,
+        writable=True,
+    )
+    try:
+        if not _same_identity(expected, opened):
+            raise RepositoryIntegrityError(
+                "identidade publicada mudou antes da barreira durável"
+            )
+        os.fsync(descriptor)
+        after = os.fstat(descriptor)
+        _validate_regular(after, expected_links=expected_links)
+        if not _same_identity(opened, after):
+            raise RepositoryIntegrityError(
+                "identidade publicada mudou durante a barreira durável"
+            )
+    finally:
+        os.close(descriptor)
 
 
 def _open_control_regular(
@@ -314,6 +351,7 @@ def _read_regular(
         if len(payload) != opened.st_size or os.read(descriptor, 1):
             raise RepositoryIntegrityError("arquivo privado mudou durante a leitura")
         after = os.fstat(descriptor)
+        _validate_regular(after, expected_links=expected_links)
         if not _same_identity(opened, after) or after.st_size != opened.st_size:
             raise RepositoryIntegrityError("arquivo privado mudou durante a leitura")
         return payload
@@ -352,6 +390,7 @@ def _hash_regular(
         if os.read(descriptor, 1):
             raise RepositoryIntegrityError("conteúdo privado cresceu durante a leitura")
         after = os.fstat(descriptor)
+        _validate_regular(after, expected_links=expected_links)
         if not _same_identity(opened, after) or after.st_size != opened.st_size:
             raise RepositoryIntegrityError("conteúdo privado mudou durante a leitura")
         return digest.hexdigest(), bytes(content) if content is not None else None
@@ -390,25 +429,12 @@ def _publish_durable(
             raise RepositoryIntegrityError(
                 "identidade do staging privado mudou durante a publicação"
             )
-        descriptor, opened = _open_existing_regular(
+        _flush_link_identity(
             destination,
-            root_fd=root_fd,
+            destination_identity,
             expected_links=2,
-            writable=True,
+            root_fd=root_fd,
         )
-        try:
-            if not _same_identity(destination_identity, opened):
-                raise RepositoryIntegrityError(
-                    "identidade publicada mudou antes da barreira durável"
-                )
-            os.fsync(descriptor)
-            after = os.fstat(descriptor)
-            if not _same_identity(opened, after) or after.st_nlink != 2:
-                raise RepositoryIntegrityError(
-                    "identidade publicada mudou durante a barreira durável"
-                )
-        finally:
-            os.close(descriptor)
         if root_fd is not None:
             os.fsync(root_fd)
     except FileExistsError:
@@ -452,6 +478,12 @@ def _retire_if_owned(
         raise RepositoryIntegrityError(
             "identidade do objeto privado mudou durante a aposentadoria"
         )
+    _flush_link_identity(
+        retired,
+        retired_details,
+        expected_links=retired_details.st_nlink,
+        root_fd=root_fd,
+    )
     if root_fd is not None:
         os.fsync(root_fd)
 
@@ -483,6 +515,12 @@ def _mark_intent_aborted(
     _validate_regular(aborted_details, expected_links=2)
     if not _same_identity(expected, aborted_details):
         raise RepositoryIntegrityError("intent privado abortado sem identidade exata")
+    _flush_link_identity(
+        aborted,
+        aborted_details,
+        expected_links=2,
+        root_fd=root_fd,
+    )
     if root_fd is not None:
         os.fsync(root_fd)
 
@@ -596,6 +634,7 @@ class LocalPrivateContentStore:
         if not root.is_absolute():
             raise RepositoryError("private root deve ser absoluto")
         self._mutex = threading.RLock()
+        self._owner_pid = os.getpid()
         self._closed = False
         self._close_failed = False
         self._lock_stream = None
@@ -613,10 +652,7 @@ class LocalPrivateContentStore:
                 raise RepositoryError(
                     "private root deve ser provisionado antes da abertura"
                 )
-            if _path_is_link_or_reparse(root):
-                raise RepositoryIntegrityError(
-                    "private root simbólico ou reparse não é permitido"
-                )
+            _validate_plain_ancestry(root.absolute())
             root_identity = os.lstat(root)
             if not stat.S_ISDIR(root_identity.st_mode):
                 raise RepositoryIntegrityError("private root inválido")
@@ -797,15 +833,56 @@ class LocalPrivateContentStore:
         return tuple(entries), confirmed_bytes, None
 
     @staticmethod
+    def _ledger_raw(entries: tuple[str, ...], tail: bytes | None) -> bytes:
+        complete = b"".join(
+            entry.encode("ascii") + b"\n" for entry in entries
+        )
+        return complete + (tail or b"")
+
+    @staticmethod
+    def _descriptor_snapshot(descriptor: int) -> bytes:
+        before = os.fstat(descriptor)
+        maximum = (_MAX_JOURNAL_ENTRIES * 74) + 73
+        if before.st_size > maximum:
+            raise RepositoryIntegrityError("ledger privado excede limite")
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        payload = _read_exact(descriptor, before.st_size)
+        if len(payload) != before.st_size or os.read(descriptor, 1):
+            raise RepositoryIntegrityError("ledger privado mudou durante a leitura")
+        after = os.fstat(descriptor)
+        if not _same_identity(before, after) or after.st_size != before.st_size:
+            raise RepositoryIntegrityError("ledger privado mudou durante a leitura")
+        return payload
+
+    @staticmethod
     def _append_ledger(descriptor: int, prefix: str) -> None:
         os.lseek(descriptor, 0, os.SEEK_END)
         _write_all(descriptor, prefix.encode("ascii") + b"\n")
         os.fsync(descriptor)
 
     @staticmethod
-    def _truncate_ledger(descriptor: int, size: int) -> None:
+    def _truncate_ledger(descriptor: int, size: int, *, expected: bytes) -> None:
+        if LocalPrivateContentStore._descriptor_snapshot(descriptor) != expected:
+            raise RepositoryIntegrityError("ledger privado mudou antes da truncagem")
         os.ftruncate(descriptor, size)
         os.fsync(descriptor)
+
+    @staticmethod
+    def _truncate_owned_ledger(
+        descriptor: int,
+        original: bytes,
+        owned_entry: bytes,
+    ) -> None:
+        current = LocalPrivateContentStore._descriptor_snapshot(descriptor)
+        if not current.startswith(original) or not owned_entry.startswith(
+            current[len(original) :]
+        ):
+            raise RepositoryIntegrityError("ledger privado mudou antes do rollback")
+        LocalPrivateContentStore._truncate_ledger(
+            descriptor,
+            len(original),
+            expected=current,
+        )
 
     def _append_intent(self, prefix: str) -> None:
         self._append_ledger(self._journal_fd, prefix)
@@ -1167,6 +1244,8 @@ class LocalPrivateContentStore:
         anchor, anchor_bytes, anchor_tail = self._ledger_entries(
             self._anchor_fd, label="anchor"
         )
+        journal_snapshot = self._ledger_raw(journal, journal_tail)
+        anchor_snapshot = self._ledger_raw(anchor, anchor_tail)
 
         common_length = 0
         for journal_entry, anchor_entry in zip(journal, anchor):
@@ -1328,6 +1407,9 @@ class LocalPrivateContentStore:
                     "journal privado truncado sem proveniência"
                 )
             self._complete_torn_intent(pending_prefix, journal_tail)
+            journal_snapshot = self._ledger_raw(journal, None) + (
+                pending_prefix.encode("ascii") + b"\n"
+            )
             mutated = True
         for final_path, final_details in cleanup_finals:
             self._retire_internal(final_path, expected=final_details)
@@ -1348,20 +1430,34 @@ class LocalPrivateContentStore:
             and not pending_is_committed
             and not pending_without_wal
         ):
-            self._truncate_ledger(self._journal_fd, common_bytes)
+            self._truncate_ledger(
+                self._journal_fd,
+                common_bytes,
+                expected=journal_snapshot,
+            )
             mutated = True
         if pending_is_committed:
-            self._truncate_ledger(self._anchor_fd, common_bytes)
+            self._truncate_ledger(
+                self._anchor_fd,
+                common_bytes,
+                expected=anchor_snapshot,
+            )
             self._append_ledger(self._anchor_fd, pending_prefix)
             mutated = True
         elif anchor_bytes != common_bytes or anchor_tail is not None:
-            self._truncate_ledger(self._anchor_fd, common_bytes)
+            self._truncate_ledger(
+                self._anchor_fd,
+                common_bytes,
+                expected=anchor_snapshot,
+            )
             mutated = True
         if mutated:
             return self._recover()
         return committed, set(intents)
 
     def _ensure_open(self) -> None:
+        if os.getpid() != self._owner_pid:
+            raise RepositoryError("armazenamento privado herdado por outro processo")
         if self._closed or self._close_failed:
             raise RepositoryError("armazenamento privado fechado")
 
@@ -1506,8 +1602,8 @@ class LocalPrivateContentStore:
             metadata_checksum = hashlib.sha256(manifest).hexdigest().encode("ascii")
             published: list[tuple[Path, os.stat_result]] = []
             stage_identities: dict[Path, os.stat_result] = {}
-            journal_start = os.lseek(self._journal_fd, 0, os.SEEK_END)
-            anchor_start = os.lseek(self._anchor_fd, 0, os.SEEK_END)
+            journal_before = self._descriptor_snapshot(self._journal_fd)
+            anchor_before = self._descriptor_snapshot(self._anchor_fd)
             commit_created = False
             intent_identity = None
             try:
@@ -1617,8 +1713,16 @@ class LocalPrivateContentStore:
                                 nonce,
                                 root_fd=self._root_fd,
                             )
-                            self._truncate_ledger(self._journal_fd, journal_start)
-                            self._truncate_ledger(self._anchor_fd, anchor_start)
+                            self._truncate_owned_ledger(
+                                self._journal_fd,
+                                journal_before,
+                                prefix.encode("ascii") + b"\n",
+                            )
+                            self._truncate_ledger(
+                                self._anchor_fd,
+                                len(anchor_before),
+                                expected=anchor_before,
+                            )
                         except (OSError, RepositoryIntegrityError):
                             pass
 
@@ -1671,6 +1775,7 @@ class LocalPrivateContentStore:
         with mutex:
             if getattr(self, "_closed", True):
                 return
+            foreign_process = os.getpid() != self._owner_pid
             failures = []
             if self._journal_fd is not None:
                 descriptor = self._journal_fd
@@ -1693,7 +1798,7 @@ class LocalPrivateContentStore:
                 self._lock_stream = None
                 self._lock_identity = None
                 try:
-                    if not self._lock_released:
+                    if not self._lock_released and not foreign_process:
                         stream.seek(0)
                         if os.name == "nt":
                             msvcrt.locking(
@@ -1704,6 +1809,9 @@ class LocalPrivateContentStore:
                         else:
                             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
                         self._lock_released = True
+                except OSError as exc:
+                    failures.append(exc)
+                try:
                     stream.close()
                 except OSError as exc:
                     failures.append(exc)

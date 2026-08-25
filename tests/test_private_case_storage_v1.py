@@ -884,6 +884,31 @@ def test_runtime_journal_tampering_is_detected_before_read(tmp_path):
             private_store.get(WORKSPACE_A, metadata.content_id)
 
 
+def test_recovery_never_erases_a_ledger_entry_injected_after_abort_marker(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    prefix = f"{WORKSPACE_A}.{CONTENT_A}"
+    nonce = "2" * 32
+    (root / f".intent.{prefix}.{nonce}").write_bytes(b"")
+    (root / ".commit-log").write_bytes(prefix.encode("ascii")[:12])
+    foreign = f"{WORKSPACE_B}.{CONTENT_B}\n".encode("ascii")
+    original_mark = private_filesystem._mark_intent_aborted
+
+    def mark_then_inject(*args, **kwargs):
+        result = original_mark(*args, **kwargs)
+        with (root / ".commit-log").open("ab") as journal:
+            journal.write(foreign)
+            journal.flush()
+            os.fsync(journal.fileno())
+        return result
+
+    monkeypatch.setattr(private_filesystem, "_mark_intent_aborted", mark_then_inject)
+    with pytest.raises(RepositoryIntegrityError, match="journal|ledger|intent"):
+        LocalPrivateContentStore(root)
+    assert foreign in (root / ".commit-log").read_bytes()
+
+
 def test_clean_journal_truncation_is_not_reclassified_as_crash_recovery(tmp_path):
     root = tmp_path / "private"
     metadata = _metadata()
@@ -1150,12 +1175,12 @@ def test_torn_wal_remains_recoverable_after_crash_before_wal_consumption(
     original_truncate = LocalPrivateContentStore._truncate_ledger
     failed = False
 
-    def fail_first_truncation(descriptor, size):
+    def fail_first_truncation(descriptor, size, *, expected):
         nonlocal failed
         if not failed:
             failed = True
             raise OSError("synthetic crash before WAL consumption")
-        return original_truncate(descriptor, size)
+        return original_truncate(descriptor, size, expected=expected)
 
     monkeypatch.setattr(
         LocalPrivateContentStore,
@@ -1289,12 +1314,12 @@ def test_recovery_rechecks_after_wal_truncation_without_losing_provenance(
     original_truncate = LocalPrivateContentStore._truncate_ledger
     injected = False
 
-    def inject_before_truncation(descriptor, size):
+    def inject_before_truncation(descriptor, size, *, expected):
         nonlocal injected
         if not injected:
             injected = True
             target.write_bytes(b"independent late replacement")
-        return original_truncate(descriptor, size)
+        return original_truncate(descriptor, size, expected=expected)
 
     monkeypatch.setattr(
         LocalPrivateContentStore,
@@ -1647,6 +1672,78 @@ def test_windows_publication_flushes_link_identity_after_hardlink(
         root_fd=None,
     )
 
+    assert events == ["link", "fsync"]
+
+
+@pytest.mark.parametrize("operation", ("read", "hash"))
+def test_private_read_revalidates_link_count_after_bytes_are_consumed(
+    tmp_path, monkeypatch, operation
+):
+    source = tmp_path / "private" / "source"
+    alias = tmp_path / "private" / "alias"
+    outside = tmp_path / "outside-hardlink"
+    source.write_bytes(b"race-private-bytes")
+    os.link(source, alias)
+    original_read = private_filesystem.os.read
+    injected = False
+
+    def inject_external_link_after_read(descriptor, size):
+        nonlocal injected
+        block = original_read(descriptor, size)
+        if block and not injected:
+            injected = True
+            os.link(source, outside)
+        return block
+
+    monkeypatch.setattr(private_filesystem.os, "read", inject_external_link_after_read)
+    with pytest.raises(RepositoryIntegrityError, match="hard link|mudou"):
+        if operation == "read":
+            private_filesystem._read_regular(
+                source,
+                root_fd=None,
+                maximum_bytes=1024,
+                expected_links=2,
+            )
+        else:
+            private_filesystem._hash_regular(
+                source,
+                root_fd=None,
+                maximum_bytes=1024,
+                expected_size=len(b"race-private-bytes"),
+                load_content=True,
+                expected_links=2,
+            )
+
+
+@pytest.mark.parametrize("operation", ("retire", "abort"))
+def test_windows_rollback_markers_flush_link_identity(
+    tmp_path, monkeypatch, operation
+):
+    root = tmp_path / "private"
+    source = root / "owned"
+    source.write_bytes(b"" if operation == "abort" else b"owned")
+    expected = source.stat()
+    events = []
+    original_link = private_filesystem.os.link
+    original_fsync = private_filesystem.os.fsync
+
+    def observed_link(*args, **kwargs):
+        result = original_link(*args, **kwargs)
+        events.append("link")
+        return result
+
+    def observed_fsync(descriptor):
+        events.append("fsync")
+        return original_fsync(descriptor)
+
+    monkeypatch.setattr(private_filesystem.os, "link", observed_link)
+    monkeypatch.setattr(private_filesystem.os, "fsync", observed_fsync)
+    if operation == "retire":
+        private_filesystem._retire_if_owned(source, expected, root_fd=None)
+    else:
+        private_filesystem._mark_intent_aborted(
+            source, expected, "3" * 32, root_fd=None
+        )
     assert events == ["link", "fsync"]
 
 
@@ -2062,6 +2159,23 @@ def test_windows_reparse_attribute_is_mechanically_recognized(monkeypatch, tmp_p
     assert private_filesystem._path_is_link_or_reparse(tmp_path / "junction")
 
 
+def test_reparse_in_any_configured_root_ancestor_is_rejected(tmp_path, monkeypatch):
+    root = tmp_path / "private"
+    marked_ancestor = root.parent
+    original_check = private_filesystem._path_is_link_or_reparse
+
+    def ancestor_is_reparse(path):
+        if Path(path) == marked_ancestor:
+            return True
+        return original_check(path)
+
+    monkeypatch.setattr(
+        private_filesystem, "_path_is_link_or_reparse", ancestor_is_reparse
+    )
+    with pytest.raises(RepositoryIntegrityError, match="ancestral|reparse"):
+        LocalPrivateContentStore(root)
+
+
 def test_closed_private_store_rejects_further_operations(tmp_path):
     store = LocalPrivateContentStore(tmp_path / "private")
     store.close()
@@ -2124,6 +2238,47 @@ def test_ambiguous_close_failure_never_retries_a_reused_descriptor(
                 original_close(descriptor)
             except OSError:
                 pass
+    with LocalPrivateContentStore(root):
+        pass
+
+
+@pytest.mark.skipif(os.name != "nt", reason="locking Windows")
+def test_close_closes_lock_handle_even_when_explicit_unlock_fails(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    store = LocalPrivateContentStore(root)
+    original_locking = private_filesystem.msvcrt.locking
+
+    def fail_unlock(descriptor, mode, count):
+        if mode == private_filesystem.msvcrt.LK_UNLCK:
+            raise OSError("synthetic unlock failure")
+        return original_locking(descriptor, mode, count)
+
+    monkeypatch.setattr(private_filesystem.msvcrt, "locking", fail_unlock)
+    with pytest.raises(RepositoryError, match="fechar") as captured:
+        store.close()
+    monkeypatch.setattr(private_filesystem.msvcrt, "locking", original_locking)
+
+    with LocalPrivateContentStore(root):
+        pass
+    assert captured.value is not None
+
+
+def test_store_inherited_by_another_process_identity_is_unusable_and_closes_safely(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    store = LocalPrivateContentStore(root)
+    owner_pid = store._owner_pid
+    monkeypatch.setattr(private_filesystem.os, "getpid", lambda: owner_pid + 1)
+
+    with pytest.raises(RepositoryError, match="processo|herdado"):
+        store.list_all(WORKSPACE_A)
+    store.close()
+    assert store._closed
+
+    monkeypatch.undo()
     with LocalPrivateContentStore(root):
         pass
 
