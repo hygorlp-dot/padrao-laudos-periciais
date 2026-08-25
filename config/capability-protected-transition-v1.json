@@ -1,23 +1,40 @@
 {
   "schemaVersion": "1.0.0",
   "transitionId": "CAPABILITY_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "cec881c42815bc222eecc03fd89c1caf32ec75f4",
+  "protectedBaseSha": "dd2d74cc4a0baec555c47677f1c8fc67ce46ec3b",
   "artifacts": [
     {
-      "path": "config/capability-exceptions-v1.json",
+      "path": "scripts/quality/capability_bootstrap.py",
       "base": {
-        "path": "config/capability-exceptions-v1.json",
+        "path": "scripts/quality/capability_bootstrap.py",
         "state": "PRESENT",
         "mode": "100644",
         "objectType": "blob",
-        "blobSha": "36a3ad9eebd44e5687e686ab1c59dd3154f289e0"
+        "blobSha": "bb62702efa2bdbe1936a3a11f4038004f9d555c2"
       },
       "candidate": {
-        "path": "config/capability-exceptions-v1.json",
+        "path": "scripts/quality/capability_bootstrap.py",
         "state": "PRESENT",
         "mode": "100644",
         "objectType": "blob",
-        "blobSha": "96aedd24745a5f0f3f70f487a8bc74d12a8611c0"
+        "blobSha": "17dc93383c8df20fea208636e8ccb3cdffa5f952"
+      }
+    },
+    {
+      "path": "scripts/quality/verify_core.py",
+      "base": {
+        "path": "scripts/quality/verify_core.py",
+        "state": "PRESENT",
+        "mode": "100644",
+        "objectType": "blob",
+        "blobSha": "9ac253ad26f35e814e7f089ecf1acdfd5c110c42"
+      },
+      "candidate": {
+        "path": "scripts/quality/verify_core.py",
+        "state": "PRESENT",
+        "mode": "100644",
+        "objectType": "blob",
+        "blobSha": "19d668cfe81fd1d4af8e5652f0b97e6e4349e1b1"
       }
     }
   ]

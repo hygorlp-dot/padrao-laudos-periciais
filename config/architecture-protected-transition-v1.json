@@ -1,37 +1,64 @@
 {
   "schemaVersion": "3.0.0",
   "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "cec881c42815bc222eecc03fd89c1caf32ec75f4",
+  "protectedBaseSha": "dd2d74cc4a0baec555c47677f1c8fc67ce46ec3b",
   "artifacts": [
     {
       "path": "config/capability-protected-artifacts-v1.json",
       "baseMode": "100644",
       "baseObjectType": "blob",
-      "baseBlobSha": "2af6e7b6079bb62fa860d94afe82db57803a8482",
+      "baseBlobSha": "4f7b0846ace6db63cfa3951828142e5dd3d30e35",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "4f7b0846ace6db63cfa3951828142e5dd3d30e35"
+      "candidateBlobSha": "6fa9ef81c322c78f2b410830a9b1bfbd8b45ecf5"
     }
   ],
   "supportScope": "CAPABILITY_BOOTSTRAP_V1",
   "supportArtifacts": [
     {
-      "path": "config/capability-exceptions-v1.json",
-      "baseMode": "100644",
-      "baseObjectType": "blob",
-      "baseBlobSha": "36a3ad9eebd44e5687e686ab1c59dd3154f289e0",
-      "candidateMode": "100644",
-      "candidateObjectType": "blob",
-      "candidateBlobSha": "96aedd24745a5f0f3f70f487a8bc74d12a8611c0"
-    },
-    {
       "path": "config/capability-protected-transition-v1.json",
       "baseMode": "100644",
       "baseObjectType": "blob",
-      "baseBlobSha": "7158136214b72a684ee4cf55b5824605bd3403e1",
+      "baseBlobSha": "570990f516554573e2087cbf9901b527915aac10",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "570990f516554573e2087cbf9901b527915aac10"
+      "candidateBlobSha": "637845208104b797930de31e1e4e5e33a8c308de"
+    },
+    {
+      "path": "scripts/quality/capability_bootstrap.py",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "bb62702efa2bdbe1936a3a11f4038004f9d555c2",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "17dc93383c8df20fea208636e8ccb3cdffa5f952"
+    },
+    {
+      "path": "scripts/quality/verify_core.py",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "9ac253ad26f35e814e7f089ecf1acdfd5c110c42",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "19d668cfe81fd1d4af8e5652f0b97e6e4349e1b1"
+    },
+    {
+      "path": "tests/test_capability_timing_gate_custody_v1.py",
+      "baseMode": null,
+      "baseObjectType": null,
+      "baseBlobSha": null,
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "9b528eb745fa51fdf514ad91b7c86ade02cc783c"
+    },
+    {
+      "path": "tests/test_repository_safety_gate.py",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "1305766d4c63b97644c8405d835716f7e274ad15",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "1ec0a4db8cb4e240863303e1a8f9b9df67df0379"
     }
   ]
 }
