@@ -5,9 +5,11 @@ from .sqlite import (
     SQLiteArtifactRevisionRepository,
     SQLiteWorkspaceRepository,
 )
+from .private_filesystem import LocalPrivateContentStore
 
 __all__ = [
     "SQLiteApplicationStore",
     "SQLiteArtifactRevisionRepository",
     "SQLiteWorkspaceRepository",
+    "LocalPrivateContentStore",
 ]
