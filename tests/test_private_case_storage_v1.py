@@ -2443,8 +2443,27 @@ def test_store_inherited_by_another_process_identity_is_unusable_and_closes_safe
         pass
 
 
-@pytest.mark.skipif(os.name != "nt", reason="política de volume Windows")
-def test_private_root_on_untrusted_windows_volume_is_rejected(tmp_path, monkeypatch):
+def test_trusted_local_device_policy_rejects_remote_mount_identity(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    original_stat = private_filesystem.os.stat
+    trusted_anchor = Path(sys.executable).anchor
+
+    def remote_volume_for_runtime(path, *args, **kwargs):
+        observed = original_stat(path, *args, **kwargs)
+        if Path(path) == Path(trusted_anchor):
+            return SimpleNamespace(st_dev=observed.st_dev + 1)
+        return observed
+
+    monkeypatch.setattr(private_filesystem.os, "stat", remote_volume_for_runtime)
+    with pytest.raises(RepositoryError, match="local"):
+        private_filesystem._validate_trusted_local_device(os.lstat(root))
+
+
+def test_private_root_on_untrusted_device_is_rejected_on_every_platform(
+    tmp_path, monkeypatch
+):
     root = tmp_path / "private"
     original_stat = private_filesystem.os.stat
     trusted_anchor = Path(sys.executable).anchor

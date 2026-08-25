@@ -136,6 +136,12 @@ def _identity_key(details: os.stat_result) -> tuple[int, int, int]:
     return (details.st_dev, details.st_ino, stat.S_IFMT(details.st_mode))
 
 
+def _validate_trusted_local_device(root_identity: os.stat_result) -> None:
+    trusted_device = os.stat(Path(sys.executable).anchor)
+    if root_identity.st_dev != trusted_device.st_dev:
+        raise RepositoryError("private root deve ser armazenamento local confiável")
+
+
 def _validate_regular(
     details: os.stat_result,
     *,
@@ -658,12 +664,7 @@ class LocalPrivateContentStore:
             root_identity = os.lstat(root)
             if not stat.S_ISDIR(root_identity.st_mode):
                 raise RepositoryIntegrityError("private root inválido")
-            if os.name == "nt":
-                trusted_volume = os.stat(Path(sys.executable).anchor)
-                if root_identity.st_dev != trusted_volume.st_dev:
-                    raise RepositoryError(
-                        "private root deve ser armazenamento local confiável"
-                    )
+            _validate_trusted_local_device(root_identity)
             configured_root = root.absolute()
             self._root = root.resolve(strict=True)
             observed_root = os.lstat(configured_root)
