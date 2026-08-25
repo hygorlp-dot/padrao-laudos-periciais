@@ -7,7 +7,7 @@ import json
 import math
 from pathlib import Path
 import re
-from statistics import median
+from statistics import fmean, median
 
 
 FULL_GATE_CHECKS = (
@@ -169,8 +169,14 @@ def evaluate_timing_evidence(
     expected_head_one = (2 * base[0] + base[1]) / 3
     expected_head_two = (base[0] + 2 * base[1]) / 3
     residuals = (head[0] - expected_head_one, head[1] - expected_head_two)
-    detail = "HEAD_RESIDUALS_SECONDS=" + ",".join(f"{value:.3f}" for value in residuals)
-    if all(value > 0 for value in residuals):
+    candidate_delta = fmean(residuals)
+    material_delta = float(limit_seconds) * 0.10
+    detail = (
+        "HEAD_RESIDUALS_SECONDS=" + ",".join(f"{value:.3f}" for value in residuals)
+        + f";CANDIDATE_DELTA_SECONDS={candidate_delta:.3f}"
+        + f";MATERIAL_DELTA_SECONDS={material_delta:.3f}"
+    )
+    if all(value > 0 for value in residuals) and candidate_delta > material_delta:
         return TimingDecision(
             False, "CANDIDATE_ATTRIBUTABLE_DURATION_REGRESSION", detail=detail, **common
         )

@@ -96,6 +96,20 @@ def test_one_sided_noise_does_not_claim_candidate_attribution():
     assert decision.code == "ENVIRONMENTAL_EXECUTION_VARIANCE"
 
 
+def test_sub_material_positive_residuals_are_environmental_variance():
+    decision = evaluate_timing_evidence(
+        _evidence((60.0, 63.0), (66.9, 67.9)),
+        expected_base_sha=BASE_SHA,
+        expected_head_sha=HEAD_SHA,
+        limit_seconds=60.0,
+    )
+
+    assert decision.allowed is True
+    assert decision.code == "ENVIRONMENTAL_EXECUTION_VARIANCE"
+    assert "CANDIDATE_DELTA_SECONDS=5.900" in decision.detail
+    assert "MATERIAL_DELTA_SECONDS=6.000" in decision.detail
+
+
 def test_semantic_failure_always_blocks_even_when_timing_is_fast():
     evidence = _evidence((54.0, 55.0), (56.0, 57.0))
     evidence["samples"][1]["exitCode"] = 1

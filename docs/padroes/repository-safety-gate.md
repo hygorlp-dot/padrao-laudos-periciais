@@ -78,9 +78,11 @@ como amostra de tempo quando a única falha é
 Falha semântica, check ausente/duplicado, identidade divergente ou evidência
 malformada continuam bloqueando. As duas amostras BASE, nas extremidades,
 definem por interpolação linear o tempo ambiental esperado nas duas posições
-HEAD. Se HEAD ultrapassar 60 segundos e ambas as amostras tiverem resíduo
-positivo, o resultado é `CANDIDATE_ATTRIBUTABLE_DURATION_REGRESSION`. Se ao
-menos um resíduo não for positivo, a ultrapassagem é registrada como
+HEAD. Se HEAD ultrapassar 60 segundos, ambas as amostras tiverem resíduo
+positivo e o efeito médio superar 10% do referencial (6 segundos), o resultado
+é `CANDIDATE_ATTRIBUTABLE_DURATION_REGRESSION`. O limiar relativo define
+"material" sem substituir o alvo absoluto. Abaixo dele, ou se algum resíduo
+não for positivo, a ultrapassagem é registrada como
 `ENVIRONMENTAL_EXECUTION_VARIANCE`, sem alterar o limite, a cobertura ou as
 suítes executadas.
 
