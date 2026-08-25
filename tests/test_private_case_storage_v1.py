@@ -2126,7 +2126,7 @@ def test_symlink_record_is_rejected_when_platform_supports_it(tmp_path):
         pytest.skip(f"symlink indisponível nesta plataforma: {exc}")
     with pytest.raises(
         RepositoryIntegrityError,
-        match="objeto inesperado|reparse|arquivo regular",
+        match="objeto inesperado|reparse|arquivo regular|intent|proveniência",
     ):
         LocalPrivateContentStore(root)
 
