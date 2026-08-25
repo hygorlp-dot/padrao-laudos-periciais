@@ -66,6 +66,23 @@ mecanismo de escopo/support-artifact equivalente ao construído para
 arquitetura. Manter o script intacto evita essa segunda autorização para
 uma mudança que é puramente de orquestração de CI.
 
+### Atribuição robusta do tempo na CI
+
+O limite `full_gate_max_seconds = 60.0` continua imutável. Em CI, o workflow
+executa o FULL no mesmo runner e ambiente na ordem intercalada
+`BASE → HEAD → BASE → HEAD`. Cada amostra fica vinculada ao SHA exato do
+checkout, deve conter a lista fechada de checks do FULL e só pode ser tratada
+como amostra de tempo quando a única falha é
+`FULL_GATE_DURATION_REGRESSION`.
+
+Falha semântica, check ausente/duplicado, identidade divergente ou evidência
+malformada continuam bloqueando. Se HEAD ultrapassar 60 segundos e suas duas
+amostras forem integralmente mais lentas que todas as amostras de BASE, o
+resultado é `CANDIDATE_ATTRIBUTABLE_DURATION_REGRESSION`. Quando as faixas se
+sobrepõem — ou HEAD não é mais lento — a ultrapassagem é registrada como
+`ENVIRONMENTAL_EXECUTION_VARIANCE`, sem alterar o limite, a cobertura ou as
+suítes executadas.
+
 ## Evolução
 
 Para adicionar boundary, invariante ou fixture:

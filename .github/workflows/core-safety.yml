@@ -15,16 +15,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           fetch-depth: 0
+          path: base
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          path: candidate
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
           cache: pip
+          cache-dependency-path: candidate/requirements-dev.txt
       - name: Install test dependencies
-        run: python -m pip install -r requirements-dev.txt
+        run: python -m pip install -r candidate/requirements-dev.txt
       - name: Architecture trust-boundary suite
+        working-directory: candidate
         run: python -m pytest -q tests/test_architecture_analyzer_v1.py
-      - name: Verify frozen Core V1
+      - name: Verify frozen Core V1 with paired timing attribution
         # --ignore only prunes directory-walk collection; it cannot silently
         # zero out the explicit-path "Architecture trust-boundary suite" step
         # above the way a -k/-m/--deselect filter would if this env block
@@ -33,4 +44,13 @@ jobs:
         # tests/test_repository_safety_gate.py).
         env:
           PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py"
-        run: python -m scripts.quality.verify_core --full
+          TIMING_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          TIMING_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        shell: pwsh
+        run: |
+          & "$env:GITHUB_WORKSPACE/candidate/.github/scripts/run-paired-core-safety.ps1" `
+            -BaseRoot "$env:GITHUB_WORKSPACE/base" `
+            -HeadRoot "$env:GITHUB_WORKSPACE/candidate" `
+            -BaseSha "$env:TIMING_BASE_SHA" `
+            -HeadSha "$env:TIMING_HEAD_SHA" `
+            -EvidencePath "$env:RUNNER_TEMP/core-safety-timing-evidence.json"

@@ -186,14 +186,16 @@ def test_architecture_trust_boundary_suite_is_partitioned_from_timed_regression(
     assert "continue-on-error" not in architecture_step
     assert "\n        if:" not in architecture_step
 
-    verify_core_blocks = [
-        block for block in step_blocks if "scripts.quality.verify_core --full" in block
+    paired_blocks = [
+        block for block in step_blocks if "run-paired-core-safety.ps1" in block
     ]
-    assert len(verify_core_blocks) == 1
-    verify_core_step = verify_core_blocks[0]
+    assert len(paired_blocks) == 1
+    verify_core_step = paired_blocks[0]
     assert 'PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py"' in verify_core_step
     assert "continue-on-error" not in verify_core_step
     assert "\n        if:" not in verify_core_step
+    paired_runner = (ROOT / ".github/scripts/run-paired-core-safety.ps1").read_text(encoding="utf-8")
+    assert paired_runner.count("scripts.quality.verify_core --full") == 1
 
 
 def test_core_safety_workflow_never_hoists_env_above_step_level():
@@ -263,7 +265,9 @@ def test_change_impact_cli_and_ci_use_first_party_gate(capsys):
     output = capsys.readouterr().out
     assert "BOUNDARIES_TOUCHED" in output and "INVARIANTS_REQUIRED" in output
     workflow = (ROOT / ".github/workflows/core-safety.yml").read_text(encoding="utf-8")
-    assert "python -m scripts.quality.verify_core --full" in workflow
+    assert "run-paired-core-safety.ps1" in workflow
+    paired_runner = (ROOT / ".github/scripts/run-paired-core-safety.ps1").read_text(encoding="utf-8")
+    assert "-m scripts.quality.verify_core --full" in paired_runner
     assert "secrets" not in workflow.casefold() and "deploy" not in workflow.casefold()
     dependencies=(ROOT/"requirements-dev.txt").read_text(encoding="utf-8")
     assert "pytest==9.1.1" in dependencies
@@ -275,7 +279,9 @@ def test_safety_gate_v2_names_historical_and_quality_checks_without_renaming_ci(
     assert "quality V2" in source
     core = (ROOT / ".github/workflows/core-safety.yml").read_text(encoding="utf-8")
     assert "name: core-safety" in core
-    assert "python -m scripts.quality.verify_core --full" in core
+    assert "run-paired-core-safety.ps1" in core
+    paired_runner = (ROOT / ".github/scripts/run-paired-core-safety.ps1").read_text(encoding="utf-8")
+    assert "-m scripts.quality.verify_core --full" in paired_runner
 
 
 def test_quality_depth_is_optional_first_party_without_secrets_or_deploy():
