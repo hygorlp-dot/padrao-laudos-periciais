@@ -864,8 +864,9 @@ class LocalPrivateContentStore:
         ):
             raise RepositoryIntegrityError("ledger privado mudou antes do rollback")
         written = current[len(original) :]
-        if written:
-            _write_all(descriptor, owned_entry[len(written) :])
+        remaining = owned_entry[len(written) :]
+        if remaining:
+            _write_all(descriptor, remaining)
             os.fsync(descriptor)
 
     def _append_intent(self, prefix: str) -> None:
@@ -1273,7 +1274,7 @@ class LocalPrivateContentStore:
             fragment = journal_tail.decode("ascii")
             candidates = [
                 prefix
-                for prefix in set(intents) - set(raw_journal)
+                for prefix in unmarked_intents - set(raw_journal)
                 if prefix.startswith(fragment)
             ]
             if len(candidates) != 1:
@@ -1682,12 +1683,6 @@ class LocalPrivateContentStore:
                         cleanup_complete = False
                     if cleanup_complete:
                         try:
-                            _mark_intent_aborted(
-                                intent_path,
-                                intent_identity,
-                                nonce,
-                                root_fd=self._root_fd,
-                            )
                             self._complete_owned_ledger(
                                 self._journal_fd,
                                 journal_before,
@@ -1697,6 +1692,12 @@ class LocalPrivateContentStore:
                                 raise RepositoryIntegrityError(
                                     "anchor privado mudou durante o rollback"
                                 )
+                            _mark_intent_aborted(
+                                intent_path,
+                                intent_identity,
+                                nonce,
+                                root_fd=self._root_fd,
+                            )
                         except (OSError, RepositoryIntegrityError):
                             pass
 

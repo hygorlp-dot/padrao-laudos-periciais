@@ -860,6 +860,60 @@ def test_process_death_with_short_torn_wal_ignores_prior_committed_groups(tmp_pa
     assert (root / f".aborted.{nonce}").exists()
 
 
+def test_short_torn_wal_ignores_prior_aborted_intent_without_wal(tmp_path):
+    root = tmp_path / "private"
+    with LocalPrivateContentStore(root):
+        pass
+    aborted_prefix = f"{WORKSPACE_A}.{CONTENT_A}"
+    aborted_nonce = "1" * 32
+    aborted_intent = root / f".intent.{aborted_prefix}.{aborted_nonce}"
+    aborted_intent.write_bytes(b"")
+    os.link(aborted_intent, root / f".aborted.{aborted_nonce}")
+    assert (root / ".commit-log").read_bytes() == b""
+
+    pending_prefix = f"{WORKSPACE_A}.{CONTENT_B}"
+    pending_nonce = "2" * 32
+    (root / f".intent.{pending_prefix}.{pending_nonce}").write_bytes(b"")
+    with (root / ".commit-log").open("ab") as journal:
+        journal.write(pending_prefix.encode("ascii")[:12])
+        journal.flush()
+        os.fsync(journal.fileno())
+
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
+    assert (root / f".aborted.{pending_nonce}").exists()
+
+
+def test_rollback_completes_owned_wal_before_marking_intent_aborted(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "private"
+    metadata = _metadata(content=b"aborted")
+    prefix = f"{WORKSPACE_A}.{CONTENT_A}"
+    private_store = LocalPrivateContentStore(root)
+
+    def fail_before_wal(_prefix):
+        raise OSError("synthetic pre-WAL failure")
+
+    original_mark = private_filesystem._mark_intent_aborted
+
+    def assert_wal_then_mark(*args, **kwargs):
+        assert (root / ".commit-log").read_bytes() == (
+            prefix.encode("ascii") + b"\n"
+        )
+        return original_mark(*args, **kwargs)
+
+    monkeypatch.setattr(private_store, "_append_intent", fail_before_wal)
+    monkeypatch.setattr(private_filesystem, "_mark_intent_aborted", assert_wal_then_mark)
+    with pytest.raises(RepositoryError):
+        private_store.store(metadata, b"aborted")
+    private_store.close()
+
+    assert tuple(root.glob(".aborted.*"))
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
+
+
 def test_complete_group_without_wal_never_mutates_confirmation_anchor(tmp_path):
     root = tmp_path / "private"
     metadata = _metadata()
@@ -2119,6 +2173,8 @@ def test_symlink_record_is_rejected_when_platform_supports_it(tmp_path):
     root = tmp_path / "private"
     outside = tmp_path / "outside.bin"
     outside.write_bytes(b"outside")
+    prefix = f"{WORKSPACE_A}.{CONTENT_A}"
+    (root / f".intent.{prefix}.{'1' * 32}").write_bytes(b"")
     record_path = _record_paths(root)["content.bin"]
     try:
         record_path.symlink_to(outside)
@@ -2126,7 +2182,7 @@ def test_symlink_record_is_rejected_when_platform_supports_it(tmp_path):
         pytest.skip(f"symlink indisponível nesta plataforma: {exc}")
     with pytest.raises(
         RepositoryIntegrityError,
-        match="objeto inesperado|reparse|arquivo regular|intent|proveniência",
+        match="objeto inesperado|reparse|arquivo regular",
     ):
         LocalPrivateContentStore(root)
 
