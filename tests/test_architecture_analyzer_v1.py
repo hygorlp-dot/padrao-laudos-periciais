@@ -9,6 +9,7 @@ import jsonschema
 
 from scripts.quality.architecture_analyzer import (
     PROTECTED_ARCHITECTURE_ARTIFACTS,
+    PROTECTED_TRANSITION_PATH,
     _cycles,
     _protected_artifact_findings,
     analyze_sources,
@@ -568,9 +569,6 @@ def _commit_protected_transition(
     base_blob = None if create_artifact else subprocess.check_output(
         ["git", "rev-parse", f"{protected_base}:{artifact_path}"], cwd=tmp_path, text=True,
     ).strip()
-    base_mode = None if create_artifact else subprocess.check_output(
-        ["git", "ls-tree", protected_base, "--", artifact_path], cwd=tmp_path, text=True,
-    ).split()[0]
     candidate_blob = None if delete_artifact else subprocess.check_output(
         ["git", "hash-object", artifact_path], cwd=tmp_path, text=True,
     ).strip()
@@ -860,7 +858,6 @@ def test_creation_transition_rejects_tree_at_protected_path(clean_protected_tran
 def test_v1_transition_cannot_authorize_undeclared_mode_change(clean_protected_transition_repo):
     tmp_path, protected_base = clean_protected_transition_repo
     artifact_path = "scripts/quality/architecture_analyzer.py"
-    analyzer = tmp_path / artifact_path
     subprocess.run(["git", "update-index", "--chmod=-x", artifact_path], cwd=tmp_path, check=True)
     blob = subprocess.check_output(["git", "rev-parse", f"{protected_base}:{artifact_path}"], cwd=tmp_path, text=True).strip()
 
@@ -1295,3 +1292,152 @@ def test_architecture_anchor_custodies_inert_capability_trust_root():
         "config/capability-protected-artifacts-v1.json",
         "scripts/quality/capability_trust_anchor.py",
     } <= set(PROTECTED_ARCHITECTURE_ARTIFACTS)
+
+
+QUALITY_INITIALIZER = "scripts/quality/__init__.py"
+
+
+def _initializer_repo(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    initializer = tmp_path / QUALITY_INITIALIZER
+    initializer.parent.mkdir(parents=True)
+    initializer.write_text('"""Protected quality package."""\n', encoding="utf-8")
+    verifier = tmp_path / "scripts/quality/verify_core.py"
+    verifier.write_text(
+        "import builtins\nINITIALIZER_EFFECT = getattr(builtins, 'QUALITY_INITIALIZER_EFFECT', None)\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "protected base"], cwd=tmp_path, check=True)
+    protected_base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True,
+    ).strip()
+    return protected_base, initializer, verifier
+
+
+def _commit_initializer_mutation(tmp_path, initializer, *, transition_path=None, candidate_hash=None):
+    initializer.write_text(
+        '"""Candidate-controlled quality package."""\n'
+        "import builtins\n"
+        "builtins.QUALITY_INITIALIZER_EFFECT = 'candidate-controlled'\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", QUALITY_INITIALIZER], cwd=tmp_path, check=True)
+    if transition_path is not None:
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+        base_blob = subprocess.check_output(
+            ["git", "rev-parse", f"{base}:{QUALITY_INITIALIZER}"], cwd=tmp_path, text=True,
+        ).strip()
+        actual_candidate = subprocess.check_output(
+            ["git", "hash-object", QUALITY_INITIALIZER], cwd=tmp_path, text=True,
+        ).strip()
+        transition = tmp_path / PROTECTED_TRANSITION_PATH
+        transition.parent.mkdir(parents=True, exist_ok=True)
+        transition.write_text(json.dumps({
+            "schemaVersion": "2.0.0",
+            "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
+            "protectedBaseSha": base,
+            "artifacts": [{
+                "path": transition_path,
+                "baseMode": "100644",
+                "baseObjectType": "blob",
+                "baseBlobSha": base_blob,
+                "candidateMode": "100644",
+                "candidateObjectType": "blob",
+                "candidateBlobSha": candidate_hash or actual_candidate,
+            }],
+        }), encoding="utf-8")
+        subprocess.run(["git", "add", PROTECTED_TRANSITION_PATH], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "mutate initializer"], cwd=tmp_path, check=True)
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+
+def test_candidate_initializer_executes_before_unchanged_quality_submodule(tmp_path):
+    protected_base, initializer, verifier = _initializer_repo(tmp_path)
+    verifier_blob = subprocess.check_output(
+        ["git", "rev-parse", f"{protected_base}:scripts/quality/verify_core.py"], cwd=tmp_path, text=True,
+    ).strip()
+
+    candidate = _commit_initializer_mutation(tmp_path, initializer)
+    candidate_verifier_blob = subprocess.check_output(
+        ["git", "rev-parse", f"{candidate}:scripts/quality/verify_core.py"], cwd=tmp_path, text=True,
+    ).strip()
+    executed = subprocess.check_output(
+        ["python", "-c", "from scripts.quality.verify_core import INITIALIZER_EFFECT; print(INITIALIZER_EFFECT)"],
+        cwd=tmp_path,
+        text=True,
+    ).strip()
+
+    assert candidate_verifier_blob == verifier_blob
+    assert verifier.read_text(encoding="utf-8").startswith("import builtins")
+    assert executed == "candidate-controlled"
+
+
+def test_architecture_anchor_custodies_quality_package_initializer():
+    assert QUALITY_INITIALIZER in PROTECTED_ARCHITECTURE_ARTIFACTS
+
+
+def test_undeclared_initializer_mutation_is_blocked(tmp_path):
+    protected_base, initializer, _ = _initializer_repo(tmp_path)
+    candidate = _commit_initializer_mutation(tmp_path, initializer)
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+
+    assert {item["code"] for item in findings} == {
+        "ARCHITECTURE_PROTECTED_TRANSITION_INVALID",
+        "ARCHITECTURE_PROTECTED_ARTIFACT_MISMATCH",
+    }
+
+
+def test_initializer_mode_only_drift_is_blocked(tmp_path):
+    protected_base, _, _ = _initializer_repo(tmp_path)
+    subprocess.run(["git", "update-index", "--chmod=+x", QUALITY_INITIALIZER], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "change initializer mode"], cwd=tmp_path, check=True)
+    candidate = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_ARTIFACT_MISMATCH" for item in findings)
+
+
+def test_initializer_non_blob_type_confusion_is_blocked(tmp_path):
+    protected_base, _, _ = _initializer_repo(tmp_path)
+    subprocess.run(
+        ["git", "update-index", "--add", "--cacheinfo", f"160000,{protected_base},{QUALITY_INITIALIZER}"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(["git", "commit", "-qm", "replace initializer with gitlink"], cwd=tmp_path, check=True)
+    candidate = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_ARTIFACT_MISMATCH" for item in findings)
+
+
+@pytest.mark.parametrize("declared_path", [
+    "scripts/quality/__init__.py*",
+    "scripts/quality/__init__.py.bak",
+    "scripts/quality/__init__",
+])
+def test_initializer_transition_rejects_wildcard_or_lookalike_path(tmp_path, declared_path):
+    protected_base, initializer, _ = _initializer_repo(tmp_path)
+    candidate = _commit_initializer_mutation(tmp_path, initializer, transition_path=declared_path)
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
+def test_initializer_transition_rejects_wrong_candidate_blob_identity(tmp_path):
+    protected_base, initializer, _ = _initializer_repo(tmp_path)
+    candidate = _commit_initializer_mutation(
+        tmp_path,
+        initializer,
+        transition_path=QUALITY_INITIALIZER,
+        candidate_hash="0" * 40,
+    )
+
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
