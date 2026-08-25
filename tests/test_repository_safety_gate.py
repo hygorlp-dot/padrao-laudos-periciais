@@ -132,59 +132,6 @@ def test_verify_core_propagates_error_and_never_reports_false_pass(tmp_path):
     assert any(item["teste"] == "property tests" for item in result.findings)
 
 
-def test_duration_deferral_never_suppresses_semantic_findings(tmp_path):
-    _valid_config(tmp_path)
-    _write(tmp_path / "tests/fixtures/core-fixtures.json", {"schema_version": "1.0.0", "fixtures": []})
-
-    def runner(command, **_):
-        failed = "pytest" in command
-        return subprocess.CompletedProcess(command, 7 if failed else 0, "", "semantic failure" if failed else "")
-
-    result = run_gate(
-        "fast",
-        tmp_path,
-        runner=runner,
-        tracked_files=[],
-        defer_duration_to_protected_timing=True,
-    )
-
-    assert result.exit_code != 0
-    assert result.result == "FAIL"
-    assert any(item["motivo"] == "semantic failure" for item in result.findings)
-
-
-def test_duration_deferral_is_inert_by_default_and_narrow_when_explicit(tmp_path, monkeypatch):
-    _valid_config(tmp_path)
-    _write(tmp_path / "tests/fixtures/core-fixtures.json", {"schema_version": "1.0.0", "fixtures": []})
-    _write(tmp_path / "config/quality-baseline.json", {"hotspots": []})
-    _write(tmp_path / "coverage-quality-v2.json", {"totals": {}})
-    monkeypatch.setattr(verify_core, "parse_coverage_totals", lambda _report: {})
-    monkeypatch.setattr(verify_core, "analyze_complexity", lambda _paths, base: [])
-    monkeypatch.setattr(
-        verify_core,
-        "validate_quality_baseline",
-        lambda *_args, **_kwargs: [{"code": "FULL_GATE_DURATION_REGRESSION"}],
-    )
-
-    def runner(command, **_):
-        return subprocess.CompletedProcess(command, 0, "", "")
-
-    default = run_gate("full", tmp_path, runner=runner, tracked_files=[])
-    deferred = run_gate(
-        "full",
-        tmp_path,
-        runner=runner,
-        tracked_files=[],
-        defer_duration_to_protected_timing=True,
-    )
-
-    assert default.exit_code == 1
-    assert any(item["teste"] == "FULL_GATE_DURATION_REGRESSION" for item in default.findings)
-    assert deferred.exit_code == 0
-    assert deferred.findings == ()
-    assert deferred.duration_deferred is True
-
-
 def test_full_gate_overlaps_independent_mutation_and_regression_suites():
     regression_started = threading.Event()
     e2e_started = threading.Event()

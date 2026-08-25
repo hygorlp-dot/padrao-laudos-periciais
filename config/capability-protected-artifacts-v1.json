@@ -56,7 +56,7 @@
       "state": "PRESENT",
       "mode": "100644",
       "objectType": "blob",
-      "blobSha": "17dc93383c8df20fea208636e8ccb3cdffa5f952"
+      "blobSha": "bb62702efa2bdbe1936a3a11f4038004f9d555c2"
     },
     {
       "path": "scripts/quality/capability_gate_adapter.py",
@@ -77,7 +77,7 @@
       "state": "PRESENT",
       "mode": "100644",
       "objectType": "blob",
-      "blobSha": "19d668cfe81fd1d4af8e5652f0b97e6e4349e1b1"
+      "blobSha": "9ac253ad26f35e814e7f089ecf1acdfd5c110c42"
     }
   ]
 }

@@ -24,7 +24,6 @@ class GateResult:
     checks: tuple[tuple[str, bool], ...]
     findings: tuple[dict, ...]
     duration_seconds: float
-    duration_deferred: bool = False
 
 
 def _finding(invariant: str, boundary: str, test: str, reason: str, severity: str = "P1") -> dict:
@@ -40,16 +39,8 @@ def _run(runner, command: list[str], root: Path):
     return runner(command, cwd=root, capture_output=True, text=True)
 
 
-def run_gate(
-    mode: str,
-    root: Path = ROOT,
-    *,
-    runner=subprocess.run,
-    tracked_files: list[str] | None = None,
-    defer_duration_to_protected_timing: bool = False,
-) -> GateResult:
+def run_gate(mode: str, root: Path = ROOT, *, runner=subprocess.run, tracked_files: list[str] | None = None) -> GateResult:
     started = time.perf_counter(); findings: list[dict] = []; checks: list[tuple[str, bool]] = []
-    duration_findings: list[dict] = []
     direct = (("invariants", validate_configuration(root)), ("fixtures", validate_fixture_registry(root)))
     for name, errors in direct:
         checks.append((name, not errors)); findings.extend(errors)
@@ -107,23 +98,11 @@ def run_gate(
             )
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             quality_findings = [{"code": "QUALITY_MEASUREMENT_INVALID", "detail": str(exc)}]
-        duration_findings = [
-            item for item in quality_findings if item.get("code") == "FULL_GATE_DURATION_REGRESSION"
-        ]
-        if defer_duration_to_protected_timing:
-            quality_findings = [item for item in quality_findings if item not in duration_findings]
         checks.append(("quality non-regression", not quality_findings))
         for item in quality_findings:
             findings.append(_finding("QUALITY_NON_REGRESSION", "QUALITY_GATE", item["code"], str(item), "P1"))
     passed = not findings and all(ok for _, ok in checks)
-    return GateResult(
-        "PASS" if passed else "FAIL",
-        0 if passed else 1,
-        tuple(checks),
-        tuple(findings),
-        round(time.perf_counter() - started, 3),
-        bool(mode == "full" and defer_duration_to_protected_timing and duration_findings),
-    )
+    return GateResult("PASS" if passed else "FAIL", 0 if passed else 1, tuple(checks), tuple(findings), round(time.perf_counter() - started, 3))
 
 
 def _print(result: GateResult) -> None:
@@ -137,33 +116,10 @@ def _print(result: GateResult) -> None:
     print(f"DURATION_SECONDS: {result.duration_seconds:.3f}")
 
 
-def _json(result: GateResult) -> str:
-    return json.dumps({
-        "schemaVersion": "1.0.0",
-        "result": result.result,
-        "exitCode": result.exit_code,
-        "checks": [{"name": name, "passed": passed} for name, passed in result.checks],
-        "findings": list(result.findings),
-        "durationSeconds": result.duration_seconds,
-        "durationDeferred": result.duration_deferred,
-    }, sort_keys=True)
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(); group = parser.add_mutually_exclusive_group()
     group.add_argument("--fast", action="store_true"); group.add_argument("--full", action="store_true")
-    parser.add_argument("--defer-duration-to-protected-timing", action="store_true")
-    parser.add_argument("--json", action="store_true")
-    args = parser.parse_args(argv)
-    mode = "fast" if args.fast else "full"
-    if args.defer_duration_to_protected_timing and mode != "full":
-        parser.error("duration deferral requires --full")
-    result = run_gate(
-        mode,
-        defer_duration_to_protected_timing=args.defer_duration_to_protected_timing,
-    )
-    print(_json(result)) if args.json else _print(result)
-    return result.exit_code
+    args = parser.parse_args(argv); result = run_gate("fast" if args.fast else "full"); _print(result); return result.exit_code
 
 
 if __name__ == "__main__":
