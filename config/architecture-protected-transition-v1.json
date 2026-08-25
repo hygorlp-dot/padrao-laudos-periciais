@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "2.0.0",
+  "schemaVersion": "3.0.0",
   "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
   "protectedBaseSha": "dd2d74cc4a0baec555c47677f1c8fc67ce46ec3b",
   "artifacts": [
@@ -11,6 +11,36 @@
       "candidateMode": "100644",
       "candidateObjectType": "blob",
       "candidateBlobSha": "9f3e51110006ddeb044a913e347eeb06bc66682f"
+    },
+    {
+      "path": "config/capability-protected-artifacts-v1.json",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "4f7b0846ace6db63cfa3951828142e5dd3d30e35",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "a1885f42ab03839a154cbf2e4d5f5250e9188801"
+    }
+  ],
+  "supportScope": "CAPABILITY_BOOTSTRAP_V1",
+  "supportArtifacts": [
+    {
+      "path": "config/capability-exceptions-v1.json",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "96aedd24745a5f0f3f70f487a8bc74d12a8611c0",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "3048afe50faf8bc4a1783a93d1404eb1b9c369a7"
+    },
+    {
+      "path": "config/capability-protected-transition-v1.json",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "570990f516554573e2087cbf9901b527915aac10",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "75326cb22838ca662bcecc3b77fa2f6f0f3bf03e"
     }
   ]
 }

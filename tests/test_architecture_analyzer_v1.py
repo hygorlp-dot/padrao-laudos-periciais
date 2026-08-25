@@ -569,9 +569,6 @@ def _commit_protected_transition(
     base_blob = None if create_artifact else subprocess.check_output(
         ["git", "rev-parse", f"{protected_base}:{artifact_path}"], cwd=tmp_path, text=True,
     ).strip()
-    base_mode = None if create_artifact else subprocess.check_output(
-        ["git", "ls-tree", protected_base, "--", artifact_path], cwd=tmp_path, text=True,
-    ).split()[0]
     candidate_blob = None if delete_artifact else subprocess.check_output(
         ["git", "hash-object", artifact_path], cwd=tmp_path, text=True,
     ).strip()
@@ -861,7 +858,6 @@ def test_creation_transition_rejects_tree_at_protected_path(clean_protected_tran
 def test_v1_transition_cannot_authorize_undeclared_mode_change(clean_protected_transition_repo):
     tmp_path, protected_base = clean_protected_transition_repo
     artifact_path = "scripts/quality/architecture_analyzer.py"
-    analyzer = tmp_path / artifact_path
     subprocess.run(["git", "update-index", "--chmod=-x", artifact_path], cwd=tmp_path, check=True)
     blob = subprocess.check_output(["git", "rev-parse", f"{protected_base}:{artifact_path}"], cwd=tmp_path, text=True).strip()
 
