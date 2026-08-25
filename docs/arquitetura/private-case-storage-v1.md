@@ -19,8 +19,8 @@ usuário fora do checkout Git. Não existe fallback para um path específico de
 máquina, para `referencias/privadas/` ou para o diretório atual. Testes usam
 somente diretórios temporários e bytes sintéticos.
 
-No Windows, o root também deve pertencer ao mesmo volume físico confiável que
-contém o executável Python do runtime. A comparação por identidade de volume é
+Em todo sistema operacional suportado, o root também deve pertencer ao mesmo
+device/volume local confiável que contém o executável Python do runtime. A comparação por identidade é
 feita antes da abertura dos controles; UNC, drive mapeado e volume divergente
 falham fechados. Esta restrição deliberada evita que uma configuração com
 aparência local envie bytes privados a um compartilhamento remoto. Suporte a
@@ -36,11 +36,12 @@ os abre sem `O_CREAT`, adquire o singleton e confirma que a identidade do
 diretório observada antes,
 durante e depois da aquisição é a mesma. Isso impede que uma troca concorrente
 do path redirecione a primeira escrita para outro namespace. A etapa de intake
-deve fornecer esse provisioning local antes de compor o store.
+fornece esse provisioning local explícito antes de compor o store; estado
+parcial nunca é completado silenciosamente.
 
-Esta entrega não conecta a capability ao browser ou à Local API. A etapa de
-document intake decidirá separadamente como o runtime recebe o root e o limite
-de bytes e como o usuário seleciona um arquivo.
+O `CASE_DOCUMENT_INTAKE_V1` posterior conecta essa capability somente por rotas
+workspace-bound exatas e documenta separadamente como o runtime recebe o root,
+o limite de bytes e a seleção do arquivo.
 
 ## Identidade, namespace ancorado e layout físico
 

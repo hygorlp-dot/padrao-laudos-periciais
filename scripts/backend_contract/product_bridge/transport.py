@@ -86,6 +86,23 @@ def _proxy_target(path: str, method: str) -> str | None:
     if path == "/app-api/v1/workspaces" and method in {"GET", "POST"}:
         return "/v1/workspaces"
     prefix = "/app-api/v1/workspaces/"
+    if path.startswith(prefix):
+        remainder = path[len(prefix) :].split("/")
+        if (
+            len(remainder) == 2
+            and _CANONICAL_UUID.fullmatch(remainder[0])
+            and remainder[1] == "materials"
+            and method in {"GET", "POST"}
+        ):
+            return f"/v1/workspaces/{remainder[0]}/materials"
+        if (
+            len(remainder) == 3
+            and _CANONICAL_UUID.fullmatch(remainder[0])
+            and remainder[1] == "materials"
+            and _CANONICAL_UUID.fullmatch(remainder[2])
+            and method == "GET"
+        ):
+            return f"/v1/workspaces/{remainder[0]}/materials/{remainder[2]}"
     process_case_suffix = "/process-case"
     if method in {"GET", "POST"} and path.startswith(prefix) and path.endswith(
         process_case_suffix
@@ -191,9 +208,21 @@ class ProductBridge:
             "X-Local-API-Token": self._token,
         }
         if method == "POST":
-            if headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+            content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            is_document = upstream_target.endswith("/materials")
+            if content_type not in ({"application/pdf"} if is_document else {"application/json"}):
                 return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
-            upstream_headers["Content-Type"] = "application/json"
+            if is_document:
+                filename = headers.get("x-document-filename", "")
+                if (
+                    not filename
+                    or len(filename) > 1024
+                    or not filename.isascii()
+                    or any(ord(character) < 33 or ord(character) > 126 for character in filename)
+                ):
+                    return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
+                upstream_headers["X-Document-Filename"] = filename
+            upstream_headers["Content-Type"] = content_type
             upstream_headers["Content-Length"] = str(len(body))
         connection = http.client.HTTPConnection(
             *self._upstream_address,

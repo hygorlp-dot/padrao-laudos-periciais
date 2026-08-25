@@ -36,6 +36,18 @@ class PrivateContentNotFound(RepositoryError):
     """Conteúdo privado exigido pela operação não existe no workspace."""
 
 
+class PrivateContentTooLarge(ValueError):
+    """Conteúdo privado excede o limite explícito do caso de uso."""
+
+
+class UnsupportedCaseDocument(ValueError):
+    """Formato de documento ainda não aceito pelo intake do produto."""
+
+
+class InvalidCaseDocument(ValueError):
+    """Bytes ou metadados não satisfazem o contrato documental V1."""
+
+
 class RepositoryIntegrityError(RepositoryError):
     """Dados persistidos não satisfazem o contrato de integridade."""
 

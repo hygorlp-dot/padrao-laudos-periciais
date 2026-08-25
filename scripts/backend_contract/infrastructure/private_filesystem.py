@@ -620,6 +620,100 @@ def _record_paths(
     }
 
 
+def _provision_control(
+    root: Path,
+    name: str,
+    payload: bytes,
+    *,
+    root_fd: int | None,
+) -> None:
+    path = root / name
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN_BINARY | _OPEN_NOFOLLOW
+    descriptor = (
+        os.open(path, flags, 0o600)
+        if root_fd is None
+        else os.open(name, flags, 0o600, dir_fd=root_fd)
+    )
+    try:
+        opened = os.fstat(descriptor)
+        _validate_regular(opened, expected_links=1)
+        _write_all(descriptor, payload)
+        os.fsync(descriptor)
+        observed = _lstat(path, root_fd=root_fd)
+        if not _same_identity(opened, observed):
+            raise RepositoryIntegrityError(
+                "identidade do controle privado mudou durante o provisioning"
+            )
+    finally:
+        os.close(descriptor)
+    if root_fd is not None:
+        os.fsync(root_fd)
+
+
+@_controlled_filesystem_errors("falha ao provisionar armazenamento privado")
+def provision_private_content_root(private_root: str | Path) -> Path:
+    """Cria uma única raiz explícita e seus controles, sem reparar estado parcial."""
+
+    if not isinstance(private_root, (str, Path)):
+        raise RepositoryError("private root inválido")
+    raw = str(private_root)
+    if not raw.strip() or "\x00" in raw or raw.startswith(("\\\\", "//")):
+        raise RepositoryError("private root deve ser armazenamento local")
+    root = Path(private_root)
+    if not root.is_absolute():
+        raise RepositoryError("private root deve ser absoluto")
+    configured = root.absolute()
+    if os.path.lexists(configured):
+        _validate_plain_ancestry(configured)
+        identity = os.lstat(configured)
+        if not stat.S_ISDIR(identity.st_mode):
+            raise RepositoryIntegrityError("private root inválido")
+        _validate_trusted_local_device(identity)
+        for name in (_LOCK_NAME, _JOURNAL_NAME, _ANCHOR_NAME):
+            path = configured / name
+            descriptor, details = _open_existing_regular(
+                path,
+                root_fd=None,
+                expected_links=1,
+            )
+            try:
+                if name == _LOCK_NAME and (
+                    details.st_size != 1 or _read_exact(descriptor, 2) != b"0"
+                ):
+                    raise RepositoryIntegrityError(
+                        "private root possui controle não provisionado"
+                    )
+            finally:
+                os.close(descriptor)
+        return configured
+
+    parent = configured.parent
+    if not os.path.lexists(parent):
+        raise RepositoryError("diretório pai do private root não existe")
+    _validate_plain_ancestry(parent)
+    parent_identity = os.lstat(parent)
+    if not stat.S_ISDIR(parent_identity.st_mode):
+        raise RepositoryIntegrityError("diretório pai do private root inválido")
+    _validate_trusted_local_device(parent_identity)
+    os.mkdir(configured, 0o700)
+    _validate_plain_ancestry(configured)
+    root_identity = os.lstat(configured)
+    if not stat.S_ISDIR(root_identity.st_mode):
+        raise RepositoryIntegrityError("private root inválido")
+    _validate_trusted_local_device(root_identity)
+    root_fd = None
+    try:
+        if os.name == "posix":
+            root_fd = os.open(configured, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        _provision_control(configured, _LOCK_NAME, b"0", root_fd=root_fd)
+        _provision_control(configured, _JOURNAL_NAME, b"", root_fd=root_fd)
+        _provision_control(configured, _ANCHOR_NAME, b"", root_fd=root_fd)
+    finally:
+        if root_fd is not None:
+            os.close(root_fd)
+    return configured
+
+
 class LocalPrivateContentStore:
     """Implementa o port privado em um namespace plano e ancorado."""
 

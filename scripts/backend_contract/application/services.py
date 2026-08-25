@@ -26,11 +26,14 @@ from .ports import (
     ArtifactRevisionRepository,
     Clock,
     IdGenerator,
+    InvalidCaseDocument,
     PrivateContentNotFound,
     PrivateContentRepository,
+    PrivateContentTooLarge,
     RepositoryIntegrityError,
     WorkspaceNotFound,
     WorkspaceRepository,
+    UnsupportedCaseDocument,
 )
 
 
@@ -145,7 +148,7 @@ class StorePrivateContent:
         if type(content) is not bytes:
             raise TypeError("conteúdo privado exige bytes")
         if len(content) > self.max_content_bytes:
-            raise ValueError("conteúdo privado excede limite configurado")
+            raise PrivateContentTooLarge("conteúdo privado excede limite configurado")
         metadata = PrivateContentMetadata(
             workspace_id=workspace_id,
             content_id=PrivateContentId(_generated_uuid(self.ids)),
@@ -210,6 +213,80 @@ class ListPrivateContents:
                 "listagem retornada pelo armazenamento privado diverge"
             )
         return records
+
+
+def _case_document_metadata(record: PrivateContentMetadata) -> PrivateContentMetadata:
+    if (
+        type(record) is not PrivateContentMetadata
+        or record.media_type != "application/pdf"
+        or record.origin is not PrivateContentOrigin.LOCAL_IMPORT
+    ):
+        raise InvalidCaseDocument("documento privado diverge do contrato PDF")
+    return record
+
+
+@dataclass(frozen=True, slots=True)
+class ImportCaseDocument:
+    contents: StorePrivateContent
+
+    def __post_init__(self):
+        if type(self.contents) is not StorePrivateContent:
+            raise TypeError("serviço de conteúdo privado inválido")
+
+    def execute(
+        self,
+        *,
+        workspace_id: WorkspaceId,
+        original_filename: str,
+        content: bytes,
+        media_type: str,
+    ) -> PrivateContentMetadata:
+        if media_type != "application/pdf":
+            raise UnsupportedCaseDocument("somente documentos PDF são aceitos")
+        if type(content) is not bytes:
+            raise TypeError("documento PDF exige bytes")
+        if not content.startswith(b"%PDF-") or not content.rstrip().endswith(b"%%EOF"):
+            raise InvalidCaseDocument("bytes não representam um documento PDF válido")
+        return _case_document_metadata(
+            self.contents.execute(
+                workspace_id=workspace_id,
+                original_filename=original_filename,
+                content=content,
+                media_type="application/pdf",
+                origin=PrivateContentOrigin.LOCAL_IMPORT,
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ListCaseDocuments:
+    contents: ListPrivateContents
+
+    def __post_init__(self):
+        if type(self.contents) is not ListPrivateContents:
+            raise TypeError("serviço de listagem privada inválido")
+
+    def execute(self, workspace_id: WorkspaceId) -> tuple[PrivateContentMetadata, ...]:
+        return tuple(
+            _case_document_metadata(record)
+            for record in self.contents.execute(workspace_id)
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReadCaseDocument:
+    contents: GetPrivateContent
+
+    def __post_init__(self):
+        if type(self.contents) is not GetPrivateContent:
+            raise TypeError("serviço de leitura privada inválido")
+
+    def execute(
+        self, workspace_id: WorkspaceId, content_id: PrivateContentId
+    ) -> PrivateContent:
+        record = self.contents.execute(workspace_id, content_id)
+        _case_document_metadata(record.metadata)
+        return record
 
 
 def _require_workspace(

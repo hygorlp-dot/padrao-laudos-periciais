@@ -17,9 +17,19 @@ from ..application.services import (
     GetLatestArtifact,
     GetProcessCase,
     GetWorkspace,
+    GetPrivateContent,
+    ImportCaseDocument,
     ListArtifactRevisions,
     ListWorkspaces,
+    ListCaseDocuments,
+    ListPrivateContents,
+    ReadCaseDocument,
     SaveProcessCase,
+    StorePrivateContent,
+)
+from ..infrastructure.private_filesystem import (
+    LocalPrivateContentStore,
+    provision_private_content_root,
 )
 from ..infrastructure.sqlite import SQLiteApplicationStore
 from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
@@ -47,6 +57,7 @@ class LocalApiRuntime:
     server: LocalApiServer
     token: str = field(repr=False)
     _store: SQLiteApplicationStore = field(repr=False)
+    _private_store: LocalPrivateContentStore | None = field(default=None, repr=False)
     _closed: bool = False
     _lifecycle_lock: object = field(
         default_factory=Lock,
@@ -68,9 +79,13 @@ class LocalApiRuntime:
             except LocalApiServerStartError as exc:
                 self._closed = True
                 try:
-                    self._store.close()
-                except RepositoryError:
-                    pass
+                    if self._private_store is not None:
+                        self._private_store.close()
+                finally:
+                    try:
+                        self._store.close()
+                    except RepositoryError:
+                        pass
                 raise LocalApiStartupError("servidor local indisponível") from exc
 
     def close(self) -> None:
@@ -81,7 +96,11 @@ class LocalApiRuntime:
             try:
                 self.server.close()
             finally:
-                self._store.close()
+                try:
+                    if self._private_store is not None:
+                        self._private_store.close()
+                finally:
+                    self._store.close()
 
     def __enter__(self) -> LocalApiRuntime:
         return self
@@ -103,6 +122,7 @@ def build_local_api(
     token: str | None = None,
     clock: Clock | None = None,
     ids: IdGenerator | None = None,
+    private_root: str | Path | None = None,
 ) -> LocalApiRuntime:
     """Compõe serviços, SQLite e listener sem esconder suas dependências."""
 
@@ -114,6 +134,35 @@ def build_local_api(
     local_clock = _SystemClock() if clock is None else clock
     local_ids = _UuidGenerator() if ids is None else ids
     store = SQLiteApplicationStore(database)
+    private_store = None
+    if private_root is not None:
+        try:
+            provision_private_content_root(private_root)
+            private_store = LocalPrivateContentStore(
+                private_root,
+                max_content_bytes=server_config.max_body_bytes,
+            )
+        except Exception:
+            store.close()
+            raise
+    import_case_document = None
+    list_case_documents = None
+    read_case_document = None
+    if private_store is not None:
+        generic_store = StorePrivateContent(
+            store.workspaces,
+            private_store,
+            local_clock,
+            local_ids,
+            server_config.max_body_bytes,
+        )
+        import_case_document = ImportCaseDocument(generic_store)
+        list_case_documents = ListCaseDocuments(
+            ListPrivateContents(store.workspaces, private_store)
+        )
+        read_case_document = ReadCaseDocument(
+            GetPrivateContent(store.workspaces, private_store)
+        )
     services = LocalApiServices(
         create_workspace=CreateWorkspace(store.workspaces, local_clock, local_ids),
         get_workspace=GetWorkspace(store.workspaces),
@@ -128,6 +177,9 @@ def build_local_api(
         save_process_case=SaveProcessCase(
             store.workspaces, store.revisions, local_clock, local_ids
         ),
+        import_case_document=import_case_document,
+        list_case_documents=list_case_documents,
+        read_case_document=read_case_document,
     )
     api = LocalApi(
         services,
@@ -138,8 +190,14 @@ def build_local_api(
         server = LocalApiServer(api, server_config)
     except OSError as exc:
         try:
+            if private_store is not None:
+                private_store.close()
+        finally:
             store.close()
-        except RepositoryError:
-            pass
         raise LocalApiStartupError("servidor local indisponível") from exc
-    return LocalApiRuntime(server=server, token=local_token, _store=store)
+    return LocalApiRuntime(
+        server=server,
+        token=local_token,
+        _store=store,
+        _private_store=private_store,
+    )

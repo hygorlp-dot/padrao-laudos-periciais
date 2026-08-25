@@ -15,7 +15,7 @@ from .transport import LocalApi, _error, _parse_content_length
 class LocalServerConfig:
     host: str = "127.0.0.1"
     port: int = 0
-    max_body_bytes: int = 1_048_576
+    max_body_bytes: int = 16_777_216
     request_timeout_seconds: float = 5.0
 
     def __post_init__(self):
@@ -156,6 +156,7 @@ def _handler_for(
                     "Content-Type",
                     "Origin",
                     "Transfer-Encoding",
+                    "X-Document-Filename",
                     "X-Local-API-Token",
                 )
             )

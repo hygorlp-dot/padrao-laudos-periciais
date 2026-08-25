@@ -15,7 +15,7 @@ from .transport import ProductBridge, _error
 class ProductBridgeConfig:
     host: str = "127.0.0.1"
     port: int = 0
-    max_body_bytes: int = 1_048_576
+    max_body_bytes: int = 16_777_216
     request_timeout_seconds: float = 5.0
 
     def __post_init__(self):
@@ -128,6 +128,7 @@ class _ProductRequestHandler(BaseHTTPRequestHandler):
                 "Origin",
                 "Sec-Fetch-Site",
                 "Transfer-Encoding",
+                "X-Document-Filename",
             )
         )
         if duplicate or "Transfer-Encoding" in self.headers:

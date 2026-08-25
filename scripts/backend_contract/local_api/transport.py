@@ -13,6 +13,9 @@ from urllib.parse import unquote_to_bytes, urlsplit
 from ..application.models import (
     ArtifactRevision,
     PericiaWorkspace,
+    PrivateContent,
+    PrivateContentId,
+    PrivateContentMetadata,
     ProcessCaseData,
     ProcessCaseSnapshot,
     WorkspaceId,
@@ -20,11 +23,15 @@ from ..application.models import (
 )
 from ..application.ports import (
     ArtifactRevisionNotFound,
+    InvalidCaseDocument,
     PersistenceSchemaError,
+    PrivateContentNotFound,
+    PrivateContentTooLarge,
     RepositoryConflict,
     RepositoryError,
     RepositoryIntegrityError,
     WorkspaceNotFound,
+    UnsupportedCaseDocument,
 )
 
 _MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
@@ -52,6 +59,9 @@ class LocalApiServices:
     list_artifact_revisions: object
     get_process_case: object
     save_process_case: object
+    import_case_document: object | None = None
+    list_case_documents: object | None = None
+    read_case_document: object | None = None
 
 
 def _workspace_dto(record: PericiaWorkspace) -> dict:
@@ -91,6 +101,26 @@ def _process_case_dto(
     }
 
 
+def _private_content_dto(
+    record: PrivateContentMetadata, expected_workspace_id: WorkspaceId
+) -> dict:
+    if (
+        type(record) is not PrivateContentMetadata
+        or record.workspace_id != expected_workspace_id
+    ):
+        raise RepositoryIntegrityError("identidade documental divergente")
+    return {
+        "workspace_id": str(record.workspace_id),
+        "content_id": str(record.content_id),
+        "original_filename": record.original_filename,
+        "byte_size": record.byte_size,
+        "checksum_sha256": record.checksum_sha256,
+        "media_type": record.media_type,
+        "imported_at": record.imported_at,
+        "origin": record.origin.value,
+    }
+
+
 def _json_response(status: int, value: object) -> HttpResponse:
     try:
         _require_safe_json_integers(value)
@@ -118,6 +148,23 @@ def _json_response(status: int, value: object) -> HttpResponse:
     )
 
 
+def _binary_response(status: int, body: bytes, content_type: str) -> HttpResponse:
+    if type(body) is not bytes or content_type != "application/pdf":
+        raise RepositoryIntegrityError("resposta documental inválida")
+    return HttpResponse(
+        status=status,
+        headers=MappingProxyType(
+            {
+                "Content-Type": content_type,
+                "Content-Length": str(len(body)),
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            }
+        ),
+        body=body,
+    )
+
+
 def _error(
     status: int, code: str, message: str = "requisição local inválida"
 ) -> HttpResponse:
@@ -138,6 +185,15 @@ def _decode_segment(value: str) -> str:
     decoded = unquote_to_bytes(value).decode("utf-8", errors="strict")
     if not decoded or _has_ascii_control(decoded):
         raise ValueError("segmento de rota inválido")
+    return decoded
+
+
+def _document_filename(value: str | None) -> str:
+    if type(value) is not str or not value or len(value) > 1024 or not value.isascii():
+        raise ValueError("filename de documento inválido")
+    decoded = _decode_segment(value)
+    if len(decoded) > 255:
+        raise ValueError("filename de documento inválido")
     return decoded
 
 
@@ -326,7 +382,12 @@ class LocalApi:
                 )
             raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
-            if normalized_method == "POST" and not hmac.compare_digest(
+            private_route = (
+                len(raw_segments) >= 4
+                and raw_segments[:2] == ("v1", "workspaces")
+                and raw_segments[3] == "materials"
+            )
+            if (normalized_method == "POST" or private_route) and not hmac.compare_digest(
                 request_headers.get("x-local-api-token", ""), self._token
             ):
                 return _error(
@@ -352,6 +413,63 @@ class LocalApi:
                     record = self._services.create_workspace.execute(dto["name"])
                     return _json_response(201, _workspace_dto(record))
                 return _error(405, "METHOD_NOT_ALLOWED")
+
+            if (
+                len(raw_segments) == 4
+                and raw_segments[:2] == ("v1", "workspaces")
+                and raw_segments[3] == "materials"
+            ):
+                workspace_id = self._workspace_id(raw_segments[2])
+                if normalized_method == "GET":
+                    service = self._services.list_case_documents
+                    if service is None:
+                        return _error(503, "PRIVATE_STORAGE_UNAVAILABLE", "armazenamento privado indisponível")
+                    records = service.execute(workspace_id)
+                    return _json_response(
+                        200,
+                        {"items": [_private_content_dto(item, workspace_id) for item in records]},
+                    )
+                if normalized_method == "POST":
+                    service = self._services.import_case_document
+                    if service is None:
+                        return _error(503, "PRIVATE_STORAGE_UNAVAILABLE", "armazenamento privado indisponível")
+                    content_type = request_headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                    if content_type != "application/pdf":
+                        raise ValueError("Content-Type de documento inválido")
+                    if _parse_content_length(request_headers.get("content-length", "")) != len(body):
+                        raise ValueError("Content-Length diverge")
+                    record = service.execute(
+                        workspace_id=workspace_id,
+                        original_filename=_document_filename(
+                            request_headers.get("x-document-filename")
+                        ),
+                        content=body,
+                        media_type="application/pdf",
+                    )
+                    return _json_response(201, _private_content_dto(record, workspace_id))
+                return _error(405, "METHOD_NOT_ALLOWED")
+
+            if (
+                len(raw_segments) == 5
+                and raw_segments[:2] == ("v1", "workspaces")
+                and raw_segments[3] == "materials"
+            ):
+                if normalized_method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                service = self._services.read_case_document
+                if service is None:
+                    return _error(503, "PRIVATE_STORAGE_UNAVAILABLE", "armazenamento privado indisponível")
+                workspace_id = self._workspace_id(raw_segments[2])
+                content_id = PrivateContentId.parse(raw_segments[4])
+                record = service.execute(workspace_id, content_id)
+                if (
+                    type(record) is not PrivateContent
+                    or record.metadata.workspace_id != workspace_id
+                    or record.metadata.content_id != content_id
+                    or record.metadata.media_type != "application/pdf"
+                ):
+                    raise RepositoryIntegrityError("identidade documental divergente")
+                return _binary_response(200, record.content, "application/pdf")
 
             if len(raw_segments) == 3 and raw_segments[:2] == (
                 "v1",
@@ -456,6 +574,14 @@ class LocalApi:
                 "ARTIFACT_REVISION_NOT_FOUND",
                 "revisão de artefato não encontrada",
             )
+        except PrivateContentNotFound:
+            return _error(404, "MATERIAL_NOT_FOUND", "material não encontrado")
+        except PrivateContentTooLarge:
+            return _error(413, "DOCUMENT_TOO_LARGE", "documento excede o limite permitido")
+        except UnsupportedCaseDocument:
+            return _error(415, "UNSUPPORTED_DOCUMENT", "somente documentos PDF são aceitos")
+        except InvalidCaseDocument:
+            return _error(400, "INVALID_DOCUMENT", "documento PDF inválido")
         except RepositoryConflict:
             return _error(409, "REPOSITORY_CONFLICT", "conflito de persistência local")
         except RepositoryIntegrityError:
