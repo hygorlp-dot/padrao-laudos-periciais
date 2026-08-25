@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 import threading
@@ -12,6 +13,15 @@ from scripts.quality.verify_core import GateResult, check_private_tracking, run_
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+PROTECTED_TIMING_SURFACE_SHA256 = {
+    ".github/workflows/core-safety.yml": "16ca41a3ff50afe30329700c1034f7be8fb34d34297eff16f3de92d6581b01ee",
+    "scripts/quality/__init__.py": "b3824e776de859b9a48131b04cfc738c925badc4d42c0475eaf919e4e1665e5b",
+    "scripts/quality/verify_core.py": "ae2e5928db5917fd4d9f4e9ad8ec9c13e65ebd4ade9f533ab0235b3440275598",
+    "scripts/quality/architecture_analyzer.py": "b0ebd34400c0a456b14e44eea747cfa88c30d1f988a2659d75087f2cf6fdf036",
+    "scripts/quality/capability_analyzer.py": "a082879716d75e2b35c271ab89b93b13b4e56163592cb4f522b924eace766303",
+}
 
 
 def _write(path: Path, data) -> None:
@@ -130,6 +140,100 @@ def test_verify_core_propagates_error_and_never_reports_false_pass(tmp_path):
     assert result.exit_code != 0
     assert result.result == "FAIL"
     assert any(item["teste"] == "property tests" for item in result.findings)
+
+
+def _write_timing_gate_inputs(root: Path) -> None:
+    _write(root / "config/quality-baseline.json", {
+        "coverage": {"line_percent": 100.0, "branch_percent": 100.0},
+        "hotspots": [],
+        "full_gate_max_seconds": 60.0,
+    })
+    _write(root / "coverage-quality-v2.json", {
+        "totals": {
+            "num_statements": 1,
+            "covered_lines": 1,
+            "num_branches": 0,
+            "covered_branches": 0,
+        },
+    })
+
+
+def _successful_gate_runner(command, **_):
+    return subprocess.CompletedProcess(command, 0, "", "")
+
+
+def _run_timed_pull_request_gate(monkeypatch, tmp_path, runner=_successful_gate_runner, tracked_files=None):
+    _write_timing_gate_inputs(tmp_path)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setattr(verify_core, "validate_configuration", lambda _root: [])
+    monkeypatch.setattr(verify_core, "validate_fixture_registry", lambda _root: [])
+    timestamps = iter((0.0, 61.0, 61.0))
+    monkeypatch.setattr(verify_core.time, "perf_counter", lambda: next(timestamps))
+    return run_gate(
+        "full",
+        tmp_path,
+        runner=runner,
+        tracked_files=[] if tracked_files is None else tracked_files,
+    )
+
+
+def test_pull_request_timing_warning_does_not_fail_an_otherwise_green_gate(monkeypatch, tmp_path, capsys):
+    result = _run_timed_pull_request_gate(monkeypatch, tmp_path)
+
+    assert result.result == "PASS"
+    assert result.exit_code == 0
+    assert ("quality non-regression", True) in result.checks
+    assert result.findings == ()
+    assert "TIMING_STATUS = WARNING" in capsys.readouterr().out
+
+
+def test_pull_request_timing_warning_never_masks_semantic_command_failure(monkeypatch, tmp_path):
+    def runner(command, **_):
+        failed = "tests/test_core_properties.py" in command
+        return subprocess.CompletedProcess(command, 7 if failed else 0, "", "semantic failure" if failed else "")
+
+    result = _run_timed_pull_request_gate(monkeypatch, tmp_path, runner=runner)
+
+    assert result.result == "FAIL"
+    assert result.exit_code != 0
+    assert any(item["teste"] == "property tests" for item in result.findings)
+
+
+def test_pull_request_timing_warning_never_masks_regression_failure(monkeypatch, tmp_path):
+    def runner(command, **_):
+        failed = "coverage" in command and "run" in command
+        return subprocess.CompletedProcess(command, 7 if failed else 0, "", "regression failure" if failed else "")
+
+    result = _run_timed_pull_request_gate(monkeypatch, tmp_path, runner=runner)
+
+    assert result.result == "FAIL"
+    assert result.exit_code != 0
+    assert any(item["teste"] == "regression" and item["severidade"] == "P0" for item in result.findings)
+
+
+def test_pull_request_timing_warning_never_masks_private_tracking(monkeypatch, tmp_path):
+    result = _run_timed_pull_request_gate(
+        monkeypatch,
+        tmp_path,
+        tracked_files=["referencias/privadas/caso.pdf"],
+    )
+
+    assert result.result == "FAIL"
+    assert result.exit_code != 0
+    assert any(item["invariant"] == "PII_DENY_BY_DEFAULT" for item in result.findings)
+
+
+def test_pr_timing_observability_preserves_protected_execution_surface():
+    observed = {
+        path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+        for path in PROTECTED_TIMING_SURFACE_SHA256
+    }
+    assert observed == PROTECTED_TIMING_SURFACE_SHA256
+
+
+def test_pr_timing_observability_keeps_immutable_sixty_second_target():
+    baseline = json.loads((ROOT / "config/quality-baseline.json").read_text(encoding="utf-8"))
+    assert baseline["full_gate_max_seconds"] == 60.0
 
 
 def test_full_gate_overlaps_independent_mutation_and_regression_suites():
