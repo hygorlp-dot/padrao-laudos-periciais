@@ -1,16 +1,25 @@
 {
   "schemaVersion": "3.0.0",
   "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "cec881c42815bc222eecc03fd89c1caf32ec75f4",
+  "protectedBaseSha": "dd2d74cc4a0baec555c47677f1c8fc67ce46ec3b",
   "artifacts": [
+    {
+      "path": "scripts/quality/architecture_analyzer.py",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "996aa949c8064cf1470f5f8ced28eb1b8a1bfcb5",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "9f3e51110006ddeb044a913e347eeb06bc66682f"
+    },
     {
       "path": "config/capability-protected-artifacts-v1.json",
       "baseMode": "100644",
       "baseObjectType": "blob",
-      "baseBlobSha": "2af6e7b6079bb62fa860d94afe82db57803a8482",
+      "baseBlobSha": "4f7b0846ace6db63cfa3951828142e5dd3d30e35",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "4f7b0846ace6db63cfa3951828142e5dd3d30e35"
+      "candidateBlobSha": "a1885f42ab03839a154cbf2e4d5f5250e9188801"
     }
   ],
   "supportScope": "CAPABILITY_BOOTSTRAP_V1",
@@ -19,19 +28,19 @@
       "path": "config/capability-exceptions-v1.json",
       "baseMode": "100644",
       "baseObjectType": "blob",
-      "baseBlobSha": "36a3ad9eebd44e5687e686ab1c59dd3154f289e0",
+      "baseBlobSha": "96aedd24745a5f0f3f70f487a8bc74d12a8611c0",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "96aedd24745a5f0f3f70f487a8bc74d12a8611c0"
+      "candidateBlobSha": "3048afe50faf8bc4a1783a93d1404eb1b9c369a7"
     },
     {
       "path": "config/capability-protected-transition-v1.json",
       "baseMode": "100644",
       "baseObjectType": "blob",
-      "baseBlobSha": "7158136214b72a684ee4cf55b5824605bd3403e1",
+      "baseBlobSha": "570990f516554573e2087cbf9901b527915aac10",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "570990f516554573e2087cbf9901b527915aac10"
+      "candidateBlobSha": "75326cb22838ca662bcecc3b77fa2f6f0f3bf03e"
     }
   ]
 }

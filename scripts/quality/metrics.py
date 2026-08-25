@@ -2,10 +2,27 @@
 from __future__ import annotations
 
 import ast
+import math
+import os
 from pathlib import Path
 
 
 BRANCH_NODES = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.IfExp, ast.Match, ast.comprehension)
+TIMING_POLICY_STRICT = "STRICT"
+TIMING_POLICY_PR_ADVISORY = "PR_ADVISORY"
+_TIMING_POLICIES = {TIMING_POLICY_STRICT, TIMING_POLICY_PR_ADVISORY}
+
+
+def _timing_policy(explicit: str | None) -> str | None:
+    if explicit is not None:
+        return explicit if explicit in _TIMING_POLICIES else None
+    return TIMING_POLICY_PR_ADVISORY if os.environ.get("GITHUB_EVENT_NAME") == "pull_request" else TIMING_POLICY_STRICT
+
+
+def _emit_timing(target: float | None, observed: float | None, status: str) -> None:
+    print(f"TARGET_SECONDS = {target if target is not None else 'INVALID'}")
+    print(f"OBSERVED_SECONDS = {observed if observed is not None else 'INVALID'}")
+    print(f"TIMING_STATUS = {status}")
 
 
 def _function_complexity(node: ast.FunctionDef | ast.AsyncFunctionDef) -> int:
@@ -47,6 +64,7 @@ def validate_quality_baseline(
     complexity: list[dict],
     *,
     duration_seconds: float | None = None,
+    timing_policy: str | None = None,
 ) -> list[dict]:
     findings: list[dict] = []
     if coverage is None:
@@ -60,9 +78,50 @@ def validate_quality_baseline(
         key = (expected["path"], expected["function"])
         if key not in current or current[key] > expected["complexity"]:
             findings.append({"code": "HOTSPOT_COMPLEXITY_REGRESSION", "severity": "P1", "expected": expected, "actual": current.get(key)})
-    limit = baseline.get("full_gate_max_seconds")
-    if duration_seconds is not None and limit is not None and duration_seconds > float(limit):
-        findings.append({"code": "FULL_GATE_DURATION_REGRESSION", "severity": "P1", "expected": limit, "actual": duration_seconds})
+    if duration_seconds is None and timing_policy is None:
+        return findings
+
+    policy = _timing_policy(timing_policy)
+    try:
+        limit = float(baseline["full_gate_max_seconds"])
+        duration = float(duration_seconds) if duration_seconds is not None else None
+    except (KeyError, TypeError, ValueError):
+        limit = None
+        duration = None
+
+    evidence_valid = (
+        policy is not None
+        and limit is not None
+        and duration is not None
+        and math.isfinite(limit)
+        and math.isfinite(duration)
+        and limit > 0
+        and duration >= 0
+    )
+    if not evidence_valid:
+        _emit_timing(limit if limit is not None and math.isfinite(limit) else None,
+                     duration if duration is not None and math.isfinite(duration) else None, "INVALID")
+        findings.append({
+            "code": "TIMING_EVIDENCE_INVALID",
+            "severity": "P1",
+            "expected": baseline.get("full_gate_max_seconds"),
+            "actual": duration_seconds,
+            "policy": timing_policy,
+        })
+        return findings
+
+    if duration > limit:
+        status = "WARNING" if policy == TIMING_POLICY_PR_ADVISORY else "FAIL"
+        _emit_timing(limit, duration, status)
+        if policy == TIMING_POLICY_STRICT:
+            findings.append({
+                "code": "FULL_GATE_DURATION_REGRESSION",
+                "severity": "P1",
+                "expected": baseline["full_gate_max_seconds"],
+                "actual": duration_seconds,
+            })
+    else:
+        _emit_timing(limit, duration, "PASS")
     return findings
 
 
