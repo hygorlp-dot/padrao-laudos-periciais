@@ -134,10 +134,7 @@ def build_local_api(
     private_store = None
     if private_root is not None:
         try:
-            private_store = LocalPrivateContentStore.open_or_provision(
-                private_root,
-                max_content_bytes=server_config.max_body_bytes,
-            )
+            private_store = LocalPrivateContentStore.open_or_provision(private_root)
         except Exception:
             store.close()
             raise

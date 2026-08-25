@@ -694,11 +694,12 @@ class _ProvisionedRootHandoff:
         return self.identity, root_fd, windows_anchor_fd
 
     def close(self) -> None:
-        for descriptor in (self._windows_anchor_fd, self._root_fd):
-            if descriptor is not None:
-                os.close(descriptor)
+        descriptors = (self._windows_anchor_fd, self._root_fd)
         self._windows_anchor_fd = None
         self._root_fd = None
+        for descriptor in descriptors:
+            if descriptor is not None:
+                os.close(descriptor)
 
 
 @_controlled_filesystem_errors("falha ao provisionar armazenamento privado")
@@ -930,8 +931,9 @@ class LocalPrivateContentStore:
                     )
             self._acquire_singleton()
             if handoff_windows_anchor_fd is not None:
-                os.close(handoff_windows_anchor_fd)
+                descriptor = handoff_windows_anchor_fd
                 handoff_windows_anchor_fd = None
+                os.close(descriptor)
             self._open_journal()
             self._open_anchor()
             self._committed, self._known_prefixes = self._recover()
@@ -943,9 +945,13 @@ class LocalPrivateContentStore:
             raise RepositoryError("falha ao abrir armazenamento privado") from exc
         finally:
             if handoff_windows_anchor_fd is not None:
-                os.close(handoff_windows_anchor_fd)
+                descriptor = handoff_windows_anchor_fd
+                handoff_windows_anchor_fd = None
+                os.close(descriptor)
             if handoff_root_fd is not None:
-                os.close(handoff_root_fd)
+                descriptor = handoff_root_fd
+                handoff_root_fd = None
+                os.close(descriptor)
 
     @classmethod
     def open_or_provision(

@@ -502,6 +502,92 @@ def test_local_api_composition_keeps_root_anchored_through_store_open(
         runtime.close()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX dirfd handoff")
+@pytest.mark.parametrize("root_preexists", (False, True))
+def test_posix_composition_fails_closed_on_root_swap_during_store_open(
+    tmp_path, monkeypatch, root_preexists
+):
+    root = tmp_path / "private"
+    original_root = tmp_path / "original-private"
+    replacement = tmp_path / "replacement-private"
+    provision_private_content_root(replacement)
+    if root_preexists:
+        provision_private_content_root(root)
+    original_init = LocalPrivateContentStore.__init__
+    swapped = False
+
+    def swap_during_handoff(self, private_root, *args, **kwargs):
+        nonlocal swapped
+        if Path(private_root) == root and not swapped:
+            root.rename(original_root)
+            replacement.rename(root)
+            swapped = True
+        original_init(self, private_root, *args, **kwargs)
+
+    monkeypatch.setattr(LocalPrivateContentStore, "__init__", swap_during_handoff)
+
+    with pytest.raises(Exception, match="identidade|private root|handoff"):
+        build_local_api(tmp_path / "case.db", private_root=root, token=TOKEN)
+
+    assert swapped is True
+    assert sorted(path.name for path in root.iterdir()) == [
+        ".commit-anchor",
+        ".commit-log",
+        ".store-lock",
+    ]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows provisioning handoff")
+def test_ambiguous_handoff_anchor_close_is_never_retried(tmp_path, monkeypatch):
+    captured = {"descriptor": None, "close_calls": 0}
+    original_take = private_filesystem._ProvisionedRootHandoff.take
+    original_close = private_filesystem.os.close
+
+    def capture_handoff(handoff):
+        identity, root_fd, windows_anchor_fd = original_take(handoff)
+        captured["descriptor"] = windows_anchor_fd
+        return identity, root_fd, windows_anchor_fd
+
+    def ambiguous_close(descriptor):
+        if descriptor == captured["descriptor"]:
+            captured["close_calls"] += 1
+            if captured["close_calls"] == 1:
+                original_close(descriptor)
+                raise OSError("synthetic ambiguous handoff close failure")
+        return original_close(descriptor)
+
+    monkeypatch.setattr(
+        private_filesystem._ProvisionedRootHandoff, "take", capture_handoff
+    )
+    monkeypatch.setattr(private_filesystem.os, "close", ambiguous_close)
+
+    with pytest.raises(Exception):
+        build_local_api(tmp_path / "case.db", private_root=tmp_path / "private", token=TOKEN)
+
+    assert captured["close_calls"] == 1
+
+
+def test_local_api_reopens_valid_store_content_above_the_intake_limit(tmp_path):
+    root = tmp_path / "private"
+    provision_private_content_root(root)
+    content = b"x" * (16_777_216 + 1)
+    stored = PrivateContentMetadata(
+        workspace_id=WORKSPACE_ID,
+        content_id=CONTENT_ID,
+        original_filename="legacy-large.bin",
+        byte_size=len(content),
+        checksum_sha256=hashlib.sha256(content).hexdigest(),
+        media_type="application/octet-stream",
+        imported_at=IMPORTED_AT,
+        origin=PrivateContentOrigin.LOCAL_IMPORT,
+    )
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(stored, content)
+
+    runtime = build_local_api(tmp_path / "case.db", private_root=root, token=TOKEN)
+    runtime.close()
+
+
 def frontend_build(root: Path) -> Path:
     root.mkdir()
     (root / "index.html").write_text("<!doctype html><div id='root'></div>", encoding="utf-8")
