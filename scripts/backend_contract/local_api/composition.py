@@ -27,10 +27,7 @@ from ..application.services import (
     SaveProcessCase,
     StorePrivateContent,
 )
-from ..infrastructure.private_filesystem import (
-    LocalPrivateContentStore,
-    provision_private_content_root,
-)
+from ..infrastructure.private_filesystem import LocalPrivateContentStore
 from ..infrastructure.sqlite import SQLiteApplicationStore
 from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
@@ -137,8 +134,7 @@ def build_local_api(
     private_store = None
     if private_root is not None:
         try:
-            provision_private_content_root(private_root)
-            private_store = LocalPrivateContentStore(
+            private_store = LocalPrivateContentStore.open_or_provision(
                 private_root,
                 max_content_bytes=server_config.max_body_bytes,
             )

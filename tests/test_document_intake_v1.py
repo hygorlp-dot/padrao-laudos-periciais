@@ -469,6 +469,39 @@ def test_local_api_start_failure_releases_the_private_store(monkeypatch, tmp_pat
         pass
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows provisioning handoff race")
+@pytest.mark.parametrize("root_preexists", (False, True))
+def test_local_api_composition_keeps_root_anchored_through_store_open(
+    tmp_path, monkeypatch, root_preexists
+):
+    root = tmp_path / "private"
+    original_root = tmp_path / "original-private"
+    replacement = tmp_path / "replacement-private"
+    provision_private_content_root(replacement)
+    if root_preexists:
+        provision_private_content_root(root)
+    original_init = LocalPrivateContentStore.__init__
+    swap_blocked = False
+
+    def attempt_handoff_swap(self, private_root, *args, **kwargs):
+        nonlocal swap_blocked
+        if Path(private_root) == root and not swap_blocked:
+            try:
+                root.rename(original_root)
+            except OSError:
+                swap_blocked = True
+            else:
+                replacement.rename(root)
+        original_init(self, private_root, *args, **kwargs)
+
+    monkeypatch.setattr(LocalPrivateContentStore, "__init__", attempt_handoff_swap)
+    runtime = build_local_api(tmp_path / "case.db", private_root=root, token=TOKEN)
+    try:
+        assert swap_blocked is True
+    finally:
+        runtime.close()
+
+
 def frontend_build(root: Path) -> Path:
     root.mkdir()
     (root / "index.html").write_text("<!doctype html><div id='root'></div>", encoding="utf-8")
