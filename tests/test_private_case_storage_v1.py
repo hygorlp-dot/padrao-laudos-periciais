@@ -57,7 +57,12 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(autouse=True)
-def _provision_default_private_root(tmp_path):
+def _provision_default_private_root(tmp_path, monkeypatch):
+    # Unit tests assert every durability barrier through call/order spies; an
+    # actual fsync cannot prove power-loss durability and makes the synthetic
+    # matrix contend with verify_core's parallel suites on Windows runners.
+    # Child-process recovery tests still execute the unpatched implementation.
+    monkeypatch.setattr(private_filesystem.os, "fsync", lambda _descriptor: None)
     root = tmp_path / "private"
     root.mkdir()
     (root / ".store-lock").write_bytes(b"0")
