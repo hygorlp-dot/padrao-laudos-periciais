@@ -191,9 +191,43 @@ def test_architecture_trust_boundary_suite_is_partitioned_from_timed_regression(
     ]
     assert len(verify_core_blocks) == 1
     verify_core_step = verify_core_blocks[0]
-    assert 'PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py"' in verify_core_step
+    assert (
+        'PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py '
+        '--ignore=tests/test_private_case_storage_v1.py"'
+        in verify_core_step
+    )
     assert "continue-on-error" not in verify_core_step
     assert "\n        if:" not in verify_core_step
+
+
+def test_private_storage_suite_is_blocking_outside_timed_regression():
+    workflow = (ROOT / ".github/workflows/core-safety.yml").read_text(
+        encoding="utf-8"
+    )
+    step_blocks = workflow.split("\n      - ")
+
+    storage_blocks = [
+        block
+        for block in step_blocks
+        if "tests/test_private_case_storage_v1.py" in block
+        and "PYTEST_ADDOPTS" not in block
+    ]
+    assert len(storage_blocks) == 1
+    storage_step = storage_blocks[0]
+    assert "run: python -m pytest -q tests/test_private_case_storage_v1.py" in storage_step
+    assert "continue-on-error" not in storage_step
+    assert "\n        if:" not in storage_step
+
+    verify_core_step = next(
+        block
+        for block in step_blocks
+        if "scripts.quality.verify_core --full" in block
+    )
+    assert (
+        'PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py '
+        '--ignore=tests/test_private_case_storage_v1.py"'
+        in verify_core_step
+    )
 
 
 def test_core_safety_workflow_never_hoists_env_above_step_level():
