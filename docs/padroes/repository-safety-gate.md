@@ -84,6 +84,12 @@ menos um resíduo não for positivo, a ultrapassagem é registrada como
 `ENVIRONMENTAL_EXECUTION_VARIANCE`, sem alterar o limite, a cobertura ou as
 suítes executadas.
 
+`tests/test_quality_gate_timing.py` roda antes como step explícito e
+bloqueante. Apenas sua segunda coleta dentro dos FULLs pareados é excluída da
+janela de 60 segundos, assim como a suíte de arquitetura já particionada. Um
+guard executável exige simultaneamente o step dedicado e o `--ignore` limitado
+ao step pareado, impedindo desaparecimento silencioso do teste.
+
 ## Evolução
 
 Para adicionar boundary, invariante ou fixture:

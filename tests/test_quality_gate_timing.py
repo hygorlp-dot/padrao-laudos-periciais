@@ -257,3 +257,22 @@ def test_core_safety_workflow_uses_exact_event_shas_and_paired_runner():
     assert "github.sha" in workflow
     assert "run-paired-core-safety.ps1" in workflow
     assert "continue-on-error" not in workflow
+
+
+def test_timing_policy_suite_is_mandatory_outside_the_timed_full_gate():
+    workflow = (ROOT / ".github/workflows/core-safety.yml").read_text(encoding="utf-8")
+    step_blocks = workflow.split("\n      - ")
+    dedicated = [
+        block for block in step_blocks
+        if "run: python -m pytest -q tests/test_quality_gate_timing.py" in block
+    ]
+    paired = [block for block in step_blocks if "run-paired-core-safety.ps1" in block]
+
+    assert len(dedicated) == 1
+    assert "continue-on-error" not in dedicated[0]
+    assert "PYTEST_ADDOPTS" not in dedicated[0]
+    assert len(paired) == 1
+    assert (
+        'PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py '
+        '--ignore=tests/test_quality_gate_timing.py"'
+    ) in paired[0]

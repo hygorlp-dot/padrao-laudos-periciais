@@ -191,7 +191,10 @@ def test_architecture_trust_boundary_suite_is_partitioned_from_timed_regression(
     ]
     assert len(paired_blocks) == 1
     verify_core_step = paired_blocks[0]
-    assert 'PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py"' in verify_core_step
+    assert (
+        'PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py '
+        '--ignore=tests/test_quality_gate_timing.py"'
+    ) in verify_core_step
     assert "continue-on-error" not in verify_core_step
     assert "\n        if:" not in verify_core_step
     paired_runner = (ROOT / ".github/scripts/run-paired-core-safety.ps1").read_text(encoding="utf-8")

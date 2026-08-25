@@ -35,6 +35,9 @@ jobs:
       - name: Architecture trust-boundary suite
         working-directory: candidate
         run: python -m pytest -q tests/test_architecture_analyzer_v1.py
+      - name: Timing attribution policy suite
+        working-directory: candidate
+        run: python -m pytest -q tests/test_quality_gate_timing.py
       - name: Verify frozen Core V1 with paired timing attribution
         # --ignore only prunes directory-walk collection; it cannot silently
         # zero out the explicit-path "Architecture trust-boundary suite" step
@@ -43,7 +46,7 @@ jobs:
         # keep using --ignore specifically (see the guard test in
         # tests/test_repository_safety_gate.py).
         env:
-          PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py"
+          PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py --ignore=tests/test_quality_gate_timing.py"
           TIMING_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           TIMING_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         shell: pwsh
