@@ -274,8 +274,9 @@ def _write_fsynced(
         descriptor = os.open(path, flags, 0o600)
     else:
         descriptor = os.open(_entry_name(path), flags, 0o600, dir_fd=root_fd)
-    opened = os.fstat(descriptor)
+    opened = None
     try:
+        opened = os.fstat(descriptor)
         _validate_regular(opened, expected_links=1)
         observed = _lstat(path, root_fd=root_fd)
         if not _same_identity(opened, observed):
@@ -286,10 +287,11 @@ def _write_fsynced(
         os.fsync(descriptor)
     except Exception:
         os.close(descriptor)
-        try:
-            _retire_if_owned(path, opened, root_fd=root_fd)
-        except (OSError, RepositoryIntegrityError):
-            pass
+        if opened is not None:
+            try:
+                _retire_if_owned(path, opened, root_fd=root_fd)
+            except (OSError, RepositoryIntegrityError):
+                pass
         raise
     else:
         os.close(descriptor)
@@ -714,7 +716,11 @@ class LocalPrivateContentStore:
             lock_path,
             root_fd=self._root_fd,
         )
-        stream = os.fdopen(descriptor, "r+b", buffering=0)
+        try:
+            stream = os.fdopen(descriptor, "r+b", buffering=0)
+        except Exception:
+            os.close(descriptor)
+            raise
         try:
             if os.fstat(descriptor).st_size != 1:
                 raise RepositoryIntegrityError("trust anchor privado inválido")
@@ -746,9 +752,13 @@ class LocalPrivateContentStore:
             self._root / _JOURNAL_NAME,
             root_fd=self._root_fd,
         )
-        os.fsync(descriptor)
-        if self._root_fd is not None:
-            os.fsync(self._root_fd)
+        try:
+            os.fsync(descriptor)
+            if self._root_fd is not None:
+                os.fsync(self._root_fd)
+        except Exception:
+            os.close(descriptor)
+            raise
         self._journal_fd = descriptor
         self._journal_identity = identity
 
@@ -757,9 +767,13 @@ class LocalPrivateContentStore:
             self._root / _ANCHOR_NAME,
             root_fd=self._root_fd,
         )
-        os.fsync(descriptor)
-        if self._root_fd is not None:
-            os.fsync(self._root_fd)
+        try:
+            os.fsync(descriptor)
+            if self._root_fd is not None:
+                os.fsync(self._root_fd)
+        except Exception:
+            os.close(descriptor)
+            raise
         self._anchor_fd = descriptor
         self._anchor_identity = identity
 

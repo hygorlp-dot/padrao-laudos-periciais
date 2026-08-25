@@ -2326,6 +2326,82 @@ def test_ambiguous_close_failure_never_retries_a_reused_descriptor(
         pass
 
 
+@pytest.mark.parametrize("failed_control", (".commit-log", ".commit-anchor"))
+def test_control_descriptor_is_closed_when_initial_sync_fails(
+    tmp_path, monkeypatch, failed_control
+):
+    root = tmp_path / "private"
+    captured = {}
+    original_open_control = private_filesystem._open_control_regular
+    original_fsync = private_filesystem.os.fsync
+    original_fstat = private_filesystem.os.fstat
+
+    def capture_control(path, *, root_fd):
+        descriptor, identity = original_open_control(path, root_fd=root_fd)
+        captured[Path(path).name] = descriptor
+        return descriptor, identity
+
+    def fail_selected_sync(descriptor):
+        if descriptor == captured.get(failed_control):
+            raise OSError(f"synthetic {failed_control} sync failure")
+        return original_fsync(descriptor)
+
+    monkeypatch.setattr(private_filesystem, "_open_control_regular", capture_control)
+    monkeypatch.setattr(private_filesystem.os, "fsync", fail_selected_sync)
+    with pytest.raises(RepositoryError, match="armazenamento privado"):
+        LocalPrivateContentStore(root)
+
+    with pytest.raises(OSError):
+        original_fstat(captured[failed_control])
+
+
+def test_staging_descriptor_is_closed_when_initial_identity_probe_fails(
+    tmp_path, monkeypatch
+):
+    target = tmp_path / "staging"
+    captured = {}
+    original_open = private_filesystem.os.open
+    original_fstat = private_filesystem.os.fstat
+
+    def capture_created(path, flags, *args, **kwargs):
+        descriptor = original_open(path, flags, *args, **kwargs)
+        captured["staging"] = descriptor
+        return descriptor
+
+    def fail_staging_probe(descriptor):
+        if descriptor == captured.get("staging"):
+            raise OSError("synthetic staging identity failure")
+        return original_fstat(descriptor)
+
+    monkeypatch.setattr(private_filesystem.os, "open", capture_created)
+    monkeypatch.setattr(private_filesystem.os, "fstat", fail_staging_probe)
+    with pytest.raises(OSError, match="synthetic staging identity failure"):
+        private_filesystem._write_fsynced(target, b"synthetic")
+
+    with pytest.raises(OSError):
+        original_fstat(captured["staging"])
+    assert target.exists()
+
+
+def test_lock_descriptor_is_closed_when_stream_adoption_fails(tmp_path, monkeypatch):
+    root = tmp_path / "private"
+    captured = {}
+    original_fdopen = private_filesystem.os.fdopen
+    original_fstat = private_filesystem.os.fstat
+
+    def fail_stream_adoption(descriptor, *args, **kwargs):
+        captured["lock"] = descriptor
+        raise OSError("synthetic fdopen failure")
+
+    monkeypatch.setattr(private_filesystem.os, "fdopen", fail_stream_adoption)
+    with pytest.raises(RepositoryError, match="armazenamento privado"):
+        LocalPrivateContentStore(root)
+    monkeypatch.setattr(private_filesystem.os, "fdopen", original_fdopen)
+
+    with pytest.raises(OSError):
+        original_fstat(captured["lock"])
+
+
 @pytest.mark.skipif(os.name != "nt", reason="locking Windows")
 def test_close_closes_lock_handle_even_when_explicit_unlock_fails(
     tmp_path, monkeypatch
