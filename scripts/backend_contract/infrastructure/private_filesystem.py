@@ -222,7 +222,7 @@ def _open_control_regular(
     *,
     root_fd: int | None,
 ) -> tuple[int, os.stat_result]:
-    flags = os.O_RDWR | _OPEN_BINARY | _OPEN_NOFOLLOW
+    flags = os.O_RDWR | os.O_APPEND | _OPEN_BINARY | _OPEN_NOFOLLOW
     try:
         before = None
         try:
@@ -833,13 +833,6 @@ class LocalPrivateContentStore:
         return tuple(entries), confirmed_bytes, None
 
     @staticmethod
-    def _ledger_raw(entries: tuple[str, ...], tail: bytes | None) -> bytes:
-        complete = b"".join(
-            entry.encode("ascii") + b"\n" for entry in entries
-        )
-        return complete + (tail or b"")
-
-    @staticmethod
     def _descriptor_snapshot(descriptor: int) -> bytes:
         before = os.fstat(descriptor)
         maximum = (_MAX_JOURNAL_ENTRIES * 74) + 73
@@ -856,19 +849,11 @@ class LocalPrivateContentStore:
 
     @staticmethod
     def _append_ledger(descriptor: int, prefix: str) -> None:
-        os.lseek(descriptor, 0, os.SEEK_END)
         _write_all(descriptor, prefix.encode("ascii") + b"\n")
         os.fsync(descriptor)
 
     @staticmethod
-    def _truncate_ledger(descriptor: int, size: int, *, expected: bytes) -> None:
-        if LocalPrivateContentStore._descriptor_snapshot(descriptor) != expected:
-            raise RepositoryIntegrityError("ledger privado mudou antes da truncagem")
-        os.ftruncate(descriptor, size)
-        os.fsync(descriptor)
-
-    @staticmethod
-    def _truncate_owned_ledger(
+    def _complete_owned_ledger(
         descriptor: int,
         original: bytes,
         owned_entry: bytes,
@@ -878,11 +863,10 @@ class LocalPrivateContentStore:
             current[len(original) :]
         ):
             raise RepositoryIntegrityError("ledger privado mudou antes do rollback")
-        LocalPrivateContentStore._truncate_ledger(
-            descriptor,
-            len(original),
-            expected=current,
-        )
+        written = current[len(original) :]
+        if written:
+            _write_all(descriptor, owned_entry[len(written) :])
+            os.fsync(descriptor)
 
     def _append_intent(self, prefix: str) -> None:
         self._append_ledger(self._journal_fd, prefix)
@@ -891,9 +875,15 @@ class LocalPrivateContentStore:
         encoded = prefix.encode("ascii")
         if not encoded.startswith(fragment):
             raise RepositoryIntegrityError("journal privado truncado sem proveniência")
-        os.lseek(self._journal_fd, 0, os.SEEK_END)
         _write_all(self._journal_fd, encoded[len(fragment) :] + b"\n")
         os.fsync(self._journal_fd)
+
+    def _complete_torn_anchor(self, prefix: str, fragment: bytes) -> None:
+        encoded = prefix.encode("ascii")
+        if not encoded.startswith(fragment):
+            raise RepositoryIntegrityError("anchor privado truncado sem proveniência")
+        _write_all(self._anchor_fd, encoded[len(fragment) :] + b"\n")
+        os.fsync(self._anchor_fd)
 
     def _confirm_intent(self, prefix: str) -> None:
         self._append_ledger(self._anchor_fd, prefix)
@@ -1142,11 +1132,15 @@ class LocalPrivateContentStore:
         anchor, _, anchor_tail = self._ledger_entries(
             self._anchor_fd, label="anchor"
         )
+        active_journal = tuple(
+            prefix for prefix in journal if prefix not in aborted_prefixes
+        )
         if (
             journal_tail is not None
             or anchor_tail is not None
-            or journal != anchor
-            or set(journal) != self._committed
+            or not set(journal).issubset(self._known_prefixes)
+            or active_journal != anchor
+            or set(active_journal) != self._committed
         ):
             raise RepositoryIntegrityError("journal privado diverge do estado confirmado")
 
@@ -1238,14 +1232,19 @@ class LocalPrivateContentStore:
         for prefix, member, _, _ in final_objects:
             groups.setdefault(prefix, set()).add(member)
 
-        journal, _, journal_tail = self._ledger_entries(
+        raw_journal, _, journal_tail = self._ledger_entries(
             self._journal_fd, label="journal"
         )
-        anchor, anchor_bytes, anchor_tail = self._ledger_entries(
+        anchor, _, anchor_tail = self._ledger_entries(
             self._anchor_fd, label="anchor"
         )
-        journal_snapshot = self._ledger_raw(journal, journal_tail)
-        anchor_snapshot = self._ledger_raw(anchor, anchor_tail)
+        if not (set(raw_journal) | set(anchor)).issubset(intents):
+            raise RepositoryIntegrityError("ledger privado sem intent durável")
+        if set(anchor) & aborted_prefixes:
+            raise RepositoryIntegrityError("anchor privado confirma intent abortado")
+        journal = tuple(
+            prefix for prefix in raw_journal if prefix not in aborted_prefixes
+        )
 
         common_length = 0
         for journal_entry, anchor_entry in zip(journal, anchor):
@@ -1260,8 +1259,6 @@ class LocalPrivateContentStore:
         journal_extra = journal[len(anchor) :]
         if len(journal_extra) > 1 or (journal_extra and journal_tail):
             raise RepositoryIntegrityError("journal privado perdeu proveniência")
-        if not (set(journal) | set(anchor)).issubset(intents):
-            raise RepositoryIntegrityError("ledger privado sem intent durável")
         committed_groups = {
             prefix
             for prefix, members in groups.items()
@@ -1275,7 +1272,9 @@ class LocalPrivateContentStore:
                 raise RepositoryIntegrityError("journal privado perdeu proveniência")
             fragment = journal_tail.decode("ascii")
             candidates = [
-                prefix for prefix in unmarked_intents if prefix.startswith(fragment)
+                prefix
+                for prefix in set(intents) - set(raw_journal)
+                if prefix.startswith(fragment)
             ]
             if len(candidates) != 1:
                 raise RepositoryIntegrityError(
@@ -1283,7 +1282,7 @@ class LocalPrivateContentStore:
                 )
             pending_prefix = candidates[0]
         elif pending_prefix is None:
-            candidates = unmarked_intents - set(journal)
+            candidates = unmarked_intents - set(raw_journal)
             if len(candidates) > 1:
                 raise RepositoryIntegrityError("intents privados pendentes ambíguos")
             if candidates:
@@ -1399,7 +1398,6 @@ class LocalPrivateContentStore:
                 continue
             raise RepositoryIntegrityError("registro privado sem proveniência durável")
 
-        common_bytes = sum(len(entry) + 1 for entry in common)
         mutated = False
         if journal_tail is not None:
             if pending_prefix is None:
@@ -1407,9 +1405,6 @@ class LocalPrivateContentStore:
                     "journal privado truncado sem proveniência"
                 )
             self._complete_torn_intent(pending_prefix, journal_tail)
-            journal_snapshot = self._ledger_raw(journal, None) + (
-                pending_prefix.encode("ascii") + b"\n"
-            )
             mutated = True
         for final_path, final_details in cleanup_finals:
             self._retire_internal(final_path, expected=final_details)
@@ -1425,31 +1420,11 @@ class LocalPrivateContentStore:
         for prefix in cleanup_prefixes - aborted_prefixes:
             self._abort_intent(prefix, intents)
             mutated = True
-        if journal_tail is not None or (
-            pending_prefix is not None
-            and not pending_is_committed
-            and not pending_without_wal
-        ):
-            self._truncate_ledger(
-                self._journal_fd,
-                common_bytes,
-                expected=journal_snapshot,
-            )
-            mutated = True
         if pending_is_committed:
-            self._truncate_ledger(
-                self._anchor_fd,
-                common_bytes,
-                expected=anchor_snapshot,
-            )
-            self._append_ledger(self._anchor_fd, pending_prefix)
-            mutated = True
-        elif anchor_bytes != common_bytes or anchor_tail is not None:
-            self._truncate_ledger(
-                self._anchor_fd,
-                common_bytes,
-                expected=anchor_snapshot,
-            )
+            if anchor_tail is not None:
+                self._complete_torn_anchor(pending_prefix, anchor_tail)
+            else:
+                self._append_ledger(self._anchor_fd, pending_prefix)
             mutated = True
         if mutated:
             return self._recover()
@@ -1713,16 +1688,15 @@ class LocalPrivateContentStore:
                                 nonce,
                                 root_fd=self._root_fd,
                             )
-                            self._truncate_owned_ledger(
+                            self._complete_owned_ledger(
                                 self._journal_fd,
                                 journal_before,
                                 prefix.encode("ascii") + b"\n",
                             )
-                            self._truncate_ledger(
-                                self._anchor_fd,
-                                len(anchor_before),
-                                expected=anchor_before,
-                            )
+                            if self._descriptor_snapshot(self._anchor_fd) != anchor_before:
+                                raise RepositoryIntegrityError(
+                                    "anchor privado mudou durante o rollback"
+                                )
                         except (OSError, RepositoryIntegrityError):
                             pass
 

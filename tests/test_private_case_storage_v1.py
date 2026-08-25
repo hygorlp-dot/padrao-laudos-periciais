@@ -736,7 +736,9 @@ def test_interrupted_first_journal_intent_exposes_no_committed_record(
 
     with LocalPrivateContentStore(root) as reopened:
         assert reopened.get(WORKSPACE_A, metadata.content_id) is None
-    assert (root / ".commit-log").read_bytes() == b""
+    assert (root / ".commit-log").read_bytes() == (
+        f"{WORKSPACE_A}.{CONTENT_A}\n".encode("ascii")
+    )
     assert (root / ".commit-anchor").read_bytes() == b""
 
 
@@ -907,6 +909,54 @@ def test_recovery_never_erases_a_ledger_entry_injected_after_abort_marker(
     with pytest.raises(RepositoryIntegrityError, match="journal|ledger|intent"):
         LocalPrivateContentStore(root)
     assert foreign in (root / ".commit-log").read_bytes()
+
+
+def test_recovery_never_uses_destructive_ledger_truncation(tmp_path, monkeypatch):
+    root = tmp_path / "private"
+    metadata = _metadata()
+    with LocalPrivateContentStore(root) as private_store:
+        private_store.store(metadata, b"synthetic private bytes")
+    _record_paths(root)["commit"].unlink()
+    (root / ".commit-anchor").write_bytes(b"")
+
+    def forbidden_truncation(*_args, **_kwargs):
+        raise AssertionError("rollback must preserve the append-only journal")
+
+    monkeypatch.setattr(private_filesystem.os, "ftruncate", forbidden_truncation)
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
+    assert (root / ".commit-log").read_bytes() == (
+        f"{WORKSPACE_A}.{CONTENT_A}\n".encode("ascii")
+    )
+
+
+def test_concurrent_ledger_append_is_never_overwritten(tmp_path, monkeypatch):
+    root = tmp_path / "private"
+    foreign = f"{WORKSPACE_B}.{CONTENT_B}\n".encode("ascii")
+    original_write_all = private_filesystem._write_all
+    injected = False
+
+    with LocalPrivateContentStore(root) as private_store:
+        journal_fd = private_store._journal_fd
+
+        def inject_before_owned_append(descriptor, payload):
+            nonlocal injected
+            if descriptor == journal_fd and not injected:
+                injected = True
+                with (root / ".commit-log").open("ab") as journal:
+                    journal.write(foreign)
+                    journal.flush()
+                    os.fsync(journal.fileno())
+            return original_write_all(descriptor, payload)
+
+        monkeypatch.setattr(
+            private_filesystem, "_write_all", inject_before_owned_append
+        )
+        private_store.store(_metadata(), b"synthetic private bytes")
+
+    assert foreign in (root / ".commit-log").read_bytes()
+    with pytest.raises(RepositoryIntegrityError, match="journal|ledger|intent"):
+        LocalPrivateContentStore(root)
 
 
 def test_clean_journal_truncation_is_not_reclassified_as_crash_recovery(tmp_path):
@@ -1158,12 +1208,10 @@ def test_recovery_retirement_failure_keeps_wal_and_is_retryable(
 
     with LocalPrivateContentStore(root) as reopened:
         assert reopened.list_all(WORKSPACE_A) == ()
-    assert (root / ".commit-log").read_bytes() == b""
+    assert (root / ".commit-log").read_bytes() == expected_wal
 
 
-def test_torn_wal_remains_recoverable_after_crash_before_wal_consumption(
-    tmp_path, monkeypatch
-):
+def test_torn_wal_is_completed_and_preserved_as_aborted_evidence(tmp_path):
     root = tmp_path / "private"
     metadata = _metadata()
     with LocalPrivateContentStore(root) as private_store:
@@ -1172,35 +1220,9 @@ def test_torn_wal_remains_recoverable_after_crash_before_wal_consumption(
     (root / ".commit-anchor").write_bytes(b"")
     prefix = f"{WORKSPACE_A}.{CONTENT_A}"
     (root / ".commit-log").write_bytes(prefix.encode("ascii")[:12])
-    original_truncate = LocalPrivateContentStore._truncate_ledger
-    failed = False
-
-    def fail_first_truncation(descriptor, size, *, expected):
-        nonlocal failed
-        if not failed:
-            failed = True
-            raise OSError("synthetic crash before WAL consumption")
-        return original_truncate(descriptor, size, expected=expected)
-
-    monkeypatch.setattr(
-        LocalPrivateContentStore,
-        "_truncate_ledger",
-        staticmethod(fail_first_truncation),
-    )
-    with pytest.raises(RepositoryError, match="abrir"):
-        LocalPrivateContentStore(root)
-    assert (root / ".commit-log").read_bytes() == (
-        prefix.encode("ascii") + b"\n"
-    )
-
-    monkeypatch.setattr(
-        LocalPrivateContentStore,
-        "_truncate_ledger",
-        staticmethod(original_truncate),
-    )
     with LocalPrivateContentStore(root) as reopened:
         assert reopened.list_all(WORKSPACE_A) == ()
-    assert (root / ".commit-log").read_bytes() == b""
+    assert (root / ".commit-log").read_bytes() == prefix.encode("ascii") + b"\n"
 
 
 def test_interrupted_torn_wal_completion_is_restartable(tmp_path, monkeypatch):
@@ -1248,7 +1270,7 @@ def test_abrupt_first_torn_wal_uses_durable_intent_provenance(tmp_path):
 
     with LocalPrivateContentStore(root) as reopened:
         assert reopened.list_all(WORKSPACE_A) == ()
-    assert (root / ".commit-log").read_bytes() == b""
+    assert (root / ".commit-log").read_bytes() == prefix.encode("ascii") + b"\n"
 
 
 def test_crash_after_physical_intent_before_wal_is_recovered_as_abort(tmp_path):
@@ -1262,7 +1284,7 @@ def test_crash_after_physical_intent_before_wal_is_recovered_as_abort(tmp_path):
     assert (root / f".aborted.{nonce}").exists()
 
 
-def test_recovery_revalidates_every_path_after_retirement_before_consuming_wal(
+def test_recovery_revalidates_every_path_after_retirement_before_sealing_abort(
     tmp_path, monkeypatch
 ):
     root = tmp_path / "private"
@@ -1300,7 +1322,7 @@ def test_recovery_revalidates_every_path_after_retirement_before_consuming_wal(
     assert target.read_bytes() == b"independent post-retirement replacement"
 
 
-def test_recovery_rechecks_after_wal_truncation_without_losing_provenance(
+def test_recovery_rechecks_after_wal_preservation_without_losing_provenance(
     tmp_path, monkeypatch
 ):
     root = tmp_path / "private"
@@ -1311,20 +1333,21 @@ def test_recovery_rechecks_after_wal_truncation_without_losing_provenance(
     paths["commit"].unlink()
     (root / ".commit-anchor").write_bytes(b"")
     target = paths["commit"]
-    original_truncate = LocalPrivateContentStore._truncate_ledger
+    original_abort = LocalPrivateContentStore._abort_intent
     injected = False
 
-    def inject_before_truncation(descriptor, size, *, expected):
+    def inject_after_abort(store, prefix, intents):
         nonlocal injected
+        result = original_abort(store, prefix, intents)
         if not injected:
             injected = True
             target.write_bytes(b"independent late replacement")
-        return original_truncate(descriptor, size, expected=expected)
+        return result
 
     monkeypatch.setattr(
         LocalPrivateContentStore,
-        "_truncate_ledger",
-        staticmethod(inject_before_truncation),
+        "_abort_intent",
+        inject_after_abort,
     )
     with LocalPrivateContentStore(root) as reopened:
         assert reopened.list_all(WORKSPACE_A) == ()
@@ -1332,8 +1355,8 @@ def test_recovery_rechecks_after_wal_truncation_without_losing_provenance(
 
     monkeypatch.setattr(
         LocalPrivateContentStore,
-        "_truncate_ledger",
-        staticmethod(original_truncate),
+        "_abort_intent",
+        original_abort,
     )
     with LocalPrivateContentStore(root) as reopened:
         assert reopened.list_all(WORKSPACE_A) == ()

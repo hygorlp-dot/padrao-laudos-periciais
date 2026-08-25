@@ -99,14 +99,16 @@
   objetos regulares não-reparse, JSON canônico, checksum exato do manifesto e
   verificação model/content. Roll back only the exact pending WAL transaction by
   adding no-replace `.retired.*` hardlinks bound to captured inode identity;
-  never unlink after a separate identity check, and consume WAL only after all
-  members are durably inert. Canonicalize and fsync a uniquely attributable
-  torn intent before retirement, using a pre-WAL fsynced physical intent to
+  never unlink after a separate identity check, and retain aborted WAL entries
+  as append-only evidence after all members are durably inert. Canonicalize and
+  fsync a uniquely attributable torn intent before retirement, using a pre-WAL
+  fsynced physical intent to
   recover even the first partial append. Require all four final/staging identity
   pairs for every committed record. Bind every retired inode to an exact aborted
   intent, reconcile its link count against all root-owned aliases, and re-audit
-  the complete prefix after retirement before consuming WAL. Unknown valid-shaped
-  names and replacements fail closed or become inert without destructive cleanup.
+  the complete prefix after retirement before sealing the abort. Unknown
+  valid-shaped names and replacements fail closed or become inert without
+  destructive cleanup.
   Attribute short torn WAL only to an unmarked physical intent, reject a complete
   group without WAL before anchor mutation, reserve the full 18-entry abort
   footprint before the first mutation, flush every newly published hardlink
@@ -114,7 +116,8 @@
   volume, and detach raw descriptors before any potentially ambiguous close.
   Revalidate link counts after reads, reject reparse ancestry, close the singleton
   handle even after unlock failure, prevent inherited-process operations/unlock,
-  flush rollback hardlinks, and compare ledger snapshots before truncation.
+  flush rollback hardlinks, open ledgers with atomic append semantics, and never
+  truncate ledger evidence during recovery or rollback.
 
 ### Task 3: Prove containment, isolation and privacy
 

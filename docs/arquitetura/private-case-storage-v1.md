@@ -113,8 +113,9 @@ separada. Em vez disso, cria um hardlink aleatório `.retired.*` com semântica
 marcado fica permanentemente inerte para catálogo/leitura. Os nomes e bytes
 permanecem preservados como evidência. Um hardlink `.aborted.*` no intent fixa
 o estado abortado; marcadores `.retired.*` só são aceitos quando ligados a um
-membro canônico dessa mesma transação. O WAL só é consumido depois que todos os
-membros estão aposentados e o intent abortado está durável.
+membro canônico dessa mesma transação. O WAL é append-only: depois que todos os
+membros estão aposentados e o intent abortado está durável, sua entrada permanece
+como evidência física e é excluída apenas da visão lógica de transações ativas.
 
 ## Integridade e reopen
 
@@ -138,12 +139,13 @@ ou erro durante esse rollback mantém a intenção e permite repetição idempot
 Uma intenção truncada é vinculada ao único intent físico ainda não confirmado
 nem abortado, completada e fsyncada antes da primeira aposentadoria. Isso cobre
 inclusive a queda no primeiro append, antes de qualquer staging existir. Antes
-de consumir o WAL, a recuperação reabre todo o prefixo e exige que cada nome
+de selar o abort, a recuperação reabre todo o prefixo e exige que cada nome
 existente esteja ligado a um marcador aposentado válido; depois reexecuta a
 recuperação sobre o estado persistido. Um nome staging/final sem intent e estado
 durável correspondente nunca é adotado nem
 apagado: bloqueia a abertura e preserva a evidência. O
-journal é write-ahead: contém no máximo uma intenção além do anchor. Se a queda
+visão ativa do journal é write-ahead: contém no máximo uma intenção além do
+anchor. Se a queda
 ocorre depois do commit e antes da confirmação, somente esse registro integral,
 único e inequivocamente vinculado pode concluir a confirmação. Se ocorre antes
 do commit, a intenção e os componentes não visíveis são revertidos. Tail parcial
@@ -159,11 +161,12 @@ entradas do pior rollback persistente (intent, aborted, oito aliases e oito
 marcadores retired); assim uma falha não ultrapassa o próprio teto físico. A
 ausência de qualquer controle nunca é tratada como store
 novo. A recuperação é executada antes de o adapter aceitar operações.
-Qualquer truncagem de rollback compara novamente os bytes integrais do ledger
-com o snapshot validado e com o único sufixo pertencente à transação; divergência
-preserva os bytes e falha fechada. Marcadores `.retired` e `.aborted` recebem a
-mesma barreira de identidade/fsync usada pelos aliases publicados antes de o WAL
-ser consumido.
+Journal e anchor são abertos com append atômico do sistema operacional e nunca
+são truncados pelo adapter. Um append parcial pertencente à transação é somente
+completado e fsyncado; bytes concorrentes ou sem proveniência permanecem
+preservados e bloqueiam a abertura. Marcadores `.retired` e `.aborted` recebem a
+mesma barreira de identidade/fsync usada pelos aliases publicados antes de o
+abort ser considerado estável.
 
 SHA-256 aqui é evidência de integridade acidental e consistência local, não uma
 assinatura nem prova de autenticidade contra um atacante com capacidade para
