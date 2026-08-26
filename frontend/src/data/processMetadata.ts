@@ -30,7 +30,13 @@ export type ProcessMetadataEvidence = {
   field_name: ProcessMetadataFieldName;
   extracted_value: string;
   source_page: number;
-  extraction_method: "LOCAL_PDF_TEXT_V1";
+  extraction_method: "LOCAL_PDF_TEXT_V1" | "LOCAL_OCR_V1";
+  extraction_mode: "NATIVE_TEXT" | "OCR";
+  ocr_engine: string;
+  engine_version: string;
+  model_version: string;
+  ocr_confidence: number | null;
+  bounding_box: [number, number, number, number] | null;
   extraction_timestamp: string;
   source_filename: string;
   normalized_text_span: string;
@@ -106,14 +112,33 @@ function parseEvidence(
   if (!exactKeys(record, [
     "workspace_id", "document_id", "field_name", "extracted_value", "source_page",
     "extraction_method", "extraction_timestamp", "source_filename", "normalized_text_span",
+    "extraction_mode", "ocr_engine", "engine_version", "model_version", "ocr_confidence",
+    "bounding_box",
   ]) || record.workspace_id !== workspaceId || typeof record.document_id !== "string"
     || !UUID.test(record.document_id) || record.field_name !== fieldName
     || typeof record.extracted_value !== "string" || !Number.isSafeInteger(record.source_page)
-    || (record.source_page as number) < 1 || record.extraction_method !== "LOCAL_PDF_TEXT_V1"
+    || (record.source_page as number) < 1
     || typeof record.extraction_timestamp !== "string" || !TIMEZONE.test(record.extraction_timestamp)
     || !Number.isFinite(Date.parse(record.extraction_timestamp))
     || !safeFilename(record.source_filename)
     || typeof record.normalized_text_span !== "string") {
+    throw new ProcessMetadataApiError("invalid-response", "Resposta local inválida");
+  }
+  const nativeEvidence = record.extraction_mode === "NATIVE_TEXT"
+    && record.extraction_method === "LOCAL_PDF_TEXT_V1"
+    && record.ocr_engine === "" && record.model_version === ""
+    && record.ocr_confidence === null && record.bounding_box === null;
+  const box = record.bounding_box;
+  const ocrEvidence = record.extraction_mode === "OCR"
+    && record.extraction_method === "LOCAL_OCR_V1"
+    && typeof record.ocr_engine === "string" && Boolean(record.ocr_engine.trim())
+    && typeof record.model_version === "string" && Boolean(record.model_version.trim())
+    && typeof record.ocr_confidence === "number" && Number.isFinite(record.ocr_confidence)
+    && record.ocr_confidence >= 0 && record.ocr_confidence <= 1
+    && (box === null || (Array.isArray(box) && box.length === 4
+      && box.every((coordinate) => typeof coordinate === "number" && Number.isFinite(coordinate))));
+  if (typeof record.engine_version !== "string" || !record.engine_version.trim()
+    || (!nativeEvidence && !ocrEvidence)) {
     throw new ProcessMetadataApiError("invalid-response", "Resposta local inválida");
   }
   return record as ProcessMetadataEvidence;

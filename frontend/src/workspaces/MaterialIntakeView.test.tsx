@@ -56,7 +56,10 @@ describe("material intake view", () => {
       }),
     );
     await user.click(screen.getByRole("button", { name: "Importar PDF" }));
-    expect(screen.getByRole("button", { name: "Importando e extraindo…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Processando PDF…" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Leitura local em andamento. OCR será usado somente nas páginas sem texto útil.",
+    );
 
     resolveImport(jsonResponse(201, ITEM));
     expect(await screen.findByText(ITEM.original_filename)).toBeInTheDocument();

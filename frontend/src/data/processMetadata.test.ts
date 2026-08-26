@@ -43,10 +43,16 @@ const REVIEW = {
         field_name: "numero_processo",
         extracted_value: "7654321-55.2025.4.05.0001",
         source_page: 1,
-        extraction_method: "LOCAL_PDF_TEXT_V1",
+        extraction_method: "LOCAL_OCR_V1",
         extraction_timestamp: "2026-08-26T12:30:00+00:00",
         source_filename: "autos.pdf",
         normalized_text_span: "PROCESSO 7654321-55.2025.4.05.0001",
+        extraction_mode: "OCR",
+        ocr_engine: "RapidOCR/ONNXRuntime",
+        engine_version: "3.9.2",
+        model_version: "PP-OCRv5-latin-rec",
+        ocr_confidence: 0.98 as number | null,
+        bounding_box: [80, 100, 1100, 180] as [number, number, number, number] | null,
       }],
     },
   },
@@ -72,6 +78,14 @@ describe("process metadata review boundary", () => {
       expect.objectContaining({ method: "GET", credentials: "same-origin" }),
     );
     expect(fetchSpy.mock.calls[0][1].headers).not.toHaveProperty("X-Local-API-Token");
+  });
+
+  test("accepts OCR evidence without a bounding box when no exact locator is available", async () => {
+    const withoutBox = structuredClone(REVIEW);
+    withoutBox.fields.numero_processo.evidence[0].bounding_box = null;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(withoutBox)));
+
+    await expect(getProcessMetadataReview(WORKSPACE_ID)).resolves.toEqual(withoutBox);
   });
 
   test.each([

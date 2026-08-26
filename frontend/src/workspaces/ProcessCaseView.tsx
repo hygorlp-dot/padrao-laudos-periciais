@@ -264,7 +264,7 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
             <strong>{document.source_filename}</strong>
             <span>
               {document.text_state === "TEXT_EXTRACTION_UNAVAILABLE"
-                ? "Este PDF não possui camada de texto utilizável. OCR não foi executado."
+                ? "O OCR local não conseguiu obter texto utilizável. Revise o arquivo ou importe uma cópia legível."
                 : "A extração local deste PDF não pôde ser concluída."}
             </span>
           </section>
@@ -292,7 +292,8 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
             />
             {extracted?.evidence[0] ? (
               <p className="field-provenance">
-                Extraído de {extracted.evidence[0].source_filename}, página {extracted.evidence[0].source_page}
+                {extracted.evidence[0].extraction_mode === "OCR" ? "Extraído por OCR local de " : "Extraído de "}
+                {extracted.evidence[0].source_filename}, página {extracted.evidence[0].source_page}
               </p>
             ) : null}
             {manualConflict && extracted ? (

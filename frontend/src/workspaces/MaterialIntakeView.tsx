@@ -138,10 +138,15 @@ export function MaterialIntakeView({ workspaceId }: MaterialIntakeViewProps) {
             type="submit"
             disabled={selected === null || importing}
           >
-            {importing ? "Importando e extraindo…" : "Importar PDF"}
+            {importing ? "Processando PDF…" : "Importar PDF"}
           </button>
         </form>
       </div>
+      {importing ? (
+        <p className="material-import-status" role="status" aria-live="polite">
+          Leitura local em andamento. OCR será usado somente nas páginas sem texto útil.
+        </p>
+      ) : null}
       {importError ? <p className="material-message material-message--error" role="alert">{importError}</p> : null}
       {state.items.length === 0 ? (
         <div className="material-empty">

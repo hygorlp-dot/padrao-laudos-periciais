@@ -135,7 +135,7 @@ class ExistingWorkspace:
 
 
 class StaticTextExtractor:
-    def extract(self, source):
+    def extract(self, source, **context):
         assert source.read(5) == b"%PDF-"
         source.seek(0)
         return PdfTextResult(
@@ -149,6 +149,7 @@ class StaticTextExtractor:
                     "AUTOR: Parte Sintetica\nREU: Parte Contraria",
                 ),
             ),
+            document_sha256=context["document_sha256"],
         )
 
 
@@ -220,7 +221,9 @@ def test_import_persists_redacted_field_provenance_separately_from_effective_dat
     assert extraction.artifact_id == str(DOCUMENT_ID)
     payload = thaw_payload(extraction.payload)
     serialized = json.dumps(payload, ensure_ascii=False)
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
+    assert payload["document_sha256"] == "b" * 64
+    assert payload["page_evidence"][0]["document_sha256"] == "b" * 64
     assert payload["document_id"] == str(DOCUMENT_ID)
     assert payload["source_filename"] == "autos.pdf"
     assert payload["fields"]["numero_processo"]["value"] == "7654321-55.2025.4.05.0001"
@@ -282,7 +285,7 @@ def test_textless_document_is_exposed_as_controlled_document_state():
         "TextlessExtractor",
         (),
         {
-            "extract": lambda _self, _source: PdfTextResult(
+            "extract": lambda _self, _source, **_context: PdfTextResult(
                 PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE,
                 (),
             )
