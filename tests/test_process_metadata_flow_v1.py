@@ -391,8 +391,19 @@ def test_missing_extraction_is_error_and_new_evidence_invalidates_confirmation()
     stale_process_review = GetProcessMetadataReview(
         ExistingWorkspace(), documents, revisions, CurrentProcess(3)
     )
-    with pytest.raises(RepositoryIntegrityError, match="revisão|confirmação"):
-        stale_process_review.execute(WORKSPACE_ID)
+    stale = stale_process_review.execute(WORKSPACE_ID)
+    assert stale.state != "CONFIRMED"
+    assert stale.confirmed_revision is None
+
+    recovery_save = SaveProcess()
+    ConfirmProcessMetadata(
+        recovery_save,
+        stale_process_review,
+        revisions,
+        FixedClock(),
+        SequenceIds(),
+    ).execute(WORKSPACE_ID, ProcessCaseData.empty(), 3)
+    assert len(recovery_save.calls) == 1
 
     updated = extract_process_metadata(
         workspace_id=WORKSPACE_ID,
@@ -535,6 +546,91 @@ def test_legacy_extraction_is_explicitly_rebound_to_the_immutable_document_ident
 
     assert restored.document_sha256 == "b" * 64
     assert restored.fields["numero_processo"].evidence[0].engine_version == ""
+    assert restored.text_state is PdfTextExtractionState.PARTIAL
+
+
+def test_legacy_extraction_cannot_promote_a_confident_field_without_provenance():
+    extracted = extract_process_metadata(
+        workspace_id=WORKSPACE_ID,
+        document_id=DOCUMENT_ID,
+        original_filename="autos.pdf",
+        text=PdfTextResult(
+            PdfTextExtractionState.AVAILABLE,
+            (PdfTextPage(1, "PROCESSO: 7654321-55.2025.4.05.0001"),),
+            document_sha256="b" * 64,
+        ),
+        extracted_at="2026-08-26T12:30:00+00:00",
+    )
+    legacy = json.loads(json.dumps(document_metadata_payload(extracted)))
+    legacy["schema_version"] = 1
+    legacy.pop("document_sha256")
+    legacy.pop("page_evidence")
+    legacy["fields"]["numero_processo"]["evidence"] = []
+    persisted = ArtifactRevision(
+        workspace_id=WORKSPACE_ID,
+        artifact_kind="PROCESS_METADATA_EXTRACTION",
+        artifact_id=str(DOCUMENT_ID),
+        revision_id="00000000-0000-4000-8000-000000000001",
+        revision=1,
+        created_at="2026-08-26T12:30:00+00:00",
+        checksum_sha256="a" * 64,
+        payload=legacy,
+    )
+
+    with pytest.raises(ValueError, match="proveniência|campo"):
+        document_metadata_from_payload(
+            persisted.payload, legacy_document_sha256="b" * 64
+        )
+
+
+def test_v2_ocr_field_bounding_box_must_belong_to_its_page_evidence():
+    from scripts.backend_contract.application.process_metadata import PageTextBlock
+
+    document = extract_process_metadata(
+        workspace_id=WORKSPACE_ID,
+        document_id=DOCUMENT_ID,
+        original_filename="autos.pdf",
+        text=PdfTextResult(
+            PdfTextExtractionState.AVAILABLE,
+            (
+                PdfTextPage(
+                    1,
+                    "PROCESSO: 7654321-55.2025.4.05.0001",
+                    extraction_mode=PageExtractionMode.OCR,
+                    engine="SYNTHETIC_OCR",
+                    engine_version="1.0",
+                    model_version="synthetic-pt-v1",
+                    confidence=0.99,
+                    blocks=(
+                        PageTextBlock(
+                            "PROCESSO: 7654321-55.2025.4.05.0001",
+                            0.99,
+                            (80.0, 100.0, 1100.0, 180.0),
+                        ),
+                    ),
+                ),
+            ),
+            document_sha256="b" * 64,
+        ),
+        extracted_at="2026-08-26T12:30:00+00:00",
+    )
+    payload = document_metadata_payload(document)
+    payload["fields"]["numero_processo"]["evidence"][0]["bounding_box"] = [
+        999.0, 999.0, 1000.0, 1000.0,
+    ]
+    persisted = ArtifactRevision(
+        workspace_id=WORKSPACE_ID,
+        artifact_kind="PROCESS_METADATA_EXTRACTION",
+        artifact_id=str(DOCUMENT_ID),
+        revision_id="00000000-0000-4000-8000-000000000001",
+        revision=1,
+        created_at="2026-08-26T12:30:00+00:00",
+        checksum_sha256="a" * 64,
+        payload=payload,
+    )
+
+    with pytest.raises(ValueError, match="bounding|proveniência|página"):
+        document_metadata_from_payload(persisted.payload)
 
 
 def test_partial_document_cannot_be_reported_as_fully_extracted():

@@ -680,9 +680,7 @@ class GetProcessMetadataReview:
             else:
                 current_case = self.process_case.execute(workspace_id)
                 if current_case.revision != confirmed_revision:
-                    raise RepositoryIntegrityError(
-                        "confirmação diverge da revisão processual atual"
-                    )
+                    confirmed_revision = None
         state = "CONFIRMED" if confirmed_revision is not None else aggregate.state
         if missing_extraction and confirmed_revision is None:
             state = "ERROR"

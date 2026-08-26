@@ -958,6 +958,8 @@ def document_metadata_from_payload(
             raw["value"],
             tuple(evidence),
         )
+    if schema_version == 1 and text_state is PdfTextExtractionState.AVAILABLE:
+        text_state = PdfTextExtractionState.PARTIAL
     document = DocumentProcessMetadata(
         workspace_id,
         document_id,
@@ -999,34 +1001,37 @@ def document_metadata_from_payload(
             raise ValueError("estado indisponível diverge da evidência de página")
         if document.text_state is PdfTextExtractionState.ERROR and document.page_evidence:
             raise ValueError("estado de erro diverge da evidência de página")
-        for name, field in document.fields.items():
-            if field.state is FieldExtractionState.CONFIDENT and (
-                not field.value.strip() or not field.evidence
-            ):
-                raise ValueError(f"campo confiante sem proveniência: {name}")
-            if field.state is FieldExtractionState.CONFIDENT:
-                expected_value = (
-                    "; ".join(item.extracted_value for item in field.evidence)
-                    if name in {"parte_requerente", "parte_requerida"}
-                    else field.evidence[0].extracted_value
+    else:
+        textual_pages = {}
+    for name, field in document.fields.items():
+        if field.state is FieldExtractionState.CONFIDENT and (
+            not field.value.strip() or not field.evidence
+        ):
+            raise ValueError(f"campo confiante sem proveniência: {name}")
+        if field.state is FieldExtractionState.CONFIDENT:
+            expected_value = (
+                "; ".join(item.extracted_value for item in field.evidence)
+                if name in {"parte_requerente", "parte_requerida"}
+                else field.evidence[0].extracted_value
+            )
+            if (
+                field.value != expected_value
+                or (
+                    name not in {"parte_requerente", "parte_requerida"}
+                    and len(field.evidence) != 1
                 )
-                if (
-                    field.value != expected_value
-                    or (
-                        name not in {"parte_requerente", "parte_requerida"}
-                        and len(field.evidence) != 1
-                    )
-                ):
-                    raise ValueError(f"valor do campo diverge da proveniência: {name}")
-            if field.state is FieldExtractionState.NOT_FOUND and (
-                field.value or field.evidence
             ):
-                raise ValueError(f"campo ausente possui evidência: {name}")
-            if field.state in {
-                FieldExtractionState.AMBIGUOUS,
-                FieldExtractionState.CONFLICTING,
-            } and (field.value or not field.evidence):
-                raise ValueError(f"campo inconclusivo sem proveniência: {name}")
+                raise ValueError(f"valor do campo diverge da proveniência: {name}")
+        if field.state is FieldExtractionState.NOT_FOUND and (
+            field.value or field.evidence
+        ):
+            raise ValueError(f"campo ausente possui evidência: {name}")
+        if field.state in {
+            FieldExtractionState.AMBIGUOUS,
+            FieldExtractionState.CONFLICTING,
+        } and (field.value or not field.evidence):
+            raise ValueError(f"campo inconclusivo sem proveniência: {name}")
+        if schema_version == 2:
             for evidence in field.evidence:
                 page = textual_pages.get(evidence.source_page)
                 if (
@@ -1039,6 +1044,10 @@ def document_metadata_from_payload(
                             evidence.ocr_engine != page.engine
                             or evidence.engine_version != page.engine_version
                             or evidence.model_version != page.model_version
+                            or (
+                                evidence.bounding_box is not None
+                                and evidence.bounding_box not in page.bounding_boxes
+                            )
                         )
                     )
                 ):
