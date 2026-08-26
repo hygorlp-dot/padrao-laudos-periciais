@@ -1040,12 +1040,13 @@ def document_metadata_from_payload(
             FieldExtractionState.CONFLICTING,
         } and (field.value or not field.evidence):
             raise ValueError(f"campo inconclusivo sem proveniência: {name}")
-        if schema_version == 2:
-            for evidence in field.evidence:
+        for evidence in field.evidence:
+            if evidence.source_filename != document.source_filename:
+                raise ValueError("arquivo da proveniência diverge do documento")
+            if schema_version == 2:
                 page = textual_pages.get(evidence.source_page)
                 if (
                     page is None
-                    or evidence.source_filename != document.source_filename
                     or evidence.extraction_mode is not page.extraction_mode
                     or (
                         evidence.extraction_mode is PageExtractionMode.OCR

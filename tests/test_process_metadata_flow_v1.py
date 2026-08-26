@@ -549,6 +549,48 @@ def test_legacy_extraction_is_explicitly_rebound_to_the_immutable_document_ident
     assert restored.text_state is PdfTextExtractionState.PARTIAL
 
 
+def test_legacy_extraction_rejects_evidence_from_a_different_source_filename():
+    extracted = extract_process_metadata(
+        workspace_id=WORKSPACE_ID,
+        document_id=DOCUMENT_ID,
+        original_filename="autos.pdf",
+        text=PdfTextResult(
+            PdfTextExtractionState.AVAILABLE,
+            (PdfTextPage(1, "PROCESSO: 7654321-55.2025.4.05.0001"),),
+            document_sha256="b" * 64,
+        ),
+        extracted_at="2026-08-26T12:30:00+00:00",
+    )
+    legacy = json.loads(json.dumps(document_metadata_payload(extracted)))
+    legacy["schema_version"] = 1
+    legacy.pop("document_sha256")
+    legacy.pop("page_evidence")
+    v2_only = {
+        "extraction_mode", "ocr_engine", "engine_version", "model_version",
+        "ocr_confidence", "bounding_box",
+    }
+    for field in legacy["fields"].values():
+        for evidence in field["evidence"]:
+            for key in v2_only:
+                evidence.pop(key)
+            evidence["source_filename"] = "outro-documento.pdf"
+    persisted = ArtifactRevision(
+        workspace_id=WORKSPACE_ID,
+        artifact_kind="PROCESS_METADATA_EXTRACTION",
+        artifact_id=str(DOCUMENT_ID),
+        revision_id="00000000-0000-4000-8000-000000000001",
+        revision=1,
+        created_at="2026-08-26T12:30:00+00:00",
+        checksum_sha256="a" * 64,
+        payload=legacy,
+    )
+
+    with pytest.raises(ValueError, match="arquivo|proveniência"):
+        document_metadata_from_payload(
+            persisted.payload, legacy_document_sha256="b" * 64
+        )
+
+
 def test_legacy_extraction_cannot_promote_a_confident_field_without_provenance():
     extracted = extract_process_metadata(
         workspace_id=WORKSPACE_ID,

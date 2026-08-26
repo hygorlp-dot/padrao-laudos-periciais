@@ -70,24 +70,31 @@ class LocalPdfTextExtractor:
             return False
         dominant = max(Counter(alphanumeric_values).values()) / len(alphanumeric_values)
         normalized = "".join(alphanumeric_values)
-        gram_count = max(0, len(normalized) - 7)
+        ngram_size = 8
+        gram_count = max(0, len(normalized) - ngram_size + 1)
         gram_frequencies = Counter(
-            normalized[index : index + 8] for index in range(gram_count)
+            normalized[index : index + ngram_size] for index in range(gram_count)
         )
         low_ngram_diversity = (
             gram_count > 0 and len(gram_frequencies) / gram_count <= 0.35
         )
-        repeated_ngram_coverage = (
-            sum(
-                occurrences
-                for occurrences in gram_frequencies.values()
-                if occurrences >= 3
+        repeated_ngram_occurrences = sum(
+            occurrences
+            for occurrences in gram_frequencies.values()
+            if occurrences >= 3
+        )
+        estimated_periodic_coverage = (
+            min(
+                len(normalized),
+                repeated_ngram_occurrences + 3 * (ngram_size - 1),
             )
-            / gram_count
-            if gram_count
+            / len(normalized)
+            if repeated_ngram_occurrences
             else 0.0
         )
-        obviously_repeated = low_ngram_diversity or repeated_ngram_coverage >= 0.5
+        obviously_repeated = (
+            low_ngram_diversity or estimated_periodic_coverage >= 0.5
+        )
         return (
             alphanumeric / len(compact) >= 0.5
             and replacement / len(compact) <= 0.02

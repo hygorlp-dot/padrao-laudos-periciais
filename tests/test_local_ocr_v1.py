@@ -508,6 +508,31 @@ def test_repeated_native_token_patterns_route_to_local_ocr(native_text):
     assert result.pages[0].extraction_mode is PageExtractionMode.OCR
 
 
+def test_majority_periodic_core_counts_repetition_boundary_ngrams():
+    period = hashlib.sha256(b"periodic-native-core").hexdigest() + "x"
+    prefix = (
+        hashlib.sha256(b"unique-prefix-a").hexdigest()
+        + hashlib.sha256(b"unique-prefix-b").hexdigest()[:16]
+        + "abcde"
+    )
+    suffix = (
+        hashlib.sha256(b"unique-suffix-a").hexdigest()
+        + hashlib.sha256(b"unique-suffix-b").hexdigest()[:16]
+        + "wxyz"
+    )
+    native_text = prefix + period * 3 + suffix
+    assert len(period) == 65
+    assert len(period) * 3 > len(native_text) / 2
+    engine = SyntheticOcrEngine(f"PROCESSO: {VALID_CNJ}")
+
+    result = LocalPdfTextExtractor(ocr_engine=engine).extract(
+        BytesIO(native_pdf(native_text))
+    )
+
+    assert engine.calls == 1
+    assert result.pages[0].extraction_mode is PageExtractionMode.OCR
+
+
 def test_failed_or_unprocessed_pages_are_never_hidden_by_available_pages():
     engine = SyntheticOcrEngine("")
 
