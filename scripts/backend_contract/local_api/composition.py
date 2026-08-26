@@ -13,21 +13,25 @@ from ..application.ports import Clock, IdGenerator, RepositoryError
 from ..application.services import (
     AppendArtifactRevision,
     CreateWorkspace,
+    ConfirmProcessMetadata,
     GetArtifactRevision,
     GetLatestArtifact,
     GetProcessCase,
+    GetProcessMetadataReview,
     GetWorkspace,
-    GetPrivateContent,
     ImportCaseDocument,
+    ImportCaseDocumentWithMetadata,
     ListArtifactRevisions,
     ListWorkspaces,
     ListCaseDocuments,
     ListPrivateContents,
-    ReadCaseDocument,
+    OpenCaseDocument,
+    OpenPrivateContentStream,
     SaveProcessCase,
     StorePrivateContent,
 )
 from ..infrastructure.private_filesystem import LocalPrivateContentStore
+from ..infrastructure.pdf_text import LocalPdfTextExtractor
 from ..infrastructure.sqlite import SQLiteApplicationStore
 from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
@@ -141,6 +145,7 @@ def build_local_api(
     import_case_document = None
     list_case_documents = None
     read_case_document = None
+    get_process_metadata_review = None
     if private_store is not None:
         generic_store = StorePrivateContent(
             store.workspaces,
@@ -149,13 +154,27 @@ def build_local_api(
             local_ids,
             server_config.max_document_body_bytes,
         )
-        import_case_document = ImportCaseDocument(generic_store)
+        import_case_document = ImportCaseDocumentWithMetadata(
+            ImportCaseDocument(generic_store),
+            LocalPdfTextExtractor(),
+            store.revisions,
+            local_clock,
+            local_ids,
+        )
         list_case_documents = ListCaseDocuments(
             ListPrivateContents(store.workspaces, private_store)
         )
-        read_case_document = ReadCaseDocument(
-            GetPrivateContent(store.workspaces, private_store)
+        read_case_document = OpenCaseDocument(
+            OpenPrivateContentStream(store.workspaces, private_store)
         )
+        get_process_metadata_review = GetProcessMetadataReview(
+            store.workspaces,
+            list_case_documents,
+            store.revisions,
+        )
+    save_process_case = SaveProcessCase(
+        store.workspaces, store.revisions, local_clock, local_ids
+    )
     services = LocalApiServices(
         create_workspace=CreateWorkspace(store.workspaces, local_clock, local_ids),
         get_workspace=GetWorkspace(store.workspaces),
@@ -167,9 +186,18 @@ def build_local_api(
         get_artifact_revision=GetArtifactRevision(store.revisions),
         list_artifact_revisions=ListArtifactRevisions(store.revisions),
         get_process_case=GetProcessCase(store.workspaces, store.revisions),
-        save_process_case=SaveProcessCase(
-            store.workspaces, store.revisions, local_clock, local_ids
+        save_process_case=(
+            ConfirmProcessMetadata(
+                save_process_case,
+                get_process_metadata_review,
+                store.revisions,
+                local_clock,
+                local_ids,
+            )
+            if get_process_metadata_review is not None
+            else save_process_case
         ),
+        get_process_metadata_review=get_process_metadata_review,
         import_case_document=import_case_document,
         list_case_documents=list_case_documents,
         read_case_document=read_case_document,

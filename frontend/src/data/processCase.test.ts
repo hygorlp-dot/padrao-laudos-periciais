@@ -10,6 +10,7 @@ import {
 const ID = "11111111-1111-4111-8111-111111111111";
 const DATA = {
   numero_processo: "0000001-00.2026.8.05.0001",
+  ramo_justica: "Justiça Estadual",
   tribunal: "  Tribunal de Justiça da Bahia  ",
   vara: "2ª Vara Cível",
   comarca_municipio: "Salvador",
@@ -46,7 +47,7 @@ describe("process case data boundary", () => {
     expect(fetchSpy.mock.calls[0][1].headers).not.toHaveProperty("X-Local-API-Token");
   });
 
-  test("saves all seven exact text fields only after an explicit call", async () => {
+  test("saves all eight exact text fields only after an explicit call", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(200, SNAPSHOT));
     vi.stubGlobal("fetch", fetchSpy);
     const draft = { ...DATA };

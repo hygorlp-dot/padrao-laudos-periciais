@@ -7,6 +7,8 @@ import {
   MaterialApiError,
   type MaterialMetadata,
 } from "../data/materials";
+import { navigate } from "../app/router";
+import { workspacePath } from "../routes/routeCatalog";
 
 type MaterialIntakeViewProps = { workspaceId: string };
 type ViewState =
@@ -136,7 +138,7 @@ export function MaterialIntakeView({ workspaceId }: MaterialIntakeViewProps) {
             type="submit"
             disabled={selected === null || importing}
           >
-            {importing ? "Importando…" : "Importar PDF"}
+            {importing ? "Importando e extraindo…" : "Importar PDF"}
           </button>
         </form>
       </div>
@@ -147,8 +149,19 @@ export function MaterialIntakeView({ workspaceId }: MaterialIntakeViewProps) {
           <div><h3>Nenhum documento importado</h3><p>Selecione o primeiro PDF dos autos para começar.</p></div>
         </div>
       ) : (
-        <ul className="material-list">
-          {state.items.map((item) => (
+        <>
+          <div className="material-review-action">
+            <p>A identificação disponível foi extraída localmente e aguarda sua conferência.</p>
+            <a
+              className="text-action"
+              href={workspacePath(workspaceId, "processo")}
+              onClick={navigate}
+            >
+              Revisar dados extraídos
+            </a>
+          </div>
+          <ul className="material-list">
+            {state.items.map((item) => (
             <li key={item.content_id}>
               <div>
                 <strong>{item.original_filename}</strong>
@@ -164,8 +177,9 @@ export function MaterialIntakeView({ workspaceId }: MaterialIntakeViewProps) {
                 Abrir PDF
               </a>
             </li>
-          ))}
-        </ul>
+            ))}
+          </ul>
+        </>
       )}
     </section>
   );

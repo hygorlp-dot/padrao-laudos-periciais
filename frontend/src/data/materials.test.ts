@@ -74,6 +74,27 @@ describe("case material data boundary", () => {
     expect(fetchSpy).toHaveBeenCalledOnce();
   });
 
+  test("accepts exactly 128 MiB and rejects one byte above before fetch", async () => {
+    const accepted = new File(["x"], "limite.pdf", { type: "application/pdf" });
+    Object.defineProperty(accepted, "size", { value: 134_217_728 });
+    const rejected = new File(["x"], "acima.pdf", { type: "application/pdf" });
+    Object.defineProperty(rejected, "size", { value: 134_217_729 });
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(201, {
+      ...ITEM,
+      original_filename: accepted.name,
+      byte_size: accepted.size,
+    }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(importCaseDocument(WORKSPACE_ID, accepted)).resolves.toMatchObject({
+      byte_size: 134_217_728,
+    });
+    await expect(importCaseDocument(WORKSPACE_ID, rejected)).rejects.toMatchObject({
+      kind: "too-large",
+    });
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+
   test.each([
     new File(["plain"], "notes.txt", { type: "text/plain" }),
     new File([], "empty.pdf", { type: "application/pdf" }),

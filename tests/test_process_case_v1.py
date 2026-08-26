@@ -42,6 +42,7 @@ TOKEN = "process-case-local-token-with-sufficient-entropy"
 
 EMPTY_DATA = {
     "numero_processo": "",
+    "ramo_justica": "",
     "tribunal": "",
     "vara": "",
     "comarca_municipio": "",
@@ -52,6 +53,7 @@ EMPTY_DATA = {
 
 DATA_A = {
     "numero_processo": "0000001-00.2026.8.05.0001",
+    "ramo_justica": "Justiça Estadual",
     "tribunal": "  Tribunal de Justiça da Bahia  ",
     "vara": "2ª Vara Cível",
     "comarca_municipio": "Salvador",
@@ -62,6 +64,7 @@ DATA_A = {
 
 DATA_B = {
     "numero_processo": "0000002-00.2026.8.26.0002",
+    "ramo_justica": "Justiça Estadual",
     "tribunal": "Tribunal de Justiça de São Paulo",
     "vara": "1ª Vara",
     "comarca_municipio": "Campinas",

@@ -203,6 +203,7 @@ describe("workspace-aware routing", () => {
           updated_at: null,
           data: {
             numero_processo: "",
+            ramo_justica: "",
             tribunal: "",
             vara: "",
             comarca_municipio: "",
@@ -211,15 +212,35 @@ describe("workspace-aware routing", () => {
             parte_requerida: "",
           },
         }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          workspace_id: ID,
+          state: "WAITING_FOR_DOCUMENTS",
+          confirmed_revision: null,
+          documents: [],
+          fields: Object.fromEntries(
+            [
+              "numero_processo",
+              "ramo_justica",
+              "tribunal",
+              "vara",
+              "comarca_municipio",
+              "uf",
+              "parte_requerente",
+              "parte_requerida",
+            ].map((field) => [field, { state: "NOT_FOUND", value: "", evidence: [] }]),
+          ),
+        }),
       );
     vi.stubGlobal("fetch", fetchSpy);
 
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "Identificação do processo" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Salvar dados do processo" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Confirmar dados do processo" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Avançar para Análise" })).not.toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /salvar dados do processo/i })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /confirmar dados do processo/i })).toHaveLength(1);
   });
 
   test("deep-links to a real workspace with the active stage and title", async () => {

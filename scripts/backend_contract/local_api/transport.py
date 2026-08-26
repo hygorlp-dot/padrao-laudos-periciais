@@ -10,6 +10,13 @@ from decimal import Decimal
 from types import MappingProxyType
 from urllib.parse import unquote_to_bytes, urlsplit
 
+from ..application.content import (
+    DOCUMENT_IO_CHUNK_BYTES,
+    MAX_DOCUMENT_BYTES,
+    OpenPrivateContent,
+    SeekableContent,
+)
+from ..application.process_metadata import ProcessMetadataReview, review_dto
 from ..application.models import (
     ArtifactRevision,
     PericiaWorkspace,
@@ -36,6 +43,13 @@ from ..application.ports import (
 
 _MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
 
+__all__ = [
+    "DOCUMENT_IO_CHUNK_BYTES",
+    "MAX_DOCUMENT_BYTES",
+    "LocalApi",
+    "SeekableContent",
+]
+
 
 class _JsonSerializationError(ValueError):
     pass
@@ -45,7 +59,7 @@ class _JsonSerializationError(ValueError):
 class HttpResponse:
     status: int
     headers: MappingProxyType
-    body: bytes
+    body: bytes | OpenPrivateContent
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +73,7 @@ class LocalApiServices:
     list_artifact_revisions: object
     get_process_case: object
     save_process_case: object
+    get_process_metadata_review: object | None = None
     import_case_document: object | None = None
     list_case_documents: object | None = None
     read_case_document: object | None = None
@@ -148,15 +163,18 @@ def _json_response(status: int, value: object) -> HttpResponse:
     )
 
 
-def _binary_response(status: int, body: bytes, content_type: str) -> HttpResponse:
-    if type(body) is not bytes or content_type != "application/pdf":
+def _binary_response(
+    status: int, body: bytes | OpenPrivateContent, content_type: str
+) -> HttpResponse:
+    if type(body) not in {bytes, OpenPrivateContent} or content_type != "application/pdf":
         raise RepositoryIntegrityError("resposta documental inválida")
+    length = len(body) if type(body) is bytes else body.metadata.byte_size
     return HttpResponse(
         status=status,
         headers=MappingProxyType(
             {
                 "Content-Type": content_type,
-                "Content-Length": str(len(body)),
+                "Content-Length": str(length),
                 "Cache-Control": "no-store",
                 "X-Content-Type-Options": "nosniff",
             }
@@ -321,7 +339,7 @@ class LocalApi:
         *,
         token: str,
         max_body_bytes: int = 1_048_576,
-        max_document_body_bytes: int = 16_777_216,
+        max_document_body_bytes: int = MAX_DOCUMENT_BYTES,
     ):
         if type(services) is not LocalApiServices:
             raise TypeError("services inválidos")
@@ -333,7 +351,7 @@ class LocalApi:
             raise ValueError("limite de body inválido")
         if (
             type(max_document_body_bytes) is not int
-            or not 1 <= max_document_body_bytes <= 16_777_216
+            or not 1 <= max_document_body_bytes <= MAX_DOCUMENT_BYTES
         ):
             raise ValueError("limite de documento inválido")
         self._services = services
@@ -403,13 +421,23 @@ class LocalApi:
             raise ValueError("workspace_id nao canonico")
         return workspace_id
 
-    def handle(self, method: str, target: str, headers, body: bytes) -> HttpResponse:
+    def handle(
+        self,
+        method: str,
+        target: str,
+        headers,
+        body: bytes | SeekableContent,
+    ) -> HttpResponse:
         try:
             if type(method) is not str:
                 raise TypeError("request inválida")
-            if type(body) is not bytes or len(body) > self.request_body_limit(
-                method, target
-            ):
+            if type(body) is bytes:
+                body_size = len(body)
+            elif type(body) is SeekableContent:
+                body_size = body.byte_size
+            else:
+                raise TypeError("body inválido")
+            if body_size > self.request_body_limit(method, target):
                 raise ValueError("body inválido")
             request_headers = _normalized_headers(headers)
             if not _local_host_allowed(request_headers.get("host")):
@@ -482,7 +510,7 @@ class LocalApi:
                     content_type = request_headers.get("content-type", "").split(";", 1)[0].strip().lower()
                     if content_type != "application/pdf":
                         raise ValueError("Content-Type de documento inválido")
-                    if _parse_content_length(request_headers.get("content-length", "")) != len(body):
+                    if _parse_content_length(request_headers.get("content-length", "")) != body_size:
                         raise ValueError("Content-Length diverge")
                     record = service.execute(
                         workspace_id=workspace_id,
@@ -508,14 +536,23 @@ class LocalApi:
                 workspace_id = self._workspace_id(raw_segments[2])
                 content_id = PrivateContentId.parse(raw_segments[4])
                 record = service.execute(workspace_id, content_id)
-                if (
-                    type(record) is not PrivateContent
-                    or record.metadata.workspace_id != workspace_id
-                    or record.metadata.content_id != content_id
-                    or record.metadata.media_type != "application/pdf"
-                ):
+                if type(record) is PrivateContent:
+                    metadata = record.metadata
+                    response_body = record.content
+                elif type(record) is OpenPrivateContent:
+                    metadata = record.metadata
+                    response_body = record
+                else:
                     raise RepositoryIntegrityError("identidade documental divergente")
-                return _binary_response(200, record.content, "application/pdf")
+                if (
+                    metadata.workspace_id != workspace_id
+                    or metadata.content_id != content_id
+                    or metadata.media_type != "application/pdf"
+                ):
+                    if type(record) is OpenPrivateContent:
+                        record.close()
+                    raise RepositoryIntegrityError("identidade documental divergente")
+                return _binary_response(200, response_body, "application/pdf")
 
             if len(raw_segments) == 3 and raw_segments[:2] == (
                 "v1",
@@ -554,6 +591,22 @@ class LocalApi:
                     )
                     return _json_response(200, _process_case_dto(record, workspace_id))
                 return _error(405, "METHOD_NOT_ALLOWED")
+
+            if (
+                len(raw_segments) == 4
+                and raw_segments[:2] == ("v1", "workspaces")
+                and raw_segments[3] == "process-metadata"
+            ):
+                if normalized_method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                service = self._services.get_process_metadata_review
+                if service is None:
+                    return _error(503, "PROCESS_METADATA_UNAVAILABLE", "extração local indisponível")
+                workspace_id = self._workspace_id(raw_segments[2])
+                review = service.execute(workspace_id)
+                if type(review) is not ProcessMetadataReview or review.workspace_id != workspace_id:
+                    raise RepositoryIntegrityError("revisão de metadados processuais divergente")
+                return _json_response(200, review_dto(review))
 
             artifact_route = (
                 len(raw_segments) in {7, 8}

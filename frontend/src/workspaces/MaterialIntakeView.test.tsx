@@ -56,7 +56,7 @@ describe("material intake view", () => {
       }),
     );
     await user.click(screen.getByRole("button", { name: "Importar PDF" }));
-    expect(screen.getByRole("button", { name: "Importando…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Importando e extraindo…" })).toBeDisabled();
 
     resolveImport(jsonResponse(201, ITEM));
     expect(await screen.findByText(ITEM.original_filename)).toBeInTheDocument();
@@ -67,6 +67,10 @@ describe("material intake view", () => {
       `/app-api/v1/workspaces/${WORKSPACE_ID}/materials/${CONTENT_ID}`,
     );
     expect(open).not.toHaveAttribute("href", expect.stringMatching(/file:|private/i));
+    expect(screen.getByRole("link", { name: "Revisar dados extraídos" })).toHaveAttribute(
+      "href",
+      `/pericias/${WORKSPACE_ID}/processo`,
+    );
     await waitFor(() => expect(screen.getByRole("button", { name: "Importar PDF" })).toHaveFocus());
   });
 

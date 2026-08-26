@@ -1,5 +1,6 @@
 export type ProcessCaseData = {
   numero_processo: string;
+  ramo_justica: string;
   tribunal: string;
   vara: string;
   comarca_municipio: string;
@@ -37,6 +38,7 @@ const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 const TIMEZONE_SUFFIX = /(?:Z|[+-][0-9]{2}:[0-9]{2})$/;
 const DATA_FIELDS = [
   "numero_processo",
+  "ramo_justica",
   "tribunal",
   "vara",
   "comarca_municipio",
@@ -54,6 +56,7 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[]) 
 export function emptyProcessCaseData(): ProcessCaseData {
   return {
     numero_processo: "",
+    ramo_justica: "",
     tribunal: "",
     vara: "",
     comarca_municipio: "",
