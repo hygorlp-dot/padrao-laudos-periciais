@@ -807,6 +807,10 @@ def provision_private_content_root(
     try:
         if os.name == "posix":
             root_fd = os.open(configured, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            if not _same_identity(root_identity, os.fstat(root_fd)):
+                raise RepositoryIntegrityError(
+                    "identidade do private root mudou durante o provisioning"
+                )
             _provision_control(configured, _LOCK_NAME, b"0", root_fd=root_fd)
         else:
             windows_anchor_fd = _provision_control(

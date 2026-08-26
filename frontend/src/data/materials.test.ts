@@ -59,6 +59,21 @@ describe("case material data boundary", () => {
     expect(JSON.stringify(init)).not.toMatch(/token|private.*path/i);
   });
 
+  test("accepts a PDF filename when the browser omits the MIME type", async () => {
+    const file = new File(["%PDF-1.7\nsynthetic\n%%EOF\n"], "autos.pdf");
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(201, {
+      ...ITEM,
+      original_filename: file.name,
+      byte_size: file.size,
+    }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(importCaseDocument(WORKSPACE_ID, file)).resolves.toMatchObject({
+      original_filename: "autos.pdf",
+    });
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+
   test.each([
     new File(["plain"], "notes.txt", { type: "text/plain" }),
     new File([], "empty.pdf", { type: "application/pdf" }),

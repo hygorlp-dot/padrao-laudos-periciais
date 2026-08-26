@@ -37,8 +37,12 @@ from scripts.backend_contract.local_api.composition import (
     LocalApiStartupError,
     build_local_api,
 )
-from scripts.backend_contract.local_api.server import LocalApiServerStartError
+from scripts.backend_contract.local_api.server import (
+    LocalApiServerStartError,
+    LocalServerConfig,
+)
 from scripts.backend_contract.product_bridge.composition import build_product_runtime
+from scripts.backend_contract.product_bridge.server import ProductBridgeConfig
 from scripts.backend_contract.infrastructure import private_filesystem
 from scripts.backend_contract.infrastructure.private_filesystem import (
     LocalPrivateContentStore,
@@ -171,6 +175,21 @@ def test_import_pdf_preserves_exact_bytes_integrity_and_user_import_provenance()
     )
     assert listed.execute(WORKSPACE_ID) == (metadata,)
     assert reader.execute(WORKSPACE_ID, CONTENT_ID) == PrivateContent(metadata, PDF)
+
+
+def test_case_document_limit_remains_16_mib_when_transport_limit_is_higher():
+    content = b"%PDF-1.7\n" + (b"x" * 16_777_201) + b"\n%%EOF\n"
+    importer, listed, _reader = document_services(max_bytes=len(content))
+
+    with pytest.raises(PrivateContentTooLarge, match="limite"):
+        importer.execute(
+            workspace_id=WORKSPACE_ID,
+            original_filename="oversized.pdf",
+            content=content,
+            media_type="application/pdf",
+        )
+
+    assert listed.execute(WORKSPACE_ID) == ()
 
 
 @pytest.mark.parametrize("media_type", ("text/plain", "application/octet-stream", ""))
@@ -452,6 +471,34 @@ def test_private_root_provisioning_holds_anchor_while_creating_later_controls(
     }
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX dirfd provisioning race")
+def test_posix_new_root_swap_is_rejected_before_first_control(tmp_path, monkeypatch):
+    root = tmp_path / "private"
+    original_root = tmp_path / "original-private"
+    replacement = tmp_path / "replacement-private"
+    replacement.mkdir()
+    original_open = private_filesystem.os.open
+    swapped = False
+
+    def swap_before_root_fd(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        if Path(path) == root and dir_fd is None and not swapped:
+            root.rename(original_root)
+            replacement.rename(root)
+            swapped = True
+        if dir_fd is None:
+            return original_open(path, flags, mode)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(private_filesystem.os, "open", swap_before_root_fd)
+
+    with pytest.raises(Exception, match="identidade|private root|provision"):
+        provision_private_content_root(root)
+
+    assert swapped is True
+    assert list(root.iterdir()) == []
+
+
 def test_local_api_start_failure_releases_the_private_store(monkeypatch, tmp_path):
     root = tmp_path / "private"
     provision_private_content_root(root)
@@ -649,6 +696,68 @@ def import_pdf(runtime, workspace_id: str, filename: str, content=PDF):
             "X-Document-Filename": quote(filename, safe="-._~"),
         },
     )
+
+
+def test_document_transport_limit_does_not_expand_legacy_json_limit(tmp_path):
+    assert LocalServerConfig().max_body_bytes == 1_048_576
+    assert LocalServerConfig().max_document_body_bytes == 16_777_216
+    assert ProductBridgeConfig().max_body_bytes == 1_048_576
+    assert ProductBridgeConfig().max_document_body_bytes == 16_777_216
+
+    runtime = build_product_runtime(
+        tmp_path / "case.db",
+        frontend_build(tmp_path / "dist"),
+        private_root=tmp_path / "private",
+        token=TOKEN,
+    )
+    runtime.start()
+    try:
+        oversized_json = json.dumps({"name": "x" * 1_048_576}).encode("utf-8")
+        json_status, _headers, _body = product_request(
+            runtime,
+            "POST",
+            "/app-api/v1/workspaces",
+            body=oversized_json,
+            headers={
+                "Origin": runtime.origin,
+                "Sec-Fetch-Site": "same-origin",
+                "Content-Type": "application/json",
+            },
+        )
+        workspace_id = create_workspace(runtime, "Perícia documental")
+        document = b"%PDF-1.7\n" + (b"x" * 1_048_576) + b"\n%%EOF\n"
+        document_status, _headers, document_body = import_pdf(
+            runtime, workspace_id, "autos.pdf", document
+        )
+        content_id = json.loads(document_body)["content_id"]
+        read_status, _headers, read_body = product_request(
+            runtime,
+            "GET",
+            f"/app-api/v1/workspaces/{workspace_id}/materials/{content_id}",
+        )
+    finally:
+        runtime.close()
+
+    assert json_status == 400
+    assert document_status == 201
+    assert read_status == 200
+    assert read_body == document
+
+
+@pytest.mark.parametrize(
+    ("config_type", "overrides"),
+    (
+        (LocalServerConfig, {"max_body_bytes": 1_048_577}),
+        (LocalServerConfig, {"max_document_body_bytes": 16_777_217}),
+        (ProductBridgeConfig, {"max_body_bytes": 1_048_577}),
+        (ProductBridgeConfig, {"max_document_body_bytes": 16_777_217}),
+    ),
+)
+def test_transport_configuration_cannot_raise_contractual_body_limits(
+    config_type, overrides
+):
+    with pytest.raises(ValueError, match="limite"):
+        config_type(**overrides)
 
 
 def test_product_flow_imports_reads_isolates_and_reopens_pdf_without_path_or_token(tmp_path):

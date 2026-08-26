@@ -15,7 +15,8 @@ from .transport import LocalApi, _error, _parse_content_length
 class LocalServerConfig:
     host: str = "127.0.0.1"
     port: int = 0
-    max_body_bytes: int = 16_777_216
+    max_body_bytes: int = 1_048_576
+    max_document_body_bytes: int = 16_777_216
     request_timeout_seconds: float = 5.0
 
     def __post_init__(self):
@@ -25,8 +26,16 @@ class LocalServerConfig:
             raise TypeError("porta local inválida")
         if self.port < 0 or self.port > 65_535:
             raise ValueError("porta local inválida")
-        if type(self.max_body_bytes) is not int or self.max_body_bytes < 1:
+        if (
+            type(self.max_body_bytes) is not int
+            or not 1 <= self.max_body_bytes <= 1_048_576
+        ):
             raise ValueError("limite de body inválido")
+        if (
+            type(self.max_document_body_bytes) is not int
+            or not 1 <= self.max_document_body_bytes <= 16_777_216
+        ):
+            raise ValueError("limite de documento inválido")
         if (
             isinstance(self.request_timeout_seconds, bool)
             or not isinstance(self.request_timeout_seconds, (int, float))
@@ -60,7 +69,6 @@ class LocalApiServerStartError(RuntimeError):
 
 def _handler_for(
     api: LocalApi,
-    max_body_bytes: int,
     request_timeout_seconds: float,
 ):
     class LocalRequestHandler(BaseHTTPRequestHandler):
@@ -168,7 +176,8 @@ def _handler_for(
                     length = _parse_content_length(raw_length)
                 except (TypeError, ValueError):
                     length = -1
-                if length < 0 or length > max_body_bytes:
+                body_limit = api.request_body_limit(self.command, self.path)
+                if length < 0 or length > body_limit:
                     self.close_connection = True
                     response = _error(400, "INVALID_REQUEST")
                 else:
@@ -241,7 +250,6 @@ class LocalApiServer:
             (self._config.host, self._config.port),
             _handler_for(
                 api,
-                self._config.max_body_bytes,
                 self._config.request_timeout_seconds,
             ),
         )

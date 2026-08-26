@@ -128,6 +128,7 @@ class ProductBridge:
         upstream_address: tuple[str, int],
         token: str,
         max_body_bytes: int,
+        max_document_body_bytes: int,
         request_timeout_seconds: float,
     ):
         root = Path(frontend_root).resolve()
@@ -151,7 +152,37 @@ class ProductBridge:
         self._upstream_address = upstream_address
         self._token = token
         self._max_body_bytes = max_body_bytes
+        self._max_document_body_bytes = max_document_body_bytes
         self._request_timeout_seconds = request_timeout_seconds
+
+    def request_body_limit(self, method: str, target: str) -> int:
+        """Mantém JSON no teto legado e amplia somente o POST documental exato."""
+
+        try:
+            normalized_method = method.upper()
+            path = _canonical_path(target)
+        except (AttributeError, TypeError, ValueError):
+            return self._max_body_bytes
+        upstream_target = _proxy_target(path, normalized_method)
+        if (
+            normalized_method == "POST"
+            and upstream_target is not None
+            and upstream_target.endswith("/materials")
+        ):
+            return self._max_document_body_bytes
+        return self._max_body_bytes
+
+    def _response_body_limit(self, method: str, upstream_target: str) -> int:
+        if (
+            method == "GET"
+            and re.fullmatch(
+                rf"/v1/workspaces/{_CANONICAL_UUID.pattern}/materials/"
+                rf"{_CANONICAL_UUID.pattern}",
+                upstream_target,
+            )
+        ):
+            return self._max_document_body_bytes
+        return self._max_body_bytes
 
     def __repr__(self) -> str:
         return f"ProductBridge(public_origin={self._public_origin!r})"
@@ -201,7 +232,12 @@ class ProductBridge:
         headers: dict[str, str],
         body: bytes,
     ) -> BridgeResponse:
-        if len(body) > self._max_body_bytes:
+        request_limit = (
+            self._max_document_body_bytes
+            if method == "POST" and upstream_target.endswith("/materials")
+            else self._max_body_bytes
+        )
+        if len(body) > request_limit:
             return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
         upstream_headers = {
             "Host": f"{self._upstream_address[0]}:{self._upstream_address[1]}",
@@ -231,8 +267,9 @@ class ProductBridge:
         try:
             connection.request(method, upstream_target, body=body or None, headers=upstream_headers)
             upstream = connection.getresponse()
-            response_body = upstream.read(self._max_body_bytes + 1)
-            if len(response_body) > self._max_body_bytes:
+            response_limit = self._response_body_limit(method, upstream_target)
+            response_body = upstream.read(response_limit + 1)
+            if len(response_body) > response_limit:
                 return _error(502, "INVALID_LOCAL_API_RESPONSE", "resposta local inválida")
             content_type = upstream.getheader("Content-Type") or "application/json; charset=utf-8"
             return _response(

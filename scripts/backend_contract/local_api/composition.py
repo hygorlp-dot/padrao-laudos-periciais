@@ -147,7 +147,7 @@ def build_local_api(
             private_store,
             local_clock,
             local_ids,
-            server_config.max_body_bytes,
+            server_config.max_document_body_bytes,
         )
         import_case_document = ImportCaseDocument(generic_store)
         list_case_documents = ListCaseDocuments(
@@ -178,6 +178,7 @@ def build_local_api(
         services,
         token=local_token,
         max_body_bytes=server_config.max_body_bytes,
+        max_document_body_bytes=server_config.max_document_body_bytes,
     )
     try:
         server = LocalApiServer(api, server_config)

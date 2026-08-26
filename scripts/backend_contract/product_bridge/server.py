@@ -15,7 +15,8 @@ from .transport import ProductBridge, _error
 class ProductBridgeConfig:
     host: str = "127.0.0.1"
     port: int = 0
-    max_body_bytes: int = 16_777_216
+    max_body_bytes: int = 1_048_576
+    max_document_body_bytes: int = 16_777_216
     request_timeout_seconds: float = 5.0
 
     def __post_init__(self):
@@ -25,8 +26,16 @@ class ProductBridgeConfig:
             raise ValueError("porta local inválida")
         if self.port == 80:
             raise ValueError("porta 80 não preserva a origem local canônica")
-        if type(self.max_body_bytes) is not int or self.max_body_bytes < 1:
+        if (
+            type(self.max_body_bytes) is not int
+            or not 1 <= self.max_body_bytes <= 1_048_576
+        ):
             raise ValueError("limite de body inválido")
+        if (
+            type(self.max_document_body_bytes) is not int
+            or not 1 <= self.max_document_body_bytes <= 16_777_216
+        ):
+            raise ValueError("limite de documento inválido")
         if (
             isinstance(self.request_timeout_seconds, bool)
             or not isinstance(self.request_timeout_seconds, (int, float))
@@ -139,7 +148,10 @@ class _ProductRequestHandler(BaseHTTPRequestHandler):
                 response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
             else:
                 length = int(raw_length)
-                if length > self.server.max_body_bytes:
+                bridge = self.server.bridge
+                if bridge is None:
+                    response = _error(503, "PRODUCT_BRIDGE_UNAVAILABLE", "serviço local indisponível")
+                elif length > bridge.request_body_limit(self.command, self.path):
                     response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
                 else:
                     try:
@@ -155,16 +167,12 @@ class _ProductRequestHandler(BaseHTTPRequestHandler):
                     elif not self._finish_request_acquisition():
                         response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
                     else:
-                        bridge = self.server.bridge
-                        if bridge is None:
-                            response = _error(503, "PRODUCT_BRIDGE_UNAVAILABLE", "serviço local indisponível")
-                        else:
-                            response = bridge.handle(
-                                self.command,
-                                self.path,
-                                dict(self.headers.items()),
-                                body,
-                            )
+                        response = bridge.handle(
+                            self.command,
+                            self.path,
+                            dict(self.headers.items()),
+                            body,
+                        )
         return response
 
     def _dispatch(self):
@@ -218,7 +226,6 @@ class ProductBridgeServer:
             (self._config.host, self._config.port),
             _ProductRequestHandler,
         )
-        self._server.max_body_bytes = self._config.max_body_bytes
         self._server.request_timeout_seconds = self._config.request_timeout_seconds
         host, port = self.address
         self._server.bridge = ProductBridge(
@@ -227,6 +234,7 @@ class ProductBridgeServer:
             upstream_address=upstream_address,
             token=token,
             max_body_bytes=self._config.max_body_bytes,
+            max_document_body_bytes=self._config.max_document_body_bytes,
             request_timeout_seconds=self._config.request_timeout_seconds,
         )
         self._thread: Thread | None = None

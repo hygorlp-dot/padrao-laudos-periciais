@@ -321,15 +321,36 @@ class LocalApi:
         *,
         token: str,
         max_body_bytes: int = 1_048_576,
+        max_document_body_bytes: int = 16_777_216,
     ):
         if type(services) is not LocalApiServices:
             raise TypeError("services inválidos")
         _require_local_token(token)
         if type(max_body_bytes) is not int or max_body_bytes < 1:
             raise ValueError("limite de body inválido")
+        if type(max_document_body_bytes) is not int or max_document_body_bytes < 1:
+            raise ValueError("limite de documento inválido")
         self._services = services
         self._token = token
         self._max_body_bytes = max_body_bytes
+        self._max_document_body_bytes = max_document_body_bytes
+
+    def request_body_limit(self, method: str, target: str) -> int:
+        """Retorna o teto de aquisição sem ampliar rotas JSON legadas."""
+
+        try:
+            raw_segments, _segments = _target_segments(target)
+        except (TypeError, ValueError):
+            return self._max_body_bytes
+        if (
+            type(method) is str
+            and method.upper() == "POST"
+            and len(raw_segments) == 4
+            and raw_segments[:2] == ("v1", "workspaces")
+            and raw_segments[3] == "materials"
+        ):
+            return self._max_document_body_bytes
+        return self._max_body_bytes
 
     def _request_dto(self, headers: dict[str, str], body: bytes) -> dict:
         if type(body) is not bytes or len(body) > self._max_body_bytes:
@@ -365,6 +386,10 @@ class LocalApi:
         try:
             if type(method) is not str:
                 raise TypeError("request inválida")
+            if type(body) is not bytes or len(body) > self.request_body_limit(
+                method, target
+            ):
+                raise ValueError("body inválido")
             request_headers = _normalized_headers(headers)
             if not _local_host_allowed(request_headers.get("host")):
                 return _error(

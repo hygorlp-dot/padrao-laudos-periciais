@@ -116,7 +116,11 @@ export async function importCaseDocument(
   signal?: AbortSignal,
 ): Promise<MaterialMetadata> {
   requireWorkspace(workspaceId);
-  if (!(file instanceof File) || file.type !== "application/pdf" || !file.name.trim()) {
+  const pdfFile = file instanceof File && (
+    file.type === "application/pdf" ||
+    (file.type === "" && file.name.toLowerCase().endsWith(".pdf"))
+  );
+  if (!pdfFile || !file.name.trim()) {
     throw new MaterialApiError("unsupported", "Selecione um documento PDF");
   }
   if (file.size === 0) {

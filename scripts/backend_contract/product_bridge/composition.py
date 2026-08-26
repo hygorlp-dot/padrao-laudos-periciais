@@ -86,6 +86,7 @@ def build_product_runtime(
         private_root=private_root,
         config=LocalServerConfig(
             max_body_bytes=bridge_config.max_body_bytes,
+            max_document_body_bytes=bridge_config.max_document_body_bytes,
             request_timeout_seconds=bridge_config.request_timeout_seconds,
         ),
     )

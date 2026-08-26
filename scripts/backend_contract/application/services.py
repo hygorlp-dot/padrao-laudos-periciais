@@ -39,6 +39,7 @@ from .ports import (
 
 _PROCESS_CASE_ARTIFACT_KIND = "PROCESS_CASE"
 _PROCESS_CASE_ARTIFACT_ID = "PROCESS_CASE"
+_CASE_DOCUMENT_MAX_BYTES = 16 * 1024 * 1024
 
 
 def _generated_uuid(ids: IdGenerator) -> UUID:
@@ -245,6 +246,8 @@ class ImportCaseDocument:
             raise UnsupportedCaseDocument("somente documentos PDF são aceitos")
         if type(content) is not bytes:
             raise TypeError("documento PDF exige bytes")
+        if len(content) > _CASE_DOCUMENT_MAX_BYTES:
+            raise PrivateContentTooLarge("documento PDF excede limite de 16 MiB")
         if not content.startswith(b"%PDF-") or not content.rstrip().endswith(b"%%EOF"):
             raise InvalidCaseDocument("bytes não representam um documento PDF válido")
         return _case_document_metadata(
