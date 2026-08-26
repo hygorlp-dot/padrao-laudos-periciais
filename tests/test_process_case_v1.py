@@ -42,6 +42,7 @@ TOKEN = "process-case-local-token-with-sufficient-entropy"
 
 EMPTY_DATA = {
     "numero_processo": "",
+    "ramo_justica": "",
     "tribunal": "",
     "vara": "",
     "comarca_municipio": "",
@@ -52,6 +53,7 @@ EMPTY_DATA = {
 
 DATA_A = {
     "numero_processo": "0000001-00.2026.8.05.0001",
+    "ramo_justica": "Justiça Estadual",
     "tribunal": "  Tribunal de Justiça da Bahia  ",
     "vara": "2ª Vara Cível",
     "comarca_municipio": "Salvador",
@@ -62,6 +64,7 @@ DATA_A = {
 
 DATA_B = {
     "numero_processo": "0000002-00.2026.8.26.0002",
+    "ramo_justica": "Justiça Estadual",
     "tribunal": "Tribunal de Justiça de São Paulo",
     "vara": "1ª Vara",
     "comarca_municipio": "Campinas",
@@ -307,7 +310,18 @@ def test_application_rejects_a_misrouted_process_case_record(tmp_path):
             GetProcessCase(store.workspaces, MisroutingRevisions()).execute(WORKSPACE_A)
 
 
-def test_generic_append_cannot_bypass_the_reserved_process_case_writer(tmp_path):
+@pytest.mark.parametrize(
+    ("artifact_kind", "artifact_id"),
+    (
+        ("PROCESS_CASE", "PROCESS_CASE"),
+        ("PROCESS_METADATA_EXTRACTION", "document-id"),
+        ("PROCESS_METADATA_CONFIRMATION", "PROCESS_METADATA_CONFIRMATION"),
+        ("OCR_PAGE_CACHE_V1", "cache-key"),
+    ),
+)
+def test_generic_append_cannot_bypass_reserved_typed_writers(
+    tmp_path, artifact_kind, artifact_id
+):
     with SQLiteApplicationStore(tmp_path / "reserved-process-case.db") as store:
         create_workspace(store, WORKSPACE_A, "Perícia A")
         typed_save = SaveProcessCase(
@@ -326,8 +340,8 @@ def test_generic_append_cannot_bypass_the_reserved_process_case_writer(tmp_path)
         with pytest.raises(ValueError, match="reservada"):
             generic_append.execute(
                 workspace_id=WORKSPACE_A,
-                artifact_kind="PROCESS_CASE",
-                artifact_id="PROCESS_CASE",
+                artifact_kind=artifact_kind,
+                artifact_id=artifact_id,
                 payload=DATA_B,
             )
 

@@ -8,11 +8,19 @@ import os
 import re
 import stat
 import sys
+import tempfile
 import threading
 from functools import wraps
 from pathlib import Path
 from uuid import uuid4
 
+from ..application.content import (
+    DOCUMENT_IO_CHUNK_BYTES,
+    MAX_DOCUMENT_BYTES,
+    OpenPrivateContent,
+    SeekableContent,
+    as_seekable_content,
+)
 from ..application.models import (
     PrivateContent,
     PrivateContentId,
@@ -41,7 +49,7 @@ else:  # pragma: no cover
     raise RuntimeError("sistema operacional sem contrato de armazenamento privado")
 
 
-DEFAULT_PRIVATE_CONTENT_LIMIT_BYTES = 64 * 1024 * 1024
+DEFAULT_PRIVATE_CONTENT_LIMIT_BYTES = MAX_DOCUMENT_BYTES
 _MANIFEST_SCHEMA_VERSION = 1
 _MAX_MANIFEST_BYTES = 64 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
@@ -290,6 +298,51 @@ def _write_fsynced(
                 "identidade física privada mudou durante a criação"
             )
         _write_all(descriptor, payload)
+        os.fsync(descriptor)
+    except Exception:
+        os.close(descriptor)
+        if opened is not None:
+            try:
+                _retire_if_owned(path, opened, root_fd=root_fd)
+            except (OSError, RepositoryIntegrityError):
+                pass
+        raise
+    else:
+        os.close(descriptor)
+
+
+def _write_source_fsynced(
+    path: Path,
+    source: SeekableContent,
+    *,
+    root_fd: int | None = None,
+) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN_BINARY | _OPEN_NOFOLLOW
+    descriptor = (
+        os.open(path, flags, 0o600)
+        if root_fd is None
+        else os.open(_entry_name(path), flags, 0o600, dir_fd=root_fd)
+    )
+    opened = None
+    try:
+        opened = os.fstat(descriptor)
+        _validate_regular(opened, expected_links=1)
+        observed = _lstat(path, root_fd=root_fd)
+        if not _same_identity(opened, observed):
+            raise RepositoryIntegrityError(
+                "identidade física privada mudou durante a criação"
+            )
+        source.rewind()
+        remaining = source.byte_size
+        while remaining:
+            block = source.stream.read(min(DOCUMENT_IO_CHUNK_BYTES, remaining))
+            if type(block) is not bytes or not block or len(block) > remaining:
+                raise RepositoryIntegrityError("fonte privada truncada ou divergente")
+            _write_all(descriptor, block)
+            remaining -= len(block)
+        if source.stream.read(1):
+            raise RepositoryIntegrityError("fonte privada excede tamanho declarado")
+        source.rewind()
         os.fsync(descriptor)
     except Exception:
         os.close(descriptor)
@@ -1889,17 +1942,17 @@ class LocalPrivateContentStore:
     def store(
         self,
         metadata: PrivateContentMetadata,
-        content: bytes,
+        content: bytes | SeekableContent,
     ) -> PrivateContentMetadata:
         self._ensure_open()
-        if (
-            type(content) is bytes and len(content) > self._max_content_bytes
-        ) or (
+        source = as_seekable_content(content)
+        if source.byte_size > self._max_content_bytes or (
             type(metadata) is PrivateContentMetadata
             and metadata.byte_size > self._max_content_bytes
         ):
             raise RepositoryError("conteúdo privado excede limite operacional")
-        record = PrivateContent(metadata, content)
+        if type(metadata) is not PrivateContentMetadata or metadata.byte_size != source.byte_size:
+            raise RepositoryIntegrityError("tamanho do conteúdo privado diverge")
         self._validate_keys(metadata.workspace_id, metadata.content_id)
         prefix = _prefix(metadata.workspace_id, metadata.content_id)
         paths = _record_paths(self._root, metadata.workspace_id, metadata.content_id)
@@ -1939,7 +1992,10 @@ class LocalPrivateContentStore:
                 )
                 self._known_prefixes.add(prefix)
                 self._append_intent(prefix)
-                _write_fsynced(stages["content"], record.content, root_fd=self._root_fd)
+                if type(content) is bytes:
+                    _write_fsynced(stages["content"], content, root_fd=self._root_fd)
+                else:
+                    _write_source_fsynced(stages["content"], source, root_fd=self._root_fd)
                 stage_identities[stages["content"]] = _lstat(
                     stages["content"], root_fd=self._root_fd
                 )
@@ -1971,11 +2027,11 @@ class LocalPrivateContentStore:
                 verified = self._read_record(
                     metadata.workspace_id,
                     metadata.content_id,
-                    load_content=True,
+                    load_content=False,
                     require_commit=False,
                     recovery_link_members=frozenset(_MEMBERS),
                 )
-                if verified != record:
+                if verified != metadata:
                     raise RepositoryIntegrityError(
                         "verificação final do conteúdo privado diverge"
                     )
@@ -2069,6 +2125,61 @@ class LocalPrivateContentStore:
             if type(result) is not PrivateContent:
                 raise RepositoryIntegrityError("conteúdo privado inválido")
             return result
+
+    @_controlled_filesystem_errors("falha ao abrir conteúdo privado")
+    def open_content(
+        self,
+        workspace_id: WorkspaceId,
+        content_id: PrivateContentId,
+    ) -> OpenPrivateContent | None:
+        self._ensure_open()
+        self._validate_keys(workspace_id, content_id)
+        prefix = _prefix(workspace_id, content_id)
+        with self._mutex:
+            self._ensure_open()
+            self._audit_runtime_inventory()
+            if prefix not in self._committed:
+                return None
+            metadata = self._read_record(workspace_id, content_id, load_content=False)
+            if type(metadata) is not PrivateContentMetadata:
+                raise RepositoryIntegrityError("metadados privados inválidos")
+            path = _record_paths(self._root, workspace_id, content_id)["content"]
+            descriptor, opened = _open_existing_regular(
+                path,
+                root_fd=self._root_fd,
+                expected_links=2,
+            )
+            snapshot = None
+            try:
+                snapshot = tempfile.TemporaryFile(mode="w+b", buffering=0)
+                if opened.st_size != metadata.byte_size:
+                    raise RepositoryIntegrityError("tamanho do conteúdo privado diverge")
+                digest = hashlib.sha256()
+                remaining = opened.st_size
+                while remaining:
+                    block = os.read(descriptor, min(_READ_CHUNK_BYTES, remaining))
+                    if not block:
+                        raise RepositoryIntegrityError("conteúdo privado truncado")
+                    digest.update(block)
+                    if snapshot.write(block) != len(block):
+                        raise RepositoryIntegrityError("snapshot privado truncado")
+                    remaining -= len(block)
+                if os.read(descriptor, 1) or digest.hexdigest() != metadata.checksum_sha256:
+                    raise RepositoryIntegrityError("conteúdo privado diverge do checksum")
+                after = os.fstat(descriptor)
+                _validate_regular(after, expected_links=2)
+                if not _same_identity(opened, after) or after.st_size != opened.st_size:
+                    raise RepositoryIntegrityError("conteúdo privado mudou durante a leitura")
+                snapshot.flush()
+                snapshot.seek(0)
+                return OpenPrivateContent(metadata, snapshot, snapshot.close)
+            except Exception:
+                if snapshot is not None:
+                    snapshot.close()
+                raise
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
 
     @_controlled_filesystem_errors("falha ao listar conteúdo privado")
     def list_all(

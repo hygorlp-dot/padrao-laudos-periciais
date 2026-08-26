@@ -11,6 +11,14 @@ from pathlib import Path
 from types import MappingProxyType
 from urllib.parse import urlsplit
 
+from ..streaming import (
+    DOCUMENT_IO_CHUNK_BYTES,
+    MAX_DOCUMENT_BYTES,
+    SeekableContent,
+    StreamBody,
+    as_seekable_content,
+)
+
 
 _CANONICAL_UUID = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -27,12 +35,19 @@ _SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
 }
 
+__all__ = [
+    "DOCUMENT_IO_CHUNK_BYTES",
+    "MAX_DOCUMENT_BYTES",
+    "ProductBridge",
+    "SeekableContent",
+]
+
 
 @dataclass(frozen=True, slots=True)
 class BridgeResponse:
     status: int
     headers: MappingProxyType
-    body: bytes
+    body: bytes | StreamBody
 
 
 def _response(status: int, body: bytes, content_type: str, *, cache: str) -> BridgeResponse:
@@ -110,6 +125,13 @@ def _proxy_target(path: str, method: str) -> str | None:
         workspace_id = path[len(prefix) : -len(process_case_suffix)]
         if _CANONICAL_UUID.fullmatch(workspace_id):
             return f"/v1/workspaces/{workspace_id}/process-case"
+    process_metadata_suffix = "/process-metadata"
+    if method == "GET" and path.startswith(prefix) and path.endswith(
+        process_metadata_suffix
+    ):
+        workspace_id = path[len(prefix) : -len(process_metadata_suffix)]
+        if _CANONICAL_UUID.fullmatch(workspace_id):
+            return f"/v1/workspaces/{workspace_id}/process-metadata"
     if method == "GET" and path.startswith(prefix):
         workspace_id = path[len(prefix) :]
         if _CANONICAL_UUID.fullmatch(workspace_id):
@@ -153,7 +175,7 @@ class ProductBridge:
             raise ValueError("limite de body inválido")
         if (
             type(max_document_body_bytes) is not int
-            or not 1 <= max_document_body_bytes <= 16_777_216
+            or not 1 <= max_document_body_bytes <= MAX_DOCUMENT_BYTES
         ):
             raise ValueError("limite de documento inválido")
         self._frontend_root = root
@@ -240,14 +262,15 @@ class ProductBridge:
         method: str,
         upstream_target: str,
         headers: dict[str, str],
-        body: bytes,
+        body: bytes | SeekableContent,
     ) -> BridgeResponse:
         request_limit = (
             self._max_document_body_bytes
             if method == "POST" and upstream_target.endswith("/materials")
             else self._max_body_bytes
         )
-        if len(body) > request_limit:
+        body_size = len(body) if type(body) is bytes else as_seekable_content(body).byte_size
+        if body_size > request_limit:
             return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
         upstream_headers = {
             "Host": f"{self._upstream_address[0]}:{self._upstream_address[1]}",
@@ -269,15 +292,44 @@ class ProductBridge:
                     return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
                 upstream_headers["X-Document-Filename"] = filename
             upstream_headers["Content-Type"] = content_type
-            upstream_headers["Content-Length"] = str(len(body))
+            upstream_headers["Content-Length"] = str(body_size)
         connection = http.client.HTTPConnection(
             *self._upstream_address,
             timeout=self._request_timeout_seconds,
         )
+        retained_connection = False
         try:
-            connection.request(method, upstream_target, body=body or None, headers=upstream_headers)
+            if type(body) is SeekableContent:
+                body.rewind()
+                upstream_body = body.stream
+            else:
+                upstream_body = body or None
+            connection.request(method, upstream_target, body=upstream_body, headers=upstream_headers)
             upstream = connection.getresponse()
             response_limit = self._response_body_limit(method, upstream_target)
+            is_document_read = response_limit == self._max_document_body_bytes and method == "GET"
+            if is_document_read and upstream.status == 200:
+                raw_length = upstream.getheader("Content-Length") or ""
+                content_type = (upstream.getheader("Content-Type") or "").split(";", 1)[0].strip().lower()
+                if (
+                    not raw_length.isascii()
+                    or not raw_length.isdecimal()
+                    or int(raw_length) > response_limit
+                    or content_type != "application/pdf"
+                ):
+                    return _error(502, "INVALID_LOCAL_API_RESPONSE", "resposta local inválida")
+                length = int(raw_length)
+                retained_connection = True
+                body_stream = StreamBody(upstream, length, connection.close)
+                headers_out = MappingProxyType(
+                    {
+                        "Content-Type": "application/pdf",
+                        "Content-Length": str(length),
+                        "Cache-Control": "no-store",
+                        **_SECURITY_HEADERS,
+                    }
+                )
+                return BridgeResponse(upstream.status, headers_out, body_stream)
             response_body = upstream.read(response_limit + 1)
             if len(response_body) > response_limit:
                 return _error(502, "INVALID_LOCAL_API_RESPONSE", "resposta local inválida")
@@ -291,14 +343,15 @@ class ProductBridge:
         except (OSError, TimeoutError, http.client.HTTPException):
             return _error(503, "LOCAL_API_UNAVAILABLE", "serviço local indisponível")
         finally:
-            connection.close()
+            if not retained_connection:
+                connection.close()
 
     def handle(
         self,
         method: str,
         target: str,
         headers: dict[str, str],
-        body: bytes,
+        body: bytes | SeekableContent,
     ) -> BridgeResponse:
         try:
             normalized_method = method.upper()

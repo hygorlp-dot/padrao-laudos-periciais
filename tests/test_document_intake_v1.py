@@ -178,19 +178,19 @@ def test_import_pdf_preserves_exact_bytes_integrity_and_user_import_provenance()
     assert reader.execute(WORKSPACE_ID, CONTENT_ID) == PrivateContent(metadata, PDF)
 
 
-def test_case_document_limit_remains_16_mib_when_transport_limit_is_higher():
+def test_case_document_above_legacy_16_mib_is_now_accepted_coherently():
     content = b"%PDF-1.7\n" + (b"x" * 16_777_201) + b"\n%%EOF\n"
     importer, listed, _reader = document_services(max_bytes=len(content))
 
-    with pytest.raises(PrivateContentTooLarge, match="limite"):
-        importer.execute(
-            workspace_id=WORKSPACE_ID,
-            original_filename="oversized.pdf",
-            content=content,
-            media_type="application/pdf",
-        )
+    record = importer.execute(
+        workspace_id=WORKSPACE_ID,
+        original_filename="large-valid.pdf",
+        content=content,
+        media_type="application/pdf",
+    )
 
-    assert listed.execute(WORKSPACE_ID) == ()
+    assert record.byte_size == len(content)
+    assert listed.execute(WORKSPACE_ID) == (record,)
 
 
 @pytest.mark.parametrize("media_type", ("text/plain", "application/octet-stream", ""))
@@ -217,6 +217,24 @@ def test_import_rejects_invalid_pdf_bytes_before_storage(content):
             workspace_id=WORKSPACE_ID,
             original_filename="autos.pdf",
             content=content,
+            media_type="application/pdf",
+        )
+
+    assert listed.execute(WORKSPACE_ID) == ()
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ("C:/private/autos.pdf", "C:\\private\\autos.pdf", "/private/autos.pdf", "\\\\server\\autos.pdf"),
+)
+def test_import_rejects_absolute_source_paths_before_storage(filename):
+    importer, listed, _reader = document_services()
+
+    with pytest.raises(InvalidCaseDocument, match="nome|path|arquivo"):
+        importer.execute(
+            workspace_id=WORKSPACE_ID,
+            original_filename=filename,
+            content=PDF,
             media_type="application/pdf",
         )
 
@@ -771,9 +789,9 @@ def import_pdf(runtime, workspace_id: str, filename: str, content=PDF):
 
 def test_document_transport_limit_does_not_expand_legacy_json_limit(tmp_path):
     assert LocalServerConfig().max_body_bytes == 1_048_576
-    assert LocalServerConfig().max_document_body_bytes == 16_777_216
+    assert LocalServerConfig().max_document_body_bytes == 134_217_728
     assert ProductBridgeConfig().max_body_bytes == 1_048_576
-    assert ProductBridgeConfig().max_document_body_bytes == 16_777_216
+    assert ProductBridgeConfig().max_document_body_bytes == 134_217_728
 
     runtime = build_product_runtime(
         tmp_path / "case.db",
@@ -819,9 +837,9 @@ def test_document_transport_limit_does_not_expand_legacy_json_limit(tmp_path):
     ("config_type", "overrides"),
     (
         (LocalServerConfig, {"max_body_bytes": 1_048_577}),
-        (LocalServerConfig, {"max_document_body_bytes": 16_777_217}),
+        (LocalServerConfig, {"max_document_body_bytes": 134_217_729}),
         (ProductBridgeConfig, {"max_body_bytes": 1_048_577}),
-        (ProductBridgeConfig, {"max_document_body_bytes": 16_777_217}),
+        (ProductBridgeConfig, {"max_document_body_bytes": 134_217_729}),
     ),
 )
 def test_transport_configuration_cannot_raise_contractual_body_limits(
@@ -850,7 +868,7 @@ def test_local_server_rejects_transport_cap_divergence_and_malformed_expansion()
         LocalApi(
             services,
             token=TOKEN,
-            max_document_body_bytes=16_777_217,
+            max_document_body_bytes=134_217_729,
         )
 
     assert (

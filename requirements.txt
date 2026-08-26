@@ -2,3 +2,5 @@ jsonschema>=4.23,<5
 referencing>=0.28.4,<1
 pypdf>=6.15,<7
 pdfplumber>=0.11,<1
+rapidocr==3.9.2
+onnxruntime==1.29.0
