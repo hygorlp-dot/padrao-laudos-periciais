@@ -311,6 +311,17 @@ class ExtractedField:
 
 
 @dataclass(frozen=True, slots=True)
+class _CnjCandidate:
+    number: CnjNumber
+    evidence: FieldEvidence
+    page: PdfTextPage
+    span: str
+    explicit_primary_anchor: bool
+    rejects_primary_anchor: bool
+    page_position: float
+
+
+@dataclass(frozen=True, slots=True)
 class DocumentProcessMetadata:
     workspace_id: WorkspaceId
     document_id: PrivateContentId
@@ -521,6 +532,122 @@ def _resolved_field(
     return ExtractedField(FieldExtractionState.CONFIDENT, evidence[0].extracted_value, evidence)
 
 
+def _cnj_line_context(page: PdfTextPage, start: int, end: int) -> tuple[str, str]:
+    line_start = page.text.rfind("\n", 0, start) + 1
+    line_end = page.text.find("\n", end)
+    if line_end < 0:
+        line_end = len(page.text)
+    return (
+        _ascii_upper(page.text[line_start:line_end]),
+        _ascii_upper(page.text[line_start:start]),
+    )
+
+
+def _rejects_primary_cnj(page: PdfTextPage, start: int, end: int) -> bool:
+    line, _ = _cnj_line_context(page, start, end)
+    return any(
+        marker in line
+        for marker in ("REFERENC", "RELACION", "VINCUL", "OUTRO FEITO", "ORIGEM")
+    )
+
+
+def _is_explicit_primary_cnj(page: PdfTextPage, start: int, end: int) -> bool:
+    _, prefix = _cnj_line_context(page, start, end)
+    if _rejects_primary_cnj(page, start, end):
+        return False
+    return re.search(
+        r"(?:^|\b)(?:PROCESSO(?:\s+JUDICIAL)?|AUTOS)"
+        r"(?:\s+(?:N|NUMERO)[O.]*)?\s*[:\-]?\s*$",
+        prefix,
+    ) is not None
+
+
+def _resolved_primary_cnj(
+    candidates: list[_CnjCandidate],
+) -> tuple[ExtractedField, CnjNumber | None, frozenset[int]]:
+    if not candidates:
+        return ExtractedField(FieldExtractionState.NOT_FOUND, "", ()), None, frozenset()
+    pages_by_value: dict[str, set[int]] = {}
+    top_pages_by_value: dict[str, set[int]] = {}
+    for candidate in candidates:
+        value = candidate.number.canonical
+        pages_by_value.setdefault(value, set()).add(candidate.page.number)
+        if candidate.page_position <= 0.25 and not candidate.rejects_primary_anchor:
+            top_pages_by_value.setdefault(value, set()).add(candidate.page.number)
+    strong_values = {
+        candidate.number.canonical
+        for candidate in candidates
+        if candidate.explicit_primary_anchor
+        or (
+            candidate.page.number == 1
+            and candidate.page_position <= 0.25
+            and not candidate.rejects_primary_anchor
+        )
+        or len(top_pages_by_value.get(candidate.number.canonical, set())) >= 2
+    }
+    unique_values = tuple(
+        dict.fromkeys(candidate.number.canonical for candidate in candidates)
+    )
+    if not strong_values:
+        return (
+            ExtractedField(
+                FieldExtractionState.AMBIGUOUS,
+                "",
+                tuple(
+                    next(
+                        candidate.evidence
+                        for candidate in candidates
+                        if candidate.number.canonical == value
+                    )
+                    for value in unique_values
+                ),
+            ),
+            None,
+            frozenset(),
+        )
+    if len(strong_values) > 1:
+        return (
+            ExtractedField(
+                FieldExtractionState.CONFLICTING,
+                "",
+                tuple(
+                    next(
+                        candidate.evidence
+                        for candidate in candidates
+                        if candidate.number.canonical == value
+                    )
+                    for value in sorted(strong_values)
+                ),
+            ),
+            None,
+            frozenset(),
+        )
+    selected_value = next(iter(strong_values))
+    selected = next(
+        candidate
+        for candidate in candidates
+        if candidate.number.canonical == selected_value
+        and (
+            candidate.explicit_primary_anchor
+            or (
+                candidate.page.number == 1
+                and candidate.page_position <= 0.25
+                and not candidate.rejects_primary_anchor
+            )
+            or candidate.page.number in top_pages_by_value[selected_value]
+        )
+    )
+    return (
+        ExtractedField(
+            FieldExtractionState.CONFIDENT,
+            selected.number.canonical,
+            (selected.evidence,),
+        ),
+        selected.number,
+        frozenset(pages_by_value[selected_value]),
+    )
+
+
 def extract_process_metadata(
     *,
     workspace_id: WorkspaceId,
@@ -542,8 +669,16 @@ def extract_process_metadata(
     low_confidence: dict[str, list[FieldEvidence]] = {
         field: [] for field in PROCESS_METADATA_FIELDS
     }
+    cnj_candidates: list[_CnjCandidate] = []
 
-    def add(field: str, value: str, page: PdfTextPage, span: str) -> None:
+    def add(
+        field: str,
+        value: str,
+        page: PdfTextPage,
+        span: str,
+        *,
+        prepend: bool = False,
+    ) -> None:
         cleaned = " ".join(value.strip(" \t:-").split())
         if cleaned:
             evidence = _evidence(
@@ -562,7 +697,45 @@ def extract_process_metadata(
                 and (evidence.ocr_confidence or 0.0) < 0.75
                 else candidates[field]
             )
-            target.append(evidence)
+            if prepend:
+                target.insert(0, evidence)
+            else:
+                target.append(evidence)
+
+    def add_cnj(
+        cnj: CnjNumber,
+        page: PdfTextPage,
+        span: str,
+        start: int,
+        end: int,
+    ) -> None:
+        evidence = _evidence(
+            workspace_id=workspace_id,
+            document_id=document_id,
+            field_name="numero_processo",
+            value=cnj.canonical,
+            page=page,
+            extracted_at=extracted_at,
+            source_filename=source_filename,
+            span=span,
+        )
+        if (
+            page.extraction_mode is PageExtractionMode.OCR
+            and (evidence.ocr_confidence or 0.0) < 0.75
+        ):
+            low_confidence["numero_processo"].append(evidence)
+            return
+        cnj_candidates.append(
+            _CnjCandidate(
+                cnj,
+                evidence,
+                page,
+                span,
+                _is_explicit_primary_cnj(page, start, end),
+                _rejects_primary_cnj(page, start, end),
+                start / max(1, len(page.text)),
+            )
+        )
 
     for page in text.pages:
         normalized_page = _ascii_upper(page.text)
@@ -584,15 +757,7 @@ def extract_process_metadata(
                     )
                 )
                 continue
-            add("numero_processo", cnj.canonical, page, raw)
-            add("ramo_justica", cnj.justice_branch, page, raw)
-            if cnj.justice_segment == "4":
-                add(
-                    "tribunal",
-                    f"Tribunal Regional Federal da {int(cnj.tribunal_code)}ª Região",
-                    page,
-                    raw,
-                )
+            add_cnj(cnj, page, raw, cnj_match.start(), cnj_match.end())
 
         if page.extraction_mode is PageExtractionMode.OCR:
             for ocr_match in _OCR_CNJ_PATTERN.finditer(normalized_page):
@@ -620,15 +785,7 @@ def extract_process_metadata(
                         )
                     )
                     continue
-                add("numero_processo", cnj.canonical, page, raw)
-                add("ramo_justica", cnj.justice_branch, page, raw)
-                if cnj.justice_segment == "4":
-                    add(
-                        "tribunal",
-                        f"Tribunal Regional Federal da {int(cnj.tribunal_code)}ª Região",
-                        page,
-                        raw,
-                    )
+                add_cnj(cnj, page, raw, ocr_match.start(), ocr_match.end())
 
         for line, normalized_line in zip(page.text.splitlines(), normalized_page.splitlines()):
             tribunal_match = re.search(
@@ -667,6 +824,54 @@ def extract_process_metadata(
                 )
                 add(field, original_value, page, line)
 
+    number_field, primary_cnj, primary_pages = _resolved_primary_cnj(cnj_candidates)
+    if not cnj_candidates and low_confidence["numero_processo"]:
+        number_field = ExtractedField(
+            FieldExtractionState.AMBIGUOUS,
+            "",
+            tuple(low_confidence["numero_processo"]),
+        )
+    if primary_cnj is not None:
+        primary_candidate = next(
+            candidate
+            for candidate in cnj_candidates
+            if candidate.number.canonical == primary_cnj.canonical
+        )
+        add(
+            "ramo_justica",
+            primary_cnj.justice_branch,
+            primary_candidate.page,
+            primary_candidate.span,
+            prepend=True,
+        )
+        if primary_cnj.justice_segment == "4":
+            add(
+                "tribunal",
+                f"Tribunal Regional Federal da {int(primary_cnj.tribunal_code)}ª Região",
+                primary_candidate.page,
+                primary_candidate.span,
+                prepend=True,
+            )
+        for field in PROCESS_METADATA_FIELDS:
+            if field == "numero_processo":
+                continue
+            candidates[field] = [
+                evidence
+                for evidence in candidates[field]
+                if evidence.source_page in primary_pages
+            ]
+            low_confidence[field] = [
+                evidence
+                for evidence in low_confidence[field]
+                if evidence.source_page in primary_pages
+            ]
+    else:
+        for field in PROCESS_METADATA_FIELDS:
+            if field == "numero_processo":
+                continue
+            low_confidence[field].extend(candidates[field])
+            candidates[field] = []
+
     fields = {
         field: _resolved_field(
             candidates[field],
@@ -678,13 +883,16 @@ def extract_process_metadata(
         )
         for field in PROCESS_METADATA_FIELDS
     }
-    if invalid_cnj and not candidates["numero_processo"]:
+    fields["numero_processo"] = number_field
+    if invalid_cnj and not cnj_candidates and not low_confidence["numero_processo"]:
         fields["numero_processo"] = ExtractedField(
             FieldExtractionState.AMBIGUOUS,
             "",
             tuple(invalid_cnj),
         )
     for field in PROCESS_METADATA_FIELDS:
+        if field == "numero_processo":
+            continue
         if not candidates[field] and low_confidence[field]:
             fields[field] = ExtractedField(
                 FieldExtractionState.AMBIGUOUS,
