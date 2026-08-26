@@ -11,6 +11,8 @@ from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from scripts.backend_contract.application.process_metadata import (
     FieldExtractionState,
+    PageExtractionMode,
+    PageProcessingStatus,
     PdfTextExtractionState,
     document_metadata_payload,
     extract_process_metadata,
@@ -410,7 +412,47 @@ def test_large_scanned_pdf_only_ocrs_bounded_early_pages():
 
     assert engine.calls == 2
     assert result.ocr_pages_processed == 2
-    assert [page.number for page in result.pages] == [1, 2]
+    assert [page.number for page in result.pages] == list(range(1, 9))
+    assert result.state is PdfTextExtractionState.PARTIAL
+    assert all(
+        page.processing_status is PageProcessingStatus.NOT_PROCESSED
+        for page in result.pages[2:]
+    )
+
+
+@pytest.mark.parametrize(
+    "native_text",
+    (
+        "ABCD" * 20,
+        "SYSTEM GENERATED " * 10,
+        "PROCESSO " * 20,
+    ),
+)
+def test_repeated_native_token_patterns_route_to_local_ocr(native_text):
+    engine = SyntheticOcrEngine(f"PROCESSO: {VALID_CNJ}")
+
+    result = LocalPdfTextExtractor(ocr_engine=engine).extract(
+        BytesIO(native_pdf(native_text))
+    )
+
+    assert engine.calls == 1
+    assert result.pages[0].extraction_mode is PageExtractionMode.OCR
+
+
+def test_failed_or_unprocessed_pages_are_never_hidden_by_available_pages():
+    engine = SyntheticOcrEngine("")
+
+    result = LocalPdfTextExtractor(ocr_engine=engine, max_ocr_pages=1).extract(
+        BytesIO(scanned_pdf_pages(3))
+    )
+
+    assert result.state is PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE
+    assert [page.number for page in result.pages] == [1, 2, 3]
+    assert result.pages[0].processing_status is PageProcessingStatus.OCR_FAILED
+    assert all(
+        page.processing_status is PageProcessingStatus.NOT_PROCESSED
+        for page in result.pages[1:]
+    )
 
 
 def test_real_rapidocr_latin_engine_reads_portuguese_and_cnj_offline():
@@ -509,7 +551,7 @@ def test_revision_page_cache_survives_reconstruction_and_isolates_workspace():
 
 
 def test_import_service_binds_reader_to_stored_sha_and_persisted_page_cache():
-    from scripts.backend_contract.application.content import SeekableContent
+    from scripts.backend_contract.application.content import OpenPrivateContent, SeekableContent
     from scripts.backend_contract.application.models import (
         PrivateContentMetadata,
         PrivateContentOrigin,
@@ -535,6 +577,12 @@ def test_import_service_binds_reader_to_stored_sha_and_persisted_page_cache():
                 PrivateContentOrigin.USER_IMPORT,
             )
 
+    class OpenDocument:
+        def execute(self, _workspace_id, _content_id):
+            metadata = ImportDocument().execute()
+            stream = BytesIO(b"%PDF-1.7\n%%EOF")
+            return OpenPrivateContent(metadata, stream, stream.close)
+
     class CacheAwareReader:
         def extract(self, source, *, document_sha256, page_cache):
             assert source.read(5) == b"%PDF-"
@@ -559,7 +607,7 @@ def test_import_service_binds_reader_to_stored_sha_and_persisted_page_cache():
     from scripts.backend_contract.application.process_metadata import PdfTextResult
 
     service = ImportCaseDocumentWithMetadata(
-        ImportDocument(), CacheAwareReader(), revisions, CacheClock(), CacheIds()
+        ImportDocument(), OpenDocument(), CacheAwareReader(), revisions, CacheClock(), CacheIds()
     )
 
     service.execute(

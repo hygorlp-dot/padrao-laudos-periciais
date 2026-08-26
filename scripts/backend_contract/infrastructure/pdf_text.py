@@ -68,10 +68,16 @@ class LocalPdfTextExtractor:
         if len(set(alphanumeric_values)) < 4:
             return False
         dominant = max(Counter(alphanumeric_values).values()) / len(alphanumeric_values)
+        normalized = "".join(alphanumeric_values)
+        period = (normalized + normalized).find(normalized, 1)
+        periodically_repeated = period < len(normalized) and len(normalized) // period >= 3
+        native_tokens = re.findall(r"\w+", value.casefold())
+        obviously_repeated = periodically_repeated and len(set(native_tokens)) <= 2
         return (
             alphanumeric / len(compact) >= 0.5
             and replacement / len(compact) <= 0.02
             and dominant <= 0.8
+            and not obviously_repeated
         )
 
     def _bounded_blocks(self, raw_blocks) -> tuple[PageTextBlock, ...]:
@@ -245,11 +251,41 @@ class LocalPdfTextExtractor:
         document_sha256: str = "",
         page_cache: object | None = None,
     ) -> PdfTextResult:
+        return self._extract(
+            source,
+            document_sha256=document_sha256,
+            page_cache=page_cache,
+            ocr_page_limit=self._max_ocr_pages,
+        )
+
+    def expand(
+        self,
+        source: BinaryIO,
+        *,
+        document_sha256: str = "",
+        page_cache: object | None = None,
+    ) -> PdfTextResult:
+        return self._extract(
+            source,
+            document_sha256=document_sha256,
+            page_cache=page_cache,
+            ocr_page_limit=self._max_pages,
+        )
+
+    def _extract(
+        self,
+        source: BinaryIO,
+        *,
+        document_sha256: str = "",
+        page_cache: object | None = None,
+        ocr_page_limit: int,
+    ) -> PdfTextResult:
         if not all(hasattr(source, name) for name in ("read", "seek", "tell")):
             raise TypeError("fonte PDF deve ser seekable")
         pages: list[PdfTextPage] = []
         remaining = self._max_total_chars
         ocr_pages = 0
+        ocr_attempts = 0
         native_pages = 0
         cache_hits = 0
         rendered_document = None
@@ -270,9 +306,20 @@ class LocalPdfTextExtractor:
                 return PdfTextResult(
                     PdfTextExtractionState.ERROR, (), document_sha256=document_sha256
                 )
+            total_pages = len(reader.pages)
+            truncated = total_pages > self._max_pages
             for index, page in enumerate(reader.pages[: self._max_pages], start=1):
                 if remaining <= 0:
-                    break
+                    pages.append(
+                        PdfTextPage(
+                            index,
+                            "",
+                            engine="pypdf",
+                            engine_version=PYPDF_VERSION,
+                            processing_status=PageProcessingStatus.NOT_PROCESSED,
+                        )
+                    )
+                    continue
                 extracted = page.extract_text() or ""
                 normalized = extracted.replace("\x00", "").strip()
                 result_page = None
@@ -285,7 +332,7 @@ class LocalPdfTextExtractor:
                         engine_version=PYPDF_VERSION,
                     )
                     native_pages += 1
-                elif self._ocr_engine is not None and ocr_pages < self._max_ocr_pages:
+                elif self._ocr_engine is not None and ocr_attempts < ocr_page_limit:
                     if rendered_document is None:
                         source.seek(0)
                         rendered_document = pdfium.PdfDocument(source)
@@ -296,7 +343,19 @@ class LocalPdfTextExtractor:
                         active_cache,
                     )
                     cache_hits += int(cache_hit)
+                    ocr_attempts += 1
                     ocr_pages += int(not cache_hit)
+                elif self._ocr_engine is not None:
+                    result_page = PdfTextPage(
+                        index,
+                        "",
+                        extraction_mode=PageExtractionMode.OCR,
+                        engine=self._ocr_engine.engine,
+                        engine_version=self._ocr_engine.engine_version,
+                        model_version=self._ocr_engine.model_version,
+                        config_version=self._ocr_engine.config_version,
+                        processing_status=PageProcessingStatus.NOT_PROCESSED,
+                    )
                 if result_page is not None:
                     result_page = self._bounded_page(
                         result_page,
@@ -305,6 +364,16 @@ class LocalPdfTextExtractor:
                     limited = result_page.text
                     pages.append(result_page)
                     remaining -= len(limited)
+            if truncated:
+                pages.append(
+                    PdfTextPage(
+                        self._max_pages + 1,
+                        "",
+                        engine="pypdf",
+                        engine_version=PYPDF_VERSION,
+                        processing_status=PageProcessingStatus.NOT_PROCESSED,
+                    )
+                )
         except Exception:
             return PdfTextResult(
                 PdfTextExtractionState.ERROR, (), document_sha256=document_sha256
@@ -326,11 +395,18 @@ class LocalPdfTextExtractor:
         has_text = any(
             page.processing_status is PageProcessingStatus.AVAILABLE for page in pages
         )
-        state = (
-            PdfTextExtractionState.AVAILABLE
-            if has_text
-            else PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE
+        incomplete = truncated or any(
+            page.processing_status is not PageProcessingStatus.AVAILABLE
+            for page in pages
         )
+        if has_text:
+            state = (
+                PdfTextExtractionState.PARTIAL
+                if incomplete
+                else PdfTextExtractionState.AVAILABLE
+            )
+        else:
+            state = PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE
         return PdfTextResult(
             state,
             tuple(pages),

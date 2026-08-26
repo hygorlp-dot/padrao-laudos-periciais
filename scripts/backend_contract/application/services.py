@@ -22,7 +22,9 @@ from .process_metadata import (
     DocumentExtractionSummary,
     ExtractedField,
     FieldExtractionState,
+    PageProcessingStatus,
     PdfTextExtractionState,
+    PdfTextResult,
     ProcessMetadataReview,
     aggregate_process_metadata,
     document_metadata_from_payload,
@@ -330,6 +332,7 @@ class ImportCaseDocument:
 @dataclass(frozen=True, slots=True)
 class ImportCaseDocumentWithMetadata:
     documents: object
+    document_streams: object
     extractor: object
     revisions: ArtifactRevisionRepository
     clock: Clock
@@ -350,24 +353,68 @@ class ImportCaseDocumentWithMetadata:
             content=source,
             media_type=media_type,
         )
-        source.rewind()
-        text = self.extractor.extract(
-            source.stream,
-            document_sha256=record.checksum_sha256,
-            page_cache=RevisionOcrPageCache(
-                self.revisions,
-                record.workspace_id,
-                self.clock,
-                self.ids,
-            ),
+        page_cache = RevisionOcrPageCache(
+            self.revisions,
+            record.workspace_id,
+            self.clock,
+            self.ids,
         )
-        extracted = extract_process_metadata(
-            workspace_id=record.workspace_id,
-            document_id=record.content_id,
-            original_filename=record.original_filename,
-            text=text,
-            extracted_at=_generated_timestamp(self.clock),
-        )
+        extracted_at = _generated_timestamp(self.clock)
+        with self.document_streams.execute(
+            record.workspace_id, record.content_id
+        ) as persisted:
+            if persisted.metadata != record:
+                raise RepositoryIntegrityError(
+                    "conteúdo persistido diverge do documento importado"
+                )
+
+            def extract_with(method):
+                persisted.stream.seek(0)
+                text = method(
+                    persisted.stream,
+                    document_sha256=record.checksum_sha256,
+                    page_cache=page_cache,
+                )
+                if (
+                    type(text) is not PdfTextResult
+                    or text.document_sha256 != record.checksum_sha256
+                ):
+                    raise RepositoryIntegrityError(
+                        "checksum da extração diverge do material persistido"
+                    )
+                return text
+
+            text = extract_with(self.extractor.extract)
+            extracted = extract_process_metadata(
+                workspace_id=record.workspace_id,
+                document_id=record.content_id,
+                original_filename=record.original_filename,
+                text=text,
+                extracted_at=extracted_at,
+            )
+            if (
+                any(
+                    page.processing_status is PageProcessingStatus.NOT_PROCESSED
+                    for page in text.pages
+                )
+                and any(
+                    field.state is not FieldExtractionState.CONFIDENT
+                    for field in extracted.fields.values()
+                )
+            ):
+                expand = getattr(self.extractor, "expand", None)
+                if not callable(expand):
+                    raise RepositoryIntegrityError(
+                        "leitor parcial não oferece expansão OCR limitada"
+                    )
+                text = extract_with(expand)
+                extracted = extract_process_metadata(
+                    workspace_id=record.workspace_id,
+                    document_id=record.content_id,
+                    original_filename=record.original_filename,
+                    text=text,
+                    extracted_at=extracted_at,
+                )
         self.revisions.append(
             workspace_id=record.workspace_id,
             artifact_kind=_PROCESS_METADATA_EXTRACTION_KIND,
@@ -568,11 +615,15 @@ class GetProcessMetadataReview:
                     }
                 )
                 continue
-            extraction = document_metadata_from_payload(revision.payload)
+            extraction = document_metadata_from_payload(
+                revision.payload,
+                legacy_document_sha256=document.checksum_sha256,
+            )
             if (
                 extraction.workspace_id != workspace_id
                 or extraction.document_id != document.content_id
                 or extraction.source_filename != document.original_filename
+                or extraction.document_sha256 != document.checksum_sha256
             ):
                 raise RepositoryIntegrityError("extração documental diverge do material")
             extractions.append(extraction)
@@ -587,6 +638,7 @@ class GetProcessMetadataReview:
             snapshot.append(
                 {
                     "document_id": str(document.content_id),
+                    "document_checksum": document.checksum_sha256,
                     "extraction_revision": revision.revision,
                     "extraction_checksum": revision.checksum_sha256,
                     "payload": thaw_payload(revision.payload),

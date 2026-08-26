@@ -132,4 +132,20 @@ describe("process metadata review boundary", () => {
 
     await expect(getProcessMetadataReview(WORKSPACE_ID)).resolves.toEqual(textless);
   });
+
+  test("accepts exact legacy native evidence and a controlled partial document", async () => {
+    const legacy = structuredClone(REVIEW);
+    legacy.documents[0].text_state = "PARTIAL";
+    const evidence = legacy.fields.numero_processo.evidence[0];
+    evidence.extraction_method = "LOCAL_PDF_TEXT_V1";
+    evidence.extraction_mode = "NATIVE_TEXT";
+    evidence.ocr_engine = "";
+    evidence.engine_version = "";
+    evidence.model_version = "";
+    evidence.ocr_confidence = null;
+    evidence.bounding_box = null;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(legacy)));
+
+    await expect(getProcessMetadataReview(WORKSPACE_ID)).resolves.toEqual(legacy);
+  });
 });

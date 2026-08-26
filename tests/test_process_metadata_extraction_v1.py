@@ -12,6 +12,7 @@ from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 from scripts.backend_contract.application.models import PrivateContentId, WorkspaceId
 from scripts.backend_contract.application.process_metadata import (
     FieldExtractionState,
+    PageProcessingStatus,
     PdfTextPage,
     PdfTextResult,
     PdfTextExtractionState,
@@ -94,8 +95,10 @@ def test_local_pdf_text_extractor_is_bounded_and_reports_textless_documents():
         )
     )
 
-    assert result.state is PdfTextExtractionState.AVAILABLE
-    assert len(result.pages) == 2
+    assert result.state is PdfTextExtractionState.PARTIAL
+    assert len(result.pages) == 3
+    assert result.pages[-1].number == 3
+    assert result.pages[-1].processing_status is PageProcessingStatus.NOT_PROCESSED
     assert all(len(page.text) <= 40 for page in result.pages)
     assert sum(len(page.text) for page in result.pages) <= 60
 

@@ -148,6 +148,9 @@ def build_local_api(
     read_case_document = None
     get_process_metadata_review = None
     if private_store is not None:
+        open_case_document = OpenCaseDocument(
+            OpenPrivateContentStream(store.workspaces, private_store)
+        )
         generic_store = StorePrivateContent(
             store.workspaces,
             private_store,
@@ -157,6 +160,7 @@ def build_local_api(
         )
         import_case_document = ImportCaseDocumentWithMetadata(
             ImportCaseDocument(generic_store),
+            open_case_document,
             LocalPdfTextExtractor(ocr_engine=RapidOcrLatinEngine()),
             store.revisions,
             local_clock,
@@ -165,9 +169,7 @@ def build_local_api(
         list_case_documents = ListCaseDocuments(
             ListPrivateContents(store.workspaces, private_store)
         )
-        read_case_document = OpenCaseDocument(
-            OpenPrivateContentStream(store.workspaces, private_store)
-        )
+        read_case_document = open_case_document
         get_process_metadata_review = GetProcessMetadataReview(
             store.workspaces,
             list_case_documents,
