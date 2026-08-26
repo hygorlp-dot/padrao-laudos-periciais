@@ -1106,7 +1106,7 @@ def document_metadata_payload(document: DocumentProcessMetadata) -> dict[str, ob
     if type(document) is not DocumentProcessMetadata:
         raise TypeError("extração documental inválida")
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "workspace_id": str(document.workspace_id),
         "document_id": str(document.document_id),
         "document_sha256": document.document_sha256,
@@ -1146,7 +1146,7 @@ def document_metadata_from_payload(
     value: object, *, legacy_document_sha256: str = ""
 ) -> DocumentProcessMetadata:
     payload = thaw_payload(value)
-    if type(payload) is not dict or payload.get("schema_version") not in {1, 2, 3}:
+    if type(payload) is not dict or payload.get("schema_version") not in {1, 2, 3, 4}:
         raise ValueError("extração documental persistida inválida")
     schema_version = payload["schema_version"]
     expected_keys = {
@@ -1157,7 +1157,7 @@ def document_metadata_from_payload(
         "text_state",
         "fields",
     }
-    if schema_version in {2, 3}:
+    if schema_version in {2, 3, 4}:
         expected_keys |= {"document_sha256", "page_evidence"}
     if set(payload) != expected_keys:
         raise ValueError("extração documental persistida inválida")
@@ -1291,7 +1291,7 @@ def document_metadata_from_payload(
         and any(field.evidence for field in fields.values())
     ):
         raise ValueError("estado legado diverge da proveniência de campo")
-    if schema_version < 3:
+    if schema_version < 4:
         fields = {
             name: (
                 ExtractedField(FieldExtractionState.AMBIGUOUS, "", field.evidence)
@@ -1300,6 +1300,10 @@ def document_metadata_from_payload(
             )
             for name, field in fields.items()
         }
+    elif any(
+        field.state is FieldExtractionState.CONFIDENT for field in fields.values()
+    ):
+        raise ValueError("schema atual não admite confiança automática")
     document = DocumentProcessMetadata(
         workspace_id,
         document_id,
@@ -1309,7 +1313,7 @@ def document_metadata_from_payload(
         document_sha256,
         tuple(pages),
     )
-    if schema_version in {2, 3}:
+    if schema_version in {2, 3, 4}:
         page_numbers = tuple(page.page_number for page in document.page_evidence)
         if page_numbers and page_numbers != tuple(range(1, len(page_numbers) + 1)):
             raise ValueError("cobertura de páginas persistida inválida")
@@ -1374,7 +1378,7 @@ def document_metadata_from_payload(
         for evidence in field.evidence:
             if evidence.source_filename != document.source_filename:
                 raise ValueError("arquivo da proveniência diverge do documento")
-            if schema_version in {2, 3}:
+            if schema_version in {2, 3, 4}:
                 page = textual_pages.get(evidence.source_page)
                 if (
                     page is None
