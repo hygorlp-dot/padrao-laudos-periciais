@@ -47,6 +47,7 @@ _JUSTICE_BRANCHES = {
 
 class PdfTextExtractionState(StrEnum):
     AVAILABLE = "AVAILABLE"
+    PARTIAL = "PARTIAL"
     TEXT_EXTRACTION_UNAVAILABLE = "TEXT_EXTRACTION_UNAVAILABLE"
     ERROR = "ERROR"
 
@@ -66,6 +67,7 @@ class PageExtractionMode(StrEnum):
 class PageProcessingStatus(StrEnum):
     AVAILABLE = "AVAILABLE"
     OCR_FAILED = "OCR_FAILED"
+    NOT_PROCESSED = "NOT_PROCESSED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +138,10 @@ class PdfTextPage:
             or self.confidence is not None
         ):
             raise ValueError("falha de OCR possui evidência textual divergente")
+        if self.processing_status is PageProcessingStatus.NOT_PROCESSED and (
+            self.text or self.blocks or self.confidence is not None
+        ):
+            raise ValueError("página não processada possui evidência textual")
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,11 +180,23 @@ class PdfTextResult:
             page for page in self.pages
             if page.processing_status is PageProcessingStatus.OCR_FAILED
         )
+        not_processed = tuple(
+            page for page in self.pages
+            if page.processing_status is PageProcessingStatus.NOT_PROCESSED
+        )
         if self.state is PdfTextExtractionState.AVAILABLE and not available:
             raise ValueError("estado disponível exige página textual")
+        if self.state is PdfTextExtractionState.AVAILABLE and (failed or not_processed):
+            raise ValueError("estado disponível não aceita perda parcial de página")
+        if self.state is PdfTextExtractionState.PARTIAL and (
+            not available or not (failed or not_processed)
+        ):
+            raise ValueError("estado parcial exige texto e página incompleta")
         if self.state is PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE and available:
             raise ValueError("estado indisponível diverge das páginas")
-        if self.state is PdfTextExtractionState.ERROR and (available or failed):
+        if self.state is PdfTextExtractionState.ERROR and (
+            available or failed or not_processed
+        ):
             raise ValueError("estado de erro não aceita páginas")
 
 
@@ -738,7 +756,13 @@ def aggregate_process_metadata(
         document.text_state is PdfTextExtractionState.ERROR for document in documents
     ):
         state = "ERROR"
-    elif all(field.state is FieldExtractionState.CONFIDENT for field in fields.values()):
+    elif (
+        all(field.state is FieldExtractionState.CONFIDENT for field in fields.values())
+        and all(
+            document.text_state is PdfTextExtractionState.AVAILABLE
+            for document in documents
+        )
+    ):
         state = "EXTRACTED"
     else:
         state = "PARTIAL"
@@ -785,7 +809,9 @@ def document_metadata_payload(document: DocumentProcessMetadata) -> dict[str, ob
     }
 
 
-def document_metadata_from_payload(value: object) -> DocumentProcessMetadata:
+def document_metadata_from_payload(
+    value: object, *, legacy_document_sha256: str = ""
+) -> DocumentProcessMetadata:
     payload = thaw_payload(value)
     if type(payload) is not dict or payload.get("schema_version") not in {1, 2}:
         raise ValueError("extração documental persistida inválida")
@@ -806,7 +832,7 @@ def document_metadata_from_payload(value: object) -> DocumentProcessMetadata:
     document_id = PrivateContentId.parse(payload["document_id"])
     source_filename = _filename(payload["source_filename"])
     text_state = PdfTextExtractionState(payload["text_state"])
-    document_sha256 = payload.get("document_sha256", "")
+    document_sha256 = payload.get("document_sha256", legacy_document_sha256)
     raw_pages = payload.get("page_evidence", [])
     if type(raw_pages) is not list:
         raise ValueError("evidência de página persistida inválida")

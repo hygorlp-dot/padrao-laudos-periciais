@@ -6,10 +6,11 @@ from datetime import UTC, datetime
 from io import BytesIO
 from uuid import UUID
 
+import pytest
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
-from scripts.backend_contract.application.content import SeekableContent
+from scripts.backend_contract.application.content import OpenPrivateContent, SeekableContent
 from scripts.backend_contract.application.models import (
     ArtifactRevision,
     PrivateContentId,
@@ -20,12 +21,17 @@ from scripts.backend_contract.application.models import (
     thaw_payload,
 )
 from scripts.backend_contract.application.process_metadata import (
+    FieldExtractionState,
+    PageExtractionMode,
+    PageProcessingStatus,
     PdfTextExtractionState,
     PdfTextPage,
     PdfTextResult,
+    document_metadata_from_payload,
     document_metadata_payload,
     extract_process_metadata,
 )
+from scripts.backend_contract.application.ports import RepositoryIntegrityError
 from scripts.backend_contract.application.services import (
     ConfirmProcessMetadata,
     GetProcessMetadataReview,
@@ -172,6 +178,26 @@ class ImportOnly:
         )
 
 
+class OpenStored:
+    def __init__(self, content=PDF, metadata=None):
+        self.content = content
+        self.metadata = metadata
+
+    def execute(self, workspace_id, content_id):
+        metadata = self.metadata or PrivateContentMetadata(
+            workspace_id=workspace_id,
+            content_id=content_id,
+            original_filename="autos.pdf",
+            byte_size=len(self.content),
+            checksum_sha256="b" * 64,
+            media_type="application/pdf",
+            imported_at="2026-08-26T12:30:00+00:00",
+            origin=PrivateContentOrigin.USER_IMPORT,
+        )
+        stream = BytesIO(self.content)
+        return OpenPrivateContent(metadata, stream, stream.close)
+
+
 class ListDocuments:
     def __init__(self, records):
         self.records = records
@@ -201,6 +227,7 @@ def test_import_persists_redacted_field_provenance_separately_from_effective_dat
     revisions = MemoryRevisions()
     importer = ImportCaseDocumentWithMetadata(
         documents=ImportOnly(),
+        document_streams=OpenStored(),
         extractor=StaticTextExtractor(),
         revisions=revisions,
         clock=FixedClock(),
@@ -235,7 +262,7 @@ def test_import_persists_redacted_field_provenance_separately_from_effective_dat
 def test_review_aggregates_persisted_extractions_and_confirmation_is_separate():
     revisions = MemoryRevisions()
     importer = ImportCaseDocumentWithMetadata(
-        ImportOnly(), StaticTextExtractor(), revisions, FixedClock(), SequenceIds()
+        ImportOnly(), OpenStored(), StaticTextExtractor(), revisions, FixedClock(), SequenceIds()
     )
     metadata = importer.execute(
         workspace_id=WORKSPACE_ID,
@@ -285,14 +312,24 @@ def test_textless_document_is_exposed_as_controlled_document_state():
         "TextlessExtractor",
         (),
         {
-            "extract": lambda _self, _source, **_context: PdfTextResult(
-                PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE,
-                (),
-            )
+                "extract": lambda _self, _source, **_context: PdfTextResult(
+                    PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE,
+                    (),
+                    document_sha256=_context["document_sha256"],
+                )
         },
     )()
     importer = ImportCaseDocumentWithMetadata(
-        ImportOnly(), extractor, revisions, FixedClock(), SequenceIds()
+        ImportOnly(),
+        OpenStored(
+            metadata=ImportOnly().execute(
+                original_filename="imagem-digitalizada.pdf"
+            )
+        ),
+        extractor,
+        revisions,
+        FixedClock(),
+        SequenceIds(),
     )
     metadata = importer.execute(
         workspace_id=WORKSPACE_ID,
@@ -318,7 +355,7 @@ def test_textless_document_is_exposed_as_controlled_document_state():
 def test_missing_extraction_is_error_and_new_evidence_invalidates_confirmation():
     revisions = MemoryRevisions()
     importer = ImportCaseDocumentWithMetadata(
-        ImportOnly(), StaticTextExtractor(), revisions, FixedClock(), SequenceIds()
+        ImportOnly(), OpenStored(), StaticTextExtractor(), revisions, FixedClock(), SequenceIds()
     )
     metadata = importer.execute(
         workspace_id=WORKSPACE_ID,
@@ -341,6 +378,7 @@ def test_missing_extraction_is_error_and_new_evidence_invalidates_confirmation()
         text=PdfTextResult(
             PdfTextExtractionState.AVAILABLE,
             (PdfTextPage(1, "AUTOR: Outra Parte Sintetica"),),
+            document_sha256="b" * 64,
         ),
         extracted_at="2026-08-26T12:31:00+00:00",
     )
@@ -368,6 +406,205 @@ def test_missing_extraction_is_error_and_new_evidence_invalidates_confirmation()
     failed = review_service.execute(WORKSPACE_ID)
     assert failed.state == "ERROR"
     assert failed.documents[-1].text_state is PdfTextExtractionState.ERROR
+
+
+def test_import_extracts_only_from_the_verified_persisted_snapshot():
+    original = PDF
+    caller = BytesIO(original)
+    seen = []
+
+    class MutatingImport(ImportOnly):
+        def execute(self, **kwargs):
+            record = super().execute(**kwargs)
+            kwargs["content"].stream.seek(0)
+            kwargs["content"].stream.write(b"%PDF-TAMPERED-1234")
+            kwargs["content"].stream.seek(0)
+            return record
+
+    class CaptureExtractor:
+        def extract(self, source, **context):
+            seen.append(source.read())
+            return PdfTextResult(
+                PdfTextExtractionState.AVAILABLE,
+                (PdfTextPage(1, "TRIBUNAL REGIONAL FEDERAL PROCESSO"),),
+                document_sha256=context["document_sha256"],
+            )
+
+    revisions = MemoryRevisions()
+    ImportCaseDocumentWithMetadata(
+        MutatingImport(), OpenStored(original), CaptureExtractor(), revisions,
+        FixedClock(), SequenceIds(),
+    ).execute(
+        workspace_id=WORKSPACE_ID,
+        original_filename="autos.pdf",
+        content=SeekableContent(caller, len(original)),
+        media_type="application/pdf",
+    )
+
+    assert seen == [original]
+
+
+def test_review_rejects_extraction_bound_to_a_different_document_sha():
+    revisions = MemoryRevisions()
+    metadata = ImportOnly().execute(original_filename="autos.pdf")
+    extracted = extract_process_metadata(
+        workspace_id=WORKSPACE_ID,
+        document_id=DOCUMENT_ID,
+        original_filename="autos.pdf",
+        text=PdfTextResult(
+            PdfTextExtractionState.AVAILABLE,
+            (PdfTextPage(1, "PROCESSO: 7654321-55.2025.4.05.0001"),),
+            document_sha256="c" * 64,
+        ),
+        extracted_at="2026-08-26T12:30:00+00:00",
+    )
+    revisions.append(
+        workspace_id=WORKSPACE_ID,
+        artifact_kind="PROCESS_METADATA_EXTRACTION",
+        artifact_id=str(DOCUMENT_ID),
+        revision_id="00000000-0000-4000-8000-000000000001",
+        created_at="2026-08-26T12:30:00+00:00",
+        payload=document_metadata_payload(extracted),
+    )
+
+    with pytest.raises(RepositoryIntegrityError, match="checksum|material"):
+        GetProcessMetadataReview(
+            ExistingWorkspace(), ListDocuments((metadata,)), revisions
+        ).execute(WORKSPACE_ID)
+
+
+def test_legacy_extraction_is_explicitly_rebound_to_the_immutable_document_identity():
+    extracted = extract_process_metadata(
+        workspace_id=WORKSPACE_ID,
+        document_id=DOCUMENT_ID,
+        original_filename="autos.pdf",
+        text=PdfTextResult(
+            PdfTextExtractionState.AVAILABLE,
+            (PdfTextPage(1, "PROCESSO: 7654321-55.2025.4.05.0001"),),
+            document_sha256="b" * 64,
+        ),
+        extracted_at="2026-08-26T12:30:00+00:00",
+    )
+    legacy = json.loads(json.dumps(document_metadata_payload(extracted)))
+    legacy["schema_version"] = 1
+    legacy.pop("document_sha256")
+    legacy.pop("page_evidence")
+    v2_only = {
+        "extraction_mode", "ocr_engine", "engine_version", "model_version",
+        "ocr_confidence", "bounding_box",
+    }
+    for field in legacy["fields"].values():
+        for evidence in field["evidence"]:
+            for key in v2_only:
+                evidence.pop(key)
+
+    revision = MemoryRevisions().append(
+        workspace_id=WORKSPACE_ID,
+        artifact_kind="PROCESS_METADATA_EXTRACTION",
+        artifact_id=str(DOCUMENT_ID),
+        revision_id="00000000-0000-4000-8000-000000000001",
+        created_at="2026-08-26T12:30:00+00:00",
+        payload=legacy,
+    )
+    restored = document_metadata_from_payload(
+        revision.payload, legacy_document_sha256="b" * 64
+    )
+
+    assert restored.document_sha256 == "b" * 64
+    assert restored.fields["numero_processo"].evidence[0].engine_version == ""
+
+
+def test_partial_document_cannot_be_reported_as_fully_extracted():
+    document = extract_process_metadata(
+        workspace_id=WORKSPACE_ID,
+        document_id=DOCUMENT_ID,
+        original_filename="autos.pdf",
+        text=PdfTextResult(
+            PdfTextExtractionState.PARTIAL,
+            (
+                PdfTextPage(
+                    1,
+                    "PROCESSO: 7654321-55.2025.4.05.0001\n"
+                    "1 VARA FEDERAL COMARCA DE RECIFE/PE\n"
+                    "AUTOR: Parte A\nREU: Parte B",
+                ),
+                PdfTextPage(
+                    2,
+                    "",
+                    extraction_mode=PageExtractionMode.OCR,
+                    engine="SYNTHETIC_OCR",
+                    engine_version="1.0",
+                    model_version="synthetic-pt-v1",
+                    processing_status=PageProcessingStatus.OCR_FAILED,
+                ),
+            ),
+            document_sha256="b" * 64,
+        ),
+        extracted_at="2026-08-26T12:30:00+00:00",
+    )
+    assert all(
+        field.state is FieldExtractionState.CONFIDENT
+        for field in document.fields.values()
+    )
+
+    from scripts.backend_contract.application.process_metadata import aggregate_process_metadata
+
+    assert aggregate_process_metadata((document,)).state == "PARTIAL"
+
+
+def test_import_expands_the_bounded_reader_when_initial_metadata_is_unresolved():
+    class ProgressiveExtractor:
+        def __init__(self):
+            self.expansions = 0
+
+        def extract(self, _source, **context):
+            return PdfTextResult(
+                PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE,
+                (
+                    PdfTextPage(
+                        1,
+                        "",
+                        extraction_mode=PageExtractionMode.OCR,
+                        engine="SYNTHETIC_OCR",
+                        engine_version="1.0",
+                        model_version="synthetic-pt-v1",
+                        processing_status=PageProcessingStatus.OCR_FAILED,
+                    ),
+                    PdfTextPage(
+                        2,
+                        "",
+                        extraction_mode=PageExtractionMode.OCR,
+                        engine="SYNTHETIC_OCR",
+                        engine_version="1.0",
+                        model_version="synthetic-pt-v1",
+                        processing_status=PageProcessingStatus.NOT_PROCESSED,
+                    ),
+                ),
+                document_sha256=context["document_sha256"],
+            )
+
+        def expand(self, _source, **context):
+            self.expansions += 1
+            return PdfTextResult(
+                PdfTextExtractionState.AVAILABLE,
+                (PdfTextPage(2, "PROCESSO: 7654321-55.2025.4.05.0001"),),
+                document_sha256=context["document_sha256"],
+            )
+
+    extractor = ProgressiveExtractor()
+    revisions = MemoryRevisions()
+    ImportCaseDocumentWithMetadata(
+        ImportOnly(), OpenStored(), extractor, revisions, FixedClock(), SequenceIds()
+    ).execute(
+        workspace_id=WORKSPACE_ID,
+        original_filename="autos.pdf",
+        content=SeekableContent(BytesIO(PDF), len(PDF)),
+        media_type="application/pdf",
+    )
+
+    assert extractor.expansions == 1
+    payload = thaw_payload(revisions.records[-1].payload)
+    assert payload["fields"]["numero_processo"]["value"] == "7654321-55.2025.4.05.0001"
 
 
 def test_local_api_exposes_review_without_raw_text_path_or_token():

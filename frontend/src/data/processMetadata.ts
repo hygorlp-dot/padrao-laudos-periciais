@@ -21,6 +21,7 @@ export type ProcessMetadataReviewState =
   | "ERROR";
 export type PdfTextExtractionState =
   | "AVAILABLE"
+  | "PARTIAL"
   | "TEXT_EXTRACTION_UNAVAILABLE"
   | "ERROR";
 
@@ -85,7 +86,7 @@ const FIELD_STATES = new Set<FieldExtractionState>([
   "CONFIDENT", "AMBIGUOUS", "NOT_FOUND", "CONFLICTING",
 ]);
 const TEXT_STATES = new Set<PdfTextExtractionState>([
-  "AVAILABLE", "TEXT_EXTRACTION_UNAVAILABLE", "ERROR",
+  "AVAILABLE", "PARTIAL", "TEXT_EXTRACTION_UNAVAILABLE", "ERROR",
 ]);
 
 function safeFilename(value: unknown): value is string {
@@ -137,8 +138,8 @@ function parseEvidence(
     && record.ocr_confidence >= 0 && record.ocr_confidence <= 1
     && (box === null || (Array.isArray(box) && box.length === 4
       && box.every((coordinate) => typeof coordinate === "number" && Number.isFinite(coordinate))));
-  if (typeof record.engine_version !== "string" || !record.engine_version.trim()
-    || (!nativeEvidence && !ocrEvidence)) {
+  if (typeof record.engine_version !== "string" || (!nativeEvidence && !ocrEvidence)
+    || (ocrEvidence && !record.engine_version.trim())) {
     throw new ProcessMetadataApiError("invalid-response", "Resposta local inválida");
   }
   return record as ProcessMetadataEvidence;
