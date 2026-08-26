@@ -70,14 +70,14 @@ class LocalPdfTextExtractor:
             return False
         dominant = max(Counter(alphanumeric_values).values()) / len(alphanumeric_values)
         normalized = "".join(alphanumeric_values)
-        periodically_repeated = False
-        max_suffix = min(64, len(normalized) // 5)
-        for suffix_size in range(max_suffix + 1):
-            core = normalized[:-suffix_size] if suffix_size else normalized
-            period = (core + core).find(core, 1)
-            if period < len(core) and len(core) // period >= 3:
-                periodically_repeated = True
-                break
+        periodic_matches = re.finditer(r"(.{2,64}?)\1{2,}", normalized)
+        longest_periodic_core = max(
+            (len(match.group(0)) for match in periodic_matches), default=0
+        )
+        periodically_repeated = (
+            longest_periodic_core >= 48
+            and longest_periodic_core * 2 >= len(normalized)
+        )
         gram_count = max(0, len(normalized) - 7)
         unique_grams = {
             normalized[index : index + 8] for index in range(gram_count)

@@ -475,6 +475,13 @@ def test_large_scanned_pdf_only_ocrs_bounded_early_pages():
         "SYSTEM GENERATED " * 10 + " PAGE 1",
         "THIS PDF IS SCANNED " * 10 + "END",
         "PAGE 1 " + "ALFA BETA GAMA " * 10,
+        "ALFA BETA GAMA " * 10
+        + " DOCUMENTO DIGITALIZADO AUTOMATICAMENTE PAGINA 1",
+        " CABECALHO DO SISTEMA PROCESSUAL ELETRONICO PAGINA 0001"
+        + "ALFA BETA GAMA " * 10,
+        "CABECALHO PROCESSUAL "
+        + "ALFA BETA GAMA " * 10
+        + " DOCUMENTO DIGITALIZADO PAGINA 1",
     ),
 )
 def test_repeated_native_token_patterns_route_to_local_ocr(native_text):
