@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+import math
 import re
 from typing import BinaryIO
 
@@ -26,6 +28,9 @@ class LocalPdfTextExtractor:
         max_ocr_pages: int = 4,
         max_chars_per_page: int = 50_000,
         max_total_chars: int = 400_000,
+        max_render_dimension: int = 8_192,
+        max_render_pixels: int = 16_000_000,
+        max_ocr_blocks: int = 2_000,
         ocr_engine: object | None = None,
         page_cache: object | None = None,
     ):
@@ -34,6 +39,9 @@ class LocalPdfTextExtractor:
             (max_ocr_pages, "max_ocr_pages"),
             (max_chars_per_page, "max_chars_per_page"),
             (max_total_chars, "max_total_chars"),
+            (max_render_dimension, "max_render_dimension"),
+            (max_render_pixels, "max_render_pixels"),
+            (max_ocr_blocks, "max_ocr_blocks"),
         ):
             if type(value) is not int or value < 1:
                 raise ValueError(f"{name} inválido")
@@ -41,6 +49,9 @@ class LocalPdfTextExtractor:
         self._max_ocr_pages = min(max_ocr_pages, max_pages)
         self._max_chars_per_page = max_chars_per_page
         self._max_total_chars = max_total_chars
+        self._max_render_dimension = max_render_dimension
+        self._max_render_pixels = max_render_pixels
+        self._max_ocr_blocks = max_ocr_blocks
         self._ocr_engine = ocr_engine
         self._page_cache = page_cache
 
@@ -51,7 +62,81 @@ class LocalPdfTextExtractor:
             return False
         alphanumeric = sum(character.isalnum() for character in compact)
         replacement = value.count("\ufffd") + value.count("\x00")
-        return alphanumeric / len(compact) >= 0.5 and replacement / len(compact) <= 0.02
+        alphanumeric_values = [
+            character.casefold() for character in compact if character.isalnum()
+        ]
+        if len(set(alphanumeric_values)) < 4:
+            return False
+        dominant = max(Counter(alphanumeric_values).values()) / len(alphanumeric_values)
+        return (
+            alphanumeric / len(compact) >= 0.5
+            and replacement / len(compact) <= 0.02
+            and dominant <= 0.8
+        )
+
+    def _bounded_blocks(self, raw_blocks) -> tuple[PageTextBlock, ...]:
+        blocks = []
+        used = 0
+        for raw in raw_blocks:
+            if len(blocks) >= self._max_ocr_blocks:
+                break
+            separator = int(bool(blocks))
+            available = self._max_chars_per_page - used - separator
+            if available <= 0:
+                break
+            text = raw["text"]
+            if type(text) is not str:
+                raise TypeError("invalid local OCR text")
+            block = PageTextBlock(
+                text=text[:available],
+                confidence=float(raw["confidence"]),
+                bounding_box=tuple(float(value) for value in raw["bounding_box"]),
+            )
+            blocks.append(block)
+            used += separator + len(block.text)
+        return tuple(blocks)
+
+    def _bounded_page(self, page: PdfTextPage, limit: int) -> PdfTextPage:
+        if len(page.text) <= limit:
+            return page
+        if page.extraction_mode is PageExtractionMode.OCR:
+            blocks = []
+            used = 0
+            for block in page.blocks:
+                separator = int(bool(blocks))
+                available = limit - used - separator
+                if available <= 0:
+                    break
+                blocks.append(
+                    PageTextBlock(
+                        block.text[:available],
+                        confidence=block.confidence,
+                        bounding_box=block.bounding_box,
+                    )
+                )
+                used += separator + len(blocks[-1].text)
+            text = "\n".join(block.text for block in blocks)
+            confidence = (
+                sum(block.confidence or 0.0 for block in blocks) / len(blocks)
+                if blocks
+                else None
+            )
+        else:
+            text = page.text[:limit]
+            blocks = []
+            confidence = page.confidence
+        return PdfTextPage(
+            page.number,
+            text,
+            extraction_mode=page.extraction_mode,
+            engine=page.engine,
+            engine_version=page.engine_version,
+            model_version=page.model_version,
+            config_version=page.config_version,
+            confidence=confidence,
+            blocks=tuple(blocks),
+            processing_status=page.processing_status,
+        )
 
     def _ocr_page(
         self,
@@ -75,18 +160,40 @@ class LocalPdfTextExtractor:
             if cached is not None:
                 if type(cached) is not PdfTextPage or cached.number != index + 1:
                     raise ValueError("cache OCR persistido inválido")
+                if (
+                    len(cached.text) > self._max_chars_per_page
+                    or len(cached.blocks) > self._max_ocr_blocks
+                    or (
+                        cached.extraction_mode is PageExtractionMode.OCR
+                        and cached.processing_status is PageProcessingStatus.AVAILABLE
+                        and cached.text != "\n".join(block.text for block in cached.blocks)
+                    )
+                ):
+                    raise ValueError("persisted OCR cache exceeds limits")
                 return cached, True
         try:
-            rendered = document[index].render(scale=1.5).to_pil()
-            raw_blocks = self._ocr_engine.recognize(rendered)
-            blocks = tuple(
-                PageTextBlock(
-                    text=block["text"],
-                    confidence=float(block["confidence"]),
-                    bounding_box=tuple(float(value) for value in block["bounding_box"]),
-                )
-                for block in raw_blocks
-            )
+            source_page = document[index]
+            width, height = source_page.get_size()
+            if not all(math.isfinite(value) and value > 0 for value in (width, height)):
+                raise ValueError("invalid PDF page dimensions")
+            pixel_width = math.ceil(width * 1.5)
+            pixel_height = math.ceil(height * 1.5)
+            if (
+                pixel_width > self._max_render_dimension
+                or pixel_height > self._max_render_dimension
+                or pixel_width * pixel_height > self._max_render_pixels
+            ):
+                raise ValueError("PDF page exceeds OCR rasterization limits")
+            bitmap = source_page.render(scale=1.5)
+            try:
+                rendered = bitmap.to_pil()
+                try:
+                    raw_blocks = self._ocr_engine.recognize(rendered)
+                    blocks = self._bounded_blocks(raw_blocks)
+                finally:
+                    rendered.close()
+            finally:
+                bitmap.close()
             if not blocks:
                 return (
                     PdfTextPage(
@@ -191,19 +298,11 @@ class LocalPdfTextExtractor:
                     cache_hits += int(cache_hit)
                     ocr_pages += int(not cache_hit)
                 if result_page is not None:
-                    limited = result_page.text[: min(self._max_chars_per_page, remaining)]
-                    if limited != result_page.text:
-                        result_page = PdfTextPage(
-                            result_page.number,
-                            limited,
-                            extraction_mode=result_page.extraction_mode,
-                            engine=result_page.engine,
-                            engine_version=result_page.engine_version,
-                            model_version=result_page.model_version,
-                            config_version=result_page.config_version,
-                            confidence=result_page.confidence,
-                            blocks=result_page.blocks,
-                        )
+                    result_page = self._bounded_page(
+                        result_page,
+                        min(self._max_chars_per_page, remaining),
+                    )
+                    limited = result_page.text
                     pages.append(result_page)
                     remaining -= len(limited)
         except Exception:

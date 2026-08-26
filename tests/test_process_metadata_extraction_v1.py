@@ -84,7 +84,15 @@ def test_cnj_checksum_and_structural_components_are_deterministic():
 
 def test_local_pdf_text_extractor_is_bounded_and_reports_textless_documents():
     extractor = LocalPdfTextExtractor(max_pages=2, max_chars_per_page=40, max_total_chars=60)
-    result = extractor.extract(BytesIO(text_pdf("A" * 80, "B" * 80, "C" * 80)))
+    result = extractor.extract(
+        BytesIO(
+            text_pdf(
+                "Pagina A com texto tecnico " * 4,
+                "Pagina B com texto tecnico " * 4,
+                "Pagina C com texto tecnico " * 4,
+            )
+        )
+    )
 
     assert result.state is PdfTextExtractionState.AVAILABLE
     assert len(result.pages) == 2

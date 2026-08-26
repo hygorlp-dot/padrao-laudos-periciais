@@ -284,6 +284,32 @@ def test_private_store_copies_hashes_opens_and_reopens_streamed_content(tmp_path
             assert digest.hexdigest() == metadata.checksum_sha256
 
 
+def test_open_private_content_returns_verified_snapshot_not_mutable_backing_inode(tmp_path):
+    payload = b"original private PDF bytes"
+    replacement = b"tampered private PDF bytes"
+    assert len(payload) == len(replacement)
+    metadata = PrivateContentMetadata(
+        workspace_id=WORKSPACE_ID,
+        content_id=CONTENT_ID,
+        original_filename="autos.pdf",
+        byte_size=len(payload),
+        checksum_sha256=hashlib.sha256(payload).hexdigest(),
+        media_type="application/pdf",
+        imported_at="2026-08-26T12:30:00+00:00",
+        origin=PrivateContentOrigin.USER_IMPORT,
+    )
+    root = tmp_path / "private"
+
+    with LocalPrivateContentStore.open_or_provision(root) as store:
+        store.store(metadata, SeekableContent(BytesIO(payload), len(payload)))
+        opened = store.open_content(WORKSPACE_ID, CONTENT_ID)
+        assert opened is not None
+        content_path = next(root.glob(f"{WORKSPACE_ID}.{CONTENT_ID}.content"))
+        content_path.write_bytes(replacement)
+        with opened:
+            assert opened.stream.read() == payload
+
+
 def test_transport_rejects_configuration_above_canonical_document_limit():
     with pytest.raises(ValueError, match="limite"):
         LocalServerConfig(max_document_body_bytes=MAX_DOCUMENT_BYTES + 1)
@@ -441,6 +467,8 @@ def test_product_upload_and_read_stream_without_whole_document_memory_copies(tmp
         reopened_review_payload = json.loads(reopened_review.read())
         connection.close()
 
+        download_baseline, _previous_peak = tracemalloc.get_traced_memory()
+        tracemalloc.reset_peak()
         connection = http.client.HTTPConnection(*runtime.address, timeout=30)
         connection.request(
             "GET",
@@ -454,6 +482,7 @@ def test_product_upload_and_read_stream_without_whole_document_memory_copies(tmp
             received += len(block)
         connection.close()
         _current, download_peak = tracemalloc.get_traced_memory()
+        download_incremental_peak = download_peak - download_baseline
         tracemalloc.stop()
     finally:
         runtime.close()
@@ -478,7 +507,7 @@ def test_product_upload_and_read_stream_without_whole_document_memory_copies(tmp
     # Inclui o tensor de uma Ãºnica pÃ¡gina OCR; o transporte continua limitado
     # aos blocos verificados acima e nunca materializa os 100 MiB em Python.
     assert upload_peak < 128 * MIB
-    assert download_peak < 20 * MIB
+    assert download_incremental_peak < 20 * MIB
 
     with sqlite3.connect(tmp_path / "case.db") as connection:
         rows = tuple(
