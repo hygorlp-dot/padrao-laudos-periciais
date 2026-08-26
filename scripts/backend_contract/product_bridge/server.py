@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import math
 import socket
+import tempfile
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Event, Lock, Thread, Timer
 
-from .transport import ProductBridge, _error
+from .transport import (
+    DOCUMENT_IO_CHUNK_BYTES,
+    MAX_DOCUMENT_BYTES,
+    ProductBridge,
+    SeekableContent,
+    _error,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,7 +23,7 @@ class ProductBridgeConfig:
     host: str = "127.0.0.1"
     port: int = 0
     max_body_bytes: int = 1_048_576
-    max_document_body_bytes: int = 16_777_216
+    max_document_body_bytes: int = MAX_DOCUMENT_BYTES
     request_timeout_seconds: float = 5.0
 
     def __post_init__(self):
@@ -33,7 +40,7 @@ class ProductBridgeConfig:
             raise ValueError("limite de body inválido")
         if (
             type(self.max_document_body_bytes) is not int
-            or not 1 <= self.max_document_body_bytes <= 16_777_216
+            or not 1 <= self.max_document_body_bytes <= MAX_DOCUMENT_BYTES
         ):
             raise ValueError("limite de documento inválido")
         if (
@@ -121,7 +128,14 @@ class _ProductRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             try:
-                self.wfile.write(response.body)
+                if type(response.body) is bytes:
+                    self.wfile.write(response.body)
+                else:
+                    try:
+                        while block := response.body.stream.read(DOCUMENT_IO_CHUNK_BYTES):
+                            self.wfile.write(block)
+                    finally:
+                        response.body.close()
             except ConnectionError:
                 pass
         self.close_connection = True
@@ -154,25 +168,47 @@ class _ProductRequestHandler(BaseHTTPRequestHandler):
                 elif length > bridge.request_body_limit(self.command, self.path):
                     response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
                 else:
+                    spool = None
                     try:
-                        body = self.rfile.read(length) if length else b""
+                        document_upload = (
+                            self.command == "POST"
+                            and self.path.startswith("/app-api/v1/workspaces/")
+                            and self.path.endswith("/materials")
+                        )
+                        if length and document_upload:
+                            spool = tempfile.SpooledTemporaryFile(max_size=1_048_576, mode="w+b")
+                            remaining = length
+                            while remaining:
+                                block = self.rfile.read(min(DOCUMENT_IO_CHUNK_BYTES, remaining))
+                                if not block:
+                                    return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
+                                spool.write(block)
+                                remaining -= len(block)
+                            spool.seek(0)
+                            body = SeekableContent(spool, length)
+                        else:
+                            body = self.rfile.read(length) if length else b""
+                            if len(body) != length:
+                                response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
+                                return response
+                        if not self._finish_request_acquisition():
+                            response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
+                        else:
+                            response = bridge.handle(
+                                self.command,
+                                self.path,
+                                dict(self.headers.items()),
+                                body,
+                            )
                     except (TimeoutError, OSError):
                         return _error(
                             400,
                             "INVALID_PRODUCT_REQUEST",
                             "requisição local inválida",
                         )
-                    if len(body) != length:
-                        response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
-                    elif not self._finish_request_acquisition():
-                        response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
-                    else:
-                        response = bridge.handle(
-                            self.command,
-                            self.path,
-                            dict(self.headers.items()),
-                            body,
-                        )
+                    finally:
+                        if spool is not None:
+                            spool.close()
         return response
 
     def _dispatch(self):

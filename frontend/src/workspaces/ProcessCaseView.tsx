@@ -7,6 +7,13 @@ import {
   type ProcessCaseSnapshot,
   saveProcessCase,
 } from "../data/processCase";
+import {
+  getProcessMetadataReview,
+  ProcessMetadataApiError,
+  type ProcessMetadataReview,
+} from "../data/processMetadata";
+import { navigate } from "../app/router";
+import { workspacePath } from "../routes/routeCatalog";
 
 type ProcessCaseViewProps = {
   workspaceId: string;
@@ -18,6 +25,7 @@ const FIELDS: readonly {
   autoComplete?: string;
 }[] = [
   { key: "numero_processo", label: "Número do processo" },
+  { key: "ramo_justica", label: "Ramo da Justiça" },
   { key: "tribunal", label: "Tribunal" },
   { key: "vara", label: "Vara" },
   { key: "comarca_municipio", label: "Comarca ou município" },
@@ -32,6 +40,7 @@ type ViewState =
       kind: "ready";
       workspaceId: string;
       snapshot: ProcessCaseSnapshot;
+      review: ProcessMetadataReview;
       draft: ProcessCaseData;
     }
   | { kind: "load-error"; workspaceId: string; message: string };
@@ -43,10 +52,33 @@ type SaveState =
   | { kind: "error"; workspaceId: string; message: string };
 
 function errorMessage(error: unknown) {
-  return error instanceof ProcessCaseApiError
+  return error instanceof ProcessCaseApiError || error instanceof ProcessMetadataApiError
     ? error.message
     : "Não foi possível concluir a operação local";
 }
+
+function initialDraft(snapshot: ProcessCaseSnapshot, review: ProcessMetadataReview) {
+  return Object.fromEntries(FIELDS.map(({ key }) => {
+    const manual = snapshot.data[key];
+    const extracted = review.fields[key];
+    return [
+      key,
+      snapshot.revision !== null
+        ? manual
+        : manual || (extracted.state === "CONFIDENT" ? extracted.value : ""),
+    ];
+  })) as ProcessCaseData;
+}
+
+const REVIEW_LABELS: Record<ProcessMetadataReview["state"], string> = {
+  WAITING_FOR_DOCUMENTS: "Aguardando documentos do processo",
+  EXTRACTING: "Extraindo identificação local",
+  EXTRACTED: "Dados extraídos para revisão",
+  PARTIAL: "Extração parcial para revisão",
+  CONFLICT: "Conflitos documentais exigem revisão",
+  CONFIRMED: "Dados processuais confirmados",
+  ERROR: "Não foi possível extrair a camada de texto",
+};
 
 export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
   const [state, setState] = useState<ViewState>({ kind: "loading" });
@@ -57,18 +89,20 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
 
   useEffect(() => {
     const controller = new AbortController();
-    getProcessCase(workspaceId, controller.signal).then(
-      (snapshot) => {
+    void (async () => {
+      try {
+        const snapshot = await getProcessCase(workspaceId, controller.signal);
+        const review = await getProcessMetadataReview(workspaceId, controller.signal);
         if (!controller.signal.aborted) {
           setState({
             kind: "ready",
             workspaceId,
             snapshot,
-            draft: { ...snapshot.data },
+            review,
+            draft: initialDraft(snapshot, review),
           });
         }
-      },
-      (error) => {
+      } catch (error) {
         if (!controller.signal.aborted) {
           setState({
             kind: "load-error",
@@ -76,8 +110,8 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
             message: errorMessage(error),
           });
         }
-      },
-    );
+      }
+    })();
     return () => {
       controller.abort();
       const pendingSave = activeSave.current;
@@ -130,6 +164,11 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
           kind: "ready",
           workspaceId,
           snapshot,
+          review: {
+            ...state.review,
+            state: "CONFIRMED",
+            confirmed_revision: snapshot.revision,
+          },
           draft: { ...snapshot.data },
         });
         setSaveState({ kind: "saved", workspaceId });
@@ -153,6 +192,7 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
       ? saveState.message
       : undefined;
   const saved = saveState.kind === "saved" && saveState.workspaceId === workspaceId;
+  const review = visibleState.kind === "ready" ? visibleState.review : undefined;
 
   if (visibleState.kind === "loading") {
     return (
@@ -192,11 +232,60 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
     <form className="process-case-form" onSubmit={submit}>
       <div className="process-case-intro">
         <h2>Identificação do processo</h2>
-        <p>Registre somente os dados conhecidos. Todos os campos podem permanecer em branco.</p>
+        <p>Revise os dados extraídos dos autos. Corrija apenas o que o documento não informou corretamente.</p>
       </div>
+      {review ? (
+        <section
+          className={`metadata-review-state metadata-review-state--${review.state.toLowerCase()}`}
+          role={review.state === "CONFLICT" || review.state === "ERROR" ? "alert" : "status"}
+        >
+          <div>
+            <strong>{REVIEW_LABELS[review.state]}</strong>
+            {review.state === "WAITING_FOR_DOCUMENTS" ? (
+              <p>Importe os PDFs dos autos para preencher a identificação automaticamente.</p>
+            ) : (
+              <p>Confira os valores e suas fontes antes de confirmar.</p>
+            )}
+          </div>
+          {review.state === "WAITING_FOR_DOCUMENTS" ? (
+            <a
+              className="text-action"
+              href={workspacePath(workspaceId, "materiais")}
+              onClick={navigate}
+            >
+              Importar documentos
+            </a>
+          ) : null}
+        </section>
+      ) : null}
+      {review?.documents
+        .filter((document) => document.text_state !== "AVAILABLE")
+        .map((document) => (
+          <section
+            className="metadata-document-notice"
+            key={document.document_id}
+            role={document.text_state === "ERROR" ? "alert" : "status"}
+          >
+            <strong>{document.source_filename}</strong>
+            <span>
+              {document.text_state === "TEXT_EXTRACTION_UNAVAILABLE"
+                ? "O OCR local não conseguiu obter texto utilizável. Revise o arquivo ou importe uma cópia legível."
+                : "A extração local deste PDF não pôde ser concluída."}
+            </span>
+          </section>
+        ))}
       <div className="process-case-fields">
-        {FIELDS.map((field) => (
-          <div className="field-group" key={field.key}>
+        {FIELDS.map((field) => {
+          const extracted = review?.fields[field.key];
+          const manualValue = visibleState.snapshot.data[field.key];
+          const manualConflict = Boolean(
+            manualValue
+            && extracted?.state === "CONFIDENT"
+            && extracted.value
+            && manualValue !== extracted.value,
+          );
+          return (
+          <div className={`field-group${manualConflict ? " field-group--conflict" : ""}`} key={field.key}>
             <label htmlFor={`process-case-${field.key}`}>{field.label}</label>
             <input
               id={`process-case-${field.key}`}
@@ -206,13 +295,49 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
               disabled={saving}
               onChange={(event) => update(field.key, event.currentTarget.value)}
             />
+            {extracted?.evidence[0] ? (
+              <p className="field-provenance">
+                {extracted.evidence[0].extraction_mode === "OCR" ? "Extraído por OCR local de " : "Extraído de "}
+                {extracted.evidence[0].source_filename}, página {extracted.evidence[0].source_page}
+              </p>
+            ) : null}
+            {manualConflict && extracted ? (
+              <div className="field-conflict" role="status">
+                <span>Valor informado difere do documento.</span>
+                <button
+                  className="text-action"
+                  type="button"
+                  disabled={saving}
+                  onClick={() => update(field.key, extracted.value)}
+                >
+                  Usar valor extraído para {field.label}
+                </button>
+              </div>
+            ) : null}
+            {extracted?.state === "CONFLICTING" ? (
+              <div className="field-conflict" role="alert">
+                <span>Os documentos apresentam valores diferentes.</span>
+                {extracted.evidence.map((candidate) => (
+                  <button
+                    className="text-action"
+                    type="button"
+                    key={`${candidate.document_id}-${candidate.extracted_value}`}
+                    disabled={saving}
+                    onClick={() => update(field.key, candidate.extracted_value)}
+                  >
+                    Usar {candidate.extracted_value}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
-        ))}
+          );
+        })}
       </div>
       {saveError ? <p className="process-case-message process-case-message--error" role="alert">{saveError}</p> : null}
       {saved ? (
         <p className="process-case-message" role="status">
-          <strong>Dados do processo salvos</strong>
+          <strong>Dados do processo confirmados</strong>
           {visibleState.snapshot.revision === null ? null : (
             <span>Revisão {visibleState.snapshot.revision}</span>
           )}
@@ -220,7 +345,7 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
       ) : null}
       <div className="form-actions">
         <button ref={saveButton} className="primary-action" type="submit" disabled={saving}>
-          {saving ? "Salvando…" : "Salvar dados do processo"}
+          {saving ? "Confirmando…" : "Confirmar dados do processo"}
         </button>
         {!saved && visibleState.snapshot.revision !== null ? (
           <span className="revision-note">Revisão atual {visibleState.snapshot.revision}</span>
