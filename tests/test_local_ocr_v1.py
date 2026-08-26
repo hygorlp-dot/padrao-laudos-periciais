@@ -161,8 +161,9 @@ def test_scanned_valid_cnj_is_extracted_with_ocr_provenance():
     metadata = metadata_from(result)
 
     field = metadata.fields["numero_processo"]
-    assert field.state is FieldExtractionState.CONFIDENT
-    assert field.value == VALID_CNJ
+    assert field.state is FieldExtractionState.AMBIGUOUS
+    assert field.value == ""
+    assert field.evidence[0].extracted_value == VALID_CNJ
     assert field.evidence[0].extraction_method == "LOCAL_OCR_V1"
     assert field.evidence[0].ocr_confidence == 0.99
 
@@ -411,8 +412,9 @@ def test_ocr_only_cnj_confusions_are_bounded_and_still_require_checksum():
 
     field = metadata_from(result).fields["numero_processo"]
 
-    assert field.state is FieldExtractionState.CONFIDENT
-    assert field.value == VALID_CNJ
+    assert field.state is FieldExtractionState.AMBIGUOUS
+    assert field.value == ""
+    assert field.evidence[0].extracted_value == VALID_CNJ
     assert field.evidence[0].normalized_text_span == confused
 
     native_result = LocalPdfTextExtractor().extract(

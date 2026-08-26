@@ -439,14 +439,14 @@ def _ascii_upper(value: str) -> str:
     return "".join(character for character in decomposed if not unicodedata.combining(character)).upper()
 
 
-def _source_offset_from_ascii(value: str, ascii_offset: int) -> int:
-    consumed = 0
+def _ascii_upper_with_source_indices(value: str) -> tuple[str, tuple[int, ...]]:
+    normalized = []
+    source_indices = []
     for index, character in enumerate(value):
-        width = len(_ascii_upper(character))
-        if consumed + width > ascii_offset:
-            return index
-        consumed += width
-    return len(value)
+        fragment = _ascii_upper(character)
+        normalized.append(fragment)
+        source_indices.extend(index for _ in fragment)
+    return "".join(normalized), tuple(source_indices)
 
 
 def _timestamp(value: str) -> str:
@@ -785,7 +785,13 @@ def extract_process_metadata(
         )
 
     for page in text.pages:
-        normalized_page = _ascii_upper(page.text)
+        if page.extraction_mode is PageExtractionMode.OCR:
+            normalized_page, ascii_source_indices = _ascii_upper_with_source_indices(
+                page.text
+            )
+        else:
+            normalized_page = _ascii_upper(page.text)
+            ascii_source_indices = ()
         for cnj_match in _CNJ_PATTERN.finditer(page.text):
             raw = cnj_match.group(0)
             cnj_starts_by_page.setdefault(page.number, []).append(cnj_match.start())
@@ -813,8 +819,8 @@ def extract_process_metadata(
                 raw = ocr_match.group(0)
                 if _CNJ_PATTERN.fullmatch(raw):
                     continue
-                source_start = _source_offset_from_ascii(page.text, ocr_match.start())
-                source_end = _source_offset_from_ascii(page.text, ocr_match.end())
+                source_start = ascii_source_indices[ocr_match.start()]
+                source_end = ascii_source_indices[ocr_match.end() - 1] + 1
                 cnj_starts_by_page.setdefault(page.number, []).append(source_start)
                 groups = tuple(group.translate(_OCR_DIGIT_CONFUSIONS) for group in ocr_match.groups())
                 normalized_cnj = (
@@ -999,6 +1005,14 @@ def extract_process_metadata(
                 "",
                 tuple(candidate.evidence for candidate in low_confidence[field]),
             )
+    fields = {
+        name: (
+            ExtractedField(FieldExtractionState.AMBIGUOUS, "", field.evidence)
+            if field.state is FieldExtractionState.CONFIDENT
+            else field
+        )
+        for name, field in fields.items()
+    }
     return DocumentProcessMetadata(
         workspace_id=workspace_id,
         document_id=document_id,
