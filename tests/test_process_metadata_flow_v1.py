@@ -263,7 +263,7 @@ def test_import_persists_redacted_field_provenance_separately_from_effective_dat
     assert extraction.artifact_id == str(DOCUMENT_ID)
     payload = thaw_payload(extraction.payload)
     serialized = json.dumps(payload, ensure_ascii=False)
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["document_sha256"] == "b" * 64
     assert payload["page_evidence"][0]["document_sha256"] == "b" * 64
     assert payload["document_id"] == str(DOCUMENT_ID)
