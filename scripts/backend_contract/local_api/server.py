@@ -16,6 +16,7 @@ class LocalServerConfig:
     host: str = "127.0.0.1"
     port: int = 0
     max_body_bytes: int = 1_048_576
+    max_document_body_bytes: int = 16_777_216
     request_timeout_seconds: float = 5.0
 
     def __post_init__(self):
@@ -25,8 +26,16 @@ class LocalServerConfig:
             raise TypeError("porta local inválida")
         if self.port < 0 or self.port > 65_535:
             raise ValueError("porta local inválida")
-        if type(self.max_body_bytes) is not int or self.max_body_bytes < 1:
+        if (
+            type(self.max_body_bytes) is not int
+            or not 1 <= self.max_body_bytes <= 1_048_576
+        ):
             raise ValueError("limite de body inválido")
+        if (
+            type(self.max_document_body_bytes) is not int
+            or not 1 <= self.max_document_body_bytes <= 16_777_216
+        ):
+            raise ValueError("limite de documento inválido")
         if (
             isinstance(self.request_timeout_seconds, bool)
             or not isinstance(self.request_timeout_seconds, (int, float))
@@ -61,6 +70,7 @@ class LocalApiServerStartError(RuntimeError):
 def _handler_for(
     api: LocalApi,
     max_body_bytes: int,
+    max_document_body_bytes: int,
     request_timeout_seconds: float,
 ):
     class LocalRequestHandler(BaseHTTPRequestHandler):
@@ -156,6 +166,7 @@ def _handler_for(
                     "Content-Type",
                     "Origin",
                     "Transfer-Encoding",
+                    "X-Document-Filename",
                     "X-Local-API-Token",
                 )
             )
@@ -167,7 +178,12 @@ def _handler_for(
                     length = _parse_content_length(raw_length)
                 except (TypeError, ValueError):
                     length = -1
-                if length < 0 or length > max_body_bytes:
+                body_limit = (
+                    max_document_body_bytes
+                    if api.is_document_upload(self.command, self.path)
+                    else max_body_bytes
+                )
+                if length < 0 or length > body_limit:
                     self.close_connection = True
                     response = _error(400, "INVALID_REQUEST")
                 else:
@@ -236,11 +252,17 @@ class LocalApiServer:
         self._config = LocalServerConfig() if config is None else config
         if type(self._config) is not LocalServerConfig:
             raise TypeError("configuração local inválida")
+        if api.body_limits != (
+            self._config.max_body_bytes,
+            self._config.max_document_body_bytes,
+        ):
+            raise ValueError("limites do servidor e transporte divergem")
         self._server = _ThreadingLocalServer(
             (self._config.host, self._config.port),
             _handler_for(
                 api,
                 self._config.max_body_bytes,
+                self._config.max_document_body_bytes,
                 self._config.request_timeout_seconds,
             ),
         )

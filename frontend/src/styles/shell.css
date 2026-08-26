@@ -356,6 +356,92 @@ main {
   margin-top: 0;
 }
 
+.material-intake {
+  display: grid;
+  gap: var(--space-6);
+  padding: var(--space-6) 0;
+  border-top: 1px solid var(--color-rule);
+  border-bottom: 1px solid var(--color-rule);
+}
+
+.material-intake-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 25rem);
+  gap: var(--space-7);
+  align-items: end;
+}
+
+.material-intake h2,
+.material-empty h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  letter-spacing: -0.015em;
+}
+
+.material-intake h2 { font-size: 1.35rem; }
+.material-empty h3 { font-size: 1.08rem; }
+
+.material-intake-heading p,
+.material-empty p {
+  margin: var(--space-2) 0 0;
+  color: var(--color-slate);
+}
+
+.material-import-form {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.material-import-form label {
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.material-import-form input[type="file"] {
+  min-width: 0;
+  padding: 0.55rem;
+  border: 1px solid var(--color-rule);
+  border-radius: 0.35rem;
+  background: var(--color-paper);
+}
+
+.material-import-form .primary-action { justify-self: start; }
+
+.material-empty {
+  display: grid;
+  grid-template-columns: 5.25rem minmax(0, 1fr);
+  gap: var(--space-6);
+  min-height: 9rem;
+  align-items: center;
+  border-top: 1px solid var(--color-rule);
+}
+
+.material-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--color-rule);
+}
+
+.material-list li {
+  display: flex;
+  min-height: 4.75rem;
+  padding: var(--space-4) 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  border-bottom: 1px solid var(--color-rule);
+}
+
+.material-list li > div { display: grid; min-width: 0; gap: 0.3rem; }
+.material-list strong { overflow-wrap: anywhere; }
+.material-list span { color: var(--color-slate); font-size: 0.75rem; }
+.material-message--error { color: var(--color-error); }
+
+@media (max-width: 56rem) {
+  .material-intake-heading { grid-template-columns: 1fr; }
+}
+
 .workspace-form {
   display: grid;
   max-width: 38rem;

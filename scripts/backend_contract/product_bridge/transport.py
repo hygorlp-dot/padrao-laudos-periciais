@@ -86,6 +86,23 @@ def _proxy_target(path: str, method: str) -> str | None:
     if path == "/app-api/v1/workspaces" and method in {"GET", "POST"}:
         return "/v1/workspaces"
     prefix = "/app-api/v1/workspaces/"
+    if path.startswith(prefix):
+        remainder = path[len(prefix) :].split("/")
+        if (
+            len(remainder) == 2
+            and _CANONICAL_UUID.fullmatch(remainder[0])
+            and remainder[1] == "materials"
+            and method in {"GET", "POST"}
+        ):
+            return f"/v1/workspaces/{remainder[0]}/materials"
+        if (
+            len(remainder) == 3
+            and _CANONICAL_UUID.fullmatch(remainder[0])
+            and remainder[1] == "materials"
+            and _CANONICAL_UUID.fullmatch(remainder[2])
+            and method == "GET"
+        ):
+            return f"/v1/workspaces/{remainder[0]}/materials/{remainder[2]}"
     process_case_suffix = "/process-case"
     if method in {"GET", "POST"} and path.startswith(prefix) and path.endswith(
         process_case_suffix
@@ -111,6 +128,7 @@ class ProductBridge:
         upstream_address: tuple[str, int],
         token: str,
         max_body_bytes: int,
+        max_document_body_bytes: int,
         request_timeout_seconds: float,
     ):
         root = Path(frontend_root).resolve()
@@ -128,13 +146,53 @@ class ProductBridge:
             raise ValueError("upstream local inválido")
         if type(token) is not str or len(token) < 32:
             raise ValueError("token local inválido")
+        if (
+            type(max_body_bytes) is not int
+            or not 1 <= max_body_bytes <= 1_048_576
+        ):
+            raise ValueError("limite de body inválido")
+        if (
+            type(max_document_body_bytes) is not int
+            or not 1 <= max_document_body_bytes <= 16_777_216
+        ):
+            raise ValueError("limite de documento inválido")
         self._frontend_root = root
         self._public_origin = public_origin
         self._public_host = public_origin.removeprefix("http://")
         self._upstream_address = upstream_address
         self._token = token
         self._max_body_bytes = max_body_bytes
+        self._max_document_body_bytes = max_document_body_bytes
         self._request_timeout_seconds = request_timeout_seconds
+
+    def request_body_limit(self, method: str, target: str) -> int:
+        """Mantém JSON no teto legado e amplia somente o POST documental exato."""
+
+        try:
+            normalized_method = method.upper()
+            path = _canonical_path(target)
+        except (AttributeError, TypeError, ValueError):
+            return self._max_body_bytes
+        upstream_target = _proxy_target(path, normalized_method)
+        if (
+            normalized_method == "POST"
+            and upstream_target is not None
+            and upstream_target.endswith("/materials")
+        ):
+            return self._max_document_body_bytes
+        return self._max_body_bytes
+
+    def _response_body_limit(self, method: str, upstream_target: str) -> int:
+        if (
+            method == "GET"
+            and re.fullmatch(
+                rf"/v1/workspaces/{_CANONICAL_UUID.pattern}/materials/"
+                rf"{_CANONICAL_UUID.pattern}",
+                upstream_target,
+            )
+        ):
+            return self._max_document_body_bytes
+        return self._max_body_bytes
 
     def __repr__(self) -> str:
         return f"ProductBridge(public_origin={self._public_origin!r})"
@@ -184,16 +242,33 @@ class ProductBridge:
         headers: dict[str, str],
         body: bytes,
     ) -> BridgeResponse:
-        if len(body) > self._max_body_bytes:
+        request_limit = (
+            self._max_document_body_bytes
+            if method == "POST" and upstream_target.endswith("/materials")
+            else self._max_body_bytes
+        )
+        if len(body) > request_limit:
             return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
         upstream_headers = {
             "Host": f"{self._upstream_address[0]}:{self._upstream_address[1]}",
             "X-Local-API-Token": self._token,
         }
         if method == "POST":
-            if headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+            content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            is_document = upstream_target.endswith("/materials")
+            if content_type not in ({"application/pdf"} if is_document else {"application/json"}):
                 return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
-            upstream_headers["Content-Type"] = "application/json"
+            if is_document:
+                filename = headers.get("x-document-filename", "")
+                if (
+                    not filename
+                    or len(filename) > 1024
+                    or not filename.isascii()
+                    or any(ord(character) < 33 or ord(character) > 126 for character in filename)
+                ):
+                    return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
+                upstream_headers["X-Document-Filename"] = filename
+            upstream_headers["Content-Type"] = content_type
             upstream_headers["Content-Length"] = str(len(body))
         connection = http.client.HTTPConnection(
             *self._upstream_address,
@@ -202,8 +277,9 @@ class ProductBridge:
         try:
             connection.request(method, upstream_target, body=body or None, headers=upstream_headers)
             upstream = connection.getresponse()
-            response_body = upstream.read(self._max_body_bytes + 1)
-            if len(response_body) > self._max_body_bytes:
+            response_limit = self._response_body_limit(method, upstream_target)
+            response_body = upstream.read(response_limit + 1)
+            if len(response_body) > response_limit:
                 return _error(502, "INVALID_LOCAL_API_RESPONSE", "resposta local inválida")
             content_type = upstream.getheader("Content-Type") or "application/json; charset=utf-8"
             return _response(

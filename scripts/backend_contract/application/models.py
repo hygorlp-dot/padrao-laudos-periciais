@@ -136,6 +136,7 @@ class PrivateContentId:
 
 class PrivateContentOrigin(Enum):
     LOCAL_IMPORT = "LOCAL_IMPORT"
+    USER_IMPORT = "USER_IMPORT"
 
 
 @dataclass(frozen=True, slots=True)

@@ -14,11 +14,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Inicia o Sistema Pericial local")
     parser.add_argument("--database", required=True, type=Path)
     parser.add_argument("--frontend", required=True, type=Path)
+    parser.add_argument("--private-root", required=True, type=Path)
     parser.add_argument("--port", type=int, default=0)
     arguments = parser.parse_args()
     runtime = build_product_runtime(
         arguments.database,
         arguments.frontend,
+        private_root=arguments.private_root,
         config=ProductBridgeConfig(port=arguments.port),
     )
     try:

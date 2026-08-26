@@ -42,11 +42,20 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
     description:
       "Registre a identificação processual básica vinculada a esta perícia.",
     kind: "stage",
+    next: { path: "/materiais", label: "Materiais" },
+  },
+  {
+    path: "/materiais",
+    index: "02",
+    label: "Materiais",
+    description:
+      "Importe e consulte os documentos recebidos sem expor o armazenamento privado.",
+    kind: "stage",
     next: { path: "/analise", label: "Análise" },
   },
   {
     path: "/analise",
-    index: "02",
+    index: "03",
     label: "Análise",
     description:
       "A leitura inicial e a organização do material recebido ficarão reunidas aqui.",
@@ -55,7 +64,7 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
   },
   {
     path: "/planejamento",
-    index: "03",
+    index: "04",
     label: "Planejamento",
     description:
       "A preparação técnica do trabalho terá uma etapa própria, antes da atividade de campo.",
@@ -64,7 +73,7 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
   },
   {
     path: "/vistoria",
-    index: "04",
+    index: "05",
     label: "Vistoria",
     description:
       "O registro organizado da atividade de campo será apresentado neste espaço.",
@@ -73,7 +82,7 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
   },
   {
     path: "/evidencias",
-    index: "05",
+    index: "06",
     label: "Evidências",
     description:
       "As fontes e os materiais relacionados ao trabalho terão navegação dedicada nesta etapa.",
@@ -82,7 +91,7 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
   },
   {
     path: "/constatacoes",
-    index: "06",
+    index: "07",
     label: "Constatações",
     description:
       "O que for efetivamente observado será organizado sem antecipar inferências ou conclusões.",
@@ -91,7 +100,7 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
   },
   {
     path: "/analise-tecnica",
-    index: "07",
+    index: "08",
     label: "Análise técnica",
     description:
       "A etapa de raciocínio técnico permanecerá distinta do material observado e das conclusões.",
@@ -100,7 +109,7 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
   },
   {
     path: "/laudo",
-    index: "08",
+    index: "09",
     label: "Laudo",
     description:
       "A composição do documento técnico terá seu próprio espaço no fluxo futuro.",
@@ -109,7 +118,7 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
   },
   {
     path: "/revisao",
-    index: "09",
+    index: "10",
     label: "Revisão",
     description:
       "A conferência final será tratada como etapa explícita antes de qualquer exportação.",
@@ -118,7 +127,7 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
   },
   {
     path: "/exportar",
-    index: "10",
+    index: "11",
     label: "Exportar",
     description:
       "A saída do trabalho ficará separada da elaboração e dependerá de um fluxo posterior.",
