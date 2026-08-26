@@ -1,0 +1,515 @@
+from __future__ import annotations
+
+import hashlib
+from io import BytesIO
+from uuid import UUID
+
+import pytest
+from PIL import Image, ImageDraw, ImageFont
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+from scripts.backend_contract.application.process_metadata import (
+    FieldExtractionState,
+    PdfTextExtractionState,
+    document_metadata_payload,
+    extract_process_metadata,
+)
+from scripts.backend_contract.application.models import (
+    ArtifactRevision,
+    PrivateContentId,
+    WorkspaceId,
+)
+from scripts.backend_contract.infrastructure.pdf_text import LocalPdfTextExtractor
+
+
+VALID_CNJ = "7654321-55.2025.4.05.0001"
+WORKSPACE_A = WorkspaceId(UUID("11111111-1111-4111-8111-111111111111"))
+WORKSPACE_B = WorkspaceId(UUID("22222222-2222-4222-8222-222222222222"))
+DOCUMENT_A = PrivateContentId(UUID("33333333-3333-4333-8333-333333333333"))
+
+
+def scanned_pdf(*lines: str) -> bytes:
+    image = Image.new("RGB", (1240, 1754), "white")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(r"C:\Windows\Fonts\arial.ttf", 48)
+    for index, line in enumerate(lines):
+        draw.text((80, 100 + index * 90), line, fill="black", font=font)
+    target = BytesIO()
+    image.save(target, format="PDF", resolution=150)
+    return target.getvalue()
+
+
+def scanned_pdf_pages(page_count: int) -> bytes:
+    font = ImageFont.truetype(r"C:\Windows\Fonts\arial.ttf", 48)
+    pages = []
+    for number in range(1, page_count + 1):
+        image = Image.new("RGB", (1240, 1754), "white")
+        ImageDraw.Draw(image).text(
+            (80, 100), f"PÁGINA DIGITALIZADA {number}", fill="black", font=font
+        )
+        pages.append(image)
+    target = BytesIO()
+    pages[0].save(
+        target,
+        format="PDF",
+        resolution=150,
+        save_all=True,
+        append_images=pages[1:],
+    )
+    return target.getvalue()
+
+
+def native_pdf(text: str) -> bytes:
+    writer = PdfWriter()
+    font = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }
+    )
+    font_ref = writer._add_object(font)
+    page = writer.add_blank_page(width=612, height=792)
+    page[NameObject("/Resources")] = DictionaryObject(
+        {NameObject("/Font"): DictionaryObject({NameObject("/F1"): font_ref})}
+    )
+    stream = DecodedStreamObject()
+    escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    stream.set_data(
+        b"BT /F1 10 Tf 36 750 Td ("
+        + escaped.encode("latin-1", errors="replace")
+        + b") Tj ET"
+    )
+    page[NameObject("/Contents")] = writer._add_object(stream)
+    target = BytesIO()
+    writer.write(target)
+    return target.getvalue()
+
+
+def mixed_pdf(native: bytes, scanned: bytes) -> bytes:
+    writer = PdfWriter()
+    for source in (native, scanned):
+        reader = PdfReader(BytesIO(source))
+        writer.add_page(reader.pages[0])
+    target = BytesIO()
+    writer.write(target)
+    return target.getvalue()
+
+
+class SyntheticOcrEngine:
+    engine = "SYNTHETIC_OCR"
+    engine_version = "1.0"
+    model_version = "synthetic-pt-v1"
+    config_version = "OCR_CONFIG_V1"
+
+    def __init__(self, *lines: str, confidence: float = 0.99):
+        self.lines = lines
+        self.confidence = confidence
+        self.calls = 0
+
+    def recognize(self, _image):
+        self.calls += 1
+        return tuple(
+            {
+                "text": line,
+                "confidence": self.confidence,
+                "bounding_box": (80.0, 100.0, 1100.0, 180.0),
+            }
+            for line in self.lines
+        )
+
+
+def test_fully_scanned_pdf_uses_local_ocr_for_process_header():
+    engine = SyntheticOcrEngine(
+        "TRIBUNAL REGIONAL FEDERAL DA 5ª REGIÃO",
+        f"PROCESSO: {VALID_CNJ}",
+    )
+
+    result = LocalPdfTextExtractor(ocr_engine=engine).extract(
+        BytesIO(scanned_pdf("imagem sem camada textual"))
+    )
+
+    assert result.state is PdfTextExtractionState.AVAILABLE
+    assert len(result.pages) == 1
+    assert result.pages[0].number == 1
+    assert result.pages[0].text == (
+        "TRIBUNAL REGIONAL FEDERAL DA 5ª REGIÃO\n"
+        f"PROCESSO: {VALID_CNJ}"
+    )
+    assert result.pages[0].extraction_mode == "OCR"
+    assert result.pages[0].engine == "SYNTHETIC_OCR"
+    assert engine.calls == 1
+
+
+def metadata_from(result, *, workspace_id=WORKSPACE_A):
+    return extract_process_metadata(
+        workspace_id=workspace_id,
+        document_id=DOCUMENT_A,
+        original_filename="autos-sinteticos.pdf",
+        text=result,
+        extracted_at="2026-08-26T12:30:00+00:00",
+    )
+
+
+def test_scanned_valid_cnj_is_extracted_with_ocr_provenance():
+    engine = SyntheticOcrEngine(f"PROCESSO: {VALID_CNJ}")
+    result = LocalPdfTextExtractor(ocr_engine=engine).extract(BytesIO(scanned_pdf("CNJ")))
+
+    metadata = metadata_from(result)
+
+    field = metadata.fields["numero_processo"]
+    assert field.state is FieldExtractionState.CONFIDENT
+    assert field.value == VALID_CNJ
+    assert field.evidence[0].extraction_method == "LOCAL_OCR_V1"
+    assert field.evidence[0].ocr_confidence == 0.99
+
+
+def test_scanned_parties_preserve_unicode_and_ocr_locator():
+    engine = SyntheticOcrEngine(
+        "AUTORA: José Gonçalves Construções Ltda.",
+        "RÉU: Órgão Público de São Luís",
+    )
+    result = LocalPdfTextExtractor(ocr_engine=engine).extract(BytesIO(scanned_pdf("partes")))
+
+    metadata = metadata_from(result)
+
+    assert metadata.fields["parte_requerente"].value == "José Gonçalves Construções Ltda."
+    assert metadata.fields["parte_requerida"].value == "Órgão Público de São Luís"
+    evidence = metadata.fields["parte_requerente"].evidence[0]
+    assert evidence.extraction_mode == "OCR"
+    assert evidence.bounding_box == (80.0, 100.0, 1100.0, 180.0)
+
+
+def test_mixed_pdf_routes_each_page_independently():
+    source = mixed_pdf(
+        native_pdf(f"PROCESSO: {VALID_CNJ} TRIBUNAL REGIONAL FEDERAL"),
+        scanned_pdf("parte digitalizada"),
+    )
+    engine = SyntheticOcrEngine("AUTOR: Parte Digitalizada")
+
+    result = LocalPdfTextExtractor(ocr_engine=engine).extract(BytesIO(source))
+
+    assert [page.extraction_mode for page in result.pages] == ["NATIVE_TEXT", "OCR"]
+    assert result.ocr_pages_processed == 1
+    assert result.native_pages_skipped == 1
+
+
+def test_born_digital_pdf_never_calls_ocr_engine():
+    engine = SyntheticOcrEngine("texto que não deve ser usado")
+
+    result = LocalPdfTextExtractor(ocr_engine=engine).extract(
+        BytesIO(native_pdf(f"PROCESSO: {VALID_CNJ} TRIBUNAL REGIONAL FEDERAL"))
+    )
+
+    assert result.pages[0].extraction_mode == "NATIVE_TEXT"
+    assert result.native_pages_skipped == 1
+    assert result.ocr_pages_processed == 0
+    assert engine.calls == 0
+
+
+class MemoryPageCache:
+    def __init__(self):
+        self.values = {}
+        self.hits = 0
+
+    def get(self, key):
+        value = self.values.get(key)
+        if value is not None:
+            self.hits += 1
+        return value
+
+    def put(self, key, value):
+        self.values[key] = value
+
+
+def test_reopen_reuses_ocr_page_cache_bound_to_source_and_engine_identity():
+    source = scanned_pdf("processo digitalizado")
+    digest = hashlib.sha256(source).hexdigest()
+    cache = MemoryPageCache()
+    engine = SyntheticOcrEngine(f"PROCESSO: {VALID_CNJ}")
+    reader = LocalPdfTextExtractor(ocr_engine=engine, page_cache=cache)
+
+    first = reader.extract(BytesIO(source), document_sha256=digest)
+    reopened = reader.extract(BytesIO(source), document_sha256=digest)
+
+    assert first.pages == reopened.pages
+    assert engine.calls == 1
+    assert reopened.cache_hits == 1
+    assert cache.hits == 1
+
+
+def test_ocr_never_changes_source_pdf_bytes_or_sha256():
+    source = scanned_pdf("fonte imutável")
+    stream = BytesIO(source)
+    before = hashlib.sha256(stream.getvalue()).hexdigest()
+
+    result = LocalPdfTextExtractor(
+        ocr_engine=SyntheticOcrEngine(f"PROCESSO: {VALID_CNJ}")
+    ).extract(stream, document_sha256=before)
+
+    assert stream.getvalue() == source
+    assert hashlib.sha256(stream.getvalue()).hexdigest() == before
+    assert result.document_sha256 == before
+
+
+class FailingOcrEngine(SyntheticOcrEngine):
+    def recognize(self, _image):
+        self.calls += 1
+        raise RuntimeError("synthetic local OCR failure")
+
+
+class EmptyOcrEngine(SyntheticOcrEngine):
+    def recognize(self, _image):
+        self.calls += 1
+        return ()
+
+
+def test_ocr_failure_is_a_controlled_page_state():
+    result = LocalPdfTextExtractor(ocr_engine=FailingOcrEngine()).extract(
+        BytesIO(scanned_pdf("falha controlada"))
+    )
+
+    assert result.state is PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE
+    assert result.pages[0].processing_status == "OCR_FAILED"
+    assert result.pages[0].text == ""
+
+
+def test_ocr_without_detected_text_is_a_controlled_page_state():
+    result = LocalPdfTextExtractor(ocr_engine=EmptyOcrEngine()).extract(
+        BytesIO(scanned_pdf("página sem texto detectável"))
+    )
+
+    assert result.state is PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE
+    assert result.pages[0].processing_status == "OCR_FAILED"
+    assert result.pages[0].text == ""
+
+
+def test_low_confidence_ocr_cnj_does_not_become_effective_metadata():
+    result = LocalPdfTextExtractor(
+        ocr_engine=SyntheticOcrEngine(f"PROCESSO: {VALID_CNJ}", confidence=0.41)
+    ).extract(BytesIO(scanned_pdf("CNJ de baixa confiança")))
+
+    field = metadata_from(result).fields["numero_processo"]
+
+    assert field.state is FieldExtractionState.AMBIGUOUS
+    assert field.value == ""
+    assert field.evidence[0].extracted_value == VALID_CNJ
+
+
+def test_ocr_only_cnj_confusions_are_bounded_and_still_require_checksum():
+    confused = "OO1O549-O8.2O26.4.O5.83O2"
+    result = LocalPdfTextExtractor(
+        ocr_engine=SyntheticOcrEngine(f"PROCESSO: {confused}")
+    ).extract(BytesIO(scanned_pdf("CNJ com confusões de OCR")))
+
+    field = metadata_from(result).fields["numero_processo"]
+
+    assert field.state is FieldExtractionState.CONFIDENT
+    assert field.value == VALID_CNJ
+    assert field.evidence[0].normalized_text_span == confused
+
+    native_result = LocalPdfTextExtractor().extract(
+        BytesIO(native_pdf(f"PROCESSO: {confused} TRIBUNAL REGIONAL FEDERAL"))
+    )
+    assert metadata_from(native_result).fields["numero_processo"].value == ""
+
+
+def test_ocr_page_evidence_is_workspace_scoped_and_contains_no_path():
+    result = LocalPdfTextExtractor(
+        ocr_engine=SyntheticOcrEngine(f"PROCESSO: {VALID_CNJ}")
+    ).extract(BytesIO(scanned_pdf("evidência isolada")))
+
+    first = document_metadata_payload(metadata_from(result, workspace_id=WORKSPACE_A))
+    second = document_metadata_payload(metadata_from(result, workspace_id=WORKSPACE_B))
+
+    assert first["page_evidence"][0]["workspace_id"] == str(WORKSPACE_A)
+    assert second["page_evidence"][0]["workspace_id"] == str(WORKSPACE_B)
+    assert first["page_evidence"][0]["document_id"] == str(DOCUMENT_A)
+    assert "path" not in repr(first).lower()
+
+
+def test_unicode_portuguese_party_requires_confident_ocr_provenance():
+    result = LocalPdfTextExtractor(
+        ocr_engine=SyntheticOcrEngine("AUTORA: Conceição d'Ávila")
+    ).extract(BytesIO(scanned_pdf("parte com Unicode")))
+
+    field = metadata_from(result).fields["parte_requerente"]
+
+    assert field.value == "Conceição d'Ávila"
+    assert field.evidence[0].ocr_confidence == 0.99
+    assert field.evidence[0].ocr_engine == "SYNTHETIC_OCR"
+
+
+def test_large_scanned_pdf_only_ocrs_bounded_early_pages():
+    engine = SyntheticOcrEngine(f"PROCESSO: {VALID_CNJ}")
+
+    result = LocalPdfTextExtractor(
+        ocr_engine=engine,
+        max_pages=8,
+        max_ocr_pages=2,
+    ).extract(BytesIO(scanned_pdf_pages(8)))
+
+    assert engine.calls == 2
+    assert result.ocr_pages_processed == 2
+    assert [page.number for page in result.pages] == [1, 2]
+
+
+def test_real_rapidocr_latin_engine_reads_portuguese_and_cnj_offline():
+    from scripts.backend_contract.infrastructure.rapid_ocr import RapidOcrLatinEngine
+
+    image = Image.new("RGB", (1800, 900), "white")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(r"C:\Windows\Fonts\arial.ttf", 48)
+    lines = (
+        "AUTORA: José Gonçalves Construções Ltda.",
+        "RÉU: Órgão Público de São Luís",
+        f"PROCESSO: {VALID_CNJ}",
+    )
+    for index, line in enumerate(lines):
+        draw.text((80, 80 + index * 120), line, fill="black", font=font)
+
+    blocks = RapidOcrLatinEngine().recognize(image)
+    text = "\n".join(block["text"] for block in blocks)
+
+    assert "José Gonçalves Construções Ltda." in text
+    assert "Órgão Público de São Luís" in text
+    assert VALID_CNJ in text
+    assert all(0.0 <= block["confidence"] <= 1.0 for block in blocks)
+    assert all(len(block["bounding_box"]) == 4 for block in blocks)
+
+
+def test_rapidocr_model_identity_mismatch_fails_closed_without_download(tmp_path):
+    from scripts.backend_contract.infrastructure.rapid_ocr import (
+        LocalOcrModelError,
+        RapidOcrLatinEngine,
+    )
+
+    wrong_model = tmp_path / "latin_PP-OCRv5_rec_mobile.onnx"
+    wrong_model.write_bytes(b"not the protected model")
+
+    with pytest.raises(LocalOcrModelError, match="identidade|modelo"):
+        RapidOcrLatinEngine(recognition_model_path=wrong_model).recognize(
+            Image.new("RGB", (100, 100), "white")
+        )
+
+
+class CacheRevisions:
+    def __init__(self):
+        self.values = {}
+
+    def latest(self, workspace_id, artifact_kind, artifact_id):
+        return self.values.get((workspace_id, artifact_kind, artifact_id))
+
+    def append(self, **values):
+        record = ArtifactRevision(
+            **values,
+            revision=1,
+            checksum_sha256="c" * 64,
+        )
+        self.values[
+            (values["workspace_id"], values["artifact_kind"], values["artifact_id"])
+        ] = record
+        return record
+
+
+class CacheClock:
+    def now(self):
+        from datetime import UTC, datetime
+
+        return datetime(2026, 8, 26, 12, 30, tzinfo=UTC)
+
+
+class CacheIds:
+    def new_uuid(self):
+        return UUID("44444444-4444-4444-8444-444444444444")
+
+
+def test_revision_page_cache_survives_reconstruction_and_isolates_workspace():
+    from scripts.backend_contract.application.ocr_cache import RevisionOcrPageCache
+
+    revisions = CacheRevisions()
+    first = RevisionOcrPageCache(revisions, WORKSPACE_A, CacheClock(), CacheIds())
+    isolated = RevisionOcrPageCache(revisions, WORKSPACE_B, CacheClock(), CacheIds())
+    key = (
+        "a" * 64,
+        1,
+        "SYNTHETIC_OCR",
+        "1.0",
+        "synthetic-pt-v1",
+        "OCR_CONFIG_V1",
+    )
+    page = LocalPdfTextExtractor(
+        ocr_engine=SyntheticOcrEngine(f"PROCESSO: {VALID_CNJ}")
+    ).extract(BytesIO(scanned_pdf("cache persistido")), document_sha256="a" * 64).pages[0]
+
+    first.put(key, page)
+    reopened = RevisionOcrPageCache(revisions, WORKSPACE_A, CacheClock(), CacheIds())
+
+    assert reopened.get(key) == page
+    assert isolated.get(key) is None
+
+
+def test_import_service_binds_reader_to_stored_sha_and_persisted_page_cache():
+    from scripts.backend_contract.application.content import SeekableContent
+    from scripts.backend_contract.application.models import (
+        PrivateContentMetadata,
+        PrivateContentOrigin,
+    )
+    from scripts.backend_contract.application.services import ImportCaseDocumentWithMetadata
+
+    revisions = CacheRevisions()
+    source_sha256 = "d" * 64
+    page = LocalPdfTextExtractor(
+        ocr_engine=SyntheticOcrEngine(f"PROCESSO: {VALID_CNJ}")
+    ).extract(BytesIO(scanned_pdf("importação")), document_sha256=source_sha256).pages[0]
+
+    class ImportDocument:
+        def execute(self, **_values):
+            return PrivateContentMetadata(
+                WORKSPACE_A,
+                DOCUMENT_A,
+                "autos.pdf",
+                15,
+                source_sha256,
+                "application/pdf",
+                "2026-08-26T12:30:00+00:00",
+                PrivateContentOrigin.USER_IMPORT,
+            )
+
+    class CacheAwareReader:
+        def extract(self, source, *, document_sha256, page_cache):
+            assert source.read(5) == b"%PDF-"
+            assert document_sha256 == source_sha256
+            key = (
+                source_sha256,
+                1,
+                page.engine,
+                page.engine_version,
+                page.model_version,
+                page.config_version,
+            )
+            page_cache.put(key, page)
+            assert type(page_cache).__name__ == "RevisionOcrPageCache"
+            return PdfTextResult(
+                PdfTextExtractionState.AVAILABLE,
+                (page,),
+                document_sha256=source_sha256,
+                ocr_pages_processed=1,
+            )
+
+    from scripts.backend_contract.application.process_metadata import PdfTextResult
+
+    service = ImportCaseDocumentWithMetadata(
+        ImportDocument(), CacheAwareReader(), revisions, CacheClock(), CacheIds()
+    )
+
+    service.execute(
+        workspace_id=WORKSPACE_A,
+        original_filename="autos.pdf",
+        content=SeekableContent(BytesIO(b"%PDF-1.7\n%%EOF"), 15),
+        media_type="application/pdf",
+    )
+
+    assert any(key[1] == "OCR_PAGE_CACHE_V1" for key in revisions.values)
+    assert any(key[1] == "PROCESS_METADATA_EXTRACTION" for key in revisions.values)

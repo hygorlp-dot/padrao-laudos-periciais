@@ -3,13 +3,17 @@ from __future__ import annotations
 import hashlib
 import http.client
 import json
+import re
+import sqlite3
 import tracemalloc
-from contextlib import contextmanager
 from datetime import UTC, datetime
 from io import BytesIO
 from uuid import UUID
 
 import pytest
+from PIL import Image, ImageDraw, ImageFont
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from scripts.backend_contract.application.content import (
     DOCUMENT_IO_CHUNK_BYTES,
@@ -37,6 +41,77 @@ from scripts.backend_contract.product_bridge.composition import build_product_ru
 MIB = 1024 * 1024
 WORKSPACE_ID = WorkspaceId(UUID("11111111-1111-4111-8111-111111111111"))
 CONTENT_ID = PrivateContentId(UUID("22222222-2222-4222-8222-222222222222"))
+VALID_CNJ = "7654321-55.2025.4.05.0001"
+
+
+def _scanned_process_page() -> bytes:
+    image = Image.new("RGB", (1240, 1754), "white")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(r"C:\Windows\Fonts\arial.ttf", 48)
+    draw.text((80, 100), f"PROCESSO: {VALID_CNJ}", fill="black", font=font)
+    draw.text((80, 190), "AUTORA: José Construções Ltda.", fill="black", font=font)
+    target = BytesIO()
+    image.save(target, format="PDF", resolution=150)
+    return target.getvalue()
+
+
+def _native_process_page() -> bytes:
+    writer = PdfWriter()
+    font = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }
+    )
+    font_ref = writer._add_object(font)
+    page = writer.add_blank_page(width=612, height=792)
+    page[NameObject("/Resources")] = DictionaryObject(
+        {NameObject("/Font"): DictionaryObject({NameObject("/F1"): font_ref})}
+    )
+    stream = DecodedStreamObject()
+    stream.set_data(b"BT /F1 12 Tf 36 750 Td (TRIBUNAL REGIONAL FEDERAL DA 5 REGIAO) Tj ET")
+    page[NameObject("/Contents")] = writer._add_object(stream)
+    target = BytesIO()
+    writer.write(target)
+    return target.getvalue()
+
+
+def _mixed_process_pdf() -> bytes:
+    writer = PdfWriter()
+    for source in (_scanned_process_page(), _native_process_page()):
+        writer.add_page(PdfReader(BytesIO(source)).pages[0])
+    target = BytesIO()
+    writer.write(target)
+    return target.getvalue()
+
+
+def _write_padded_pdf(path, source: bytes, target_size: int) -> None:
+    start_match = tuple(re.finditer(rb"startxref\s+(\d+)\s+%%EOF", source))[-1]
+    xref_offset = int(start_match.group(1))
+    prefix = source[:xref_offset]
+    suffix = source[xref_offset:]
+    padding_size = target_size - len(source)
+    while True:
+        candidate_offset = xref_offset + padding_size
+        rewritten_suffix = re.sub(
+            rb"startxref\s+\d+", f"startxref\n{candidate_offset}".encode("ascii"), suffix, count=1
+        )
+        updated_padding = target_size - len(prefix) - len(rewritten_suffix)
+        if updated_padding == padding_size:
+            break
+        padding_size = updated_padding
+    if padding_size < 0:
+        raise ValueError("target PDF size is smaller than source")
+    padding_block = b"\n" * (64 * 1024)
+    with path.open("wb") as stream:
+        stream.write(prefix)
+        remaining = padding_size
+        while remaining:
+            block = padding_block[: min(remaining, len(padding_block))]
+            stream.write(block)
+            remaining -= len(block)
+        stream.write(rewritten_suffix)
 
 
 class ExistingWorkspace:
@@ -251,10 +326,7 @@ def test_product_upload_and_read_stream_without_whole_document_memory_copies(tmp
     runtime.start()
     document_size = 100 * MIB
     source = tmp_path / "large.pdf"
-    with source.open("wb") as stream:
-        stream.write(b"%PDF-1.7\n")
-        stream.seek(document_size - len(b"\n%%EOF\n"))
-        stream.write(b"\n%%EOF\n")
+    _write_padded_pdf(source, _mixed_process_pdf(), document_size)
 
     try:
         connection = http.client.HTTPConnection(*runtime.address, timeout=30)
@@ -320,6 +392,14 @@ def test_product_upload_and_read_stream_without_whole_document_memory_copies(tmp
 
         connection = http.client.HTTPConnection(*runtime.address, timeout=30)
         connection.request(
+            "GET", f"/app-api/v1/workspaces/{workspace_id}/process-metadata"
+        )
+        process_review = connection.getresponse()
+        process_review_payload = json.loads(process_review.read())
+        connection.close()
+
+        connection = http.client.HTTPConnection(*runtime.address, timeout=30)
+        connection.request(
             "GET", f"/app-api/v1/workspaces/{isolated_workspace_id}/materials"
         )
         isolated_catalog = connection.getresponse()
@@ -355,6 +435,14 @@ def test_product_upload_and_read_stream_without_whole_document_memory_copies(tmp
 
         connection = http.client.HTTPConnection(*runtime.address, timeout=30)
         connection.request(
+            "GET", f"/app-api/v1/workspaces/{workspace_id}/process-metadata"
+        )
+        reopened_review = connection.getresponse()
+        reopened_review_payload = json.loads(reopened_review.read())
+        connection.close()
+
+        connection = http.client.HTTPConnection(*runtime.address, timeout=30)
+        connection.request(
             "GET",
             f"/app-api/v1/workspaces/{workspace_id}/materials/{imported['content_id']}",
         )
@@ -378,8 +466,33 @@ def test_product_upload_and_read_stream_without_whole_document_memory_copies(tmp
     assert isolated_open.status == 404
     assert reopened_catalog.status == 200
     assert reopened_catalog_payload == catalog_payload
+    assert process_review.status == 200
+    assert reopened_review.status == 200
+    assert reopened_review_payload == process_review_payload
+    process_number = process_review_payload["fields"]["numero_processo"]
+    assert process_number["value"] == VALID_CNJ
+    assert process_number["evidence"][0]["extraction_mode"] == "OCR"
     assert opened.status == 200
     assert received == document_size
     assert digest.hexdigest() == imported["checksum_sha256"]
-    assert upload_peak < 20 * MIB
+    # Inclui o tensor de uma Ãºnica pÃ¡gina OCR; o transporte continua limitado
+    # aos blocos verificados acima e nunca materializa os 100 MiB em Python.
+    assert upload_peak < 128 * MIB
     assert download_peak < 20 * MIB
+
+    with sqlite3.connect(tmp_path / "case.db") as connection:
+        rows = tuple(
+            connection.execute(
+                "SELECT artifact_kind, payload_json FROM artifact_revisions "
+                "WHERE workspace_id = ?",
+                (workspace_id,),
+            )
+        )
+    extraction_payload = next(
+        json.loads(payload) for kind, payload in rows if kind == "PROCESS_METADATA_EXTRACTION"
+    )
+    assert [page["extraction_mode"] for page in extraction_payload["page_evidence"]] == [
+        "OCR",
+        "NATIVE_TEXT",
+    ]
+    assert sum(kind == "OCR_PAGE_CACHE_V1" for kind, _payload in rows) == 1

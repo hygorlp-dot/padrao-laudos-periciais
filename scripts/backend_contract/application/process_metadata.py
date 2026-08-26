@@ -25,6 +25,13 @@ PROCESS_METADATA_FIELDS = (
 _CNJ_PATTERN = re.compile(
     r"(?<!\d)(\d{7})-(\d{2})\.(\d{4})\.([1-9])\.(\d{2})\.(\d{4})(?!\d)"
 )
+_OCR_CNJ_PATTERN = re.compile(
+    r"(?<![0-9A-Z])([0-9OILSB]{7})-([0-9OILSB]{2})\."
+    r"([0-9OILSB]{4})\.([0-9OILSB])\.([0-9OILSB]{2})\."
+    r"([0-9OILSB]{4})(?![0-9A-Z])",
+    re.IGNORECASE,
+)
+_OCR_DIGIT_CONFUSIONS = str.maketrans({"O": "0", "I": "1", "L": "1", "S": "5", "B": "8"})
 _JUSTICE_BRANCHES = {
     "1": "Supremo Tribunal Federal",
     "2": "Conselho Nacional de Justiça",
@@ -51,22 +58,94 @@ class FieldExtractionState(StrEnum):
     CONFLICTING = "CONFLICTING"
 
 
+class PageExtractionMode(StrEnum):
+    NATIVE_TEXT = "NATIVE_TEXT"
+    OCR = "OCR"
+
+
+class PageProcessingStatus(StrEnum):
+    AVAILABLE = "AVAILABLE"
+    OCR_FAILED = "OCR_FAILED"
+
+
+@dataclass(frozen=True, slots=True)
+class PageTextBlock:
+    text: str
+    confidence: float | None = None
+    bounding_box: tuple[float, float, float, float] | None = None
+
+    def __post_init__(self):
+        if type(self.text) is not str or not self.text.strip():
+            raise ValueError("bloco textual de página inválido")
+        if self.confidence is not None and (
+            type(self.confidence) is not float or not 0.0 <= self.confidence <= 1.0
+        ):
+            raise ValueError("confiança de OCR inválida")
+        if self.bounding_box is not None and (
+            type(self.bounding_box) is not tuple
+            or len(self.bounding_box) != 4
+            or any(type(value) is not float for value in self.bounding_box)
+        ):
+            raise ValueError("bounding box de OCR inválida")
+
+
 @dataclass(frozen=True, slots=True)
 class PdfTextPage:
     number: int
     text: str
+    extraction_mode: PageExtractionMode = PageExtractionMode.NATIVE_TEXT
+    engine: str = "pypdf"
+    engine_version: str = ""
+    model_version: str = ""
+    config_version: str = "PDF_TEXT_V1"
+    confidence: float | None = None
+    blocks: tuple[PageTextBlock, ...] = ()
+    processing_status: PageProcessingStatus = PageProcessingStatus.AVAILABLE
 
     def __post_init__(self):
         if type(self.number) is not int or self.number < 1:
             raise ValueError("página PDF inválida")
         if type(self.text) is not str:
             raise TypeError("texto PDF inválido")
+        if type(self.extraction_mode) is not PageExtractionMode:
+            raise TypeError("modo de extração da página inválido")
+        for value, name in (
+            (self.engine, "engine"),
+            (self.engine_version, "engine_version"),
+            (self.model_version, "model_version"),
+            (self.config_version, "config_version"),
+        ):
+            if type(value) is not str:
+                raise TypeError(f"{name} da página inválido")
+        if self.confidence is not None and (
+            type(self.confidence) is not float or not 0.0 <= self.confidence <= 1.0
+        ):
+            raise ValueError("confiança da página inválida")
+        if type(self.blocks) is not tuple or any(
+            type(block) is not PageTextBlock for block in self.blocks
+        ):
+            raise TypeError("blocos textuais da página inválidos")
+        if type(self.processing_status) is not PageProcessingStatus:
+            raise TypeError("status de processamento da página inválido")
+        if self.processing_status is PageProcessingStatus.AVAILABLE and not self.text.strip():
+            raise ValueError("página disponível exige texto")
+        if self.processing_status is PageProcessingStatus.OCR_FAILED and (
+            self.extraction_mode is not PageExtractionMode.OCR
+            or self.text
+            or self.blocks
+            or self.confidence is not None
+        ):
+            raise ValueError("falha de OCR possui evidência textual divergente")
 
 
 @dataclass(frozen=True, slots=True)
 class PdfTextResult:
     state: PdfTextExtractionState
     pages: tuple[PdfTextPage, ...]
+    document_sha256: str = ""
+    ocr_pages_processed: int = 0
+    native_pages_skipped: int = 0
+    cache_hits: int = 0
 
     def __post_init__(self):
         if type(self.state) is not PdfTextExtractionState:
@@ -75,8 +154,32 @@ class PdfTextResult:
             type(page) is not PdfTextPage for page in self.pages
         ):
             raise TypeError("páginas PDF inválidas")
-        if self.state is not PdfTextExtractionState.AVAILABLE and self.pages:
-            raise ValueError("estado de texto PDF diverge das páginas")
+        if self.document_sha256 and (
+            len(self.document_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in self.document_sha256)
+        ):
+            raise ValueError("checksum do documento inválido")
+        for value, name in (
+            (self.ocr_pages_processed, "ocr_pages_processed"),
+            (self.native_pages_skipped, "native_pages_skipped"),
+            (self.cache_hits, "cache_hits"),
+        ):
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{name} inválido")
+        available = tuple(
+            page for page in self.pages
+            if page.processing_status is PageProcessingStatus.AVAILABLE
+        )
+        failed = tuple(
+            page for page in self.pages
+            if page.processing_status is PageProcessingStatus.OCR_FAILED
+        )
+        if self.state is PdfTextExtractionState.AVAILABLE and not available:
+            raise ValueError("estado disponível exige página textual")
+        if self.state is PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE and available:
+            raise ValueError("estado indisponível diverge das páginas")
+        if self.state is PdfTextExtractionState.ERROR and (available or failed):
+            raise ValueError("estado de erro não aceita páginas")
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +205,54 @@ class FieldEvidence:
     extraction_timestamp: str
     source_filename: str
     normalized_text_span: str
+    extraction_mode: PageExtractionMode
+    ocr_engine: str
+    engine_version: str
+    model_version: str
+    ocr_confidence: float | None
+    bounding_box: tuple[float, float, float, float] | None
+
+    def __post_init__(self):
+        if type(self.source_page) is not int or self.source_page < 1:
+            raise ValueError("página da proveniência inválida")
+        if type(self.extraction_mode) is not PageExtractionMode:
+            raise TypeError("modo da proveniência inválido")
+        if any(
+            type(value) is not str
+            for value in (
+                self.extraction_method,
+                self.ocr_engine,
+                self.engine_version,
+                self.model_version,
+                self.normalized_text_span,
+            )
+        ):
+            raise TypeError("proveniência textual inválida")
+        if self.bounding_box is not None and (
+            type(self.bounding_box) is not tuple
+            or len(self.bounding_box) != 4
+            or any(type(value) is not float for value in self.bounding_box)
+        ):
+            raise ValueError("bounding box da proveniência inválida")
+        native = (
+            self.extraction_mode is PageExtractionMode.NATIVE_TEXT
+            and self.extraction_method == "LOCAL_PDF_TEXT_V1"
+            and not self.ocr_engine
+            and not self.model_version
+            and self.ocr_confidence is None
+            and self.bounding_box is None
+        )
+        ocr = (
+            self.extraction_mode is PageExtractionMode.OCR
+            and self.extraction_method == "LOCAL_OCR_V1"
+            and bool(self.ocr_engine)
+            and bool(self.engine_version)
+            and bool(self.model_version)
+            and type(self.ocr_confidence) is float
+            and 0.0 <= self.ocr_confidence <= 1.0
+        )
+        if not native and not ocr:
+            raise ValueError("identidade da proveniência diverge do modo de extração")
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -114,6 +265,12 @@ class FieldEvidence:
             "extraction_timestamp": self.extraction_timestamp,
             "source_filename": self.source_filename,
             "normalized_text_span": self.normalized_text_span,
+            "extraction_mode": self.extraction_mode.value,
+            "ocr_engine": self.ocr_engine,
+            "engine_version": self.engine_version,
+            "model_version": self.model_version,
+            "ocr_confidence": self.ocr_confidence,
+            "bounding_box": list(self.bounding_box) if self.bounding_box is not None else None,
         }
 
 
@@ -131,6 +288,54 @@ class DocumentProcessMetadata:
     source_filename: str
     text_state: PdfTextExtractionState
     fields: MappingProxyType
+    document_sha256: str = ""
+    page_evidence: tuple[DocumentPageEvidence, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentPageEvidence:
+    page_number: int
+    extraction_mode: PageExtractionMode
+    engine: str
+    engine_version: str
+    model_version: str
+    config_version: str
+    confidence: float | None
+    bounding_boxes: tuple[tuple[float, float, float, float], ...]
+    processing_status: PageProcessingStatus
+
+    def __post_init__(self):
+        if type(self.page_number) is not int or self.page_number < 1:
+            raise ValueError("número da evidência de página inválido")
+        if type(self.extraction_mode) is not PageExtractionMode:
+            raise TypeError("modo da evidência de página inválido")
+        if any(
+            type(value) is not str
+            for value in (
+                self.engine,
+                self.engine_version,
+                self.model_version,
+                self.config_version,
+            )
+        ) or not self.engine or not self.config_version:
+            raise ValueError("identidade da evidência de página inválida")
+        if self.confidence is not None and (
+            type(self.confidence) is not float or not 0.0 <= self.confidence <= 1.0
+        ):
+            raise ValueError("confiança da evidência de página inválida")
+        if type(self.bounding_boxes) is not tuple or any(
+            type(box) is not tuple
+            or len(box) != 4
+            or any(type(value) is not float for value in box)
+            for box in self.bounding_boxes
+        ):
+            raise ValueError("bounding boxes da evidência de página inválidas")
+        if type(self.processing_status) is not PageProcessingStatus:
+            raise TypeError("status da evidência de página inválido")
+        if self.extraction_mode is PageExtractionMode.OCR and (
+            not self.engine_version or not self.model_version
+        ):
+            raise ValueError("identidade OCR da evidência de página incompleta")
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,16 +422,44 @@ def _evidence(
     source_filename: str,
     span: str,
 ) -> FieldEvidence:
+    normalized_span = _ascii_upper(" ".join(span.split()))
+    matching_block = next(
+        (
+            block
+            for block in page.blocks
+            if normalized_span and normalized_span in _ascii_upper(" ".join(block.text.split()))
+        ),
+        None,
+    )
+    confidence = (
+        matching_block.confidence
+        if matching_block is not None
+        else page.confidence
+    )
     return FieldEvidence(
         workspace_id=workspace_id,
         document_id=document_id,
         field_name=field_name,
         extracted_value=value,
         source_page=page.number,
-        extraction_method="LOCAL_PDF_TEXT_V1",
+        extraction_method=(
+            "LOCAL_OCR_V1"
+            if page.extraction_mode is PageExtractionMode.OCR
+            else "LOCAL_PDF_TEXT_V1"
+        ),
         extraction_timestamp=extracted_at,
         source_filename=source_filename,
         normalized_text_span=" ".join(span.split())[:240],
+        extraction_mode=page.extraction_mode,
+        ocr_engine=page.engine if page.extraction_mode is PageExtractionMode.OCR else "",
+        engine_version=page.engine_version,
+        model_version=page.model_version,
+        ocr_confidence=(
+            confidence if page.extraction_mode is PageExtractionMode.OCR else None
+        ),
+        bounding_box=(
+            matching_block.bounding_box if matching_block is not None else None
+        ),
     )
 
 
@@ -277,22 +510,30 @@ def extract_process_metadata(
         field: [] for field in PROCESS_METADATA_FIELDS
     }
     invalid_cnj: list[FieldEvidence] = []
+    low_confidence: dict[str, list[FieldEvidence]] = {
+        field: [] for field in PROCESS_METADATA_FIELDS
+    }
 
     def add(field: str, value: str, page: PdfTextPage, span: str) -> None:
         cleaned = " ".join(value.strip(" \t:-").split())
         if cleaned:
-            candidates[field].append(
-                _evidence(
-                    workspace_id=workspace_id,
-                    document_id=document_id,
-                    field_name=field,
-                    value=cleaned,
-                    page=page,
-                    extracted_at=extracted_at,
-                    source_filename=source_filename,
-                    span=span,
-                )
+            evidence = _evidence(
+                workspace_id=workspace_id,
+                document_id=document_id,
+                field_name=field,
+                value=cleaned,
+                page=page,
+                extracted_at=extracted_at,
+                source_filename=source_filename,
+                span=span,
             )
+            target = (
+                low_confidence[field]
+                if page.extraction_mode is PageExtractionMode.OCR
+                and (evidence.ocr_confidence or 0.0) < 0.75
+                else candidates[field]
+            )
+            target.append(evidence)
 
     for page in text.pages:
         normalized_page = _ascii_upper(page.text)
@@ -323,6 +564,42 @@ def extract_process_metadata(
                     page,
                     raw,
                 )
+
+        if page.extraction_mode is PageExtractionMode.OCR:
+            for ocr_match in _OCR_CNJ_PATTERN.finditer(normalized_page):
+                raw = ocr_match.group(0)
+                if _CNJ_PATTERN.fullmatch(raw):
+                    continue
+                groups = tuple(group.translate(_OCR_DIGIT_CONFUSIONS) for group in ocr_match.groups())
+                normalized_cnj = (
+                    f"{groups[0]}-{groups[1]}.{groups[2]}."
+                    f"{groups[3]}.{groups[4]}.{groups[5]}"
+                )
+                try:
+                    cnj = validate_cnj_number(normalized_cnj)
+                except ValueError:
+                    invalid_cnj.append(
+                        _evidence(
+                            workspace_id=workspace_id,
+                            document_id=document_id,
+                            field_name="numero_processo",
+                            value=raw,
+                            page=page,
+                            extracted_at=extracted_at,
+                            source_filename=source_filename,
+                            span=raw,
+                        )
+                    )
+                    continue
+                add("numero_processo", cnj.canonical, page, raw)
+                add("ramo_justica", cnj.justice_branch, page, raw)
+                if cnj.justice_segment == "4":
+                    add(
+                        "tribunal",
+                        f"Tribunal Regional Federal da {int(cnj.tribunal_code)}ª Região",
+                        page,
+                        raw,
+                    )
 
         for line, normalized_line in zip(page.text.splitlines(), normalized_page.splitlines()):
             tribunal_match = re.search(
@@ -364,7 +641,10 @@ def extract_process_metadata(
     fields = {
         field: _resolved_field(
             candidates[field],
-            ambiguous=(field == "numero_processo" and bool(invalid_cnj) and not candidates[field]),
+            ambiguous=(
+                not candidates[field]
+                and bool(low_confidence[field] or (field == "numero_processo" and invalid_cnj))
+            ),
             combined=field in {"parte_requerente", "parte_requerida"},
         )
         for field in PROCESS_METADATA_FIELDS
@@ -375,12 +655,38 @@ def extract_process_metadata(
             "",
             tuple(invalid_cnj),
         )
+    for field in PROCESS_METADATA_FIELDS:
+        if not candidates[field] and low_confidence[field]:
+            fields[field] = ExtractedField(
+                FieldExtractionState.AMBIGUOUS,
+                "",
+                tuple(low_confidence[field]),
+            )
     return DocumentProcessMetadata(
         workspace_id=workspace_id,
         document_id=document_id,
         source_filename=source_filename,
         text_state=text.state,
         fields=MappingProxyType(fields),
+        document_sha256=text.document_sha256,
+        page_evidence=tuple(
+            DocumentPageEvidence(
+                page.number,
+                page.extraction_mode,
+                page.engine,
+                page.engine_version,
+                page.model_version,
+                page.config_version,
+                page.confidence,
+                tuple(
+                    block.bounding_box
+                    for block in page.blocks
+                    if block.bounding_box is not None
+                ),
+                page.processing_status,
+            )
+            for page in text.pages
+        ),
     )
 
 
@@ -443,11 +749,31 @@ def document_metadata_payload(document: DocumentProcessMetadata) -> dict[str, ob
     if type(document) is not DocumentProcessMetadata:
         raise TypeError("extração documental inválida")
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "workspace_id": str(document.workspace_id),
         "document_id": str(document.document_id),
+        "document_sha256": document.document_sha256,
         "source_filename": document.source_filename,
         "text_state": document.text_state.value,
+        "page_evidence": [
+            {
+                "workspace_id": str(document.workspace_id),
+                "document_id": str(document.document_id),
+                "document_sha256": document.document_sha256,
+                "page_number": page.page_number,
+                "extraction_mode": page.extraction_mode.value,
+                "engine": page.engine,
+                "engine_version": page.engine_version,
+                "model_version": page.model_version,
+                "config_version": page.config_version,
+                "confidence": page.confidence,
+                "bounding_boxes": [
+                    list(box) for box in page.bounding_boxes
+                ],
+                "processing_status": page.processing_status.value,
+            }
+            for page in document.page_evidence
+        ],
         "fields": {
             name: {
                 "state": field.state.value,
@@ -461,19 +787,66 @@ def document_metadata_payload(document: DocumentProcessMetadata) -> dict[str, ob
 
 def document_metadata_from_payload(value: object) -> DocumentProcessMetadata:
     payload = thaw_payload(value)
-    if type(payload) is not dict or set(payload) != {
+    if type(payload) is not dict or payload.get("schema_version") not in {1, 2}:
+        raise ValueError("extração documental persistida inválida")
+    schema_version = payload["schema_version"]
+    expected_keys = {
         "schema_version",
         "workspace_id",
         "document_id",
         "source_filename",
         "text_state",
         "fields",
-    } or payload["schema_version"] != 1:
+    }
+    if schema_version == 2:
+        expected_keys |= {"document_sha256", "page_evidence"}
+    if set(payload) != expected_keys:
         raise ValueError("extração documental persistida inválida")
     workspace_id = WorkspaceId.parse(payload["workspace_id"])
     document_id = PrivateContentId.parse(payload["document_id"])
     source_filename = _filename(payload["source_filename"])
     text_state = PdfTextExtractionState(payload["text_state"])
+    document_sha256 = payload.get("document_sha256", "")
+    raw_pages = payload.get("page_evidence", [])
+    if type(raw_pages) is not list:
+        raise ValueError("evidência de página persistida inválida")
+    pages = []
+    page_keys = {
+        "workspace_id",
+        "document_id",
+        "document_sha256",
+        "page_number",
+        "extraction_mode",
+        "engine",
+        "engine_version",
+        "model_version",
+        "config_version",
+        "confidence",
+        "bounding_boxes",
+        "processing_status",
+    }
+    for raw_page in raw_pages:
+        if type(raw_page) is not dict or set(raw_page) != page_keys:
+            raise ValueError("evidência de página persistida inválida")
+        if (
+            raw_page["workspace_id"] != str(workspace_id)
+            or raw_page["document_id"] != str(document_id)
+            or raw_page["document_sha256"] != document_sha256
+            or type(raw_page["bounding_boxes"]) is not list
+        ):
+            raise ValueError("identidade da página persistida diverge")
+        page = DocumentPageEvidence(
+            raw_page["page_number"],
+            PageExtractionMode(raw_page["extraction_mode"]),
+            raw_page["engine"],
+            raw_page["engine_version"],
+            raw_page["model_version"],
+            raw_page["config_version"],
+            raw_page["confidence"],
+            tuple(tuple(box) for box in raw_page["bounding_boxes"]),
+            PageProcessingStatus(raw_page["processing_status"]),
+        )
+        pages.append(page)
     raw_fields = payload["fields"]
     if type(raw_fields) is not dict or set(raw_fields) != set(PROCESS_METADATA_FIELDS):
         raise ValueError("campos de extração persistidos inválidos")
@@ -486,7 +859,7 @@ def document_metadata_from_payload(value: object) -> DocumentProcessMetadata:
             raise ValueError("campo de extração persistido inválido")
         evidence = []
         for item in raw["evidence"]:
-            if type(item) is not dict or set(item) != {
+            legacy_evidence_keys = {
                 "workspace_id",
                 "document_id",
                 "field_name",
@@ -496,8 +869,21 @@ def document_metadata_from_payload(value: object) -> DocumentProcessMetadata:
                 "extraction_timestamp",
                 "source_filename",
                 "normalized_text_span",
+            }
+            v2_evidence_keys = legacy_evidence_keys | {
+                "extraction_mode",
+                "ocr_engine",
+                "engine_version",
+                "model_version",
+                "ocr_confidence",
+                "bounding_box",
+            }
+            if type(item) is not dict or set(item) not in {
+                frozenset(legacy_evidence_keys),
+                frozenset(v2_evidence_keys),
             }:
                 raise ValueError("proveniência persistida inválida")
+            raw_box = item.get("bounding_box")
             record = FieldEvidence(
                 workspace_id=WorkspaceId.parse(item["workspace_id"]),
                 document_id=PrivateContentId.parse(item["document_id"]),
@@ -508,6 +894,14 @@ def document_metadata_from_payload(value: object) -> DocumentProcessMetadata:
                 extraction_timestamp=_timestamp(item["extraction_timestamp"]),
                 source_filename=_filename(item["source_filename"]),
                 normalized_text_span=item["normalized_text_span"],
+                extraction_mode=PageExtractionMode(
+                    item.get("extraction_mode", PageExtractionMode.NATIVE_TEXT)
+                ),
+                ocr_engine=item.get("ocr_engine", ""),
+                engine_version=item.get("engine_version", ""),
+                model_version=item.get("model_version", ""),
+                ocr_confidence=item.get("ocr_confidence"),
+                bounding_box=tuple(raw_box) if raw_box is not None else None,
             )
             if (
                 record.workspace_id != workspace_id
@@ -527,6 +921,8 @@ def document_metadata_from_payload(value: object) -> DocumentProcessMetadata:
         source_filename,
         text_state,
         MappingProxyType(fields),
+        document_sha256,
+        tuple(pages),
     )
 
 

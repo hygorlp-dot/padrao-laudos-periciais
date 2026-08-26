@@ -32,6 +32,7 @@ from ..application.services import (
 )
 from ..infrastructure.private_filesystem import LocalPrivateContentStore
 from ..infrastructure.pdf_text import LocalPdfTextExtractor
+from ..infrastructure.rapid_ocr import RapidOcrLatinEngine
 from ..infrastructure.sqlite import SQLiteApplicationStore
 from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
@@ -156,7 +157,7 @@ def build_local_api(
         )
         import_case_document = ImportCaseDocumentWithMetadata(
             ImportCaseDocument(generic_store),
-            LocalPdfTextExtractor(),
+            LocalPdfTextExtractor(ocr_engine=RapidOcrLatinEngine()),
             store.revisions,
             local_clock,
             local_ids,

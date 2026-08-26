@@ -16,6 +16,7 @@ from .content import (
     SeekableContent,
     as_seekable_content,
 )
+from .ocr_cache import RevisionOcrPageCache
 from .process_metadata import (
     PROCESS_METADATA_FIELDS,
     DocumentExtractionSummary,
@@ -350,7 +351,16 @@ class ImportCaseDocumentWithMetadata:
             media_type=media_type,
         )
         source.rewind()
-        text = self.extractor.extract(source.stream)
+        text = self.extractor.extract(
+            source.stream,
+            document_sha256=record.checksum_sha256,
+            page_cache=RevisionOcrPageCache(
+                self.revisions,
+                record.workspace_id,
+                self.clock,
+                self.ids,
+            ),
+        )
         extracted = extract_process_metadata(
             workspace_id=record.workspace_id,
             document_id=record.content_id,

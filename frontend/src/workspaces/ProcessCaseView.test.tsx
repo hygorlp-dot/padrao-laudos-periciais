@@ -43,6 +43,12 @@ function review(
         extraction_timestamp: "2026-08-26T12:30:00+00:00",
         source_filename: "autos.pdf",
         normalized_text_span: `${field}: ${values[field]}`,
+        extraction_mode: "NATIVE_TEXT",
+        ocr_engine: "",
+        engine_version: "6.16.2",
+        model_version: "",
+        ocr_confidence: null as number | null,
+        bounding_box: null as [number, number, number, number] | null,
       }],
     } : { state: "NOT_FOUND", value: "", evidence: [] }])),
   };
@@ -71,7 +77,7 @@ function jsonResponse(status: number, value: object) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("process case form", () => {
-  test("explains locally when a scanned PDF has no usable text layer", async () => {
+  test("explains a controlled local OCR failure without claiming it was skipped", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn()
@@ -85,8 +91,8 @@ describe("process case form", () => {
 
     render(<ProcessCaseView workspaceId={ID} />);
 
-    expect(await screen.findByText(/não possui camada de texto utilizável/i)).toBeInTheDocument();
-    expect(screen.getByText(/OCR não foi executado/i)).toBeInTheDocument();
+    expect(await screen.findByText(/OCR local não conseguiu obter texto utilizável/i)).toBeInTheDocument();
+    expect(screen.queryByText(/OCR não foi executado/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/C:\\|\/private|token/i)).not.toBeInTheDocument();
   });
 
@@ -278,6 +284,28 @@ describe("process case form", () => {
     expect(screen.getAllByText(/Extraído de autos\.pdf, página 1/).length).toBeGreaterThan(0);
     expect(screen.getByText("Dados extraídos para revisão")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Confirmar dados do processo" })).toBeEnabled();
+  });
+
+  test("identifies OCR-derived provenance without exposing implementation paths", async () => {
+    const extracted = review("PARTIAL", { numero_processo: DATA.numero_processo });
+    extracted.fields.numero_processo.evidence[0] = {
+      ...extracted.fields.numero_processo.evidence[0],
+      extraction_method: "LOCAL_OCR_V1",
+      extraction_mode: "OCR",
+      ocr_engine: "RapidOCR/ONNXRuntime",
+      engine_version: "3.9.2",
+      model_version: "PP-OCRv5-latin-rec",
+      ocr_confidence: 0.98,
+      bounding_box: [80, 100, 1100, 180],
+    };
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(jsonResponse(200, snapshot()))
+      .mockResolvedValueOnce(jsonResponse(200, extracted)));
+
+    render(<ProcessCaseView workspaceId={ID} />);
+
+    expect(await screen.findByText(/Extraído por OCR local de autos\.pdf, página 1/)).toBeInTheDocument();
+    expect(screen.queryByText(/RapidOCR|ONNX|C:\\|\/private/)).not.toBeInTheDocument();
   });
 
   test("does not overwrite manual data and offers an explicit extracted replacement", async () => {
