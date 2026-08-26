@@ -61,7 +61,12 @@ function initialDraft(snapshot: ProcessCaseSnapshot, review: ProcessMetadataRevi
   return Object.fromEntries(FIELDS.map(({ key }) => {
     const manual = snapshot.data[key];
     const extracted = review.fields[key];
-    return [key, manual || (extracted.state === "CONFIDENT" ? extracted.value : "")];
+    return [
+      key,
+      snapshot.revision !== null
+        ? manual
+        : manual || (extracted.state === "CONFIDENT" ? extracted.value : ""),
+    ];
   })) as ProcessCaseData;
 }
 

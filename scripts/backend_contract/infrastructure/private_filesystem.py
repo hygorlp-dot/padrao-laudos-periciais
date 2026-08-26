@@ -8,6 +8,7 @@ import os
 import re
 import stat
 import sys
+import tempfile
 import threading
 from functools import wraps
 from pathlib import Path
@@ -2148,7 +2149,9 @@ class LocalPrivateContentStore:
                 root_fd=self._root_fd,
                 expected_links=2,
             )
+            snapshot = None
             try:
+                snapshot = tempfile.TemporaryFile(mode="w+b", buffering=0)
                 if opened.st_size != metadata.byte_size:
                     raise RepositoryIntegrityError("tamanho do conteúdo privado diverge")
                 digest = hashlib.sha256()
@@ -2158,6 +2161,8 @@ class LocalPrivateContentStore:
                     if not block:
                         raise RepositoryIntegrityError("conteúdo privado truncado")
                     digest.update(block)
+                    if snapshot.write(block) != len(block):
+                        raise RepositoryIntegrityError("snapshot privado truncado")
                     remaining -= len(block)
                 if os.read(descriptor, 1) or digest.hexdigest() != metadata.checksum_sha256:
                     raise RepositoryIntegrityError("conteúdo privado diverge do checksum")
@@ -2165,10 +2170,13 @@ class LocalPrivateContentStore:
                 _validate_regular(after, expected_links=2)
                 if not _same_identity(opened, after) or after.st_size != opened.st_size:
                     raise RepositoryIntegrityError("conteúdo privado mudou durante a leitura")
-                os.lseek(descriptor, 0, os.SEEK_SET)
-                stream = os.fdopen(descriptor, "rb", buffering=0)
-                descriptor = -1
-                return OpenPrivateContent(metadata, stream, stream.close)
+                snapshot.flush()
+                snapshot.seek(0)
+                return OpenPrivateContent(metadata, snapshot, snapshot.close)
+            except Exception:
+                if snapshot is not None:
+                    snapshot.close()
+                raise
             finally:
                 if descriptor >= 0:
                     os.close(descriptor)

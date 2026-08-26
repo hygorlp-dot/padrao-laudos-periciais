@@ -208,6 +208,18 @@ def test_born_digital_pdf_never_calls_ocr_engine():
     assert engine.calls == 0
 
 
+@pytest.mark.parametrize("garbage", ("X" * 24, "0" * 24))
+def test_obviously_repeated_hidden_text_does_not_suppress_ocr(garbage):
+    engine = SyntheticOcrEngine(f"PROCESSO: {VALID_CNJ}")
+
+    result = LocalPdfTextExtractor(ocr_engine=engine).extract(
+        BytesIO(native_pdf(garbage))
+    )
+
+    assert result.pages[0].extraction_mode == "OCR"
+    assert engine.calls == 1
+
+
 class MemoryPageCache:
     def __init__(self):
         self.values = {}
@@ -221,6 +233,52 @@ class MemoryPageCache:
 
     def put(self, key, value):
         self.values[key] = value
+
+
+def test_oversized_page_geometry_fails_before_rasterization_or_ocr():
+    class OversizedPage:
+        def __init__(self):
+            self.render_calls = 0
+
+        def get_size(self):
+            return 50_000.0, 50_000.0
+
+        def render(self, **_values):
+            self.render_calls += 1
+            raise MemoryError("rasterization must not be attempted")
+
+    page = OversizedPage()
+    engine = SyntheticOcrEngine("must not be called")
+
+    result, cache_hit = LocalPdfTextExtractor(ocr_engine=engine)._ocr_page(
+        [page], 0, "", None
+    )
+
+    assert result is not None
+    assert result.processing_status == "OCR_FAILED"
+    assert cache_hit is False
+    assert page.render_calls == 0
+    assert engine.calls == 0
+
+
+def test_ocr_text_and_blocks_are_bounded_before_cache_persistence():
+    cache = MemoryPageCache()
+    engine = SyntheticOcrEngine("X" * 100_000, "Y" * 100_000)
+
+    result = LocalPdfTextExtractor(
+        ocr_engine=engine,
+        page_cache=cache,
+        max_chars_per_page=10,
+    ).extract(
+        BytesIO(scanned_pdf("saÃ­da OCR superdimensionada")),
+        document_sha256="a" * 64,
+    )
+
+    cached = next(iter(cache.values.values()))
+    assert result.pages[0].text == "X" * 10
+    assert cached.text == "X" * 10
+    assert len(cached.blocks) == 1
+    assert cached.blocks[0].text == "X" * 10
 
 
 def test_reopen_reuses_ocr_page_cache_bound_to_source_and_engine_identity():

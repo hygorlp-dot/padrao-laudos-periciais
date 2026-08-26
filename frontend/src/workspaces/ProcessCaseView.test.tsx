@@ -158,6 +158,17 @@ describe("process case form", () => {
     expect(JSON.parse(fetchSpy.mock.calls[2][1].body).data.vara).toBe(corrected.vara);
   });
 
+  test("preserves a confirmed human correction to an empty value after reload", async () => {
+    const cleared = { ...DATA, vara: "" };
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(jsonResponse(200, snapshot(cleared, 2)))
+      .mockResolvedValueOnce(jsonResponse(200, review("CONFIRMED", DATA))));
+
+    render(<ProcessCaseView workspaceId={ID} />);
+
+    expect(await screen.findByRole("textbox", { name: "Vara" })).toHaveValue("");
+  });
+
   test("keeps the draft and exposes a sanitized retryable save failure", async () => {
     const fetchSpy = vi
       .fn()
