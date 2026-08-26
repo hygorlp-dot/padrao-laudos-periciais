@@ -69,6 +69,8 @@ class LocalApiServerStartError(RuntimeError):
 
 def _handler_for(
     api: LocalApi,
+    max_body_bytes: int,
+    max_document_body_bytes: int,
     request_timeout_seconds: float,
 ):
     class LocalRequestHandler(BaseHTTPRequestHandler):
@@ -176,7 +178,11 @@ def _handler_for(
                     length = _parse_content_length(raw_length)
                 except (TypeError, ValueError):
                     length = -1
-                body_limit = api.request_body_limit(self.command, self.path)
+                body_limit = (
+                    max_document_body_bytes
+                    if api.is_document_upload(self.command, self.path)
+                    else max_body_bytes
+                )
                 if length < 0 or length > body_limit:
                     self.close_connection = True
                     response = _error(400, "INVALID_REQUEST")
@@ -246,10 +252,17 @@ class LocalApiServer:
         self._config = LocalServerConfig() if config is None else config
         if type(self._config) is not LocalServerConfig:
             raise TypeError("configuração local inválida")
+        if api.body_limits != (
+            self._config.max_body_bytes,
+            self._config.max_document_body_bytes,
+        ):
+            raise ValueError("limites do servidor e transporte divergem")
         self._server = _ThreadingLocalServer(
             (self._config.host, self._config.port),
             _handler_for(
                 api,
+                self._config.max_body_bytes,
+                self._config.max_document_body_bytes,
                 self._config.request_timeout_seconds,
             ),
         )

@@ -795,22 +795,73 @@ def provision_private_content_root(
     if not stat.S_ISDIR(parent_identity.st_mode):
         raise RepositoryIntegrityError("diretório pai do private root inválido")
     _validate_trusted_local_device(parent_identity)
-    os.mkdir(configured, 0o700)
-    _validate_plain_ancestry(configured)
-    root_identity = os.lstat(configured)
-    if not stat.S_ISDIR(root_identity.st_mode):
-        raise RepositoryIntegrityError("private root inválido")
-    _validate_trusted_local_device(root_identity)
+    parent_fd = None
+    parent_custody_fd = None
     root_fd = None
     windows_anchor_fd = None
     retained = False
     try:
         if os.name == "posix":
-            root_fd = os.open(configured, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            parent_fd = os.open(
+                parent,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
+            if not _same_identity(parent_identity, os.fstat(parent_fd)):
+                raise RepositoryIntegrityError(
+                    "identidade do diretório pai mudou durante o provisioning"
+                )
+            os.mkdir(_entry_name(configured), 0o700, dir_fd=parent_fd)
+            root_identity = os.stat(
+                _entry_name(configured),
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            root_fd = os.open(
+                _entry_name(configured),
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=parent_fd,
+            )
             if not _same_identity(root_identity, os.fstat(root_fd)):
                 raise RepositoryIntegrityError(
                     "identidade do private root mudou durante o provisioning"
                 )
+        else:
+            custody_path = parent / (
+                f".private-root-custody.{uuid4().hex}.tmp"
+            )
+            parent_custody_fd = os.open(
+                custody_path,
+                os.O_RDWR
+                | os.O_CREAT
+                | os.O_EXCL
+                | os.O_BINARY
+                | os.O_TEMPORARY,
+                0o600,
+            )
+            _validate_regular(
+                os.fstat(parent_custody_fd),
+                expected_links=1,
+            )
+            if not _same_identity(parent_identity, os.lstat(parent)):
+                raise RepositoryIntegrityError(
+                    "identidade do diretório pai mudou durante o provisioning"
+                )
+            os.mkdir(configured, 0o700)
+            if not _same_identity(parent_identity, os.lstat(parent)):
+                raise RepositoryIntegrityError(
+                    "identidade do diretório pai mudou durante o provisioning"
+                )
+            root_identity = os.lstat(configured)
+
+        _validate_plain_ancestry(configured)
+        observed_root = os.lstat(configured)
+        if (
+            not stat.S_ISDIR(root_identity.st_mode)
+            or not _same_identity(root_identity, observed_root)
+        ):
+            raise RepositoryIntegrityError("private root inválido")
+        _validate_trusted_local_device(root_identity)
+        if os.name == "posix":
             _provision_control(configured, _LOCK_NAME, b"0", root_fd=root_fd)
         else:
             windows_anchor_fd = _provision_control(
@@ -841,6 +892,10 @@ def provision_private_content_root(
                 os.close(windows_anchor_fd)
             if root_fd is not None:
                 os.close(root_fd)
+        if parent_custody_fd is not None:
+            os.close(parent_custody_fd)
+        if parent_fd is not None:
+            os.close(parent_fd)
     return configured
 
 

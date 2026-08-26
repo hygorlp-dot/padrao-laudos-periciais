@@ -326,29 +326,50 @@ class LocalApi:
         if type(services) is not LocalApiServices:
             raise TypeError("services inválidos")
         _require_local_token(token)
-        if type(max_body_bytes) is not int or max_body_bytes < 1:
+        if (
+            type(max_body_bytes) is not int
+            or not 1 <= max_body_bytes <= 1_048_576
+        ):
             raise ValueError("limite de body inválido")
-        if type(max_document_body_bytes) is not int or max_document_body_bytes < 1:
+        if (
+            type(max_document_body_bytes) is not int
+            or not 1 <= max_document_body_bytes <= 16_777_216
+        ):
             raise ValueError("limite de documento inválido")
         self._services = services
         self._token = token
         self._max_body_bytes = max_body_bytes
         self._max_document_body_bytes = max_document_body_bytes
 
-    def request_body_limit(self, method: str, target: str) -> int:
-        """Retorna o teto de aquisição sem ampliar rotas JSON legadas."""
+    @property
+    def body_limits(self) -> tuple[int, int]:
+        return self._max_body_bytes, self._max_document_body_bytes
+
+    def is_document_upload(self, method: str, target: str) -> bool:
+        """Reconhece somente o POST documental com workspace canônico."""
 
         try:
             raw_segments, _segments = _target_segments(target)
         except (TypeError, ValueError):
-            return self._max_body_bytes
-        if (
+            return False
+        if not (
             type(method) is str
             and method.upper() == "POST"
             and len(raw_segments) == 4
             and raw_segments[:2] == ("v1", "workspaces")
             and raw_segments[3] == "materials"
         ):
+            return False
+        try:
+            self._workspace_id(raw_segments[2])
+        except (TypeError, ValueError):
+            return False
+        return True
+
+    def request_body_limit(self, method: str, target: str) -> int:
+        """Retorna o teto de aquisição sem ampliar rotas JSON legadas."""
+
+        if self.is_document_upload(method, target):
             return self._max_document_body_bytes
         return self._max_body_bytes
 

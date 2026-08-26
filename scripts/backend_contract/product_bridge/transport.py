@@ -146,6 +146,16 @@ class ProductBridge:
             raise ValueError("upstream local inválido")
         if type(token) is not str or len(token) < 32:
             raise ValueError("token local inválido")
+        if (
+            type(max_body_bytes) is not int
+            or not 1 <= max_body_bytes <= 1_048_576
+        ):
+            raise ValueError("limite de body inválido")
+        if (
+            type(max_document_body_bytes) is not int
+            or not 1 <= max_document_body_bytes <= 16_777_216
+        ):
+            raise ValueError("limite de documento inválido")
         self._frontend_root = root
         self._public_origin = public_origin
         self._public_host = public_origin.removeprefix("http://")

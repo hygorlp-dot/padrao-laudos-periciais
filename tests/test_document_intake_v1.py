@@ -38,6 +38,7 @@ from scripts.backend_contract.local_api.composition import (
     build_local_api,
 )
 from scripts.backend_contract.local_api.server import (
+    LocalApiServer,
     LocalApiServerStartError,
     LocalServerConfig,
 )
@@ -499,6 +500,76 @@ def test_posix_new_root_swap_is_rejected_before_first_control(tmp_path, monkeypa
     assert list(root.iterdir()) == []
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows parent custody")
+def test_windows_parent_swap_is_blocked_before_private_root_creation(
+    tmp_path, monkeypatch
+):
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    root = parent / "private"
+    moved_parent = tmp_path / "moved-parent"
+    replacement_parent = tmp_path / "replacement-parent"
+    replacement_parent.mkdir()
+    original_mkdir = private_filesystem.os.mkdir
+    swap_blocked = False
+
+    def swap_parent_before_mkdir(path, mode=0o777, *, dir_fd=None):
+        nonlocal swap_blocked
+        if Path(path) == root and dir_fd is None:
+            try:
+                parent.rename(moved_parent)
+                replacement_parent.rename(parent)
+            except PermissionError:
+                swap_blocked = True
+                raise
+        if dir_fd is None:
+            return original_mkdir(path, mode)
+        return original_mkdir(path, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(private_filesystem.os, "mkdir", swap_parent_before_mkdir)
+
+    with pytest.raises(Exception):
+        provision_private_content_root(root)
+
+    assert swap_blocked is True
+    assert parent.exists()
+    assert list(parent.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX parent dirfd custody")
+def test_posix_parent_swap_never_redirects_private_root_creation(
+    tmp_path, monkeypatch
+):
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    root = parent / "private"
+    moved_parent = tmp_path / "moved-parent"
+    replacement_parent = tmp_path / "replacement-parent"
+    replacement_parent.mkdir()
+    original_mkdir = private_filesystem.os.mkdir
+    swapped = False
+
+    def swap_parent_before_mkdir(path, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        if path == root.name and dir_fd is not None and not swapped:
+            parent.rename(moved_parent)
+            replacement_parent.rename(parent)
+            swapped = True
+        if dir_fd is None:
+            return original_mkdir(path, mode)
+        return original_mkdir(path, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(private_filesystem.os, "mkdir", swap_parent_before_mkdir)
+
+    with pytest.raises(Exception, match="identidade|private root|provision"):
+        provision_private_content_root(root)
+
+    assert swapped is True
+    assert list(parent.iterdir()) == []
+    assert (moved_parent / "private").is_dir()
+    assert list((moved_parent / "private").iterdir()) == []
+
+
 def test_local_api_start_failure_releases_the_private_store(monkeypatch, tmp_path):
     root = tmp_path / "private"
     provision_private_content_root(root)
@@ -758,6 +829,36 @@ def test_transport_configuration_cannot_raise_contractual_body_limits(
 ):
     with pytest.raises(ValueError, match="limite"):
         config_type(**overrides)
+
+
+def test_local_server_rejects_transport_cap_divergence_and_malformed_expansion():
+    services = api_services()
+    api = LocalApi(
+        services,
+        token=TOKEN,
+        max_body_bytes=8,
+        max_document_body_bytes=4,
+    )
+
+    with pytest.raises(ValueError, match="limite"):
+        LocalApiServer(
+            api,
+            LocalServerConfig(max_body_bytes=8, max_document_body_bytes=1),
+        )
+
+    with pytest.raises(ValueError, match="limite"):
+        LocalApi(
+            services,
+            token=TOKEN,
+            max_document_body_bytes=16_777_217,
+        )
+
+    assert (
+        api.request_body_limit(
+            "POST", "/v1/workspaces/not-a-canonical-uuid/materials"
+        )
+        == 8
+    )
 
 
 def test_product_flow_imports_reads_isolates_and_reopens_pdf_without_path_or_token(tmp_path):
