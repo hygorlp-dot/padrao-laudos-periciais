@@ -310,7 +310,18 @@ def test_application_rejects_a_misrouted_process_case_record(tmp_path):
             GetProcessCase(store.workspaces, MisroutingRevisions()).execute(WORKSPACE_A)
 
 
-def test_generic_append_cannot_bypass_the_reserved_process_case_writer(tmp_path):
+@pytest.mark.parametrize(
+    ("artifact_kind", "artifact_id"),
+    (
+        ("PROCESS_CASE", "PROCESS_CASE"),
+        ("PROCESS_METADATA_EXTRACTION", "document-id"),
+        ("PROCESS_METADATA_CONFIRMATION", "PROCESS_METADATA_CONFIRMATION"),
+        ("OCR_PAGE_CACHE_V1", "cache-key"),
+    ),
+)
+def test_generic_append_cannot_bypass_reserved_typed_writers(
+    tmp_path, artifact_kind, artifact_id
+):
     with SQLiteApplicationStore(tmp_path / "reserved-process-case.db") as store:
         create_workspace(store, WORKSPACE_A, "Perícia A")
         typed_save = SaveProcessCase(
@@ -329,8 +340,8 @@ def test_generic_append_cannot_bypass_the_reserved_process_case_writer(tmp_path)
         with pytest.raises(ValueError, match="reservada"):
             generic_append.execute(
                 workspace_id=WORKSPACE_A,
-                artifact_kind="PROCESS_CASE",
-                artifact_id="PROCESS_CASE",
+                artifact_kind=artifact_kind,
+                artifact_id=artifact_id,
                 payload=DATA_B,
             )
 

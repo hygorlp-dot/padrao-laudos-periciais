@@ -223,6 +223,21 @@ class SaveProcess:
         )
 
 
+class CurrentProcess:
+    def __init__(self, revision):
+        self.revision = revision
+
+    def execute(self, workspace_id):
+        from scripts.backend_contract.application.models import ProcessCaseSnapshot
+
+        return ProcessCaseSnapshot(
+            workspace_id,
+            self.revision,
+            "2026-08-26T12:30:00+00:00",
+            ProcessCaseData.empty(),
+        )
+
+
 def test_import_persists_redacted_field_provenance_separately_from_effective_data():
     revisions = MemoryRevisions()
     importer = ImportCaseDocumentWithMetadata(
@@ -271,7 +286,7 @@ def test_review_aggregates_persisted_extractions_and_confirmation_is_separate():
         media_type="application/pdf",
     )
     review_service = GetProcessMetadataReview(
-        ExistingWorkspace(), ListDocuments((metadata,)), revisions
+        ExistingWorkspace(), ListDocuments((metadata,)), revisions, CurrentProcess(2)
     )
 
     before = review_service.execute(WORKSPACE_ID)
@@ -364,12 +379,20 @@ def test_missing_extraction_is_error_and_new_evidence_invalidates_confirmation()
         media_type="application/pdf",
     )
     documents = ListDocuments((metadata,))
-    review_service = GetProcessMetadataReview(ExistingWorkspace(), documents, revisions)
+    review_service = GetProcessMetadataReview(
+        ExistingWorkspace(), documents, revisions, CurrentProcess(2)
+    )
     confirmation = ConfirmProcessMetadata(
         SaveProcess(), review_service, revisions, FixedClock(), SequenceIds()
     )
     confirmation.execute(WORKSPACE_ID, ProcessCaseData.empty(), None)
     assert review_service.execute(WORKSPACE_ID).state == "CONFIRMED"
+
+    stale_process_review = GetProcessMetadataReview(
+        ExistingWorkspace(), documents, revisions, CurrentProcess(3)
+    )
+    with pytest.raises(RepositoryIntegrityError, match="revisão|confirmação"):
+        stale_process_review.execute(WORKSPACE_ID)
 
     updated = extract_process_metadata(
         workspace_id=WORKSPACE_ID,
@@ -550,6 +573,110 @@ def test_partial_document_cannot_be_reported_as_fully_extracted():
     from scripts.backend_contract.application.process_metadata import aggregate_process_metadata
 
     assert aggregate_process_metadata((document,)).state == "PARTIAL"
+
+
+def test_v2_persisted_metadata_rejects_declared_state_without_page_coherence():
+    document = extract_process_metadata(
+        workspace_id=WORKSPACE_ID,
+        document_id=DOCUMENT_ID,
+        original_filename="autos.pdf",
+        text=PdfTextResult(
+            PdfTextExtractionState.AVAILABLE,
+            (
+                PdfTextPage(
+                    1,
+                    "PROCESSO: 7654321-55.2025.4.05.0001 TRIBUNAL REGIONAL FEDERAL",
+                ),
+            ),
+            document_sha256="b" * 64,
+        ),
+        extracted_at="2026-08-26T12:30:00+00:00",
+    )
+    payload = document_metadata_payload(document)
+    payload["page_evidence"][0]["processing_status"] = "NOT_PROCESSED"
+    persisted = ArtifactRevision(
+        workspace_id=WORKSPACE_ID,
+        artifact_kind="PROCESS_METADATA_EXTRACTION",
+        artifact_id=str(DOCUMENT_ID),
+        revision_id="00000000-0000-4000-8000-000000000001",
+        revision=1,
+        created_at="2026-08-26T12:30:00+00:00",
+        checksum_sha256="a" * 64,
+        payload=payload,
+    )
+
+    with pytest.raises(ValueError, match="estado|página|evidência"):
+        document_metadata_from_payload(persisted.payload)
+
+
+def test_v2_persisted_metadata_rejects_confident_fields_without_provenance():
+    document = extract_process_metadata(
+        workspace_id=WORKSPACE_ID,
+        document_id=DOCUMENT_ID,
+        original_filename="autos.pdf",
+        text=PdfTextResult(
+            PdfTextExtractionState.AVAILABLE,
+            (
+                PdfTextPage(
+                    1,
+                    "TRIBUNAL REGIONAL FEDERAL DA 5 REGIAO 1 VARA FEDERAL "
+                    "COMARCA DE RECIFE PE PROCESSO: 7654321-55.2025.4.05.0001 "
+                    "AUTOR: Parte A REU: Parte B",
+                ),
+            ),
+            document_sha256="b" * 64,
+        ),
+        extracted_at="2026-08-26T12:30:00+00:00",
+    )
+    payload = document_metadata_payload(document)
+    payload["fields"]["numero_processo"]["evidence"] = []
+    persisted = ArtifactRevision(
+        workspace_id=WORKSPACE_ID,
+        artifact_kind="PROCESS_METADATA_EXTRACTION",
+        artifact_id=str(DOCUMENT_ID),
+        revision_id="00000000-0000-4000-8000-000000000001",
+        revision=1,
+        created_at="2026-08-26T12:30:00+00:00",
+        checksum_sha256="a" * 64,
+        payload=payload,
+    )
+
+    with pytest.raises(ValueError, match="proveniência|campo"):
+        document_metadata_from_payload(persisted.payload)
+
+
+def test_v2_persisted_metadata_rejects_a_confident_value_not_backed_by_evidence():
+    document = extract_process_metadata(
+        workspace_id=WORKSPACE_ID,
+        document_id=DOCUMENT_ID,
+        original_filename="autos.pdf",
+        text=PdfTextResult(
+            PdfTextExtractionState.AVAILABLE,
+            (
+                PdfTextPage(
+                    1,
+                    "PROCESSO: 7654321-55.2025.4.05.0001 TRIBUNAL REGIONAL FEDERAL",
+                ),
+            ),
+            document_sha256="b" * 64,
+        ),
+        extracted_at="2026-08-26T12:30:00+00:00",
+    )
+    payload = document_metadata_payload(document)
+    payload["fields"]["numero_processo"]["value"] = "9999999-99.9999.9.99.9999"
+    persisted = ArtifactRevision(
+        workspace_id=WORKSPACE_ID,
+        artifact_kind="PROCESS_METADATA_EXTRACTION",
+        artifact_id=str(DOCUMENT_ID),
+        revision_id="00000000-0000-4000-8000-000000000001",
+        revision=1,
+        created_at="2026-08-26T12:30:00+00:00",
+        checksum_sha256="a" * 64,
+        payload=payload,
+    )
+
+    with pytest.raises(ValueError, match="valor|proveniência|campo"):
+        document_metadata_from_payload(persisted.payload)
 
 
 def test_import_expands_the_bounded_reader_when_initial_metadata_is_unresolved():

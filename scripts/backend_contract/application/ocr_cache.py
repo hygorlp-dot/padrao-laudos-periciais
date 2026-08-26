@@ -7,7 +7,13 @@ import json
 from dataclasses import dataclass
 
 from .models import WorkspaceId, thaw_payload
-from .ports import ArtifactRevisionRepository, Clock, IdGenerator, RepositoryIntegrityError
+from .ports import (
+    ArtifactRevisionRepository,
+    Clock,
+    IdGenerator,
+    RepositoryConflict,
+    RepositoryIntegrityError,
+)
 from .process_metadata import (
     PageExtractionMode,
     PageProcessingStatus,
@@ -53,11 +59,14 @@ def _page_payload(
         or page.engine_version != key[3]
         or page.model_version != key[4]
         or page.config_version != key[5]
-        or page.processing_status is not PageProcessingStatus.AVAILABLE
+        or page.processing_status not in {
+            PageProcessingStatus.AVAILABLE,
+            PageProcessingStatus.TRUNCATED,
+        }
     ):
         raise ValueError("identidade da página diverge do cache OCR")
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "document_sha256": key[0],
         "page_number": key[1],
         "engine": key[2],
@@ -66,6 +75,7 @@ def _page_payload(
         "config_version": key[5],
         "normalized_text": page.text,
         "confidence": page.confidence,
+        "processing_status": page.processing_status.value,
         "blocks": [
             {
                 "text": block.text,
@@ -82,7 +92,7 @@ def _page_from_payload(
     expected_key: tuple[str, int, str, str, str, str],
 ) -> PdfTextPage:
     value = thaw_payload(raw_value)
-    expected_fields = {
+    legacy_fields = {
         "schema_version",
         "document_sha256",
         "page_number",
@@ -94,7 +104,12 @@ def _page_from_payload(
         "confidence",
         "blocks",
     }
-    if type(value) is not dict or set(value) != expected_fields or value["schema_version"] != 1:
+    v2_fields = legacy_fields | {"processing_status"}
+    if (
+        type(value) is not dict
+        or value.get("schema_version") not in {1, 2}
+        or set(value) != (legacy_fields if value["schema_version"] == 1 else v2_fields)
+    ):
         raise RepositoryIntegrityError("cache OCR persistido inválido")
     actual_key = (
         value["document_sha256"],
@@ -129,6 +144,9 @@ def _page_from_payload(
             expected_key[5],
             value["confidence"],
             tuple(blocks),
+            PageProcessingStatus(
+                value.get("processing_status", PageProcessingStatus.TRUNCATED)
+            ),
         )
     except (TypeError, ValueError) as exc:
         raise RepositoryIntegrityError("conteúdo do cache OCR persistido inválido") from exc
@@ -161,11 +179,21 @@ class RevisionOcrPageCache:
         created_at = self.clock.now()
         if created_at.tzinfo is None or created_at.utcoffset() is None:
             raise ValueError("clock do cache OCR exige timezone")
-        self.revisions.append(
-            workspace_id=self.workspace_id,
-            artifact_kind=_OCR_PAGE_CACHE_KIND,
-            artifact_id=artifact_id,
-            revision_id=str(self.ids.new_uuid()),
-            created_at=created_at.isoformat(),
-            payload=_page_payload(key, page),
-        )
+        try:
+            self.revisions.append_if_latest(
+                workspace_id=self.workspace_id,
+                artifact_kind=_OCR_PAGE_CACHE_KIND,
+                artifact_id=artifact_id,
+                revision_id=str(self.ids.new_uuid()),
+                created_at=created_at.isoformat(),
+                payload=_page_payload(key, page),
+                expected_revision=None,
+            )
+        except RepositoryConflict as exc:
+            winner = self.revisions.latest(
+                self.workspace_id, _OCR_PAGE_CACHE_KIND, artifact_id
+            )
+            if winner is None or _page_from_payload(winner.payload, key) != page:
+                raise RepositoryIntegrityError(
+                    "cache OCR imutável diverge da nova evidência"
+                ) from exc

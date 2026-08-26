@@ -88,9 +88,9 @@ def test_local_pdf_text_extractor_is_bounded_and_reports_textless_documents():
     result = extractor.extract(
         BytesIO(
             text_pdf(
-                "Pagina A com texto tecnico " * 4,
-                "Pagina B com texto tecnico " * 4,
-                "Pagina C com texto tecnico " * 4,
+                "Pagina A descreve fundacao, alvenaria, cobertura e acabamento.",
+                "Pagina B registra vistoria, medidas, fotografias e anomalias.",
+                "Pagina C consolida conclusoes, ressalvas, anexos e referencias.",
             )
         )
     )
@@ -101,6 +101,7 @@ def test_local_pdf_text_extractor_is_bounded_and_reports_textless_documents():
     assert result.pages[-1].processing_status is PageProcessingStatus.NOT_PROCESSED
     assert all(len(page.text) <= 40 for page in result.pages)
     assert sum(len(page.text) for page in result.pages) <= 60
+    assert result.pages[0].processing_status is PageProcessingStatus.TRUNCATED
 
     textless = extractor.extract(BytesIO(text_pdf("")))
     assert textless.state is PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE
