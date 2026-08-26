@@ -147,6 +147,7 @@ def build_local_api(
     list_case_documents = None
     read_case_document = None
     get_process_metadata_review = None
+    get_process_case = GetProcessCase(store.workspaces, store.revisions)
     if private_store is not None:
         open_case_document = OpenCaseDocument(
             OpenPrivateContentStream(store.workspaces, private_store)
@@ -174,6 +175,7 @@ def build_local_api(
             store.workspaces,
             list_case_documents,
             store.revisions,
+            get_process_case,
         )
     save_process_case = SaveProcessCase(
         store.workspaces, store.revisions, local_clock, local_ids
@@ -188,7 +190,7 @@ def build_local_api(
         get_latest_artifact=GetLatestArtifact(store.revisions),
         get_artifact_revision=GetArtifactRevision(store.revisions),
         list_artifact_revisions=ListArtifactRevisions(store.revisions),
-        get_process_case=GetProcessCase(store.workspaces, store.revisions),
+        get_process_case=get_process_case,
         save_process_case=(
             ConfirmProcessMetadata(
                 save_process_case,

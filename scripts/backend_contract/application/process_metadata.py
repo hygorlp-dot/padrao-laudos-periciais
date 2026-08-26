@@ -66,6 +66,7 @@ class PageExtractionMode(StrEnum):
 
 class PageProcessingStatus(StrEnum):
     AVAILABLE = "AVAILABLE"
+    TRUNCATED = "TRUNCATED"
     OCR_FAILED = "OCR_FAILED"
     NOT_PROCESSED = "NOT_PROCESSED"
 
@@ -129,8 +130,11 @@ class PdfTextPage:
             raise TypeError("blocos textuais da página inválidos")
         if type(self.processing_status) is not PageProcessingStatus:
             raise TypeError("status de processamento da página inválido")
-        if self.processing_status is PageProcessingStatus.AVAILABLE and not self.text.strip():
-            raise ValueError("página disponível exige texto")
+        if self.processing_status in {
+            PageProcessingStatus.AVAILABLE,
+            PageProcessingStatus.TRUNCATED,
+        } and not self.text.strip():
+            raise ValueError("página textual exige texto")
         if self.processing_status is PageProcessingStatus.OCR_FAILED and (
             self.extraction_mode is not PageExtractionMode.OCR
             or self.text
@@ -176,6 +180,10 @@ class PdfTextResult:
             page for page in self.pages
             if page.processing_status is PageProcessingStatus.AVAILABLE
         )
+        truncated = tuple(
+            page for page in self.pages
+            if page.processing_status is PageProcessingStatus.TRUNCATED
+        )
         failed = tuple(
             page for page in self.pages
             if page.processing_status is PageProcessingStatus.OCR_FAILED
@@ -184,18 +192,21 @@ class PdfTextResult:
             page for page in self.pages
             if page.processing_status is PageProcessingStatus.NOT_PROCESSED
         )
+        textual = available + truncated
         if self.state is PdfTextExtractionState.AVAILABLE and not available:
             raise ValueError("estado disponível exige página textual")
-        if self.state is PdfTextExtractionState.AVAILABLE and (failed or not_processed):
+        if self.state is PdfTextExtractionState.AVAILABLE and (
+            truncated or failed or not_processed
+        ):
             raise ValueError("estado disponível não aceita perda parcial de página")
         if self.state is PdfTextExtractionState.PARTIAL and (
-            not available or not (failed or not_processed)
+            not textual or not (truncated or failed or not_processed)
         ):
             raise ValueError("estado parcial exige texto e página incompleta")
-        if self.state is PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE and available:
+        if self.state is PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE and textual:
             raise ValueError("estado indisponível diverge das páginas")
         if self.state is PdfTextExtractionState.ERROR and (
-            available or failed or not_processed
+            textual or failed or not_processed
         ):
             raise ValueError("estado de erro não aceita páginas")
 
@@ -833,6 +844,12 @@ def document_metadata_from_payload(
     source_filename = _filename(payload["source_filename"])
     text_state = PdfTextExtractionState(payload["text_state"])
     document_sha256 = payload.get("document_sha256", legacy_document_sha256)
+    if (
+        type(document_sha256) is not str
+        or len(document_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in document_sha256)
+    ):
+        raise ValueError("checksum da extração persistida inválido")
     raw_pages = payload.get("page_evidence", [])
     if type(raw_pages) is not list:
         raise ValueError("evidência de página persistida inválida")
@@ -941,7 +958,7 @@ def document_metadata_from_payload(
             raw["value"],
             tuple(evidence),
         )
-    return DocumentProcessMetadata(
+    document = DocumentProcessMetadata(
         workspace_id,
         document_id,
         source_filename,
@@ -950,6 +967,83 @@ def document_metadata_from_payload(
         document_sha256,
         tuple(pages),
     )
+    if schema_version == 2:
+        page_numbers = tuple(page.page_number for page in document.page_evidence)
+        if page_numbers and page_numbers != tuple(range(1, len(page_numbers) + 1)):
+            raise ValueError("cobertura de páginas persistida inválida")
+        textual_pages = {
+            page.page_number: page
+            for page in document.page_evidence
+            if page.processing_status in {
+                PageProcessingStatus.AVAILABLE,
+                PageProcessingStatus.TRUNCATED,
+            }
+        }
+        incomplete_pages = tuple(
+            page
+            for page in document.page_evidence
+            if page.processing_status is not PageProcessingStatus.AVAILABLE
+        )
+        if document.text_state is PdfTextExtractionState.AVAILABLE and (
+            not textual_pages or incomplete_pages
+        ):
+            raise ValueError("estado disponível diverge da evidência de página")
+        if document.text_state is PdfTextExtractionState.PARTIAL and (
+            not textual_pages or not incomplete_pages
+        ):
+            raise ValueError("estado parcial diverge da evidência de página")
+        if (
+            document.text_state is PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE
+            and textual_pages
+        ):
+            raise ValueError("estado indisponível diverge da evidência de página")
+        if document.text_state is PdfTextExtractionState.ERROR and document.page_evidence:
+            raise ValueError("estado de erro diverge da evidência de página")
+        for name, field in document.fields.items():
+            if field.state is FieldExtractionState.CONFIDENT and (
+                not field.value.strip() or not field.evidence
+            ):
+                raise ValueError(f"campo confiante sem proveniência: {name}")
+            if field.state is FieldExtractionState.CONFIDENT:
+                expected_value = (
+                    "; ".join(item.extracted_value for item in field.evidence)
+                    if name in {"parte_requerente", "parte_requerida"}
+                    else field.evidence[0].extracted_value
+                )
+                if (
+                    field.value != expected_value
+                    or (
+                        name not in {"parte_requerente", "parte_requerida"}
+                        and len(field.evidence) != 1
+                    )
+                ):
+                    raise ValueError(f"valor do campo diverge da proveniência: {name}")
+            if field.state is FieldExtractionState.NOT_FOUND and (
+                field.value or field.evidence
+            ):
+                raise ValueError(f"campo ausente possui evidência: {name}")
+            if field.state in {
+                FieldExtractionState.AMBIGUOUS,
+                FieldExtractionState.CONFLICTING,
+            } and (field.value or not field.evidence):
+                raise ValueError(f"campo inconclusivo sem proveniência: {name}")
+            for evidence in field.evidence:
+                page = textual_pages.get(evidence.source_page)
+                if (
+                    page is None
+                    or evidence.source_filename != document.source_filename
+                    or evidence.extraction_mode is not page.extraction_mode
+                    or (
+                        evidence.extraction_mode is PageExtractionMode.OCR
+                        and (
+                            evidence.ocr_engine != page.engine
+                            or evidence.engine_version != page.engine_version
+                            or evidence.model_version != page.model_version
+                        )
+                    )
+                ):
+                    raise ValueError("proveniência de campo diverge da página")
+    return document
 
 
 def review_dto(review: ProcessMetadataReview) -> dict[str, object]:

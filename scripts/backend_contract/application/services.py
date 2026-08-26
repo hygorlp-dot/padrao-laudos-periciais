@@ -564,6 +564,7 @@ class GetProcessMetadataReview:
     workspaces: WorkspaceRepository
     documents: object
     revisions: ArtifactRevisionRepository
+    process_case: object | None = None
 
     @staticmethod
     def empty(workspace_id: WorkspaceId) -> ProcessMetadataReview:
@@ -672,6 +673,16 @@ class GetProcessMetadataReview:
                 raise RepositoryIntegrityError("fingerprint de confirmação inválido")
             if confirmed_fingerprint != extraction_fingerprint:
                 confirmed_revision = None
+            elif self.process_case is None:
+                raise RepositoryIntegrityError(
+                    "confirmação processual não possui vínculo à revisão atual"
+                )
+            else:
+                current_case = self.process_case.execute(workspace_id)
+                if current_case.revision != confirmed_revision:
+                    raise RepositoryIntegrityError(
+                        "confirmação diverge da revisão processual atual"
+                    )
         state = "CONFIRMED" if confirmed_revision is not None else aggregate.state
         if missing_extraction and confirmed_revision is None:
             state = "ERROR"
@@ -734,10 +745,12 @@ class AppendArtifactRevision:
         workspace_id = _workspace_key(workspace_id)
         artifact_kind = _artifact_key(artifact_kind, "artifact_kind")
         artifact_id = _artifact_key(artifact_id, "artifact_id")
-        if (
-            artifact_kind == _PROCESS_CASE_ARTIFACT_KIND
-            and artifact_id == _PROCESS_CASE_ARTIFACT_ID
-        ):
+        if artifact_kind in {
+            _PROCESS_CASE_ARTIFACT_KIND,
+            _PROCESS_METADATA_EXTRACTION_KIND,
+            _PROCESS_METADATA_CONFIRMATION_KIND,
+            "OCR_PAGE_CACHE_V1",
+        }:
             raise ValueError("identidade de artefato reservada")
         payload_snapshot = json.loads(canonical_payload_json(payload))
         revision_id = str(_generated_uuid(self.ids))

@@ -71,8 +71,7 @@ class LocalPdfTextExtractor:
         normalized = "".join(alphanumeric_values)
         period = (normalized + normalized).find(normalized, 1)
         periodically_repeated = period < len(normalized) and len(normalized) // period >= 3
-        native_tokens = re.findall(r"\w+", value.casefold())
-        obviously_repeated = periodically_repeated and len(set(native_tokens)) <= 2
+        obviously_repeated = periodically_repeated
         return (
             alphanumeric / len(compact) >= 0.5
             and replacement / len(compact) <= 0.02
@@ -80,27 +79,32 @@ class LocalPdfTextExtractor:
             and not obviously_repeated
         )
 
-    def _bounded_blocks(self, raw_blocks) -> tuple[PageTextBlock, ...]:
+    def _bounded_blocks(self, raw_blocks) -> tuple[tuple[PageTextBlock, ...], bool]:
         blocks = []
         used = 0
+        truncated = False
         for raw in raw_blocks:
             if len(blocks) >= self._max_ocr_blocks:
+                truncated = True
                 break
             separator = int(bool(blocks))
             available = self._max_chars_per_page - used - separator
             if available <= 0:
+                truncated = True
                 break
             text = raw["text"]
             if type(text) is not str:
                 raise TypeError("invalid local OCR text")
+            limited = text[:available]
+            truncated = truncated or len(limited) < len(text)
             block = PageTextBlock(
-                text=text[:available],
+                text=limited,
                 confidence=float(raw["confidence"]),
                 bounding_box=tuple(float(value) for value in raw["bounding_box"]),
             )
             blocks.append(block)
             used += separator + len(block.text)
-        return tuple(blocks)
+        return tuple(blocks), truncated
 
     def _bounded_page(self, page: PdfTextPage, limit: int) -> PdfTextPage:
         if len(page.text) <= limit:
@@ -141,7 +145,7 @@ class LocalPdfTextExtractor:
             config_version=page.config_version,
             confidence=confidence,
             blocks=tuple(blocks),
-            processing_status=page.processing_status,
+            processing_status=PageProcessingStatus.TRUNCATED,
         )
 
     def _ocr_page(
@@ -171,7 +175,10 @@ class LocalPdfTextExtractor:
                     or len(cached.blocks) > self._max_ocr_blocks
                     or (
                         cached.extraction_mode is PageExtractionMode.OCR
-                        and cached.processing_status is PageProcessingStatus.AVAILABLE
+                        and cached.processing_status in {
+                            PageProcessingStatus.AVAILABLE,
+                            PageProcessingStatus.TRUNCATED,
+                        }
                         and cached.text != "\n".join(block.text for block in cached.blocks)
                     )
                 ):
@@ -195,7 +202,7 @@ class LocalPdfTextExtractor:
                 rendered = bitmap.to_pil()
                 try:
                     raw_blocks = self._ocr_engine.recognize(rendered)
-                    blocks = self._bounded_blocks(raw_blocks)
+                    blocks, truncated = self._bounded_blocks(raw_blocks)
                 finally:
                     rendered.close()
             finally:
@@ -225,6 +232,11 @@ class LocalPdfTextExtractor:
                 config_version=self._ocr_engine.config_version,
                 confidence=sum(block.confidence or 0.0 for block in blocks) / len(blocks),
                 blocks=blocks,
+                processing_status=(
+                    PageProcessingStatus.TRUNCATED
+                    if truncated
+                    else PageProcessingStatus.AVAILABLE
+                ),
             )
             if page_cache is not None and document_sha256:
                 page_cache.put(key, page)
@@ -324,12 +336,18 @@ class LocalPdfTextExtractor:
                 normalized = extracted.replace("\x00", "").strip()
                 result_page = None
                 if self._reliable_native_text(normalized):
-                    limited = normalized[: min(self._max_chars_per_page, remaining)]
+                    page_limit = min(self._max_chars_per_page, remaining)
+                    limited = normalized[:page_limit]
                     result_page = PdfTextPage(
                         index,
                         limited,
                         engine="pypdf",
                         engine_version=PYPDF_VERSION,
+                        processing_status=(
+                            PageProcessingStatus.TRUNCATED
+                            if len(limited) < len(normalized)
+                            else PageProcessingStatus.AVAILABLE
+                        ),
                     )
                     native_pages += 1
                 elif self._ocr_engine is not None and ocr_attempts < ocr_page_limit:
@@ -379,6 +397,8 @@ class LocalPdfTextExtractor:
                 PdfTextExtractionState.ERROR, (), document_sha256=document_sha256
             )
         finally:
+            if rendered_document is not None:
+                rendered_document.close()
             try:
                 source.seek(0)
             except (OSError, ValueError):
@@ -393,7 +413,11 @@ class LocalPdfTextExtractor:
                 cache_hits=cache_hits,
             )
         has_text = any(
-            page.processing_status is PageProcessingStatus.AVAILABLE for page in pages
+            page.processing_status in {
+                PageProcessingStatus.AVAILABLE,
+                PageProcessingStatus.TRUNCATED,
+            }
+            for page in pages
         )
         incomplete = truncated or any(
             page.processing_status is not PageProcessingStatus.AVAILABLE

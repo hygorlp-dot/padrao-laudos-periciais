@@ -263,6 +263,32 @@ def test_oversized_page_geometry_fails_before_rasterization_or_ocr():
     assert engine.calls == 0
 
 
+def test_pdfium_document_is_closed_after_local_ocr(monkeypatch):
+    from scripts.backend_contract.infrastructure import pdf_text
+
+    actual_factory = pdf_text.pdfium.PdfDocument
+    closed = []
+
+    class TrackedDocument:
+        def __init__(self, source):
+            self.inner = actual_factory(source)
+
+        def __getitem__(self, index):
+            return self.inner[index]
+
+        def close(self):
+            self.inner.close()
+            closed.append(True)
+
+    monkeypatch.setattr(pdf_text.pdfium, "PdfDocument", TrackedDocument)
+
+    LocalPdfTextExtractor(ocr_engine=SyntheticOcrEngine("texto OCR suficiente")).extract(
+        BytesIO(scanned_pdf("documento a fechar"))
+    )
+
+    assert closed == [True]
+
+
 def test_ocr_text_and_blocks_are_bounded_before_cache_persistence():
     cache = MemoryPageCache()
     engine = SyntheticOcrEngine("X" * 100_000, "Y" * 100_000)
@@ -281,6 +307,23 @@ def test_ocr_text_and_blocks_are_bounded_before_cache_persistence():
     assert cached.text == "X" * 10
     assert len(cached.blocks) == 1
     assert cached.blocks[0].text == "X" * 10
+    assert cached.processing_status is PageProcessingStatus.TRUNCATED
+    assert result.state is PdfTextExtractionState.PARTIAL
+
+
+def test_native_page_character_limit_is_explicitly_partial():
+    source = (
+        f"PROCESSO: {VALID_CNJ} TRIBUNAL REGIONAL FEDERAL "
+        "CONTEUDO TECNICO ADICIONAL NAO PROCESSADO INTEGRALMENTE"
+    )
+
+    result = LocalPdfTextExtractor(max_chars_per_page=50).extract(
+        BytesIO(native_pdf(source))
+    )
+
+    assert len(result.pages[0].text) == 50
+    assert result.pages[0].processing_status is PageProcessingStatus.TRUNCATED
+    assert result.state is PdfTextExtractionState.PARTIAL
 
 
 def test_reopen_reuses_ocr_page_cache_bound_to_source_and_engine_identity():
@@ -426,6 +469,8 @@ def test_large_scanned_pdf_only_ocrs_bounded_early_pages():
         "ABCD" * 20,
         "SYSTEM GENERATED " * 10,
         "PROCESSO " * 20,
+        "ALFA BETA GAMA " * 10,
+        "THIS PDF IS SCANNED " * 10,
     ),
 )
 def test_repeated_native_token_patterns_route_to_local_ocr(native_text):
@@ -512,6 +557,15 @@ class CacheRevisions:
         ] = record
         return record
 
+    def append_if_latest(self, *, expected_revision, **values):
+        if expected_revision is not None or self.latest(
+            values["workspace_id"], values["artifact_kind"], values["artifact_id"]
+        ) is not None:
+            from scripts.backend_contract.application.ports import RepositoryConflict
+
+            raise RepositoryConflict("concurrent cache write")
+        return self.append(**values)
+
 
 class CacheClock:
     def now(self):
@@ -548,6 +602,43 @@ def test_revision_page_cache_survives_reconstruction_and_isolates_workspace():
 
     assert reopened.get(key) == page
     assert isolated.get(key) is None
+
+
+def test_revision_page_cache_rejects_a_divergent_concurrent_first_write():
+    from scripts.backend_contract.application.ocr_cache import RevisionOcrPageCache
+    from scripts.backend_contract.application.ports import (
+        RepositoryConflict,
+        RepositoryIntegrityError,
+    )
+
+    class RacingCacheRevisions(CacheRevisions):
+        def append_if_latest(self, *, expected_revision, **values):
+            competing = dict(values)
+            competing_payload = dict(values["payload"])
+            competing_payload["normalized_text"] = "DIVERGENT"
+            competing_blocks = [dict(block) for block in competing_payload["blocks"]]
+            competing_blocks[0]["text"] = "DIVERGENT"
+            competing_payload["blocks"] = competing_blocks
+            competing["payload"] = competing_payload
+            self.append(**competing)
+            raise RepositoryConflict("concurrent cache write")
+
+    revisions = RacingCacheRevisions()
+    cache = RevisionOcrPageCache(revisions, WORKSPACE_A, CacheClock(), CacheIds())
+    key = (
+        "a" * 64,
+        1,
+        "SYNTHETIC_OCR",
+        "1.0",
+        "synthetic-pt-v1",
+        "OCR_CONFIG_V1",
+    )
+    page = LocalPdfTextExtractor(
+        ocr_engine=SyntheticOcrEngine(f"PROCESSO: {VALID_CNJ}")
+    ).extract(BytesIO(scanned_pdf("concorrência")), document_sha256="a" * 64).pages[0]
+
+    with pytest.raises(RepositoryIntegrityError, match="imutável|diverge"):
+        cache.put(key, page)
 
 
 def test_import_service_binds_reader_to_stored_sha_and_persisted_page_cache():
