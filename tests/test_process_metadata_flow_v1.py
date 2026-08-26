@@ -583,6 +583,105 @@ def test_legacy_extraction_cannot_promote_a_confident_field_without_provenance()
         )
 
 
+def test_legacy_extraction_cannot_smuggle_ocr_evidence_without_page_provenance():
+    from scripts.backend_contract.application.process_metadata import PageTextBlock
+
+    extracted = extract_process_metadata(
+        workspace_id=WORKSPACE_ID,
+        document_id=DOCUMENT_ID,
+        original_filename="autos.pdf",
+        text=PdfTextResult(
+            PdfTextExtractionState.AVAILABLE,
+            (
+                PdfTextPage(
+                    1,
+                    "PROCESSO: 7654321-55.2025.4.05.0001",
+                    extraction_mode=PageExtractionMode.OCR,
+                    engine="SYNTHETIC_OCR",
+                    engine_version="1.0",
+                    model_version="synthetic-pt-v1",
+                    confidence=0.99,
+                    blocks=(
+                        PageTextBlock(
+                            "PROCESSO: 7654321-55.2025.4.05.0001",
+                            0.99,
+                            (80.0, 100.0, 1100.0, 180.0),
+                        ),
+                    ),
+                ),
+            ),
+            document_sha256="b" * 64,
+        ),
+        extracted_at="2026-08-26T12:30:00+00:00",
+    )
+    legacy = json.loads(json.dumps(document_metadata_payload(extracted)))
+    legacy["schema_version"] = 1
+    legacy.pop("document_sha256")
+    legacy.pop("page_evidence")
+    legacy["text_state"] = (
+        PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE.value
+    )
+    persisted = ArtifactRevision(
+        workspace_id=WORKSPACE_ID,
+        artifact_kind="PROCESS_METADATA_EXTRACTION",
+        artifact_id=str(DOCUMENT_ID),
+        revision_id="00000000-0000-4000-8000-000000000001",
+        revision=1,
+        created_at="2026-08-26T12:30:00+00:00",
+        checksum_sha256="a" * 64,
+        payload=legacy,
+    )
+
+    with pytest.raises(ValueError, match="schema|legad|proveniência|página"):
+        document_metadata_from_payload(
+            persisted.payload, legacy_document_sha256="b" * 64
+        )
+
+
+def test_legacy_unavailable_document_cannot_retain_native_field_evidence():
+    extracted = extract_process_metadata(
+        workspace_id=WORKSPACE_ID,
+        document_id=DOCUMENT_ID,
+        original_filename="autos.pdf",
+        text=PdfTextResult(
+            PdfTextExtractionState.AVAILABLE,
+            (PdfTextPage(1, "PROCESSO: 7654321-55.2025.4.05.0001"),),
+            document_sha256="b" * 64,
+        ),
+        extracted_at="2026-08-26T12:30:00+00:00",
+    )
+    legacy = json.loads(json.dumps(document_metadata_payload(extracted)))
+    legacy["schema_version"] = 1
+    legacy.pop("document_sha256")
+    legacy.pop("page_evidence")
+    legacy["text_state"] = (
+        PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE.value
+    )
+    v2_only = {
+        "extraction_mode", "ocr_engine", "engine_version", "model_version",
+        "ocr_confidence", "bounding_box",
+    }
+    for field in legacy["fields"].values():
+        for evidence in field["evidence"]:
+            for key in v2_only:
+                evidence.pop(key)
+    persisted = ArtifactRevision(
+        workspace_id=WORKSPACE_ID,
+        artifact_kind="PROCESS_METADATA_EXTRACTION",
+        artifact_id=str(DOCUMENT_ID),
+        revision_id="00000000-0000-4000-8000-000000000001",
+        revision=1,
+        created_at="2026-08-26T12:30:00+00:00",
+        checksum_sha256="a" * 64,
+        payload=legacy,
+    )
+
+    with pytest.raises(ValueError, match="estado|evidência|proveniência"):
+        document_metadata_from_payload(
+            persisted.payload, legacy_document_sha256="b" * 64
+        )
+
+
 def test_v2_ocr_field_bounding_box_must_belong_to_its_page_evidence():
     from scripts.backend_contract.application.process_metadata import PageTextBlock
 

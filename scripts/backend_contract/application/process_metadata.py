@@ -921,10 +921,10 @@ def document_metadata_from_payload(
                 "ocr_confidence",
                 "bounding_box",
             }
-            if type(item) is not dict or set(item) not in {
-                frozenset(legacy_evidence_keys),
-                frozenset(v2_evidence_keys),
-            }:
+            expected_evidence_keys = (
+                legacy_evidence_keys if schema_version == 1 else v2_evidence_keys
+            )
+            if type(item) is not dict or set(item) != expected_evidence_keys:
                 raise ValueError("proveniência persistida inválida")
             raw_box = item.get("bounding_box")
             record = FieldEvidence(
@@ -960,6 +960,15 @@ def document_metadata_from_payload(
         )
     if schema_version == 1 and text_state is PdfTextExtractionState.AVAILABLE:
         text_state = PdfTextExtractionState.PARTIAL
+    if (
+        schema_version == 1
+        and text_state in {
+            PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE,
+            PdfTextExtractionState.ERROR,
+        }
+        and any(field.evidence for field in fields.values())
+    ):
+        raise ValueError("estado legado diverge da proveniência de campo")
     document = DocumentProcessMetadata(
         workspace_id,
         document_id,

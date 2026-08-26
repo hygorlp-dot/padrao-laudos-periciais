@@ -482,6 +482,19 @@ def test_large_scanned_pdf_only_ocrs_bounded_early_pages():
         "CABECALHO PROCESSUAL "
         + "ALFA BETA GAMA " * 10
         + " DOCUMENTO DIGITALIZADO PAGINA 1",
+        (
+            "DOCUMENTO DIGITALIZADO AUTOMATICAMENTE PELO SISTEMA PROCESSUAL "
+            "ELETRONICO PAGINA ORIGINAL "
+        )
+        * 3
+        + " CABECALHO PROCESSUAL UNICO COM IDENTIFICADOR 2026",
+        "AUTOS JUDICIAIS PAGINA 1 "
+        + (
+            "ESTE DOCUMENTO FOI GERADO E ASSINADO DIGITALMENTE NO SISTEMA "
+            "PROCESSUAL ELETRONICO OFICIAL "
+        )
+        * 3
+        + " RODAPE PROCESSUAL IDENTIFICADOR 2026",
     ),
 )
 def test_repeated_native_token_patterns_route_to_local_ocr(native_text):
