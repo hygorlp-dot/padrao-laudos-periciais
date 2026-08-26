@@ -14,6 +14,7 @@ from .models import (
     PrivateContentMetadata,
     WorkspaceId,
 )
+from .content import OpenPrivateContent, SeekableContent
 
 
 class RepositoryError(RuntimeError):
@@ -121,7 +122,7 @@ class ArtifactRevisionRepository(Protocol):
 
 class PrivateContentRepository(Protocol):
     def store(
-        self, metadata: PrivateContentMetadata, content: bytes
+        self, metadata: PrivateContentMetadata, content: bytes | SeekableContent
     ) -> PrivateContentMetadata: ...
 
     def get(
@@ -131,3 +132,9 @@ class PrivateContentRepository(Protocol):
     def list_all(
         self, workspace_id: WorkspaceId
     ) -> tuple[PrivateContentMetadata, ...]: ...
+
+
+class PrivateContentStreamRepository(PrivateContentRepository, Protocol):
+    def open_content(
+        self, workspace_id: WorkspaceId, content_id: PrivateContentId
+    ) -> OpenPrivateContent | None: ...

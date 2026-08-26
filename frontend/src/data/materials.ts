@@ -1,6 +1,6 @@
 const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
-const MAX_DOCUMENT_BYTES = 16_777_216;
+const MAX_DOCUMENT_BYTES = 134_217_728;
 
 export type MaterialMetadata = {
   workspace_id: string;

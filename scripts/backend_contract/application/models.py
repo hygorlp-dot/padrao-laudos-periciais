@@ -202,6 +202,7 @@ class PericiaWorkspace:
 
 _PROCESS_CASE_FIELDS = (
     "numero_processo",
+    "ramo_justica",
     "tribunal",
     "vara",
     "comarca_municipio",
@@ -224,6 +225,7 @@ def _process_case_text(value: str, field: str) -> str:
 @dataclass(frozen=True, slots=True)
 class ProcessCaseData:
     numero_processo: str
+    ramo_justica: str
     tribunal: str
     vara: str
     comarca_municipio: str
@@ -241,9 +243,15 @@ class ProcessCaseData:
 
     @classmethod
     def from_mapping(cls, value: object) -> ProcessCaseData:
-        if type(value) is not dict or set(value) != set(_PROCESS_CASE_FIELDS):
+        legacy_fields = set(_PROCESS_CASE_FIELDS) - {"ramo_justica"}
+        if type(value) is not dict or frozenset(value) not in {
+            frozenset(_PROCESS_CASE_FIELDS),
+            frozenset(legacy_fields),
+        }:
             raise ValueError("dados processuais exigem campos exatos")
-        return cls(**{field: value[field] for field in _PROCESS_CASE_FIELDS})
+        normalized = dict(value)
+        normalized.setdefault("ramo_justica", "")
+        return cls(**{field: normalized[field] for field in _PROCESS_CASE_FIELDS})
 
     def as_dict(self) -> dict[str, str]:
         return {field: getattr(self, field) for field in _PROCESS_CASE_FIELDS}
