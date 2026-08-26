@@ -499,7 +499,9 @@ def test_product_upload_and_read_stream_without_whole_document_memory_copies(tmp
     assert reopened_review.status == 200
     assert reopened_review_payload == process_review_payload
     process_number = process_review_payload["fields"]["numero_processo"]
-    assert process_number["value"] == VALID_CNJ
+    assert process_number["state"] == "AMBIGUOUS"
+    assert process_number["value"] == ""
+    assert process_number["evidence"][0]["extracted_value"] == VALID_CNJ
     assert process_number["evidence"][0]["extraction_mode"] == "OCR"
     assert opened.status == 200
     assert received == document_size

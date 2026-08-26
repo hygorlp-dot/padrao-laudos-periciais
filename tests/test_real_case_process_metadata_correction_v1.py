@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import MappingProxyType
 from uuid import UUID
 
+from scripts.backend_contract.application import process_metadata as metadata_module
 from scripts.backend_contract.application.models import PrivateContentId, WorkspaceId
 from scripts.backend_contract.application.process_metadata import (
     FieldExtractionState,
@@ -152,11 +153,17 @@ def test_primary_process_header_outranks_incidental_valid_cnj():
     )
 
     process_number = metadata.fields["numero_processo"]
-    assert process_number.state is FieldExtractionState.CONFIDENT
-    assert process_number.value == PRIMARY_CNJ
+    assert process_number.state is FieldExtractionState.AMBIGUOUS
+    assert process_number.value == ""
+    assert process_number.evidence[0].extracted_value == PRIMARY_CNJ
     assert [item.source_page for item in process_number.evidence] == [1]
-    assert metadata.fields["ramo_justica"].value == "Justiça Federal"
-    assert metadata.fields["tribunal"].value == "Tribunal Regional Federal da 1ª Região"
+    assert metadata.fields["ramo_justica"].state is FieldExtractionState.AMBIGUOUS
+    assert metadata.fields["ramo_justica"].evidence[0].extracted_value == "Justiça Federal"
+    assert metadata.fields["tribunal"].state is FieldExtractionState.AMBIGUOUS
+    assert (
+        metadata.fields["tribunal"].evidence[0].extracted_value
+        == "Tribunal Regional Federal da 1ª Região"
+    )
 
 
 def test_identity_fields_outside_primary_context_do_not_contaminate_result():
@@ -179,10 +186,14 @@ def test_identity_fields_outside_primary_context_do_not_contaminate_result():
         state=PdfTextExtractionState.PARTIAL,
     )
 
-    assert metadata.fields["vara"].state is FieldExtractionState.CONFIDENT
-    assert metadata.fields["vara"].value == "2ª Vara Federal"
-    assert metadata.fields["parte_requerente"].value == "Parte principal"
-    assert metadata.fields["parte_requerida"].value == "Parte contrária"
+    for name, expected in {
+        "vara": "2ª Vara Federal",
+        "parte_requerente": "Parte principal",
+        "parte_requerida": "Parte contrária",
+    }.items():
+        assert metadata.fields[name].state is FieldExtractionState.AMBIGUOUS
+        assert metadata.fields[name].value == ""
+        assert metadata.fields[name].evidence[0].extracted_value == expected
     assert all(
         evidence.source_page == 1
         for name in ("vara", "parte_requerente", "parte_requerida")
@@ -204,8 +215,12 @@ def test_same_primary_cnj_on_reference_page_does_not_expand_identity_context():
         ),
     )
 
-    assert metadata.fields["parte_requerente"].value == "Parte principal"
-    assert metadata.fields["parte_requerida"].value == "Parte contraria"
+    assert metadata.fields["parte_requerente"].state is FieldExtractionState.AMBIGUOUS
+    assert metadata.fields["parte_requerente"].value == ""
+    assert metadata.fields["parte_requerente"].evidence[0].extracted_value == "Parte principal"
+    assert metadata.fields["parte_requerida"].state is FieldExtractionState.AMBIGUOUS
+    assert metadata.fields["parte_requerida"].value == ""
+    assert metadata.fields["parte_requerida"].evidence[0].extracted_value == "Parte contraria"
     assert all(
         evidence.source_page == 1
         for name in ("parte_requerente", "parte_requerida")
@@ -225,10 +240,14 @@ def test_secondary_section_on_primary_page_does_not_contaminate_identity_fields(
         )
     )
 
-    assert metadata.fields["numero_processo"].state is FieldExtractionState.CONFIDENT
-    assert metadata.fields["numero_processo"].value == PRIMARY_CNJ
-    assert metadata.fields["parte_requerente"].value == "Parte principal"
-    assert metadata.fields["parte_requerida"].value == "Parte contraria"
+    for name, expected in {
+        "numero_processo": PRIMARY_CNJ,
+        "parte_requerente": "Parte principal",
+        "parte_requerida": "Parte contraria",
+    }.items():
+        assert metadata.fields[name].state is FieldExtractionState.AMBIGUOUS
+        assert metadata.fields[name].value == ""
+        assert metadata.fields[name].evidence[0].extracted_value == expected
 
 
 def test_prior_incidental_cnj_prevents_same_page_primary_confidence():
@@ -294,6 +313,60 @@ def test_legacy_v2_extraction_cannot_preserve_pre_fix_confidence():
     assert restored.fields["numero_processo"].state is FieldExtractionState.AMBIGUOUS
     assert restored.fields["numero_processo"].value == ""
     assert aggregate.fields["numero_processo"].state is FieldExtractionState.AMBIGUOUS
+
+
+def test_automatic_identity_requires_human_review_without_primary_document_role():
+    metadata = extract(
+        PdfTextPage(
+            1,
+            f"PROCESSO: {PRIMARY_CNJ}\n"
+            "1 VARA FEDERAL\nAUTOR: Parte principal\nREU: Parte contraria",
+        )
+    )
+
+    assert all(
+        field.state is not FieldExtractionState.CONFIDENT
+        for field in metadata.fields.values()
+    )
+    assert metadata.fields["numero_processo"].state is FieldExtractionState.AMBIGUOUS
+    assert metadata.fields["numero_processo"].value == ""
+    assert metadata.fields["numero_processo"].evidence
+
+
+def test_ocr_offset_mapping_work_is_linear_in_page_size(monkeypatch):
+    confused_cnj = PRIMARY_CNJ.replace("0", "O")
+    blocks = tuple(
+        PageTextBlock(
+            f"Referencia {index}: {confused_cnj}",
+            confidence=0.99,
+            bounding_box=(float(index), 1.0, float(index + 1), 2.0),
+        )
+        for index in range(40)
+    )
+    text = "\n".join(block.text for block in blocks)
+    original = metadata_module._ascii_upper
+    processed_characters = 0
+
+    def counted_ascii_upper(value):
+        nonlocal processed_characters
+        processed_characters += len(value)
+        return original(value)
+
+    monkeypatch.setattr(metadata_module, "_ascii_upper", counted_ascii_upper)
+    extract(
+        PdfTextPage(
+            1,
+            text,
+            extraction_mode=PageExtractionMode.OCR,
+            engine="ocr-local",
+            engine_version="1",
+            model_version="modelo-local",
+            confidence=0.99,
+            blocks=blocks,
+        )
+    )
+
+    assert processed_characters < len(text) * 20
 
 
 def test_later_page_anchor_cannot_override_first_page_reference():

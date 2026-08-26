@@ -130,9 +130,10 @@ def test_complete_process_identity_is_extracted_with_field_level_provenance():
     assert isinstance(result.fields, MappingProxyType)
     for name, value in expected.items():
         field = result.fields[name]
-        assert field.state is FieldExtractionState.CONFIDENT
-        assert field.value == value
+        assert field.state is FieldExtractionState.AMBIGUOUS
+        assert field.value == ""
         assert field.evidence
+        assert value in {item.extracted_value for item in field.evidence}
         assert all(item.workspace_id == WORKSPACE_ID for item in field.evidence)
         assert all(item.document_id == DOCUMENT_A for item in field.evidence)
         assert all(item.source_page == 1 for item in field.evidence)
@@ -152,11 +153,17 @@ def test_partial_multiple_unicode_and_duplicate_values_do_not_inflate_confidence
         "REQUERIDO: Empresa Dois"
     )
 
-    assert result.fields["numero_processo"].state is FieldExtractionState.CONFIDENT
-    assert result.fields["tribunal"].state is FieldExtractionState.CONFIDENT
+    assert result.fields["numero_processo"].state is FieldExtractionState.AMBIGUOUS
+    assert result.fields["tribunal"].state is FieldExtractionState.AMBIGUOUS
     assert result.fields["vara"].state is FieldExtractionState.NOT_FOUND
-    assert result.fields["parte_requerente"].value == "Joao Sintetico; Ana Goncalves"
-    assert result.fields["parte_requerida"].value == "Orgao Publico; Empresa Dois"
+    assert result.fields["parte_requerente"].value == ""
+    assert result.fields["parte_requerida"].value == ""
+    assert {
+        item.extracted_value for item in result.fields["parte_requerente"].evidence
+    } == {"Joao Sintetico", "Ana Goncalves"}
+    assert {
+        item.extracted_value for item in result.fields["parte_requerida"].evidence
+    } == {"Orgao Publico", "Empresa Dois"}
     assert len(result.fields["parte_requerente"].evidence) == 2
 
 
@@ -180,9 +187,14 @@ def test_unicode_parties_and_unusual_valid_heading_are_preserved_without_guessin
         extracted_at=EXTRACTED_AT,
     )
 
-    assert result.fields["tribunal"].value == "Tribunal Regional Federal da 5ª Região"
-    assert result.fields["parte_requerente"].value == "Conceição Gonçalves"
-    assert result.fields["parte_requerida"].value == "Órgão Público Sintético"
+    for name, expected in {
+        "tribunal": "Tribunal Regional Federal da 5ª Região",
+        "parte_requerente": "Conceição Gonçalves",
+        "parte_requerida": "Órgão Público Sintético",
+    }.items():
+        assert result.fields[name].state is FieldExtractionState.AMBIGUOUS
+        assert result.fields[name].value == ""
+        assert result.fields[name].evidence[0].extracted_value == expected
 
 
 def test_duplicate_filenames_remain_distinct_by_document_identity():
@@ -195,7 +207,8 @@ def test_duplicate_filenames_remain_distinct_by_document_identity():
 
     field = aggregate_process_metadata((first, second)).fields["numero_processo"]
 
-    assert field.state is FieldExtractionState.CONFLICTING
+    assert field.state is FieldExtractionState.AMBIGUOUS
+    assert field.value == ""
     assert {item.document_id for item in field.evidence} == {DOCUMENT_A, DOCUMENT_B}
     assert {item.source_filename for item in field.evidence} == {"autos.pdf"}
 
@@ -230,8 +243,8 @@ def test_aggregate_surfaces_cross_document_conflict_and_keeps_exact_sources():
 
     aggregate = aggregate_process_metadata((first, second))
 
-    assert aggregate.state == "CONFLICT"
-    assert aggregate.fields["numero_processo"].state is FieldExtractionState.CONFLICTING
+    assert aggregate.state == "PARTIAL"
+    assert aggregate.fields["numero_processo"].state is FieldExtractionState.AMBIGUOUS
     assert aggregate.fields["numero_processo"].value == ""
     assert {item.source_filename for item in aggregate.fields["numero_processo"].evidence} == {
         "primeiro.pdf",
