@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import MappingProxyType
 from uuid import UUID
 
+import pytest
+
 from scripts.backend_contract.application import process_metadata as metadata_module
 from scripts.backend_contract.application.models import PrivateContentId, WorkspaceId
 from scripts.backend_contract.application.process_metadata import (
@@ -313,6 +315,31 @@ def test_legacy_v2_extraction_cannot_preserve_pre_fix_confidence():
     assert restored.fields["numero_processo"].state is FieldExtractionState.AMBIGUOUS
     assert restored.fields["numero_processo"].value == ""
     assert aggregate.fields["numero_processo"].state is FieldExtractionState.AMBIGUOUS
+
+
+def test_pre_fix_v3_extraction_cannot_preserve_confidence_after_reopen():
+    extracted = extract(PdfTextPage(1, f"PROCESSO: {PRIMARY_CNJ}"))
+    payload = document_metadata_payload(extracted)
+    payload["schema_version"] = 3
+    payload["fields"]["numero_processo"]["state"] = "CONFIDENT"
+    payload["fields"]["numero_processo"]["value"] = PRIMARY_CNJ
+
+    restored = document_metadata_from_payload(freeze_payload(payload))
+    aggregate = aggregate_process_metadata((restored,))
+
+    assert restored.fields["numero_processo"].state is FieldExtractionState.AMBIGUOUS
+    assert restored.fields["numero_processo"].value == ""
+    assert aggregate.fields["numero_processo"].state is FieldExtractionState.AMBIGUOUS
+
+
+def test_current_v4_payload_cannot_assert_automatic_confidence():
+    extracted = extract(PdfTextPage(1, f"PROCESSO: {PRIMARY_CNJ}"))
+    payload = document_metadata_payload(extracted)
+    payload["fields"]["numero_processo"]["state"] = "CONFIDENT"
+    payload["fields"]["numero_processo"]["value"] = PRIMARY_CNJ
+
+    with pytest.raises(ValueError, match="confiança automática"):
+        document_metadata_from_payload(freeze_payload(payload))
 
 
 def test_automatic_identity_requires_human_review_without_primary_document_role():
