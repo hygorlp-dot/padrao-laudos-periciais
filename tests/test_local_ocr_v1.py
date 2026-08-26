@@ -471,6 +471,10 @@ def test_large_scanned_pdf_only_ocrs_bounded_early_pages():
         "PROCESSO " * 20,
         "ALFA BETA GAMA " * 10,
         "THIS PDF IS SCANNED " * 10,
+        "ALFA BETA GAMA " * 10 + "1",
+        "SYSTEM GENERATED " * 10 + " PAGE 1",
+        "THIS PDF IS SCANNED " * 10 + "END",
+        "PAGE 1 " + "ALFA BETA GAMA " * 10,
     ),
 )
 def test_repeated_native_token_patterns_route_to_local_ocr(native_text):
@@ -639,6 +643,26 @@ def test_revision_page_cache_rejects_a_divergent_concurrent_first_write():
 
     with pytest.raises(RepositoryIntegrityError, match="imutável|diverge"):
         cache.put(key, page)
+
+
+def test_extractor_propagates_persisted_cache_integrity_failures():
+    from scripts.backend_contract.application.ports import RepositoryIntegrityError
+
+    class DivergentCache:
+        def get(self, _key):
+            return None
+
+        def put(self, _key, _page):
+            raise RepositoryIntegrityError("divergent concurrent cache winner")
+
+    with pytest.raises(RepositoryIntegrityError, match="divergent concurrent"):
+        LocalPdfTextExtractor(
+            ocr_engine=SyntheticOcrEngine(f"PROCESSO: {VALID_CNJ}"),
+            page_cache=DivergentCache(),
+        ).extract(
+            BytesIO(scanned_pdf("falha de integridade")),
+            document_sha256="a" * 64,
+        )
 
 
 def test_import_service_binds_reader_to_stored_sha_and_persisted_page_cache():

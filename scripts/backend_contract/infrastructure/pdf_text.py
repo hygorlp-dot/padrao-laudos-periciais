@@ -10,6 +10,7 @@ from typing import BinaryIO
 import pypdfium2 as pdfium
 from pypdf import PdfReader, __version__ as PYPDF_VERSION
 
+from ..application.ports import RepositoryError
 from ..application.process_metadata import (
     PageExtractionMode,
     PageProcessingStatus,
@@ -69,9 +70,22 @@ class LocalPdfTextExtractor:
             return False
         dominant = max(Counter(alphanumeric_values).values()) / len(alphanumeric_values)
         normalized = "".join(alphanumeric_values)
-        period = (normalized + normalized).find(normalized, 1)
-        periodically_repeated = period < len(normalized) and len(normalized) // period >= 3
-        obviously_repeated = periodically_repeated
+        periodically_repeated = False
+        max_suffix = min(64, len(normalized) // 5)
+        for suffix_size in range(max_suffix + 1):
+            core = normalized[:-suffix_size] if suffix_size else normalized
+            period = (core + core).find(core, 1)
+            if period < len(core) and len(core) // period >= 3:
+                periodically_repeated = True
+                break
+        gram_count = max(0, len(normalized) - 7)
+        unique_grams = {
+            normalized[index : index + 8] for index in range(gram_count)
+        }
+        low_ngram_diversity = (
+            gram_count > 0 and len(unique_grams) / gram_count <= 0.35
+        )
+        obviously_repeated = periodically_repeated or low_ngram_diversity
         return (
             alphanumeric / len(compact) >= 0.5
             and replacement / len(compact) <= 0.02
@@ -241,6 +255,8 @@ class LocalPdfTextExtractor:
             if page_cache is not None and document_sha256:
                 page_cache.put(key, page)
             return page, False
+        except RepositoryError:
+            raise
         except Exception:
             return (
                 PdfTextPage(
@@ -392,6 +408,8 @@ class LocalPdfTextExtractor:
                         processing_status=PageProcessingStatus.NOT_PROCESSED,
                     )
                 )
+        except RepositoryError:
+            raise
         except Exception:
             return PdfTextResult(
                 PdfTextExtractionState.ERROR, (), document_sha256=document_sha256
