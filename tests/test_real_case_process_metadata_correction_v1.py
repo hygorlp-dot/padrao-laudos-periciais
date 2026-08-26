@@ -57,6 +57,42 @@ def test_first_page_top_reference_is_not_a_primary_identity_anchor():
     assert metadata.fields["numero_processo"].value == ""
 
 
+def test_bare_first_page_top_cnj_is_not_a_primary_identity_anchor():
+    metadata = extract(
+        PdfTextPage(
+            1,
+            f"{INCIDENTAL_CNJ}\n"
+            + "Conteudo sintetico sem rotulo de identidade processual. " * 8,
+        )
+    )
+
+    assert metadata.fields["numero_processo"].state is FieldExtractionState.AMBIGUOUS
+    assert metadata.fields["numero_processo"].value == ""
+
+
+def test_repeated_unanchored_cnj_is_not_a_primary_identity_anchor():
+    metadata = extract(
+        PdfTextPage(2, f"{INCIDENTAL_CNJ}\nReferencia sintetica sem rotulo."),
+        PdfTextPage(3, f"{INCIDENTAL_CNJ}\nOutra referencia sintetica sem rotulo."),
+    )
+
+    assert metadata.fields["numero_processo"].state is FieldExtractionState.AMBIGUOUS
+    assert metadata.fields["numero_processo"].value == ""
+
+
+def test_multiline_reference_label_rejects_apparent_process_anchor():
+    metadata = extract(
+        PdfTextPage(
+            1,
+            f"Referencia documental:\nPROCESSO: {INCIDENTAL_CNJ}\n"
+            "Conteudo sintetico de outro feito.",
+        )
+    )
+
+    assert metadata.fields["numero_processo"].state is FieldExtractionState.AMBIGUOUS
+    assert metadata.fields["numero_processo"].value == ""
+
+
 def test_primary_process_header_outranks_incidental_valid_cnj():
     metadata = extract(
         PdfTextPage(
@@ -109,3 +145,42 @@ def test_identity_fields_outside_primary_context_do_not_contaminate_result():
         for name in ("vara", "parte_requerente", "parte_requerida")
         for evidence in metadata.fields[name].evidence
     )
+
+
+def test_same_primary_cnj_on_reference_page_does_not_expand_identity_context():
+    metadata = extract(
+        PdfTextPage(
+            1,
+            f"PROCESSO: {PRIMARY_CNJ}\n"
+            "AUTOR: Parte principal\nREU: Parte contraria",
+        ),
+        PdfTextPage(
+            9,
+            f"Referencia documental: {PRIMARY_CNJ}\n"
+            "AUTOR: Pessoa de outro feito\nREU: Outra pessoa",
+        ),
+    )
+
+    assert metadata.fields["parte_requerente"].value == "Parte principal"
+    assert metadata.fields["parte_requerida"].value == "Parte contraria"
+    assert all(
+        evidence.source_page == 1
+        for name in ("parte_requerente", "parte_requerida")
+        for evidence in metadata.fields[name].evidence
+    )
+
+
+def test_derived_identity_uses_the_selected_anchored_occurrence():
+    metadata = extract(
+        PdfTextPage(
+            1,
+            f"Referencia documental: {PRIMARY_CNJ}\n"
+            "TRIBUNAL REGIONAL FEDERAL DA 3 REGIAO",
+        ),
+        PdfTextPage(2, f"PROCESSO: {PRIMARY_CNJ}"),
+    )
+
+    for field_name in ("numero_processo", "ramo_justica", "tribunal"):
+        field = metadata.fields[field_name]
+        assert field.state is FieldExtractionState.CONFIDENT
+        assert [item.source_page for item in field.evidence] == [2]

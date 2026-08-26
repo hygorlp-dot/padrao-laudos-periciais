@@ -318,7 +318,6 @@ class _CnjCandidate:
     span: str
     explicit_primary_anchor: bool
     rejects_primary_anchor: bool
-    page_position: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -545,8 +544,15 @@ def _cnj_line_context(page: PdfTextPage, start: int, end: int) -> tuple[str, str
 
 def _rejects_primary_cnj(page: PdfTextPage, start: int, end: int) -> bool:
     line, _ = _cnj_line_context(page, start, end)
+    line_start = page.text.rfind("\n", 0, start)
+    preceding_lines = page.text[:line_start].splitlines() if line_start >= 0 else []
+    preceding_line = next(
+        (_ascii_upper(item) for item in reversed(preceding_lines) if item.strip()),
+        "",
+    )
+    local_context = f"{preceding_line}\n{line}"
     return any(
-        marker in line
+        marker in local_context
         for marker in ("REFERENC", "RELACION", "VINCUL", "OUTRO FEITO", "ORIGEM")
     )
 
@@ -564,26 +570,13 @@ def _is_explicit_primary_cnj(page: PdfTextPage, start: int, end: int) -> bool:
 
 def _resolved_primary_cnj(
     candidates: list[_CnjCandidate],
-) -> tuple[ExtractedField, CnjNumber | None, frozenset[int]]:
+) -> tuple[ExtractedField, _CnjCandidate | None, frozenset[int]]:
     if not candidates:
         return ExtractedField(FieldExtractionState.NOT_FOUND, "", ()), None, frozenset()
-    pages_by_value: dict[str, set[int]] = {}
-    top_pages_by_value: dict[str, set[int]] = {}
-    for candidate in candidates:
-        value = candidate.number.canonical
-        pages_by_value.setdefault(value, set()).add(candidate.page.number)
-        if candidate.page_position <= 0.25 and not candidate.rejects_primary_anchor:
-            top_pages_by_value.setdefault(value, set()).add(candidate.page.number)
     strong_values = {
         candidate.number.canonical
         for candidate in candidates
-        if candidate.explicit_primary_anchor
-        or (
-            candidate.page.number == 1
-            and candidate.page_position <= 0.25
-            and not candidate.rejects_primary_anchor
-        )
-        or len(top_pages_by_value.get(candidate.number.canonical, set())) >= 2
+        if candidate.explicit_primary_anchor and not candidate.rejects_primary_anchor
     }
     unique_values = tuple(
         dict.fromkeys(candidate.number.canonical for candidate in candidates)
@@ -627,15 +620,15 @@ def _resolved_primary_cnj(
         candidate
         for candidate in candidates
         if candidate.number.canonical == selected_value
-        and (
-            candidate.explicit_primary_anchor
-            or (
-                candidate.page.number == 1
-                and candidate.page_position <= 0.25
-                and not candidate.rejects_primary_anchor
-            )
-            or candidate.page.number in top_pages_by_value[selected_value]
-        )
+        and candidate.explicit_primary_anchor
+        and not candidate.rejects_primary_anchor
+    )
+    primary_pages = frozenset(
+        candidate.page.number
+        for candidate in candidates
+        if candidate.number.canonical == selected_value
+        and candidate.explicit_primary_anchor
+        and not candidate.rejects_primary_anchor
     )
     return (
         ExtractedField(
@@ -643,8 +636,8 @@ def _resolved_primary_cnj(
             selected.number.canonical,
             (selected.evidence,),
         ),
-        selected.number,
-        frozenset(pages_by_value[selected_value]),
+        selected,
+        primary_pages,
     )
 
 
@@ -733,7 +726,6 @@ def extract_process_metadata(
                 span,
                 _is_explicit_primary_cnj(page, start, end),
                 _rejects_primary_cnj(page, start, end),
-                start / max(1, len(page.text)),
             )
         )
 
@@ -824,19 +816,15 @@ def extract_process_metadata(
                 )
                 add(field, original_value, page, line)
 
-    number_field, primary_cnj, primary_pages = _resolved_primary_cnj(cnj_candidates)
+    number_field, primary_candidate, primary_pages = _resolved_primary_cnj(cnj_candidates)
     if not cnj_candidates and low_confidence["numero_processo"]:
         number_field = ExtractedField(
             FieldExtractionState.AMBIGUOUS,
             "",
             tuple(low_confidence["numero_processo"]),
         )
-    if primary_cnj is not None:
-        primary_candidate = next(
-            candidate
-            for candidate in cnj_candidates
-            if candidate.number.canonical == primary_cnj.canonical
-        )
+    if primary_candidate is not None:
+        primary_cnj = primary_candidate.number
         add(
             "ramo_justica",
             primary_cnj.justice_branch,
