@@ -263,12 +263,15 @@ def test_import_persists_redacted_field_provenance_separately_from_effective_dat
     assert extraction.artifact_id == str(DOCUMENT_ID)
     payload = thaw_payload(extraction.payload)
     serialized = json.dumps(payload, ensure_ascii=False)
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 4
     assert payload["document_sha256"] == "b" * 64
     assert payload["page_evidence"][0]["document_sha256"] == "b" * 64
     assert payload["document_id"] == str(DOCUMENT_ID)
     assert payload["source_filename"] == "autos.pdf"
-    assert payload["fields"]["numero_processo"]["value"] == "7654321-55.2025.4.05.0001"
+    process_number = payload["fields"]["numero_processo"]
+    assert process_number["state"] == "AMBIGUOUS"
+    assert process_number["value"] == ""
+    assert process_number["evidence"][0]["extracted_value"] == "7654321-55.2025.4.05.0001"
     assert "private" not in serialized.lower()
     assert "path" not in serialized.lower()
     assert "TRIBUNAL REGIONAL" not in serialized
@@ -290,9 +293,14 @@ def test_review_aggregates_persisted_extractions_and_confirmation_is_separate():
     )
 
     before = review_service.execute(WORKSPACE_ID)
-    assert before.state == "EXTRACTED"
+    assert before.state == "PARTIAL"
     assert before.confirmed_revision is None
-    assert before.fields["numero_processo"].value == "7654321-55.2025.4.05.0001"
+    assert before.fields["numero_processo"].state is FieldExtractionState.AMBIGUOUS
+    assert before.fields["numero_processo"].value == ""
+    assert (
+        before.fields["numero_processo"].evidence[0].extracted_value
+        == "7654321-55.2025.4.05.0001"
+    )
 
     save = SaveProcess()
     confirmation = ConfirmProcessMetadata(
@@ -316,8 +324,10 @@ def test_review_aggregates_persisted_extractions_and_confirmation_is_separate():
     after = review_service.execute(WORKSPACE_ID)
     assert after.state == "CONFIRMED"
     assert after.confirmed_revision == 2
-    assert after.fields["vara"].value == "1ª Vara Federal"
-    assert after.fields["parte_requerente"].value == "Parte Sintetica"
+    assert after.fields["vara"].value == ""
+    assert after.fields["vara"].evidence[0].extracted_value == "1ª Vara Federal"
+    assert after.fields["parte_requerente"].value == ""
+    assert after.fields["parte_requerente"].evidence[0].extracted_value == "Parte Sintetica"
     assert revisions.records[0].payload == before.document_payloads[0]
 
 
@@ -803,9 +813,10 @@ def test_partial_document_cannot_be_reported_as_fully_extracted():
         extracted_at="2026-08-26T12:30:00+00:00",
     )
     assert all(
-        field.state is FieldExtractionState.CONFIDENT
+        field.state is FieldExtractionState.AMBIGUOUS
         for field in document.fields.values()
     )
+    assert all(field.value == "" for field in document.fields.values())
 
     from scripts.backend_contract.application.process_metadata import aggregate_process_metadata
 
@@ -968,7 +979,10 @@ def test_import_expands_the_bounded_reader_when_initial_metadata_is_unresolved()
 
     assert extractor.expansions == 1
     payload = thaw_payload(revisions.records[-1].payload)
-    assert payload["fields"]["numero_processo"]["value"] == "7654321-55.2025.4.05.0001"
+    process_number = payload["fields"]["numero_processo"]
+    assert process_number["state"] == "AMBIGUOUS"
+    assert process_number["value"] == ""
+    assert process_number["evidence"][0]["extracted_value"] == "7654321-55.2025.4.05.0001"
 
 
 def test_local_api_exposes_review_without_raw_text_path_or_token():
@@ -1072,9 +1086,19 @@ def test_real_local_pdf_flow_extracts_confirms_and_survives_reopen(tmp_path):
         )
         review = json.loads(raw)
         assert status == 200
-        assert review["state"] == "EXTRACTED"
-        assert review["fields"]["numero_processo"]["value"] == "7654321-55.2025.4.05.0001"
-        assert review["fields"]["tribunal"]["value"] == "Tribunal Regional Federal da 5ª Região"
+        assert review["state"] == "PARTIAL"
+        assert review["fields"]["numero_processo"]["state"] == "AMBIGUOUS"
+        assert review["fields"]["numero_processo"]["value"] == ""
+        assert (
+            review["fields"]["numero_processo"]["evidence"][0]["extracted_value"]
+            == "7654321-55.2025.4.05.0001"
+        )
+        assert review["fields"]["tribunal"]["state"] == "AMBIGUOUS"
+        assert review["fields"]["tribunal"]["value"] == ""
+        assert (
+            review["fields"]["tribunal"]["evidence"][0]["extracted_value"]
+            == "Tribunal Regional Federal da 5ª Região"
+        )
         assert review["documents"] == [{
             "document_id": content_id,
             "source_filename": "autos-sinteticos.pdf",
@@ -1082,10 +1106,15 @@ def test_real_local_pdf_flow_extracts_confirms_and_survives_reopen(tmp_path):
         }]
 
         effective = {
-            name: field["value"]
-            for name, field in review["fields"].items()
+            "numero_processo": "7654321-55.2025.4.05.0001",
+            "ramo_justica": "Justiça Federal",
+            "tribunal": "Tribunal Regional Federal da 5ª Região",
+            "vara": "2ª Vara Federal",
+            "comarca_municipio": "Recife",
+            "uf": "PE",
+            "parte_requerente": "Parte Sintetica",
+            "parte_requerida": "Parte Contraria",
         }
-        effective["vara"] = "2ª Vara Federal"
         confirmation_body = json.dumps(
             {"expected_revision": None, "data": effective},
             ensure_ascii=False,
@@ -1117,7 +1146,11 @@ def test_real_local_pdf_flow_extracts_confirms_and_survives_reopen(tmp_path):
         restored_review = json.loads(raw)
         assert status == 200
         assert restored_review["state"] == "CONFIRMED"
-        assert restored_review["fields"]["vara"]["value"] == "1ª Vara Federal"
+        assert restored_review["fields"]["vara"]["value"] == ""
+        assert (
+            restored_review["fields"]["vara"]["evidence"][0]["extracted_value"]
+            == "1ª Vara Federal"
+        )
         assert restored_review["fields"]["vara"]["evidence"][0]["source_filename"] == "autos-sinteticos.pdf"
 
         status, _, raw = product_request(

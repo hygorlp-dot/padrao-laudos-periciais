@@ -311,6 +311,25 @@ class ExtractedField:
 
 
 @dataclass(frozen=True, slots=True)
+class _CnjCandidate:
+    number: CnjNumber
+    evidence: FieldEvidence
+    page: PdfTextPage
+    span: str
+    start: int
+    end: int
+    explicit_primary_anchor: bool
+    rejects_primary_anchor: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _FieldCandidate:
+    evidence: FieldEvidence
+    page: PdfTextPage
+    start: int
+
+
+@dataclass(frozen=True, slots=True)
 class DocumentProcessMetadata:
     workspace_id: WorkspaceId
     document_id: PrivateContentId
@@ -420,6 +439,16 @@ def _ascii_upper(value: str) -> str:
     return "".join(character for character in decomposed if not unicodedata.combining(character)).upper()
 
 
+def _ascii_upper_with_source_indices(value: str) -> tuple[str, tuple[int, ...]]:
+    normalized = []
+    source_indices = []
+    for index, character in enumerate(value):
+        fragment = _ascii_upper(character)
+        normalized.append(fragment)
+        source_indices.extend(index for _ in fragment)
+    return "".join(normalized), tuple(source_indices)
+
+
 def _timestamp(value: str) -> str:
     if type(value) is not str:
         raise TypeError("timestamp de extração inválido")
@@ -450,16 +479,28 @@ def _evidence(
     extracted_at: str,
     source_filename: str,
     span: str,
+    source_start: int | None = None,
 ) -> FieldEvidence:
     normalized_span = _ascii_upper(" ".join(span.split()))
-    matching_block = next(
-        (
-            block
-            for block in page.blocks
-            if normalized_span and normalized_span in _ascii_upper(" ".join(block.text.split()))
-        ),
-        None,
-    )
+    matching_block = None
+    if source_start is not None and page.blocks:
+        cursor = 0
+        for block in page.blocks:
+            block_end = cursor + len(block.text)
+            if cursor <= source_start < block_end:
+                matching_block = block
+                break
+            cursor = block_end + 1
+    elif source_start is None:
+        matching_block = next(
+            (
+                block
+                for block in page.blocks
+                if normalized_span
+                and normalized_span in _ascii_upper(" ".join(block.text.split()))
+            ),
+            None,
+        )
     confidence = (
         matching_block.confidence
         if matching_block is not None
@@ -521,6 +562,131 @@ def _resolved_field(
     return ExtractedField(FieldExtractionState.CONFIDENT, evidence[0].extracted_value, evidence)
 
 
+def _cnj_line_context(page: PdfTextPage, start: int, end: int) -> tuple[str, str]:
+    line_start = page.text.rfind("\n", 0, start) + 1
+    line_end = page.text.find("\n", end)
+    if line_end < 0:
+        line_end = len(page.text)
+    return (
+        _ascii_upper(page.text[line_start:line_end]),
+        _ascii_upper(page.text[line_start:start]),
+    )
+
+
+def _rejects_primary_cnj(page: PdfTextPage, start: int, end: int) -> bool:
+    line, _ = _cnj_line_context(page, start, end)
+    line_start = page.text.rfind("\n", 0, start)
+    preceding_lines = page.text[:line_start].splitlines() if line_start >= 0 else []
+    preceding_line = next(
+        (_ascii_upper(item) for item in reversed(preceding_lines) if item.strip()),
+        "",
+    )
+    local_context = f"{preceding_line}\n{line}"
+    return any(
+        marker in local_context
+        for marker in ("REFERENC", "RELACION", "VINCUL", "OUTRO FEITO", "ORIGEM")
+    )
+
+
+def _is_explicit_primary_cnj(page: PdfTextPage, start: int, end: int) -> bool:
+    _, prefix = _cnj_line_context(page, start, end)
+    if _rejects_primary_cnj(page, start, end):
+        return False
+    return re.fullmatch(
+        r"(?:PROCESSO(?:\s+JUDICIAL)?|AUTOS)"
+        r"(?:\s+(?:N|NUMERO)[O.]*)?\s*[:\-]?\s*$",
+        prefix,
+    ) is not None
+
+
+def _resolved_primary_cnj(
+    candidates: list[_CnjCandidate],
+    *,
+    first_textual_page: int | None,
+    cnj_starts_by_page: dict[int, list[int]],
+) -> tuple[ExtractedField, _CnjCandidate | None]:
+    if not candidates:
+        return ExtractedField(FieldExtractionState.NOT_FOUND, "", ()), None
+    strong_values = {
+        candidate.number.canonical
+        for candidate in candidates
+        if candidate.page.number == first_textual_page
+        and candidate.explicit_primary_anchor
+        and not candidate.rejects_primary_anchor
+    }
+    unique_values = tuple(
+        dict.fromkeys(candidate.number.canonical for candidate in candidates)
+    )
+    if not strong_values:
+        return (
+            ExtractedField(
+                FieldExtractionState.AMBIGUOUS,
+                "",
+                tuple(
+                    next(
+                        candidate.evidence
+                        for candidate in candidates
+                        if candidate.number.canonical == value
+                    )
+                    for value in unique_values
+                ),
+            ),
+            None,
+        )
+    if len(strong_values) > 1:
+        return (
+            ExtractedField(
+                FieldExtractionState.CONFLICTING,
+                "",
+                tuple(
+                    next(
+                        candidate.evidence
+                        for candidate in candidates
+                        if candidate.number.canonical == value
+                    )
+                    for value in sorted(strong_values)
+                ),
+            ),
+            None,
+        )
+    selected_value = next(iter(strong_values))
+    selected = next(
+        candidate
+        for candidate in candidates
+        if candidate.number.canonical == selected_value
+        and candidate.page.number == first_textual_page
+        and candidate.explicit_primary_anchor
+        and not candidate.rejects_primary_anchor
+    )
+    if any(
+        start < selected.start
+        for start in cnj_starts_by_page.get(selected.page.number, [])
+    ):
+        return (
+            ExtractedField(
+                FieldExtractionState.AMBIGUOUS,
+                "",
+                tuple(
+                    next(
+                        candidate.evidence
+                        for candidate in candidates
+                        if candidate.number.canonical == value
+                    )
+                    for value in unique_values
+                ),
+            ),
+            None,
+        )
+    return (
+        ExtractedField(
+            FieldExtractionState.CONFIDENT,
+            selected.number.canonical,
+            (selected.evidence,),
+        ),
+        selected,
+    )
+
+
 def extract_process_metadata(
     *,
     workspace_id: WorkspaceId,
@@ -535,15 +701,25 @@ def extract_process_metadata(
         raise TypeError("resultado de texto PDF inválido")
     source_filename = _filename(original_filename)
     extracted_at = _timestamp(extracted_at)
-    candidates: dict[str, list[FieldEvidence]] = {
+    candidates: dict[str, list[_FieldCandidate]] = {
         field: [] for field in PROCESS_METADATA_FIELDS
     }
     invalid_cnj: list[FieldEvidence] = []
-    low_confidence: dict[str, list[FieldEvidence]] = {
+    low_confidence: dict[str, list[_FieldCandidate]] = {
         field: [] for field in PROCESS_METADATA_FIELDS
     }
+    cnj_candidates: list[_CnjCandidate] = []
+    cnj_starts_by_page: dict[int, list[int]] = {}
 
-    def add(field: str, value: str, page: PdfTextPage, span: str) -> None:
+    def add(
+        field: str,
+        value: str,
+        page: PdfTextPage,
+        span: str,
+        *,
+        source_start: int,
+        prepend: bool = False,
+    ) -> None:
         cleaned = " ".join(value.strip(" \t:-").split())
         if cleaned:
             evidence = _evidence(
@@ -555,19 +731,70 @@ def extract_process_metadata(
                 extracted_at=extracted_at,
                 source_filename=source_filename,
                 span=span,
+                source_start=source_start,
             )
+            candidate = _FieldCandidate(evidence, page, source_start)
             target = (
                 low_confidence[field]
                 if page.extraction_mode is PageExtractionMode.OCR
                 and (evidence.ocr_confidence or 0.0) < 0.75
                 else candidates[field]
             )
-            target.append(evidence)
+            if prepend:
+                target.insert(0, candidate)
+            else:
+                target.append(candidate)
+
+    def add_cnj(
+        cnj: CnjNumber,
+        page: PdfTextPage,
+        span: str,
+        start: int,
+        end: int,
+    ) -> None:
+        evidence = _evidence(
+            workspace_id=workspace_id,
+            document_id=document_id,
+            field_name="numero_processo",
+            value=cnj.canonical,
+            page=page,
+            extracted_at=extracted_at,
+            source_filename=source_filename,
+            span=span,
+            source_start=start,
+        )
+        if (
+            page.extraction_mode is PageExtractionMode.OCR
+            and (evidence.ocr_confidence or 0.0) < 0.75
+        ):
+            low_confidence["numero_processo"].append(
+                _FieldCandidate(evidence, page, start)
+            )
+            return
+        cnj_candidates.append(
+            _CnjCandidate(
+                cnj,
+                evidence,
+                page,
+                span,
+                start,
+                end,
+                _is_explicit_primary_cnj(page, start, end),
+                _rejects_primary_cnj(page, start, end),
+            )
+        )
 
     for page in text.pages:
-        normalized_page = _ascii_upper(page.text)
+        if page.extraction_mode is PageExtractionMode.OCR:
+            normalized_page, ascii_source_indices = _ascii_upper_with_source_indices(
+                page.text
+            )
+        else:
+            normalized_page = _ascii_upper(page.text)
+            ascii_source_indices = ()
         for cnj_match in _CNJ_PATTERN.finditer(page.text):
             raw = cnj_match.group(0)
+            cnj_starts_by_page.setdefault(page.number, []).append(cnj_match.start())
             try:
                 cnj = validate_cnj_number(raw)
             except ValueError:
@@ -581,24 +808,20 @@ def extract_process_metadata(
                         extracted_at=extracted_at,
                         source_filename=source_filename,
                         span=raw,
+                        source_start=cnj_match.start(),
                     )
                 )
                 continue
-            add("numero_processo", cnj.canonical, page, raw)
-            add("ramo_justica", cnj.justice_branch, page, raw)
-            if cnj.justice_segment == "4":
-                add(
-                    "tribunal",
-                    f"Tribunal Regional Federal da {int(cnj.tribunal_code)}ª Região",
-                    page,
-                    raw,
-                )
+            add_cnj(cnj, page, raw, cnj_match.start(), cnj_match.end())
 
         if page.extraction_mode is PageExtractionMode.OCR:
             for ocr_match in _OCR_CNJ_PATTERN.finditer(normalized_page):
                 raw = ocr_match.group(0)
                 if _CNJ_PATTERN.fullmatch(raw):
                     continue
+                source_start = ascii_source_indices[ocr_match.start()]
+                source_end = ascii_source_indices[ocr_match.end() - 1] + 1
+                cnj_starts_by_page.setdefault(page.number, []).append(source_start)
                 groups = tuple(group.translate(_OCR_DIGIT_CONFUSIONS) for group in ocr_match.groups())
                 normalized_cnj = (
                     f"{groups[0]}-{groups[1]}.{groups[2]}."
@@ -617,32 +840,40 @@ def extract_process_metadata(
                             extracted_at=extracted_at,
                             source_filename=source_filename,
                             span=raw,
+                            source_start=source_start,
                         )
                     )
                     continue
-                add("numero_processo", cnj.canonical, page, raw)
-                add("ramo_justica", cnj.justice_branch, page, raw)
-                if cnj.justice_segment == "4":
-                    add(
-                        "tribunal",
-                        f"Tribunal Regional Federal da {int(cnj.tribunal_code)}ª Região",
-                        page,
-                        raw,
-                    )
+                add_cnj(cnj, page, raw, source_start, source_end)
 
-        for line, normalized_line in zip(page.text.splitlines(), normalized_page.splitlines()):
+        line_start = 0
+        for raw_line in page.text.splitlines(keepends=True):
+            line = raw_line.rstrip("\r\n")
+            normalized_line = _ascii_upper(line)
             tribunal_match = re.search(
                 r"TRIBUNAL\s+REGIONAL\s+FEDERAL\s+DA\s+(\d{1,2})(?:A)?\s+REGIAO",
                 normalized_line,
             )
             if tribunal_match:
                 region = int(tribunal_match.group(1))
-                add("tribunal", f"Tribunal Regional Federal da {region}ª Região", page, line)
+                add(
+                    "tribunal",
+                    f"Tribunal Regional Federal da {region}ª Região",
+                    page,
+                    line,
+                    source_start=line_start,
+                )
 
             unit_match = re.search(r"\b(\d{1,3})\s*(?:A)?\s+VARA(?:\s+FEDERAL)?\b", normalized_line)
             if unit_match:
                 suffix = " Federal" if "FEDERAL" in unit_match.group(0) else ""
-                add("vara", f"{int(unit_match.group(1))}ª Vara{suffix}", page, line)
+                add(
+                    "vara",
+                    f"{int(unit_match.group(1))}ª Vara{suffix}",
+                    page,
+                    line,
+                    source_start=line_start,
+                )
 
             location_match = re.search(
                 r"(?:SUBSECAO\s+JUDICIARIA|COMARCA|MUNICIPIO)(?:\s+DE)?\s*[:\-]?\s*([A-Z][A-Z '\-]{1,80}?)\s*/\s*([A-Z]{2})\b",
@@ -651,8 +882,20 @@ def extract_process_metadata(
             if location_match:
                 raw_location = location_match.group(1).strip()
                 location_words = [word.capitalize() for word in raw_location.split()]
-                add("comarca_municipio", " ".join(location_words), page, line)
-                add("uf", location_match.group(2), page, line)
+                add(
+                    "comarca_municipio",
+                    " ".join(location_words),
+                    page,
+                    line,
+                    source_start=line_start,
+                )
+                add(
+                    "uf",
+                    location_match.group(2),
+                    page,
+                    line,
+                    source_start=line_start,
+                )
 
             party_match = re.match(
                 r"\s*(AUTOR(?:A)?|REQUERENTE|EXEQUENTE|REQUERIDO(?:A)?|REU|EXECUTADO(?:A)?)\s*:\s*(.+?)\s*$",
@@ -665,11 +908,79 @@ def extract_process_metadata(
                     if party_match.group(1) in {"AUTOR", "AUTORA", "REQUERENTE", "EXEQUENTE"}
                     else "parte_requerida"
                 )
-                add(field, original_value, page, line)
+                add(field, original_value, page, line, source_start=line_start)
+            line_start += len(raw_line)
+
+    first_textual_page = next(
+        (page.number for page in text.pages if page.text.strip()),
+        None,
+    )
+    number_field, primary_candidate = _resolved_primary_cnj(
+        cnj_candidates,
+        first_textual_page=first_textual_page,
+        cnj_starts_by_page=cnj_starts_by_page,
+    )
+    number_low_confidence = tuple(
+        candidate.evidence for candidate in low_confidence["numero_processo"]
+    )
+    if primary_candidate is None and number_low_confidence:
+        number_field = ExtractedField(
+            FieldExtractionState.AMBIGUOUS,
+            "",
+            number_field.evidence + number_low_confidence,
+        )
+    if primary_candidate is not None:
+        primary_cnj = primary_candidate.number
+        primary_section_end = min(
+            (
+                start
+                for start in cnj_starts_by_page.get(primary_candidate.page.number, [])
+                if start > primary_candidate.start
+            ),
+            default=len(primary_candidate.page.text),
+        )
+        add(
+            "ramo_justica",
+            primary_cnj.justice_branch,
+            primary_candidate.page,
+            primary_candidate.span,
+            source_start=primary_candidate.start,
+            prepend=True,
+        )
+        if primary_cnj.justice_segment == "4":
+            add(
+                "tribunal",
+                f"Tribunal Regional Federal da {int(primary_cnj.tribunal_code)}ª Região",
+                primary_candidate.page,
+                primary_candidate.span,
+                source_start=primary_candidate.start,
+                prepend=True,
+            )
+        for field in PROCESS_METADATA_FIELDS:
+            if field == "numero_processo":
+                continue
+            candidates[field] = [
+                candidate
+                for candidate in candidates[field]
+                if candidate.page.number == primary_candidate.page.number
+                and 0 <= candidate.start < primary_section_end
+            ]
+            low_confidence[field] = [
+                candidate
+                for candidate in low_confidence[field]
+                if candidate.page.number == primary_candidate.page.number
+                and 0 <= candidate.start < primary_section_end
+            ]
+    else:
+        for field in PROCESS_METADATA_FIELDS:
+            if field == "numero_processo":
+                continue
+            low_confidence[field].extend(candidates[field])
+            candidates[field] = []
 
     fields = {
         field: _resolved_field(
-            candidates[field],
+            [candidate.evidence for candidate in candidates[field]],
             ambiguous=(
                 not candidates[field]
                 and bool(low_confidence[field] or (field == "numero_processo" and invalid_cnj))
@@ -678,19 +989,30 @@ def extract_process_metadata(
         )
         for field in PROCESS_METADATA_FIELDS
     }
-    if invalid_cnj and not candidates["numero_processo"]:
+    fields["numero_processo"] = number_field
+    if invalid_cnj and not cnj_candidates and not low_confidence["numero_processo"]:
         fields["numero_processo"] = ExtractedField(
             FieldExtractionState.AMBIGUOUS,
             "",
             tuple(invalid_cnj),
         )
     for field in PROCESS_METADATA_FIELDS:
+        if field == "numero_processo":
+            continue
         if not candidates[field] and low_confidence[field]:
             fields[field] = ExtractedField(
                 FieldExtractionState.AMBIGUOUS,
                 "",
-                tuple(low_confidence[field]),
+                tuple(candidate.evidence for candidate in low_confidence[field]),
             )
+    fields = {
+        name: (
+            ExtractedField(FieldExtractionState.AMBIGUOUS, "", field.evidence)
+            if field.state is FieldExtractionState.CONFIDENT
+            else field
+        )
+        for name, field in fields.items()
+    }
     return DocumentProcessMetadata(
         workspace_id=workspace_id,
         document_id=document_id,
@@ -784,7 +1106,7 @@ def document_metadata_payload(document: DocumentProcessMetadata) -> dict[str, ob
     if type(document) is not DocumentProcessMetadata:
         raise TypeError("extração documental inválida")
     return {
-        "schema_version": 2,
+        "schema_version": 4,
         "workspace_id": str(document.workspace_id),
         "document_id": str(document.document_id),
         "document_sha256": document.document_sha256,
@@ -824,7 +1146,7 @@ def document_metadata_from_payload(
     value: object, *, legacy_document_sha256: str = ""
 ) -> DocumentProcessMetadata:
     payload = thaw_payload(value)
-    if type(payload) is not dict or payload.get("schema_version") not in {1, 2}:
+    if type(payload) is not dict or payload.get("schema_version") not in {1, 2, 3, 4}:
         raise ValueError("extração documental persistida inválida")
     schema_version = payload["schema_version"]
     expected_keys = {
@@ -835,7 +1157,7 @@ def document_metadata_from_payload(
         "text_state",
         "fields",
     }
-    if schema_version == 2:
+    if schema_version in {2, 3, 4}:
         expected_keys |= {"document_sha256", "page_evidence"}
     if set(payload) != expected_keys:
         raise ValueError("extração documental persistida inválida")
@@ -969,6 +1291,19 @@ def document_metadata_from_payload(
         and any(field.evidence for field in fields.values())
     ):
         raise ValueError("estado legado diverge da proveniência de campo")
+    if schema_version < 4:
+        fields = {
+            name: (
+                ExtractedField(FieldExtractionState.AMBIGUOUS, "", field.evidence)
+                if field.state is FieldExtractionState.CONFIDENT
+                else field
+            )
+            for name, field in fields.items()
+        }
+    elif any(
+        field.state is FieldExtractionState.CONFIDENT for field in fields.values()
+    ):
+        raise ValueError("schema atual não admite confiança automática")
     document = DocumentProcessMetadata(
         workspace_id,
         document_id,
@@ -978,7 +1313,7 @@ def document_metadata_from_payload(
         document_sha256,
         tuple(pages),
     )
-    if schema_version == 2:
+    if schema_version in {2, 3, 4}:
         page_numbers = tuple(page.page_number for page in document.page_evidence)
         if page_numbers and page_numbers != tuple(range(1, len(page_numbers) + 1)):
             raise ValueError("cobertura de páginas persistida inválida")
@@ -1043,7 +1378,7 @@ def document_metadata_from_payload(
         for evidence in field.evidence:
             if evidence.source_filename != document.source_filename:
                 raise ValueError("arquivo da proveniência diverge do documento")
-            if schema_version == 2:
+            if schema_version in {2, 3, 4}:
                 page = textual_pages.get(evidence.source_page)
                 if (
                     page is None
