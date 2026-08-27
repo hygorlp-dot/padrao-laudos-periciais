@@ -299,6 +299,7 @@ describe("process case form", () => {
 
   test("surfaces distinct ambiguous candidates without making them effective", async () => {
     const extracted = review("PARTIAL");
+    const otherNumber = "0000002-00.2026.8.05.0001";
     extracted.fields.numero_processo = {
       state: "AMBIGUOUS",
       value: "",
@@ -311,6 +312,8 @@ describe("process case form", () => {
         {
           ...review("PARTIAL", { numero_processo: DATA.numero_processo })
             .fields.numero_processo.evidence[0],
+          extracted_value: otherNumber,
+          source_filename: "anexos.pdf",
           source_page: 9,
         },
       ],
@@ -327,18 +330,22 @@ describe("process case form", () => {
 
     const number = await screen.findByRole("textbox", { name: "Número do processo" });
     expect(number).toHaveValue("");
-    const candidates = screen.getAllByRole("button", {
-      name: `Usar ${DATA.numero_processo}`,
+    const firstCandidate = screen.getByRole("button", {
+      name: `Usar ${DATA.numero_processo} — autos.pdf, página 2`,
     });
-    expect(candidates).toHaveLength(1);
+    const secondCandidate = screen.getByRole("button", {
+      name: `Usar ${otherNumber} — anexos.pdf, página 9`,
+    });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
 
     number.focus();
     await user.tab();
-    expect(candidates[0]).toHaveFocus();
+    expect(firstCandidate).toHaveFocus();
+    await user.tab();
+    expect(secondCandidate).toHaveFocus();
     await user.keyboard("{Enter}");
 
-    expect(number).toHaveValue(DATA.numero_processo);
+    expect(number).toHaveValue(otherNumber);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
 
     await user.click(screen.getByRole("button", { name: "Confirmar dados do processo" }));

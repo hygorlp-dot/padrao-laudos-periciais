@@ -92,14 +92,18 @@ def test_local_pdf_text_extractor_is_bounded_and_reports_textless_documents():
                 "Pagina A descreve fundacao, alvenaria, cobertura e acabamento.",
                 "Pagina B registra vistoria, medidas, fotografias e anomalias.",
                 "Pagina C consolida conclusoes, ressalvas, anexos e referencias.",
+                "Pagina D permanece fora do limite de processamento configurado.",
+                "Pagina E tambem deve constar na cobertura nao processada.",
             )
         )
     )
 
     assert result.state is PdfTextExtractionState.PARTIAL
-    assert len(result.pages) == 3
-    assert result.pages[-1].number == 3
-    assert result.pages[-1].processing_status is PageProcessingStatus.NOT_PROCESSED
+    assert [page.number for page in result.pages] == [1, 2, 3, 4, 5]
+    assert all(
+        page.processing_status is PageProcessingStatus.NOT_PROCESSED
+        for page in result.pages[2:]
+    )
     assert all(len(page.text) <= 40 for page in result.pages)
     assert sum(len(page.text) for page in result.pages) <= 60
     assert result.pages[0].processing_status is PageProcessingStatus.TRUNCATED

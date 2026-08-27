@@ -419,14 +419,15 @@ class LocalPdfTextExtractor:
                     pages.append(result_page)
                     remaining -= len(limited)
             if truncated:
-                pages.append(
+                pages.extend(
                     PdfTextPage(
-                        self._max_pages + 1,
+                        page_number,
                         "",
                         engine="pypdf",
                         engine_version=PYPDF_VERSION,
                         processing_status=PageProcessingStatus.NOT_PROCESSED,
                     )
+                    for page_number in range(self._max_pages + 1, total_pages + 1)
                 )
         except RepositoryError:
             raise

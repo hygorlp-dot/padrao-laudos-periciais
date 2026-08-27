@@ -10,6 +10,7 @@ import {
 import {
   getProcessMetadataReview,
   ProcessMetadataApiError,
+  type ProcessMetadataEvidence,
   type ProcessMetadataReview,
 } from "../data/processMetadata";
 import { navigate } from "../app/router";
@@ -33,6 +34,16 @@ const FIELDS: readonly {
   { key: "parte_requerente", label: "Parte requerente" },
   { key: "parte_requerida", label: "Parte requerida" },
 ];
+
+function distinctReviewCandidates(evidence: readonly ProcessMetadataEvidence[]) {
+  const candidates = new Map<string, ProcessMetadataEvidence>();
+  for (const candidate of evidence) {
+    if (!candidates.has(candidate.extracted_value)) {
+      candidates.set(candidate.extracted_value, candidate);
+    }
+  }
+  return Array.from(candidates.values());
+}
 
 type ViewState =
   | { kind: "loading" }
@@ -279,9 +290,7 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
           const extracted = review?.fields[field.key];
           const reviewCandidates = extracted?.state === "AMBIGUOUS"
             || extracted?.state === "CONFLICTING"
-            ? Array.from(new Map(
-              extracted.evidence.map((candidate) => [candidate.extracted_value, candidate]),
-            ).values())
+            ? distinctReviewCandidates(extracted.evidence)
             : [];
           const manualValue = visibleState.snapshot.data[field.key];
           const manualConflict = Boolean(
@@ -301,7 +310,7 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
               disabled={saving}
               onChange={(event) => update(field.key, event.currentTarget.value)}
             />
-            {extracted?.evidence[0] ? (
+            {extracted?.evidence[0] && reviewCandidates.length === 0 ? (
               <p className="field-provenance">
                 {extracted.evidence[0].extraction_mode === "OCR" ? "Extraído por OCR local de " : "Extraído de "}
                 {extracted.evidence[0].source_filename}, página {extracted.evidence[0].source_page}
@@ -338,7 +347,7 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
                     disabled={saving}
                     onClick={() => update(field.key, candidate.extracted_value)}
                   >
-                    Usar {candidate.extracted_value}
+                    Usar {candidate.extracted_value} — {candidate.source_filename}, página {candidate.source_page}
                   </button>
                 ))}
               </div>
