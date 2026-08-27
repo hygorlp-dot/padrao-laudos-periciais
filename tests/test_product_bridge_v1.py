@@ -76,6 +76,12 @@ def test_product_bridge_config_requires_literal_loopback():
         ProductBridgeConfig(port=80)
 
 
+@pytest.mark.parametrize("value", (0, -1, 31, True, float("inf"), float("nan")))
+def test_product_bridge_config_rejects_invalid_upstream_timeouts(value):
+    with pytest.raises(ValueError, match="timeout upstream"):
+        ProductBridgeConfig(upstream_timeout_seconds=value)
+
+
 def test_product_bridge_serves_build_and_spa_deep_links_without_secret(tmp_path):
     root = frontend_build(tmp_path)
     runtime = build_product_runtime(tmp_path / "product.db", root, token=TOKEN)

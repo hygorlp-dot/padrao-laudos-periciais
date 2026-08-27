@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import hashlib
 from io import BytesIO
 from types import MappingProxyType
 from uuid import UUID
@@ -91,21 +92,91 @@ def test_local_pdf_text_extractor_is_bounded_and_reports_textless_documents():
                 "Pagina A descreve fundacao, alvenaria, cobertura e acabamento.",
                 "Pagina B registra vistoria, medidas, fotografias e anomalias.",
                 "Pagina C consolida conclusoes, ressalvas, anexos e referencias.",
+                "Pagina D permanece fora do limite de processamento configurado.",
+                "Pagina E tambem deve constar na cobertura nao processada.",
             )
         )
     )
 
     assert result.state is PdfTextExtractionState.PARTIAL
-    assert len(result.pages) == 3
-    assert result.pages[-1].number == 3
-    assert result.pages[-1].processing_status is PageProcessingStatus.NOT_PROCESSED
+    assert [page.number for page in result.pages] == [1, 2, 3, 4, 5]
+    assert all(
+        page.processing_status is PageProcessingStatus.NOT_PROCESSED
+        for page in result.pages[2:]
+    )
     assert all(len(page.text) <= 40 for page in result.pages)
     assert sum(len(page.text) for page in result.pages) <= 60
     assert result.pages[0].processing_status is PageProcessingStatus.TRUNCATED
 
     textless = extractor.extract(BytesIO(text_pdf("")))
     assert textless.state is PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE
-    assert textless.pages == ()
+    assert [page.number for page in textless.pages] == [1]
+    assert textless.pages[0].processing_status is PageProcessingStatus.NOT_PROCESSED
+
+
+def test_native_scan_reports_a_textless_page_between_recoverable_pages():
+    result = LocalPdfTextExtractor().extract(
+        BytesIO(
+            text_pdf(
+                "Pagina um com texto nativo diversificado e recuperavel.",
+                "",
+                "Pagina tres com texto nativo diversificado e recuperavel.",
+            )
+        )
+    )
+
+    assert result.state is PdfTextExtractionState.PARTIAL
+    assert [page.number for page in result.pages] == [1, 2, 3]
+    assert result.pages[1].processing_status is PageProcessingStatus.NOT_PROCESSED
+
+
+def test_default_native_scan_reaches_supported_metadata_on_the_last_page():
+    pages = [
+        f"Pagina sintetica {number} com conteudo textual diverso para cobertura integral."
+        for number in range(1, 15)
+    ]
+    pages[-1] += f" PROCESSO: {VALID_CNJ}"
+
+    parsed = LocalPdfTextExtractor().extract(BytesIO(text_pdf(*pages)))
+    metadata = extract_process_metadata(
+        workspace_id=WORKSPACE_ID,
+        document_id=DOCUMENT_A,
+        original_filename="autos-sinteticos.pdf",
+        text=parsed,
+        extracted_at=EXTRACTED_AT,
+    )
+
+    assert parsed.state is PdfTextExtractionState.AVAILABLE
+    assert [page.number for page in parsed.pages] == list(range(1, 15))
+    assert metadata.fields["numero_processo"].state is FieldExtractionState.AMBIGUOUS
+    assert metadata.fields["numero_processo"].value == ""
+    assert metadata.fields["numero_processo"].evidence[0].source_page == 14
+
+
+def test_long_early_native_page_does_not_hide_a_later_supported_candidate():
+    parsed = LocalPdfTextExtractor(max_chars_per_page=128).extract(
+        BytesIO(
+            text_pdf(
+                " ".join(
+                    hashlib.sha256(f"termo-{number}".encode()).hexdigest()
+                    for number in range(40)
+                ),
+                f"Pagina final com identidade sujeita a revisao PROCESSO: {VALID_CNJ}",
+            )
+        )
+    )
+    metadata = extract_process_metadata(
+        workspace_id=WORKSPACE_ID,
+        document_id=DOCUMENT_A,
+        original_filename="autos-sinteticos.pdf",
+        text=parsed,
+        extracted_at=EXTRACTED_AT,
+    )
+
+    assert parsed.state is PdfTextExtractionState.PARTIAL
+    assert parsed.pages[0].processing_status is PageProcessingStatus.TRUNCATED
+    assert parsed.pages[1].processing_status is PageProcessingStatus.AVAILABLE
+    assert metadata.fields["numero_processo"].evidence[0].source_page == 2
 
 
 def test_complete_process_identity_is_extracted_with_field_level_provenance():

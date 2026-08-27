@@ -297,6 +297,62 @@ describe("process case form", () => {
     expect(screen.getByRole("button", { name: "Confirmar dados do processo" })).toBeEnabled();
   });
 
+  test("surfaces distinct ambiguous candidates without making them effective", async () => {
+    const extracted = review("PARTIAL");
+    const otherNumber = "0000002-00.2026.8.05.0001";
+    extracted.fields.numero_processo = {
+      state: "AMBIGUOUS",
+      value: "",
+      evidence: [
+        {
+          ...review("PARTIAL", { numero_processo: DATA.numero_processo })
+            .fields.numero_processo.evidence[0],
+          source_page: 2,
+        },
+        {
+          ...review("PARTIAL", { numero_processo: DATA.numero_processo })
+            .fields.numero_processo.evidence[0],
+          extracted_value: otherNumber,
+          source_filename: "anexos.pdf",
+          source_page: 9,
+        },
+      ],
+    };
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, snapshot()))
+      .mockResolvedValueOnce(jsonResponse(200, extracted))
+      .mockResolvedValueOnce(jsonResponse(200, snapshot(DATA, 1)));
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+
+    render(<ProcessCaseView workspaceId={ID} />);
+
+    const number = await screen.findByRole("textbox", { name: "Número do processo" });
+    expect(number).toHaveValue("");
+    const firstCandidate = screen.getByRole("button", {
+      name: `Usar ${DATA.numero_processo} — autos.pdf, página 2`,
+    });
+    const secondCandidate = screen.getByRole("button", {
+      name: `Usar ${otherNumber} — anexos.pdf, página 9`,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    number.focus();
+    await user.tab();
+    expect(firstCandidate).toHaveFocus();
+    await user.tab();
+    expect(secondCandidate).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    expect(number).toHaveValue(otherNumber);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    await user.click(screen.getByRole("button", { name: "Confirmar dados do processo" }));
+    expect(await screen.findByText("Dados do processo confirmados")).toBeInTheDocument();
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
   test("identifies OCR-derived provenance without exposing implementation paths", async () => {
     const extracted = review("PARTIAL", { numero_processo: DATA.numero_processo });
     extracted.fields.numero_processo.evidence[0] = {

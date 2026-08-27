@@ -25,6 +25,7 @@ class ProductBridgeConfig:
     max_body_bytes: int = 1_048_576
     max_document_body_bytes: int = MAX_DOCUMENT_BYTES
     request_timeout_seconds: float = 5.0
+    upstream_timeout_seconds: float = 30.0
 
     def __post_init__(self):
         if self.host != "127.0.0.1":
@@ -50,6 +51,13 @@ class ProductBridgeConfig:
             or not 0 < self.request_timeout_seconds <= 30
         ):
             raise ValueError("timeout local inválido")
+        if (
+            isinstance(self.upstream_timeout_seconds, bool)
+            or not isinstance(self.upstream_timeout_seconds, (int, float))
+            or not math.isfinite(self.upstream_timeout_seconds)
+            or not 0 < self.upstream_timeout_seconds <= 30
+        ):
+            raise ValueError("timeout upstream local inválido")
 
 
 class _ProductHttpServer(ThreadingHTTPServer):
@@ -271,7 +279,7 @@ class ProductBridgeServer:
             token=token,
             max_body_bytes=self._config.max_body_bytes,
             max_document_body_bytes=self._config.max_document_body_bytes,
-            request_timeout_seconds=self._config.request_timeout_seconds,
+            request_timeout_seconds=self._config.upstream_timeout_seconds,
         )
         self._thread: Thread | None = None
         self._serve_stopped = Event()

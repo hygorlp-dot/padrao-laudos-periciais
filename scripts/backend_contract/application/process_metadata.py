@@ -43,6 +43,14 @@ _JUSTICE_BRANCHES = {
     "8": "Justiça Estadual",
     "9": "Justiça Militar Estadual",
 }
+_FEDERAL_TRIBUNAL_REGIONS = {
+    "01": 1,
+    "02": 2,
+    "03": 3,
+    "04": 4,
+    "05": 5,
+    "06": 6,
+}
 
 
 class PdfTextExtractionState(StrEnum):
@@ -763,6 +771,22 @@ def extract_process_metadata(
             span=span,
             source_start=start,
         )
+        add(
+            "ramo_justica",
+            cnj.justice_branch,
+            page,
+            span,
+            source_start=start,
+        )
+        federal_region = _FEDERAL_TRIBUNAL_REGIONS.get(cnj.tribunal_code)
+        if cnj.justice_segment == "4" and federal_region is not None:
+            add(
+                "tribunal",
+                f"Tribunal Regional Federal da {federal_region}ª Região",
+                page,
+                span,
+                source_start=start,
+            )
         if (
             page.extraction_mode is PageExtractionMode.OCR
             and (evidence.ocr_confidence or 0.0) < 0.75
@@ -947,10 +971,11 @@ def extract_process_metadata(
             source_start=primary_candidate.start,
             prepend=True,
         )
-        if primary_cnj.justice_segment == "4":
+        federal_region = _FEDERAL_TRIBUNAL_REGIONS.get(primary_cnj.tribunal_code)
+        if primary_cnj.justice_segment == "4" and federal_region is not None:
             add(
                 "tribunal",
-                f"Tribunal Regional Federal da {int(primary_cnj.tribunal_code)}ª Região",
+                f"Tribunal Regional Federal da {federal_region}ª Região",
                 primary_candidate.page,
                 primary_candidate.span,
                 source_start=primary_candidate.start,

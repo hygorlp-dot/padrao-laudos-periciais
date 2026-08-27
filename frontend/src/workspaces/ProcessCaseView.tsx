@@ -10,6 +10,7 @@ import {
 import {
   getProcessMetadataReview,
   ProcessMetadataApiError,
+  type ProcessMetadataEvidence,
   type ProcessMetadataReview,
 } from "../data/processMetadata";
 import { navigate } from "../app/router";
@@ -33,6 +34,16 @@ const FIELDS: readonly {
   { key: "parte_requerente", label: "Parte requerente" },
   { key: "parte_requerida", label: "Parte requerida" },
 ];
+
+function distinctReviewCandidates(evidence: readonly ProcessMetadataEvidence[]) {
+  const candidates = new Map<string, ProcessMetadataEvidence>();
+  for (const candidate of evidence) {
+    if (!candidates.has(candidate.extracted_value)) {
+      candidates.set(candidate.extracted_value, candidate);
+    }
+  }
+  return Array.from(candidates.values());
+}
 
 type ViewState =
   | { kind: "loading" }
@@ -277,6 +288,10 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
       <div className="process-case-fields">
         {FIELDS.map((field) => {
           const extracted = review?.fields[field.key];
+          const reviewCandidates = extracted?.state === "AMBIGUOUS"
+            || extracted?.state === "CONFLICTING"
+            ? distinctReviewCandidates(extracted.evidence)
+            : [];
           const manualValue = visibleState.snapshot.data[field.key];
           const manualConflict = Boolean(
             manualValue
@@ -295,7 +310,7 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
               disabled={saving}
               onChange={(event) => update(field.key, event.currentTarget.value)}
             />
-            {extracted?.evidence[0] ? (
+            {extracted?.evidence[0] && reviewCandidates.length === 0 ? (
               <p className="field-provenance">
                 {extracted.evidence[0].extraction_mode === "OCR" ? "Extraído por OCR local de " : "Extraído de "}
                 {extracted.evidence[0].source_filename}, página {extracted.evidence[0].source_page}
@@ -314,18 +329,25 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
                 </button>
               </div>
             ) : null}
-            {extracted?.state === "CONFLICTING" ? (
-              <div className="field-conflict" role="alert">
-                <span>Os documentos apresentam valores diferentes.</span>
-                {extracted.evidence.map((candidate) => (
+            {reviewCandidates.length > 0 ? (
+              <div
+                className="field-conflict"
+                role={extracted?.state === "CONFLICTING" ? "alert" : "status"}
+              >
+                <span>
+                  {extracted?.state === "CONFLICTING"
+                    ? "Os documentos apresentam valores diferentes."
+                    : "Candidato extraído — confira a fonte antes de usar."}
+                </span>
+                {reviewCandidates.map((candidate) => (
                   <button
                     className="text-action"
                     type="button"
-                    key={`${candidate.document_id}-${candidate.extracted_value}`}
+                    key={candidate.extracted_value}
                     disabled={saving}
                     onClick={() => update(field.key, candidate.extracted_value)}
                   >
-                    Usar {candidate.extracted_value}
+                    Usar {candidate.extracted_value} — {candidate.source_filename}, página {candidate.source_page}
                   </button>
                 ))}
               </div>

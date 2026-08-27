@@ -61,6 +61,47 @@ def test_valid_cnj_without_primary_identity_anchor_is_ambiguous():
     assert [item.source_page for item in field.evidence] == [1]
 
 
+def test_unanchored_valid_cnj_surfaces_deterministic_justice_candidates_fail_closed():
+    metadata = extract(
+        PdfTextPage(
+            1,
+            f"Nº {PRIMARY_CNJ}\nDocumento sintetico sujeito a revisao humana.",
+        )
+    )
+
+    assert metadata.fields["numero_processo"].state is FieldExtractionState.AMBIGUOUS
+    assert metadata.fields["numero_processo"].value == ""
+    assert metadata.fields["ramo_justica"].state is FieldExtractionState.AMBIGUOUS
+    assert metadata.fields["ramo_justica"].value == ""
+    assert metadata.fields["ramo_justica"].evidence[0].extracted_value == "Justiça Federal"
+    assert metadata.fields["ramo_justica"].evidence[0].source_page == 1
+    assert metadata.fields["tribunal"].state is FieldExtractionState.AMBIGUOUS
+    assert metadata.fields["tribunal"].value == ""
+    assert (
+        metadata.fields["tribunal"].evidence[0].extracted_value
+        == "Tribunal Regional Federal da 1ª Região"
+    )
+    assert metadata.fields["tribunal"].evidence[0].source_page == 1
+
+
+@pytest.mark.parametrize("prefix", ("Nº", "PROCESSO:"))
+def test_cnj_with_unsupported_federal_tribunal_code_does_not_invent_region(prefix):
+    sequential = "7654321"
+    year = "2025"
+    segment = "4"
+    tribunal = "99"
+    origin = "0001"
+    check_digits = 98 - int(f"{sequential}{year}{segment}{tribunal}{origin}00") % 97
+    cnj = f"{sequential}-{check_digits:02d}.{year}.{segment}.{tribunal}.{origin}"
+
+    metadata = extract(PdfTextPage(1, f"{prefix} {cnj}"))
+
+    assert metadata.fields["numero_processo"].state is FieldExtractionState.AMBIGUOUS
+    assert metadata.fields["ramo_justica"].state is FieldExtractionState.AMBIGUOUS
+    assert metadata.fields["tribunal"].state is FieldExtractionState.NOT_FOUND
+    assert metadata.fields["tribunal"].evidence == ()
+
+
 def test_first_page_top_reference_is_not_a_primary_identity_anchor():
     metadata = extract(
         PdfTextPage(
