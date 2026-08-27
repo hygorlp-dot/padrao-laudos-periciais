@@ -763,6 +763,21 @@ def extract_process_metadata(
             span=span,
             source_start=start,
         )
+        add(
+            "ramo_justica",
+            cnj.justice_branch,
+            page,
+            span,
+            source_start=start,
+        )
+        if cnj.justice_segment == "4":
+            add(
+                "tribunal",
+                f"Tribunal Regional Federal da {int(cnj.tribunal_code)}ª Região",
+                page,
+                span,
+                source_start=start,
+            )
         if (
             page.extraction_mode is PageExtractionMode.OCR
             and (evidence.ocr_confidence or 0.0) < 0.75

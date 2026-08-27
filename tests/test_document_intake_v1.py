@@ -792,6 +792,8 @@ def test_document_transport_limit_does_not_expand_legacy_json_limit(tmp_path):
     assert LocalServerConfig().max_document_body_bytes == 134_217_728
     assert ProductBridgeConfig().max_body_bytes == 1_048_576
     assert ProductBridgeConfig().max_document_body_bytes == 134_217_728
+    assert ProductBridgeConfig().request_timeout_seconds == 5
+    assert ProductBridgeConfig().upstream_timeout_seconds == 30
 
     runtime = build_product_runtime(
         tmp_path / "case.db",

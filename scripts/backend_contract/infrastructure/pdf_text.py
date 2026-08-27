@@ -25,10 +25,11 @@ class LocalPdfTextExtractor:
     def __init__(
         self,
         *,
-        max_pages: int = 12,
+        max_pages: int = 4_096,
         max_ocr_pages: int = 4,
+        max_expanded_ocr_pages: int = 12,
         max_chars_per_page: int = 50_000,
-        max_total_chars: int = 400_000,
+        max_total_chars: int = 16_000_000,
         max_render_dimension: int = 8_192,
         max_render_pixels: int = 16_000_000,
         max_ocr_blocks: int = 2_000,
@@ -38,6 +39,7 @@ class LocalPdfTextExtractor:
         for value, name in (
             (max_pages, "max_pages"),
             (max_ocr_pages, "max_ocr_pages"),
+            (max_expanded_ocr_pages, "max_expanded_ocr_pages"),
             (max_chars_per_page, "max_chars_per_page"),
             (max_total_chars, "max_total_chars"),
             (max_render_dimension, "max_render_dimension"),
@@ -48,6 +50,7 @@ class LocalPdfTextExtractor:
                 raise ValueError(f"{name} inválido")
         self._max_pages = max_pages
         self._max_ocr_pages = min(max_ocr_pages, max_pages)
+        self._max_expanded_ocr_pages = min(max_expanded_ocr_pages, max_pages)
         self._max_chars_per_page = max_chars_per_page
         self._max_total_chars = max_total_chars
         self._max_render_dimension = max_render_dimension
@@ -306,7 +309,7 @@ class LocalPdfTextExtractor:
             source,
             document_sha256=document_sha256,
             page_cache=page_cache,
-            ocr_page_limit=self._max_pages,
+            ocr_page_limit=self._max_expanded_ocr_pages,
         )
 
     def _extract(
@@ -397,6 +400,14 @@ class LocalPdfTextExtractor:
                         engine_version=self._ocr_engine.engine_version,
                         model_version=self._ocr_engine.model_version,
                         config_version=self._ocr_engine.config_version,
+                        processing_status=PageProcessingStatus.NOT_PROCESSED,
+                    )
+                else:
+                    result_page = PdfTextPage(
+                        index,
+                        "",
+                        engine="pypdf",
+                        engine_version=PYPDF_VERSION,
                         processing_status=PageProcessingStatus.NOT_PROCESSED,
                     )
                 if result_page is not None:

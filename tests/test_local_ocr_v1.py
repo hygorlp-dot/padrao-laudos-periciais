@@ -470,6 +470,26 @@ def test_large_scanned_pdf_only_ocrs_bounded_early_pages():
     )
 
 
+def test_expanded_ocr_budget_is_independent_from_native_page_coverage():
+    engine = SyntheticOcrEngine(f"PROCESSO: {VALID_CNJ}")
+    extractor = LocalPdfTextExtractor(
+        ocr_engine=engine,
+        max_pages=8,
+        max_ocr_pages=2,
+        max_expanded_ocr_pages=3,
+    )
+
+    result = extractor.expand(BytesIO(scanned_pdf_pages(8)))
+
+    assert engine.calls == 3
+    assert result.ocr_pages_processed == 3
+    assert [page.number for page in result.pages] == list(range(1, 9))
+    assert all(
+        page.processing_status is PageProcessingStatus.NOT_PROCESSED
+        for page in result.pages[3:]
+    )
+
+
 @pytest.mark.parametrize(
     "native_text",
     (

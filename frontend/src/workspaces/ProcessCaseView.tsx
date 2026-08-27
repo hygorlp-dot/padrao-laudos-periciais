@@ -277,6 +277,12 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
       <div className="process-case-fields">
         {FIELDS.map((field) => {
           const extracted = review?.fields[field.key];
+          const reviewCandidates = extracted?.state === "AMBIGUOUS"
+            || extracted?.state === "CONFLICTING"
+            ? Array.from(new Map(
+              extracted.evidence.map((candidate) => [candidate.extracted_value, candidate]),
+            ).values())
+            : [];
           const manualValue = visibleState.snapshot.data[field.key];
           const manualConflict = Boolean(
             manualValue
@@ -314,14 +320,21 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
                 </button>
               </div>
             ) : null}
-            {extracted?.state === "CONFLICTING" ? (
-              <div className="field-conflict" role="alert">
-                <span>Os documentos apresentam valores diferentes.</span>
-                {extracted.evidence.map((candidate) => (
+            {reviewCandidates.length > 0 ? (
+              <div
+                className="field-conflict"
+                role={extracted?.state === "CONFLICTING" ? "alert" : "status"}
+              >
+                <span>
+                  {extracted?.state === "CONFLICTING"
+                    ? "Os documentos apresentam valores diferentes."
+                    : "Candidato extraído — confira a fonte antes de usar."}
+                </span>
+                {reviewCandidates.map((candidate) => (
                   <button
                     className="text-action"
                     type="button"
-                    key={`${candidate.document_id}-${candidate.extracted_value}`}
+                    key={candidate.extracted_value}
                     disabled={saving}
                     onClick={() => update(field.key, candidate.extracted_value)}
                   >
