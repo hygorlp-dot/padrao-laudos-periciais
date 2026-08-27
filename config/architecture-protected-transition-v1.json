@@ -1,7 +1,7 @@
 {
   "schemaVersion": "3.0.0",
   "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "dd2d74cc4a0baec555c47677f1c8fc67ce46ec3b",
+  "protectedBaseSha": "2398dc8909fc7b4e04e5822d3bcaec232bbfbc56",
   "artifacts": [
     {
       "path": "scripts/quality/architecture_analyzer.py",
@@ -19,7 +19,7 @@
       "baseBlobSha": "4f7b0846ace6db63cfa3951828142e5dd3d30e35",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "a1885f42ab03839a154cbf2e4d5f5250e9188801"
+      "candidateBlobSha": "7eec886d065cef3576e5ee74a52270f25022e39a"
     }
   ],
   "supportScope": "CAPABILITY_BOOTSTRAP_V1",
@@ -31,7 +31,7 @@
       "baseBlobSha": "96aedd24745a5f0f3f70f487a8bc74d12a8611c0",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "3048afe50faf8bc4a1783a93d1404eb1b9c369a7"
+      "candidateBlobSha": "7f0397407dc89c1c7548086002a70b6bb5f7c825"
     },
     {
       "path": "config/capability-protected-transition-v1.json",
@@ -40,7 +40,7 @@
       "baseBlobSha": "570990f516554573e2087cbf9901b527915aac10",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "75326cb22838ca662bcecc3b77fa2f6f0f3bf03e"
+      "candidateBlobSha": "c7a201b0db09eb0c0b2e44b34c97b5aa843ed63e"
     }
   ]
 }

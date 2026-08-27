@@ -365,7 +365,7 @@ def test_architecture_baseline_cannot_self_bootstrap_from_candidate():
 def test_architecture_baseline_is_authorized_by_protected_base():
     baseline = json.loads((ROOT / "config/architecture-baseline-v1.json").read_text())
     result = {"candidateCommitSha": candidate_tree(ROOT, "HEAD")[0], "policyVersion": "1.0.0", "findings": [], "modules": []}
-    checked = apply_exact_baseline(ROOT, result, baseline, protected_base="c1dda7b34ab6c68475f1992029203554205a2ec7")
+    checked = apply_exact_baseline(ROOT, result, baseline, protected_base="4803eaf52d42d9c1e9b679c07c5aa5de62b83502")
     assert any(item["code"] == "ARCHITECTURE_BASELINE_INVALID" and "protected base" in item["detail"] for item in checked["findings"])
 
 
@@ -394,7 +394,7 @@ def test_exact_baseline_rejects_duplicate_or_blob_mismatch(tmp_path):
 def test_exact_baseline_rejects_stale_exception_on_real_repository():
     result = {"findings": []}
     baseline = {
-        "baselineCommit": "c1dda7b34ab6c68475f1992029203554205a2ec7",
+        "baselineCommit": "4803eaf52d42d9c1e9b679c07c5aa5de62b83502",
         "exceptions": [{
             "code": "DYNAMIC_ARCHITECTURE_BYPASS", "canonicalPath": "scripts/quality/fixture_registry.py",
             "line": 30, "normalizedAstSha256": "0" * 64,
