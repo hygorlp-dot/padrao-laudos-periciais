@@ -405,7 +405,7 @@ def test_low_confidence_ocr_cnj_does_not_become_effective_metadata():
 
 
 def test_ocr_only_cnj_confusions_are_bounded_and_still_require_checksum():
-    confused = "OO1O549-O8.2O26.4.O5.83O2"
+    confused = "7654321-55.2O25.4.O5.OOO1"
     result = LocalPdfTextExtractor(
         ocr_engine=SyntheticOcrEngine(f"PROCESSO: {confused}")
     ).extract(BytesIO(scanned_pdf("CNJ com confusões de OCR")))

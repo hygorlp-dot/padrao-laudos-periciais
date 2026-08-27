@@ -28,7 +28,7 @@ DOCUMENT_A = PrivateContentId(UUID("22222222-2222-4222-8222-222222222222"))
 DOCUMENT_B = PrivateContentId(UUID("33333333-3333-4333-8333-333333333333"))
 EXTRACTED_AT = "2026-08-26T12:30:00+00:00"
 VALID_CNJ = "7654321-55.2025.4.05.0001"
-INVALID_CNJ = "0010549-09.2026.4.05.8302"
+INVALID_CNJ = "7654321-56.2025.4.05.0001"
 
 
 def text_pdf(*pages: str) -> bytes:
@@ -71,12 +71,12 @@ def test_cnj_checksum_and_structural_components_are_deterministic():
     parsed = validate_cnj_number(VALID_CNJ)
 
     assert parsed.canonical == VALID_CNJ
-    assert parsed.sequential == "0010549"
-    assert parsed.check_digits == "08"
-    assert parsed.year == "2026"
+    assert parsed.sequential == "7654321"
+    assert parsed.check_digits == "55"
+    assert parsed.year == "2025"
     assert parsed.justice_segment == "4"
     assert parsed.tribunal_code == "05"
-    assert parsed.origin_unit == "8302"
+    assert parsed.origin_unit == "0001"
     assert parsed.justice_branch == "Justiça Federal"
 
     with pytest.raises(ValueError, match="dígito|CNJ"):
