@@ -161,13 +161,14 @@ def test_scanned_valid_cnj_is_extracted_with_ocr_provenance():
     metadata = metadata_from(result)
 
     field = metadata.fields["numero_processo"]
-    assert field.state is FieldExtractionState.CONFIDENT
-    assert field.value == VALID_CNJ
+    assert field.state is FieldExtractionState.AMBIGUOUS
+    assert field.value == ""
+    assert field.evidence[0].extracted_value == VALID_CNJ
     assert field.evidence[0].extraction_method == "LOCAL_OCR_V1"
     assert field.evidence[0].ocr_confidence == 0.99
 
 
-def test_scanned_parties_preserve_unicode_and_ocr_locator():
+def test_scanned_parties_without_primary_identity_are_ambiguous_with_ocr_locator():
     engine = SyntheticOcrEngine(
         "AUTORA: José Gonçalves Construções Ltda.",
         "RÉU: Órgão Público de São Luís",
@@ -176,9 +177,12 @@ def test_scanned_parties_preserve_unicode_and_ocr_locator():
 
     metadata = metadata_from(result)
 
-    assert metadata.fields["parte_requerente"].value == "José Gonçalves Construções Ltda."
-    assert metadata.fields["parte_requerida"].value == "Órgão Público de São Luís"
+    assert metadata.fields["parte_requerente"].state is FieldExtractionState.AMBIGUOUS
+    assert metadata.fields["parte_requerente"].value == ""
+    assert metadata.fields["parte_requerida"].state is FieldExtractionState.AMBIGUOUS
+    assert metadata.fields["parte_requerida"].value == ""
     evidence = metadata.fields["parte_requerente"].evidence[0]
+    assert evidence.extracted_value == "José Gonçalves Construções Ltda."
     assert evidence.extraction_mode == "OCR"
     assert evidence.bounding_box == (80.0, 100.0, 1100.0, 180.0)
 
@@ -408,8 +412,9 @@ def test_ocr_only_cnj_confusions_are_bounded_and_still_require_checksum():
 
     field = metadata_from(result).fields["numero_processo"]
 
-    assert field.state is FieldExtractionState.CONFIDENT
-    assert field.value == VALID_CNJ
+    assert field.state is FieldExtractionState.AMBIGUOUS
+    assert field.value == ""
+    assert field.evidence[0].extracted_value == VALID_CNJ
     assert field.evidence[0].normalized_text_span == confused
 
     native_result = LocalPdfTextExtractor().extract(
@@ -432,14 +437,16 @@ def test_ocr_page_evidence_is_workspace_scoped_and_contains_no_path():
     assert "path" not in repr(first).lower()
 
 
-def test_unicode_portuguese_party_requires_confident_ocr_provenance():
+def test_unicode_portuguese_party_without_primary_identity_preserves_ambiguous_provenance():
     result = LocalPdfTextExtractor(
         ocr_engine=SyntheticOcrEngine("AUTORA: Conceição d'Ávila")
     ).extract(BytesIO(scanned_pdf("parte com Unicode")))
 
     field = metadata_from(result).fields["parte_requerente"]
 
-    assert field.value == "Conceição d'Ávila"
+    assert field.state is FieldExtractionState.AMBIGUOUS
+    assert field.value == ""
+    assert field.evidence[0].extracted_value == "Conceição d'Ávila"
     assert field.evidence[0].ocr_confidence == 0.99
     assert field.evidence[0].ocr_engine == "SYNTHETIC_OCR"
 
