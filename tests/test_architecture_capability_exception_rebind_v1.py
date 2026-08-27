@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -17,28 +18,108 @@ ANALYZER_PATH = "scripts/quality/architecture_analyzer.py"
 EXCEPTIONS_PATH = "config/capability-exceptions-v1.json"
 CAPABILITY_REGISTRY_PATH = "config/capability-protected-artifacts-v1.json"
 CAPABILITY_TRANSITION_PATH = "config/capability-protected-transition-v1.json"
+ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
+PROTECTED_BASE = "145715360cb28237d098a225a45614b6dda3d704"
+HISTORY_REWRITE_MAPPINGS = {
+    "cec881c42815bc222eecc03fd89c1caf32ec75f4":
+        "2bd315608700f74a21103f3ea61a95dbf4013f25",
+    "f00bb46f60431376f8fe7bc5bba497aaf09670d9":
+        "a330a5c5ee92ae54e05829a9f232ca7ccf9e7f76",
+}
 
 
 def _json(path: str) -> dict:
     return json.loads((ROOT / path).read_text(encoding="utf-8"))
 
 
+def _git(*args: str) -> str:
+    return subprocess.check_output(["git", *args], cwd=ROOT, text=True).strip()
+
+
+def _identity_from_commit(commit: str, path: str) -> tuple[str, str, str]:
+    metadata, listed_path = _git("ls-tree", commit, "--", path).split("\t", 1)
+    assert listed_path == path
+    mode, object_type, blob_sha = metadata.split()
+    return mode, object_type, blob_sha
+
+
+def _identity_from_worktree(path: str) -> tuple[str, str, str]:
+    mode, object_type, _ = _identity_from_commit("HEAD", path)
+    return mode, object_type, _git("hash-object", path)
+
+
+def _transition_identity(row: dict, side: str) -> tuple[str, str, str]:
+    identity = row[side]
+    return identity["mode"], identity["objectType"], identity["blobSha"]
+
+
+def _architecture_transition_identity(row: dict, side: str) -> tuple[str, str, str]:
+    prefix = "base" if side == "base" else "candidate"
+    return row[f"{prefix}Mode"], row[f"{prefix}ObjectType"], row[f"{prefix}BlobSha"]
+
+
 def test_rebind_introduces_no_wildcard_or_package_wide_authority():
     paths = []
     for document in (
         _json(CAPABILITY_TRANSITION_PATH),
-        _json("config/architecture-protected-transition-v1.json"),
+        _json(ARCHITECTURE_TRANSITION_PATH),
     ):
         paths.extend(row["path"] for row in document["artifacts"])
         paths.extend(row["path"] for row in document.get("supportArtifacts", []))
 
     assert all("*" not in path and not path.endswith("/") for path in paths)
     assert set(paths) == {
-        ANALYZER_PATH,
         EXCEPTIONS_PATH,
         CAPABILITY_REGISTRY_PATH,
         CAPABILITY_TRANSITION_PATH,
     }
+
+
+def test_rebind_changes_only_proven_baseline_commit_identities():
+    base_rows = _git("show", f"{PROTECTED_BASE}:{EXCEPTIONS_PATH}")
+    base = json.loads(base_rows)
+    candidate = _json(EXCEPTIONS_PATH)
+
+    assert len(candidate["exceptions"]) == len(base["exceptions"])
+    for before, after in zip(base["exceptions"], candidate["exceptions"], strict=True):
+        changed = {key for key in before if before[key] != after[key]}
+        assert changed == {"baselineCommit"}
+        assert HISTORY_REWRITE_MAPPINGS[before["baselineCommit"]] == after["baselineCommit"]
+
+
+def test_capability_registry_and_transition_bind_exact_exception_blob():
+    registry = _json(CAPABILITY_REGISTRY_PATH)
+    protected = next(row for row in registry["artifacts"] if row["path"] == EXCEPTIONS_PATH)
+    assert (protected["mode"], protected["objectType"], protected["blobSha"]) == (
+        *_identity_from_worktree(EXCEPTIONS_PATH)[:2],
+        _identity_from_worktree(EXCEPTIONS_PATH)[2],
+    )
+
+    transition = _json(CAPABILITY_TRANSITION_PATH)
+    assert transition["protectedBaseSha"] == PROTECTED_BASE
+    assert len(transition["artifacts"]) == 1
+    row = transition["artifacts"][0]
+    assert row["path"] == EXCEPTIONS_PATH
+    assert _transition_identity(row, "base") == _identity_from_commit(PROTECTED_BASE, EXCEPTIONS_PATH)
+    assert _transition_identity(row, "candidate") == _identity_from_worktree(EXCEPTIONS_PATH)
+
+
+def test_architecture_transition_binds_capability_rotation_and_companions():
+    transition = _json(ARCHITECTURE_TRANSITION_PATH)
+    assert transition["schemaVersion"] == "3.0.0"
+    assert transition["protectedBaseSha"] == PROTECTED_BASE
+    assert transition["supportScope"] == "CAPABILITY_BOOTSTRAP_V1"
+
+    artifact_rows = {row["path"]: row for row in transition["artifacts"]}
+    assert set(artifact_rows) == {CAPABILITY_REGISTRY_PATH}
+    support_rows = {row["path"]: row for row in transition["supportArtifacts"]}
+    assert set(support_rows) == {EXCEPTIONS_PATH, CAPABILITY_TRANSITION_PATH}
+
+    for path, row in {**artifact_rows, **support_rows}.items():
+        assert _architecture_transition_identity(row, "base") == _identity_from_commit(
+            PROTECTED_BASE, path
+        )
+        assert _architecture_transition_identity(row, "candidate") == _identity_from_worktree(path)
 
 
 def _future_base_clone(tmp_path: Path) -> tuple[Path, str]:
@@ -49,6 +130,21 @@ def _future_base_clone(tmp_path: Path) -> tuple[Path, str]:
     )
     subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    for path in (
+        ARCHITECTURE_TRANSITION_PATH,
+        EXCEPTIONS_PATH,
+        CAPABILITY_REGISTRY_PATH,
+        CAPABILITY_TRANSITION_PATH,
+    ):
+        shutil.copyfile(ROOT / path, repo / path)
+    subprocess.run(["git", "add", "--", *(
+        ARCHITECTURE_TRANSITION_PATH,
+        EXCEPTIONS_PATH,
+        CAPABILITY_REGISTRY_PATH,
+        CAPABILITY_TRANSITION_PATH,
+    )], cwd=repo, check=True)
+    if subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=repo).returncode:
+        subprocess.run(["git", "commit", "-qm", "candidate protected base"], cwd=repo, check=True)
     base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
     return repo, base
 
@@ -122,6 +218,15 @@ def test_future_base_capability_custody_blocks_exception_registry_drift(tmp_path
         "CAPABILITY_PROTECTED_REGISTRY_ADVANCEMENT_INVALID",
         "CAPABILITY_PROTECTED_TRANSITION_INVALID",
     }
+
+
+def test_future_base_suppresses_unchanged_capabilities_and_accepts_safe_child(tmp_path):
+    repo, base = _future_base_clone(tmp_path)
+    safe = repo / "scripts/quality/rebind_safe_child.py"
+    safe.write_text("def add(left, right):\n    return left + right\n", encoding="utf-8")
+    child = _child_commit(repo, "safe child")
+
+    assert run_protected_capability_gate(repo, base, child) == []
 
 
 def test_future_base_blocks_new_unauthorized_capability(tmp_path):
