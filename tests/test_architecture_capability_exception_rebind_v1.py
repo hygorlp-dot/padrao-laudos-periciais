@@ -14,7 +14,7 @@ from scripts.quality.capability_bootstrap import run_protected_capability_gate
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PROTECTED_BASE = "2398dc8909fc7b4e04e5822d3bcaec232bbfbc56"
+PROTECTED_BASE = "884b650958fa5d7a7f90cc73595466f1cd485189"
 COMMIT_A = "a330a5c5ee92ae54e05829a9f232ca7ccf9e7f76"
 ANALYZER_PATH = "scripts/quality/architecture_analyzer.py"
 EXCEPTIONS_PATH = "config/capability-exceptions-v1.json"

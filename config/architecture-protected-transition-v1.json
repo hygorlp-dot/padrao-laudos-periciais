@@ -1,13 +1,13 @@
 {
   "schemaVersion": "3.0.0",
   "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "2398dc8909fc7b4e04e5822d3bcaec232bbfbc56",
+  "protectedBaseSha": "884b650958fa5d7a7f90cc73595466f1cd485189",
   "artifacts": [
     {
       "path": "scripts/quality/architecture_analyzer.py",
       "baseMode": "100644",
       "baseObjectType": "blob",
-      "baseBlobSha": "996aa949c8064cf1470f5f8ced28eb1b8a1bfcb5",
+      "baseBlobSha": "9f3e51110006ddeb044a913e347eeb06bc66682f",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
       "candidateBlobSha": "9f3e51110006ddeb044a913e347eeb06bc66682f"
@@ -16,7 +16,7 @@
       "path": "config/capability-protected-artifacts-v1.json",
       "baseMode": "100644",
       "baseObjectType": "blob",
-      "baseBlobSha": "4f7b0846ace6db63cfa3951828142e5dd3d30e35",
+      "baseBlobSha": "a1885f42ab03839a154cbf2e4d5f5250e9188801",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
       "candidateBlobSha": "7eec886d065cef3576e5ee74a52270f25022e39a"
@@ -28,7 +28,7 @@
       "path": "config/capability-exceptions-v1.json",
       "baseMode": "100644",
       "baseObjectType": "blob",
-      "baseBlobSha": "96aedd24745a5f0f3f70f487a8bc74d12a8611c0",
+      "baseBlobSha": "3048afe50faf8bc4a1783a93d1404eb1b9c369a7",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
       "candidateBlobSha": "7f0397407dc89c1c7548086002a70b6bb5f7c825"
@@ -37,10 +37,10 @@
       "path": "config/capability-protected-transition-v1.json",
       "baseMode": "100644",
       "baseObjectType": "blob",
-      "baseBlobSha": "570990f516554573e2087cbf9901b527915aac10",
+      "baseBlobSha": "75326cb22838ca662bcecc3b77fa2f6f0f3bf03e",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "c7a201b0db09eb0c0b2e44b34c97b5aa843ed63e"
+      "candidateBlobSha": "df80a2a7e94c92d143411f50aacd6e7de7a78292"
     }
   ]
 }
