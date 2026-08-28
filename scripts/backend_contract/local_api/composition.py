@@ -186,9 +186,6 @@ def build_local_api(
             get_process_case,
             save_process_case,
             get_process_metadata_review,
-            store.revisions,
-            local_clock,
-            local_ids,
         )
         if get_process_metadata_review is not None
         else None

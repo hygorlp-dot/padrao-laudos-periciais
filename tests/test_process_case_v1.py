@@ -45,6 +45,8 @@ EMPTY_DATA = {
     "ramo_justica": "",
     "tribunal": "",
     "vara": "",
+    "municipio_sede": "",
+    "subsecao_judiciaria": "",
     "comarca_municipio": "",
     "uf": "",
     "parte_requerente": "",
@@ -56,6 +58,8 @@ DATA_A = {
     "ramo_justica": "Justiça Estadual",
     "tribunal": "  Tribunal de Justiça da Bahia  ",
     "vara": "2ª Vara Cível",
+    "municipio_sede": "Salvador",
+    "subsecao_judiciaria": "Salvador",
     "comarca_municipio": "Salvador",
     "uf": "BA",
     "parte_requerente": "Pessoa requerente",
@@ -67,6 +71,8 @@ DATA_B = {
     "ramo_justica": "Justiça Estadual",
     "tribunal": "Tribunal de Justiça de São Paulo",
     "vara": "1ª Vara",
+    "municipio_sede": "Campinas",
+    "subsecao_judiciaria": "Campinas",
     "comarca_municipio": "Campinas",
     "uf": "SP",
     "parte_requerente": "Parte B autora",
@@ -104,6 +110,14 @@ class RecordingService:
     def execute(self, *args, **kwargs):
         self.calls.append((args, kwargs))
         return self.result
+
+
+def test_process_case_contract_includes_derived_judicial_location_fields():
+    data = ProcessCaseData.empty().as_dict()
+
+    assert data["municipio_sede"] == ""
+    assert data["subsecao_judiciaria"] == ""
+    assert data["comarca_municipio"] == ""
 
 
 class FailingService:
@@ -316,6 +330,7 @@ def test_application_rejects_a_misrouted_process_case_record(tmp_path):
         ("PROCESS_CASE", "PROCESS_CASE"),
         ("PROCESS_METADATA_EXTRACTION", "document-id"),
         ("PROCESS_METADATA_CONFIRMATION", "PROCESS_METADATA_CONFIRMATION"),
+        ("PROCESS_METADATA_SOURCE_CONFIRMATION", "parte_requerente"),
         ("OCR_PAGE_CACHE_V1", "cache-key"),
     ),
 )

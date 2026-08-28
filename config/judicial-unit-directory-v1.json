@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "JUDICIAL_UNIT_DIRECTORY_V1",
+  "entries": [
+    {
+      "tribunal": "TRF5",
+      "uf": "PE",
+      "unitType": "VARA_FEDERAL",
+      "unitNumber": 24,
+      "municipioSede": "Caruaru",
+      "subsecaoJudiciaria": "Caruaru",
+      "authority": "Justiça Federal em Pernambuco",
+      "sourceReference": "https://www.jfpe.jus.br/index.php/institucional.html?catid=88&id=33%3Acomposicaovaraspagina4&view=article",
+      "effectiveInformation": "Relação institucional consultada em 2026-08-28"
+    }
+  ]
+}

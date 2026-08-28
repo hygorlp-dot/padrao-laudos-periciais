@@ -182,6 +182,7 @@ def test_ports_expose_only_explicit_application_operations():
     assert revision_methods == {
         "append",
         "append_if_latest",
+        "append_pair_if_latest",
         "latest",
         "get_revision",
         "list_all",

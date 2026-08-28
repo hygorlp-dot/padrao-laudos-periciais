@@ -13,6 +13,8 @@ const DATA = {
   ramo_justica: "Justiça Estadual",
   tribunal: "  Tribunal de Justiça da Bahia  ",
   vara: "2ª Vara Cível",
+  municipio_sede: "Salvador",
+  subsecao_judiciaria: "Salvador",
   comarca_municipio: "Salvador",
   uf: "BA",
   parte_requerente: "Pessoa requerente",
@@ -35,6 +37,14 @@ function jsonResponse(status: number, value: object) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("process case data boundary", () => {
+  test("includes derived judicial location and its legacy projection", () => {
+    expect(emptyProcessCaseData()).toMatchObject({
+      municipio_sede: "",
+      subsecao_judiciaria: "",
+      comarca_municipio: "",
+    });
+  });
+
   test("gets the exact workspace-scoped snapshot without a browser token", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(200, SNAPSHOT));
     vi.stubGlobal("fetch", fetchSpy);
@@ -47,7 +57,7 @@ describe("process case data boundary", () => {
     expect(fetchSpy.mock.calls[0][1].headers).not.toHaveProperty("X-Local-API-Token");
   });
 
-  test("saves all eight exact text fields only after an explicit call", async () => {
+  test("saves all ten exact text fields only after an explicit call", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(200, SNAPSHOT));
     vi.stubGlobal("fetch", fetchSpy);
     const draft = { ...DATA };

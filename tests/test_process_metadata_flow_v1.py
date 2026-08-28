@@ -263,7 +263,7 @@ def test_import_persists_redacted_field_provenance_separately_from_effective_dat
     assert extraction.artifact_id == str(DOCUMENT_ID)
     payload = thaw_payload(extraction.payload)
     serialized = json.dumps(payload, ensure_ascii=False)
-    assert payload["schema_version"] == 5
+    assert payload["schema_version"] == 6
     assert payload["document_sha256"] == "b" * 64
     assert payload["page_evidence"][0]["document_sha256"] == "b" * 64
     assert payload["document_id"] == str(DOCUMENT_ID)
@@ -534,10 +534,13 @@ def test_legacy_extraction_is_explicitly_rebound_to_the_immutable_document_ident
     legacy["schema_version"] = 1
     legacy.pop("document_sha256")
     legacy.pop("page_evidence")
+    legacy["fields"].pop("municipio_sede")
+    legacy["fields"].pop("subsecao_judiciaria")
     v2_only = {
         "extraction_mode", "ocr_engine", "engine_version", "model_version",
         "ocr_confidence", "bounding_box",
         "evidence_id", "source_text", "source_start", "requires_source_selection",
+        "source_role", "derivation_authority", "derivation_reference",
     }
     for field in legacy["fields"].values():
         for evidence in field["evidence"]:
@@ -577,9 +580,13 @@ def test_legacy_extraction_rejects_evidence_from_a_different_source_filename():
     legacy["schema_version"] = 1
     legacy.pop("document_sha256")
     legacy.pop("page_evidence")
+    legacy["fields"].pop("municipio_sede")
+    legacy["fields"].pop("subsecao_judiciaria")
     v2_only = {
         "extraction_mode", "ocr_engine", "engine_version", "model_version",
         "ocr_confidence", "bounding_box",
+        "evidence_id", "source_text", "source_start", "requires_source_selection",
+        "source_role", "derivation_authority", "derivation_reference",
     }
     for field in legacy["fields"].values():
         for evidence in field["evidence"]:
@@ -619,6 +626,8 @@ def test_legacy_extraction_cannot_promote_a_confident_field_without_provenance()
     legacy["schema_version"] = 1
     legacy.pop("document_sha256")
     legacy.pop("page_evidence")
+    legacy["fields"].pop("municipio_sede")
+    legacy["fields"].pop("subsecao_judiciaria")
     legacy["fields"]["numero_processo"]["evidence"] = []
     persisted = ArtifactRevision(
         workspace_id=WORKSPACE_ID,
@@ -672,6 +681,8 @@ def test_legacy_extraction_cannot_smuggle_ocr_evidence_without_page_provenance()
     legacy["schema_version"] = 1
     legacy.pop("document_sha256")
     legacy.pop("page_evidence")
+    legacy["fields"].pop("municipio_sede")
+    legacy["fields"].pop("subsecao_judiciaria")
     legacy["text_state"] = (
         PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE.value
     )
@@ -708,12 +719,16 @@ def test_legacy_unavailable_document_cannot_retain_native_field_evidence():
     legacy["schema_version"] = 1
     legacy.pop("document_sha256")
     legacy.pop("page_evidence")
+    legacy["fields"].pop("municipio_sede")
+    legacy["fields"].pop("subsecao_judiciaria")
     legacy["text_state"] = (
         PdfTextExtractionState.TEXT_EXTRACTION_UNAVAILABLE.value
     )
     v2_only = {
         "extraction_mode", "ocr_engine", "engine_version", "model_version",
         "ocr_confidence", "bounding_box",
+        "evidence_id", "source_text", "source_start", "requires_source_selection",
+        "source_role", "derivation_authority", "derivation_reference",
     }
     for field in legacy["fields"].values():
         for evidence in field["evidence"]:
@@ -816,7 +831,12 @@ def test_partial_document_cannot_be_reported_as_fully_extracted():
     )
     assert all(
         field.state is FieldExtractionState.AMBIGUOUS
-        for field in document.fields.values()
+        for name, field in document.fields.items()
+        if name not in {"municipio_sede", "subsecao_judiciaria", "comarca_municipio"}
+    )
+    assert all(
+        document.fields[name].state is FieldExtractionState.NOT_FOUND
+        for name in {"municipio_sede", "subsecao_judiciaria", "comarca_municipio"}
     )
     assert all(field.value == "" for field in document.fields.values())
 
@@ -1025,9 +1045,11 @@ def test_local_api_exposes_review_without_raw_text_path_or_token():
     assert set(payload["fields"]) == {
         "numero_processo",
         "ramo_justica",
-        "tribunal",
-        "vara",
-        "comarca_municipio",
+            "tribunal",
+            "vara",
+            "municipio_sede",
+            "subsecao_judiciaria",
+            "comarca_municipio",
         "uf",
         "parte_requerente",
         "parte_requerida",

@@ -5,6 +5,8 @@ export const PROCESS_METADATA_FIELDS = [
   "ramo_justica",
   "tribunal",
   "vara",
+  "municipio_sede",
+  "subsecao_judiciaria",
   "comarca_municipio",
   "uf",
   "parte_requerente",
@@ -47,6 +49,17 @@ export type ProcessMetadataEvidence = {
   source_text: string;
   source_start: number;
   requires_source_selection: boolean;
+  source_role:
+    | "PRIMARY_PROCESS_COVER"
+    | "PRIMARY_PROCESS_HEADER"
+    | "PRIMARY_PARTY_STRUCTURE"
+    | "PRIMARY_PROCESS_DOCUMENT"
+    | "REFERENCED_CASE"
+    | "CITED_JURISPRUDENCE"
+    | "ANNEX_DOCUMENT"
+    | "UNKNOWN_SOURCE_CONTEXT";
+  derivation_authority: string;
+  derivation_reference: string;
 };
 
 export type ProcessMetadataField = {
@@ -123,7 +136,8 @@ function parseEvidence(
     "extraction_method", "extraction_timestamp", "source_filename", "normalized_text_span",
     "extraction_mode", "ocr_engine", "engine_version", "model_version", "ocr_confidence",
     "bounding_box", "evidence_id", "source_text", "source_start",
-    "requires_source_selection",
+    "requires_source_selection", "source_role", "derivation_authority",
+    "derivation_reference",
   ]) || record.workspace_id !== workspaceId || typeof record.document_id !== "string"
     || !UUID.test(record.document_id) || record.field_name !== fieldName
     || typeof record.extracted_value !== "string" || !Number.isSafeInteger(record.source_page)
@@ -136,6 +150,14 @@ function parseEvidence(
     || typeof record.source_text !== "string"
     || !Number.isSafeInteger(record.source_start) || (record.source_start as number) < 0
     || typeof record.requires_source_selection !== "boolean"
+    || ![
+      "PRIMARY_PROCESS_COVER", "PRIMARY_PROCESS_HEADER", "PRIMARY_PARTY_STRUCTURE",
+      "PRIMARY_PROCESS_DOCUMENT", "REFERENCED_CASE", "CITED_JURISPRUDENCE",
+      "ANNEX_DOCUMENT", "UNKNOWN_SOURCE_CONTEXT",
+    ]
+      .includes(record.source_role as string)
+    || typeof record.derivation_authority !== "string"
+    || typeof record.derivation_reference !== "string"
     || (record.requires_source_selection === true
       && (!record.source_text || record.extracted_value !== ""))) {
     throw new ProcessMetadataApiError("invalid-response", "Resposta local inválida");

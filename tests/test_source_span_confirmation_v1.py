@@ -71,9 +71,35 @@ class StaticProcessCase:
 class RecordingSave:
     def __init__(self):
         self.calls = []
+        self.atomic_calls = []
 
     def execute(self, workspace_id, data, expected_revision):
         self.calls.append((workspace_id, data, expected_revision))
+        return ProcessCaseSnapshot(
+            workspace_id,
+            1 if expected_revision is None else expected_revision + 1,
+            "2026-08-28T18:05:00+00:00",
+            data,
+        )
+
+    def execute_with_source_confirmation(
+        self,
+        workspace_id,
+        data,
+        expected_revision,
+        *,
+        confirmation,
+        source_expectations,
+    ):
+        self.atomic_calls.append(
+            (
+                workspace_id,
+                data,
+                expected_revision,
+                confirmation,
+                source_expectations,
+            )
+        )
         return ProcessCaseSnapshot(
             workspace_id,
             1 if expected_revision is None else expected_revision + 1,
@@ -118,6 +144,14 @@ def review_for(source: str, *, workspace_id=WORKSPACE_A):
         ),
         "f" * 64,
         (document_metadata_payload(document),),
+        (
+            {
+                "artifact_kind": "PROCESS_METADATA_EXTRACTION",
+                "artifact_id": str(DOCUMENT_ID),
+                "revision": 1,
+                "checksum_sha256": "c" * 64,
+            },
+        ),
     )
 
 
@@ -128,9 +162,6 @@ def service_for(review, *, process_case=None):
         StaticProcessCase() if process_case is None else process_case,
         save,
         StaticReview(review),
-        revisions,
-        FixedClock(),
-        SequenceIds(),
     )
     return service, save, revisions
 
@@ -163,8 +194,9 @@ def test_server_derives_exact_human_confirmed_value_from_trusted_source_offsets(
     )
 
     assert snapshot.data.parte_requerente == selected
-    assert save.calls[0][1].parte_requerente == selected
-    payload = revisions.calls[0]["payload"]
+    assert save.calls == []
+    assert save.atomic_calls[0][1].parte_requerente == selected
+    payload = save.atomic_calls[0][3]["payload"]
     assert payload["decision"] == "HUMAN_CONFIRMED"
     assert payload["selected_value"] == selected
     assert payload["source_start"] == evidence.source_start + start
@@ -172,6 +204,8 @@ def test_server_derives_exact_human_confirmed_value_from_trusted_source_offsets(
     assert payload["document_id"] == str(DOCUMENT_ID)
     assert payload["document_sha256"] == "a" * 64
     assert payload["source_page"] == 1
+    assert save.atomic_calls[0][4]
+    assert revisions.calls == []
 
 
 @pytest.mark.parametrize(

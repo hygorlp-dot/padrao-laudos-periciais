@@ -560,6 +560,47 @@ class SaveProcessCase:
         )
         return _process_case_snapshot(record, workspace_id)
 
+    def execute_with_source_confirmation(
+        self,
+        workspace_id: WorkspaceId,
+        data: ProcessCaseData,
+        expected_revision: int | None,
+        *,
+        confirmation: dict[str, object],
+        source_expectations: tuple[dict[str, object], ...],
+    ) -> ProcessCaseSnapshot:
+        workspace_id = _require_workspace(self.workspaces, workspace_id)
+        if type(data) is not ProcessCaseData:
+            raise TypeError("dados processuais inválidos")
+        if (
+            type(confirmation) is not dict
+            or set(confirmation) != {"artifact_id", "payload"}
+            or type(source_expectations) is not tuple
+            or not source_expectations
+        ):
+            raise ValueError("confirmação de fonte inválida")
+        created_at = _generated_timestamp(self.clock)
+        process_record, _ = self.revisions.append_pair_if_latest(
+            workspace_id=workspace_id,
+            first={
+                "artifact_kind": _PROCESS_CASE_ARTIFACT_KIND,
+                "artifact_id": _PROCESS_CASE_ARTIFACT_ID,
+                "revision_id": str(_generated_uuid(self.ids)),
+                "created_at": created_at,
+                "payload": data.as_dict(),
+            },
+            second={
+                "artifact_kind": _PROCESS_METADATA_SOURCE_CONFIRMATION_KIND,
+                "artifact_id": confirmation["artifact_id"],
+                "revision_id": str(_generated_uuid(self.ids)),
+                "created_at": created_at,
+                "payload": confirmation["payload"],
+            },
+            expected_first_revision=expected_revision,
+            expected_latest=source_expectations,
+        )
+        return _process_case_snapshot(process_record, workspace_id)
+
 
 @dataclass(frozen=True, slots=True)
 class GetProcessMetadataReview:
@@ -584,6 +625,7 @@ class GetProcessMetadataReview:
             documents=(),
             extraction_fingerprint=_metadata_extraction_fingerprint(snapshot),
             document_payloads=(),
+            source_expectations=(),
         )
 
     def execute(self, workspace_id: WorkspaceId) -> ProcessMetadataReview:
@@ -595,6 +637,7 @@ class GetProcessMetadataReview:
         payloads = []
         summaries = []
         snapshot = []
+        source_expectations = []
         missing_extraction = False
         for document in document_records:
             revision = self.revisions.latest(
@@ -615,6 +658,14 @@ class GetProcessMetadataReview:
                     {
                         "document_id": str(document.content_id),
                         "extraction_revision": None,
+                    }
+                )
+                source_expectations.append(
+                    {
+                        "artifact_kind": _PROCESS_METADATA_EXTRACTION_KIND,
+                        "artifact_id": str(document.content_id),
+                        "revision": None,
+                        "checksum_sha256": None,
                     }
                 )
                 continue
@@ -645,6 +696,14 @@ class GetProcessMetadataReview:
                     "extraction_revision": revision.revision,
                     "extraction_checksum": revision.checksum_sha256,
                     "payload": thaw_payload(revision.payload),
+                }
+            )
+            source_expectations.append(
+                {
+                    "artifact_kind": _PROCESS_METADATA_EXTRACTION_KIND,
+                    "artifact_id": str(document.content_id),
+                    "revision": revision.revision,
+                    "checksum_sha256": revision.checksum_sha256,
                 }
             )
         aggregate = aggregate_process_metadata(tuple(extractions))
@@ -694,6 +753,7 @@ class GetProcessMetadataReview:
             tuple(summaries),
             extraction_fingerprint,
             tuple(payloads),
+            tuple(source_expectations),
         )
 
 
@@ -733,9 +793,6 @@ class ConfirmProcessMetadataSourceSpan:
     process_case: object
     save_process_case: object
     metadata_review: GetProcessMetadataReview
-    revisions: ArtifactRevisionRepository
-    clock: Clock
-    ids: IdGenerator
 
     def execute(
         self,
@@ -837,10 +894,34 @@ class ConfirmProcessMetadataSourceSpan:
                 field_name: selected_value,
             }
         )
-        snapshot = self.save_process_case.execute(
+        confirmation_payload = {
+            "schema_version": 1,
+            "decision": "HUMAN_CONFIRMED",
+            "field_name": field_name,
+            "process_case_revision": (
+                1 if expected_revision is None else expected_revision + 1
+            ),
+            "extraction_fingerprint": review.extraction_fingerprint,
+            "evidence_id": evidence.evidence_id,
+            "document_id": str(evidence.document_id),
+            "document_sha256": document_sha256,
+            "source_page": evidence.source_page,
+            "evidence_source_start": evidence.source_start,
+            "selection_start": source_start,
+            "selection_end": source_end,
+            "source_start": evidence.source_start + source_start,
+            "source_end": evidence.source_start + source_end,
+            "selected_value": selected_value,
+        }
+        snapshot = self.save_process_case.execute_with_source_confirmation(
             workspace_id,
             updated_data,
             expected_revision,
+            confirmation={
+                "artifact_id": field_name,
+                "payload": confirmation_payload,
+            },
+            source_expectations=review.source_expectations,
         )
         if (
             type(snapshot) is not ProcessCaseSnapshot
@@ -849,30 +930,8 @@ class ConfirmProcessMetadataSourceSpan:
             or snapshot.revision is None
         ):
             raise RepositoryIntegrityError("confirmação processual divergente")
-        self.revisions.append(
-            workspace_id=workspace_id,
-            artifact_kind=_PROCESS_METADATA_SOURCE_CONFIRMATION_KIND,
-            artifact_id=field_name,
-            revision_id=str(_generated_uuid(self.ids)),
-            created_at=_generated_timestamp(self.clock),
-            payload={
-                "schema_version": 1,
-                "decision": "HUMAN_CONFIRMED",
-                "field_name": field_name,
-                "process_case_revision": snapshot.revision,
-                "extraction_fingerprint": review.extraction_fingerprint,
-                "evidence_id": evidence.evidence_id,
-                "document_id": str(evidence.document_id),
-                "document_sha256": document_sha256,
-                "source_page": evidence.source_page,
-                "evidence_source_start": evidence.source_start,
-                "selection_start": source_start,
-                "selection_end": source_end,
-                "source_start": evidence.source_start + source_start,
-                "source_end": evidence.source_start + source_end,
-                "selected_value": selected_value,
-            },
-        )
+        if confirmation_payload["process_case_revision"] != snapshot.revision:
+            raise RepositoryIntegrityError("revisão da proveniência divergente")
         return snapshot
 
 
@@ -897,6 +956,7 @@ class AppendArtifactRevision:
             _PROCESS_CASE_ARTIFACT_KIND,
             _PROCESS_METADATA_EXTRACTION_KIND,
             _PROCESS_METADATA_CONFIRMATION_KIND,
+            _PROCESS_METADATA_SOURCE_CONFIRMATION_KIND,
             "OCR_PAGE_CACHE_V1",
         }:
             raise ValueError("identidade de artefato reservada")

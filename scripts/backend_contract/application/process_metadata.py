@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
-from dataclasses import dataclass
+from bisect import bisect_right
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType
 
 from .models import PrivateContentId, WorkspaceId, canonical_payload_json, thaw_payload
+from .judicial_unit_directory import resolve_judicial_unit
 from .pje_party_table import PjePartyPole, parse_pje_party_table
 
 
@@ -19,10 +21,17 @@ PROCESS_METADATA_FIELDS = (
     "ramo_justica",
     "tribunal",
     "vara",
+    "municipio_sede",
+    "subsecao_judiciaria",
     "comarca_municipio",
     "uf",
     "parte_requerente",
     "parte_requerida",
+)
+_LEGACY_PROCESS_METADATA_FIELDS = tuple(
+    field
+    for field in PROCESS_METADATA_FIELDS
+    if field not in {"municipio_sede", "subsecao_judiciaria"}
 )
 _CNJ_PATTERN = re.compile(
     r"(?<!\d)(\d{7})-(\d{2})\.(\d{4})\.([1-9])\.(\d{2})\.(\d{4})(?!\d)"
@@ -72,6 +81,17 @@ class FieldExtractionState(StrEnum):
     AMBIGUOUS = "AMBIGUOUS"
     NOT_FOUND = "NOT_FOUND"
     CONFLICTING = "CONFLICTING"
+
+
+class ProcessMetadataSourceRole(StrEnum):
+    PRIMARY_PROCESS_COVER = "PRIMARY_PROCESS_COVER"
+    PRIMARY_PROCESS_HEADER = "PRIMARY_PROCESS_HEADER"
+    PRIMARY_PARTY_STRUCTURE = "PRIMARY_PARTY_STRUCTURE"
+    PRIMARY_PROCESS_DOCUMENT = "PRIMARY_PROCESS_DOCUMENT"
+    REFERENCED_CASE = "REFERENCED_CASE"
+    CITED_JURISPRUDENCE = "CITED_JURISPRUDENCE"
+    ANNEX_DOCUMENT = "ANNEX_DOCUMENT"
+    UNKNOWN_SOURCE_CONTEXT = "UNKNOWN_SOURCE_CONTEXT"
 
 
 class PageExtractionMode(StrEnum):
@@ -258,6 +278,11 @@ class FieldEvidence:
     source_text: str = ""
     source_start: int = 0
     requires_source_selection: bool = False
+    source_role: ProcessMetadataSourceRole = (
+        ProcessMetadataSourceRole.UNKNOWN_SOURCE_CONTEXT
+    )
+    derivation_authority: str = ""
+    derivation_reference: str = ""
 
     def __post_init__(self):
         if type(self.source_page) is not int or self.source_page < 1:
@@ -280,6 +305,14 @@ class FieldEvidence:
             raise ValueError("offset da proveniência inválido")
         if type(self.requires_source_selection) is not bool:
             raise TypeError("contrato de seleção da proveniência inválido")
+        if type(self.source_role) is not ProcessMetadataSourceRole:
+            raise TypeError("papel da fonte inválido")
+        if (
+            type(self.derivation_authority) is not str
+            or type(self.derivation_reference) is not str
+            or bool(self.derivation_authority) != bool(self.derivation_reference)
+        ):
+            raise ValueError("proveniência da derivação inválida")
         if self.requires_source_selection and (
             not self.source_text or self.extracted_value
         ):
@@ -312,6 +345,13 @@ class FieldEvidence:
 
     @property
     def evidence_id(self) -> str:
+        return self._identity(include_authority=True)
+
+    @property
+    def legacy_v5_evidence_id(self) -> str:
+        return self._identity(include_authority=False)
+
+    def _identity(self, *, include_authority: bool) -> str:
         identity = {
             "workspace_id": str(self.workspace_id),
             "document_id": str(self.document_id),
@@ -334,6 +374,14 @@ class FieldEvidence:
             "source_start": self.source_start,
             "requires_source_selection": self.requires_source_selection,
         }
+        if include_authority:
+            identity.update(
+                {
+                    "source_role": self.source_role.value,
+                    "derivation_authority": self.derivation_authority,
+                    "derivation_reference": self.derivation_reference,
+                }
+            )
         return hashlib.sha256(
             canonical_payload_json(identity).encode("utf-8")
         ).hexdigest()
@@ -359,6 +407,9 @@ class FieldEvidence:
             "source_text": self.source_text,
             "source_start": self.source_start,
             "requires_source_selection": self.requires_source_selection,
+            "source_role": self.source_role.value,
+            "derivation_authority": self.derivation_authority,
+            "derivation_reference": self.derivation_reference,
         }
 
 
@@ -379,6 +430,7 @@ class _CnjCandidate:
     end: int
     explicit_primary_anchor: bool
     rejects_primary_anchor: bool
+    source_role: ProcessMetadataSourceRole
 
 
 @dataclass(frozen=True, slots=True)
@@ -468,6 +520,7 @@ class ProcessMetadataReview:
     documents: tuple[DocumentExtractionSummary, ...]
     extraction_fingerprint: str
     document_payloads: tuple[object, ...]
+    source_expectations: tuple[dict[str, object], ...] = ()
 
 
 def validate_cnj_number(value: str) -> CnjNumber:
@@ -540,6 +593,11 @@ def _evidence(
     span: str,
     source_start: int | None = None,
     requires_source_selection: bool = False,
+    source_role: ProcessMetadataSourceRole = (
+        ProcessMetadataSourceRole.UNKNOWN_SOURCE_CONTEXT
+    ),
+    derivation_authority: str = "",
+    derivation_reference: str = "",
 ) -> FieldEvidence:
     normalized_span = _ascii_upper(" ".join(span.split()))
     matching_block = None
@@ -597,6 +655,9 @@ def _evidence(
             else source_start
         ),
         requires_source_selection=requires_source_selection,
+        source_role=source_role,
+        derivation_authority=derivation_authority,
+        derivation_reference=derivation_reference,
     )
 
 
@@ -670,18 +731,136 @@ def _is_explicit_primary_cnj(page: PdfTextPage, start: int, end: int) -> bool:
     ) is not None
 
 
+def _has_primary_header_structure(page: PdfTextPage) -> bool:
+    normalized = _ascii_upper(page.text)
+    institutional_heading = any(
+        marker in normalized
+        for marker in (
+            "PODER JUDICIARIO",
+            "JUSTICA FEDERAL",
+            "TRIBUNAL REGIONAL FEDERAL",
+        )
+    )
+    process_structure = any(
+        marker in normalized
+        for marker in ("ORGAO JULGADOR", "POLO ATIVO", "POLO PASSIVO")
+    )
+    if not process_structure:
+        process_structure = (
+            "VARA FEDERAL" in normalized
+            and bool(re.search(r"(?m)^\s*(?:AUTOR|AUTORA|REQUERENTE|EXEQUENTE)\s*:", normalized))
+            and bool(re.search(r"(?m)^\s*(?:REU|REQUERIDO|REQUERIDA|EXECUTADO|EXECUTADA)\s*:", normalized))
+        )
+    return institutional_heading and process_structure
+
+
+def _has_primary_cover_structure(page: PdfTextPage) -> bool:
+    normalized = _ascii_upper(page.text)
+    return (
+        any(
+            marker in normalized
+            for marker in (
+                "PODER JUDICIARIO",
+                "JUSTICA FEDERAL",
+                "TRIBUNAL REGIONAL FEDERAL",
+            )
+        )
+        and any(marker in normalized for marker in ("PJE", "CAPA DO PROCESSO"))
+    )
+
+
+def _has_primary_document_structure(page: PdfTextPage) -> bool:
+    normalized = _ascii_upper(page.text)
+    return (
+        "VARA FEDERAL" in normalized
+        and bool(re.search(r"(?m)^\s*(?:AUTOR|AUTORA|REQUERENTE|EXEQUENTE)\s*:", normalized))
+        and bool(re.search(r"(?m)^\s*(?:REU|REQUERIDO|REQUERIDA|EXECUTADO|EXECUTADA)\s*:", normalized))
+    )
+
+
+def _non_primary_heading_role(line: str) -> ProcessMetadataSourceRole | None:
+    if re.fullmatch(
+        r"(?:JURISPRUDENCIA(?:\s+REFERENCIADA)?|EMENTA|ACORDAO(?:\s+CITADO)?|PRECEDENTE)",
+        line,
+    ):
+        return ProcessMetadataSourceRole.CITED_JURISPRUDENCE
+    if re.fullmatch(r"ANEXO(?:\s+[A-Z0-9.-]+)?", line):
+        return ProcessMetadataSourceRole.ANNEX_DOCUMENT
+    if re.fullmatch(
+        r"(?:PROCESSO|AUTOS|FEITO)\s+(?:REFERENCIADO|RELACIONADO|VINCULADO)",
+        line,
+    ):
+        return ProcessMetadataSourceRole.REFERENCED_CASE
+    return None
+
+
+def _declared_non_primary_source_segments(
+    page: PdfTextPage,
+) -> tuple[tuple[int, ...], tuple[ProcessMetadataSourceRole, ...]]:
+    starts = []
+    roles = []
+    offset = 0
+    for raw_line in page.text.splitlines(keepends=True):
+        role = _non_primary_heading_role(_ascii_upper(raw_line.strip()))
+        if role is not None:
+            starts.append(offset)
+            roles.append(role)
+        offset += len(raw_line)
+    return tuple(starts), tuple(roles)
+
+
+def _declared_non_primary_role_at(
+    segments: tuple[tuple[int, ...], tuple[ProcessMetadataSourceRole, ...]],
+    start: int,
+) -> ProcessMetadataSourceRole | None:
+    starts, roles = segments
+    index = bisect_right(starts, start) - 1
+    return None if index < 0 else roles[index]
+
+
+def _source_role_for_cnj(
+    page: PdfTextPage,
+    start: int,
+    end: int,
+    *,
+    declared_non_primary_segments: tuple[
+        tuple[int, ...], tuple[ProcessMetadataSourceRole, ...]
+    ],
+) -> ProcessMetadataSourceRole:
+    declared_non_primary_role = _declared_non_primary_role_at(
+        declared_non_primary_segments, start
+    )
+    if declared_non_primary_role is not None:
+        return declared_non_primary_role
+    if _rejects_primary_cnj(page, start, end):
+        return ProcessMetadataSourceRole.REFERENCED_CASE
+    if not _is_explicit_primary_cnj(page, start, end):
+        return ProcessMetadataSourceRole.UNKNOWN_SOURCE_CONTEXT
+    if _has_primary_header_structure(page):
+        return ProcessMetadataSourceRole.PRIMARY_PROCESS_HEADER
+    if _has_primary_cover_structure(page):
+        return ProcessMetadataSourceRole.PRIMARY_PROCESS_COVER
+    if _has_primary_document_structure(page):
+        return ProcessMetadataSourceRole.PRIMARY_PROCESS_DOCUMENT
+    return ProcessMetadataSourceRole.UNKNOWN_SOURCE_CONTEXT
+
+
 def _resolved_primary_cnj(
     candidates: list[_CnjCandidate],
     *,
-    first_textual_page: int | None,
     cnj_starts_by_page: dict[int, list[int]],
 ) -> tuple[ExtractedField, _CnjCandidate | None]:
     if not candidates:
         return ExtractedField(FieldExtractionState.NOT_FOUND, "", ()), None
+    eligible_roles = {
+        ProcessMetadataSourceRole.PRIMARY_PROCESS_COVER,
+        ProcessMetadataSourceRole.PRIMARY_PROCESS_HEADER,
+        ProcessMetadataSourceRole.PRIMARY_PROCESS_DOCUMENT,
+    }
     strong_values = {
         candidate.number.canonical
         for candidate in candidates
-        if candidate.page.number == first_textual_page
+        if candidate.source_role in eligible_roles
         and candidate.explicit_primary_anchor
         and not candidate.rejects_primary_anchor
     }
@@ -725,7 +904,7 @@ def _resolved_primary_cnj(
         candidate
         for candidate in candidates
         if candidate.number.canonical == selected_value
-        and candidate.page.number == first_textual_page
+        and candidate.source_role in eligible_roles
         and candidate.explicit_primary_anchor
         and not candidate.rejects_primary_anchor
     )
@@ -781,6 +960,10 @@ def extract_process_metadata(
     }
     cnj_candidates: list[_CnjCandidate] = []
     cnj_starts_by_page: dict[int, list[int]] = {}
+    declared_non_primary_segments = {
+        page.number: _declared_non_primary_source_segments(page)
+        for page in text.pages
+    }
 
     def add(
         field: str,
@@ -853,6 +1036,12 @@ def extract_process_metadata(
         start: int,
         end: int,
     ) -> None:
+        source_role = _source_role_for_cnj(
+            page,
+            start,
+            end,
+            declared_non_primary_segments=declared_non_primary_segments[page.number],
+        )
         evidence = _evidence(
             workspace_id=workspace_id,
             document_id=document_id,
@@ -863,6 +1052,7 @@ def extract_process_metadata(
             source_filename=source_filename,
             span=span,
             source_start=start,
+            source_role=source_role,
         )
         add(
             "ramo_justica",
@@ -898,6 +1088,7 @@ def extract_process_metadata(
                 end,
                 _is_explicit_primary_cnj(page, start, end),
                 _rejects_primary_cnj(page, start, end),
+                source_role,
             )
         )
 
@@ -1042,15 +1233,6 @@ def extract_process_metadata(
                 normalized_line,
             )
             if location_match:
-                raw_location = location_match.group(1).strip()
-                location_words = [word.capitalize() for word in raw_location.split()]
-                add(
-                    "comarca_municipio",
-                    " ".join(location_words),
-                    page,
-                    line,
-                    source_start=line_start,
-                )
                 add(
                     "uf",
                     location_match.group(2),
@@ -1077,13 +1259,8 @@ def extract_process_metadata(
                 )
             line_start += len(raw_line)
 
-    first_textual_page = next(
-        (page.number for page in text.pages if page.text.strip()),
-        None,
-    )
     number_field, primary_candidate = _resolved_primary_cnj(
         cnj_candidates,
-        first_textual_page=first_textual_page,
         cnj_starts_by_page=cnj_starts_by_page,
     )
     number_low_confidence = tuple(
@@ -1126,18 +1303,80 @@ def extract_process_metadata(
         for field in PROCESS_METADATA_FIELDS:
             if field == "numero_processo":
                 continue
+            source_role = (
+                ProcessMetadataSourceRole.PRIMARY_PARTY_STRUCTURE
+                if field in {"parte_requerente", "parte_requerida"}
+                else primary_candidate.source_role
+            )
             candidates[field] = [
-                candidate
+                replace(
+                    candidate,
+                    evidence=replace(candidate.evidence, source_role=source_role),
+                )
                 for candidate in candidates[field]
                 if candidate.page.number == primary_candidate.page.number
                 and 0 <= candidate.start < primary_section_end
             ]
             low_confidence[field] = [
-                candidate
+                replace(
+                    candidate,
+                    evidence=replace(candidate.evidence, source_role=source_role),
+                )
                 for candidate in low_confidence[field]
                 if candidate.page.number == primary_candidate.page.number
                 and 0 <= candidate.start < primary_section_end
             ]
+        primary_uf = next(
+            (
+                candidate.evidence.extracted_value
+                for candidate in candidates["uf"]
+                if candidate.evidence.extracted_value in _BRAZILIAN_UF_CODES
+            ),
+            "",
+        )
+        unit_candidate = next(
+            (
+                candidate
+                for candidate in candidates["vara"]
+                if re.fullmatch(r"(\d{1,3})ª Vara Federal", candidate.evidence.extracted_value)
+            ),
+            None,
+        )
+        federal_region = _FEDERAL_TRIBUNAL_REGIONS.get(primary_cnj.tribunal_code)
+        if primary_uf and unit_candidate is not None and federal_region is not None:
+            unit_number = int(
+                re.fullmatch(
+                    r"(\d{1,3})ª Vara Federal", unit_candidate.evidence.extracted_value
+                ).group(1)
+            )
+            location = resolve_judicial_unit(
+                tribunal=f"TRF{federal_region}",
+                uf=primary_uf,
+                unit_type="VARA_FEDERAL",
+                unit_number=unit_number,
+            )
+            if location is not None:
+                for field, value in (
+                    ("municipio_sede", location.municipio_sede),
+                    ("subsecao_judiciaria", location.subsecao_judiciaria),
+                    ("comarca_municipio", location.municipio_sede),
+                ):
+                    candidates[field] = [
+                        _FieldCandidate(
+                            replace(
+                                unit_candidate.evidence,
+                                field_name=field,
+                                extracted_value=value,
+                                source_role=(
+                                    primary_candidate.source_role
+                                ),
+                                derivation_authority=location.authority,
+                                derivation_reference=location.source_reference,
+                            ),
+                            unit_candidate.page,
+                            unit_candidate.start,
+                        )
+                    ]
     else:
         for field in PROCESS_METADATA_FIELDS:
             if field == "numero_processo":
@@ -1273,7 +1512,7 @@ def document_metadata_payload(document: DocumentProcessMetadata) -> dict[str, ob
     if type(document) is not DocumentProcessMetadata:
         raise TypeError("extração documental inválida")
     return {
-        "schema_version": 5,
+        "schema_version": 6,
         "workspace_id": str(document.workspace_id),
         "document_id": str(document.document_id),
         "document_sha256": document.document_sha256,
@@ -1313,7 +1552,7 @@ def document_metadata_from_payload(
     value: object, *, legacy_document_sha256: str = ""
 ) -> DocumentProcessMetadata:
     payload = thaw_payload(value)
-    if type(payload) is not dict or payload.get("schema_version") not in {1, 2, 3, 4, 5}:
+    if type(payload) is not dict or payload.get("schema_version") not in {1, 2, 3, 4, 5, 6}:
         raise ValueError("extração documental persistida inválida")
     schema_version = payload["schema_version"]
     expected_keys = {
@@ -1324,7 +1563,7 @@ def document_metadata_from_payload(
         "text_state",
         "fields",
     }
-    if schema_version in {2, 3, 4, 5}:
+    if schema_version in {2, 3, 4, 5, 6}:
         expected_keys |= {"document_sha256", "page_evidence"}
     if set(payload) != expected_keys:
         raise ValueError("extração documental persistida inválida")
@@ -1380,10 +1619,15 @@ def document_metadata_from_payload(
         )
         pages.append(page)
     raw_fields = payload["fields"]
-    if type(raw_fields) is not dict or set(raw_fields) != set(PROCESS_METADATA_FIELDS):
+    expected_field_names = (
+        set(PROCESS_METADATA_FIELDS)
+        if schema_version == 6
+        else set(_LEGACY_PROCESS_METADATA_FIELDS)
+    )
+    if type(raw_fields) is not dict or set(raw_fields) != expected_field_names:
         raise ValueError("campos de extração persistidos inválidos")
     fields = {}
-    for name in PROCESS_METADATA_FIELDS:
+    for name in expected_field_names:
         raw = raw_fields[name]
         if type(raw) is not dict or set(raw) != {"state", "value", "evidence"}:
             raise ValueError("campo de extração persistido inválido")
@@ -1416,10 +1660,19 @@ def document_metadata_from_payload(
                 "source_start",
                 "requires_source_selection",
             }
+            v6_evidence_keys = v5_evidence_keys | {
+                "source_role",
+                "derivation_authority",
+                "derivation_reference",
+            }
             expected_evidence_keys = (
                 legacy_evidence_keys
                 if schema_version == 1
-                else v5_evidence_keys if schema_version == 5 else v2_evidence_keys
+                else v6_evidence_keys
+                if schema_version == 6
+                else v5_evidence_keys
+                if schema_version == 5
+                else v2_evidence_keys
             )
             if type(item) is not dict or set(item) != expected_evidence_keys:
                 raise ValueError("proveniência persistida inválida")
@@ -1447,8 +1700,18 @@ def document_metadata_from_payload(
                 requires_source_selection=item.get(
                     "requires_source_selection", False
                 ),
+                source_role=ProcessMetadataSourceRole(
+                    item.get("source_role", "UNKNOWN_SOURCE_CONTEXT")
+                ),
+                derivation_authority=item.get("derivation_authority", ""),
+                derivation_reference=item.get("derivation_reference", ""),
             )
-            if schema_version == 5 and record.evidence_id != item["evidence_id"]:
+            persisted_evidence_id = (
+                record.evidence_id
+                if schema_version == 6
+                else record.legacy_v5_evidence_id
+            )
+            if schema_version in {5, 6} and persisted_evidence_id != item["evidence_id"]:
                 raise ValueError("identidade da evidência persistida diverge")
             if (
                 record.workspace_id != workspace_id
@@ -1462,6 +1725,8 @@ def document_metadata_from_payload(
             raw["value"],
             tuple(evidence),
         )
+    for name in set(PROCESS_METADATA_FIELDS) - set(fields):
+        fields[name] = ExtractedField(FieldExtractionState.NOT_FOUND, "", ())
     if schema_version == 1 and text_state is PdfTextExtractionState.AVAILABLE:
         text_state = PdfTextExtractionState.PARTIAL
     if (
@@ -1495,7 +1760,7 @@ def document_metadata_from_payload(
         document_sha256,
         tuple(pages),
     )
-    if schema_version in {2, 3, 4, 5}:
+    if schema_version in {2, 3, 4, 5, 6}:
         page_numbers = tuple(page.page_number for page in document.page_evidence)
         if page_numbers and page_numbers != tuple(range(1, len(page_numbers) + 1)):
             raise ValueError("cobertura de páginas persistida inválida")
@@ -1560,7 +1825,7 @@ def document_metadata_from_payload(
         for evidence in field.evidence:
             if evidence.source_filename != document.source_filename:
                 raise ValueError("arquivo da proveniência diverge do documento")
-            if schema_version in {2, 3, 4, 5}:
+            if schema_version in {2, 3, 4, 5, 6}:
                 page = textual_pages.get(evidence.source_page)
                 if (
                     page is None

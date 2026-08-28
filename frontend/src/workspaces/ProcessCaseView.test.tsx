@@ -12,6 +12,8 @@ const DATA = {
   ramo_justica: "Justiça Estadual",
   tribunal: "Tribunal de Justiça da Bahia",
   vara: "2ª Vara Cível",
+  municipio_sede: "Salvador",
+  subsecao_judiciaria: "Salvador",
   comarca_municipio: "Salvador",
   uf: "BA",
   parte_requerente: "Pessoa requerente",
@@ -48,6 +50,9 @@ function review(
         source_text: `${field}: ${values[field]}`,
         source_start: 0,
         requires_source_selection: false,
+        source_role: "PRIMARY_PROCESS_COVER",
+        derivation_authority: "",
+        derivation_reference: "",
         extraction_mode: "NATIVE_TEXT",
         ocr_engine: "",
         engine_version: "6.16.2",
@@ -101,7 +106,7 @@ describe("process case form", () => {
     expect(screen.queryByText(/C:\\|\/private|token/i)).not.toBeInTheDocument();
   });
 
-  test("loads eight real fields and confirms only through the explicit primary action", async () => {
+  test("loads ten real fields and confirms only through the explicit primary action", async () => {
     const fetchSpy = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(200, snapshot()))
@@ -113,11 +118,19 @@ describe("process case form", () => {
 
     expect(screen.getByRole("status")).toHaveTextContent("Carregando dados do processo");
     const number = await screen.findByRole("textbox", { name: "Número do processo" });
-    expect(screen.getAllByRole("textbox")).toHaveLength(8);
+    expect(screen.getAllByRole("textbox")).toHaveLength(10);
     await user.type(number, DATA.numero_processo);
     await user.type(screen.getByRole("textbox", { name: "Ramo da Justiça" }), DATA.ramo_justica);
     await user.type(screen.getByRole("textbox", { name: "Tribunal" }), DATA.tribunal);
     await user.type(screen.getByRole("textbox", { name: "Vara" }), DATA.vara);
+    await user.type(
+      screen.getByRole("textbox", { name: "Município-sede" }),
+      DATA.municipio_sede,
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Subseção judiciária" }),
+      DATA.subsecao_judiciaria,
+    );
     await user.type(
       screen.getByRole("textbox", { name: "Comarca ou município" }),
       DATA.comarca_municipio,
@@ -396,6 +409,9 @@ describe("process case form", () => {
     expect(sourceControl).toHaveValue(source);
     expect(sourceControl).toHaveAttribute("aria-readonly", "true");
     expect(sourceControl).not.toHaveAttribute("readonly");
+    const tribunal = screen.getByRole("textbox", { name: "Tribunal" });
+    await user.clear(tribunal);
+    await user.type(tribunal, "TRIBUNAL EM EDIÇÃO");
     await user.type(sourceControl, "NÃO É AUTORIDADE");
     expect(sourceControl).toHaveValue(source);
 
@@ -406,6 +422,7 @@ describe("process case form", () => {
     await user.click(screen.getByRole("button", { name: "Confirmar trecho para Parte requerente" }));
 
     expect(field).toHaveValue("PARTE ALFA");
+    expect(tribunal).toHaveValue("TRIBUNAL EM EDIÇÃO");
     const request = JSON.parse(fetchSpy.mock.calls[2][1].body);
     expect(request).toMatchObject({
       field_name: "parte_requerente",

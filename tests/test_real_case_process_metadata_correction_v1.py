@@ -26,6 +26,8 @@ WORKSPACE_ID = WorkspaceId(UUID("11111111-1111-4111-8111-111111111111"))
 DOCUMENT_ID = PrivateContentId(UUID("22222222-2222-4222-8222-222222222222"))
 PRIMARY_CNJ = "1234567-48.2024.4.01.0001"
 INCIDENTAL_CNJ = "7654321-12.2025.4.03.0001"
+PRIMARY_TRF5_CNJ = "1111111-08.2026.4.05.8302"
+FOREIGN_TRF1_CNJ = "2222222-21.2024.4.01.3400"
 
 
 def extract(*pages: PdfTextPage, state=PdfTextExtractionState.AVAILABLE):
@@ -59,6 +61,210 @@ def test_valid_cnj_without_primary_identity_anchor_is_ambiguous():
     assert field.state is FieldExtractionState.AMBIGUOUS
     assert field.value == ""
     assert [item.source_page for item in field.evidence] == [1]
+
+
+def test_structural_primary_header_after_receipt_excludes_cited_case_metadata():
+    metadata = extract(
+        PdfTextPage(1, "Comprovante sintético de protocolo sem identidade processual."),
+        PdfTextPage(
+            3,
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+            f"PROCESSO: {PRIMARY_TRF5_CNJ}\n"
+            "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+            "AUTOR: PARTE ALFA\n"
+            "RÉU: PARTE BETA",
+        ),
+        PdfTextPage(
+            20,
+            "JURISPRUDÊNCIA REFERENCIADA\n"
+            f"PROCESSO: {FOREIGN_TRF1_CNJ}\n"
+            "ÓRGÃO JULGADOR: 3ª Vara Federal DF\n"
+            "AUTOR: PARTE GAMA\n"
+            "RÉU: PARTE DELTA\n"
+            "SUBSEÇÃO JUDICIÁRIA: BRASÍLIA / DF",
+        ),
+    )
+
+    expected = {
+        "numero_processo": PRIMARY_TRF5_CNJ,
+        "ramo_justica": "Justiça Federal",
+        "tribunal": "Tribunal Regional Federal da 5ª Região",
+        "vara": "24ª Vara Federal",
+        "uf": "PE",
+    }
+    for field_name, value in expected.items():
+        field = metadata.fields[field_name]
+        assert field.state is FieldExtractionState.AMBIGUOUS
+        assert field.value == ""
+        assert [item.extracted_value for item in field.evidence] == [value]
+        assert {item.source_page for item in field.evidence} == {3}
+        assert {item.source_role.value for item in field.evidence} == {
+            "PRIMARY_PROCESS_HEADER"
+        }
+    for field_name, value in {
+        "parte_requerente": "PARTE ALFA",
+        "parte_requerida": "PARTE BETA",
+    }.items():
+        evidence = metadata.fields[field_name].evidence
+        assert len(evidence) == 1
+        assert evidence[0].source_page == 3
+        assert evidence[0].source_role.value == "PRIMARY_PARTY_STRUCTURE"
+        assert value in (evidence[0].extracted_value or evidence[0].source_text)
+    assert all(
+        item.source_page != 20
+        for field in metadata.fields.values()
+        for item in field.evidence
+    )
+
+
+def test_cited_page_cannot_become_primary_by_copying_a_complete_court_header():
+    metadata = extract(
+        PdfTextPage(1, "Comprovante sintético sem identidade processual."),
+        PdfTextPage(
+            3,
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+            f"PROCESSO: {PRIMARY_TRF5_CNJ}\n"
+            "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+            "POLO ATIVO\nPARTE ALFA - AUTOR\n"
+            "POLO PASSIVO\nPARTE BETA - RÉU",
+        ),
+        PdfTextPage(
+            20,
+            "JURISPRUDÊNCIA REFERENCIADA\n"
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 1ª REGIÃO\n"
+            f"PROCESSO: {FOREIGN_TRF1_CNJ}\n"
+            "ÓRGÃO JULGADOR: 3ª Vara Federal DF\n"
+            "POLO ATIVO\nPARTE GAMA - AUTOR\n"
+            "POLO PASSIVO\nPARTE DELTA - RÉU",
+        ),
+    )
+
+    number = metadata.fields["numero_processo"]
+    assert number.state is FieldExtractionState.AMBIGUOUS
+    assert [item.extracted_value for item in number.evidence] == [PRIMARY_TRF5_CNJ]
+    assert {item.source_page for item in number.evidence} == {3}
+    assert all(
+        item.source_page != 20
+        for field in metadata.fields.values()
+        for item in field.evidence
+    )
+
+
+def test_later_cited_block_on_the_primary_page_cannot_create_identity_conflict():
+    metadata = extract(
+        PdfTextPage(
+            1,
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+            f"PROCESSO: {PRIMARY_TRF5_CNJ}\n"
+            "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+            "POLO ATIVO\nPARTE ALFA - AUTOR\n"
+            "POLO PASSIVO\nPARTE BETA - RÉU\n"
+            "JURISPRUDÊNCIA REFERENCIADA\n"
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 1ª REGIÃO\n"
+            f"PROCESSO: {FOREIGN_TRF1_CNJ}\n"
+            "ÓRGÃO JULGADOR: 3ª Vara Federal DF\n"
+            "POLO ATIVO\nPARTE GAMA - AUTOR\n"
+            "POLO PASSIVO\nPARTE DELTA - RÉU",
+        )
+    )
+
+    number = metadata.fields["numero_processo"]
+    assert number.state is FieldExtractionState.AMBIGUOUS
+    assert [item.extracted_value for item in number.evidence] == [PRIMARY_TRF5_CNJ]
+    assert all(
+        FOREIGN_TRF1_CNJ not in item.extracted_value
+        and "PARTE GAMA" not in (item.extracted_value or item.source_text)
+        and "PARTE DELTA" not in (item.extracted_value or item.source_text)
+        for field in metadata.fields.values()
+        for item in field.evidence
+    )
+
+
+def test_first_page_position_alone_cannot_outvote_a_later_structural_header():
+    metadata = extract(
+        PdfTextPage(
+            1,
+            "Petição sintética com dado reproduzido.\n"
+            f"PROCESSO: {FOREIGN_TRF1_CNJ}\n"
+            "AUTOR: PARTE GAMA\nRÉU: PARTE DELTA",
+        ),
+        PdfTextPage(
+            3,
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+            f"PROCESSO: {PRIMARY_TRF5_CNJ}\n"
+            "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+            "POLO ATIVO\nPARTE ALFA - AUTOR\n"
+            "POLO PASSIVO\nPARTE BETA - RÉU",
+        ),
+    )
+
+    number = metadata.fields["numero_processo"]
+    assert number.state is FieldExtractionState.AMBIGUOUS
+    assert [item.extracted_value for item in number.evidence] == [PRIMARY_TRF5_CNJ]
+    assert all(
+        item.source_page != 1
+        for field in metadata.fields.values()
+        for item in field.evidence
+    )
+
+
+def test_known_judicial_unit_derives_location_and_legacy_projection():
+    metadata = extract(
+        PdfTextPage(
+            2,
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+            f"PROCESSO: {PRIMARY_TRF5_CNJ}\n"
+            "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+            "SUBSEÇÃO JUDICIÁRIA: CIDADE NARRATIVA / PE",
+        )
+    )
+
+    for field_name in (
+        "municipio_sede",
+        "subsecao_judiciaria",
+        "comarca_municipio",
+    ):
+        field = metadata.fields[field_name]
+        assert field.state is FieldExtractionState.AMBIGUOUS
+        assert field.value == ""
+        assert [item.extracted_value for item in field.evidence] == ["Caruaru"]
+        assert field.evidence[0].derivation_authority == "Justiça Federal em Pernambuco"
+        assert "jfpe.jus.br" in field.evidence[0].derivation_reference
+    assert all(
+        "CIDADE NARRATIVA" not in item.extracted_value
+        for field in metadata.fields.values()
+        for item in field.evidence
+    )
+
+
+def test_unknown_judicial_unit_does_not_promote_an_independent_city_mention():
+    metadata = extract(
+        PdfTextPage(
+            1,
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+            f"PROCESSO: {PRIMARY_TRF5_CNJ}\n"
+            "ÓRGÃO JULGADOR: 77ª Vara Federal PE\n"
+            "SUBSEÇÃO JUDICIÁRIA: CIDADE INVENTADA / PE",
+        )
+    )
+
+    for field_name in (
+        "municipio_sede",
+        "subsecao_judiciaria",
+        "comarca_municipio",
+    ):
+        field = metadata.fields[field_name]
+        assert field.state is FieldExtractionState.NOT_FOUND
+        assert field.value == ""
+        assert field.evidence == ()
 
 
 def test_unanchored_valid_cnj_surfaces_deterministic_justice_candidates_fail_closed():
@@ -254,6 +460,7 @@ def test_same_primary_cnj_on_reference_page_does_not_expand_identity_context():
         PdfTextPage(
             1,
             f"PROCESSO: {PRIMARY_CNJ}\n"
+            "2 VARA FEDERAL\n"
             "AUTOR: Parte principal\nREU: Parte contraria",
         ),
         PdfTextPage(
@@ -361,10 +568,13 @@ def test_legacy_v2_extraction_cannot_preserve_pre_fix_confidence():
     extracted = extract(PdfTextPage(1, f"PROCESSO: {PRIMARY_CNJ}"))
     payload = document_metadata_payload(extracted)
     payload["schema_version"] = 2
+    payload["fields"].pop("municipio_sede")
+    payload["fields"].pop("subsecao_judiciaria")
     for field in payload["fields"].values():
         for evidence in field["evidence"]:
             for key in (
-                "evidence_id", "source_text", "source_start", "requires_source_selection"
+                "evidence_id", "source_text", "source_start", "requires_source_selection",
+                "source_role", "derivation_authority", "derivation_reference",
             ):
                 evidence.pop(key)
 
@@ -380,10 +590,13 @@ def test_pre_fix_v3_extraction_cannot_preserve_confidence_after_reopen():
     extracted = extract(PdfTextPage(1, f"PROCESSO: {PRIMARY_CNJ}"))
     payload = document_metadata_payload(extracted)
     payload["schema_version"] = 3
+    payload["fields"].pop("municipio_sede")
+    payload["fields"].pop("subsecao_judiciaria")
     for field in payload["fields"].values():
         for evidence in field["evidence"]:
             for key in (
-                "evidence_id", "source_text", "source_start", "requires_source_selection"
+                "evidence_id", "source_text", "source_start", "requires_source_selection",
+                "source_role", "derivation_authority", "derivation_reference",
             ):
                 evidence.pop(key)
     payload["fields"]["numero_processo"]["state"] = "CONFIDENT"

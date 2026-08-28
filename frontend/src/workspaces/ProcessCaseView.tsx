@@ -30,6 +30,8 @@ const FIELDS: readonly {
   { key: "ramo_justica", label: "Ramo da Justiça" },
   { key: "tribunal", label: "Tribunal" },
   { key: "vara", label: "Vara" },
+  { key: "municipio_sede", label: "Município-sede" },
+  { key: "subsecao_judiciaria", label: "Subseção judiciária" },
   { key: "comarca_municipio", label: "Comarca ou município" },
   { key: "uf", label: "UF" },
   { key: "parte_requerente", label: "Parte requerente" },
@@ -237,11 +239,18 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
       );
       if (!controller.signal.aborted) {
         const field = sourceSelection.field;
-        setState({
-          ...state,
-          snapshot,
-          draft: { ...snapshot.data },
-        });
+        setState((current) =>
+          current.kind === "ready" && current.workspaceId === workspaceId
+            ? {
+              ...current,
+              snapshot,
+              draft: {
+                ...current.draft,
+                [field]: snapshot.data[field],
+              },
+            }
+            : current,
+        );
         setSourceSelection(null);
         setSourceConfirmation(field);
         setSaveState({ kind: "idle" });

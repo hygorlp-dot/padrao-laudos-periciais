@@ -195,7 +195,6 @@ def test_complete_process_identity_is_extracted_with_field_level_provenance():
         "ramo_justica": "Justiça Federal",
         "tribunal": "Tribunal Regional Federal da 5ª Região",
         "vara": "1ª Vara Federal",
-        "comarca_municipio": "Recife",
         "uf": "PE",
         "parte_requerente": "Maria da Conceicao Silva",
         "parte_requerida": "Construtora Sintetica Ltda",
@@ -219,6 +218,8 @@ def test_complete_process_identity_is_extracted_with_field_level_provenance():
         assert all(item.extraction_timestamp == EXTRACTED_AT for item in field.evidence)
         assert all(item.source_filename == "autos.pdf" for item in field.evidence)
         assert all("path" not in item.as_dict() for item in field.evidence)
+    for name in {"municipio_sede", "subsecao_judiciaria", "comarca_municipio"}:
+        assert result.fields[name].state is FieldExtractionState.NOT_FOUND
 
 
 def test_pje_cover_surfaces_header_unit_region_and_each_party_for_review():
