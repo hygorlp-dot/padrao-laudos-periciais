@@ -905,13 +905,14 @@ def extract_process_metadata(
             )
             if tribunal_match:
                 region = int(tribunal_match.group(1))
-                add(
-                    "tribunal",
-                    f"Tribunal Regional Federal da {region}ª Região",
-                    page,
-                    line,
-                    source_start=line_start,
-                )
+                if region in _FEDERAL_TRIBUNAL_REGIONS.values():
+                    add(
+                        "tribunal",
+                        f"Tribunal Regional Federal da {region}ª Região",
+                        page,
+                        line,
+                        source_start=line_start,
+                    )
 
             unit_match = re.search(r"\b(\d{1,3})\s*(?:A)?\s+VARA(?:\s+FEDERAL)?\b", normalized_line)
             if unit_match:
@@ -974,10 +975,11 @@ def extract_process_metadata(
                     else "parte_requerida"
                 )
                 add(field, original_value, page, line, source_start=line_start)
-            if (
+            party_table_header = bool(
                 re.search(r"\bPARTES?\b", normalized_line)
                 and "PROCURADOR" in normalized_line
-            ):
+            )
+            if party_table_header:
                 in_pje_party_table = True
             explicit_pole = re.match(
                 r"\s*(?:POLO ATIVO|POLO PASSIVO)\s*[-:]\s*",
@@ -987,7 +989,20 @@ def extract_process_metadata(
                 r"\((AUTOR|AUTORA|REQUERENTE|EXEQUENTE|REQUERIDO|REQUERIDA|REU|EXECUTADO|EXECUTADA)\)",
                 normalized_line,
             )
-            if pje_party_match and (in_pje_party_table or explicit_pole):
+            party_tail = (
+                normalized_line[pje_party_match.end():].strip()
+                if pje_party_match
+                else ""
+            )
+            valid_table_row = bool(
+                in_pje_party_table
+                and pje_party_match
+                and (
+                    not party_tail
+                    or re.search(r"\((?:ADVOGADO|PROCURADOR)\)\s*$", party_tail)
+                )
+            )
+            if pje_party_match and (valid_table_row or explicit_pole):
                 role = pje_party_match.group(1)
                 normalized_name = normalized_line[:pje_party_match.start()]
                 prefix = re.match(
@@ -1024,6 +1039,8 @@ def extract_process_metadata(
                     line,
                     source_start=line_start + source_start,
                 )
+            if in_pje_party_table and not party_table_header and not valid_table_row:
+                in_pje_party_table = False
             line_start += len(raw_line)
 
     first_textual_page = next(

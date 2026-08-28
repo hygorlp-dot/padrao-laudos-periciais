@@ -267,7 +267,9 @@ def test_pje_party_parser_requires_table_or_pole_context_and_preserves_aliases()
     result = extraction(
         "O contrato menciona JOAO DA SILVA (AUTOR) apenas como referencia.\n"
         "PARTES PROCURADOR TERCEIRO VINCULADO\n"
-        "BANCO EXEMPLO (BE) S.A. (REU) ADVOGADO UM (ADVOGADO)"
+        "BANCO EXEMPLO (BE) S.A. (REU) ADVOGADO UM (ADVOGADO)\n"
+        "OUTRAS INFORMACOES\n"
+        "O contrato menciona MARIA EXEMPLO (AUTORA) apenas como referencia."
     )
 
     assert result.fields["parte_requerente"].state is FieldExtractionState.NOT_FOUND
@@ -389,15 +391,15 @@ def test_invalid_cnj_and_contradictory_header_never_become_effective_silently():
     assert invalid.fields["numero_processo"].value == ""
     assert invalid.fields["numero_processo"].evidence[0].extracted_value == INVALID_CNJ
 
-    contradictory = extraction(
+    unsupported_region = extraction(
         f"TRIBUNAL REGIONAL FEDERAL DA 24 REGIAO\nPROCESSO: {VALID_CNJ}"
     )
-    assert contradictory.fields["tribunal"].state is FieldExtractionState.CONFLICTING
-    assert contradictory.fields["tribunal"].value == ""
-    assert {item.extracted_value for item in contradictory.fields["tribunal"].evidence} == {
-        "Tribunal Regional Federal da 5ª Região",
-        "Tribunal Regional Federal da 24ª Região",
-    }
+    assert unsupported_region.fields["tribunal"].state is FieldExtractionState.AMBIGUOUS
+    assert unsupported_region.fields["tribunal"].value == ""
+    assert {
+        item.extracted_value
+        for item in unsupported_region.fields["tribunal"].evidence
+    } == {"Tribunal Regional Federal da 5ª Região"}
 
 
 def test_aggregate_surfaces_cross_document_conflict_and_keeps_exact_sources():
