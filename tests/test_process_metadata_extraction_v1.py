@@ -13,7 +13,9 @@ from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 from scripts.backend_contract.application.models import PrivateContentId, WorkspaceId
 from scripts.backend_contract.application.process_metadata import (
     FieldExtractionState,
+    PageExtractionMode,
     PageProcessingStatus,
+    PageTextBlock,
     PdfTextPage,
     PdfTextResult,
     PdfTextExtractionState,
@@ -280,6 +282,18 @@ def test_pje_party_parser_requires_table_or_pole_context_and_preserves_aliases()
     assert result.fields["parte_requerida"].value == ""
 
 
+def test_pje_party_table_stops_before_role_like_narrative_after_complete_row():
+    result = extraction(
+        "PARTES PROCURADOR TERCEIRO VINCULADO\n"
+        "ALICE EXEMPLO (AUTORA) ADVOGADO UM (ADVOGADO)\n"
+        "O contrato menciona MARIA EXEMPLO (AUTORA)"
+    )
+
+    assert {
+        item.extracted_value for item in result.fields["parte_requerente"].evidence
+    } == {"ALICE EXEMPLO"}
+
+
 def test_pje_party_candidates_preserve_unicode_source_offsets_and_drop_pole_labels():
     claimant = "AL\ufb01CE E\u0301XEMPLO"
     defendant = "RE\u0301U SINT\u0301ETICO"
@@ -313,6 +327,68 @@ def test_pje_party_candidates_preserve_unicode_source_offsets_and_drop_pole_labe
             result.fields["parte_requerida"],
         )
     )
+
+
+def test_pje_party_table_context_does_not_cross_a_page_boundary():
+    result = extract_process_metadata(
+        workspace_id=WORKSPACE_ID,
+        document_id=DOCUMENT_A,
+        original_filename="tabela-pje-paginada-sintetica.pdf",
+        text=PdfTextResult(
+            PdfTextExtractionState.AVAILABLE,
+            (
+                PdfTextPage(1, "PARTES PROCURADOR TERCEIRO VINCULADO"),
+                PdfTextPage(
+                    2,
+                    "ALICE EXEMPLO (AUTORA) ADVOGADO UM (ADVOGADO)",
+                ),
+            ),
+        ),
+        extracted_at=EXTRACTED_AT,
+    )
+
+    assert result.fields["parte_requerente"].state is FieldExtractionState.NOT_FOUND
+    assert result.fields["parte_requerente"].evidence == ()
+
+
+def test_pje_party_table_preserves_exact_ocr_document_page_and_block_provenance():
+    row = "AL\ufb01CE E\u0301XEMPLO (AUTORA) ADVOGADO UM (ADVOGADO)"
+    header = "PARTES PROCURADOR TERCEIRO VINCULADO"
+    bounding_box = (11.0, 22.0, 333.0, 44.0)
+    result = extract_process_metadata(
+        workspace_id=WORKSPACE_ID,
+        document_id=DOCUMENT_B,
+        original_filename="tabela-pje-ocr-sintetica.pdf",
+        text=PdfTextResult(
+            PdfTextExtractionState.AVAILABLE,
+            (
+                PdfTextPage(
+                    7,
+                    f"{header}\n{row}",
+                    extraction_mode=PageExtractionMode.OCR,
+                    engine="tesseract",
+                    engine_version="5.synthetic",
+                    model_version="por.synthetic",
+                    confidence=0.88,
+                    blocks=(
+                        PageTextBlock(header, 0.99, (1.0, 2.0, 3.0, 4.0)),
+                        PageTextBlock(row, 0.91, bounding_box),
+                    ),
+                ),
+            ),
+        ),
+        extracted_at=EXTRACTED_AT,
+    )
+
+    evidence = result.fields["parte_requerente"].evidence
+    assert len(evidence) == 1
+    assert evidence[0].workspace_id == WORKSPACE_ID
+    assert evidence[0].document_id == DOCUMENT_B
+    assert evidence[0].source_page == 7
+    assert evidence[0].extracted_value == "AL\ufb01CE E\u0301XEMPLO"
+    assert evidence[0].normalized_text_span == row
+    assert evidence[0].ocr_confidence == 0.91
+    assert evidence[0].bounding_box == bounding_box
 
 
 def test_partial_multiple_unicode_and_duplicate_values_do_not_inflate_confidence():

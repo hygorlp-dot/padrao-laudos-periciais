@@ -10,6 +10,7 @@ from enum import StrEnum
 from types import MappingProxyType
 
 from .models import PrivateContentId, WorkspaceId, thaw_payload
+from .pje_party_table import PjePartyPole, parse_pje_party_table
 
 
 PROCESS_METADATA_FIELDS = (
@@ -875,15 +876,23 @@ def extract_process_metadata(
                     continue
                 add_cnj(cnj, page, raw, source_start, source_end)
 
+        for party_row in parse_pje_party_table(page.text).rows:
+            add(
+                (
+                    "parte_requerente"
+                    if party_row.pole is PjePartyPole.ACTIVE
+                    else "parte_requerida"
+                ),
+                party_row.name,
+                page,
+                party_row.source_line,
+                source_start=party_row.source_start,
+            )
+
         line_start = 0
-        in_pje_party_table = False
         for raw_line in page.text.splitlines(keepends=True):
             line = raw_line.rstrip("\r\n")
-            normalized_line, line_source_indices = _ascii_upper_with_source_indices(
-                line
-            )
-            if not normalized_line.strip():
-                in_pje_party_table = False
+            normalized_line = _ascii_upper(line)
             federal_heading_match = re.search(
                 r"\bJUSTICA\s+FEDERAL\s+DA\s+(\d{1,2})(?:A)?\s+REGIAO\b",
                 normalized_line,
@@ -975,72 +984,6 @@ def extract_process_metadata(
                     else "parte_requerida"
                 )
                 add(field, original_value, page, line, source_start=line_start)
-            party_table_header = bool(
-                re.search(r"\bPARTES?\b", normalized_line)
-                and "PROCURADOR" in normalized_line
-            )
-            if party_table_header:
-                in_pje_party_table = True
-            explicit_pole = re.match(
-                r"\s*(?:POLO ATIVO|POLO PASSIVO)\s*[-:]\s*",
-                normalized_line,
-            )
-            pje_party_match = re.search(
-                r"\((AUTOR|AUTORA|REQUERENTE|EXEQUENTE|REQUERIDO|REQUERIDA|REU|EXECUTADO|EXECUTADA)\)",
-                normalized_line,
-            )
-            party_tail = (
-                normalized_line[pje_party_match.end():].strip()
-                if pje_party_match
-                else ""
-            )
-            valid_table_row = bool(
-                in_pje_party_table
-                and pje_party_match
-                and (
-                    not party_tail
-                    or re.search(r"\((?:ADVOGADO|PROCURADOR)\)\s*$", party_tail)
-                )
-            )
-            if pje_party_match and (valid_table_row or explicit_pole):
-                role = pje_party_match.group(1)
-                normalized_name = normalized_line[:pje_party_match.start()]
-                prefix = re.match(
-                    r"\s*(?:POLO ATIVO|POLO PASSIVO)\s*[-:]\s*",
-                    normalized_name,
-                )
-                relative_start = prefix.end() if prefix else 0
-                name_bounds = re.search(r"\S(?:.*\S)?", normalized_name[relative_start:])
-                if name_bounds is None:
-                    line_start += len(raw_line)
-                    continue
-                normalized_start = (
-                    relative_start + name_bounds.start()
-                )
-                normalized_end = (
-                    relative_start + name_bounds.end()
-                )
-                source_start = line_source_indices[normalized_start]
-                source_end = (
-                    line_source_indices[normalized_end]
-                    if normalized_end < len(line_source_indices)
-                    else len(line)
-                )
-                original_value = line[source_start:source_end]
-                field = (
-                    "parte_requerente"
-                    if role in {"AUTOR", "AUTORA", "REQUERENTE", "EXEQUENTE"}
-                    else "parte_requerida"
-                )
-                add(
-                    field,
-                    original_value,
-                    page,
-                    line,
-                    source_start=line_start + source_start,
-                )
-            if in_pje_party_table and not party_table_header and not valid_table_row:
-                in_pje_party_table = False
             line_start += len(raw_line)
 
     first_textual_page = next(
