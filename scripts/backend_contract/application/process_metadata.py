@@ -10,6 +10,7 @@ from enum import StrEnum
 from types import MappingProxyType
 
 from .models import PrivateContentId, WorkspaceId, thaw_payload
+from .pje_party_table import PjePartyPole, parse_pje_party_table
 
 
 PROCESS_METADATA_FIELDS = (
@@ -50,6 +51,11 @@ _FEDERAL_TRIBUNAL_REGIONS = {
     "04": 4,
     "05": 5,
     "06": 6,
+}
+_BRAZILIAN_UF_CODES = {
+    "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT",
+    "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO",
+    "RR", "SC", "SP", "SE", "TO",
 }
 
 
@@ -870,23 +876,52 @@ def extract_process_metadata(
                     continue
                 add_cnj(cnj, page, raw, source_start, source_end)
 
+        for party_row in parse_pje_party_table(page.text).rows:
+            add(
+                (
+                    "parte_requerente"
+                    if party_row.pole is PjePartyPole.ACTIVE
+                    else "parte_requerida"
+                ),
+                party_row.name,
+                page,
+                party_row.source_line,
+                source_start=party_row.source_start,
+            )
+
         line_start = 0
         for raw_line in page.text.splitlines(keepends=True):
             line = raw_line.rstrip("\r\n")
             normalized_line = _ascii_upper(line)
+            federal_heading_match = re.search(
+                r"\bJUSTICA\s+FEDERAL\s+DA\s+(\d{1,2})(?:A)?\s+REGIAO\b",
+                normalized_line,
+            )
+            if federal_heading_match:
+                region = int(federal_heading_match.group(1))
+                if region in _FEDERAL_TRIBUNAL_REGIONS.values():
+                    add(
+                        "tribunal",
+                        f"Tribunal Regional Federal da {region}\u00aa Regi\u00e3o",
+                        page,
+                        line,
+                        source_start=line_start,
+                    )
+
             tribunal_match = re.search(
                 r"TRIBUNAL\s+REGIONAL\s+FEDERAL\s+DA\s+(\d{1,2})(?:A)?\s+REGIAO",
                 normalized_line,
             )
             if tribunal_match:
                 region = int(tribunal_match.group(1))
-                add(
-                    "tribunal",
-                    f"Tribunal Regional Federal da {region}ª Região",
-                    page,
-                    line,
-                    source_start=line_start,
-                )
+                if region in _FEDERAL_TRIBUNAL_REGIONS.values():
+                    add(
+                        "tribunal",
+                        f"Tribunal Regional Federal da {region}ª Região",
+                        page,
+                        line,
+                        source_start=line_start,
+                    )
 
             unit_match = re.search(r"\b(\d{1,3})\s*(?:A)?\s+VARA(?:\s+FEDERAL)?\b", normalized_line)
             if unit_match:
@@ -894,6 +929,22 @@ def extract_process_metadata(
                 add(
                     "vara",
                     f"{int(unit_match.group(1))}ª Vara{suffix}",
+                    page,
+                    line,
+                    source_start=line_start,
+                )
+
+            judging_body_match = re.search(
+                r"\bORGAO\s+JULGADOR\s*:\s*.+?\b([A-Z]{2})\s*$",
+                normalized_line,
+            )
+            if (
+                judging_body_match
+                and judging_body_match.group(1) in _BRAZILIAN_UF_CODES
+            ):
+                add(
+                    "uf",
+                    judging_body_match.group(1),
                     page,
                     line,
                     source_start=line_start,
