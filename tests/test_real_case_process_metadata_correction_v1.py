@@ -185,6 +185,44 @@ def test_later_cited_block_on_the_primary_page_cannot_create_identity_conflict()
     )
 
 
+@pytest.mark.parametrize(
+    "secondary_heading",
+    (
+        "ANEXO A",
+        "JURISPRUDÊNCIA REFERENCIADA",
+        "PROCESSO REFERENCIADO",
+    ),
+)
+def test_declared_secondary_block_without_cnj_ends_all_primary_field_acquisition(
+    secondary_heading,
+):
+    primary_prefix = (
+        "PODER JUDICIÁRIO\n"
+        "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+        f"PROCESSO: {PRIMARY_TRF5_CNJ}\n"
+        "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+        "AUTOR: PARTE ALFA\n"
+        "RÉU: PARTE BETA\n"
+    )
+    metadata = extract(
+        PdfTextPage(
+            1,
+            primary_prefix
+            + secondary_heading
+            + "\nÓRGÃO JULGADOR: 3ª Vara Federal DF\n"
+            + "AUTOR: PARTE GAMA\n"
+            + "RÉU: PARTE DELTA",
+        )
+    )
+
+    boundary = len(primary_prefix)
+    for field_name in ("tribunal", "vara", "uf", "parte_requerente", "parte_requerida"):
+        evidence = metadata.fields[field_name].evidence
+        assert evidence
+        assert all(item.source_start < boundary for item in evidence)
+        assert all(item.source_role.value.startswith("PRIMARY_") for item in evidence)
+
+
 def test_first_page_position_alone_cannot_outvote_a_later_structural_header():
     metadata = extract(
         PdfTextPage(

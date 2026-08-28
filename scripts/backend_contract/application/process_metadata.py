@@ -1274,12 +1274,20 @@ def extract_process_metadata(
         )
     if primary_candidate is not None:
         primary_cnj = primary_candidate.number
+        primary_page_boundaries = [
+            start
+            for start in cnj_starts_by_page.get(primary_candidate.page.number, [])
+            if start > primary_candidate.start
+        ]
+        primary_page_boundaries.extend(
+            start
+            for start in declared_non_primary_segments[
+                primary_candidate.page.number
+            ][0]
+            if start > primary_candidate.start
+        )
         primary_section_end = min(
-            (
-                start
-                for start in cnj_starts_by_page.get(primary_candidate.page.number, [])
-                if start > primary_candidate.start
-            ),
+            primary_page_boundaries,
             default=len(primary_candidate.page.text),
         )
         add(
