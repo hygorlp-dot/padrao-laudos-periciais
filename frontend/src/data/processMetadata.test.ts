@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { getProcessMetadataReview, ProcessMetadataApiError } from "./processMetadata";
+import {
+  confirmProcessMetadataSourceSpan,
+  getProcessMetadataReview,
+  ProcessMetadataApiError,
+} from "./processMetadata";
 
 const WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
 const DOCUMENT_ID = "22222222-2222-4222-8222-222222222222";
@@ -27,6 +31,7 @@ const REVIEW = {
   workspace_id: WORKSPACE_ID,
   state: "PARTIAL",
   confirmed_revision: null,
+  extraction_fingerprint: "f".repeat(64),
   documents: [{
     document_id: DOCUMENT_ID,
     source_filename: "autos.pdf",
@@ -47,6 +52,10 @@ const REVIEW = {
         extraction_timestamp: "2026-08-26T12:30:00+00:00",
         source_filename: "autos.pdf",
         normalized_text_span: "PROCESSO 7654321-55.2025.4.05.0001",
+        evidence_id: "e".repeat(64),
+        source_text: "PROCESSO 7654321-55.2025.4.05.0001",
+        source_start: 0,
+        requires_source_selection: false,
         extraction_mode: "OCR",
         ocr_engine: "RapidOCR/ONNXRuntime",
         engine_version: "3.9.2",
@@ -77,6 +86,45 @@ describe("process metadata review boundary", () => {
       `/app-api/v1/workspaces/${WORKSPACE_ID}/process-metadata`,
       expect.objectContaining({ method: "GET", credentials: "same-origin" }),
     );
+    expect(fetchSpy.mock.calls[0][1].headers).not.toHaveProperty("X-Local-API-Token");
+  });
+
+  test("confirms a source span by offsets without sending the selected value", async () => {
+    const snapshot = {
+      workspace_id: WORKSPACE_ID,
+      revision: 1,
+      updated_at: "2026-08-28T18:05:00+00:00",
+      data: Object.fromEntries(FIELD_NAMES.map((field) => [
+        field,
+        field === "parte_requerente" ? "PARTE ALFA" : "",
+      ])),
+    };
+    const fetchSpy = vi.fn().mockResolvedValue(response(snapshot));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(confirmProcessMetadataSourceSpan(WORKSPACE_ID, {
+      field_name: "parte_requerente",
+      evidence_id: "e".repeat(64),
+      source_start: 7,
+      source_end: 17,
+      expected_source_revision: "f".repeat(64),
+      expected_revision: null,
+    })).resolves.toEqual(snapshot);
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      `/app-api/v1/workspaces/${WORKSPACE_ID}/process-metadata/source-span-confirmations`,
+      expect.objectContaining({ method: "POST", credentials: "same-origin" }),
+    );
+    const request = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(request).toEqual({
+      field_name: "parte_requerente",
+      evidence_id: "e".repeat(64),
+      source_start: 7,
+      source_end: 17,
+      expected_source_revision: "f".repeat(64),
+      expected_revision: null,
+    });
+    expect(request).not.toHaveProperty("value");
     expect(fetchSpy.mock.calls[0][1].headers).not.toHaveProperty("X-Local-API-Token");
   });
 

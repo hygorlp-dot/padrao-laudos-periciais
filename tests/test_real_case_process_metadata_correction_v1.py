@@ -236,7 +236,12 @@ def test_identity_fields_outside_primary_context_do_not_contaminate_result():
     }.items():
         assert metadata.fields[name].state is FieldExtractionState.AMBIGUOUS
         assert metadata.fields[name].value == ""
-        assert metadata.fields[name].evidence[0].extracted_value == expected
+        evidence = metadata.fields[name].evidence[0]
+        if name == "vara":
+            assert evidence.extracted_value == expected
+        else:
+            assert evidence.extracted_value == ""
+            assert expected in evidence.source_text
     assert all(
         evidence.source_page == 1
         for name in ("vara", "parte_requerente", "parte_requerida")
@@ -260,10 +265,12 @@ def test_same_primary_cnj_on_reference_page_does_not_expand_identity_context():
 
     assert metadata.fields["parte_requerente"].state is FieldExtractionState.AMBIGUOUS
     assert metadata.fields["parte_requerente"].value == ""
-    assert metadata.fields["parte_requerente"].evidence[0].extracted_value == "Parte principal"
+    assert metadata.fields["parte_requerente"].evidence[0].extracted_value == ""
+    assert "Parte principal" in metadata.fields["parte_requerente"].evidence[0].source_text
     assert metadata.fields["parte_requerida"].state is FieldExtractionState.AMBIGUOUS
     assert metadata.fields["parte_requerida"].value == ""
-    assert metadata.fields["parte_requerida"].evidence[0].extracted_value == "Parte contraria"
+    assert metadata.fields["parte_requerida"].evidence[0].extracted_value == ""
+    assert "Parte contraria" in metadata.fields["parte_requerida"].evidence[0].source_text
     assert all(
         evidence.source_page == 1
         for name in ("parte_requerente", "parte_requerida")
@@ -290,7 +297,12 @@ def test_secondary_section_on_primary_page_does_not_contaminate_identity_fields(
     }.items():
         assert metadata.fields[name].state is FieldExtractionState.AMBIGUOUS
         assert metadata.fields[name].value == ""
-        assert metadata.fields[name].evidence[0].extracted_value == expected
+        evidence = metadata.fields[name].evidence[0]
+        if name == "numero_processo":
+            assert evidence.extracted_value == expected
+        else:
+            assert evidence.extracted_value == ""
+            assert expected in evidence.source_text
 
 
 def test_prior_incidental_cnj_prevents_same_page_primary_confidence():
@@ -349,6 +361,12 @@ def test_legacy_v2_extraction_cannot_preserve_pre_fix_confidence():
     extracted = extract(PdfTextPage(1, f"PROCESSO: {PRIMARY_CNJ}"))
     payload = document_metadata_payload(extracted)
     payload["schema_version"] = 2
+    for field in payload["fields"].values():
+        for evidence in field["evidence"]:
+            for key in (
+                "evidence_id", "source_text", "source_start", "requires_source_selection"
+            ):
+                evidence.pop(key)
 
     restored = document_metadata_from_payload(freeze_payload(payload))
     aggregate = aggregate_process_metadata((restored,))
@@ -362,6 +380,12 @@ def test_pre_fix_v3_extraction_cannot_preserve_confidence_after_reopen():
     extracted = extract(PdfTextPage(1, f"PROCESSO: {PRIMARY_CNJ}"))
     payload = document_metadata_payload(extracted)
     payload["schema_version"] = 3
+    for field in payload["fields"].values():
+        for evidence in field["evidence"]:
+            for key in (
+                "evidence_id", "source_text", "source_start", "requires_source_selection"
+            ):
+                evidence.pop(key)
     payload["fields"]["numero_processo"]["state"] = "CONFIDENT"
     payload["fields"]["numero_processo"]["value"] = PRIMARY_CNJ
 
@@ -373,7 +397,7 @@ def test_pre_fix_v3_extraction_cannot_preserve_confidence_after_reopen():
     assert aggregate.fields["numero_processo"].state is FieldExtractionState.AMBIGUOUS
 
 
-def test_current_v4_payload_cannot_assert_automatic_confidence():
+def test_current_v5_payload_cannot_assert_automatic_confidence():
     extracted = extract(PdfTextPage(1, f"PROCESSO: {PRIMARY_CNJ}"))
     payload = document_metadata_payload(extracted)
     payload["fields"]["numero_processo"]["state"] = "CONFIDENT"

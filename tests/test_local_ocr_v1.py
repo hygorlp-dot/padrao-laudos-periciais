@@ -182,7 +182,9 @@ def test_scanned_parties_without_primary_identity_are_ambiguous_with_ocr_locator
     assert metadata.fields["parte_requerida"].state is FieldExtractionState.AMBIGUOUS
     assert metadata.fields["parte_requerida"].value == ""
     evidence = metadata.fields["parte_requerente"].evidence[0]
-    assert evidence.extracted_value == "José Gonçalves Construções Ltda."
+    assert evidence.extracted_value == ""
+    assert evidence.source_text == "AUTORA: José Gonçalves Construções Ltda."
+    assert evidence.requires_source_selection is True
     assert evidence.extraction_mode == "OCR"
     assert evidence.bounding_box == (80.0, 100.0, 1100.0, 180.0)
 
@@ -446,7 +448,9 @@ def test_unicode_portuguese_party_without_primary_identity_preserves_ambiguous_p
 
     assert field.state is FieldExtractionState.AMBIGUOUS
     assert field.value == ""
-    assert field.evidence[0].extracted_value == "Conceição d'Ávila"
+    assert field.evidence[0].extracted_value == ""
+    assert field.evidence[0].source_text == "AUTORA: Conceição d'Ávila"
+    assert field.evidence[0].requires_source_selection is True
     assert field.evidence[0].ocr_confidence == 0.99
     assert field.evidence[0].ocr_engine == "SYNTHETIC_OCR"
 

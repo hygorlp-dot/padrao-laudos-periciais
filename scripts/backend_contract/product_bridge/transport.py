@@ -118,6 +118,19 @@ def _proxy_target(path: str, method: str) -> str | None:
             and method == "GET"
         ):
             return f"/v1/workspaces/{remainder[0]}/materials/{remainder[2]}"
+        if (
+            len(remainder) == 3
+            and _CANONICAL_UUID.fullmatch(remainder[0])
+            and remainder[1:] == [
+                "process-metadata",
+                "source-span-confirmations",
+            ]
+            and method == "POST"
+        ):
+            return (
+                f"/v1/workspaces/{remainder[0]}/process-metadata/"
+                "source-span-confirmations"
+            )
     process_case_suffix = "/process-case"
     if method in {"GET", "POST"} and path.startswith(prefix) and path.endswith(
         process_case_suffix

@@ -206,7 +206,12 @@ def test_complete_process_identity_is_extracted_with_field_level_provenance():
         assert field.state is FieldExtractionState.AMBIGUOUS
         assert field.value == ""
         assert field.evidence
-        assert value in {item.extracted_value for item in field.evidence}
+        if name in {"parte_requerente", "parte_requerida"}:
+            assert {item.extracted_value for item in field.evidence} == {""}
+            assert all(item.requires_source_selection for item in field.evidence)
+            assert any(value in item.source_text for item in field.evidence)
+        else:
+            assert value in {item.extracted_value for item in field.evidence}
         assert all(item.workspace_id == WORKSPACE_ID for item in field.evidence)
         assert all(item.document_id == DOCUMENT_A for item in field.evidence)
         assert all(item.source_page == 1 for item in field.evidence)
@@ -408,11 +413,20 @@ def test_partial_multiple_unicode_and_duplicate_values_do_not_inflate_confidence
     assert result.fields["parte_requerida"].value == ""
     assert {
         item.extracted_value for item in result.fields["parte_requerente"].evidence
-    } == {"Joao Sintetico", "Ana Goncalves"}
+    } == {""}
     assert {
-        item.extracted_value for item in result.fields["parte_requerida"].evidence
-    } == {"Orgao Publico", "Empresa Dois"}
-    assert len(result.fields["parte_requerente"].evidence) == 2
+        item.source_text for item in result.fields["parte_requerente"].evidence
+    } == {
+        "REQUERENTE: Joao Sintetico",
+        "AUTORA: Ana Goncalves",
+    }
+    assert {
+        item.source_text for item in result.fields["parte_requerida"].evidence
+    } == {
+        "REQUERIDO: Orgao Publico",
+        "REQUERIDO: Empresa Dois",
+    }
+    assert len(result.fields["parte_requerente"].evidence) == 3
 
 
 def test_unicode_parties_and_unusual_valid_heading_are_preserved_without_guessing():
@@ -442,7 +456,13 @@ def test_unicode_parties_and_unusual_valid_heading_are_preserved_without_guessin
     }.items():
         assert result.fields[name].state is FieldExtractionState.AMBIGUOUS
         assert result.fields[name].value == ""
-        assert result.fields[name].evidence[0].extracted_value == expected
+        evidence = result.fields[name].evidence[0]
+        if name == "tribunal":
+            assert evidence.extracted_value == expected
+        else:
+            assert evidence.extracted_value == ""
+            assert expected in evidence.source_text
+            assert evidence.requires_source_selection is True
 
 
 def test_duplicate_filenames_remain_distinct_by_document_identity():
@@ -459,6 +479,51 @@ def test_duplicate_filenames_remain_distinct_by_document_identity():
     assert field.value == ""
     assert {item.document_id for item in field.evidence} == {DOCUMENT_A, DOCUMENT_B}
     assert {item.source_filename for item in field.evidence} == {"autos.pdf"}
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "AUTOR: PARTE ALFA",
+        "AUTOR: PARTE ALFA REPRESENTANTE BETA",
+    ),
+)
+def test_generic_labeled_party_is_actionable_source_evidence_not_an_automatic_candidate(
+    source,
+):
+    result = extract_process_metadata(
+        workspace_id=WORKSPACE_ID,
+        document_id=DOCUMENT_A,
+        original_filename="autos.pdf",
+        text=PdfTextResult(
+            PdfTextExtractionState.AVAILABLE,
+            (PdfTextPage(1, source),),
+        ),
+        extracted_at=EXTRACTED_AT,
+    )
+
+    field = result.fields["parte_requerente"]
+    assert field.state is FieldExtractionState.AMBIGUOUS
+    assert field.value == ""
+    assert len(field.evidence) == 1
+    evidence = field.evidence[0]
+    assert evidence.extracted_value == ""
+    assert evidence.requires_source_selection is True
+    assert evidence.source_text == source
+    assert evidence.source_start == 0
+
+
+def test_structured_pje_party_remains_an_automatic_ambiguous_candidate():
+    row = "PARTE ALFA (AUTORA) REPRESENTANTE BETA (ADVOGADO)"
+    result = extraction(
+        "PARTES PROCURADOR TERCEIRO VINCULADO\n"
+        f"{row}"
+    )
+
+    evidence = result.fields["parte_requerente"].evidence
+    assert [item.extracted_value for item in evidence] == ["PARTE ALFA"]
+    assert evidence[0].requires_source_selection is False
+    assert evidence[0].source_text == ""
 
 
 def test_invalid_cnj_and_contradictory_header_never_become_effective_silently():

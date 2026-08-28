@@ -54,6 +54,7 @@ from .ports import (
     PrivateContentRepository,
     PrivateContentStreamRepository,
     PrivateContentTooLarge,
+    RepositoryConflict,
     RepositoryIntegrityError,
     WorkspaceNotFound,
     WorkspaceRepository,
@@ -66,6 +67,7 @@ _PROCESS_CASE_ARTIFACT_ID = "PROCESS_CASE"
 _PROCESS_METADATA_EXTRACTION_KIND = "PROCESS_METADATA_EXTRACTION"
 _PROCESS_METADATA_CONFIRMATION_KIND = "PROCESS_METADATA_CONFIRMATION"
 _PROCESS_METADATA_CONFIRMATION_ID = "PROCESS_METADATA_CONFIRMATION"
+_PROCESS_METADATA_SOURCE_CONFIRMATION_KIND = "PROCESS_METADATA_SOURCE_CONFIRMATION"
 
 
 def _metadata_extraction_fingerprint(value: object) -> str:
@@ -721,6 +723,154 @@ class ConfirmProcessMetadata:
                 "schema_version": 1,
                 "confirmed_revision": snapshot.revision,
                 "extraction_fingerprint": review.extraction_fingerprint,
+            },
+        )
+        return snapshot
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmProcessMetadataSourceSpan:
+    process_case: object
+    save_process_case: object
+    metadata_review: GetProcessMetadataReview
+    revisions: ArtifactRevisionRepository
+    clock: Clock
+    ids: IdGenerator
+
+    def execute(
+        self,
+        *,
+        workspace_id: WorkspaceId,
+        field_name: str,
+        evidence_id: str,
+        source_start: int,
+        source_end: int,
+        expected_source_revision: str,
+        expected_revision: int | None,
+    ) -> ProcessCaseSnapshot:
+        if type(workspace_id) is not WorkspaceId:
+            raise TypeError("workspace inválido")
+        if field_name not in {"parte_requerente", "parte_requerida"}:
+            raise ValueError("campo não admite confirmação por fonte")
+        if (
+            type(evidence_id) is not str
+            or len(evidence_id) != 64
+            or any(character not in "0123456789abcdef" for character in evidence_id)
+            or type(expected_source_revision) is not str
+            or len(expected_source_revision) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in expected_source_revision
+            )
+        ):
+            raise ValueError("identidade de evidência inválida")
+        if (
+            type(source_start) is not int
+            or type(source_end) is not int
+            or source_start < 0
+            or source_end <= source_start
+        ):
+            raise ValueError("span de fonte inválido")
+        if expected_revision is not None and (
+            type(expected_revision) is not int or expected_revision < 1
+        ):
+            raise ValueError("expected_revision inválida")
+
+        review = self.metadata_review.execute(workspace_id)
+        if review.workspace_id != workspace_id:
+            raise ValueError("evidência pertence a outro workspace")
+        if review.extraction_fingerprint != expected_source_revision:
+            raise RepositoryConflict("fonte de metadados foi atualizada")
+        matches = tuple(
+            evidence
+            for evidence in review.fields[field_name].evidence
+            if evidence.evidence_id == evidence_id
+        )
+        if len(matches) != 1:
+            raise ValueError("evidência não encontrada")
+        evidence = matches[0]
+        if (
+            evidence.workspace_id != workspace_id
+            or evidence.field_name != field_name
+            or not evidence.requires_source_selection
+            or source_end > len(evidence.source_text)
+        ):
+            raise ValueError("evidência não admite o span solicitado")
+        selected_value = evidence.source_text[source_start:source_end]
+        if not selected_value.strip():
+            raise ValueError("seleção de fonte vazia")
+
+        document_payloads = tuple(
+            dict(payload) if type(payload) is dict else thaw_payload(payload)
+            for payload in review.document_payloads
+        )
+        matching_documents = tuple(
+            payload
+            for payload in document_payloads
+            if type(payload) is dict
+            and payload.get("document_id") == str(evidence.document_id)
+        )
+        if len(matching_documents) != 1:
+            raise RepositoryIntegrityError("documento da evidência não é único")
+        document_sha256 = matching_documents[0].get("document_sha256")
+        if (
+            type(document_sha256) is not str
+            or len(document_sha256) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in document_sha256
+            )
+        ):
+            raise RepositoryIntegrityError("identidade documental inválida")
+
+        current = self.process_case.execute(workspace_id)
+        if (
+            type(current) is not ProcessCaseSnapshot
+            or current.workspace_id != workspace_id
+        ):
+            raise RepositoryIntegrityError("identidade processual divergente")
+        if current.revision != expected_revision:
+            raise RepositoryConflict("dados processuais foram atualizados")
+        updated_data = ProcessCaseData.from_mapping(
+            {
+                **current.data.as_dict(),
+                field_name: selected_value,
+            }
+        )
+        snapshot = self.save_process_case.execute(
+            workspace_id,
+            updated_data,
+            expected_revision,
+        )
+        if (
+            type(snapshot) is not ProcessCaseSnapshot
+            or snapshot.workspace_id != workspace_id
+            or snapshot.data.as_dict() != updated_data.as_dict()
+            or snapshot.revision is None
+        ):
+            raise RepositoryIntegrityError("confirmação processual divergente")
+        self.revisions.append(
+            workspace_id=workspace_id,
+            artifact_kind=_PROCESS_METADATA_SOURCE_CONFIRMATION_KIND,
+            artifact_id=field_name,
+            revision_id=str(_generated_uuid(self.ids)),
+            created_at=_generated_timestamp(self.clock),
+            payload={
+                "schema_version": 1,
+                "decision": "HUMAN_CONFIRMED",
+                "field_name": field_name,
+                "process_case_revision": snapshot.revision,
+                "extraction_fingerprint": review.extraction_fingerprint,
+                "evidence_id": evidence.evidence_id,
+                "document_id": str(evidence.document_id),
+                "document_sha256": document_sha256,
+                "source_page": evidence.source_page,
+                "evidence_source_start": evidence.source_start,
+                "selection_start": source_start,
+                "selection_end": source_end,
+                "source_start": evidence.source_start + source_start,
+                "source_end": evidence.source_start + source_end,
+                "selected_value": selected_value,
             },
         )
         return snapshot

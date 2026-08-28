@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -9,7 +10,7 @@ from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType
 
-from .models import PrivateContentId, WorkspaceId, thaw_payload
+from .models import PrivateContentId, WorkspaceId, canonical_payload_json, thaw_payload
 from .pje_party_table import PjePartyPole, parse_pje_party_table
 
 
@@ -254,6 +255,9 @@ class FieldEvidence:
     model_version: str
     ocr_confidence: float | None
     bounding_box: tuple[float, float, float, float] | None
+    source_text: str = ""
+    source_start: int = 0
+    requires_source_selection: bool = False
 
     def __post_init__(self):
         if type(self.source_page) is not int or self.source_page < 1:
@@ -268,9 +272,18 @@ class FieldEvidence:
                 self.engine_version,
                 self.model_version,
                 self.normalized_text_span,
+                self.source_text,
             )
         ):
             raise TypeError("proveniência textual inválida")
+        if type(self.source_start) is not int or self.source_start < 0:
+            raise ValueError("offset da proveniência inválido")
+        if type(self.requires_source_selection) is not bool:
+            raise TypeError("contrato de seleção da proveniência inválido")
+        if self.requires_source_selection and (
+            not self.source_text or self.extracted_value
+        ):
+            raise ValueError("evidência não segmentada possui candidato automático")
         if self.bounding_box is not None and (
             type(self.bounding_box) is not tuple
             or len(self.bounding_box) != 4
@@ -297,6 +310,34 @@ class FieldEvidence:
         if not native and not ocr:
             raise ValueError("identidade da proveniência diverge do modo de extração")
 
+    @property
+    def evidence_id(self) -> str:
+        identity = {
+            "workspace_id": str(self.workspace_id),
+            "document_id": str(self.document_id),
+            "field_name": self.field_name,
+            "extracted_value": self.extracted_value,
+            "source_page": self.source_page,
+            "extraction_method": self.extraction_method,
+            "extraction_timestamp": self.extraction_timestamp,
+            "source_filename": self.source_filename,
+            "normalized_text_span": self.normalized_text_span,
+            "extraction_mode": self.extraction_mode.value,
+            "ocr_engine": self.ocr_engine,
+            "engine_version": self.engine_version,
+            "model_version": self.model_version,
+            "ocr_confidence": self.ocr_confidence,
+            "bounding_box": (
+                list(self.bounding_box) if self.bounding_box is not None else None
+            ),
+            "source_text": self.source_text,
+            "source_start": self.source_start,
+            "requires_source_selection": self.requires_source_selection,
+        }
+        return hashlib.sha256(
+            canonical_payload_json(identity).encode("utf-8")
+        ).hexdigest()
+
     def as_dict(self) -> dict[str, object]:
         return {
             "workspace_id": str(self.workspace_id),
@@ -314,6 +355,10 @@ class FieldEvidence:
             "model_version": self.model_version,
             "ocr_confidence": self.ocr_confidence,
             "bounding_box": list(self.bounding_box) if self.bounding_box is not None else None,
+            "evidence_id": self.evidence_id,
+            "source_text": self.source_text,
+            "source_start": self.source_start,
+            "requires_source_selection": self.requires_source_selection,
         }
 
 
@@ -494,6 +539,7 @@ def _evidence(
     source_filename: str,
     span: str,
     source_start: int | None = None,
+    requires_source_selection: bool = False,
 ) -> FieldEvidence:
     normalized_span = _ascii_upper(" ".join(span.split()))
     matching_block = None
@@ -544,6 +590,13 @@ def _evidence(
         bounding_box=(
             matching_block.bounding_box if matching_block is not None else None
         ),
+        source_text=span if requires_source_selection else "",
+        source_start=(
+            0
+            if not requires_source_selection or source_start is None
+            else source_start
+        ),
+        requires_source_selection=requires_source_selection,
     )
 
 
@@ -556,7 +609,11 @@ def _resolved_field(
     unique: list[FieldEvidence] = []
     seen = set()
     for candidate in candidates:
-        key = _ascii_upper(" ".join(candidate.extracted_value.split()))
+        key = (
+            ("candidate", _ascii_upper(" ".join(candidate.extracted_value.split())))
+            if candidate.extracted_value
+            else ("source", candidate.evidence_id)
+        )
         if key not in seen:
             seen.add(key)
             unique.append(candidate)
@@ -758,6 +815,36 @@ def extract_process_metadata(
                 target.insert(0, candidate)
             else:
                 target.append(candidate)
+
+    def add_unsegmented_source(
+        field: str,
+        page: PdfTextPage,
+        span: str,
+        *,
+        source_start: int,
+    ) -> None:
+        if not span.strip():
+            return
+        evidence = _evidence(
+            workspace_id=workspace_id,
+            document_id=document_id,
+            field_name=field,
+            value="",
+            page=page,
+            extracted_at=extracted_at,
+            source_filename=source_filename,
+            span=span,
+            source_start=source_start,
+            requires_source_selection=True,
+        )
+        candidate = _FieldCandidate(evidence, page, source_start)
+        target = (
+            low_confidence[field]
+            if page.extraction_mode is PageExtractionMode.OCR
+            and (evidence.ocr_confidence or 0.0) < 0.75
+            else candidates[field]
+        )
+        target.append(candidate)
 
     def add_cnj(
         cnj: CnjNumber,
@@ -977,13 +1064,17 @@ def extract_process_metadata(
                 normalized_line,
             )
             if party_match:
-                original_value = line.split(":", 1)[1].strip()
                 field = (
                     "parte_requerente"
                     if party_match.group(1) in {"AUTOR", "AUTORA", "REQUERENTE", "EXEQUENTE"}
                     else "parte_requerida"
                 )
-                add(field, original_value, page, line, source_start=line_start)
+                add_unsegmented_source(
+                    field,
+                    page,
+                    line,
+                    source_start=line_start,
+                )
             line_start += len(raw_line)
 
     first_textual_page = next(
@@ -1182,7 +1273,7 @@ def document_metadata_payload(document: DocumentProcessMetadata) -> dict[str, ob
     if type(document) is not DocumentProcessMetadata:
         raise TypeError("extração documental inválida")
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "workspace_id": str(document.workspace_id),
         "document_id": str(document.document_id),
         "document_sha256": document.document_sha256,
@@ -1222,7 +1313,7 @@ def document_metadata_from_payload(
     value: object, *, legacy_document_sha256: str = ""
 ) -> DocumentProcessMetadata:
     payload = thaw_payload(value)
-    if type(payload) is not dict or payload.get("schema_version") not in {1, 2, 3, 4}:
+    if type(payload) is not dict or payload.get("schema_version") not in {1, 2, 3, 4, 5}:
         raise ValueError("extração documental persistida inválida")
     schema_version = payload["schema_version"]
     expected_keys = {
@@ -1233,7 +1324,7 @@ def document_metadata_from_payload(
         "text_state",
         "fields",
     }
-    if schema_version in {2, 3, 4}:
+    if schema_version in {2, 3, 4, 5}:
         expected_keys |= {"document_sha256", "page_evidence"}
     if set(payload) != expected_keys:
         raise ValueError("extração documental persistida inválida")
@@ -1319,8 +1410,16 @@ def document_metadata_from_payload(
                 "ocr_confidence",
                 "bounding_box",
             }
+            v5_evidence_keys = v2_evidence_keys | {
+                "evidence_id",
+                "source_text",
+                "source_start",
+                "requires_source_selection",
+            }
             expected_evidence_keys = (
-                legacy_evidence_keys if schema_version == 1 else v2_evidence_keys
+                legacy_evidence_keys
+                if schema_version == 1
+                else v5_evidence_keys if schema_version == 5 else v2_evidence_keys
             )
             if type(item) is not dict or set(item) != expected_evidence_keys:
                 raise ValueError("proveniência persistida inválida")
@@ -1343,7 +1442,14 @@ def document_metadata_from_payload(
                 model_version=item.get("model_version", ""),
                 ocr_confidence=item.get("ocr_confidence"),
                 bounding_box=tuple(raw_box) if raw_box is not None else None,
+                source_text=item.get("source_text", ""),
+                source_start=item.get("source_start", 0),
+                requires_source_selection=item.get(
+                    "requires_source_selection", False
+                ),
             )
+            if schema_version == 5 and record.evidence_id != item["evidence_id"]:
+                raise ValueError("identidade da evidência persistida diverge")
             if (
                 record.workspace_id != workspace_id
                 or record.document_id != document_id
@@ -1389,7 +1495,7 @@ def document_metadata_from_payload(
         document_sha256,
         tuple(pages),
     )
-    if schema_version in {2, 3, 4}:
+    if schema_version in {2, 3, 4, 5}:
         page_numbers = tuple(page.page_number for page in document.page_evidence)
         if page_numbers and page_numbers != tuple(range(1, len(page_numbers) + 1)):
             raise ValueError("cobertura de páginas persistida inválida")
@@ -1454,7 +1560,7 @@ def document_metadata_from_payload(
         for evidence in field.evidence:
             if evidence.source_filename != document.source_filename:
                 raise ValueError("arquivo da proveniência diverge do documento")
-            if schema_version in {2, 3, 4}:
+            if schema_version in {2, 3, 4, 5}:
                 page = textual_pages.get(evidence.source_page)
                 if (
                     page is None
@@ -1481,6 +1587,7 @@ def review_dto(review: ProcessMetadataReview) -> dict[str, object]:
         "workspace_id": str(review.workspace_id),
         "state": review.state,
         "confirmed_revision": review.confirmed_revision,
+        "extraction_fingerprint": review.extraction_fingerprint,
         "documents": [
             {
                 "document_id": str(document.document_id),

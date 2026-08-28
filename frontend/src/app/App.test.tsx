@@ -218,6 +218,7 @@ describe("workspace-aware routing", () => {
           workspace_id: ID,
           state: "WAITING_FOR_DOCUMENTS",
           confirmed_revision: null,
+          extraction_fingerprint: "f".repeat(64),
           documents: [],
           fields: Object.fromEntries(
             [

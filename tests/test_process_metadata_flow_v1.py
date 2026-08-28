@@ -263,7 +263,7 @@ def test_import_persists_redacted_field_provenance_separately_from_effective_dat
     assert extraction.artifact_id == str(DOCUMENT_ID)
     payload = thaw_payload(extraction.payload)
     serialized = json.dumps(payload, ensure_ascii=False)
-    assert payload["schema_version"] == 4
+    assert payload["schema_version"] == 5
     assert payload["document_sha256"] == "b" * 64
     assert payload["page_evidence"][0]["document_sha256"] == "b" * 64
     assert payload["document_id"] == str(DOCUMENT_ID)
@@ -327,7 +327,8 @@ def test_review_aggregates_persisted_extractions_and_confirmation_is_separate():
     assert after.fields["vara"].value == ""
     assert after.fields["vara"].evidence[0].extracted_value == "1ª Vara Federal"
     assert after.fields["parte_requerente"].value == ""
-    assert after.fields["parte_requerente"].evidence[0].extracted_value == "Parte Sintetica"
+    assert after.fields["parte_requerente"].evidence[0].extracted_value == ""
+    assert after.fields["parte_requerente"].evidence[0].requires_source_selection is True
     assert revisions.records[0].payload == before.document_payloads[0]
 
 
@@ -536,6 +537,7 @@ def test_legacy_extraction_is_explicitly_rebound_to_the_immutable_document_ident
     v2_only = {
         "extraction_mode", "ocr_engine", "engine_version", "model_version",
         "ocr_confidence", "bounding_box",
+        "evidence_id", "source_text", "source_start", "requires_source_selection",
     }
     for field in legacy["fields"].values():
         for evidence in field["evidence"]:
@@ -780,7 +782,7 @@ def test_v2_ocr_field_bounding_box_must_belong_to_its_page_evidence():
         payload=payload,
     )
 
-    with pytest.raises(ValueError, match="bounding|proveniência|página"):
+    with pytest.raises(ValueError, match="bounding|proveniência|página|identidade"):
         document_metadata_from_payload(persisted.payload)
 
 
@@ -1104,6 +1106,94 @@ def test_real_local_pdf_flow_extracts_confirms_and_survives_reopen(tmp_path):
             "source_filename": "autos-sinteticos.pdf",
             "text_state": "AVAILABLE",
         }]
+        party_evidence = review["fields"]["parte_requerente"]["evidence"][0]
+        assert party_evidence["extracted_value"] == ""
+        assert party_evidence["requires_source_selection"] is True
+        selected_party = "Parte Sintetica"
+        selection_start = party_evidence["source_text"].index(selected_party)
+
+        stale_body = json.dumps({
+            "field_name": "parte_requerente",
+            "evidence_id": party_evidence["evidence_id"],
+            "source_start": selection_start,
+            "source_end": selection_start + len(selected_party),
+            "expected_source_revision": "0" * 64,
+            "expected_revision": None,
+        }).encode("utf-8")
+        status, _, _ = product_request(
+            runtime,
+            "POST",
+            f"/app-api/v1/workspaces/{workspace_id}/process-metadata/source-span-confirmations",
+            stale_body,
+            {"Content-Type": "application/json"},
+        )
+        assert status == 409
+
+        client_value_body = json.dumps({
+            **json.loads(stale_body),
+            "expected_source_revision": review["extraction_fingerprint"],
+            "value": selected_party,
+        }).encode("utf-8")
+        status, _, _ = product_request(
+            runtime,
+            "POST",
+            f"/app-api/v1/workspaces/{workspace_id}/process-metadata/source-span-confirmations",
+            client_value_body,
+            {"Content-Type": "application/json"},
+        )
+        assert status == 400
+
+        status, _, raw = product_request(
+            runtime,
+            "POST",
+            "/app-api/v1/workspaces",
+            json.dumps({"name": "Perícia isolada"}).encode(),
+            {"Content-Type": "application/json"},
+        )
+        assert status == 201
+        isolated_workspace_id = json.loads(raw)["workspace_id"]
+        status, _, raw = product_request(
+            runtime,
+            "GET",
+            f"/app-api/v1/workspaces/{isolated_workspace_id}/process-metadata",
+        )
+        isolated_revision = json.loads(raw)["extraction_fingerprint"]
+        cross_workspace_body = json.dumps({
+            "field_name": "parte_requerente",
+            "evidence_id": party_evidence["evidence_id"],
+            "source_start": selection_start,
+            "source_end": selection_start + len(selected_party),
+            "expected_source_revision": isolated_revision,
+            "expected_revision": None,
+        }).encode("utf-8")
+        status, _, _ = product_request(
+            runtime,
+            "POST",
+            f"/app-api/v1/workspaces/{isolated_workspace_id}/process-metadata/source-span-confirmations",
+            cross_workspace_body,
+            {"Content-Type": "application/json"},
+        )
+        assert status == 400
+
+        source_confirmation_body = json.dumps({
+            "field_name": "parte_requerente",
+            "evidence_id": party_evidence["evidence_id"],
+            "source_start": selection_start,
+            "source_end": selection_start + len(selected_party),
+            "expected_source_revision": review["extraction_fingerprint"],
+            "expected_revision": None,
+        }).encode("utf-8")
+        status, _, raw = product_request(
+            runtime,
+            "POST",
+            f"/app-api/v1/workspaces/{workspace_id}/process-metadata/source-span-confirmations",
+            source_confirmation_body,
+            {"Content-Type": "application/json"},
+        )
+        assert status == 200
+        source_confirmed = json.loads(raw)
+        assert source_confirmed["data"]["parte_requerente"] == selected_party
+        assert source_confirmed["revision"] == 1
 
         effective = {
             "numero_processo": "7654321-55.2025.4.05.0001",
@@ -1112,11 +1202,11 @@ def test_real_local_pdf_flow_extracts_confirms_and_survives_reopen(tmp_path):
             "vara": "2ª Vara Federal",
             "comarca_municipio": "Recife",
             "uf": "PE",
-            "parte_requerente": "Parte Sintetica",
+            "parte_requerente": source_confirmed["data"]["parte_requerente"],
             "parte_requerida": "Parte Contraria",
         }
         confirmation_body = json.dumps(
-            {"expected_revision": None, "data": effective},
+            {"expected_revision": 1, "data": effective},
             ensure_ascii=False,
         ).encode("utf-8")
         status, _, _ = product_request(
@@ -1159,7 +1249,10 @@ def test_real_local_pdf_flow_extracts_confirms_and_survives_reopen(tmp_path):
             f"/app-api/v1/workspaces/{workspace_id}/process-case",
         )
         assert status == 200
-        assert json.loads(raw)["data"]["vara"] == "2ª Vara Federal"
+        reopened_case = json.loads(raw)
+        assert reopened_case["data"]["vara"] == "2ª Vara Federal"
+        assert reopened_case["data"]["parte_requerente"] == selected_party
+        assert reopened_case["revision"] == 2
 
         status, content_type, opened_pdf = product_request(
             reopened,
