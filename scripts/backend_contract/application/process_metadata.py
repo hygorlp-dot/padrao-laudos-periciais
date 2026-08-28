@@ -876,24 +876,28 @@ def extract_process_metadata(
                 add_cnj(cnj, page, raw, source_start, source_end)
 
         line_start = 0
+        in_pje_party_table = False
         for raw_line in page.text.splitlines(keepends=True):
             line = raw_line.rstrip("\r\n")
             normalized_line, line_source_indices = _ascii_upper_with_source_indices(
                 line
             )
+            if not normalized_line.strip():
+                in_pje_party_table = False
             federal_heading_match = re.search(
                 r"\bJUSTICA\s+FEDERAL\s+DA\s+(\d{1,2})(?:A)?\s+REGIAO\b",
                 normalized_line,
             )
             if federal_heading_match:
                 region = int(federal_heading_match.group(1))
-                add(
-                    "tribunal",
-                    f"Justi\u00e7a Federal da {region}\u00aa Regi\u00e3o",
-                    page,
-                    line,
-                    source_start=line_start,
-                )
+                if region in _FEDERAL_TRIBUNAL_REGIONS.values():
+                    add(
+                        "tribunal",
+                        f"Tribunal Regional Federal da {region}\u00aa Regi\u00e3o",
+                        page,
+                        line,
+                        source_start=line_start,
+                    )
 
             tribunal_match = re.search(
                 r"TRIBUNAL\s+REGIONAL\s+FEDERAL\s+DA\s+(\d{1,2})(?:A)?\s+REGIAO",
@@ -970,14 +974,22 @@ def extract_process_metadata(
                     else "parte_requerida"
                 )
                 add(field, original_value, page, line, source_start=line_start)
-            for pje_party_match in re.finditer(r"([^()]*)\(([^()]*)\)", normalized_line):
-                role = pje_party_match.group(2).strip()
-                if role not in {
-                    "AUTOR", "AUTORA", "REQUERENTE", "EXEQUENTE",
-                    "REQUERIDO", "REQUERIDA", "REU", "EXECUTADO", "EXECUTADA",
-                }:
-                    continue
-                normalized_name = pje_party_match.group(1)
+            if (
+                re.search(r"\bPARTES?\b", normalized_line)
+                and "PROCURADOR" in normalized_line
+            ):
+                in_pje_party_table = True
+            explicit_pole = re.match(
+                r"\s*(?:POLO ATIVO|POLO PASSIVO)\s*[-:]\s*",
+                normalized_line,
+            )
+            pje_party_match = re.search(
+                r"\((AUTOR|AUTORA|REQUERENTE|EXEQUENTE|REQUERIDO|REQUERIDA|REU|EXECUTADO|EXECUTADA)\)",
+                normalized_line,
+            )
+            if pje_party_match and (in_pje_party_table or explicit_pole):
+                role = pje_party_match.group(1)
+                normalized_name = normalized_line[:pje_party_match.start()]
                 prefix = re.match(
                     r"\s*(?:POLO ATIVO|POLO PASSIVO)\s*[-:]\s*",
                     normalized_name,
@@ -985,12 +997,13 @@ def extract_process_metadata(
                 relative_start = prefix.end() if prefix else 0
                 name_bounds = re.search(r"\S(?:.*\S)?", normalized_name[relative_start:])
                 if name_bounds is None:
+                    line_start += len(raw_line)
                     continue
                 normalized_start = (
-                    pje_party_match.start(1) + relative_start + name_bounds.start()
+                    relative_start + name_bounds.start()
                 )
                 normalized_end = (
-                    pje_party_match.start(1) + relative_start + name_bounds.end()
+                    relative_start + name_bounds.end()
                 )
                 source_start = line_source_indices[normalized_start]
                 source_end = (

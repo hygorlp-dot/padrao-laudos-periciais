@@ -228,7 +228,7 @@ def test_pje_cover_surfaces_header_unit_region_and_each_party_for_review():
     )
 
     expected = {
-        "tribunal": "Justi\u00e7a Federal da 5\u00aa Regi\u00e3o",
+        "tribunal": "Tribunal Regional Federal da 5\u00aa Regi\u00e3o",
         "vara": "24\u00aa Vara Federal",
         "uf": "PE",
         "parte_requerida": "BANCO EXEMPLO SA",
@@ -247,6 +247,35 @@ def test_pje_cover_surfaces_header_unit_region_and_each_party_for_review():
         for field in result.fields.values()
         if field.evidence
     )
+
+
+def test_pje_heading_uses_only_canonical_supported_federal_tribunal_regions():
+    coherent = extraction(
+        "JUSTICA FEDERAL DA 5 REGIAO\n"
+        f"PROCESSO: {VALID_CNJ}"
+    )
+    impossible = extraction("JUSTICA FEDERAL DA 99 REGIAO")
+
+    assert {
+        item.extracted_value for item in coherent.fields["tribunal"].evidence
+    } == {"Tribunal Regional Federal da 5\u00aa Regi\u00e3o"}
+    assert impossible.fields["tribunal"].state is FieldExtractionState.NOT_FOUND
+    assert impossible.fields["tribunal"].evidence == ()
+
+
+def test_pje_party_parser_requires_table_or_pole_context_and_preserves_aliases():
+    result = extraction(
+        "O contrato menciona JOAO DA SILVA (AUTOR) apenas como referencia.\n"
+        "PARTES PROCURADOR TERCEIRO VINCULADO\n"
+        "BANCO EXEMPLO (BE) S.A. (REU) ADVOGADO UM (ADVOGADO)"
+    )
+
+    assert result.fields["parte_requerente"].state is FieldExtractionState.NOT_FOUND
+    assert {
+        item.extracted_value for item in result.fields["parte_requerida"].evidence
+    } == {"BANCO EXEMPLO (BE) S.A."}
+    assert result.fields["parte_requerida"].state is FieldExtractionState.AMBIGUOUS
+    assert result.fields["parte_requerida"].value == ""
 
 
 def test_pje_party_candidates_preserve_unicode_source_offsets_and_drop_pole_labels():
