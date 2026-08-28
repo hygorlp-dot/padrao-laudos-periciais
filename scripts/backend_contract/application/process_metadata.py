@@ -960,10 +960,16 @@ def extract_process_metadata(
     }
     cnj_candidates: list[_CnjCandidate] = []
     cnj_starts_by_page: dict[int, list[int]] = {}
-    declared_non_primary_segments = {
-        page.number: _declared_non_primary_source_segments(page)
-        for page in text.pages
-    }
+    declared_non_primary_segments = {}
+    active_non_primary_role: ProcessMetadataSourceRole | None = None
+    for page in text.pages:
+        starts, roles = _declared_non_primary_source_segments(page)
+        if active_non_primary_role is not None and (not starts or starts[0] != 0):
+            starts = (0, *starts)
+            roles = (active_non_primary_role, *roles)
+        if roles:
+            active_non_primary_role = roles[-1]
+        declared_non_primary_segments[page.number] = (starts, roles)
 
     def add(
         field: str,
@@ -1350,27 +1356,39 @@ def extract_process_metadata(
             for candidate in candidates["uf"]
             if candidate.evidence.extracted_value in _BRAZILIAN_UF_CODES
         }
-        unit_candidates: dict[int, _FieldCandidate] = {}
+        unit_candidates: dict[tuple[str, int], _FieldCandidate] = {}
+        unsupported_unit_identity = False
         for candidate in candidates["vara"]:
             unit_match = re.fullmatch(
-                r"(\d{1,3})ª Vara Federal", candidate.evidence.extracted_value
+                r"(\d{1,3})ª Vara( Federal)?", candidate.evidence.extracted_value
             )
-            if unit_match is not None:
-                unit_candidates.setdefault(int(unit_match.group(1)), candidate)
+            if unit_match is None:
+                unsupported_unit_identity = True
+                continue
+            unit_type = "VARA_FEDERAL" if unit_match.group(2) else "VARA"
+            unit_candidates.setdefault(
+                (unit_type, int(unit_match.group(1))), candidate
+            )
         if (
             expected_tribunal
             and tribunal_values == {expected_tribunal}
             and len(primary_ufs) == 1
             and len(unit_candidates) == 1
+            and not unsupported_unit_identity
         ):
             primary_uf = next(iter(primary_ufs))
-            unit_number, unit_candidate = next(iter(unit_candidates.items()))
-            location = resolve_judicial_unit(
-                tribunal=f"TRF{federal_region}",
-                uf=primary_uf,
-                unit_type="VARA_FEDERAL",
-                unit_number=unit_number,
+            (unit_type, unit_number), unit_candidate = next(
+                iter(unit_candidates.items())
             )
+            if unit_type != "VARA_FEDERAL":
+                location = None
+            else:
+                location = resolve_judicial_unit(
+                    tribunal=f"TRF{federal_region}",
+                    uf=primary_uf,
+                    unit_type=unit_type,
+                    unit_number=unit_number,
+                )
             if location is not None:
                 for field, value in (
                     ("municipio_sede", location.municipio_sede),

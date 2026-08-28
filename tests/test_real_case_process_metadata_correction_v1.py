@@ -288,6 +288,8 @@ def test_known_judicial_unit_derives_location_and_legacy_projection():
         "ÓRGÃO JULGADOR: 3ª Vara Federal PE",
         "ÓRGÃO JULGADOR: 24ª Vara Federal DF",
         "TRIBUNAL REGIONAL FEDERAL DA 1ª REGIÃO",
+        "ÓRGÃO JULGADOR: 3ª Vara PE",
+        "ÓRGÃO JULGADOR: 24ª Vara PE",
     ),
 )
 def test_conflicting_judicial_identity_cannot_derive_location(
@@ -313,6 +315,44 @@ def test_conflicting_judicial_identity_cannot_derive_location(
         assert field.state is FieldExtractionState.NOT_FOUND
         assert field.value == ""
         assert field.evidence == ()
+
+
+@pytest.mark.parametrize(
+    "secondary_heading",
+    ("ANEXO A", "JURISPRUDÊNCIA REFERENCIADA", "PROCESSO REFERENCIADO"),
+)
+def test_secondary_source_role_is_monotonic_across_page_boundaries(
+    secondary_heading,
+):
+    metadata = extract(
+        PdfTextPage(
+            2,
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+            f"PROCESSO: {PRIMARY_TRF5_CNJ}\n"
+            "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+            "AUTOR: PARTE ALFA\n"
+            "RÉU: PARTE BETA",
+        ),
+        PdfTextPage(20, secondary_heading),
+        PdfTextPage(
+            21,
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 1ª REGIÃO\n"
+            f"PROCESSO: {FOREIGN_TRF1_CNJ}\n"
+            "ÓRGÃO JULGADOR: 3ª Vara Federal DF\n"
+            "AUTOR: PARTE GAMA\n"
+            "RÉU: PARTE DELTA",
+        ),
+    )
+
+    number = metadata.fields["numero_processo"]
+    assert [item.extracted_value for item in number.evidence] == [PRIMARY_TRF5_CNJ]
+    assert all(
+        item.source_page == 2
+        for field in metadata.fields.values()
+        for item in field.evidence
+    )
 
 
 def test_unknown_judicial_unit_does_not_promote_an_independent_city_mention():
