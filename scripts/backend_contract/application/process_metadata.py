@@ -878,7 +878,9 @@ def extract_process_metadata(
         line_start = 0
         for raw_line in page.text.splitlines(keepends=True):
             line = raw_line.rstrip("\r\n")
-            normalized_line = _ascii_upper(line)
+            normalized_line, line_source_indices = _ascii_upper_with_source_indices(
+                line
+            )
             federal_heading_match = re.search(
                 r"\bJUSTICA\s+FEDERAL\s+DA\s+(\d{1,2})(?:A)?\s+REGIAO\b",
                 normalized_line,
@@ -975,15 +977,40 @@ def extract_process_metadata(
                     "REQUERIDO", "REQUERIDA", "REU", "EXECUTADO", "EXECUTADA",
                 }:
                     continue
-                original_value = line[
-                    pje_party_match.start(1):pje_party_match.end(1)
-                ].strip()
+                normalized_name = pje_party_match.group(1)
+                prefix = re.match(
+                    r"\s*(?:POLO ATIVO|POLO PASSIVO)\s*[-:]\s*",
+                    normalized_name,
+                )
+                relative_start = prefix.end() if prefix else 0
+                name_bounds = re.search(r"\S(?:.*\S)?", normalized_name[relative_start:])
+                if name_bounds is None:
+                    continue
+                normalized_start = (
+                    pje_party_match.start(1) + relative_start + name_bounds.start()
+                )
+                normalized_end = (
+                    pje_party_match.start(1) + relative_start + name_bounds.end()
+                )
+                source_start = line_source_indices[normalized_start]
+                source_end = (
+                    line_source_indices[normalized_end]
+                    if normalized_end < len(line_source_indices)
+                    else len(line)
+                )
+                original_value = line[source_start:source_end]
                 field = (
                     "parte_requerente"
                     if role in {"AUTOR", "AUTORA", "REQUERENTE", "EXEQUENTE"}
                     else "parte_requerida"
                 )
-                add(field, original_value, page, line, source_start=line_start)
+                add(
+                    field,
+                    original_value,
+                    page,
+                    line,
+                    source_start=line_start + source_start,
+                )
             line_start += len(raw_line)
 
     first_textual_page = next(

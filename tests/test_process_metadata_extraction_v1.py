@@ -249,6 +249,41 @@ def test_pje_cover_surfaces_header_unit_region_and_each_party_for_review():
     )
 
 
+def test_pje_party_candidates_preserve_unicode_source_offsets_and_drop_pole_labels():
+    claimant = "AL\ufb01CE E\u0301XEMPLO"
+    defendant = "RE\u0301U SINT\u0301ETICO"
+    result = extract_process_metadata(
+        workspace_id=WORKSPACE_ID,
+        document_id=DOCUMENT_A,
+        original_filename="tabela-pje-sintetica.pdf",
+        text=PdfTextResult(
+            PdfTextExtractionState.AVAILABLE,
+            (
+                PdfTextPage(
+                    1,
+                    f"POLO ATIVO - {claimant} (AUTORA) ADVOGADO UM (ADVOGADO)\n"
+                    f"POLO PASSIVO: {defendant} (REU) ADVOGADO DOIS (ADVOGADO)",
+                ),
+            ),
+        ),
+        extracted_at=EXTRACTED_AT,
+    )
+
+    assert {
+        item.extracted_value for item in result.fields["parte_requerente"].evidence
+    } == {claimant}
+    assert {
+        item.extracted_value for item in result.fields["parte_requerida"].evidence
+    } == {defendant}
+    assert all(
+        field.state is FieldExtractionState.AMBIGUOUS and field.value == ""
+        for field in (
+            result.fields["parte_requerente"],
+            result.fields["parte_requerida"],
+        )
+    )
+
+
 def test_partial_multiple_unicode_and_duplicate_values_do_not_inflate_confidence():
     result = extraction(
         f"Processo {VALID_CNJ}\n"
