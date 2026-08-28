@@ -282,6 +282,39 @@ def test_known_judicial_unit_derives_location_and_legacy_projection():
     )
 
 
+@pytest.mark.parametrize(
+    "conflicting_identity_line",
+    (
+        "ÓRGÃO JULGADOR: 3ª Vara Federal PE",
+        "ÓRGÃO JULGADOR: 24ª Vara Federal DF",
+        "TRIBUNAL REGIONAL FEDERAL DA 1ª REGIÃO",
+    ),
+)
+def test_conflicting_judicial_identity_cannot_derive_location(
+    conflicting_identity_line,
+):
+    metadata = extract(
+        PdfTextPage(
+            2,
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+            f"PROCESSO: {PRIMARY_TRF5_CNJ}\n"
+            "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+            + conflicting_identity_line,
+        )
+    )
+
+    for field_name in (
+        "municipio_sede",
+        "subsecao_judiciaria",
+        "comarca_municipio",
+    ):
+        field = metadata.fields[field_name]
+        assert field.state is FieldExtractionState.NOT_FOUND
+        assert field.value == ""
+        assert field.evidence == ()
+
+
 def test_unknown_judicial_unit_does_not_promote_an_independent_city_mention():
     metadata = extract(
         PdfTextPage(

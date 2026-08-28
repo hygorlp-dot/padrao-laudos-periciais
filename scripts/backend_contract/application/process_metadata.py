@@ -1334,29 +1334,37 @@ def extract_process_metadata(
                 if candidate.page.number == primary_candidate.page.number
                 and 0 <= candidate.start < primary_section_end
             ]
-        primary_uf = next(
-            (
-                candidate.evidence.extracted_value
-                for candidate in candidates["uf"]
-                if candidate.evidence.extracted_value in _BRAZILIAN_UF_CODES
-            ),
-            "",
-        )
-        unit_candidate = next(
-            (
-                candidate
-                for candidate in candidates["vara"]
-                if re.fullmatch(r"(\d{1,3})ª Vara Federal", candidate.evidence.extracted_value)
-            ),
-            None,
-        )
         federal_region = _FEDERAL_TRIBUNAL_REGIONS.get(primary_cnj.tribunal_code)
-        if primary_uf and unit_candidate is not None and federal_region is not None:
-            unit_number = int(
-                re.fullmatch(
-                    r"(\d{1,3})ª Vara Federal", unit_candidate.evidence.extracted_value
-                ).group(1)
+        expected_tribunal = (
+            ""
+            if federal_region is None
+            else f"Tribunal Regional Federal da {federal_region}ª Região"
+        )
+        tribunal_values = {
+            candidate.evidence.extracted_value
+            for candidate in candidates["tribunal"]
+            if candidate.evidence.extracted_value
+        }
+        primary_ufs = {
+            candidate.evidence.extracted_value
+            for candidate in candidates["uf"]
+            if candidate.evidence.extracted_value in _BRAZILIAN_UF_CODES
+        }
+        unit_candidates: dict[int, _FieldCandidate] = {}
+        for candidate in candidates["vara"]:
+            unit_match = re.fullmatch(
+                r"(\d{1,3})ª Vara Federal", candidate.evidence.extracted_value
             )
+            if unit_match is not None:
+                unit_candidates.setdefault(int(unit_match.group(1)), candidate)
+        if (
+            expected_tribunal
+            and tribunal_values == {expected_tribunal}
+            and len(primary_ufs) == 1
+            and len(unit_candidates) == 1
+        ):
+            primary_uf = next(iter(primary_ufs))
+            unit_number, unit_candidate = next(iter(unit_candidates.items()))
             location = resolve_judicial_unit(
                 tribunal=f"TRF{federal_region}",
                 uf=primary_uf,
