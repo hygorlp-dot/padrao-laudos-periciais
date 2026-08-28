@@ -46,18 +46,149 @@ _HEADER = re.compile(
     r"^\s*PARTES\s+PROCURADOR(?:ES)?(?:\s+TERCEIRO\s+VINCULADO)?\s*$",
     re.IGNORECASE,
 )
-_SUPPORTED_ROW = re.compile(
-    r"^\s*"
-    r"(?:(?P<explicit_pole>POLO\s+(?:ATIVO|PASSIVO))\s*[-:]\s*)?"
-    r"(?P<name>\S(?:.*?\S)?)\s+"
-    r"\((?P<role>"
-    r"AUTOR|AUTORA|REQUERENTE|EXEQUENTE|"
-    r"REQUERIDO|REQUERIDA|REU|EXECUTADO|EXECUTADA"
-    r")\)\s+"
-    r"(?P<representative>\S(?:.*?\S)?)\s+"
-    r"\((?P<representative_role>ADVOGADO|PROCURADOR)\)\s*$",
-    re.IGNORECASE,
+_EXPLICIT_POLES = (
+    ("POLO ATIVO", PjePartyPole.ACTIVE),
+    ("POLO PASSIVO", PjePartyPole.PASSIVE),
 )
+_PARTY_ROLE_TOKENS = tuple(
+    (f"({role})", role) for role in sorted(_ACTIVE_ROLES | _PASSIVE_ROLES)
+)
+_REPRESENTATIVE_ROLE_TOKENS = ("(ADVOGADO)", "(PROCURADOR)")
+
+
+@dataclass(frozen=True, slots=True)
+class _ScannedSupportedRow:
+    explicit_pole: PjePartyPole | None
+    role: str
+    representative_role: str
+    name_start: int
+    name_end: int
+    representative_start: int
+    representative_end: int
+
+
+def _skip_whitespace_forward(value: str, index: int, end: int) -> int:
+    while index < end and value[index].isspace():
+        index += 1
+    return index
+
+
+def _skip_whitespace_backward(value: str, start: int, index: int) -> int:
+    while index > start and value[index - 1].isspace():
+        index -= 1
+    return index
+
+
+def _scan_explicit_pole(
+    value: str,
+    start: int,
+    end: int,
+) -> tuple[PjePartyPole | None, int]:
+    for token, pole in _EXPLICIT_POLES:
+        token_end = start + len(token)
+        if token_end > end or not value.startswith(token, start):
+            continue
+        delimiter = _skip_whitespace_forward(value, token_end, end)
+        if delimiter < end and value[delimiter] in {":", "-"}:
+            content_start = _skip_whitespace_forward(value, delimiter + 1, end)
+            return pole, content_start
+    return None, start
+
+
+def _scan_terminal_representative_role(
+    value: str,
+    start: int,
+    end: int,
+) -> tuple[str, int] | None:
+    for token in _REPRESENTATIVE_ROLE_TOKENS:
+        token_start = end - len(token)
+        if (
+            token_start > start
+            and value.startswith(token, token_start)
+            and value[token_start - 1].isspace()
+        ):
+            return token[1:-1], token_start
+    return None
+
+
+def _scan_supported_row(normalized_line: str) -> _ScannedSupportedRow | None:
+    """Reconhece uma linha suportada em uma passagem monotônica e limitada."""
+
+    line_end = _skip_whitespace_backward(
+        normalized_line,
+        0,
+        len(normalized_line),
+    )
+    content_start = _skip_whitespace_forward(normalized_line, 0, line_end)
+    if content_start >= line_end:
+        return None
+
+    explicit_pole, content_start = _scan_explicit_pole(
+        normalized_line,
+        content_start,
+        line_end,
+    )
+    if content_start >= line_end:
+        return None
+
+    representative_role = _scan_terminal_representative_role(
+        normalized_line,
+        content_start,
+        line_end,
+    )
+    if representative_role is None:
+        return None
+    representative_role_name, representative_role_start = representative_role
+    representative_end = _skip_whitespace_backward(
+        normalized_line,
+        content_start,
+        representative_role_start,
+    )
+
+    candidate: _ScannedSupportedRow | None = None
+    index = content_start
+    while index < representative_end:
+        if normalized_line[index] != "(":
+            index += 1
+            continue
+
+        matched_token_length = 0
+        for token, role in _PARTY_ROLE_TOKENS:
+            token_end = index + len(token)
+            if (
+                index > content_start
+                and token_end < representative_end
+                and normalized_line[index - 1].isspace()
+                and normalized_line[token_end].isspace()
+                and normalized_line.startswith(token, index)
+            ):
+                name_end = _skip_whitespace_backward(
+                    normalized_line,
+                    content_start,
+                    index,
+                )
+                representative_start = _skip_whitespace_forward(
+                    normalized_line,
+                    token_end,
+                    representative_end,
+                )
+                if name_end > content_start and representative_start < representative_end:
+                    if candidate is not None:
+                        return None
+                    candidate = _ScannedSupportedRow(
+                        explicit_pole=explicit_pole,
+                        role=role,
+                        representative_role=representative_role_name,
+                        name_start=content_start,
+                        name_end=name_end,
+                        representative_start=representative_start,
+                        representative_end=representative_end,
+                    )
+                matched_token_length = len(token)
+                break
+        index += max(1, matched_token_length)
+
+    return candidate
 
 
 def _ascii_upper_with_source_indices(value: str) -> tuple[str, tuple[int, ...]]:
@@ -79,16 +210,6 @@ def _pole_for_role(role: str) -> PjePartyPole:
     if role in _PASSIVE_ROLES:
         return PjePartyPole.PASSIVE
     raise ValueError("papel processual não suportado pela tabela PJe")
-
-
-def _explicit_pole(value: str | None) -> PjePartyPole | None:
-    if value is None:
-        return None
-    return (
-        PjePartyPole.ACTIVE
-        if value.endswith("ATIVO")
-        else PjePartyPole.PASSIVE
-    )
 
 
 def _source_bound(
@@ -124,9 +245,9 @@ def parse_pje_party_table(page_text: str) -> PjePartyTableParseResult:
             line_start += len(raw_line)
             continue
 
-        match = _SUPPORTED_ROW.fullmatch(normalized)
-        explicit_pole = _explicit_pole(
-            match.group("explicit_pole") if match is not None else None
+        scanned_row = _scan_supported_row(normalized)
+        explicit_pole = (
+            scanned_row.explicit_pole if scanned_row is not None else None
         )
         row_is_expected = state in {
             PjePartyTableState.HEADER_SEEN,
@@ -134,13 +255,13 @@ def parse_pje_party_table(page_text: str) -> PjePartyTableParseResult:
         }
         structurally_addressed = explicit_pole is not None
 
-        if match is None or not (row_is_expected or structurally_addressed):
+        if scanned_row is None or not (row_is_expected or structurally_addressed):
             if state is not PjePartyTableState.OUTSIDE_TABLE:
                 state = PjePartyTableState.TERMINATED
             line_start += len(raw_line)
             continue
 
-        role = match.group("role")
+        role = scanned_row.role
         role_pole = _pole_for_role(role)
         if explicit_pole is not None and explicit_pole is not role_pole:
             state = PjePartyTableState.TERMINATED
@@ -148,7 +269,8 @@ def parse_pje_party_table(page_text: str) -> PjePartyTableParseResult:
             continue
 
         state = PjePartyTableState.IN_TABLE
-        normalized_start, normalized_end = match.span("name")
+        normalized_start = scanned_row.name_start
+        normalized_end = scanned_row.name_end
         local_source_start = _source_bound(
             source_indices,
             normalized_start,
