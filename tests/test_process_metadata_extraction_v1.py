@@ -214,6 +214,41 @@ def test_complete_process_identity_is_extracted_with_field_level_provenance():
         assert all("path" not in item.as_dict() for item in field.evidence)
 
 
+def test_pje_cover_surfaces_header_unit_region_and_each_party_for_review():
+    result = extraction(
+        "JUSTICA FEDERAL DA 5 REGIAO\n"
+        "PJE - PROCESSO JUDICIAL ELETRONICO\n"
+        f"NUMERO: {VALID_CNJ}\n"
+        "CLASSE: PROCEDIMENTO SINTETICO\n"
+        "ORGAO JULGADOR: 24 VARA FEDERAL PE\n"
+        "PARTES PROCURADOR TERCEIRO VINCULADO\n"
+        "ALICE EXEMPLO (AUTOR) ADVOGADO UM (ADVOGADO)\n"
+        "BRUNO EXEMPLO (AUTOR) ADVOGADO DOIS (ADVOGADO)\n"
+        "BANCO EXEMPLO SA (REU) ADVOGADO TRES (ADVOGADO)"
+    )
+
+    expected = {
+        "tribunal": "Justi\u00e7a Federal da 5\u00aa Regi\u00e3o",
+        "vara": "24\u00aa Vara Federal",
+        "uf": "PE",
+        "parte_requerida": "BANCO EXEMPLO SA",
+    }
+    for field, value in expected.items():
+        evidence = result.fields[field].evidence
+        assert value in {item.extracted_value for item in evidence}
+        assert all(item.source_page == 1 for item in evidence if item.extracted_value == value)
+
+    assert {
+        item.extracted_value for item in result.fields["parte_requerente"].evidence
+    } >= {"ALICE EXEMPLO", "BRUNO EXEMPLO"}
+    assert all(
+        field.state is FieldExtractionState.AMBIGUOUS
+        and field.value == ""
+        for field in result.fields.values()
+        if field.evidence
+    )
+
+
 def test_partial_multiple_unicode_and_duplicate_values_do_not_inflate_confidence():
     result = extraction(
         f"Processo {VALID_CNJ}\n"

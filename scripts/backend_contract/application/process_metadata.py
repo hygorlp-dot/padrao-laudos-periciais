@@ -51,6 +51,11 @@ _FEDERAL_TRIBUNAL_REGIONS = {
     "05": 5,
     "06": 6,
 }
+_BRAZILIAN_UF_CODES = {
+    "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT",
+    "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO",
+    "RR", "SC", "SP", "SE", "TO",
+}
 
 
 class PdfTextExtractionState(StrEnum):
@@ -874,6 +879,20 @@ def extract_process_metadata(
         for raw_line in page.text.splitlines(keepends=True):
             line = raw_line.rstrip("\r\n")
             normalized_line = _ascii_upper(line)
+            federal_heading_match = re.search(
+                r"\bJUSTICA\s+FEDERAL\s+DA\s+(\d{1,2})(?:A)?\s+REGIAO\b",
+                normalized_line,
+            )
+            if federal_heading_match:
+                region = int(federal_heading_match.group(1))
+                add(
+                    "tribunal",
+                    f"Justi\u00e7a Federal da {region}\u00aa Regi\u00e3o",
+                    page,
+                    line,
+                    source_start=line_start,
+                )
+
             tribunal_match = re.search(
                 r"TRIBUNAL\s+REGIONAL\s+FEDERAL\s+DA\s+(\d{1,2})(?:A)?\s+REGIAO",
                 normalized_line,
@@ -894,6 +913,22 @@ def extract_process_metadata(
                 add(
                     "vara",
                     f"{int(unit_match.group(1))}ª Vara{suffix}",
+                    page,
+                    line,
+                    source_start=line_start,
+                )
+
+            judging_body_match = re.search(
+                r"\bORGAO\s+JULGADOR\s*:\s*.+?\b([A-Z]{2})\s*$",
+                normalized_line,
+            )
+            if (
+                judging_body_match
+                and judging_body_match.group(1) in _BRAZILIAN_UF_CODES
+            ):
+                add(
+                    "uf",
+                    judging_body_match.group(1),
                     page,
                     line,
                     source_start=line_start,
@@ -930,6 +965,22 @@ def extract_process_metadata(
                 field = (
                     "parte_requerente"
                     if party_match.group(1) in {"AUTOR", "AUTORA", "REQUERENTE", "EXEQUENTE"}
+                    else "parte_requerida"
+                )
+                add(field, original_value, page, line, source_start=line_start)
+            for pje_party_match in re.finditer(r"([^()]*)\(([^()]*)\)", normalized_line):
+                role = pje_party_match.group(2).strip()
+                if role not in {
+                    "AUTOR", "AUTORA", "REQUERENTE", "EXEQUENTE",
+                    "REQUERIDO", "REQUERIDA", "REU", "EXECUTADO", "EXECUTADA",
+                }:
+                    continue
+                original_value = line[
+                    pje_party_match.start(1):pje_party_match.end(1)
+                ].strip()
+                field = (
+                    "parte_requerente"
+                    if role in {"AUTOR", "AUTORA", "REQUERENTE", "EXEQUENTE"}
                     else "parte_requerida"
                 )
                 add(field, original_value, page, line, source_start=line_start)
