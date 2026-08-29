@@ -431,6 +431,7 @@ class _CnjCandidate:
     explicit_primary_anchor: bool
     rejects_primary_anchor: bool
     source_role: ProcessMetadataSourceRole
+    primary_source_role: ProcessMetadataSourceRole
 
 
 @dataclass(frozen=True, slots=True)
@@ -992,13 +993,54 @@ def _resolved_primary_cnj(
         ProcessMetadataSourceRole.PRIMARY_PROCESS_HEADER,
         ProcessMetadataSourceRole.PRIMARY_PROCESS_DOCUMENT,
     }
-    strong_values = {
-        candidate.number.canonical
-        for candidate in candidates
-        if candidate.source_role in eligible_roles
-        and candidate.explicit_primary_anchor
-        and not candidate.rejects_primary_anchor
+    secondary_roles = {
+        ProcessMetadataSourceRole.REFERENCED_CASE,
+        ProcessMetadataSourceRole.CITED_JURISPRUDENCE,
+        ProcessMetadataSourceRole.ANNEX_DOCUMENT,
     }
+    grouped: dict[str, list[tuple[int, _CnjCandidate]]] = {}
+    for index, candidate in enumerate(candidates):
+        grouped.setdefault(candidate.number.canonical, []).append((index, candidate))
+    identity_group_ends = [len(candidates)] * len(candidates)
+    group_start = 0
+    for index in range(1, len(candidates) + 1):
+        if (
+            index == len(candidates)
+            or candidates[index].number.canonical
+            != candidates[group_start].number.canonical
+        ):
+            for member_index in range(group_start, index):
+                identity_group_ends[member_index] = index
+            group_start = index
+    support_groups = {}
+    for canonical, occurrences in grouped.items():
+        structural = next(
+            (
+                (index, candidate)
+                for index, candidate in occurrences
+                if candidate.primary_source_role in eligible_roles
+                and candidate.source_role not in secondary_roles
+                and not candidate.rejects_primary_anchor
+            ),
+            None,
+        )
+        if structural is None:
+            continue
+        anchor = next(
+            (
+                (index, candidate)
+                for index, candidate in occurrences
+                if index >= structural[0]
+                and index < identity_group_ends[structural[0]]
+                and candidate.explicit_primary_anchor
+                and candidate.source_role not in secondary_roles
+                and not candidate.rejects_primary_anchor
+            ),
+            None,
+        )
+        if anchor is not None:
+            support_groups[canonical] = (structural, anchor)
+    strong_values = set(support_groups)
     unique_values = tuple(
         dict.fromkeys(candidate.number.canonical for candidate in candidates)
     )
@@ -1035,13 +1077,17 @@ def _resolved_primary_cnj(
             None,
         )
     selected_value = next(iter(strong_values))
-    selected = next(
-        candidate
-        for candidate in candidates
-        if candidate.number.canonical == selected_value
-        and candidate.source_role in eligible_roles
-        and candidate.explicit_primary_anchor
-        and not candidate.rejects_primary_anchor
+    (structural_index, structural), (anchor_index, anchor) = support_groups[
+        selected_value
+    ]
+    primary_evidence = replace(
+        structural.evidence,
+        source_role=structural.primary_source_role,
+    )
+    selected = replace(
+        structural,
+        evidence=primary_evidence,
+        source_role=structural.primary_source_role,
     )
     if any(
         start < selected.start
@@ -1066,7 +1112,15 @@ def _resolved_primary_cnj(
         ExtractedField(
             FieldExtractionState.CONFIDENT,
             selected.number.canonical,
-            (selected.evidence,),
+            tuple(
+                evidence
+                for _, evidence in sorted(
+                    {
+                        structural_index: primary_evidence,
+                        anchor_index: anchor.evidence,
+                    }.items()
+                )
+            ),
         ),
         selected,
     )
@@ -1247,6 +1301,7 @@ def extract_process_metadata(
                     preceding_line=preceding_line,
                 ),
                 source_role,
+                primary_source_roles[id(page)],
             )
         )
 
@@ -1439,9 +1494,19 @@ def extract_process_metadata(
     if primary_candidate is not None:
         primary_cnj = primary_candidate.number
         primary_page_boundaries = [
-            start
-            for start in cnj_starts_by_page.get(primary_candidate.page.number, [])
-            if start > primary_candidate.start
+            candidate.start
+            for candidate in cnj_candidates
+            if candidate.page is primary_candidate.page
+            and candidate.start > primary_candidate.start
+            and (
+                candidate.number.canonical != primary_cnj.canonical
+                or candidate.source_role
+                in {
+                    ProcessMetadataSourceRole.REFERENCED_CASE,
+                    ProcessMetadataSourceRole.CITED_JURISPRUDENCE,
+                    ProcessMetadataSourceRole.ANNEX_DOCUMENT,
+                }
+            )
         ]
         primary_page_boundaries.extend(
             start
