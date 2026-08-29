@@ -432,6 +432,7 @@ class _CnjCandidate:
     rejects_primary_anchor: bool
     source_role: ProcessMetadataSourceRole
     primary_source_role: ProcessMetadataSourceRole
+    declared_non_primary: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -984,7 +985,7 @@ def _source_role_for_cnj(
 def _resolved_primary_cnj(
     candidates: list[_CnjCandidate],
     *,
-    cnj_starts_by_page: dict[int, list[int]],
+    recognized_occurrences: list[_CnjCandidate],
 ) -> tuple[ExtractedField, _CnjCandidate | None]:
     if not candidates:
         return ExtractedField(FieldExtractionState.NOT_FOUND, "", ()), None
@@ -998,28 +999,50 @@ def _resolved_primary_cnj(
         ProcessMetadataSourceRole.CITED_JURISPRUDENCE,
         ProcessMetadataSourceRole.ANNEX_DOCUMENT,
     }
-    grouped: dict[str, list[tuple[int, _CnjCandidate]]] = {}
-    for index, candidate in enumerate(candidates):
-        grouped.setdefault(candidate.number.canonical, []).append((index, candidate))
-    identity_group_ends = [len(candidates)] * len(candidates)
-    group_start = 0
-    for index in range(1, len(candidates) + 1):
-        if (
-            index == len(candidates)
-            or candidates[index].number.canonical
-            != candidates[group_start].number.canonical
+    identity_group_by_occurrence: dict[int, int] = {}
+    recognized_index_by_occurrence: dict[int, int] = {}
+    effective_secondary_by_occurrence: dict[int, bool] = {}
+    identity_group = 0
+    previous: _CnjCandidate | None = None
+    secondary_selection_context = False
+    for recognized_index, occurrence in enumerate(recognized_occurrences):
+        starts_secondary_context = (
+            occurrence.declared_non_primary or occurrence.rejects_primary_anchor
+        )
+        resets_secondary_context = (
+            secondary_selection_context
+            and occurrence.primary_source_role in eligible_roles
+            and not starts_secondary_context
+        )
+        if previous is not None and (
+            occurrence.number.canonical != previous.number.canonical
+            or starts_secondary_context
+            or resets_secondary_context
         ):
-            for member_index in range(group_start, index):
-                identity_group_ends[member_index] = index
-            group_start = index
-    support_groups = {}
-    for canonical, occurrences in grouped.items():
+            identity_group += 1
+        if starts_secondary_context:
+            secondary_selection_context = True
+        elif resets_secondary_context:
+            secondary_selection_context = False
+        identity_group_by_occurrence[id(occurrence)] = identity_group
+        recognized_index_by_occurrence[id(occurrence)] = recognized_index
+        effective_secondary_by_occurrence[id(occurrence)] = (
+            secondary_selection_context
+        )
+        previous = occurrence
+    candidates_by_group: dict[int, list[tuple[int, _CnjCandidate]]] = {}
+    for index, candidate in enumerate(candidates):
+        candidates_by_group.setdefault(
+            identity_group_by_occurrence[id(candidate)], []
+        ).append((index, candidate))
+    locked_group = None
+    for occurrences in candidates_by_group.values():
         structural = next(
             (
                 (index, candidate)
                 for index, candidate in occurrences
                 if candidate.primary_source_role in eligible_roles
-                and candidate.source_role not in secondary_roles
+                and not effective_secondary_by_occurrence[id(candidate)]
                 and not candidate.rejects_primary_anchor
             ),
             None,
@@ -1031,20 +1054,19 @@ def _resolved_primary_cnj(
                 (index, candidate)
                 for index, candidate in occurrences
                 if index >= structural[0]
-                and index < identity_group_ends[structural[0]]
                 and candidate.explicit_primary_anchor
-                and candidate.source_role not in secondary_roles
+                and not effective_secondary_by_occurrence[id(candidate)]
                 and not candidate.rejects_primary_anchor
             ),
             None,
         )
         if anchor is not None:
-            support_groups[canonical] = (structural, anchor)
-    strong_values = set(support_groups)
+            locked_group = (structural, anchor)
+            break
     unique_values = tuple(
         dict.fromkeys(candidate.number.canonical for candidate in candidates)
     )
-    if not strong_values:
+    if locked_group is None:
         return (
             ExtractedField(
                 FieldExtractionState.AMBIGUOUS,
@@ -1060,26 +1082,7 @@ def _resolved_primary_cnj(
             ),
             None,
         )
-    if len(strong_values) > 1:
-        return (
-            ExtractedField(
-                FieldExtractionState.CONFLICTING,
-                "",
-                tuple(
-                    next(
-                        candidate.evidence
-                        for candidate in candidates
-                        if candidate.number.canonical == value
-                    )
-                    for value in sorted(strong_values)
-                ),
-            ),
-            None,
-        )
-    selected_value = next(iter(strong_values))
-    (structural_index, structural), (anchor_index, anchor) = support_groups[
-        selected_value
-    ]
+    (structural_index, structural), (anchor_index, anchor) = locked_group
     primary_evidence = replace(
         structural.evidence,
         source_role=structural.primary_source_role,
@@ -1089,38 +1092,38 @@ def _resolved_primary_cnj(
         evidence=primary_evidence,
         source_role=structural.primary_source_role,
     )
-    if any(
-        start < selected.start
-        for start in cnj_starts_by_page.get(selected.page.number, [])
+    anchor_recognized_index = recognized_index_by_occurrence[id(anchor)]
+    anchor_evidence = anchor.evidence
+    if (
+        anchor_evidence.source_role in secondary_roles
+        and not effective_secondary_by_occurrence[id(anchor)]
     ):
-        return (
-            ExtractedField(
-                FieldExtractionState.AMBIGUOUS,
-                "",
-                tuple(
-                    next(
-                        candidate.evidence
-                        for candidate in candidates
-                        if candidate.number.canonical == value
-                    )
-                    for value in unique_values
-                ),
-            ),
-            None,
+        anchor_evidence = replace(
+            anchor_evidence,
+            source_role=ProcessMetadataSourceRole.UNKNOWN_SOURCE_CONTEXT,
+        )
+    retained_evidence = {
+        (structural.page.number, structural.start, structural.end): primary_evidence,
+        (anchor.page.number, anchor.start, anchor.end): anchor_evidence,
+    }
+    for occurrence in recognized_occurrences[anchor_recognized_index + 1 :]:
+        if occurrence.source_role in secondary_roles:
+            continue
+        evidence = occurrence.evidence
+        if evidence.source_role in eligible_roles:
+            evidence = replace(
+                evidence,
+                source_role=ProcessMetadataSourceRole.UNKNOWN_SOURCE_CONTEXT,
+            )
+        retained_evidence.setdefault(
+            (occurrence.page.number, occurrence.start, occurrence.end),
+            evidence,
         )
     return (
         ExtractedField(
             FieldExtractionState.CONFIDENT,
             selected.number.canonical,
-            tuple(
-                evidence
-                for _, evidence in sorted(
-                    {
-                        structural_index: primary_evidence,
-                        anchor_index: anchor.evidence,
-                    }.items()
-                )
-            ),
+            tuple(retained_evidence.values()),
         ),
         selected,
     )
@@ -1148,14 +1151,16 @@ def extract_process_metadata(
         field: [] for field in PROCESS_METADATA_FIELDS
     }
     cnj_candidates: list[_CnjCandidate] = []
-    cnj_starts_by_page: dict[int, list[int]] = {}
+    recognized_cnj_occurrences: list[_CnjCandidate] = []
     declared_non_primary_segments = {}
+    local_declared_non_primary_segments = {}
     primary_source_roles = {
         id(page): _primary_source_role_for_page(page) for page in text.pages
     }
     active_non_primary_role: ProcessMetadataSourceRole | None = None
     for page in text.pages:
         starts, roles = _declared_non_primary_source_segments(page)
+        local_declared_non_primary_segments[page.number] = (starts, roles)
         if active_non_primary_role is not None and (not starts or starts[0] != 0):
             starts = (0, *starts)
             roles = (active_non_primary_role, *roles)
@@ -1273,6 +1278,35 @@ def extract_process_metadata(
                 span,
                 source_start=start,
             )
+        candidate = _CnjCandidate(
+            cnj,
+            evidence,
+            page,
+            span,
+            start,
+            end,
+            _is_explicit_primary_cnj(
+                page,
+                start,
+                end,
+                context_start=context_start,
+                preceding_line=preceding_line,
+            ),
+            _rejects_primary_cnj(
+                page,
+                start,
+                end,
+                context_start=context_start,
+                preceding_line=preceding_line,
+            ),
+            source_role,
+            primary_source_roles[id(page)],
+            _declared_non_primary_role_at(
+                local_declared_non_primary_segments[page.number], start
+            )
+            is not None,
+        )
+        recognized_cnj_occurrences.append(candidate)
         if (
             page.extraction_mode is PageExtractionMode.OCR
             and (evidence.ocr_confidence or 0.0) < 0.75
@@ -1281,29 +1315,7 @@ def extract_process_metadata(
                 _FieldCandidate(evidence, page, start)
             )
             return
-        cnj_candidates.append(
-            _CnjCandidate(
-                cnj,
-                evidence,
-                page,
-                span,
-                start,
-                end,
-                _is_explicit_primary_cnj(
-                    page, start, end, context_start=context_start
-                    , preceding_line=preceding_line
-                ),
-                _rejects_primary_cnj(
-                    page,
-                    start,
-                    end,
-                    context_start=context_start,
-                    preceding_line=preceding_line,
-                ),
-                source_role,
-                primary_source_roles[id(page)],
-            )
-        )
+        cnj_candidates.append(candidate)
 
     for page in text.pages:
         for cnj_match, context_start, preceding_line in _cnj_occurrences_with_context(page):
@@ -1325,7 +1337,6 @@ def extract_process_metadata(
                     )
                 )
                 continue
-            cnj_starts_by_page.setdefault(page.number, []).append(cnj_match.start())
             add_cnj(
                 cnj,
                 page,
@@ -1362,7 +1373,6 @@ def extract_process_metadata(
                         )
                     )
                     continue
-                cnj_starts_by_page.setdefault(page.number, []).append(source_start)
                 add_cnj(
                     cnj,
                     page,
@@ -1480,7 +1490,7 @@ def extract_process_metadata(
 
     number_field, primary_candidate = _resolved_primary_cnj(
         cnj_candidates,
-        cnj_starts_by_page=cnj_starts_by_page,
+        recognized_occurrences=recognized_cnj_occurrences,
     )
     number_low_confidence = tuple(
         candidate.evidence for candidate in low_confidence["numero_processo"]
@@ -1495,7 +1505,7 @@ def extract_process_metadata(
         primary_cnj = primary_candidate.number
         primary_page_boundaries = [
             candidate.start
-            for candidate in cnj_candidates
+            for candidate in recognized_cnj_occurrences
             if candidate.page is primary_candidate.page
             and candidate.start > primary_candidate.start
             and (
