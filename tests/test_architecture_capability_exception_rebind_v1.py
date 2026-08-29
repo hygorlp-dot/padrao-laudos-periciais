@@ -125,7 +125,8 @@ def test_protected_workflows_use_trusted_locked_uv_dependencies():
     for path in E1A_PROTECTED_WORKFLOWS:
         workflow = (ROOT / path).read_text(encoding="utf-8")
         assert "uv lock --check" in workflow
-        assert "uv pip sync --system --require-hashes requirements-dev.txt" in workflow
+        assert '$syncArgs = @("pip", "sync", "--system", "--require-hashes", "requirements-dev.txt")' in workflow
+        assert "uv @syncArgs" in workflow
         assert "cache-dependency-glob: trusted/uv.lock" in workflow
         assert "pip install" not in workflow
 

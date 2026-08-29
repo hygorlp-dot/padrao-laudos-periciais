@@ -36,7 +36,8 @@ jobs:
         working-directory: trusted
         run: |
           uv lock --check
-          uv pip sync --system --require-hashes requirements-dev.txt
+          $syncArgs = @("pip", "sync", "--system", "--require-hashes", "requirements-dev.txt")
+          uv @syncArgs
       - name: Select capability judge from protected base
         working-directory: trusted
         shell: pwsh

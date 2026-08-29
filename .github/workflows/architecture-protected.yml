@@ -36,7 +36,8 @@ jobs:
         working-directory: trusted
         run: |
           uv lock --check
-          uv pip sync --system --require-hashes requirements-dev.txt
+          $syncArgs = @("pip", "sync", "--system", "--require-hashes", "requirements-dev.txt")
+          uv @syncArgs
       - name: Analyze candidate with protected base executable
         working-directory: trusted
         env:
