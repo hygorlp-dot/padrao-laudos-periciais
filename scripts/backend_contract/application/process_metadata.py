@@ -809,8 +809,7 @@ def _ocr_cnj_occurrences_with_context(page: PdfTextPage):
         yield (*occurrence, context_start, preceding_line)
 
 
-def _has_primary_header_structure(page: PdfTextPage) -> bool:
-    normalized = _ascii_upper(page.text)
+def _has_primary_header_structure(normalized: str) -> bool:
     institutional_heading = any(
         marker in normalized
         for marker in (
@@ -832,8 +831,7 @@ def _has_primary_header_structure(page: PdfTextPage) -> bool:
     return institutional_heading and process_structure
 
 
-def _has_primary_cover_structure(page: PdfTextPage) -> bool:
-    normalized = _ascii_upper(page.text)
+def _has_primary_cover_structure(normalized: str) -> bool:
     return (
         any(
             marker in normalized
@@ -847,13 +845,23 @@ def _has_primary_cover_structure(page: PdfTextPage) -> bool:
     )
 
 
-def _has_primary_document_structure(page: PdfTextPage) -> bool:
-    normalized = _ascii_upper(page.text)
+def _has_primary_document_structure(normalized: str) -> bool:
     return (
         "VARA FEDERAL" in normalized
         and bool(re.search(r"(?m)^\s*(?:AUTOR|AUTORA|REQUERENTE|EXEQUENTE)\s*:", normalized))
         and bool(re.search(r"(?m)^\s*(?:REU|REQUERIDO|REQUERIDA|EXECUTADO|EXECUTADA)\s*:", normalized))
     )
+
+
+def _primary_source_role_for_page(page: PdfTextPage) -> ProcessMetadataSourceRole:
+    normalized = _ascii_upper(page.text)
+    if _has_primary_header_structure(normalized):
+        return ProcessMetadataSourceRole.PRIMARY_PROCESS_HEADER
+    if _has_primary_cover_structure(normalized):
+        return ProcessMetadataSourceRole.PRIMARY_PROCESS_COVER
+    if _has_primary_document_structure(normalized):
+        return ProcessMetadataSourceRole.PRIMARY_PROCESS_DOCUMENT
+    return ProcessMetadataSourceRole.UNKNOWN_SOURCE_CONTEXT
 
 
 def _non_primary_heading_role(line: str) -> ProcessMetadataSourceRole | None:
@@ -943,6 +951,7 @@ def _source_role_for_cnj(
     *,
     context_start: int | None = None,
     preceding_line: str = "",
+    primary_source_role: ProcessMetadataSourceRole,
     declared_non_primary_segments: tuple[
         tuple[int, ...], tuple[ProcessMetadataSourceRole, ...]
     ],
@@ -968,13 +977,7 @@ def _source_role_for_cnj(
         preceding_line=preceding_line,
     ):
         return ProcessMetadataSourceRole.UNKNOWN_SOURCE_CONTEXT
-    if _has_primary_header_structure(page):
-        return ProcessMetadataSourceRole.PRIMARY_PROCESS_HEADER
-    if _has_primary_cover_structure(page):
-        return ProcessMetadataSourceRole.PRIMARY_PROCESS_COVER
-    if _has_primary_document_structure(page):
-        return ProcessMetadataSourceRole.PRIMARY_PROCESS_DOCUMENT
-    return ProcessMetadataSourceRole.UNKNOWN_SOURCE_CONTEXT
+    return primary_source_role
 
 
 def _resolved_primary_cnj(
@@ -1093,6 +1096,9 @@ def extract_process_metadata(
     cnj_candidates: list[_CnjCandidate] = []
     cnj_starts_by_page: dict[int, list[int]] = {}
     declared_non_primary_segments = {}
+    primary_source_roles = {
+        id(page): _primary_source_role_for_page(page) for page in text.pages
+    }
     active_non_primary_role: ProcessMetadataSourceRole | None = None
     for page in text.pages:
         starts, roles = _declared_non_primary_source_segments(page)
@@ -1182,6 +1188,7 @@ def extract_process_metadata(
             end,
             context_start=context_start,
             preceding_line=preceding_line,
+            primary_source_role=primary_source_roles[id(page)],
             declared_non_primary_segments=declared_non_primary_segments[page.number],
         )
         evidence = _evidence(

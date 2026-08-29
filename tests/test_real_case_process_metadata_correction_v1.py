@@ -470,6 +470,7 @@ def test_same_line_identity_order_is_classified_per_occurrence(
             match.end(),
             context_start=context_start,
             preceding_line=preceding_line,
+            primary_source_role=metadata_module._primary_source_role_for_page(page),
             declared_non_primary_segments=segments,
         ).value
         for match, context_start, preceding_line in occurrences
@@ -613,6 +614,70 @@ def test_multiline_authority_scan_has_bounded_linear_scaling():
 
     assert two_thousand_four_hundred <= 1.0
     assert two_thousand_four_hundred / max(six_hundred, 1e-9) <= 6.0
+
+
+def test_full_page_normalization_is_constant_per_page_for_primary_identities(
+    monkeypatch,
+):
+    identity_lines = "".join(
+        f"PROCESSO: {PRIMARY_TRF5_CNJ}\n" for _ in range(80)
+    )
+    page = PdfTextPage(
+        2,
+        "PODER JUDICIÁRIO\n"
+        "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+        f"{identity_lines}"
+        "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+        "AUTOR: PARTE ALFA\n"
+        "RÉU: PARTE BETA",
+    )
+    original = metadata_module._ascii_upper
+    full_page_normalizations = 0
+
+    def counted_ascii_upper(value):
+        nonlocal full_page_normalizations
+        if value is page.text:
+            full_page_normalizations += 1
+        return original(value)
+
+    monkeypatch.setattr(metadata_module, "_ascii_upper", counted_ascii_upper)
+
+    extract(page)
+
+    assert full_page_normalizations <= 4
+
+
+def test_explicit_primary_multiline_scan_has_bounded_linear_scaling():
+    def source(identity_count):
+        return (
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+            + "".join(
+                f"PROCESSO: {PRIMARY_TRF5_CNJ}\n"
+                for _ in range(identity_count)
+            )
+            + "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+            "AUTOR: PARTE ALFA\n"
+            "RÉU: PARTE BETA"
+        )
+
+    def duration(identity_count):
+        page = PdfTextPage(2, source(identity_count))
+        samples = []
+        for _ in range(3):
+            started = perf_counter()
+            extract(page)
+            samples.append(perf_counter() - started)
+        return median(samples)
+
+    two_hundred = duration(200)
+    four_hundred = duration(400)
+    eight_hundred = duration(800)
+
+    assert eight_hundred <= 3.0
+    assert eight_hundred / max(two_hundred, 1e-9) <= 8.0
+    assert four_hundred / max(two_hundred, 1e-9) <= 3.5
+    assert eight_hundred / max(four_hundred, 1e-9) <= 3.5
 
 
 @pytest.mark.parametrize(
