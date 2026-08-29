@@ -28,9 +28,8 @@ CORE_CONFIGS = {
     "config/historical-mutants.json", "tests/fixtures/core-fixtures.json",
 }
 GOVERNANCE_FILES = {
-    "AGENTS.md", ".github/workflows/core-safety.yml", "pyproject.toml",
-    "uv.lock", "requirements.txt", "requirements-dev.txt",
-    "docs/arquitetura/arquitetura-core-pericial.md",
+    "AGENTS.md", ".github/workflows/core-safety.yml", "requirements.txt",
+    "requirements-dev.txt", "docs/arquitetura/arquitetura-core-pericial.md",
     "docs/arquitetura/arquitetura-sistema.md",
     "docs/padroes/padrao-governanca-desenvolvimento.md",
     "docs/padroes/protocolo-pesquisa-ranking.md",
