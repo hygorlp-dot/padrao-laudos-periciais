@@ -8,9 +8,11 @@ repository retains `requirements*.txt` only as hash-pinned, generated
 compatibility exports for the protected-base transition. They are not edited
 as declarations and their generator command is embedded in each header.
 
-The canonical tool version is `uv 0.12.6`. CI installs with
-`uv sync --locked --no-install-project` and executes commands with
-`uv run --no-sync`, so a stale or mutated lock fails closed.
+The canonical tool version is `uv 0.12.6`. CI first runs `uv lock --check`,
+then synchronizes the hash-pinned generated export into the runner Python with
+`uv pip sync --system --require-hashes requirements-dev.txt`. This preserves
+the historical runner execution boundary while a stale lock or altered export
+fails closed.
 
 ## GitHub Actions provenance
 

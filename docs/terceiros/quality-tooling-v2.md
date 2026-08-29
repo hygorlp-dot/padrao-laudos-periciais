@@ -14,7 +14,7 @@
 
 - Autoridade declarativa única: `pyproject.toml`, separando dependências de runtime do grupo `dev`.
 - Resolução determinística: `uv.lock`, gerado e validado por `uv 0.12.6`.
-- Instalação CI: `uv sync --locked --no-install-project`; execução: `uv run --no-sync`.
+- Instalação CI: `uv lock --check` seguido de `uv pip sync --system --require-hashes requirements-dev.txt`.
 - Scripts de instalação arbitrários: nenhum script do repositório é executado na instalação; os artefatos resolvidos pelo lock provêm do PyPI.
 - Filesystem: mutmut cria exclusivamente `mutants/`, ignorado pelo Git; a suíte histórica first-party usa diretório temporário.
 - CI: `core-safety` não executa a campanha profunda. O workflow opcional `quality-depth` roda em Ubuntu, sem secrets ou deploy.

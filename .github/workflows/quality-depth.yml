@@ -24,6 +24,8 @@ jobs:
           version: "0.12.6"
           cache-dependency-glob: uv.lock
       - name: Install pinned development dependencies
-        run: uv sync --locked --no-install-project
+        run: |
+          uv lock --check
+          uv pip sync --system --require-hashes requirements-dev.txt
       - name: Run first-party deep quality boundary
-        run: uv run --no-sync python -m scripts.quality.deep_quality
+        run: python -m scripts.quality.deep_quality

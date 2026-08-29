@@ -45,8 +45,9 @@ Os schemas rejeitam propriedades não declaradas. Alegações, documentos, const
 A validação usa o pacote Python `jsonschema`, declarado em `pyproject.toml`. O pacote instala também `referencing`, usado para resolver referências entre os schemas. A resolução exata fica registrada em `uv.lock`.
 
 ```powershell
-uv sync --locked --no-install-project
-uv run --no-sync python scripts/validar_schemas.py
+uv lock --check
+uv pip sync --system --require-hashes requirements.txt
+python scripts/validar_schemas.py
 ```
 
 O validador confere os próprios schemas e os exemplos em

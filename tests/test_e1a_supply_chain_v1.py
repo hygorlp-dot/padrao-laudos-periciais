@@ -46,13 +46,13 @@ def test_every_checkout_disables_persisted_credentials():
 
 def test_dependency_workflows_use_locked_uv_and_exports_are_generated_only():
     workflows = _workflow_texts()
-    uv_workflows = {path: text for path, text in workflows.items() if "uv sync" in text}
+    uv_workflows = {path: text for path, text in workflows.items() if "uv pip sync" in text}
     assert {path.name for path in uv_workflows} == {
         "core-safety.yml", "lint.yml", "quality-depth.yml"
     }
     for path, workflow in uv_workflows.items():
-        assert "uv sync --locked --no-install-project" in workflow, path
-        assert "uv run --no-sync" in workflow, path
+        assert "uv lock --check" in workflow, path
+        assert "uv pip sync --system --require-hashes requirements-dev.txt" in workflow, path
         assert "pip install" not in workflow, path
     for name in ("requirements.txt", "requirements-dev.txt"):
         export = (ROOT / name).read_text(encoding="utf-8")

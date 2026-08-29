@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 PROTECTED_TIMING_SURFACE_SHA256 = {
-    ".github/workflows/core-safety.yml": "5e40cc75b943c31d5b00164018cb7def299664b6a3231e8a5170ef99f93354ab",
+    ".github/workflows/core-safety.yml": "5a499f0844e528f46c34a57d7663addd0d69b2a000d9a677da57bbc953158765",
     "scripts/quality/__init__.py": "b3824e776de859b9a48131b04cfc738c925badc4d42c0475eaf919e4e1665e5b",
     "scripts/quality/verify_core.py": "ae2e5928db5917fd4d9f4e9ad8ec9c13e65ebd4ade9f533ab0235b3440275598",
     "scripts/quality/architecture_analyzer.py": "b0ebd34400c0a456b14e44eea747cfa88c30d1f988a2659d75087f2cf6fdf036",
@@ -286,7 +286,7 @@ def test_architecture_trust_boundary_suite_is_partitioned_from_timed_regression(
     ]
     assert len(architecture_blocks) == 1
     architecture_step = architecture_blocks[0]
-    assert "run: uv run --no-sync python -m pytest -q tests/test_architecture_analyzer_v1.py" in architecture_step
+    assert "run: python -m pytest -q tests/test_architecture_analyzer_v1.py" in architecture_step
     assert "continue-on-error" not in architecture_step
     assert "\n        if:" not in architecture_step
 

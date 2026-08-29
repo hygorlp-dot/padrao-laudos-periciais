@@ -24,6 +24,8 @@ jobs:
           version: "0.12.6"
           cache-dependency-glob: uv.lock
       - name: Install Ruff
-        run: uv sync --locked --no-install-project
+        run: |
+          uv lock --check
+          uv pip sync --system --require-hashes requirements-dev.txt
       - name: Ruff check (informational — not a required status check yet)
-        run: uv run --no-sync python -m ruff check .
+        run: python -m ruff check .
