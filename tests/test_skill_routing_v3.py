@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import jsonschema
+from referencing import Registry, Resource
 
 from scripts.quality.skill_routing import route
 
@@ -19,6 +20,16 @@ def test_manifest_is_closed_valid_and_routes_every_installed_skill():
         for skills in profile["conditional"].values(): routed.update(skills)
     assert routed == installed
     assert MANIFEST["precedence"][0] == "AGENTS.md"
+
+
+def test_router_schema_composes_with_global_schema_registry():
+    schemas = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in (ROOT / "schemas").glob("*.schema.json")
+    ]
+    Registry().with_resources(
+        (schema["$id"], Resource.from_contents(schema)) for schema in schemas
+    )
 
 
 def test_material_bug_loads_minimum_engineering_set_only():
