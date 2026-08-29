@@ -20,7 +20,7 @@ CAPABILITY_REGISTRY_PATH = "config/capability-protected-artifacts-v1.json"
 CAPABILITY_TRANSITION_PATH = "config/capability-protected-transition-v1.json"
 ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
 PROTECTED_BASE = "145715360cb28237d098a225a45614b6dda3d704"
-E1A_ROTATION_BASE = "835bb91e2c13a800cd57ba53131c21847fe1eff0"
+E1A_ROTATION_BASE = "7a9bfa029bbf109b28066ed472221649d58f92ad"
 E1A_PROTECTED_WORKFLOWS = {
     ".github/workflows/architecture-protected.yml",
     ".github/workflows/capability-protected.yml",
@@ -119,6 +119,16 @@ def test_architecture_transition_binds_current_protected_workflow_rotation():
             E1A_ROTATION_BASE, path
         )
         assert _architecture_transition_identity(row, "candidate") == _identity_from_worktree(path)
+
+
+def test_protected_workflows_use_trusted_locked_uv_dependencies():
+    for path in E1A_PROTECTED_WORKFLOWS:
+        workflow = (ROOT / path).read_text(encoding="utf-8")
+        assert "uv lock --check" in workflow
+        assert '$syncArgs = @("pip", "sync", "--system", "--require-hashes", "requirements-dev.txt")' in workflow
+        assert "uv @syncArgs" in workflow
+        assert "cache-dependency-glob: trusted/uv.lock" in workflow
+        assert "pip install" not in workflow
 
 
 def _future_base_clone(tmp_path: Path) -> tuple[Path, str]:
