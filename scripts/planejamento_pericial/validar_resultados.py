@@ -1,15 +1,17 @@
 """Valida processo, delimitação, plano e conhecimento privado sem expor conteúdo."""
 
 from __future__ import annotations
-import argparse, json, sys
+import argparse
+import json
+import sys
 from pathlib import Path
 from jsonschema import FormatChecker
 from jsonschema.validators import validator_for
 from referencing import Registry, Resource
 RAIZ=Path(__file__).resolve().parents[2]
 if str(RAIZ) not in sys.path: sys.path.insert(0,str(RAIZ))
-from scripts.planejamento_pericial.validar_plano import validar as validar_relacoes_plano
-from scripts.triagem_pericial.validar_delimitacao import validar_arquivo as validar_delimitacao
+from scripts.planejamento_pericial.validar_plano import validar as validar_relacoes_plano  # noqa: E402
+from scripts.triagem_pericial.validar_delimitacao import validar_arquivo as validar_delimitacao  # noqa: E402
 
 def main():
     p=argparse.ArgumentParser(); p.add_argument("raiz_privada",type=Path); a=p.parse_args()

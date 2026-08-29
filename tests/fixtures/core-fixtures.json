@@ -7,7 +7,8 @@
                          "schema":  "auditoria-grounding-pericial.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Grounding vÃ¡lido",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/auditoria/trilha-auditoria-valida.json",
@@ -15,7 +16,8 @@
                          "schema":  "trilha-auditoria-agente.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Trilha vÃ¡lida",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/motor-vicios/analise-motor-vicios-valida.json",
@@ -23,7 +25,8 @@
                          "schema":  "analise-motor-vicios.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "AnÃ¡lise vÃ¡lida",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/motor-vicios/fonte-online-valida.json",
@@ -31,7 +34,8 @@
                          "schema":  "fonte-online.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Fonte online vÃ¡lida",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/motor-vicios/inventario-vistoria-valido.json",
@@ -39,7 +43,8 @@
                          "schema":  "inventario-vistoria.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "InventÃ¡rio de vistoria vÃ¡lido",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/motor-vicios-cenarios.json",
@@ -47,7 +52,8 @@
                          "schema":  null,
                          "consumer":  "tests/test_motor_vicios.py::MotorViciosTest::test_trinta_cenarios_de_risco_executam_comportamento",
                          "finalidade":  "CenÃ¡rios sintÃ©ticos do Motor",
-                         "expected":  "DATASET"
+                         "expected":  "DATASET",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/pje/documento-composto-valido.json",
@@ -55,7 +61,8 @@
                          "schema":  "documento-pje.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Documento composto vÃ¡lido",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/pje/documento-fonte-sem-proveniencia.json",
@@ -63,7 +70,8 @@
                          "schema":  "documento-pje.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Documento sem proveniÃªncia",
-                         "expected":  "INVALID"
+                         "expected":  "INVALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/pje/documento-parecer-com-fotos-orcamento-valido.json",
@@ -71,7 +79,8 @@
                          "schema":  "documento-pje.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Parecer composto vÃ¡lido",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/pje/documento-quesito-sem-numero-original-e-status-regular.json",
@@ -79,7 +88,8 @@
                          "schema":  "documento-pje.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Quesito inconsistente",
-                         "expected":  "INVALID"
+                         "expected":  "INVALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/pje/documento-secao-com-id-pje-proprio.json",
@@ -87,7 +97,8 @@
                          "schema":  "documento-pje.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "SeÃ§Ã£o com identidade indevida",
-                         "expected":  "INVALID"
+                         "expected":  "INVALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/pje/documento-simples-valido.json",
@@ -95,7 +106,8 @@
                          "schema":  "documento-pje.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Documento simples vÃ¡lido",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/pje/manifesto-documento-sem-pagina.json",
@@ -103,7 +115,8 @@
                          "schema":  "manifesto-pje.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Manifesto sem pÃ¡gina",
-                         "expected":  "INVALID"
+                         "expected":  "INVALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/pje/manifesto-minimo-valido.json",
@@ -111,7 +124,8 @@
                          "schema":  "manifesto-pje.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Manifesto mÃ­nimo vÃ¡lido",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/pje/manifesto-multiplas-partes-valido.json",
@@ -119,7 +133,8 @@
                          "schema":  "manifesto-pje.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Manifesto multilateral vÃ¡lido",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/pje/manifesto-reconciliacao-invalida.json",
@@ -127,7 +142,8 @@
                          "schema":  "manifesto-pje.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "ReconciliaÃ§Ã£o invÃ¡lida",
-                         "expected":  "INVALID"
+                         "expected":  "INVALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/pje_documentos/casos-classificacao.json",
@@ -135,7 +151,8 @@
                          "schema":  null,
                          "consumer":  "tests/test_documentos_pje.py::DocumentoPjeTest::test_classes_exatas_e_outro",
                          "finalidade":  "Casos de classificaÃ§Ã£o documental",
-                         "expected":  "DATASET"
+                         "expected":  "DATASET",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/pje_parser/casos.json",
@@ -143,7 +160,8 @@
                          "schema":  null,
                          "consumer":  "tests/test_extracao_pje.py::ParserPjeTest::test_rodape_valido_e_ausente",
                          "finalidade":  "Casos do parser estrutural",
-                         "expected":  "DATASET"
+                         "expected":  "DATASET",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/planejamento/conhecimento-normativo-valido.json",
@@ -151,7 +169,8 @@
                          "schema":  "conhecimento-normativo.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Conhecimento normativo vÃ¡lido",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/planejamento/conhecimento-referencial-valido.json",
@@ -159,7 +178,8 @@
                          "schema":  "conhecimento-referencial.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Conhecimento referencial vÃ¡lido",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/planejamento/inventario-valido.json",
@@ -167,7 +187,8 @@
                          "schema":  "inventario-referencias.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "InventÃ¡rio referencial vÃ¡lido",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/planejamento/plano-vistoria-valido.json",
@@ -175,7 +196,8 @@
                          "schema":  "plano-vistoria.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Plano de vistoria vÃ¡lido",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/planejamento-cenarios.json",
@@ -183,7 +205,8 @@
                          "schema":  null,
                          "consumer":  "tests/test_planejamento_pericial.py::PlanejamentoPericialTest::test_dezessete_cenarios_sinteticos_documentados",
                          "finalidade":  "CenÃ¡rios de planejamento",
-                         "expected":  "DATASET"
+                         "expected":  "DATASET",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/redacao/laudo-redacao-valido.json",
@@ -191,7 +214,8 @@
                          "schema":  "laudo-redacao.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Laudo semÃ¢ntico vÃ¡lido",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/redacao/plano-redacao-valido.json",
@@ -199,7 +223,8 @@
                          "schema":  "plano-redacao.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Plano de redaÃ§Ã£o vÃ¡lido",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/schemas/patologia-conforme-com-orcamento.json",
@@ -207,7 +232,8 @@
                          "schema":  "patologia.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Patologia conforme com orÃ§amento indevido",
-                         "expected":  "INVALID"
+                         "expected":  "INVALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/schemas/patologia-conforme-valida.json",
@@ -215,7 +241,8 @@
                          "schema":  "patologia.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Patologia conforme vÃ¡lida",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/schemas/patologia-endogena-valida.json",
@@ -223,7 +250,8 @@
                          "schema":  "patologia.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Patologia endÃ³gena vÃ¡lida",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/schemas/patologia-funcional-com-orcamento.json",
@@ -231,7 +259,8 @@
                          "schema":  "patologia.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Patologia funcional com orÃ§amento indevido",
-                         "expected":  "INVALID"
+                         "expected":  "INVALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/schemas/patologia-inconclusiva-com-vicio.json",
@@ -239,7 +268,8 @@
                          "schema":  "patologia.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Patologia inconclusiva com vÃ­cio indevido",
-                         "expected":  "INVALID"
+                         "expected":  "INVALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/schemas/patologia-inconclusiva-valida.json",
@@ -247,7 +277,8 @@
                          "schema":  "patologia.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Patologia inconclusiva vÃ¡lida",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/schemas/patologia-vicio-sem-origem-endogena.json",
@@ -255,7 +286,8 @@
                          "schema":  "patologia.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "VÃ­cio sem origem endÃ³gena",
-                         "expected":  "INVALID"
+                         "expected":  "INVALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/schemas/processo-valido.json",
@@ -263,7 +295,8 @@
                          "schema":  "processo.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Processo vÃ¡lido",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/schemas/vistoria-valida.json",
@@ -271,7 +304,8 @@
                          "schema":  "vistoria.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Vistoria vÃ¡lida",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/triagem/cenarios.json",
@@ -279,7 +313,8 @@
                          "schema":  "delimitacao-pericial.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "CenÃ¡rios de triagem rejeitados pelo schema unitÃ¡rio",
-                         "expected":  "INVALID"
+                         "expected":  "INVALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/triagem/delimitacao-minima-valida.json",
@@ -287,7 +322,8 @@
                          "schema":  "delimitacao-pericial.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "DelimitaÃ§Ã£o mÃ­nima vÃ¡lida",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/agentic/review-multiagente-valido.json",
@@ -295,7 +331,8 @@
                          "schema":  "review-multiagente.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Revisão independente válida",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/agentic/review-multiagente-independencia-invalida.json",
@@ -303,7 +340,8 @@
                          "schema":  "review-multiagente.schema.json",
                          "consumer":  "scripts/validar_schemas.py::principal",
                          "finalidade":  "Aprovação sem independência",
-                         "expected":  "INVALID"
+                         "expected":  "INVALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/capability-boundary-v1.json",
@@ -311,7 +349,8 @@
                          "schema":  null,
                          "consumer":  "tests/test_capability_contracts_v1.py::test_p0_p1_fixture_matrix_covers_boundaries_and_positive_controls",
                          "finalidade":  "Matriz contratual P0/P1 e controles positivos do limite de aquisicao V1",
-                         "expected":  "DATASET"
+                         "expected":  "DATASET",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/capability-exception-v1-valid.json",
@@ -319,7 +358,8 @@
                          "schema":  "capability-exception-v1.schema.json",
                          "consumer":  "tests/test_capability_contracts_v1.py::test_contract_schemas_accept_exact_examples_and_reject_wildcard_exception",
                          "finalidade":  "Excecao de capability exata vinculada a baseline imutavel",
-                         "expected":  "VALID"
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/golden_corpus/validar_integridade.json",
@@ -327,7 +367,8 @@
                          "schema":  null,
                          "consumer":  "tests/test_golden_forensic_corpus_v1.py::GoldenCorpusRegistryDrivenTest::test_validar_integridade_corpus_is_registered_with_golden_cases",
                          "finalidade":  "Corpus dourado - HOTSPOT-04 validar_integridade",
-                         "expected":  "DATASET"
+                         "expected":  "DATASET",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/golden_corpus/motor_executar.json",
@@ -335,7 +376,8 @@
                          "schema":  null,
                          "consumer":  "tests/test_golden_forensic_corpus_v1.py::GoldenCorpusRegistryDrivenTest::test_motor_executar_corpus_is_registered_with_approved_cases",
                          "finalidade":  "Corpus dourado - HOTSPOT-01 motor.executar",
-                         "expected":  "DATASET"
+                         "expected":  "DATASET",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/golden_corpus/gerar_vistoria.json",
@@ -343,7 +385,8 @@
                          "schema":  null,
                          "consumer":  "tests/test_golden_forensic_corpus_v1.py::GoldenCorpusRegistryDrivenTest::test_gerar_vistoria_corpus_is_registered_with_approved_cases",
                          "finalidade":  "Corpus dourado - HOTSPOT-02 gerar_vistoria",
-                         "expected":  "DATASET"
+                         "expected":  "DATASET",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/golden_corpus/autocorrigir.json",
@@ -351,7 +394,8 @@
                          "schema":  null,
                          "consumer":  "tests/test_golden_forensic_corpus_v1.py::GoldenCorpusRegistryDrivenTest::test_autocorrigir_corpus_is_registered_with_approved_cases",
                          "finalidade":  "Corpus dourado - HOTSPOT-05 autocorrigir",
-                         "expected":  "DATASET"
+                         "expected":  "DATASET",
+                         "provenance":  "SYNTHETIC"
                      },
                      {
                          "arquivo":  "tests/fixtures/golden_corpus/gerar_delimitacao.json",
@@ -359,7 +403,8 @@
                          "schema":  null,
                          "consumer":  "tests/test_golden_forensic_corpus_v1.py::GoldenCorpusRegistryDrivenTest::test_gerar_delimitacao_corpus_is_registered_with_approved_cases",
                          "finalidade":  "Corpus dourado - HOTSPOT-03 gerar_delimitacao",
-                         "expected":  "DATASET"
+                         "expected":  "DATASET",
+                         "provenance":  "SYNTHETIC"
                      }
                  ]
 }

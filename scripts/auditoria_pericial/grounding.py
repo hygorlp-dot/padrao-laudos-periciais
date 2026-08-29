@@ -41,7 +41,8 @@ def auditar_aspecto(evidencia,aspecto,indice=1):
 def auditar_candidato_aspecto(evidencia,candidato):
     """Audita candidato contra a fonte bruta, sem consultar aspectos derivados."""
     bruto=" ".join(str(evidencia.get(k) or "") for k in ("descricao","resultado","valor","unidade","grandeza","anotacao","requisito","metodo_verificacao","criterio","definicao","escopo","aplicabilidade_temporal"))
-    limpar=lambda x:re.sub(r"\s+"," ",unicodedata.normalize("NFKD",str(x)).encode("ascii","ignore").decode().lower()).strip()
+    def limpar(x):
+        return re.sub(r"\s+"," ",unicodedata.normalize("NFKD",str(x)).encode("ascii","ignore").decode().lower()).strip()
     normalizado=limpar(bruto);ancora=limpar(candidato.get("ancora") or "")
     fiel=bool(ancora and ancora in normalizado);polaridade=candidato.get("polaridade","NAO_AVALIADO")
     if not fiel:veredito="UNSUBSTANTIATED"

@@ -1,7 +1,8 @@
 """Registra em cache privado somente fontes online já verificadas; não simula pesquisa."""
 from __future__ import annotations
-import hashlib,json
-from datetime import datetime,timezone
+import hashlib
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 

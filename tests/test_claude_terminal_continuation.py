@@ -12,7 +12,8 @@ from scripts.triagem_pericial import gerar_delimitacao
 
 
 ROOT=Path(__file__).resolve().parents[1]
-load=lambda p:json.loads((ROOT/p).read_text(encoding="utf-8"))
+def load(p):
+    return json.loads((ROOT/p).read_text(encoding="utf-8"))
 
 
 class ClaudeTerminalContinuation(unittest.TestCase):

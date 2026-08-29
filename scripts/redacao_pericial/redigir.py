@@ -24,7 +24,8 @@ def _rotulo(valor):
 
 
 def _claim(indice, tipo, texto, pat, fontes, medicoes=(), materialidade="LOAD_BEARING", natureza="INTERPRETIVE", qt_ids=(), que_ids=()):
-    por_prefixo = lambda prefixo: [x for x in fontes if x.startswith(prefixo)]
+    def por_prefixo(prefixo):
+        return [x for x in fontes if x.startswith(prefixo)]
     normas_citadas = [x for x in por_prefixo("NOR-") if x in texto]
     return {
         "id": f"CLAIM-RED-{indice:03d}", "secao": f"PAT:{pat['id']}", "tipo": tipo, "texto_semantico": texto,

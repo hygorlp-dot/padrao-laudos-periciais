@@ -1,13 +1,11 @@
 """Orquestração do parser e geração validada do manifesto PJe."""
 
 import json
-from datetime import datetime
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
-from .detectar_rodape_pje import detectar_rodape
 from .diagnosticar_paginas import diagnosticar_paginas
 from .extrair_capa import extrair_capa
 from .extrair_indice import extrair_indice

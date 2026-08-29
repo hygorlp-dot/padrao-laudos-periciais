@@ -11,7 +11,7 @@ from typing import Any
 
 RAIZ = Path(__file__).resolve().parents[2]
 if str(RAIZ) not in sys.path: sys.path.insert(0, str(RAIZ))
-from scripts.triagem_pericial.gerar_delimitacao import gerar as gerar_delimitacao
+from scripts.triagem_pericial.gerar_delimitacao import gerar as gerar_delimitacao  # noqa: E402
 
 
 TERMOS_ALEGACAO = re.compile(r"(?i)\b(alega|relata|sustenta|afirma|infiltra|fissura|trinca|umidade|descolamento|defeito|animal\s+solto|sinaliza[cç][aã]o|valor\s+(?:de\s+)?aluguel)\b")
@@ -105,7 +105,8 @@ def gerar(diretorio: Path, *, data_laudo: str | None = None) -> dict[str, Any]:
     principal = fontes[0]["blocos_texto"][0]["proveniencia"]
     principal = {k: v for k, v in principal.items() if k != "bbox"}
     processo = manifesto["processo"]
-    valor = lambda k: processo[k].get("valor") if isinstance(processo.get(k), dict) else None
+    def valor(k):
+        return processo[k].get("valor") if isinstance(processo.get(k), dict) else None
     assuntos = [i["valor"] for i in processo.get("assuntos", []) if i.get("valor")]
     conflitos_upstream=[{"id":f"CON-{i:03d}","tipo":c["tipo"],"descricao":c["descricao"],"fontes_conflitantes":list(dict.fromkeys(f'{f.get("documento_id") or "CAPA"}:p{f.get("pagina_pdf")}' for f in c.get("fontes",[]))),"criticidade":"CRITICA" if c.get("bloqueante") else "IMPORTANTE","bloqueante":c.get("bloqueante",False),"decisao_perito":c.get("decisao"),"status":"ABERTO" if c.get("status")=="ABERTO" else "RESOLVIDO"} for i,c in enumerate(manifesto.get("conflitos",[]),1)]
     if any(len(c["fontes_conflitantes"])<2 for c in conflitos_upstream):raise ValueError("Conflito upstream sem duas fontes distinguíveis; processo bloqueado")

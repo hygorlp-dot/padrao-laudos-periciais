@@ -1,10 +1,12 @@
 """Valida schema e integridade relacional do plano pré-vistoria."""
 
 from __future__ import annotations
-import argparse, json
+import argparse
+import json
 from pathlib import Path
 from decimal import Decimal,InvalidOperation
-import re,unicodedata
+import re
+import unicodedata
 from jsonschema.validators import validator_for
 from jsonschema import FormatChecker
 from referencing import Registry, Resource

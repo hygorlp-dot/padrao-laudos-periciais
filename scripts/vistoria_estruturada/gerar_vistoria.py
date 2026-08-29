@@ -9,8 +9,8 @@ import sys
 from pathlib import Path
 RAIZ=Path(__file__).resolve().parents[2]
 if str(RAIZ) not in sys.path:sys.path.insert(0,str(RAIZ))
-from scripts.triagem_pericial.semantica import afinidade,melhores
-from scripts.motor_vicios.evidencias import proposicoes_observacionais
+from scripts.triagem_pericial.semantica import afinidade, melhores  # noqa: E402
+from scripts.motor_vicios.evidencias import proposicoes_observacionais  # noqa: E402
 
 def _vinculos(texto,plano,atividade_planejada=None):
     atividades=(plano or {}).get("atividades",[])
@@ -18,7 +18,8 @@ def _vinculos(texto,plano,atividade_planejada=None):
     ids=[atividade_planejada] if atividade_planejada and any(a["id"]==atividade_planejada for a in atividades) else melhores(texto,candidatos) if candidatos else []
     ambiguidade=len(ids)>1
     escolhidas=[a for a in atividades if a["id"] in ids] if not ambiguidade else []
-    unir=lambda campo:sorted({x for a in escolhidas for x in a.get(campo,[])})
+    def unir(campo):
+        return sorted({x for a in escolhidas for x in a.get(campo,[])})
     return {"atividade":ids[0] if len(ids)==1 else None,"questoes":unir("questoes_tecnicas"),
             "quesitos":unir("quesitos"),"alegacoes":unir("alegacoes"),
             "ambiguidade":ambiguidade,"candidatos_ambiguos":sorted(ids) if ambiguidade else []}
@@ -130,8 +131,8 @@ def _comp(item,obs,registros,atividades_univocas):
     # TODO(#74): normalizar() is undefined here -- dormant NameError risk,
     # currently unreachable because no producer sets "elemento" on
     # medicoes/fotos. Do not add an "elemento" key without resolving #74.
-    elemento=bool(obs.get("elemento") and item.get("elemento") and normalizar(obs.get("elemento"))==normalizar(item.get("elemento")))
-    manifestacao=bool(obs.get("manifestacao") and item.get("manifestacao") and normalizar(obs.get("manifestacao"))==normalizar(item.get("manifestacao")))
+    elemento=bool(obs.get("elemento") and item.get("elemento") and normalizar(obs.get("elemento"))==normalizar(item.get("elemento")))  # noqa: F821
+    manifestacao=bool(obs.get("manifestacao") and item.get("manifestacao") and normalizar(obs.get("manifestacao"))==normalizar(item.get("manifestacao")))  # noqa: F821
     return explicito or registro or atividade_univoca or (atividade and elemento and manifestacao)
 
 

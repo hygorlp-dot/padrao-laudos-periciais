@@ -12,6 +12,22 @@
 
 ## Supply chain
 
+### E1B — Ruff e Gitleaks
+
+- Ruff `0.16.3`: E1B remove o baseline global mantendo o conjunto de regras
+  existente, sem ampliar semântica nem criar novo status protegido.
+- Gitleaks `8.30.1`, MIT, origem
+  `github.com/gitleaks/gitleaks/releases/tag/v8.30.1`.
+- Asset Windows x64 pinado por SHA-256
+  `d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e`.
+- O wrapper `scripts/quality/run_gitleaks.ps1` verifica a integridade antes de
+  extrair, usa `--redact=100`, cobre snapshot rastreado e `--all`, e apaga os
+  relatórios efêmeros.
+- Findings do Gitleaks são advisory em E1B. Falha de aquisição ou integridade
+  falha fechada; o gate first-party continua sendo a autoridade bloqueante.
+- Não há telemetria nem upload do repositório. A única rede é o download do
+  release público oficial pinado.
+
 - Autoridade declarativa única: `pyproject.toml`, separando dependências de runtime do grupo `dev`.
 - Resolução determinística: `uv.lock`, gerado e validado por `uv 0.12.6`.
 - Instalação CI: `uv lock --check` seguido de `uv pip sync --system --require-hashes requirements-dev.txt`.
@@ -34,3 +50,5 @@ Fontes primárias consultadas em 2026-08-11:
 - <https://cosmic-ray.readthedocs.io/en/stable/>
 - <https://github.com/coveragepy/coveragepy>
 - <https://github.com/rubik/radon>
+- <https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1>
+- <https://github.com/gitleaks/gitleaks/blob/v8.30.1/LICENSE>

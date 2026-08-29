@@ -12,9 +12,9 @@ import hashlib
 import json
 from pathlib import Path
 import re
+from typing import Any
 
 def resultado_criterio(condicao):return "APROVADO" if bool(condicao) else "BLOQUEADO"
-from typing import Any
 
 try:
     from scripts.triagem_pericial.classificar_tipo import classificar, normalizar
@@ -293,9 +293,10 @@ def _montar_cobertura_e_ressalvas(questoes, quesitos, resultado, modelos, normas
 
 def _montar_tema_e_assunto(documentos, manifesto, perfil, resultado, prov):
     tema_extraido,passagem_tema=_tema_dos_autos(documentos,perfil["tema"])
-    analise = lambda texto: {"texto": texto, "confianca": _confianca(resultado.nivel),
-                             "documentos_fonte": resultado.documentos_fonte,
-                             "status_verificacao": "PENDENTE_VALIDACAO_PERITO"}
+    def analise(texto):
+        return {"texto": texto, "confianca": _confianca(resultado.nivel),
+                "documentos_fonte": resultado.documentos_fonte,
+                "status_verificacao": "PENDENTE_VALIDACAO_PERITO"}
     assuntos = [item["valor"] for item in manifesto["processo"].get("assuntos", []) if item.get("valor")]
     proveniencias_gerais = [item["proveniencia"] for item in manifesto["processo"].get("assuntos", []) if item.get("valor")]
     proveniencias_gerais.append(prov)

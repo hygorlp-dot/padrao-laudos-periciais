@@ -25,5 +25,13 @@ select = ["E4", "E7", "E9", "F"]
 # issue mass-applies. Every other E7/E4/E9/F code stays active.
 ignore = ["E701", "E702"]
 
+[lint.per-file-ignores]
+# Capability acquisitions are identity-bound by the protected analyzer. E1B
+# keeps their exact reviewed blobs and suppresses only the pre-existing lint
+# forms that cannot be mechanically rewritten without rotating authority.
+"scripts/agentic/gates.py" = ["F401"]
+"scripts/terceiros/catalogar_repositorios.py" = ["E401", "F401"]
+"scripts/terceiros/verificar_atualizacoes.py" = ["E401"]
+
 [format]
 # Formatter not wired into CI or run against the existing tree yet.

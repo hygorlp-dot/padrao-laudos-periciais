@@ -32,8 +32,6 @@ class CorrecaoTerminalMotorV1Test(unittest.TestCase):
     def test_obs_pol_06_pipeline_nao_afirma_anomalia(self):
         r=executar_pipeline_motor(self.processo,self.delim,self.plano,self.gerar("Sala: Não há fissura na parede."));p=r["analise_final"]["patologias"][0];self.assertEqual(p["constatacao"]["situacao"],"NAO_CONSTATADA");self.assertNotIn("foi observada",p["conclusao_tecnica"].lower())
 
-    def norma(self):return {"id":"NOR-001","tipo":"NORMA","entidade":"ABNT","numero":"1","classificacao_fonte":"FONTE_TECNICA_LOCAL_VERIFICADA","requisito":"interface com vedação deteriorada não atende ao requisito","verificada":True,"proveniencia":["FONTE"],"aplicabilidade_temporal":"APLICAVEL_PRINCIPAL","metodo_verificacao":"medição","criterio":{"operador":"<=","valor":.5,"unidade":"mm","grandeza":"abertura"}}
-
     def norma(self):
         return {"id":"NOR-001","tipo":"NORMA","entidade":"ABNT","numero":"1","classificacao_fonte":"FONTE_TECNICA_LOCAL_VERIFICADA","status_verificacao":"VERIFICADO","requisito":"requisito de abertura","verificada":True,"proveniencia":["FONTE"],"vigencia_inicio":"2010-01-01","data_relevante":"2020-01-01","metodo_verificacao":"medicao","criterio":{"operador":"<=","valor":.5,"unidade":"mm","grandeza":"abertura"}}
 

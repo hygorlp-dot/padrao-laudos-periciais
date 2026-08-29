@@ -104,6 +104,19 @@ integração, integridade, dependências, risco e política de atualização. Um
 atualização exige Issue própria, auditoria, branch e PR; nunca atualizar
 silenciosamente.
 
+## Gate de publicação
+
+`PRE_PUBLICATION_HISTORY_SCAN = REQUIRED`. Antes de publicar branch, PR,
+release ou outro ref remoto, executar os scanners first-party de árvore
+rastreada e de todo o histórico alcançável. A ausência atual de um arquivo não
+saneia conteúdo que permaneça alcançável no Git.
+
+Fixtures versionadas devem declarar `provenance: SYNTHETIC` no registro global.
+Fixture derivada, transcrita, anonimizada ou adaptada de caso real é proibida;
+anonimização não converte material real em sintético. O scanner nunca imprime
+o conteúdo encontrado e `referencias/privadas/` não deve ser aberto durante o
+gate.
+
 ## Autoridade de domínio e privacidade
 
 O Core Pericial é a autoridade do domínio; IA é auxiliar e UI não contém

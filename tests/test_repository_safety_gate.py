@@ -8,6 +8,7 @@ from pathlib import Path
 from scripts.quality.change_impact import impact_for_paths, main as impact_main
 from scripts.quality.config import registry_lock, validate_configuration
 from scripts.quality.fixture_registry import validate_fixture_registry
+from scripts.quality.publication_privacy import scan_current_tree, scan_reachable_history
 from scripts.quality import verify_core
 from scripts.quality.verify_core import GateResult, check_private_tracking, run_gate
 
@@ -88,18 +89,34 @@ def test_fixture_registry_detects_orphan_stale_and_unexercised(tmp_path):
     _write(fixtures / "orphan.json", {"x": 1})
     _write(fixtures / "core-fixtures.json", {"schema_version": "1.0.0", "fixtures": [{
         "arquivo": "tests/fixtures/missing.json", "dominio": "CORE", "schema": None,
-        "consumer": "tests/test_missing.py", "finalidade": "stale", "expected": "VALID",
+        "consumer": "tests/test_missing.py", "finalidade": "stale", "expected": "VALID", "provenance": "SYNTHETIC",
     }]})
     findings = validate_fixture_registry(tmp_path)
     reasons = {item["motivo"] for item in findings}
     assert {"FIXTURE_ORFA", "REGISTRY_STALE", "FIXTURE_NAO_EXERCITADA"} <= reasons
 
 
+def test_fixture_registry_requires_explicit_synthetic_provenance(tmp_path):
+    _write(tmp_path / "tests/fixtures/case.json", {"synthetic": True})
+    _write(tmp_path / "tests/fixtures/core-fixtures.json", {"schema_version": "1.0.0", "fixtures": [{
+        "arquivo": "tests/fixtures/case.json", "dominio": "CORE", "schema": None,
+        "consumer": "tests/test_case.py::test_case", "finalidade": "synthetic", "expected": "DATASET",
+    }]})
+    (tmp_path / "tests/test_case.py").write_text(
+        "def test_case():\n    path = 'tests/fixtures/case.json'\n    assert path\n",
+        encoding="utf-8",
+    )
+
+    findings = validate_fixture_registry(tmp_path)
+
+    assert any(item["motivo"] == "FIXTURE_PROVENIENCIA_NAO_SINTETICA" for item in findings)
+
+
 def test_fixture_consumer_must_be_real_node_that_references_fixture(tmp_path):
     _write(tmp_path/"tests/fixtures/case.json",{"x":1})
     _write(tmp_path/"tests/fixtures/core-fixtures.json",{"schema_version":"1.0.0","fixtures":[{
         "arquivo":"tests/fixtures/case.json","dominio":"CORE","schema":None,
-        "consumer":"tests/test_unrelated.py::test_unrelated","finalidade":"case","expected":"DATASET"}]})
+        "consumer":"tests/test_unrelated.py::test_unrelated","finalidade":"case","expected":"DATASET","provenance":"SYNTHETIC"}]})
     (tmp_path/"tests/test_unrelated.py").write_text("def test_unrelated(): assert True\n",encoding="utf-8")
     findings=validate_fixture_registry(tmp_path)
     assert any(item["motivo"]=="FIXTURE_NAO_EXERCITADA" for item in findings)
@@ -109,7 +126,7 @@ def test_schema_discovery_requires_real_configured_fixture_directory(tmp_path):
     _write(tmp_path/"tests/fixtures/x/case.json",{"x":1})
     _write(tmp_path/"tests/fixtures/core-fixtures.json",{"schema_version":"1.0.0","fixtures":[{
         "arquivo":"tests/fixtures/x/case.json","dominio":"CORE","schema":None,
-        "consumer":"scripts/validar_schemas.py::principal","finalidade":"case","expected":"DATASET"}]})
+        "consumer":"scripts/validar_schemas.py::principal","finalidade":"case","expected":"DATASET","provenance":"SYNTHETIC"}]})
     (tmp_path/"scripts").mkdir(parents=True)
     (tmp_path/"scripts/validar_schemas.py").write_text("marker='x'\ndef principal(): return 0\n",encoding="utf-8")
     assert any(item["motivo"]=="FIXTURE_NAO_EXERCITADA" for item in validate_fixture_registry(tmp_path))
@@ -118,6 +135,11 @@ def test_schema_discovery_requires_real_configured_fixture_directory(tmp_path):
 def test_private_tracking_artificial_is_fail_closed():
     findings = check_private_tracking(["README.md", "referencias/privadas/caso.pdf"])
     assert findings and findings[0]["invariant"] == "PII_DENY_BY_DEFAULT"
+
+
+def test_repository_publication_tree_and_reachable_history_are_private_safe():
+    assert scan_current_tree(ROOT, runner=subprocess.run) == []
+    assert scan_reachable_history(ROOT, runner=subprocess.run) == []
 
 
 def test_unknown_path_has_conservative_change_impact(tmp_path):

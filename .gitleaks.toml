@@ -1,0 +1,18 @@
+title = "Padrao Laudos Periciais publication privacy"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "private-reference-path"
+description = "Private reference material must never be published"
+path = '''(?i)(^|[\\/])referencias[\\/]privadas[\\/]'''
+regex = '''(?s).+'''
+tags = ["first-party", "privacy", "publication"]
+
+[[rules]]
+id = "real-case-fixture-derivation"
+description = "Fixtures must not be derived from real cases"
+path = '''(?i)^tests[\\/]fixtures[\\/]'''
+regex = '''(?i)(REAL_CASE_DERIVED|CASO_REAL_DERIVADO|"provenance"\s*:\s*"REAL_CASE")'''
+tags = ["first-party", "privacy", "fixture-provenance"]
