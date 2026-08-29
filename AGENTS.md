@@ -33,6 +33,9 @@
   inclusive `brainstorming`. Aplicar Skills proporcionalmente ao risco; elas
   são obrigatórias nas mudanças materiais já definidas, sem criar burocracia
   em perguntas e operações triviais.
+- Aplicar `SKILL_ROUTING_V3` por `.agents/skill-router.json`: selecionar o
+  conjunto mínimo aplicável, sem transformar roteamento em execução, instalação
+  ou autoridade. Contexto material não mapeado falha fechado.
 - Cumprir e registrar nesta ordem: reprodução do bug → teste falhando →
   causa-raiz → correção → adversarial/property tests → regressão → revisão →
   verificação final. Falhar fechado quando um gate material não puder ser
