@@ -696,8 +696,11 @@ def _cnj_local_prefix(
     *,
     context_start: int | None = None,
 ) -> str:
-    line_start = page.text.rfind("\n", 0, start) + 1
-    local_start = line_start if context_start is None else max(line_start, context_start)
+    local_start = (
+        page.text.rfind("\n", 0, start) + 1
+        if context_start is None
+        else context_start
+    )
     return _ascii_upper(page.text[local_start:start])
 
 
@@ -707,24 +710,20 @@ def _rejects_primary_cnj(
     end: int,
     *,
     context_start: int | None = None,
+    preceding_line: str = "",
 ) -> bool:
     prefix = _cnj_local_prefix(page, start, context_start=context_start)
-    line_start = page.text.rfind("\n", 0, start)
-    include_preceding_line = context_start is None or context_start <= line_start + 1
-    preceding_lines = (
-        page.text[:line_start].splitlines()
-        if line_start >= 0 and include_preceding_line
-        else []
+    relation = re.compile(
+        r"(?:^|\s)(?:"
+        r"REFERENCIA(?:\s+DOCUMENTAL)?|"
+        r"(?:PROCESSO|AUTOS|FEITO)\s+(?:REFERENCIADO|RELACIONADO|VINCULADO)|"
+        r"OUTRO\s+(?:PROCESSO|FEITO)|"
+        r"ANEXO\s+DE\s+OUTRO\s+FEITO"
+        r")\s*:\s*$"
     )
-    preceding_line = next(
-        (_ascii_upper(item) for item in reversed(preceding_lines) if item.strip()),
-        "",
-    )
-    local_context = f"{preceding_line}\n{prefix}"
-    return any(
-        marker in local_context
-        for marker in ("REFERENC", "RELACION", "VINCUL", "OUTRO FEITO", "ORIGEM")
-    )
+    return relation.search(prefix) is not None or relation.search(
+        _ascii_upper(preceding_line)
+    ) is not None
 
 
 def _is_explicit_primary_cnj(
@@ -733,29 +732,81 @@ def _is_explicit_primary_cnj(
     end: int,
     *,
     context_start: int | None = None,
+    preceding_line: str = "",
 ) -> bool:
     prefix = _cnj_local_prefix(page, start, context_start=context_start)
     if _rejects_primary_cnj(
-        page, start, end, context_start=context_start
+        page,
+        start,
+        end,
+        context_start=context_start,
+        preceding_line=preceding_line,
     ):
         return False
     return re.fullmatch(
-        r"(?:PROCESSO(?:\s+JUDICIAL)?|AUTOS)"
+        r"[\s:;,.|\u2014\u2013-]*(?:PROCESSO(?:\s+JUDICIAL)?|AUTOS)"
         r"(?:\s+(?:N|NUMERO)[O.]*)?\s*[:\-]?\s*$",
         prefix,
     ) is not None
 
 
-def _cnj_occurrences_with_context(page: PdfTextPage):
+def _source_contexts_for_spans(
+    source: str,
+    spans: tuple[tuple[int, int], ...],
+) -> tuple[tuple[int, str], ...]:
+    contexts = []
+    span_index = 0
     line_start = 0
-    for raw_line in page.text.splitlines(keepends=True):
+    preceding_nonempty_line = ""
+    for raw_line in source.splitlines(keepends=True):
+        line_end = line_start + len(raw_line)
         previous_end = line_start
-        for match in _CNJ_PATTERN.finditer(raw_line):
-            absolute_start = line_start + match.start()
-            absolute_end = line_start + match.end()
-            yield _CNJ_PATTERN.match(page.text, absolute_start, absolute_end), previous_end
-            previous_end = absolute_end
-        line_start += len(raw_line)
+        while span_index < len(spans) and spans[span_index][0] < line_end:
+            start, end = spans[span_index]
+            contexts.append((previous_end, preceding_nonempty_line))
+            previous_end = end
+            span_index += 1
+        if raw_line.strip():
+            preceding_nonempty_line = raw_line.strip()
+        line_start = line_end
+    return tuple(contexts)
+
+
+def _cnj_occurrences_with_context(page: PdfTextPage):
+    matches = tuple(_CNJ_PATTERN.finditer(page.text))
+    contexts = _source_contexts_for_spans(
+        page.text,
+        tuple((match.start(), match.end()) for match in matches),
+    )
+    for match, (context_start, preceding_line) in zip(matches, contexts, strict=True):
+        yield match, context_start, preceding_line
+
+
+def _ocr_cnj_occurrences_with_context(page: PdfTextPage):
+    normalized_page, source_indices = _ascii_upper_with_source_indices(page.text)
+    occurrences = []
+    for match in _OCR_CNJ_PATTERN.finditer(normalized_page):
+        raw = match.group(0)
+        if _CNJ_PATTERN.fullmatch(raw):
+            continue
+        source_start = source_indices[match.start()]
+        source_end = source_indices[match.end() - 1] + 1
+        groups = tuple(
+            group.translate(_OCR_DIGIT_CONFUSIONS) for group in match.groups()
+        )
+        normalized_cnj = (
+            f"{groups[0]}-{groups[1]}.{groups[2]}."
+            f"{groups[3]}.{groups[4]}.{groups[5]}"
+        )
+        occurrences.append((raw, normalized_cnj, source_start, source_end))
+    contexts = _source_contexts_for_spans(
+        page.text,
+        tuple((start, end) for _, _, start, end in occurrences),
+    )
+    for occurrence, (context_start, preceding_line) in zip(
+        occurrences, contexts, strict=True
+    ):
+        yield (*occurrence, context_start, preceding_line)
 
 
 def _has_primary_header_structure(page: PdfTextPage) -> bool:
@@ -833,7 +884,7 @@ def _declared_non_primary_source_segments(
             starts.append(offset)
             roles.append(role)
         offset += len(raw_line)
-    for match, context_start in _cnj_occurrences_with_context(page):
+    for match, context_start, preceding_line in _cnj_occurrences_with_context(page):
         try:
             validate_cnj_number(match.group(0))
         except ValueError:
@@ -843,9 +894,32 @@ def _declared_non_primary_source_segments(
             match.start(),
             match.end(),
             context_start=context_start,
+            preceding_line=preceding_line,
         ):
             starts.append(match.start())
             roles.append(ProcessMetadataSourceRole.REFERENCED_CASE)
+    if page.extraction_mode is PageExtractionMode.OCR:
+        for (
+            _,
+            normalized_cnj,
+            source_start,
+            source_end,
+            context_start,
+            preceding_line,
+        ) in _ocr_cnj_occurrences_with_context(page):
+            try:
+                validate_cnj_number(normalized_cnj)
+            except ValueError:
+                continue
+            if _rejects_primary_cnj(
+                page,
+                source_start,
+                source_end,
+                context_start=context_start,
+                preceding_line=preceding_line,
+            ):
+                starts.append(source_start)
+                roles.append(ProcessMetadataSourceRole.REFERENCED_CASE)
     ordered = sorted(zip(starts, roles), key=lambda item: item[0])
     return (
         tuple(start for start, _ in ordered),
@@ -868,6 +942,7 @@ def _source_role_for_cnj(
     end: int,
     *,
     context_start: int | None = None,
+    preceding_line: str = "",
     declared_non_primary_segments: tuple[
         tuple[int, ...], tuple[ProcessMetadataSourceRole, ...]
     ],
@@ -878,11 +953,19 @@ def _source_role_for_cnj(
     if declared_non_primary_role is not None:
         return declared_non_primary_role
     if _rejects_primary_cnj(
-        page, start, end, context_start=context_start
+        page,
+        start,
+        end,
+        context_start=context_start,
+        preceding_line=preceding_line,
     ):
         return ProcessMetadataSourceRole.REFERENCED_CASE
     if not _is_explicit_primary_cnj(
-        page, start, end, context_start=context_start
+        page,
+        start,
+        end,
+        context_start=context_start,
+        preceding_line=preceding_line,
     ):
         return ProcessMetadataSourceRole.UNKNOWN_SOURCE_CONTEXT
     if _has_primary_header_structure(page):
@@ -1091,12 +1174,14 @@ def extract_process_metadata(
         start: int,
         end: int,
         context_start: int,
+        preceding_line: str,
     ) -> None:
         source_role = _source_role_for_cnj(
             page,
             start,
             end,
             context_start=context_start,
+            preceding_line=preceding_line,
             declared_non_primary_segments=declared_non_primary_segments[page.number],
         )
         evidence = _evidence(
@@ -1145,25 +1230,22 @@ def extract_process_metadata(
                 end,
                 _is_explicit_primary_cnj(
                     page, start, end, context_start=context_start
+                    , preceding_line=preceding_line
                 ),
                 _rejects_primary_cnj(
-                    page, start, end, context_start=context_start
+                    page,
+                    start,
+                    end,
+                    context_start=context_start,
+                    preceding_line=preceding_line,
                 ),
                 source_role,
             )
         )
 
     for page in text.pages:
-        if page.extraction_mode is PageExtractionMode.OCR:
-            normalized_page, ascii_source_indices = _ascii_upper_with_source_indices(
-                page.text
-            )
-        else:
-            normalized_page = _ascii_upper(page.text)
-            ascii_source_indices = ()
-        for cnj_match, context_start in _cnj_occurrences_with_context(page):
+        for cnj_match, context_start, preceding_line in _cnj_occurrences_with_context(page):
             raw = cnj_match.group(0)
-            cnj_starts_by_page.setdefault(page.number, []).append(cnj_match.start())
             try:
                 cnj = validate_cnj_number(raw)
             except ValueError:
@@ -1181,6 +1263,7 @@ def extract_process_metadata(
                     )
                 )
                 continue
+            cnj_starts_by_page.setdefault(page.number, []).append(cnj_match.start())
             add_cnj(
                 cnj,
                 page,
@@ -1188,21 +1271,18 @@ def extract_process_metadata(
                 cnj_match.start(),
                 cnj_match.end(),
                 context_start,
+                preceding_line,
             )
 
         if page.extraction_mode is PageExtractionMode.OCR:
-            for ocr_match in _OCR_CNJ_PATTERN.finditer(normalized_page):
-                raw = ocr_match.group(0)
-                if _CNJ_PATTERN.fullmatch(raw):
-                    continue
-                source_start = ascii_source_indices[ocr_match.start()]
-                source_end = ascii_source_indices[ocr_match.end() - 1] + 1
-                cnj_starts_by_page.setdefault(page.number, []).append(source_start)
-                groups = tuple(group.translate(_OCR_DIGIT_CONFUSIONS) for group in ocr_match.groups())
-                normalized_cnj = (
-                    f"{groups[0]}-{groups[1]}.{groups[2]}."
-                    f"{groups[3]}.{groups[4]}.{groups[5]}"
-                )
+            for (
+                raw,
+                normalized_cnj,
+                source_start,
+                source_end,
+                context_start,
+                preceding_line,
+            ) in _ocr_cnj_occurrences_with_context(page):
                 try:
                     cnj = validate_cnj_number(normalized_cnj)
                 except ValueError:
@@ -1220,7 +1300,16 @@ def extract_process_metadata(
                         )
                     )
                     continue
-                add_cnj(cnj, page, raw, source_start, source_end, source_start)
+                cnj_starts_by_page.setdefault(page.number, []).append(source_start)
+                add_cnj(
+                    cnj,
+                    page,
+                    raw,
+                    source_start,
+                    source_end,
+                    context_start,
+                    preceding_line,
+                )
 
         for party_row in parse_pje_party_table(page.text).rows:
             add(

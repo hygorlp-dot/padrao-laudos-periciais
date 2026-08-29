@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from statistics import median
+from time import perf_counter
 from types import MappingProxyType
 from uuid import UUID
 
@@ -458,17 +460,19 @@ def test_same_line_identity_order_is_classified_per_occurrence(
 
     assert len(occurrences) == 2
     assert tuple(
-        page.text[match.start() : match.end()] for match, _ in occurrences
-    ) == tuple(match.group(0) for match, _ in occurrences)
+        page.text[match.start() : match.end()]
+        for match, _, _ in occurrences
+    ) == tuple(match.group(0) for match, _, _ in occurrences)
     assert tuple(
         metadata_module._source_role_for_cnj(
             page,
             match.start(),
             match.end(),
             context_start=context_start,
+            preceding_line=preceding_line,
             declared_non_primary_segments=segments,
         ).value
-        for match, context_start in occurrences
+        for match, context_start, preceding_line in occurrences
     ) == expected_roles
 
 
@@ -504,6 +508,252 @@ def test_long_same_line_identity_scan_is_monotonic(monkeypatch):
 
     assert len(segments[0]) == 80
     assert processed_characters < len(line) * 12
+
+
+def test_reference_vocabulary_without_foreign_identity_does_not_change_authority():
+    metadata = extract(
+        PdfTextPage(
+            2,
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+            "ORIGEM DO DOCUMENTO: PJE\n"
+            f"PROCESSO: {PRIMARY_TRF5_CNJ}\n"
+            "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+            "AUTOR: PARTE ALFA\n"
+            "RÉU: PARTE BETA",
+        )
+    )
+
+    number = metadata.fields["numero_processo"]
+    assert [item.extracted_value for item in number.evidence] == [PRIMARY_TRF5_CNJ]
+    assert number.evidence[0].source_role.value == "PRIMARY_PROCESS_HEADER"
+
+
+def test_ocr_preserves_per_occurrence_authority_and_secondary_state():
+    confused_primary = PRIMARY_TRF5_CNJ.replace("0", "O")
+    confused_foreign = FOREIGN_TRF1_CNJ.replace("0", "O")
+    metadata = extract(
+        PdfTextPage(
+            2,
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+            f"PROCESSO: {confused_primary} — referência: {confused_foreign}\n"
+            "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+            "AUTOR: PARTE ALFA\n"
+            "RÉU: PARTE BETA",
+            extraction_mode=PageExtractionMode.OCR,
+            engine="ocr-local",
+            engine_version="1",
+            model_version="modelo-local",
+            confidence=0.99,
+        ),
+        PdfTextPage(
+            3,
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 1ª REGIÃO\n"
+            f"PROCESSO: {FOREIGN_TRF1_CNJ}\n"
+            "ÓRGÃO JULGADOR: 3ª Vara Federal DF\n"
+            "AUTOR: PARTE GAMA\n"
+            "RÉU: PARTE DELTA",
+        ),
+    )
+
+    number = metadata.fields["numero_processo"]
+    assert [item.extracted_value for item in number.evidence] == [PRIMARY_TRF5_CNJ]
+    assert number.evidence[0].source_role.value == "PRIMARY_PROCESS_HEADER"
+    assert all(
+        evidence.source_page == 2
+        for field in metadata.fields.values()
+        for evidence in field.evidence
+    )
+
+
+def test_malformed_cnj_before_valid_primary_does_not_block_selection():
+    malformed = FOREIGN_TRF1_CNJ.replace("-21.", "-22.")
+    metadata = extract(
+        PdfTextPage(
+            2,
+            "PODER JUDICIÁRIO\n"
+            f"Identidade inconsistente: {malformed}\n"
+            "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+            f"PROCESSO: {PRIMARY_TRF5_CNJ}\n"
+            "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+            "AUTOR: PARTE ALFA\n"
+            "RÉU: PARTE BETA",
+        )
+    )
+
+    number = metadata.fields["numero_processo"]
+    assert [item.extracted_value for item in number.evidence] == [PRIMARY_TRF5_CNJ]
+    assert number.evidence[0].source_role.value == "PRIMARY_PROCESS_HEADER"
+    assert metadata.fields["vara"].evidence[0].source_role.value == (
+        "PRIMARY_PROCESS_HEADER"
+    )
+    assert metadata.fields["municipio_sede"].evidence[0].extracted_value == "Caruaru"
+
+
+def test_multiline_authority_scan_has_bounded_linear_scaling():
+    def source(line_count):
+        return "".join(
+            f"referência estrutural: {FOREIGN_TRF1_CNJ}\n"
+            for _ in range(line_count)
+        )
+
+    def duration(line_count):
+        page = PdfTextPage(2, source(line_count))
+        samples = []
+        for _ in range(3):
+            started = perf_counter()
+            metadata_module._declared_non_primary_source_segments(page)
+            samples.append(perf_counter() - started)
+        return median(samples)
+
+    six_hundred = duration(600)
+    two_thousand_four_hundred = duration(2_400)
+
+    assert two_thousand_four_hundred <= 1.0
+    assert two_thousand_four_hundred / max(six_hundred, 1e-9) <= 6.0
+
+
+@pytest.mark.parametrize(
+    "preceding_vocabulary",
+    (
+        "ORIGEM DO DOCUMENTO: PJE",
+        "REFERÊNCIA PARA ORGANIZAÇÃO INTERNA",
+        "CONTEÚDO RELACIONADO AO ÍNDICE",
+        "DOCUMENTO VINCULADO AO LOTE",
+    ),
+)
+def test_vocabulary_without_structural_foreign_identity_is_not_authority(
+    preceding_vocabulary,
+):
+    metadata = extract(
+        PdfTextPage(
+            2,
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+            f"{preceding_vocabulary}\n"
+            f"PROCESSO: {PRIMARY_TRF5_CNJ}\n"
+            "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+            "AUTOR: PARTE ALFA\n"
+            "RÉU: PARTE BETA",
+        )
+    )
+
+    assert metadata.fields["numero_processo"].evidence[0].source_role.value == (
+        "PRIMARY_PROCESS_HEADER"
+    )
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    (
+        lambda malformed: f"Identidade inconsistente: {malformed}\n",
+        lambda malformed: (
+            f"Primeira identidade inconsistente: {malformed}\n"
+            f"Segunda identidade inconsistente: {malformed}\n"
+        ),
+        lambda malformed: "Identidade parcial: 2222222-21.2024.4.01\n",
+        lambda malformed: f"{malformed} — PROCESSO: ",
+    ),
+)
+def test_invalid_patterns_do_not_consume_the_later_valid_primary(prefix):
+    malformed = FOREIGN_TRF1_CNJ.replace("-21.", "-22.")
+    malformed_prefix = prefix(malformed)
+    if malformed_prefix.endswith("PROCESSO: "):
+        identity_section = f"{malformed_prefix}{PRIMARY_TRF5_CNJ}\n"
+    else:
+        identity_section = f"{malformed_prefix}PROCESSO: {PRIMARY_TRF5_CNJ}\n"
+    metadata = extract(
+        PdfTextPage(
+            2,
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+            f"{identity_section}"
+            "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+            "AUTOR: PARTE ALFA\n"
+            "RÉU: PARTE BETA",
+        )
+    )
+
+    assert metadata.fields["numero_processo"].evidence[0].source_role.value == (
+        "PRIMARY_PROCESS_HEADER"
+    )
+    assert metadata.fields["vara"].evidence[0].source_role.value == (
+        "PRIMARY_PROCESS_HEADER"
+    )
+
+
+def test_malformed_after_primary_does_not_erase_valid_authority():
+    malformed = FOREIGN_TRF1_CNJ.replace("-21.", "-22.")
+    metadata = extract(
+        PdfTextPage(
+            2,
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+            f"PROCESSO: {PRIMARY_TRF5_CNJ}\n"
+            "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+            "AUTOR: PARTE ALFA\n"
+            "RÉU: PARTE BETA\n"
+            f"Identidade inconsistente posterior: {malformed}",
+        )
+    )
+
+    assert metadata.fields["numero_processo"].evidence[0].source_role.value == (
+        "PRIMARY_PROCESS_HEADER"
+    )
+    assert metadata.fields["vara"].evidence[0].source_role.value == (
+        "PRIMARY_PROCESS_HEADER"
+    )
+
+
+def test_primary_malformed_and_referenced_same_line_keep_valid_spans_independent():
+    malformed = FOREIGN_TRF1_CNJ.replace("-21.", "-22.")
+    line = (
+        f"PROCESSO: {PRIMARY_TRF5_CNJ} — inconsistente: {malformed} "
+        f"— referência: {FOREIGN_TRF1_CNJ}"
+    )
+    page = PdfTextPage(
+        2,
+        "PODER JUDICIÁRIO\n"
+        "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+        f"{line}\n"
+        "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+        "AUTOR: PARTE ALFA\n"
+        "RÉU: PARTE BETA",
+    )
+    metadata = extract(page)
+    valid_evidence = metadata.fields["numero_processo"].evidence[0]
+
+    assert valid_evidence.extracted_value == PRIMARY_TRF5_CNJ
+    assert page.text[
+        valid_evidence.source_start : valid_evidence.source_start + len(PRIMARY_TRF5_CNJ)
+    ] == PRIMARY_TRF5_CNJ
+
+
+def test_ocr_primary_offset_reverses_to_original_confused_source():
+    confused_primary = PRIMARY_TRF5_CNJ.replace("0", "O")
+    page = PdfTextPage(
+        2,
+        "PODER JUDICIÁRIO\n"
+        "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+        f"PROCESSO: {confused_primary}\n"
+        "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+        "AUTOR: PARTE ALFA\n"
+        "RÉU: PARTE BETA",
+        extraction_mode=PageExtractionMode.OCR,
+        engine="ocr-local",
+        engine_version="1",
+        model_version="modelo-local",
+        confidence=0.99,
+    )
+
+    evidence = extract(page).fields["numero_processo"].evidence[0]
+
+    assert evidence.extracted_value == PRIMARY_TRF5_CNJ
+    assert page.text[
+        evidence.source_start : evidence.source_start + len(confused_primary)
+    ] == confused_primary
 
 
 def test_unknown_judicial_unit_does_not_promote_an_independent_city_mention():
