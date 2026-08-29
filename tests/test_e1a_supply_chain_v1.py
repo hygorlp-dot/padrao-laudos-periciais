@@ -1,4 +1,6 @@
 import re
+import subprocess
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -9,6 +11,11 @@ IMMUTABLE_USE = re.compile(
     r"^\s*uses:\s+(?P<owner>[^/\s]+)/(?P<name>[^@\s]+)@(?P<sha>[0-9a-f]{40})(?:\s+#\s+\S+)?\s*$",
     re.MULTILINE,
 )
+APPROVED_ACTIONS = {
+    ("actions", "checkout"): "11d5960a326750d5838078e36cf38b85af677262",
+    ("actions", "setup-python"): "a26af69be951a213d495a4c3e4e4022e16d87065",
+    ("astral-sh", "setup-uv"): "c771a70e6277c0a99b617c7a806ffedaca235ff9",
+}
 
 
 def _workflow_texts() -> dict[Path, str]:
@@ -21,14 +28,14 @@ def test_third_party_actions_are_official_and_immutably_pinned():
         raw_uses = re.findall(r"^\s*uses:\s+(\S+)", workflow, re.MULTILINE)
         matches = tuple(IMMUTABLE_USE.finditer(workflow))
         assert len(matches) == len(raw_uses), path
-        references.extend((match["owner"], match["name"]) for match in matches)
+        references.extend(
+            (match["owner"], match["name"], match["sha"])
+            for match in matches
+        )
 
     assert references
-    assert set(references) <= {
-        ("actions", "checkout"),
-        ("actions", "setup-python"),
-        ("astral-sh", "setup-uv"),
-    }
+    for owner, name, sha in references:
+        assert APPROVED_ACTIONS[(owner, name)] == sha
 
 
 def test_every_checkout_disables_persisted_credentials():
@@ -62,6 +69,30 @@ def test_project_and_lock_are_consistent_and_python_is_bounded():
     assert project["tool"]["uv"]["package"] is False
     assert lock["requires-python"] == ">=3.13, <3.15"
     assert lock["revision"] >= 1
+
+
+def test_compatibility_exports_exactly_match_the_lock():
+    commands = {
+        "requirements.txt": ["--no-dev"],
+        "requirements-dev.txt": ["--all-groups"],
+    }
+    with tempfile.TemporaryDirectory() as directory:
+        for name, group_args in commands.items():
+            generated = Path(directory) / name
+            subprocess.run(
+                [
+                    "uv", "export", "--locked", *group_args,
+                    "--no-emit-project", "--output-file", str(generated),
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            committed_lines = (ROOT / name).read_text(encoding="utf-8").splitlines()
+            generated_lines = generated.read_text(encoding="utf-8").splitlines()
+            assert committed_lines[0] == generated_lines[0]
+            assert committed_lines[2:] == generated_lines[2:]
 
 
 def test_e1a_surface_has_no_floating_action_refs():
