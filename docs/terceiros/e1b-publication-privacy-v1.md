@@ -2,9 +2,9 @@
 
 ## Autoridades separadas
 
-- `scripts/quality/publication_privacy.py`: regra first-party bloqueante,
-  integrada ao gate existente, para caminhos privados e proveniência de
-  fixtures.
+- `scripts/quality/publication_privacy.py`: regra first-party para caminhos
+  privados e proveniência de fixtures. Sua integração direta ao `GateResult`
+  exige rotação protegida mínima e separada, ainda dentro da Issue #137.
 - `.gitleaks.toml` + `scripts/quality/run_gitleaks.ps1`: detector advisory de
   segredos e padrões complementares.
 - `tests/fixtures/core-fixtures.json`: declaração positiva e auditável de que
@@ -12,6 +12,10 @@
 
 Gitleaks não decide se uma fixture é aceitável e não substitui a política
 first-party. Nenhuma allowlist de commit ou finding foi criada.
+
+Enquanto a rotação protegida sucessora não for mergeada, o teste first-party
+é executado de forma bloqueante pela suíte explícita de repository safety do
+`verify_core`; esse estado intermediário não constitui conclusão de E1B.
 
 ## Modos obrigatórios
 
