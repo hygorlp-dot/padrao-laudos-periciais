@@ -48,7 +48,8 @@ def test_dependency_workflows_use_locked_uv_and_exports_are_generated_only():
     workflows = _workflow_texts()
     uv_workflows = {path: text for path, text in workflows.items() if "uv pip sync" in text}
     assert {path.name for path in uv_workflows} == {
-        "core-safety.yml", "lint.yml", "quality-depth.yml"
+        "architecture-protected.yml", "capability-protected.yml",
+        "core-safety.yml", "lint.yml", "quality-depth.yml",
     }
     for path, workflow in uv_workflows.items():
         assert "uv lock --check" in workflow, path
