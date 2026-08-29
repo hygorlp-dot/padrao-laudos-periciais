@@ -75,13 +75,20 @@ def _locked_packages(lock: dict) -> dict[str, dict]:
 
 def _dependency_closure(packages: dict[str, dict], roots: set[str]) -> set[str]:
     found = set()
-    pending = list(roots)
+    visited = set()
+    pending = [{"name": name} for name in roots]
     while pending:
-        name = pending.pop()
-        if name in found:
+        dependency = pending.pop()
+        name = dependency["name"]
+        extras = tuple(sorted(dependency.get("extra", [])))
+        if (name, extras) in visited:
             continue
+        visited.add((name, extras))
         found.add(name)
-        pending.extend(row["name"] for row in packages[name].get("dependencies", []))
+        package = packages[name]
+        pending.extend(package.get("dependencies", []))
+        for extra in extras:
+            pending.extend(package.get("optional-dependencies", {}).get(extra, []))
     return found
 
 
