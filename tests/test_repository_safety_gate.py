@@ -112,6 +112,34 @@ def test_fixture_registry_requires_explicit_synthetic_provenance(tmp_path):
     assert any(item["motivo"] == "FIXTURE_PROVENIENCIA_NAO_SINTETICA" for item in findings)
 
 
+def test_fixture_registry_rejects_unregistered_non_json_artifacts(tmp_path):
+    fixtures = tmp_path / "tests/fixtures"
+    fixtures.mkdir(parents=True)
+    _write(fixtures / "core-fixtures.json", {"schema_version": "1.0.0", "fixtures": []})
+    for name, content in (
+        ("unregistered.txt", b"synthetic text"),
+        ("unregistered.csv", b"column\nsynthetic"),
+        ("unregistered.bin", b"\x00synthetic"),
+        ("unregistered-registry.json", b"{}"),
+        ("nested/core-fixtures.json", b"{}"),
+    ):
+        artifact = fixtures / name
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_bytes(content)
+
+    findings = validate_fixture_registry(tmp_path)
+
+    assert {
+        item["teste"] for item in findings if item["motivo"] == "FIXTURE_ORFA"
+    } == {
+        "tests/fixtures/unregistered.txt",
+        "tests/fixtures/unregistered.csv",
+        "tests/fixtures/unregistered.bin",
+        "tests/fixtures/unregistered-registry.json",
+        "tests/fixtures/nested/core-fixtures.json",
+    }
+
+
 def test_fixture_consumer_must_be_real_node_that_references_fixture(tmp_path):
     _write(tmp_path/"tests/fixtures/case.json",{"x":1})
     _write(tmp_path/"tests/fixtures/core-fixtures.json",{"schema_version":"1.0.0","fixtures":[{
