@@ -1,6 +1,4 @@
 import re
-import subprocess
-import tempfile
 import tomllib
 from pathlib import Path
 
@@ -71,28 +69,58 @@ def test_project_and_lock_are_consistent_and_python_is_bounded():
     assert lock["revision"] >= 1
 
 
-def test_compatibility_exports_exactly_match_the_lock():
-    commands = {
-        "requirements.txt": ["--no-dev"],
-        "requirements-dev.txt": ["--all-groups"],
+def _locked_packages(lock: dict) -> dict[str, dict]:
+    return {package["name"]: package for package in lock["package"]}
+
+
+def _dependency_closure(packages: dict[str, dict], roots: set[str]) -> set[str]:
+    found = set()
+    pending = list(roots)
+    while pending:
+        name = pending.pop()
+        if name in found:
+            continue
+        found.add(name)
+        pending.extend(row["name"] for row in packages[name].get("dependencies", []))
+    return found
+
+
+def _export_entries(name: str) -> dict[str, tuple[str, set[str]]]:
+    text = (ROOT / name).read_text(encoding="utf-8")
+    starts = list(re.finditer(r"(?m)^([a-zA-Z0-9_.-]+)==([^ ;\\]+).*$", text))
+    entries = {}
+    for index, match in enumerate(starts):
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
+        hashes = set(re.findall(r"--hash=sha256:([0-9a-f]{64})", text[match.start():end]))
+        entries[match.group(1)] = (match.group(2), hashes)
+    return entries
+
+
+def test_compatibility_exports_exactly_match_lock_graph_and_hashes():
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    packages = _locked_packages(lock)
+    project = packages["padrao-laudos-periciais"]
+    runtime_roots = {row["name"] for row in project["dependencies"]}
+    dev_roots = runtime_roots | {
+        row["name"] for row in project["dev-dependencies"]["dev"]
     }
-    with tempfile.TemporaryDirectory() as directory:
-        for name, group_args in commands.items():
-            generated = Path(directory) / name
-            subprocess.run(
-                [
-                    "uv", "export", "--locked", *group_args,
-                    "--no-emit-project", "--output-file", str(generated),
-                ],
-                cwd=ROOT,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            committed_lines = (ROOT / name).read_text(encoding="utf-8").splitlines()
-            generated_lines = generated.read_text(encoding="utf-8").splitlines()
-            assert committed_lines[0] == generated_lines[0]
-            assert committed_lines[2:] == generated_lines[2:]
+    expected_names = {
+        "requirements.txt": _dependency_closure(packages, runtime_roots),
+        "requirements-dev.txt": _dependency_closure(packages, dev_roots),
+    }
+
+    for export_name, names in expected_names.items():
+        entries = _export_entries(export_name)
+        assert set(entries) == names
+        for name, (version, hashes) in entries.items():
+            package = packages[name]
+            locked_hashes = {
+                artifact["hash"].removeprefix("sha256:")
+                for artifact in ([package.get("sdist")] if package.get("sdist") else [])
+                + package.get("wheels", [])
+            }
+            assert version == package["version"]
+            assert hashes == locked_hashes
 
 
 def test_e1a_surface_has_no_floating_action_refs():
