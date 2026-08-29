@@ -97,6 +97,16 @@ class ArtifactRevisionRepository(Protocol):
         expected_revision: int | None,
     ) -> ArtifactRevision: ...
 
+    def append_pair_if_latest(
+        self,
+        *,
+        workspace_id: WorkspaceId,
+        first: dict[str, object],
+        second: dict[str, object],
+        expected_first_revision: int | None,
+        expected_latest: tuple[dict[str, object], ...],
+    ) -> tuple[ArtifactRevision, ArtifactRevision]: ...
+
     def latest(
         self,
         workspace_id: WorkspaceId,

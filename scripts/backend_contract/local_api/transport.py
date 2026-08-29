@@ -74,6 +74,7 @@ class LocalApiServices:
     get_process_case: object
     save_process_case: object
     get_process_metadata_review: object | None = None
+    confirm_process_metadata_source_span: object | None = None
     import_case_document: object | None = None
     list_case_documents: object | None = None
     read_case_document: object | None = None
@@ -591,6 +592,48 @@ class LocalApi:
                     )
                     return _json_response(200, _process_case_dto(record, workspace_id))
                 return _error(405, "METHOD_NOT_ALLOWED")
+
+            if (
+                len(raw_segments) == 5
+                and raw_segments[:2] == ("v1", "workspaces")
+                and raw_segments[3:] == (
+                    "process-metadata",
+                    "source-span-confirmations",
+                )
+            ):
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                service = self._services.confirm_process_metadata_source_span
+                if service is None:
+                    return _error(
+                        503,
+                        "PROCESS_METADATA_UNAVAILABLE",
+                        "extração local indisponível",
+                    )
+                workspace_id = self._workspace_id(raw_segments[2])
+                dto = self._request_dto(request_headers, body)
+                if set(dto) != {
+                    "field_name",
+                    "evidence_id",
+                    "source_start",
+                    "source_end",
+                    "expected_source_revision",
+                    "expected_revision",
+                }:
+                    raise ValueError("confirmação de fonte inválida")
+                record = service.execute(
+                    workspace_id=workspace_id,
+                    field_name=dto["field_name"],
+                    evidence_id=dto["evidence_id"],
+                    source_start=dto["source_start"],
+                    source_end=dto["source_end"],
+                    expected_source_revision=dto["expected_source_revision"],
+                    expected_revision=dto["expected_revision"],
+                )
+                return _json_response(
+                    200,
+                    _process_case_dto(record, workspace_id),
+                )
 
             if (
                 len(raw_segments) == 4

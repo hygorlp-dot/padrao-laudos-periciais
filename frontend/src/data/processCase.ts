@@ -3,6 +3,8 @@ export type ProcessCaseData = {
   ramo_justica: string;
   tribunal: string;
   vara: string;
+  municipio_sede: string;
+  subsecao_judiciaria: string;
   comarca_municipio: string;
   uf: string;
   parte_requerente: string;
@@ -41,6 +43,8 @@ const DATA_FIELDS = [
   "ramo_justica",
   "tribunal",
   "vara",
+  "municipio_sede",
+  "subsecao_judiciaria",
   "comarca_municipio",
   "uf",
   "parte_requerente",
@@ -59,6 +63,8 @@ export function emptyProcessCaseData(): ProcessCaseData {
     ramo_justica: "",
     tribunal: "",
     vara: "",
+    municipio_sede: "",
+    subsecao_judiciaria: "",
     comarca_municipio: "",
     uf: "",
     parte_requerente: "",

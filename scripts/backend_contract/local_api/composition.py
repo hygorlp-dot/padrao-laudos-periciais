@@ -14,6 +14,7 @@ from ..application.services import (
     AppendArtifactRevision,
     CreateWorkspace,
     ConfirmProcessMetadata,
+    ConfirmProcessMetadataSourceSpan,
     GetArtifactRevision,
     GetLatestArtifact,
     GetProcessCase,
@@ -180,6 +181,15 @@ def build_local_api(
     save_process_case = SaveProcessCase(
         store.workspaces, store.revisions, local_clock, local_ids
     )
+    confirm_process_metadata_source_span = (
+        ConfirmProcessMetadataSourceSpan(
+            get_process_case,
+            save_process_case,
+            get_process_metadata_review,
+        )
+        if get_process_metadata_review is not None
+        else None
+    )
     services = LocalApiServices(
         create_workspace=CreateWorkspace(store.workspaces, local_clock, local_ids),
         get_workspace=GetWorkspace(store.workspaces),
@@ -203,6 +213,7 @@ def build_local_api(
             else save_process_case
         ),
         get_process_metadata_review=get_process_metadata_review,
+        confirm_process_metadata_source_span=confirm_process_metadata_source_span,
         import_case_document=import_case_document,
         list_case_documents=list_case_documents,
         read_case_document=read_case_document,

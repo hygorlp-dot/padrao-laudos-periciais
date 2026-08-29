@@ -205,6 +205,8 @@ _PROCESS_CASE_FIELDS = (
     "ramo_justica",
     "tribunal",
     "vara",
+    "municipio_sede",
+    "subsecao_judiciaria",
     "comarca_municipio",
     "uf",
     "parte_requerente",
@@ -228,6 +230,8 @@ class ProcessCaseData:
     ramo_justica: str
     tribunal: str
     vara: str
+    municipio_sede: str
+    subsecao_judiciaria: str
     comarca_municipio: str
     uf: str
     parte_requerente: str
@@ -243,14 +247,19 @@ class ProcessCaseData:
 
     @classmethod
     def from_mapping(cls, value: object) -> ProcessCaseData:
-        legacy_fields = set(_PROCESS_CASE_FIELDS) - {"ramo_justica"}
+        derived_fields = {"municipio_sede", "subsecao_judiciaria"}
+        legacy_fields = set(_PROCESS_CASE_FIELDS) - derived_fields
+        oldest_fields = legacy_fields - {"ramo_justica"}
         if type(value) is not dict or frozenset(value) not in {
             frozenset(_PROCESS_CASE_FIELDS),
             frozenset(legacy_fields),
+            frozenset(oldest_fields),
         }:
             raise ValueError("dados processuais exigem campos exatos")
         normalized = dict(value)
         normalized.setdefault("ramo_justica", "")
+        normalized.setdefault("municipio_sede", "")
+        normalized.setdefault("subsecao_judiciaria", "")
         return cls(**{field: normalized[field] for field in _PROCESS_CASE_FIELDS})
 
     def as_dict(self) -> dict[str, str]:

@@ -407,6 +407,19 @@ _NO_REVISION_PRECONDITION = object()
 
 
 class SQLiteArtifactRevisionRepository(_SQLiteRepository):
+    _PENDING_KEYS = {
+        "artifact_kind",
+        "artifact_id",
+        "revision_id",
+        "created_at",
+        "payload",
+    }
+    _EXPECTATION_KEYS = {
+        "artifact_kind",
+        "artifact_id",
+        "revision",
+        "checksum_sha256",
+    }
     @staticmethod
     def _text_key(value, field: str) -> str:
         if type(value) is not str or not value.strip():
@@ -475,6 +488,183 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
             payload=payload,
             expected_revision=expected_revision,
         )
+
+    def append_pair_if_latest(
+        self,
+        *,
+        workspace_id: WorkspaceId,
+        first: dict[str, object],
+        second: dict[str, object],
+        expected_first_revision: int | None,
+        expected_latest: tuple[dict[str, object], ...],
+    ) -> tuple[ArtifactRevision, ArtifactRevision]:
+        if expected_first_revision is not None and (
+            type(expected_first_revision) is not int or expected_first_revision < 1
+        ):
+            raise ValueError("expected_revision inválida")
+        if (
+            type(first) is not dict
+            or set(first) != self._PENDING_KEYS
+            or type(second) is not dict
+            or set(second) != self._PENDING_KEYS
+            or type(expected_latest) is not tuple
+        ):
+            raise ValueError("par de revisões inválido")
+
+        workspace_key = str(workspace_id) if type(workspace_id) is WorkspaceId else None
+        if workspace_key is None:
+            raise TypeError("workspace_id inválido")
+
+        def prepared(values: dict[str, object], revision: int):
+            _, artifact_kind, artifact_id = self._key(
+                workspace_id,
+                values["artifact_kind"],
+                values["artifact_id"],
+            )
+            canonical_json = canonical_payload_json(values["payload"])
+            payload_snapshot = json.loads(canonical_json)
+            checksum = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+            try:
+                revision_id = str(UUID(values["revision_id"]))
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise ValueError("revision_id inválido") from exc
+            created_at = values["created_at"]
+            if type(created_at) is not str or not created_at.strip():
+                raise ValueError("created_at inválido")
+            record = ArtifactRevision(
+                workspace_id=workspace_id,
+                artifact_kind=artifact_kind,
+                artifact_id=artifact_id,
+                revision_id=revision_id,
+                revision=revision,
+                created_at=created_at,
+                checksum_sha256=checksum,
+                payload=payload_snapshot,
+            )
+            return record, canonical_json
+
+        normalized_expectations = []
+        expected_identities_by_kind = {}
+        for expectation in expected_latest:
+            if type(expectation) is not dict or set(expectation) != self._EXPECTATION_KEYS:
+                raise ValueError("precondição de fonte inválida")
+            _, kind, artifact_id = self._key(
+                workspace_id,
+                expectation["artifact_kind"],
+                expectation["artifact_id"],
+            )
+            revision = expectation["revision"]
+            checksum = expectation["checksum_sha256"]
+            if revision is None:
+                if checksum is not None:
+                    raise ValueError("precondição ausente possui checksum")
+            elif (
+                type(revision) is not int
+                or revision < 1
+                or type(checksum) is not str
+                or len(checksum) != 64
+                or any(character not in "0123456789abcdef" for character in checksum)
+            ):
+                raise ValueError("precondição de fonte inválida")
+            normalized_expectations.append((kind, artifact_id, revision, checksum))
+            identities = expected_identities_by_kind.setdefault(kind, {})
+            if artifact_id in identities:
+                raise ValueError("precondição de fonte duplicada")
+            identities[artifact_id] = (
+                None if revision is None else (revision, checksum)
+            )
+
+        try:
+            with self._write():
+                exists = self._connection.execute(
+                    "SELECT 1 FROM workspaces WHERE workspace_id = ?",
+                    (workspace_key,),
+                ).fetchone()
+                if exists is None:
+                    raise WorkspaceNotFound(f"workspace não encontrado: {workspace_id}")
+                for kind, artifact_id, revision, checksum in normalized_expectations:
+                    current = self._connection.execute(
+                        "SELECT revision, checksum_sha256 FROM artifact_revisions "
+                        "WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ? "
+                        "ORDER BY revision DESC LIMIT 1",
+                        (workspace_key, kind, artifact_id),
+                    ).fetchone()
+                    actual = None if current is None else (current[0], current[1])
+                    expected = None if revision is None else (revision, checksum)
+                    if actual != expected:
+                        raise RepositoryConflict("fonte de metadados foi atualizada")
+                for kind, expected_identities in expected_identities_by_kind.items():
+                    current_rows = self._connection.execute(
+                        "SELECT current.artifact_id, current.revision, "
+                        "current.checksum_sha256 FROM artifact_revisions AS current "
+                        "WHERE current.workspace_id = ? AND current.artifact_kind = ? "
+                        "AND current.revision = ("
+                        "SELECT MAX(candidate.revision) FROM artifact_revisions AS candidate "
+                        "WHERE candidate.workspace_id = current.workspace_id "
+                        "AND candidate.artifact_kind = current.artifact_kind "
+                        "AND candidate.artifact_id = current.artifact_id)",
+                        (workspace_key, kind),
+                    ).fetchall()
+                    current_identities = {
+                        row[0]: (row[1], row[2]) for row in current_rows
+                    }
+                    expected_present = {
+                        artifact_id: identity
+                        for artifact_id, identity in expected_identities.items()
+                        if identity is not None
+                    }
+                    if current_identities != expected_present:
+                        raise RepositoryConflict("conjunto de fontes foi atualizado")
+
+                first_key = self._key(
+                    workspace_id, first["artifact_kind"], first["artifact_id"]
+                )
+                second_key = self._key(
+                    workspace_id, second["artifact_kind"], second["artifact_id"]
+                )
+                if first_key == second_key:
+                    raise ValueError("par de revisões exige artefatos distintos")
+                first_current = self._connection.execute(
+                    "SELECT COALESCE(MAX(revision), 0) FROM artifact_revisions "
+                    "WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ?",
+                    first_key,
+                ).fetchone()[0]
+                expected_current = (
+                    0 if expected_first_revision is None else expected_first_revision
+                )
+                if first_current != expected_current:
+                    raise RepositoryConflict("revisão processual desatualizada")
+                second_current = self._connection.execute(
+                    "SELECT COALESCE(MAX(revision), 0) FROM artifact_revisions "
+                    "WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ?",
+                    second_key,
+                ).fetchone()[0]
+                records = (
+                    prepared(first, first_current + 1),
+                    prepared(second, second_current + 1),
+                )
+                for record, canonical_json in records:
+                    self._connection.execute(
+                        "INSERT INTO artifact_revisions "
+                        "(workspace_id, artifact_kind, artifact_id, revision_id, revision, "
+                        "created_at, checksum_sha256, payload_json) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            str(record.workspace_id),
+                            record.artifact_kind,
+                            record.artifact_id,
+                            record.revision_id,
+                            record.revision,
+                            record.created_at,
+                            record.checksum_sha256,
+                            canonical_json,
+                        ),
+                    )
+        except sqlite3.IntegrityError as exc:
+            raise RepositoryConflict("conflito de identidade de revisão") from exc
+        except sqlite3.Error as exc:
+            raise RepositoryError("falha SQLite ao anexar revisões atômicas") from exc
+        return records[0][0], records[1][0]
 
     def _append(
         self,

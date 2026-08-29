@@ -616,6 +616,71 @@ main {
   font-size: inherit;
 }
 
+.source-evidence {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-graphite);
+  background: color-mix(in srgb, var(--color-ochre-bright) 8%, var(--color-paper));
+  border-left: 3px solid var(--color-ochre);
+}
+
+.source-evidence__summary {
+  display: grid;
+  gap: var(--space-1);
+  font-size: 0.78rem;
+}
+
+.source-evidence__summary span,
+.source-span-review__selection {
+  color: var(--color-slate);
+}
+
+.source-span-review {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.source-span-review label {
+  font-size: 0.82rem;
+  font-weight: 680;
+}
+
+.source-span-review textarea {
+  width: 100%;
+  min-height: 5.75rem;
+  padding: 0.72rem;
+  resize: vertical;
+  color: var(--color-graphite);
+  background: var(--color-paper);
+  border: 1px solid var(--color-rule-strong);
+  border-radius: 0.32rem;
+  font: 0.82rem/1.55 var(--font-data);
+}
+
+.source-span-review__selection,
+.source-evidence__confirmed {
+  margin: 0;
+  font-size: 0.76rem;
+}
+
+.source-evidence__confirmed {
+  color: var(--color-graphite);
+  font-weight: 680;
+}
+
+.source-span-review__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.source-span-review__actions .primary-action,
+.source-span-review__actions .text-action {
+  margin: 0;
+}
+
 .field-group--conflict input {
   border-color: color-mix(in srgb, var(--color-error) 55%, var(--color-rule));
 }

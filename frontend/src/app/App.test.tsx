@@ -206,6 +206,8 @@ describe("workspace-aware routing", () => {
             ramo_justica: "",
             tribunal: "",
             vara: "",
+            municipio_sede: "",
+            subsecao_judiciaria: "",
             comarca_municipio: "",
             uf: "",
             parte_requerente: "",
@@ -218,6 +220,7 @@ describe("workspace-aware routing", () => {
           workspace_id: ID,
           state: "WAITING_FOR_DOCUMENTS",
           confirmed_revision: null,
+          extraction_fingerprint: "f".repeat(64),
           documents: [],
           fields: Object.fromEntries(
             [
@@ -225,6 +228,8 @@ describe("workspace-aware routing", () => {
               "ramo_justica",
               "tribunal",
               "vara",
+              "municipio_sede",
+              "subsecao_judiciaria",
               "comarca_municipio",
               "uf",
               "parte_requerente",

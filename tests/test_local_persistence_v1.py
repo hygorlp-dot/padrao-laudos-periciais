@@ -538,11 +538,157 @@ def test_public_adapters_implement_only_append_only_port_operations():
     assert revision_methods == {
         "append",
         "append_if_latest",
+        "append_pair_if_latest",
         "latest",
         "get_revision",
         "list_all",
     }
     assert not ({"update", "delete", "replace"} & (workspace_methods | revision_methods))
+
+
+def test_atomic_pair_rolls_back_first_revision_when_second_insert_fails(repository):
+    repository.workspaces.create(workspace())
+    append_pair = getattr(repository.revisions, "append_pair_if_latest", None)
+    assert append_pair is not None, "atomic pair append is required"
+
+    duplicate_revision_id = REVISION_1
+    with pytest.raises(RepositoryConflict):
+        append_pair(
+            workspace_id=WorkspaceId.parse(WORKSPACE_1),
+            first={
+                "artifact_kind": "PROCESS_CASE",
+                "artifact_id": "PROCESS_CASE",
+                "revision_id": duplicate_revision_id,
+                "created_at": CREATED_1,
+                "payload": {"field": "confirmed"},
+            },
+            second={
+                "artifact_kind": "PROCESS_METADATA_SOURCE_CONFIRMATION",
+                "artifact_id": "parte_requerente",
+                "revision_id": duplicate_revision_id,
+                "created_at": CREATED_1,
+                "payload": {"decision": "HUMAN_CONFIRMED"},
+            },
+            expected_first_revision=None,
+            expected_latest=(),
+        )
+
+    assert repository.revisions.latest(
+        WorkspaceId.parse(WORKSPACE_1), "PROCESS_CASE", "PROCESS_CASE"
+    ) is None
+    assert repository.revisions.latest(
+        WorkspaceId.parse(WORKSPACE_1),
+        "PROCESS_METADATA_SOURCE_CONFIRMATION",
+        "parte_requerente",
+    ) is None
+
+
+def test_atomic_pair_rejects_a_source_revision_that_changed_after_review(repository):
+    repository.workspaces.create(workspace())
+    workspace_id = WorkspaceId.parse(WORKSPACE_1)
+    first_source = repository.revisions.append(
+        workspace_id=workspace_id,
+        artifact_kind="PROCESS_METADATA_EXTRACTION",
+        artifact_id="document-1",
+        revision_id=REVISION_1,
+        created_at=CREATED_1,
+        payload={"source": "first"},
+    )
+    append_pair = getattr(repository.revisions, "append_pair_if_latest", None)
+    assert append_pair is not None, "source-bound atomic pair append is required"
+    repository.revisions.append(
+        workspace_id=workspace_id,
+        artifact_kind="PROCESS_METADATA_EXTRACTION",
+        artifact_id="document-1",
+        revision_id=REVISION_2,
+        created_at=CREATED_2,
+        payload={"source": "changed"},
+    )
+
+    with pytest.raises(RepositoryConflict, match="fonte|revisão"):
+        append_pair(
+            workspace_id=workspace_id,
+            first={
+                "artifact_kind": "PROCESS_CASE",
+                "artifact_id": "PROCESS_CASE",
+                "revision_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                "created_at": CREATED_2,
+                "payload": {"field": "confirmed"},
+            },
+            second={
+                "artifact_kind": "PROCESS_METADATA_SOURCE_CONFIRMATION",
+                "artifact_id": "parte_requerente",
+                "revision_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                "created_at": CREATED_2,
+                "payload": {"decision": "HUMAN_CONFIRMED"},
+            },
+            expected_first_revision=None,
+            expected_latest=(
+                {
+                    "artifact_kind": first_source.artifact_kind,
+                    "artifact_id": first_source.artifact_id,
+                    "revision": first_source.revision,
+                    "checksum_sha256": first_source.checksum_sha256,
+                },
+            ),
+        )
+
+    assert repository.revisions.latest(
+        workspace_id, "PROCESS_CASE", "PROCESS_CASE"
+    ) is None
+
+
+def test_atomic_pair_rejects_a_new_source_identity_added_after_review(repository):
+    repository.workspaces.create(workspace())
+    workspace_id = WorkspaceId.parse(WORKSPACE_1)
+    first_source = repository.revisions.append(
+        workspace_id=workspace_id,
+        artifact_kind="PROCESS_METADATA_EXTRACTION",
+        artifact_id="document-1",
+        revision_id=REVISION_1,
+        created_at=CREATED_1,
+        payload={"source": "first"},
+    )
+    repository.revisions.append(
+        workspace_id=workspace_id,
+        artifact_kind="PROCESS_METADATA_EXTRACTION",
+        artifact_id="document-2",
+        revision_id=REVISION_2,
+        created_at=CREATED_2,
+        payload={"source": "new"},
+    )
+
+    with pytest.raises(RepositoryConflict, match="fonte|revisão"):
+        repository.revisions.append_pair_if_latest(
+            workspace_id=workspace_id,
+            first={
+                "artifact_kind": "PROCESS_CASE",
+                "artifact_id": "PROCESS_CASE",
+                "revision_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                "created_at": CREATED_2,
+                "payload": {"field": "confirmed"},
+            },
+            second={
+                "artifact_kind": "PROCESS_METADATA_SOURCE_CONFIRMATION",
+                "artifact_id": "parte_requerente",
+                "revision_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                "created_at": CREATED_2,
+                "payload": {"decision": "HUMAN_CONFIRMED"},
+            },
+            expected_first_revision=None,
+            expected_latest=(
+                {
+                    "artifact_kind": first_source.artifact_kind,
+                    "artifact_id": first_source.artifact_id,
+                    "revision": first_source.revision,
+                    "checksum_sha256": first_source.checksum_sha256,
+                },
+            ),
+        )
+
+    assert repository.revisions.latest(
+        workspace_id, "PROCESS_CASE", "PROCESS_CASE"
+    ) is None
 
 
 @pytest.mark.parametrize(
