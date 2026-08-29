@@ -38,7 +38,12 @@ def validate_fixture_registry(root: Path) -> list[dict]:
         return [_finding("REGISTRY_INVALIDO", str(registry_path), str(exc))]
     entries = registry.get("fixtures", [])
     registered = {entry.get("arquivo") for entry in entries if isinstance(entry, dict)}
-    actual = {path.relative_to(root).as_posix() for path in (root / "tests/fixtures").rglob("*.json") if not path.name.endswith("registry.json") and path.name != "core-fixtures.json"}
+    actual = {
+        path.relative_to(root).as_posix()
+        for path in (root / "tests/fixtures").rglob("*")
+        if path.is_file()
+        and path != registry_path
+    }
     findings = [_finding("FIXTURE_ORFA", path, "arquivo sem registry") for path in sorted(actual - registered)]
     findings += [_finding("REGISTRY_STALE", path, "registry sem arquivo") for path in sorted(registered - actual)]
     required = {"arquivo", "dominio", "schema", "consumer", "finalidade", "expected"}

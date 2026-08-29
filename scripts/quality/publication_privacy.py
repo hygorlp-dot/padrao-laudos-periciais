@@ -1,6 +1,7 @@
 """Sanitized current-tree and reachable-history publication privacy scans."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Protocol
 
@@ -16,6 +17,11 @@ _FORBIDDEN_FIXTURE_MARKERS = (
     b"caso_real_derivado",
     b'"provenance":"real_case"',
     b'"provenance": "real_case"',
+)
+_EXPLICIT_REAL_PROVENANCE = re.compile(
+    rb"(?i)(?<![a-z0-9_])(?:provenance|fixture[_ -]?origin)"
+    rb"[\"']?\s*(?::|=|,|;|\t)\s*[\"']?real[_ -]?case"
+    rb"(?:[_ -]?derived)?(?![a-z0-9_])"
 )
 
 
@@ -50,14 +56,14 @@ def _is_private(path: str) -> bool:
 
 def _is_fixture(path: str) -> bool:
     normalized = _normalized(path)
-    return normalized.startswith(_FIXTURE_ROOT) and normalized != (
-        _FIXTURE_ROOT + "core-fixtures.json"
-    )
+    return normalized.startswith(_FIXTURE_ROOT)
 
 
 def _has_forbidden_fixture_marker(blob: bytes) -> bool:
     lowered = blob.lower().replace(b"\r", b"")
-    return any(marker in lowered for marker in _FORBIDDEN_FIXTURE_MARKERS)
+    return any(marker in lowered for marker in _FORBIDDEN_FIXTURE_MARKERS) or bool(
+        _EXPLICIT_REAL_PROVENANCE.search(lowered)
+    )
 
 
 def _git_failure(command: str) -> list[dict]:

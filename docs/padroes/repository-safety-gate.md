@@ -44,8 +44,8 @@ boundaries e invariantes globais.
 
 O workflow `.github/workflows/core-safety.yml` executa somente o gate first-party
 em pull requests e pushes para `main`. Não usa secrets, não faz deploy e não
-acessa referências privadas. A proteção de branch deve tornar `core-safety`
-obrigatório por configuração administrativa posterior.
+acessa referências privadas. A proteção de branch torna `core-safety`
+obrigatório no mesmo boundary de merge.
 
 O job `core-safety` roda a suíte de arquitetura (`tests/test_architecture_analyzer_v1.py`)
 como etapa própria, antes de `verify_core --full`: qualquer falha ali também
@@ -55,6 +55,13 @@ regressão, então sua execução ali só custava tempo, sem benefício de
 cobertura). Falhas nessa etapa aparecem como falha de step do GitHub
 Actions, não como finding estruturado do `verify_core` — não têm
 `invariant`/`boundary`/`severidade` da mesma taxonomia.
+
+A suíte explícita `tests/test_repository_safety_gate.py`, executada pelo
+`verify_core`, aplica de forma bloqueante o oracle first-party de publicação
+ao tree rastreado e a todos os commits alcançáveis pelos refs do checkout.
+O checkout usa `fetch-depth: 0`; finding atual ou histórico falha o pytest e,
+portanto, o mesmo job requerido. A proveniência sintética das fixtures também
+é validada pelo gate. Gitleaks permanece uma evidência advisory separada.
 
 A etapa `Verify frozen Core V1` define `PYTEST_ADDOPTS: --ignore=tests/test_architecture_analyzer_v1.py`
 para excluir a suíte da regressão cronometrada — a exclusão vive só no

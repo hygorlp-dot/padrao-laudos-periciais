@@ -2,6 +2,15 @@
     "schema_version":  "1.0.0",
     "fixtures":  [
                      {
+                         "arquivo":  "tests/fixtures/pje-registry.json",
+                         "dominio":  "PJE_EXTRACTION",
+                         "schema":  null,
+                         "consumer":  "tests/test_final_delta_r3.py::FinalDeltaR3Test::test_registry_exerce_todas_as_fixtures_pje",
+                         "finalidade":  "Registro sintético das fixtures PJe",
+                         "expected":  "DATASET",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
                          "arquivo":  "tests/fixtures/auditoria/auditoria-grounding-valida.json",
                          "dominio":  "AUDIT",
                          "schema":  "auditoria-grounding-pericial.schema.json",
