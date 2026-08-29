@@ -1,0 +1,24 @@
+[project]
+name = "padrao-laudos-periciais"
+version = "0.0.0"
+requires-python = ">=3.13,<3.15"
+dependencies = [
+  "jsonschema>=4.23,<5",
+  "onnxruntime==1.29.0",
+  "pdfplumber>=0.11,<1",
+  "pypdf>=6.15,<7",
+  "rapidocr==3.9.2",
+  "referencing>=0.28.4,<1",
+]
+
+[dependency-groups]
+dev = [
+  "coverage==7.15.4",
+  "hypothesis==6.165.3",
+  "mutmut==3.7.0",
+  "pytest==9.1.1",
+  "ruff==0.16.3",
+]
+
+[tool.uv]
+package = false
