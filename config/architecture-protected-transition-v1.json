@@ -1,25 +1,25 @@
 {
   "schemaVersion": "2.0.0",
   "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "835bb91e2c13a800cd57ba53131c21847fe1eff0",
+  "protectedBaseSha": "7a9bfa029bbf109b28066ed472221649d58f92ad",
   "artifacts": [
     {
       "path": ".github/workflows/architecture-protected.yml",
       "baseMode": "100644",
       "baseObjectType": "blob",
-      "baseBlobSha": "254b0fdd150f4187ae1bec441a960ca4a61137ee",
+      "baseBlobSha": "33119af04e01130cc659df0c57f755b825e3d583",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "33119af04e01130cc659df0c57f755b825e3d583"
+      "candidateBlobSha": "f513ca04f15b4ea3e929c30cfbdabba6f1c14f24"
     },
     {
       "path": ".github/workflows/capability-protected.yml",
       "baseMode": "100644",
       "baseObjectType": "blob",
-      "baseBlobSha": "edfafe1aba4a8bc9dcdaea8b156b296ad23c96c3",
+      "baseBlobSha": "0a1497b0891420884b7c42952fa1ef747d542e99",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "0a1497b0891420884b7c42952fa1ef747d542e99"
+      "candidateBlobSha": "19e9d6c5d7766da45669ab0f9e77fb124138e311"
     }
   ]
 }

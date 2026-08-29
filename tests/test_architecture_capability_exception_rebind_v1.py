@@ -20,7 +20,7 @@ CAPABILITY_REGISTRY_PATH = "config/capability-protected-artifacts-v1.json"
 CAPABILITY_TRANSITION_PATH = "config/capability-protected-transition-v1.json"
 ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
 PROTECTED_BASE = "145715360cb28237d098a225a45614b6dda3d704"
-E1A_ROTATION_BASE = "835bb91e2c13a800cd57ba53131c21847fe1eff0"
+E1A_ROTATION_BASE = "7a9bfa029bbf109b28066ed472221649d58f92ad"
 E1A_PROTECTED_WORKFLOWS = {
     ".github/workflows/architecture-protected.yml",
     ".github/workflows/capability-protected.yml",
