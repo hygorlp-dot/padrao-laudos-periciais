@@ -135,7 +135,8 @@ def derivar_modelo(item: dict, paginas: list[str]) -> dict:
     tipo, _ = tipo_provavel(texto, "MODELO_REFERENCIAL")
     base = normalizar(texto[:300000])
     sistemas = [nome for nome, termos in SISTEMAS.items() if any(t in base for t in termos)]
-    extrair=lambda padrao,limite:[x["descricao"] for x in itens_textuais(paginas,padrao,limite)]
+    def extrair(padrao, limite):
+        return [x["descricao"] for x in itens_textuais(paginas, padrao, limite)]
     estrutura=extrair(r"^(?:[0-9]+(?:\.[0-9]+)*\s+)?(?:considera[cç][oõ]es|metodologia|vistoria|conclus[aã]o|quesitos|or[cç]amento|encerramento)\b",30)
     metodologia=extrair(r"\b(metodologia|inspe[cç][aã]o visual|levantamento|procedimento)\b",20)
     medicoes=extrair(r"\b(medi[cç][aã]o|medidor|trena|fissur[oô]metro|umidade)\b",20)

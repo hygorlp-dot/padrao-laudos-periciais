@@ -48,7 +48,9 @@ class AceitacaoFinalMotorV1Test(unittest.TestCase):
         d1=copy.deepcopy(self.delim);d1["questoes_tecnicas"]=[{"id":f"QT-{i:03d}","descricao":f"Verificar condição {i}","alegacoes_relacionadas":[],"quesitos_relacionados":[],**{k:v for k,v in d1["questoes_tecnicas"][0].items() if k not in {"id","descricao","alegacoes_relacionadas","quesitos_relacionados"}}} for i in range(1,11)]
         with tempfile.TemporaryDirectory() as td:
             p=Path(td);(p/"processo.json").write_text(json.dumps(self.processo),encoding="utf-8");(p/"delimitacao-pericial.json").write_text(json.dumps(d1),encoding="utf-8");a=gerar_plano(p);d1["questoes_tecnicas"].reverse();(p/"delimitacao-pericial.json").write_text(json.dumps(d1),encoding="utf-8");b=gerar_plano(p)
-        mapa=lambda x:{tuple(a["questoes_tecnicas"]):a["metodo"] for a in x["atividades"]};self.assertEqual(mapa(a),mapa(b));self.assertEqual(len(a["atividades"]),10)
+        def mapa(x):
+            return {tuple(a["questoes_tecnicas"]):a["metodo"] for a in x["atividades"]}
+        self.assertEqual(mapa(a),mapa(b));self.assertEqual(len(a["atividades"]),10)
     def test_t_final_07_norma_decorativa_nao_sustenta_causa(self):
         c={"id":"CLM-001","tipo":"CAUSA","natureza":"INTERPRETIVE","saliencia":"LOAD_BEARING","texto":"Argamassa causou desplacamento","aspectos_requeridos":["CAUSA"]};n={"id":"NOR-001","tipo":"NORMA","classe_probatoria":"EVIDENCIA_PRIMARIA","proveniencia":["fonte"],"aspectos_suportados":["CONFORMIDADE_NORMATIVA"],"aspectos_contraditos":[],"acessivel":True};self.assertEqual(auditar_claim(c,[n],[n])["veredito"],"UNSUBSTANTIATED")
     def test_t_final_08_requisito_normativo_verificado_sustenta_claim(self):

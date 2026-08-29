@@ -36,5 +36,8 @@ class PesquisaOnlineTest(unittest.TestCase):
         with self.assertRaises(PermissionError): agente.buscar("manual público")
         self.assertEqual(agente.buscar("manual público",EgressPolicy(permitir_egress=True))[0]["query"],"manual público")
     def test_mock_integrado_ao_fluxo_do_motor(self):
-        raiz=Path(__file__).resolve().parents[1];load=lambda p:json.loads((raiz/p).read_text(encoding="utf-8"));processo=load("tests/fixtures/schemas/processo-valido.json");delim=load("tests/fixtures/triagem/delimitacao-minima-valida.json");plano=load("tests/fixtures/planejamento/plano-vistoria-valido.json");vistoria=load("tests/fixtures/schemas/vistoria-valida.json")
+        raiz=Path(__file__).resolve().parents[1]
+        def load(p):
+            return json.loads((raiz/p).read_text(encoding="utf-8"))
+        processo=load("tests/fixtures/schemas/processo-valido.json");delim=load("tests/fixtures/triagem/delimitacao-minima-valida.json");plano=load("tests/fixtures/planejamento/plano-vistoria-valido.json");vistoria=load("tests/fixtures/schemas/vistoria-valida.json")
         r=executar_pipeline_motor(processo,delim,plano,vistoria,{"search_provider":MockSearchProvider([{"url":"https://www.gov.br/fonte"}])});self.assertEqual(r["analise_inicial"]["pesquisa_online"]["status"],"CONCLUIDA");self.assertEqual(r["analise_inicial"]["pesquisa_online"]["fontes_oficiais_localizadas"],["https://www.gov.br/fonte"])

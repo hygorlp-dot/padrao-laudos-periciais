@@ -38,7 +38,8 @@ def _acrescentar_claims_globais(redacao, plano, delimitacao, final, quesitos, or
     def add(secao, texto, tipo, fontes, *, qts=(), ques=(), pats=(), material="LOAD_BEARING"):
         nonlocal contador
         if not texto: return
-        por = lambda prefixo: [i for i in fontes if i.startswith(prefixo)]
+        def por(prefixo):
+            return [i for i in fontes if i.startswith(prefixo)]
         claims.append({"id": f"CLAIM-RED-{contador:03d}", "secao": secao, "tipo": tipo, "texto_semantico": str(texto),
             "pat_ids": list(pats), "qt_ids": list(qts), "que_ids": list(ques), "alg_ids": por("ALG-"), "doc_ids": por("DOC-"),
             "obs_ids": por("OBS-"), "med_ids": por("MED-"), "fot_ids": por("FOT-"), "nor_ids": por("NOR-"), "res_ids": por("RES-"), "con_ids": por("CON-"),
@@ -148,7 +149,8 @@ def _montar_laudo(processo, delimitacao, final, plano, redacao, gate, grounding,
 
 def _render_markdown(laudo):
     """Representação de teste; não contém decisões de layout Word."""
-    dado = lambda valor, nome: str(valor) if valor not in (None, "", []) else f"[INFORMAÇÃO NECESSÁRIA: {nome}]"
+    def dado(valor, nome):
+        return str(valor) if valor not in (None, "", []) else f"[INFORMAÇÃO NECESSÁRIA: {nome}]"
     linhas = [
         "# 1 CONSIDERAÇÕES GERAIS", "## 1.1 Identificação do Processo", dado(laudo["identificacao"].get("numero_processo"), "número do processo"),
         "## 1.2 Qualificação do Perito Nomeado", dado(laudo["qualificacao_perito"], "qualificação do perito"),

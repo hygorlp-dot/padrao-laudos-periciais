@@ -15,8 +15,12 @@ def _n(texto):
     return unicodedata.normalize("NFKD", str(texto)).encode("ascii", "ignore").decode().lower()
 
 def _texto_derivavel(redacao,motor):
-    a,b=_n(redacao),_n(motor);termos=lambda x:set(re.findall(r"[a-z]{4,}",x))-{"para","como","pela","pelo","uma","com"}
-    compartilhados=termos(a)&termos(b);neg=lambda x:bool(re.search(r"\b(?:nao|sem|ausencia|inexist\w*|jamais)\b",x))
+    a,b=_n(redacao),_n(motor)
+    def termos(x):
+        return set(re.findall(r"[a-z]{4,}",x))-{"para","como","pela","pelo","uma","com"}
+    compartilhados=termos(a)&termos(b)
+    def neg(x):
+        return bool(re.search(r"\b(?:nao|sem|ausencia|inexist\w*|jamais)\b",x))
     inflacao=any(x in a and x not in b for x in ("inequivocamente","comprovadamente","sempre","jamais"))
     contradicao=bool(compartilhados) and neg(a)!=neg(b)
     dimensoes=(

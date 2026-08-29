@@ -1,7 +1,9 @@
 """Recupera fonte oficial por URL direta, valida domínio e grava cache auditável."""
 from __future__ import annotations
-import hashlib,json,re
-from datetime import datetime,timezone,timedelta
+import hashlib
+import json
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse,unquote
 from urllib.request import Request,urlopen

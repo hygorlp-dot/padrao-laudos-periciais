@@ -1,12 +1,14 @@
 """Confronta processo.json com a delimitação por afinidade semântica."""
 from __future__ import annotations
-import argparse,json,sys
+import argparse
+import json
+import sys
 from pathlib import Path
 RAIZ=Path(__file__).resolve().parents[2]
 if str(RAIZ) not in sys.path:sys.path.insert(0,str(RAIZ))
-from scripts.motor_vicios.granularizar_questoes import granularizar
-from scripts.triagem_pericial.semantica import melhores
-from scripts.triagem_pericial.gerar_delimitacao import resultado_criterio
+from scripts.motor_vicios.granularizar_questoes import granularizar  # noqa: E402
+from scripts.triagem_pericial.semantica import melhores  # noqa: E402
+from scripts.triagem_pericial.gerar_delimitacao import resultado_criterio  # noqa: E402
 
 def aprofundar(diretorio:Path)->dict:
     processo=json.loads((diretorio/"processo.json").read_text(encoding="utf-8"))

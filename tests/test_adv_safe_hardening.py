@@ -143,7 +143,8 @@ class AdvSafeHardening(unittest.TestCase):
         import json
         processo=json.loads((raiz/"tests/fixtures/schemas/processo-valido.json").read_text(encoding="utf8"));delim=json.loads((raiz/"tests/fixtures/triagem/delimitacao-minima-valida.json").read_text(encoding="utf8"))
         def obs(i,manifestacao):return {"id":f"OBS-{i:03d}","ambiente":"Sala","sistema":"IMPERMEABILIZACAO","elemento":"Parede","manifestacao":manifestacao,"descricao_objetiva":manifestacao,"resultado":"OBSERVADO","metodo":["INSPECAO_VISUAL"],"alegacoes":[],"fotografias":[],"medicoes":[],"questoes":["QT-001"],"aspectos_suportados":[],"proveniencia":["SINTETICA"]}
-        vist=lambda itens:{"status":"VISTORIA_ESTRUTURADA","observacoes":itens,"medicoes":[],"fotografias":[]}
+        def vist(itens):
+            return {"status":"VISTORIA_ESTRUTURADA","observacoes":itens,"medicoes":[],"fotografias":[]}
         base=executar_motor(processo,delim,{},vist([obs(2,"umidade")]))
         mutado=executar_motor(processo,delim,{},vist([obs(1,"fissura"),obs(2,"umidade")]))
         id_base=next(p["id"] for p in base["patologias"] if p["manifestacao"]=="umidade");id_mutado=next(p["id"] for p in mutado["patologias"] if p["manifestacao"]=="umidade")

@@ -155,7 +155,8 @@ class FinalDeltaR3Test(unittest.TestCase):
             self.assertEqual(corrigida["blocos"][0]["textos"][0],textos[0]);self.assertEqual(correcoes,[])
 
     def test_pipeline_motor_reaudita_catalogo_autocorrigido_e_usa_estado_final(self):
-        load=lambda p:json.loads((ROOT/p).read_text(encoding="utf-8"))
+        def load(p):
+            return json.loads((ROOT/p).read_text(encoding="utf-8"))
         processo=load("tests/fixtures/schemas/processo-valido.json");delim=load("tests/fixtures/triagem/delimitacao-minima-valida.json")
         plano=load("tests/fixtures/planejamento/plano-vistoria-valido.json");vistoria=load("tests/fixtures/schemas/vistoria-valida.json")
         base=executar_pipeline_motor(processo,delim,plano,vistoria)["analise_inicial"]

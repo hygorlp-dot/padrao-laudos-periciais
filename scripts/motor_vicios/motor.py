@@ -131,5 +131,8 @@ def executar(processo,delimitacao,plano,vistoria,contexto=None,conhecimento=None
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument("diretorio",type=Path);p.add_argument("--contexto",type=Path)
-    a=p.parse_args();d=a.diretorio;load=lambda n:json.loads((d/n).read_text(encoding="utf-8"));ctx=json.loads(a.contexto.read_text(encoding="utf-8")) if a.contexto else None;obj=executar(load("processo.json"),load("delimitacao-pericial.json"),load("plano-vistoria.json"),load("vistoria.json"),ctx);out=d/"analise-motor-vicios.json";out.write_text(json.dumps(obj,ensure_ascii=False,indent=2)+"\n",encoding="utf-8",newline="\n");print(out);return 0
+    a=p.parse_args();d=a.diretorio
+    def load(n):
+        return json.loads((d/n).read_text(encoding="utf-8"))
+    ctx=json.loads(a.contexto.read_text(encoding="utf-8")) if a.contexto else None;obj=executar(load("processo.json"),load("delimitacao-pericial.json"),load("plano-vistoria.json"),load("vistoria.json"),ctx);out=d/"analise-motor-vicios.json";out.write_text(json.dumps(obj,ensure_ascii=False,indent=2)+"\n",encoding="utf-8",newline="\n");print(out);return 0
 if __name__=="__main__":raise SystemExit(main())

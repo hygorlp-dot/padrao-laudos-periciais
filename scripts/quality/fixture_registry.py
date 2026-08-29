@@ -69,4 +69,6 @@ def validate_fixture_registry(root: Path) -> list[dict]:
             findings.append(_finding("SCHEMA_STALE", entry["arquivo"], schema))
         if entry.get("expected") not in {"VALID", "INVALID", "DATASET"}:
             findings.append(_finding("REGISTRY_INVALIDO", entry["arquivo"], "expected inválido"))
+        if entry.get("provenance") != "SYNTHETIC":
+            findings.append(_finding("FIXTURE_PROVENIENCIA_NAO_SINTETICA", entry["arquivo"], "provenance deve ser SYNTHETIC"))
     return findings
