@@ -1,37 +1,25 @@
 {
-  "schemaVersion": "3.0.0",
+  "schemaVersion": "2.0.0",
   "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "145715360cb28237d098a225a45614b6dda3d704",
+  "protectedBaseSha": "835bb91e2c13a800cd57ba53131c21847fe1eff0",
   "artifacts": [
     {
-      "path": "config/capability-protected-artifacts-v1.json",
+      "path": ".github/workflows/architecture-protected.yml",
       "baseMode": "100644",
       "baseObjectType": "blob",
-      "baseBlobSha": "a1885f42ab03839a154cbf2e4d5f5250e9188801",
+      "baseBlobSha": "254b0fdd150f4187ae1bec441a960ca4a61137ee",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "7eec886d065cef3576e5ee74a52270f25022e39a"
-    }
-  ],
-  "supportScope": "CAPABILITY_BOOTSTRAP_V1",
-  "supportArtifacts": [
-    {
-      "path": "config/capability-exceptions-v1.json",
-      "baseMode": "100644",
-      "baseObjectType": "blob",
-      "baseBlobSha": "3048afe50faf8bc4a1783a93d1404eb1b9c369a7",
-      "candidateMode": "100644",
-      "candidateObjectType": "blob",
-      "candidateBlobSha": "7f0397407dc89c1c7548086002a70b6bb5f7c825"
+      "candidateBlobSha": "33119af04e01130cc659df0c57f755b825e3d583"
     },
     {
-      "path": "config/capability-protected-transition-v1.json",
+      "path": ".github/workflows/capability-protected.yml",
       "baseMode": "100644",
       "baseObjectType": "blob",
-      "baseBlobSha": "75326cb22838ca662bcecc3b77fa2f6f0f3bf03e",
+      "baseBlobSha": "edfafe1aba4a8bc9dcdaea8b156b296ad23c96c3",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "6c0a8081207eea40c8f3520a9d745d41cc3d2fe4"
+      "candidateBlobSha": "0a1497b0891420884b7c42952fa1ef747d542e99"
     }
   ]
 }
