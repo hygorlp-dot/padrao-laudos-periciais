@@ -42,10 +42,11 @@ Os schemas rejeitam propriedades não declaradas. Alegações, documentos, const
 
 ## Dependência externa
 
-A validação usa o pacote Python `jsonschema`, declarado em `requirements.txt`. O pacote instala também `referencing`, usado para resolver referências entre os schemas.
+A validação usa o pacote Python `jsonschema`, declarado em `pyproject.toml`. O pacote instala também `referencing`, usado para resolver referências entre os schemas. A resolução exata fica registrada em `uv.lock`.
 
 ```powershell
-python -m pip install -r requirements.txt
+uv lock --check
+uv pip sync --system --require-hashes requirements.txt
 python scripts/validar_schemas.py
 ```
 
