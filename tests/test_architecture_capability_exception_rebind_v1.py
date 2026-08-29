@@ -121,6 +121,15 @@ def test_architecture_transition_binds_current_protected_workflow_rotation():
         assert _architecture_transition_identity(row, "candidate") == _identity_from_worktree(path)
 
 
+def test_protected_workflows_use_trusted_locked_uv_dependencies():
+    for path in E1A_PROTECTED_WORKFLOWS:
+        workflow = (ROOT / path).read_text(encoding="utf-8")
+        assert "uv lock --check" in workflow
+        assert "uv pip sync --system --require-hashes requirements-dev.txt" in workflow
+        assert "cache-dependency-glob: trusted/uv.lock" in workflow
+        assert "pip install" not in workflow
+
+
 def _future_base_clone(tmp_path: Path) -> tuple[Path, str]:
     repo = tmp_path / "future-base"
     subprocess.run(
