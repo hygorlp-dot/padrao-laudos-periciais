@@ -355,6 +355,157 @@ def test_secondary_source_role_is_monotonic_across_page_boundaries(
     )
 
 
+def test_inline_referenced_identity_activates_monotonic_secondary_context():
+    metadata = extract(
+        PdfTextPage(
+            2,
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+            f"PROCESSO: {PRIMARY_TRF5_CNJ}\n"
+            "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+            "AUTOR: PARTE ALFA\n"
+            "RÉU: PARTE BETA",
+        ),
+        PdfTextPage(
+            20,
+            f"Consulta vinculada à referência documental: {FOREIGN_TRF1_CNJ}",
+        ),
+        PdfTextPage(
+            21,
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 1ª REGIÃO\n"
+            f"PROCESSO: {FOREIGN_TRF1_CNJ}\n"
+            "ÓRGÃO JULGADOR: 3ª Vara Federal DF\n"
+            "AUTOR: PARTE GAMA\n"
+            "RÉU: PARTE DELTA",
+        ),
+    )
+
+    number = metadata.fields["numero_processo"]
+    assert [item.extracted_value for item in number.evidence] == [PRIMARY_TRF5_CNJ]
+    assert all(
+        item.source_page == 2
+        for field in metadata.fields.values()
+        for item in field.evidence
+    )
+
+
+def test_same_line_judicial_identities_are_classified_with_independent_offsets():
+    heading = "Cabeçalho sintético ⚖️\n"
+    prefix = "PROCESSO: "
+    separator = " — referência documental: "
+    line = f"{prefix}{PRIMARY_TRF5_CNJ}{separator}{FOREIGN_TRF1_CNJ}"
+    metadata = extract(
+        PdfTextPage(
+            2,
+            "PODER JUDICIÁRIO\n"
+            "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+            f"{heading}"
+            f"{line}\n"
+            "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+            "AUTOR: PARTE ALFA\n"
+            "RÉU: PARTE BETA",
+        )
+    )
+
+    number = metadata.fields["numero_processo"]
+    assert [item.extracted_value for item in number.evidence] == [PRIMARY_TRF5_CNJ]
+    primary_start = (
+        len("PODER JUDICIÁRIO\nJUSTIÇA FEDERAL DA 5ª REGIÃO\n")
+        + len(heading)
+        + len(prefix)
+    )
+    assert number.evidence[0].source_start == primary_start
+    assert number.evidence[0].normalized_text_span == PRIMARY_TRF5_CNJ
+
+
+@pytest.mark.parametrize(
+    ("line", "expected_roles"),
+    (
+        (
+            f"PROCESSO: {PRIMARY_TRF5_CNJ} — referência: {FOREIGN_TRF1_CNJ}",
+            ("PRIMARY_PROCESS_HEADER", "REFERENCED_CASE"),
+        ),
+        (
+            f"referência: {FOREIGN_TRF1_CNJ} — PROCESSO: {PRIMARY_TRF5_CNJ}",
+            ("REFERENCED_CASE", "REFERENCED_CASE"),
+        ),
+        (
+            f"referência: {PRIMARY_CNJ} — referência: {FOREIGN_TRF1_CNJ}",
+            ("REFERENCED_CASE", "REFERENCED_CASE"),
+        ),
+        (
+            f"PROCESSO: {PRIMARY_TRF5_CNJ} — referência: {PRIMARY_TRF5_CNJ}",
+            ("PRIMARY_PROCESS_HEADER", "REFERENCED_CASE"),
+        ),
+    ),
+)
+def test_same_line_identity_order_is_classified_per_occurrence(
+    line,
+    expected_roles,
+):
+    page = PdfTextPage(
+        2,
+        "PODER JUDICIÁRIO\n"
+        "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+        f"{line}\n"
+        "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+        "AUTOR: PARTE ALFA\n"
+        "RÉU: PARTE BETA",
+    )
+    segments = metadata_module._declared_non_primary_source_segments(page)
+    occurrences = tuple(metadata_module._cnj_occurrences_with_context(page))
+
+    assert len(occurrences) == 2
+    assert tuple(
+        page.text[match.start() : match.end()] for match, _ in occurrences
+    ) == tuple(match.group(0) for match, _ in occurrences)
+    assert tuple(
+        metadata_module._source_role_for_cnj(
+            page,
+            match.start(),
+            match.end(),
+            context_start=context_start,
+            declared_non_primary_segments=segments,
+        ).value
+        for match, context_start in occurrences
+    ) == expected_roles
+
+
+def test_malformed_second_same_line_identity_is_not_acquired():
+    malformed = FOREIGN_TRF1_CNJ.replace("-21.", "-22.")
+    page = PdfTextPage(
+        2,
+        f"PROCESSO: {PRIMARY_TRF5_CNJ} — referência: {malformed}",
+    )
+
+    metadata = extract(page)
+
+    assert [item.extracted_value for item in metadata.fields["numero_processo"].evidence] == [
+        PRIMARY_TRF5_CNJ
+    ]
+
+
+def test_long_same_line_identity_scan_is_monotonic(monkeypatch):
+    line = " | ".join(
+        f"referência: {FOREIGN_TRF1_CNJ}" for _ in range(80)
+    ) + (" conteúdo sintético" * 800)
+    page = PdfTextPage(2, line)
+    original = metadata_module._ascii_upper
+    processed_characters = 0
+
+    def counted_ascii_upper(value):
+        nonlocal processed_characters
+        processed_characters += len(value)
+        return original(value)
+
+    monkeypatch.setattr(metadata_module, "_ascii_upper", counted_ascii_upper)
+    segments = metadata_module._declared_non_primary_source_segments(page)
+
+    assert len(segments[0]) == 80
+    assert processed_characters < len(line) * 12
+
+
 def test_unknown_judicial_unit_does_not_promote_an_independent_city_mention():
     metadata = extract(
         PdfTextPage(
