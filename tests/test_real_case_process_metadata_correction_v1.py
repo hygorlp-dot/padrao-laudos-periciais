@@ -1150,6 +1150,223 @@ def test_structured_malformed_page_cannot_make_secondary_context_block_valid_loc
     assert metadata.fields["municipio_sede"].evidence[0].source_page == 3
 
 
+def test_mixed_acquisition_uses_source_order_when_ocr_identity_is_earlier():
+    structural, _ = split_primary_pages()
+    confused_primary = PRIMARY_TRF5_CNJ.replace("0", "O")
+    text = structural.text.replace(PRIMARY_TRF5_CNJ, confused_primary)
+    text = text.replace(
+        f"{confused_primary}\n",
+        f"{confused_primary}\nPROCESSO: {confused_primary}\n",
+        1,
+    )
+    text += f"\nPROCESSO: {FOREIGN_TRF1_CNJ}"
+    metadata = extract(
+        replace(
+            structural,
+            text=text,
+            extraction_mode=PageExtractionMode.OCR,
+            engine="ocr-local",
+            engine_version="1",
+            model_version="modelo-local",
+            confidence=0.99,
+            blocks=(
+                PageTextBlock(
+                    text,
+                    confidence=0.99,
+                    bounding_box=(1.0, 1.0, 2.0, 2.0),
+                ),
+            ),
+        )
+    )
+
+    primary = [
+        item
+        for item in metadata.fields["numero_processo"].evidence
+        if item.source_role.value == "PRIMARY_PROCESS_HEADER"
+    ]
+    assert {item.extracted_value for item in primary} == {PRIMARY_TRF5_CNJ}
+    assert min(item.source_start for item in primary) == text.index(confused_primary)
+    assert all(item.extracted_value != FOREIGN_TRF1_CNJ for item in primary)
+    assert [
+        item.source_start for item in metadata.fields["numero_processo"].evidence
+    ] == sorted(
+        item.source_start for item in metadata.fields["numero_processo"].evidence
+    )
+    assert metadata.fields["municipio_sede"].evidence[0].extracted_value == "Caruaru"
+
+
+def test_mixed_acquisition_keeps_earlier_native_identity_before_later_ocr():
+    structural, _ = split_primary_pages()
+    confused_foreign = FOREIGN_TRF1_CNJ.replace("0", "O")
+    text = structural.text.replace(
+        f"{PRIMARY_TRF5_CNJ}\n",
+        f"{PRIMARY_TRF5_CNJ}\nPROCESSO: {PRIMARY_TRF5_CNJ}\n",
+        1,
+    )
+    text += f"\nPROCESSO: {confused_foreign}"
+    metadata = extract(
+        replace(
+            structural,
+            text=text,
+            extraction_mode=PageExtractionMode.OCR,
+            engine="ocr-local",
+            engine_version="1",
+            model_version="modelo-local",
+            confidence=0.99,
+            blocks=(PageTextBlock(text, 0.99, (1.0, 1.0, 2.0, 2.0)),),
+        )
+    )
+
+    primary = [
+        item
+        for item in metadata.fields["numero_processo"].evidence
+        if item.source_role.value == "PRIMARY_PROCESS_HEADER"
+    ]
+    assert {item.extracted_value for item in primary} == {PRIMARY_TRF5_CNJ}
+    assert [
+        item.source_start
+        for item in metadata.fields["numero_processo"].evidence
+        if item.source_page == 1
+    ] == sorted(
+        item.source_start
+        for item in metadata.fields["numero_processo"].evidence
+        if item.source_page == 1
+    )
+    assert metadata.fields["municipio_sede"].evidence[0].source_page == 1
+
+
+def test_mixed_low_confidence_foreign_boundary_follows_source_position():
+    confused_primary = PRIMARY_TRF5_CNJ.replace("0", "O")
+    first = (
+        "PODER JUDICIÁRIO\n"
+        "JUSTIÇA FEDERAL DA 5ª REGIÃO\n"
+        f"{confused_primary}"
+    )
+    middle = f"PROCESSO: {FOREIGN_TRF1_CNJ}"
+    last = (
+        f"PROCESSO: {confused_primary}\n"
+        "ÓRGÃO JULGADOR: 24ª Vara Federal PE\n"
+        "AUTOR: PARTE ALFA\n"
+        "RÉU: PARTE BETA"
+    )
+    text = "\n".join((first, middle, last))
+    metadata = extract(
+        PdfTextPage(
+            1,
+            text,
+            extraction_mode=PageExtractionMode.OCR,
+            engine="ocr-local",
+            engine_version="1",
+            model_version="modelo-local",
+            confidence=0.99,
+            blocks=(
+                PageTextBlock(first, 0.99, (1.0, 1.0, 2.0, 2.0)),
+                PageTextBlock(middle, 0.2, (1.0, 3.0, 2.0, 4.0)),
+                PageTextBlock(last, 0.99, (1.0, 5.0, 2.0, 6.0)),
+            ),
+        )
+    )
+
+    number_evidence = metadata.fields["numero_processo"].evidence
+    primary = [
+        item
+        for item in number_evidence
+        if item.source_role.value == "PRIMARY_PROCESS_HEADER"
+    ]
+    assert [(item.source_start, item.extracted_value) for item in primary] == [
+        (text.rindex(confused_primary), PRIMARY_TRF5_CNJ),
+    ]
+    assert metadata.fields["municipio_sede"].evidence[0].source_start > primary[0].source_start
+
+
+def _cnj_occurrence(value: str, start: int):
+    return metadata_module._CnjOccurrence(
+        number=metadata_module.validate_cnj_number(value),
+        raw=value,
+        start=start,
+        end=start + len(value),
+        context_start=max(0, start - 1),
+        preceding_line="",
+    )
+
+
+@pytest.mark.parametrize(
+    ("native_start", "ocr_start", "expected"),
+    [
+        (10, 80, [PRIMARY_TRF5_CNJ, FOREIGN_TRF1_CNJ]),
+        (80, 10, [FOREIGN_TRF1_CNJ, PRIMARY_TRF5_CNJ]),
+    ],
+)
+def test_mixed_occurrence_merge_uses_source_offsets(
+    native_start, ocr_start, expected
+):
+    native = _cnj_occurrence(PRIMARY_TRF5_CNJ, native_start)
+    ocr = _cnj_occurrence(FOREIGN_TRF1_CNJ, ocr_start)
+
+    merged = metadata_module._merge_cnj_occurrence_streams((native,), (ocr,))
+
+    assert [item.number.canonical for item in merged] == expected
+    assert not any(item.source_order_conflict for item in merged)
+
+
+def test_mixed_occurrence_merge_coalesces_same_canonical_at_same_offset():
+    native = _cnj_occurrence(PRIMARY_TRF5_CNJ, 10)
+    ocr = _cnj_occurrence(PRIMARY_TRF5_CNJ, 10)
+
+    merged = metadata_module._merge_cnj_occurrence_streams((native,), (ocr,))
+
+    assert merged == (native,)
+
+
+def test_mixed_occurrence_merge_fails_closed_on_same_offset_disagreement():
+    native = _cnj_occurrence(PRIMARY_TRF5_CNJ, 10)
+    ocr = replace(
+        _cnj_occurrence(FOREIGN_TRF1_CNJ, 10),
+        end=10 + len(FOREIGN_TRF1_CNJ) + 1,
+    )
+
+    merged = metadata_module._merge_cnj_occurrence_streams((native,), (ocr,))
+
+    assert {item.number.canonical for item in merged} == {
+        PRIMARY_TRF5_CNJ,
+        FOREIGN_TRF1_CNJ,
+    }
+    assert all(item.source_order_conflict for item in merged)
+
+
+@pytest.mark.parametrize("occurrence_count", (128, 256, 512))
+def test_mixed_occurrence_merge_has_bounded_linear_work(occurrence_count):
+    class CountingSequence:
+        def __init__(self, values):
+            self.values = values
+            self.reads = 0
+
+        def __len__(self):
+            return len(self.values)
+
+        def __getitem__(self, index):
+            self.reads += 1
+            return self.values[index]
+
+    native = CountingSequence(
+        tuple(
+            _cnj_occurrence(PRIMARY_TRF5_CNJ, index * 2)
+            for index in range(occurrence_count)
+        )
+    )
+    ocr = CountingSequence(
+        tuple(
+            _cnj_occurrence(FOREIGN_TRF1_CNJ, index * 2 + 1)
+            for index in range(occurrence_count)
+        )
+    )
+
+    merged = metadata_module._merge_cnj_occurrence_streams(native, ocr)
+
+    assert len(merged) == occurrence_count * 2
+    assert native.reads + ocr.reads <= occurrence_count * 16
+
+
 def test_repeated_later_foreign_groups_cannot_promote_by_cardinality():
     metadata = extract(
         *strong_primary_group(PRIMARY_TRF5_CNJ, 1),

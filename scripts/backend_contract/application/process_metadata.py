@@ -433,6 +433,59 @@ class _CnjCandidate:
     source_role: ProcessMetadataSourceRole
     primary_source_role: ProcessMetadataSourceRole
     declared_non_primary: bool
+    source_order_conflict: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _CnjOccurrence:
+    number: CnjNumber
+    raw: str
+    start: int
+    end: int
+    context_start: int
+    preceding_line: str
+    source_order_conflict: bool = False
+
+
+def _merge_cnj_occurrence_streams(
+    native: tuple[_CnjOccurrence, ...],
+    ocr: tuple[_CnjOccurrence, ...],
+) -> tuple[_CnjOccurrence, ...]:
+    merged: list[_CnjOccurrence] = []
+    native_index = 0
+    ocr_index = 0
+    while native_index < len(native) or ocr_index < len(ocr):
+        native_key = (
+            native[native_index].start if native_index < len(native) else None
+        )
+        ocr_key = ocr[ocr_index].start if ocr_index < len(ocr) else None
+        if ocr_key is None or (native_key is not None and native_key < ocr_key):
+            merged.append(native[native_index])
+            native_index += 1
+            continue
+        if native_key is None or ocr_key < native_key:
+            merged.append(ocr[ocr_index])
+            ocr_index += 1
+            continue
+        tied = []
+        while (
+            native_index < len(native)
+            and native[native_index].start == native_key
+        ):
+            tied.append(native[native_index])
+            native_index += 1
+        while ocr_index < len(ocr) and ocr[ocr_index].start == ocr_key:
+            tied.append(ocr[ocr_index])
+            ocr_index += 1
+        by_canonical = {}
+        for occurrence in tied:
+            by_canonical.setdefault(occurrence.number.canonical, occurrence)
+        conflict = len(by_canonical) > 1
+        merged.extend(
+            replace(occurrence, source_order_conflict=conflict)
+            for _, occurrence in sorted(by_canonical.items())
+        )
+    return tuple(merged)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1044,6 +1097,7 @@ def _resolved_primary_cnj(
                 if candidate.primary_source_role in eligible_roles
                 and not effective_secondary_by_occurrence[id(candidate)]
                 and not candidate.rejects_primary_anchor
+                and not candidate.source_order_conflict
             ),
             None,
         )
@@ -1057,6 +1111,7 @@ def _resolved_primary_cnj(
                 and candidate.explicit_primary_anchor
                 and not effective_secondary_by_occurrence[id(candidate)]
                 and not candidate.rejects_primary_anchor
+                and not candidate.source_order_conflict
             ),
             None,
         )
@@ -1103,8 +1158,18 @@ def _resolved_primary_cnj(
             source_role=ProcessMetadataSourceRole.UNKNOWN_SOURCE_CONTEXT,
         )
     retained_evidence = {
-        (structural.page.number, structural.start, structural.end): primary_evidence,
-        (anchor.page.number, anchor.start, anchor.end): anchor_evidence,
+        (
+            structural.page.number,
+            structural.start,
+            structural.end,
+            structural.number.canonical,
+        ): primary_evidence,
+        (
+            anchor.page.number,
+            anchor.start,
+            anchor.end,
+            anchor.number.canonical,
+        ): anchor_evidence,
     }
     for occurrence in recognized_occurrences[anchor_recognized_index + 1 :]:
         if occurrence.source_role in secondary_roles:
@@ -1116,7 +1181,12 @@ def _resolved_primary_cnj(
                 source_role=ProcessMetadataSourceRole.UNKNOWN_SOURCE_CONTEXT,
             )
         retained_evidence.setdefault(
-            (occurrence.page.number, occurrence.start, occurrence.end),
+            (
+                occurrence.page.number,
+                occurrence.start,
+                occurrence.end,
+                occurrence.number.canonical,
+            ),
             evidence,
         )
     return (
@@ -1240,6 +1310,7 @@ def extract_process_metadata(
         end: int,
         context_start: int,
         preceding_line: str,
+        source_order_conflict: bool = False,
     ) -> None:
         source_role = _source_role_for_cnj(
             page,
@@ -1262,22 +1333,23 @@ def extract_process_metadata(
             source_start=start,
             source_role=source_role,
         )
-        add(
-            "ramo_justica",
-            cnj.justice_branch,
-            page,
-            span,
-            source_start=start,
-        )
-        federal_region = _FEDERAL_TRIBUNAL_REGIONS.get(cnj.tribunal_code)
-        if cnj.justice_segment == "4" and federal_region is not None:
+        if not source_order_conflict:
             add(
-                "tribunal",
-                f"Tribunal Regional Federal da {federal_region}ª Região",
+                "ramo_justica",
+                cnj.justice_branch,
                 page,
                 span,
                 source_start=start,
             )
+            federal_region = _FEDERAL_TRIBUNAL_REGIONS.get(cnj.tribunal_code)
+            if cnj.justice_segment == "4" and federal_region is not None:
+                add(
+                    "tribunal",
+                    f"Tribunal Regional Federal da {federal_region}ª Região",
+                    page,
+                    span,
+                    source_start=start,
+                )
         candidate = _CnjCandidate(
             cnj,
             evidence,
@@ -1305,11 +1377,15 @@ def extract_process_metadata(
                 local_declared_non_primary_segments[page.number], start
             )
             is not None,
+            source_order_conflict,
         )
         recognized_cnj_occurrences.append(candidate)
         if (
-            page.extraction_mode is PageExtractionMode.OCR
-            and (evidence.ocr_confidence or 0.0) < 0.75
+            source_order_conflict
+            or (
+                page.extraction_mode is PageExtractionMode.OCR
+                and (evidence.ocr_confidence or 0.0) < 0.75
+            )
         ):
             low_confidence["numero_processo"].append(
                 _FieldCandidate(evidence, page, start)
@@ -1318,6 +1394,7 @@ def extract_process_metadata(
         cnj_candidates.append(candidate)
 
     for page in text.pages:
+        native_occurrences = []
         for cnj_match, context_start, preceding_line in _cnj_occurrences_with_context(page):
             raw = cnj_match.group(0)
             try:
@@ -1337,16 +1414,18 @@ def extract_process_metadata(
                     )
                 )
                 continue
-            add_cnj(
-                cnj,
-                page,
-                raw,
-                cnj_match.start(),
-                cnj_match.end(),
-                context_start,
-                preceding_line,
+            native_occurrences.append(
+                _CnjOccurrence(
+                    cnj,
+                    raw,
+                    cnj_match.start(),
+                    cnj_match.end(),
+                    context_start,
+                    preceding_line,
+                )
             )
 
+        ocr_occurrences = []
         if page.extraction_mode is PageExtractionMode.OCR:
             for (
                 raw,
@@ -1373,15 +1452,29 @@ def extract_process_metadata(
                         )
                     )
                     continue
-                add_cnj(
-                    cnj,
-                    page,
-                    raw,
-                    source_start,
-                    source_end,
-                    context_start,
-                    preceding_line,
+                ocr_occurrences.append(
+                    _CnjOccurrence(
+                        cnj,
+                        raw,
+                        source_start,
+                        source_end,
+                        context_start,
+                        preceding_line,
+                    )
                 )
+        for occurrence in _merge_cnj_occurrence_streams(
+            tuple(native_occurrences), tuple(ocr_occurrences)
+        ):
+            add_cnj(
+                occurrence.number,
+                page,
+                occurrence.raw,
+                occurrence.start,
+                occurrence.end,
+                occurrence.context_start,
+                occurrence.preceding_line,
+                occurrence.source_order_conflict,
+            )
 
         for party_row in parse_pje_party_table(page.text).rows:
             add(
