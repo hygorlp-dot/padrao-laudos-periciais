@@ -189,10 +189,7 @@ def _validated_paths(repository: Path, target: Path) -> tuple[Path, Path, Path]:
         raise BootstrapError("parent traversal in target is prohibited")
     if any(private[index:index + 2] == ["referencias", "privadas"] for index in range(len(private) - 1)):
         raise BootstrapError("private target is prohibited")
-    try:
-        resolved_parent = destination.parent.resolve(strict=True)
-    except OSError as exc:
-        raise BootstrapError("target parent must already exist and be resolvable") from exc
+    resolved_parent = _validated_custody_path(destination.parent, "target parent")
     resolved = resolved_parent / destination.name
     resolved_parts = [part.casefold() for part in resolved.parts]
     if any(
@@ -208,9 +205,6 @@ def _validated_paths(repository: Path, target: Path) -> tuple[Path, Path, Path]:
         pass
     else:
         raise BootstrapError("target must be outside the source worktree")
-    for ancestor in [resolved_parent, *resolved_parent.parents]:
-        if _is_link_or_reparse(ancestor):
-            raise BootstrapError("symlinked/reparse target ancestry is prohibited")
     return root, common, resolved
 
 

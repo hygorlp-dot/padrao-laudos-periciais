@@ -850,3 +850,19 @@ def test_git_identity_change_before_manifest_emission_fails_without_manifest(
     common = source / Path(git(source, "rev-parse", "--git-common-dir"))
     manifests = common / "codex-uow" / "manifests"
     assert not manifests.exists() or list(manifests.glob("*.json")) == []
+
+
+def test_mapped_drive_target_is_rejected_before_worktree_creation(
+    repository: tuple[Path, Path, str], monkeypatch: pytest.MonkeyPatch
+):
+    source, _remote, _expected = repository
+    validate_drive = bootstrap_module._validate_windows_drive_identity
+
+    def reject_mapped_target(raw: Path) -> None:
+        if raw.drive == "Z:":
+            raise BootstrapError("Windows local remote must use a fixed local drive")
+        validate_drive(raw)
+
+    monkeypatch.setattr(bootstrap_module, "_validate_windows_drive_identity", reject_mapped_target)
+    with pytest.raises(BootstrapError, match="fixed local drive"):
+        minimal_bootstrap(source, Path(r"Z:\mapped-target"), "chore/42-mapped-target")
