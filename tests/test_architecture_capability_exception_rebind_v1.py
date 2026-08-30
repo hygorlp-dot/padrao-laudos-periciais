@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -19,17 +20,21 @@ EXCEPTIONS_PATH = "config/capability-exceptions-v1.json"
 CAPABILITY_REGISTRY_PATH = "config/capability-protected-artifacts-v1.json"
 CAPABILITY_TRANSITION_PATH = "config/capability-protected-transition-v1.json"
 ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
-PROTECTED_BASE = "145715360cb28237d098a225a45614b6dda3d704"
-E1A_ROTATION_BASE = "7a9bfa029bbf109b28066ed472221649d58f92ad"
+PROTECTED_BASE = "1f3f5dc479433dde0ce75600c7f16f84816e2637"
+SOURCE_ANCHOR = "87776ce9fd37a7eb518a32f28048ab33fc5a70c0"
 E1A_PROTECTED_WORKFLOWS = {
     ".github/workflows/architecture-protected.yml",
     ".github/workflows/capability-protected.yml",
 }
-HISTORY_REWRITE_MAPPINGS = {
-    "cec881c42815bc222eecc03fd89c1caf32ec75f4":
-        "2bd315608700f74a21103f3ea61a95dbf4013f25",
-    "f00bb46f60431376f8fe7bc5bba497aaf09670d9":
-        "a330a5c5ee92ae54e05829a9f232ca7ccf9e7f76",
+ROTATED_PROTECTED_ARTIFACTS = {
+    "scripts/quality/architecture_analyzer.py",
+    "scripts/quality/capability_trust_anchor.py",
+    CAPABILITY_REGISTRY_PATH,
+}
+SUPPORT_ARTIFACTS = {EXCEPTIONS_PATH, CAPABILITY_TRANSITION_PATH}
+ROTATED_EXCEPTION_PATHS = {
+    "scripts/quality/architecture_analyzer.py",
+    "scripts/quality/capability_trust_anchor.py",
 }
 
 
@@ -70,23 +75,36 @@ def test_transition_manifests_introduce_no_wildcard_or_package_wide_authority():
     architecture_paths = {
         row["path"] for row in _json(ARCHITECTURE_TRANSITION_PATH)["artifacts"]
     }
-    paths = capability_paths | architecture_paths
+    support_paths = {
+        row["path"] for row in _json(ARCHITECTURE_TRANSITION_PATH)["supportArtifacts"]
+    }
+    paths = capability_paths | architecture_paths | support_paths
 
     assert all("*" not in path and not path.endswith("/") for path in paths)
     assert capability_paths == {EXCEPTIONS_PATH}
-    assert architecture_paths == E1A_PROTECTED_WORKFLOWS
+    assert architecture_paths == ROTATED_PROTECTED_ARTIFACTS
+    assert support_paths == SUPPORT_ARTIFACTS
 
 
-def test_rebind_changes_only_proven_baseline_commit_identities():
+def test_rebind_rotates_only_exact_judge_exception_identities():
     base_rows = _git("show", f"{PROTECTED_BASE}:{EXCEPTIONS_PATH}")
     base = json.loads(base_rows)
     candidate = _json(EXCEPTIONS_PATH)
 
     assert len(candidate["exceptions"]) == len(base["exceptions"])
+    changed_paths = set()
     for before, after in zip(base["exceptions"], candidate["exceptions"], strict=True):
         changed = {key for key in before if before[key] != after[key]}
-        assert changed == {"baselineCommit"}
-        assert HISTORY_REWRITE_MAPPINGS[before["baselineCommit"]] == after["baselineCommit"]
+        if not changed:
+            continue
+        changed_paths.add(after["canonicalPath"])
+        assert changed == {"baselineCommit", "reviewEvidence", "wholeFileSha256"}
+        assert after["baselineCommit"] == SOURCE_ANCHOR
+        assert after["reviewEvidence"] == "C1B_ONE_TIME_TRUST_BOOTSTRAP_PREDECESSOR_87776CE"
+        assert after["wholeFileSha256"] == hashlib.sha256(
+            (ROOT / after["canonicalPath"]).read_bytes()
+        ).hexdigest()
+    assert changed_paths == ROTATED_EXCEPTION_PATHS
 
 
 def test_capability_registry_and_transition_bind_exact_exception_blob():
@@ -106,17 +124,26 @@ def test_capability_registry_and_transition_bind_exact_exception_blob():
     assert _transition_identity(row, "candidate") == _identity_from_worktree(EXCEPTIONS_PATH)
 
 
-def test_architecture_transition_binds_current_protected_workflow_rotation():
+def test_architecture_transition_binds_current_trust_anchor_rotation():
     transition = _json(ARCHITECTURE_TRANSITION_PATH)
-    assert transition["schemaVersion"] == "2.0.0"
-    assert transition["protectedBaseSha"] == E1A_ROTATION_BASE
+    assert transition["schemaVersion"] == "3.0.0"
+    assert transition["protectedBaseSha"] == PROTECTED_BASE
 
     artifact_rows = {row["path"]: row for row in transition["artifacts"]}
-    assert set(artifact_rows) == E1A_PROTECTED_WORKFLOWS
+    assert set(artifact_rows) == ROTATED_PROTECTED_ARTIFACTS
 
     for path, row in artifact_rows.items():
         assert _architecture_transition_identity(row, "base") == _identity_from_commit(
-            E1A_ROTATION_BASE, path
+            PROTECTED_BASE, path
+        )
+        assert _architecture_transition_identity(row, "candidate") == _identity_from_worktree(path)
+
+    support_rows = {row["path"]: row for row in transition["supportArtifacts"]}
+    assert transition["supportScope"] == "CAPABILITY_BOOTSTRAP_V1"
+    assert set(support_rows) == SUPPORT_ARTIFACTS
+    for path, row in support_rows.items():
+        assert _architecture_transition_identity(row, "base") == _identity_from_commit(
+            PROTECTED_BASE, path
         )
         assert _architecture_transition_identity(row, "candidate") == _identity_from_worktree(path)
 
