@@ -795,3 +795,37 @@ def test_mapped_drive_git_executable_authority_fails_closed(
     monkeypatch.setattr(bootstrap_module, "_canonical_windows_local_path", reject_mapped_drive)
     with pytest.raises(BootstrapError, match="fixed local drive"):
         bootstrap_module._validate_git_executable(Path(r"Z:\git.exe"))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction boundary")
+def test_junction_git_executable_is_rejected_before_canonical_open(tmp_path: Path):
+    real_dir = tmp_path / "real-git-dir"
+    real_dir.mkdir()
+    shutil.copy2(TRUSTED_GIT, real_dir / "git.exe")
+    alias_dir = tmp_path / "git-junction"
+    junction = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(alias_dir), str(real_dir)],
+        text=True, capture_output=True,
+    )
+    if junction.returncode:
+        pytest.skip(f"directory junction unavailable: {junction.stderr}")
+
+    with pytest.raises(BootstrapError, match="symlinked/reparse"):
+        bootstrap_module._validate_git_executable(alias_dir / "git.exe")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction boundary")
+def test_junction_source_repository_is_rejected_before_git_execution(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, _expected = repository
+    alias = tmp_path / "source-junction"
+    junction = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(alias), str(source)],
+        text=True, capture_output=True,
+    )
+    if junction.returncode:
+        pytest.skip(f"directory junction unavailable: {junction.stderr}")
+
+    with pytest.raises(BootstrapError, match="symlinked/reparse"):
+        minimal_bootstrap(alias, tmp_path / "junction-source-target", "chore/42-junction-source")

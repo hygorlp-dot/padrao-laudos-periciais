@@ -160,8 +160,10 @@ def _validated_custody_path(path: Path, label: str) -> Path:
     if _has_private_components(absolute):
         raise BootstrapError(f"private {label} is prohibited")
     try:
-        canonical = _canonical_windows_local_path(absolute) if os.name == "nt" else absolute
+        if os.name == "nt":
+            _validate_windows_drive_identity(absolute)
         _reject_reparse_ancestry(absolute)
+        canonical = _canonical_windows_local_path(absolute) if os.name == "nt" else absolute
         resolved = canonical.resolve(strict=True)
         _reject_reparse_ancestry(resolved)
     except OSError as exc:
@@ -321,6 +323,8 @@ def _validate_local_remote(url: str) -> None:
     if raw_text.startswith(("\\\\", "\\\\?\\", "\\\\.\\")):
         raise BootstrapError("UNC/device remote is prohibited")
     original_absolute = raw.absolute()
+    if os.name == "nt":
+        _validate_windows_drive_identity(original_absolute)
     _reject_reparse_ancestry(original_absolute)
     if os.name == "nt":
         raw = _canonical_windows_local_path(raw)
@@ -338,8 +342,8 @@ def _validate_local_remote(url: str) -> None:
     _reject_reparse_ancestry(absolute)
 
 
-def _canonical_windows_local_path(raw: Path) -> Path:
-    """Resolve a path through the Win32 volume namespace, rejecting aliases."""
+def _validate_windows_drive_identity(raw: Path) -> None:
+    """Reject non-fixed and DOS-aliased drives without opening the target path."""
     if not raw.drive or raw.drive.startswith("\\"):
         raise BootstrapError("Windows local remote requires a local drive")
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -359,6 +363,14 @@ def _canonical_windows_local_path(raw: Path) -> Path:
     if device_buffer.value.casefold().replace("\\", "/").startswith("/??/"):
         raise BootstrapError("Windows DOS/SUBST drive aliases are prohibited")
 
+
+def _canonical_windows_local_path(raw: Path) -> Path:
+    """Resolve a path through the Win32 volume namespace, rejecting aliases."""
+    _validate_windows_drive_identity(raw)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_drive_type = kernel32.GetDriveTypeW
+    get_drive_type.argtypes = [ctypes.c_wchar_p]
+    get_drive_type.restype = ctypes.c_uint
     create_file = kernel32.CreateFileW
     create_file.argtypes = [
         ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p,
