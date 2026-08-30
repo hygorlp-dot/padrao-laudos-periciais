@@ -6,6 +6,7 @@
   "required": [
     "schema_version", "issue", "pull_request", "stage", "task", "risk",
     "base_head", "base_tree", "current_head", "repository_id_sha256", "fetch_url_sha256",
+    "git_executable_path", "git_executable_sha256",
     "git_common_dir", "worktree_git_dir", "target_path", "remote", "remote_branch", "local_branch",
     "postconditions", "lanes", "dependencies", "declaration_authority",
     "mutation_owner", "open_findings", "terminal_state", "skills", "policies"
@@ -22,6 +23,8 @@
     "current_head": {"$ref": "#/$defs/sha"},
     "repository_id_sha256": {"$ref": "#/$defs/sha256"},
     "fetch_url_sha256": {"$ref": "#/$defs/sha256"},
+    "git_executable_path": {"type": "string", "minLength": 1},
+    "git_executable_sha256": {"$ref": "#/$defs/sha256"},
     "git_common_dir": {"type": "string", "minLength": 1},
     "worktree_git_dir": {"type": "string", "minLength": 1},
     "target_path": {"type": "string", "minLength": 1},

@@ -23,6 +23,9 @@ HEAD exato de uma branch remota explicitamente informada e emite um
   userinfo são rejeitados; no Windows o remote precisa de volume local fixo
   comprovado por Win32, sem mapped drive, SMB, DOS device ou `SUBST`, e o path
   final obtido por handle é revalidado contra os mesmos limites privados.
+- O manifesto registra path absoluto e SHA-256 do executável Git efetivamente
+  autorizado, permitindo reconstruir a proveniência do host tool sem confiar
+  novamente no ambiente de execução.
 - O manifesto é evidência local, não substitui GitHub, Issue, PR, branch
   protection, policy ou revisão.
 - Skills, policies e lanes são declarações explícitas não confiáveis do caller;

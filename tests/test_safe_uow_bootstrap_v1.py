@@ -95,6 +95,8 @@ def test_bootstrap_creates_exact_clean_worktree_and_canonical_manifest(
     assert payload["remote_branch"] == "main"
     assert payload["local_branch"] == "chore/42-example"
     assert payload["target_path"] == str(target)
+    assert payload["git_executable_path"] == str(TRUSTED_GIT)
+    assert payload["git_executable_sha256"] == bootstrap_module._sha256_file(TRUSTED_GIT)
     assert payload["postconditions"] == {
         "clean": True,
         "head": expected,
@@ -716,3 +718,29 @@ def test_relative_git_executable_authority_is_rejected(
             source, tmp_path / "relative-git", "chore/42-relative-git",
             git_executable=Path("git"),
         )
+
+
+def test_git_authority_is_restored_after_failure(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, _expected = repository
+    git(source, "remote", "remove", "origin")
+
+    with pytest.raises(BootstrapError, match="named remote"):
+        minimal_bootstrap(source, tmp_path / "failed-authority", "chore/42-failed-authority")
+    with pytest.raises(BootstrapError, match="explicit Git executable authority"):
+        bootstrap_module._git_executable()
+
+
+def test_git_authority_is_restored_after_success_and_nested_context(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, _expected = repository
+    outer = bootstrap_module._GIT_EXECUTABLE.set("outer-authority")
+    try:
+        minimal_bootstrap(source, tmp_path / "restored-authority", "chore/42-restored-authority")
+        assert bootstrap_module._git_executable() == "outer-authority"
+    finally:
+        bootstrap_module._GIT_EXECUTABLE.reset(outer)
+    with pytest.raises(BootstrapError, match="explicit Git executable authority"):
+        bootstrap_module._git_executable()

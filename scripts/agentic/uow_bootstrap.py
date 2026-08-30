@@ -14,6 +14,7 @@ import tempfile
 from collections.abc import Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
+from functools import wraps
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -68,6 +69,14 @@ def _git_executable() -> str:
         return _GIT_EXECUTABLE.get()
     except LookupError as exc:
         raise BootstrapError("explicit Git executable authority is required") from exc
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _controlled_git_environment() -> dict[str, str]:
@@ -440,6 +449,22 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         raise BootstrapError(f"invalid UOW manifest: {exc}") from exc
 
 
+def _restore_git_authority(function: Any) -> Any:
+    @wraps(function)
+    def guarded(*args: Any, **kwargs: Any) -> Any:
+        candidate = kwargs.get("git_executable")
+        if not isinstance(candidate, Path):
+            raise BootstrapError("explicit Git executable authority is required")
+        token = _GIT_EXECUTABLE.set(_validate_git_executable(candidate))
+        try:
+            return function(*args, **kwargs)
+        finally:
+            _GIT_EXECUTABLE.reset(token)
+
+    return guarded
+
+
+@_restore_git_authority
 def bootstrap_uow(
     *,
     git_executable: Path,
@@ -459,7 +484,6 @@ def bootstrap_uow(
     policies: Sequence[str],
     pull_request: int | None = None,
 ) -> dict[str, Any]:
-    _GIT_EXECUTABLE.set(_validate_git_executable(git_executable))
     for label, value in (("remote", remote), ("remote branch", remote_branch), ("local branch", local_branch)):
         _validate_name(label, value)
     if issue < 1 or pull_request is not None and pull_request < 1:
@@ -526,6 +550,8 @@ def bootstrap_uow(
             "current_head": base_head,
             "repository_id_sha256": hashlib.sha256(str(common).casefold().encode("utf-8")).hexdigest(),
             "fetch_url_sha256": hashlib.sha256(fetch_url.encode("utf-8")).hexdigest(),
+            "git_executable_path": _git_executable(),
+            "git_executable_sha256": _sha256_file(Path(_git_executable())),
             "git_common_dir": str(common),
             "worktree_git_dir": "PENDING_POSTCONDITION",
             "target_path": str(destination),
