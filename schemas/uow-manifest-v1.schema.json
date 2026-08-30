@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/uow-manifest-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "issue", "pull_request", "stage", "task", "risk",
+    "base_head", "base_tree", "current_head", "lanes", "dependencies",
+    "mutation_owner", "open_findings", "terminal_state", "skills", "policies"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "issue": {"type": "integer", "minimum": 1},
+    "pull_request": {"type": ["integer", "null"], "minimum": 1},
+    "stage": {"type": "string", "minLength": 1},
+    "task": {"type": "string", "minLength": 1},
+    "risk": {"enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]},
+    "base_head": {"$ref": "#/$defs/sha"},
+    "base_tree": {"$ref": "#/$defs/sha"},
+    "current_head": {"$ref": "#/$defs/sha"},
+    "lanes": {"$ref": "#/$defs/nonempty_strings"},
+    "dependencies": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "mutation_owner": {"type": "string", "minLength": 1},
+    "open_findings": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "terminal_state": {"enum": ["OPEN", "FROZEN", "PASS", "FAIL", "BLOCKED"]},
+    "skills": {"$ref": "#/$defs/nonempty_strings"},
+    "policies": {"$ref": "#/$defs/nonempty_strings"}
+  },
+  "$defs": {
+    "sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "nonempty_strings": {"type": "array", "uniqueItems": true, "minItems": 1, "items": {"type": "string", "minLength": 1}}
+  }
+}
