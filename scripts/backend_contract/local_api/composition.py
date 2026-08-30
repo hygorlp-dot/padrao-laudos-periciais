@@ -37,6 +37,7 @@ from ..infrastructure.rapid_ocr import RapidOcrLatinEngine
 from ..infrastructure.sqlite import SQLiteApplicationStore
 from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
+from ..case_analysis import GetCaseAnalysis, SaveCaseAnalysis
 
 
 class LocalApiStartupError(RuntimeError):
@@ -150,9 +151,7 @@ def build_local_api(
     get_process_metadata_review = None
     get_process_case = GetProcessCase(store.workspaces, store.revisions)
     if private_store is not None:
-        open_case_document = OpenCaseDocument(
-            OpenPrivateContentStream(store.workspaces, private_store)
-        )
+        open_case_document = OpenCaseDocument(OpenPrivateContentStream(store.workspaces, private_store))
         generic_store = StorePrivateContent(
             store.workspaces,
             private_store,
@@ -168,9 +167,7 @@ def build_local_api(
             local_clock,
             local_ids,
         )
-        list_case_documents = ListCaseDocuments(
-            ListPrivateContents(store.workspaces, private_store)
-        )
+        list_case_documents = ListCaseDocuments(ListPrivateContents(store.workspaces, private_store))
         read_case_document = open_case_document
         get_process_metadata_review = GetProcessMetadataReview(
             store.workspaces,
@@ -178,9 +175,7 @@ def build_local_api(
             store.revisions,
             get_process_case,
         )
-    save_process_case = SaveProcessCase(
-        store.workspaces, store.revisions, local_clock, local_ids
-    )
+    save_process_case = SaveProcessCase(store.workspaces, store.revisions, local_clock, local_ids)
     confirm_process_metadata_source_span = (
         ConfirmProcessMetadataSourceSpan(
             get_process_case,
@@ -190,14 +185,14 @@ def build_local_api(
         if get_process_metadata_review is not None
         else None
     )
+    append_artifact_revision = AppendArtifactRevision(store.revisions, local_clock, local_ids)
+    get_latest_artifact = GetLatestArtifact(store.revisions)
     services = LocalApiServices(
         create_workspace=CreateWorkspace(store.workspaces, local_clock, local_ids),
         get_workspace=GetWorkspace(store.workspaces),
         list_workspaces=ListWorkspaces(store.workspaces),
-        append_artifact_revision=AppendArtifactRevision(
-            store.revisions, local_clock, local_ids
-        ),
-        get_latest_artifact=GetLatestArtifact(store.revisions),
+        append_artifact_revision=append_artifact_revision,
+        get_latest_artifact=get_latest_artifact,
         get_artifact_revision=GetArtifactRevision(store.revisions),
         list_artifact_revisions=ListArtifactRevisions(store.revisions),
         get_process_case=get_process_case,
@@ -212,6 +207,8 @@ def build_local_api(
             if get_process_metadata_review is not None
             else save_process_case
         ),
+        save_case_analysis=SaveCaseAnalysis(append_artifact_revision, get_latest_artifact),
+        get_case_analysis=GetCaseAnalysis(get_latest_artifact),
         get_process_metadata_review=get_process_metadata_review,
         confirm_process_metadata_source_span=confirm_process_metadata_source_span,
         import_case_document=import_case_document,

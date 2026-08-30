@@ -193,12 +193,8 @@ def test_non_get_browser_route_never_falls_back_to_the_spa(tmp_path):
         {"Origin": "http://127.0.0.1:1", "Sec-Fetch-Site": "same-origin"},
     ),
 )
-def test_browser_facing_mutation_fails_closed_without_exact_product_origin(
-    tmp_path, headers
-):
-    runtime = build_product_runtime(
-        tmp_path / "blocked.db", frontend_build(tmp_path), token=TOKEN
-    )
+def test_browser_facing_mutation_fails_closed_without_exact_product_origin(tmp_path, headers):
+    runtime = build_product_runtime(tmp_path / "blocked.db", frontend_build(tmp_path), token=TOKEN)
     try:
         runtime.start()
         status, response_headers, body = request(
@@ -212,9 +208,7 @@ def test_browser_facing_mutation_fails_closed_without_exact_product_origin(
         assert json.loads(body)["error"]["code"] == "FORBIDDEN_PRODUCT_REQUEST"
         assert TOKEN.encode() not in body
         assert "Access-Control-Allow-Origin" not in response_headers
-        listed_status, _listed_headers, listed_body = request(
-            runtime, "GET", "/app-api/v1/workspaces"
-        )
+        listed_status, _listed_headers, listed_body = request(runtime, "GET", "/app-api/v1/workspaces")
         assert listed_status == 200
         assert json.loads(listed_body) == {"items": []}
     finally:
@@ -222,9 +216,7 @@ def test_browser_facing_mutation_fails_closed_without_exact_product_origin(
 
 
 def test_same_origin_mutation_is_forwarded_and_token_stays_server_side(tmp_path):
-    runtime = build_product_runtime(
-        tmp_path / "allowed.db", frontend_build(tmp_path), token=TOKEN
-    )
+    runtime = build_product_runtime(tmp_path / "allowed.db", frontend_build(tmp_path), token=TOKEN)
     try:
         runtime.start()
         status, headers, body = request(
@@ -244,6 +236,53 @@ def test_same_origin_mutation_is_forwarded_and_token_stays_server_side(tmp_path)
         runtime.close()
 
 
+def test_case_analysis_bridge_saves_and_reopens_canonical_snapshot(tmp_path):
+    payload = json.loads((Path(__file__).parent / "fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8"))
+    runtime = build_product_runtime(tmp_path / "analysis.db", frontend_build(tmp_path), token=TOKEN)
+    try:
+        runtime.start()
+        workspace_status, _, workspace_body = request(
+            runtime,
+            "POST",
+            "/app-api/v1/workspaces",
+            headers=browser_mutation_headers(runtime),
+            body={"name": "Análise sintética"},
+        )
+        workspace_id = json.loads(workspace_body)["workspace_id"]
+        payload["workspace_id"] = workspace_id
+        for collection in (
+            "claims",
+            "counterarguments",
+            "decisions",
+            "pericial_objects",
+            "questions",
+            "events",
+            "technical_document_references",
+            "gaps",
+            "conflicts",
+        ):
+            for item in payload[collection]:
+                for provenance in item["provenance"]:
+                    provenance["workspace_id"] = workspace_id
+        saved_status, _, saved_body = request(
+            runtime,
+            "POST",
+            f"/app-api/v1/workspaces/{workspace_id}/case-analysis",
+            headers=browser_mutation_headers(runtime),
+            body={"expected_revision": None, "snapshot": payload},
+        )
+        get_status, _, get_body = request(runtime, "GET", f"/app-api/v1/workspaces/{workspace_id}/case-analysis")
+    finally:
+        runtime.close()
+
+    assert workspace_status == 201
+    assert saved_status == 200
+    assert get_status == 200
+    assert json.loads(saved_body)["snapshot"] == payload
+    assert json.loads(get_body)["snapshot"] == payload
+    assert TOKEN.encode() not in saved_body + get_body
+
+
 @pytest.mark.parametrize(
     "duplicate_headers",
     (
@@ -253,9 +292,7 @@ def test_same_origin_mutation_is_forwarded_and_token_stays_server_side(tmp_path)
     ),
 )
 def test_duplicate_security_headers_fail_closed(tmp_path, duplicate_headers):
-    runtime = build_product_runtime(
-        tmp_path / "duplicates.db", frontend_build(tmp_path), token=TOKEN
-    )
+    runtime = build_product_runtime(tmp_path / "duplicates.db", frontend_build(tmp_path), token=TOKEN)
     runtime.start()
     try:
         payload = (
@@ -277,28 +314,18 @@ def test_duplicate_security_headers_fail_closed(tmp_path, duplicate_headers):
 
 
 def test_absolute_form_and_truncated_body_fail_closed(tmp_path):
-    runtime = build_product_runtime(
-        tmp_path / "framing.db", frontend_build(tmp_path), token=TOKEN
-    )
+    runtime = build_product_runtime(tmp_path / "framing.db", frontend_build(tmp_path), token=TOKEN)
     runtime.start()
     host = f"{runtime.address[0]}:{runtime.address[1]}"
     try:
         absolute = raw_request(
             runtime,
-            (
-                f"GET http://{host}/ HTTP/1.1\r\n"
-                f"Host: {host}\r\n\r\n"
-            ).encode("ascii"),
+            (f"GET http://{host}/ HTTP/1.1\r\nHost: {host}\r\n\r\n").encode("ascii"),
         )
         truncated = raw_request(
             runtime,
             (
-                "POST /app-api/v1/workspaces HTTP/1.1\r\n"
-                f"Host: {host}\r\n"
-                f"Origin: {runtime.origin}\r\n"
-                "Sec-Fetch-Site: same-origin\r\n"
-                "Content-Type: application/json\r\n"
-                "Content-Length: 10\r\n\r\n{}"
+                f"POST /app-api/v1/workspaces HTTP/1.1\r\nHost: {host}\r\nOrigin: {runtime.origin}\r\nSec-Fetch-Site: same-origin\r\nContent-Type: application/json\r\nContent-Length: 10\r\n\r\n{{}}"
             ).encode("ascii"),
         )
     finally:
@@ -319,9 +346,7 @@ def test_upstream_failure_is_sanitized_and_token_never_reaches_public_bytes(tmp_
     bridge.start()
     try:
         status, _headers, body = request(bridge, "GET", "/app-api/v1/workspaces")
-        missing_status, _missing_headers, missing_body = request(
-            bridge, "GET", "/assets/missing.js"
-        )
+        missing_status, _missing_headers, missing_body = request(bridge, "GET", "/assets/missing.js")
     finally:
         bridge.close()
 
@@ -347,9 +372,7 @@ def test_upstream_failure_is_sanitized_and_token_never_reaches_public_bytes(tmp_
     ),
 )
 def test_bridge_exposes_only_the_workspace_slice(tmp_path, method, target):
-    runtime = build_product_runtime(
-        tmp_path / "allowlist.db", frontend_build(tmp_path), token=TOKEN
-    )
+    runtime = build_product_runtime(tmp_path / "allowlist.db", frontend_build(tmp_path), token=TOKEN)
     try:
         runtime.start()
         status, _headers, body = request(
@@ -371,9 +394,7 @@ def test_missing_frontend_build_fails_before_runtime_is_exposed(tmp_path):
 
 
 def test_close_is_idempotent_after_start(tmp_path):
-    runtime = build_product_runtime(
-        tmp_path / "close.db", frontend_build(tmp_path), token=TOKEN
-    )
+    runtime = build_product_runtime(tmp_path / "close.db", frontend_build(tmp_path), token=TOKEN)
     runtime.start()
     runtime.close()
     runtime.close()
@@ -399,11 +420,7 @@ def test_slow_drip_cannot_hold_product_runtime_shutdown(tmp_path, slow_part):
             + b"Content-Length: 100\r\n\r\n{"
         )
     else:
-        request_prefix = (
-            b"GET / HTTP/1.1\r\n"
-            + f"Host: {runtime.address[0]}:{runtime.address[1]}\r\n".encode("ascii")
-            + b"X-Slow-Header:"
-        )
+        request_prefix = b"GET / HTTP/1.1\r\n" + f"Host: {runtime.address[0]}:{runtime.address[1]}\r\n".encode("ascii") + b"X-Slow-Header:"
     client.sendall(request_prefix)
     stop_drip = Event()
 
@@ -488,9 +505,7 @@ def test_serve_loop_failure_before_ready_fails_closed(tmp_path):
 
 
 def test_partial_product_runtime_startup_closes_owned_local_api(tmp_path):
-    runtime = build_product_runtime(
-        tmp_path / "partial.db", frontend_build(tmp_path), token=TOKEN
-    )
+    runtime = build_product_runtime(tmp_path / "partial.db", frontend_build(tmp_path), token=TOKEN)
 
     def fail_bridge_start():
         raise ProductBridgeServerStartError("bridge indisponível")
@@ -503,9 +518,7 @@ def test_partial_product_runtime_startup_closes_owned_local_api(tmp_path):
 
 
 def test_unsupported_method_uses_sanitized_bridge_response(tmp_path):
-    runtime = build_product_runtime(
-        tmp_path / "unsupported.db", frontend_build(tmp_path), token=TOKEN
-    )
+    runtime = build_product_runtime(tmp_path / "unsupported.db", frontend_build(tmp_path), token=TOKEN)
     runtime.start()
     try:
         status, headers, body = request(runtime, "CONNECT", "/")

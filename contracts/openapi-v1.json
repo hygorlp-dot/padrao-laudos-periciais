@@ -2,16 +2,33 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Padrão de Laudos Periciais — Product API",
-    "version": "1.0.0",
-    "description": "Componentes canônicos compartilhados pelos endpoints do produto. Este artefato não cria endpoints.",
-    "x-semantic-boundary": "scripts.backend_contract.api_contract.parse_judicial_domain_payload"
+    "version": "1.1.0",
+    "description": "Contrato mínimo da API local do produto.",
+    "x-semantic-boundary": "scripts.backend_contract.api_contract.parse_judicial_domain_payload",
+    "x-case-analysis-semantic-boundary": "scripts.backend_contract.case_analysis.case_analysis_from_mapping"
   },
-  "paths": {},
-  "components": {
-    "schemas": {
-      "ProceduralContext": {
-        "$ref": "../schemas/judicial-domain-model-v1.schema.json"
+  "paths": {
+    "/v1/workspaces/{workspace_id}/case-analysis": {
+      "get": {
+        "summary": "Reabre a análise canônica",
+        "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
+        "responses": {"200": {"description": "Análise revalidada"}, "404": {"description": "Análise ausente"}}
+      },
+      "post": {
+        "summary": "Salva nova revisão canônica",
+        "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
+        "requestBody": {"required": true},
+        "responses": {"200": {"description": "Revisão persistida"}, "409": {"description": "Conflito de revisão"}}
       }
+    }
+  },
+  "components": {
+    "parameters": {
+      "WorkspaceId": {"name": "workspace_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}
+    },
+    "schemas": {
+      "ProceduralContext": {"$ref": "../schemas/judicial-domain-model-v1.schema.json"},
+      "CaseAnalysisSnapshot": {"$ref": "../schemas/case-analysis-snapshot-v1.schema.json"}
     }
   }
 }

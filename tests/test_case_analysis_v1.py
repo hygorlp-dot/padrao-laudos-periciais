@@ -127,3 +127,16 @@ def test_unknown_fields_cannot_smuggle_pericial_conclusion():
     raw["pericial_conclusion"] = "não permitido"
     with pytest.raises(ValueError, match="exact fields"):
         case_analysis_from_mapping(raw)
+
+
+def test_openapi_exposes_only_minimum_case_analysis_operations_and_canonical_schema():
+    contract = json.loads((ROOT / "contracts/openapi-v1.json").read_text(encoding="utf-8"))
+    path = contract["paths"]["/v1/workspaces/{workspace_id}/case-analysis"]
+
+    assert set(path) == {"get", "post"}
+    assert contract["components"]["schemas"]["CaseAnalysisSnapshot"] == {
+        "$ref": "../schemas/case-analysis-snapshot-v1.schema.json"
+    }
+    assert contract["info"]["x-case-analysis-semantic-boundary"] == (
+        "scripts.backend_contract.case_analysis.case_analysis_from_mapping"
+    )

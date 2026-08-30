@@ -40,6 +40,12 @@ from ..application.ports import (
     WorkspaceNotFound,
     UnsupportedCaseDocument,
 )
+from ..case_analysis import (
+    CASE_ANALYSIS_ARTIFACT_KIND,
+    CaseAnalysisSnapshot,
+    case_analysis_from_mapping,
+    case_analysis_to_mapping,
+)
 
 _MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
 
@@ -73,6 +79,8 @@ class LocalApiServices:
     list_artifact_revisions: object
     get_process_case: object
     save_process_case: object
+    save_case_analysis: object
+    get_case_analysis: object
     get_process_metadata_review: object | None = None
     confirm_process_metadata_source_span: object | None = None
     import_case_document: object | None = None
@@ -101,13 +109,8 @@ def _revision_dto(record: ArtifactRevision) -> dict:
     }
 
 
-def _process_case_dto(
-    record: ProcessCaseSnapshot, expected_workspace_id: WorkspaceId
-) -> dict:
-    if (
-        type(record) is not ProcessCaseSnapshot
-        or record.workspace_id != expected_workspace_id
-    ):
+def _process_case_dto(record: ProcessCaseSnapshot, expected_workspace_id: WorkspaceId) -> dict:
+    if type(record) is not ProcessCaseSnapshot or record.workspace_id != expected_workspace_id:
         raise RepositoryIntegrityError("identidade processual divergente")
     return {
         "workspace_id": str(record.workspace_id),
@@ -117,13 +120,8 @@ def _process_case_dto(
     }
 
 
-def _private_content_dto(
-    record: PrivateContentMetadata, expected_workspace_id: WorkspaceId
-) -> dict:
-    if (
-        type(record) is not PrivateContentMetadata
-        or record.workspace_id != expected_workspace_id
-    ):
+def _private_content_dto(record: PrivateContentMetadata, expected_workspace_id: WorkspaceId) -> dict:
+    if type(record) is not PrivateContentMetadata or record.workspace_id != expected_workspace_id:
         raise RepositoryIntegrityError("identidade documental divergente")
     return {
         "workspace_id": str(record.workspace_id),
@@ -164,9 +162,7 @@ def _json_response(status: int, value: object) -> HttpResponse:
     )
 
 
-def _binary_response(
-    status: int, body: bytes | OpenPrivateContent, content_type: str
-) -> HttpResponse:
+def _binary_response(status: int, body: bytes | OpenPrivateContent, content_type: str) -> HttpResponse:
     if type(body) not in {bytes, OpenPrivateContent} or content_type != "application/pdf":
         raise RepositoryIntegrityError("resposta documental inválida")
     length = len(body) if type(body) is bytes else body.metadata.byte_size
@@ -184,9 +180,7 @@ def _binary_response(
     )
 
 
-def _error(
-    status: int, code: str, message: str = "requisição local inválida"
-) -> HttpResponse:
+def _error(status: int, code: str, message: str = "requisição local inválida") -> HttpResponse:
     return _json_response(
         status,
         {"error": {"code": code, "message": message}},
@@ -195,11 +189,7 @@ def _error(
 
 def _decode_segment(value: str) -> str:
     for index, character in enumerate(value):
-        if character == "%" and (
-            index + 2 >= len(value)
-            or value[index + 1] not in string.hexdigits
-            or value[index + 2] not in string.hexdigits
-        ):
+        if character == "%" and (index + 2 >= len(value) or value[index + 1] not in string.hexdigits or value[index + 2] not in string.hexdigits):
             raise ValueError("percent-encoding inválido")
     decoded = unquote_to_bytes(value).decode("utf-8", errors="strict")
     if not decoded or _has_ascii_control(decoded):
@@ -239,24 +229,11 @@ def _local_host_allowed(value: str | None) -> bool:
         _ = parsed.port
     except ValueError:
         return False
-    return (
-        parsed.hostname in {"127.0.0.1", "localhost"}
-        and parsed.username is None
-        and parsed.password is None
-        and not parsed.path
-        and not parsed.query
-        and not parsed.fragment
-    )
+    return parsed.hostname in {"127.0.0.1", "localhost"} and parsed.username is None and parsed.password is None and not parsed.path and not parsed.query and not parsed.fragment
 
 
 def _require_local_token(token: str) -> str:
-    if (
-        type(token) is not str
-        or len(token) < 32
-        or not token.isascii()
-        or not token.isprintable()
-        or any(character.isspace() for character in token)
-    ):
+    if type(token) is not str or len(token) < 32 or not token.isascii() or not token.isprintable() or any(character.isspace() for character in token):
         raise ValueError("token local inválido")
     return token
 
@@ -304,12 +281,7 @@ def _require_safe_json_integers(value: object) -> None:
 
 
 def _parse_content_length(value: str) -> int:
-    if (
-        type(value) is not str
-        or not value
-        or not value.isascii()
-        or not value.isdecimal()
-    ):
+    if type(value) is not str or not value or not value.isascii() or not value.isdecimal():
         raise ValueError("Content-Length invalido")
     return int(value)
 
@@ -317,12 +289,7 @@ def _parse_content_length(value: str) -> int:
 def _target_segments(target: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
     if type(target) is not str:
         raise TypeError("target inválido")
-    if (
-        _has_ascii_control(target)
-        or any(character.isspace() for character in target)
-        or "?" in target
-        or "#" in target
-    ):
+    if _has_ascii_control(target) or any(character.isspace() for character in target) or "?" in target or "#" in target:
         raise ValueError("target contains noncanonical syntax")
     parsed = urlsplit(target)
     if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
@@ -345,15 +312,9 @@ class LocalApi:
         if type(services) is not LocalApiServices:
             raise TypeError("services inválidos")
         _require_local_token(token)
-        if (
-            type(max_body_bytes) is not int
-            or not 1 <= max_body_bytes <= 1_048_576
-        ):
+        if type(max_body_bytes) is not int or not 1 <= max_body_bytes <= 1_048_576:
             raise ValueError("limite de body inválido")
-        if (
-            type(max_document_body_bytes) is not int
-            or not 1 <= max_document_body_bytes <= MAX_DOCUMENT_BYTES
-        ):
+        if type(max_document_body_bytes) is not int or not 1 <= max_document_body_bytes <= MAX_DOCUMENT_BYTES:
             raise ValueError("limite de documento inválido")
         self._services = services
         self._token = token
@@ -371,13 +332,7 @@ class LocalApi:
             raw_segments, _segments = _target_segments(target)
         except (TypeError, ValueError):
             return False
-        if not (
-            type(method) is str
-            and method.upper() == "POST"
-            and len(raw_segments) == 4
-            and raw_segments[:2] == ("v1", "workspaces")
-            and raw_segments[3] == "materials"
-        ):
+        if not (type(method) is str and method.upper() == "POST" and len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "materials"):
             return False
         try:
             self._workspace_id(raw_segments[2])
@@ -447,9 +402,7 @@ class LocalApi:
                     "FORBIDDEN_LOCAL_REQUEST",
                     "requisição local não autorizada",
                 )
-            if "origin" in request_headers or request_headers.get(
-                "sec-fetch-site", "none"
-            ).lower() not in {"none", "same-origin"}:
+            if "origin" in request_headers or request_headers.get("sec-fetch-site", "none").lower() not in {"none", "same-origin"}:
                 return _error(
                     403,
                     "FORBIDDEN_LOCAL_REQUEST",
@@ -457,14 +410,8 @@ class LocalApi:
                 )
             raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
-            private_route = (
-                len(raw_segments) >= 4
-                and raw_segments[:2] == ("v1", "workspaces")
-                and raw_segments[3] == "materials"
-            )
-            if (normalized_method == "POST" or private_route) and not hmac.compare_digest(
-                request_headers.get("x-local-api-token", ""), self._token
-            ):
+            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "case-analysis"}
+            if (normalized_method == "POST" or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
                 return _error(
                     403,
                     "FORBIDDEN_LOCAL_REQUEST",
@@ -476,24 +423,51 @@ class LocalApi:
             if raw_segments == ("v1", "workspaces"):
                 if normalized_method == "GET":
                     records = self._services.list_workspaces.execute()
-                    return _json_response(
-                        200, {"items": [_workspace_dto(item) for item in records]}
-                    )
+                    return _json_response(200, {"items": [_workspace_dto(item) for item in records]})
                 if normalized_method == "POST":
                     dto = self._request_dto(request_headers, body)
-                    if set(dto) != {"name"} or type(dto["name"]) is not str or not dto[
-                        "name"
-                    ].strip():
+                    if set(dto) != {"name"} or type(dto["name"]) is not str or not dto["name"].strip():
                         raise ValueError("name inválido")
                     record = self._services.create_workspace.execute(dto["name"])
                     return _json_response(201, _workspace_dto(record))
                 return _error(405, "METHOD_NOT_ALLOWED")
 
-            if (
-                len(raw_segments) == 4
-                and raw_segments[:2] == ("v1", "workspaces")
-                and raw_segments[3] == "materials"
-            ):
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "case-analysis":
+                workspace_id = self._workspace_id(raw_segments[2])
+                if normalized_method == "GET":
+                    record, snapshot = self._services.get_case_analysis.execute(workspace_id)
+                    if type(snapshot) is not CaseAnalysisSnapshot:
+                        raise RepositoryIntegrityError("Case Analysis persisted state is invalid")
+                    return _json_response(
+                        200,
+                        {
+                            "revision": record.revision,
+                            "updated_at": record.created_at,
+                            "snapshot": case_analysis_to_mapping(snapshot),
+                        },
+                    )
+                if normalized_method == "POST":
+                    dto = self._request_dto(request_headers, body)
+                    if set(dto) != {"expected_revision", "snapshot"}:
+                        raise ValueError("Case Analysis request is invalid")
+                    expected = dto["expected_revision"]
+                    if expected is not None and (type(expected) is not int or expected < 1):
+                        raise ValueError("Case Analysis expected revision is invalid")
+                    snapshot = case_analysis_from_mapping(dto["snapshot"])
+                    if snapshot.workspace_id != str(workspace_id):
+                        raise ValueError("Case Analysis workspace mismatch")
+                    record = self._services.save_case_analysis.execute(workspace_id, snapshot, expected)
+                    return _json_response(
+                        200,
+                        {
+                            "revision": record.revision,
+                            "updated_at": record.created_at,
+                            "snapshot": case_analysis_to_mapping(snapshot),
+                        },
+                    )
+                return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "materials":
                 workspace_id = self._workspace_id(raw_segments[2])
                 if normalized_method == "GET":
                     service = self._services.list_case_documents
@@ -515,20 +489,14 @@ class LocalApi:
                         raise ValueError("Content-Length diverge")
                     record = service.execute(
                         workspace_id=workspace_id,
-                        original_filename=_document_filename(
-                            request_headers.get("x-document-filename")
-                        ),
+                        original_filename=_document_filename(request_headers.get("x-document-filename")),
                         content=body,
                         media_type="application/pdf",
                     )
                     return _json_response(201, _private_content_dto(record, workspace_id))
                 return _error(405, "METHOD_NOT_ALLOWED")
 
-            if (
-                len(raw_segments) == 5
-                and raw_segments[:2] == ("v1", "workspaces")
-                and raw_segments[3] == "materials"
-            ):
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "materials":
                 if normalized_method != "GET":
                     return _error(405, "METHOD_NOT_ALLOWED")
                 service = self._services.read_case_document
@@ -545,11 +513,7 @@ class LocalApi:
                     response_body = record
                 else:
                     raise RepositoryIntegrityError("identidade documental divergente")
-                if (
-                    metadata.workspace_id != workspace_id
-                    or metadata.content_id != content_id
-                    or metadata.media_type != "application/pdf"
-                ):
+                if metadata.workspace_id != workspace_id or metadata.content_id != content_id or metadata.media_type != "application/pdf":
                     if type(record) is OpenPrivateContent:
                         record.close()
                     raise RepositoryIntegrityError("identidade documental divergente")
@@ -561,16 +525,10 @@ class LocalApi:
             ):
                 if normalized_method != "GET":
                     return _error(405, "METHOD_NOT_ALLOWED")
-                record = self._services.get_workspace.execute(
-                    self._workspace_id(raw_segments[2])
-                )
+                record = self._services.get_workspace.execute(self._workspace_id(raw_segments[2]))
                 return _json_response(200, _workspace_dto(record))
 
-            if (
-                len(raw_segments) == 4
-                and raw_segments[:2] == ("v1", "workspaces")
-                and raw_segments[3] == "process-case"
-            ):
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "process-case":
                 workspace_id = self._workspace_id(raw_segments[2])
                 if normalized_method == "GET":
                     record = self._services.get_process_case.execute(workspace_id)
@@ -580,23 +538,18 @@ class LocalApi:
                     if set(dto) != {"expected_revision", "data"}:
                         raise ValueError("data invalida")
                     expected_revision = dto["expected_revision"]
-                    if expected_revision is not None and (
-                        type(expected_revision) is not int
-                        or expected_revision < 1
-                        or expected_revision > _MAX_SAFE_JSON_INTEGER
-                    ):
+                    if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1 or expected_revision > _MAX_SAFE_JSON_INTEGER):
                         raise ValueError("expected_revision invalida")
                     data = ProcessCaseData.from_mapping(dto["data"])
-                    record = self._services.save_process_case.execute(
-                        workspace_id, data, expected_revision
-                    )
+                    record = self._services.save_process_case.execute(workspace_id, data, expected_revision)
                     return _json_response(200, _process_case_dto(record, workspace_id))
                 return _error(405, "METHOD_NOT_ALLOWED")
 
             if (
                 len(raw_segments) == 5
                 and raw_segments[:2] == ("v1", "workspaces")
-                and raw_segments[3:] == (
+                and raw_segments[3:]
+                == (
                     "process-metadata",
                     "source-span-confirmations",
                 )
@@ -635,11 +588,7 @@ class LocalApi:
                     _process_case_dto(record, workspace_id),
                 )
 
-            if (
-                len(raw_segments) == 4
-                and raw_segments[:2] == ("v1", "workspaces")
-                and raw_segments[3] == "process-metadata"
-            ):
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "process-metadata":
                 if normalized_method != "GET":
                     return _error(405, "METHOD_NOT_ALLOWED")
                 service = self._services.get_process_metadata_review
@@ -651,13 +600,10 @@ class LocalApi:
                     raise RepositoryIntegrityError("revisão de metadados processuais divergente")
                 return _json_response(200, review_dto(review))
 
-            artifact_route = (
-                len(raw_segments) in {7, 8}
-                and raw_segments[:2] == ("v1", "workspaces")
-                and raw_segments[3] == "artifacts"
-                and raw_segments[6] == "revisions"
-            )
+            artifact_route = len(raw_segments) in {7, 8} and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "artifacts" and raw_segments[6] == "revisions"
             if artifact_route:
+                if segments[4] == CASE_ANALYSIS_ARTIFACT_KIND:
+                    return _error(404, "NOT_FOUND")
                 if len(segments) == 7 and normalized_method == "POST":
                     dto = self._request_dto(request_headers, body)
                     if set(dto) != {"payload"}:
@@ -675,29 +621,19 @@ class LocalApi:
                         segments[4],
                         segments[5],
                     )
-                    return _json_response(
-                        200, {"items": [_revision_dto(item) for item in records]}
-                    )
+                    return _json_response(200, {"items": [_revision_dto(item) for item in records]})
                 if len(segments) == 8 and normalized_method == "GET":
                     workspace_id = self._workspace_id(raw_segments[2])
                     if raw_segments[7] == "latest":
-                        record = self._services.get_latest_artifact.execute(
-                            workspace_id, segments[4], segments[5]
-                        )
+                        record = self._services.get_latest_artifact.execute(workspace_id, segments[4], segments[5])
                     else:
                         revision_text = raw_segments[7]
                         if not revision_text.isascii() or not revision_text.isdecimal():
                             raise ValueError("revision inválida")
                         revision = int(revision_text)
-                        if (
-                            revision < 1
-                            or revision > _MAX_SAFE_JSON_INTEGER
-                            or str(revision) != revision_text
-                        ):
+                        if revision < 1 or revision > _MAX_SAFE_JSON_INTEGER or str(revision) != revision_text:
                             raise ValueError("revision inválida")
-                        record = self._services.get_artifact_revision.execute(
-                            workspace_id, segments[4], segments[5], revision
-                        )
+                        record = self._services.get_artifact_revision.execute(workspace_id, segments[4], segments[5], revision)
                     return _json_response(200, _revision_dto(record))
                 return _error(405, "METHOD_NOT_ALLOWED")
 
@@ -739,9 +675,7 @@ class LocalApi:
                 "schema da persistência local inválido",
             )
         except RepositoryError:
-            return _error(
-                503, "REPOSITORY_UNAVAILABLE", "persistência local indisponível"
-            )
+            return _error(503, "REPOSITORY_UNAVAILABLE", "persistência local indisponível")
         except (
             json.JSONDecodeError,
             RecursionError,

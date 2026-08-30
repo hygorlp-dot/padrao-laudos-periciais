@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 
 
@@ -209,6 +209,91 @@ class CaseAnalysisSnapshot:
             conflicts=stale(self.conflicts),
             stale_document_ids=changed,
         )
+
+
+CASE_ANALYSIS_ARTIFACT_KIND = "CASE_ANALYSIS_SNAPSHOT_V1"
+CASE_ANALYSIS_ARTIFACT_ID = "CASE-ANALYSIS"
+
+
+def case_analysis_to_mapping(snapshot: CaseAnalysisSnapshot) -> dict:
+    if type(snapshot) is not CaseAnalysisSnapshot:
+        raise TypeError("canonical Case Analysis snapshot required")
+    value = _json_value(asdict(snapshot))
+    value.pop("stale_document_ids")
+    value["schema_version"] = "1.0.0"
+    for name in (
+        "claims",
+        "counterarguments",
+        "decisions",
+        "pericial_objects",
+        "questions",
+        "events",
+        "technical_document_references",
+        "gaps",
+        "conflicts",
+    ):
+        for item in value[name]:
+            item.pop("stale")
+    return value
+
+
+def _json_value(value):
+    if isinstance(value, StrEnum):
+        return str(value)
+    if type(value) is tuple:
+        return [_json_value(item) for item in value]
+    if type(value) is list:
+        return [_json_value(item) for item in value]
+    if type(value) is dict:
+        return {key: _json_value(item) for key, item in value.items()}
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class SaveCaseAnalysis:
+    append_revision: object
+    get_latest_revision: object
+
+    def execute(self, workspace_id, snapshot: CaseAnalysisSnapshot, expected_revision: int | None):
+        if type(snapshot) is not CaseAnalysisSnapshot or str(workspace_id) != snapshot.workspace_id:
+            raise ValueError("Case Analysis workspace identity mismatch")
+        if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
+            raise ValueError("expected revision is invalid")
+        try:
+            current = self.get_latest_revision.execute(workspace_id, CASE_ANALYSIS_ARTIFACT_KIND, CASE_ANALYSIS_ARTIFACT_ID)
+        except Exception as exc:
+            if exc.__class__.__name__ != "ArtifactRevisionNotFound":
+                raise
+            current = None
+        current_revision = None if current is None else current.revision
+        if current_revision != expected_revision:
+            from .application.ports import RepositoryConflict
+
+            raise RepositoryConflict("Case Analysis revision conflict")
+        return self.append_revision.execute(
+            workspace_id=workspace_id,
+            artifact_kind=CASE_ANALYSIS_ARTIFACT_KIND,
+            artifact_id=CASE_ANALYSIS_ARTIFACT_ID,
+            payload=case_analysis_to_mapping(snapshot),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class GetCaseAnalysis:
+    get_latest_revision: object
+
+    def execute(self, workspace_id):
+        record = self.get_latest_revision.execute(workspace_id, CASE_ANALYSIS_ARTIFACT_KIND, CASE_ANALYSIS_ARTIFACT_ID)
+        snapshot = case_analysis_from_mapping(_mutable_payload(record.payload))
+        if snapshot.workspace_id != str(workspace_id):
+            raise ValueError("persisted Case Analysis workspace mismatch")
+        return record, snapshot
+
+
+def _mutable_payload(value):
+    from .application.models import thaw_payload
+
+    return thaw_payload(value)
 
 
 _ROOT_FIELDS = {
