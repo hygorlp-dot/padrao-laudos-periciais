@@ -19,18 +19,13 @@ EXCEPTIONS_PATH = "config/capability-exceptions-v1.json"
 CAPABILITY_REGISTRY_PATH = "config/capability-protected-artifacts-v1.json"
 CAPABILITY_TRANSITION_PATH = "config/capability-protected-transition-v1.json"
 ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
-PROTECTED_BASE = "145715360cb28237d098a225a45614b6dda3d704"
-E1A_ROTATION_BASE = "7a9bfa029bbf109b28066ed472221649d58f92ad"
+PROTECTED_BASE = "1f3f5dc479433dde0ce75600c7f16f84816e2637"
+ARCHITECTURE_ROTATION_BASE = PROTECTED_BASE
 E1A_PROTECTED_WORKFLOWS = {
     ".github/workflows/architecture-protected.yml",
     ".github/workflows/capability-protected.yml",
 }
-HISTORY_REWRITE_MAPPINGS = {
-    "cec881c42815bc222eecc03fd89c1caf32ec75f4":
-        "2bd315608700f74a21103f3ea61a95dbf4013f25",
-    "f00bb46f60431376f8fe7bc5bba497aaf09670d9":
-        "a330a5c5ee92ae54e05829a9f232ca7ccf9e7f76",
-}
+CURRENT_ARCHITECTURE_PROTECTED_PATHS = {CAPABILITY_REGISTRY_PATH}
 
 
 def _json(path: str) -> dict:
@@ -74,19 +69,21 @@ def test_transition_manifests_introduce_no_wildcard_or_package_wide_authority():
 
     assert all("*" not in path and not path.endswith("/") for path in paths)
     assert capability_paths == {EXCEPTIONS_PATH}
-    assert architecture_paths == E1A_PROTECTED_WORKFLOWS
+    assert architecture_paths == CURRENT_ARCHITECTURE_PROTECTED_PATHS
 
 
-def test_rebind_changes_only_proven_baseline_commit_identities():
+def test_c1b_rotation_adds_only_the_exact_reviewed_process_acquisition():
     base_rows = _git("show", f"{PROTECTED_BASE}:{EXCEPTIONS_PATH}")
     base = json.loads(base_rows)
     candidate = _json(EXCEPTIONS_PATH)
 
-    assert len(candidate["exceptions"]) == len(base["exceptions"])
-    for before, after in zip(base["exceptions"], candidate["exceptions"], strict=True):
-        changed = {key for key in before if before[key] != after[key]}
-        assert changed == {"baselineCommit"}
-        assert HISTORY_REWRITE_MAPPINGS[before["baselineCommit"]] == after["baselineCommit"]
+    assert candidate["exceptions"][:-1] == base["exceptions"]
+    assert len(candidate["exceptions"]) == len(base["exceptions"]) + 1
+    added = candidate["exceptions"][-1]
+    assert added["canonicalPath"] == "scripts/agentic/uow_bootstrap.py"
+    assert added["findingCode"] == "PROCESS_NAMESPACE_ACQUISITION"
+    assert added["acquiredCapability"] == "subprocess"
+    assert added["baselineCommit"] == "05f8524e7a2df624335126c1b824eeb52281a3ac"
 
 
 def test_capability_registry_and_transition_bind_exact_exception_blob():
@@ -106,17 +103,17 @@ def test_capability_registry_and_transition_bind_exact_exception_blob():
     assert _transition_identity(row, "candidate") == _identity_from_worktree(EXCEPTIONS_PATH)
 
 
-def test_architecture_transition_binds_current_protected_workflow_rotation():
+def test_architecture_transition_binds_current_capability_registry_rotation():
     transition = _json(ARCHITECTURE_TRANSITION_PATH)
     assert transition["schemaVersion"] == "2.0.0"
-    assert transition["protectedBaseSha"] == E1A_ROTATION_BASE
+    assert transition["protectedBaseSha"] == ARCHITECTURE_ROTATION_BASE
 
     artifact_rows = {row["path"]: row for row in transition["artifacts"]}
-    assert set(artifact_rows) == E1A_PROTECTED_WORKFLOWS
+    assert set(artifact_rows) == CURRENT_ARCHITECTURE_PROTECTED_PATHS
 
     for path, row in artifact_rows.items():
         assert _architecture_transition_identity(row, "base") == _identity_from_commit(
-            E1A_ROTATION_BASE, path
+            ARCHITECTURE_ROTATION_BASE, path
         )
         assert _architecture_transition_identity(row, "candidate") == _identity_from_worktree(path)
 
