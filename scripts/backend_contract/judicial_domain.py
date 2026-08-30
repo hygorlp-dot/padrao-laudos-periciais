@@ -224,12 +224,30 @@ class ProceduralContext:
         for item in self.access_relations:
             if item.entity_id not in entity_ids or item.context_id != self.context_id:
                 raise ValueError("access relation is dangling or belongs to another context")
+        all_provenance = [*self.provenance]
+        for collection in (self.entities, self.participants, self.representation_links, self.access_relations):
+            for item in collection:
+                all_provenance.extend(item.provenance)
+        occurrence_identities: dict[tuple[str, str, str, str], tuple[int, str]] = {}
+        for item in all_provenance:
+            key = (item.source_system, item.source_document_id, item.source_sha256, item.occurrence_id)
+            locator = (item.page, item.occurrence)
+            if key in occurrence_identities and occurrence_identities[key] != locator:
+                raise ValueError("occurrence_id resolves to conflicting source locators")
+            occurrence_identities[key] = locator
 
 
 def legacy_singular_party_view(context: ProceduralContext) -> dict[str, str] | None:
     """Return a lossy legacy view only when both singular parties are unambiguous."""
     if type(context) is not ProceduralContext:
         raise TypeError("context is invalid")
+    if any(
+        item.status is not ParticipantStatus.ACTIVE
+        or item.pole is ProcessPole.UNKNOWN
+        or item.role.normalized is NormalizedProceduralRole.UNKNOWN
+        for item in context.participants
+    ):
+        return None
     entity_names = {item.entity_id: item.raw_name for item in context.entities}
     active = [
         item for item in context.participants
@@ -241,7 +259,11 @@ def legacy_singular_party_view(context: ProceduralContext) -> dict[str, str] | N
         if item.pole is ProcessPole.PASSIVE and item.role.normalized is NormalizedProceduralRole.DEFENDANT
         and item.principal and item.status is ParticipantStatus.ACTIVE
     ]
-    if len(active) != 1 or len(passive) != 1:
+    selected = {*active, *passive}
+    if (
+        len(active) != 1 or len(passive) != 1
+        or any(item.principal and item not in selected for item in context.participants)
+    ):
         return None
     return {
         "parte_requerente": entity_names[active[0].entity_id],

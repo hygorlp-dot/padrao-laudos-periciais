@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import copy
+import hashlib
 import json
 from pathlib import Path
 
@@ -36,7 +37,7 @@ def provenance(occurrence: str = "Parte autora sintética") -> SourceProvenance:
         source_sha256=SHA,
         page=1,
         occurrence=occurrence,
-        occurrence_id="OCC-SYNTHETIC-001",
+        occurrence_id=f"OCC-{hashlib.sha256(occurrence.encode()).hexdigest()[:12].upper()}",
     )
 
 
@@ -183,6 +184,29 @@ def test_legacy_projection_rejects_non_active_principal_status(status):
     context = valid_context()
     changed = replace(context.participants[0], status=status)
     assert legacy_singular_party_view(replace(context, participants=(changed, context.participants[1]))) is None
+
+
+def test_legacy_projection_rejects_additional_unknown_principal_participant():
+    context = valid_context()
+    unknown_entity = entity("ENT-005", "Parte Incerta Sintética")
+    unknown = participant(
+        "PAR-003", "ENT-005", ProcessPole.ACTIVE, NormalizedProceduralRole.UNKNOWN,
+        raw_role="PAPEL NÃO MAPEADO", principal=True,
+    )
+    ambiguous = replace(
+        context,
+        entities=(*context.entities, unknown_entity),
+        participants=(*context.participants, unknown),
+    )
+    assert legacy_singular_party_view(ambiguous) is None
+
+
+def test_occurrence_identity_reuse_must_resolve_to_one_exact_locator():
+    context = valid_context()
+    original = context.provenance[0]
+    conflicting = replace(original, occurrence="Outra ocorrência na mesma página")
+    with pytest.raises(ValueError, match="occurrence_id"):
+        replace(context, provenance=(original, conflicting))
 
 
 def test_synthetic_fixture_satisfies_closed_serialization_contract():
