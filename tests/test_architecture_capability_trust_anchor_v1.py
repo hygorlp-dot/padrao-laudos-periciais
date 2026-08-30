@@ -362,7 +362,7 @@ def test_c1b_exact_support_scope_rejects_wildcards_siblings_and_directory_grants
 
 def test_c1b_support_artifact_is_bound_to_exact_base_and_candidate_blobs(inert_repo):
     root, base = inert_repo
-    protected = PROTECTED_PATHS[0]
+    protected = "scripts/quality/capability_trust_anchor.py"
     support_path = "scripts/agentic/uow_bootstrap.py"
     base_identity = _identity(root, base, protected)
     (root / protected).write_text("candidate protected bytes\n", encoding="utf-8")
