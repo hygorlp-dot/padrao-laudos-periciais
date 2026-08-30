@@ -445,3 +445,25 @@ def test_credential_execution_config_is_rejected_before_fetch(
         minimal_bootstrap(source, target, "chore/42-credential-helper")
 
     assert not target.exists()
+
+
+def test_hostile_git_repository_and_config_environment_cannot_redirect_bootstrap(
+    repository: tuple[Path, Path, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    source, _remote, expected = repository
+    alternate = tmp_path / "alternate"
+    alternate.mkdir()
+    git(alternate, "init", "-b", "main")
+    monkeypatch.setenv("GIT_DIR", str(alternate / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(alternate))
+    monkeypatch.setenv("GIT_COMMON_DIR", str(alternate / ".git"))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "remote.origin.url")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "ext::arbitrary-helper")
+    target = tmp_path / "environment-safe"
+
+    result = minimal_bootstrap(source, target, "chore/42-environment-safe")
+
+    monkeypatch.undo()
+    assert result["base_head"] == expected
+    assert git(target, "rev-parse", "HEAD") == expected

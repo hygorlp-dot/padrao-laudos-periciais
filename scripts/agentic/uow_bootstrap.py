@@ -56,7 +56,8 @@ def _git_execution_policy(hooks: Path) -> list[str]:
 
 def _git(repository: Path, *args: str) -> str:
     result = subprocess.run(
-        ["git", *args], cwd=repository, text=True, capture_output=True
+        ["git", *args], cwd=repository, text=True, capture_output=True,
+        env=_controlled_git_environment(),
     )
     if result.returncode:
         detail = result.stderr.strip() or result.stdout.strip() or "git failed"
@@ -114,6 +115,7 @@ def _reject_tree_filters(root: Path, commit: str) -> None:
         cwd=root,
         text=True,
         capture_output=True,
+        env=_controlled_git_environment(),
     )
     if result.returncode == 0 and result.stdout.strip():
         raise BootstrapError("versioned Git filter attributes are prohibited")
@@ -127,7 +129,7 @@ def _reject_external_attributes(root: Path, common: Path) -> None:
         raise BootstrapError("Git info attributes are prohibited")
     configured = subprocess.run(
         ["git", "config", "--show-origin", "--get-all", "core.attributesFile"],
-        cwd=root, text=True, capture_output=True,
+        cwd=root, text=True, capture_output=True, env=_controlled_git_environment(),
     )
     if configured.returncode == 0 and configured.stdout.strip():
         raise BootstrapError("global/system Git attributes are prohibited")
@@ -138,7 +140,7 @@ def _reject_external_attributes(root: Path, common: Path) -> None:
 def _reject_fsmonitor(root: Path) -> None:
     configured = subprocess.run(
         ["git", "config", "--show-origin", "--get-all", "core.fsmonitor"],
-        cwd=root, text=True, capture_output=True,
+        cwd=root, text=True, capture_output=True, env=_controlled_git_environment(),
     )
     if configured.returncode == 0 and configured.stdout.strip():
         raise BootstrapError("Git fsmonitor configuration is prohibited")
@@ -154,7 +156,8 @@ def _reject_gitlinks(root: Path, commit: str) -> None:
 
 def _reject_private_tree(root: Path, commit: str) -> None:
     result = subprocess.run(
-        ["git", "ls-tree", "-rz", "--name-only", commit], cwd=root, capture_output=True
+        ["git", "ls-tree", "-rz", "--name-only", commit], cwd=root, capture_output=True,
+        env=_controlled_git_environment(),
     )
     if result.returncode:
         raise BootstrapError("unable to inventory candidate tree paths")
@@ -312,11 +315,13 @@ def bootstrap_uow(
     _reject_fsmonitor(root)
     for label, value in (("remote branch", remote_branch), ("local branch", local_branch)):
         if subprocess.run(
-            ["git", "check-ref-format", "--branch", value], cwd=root, capture_output=True
+            ["git", "check-ref-format", "--branch", value], cwd=root, capture_output=True,
+            env=_controlled_git_environment(),
         ).returncode:
             raise BootstrapError(f"invalid {label}: {value!r}")
     if subprocess.run(
-        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{local_branch}"], cwd=root
+        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{local_branch}"], cwd=root,
+        env=_controlled_git_environment(),
     ).returncode == 0:
         raise BootstrapError(f"local branch already exists: {local_branch}")
 
