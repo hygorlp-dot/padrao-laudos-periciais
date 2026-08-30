@@ -37,15 +37,28 @@ PROTECTED_TRANSITION_SUPPORT_PREFIXES = (
 )
 PROTECTED_TRANSITION_SUPPORT_SCOPES = {
     "CAPABILITY_BOOTSTRAP_V1": {
-        "prefixes": (
-            "scripts/quality/capability_",
-            "tests/test_capability_",
-        ),
+        "prefixes": (),
         "paths": (
             "config/capability-exceptions-v1.json",
             "config/capability-protected-transition-v1.json",
+            "scripts/quality/capability_bootstrap.py",
+            "scripts/quality/capability_gate_adapter.py",
             "scripts/quality/verify_core.py",
+            "tests/test_capability_analyzer_v1.py",
+            "tests/test_capability_base_owned_blocking_topology_v1.py",
+            "tests/test_capability_contracts_v1.py",
+            "tests/test_capability_exceptions_v1.py",
             "tests/test_repository_safety_gate.py",
+        ),
+    },
+    "C1B_SAFE_UOW_BOOTSTRAP_V1": {
+        "prefixes": (),
+        "paths": (
+            "config/capability-exceptions-v1.json",
+            "config/capability-protected-transition-v1.json",
+            "docs/padroes/safe-uow-bootstrap-v1.md",
+            "schemas/uow-manifest-v1.schema.json",
+            "scripts/agentic/uow_bootstrap.py",
         ),
     },
 }

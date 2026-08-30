@@ -1089,6 +1089,31 @@ def test_v3_transition_rejects_malformed_support_artifact_row(clean_protected_tr
     assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
 
 
+def test_c1b_support_scope_accepts_only_exact_bootstrap_artifact(clean_protected_transition_repo):
+    tmp_path, protected_base = clean_protected_transition_repo
+    candidate = _commit_protected_transition(
+        tmp_path,
+        protected_base,
+        schema_version="3.0.0",
+        support_scope="C1B_SAFE_UOW_BOOTSTRAP_V1",
+        support_artifacts=["scripts/agentic/uow_bootstrap.py"],
+    )
+    assert _protected_artifact_findings(tmp_path, protected_base, candidate) == []
+
+
+def test_c1b_support_scope_rejects_sibling_artifact(clean_protected_transition_repo):
+    tmp_path, protected_base = clean_protected_transition_repo
+    candidate = _commit_protected_transition(
+        tmp_path,
+        protected_base,
+        schema_version="3.0.0",
+        support_scope="C1B_SAFE_UOW_BOOTSTRAP_V1",
+        support_artifacts=["scripts/agentic/sibling.py"],
+    )
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
 def _v3_commit_rotation_with_support_row(tmp_path, protected_base, support_path, support_row):
     analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
     analyzer.write_text("# rotated trust anchor\n", encoding="utf-8")
@@ -1189,7 +1214,9 @@ def test_v3_support_artifact_with_wrong_base_identity_for_existing_file_is_block
 @pytest.mark.parametrize("out_of_scope_path", [
     "scripts/motor_vicios/motor.py",
     "scripts/quality/unrelated.py",
+    "scripts/quality/capability_backdoor.py",
     "tests/test_unrelated.py",
+    "tests/test_capability_backdoor.py",
 ])
 def test_v3_transition_rejects_out_of_scope_support_artifact_even_with_exact_identity(
     clean_protected_transition_repo, out_of_scope_path,
@@ -1205,8 +1232,10 @@ def test_v3_transition_rejects_out_of_scope_support_artifact_even_with_exact_ide
 
 
 @pytest.mark.parametrize("in_scope_path", [
-    "scripts/quality/capability_example.py",
-    "tests/test_capability_example.py",
+    "scripts/quality/capability_bootstrap.py",
+    "scripts/quality/capability_gate_adapter.py",
+    "tests/test_capability_analyzer_v1.py",
+    "tests/test_capability_contracts_v1.py",
     "scripts/quality/verify_core.py",
     "tests/test_repository_safety_gate.py",
     "config/capability-exceptions-v1.json",

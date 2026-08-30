@@ -20,7 +20,7 @@ PROTECTED_TIMING_SURFACE_SHA256 = {
     ".github/workflows/core-safety.yml": "5a499f0844e528f46c34a57d7663addd0d69b2a000d9a677da57bbc953158765",
     "scripts/quality/__init__.py": "b3824e776de859b9a48131b04cfc738c925badc4d42c0475eaf919e4e1665e5b",
     "scripts/quality/verify_core.py": "ae2e5928db5917fd4d9f4e9ad8ec9c13e65ebd4ade9f533ab0235b3440275598",
-    "scripts/quality/architecture_analyzer.py": "b0ebd34400c0a456b14e44eea747cfa88c30d1f988a2659d75087f2cf6fdf036",
+    "scripts/quality/architecture_analyzer.py": "4982ce83da99ff3ab3e7bab73a089ca88221148a91d807bfde7edc0cc1d00f0a",
     "scripts/quality/capability_analyzer.py": "a082879716d75e2b35c271ab89b93b13b4e56163592cb4f522b924eace766303",
 }
 

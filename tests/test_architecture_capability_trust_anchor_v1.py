@@ -19,6 +19,7 @@ from scripts.quality.capability_trust_anchor import (
 
 PROTECTED_PATHS = (
     "scripts/quality/capability_analyzer.py",
+    "scripts/quality/capability_trust_anchor.py",
     "config/capability-policy-v1.json",
 )
 FUTURE_PATH = "scripts/quality/capability_bootstrap.py"
@@ -183,6 +184,31 @@ def test_candidate_registry_cannot_change_base_owned_path_set_or_order(inert_rep
     assert {item["code"] for item in findings} == {"CAPABILITY_PROTECTED_REGISTRY_ADVANCEMENT_INVALID"}
 
 
+def test_future_base_removal_of_protected_trust_anchor_fails_closed(inert_repo):
+    root, base = inert_repo
+    anchor = root / "scripts/quality/capability_trust_anchor.py"
+    anchor.unlink()
+    candidate = _commit(root, "remove protected trust anchor")
+
+    findings = validate_inert_trust_anchor(root, base, candidate)
+    assert {item["code"] for item in findings} == {"CAPABILITY_PROTECTED_REGISTRY_ADVANCEMENT_INVALID"}
+
+
+def test_repository_registry_protects_exact_trust_anchor_blob():
+    registry = json.loads(
+        (ROOT / trust_anchor.REGISTRY_PATH).read_text(encoding="utf-8")
+    )["artifacts"]
+    rows = [
+        row for row in registry
+        if row["path"] == "scripts/quality/capability_trust_anchor.py"
+    ]
+    assert len(rows) == 1
+    assert rows[0]["state"] == "PRESENT"
+    assert rows[0]["blobSha"] == _git(
+        ROOT, "hash-object", "scripts/quality/capability_trust_anchor.py"
+    )
+
+
 def test_base_state_ignores_windows_casefold_alias_not_present_at_canonical_git_path(inert_repo):
     root, _base = inert_repo
     _git(root, "config", "core.ignorecase", "false")
@@ -293,6 +319,107 @@ def test_mixed_unprotected_production_change_blocks_exact_transition():
     changed = {path: (base_identity, candidate_identity)}
     changed_paths = {path, "config/capability-protected-transition-v1.json", "scripts/product.py"}
     assert not _transition_document_valid(transition, base, changed, changed_paths)
+
+
+def _support_identity(path: str, blob: str, *, state: str = "PRESENT") -> dict:
+    if state == "ABSENT":
+        return {"path": path, "state": "ABSENT"}
+    return {
+        "path": path, "state": "PRESENT", "mode": "100644",
+        "objectType": "blob", "blobSha": blob,
+    }
+
+
+def test_c1b_exact_support_scope_rejects_wildcards_siblings_and_directory_grants():
+    assert "tests/test_architecture_capability_exception_rebind_v1.py" in (
+        trust_anchor._SUPPORT_SCOPES["C1B_SAFE_UOW_BOOTSTRAP_V1"]
+    )
+    assert "tests/test_architecture_capability_exception_rebind_sibling.py" not in (
+        trust_anchor._SUPPORT_SCOPES["C1B_SAFE_UOW_BOOTSTRAP_V1"]
+    )
+    base = "a" * 40
+    protected = PROTECTED_PATHS[0]
+    base_identity = _support_identity(protected, "b" * 40)
+    candidate_identity = _support_identity(protected, "c" * 40)
+    support_path = "scripts/agentic/uow_bootstrap.py"
+    transition = {
+        "schemaVersion": "2.0.0",
+        "transitionId": "CAPABILITY_TRUST_ANCHOR_ROTATION_V1",
+        "protectedBaseSha": base,
+        "artifacts": [{"path": protected, "base": base_identity, "candidate": candidate_identity}],
+        "supportScope": "C1B_SAFE_UOW_BOOTSTRAP_V1",
+        "supportArtifacts": [{
+            "path": support_path,
+            "base": _support_identity(support_path, "", state="ABSENT"),
+            "candidate": _support_identity(support_path, "d" * 40),
+        }],
+    }
+    changed = {protected: (base_identity, candidate_identity)}
+    common = {protected, trust_anchor.REGISTRY_PATH, trust_anchor.TRANSITION_PATH}
+    assert _transition_document_valid(transition, base, changed, common | {support_path})
+
+    for undeclared_path in ("tests/evil_payload.py", "docs/arquitetura/unrelated.md"):
+        assert not _transition_document_valid(
+            transition,
+            base,
+            changed,
+            common | {support_path, undeclared_path},
+        )
+
+    for invalid_path in (
+        "scripts/agentic/*",
+        "scripts/agentic/",
+        "scripts/agentic/sibling.py",
+    ):
+        invalid = json.loads(json.dumps(transition))
+        invalid["supportArtifacts"][0]["path"] = invalid_path
+        invalid["supportArtifacts"][0]["base"]["path"] = invalid_path
+        invalid["supportArtifacts"][0]["candidate"]["path"] = invalid_path
+        assert not _transition_document_valid(invalid, base, changed, common | {invalid_path})
+
+
+def test_c1b_support_artifact_is_bound_to_exact_base_and_candidate_blobs(inert_repo):
+    root, base = inert_repo
+    protected = "scripts/quality/capability_trust_anchor.py"
+    support_path = "scripts/agentic/uow_bootstrap.py"
+    base_identity = _identity(root, base, protected)
+    (root / protected).write_text("candidate protected bytes\n", encoding="utf-8")
+    support = root / support_path
+    support.parent.mkdir(parents=True, exist_ok=True)
+    support.write_text("import subprocess\n", encoding="utf-8")
+    staged = _commit(root, "stage exact C1B support")
+    candidate_identity = _identity(root, staged, protected)
+    support_candidate = _identity(root, staged, support_path)
+
+    registry_path = root / trust_anchor.REGISTRY_PATH
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["artifacts"] = [
+        candidate_identity if row["path"] == protected else row
+        for row in registry["artifacts"]
+    ]
+    registry_path.write_text(json.dumps(registry, indent=2) + "\n", encoding="utf-8")
+    transition = {
+        "schemaVersion": "2.0.0",
+        "transitionId": "CAPABILITY_TRUST_ANCHOR_ROTATION_V1",
+        "protectedBaseSha": base,
+        "artifacts": [{"path": protected, "base": base_identity, "candidate": candidate_identity}],
+        "supportScope": "C1B_SAFE_UOW_BOOTSTRAP_V1",
+        "supportArtifacts": [{
+            "path": support_path,
+            "base": {"path": support_path, "state": "ABSENT"},
+            "candidate": support_candidate,
+        }],
+    }
+    (root / trust_anchor.TRANSITION_PATH).write_text(
+        json.dumps(transition, indent=2) + "\n", encoding="utf-8"
+    )
+    candidate = _commit(root, "authorize exact C1B support")
+    assert validate_inert_trust_anchor(root, base, candidate) == []
+
+    support.write_text("import subprocess\n# modified identity\n", encoding="utf-8")
+    modified = _commit(root, "modify C1B support without rotating identity")
+    findings = validate_inert_trust_anchor(root, base, modified)
+    assert {item["code"] for item in findings} == {"CAPABILITY_PROTECTED_TRANSITION_INVALID"}
 
 
 @pytest.mark.parametrize("mutation", ["duplicate", "omitted", "unknown-key", "wrong-base"])

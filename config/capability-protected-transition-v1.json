@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "transitionId": "CAPABILITY_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "145715360cb28237d098a225a45614b6dda3d704",
+  "protectedBaseSha": "1f3f5dc479433dde0ce75600c7f16f84816e2637",
   "artifacts": [
     {
       "path": "config/capability-exceptions-v1.json",
@@ -10,14 +10,14 @@
         "state": "PRESENT",
         "mode": "100644",
         "objectType": "blob",
-        "blobSha": "3048afe50faf8bc4a1783a93d1404eb1b9c369a7"
+        "blobSha": "7f0397407dc89c1c7548086002a70b6bb5f7c825"
       },
       "candidate": {
         "path": "config/capability-exceptions-v1.json",
         "state": "PRESENT",
         "mode": "100644",
         "objectType": "blob",
-        "blobSha": "7f0397407dc89c1c7548086002a70b6bb5f7c825"
+        "blobSha": "f17a2bd00243bafb92cb05d71c2289a5a976fae4"
       }
     }
   ]

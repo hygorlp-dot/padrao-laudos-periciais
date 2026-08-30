@@ -10,6 +10,15 @@ TRANSITION_PATH = "config/capability-protected-transition-v1.json"
 BOOTSTRAP_PATH = "scripts/quality/capability_bootstrap.py"
 ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
 _IDENTITY_KEYS = {"path", "state", "mode", "objectType", "blobSha"}
+_SUPPORT_SCOPES = {
+    "C1B_SAFE_UOW_BOOTSTRAP_V1": {
+        "docs/padroes/safe-uow-bootstrap-v1.md",
+        "schemas/uow-manifest-v1.schema.json",
+        "scripts/agentic/uow_bootstrap.py",
+        "tests/test_architecture_capability_exception_rebind_v1.py",
+        "tests/test_safe_uow_bootstrap_v1.py",
+    },
+}
 
 
 def _finding(code: str, message: str) -> dict:
@@ -155,9 +164,17 @@ def _transition_document_valid(
     changed: dict[str, tuple[dict, dict]],
     changed_paths: set[str],
 ) -> bool:
-    if not isinstance(value, dict) or set(value) != {"schemaVersion", "transitionId", "protectedBaseSha", "artifacts"}:
+    if not isinstance(value, dict):
         return False
-    if value.get("schemaVersion") != "1.0.0" or value.get("transitionId") != "CAPABILITY_TRUST_ANCHOR_ROTATION_V1":
+    schema_version = value.get("schemaVersion")
+    expected_keys = (
+        {"schemaVersion", "transitionId", "protectedBaseSha", "artifacts", "supportScope", "supportArtifacts"}
+        if schema_version == "2.0.0"
+        else {"schemaVersion", "transitionId", "protectedBaseSha", "artifacts"}
+    )
+    if set(value) != expected_keys or schema_version not in {"1.0.0", "2.0.0"}:
+        return False
+    if value.get("transitionId") != "CAPABILITY_TRUST_ANCHOR_ROTATION_V1":
         return False
     if value.get("protectedBaseSha") != protected_base:
         return False
@@ -179,7 +196,31 @@ def _transition_document_valid(
             return False
         if row.get("base") != base_identity or row.get("candidate") != candidate_identity:
             return False
-    allowed = set(changed) | {REGISTRY_PATH, TRANSITION_PATH}
+    support_paths: set[str] = set()
+    if schema_version == "2.0.0":
+        scope_paths = _SUPPORT_SCOPES.get(value.get("supportScope"))
+        support_rows = value.get("supportArtifacts")
+        if scope_paths is None or not isinstance(support_rows, list):
+            return False
+        for support_row in support_rows:
+            if not isinstance(support_row, dict) or set(support_row) != {"path", "base", "candidate"}:
+                return False
+            support_path = support_row.get("path")
+            base_support = support_row.get("base")
+            candidate_support = support_row.get("candidate")
+            if (
+                support_path in support_paths
+                or support_path not in scope_paths
+                or not _valid_identity(base_support, support_path)
+                or not _valid_identity(candidate_support, support_path)
+                or candidate_support.get("state") != "PRESENT"
+                or base_support == candidate_support
+            ):
+                return False
+            support_paths.add(support_path)
+        if support_paths != changed_paths & scope_paths:
+            return False
+    allowed = set(changed) | {REGISTRY_PATH, TRANSITION_PATH} | support_paths
     if REGISTRY_PATH in changed_paths:
         # A real capability-registry rotation legitimately requires updating the
         # architecture trust-boundary system's own transition manifest (its
@@ -189,7 +230,7 @@ def _transition_document_valid(
         # sole semantic authority over that file's content; this only accounts
         # for its presence in the diff, exact path, no prefix, no wildcard.
         allowed = allowed | {ARCHITECTURE_TRANSITION_PATH}
-    return changed_paths <= allowed | {path for path in changed_paths if path.startswith("tests/") or path.startswith("docs/arquitetura/")}
+    return changed_paths <= allowed
 
 
 def _transition_valid(
@@ -207,7 +248,21 @@ def _transition_valid(
         }
     except (UnicodeError, json.JSONDecodeError, subprocess.CalledProcessError):
         return False
-    return _transition_document_valid(value, protected_base, changed, changed_paths)
+    if not _transition_document_valid(value, protected_base, changed, changed_paths):
+        return False
+    if value.get("schemaVersion") == "2.0.0":
+        for row in value["supportArtifacts"]:
+            path = row["path"]
+            identities = _tree_identities(root, protected_base, [path])
+            candidate_identities = _tree_identities(root, candidate, [path])
+            if (
+                identities is None
+                or candidate_identities is None
+                or identities[path] != row["base"]
+                or candidate_identities[path] != row["candidate"]
+            ):
+                return False
+    return True
 
 
 def validate_inert_trust_anchor(root: Path, protected_base: str, candidate: str) -> list[dict]:
