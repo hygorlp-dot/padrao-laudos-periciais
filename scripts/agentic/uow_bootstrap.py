@@ -30,14 +30,33 @@ _REF_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
+def _is_link_or_reparse(path: Path) -> bool:
+    attributes = getattr(path.lstat(), "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    is_junction = getattr(path, "is_junction", None)
+    return bool(
+        path.is_symlink()
+        or is_junction is not None and is_junction()
+        or attributes & reparse_flag
+    )
+
+
+def _reject_reparse_ancestry(path: Path) -> None:
+    for ancestor in [path, *path.parents]:
+        if not ancestor.exists():
+            continue
+        if _is_link_or_reparse(ancestor):
+            raise BootstrapError("symlinked/reparse local remote is prohibited")
+
+
 def _resolve_git_executable() -> str:
     located = shutil.which("git")
     if not located:
         raise RuntimeError("trusted Git executable is unavailable")
-    executable = Path(located).resolve(strict=True)
-    attributes = getattr(executable.stat(), "st_file_attributes", 0)
-    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    if not executable.is_file() or executable.is_symlink() or attributes & reparse_flag:
+    located_path = Path(located).absolute()
+    _reject_reparse_ancestry(located_path)
+    executable = located_path.resolve(strict=True)
+    if not executable.is_file() or _is_link_or_reparse(executable):
         raise RuntimeError("trusted Git executable must be a real file")
     return str(executable)
 
@@ -121,9 +140,7 @@ def _validated_paths(repository: Path, target: Path) -> tuple[Path, Path, Path]:
     else:
         raise BootstrapError("target must be outside the source worktree")
     for ancestor in [resolved_parent, *resolved_parent.parents]:
-        attributes = getattr(ancestor.stat(), "st_file_attributes", 0)
-        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-        if ancestor.is_symlink() or attributes & reparse_flag:
+        if _is_link_or_reparse(ancestor):
             raise BootstrapError("symlinked/reparse target ancestry is prohibited")
     return root, common, resolved
 
@@ -254,16 +271,6 @@ def _validate_local_remote(url: str) -> None:
     _reject_reparse_ancestry(absolute)
 
 
-def _reject_reparse_ancestry(path: Path) -> None:
-    for ancestor in [path, *path.parents]:
-        if not ancestor.exists():
-            continue
-        attributes = getattr(ancestor.stat(), "st_file_attributes", 0)
-        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-        if ancestor.is_symlink() or attributes & reparse_flag:
-            raise BootstrapError("symlinked/reparse local remote is prohibited")
-
-
 def _canonical_windows_local_path(raw: Path) -> Path:
     """Resolve a path through the Win32 volume namespace, rejecting aliases."""
     if not raw.drive or raw.drive.startswith("\\"):
@@ -345,11 +352,9 @@ def _exclusive_lock(common: Path):
     state_dir = common / "codex-uow"
     try:
         state_dir.mkdir(mode=0o700, exist_ok=True)
-        attributes = getattr(state_dir.stat(), "st_file_attributes", 0)
     except OSError as exc:
         raise BootstrapError("invalid UOW state directory") from exc
-    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    if not state_dir.is_dir() or state_dir.is_symlink() or attributes & reparse_flag:
+    if _is_link_or_reparse(state_dir) or not state_dir.is_dir():
         raise BootstrapError("UOW state directory must be a real directory")
     lock = state_dir / "bootstrap.lock"
     try:
@@ -368,11 +373,9 @@ def _manifest_directory(state_dir: Path) -> Path:
     manifests = state_dir / "manifests"
     try:
         manifests.mkdir(mode=0o700, exist_ok=True)
-        attributes = getattr(manifests.stat(), "st_file_attributes", 0)
     except OSError as exc:
         raise BootstrapError("invalid manifests directory") from exc
-    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    if not manifests.is_dir() or manifests.is_symlink() or attributes & reparse_flag:
+    if _is_link_or_reparse(manifests) or not manifests.is_dir():
         raise BootstrapError("manifests directory must be a real non-reparse directory")
     return manifests
 
@@ -457,9 +460,7 @@ def bootstrap_uow(
     with _exclusive_lock(common) as state_dir:
         _manifest_directory(state_dir)
         hooks = Path(tempfile.mkdtemp(prefix="empty-hooks-", dir=state_dir))
-        hook_attributes = getattr(hooks.stat(), "st_file_attributes", 0)
-        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-        if hooks.is_symlink() or hook_attributes & reparse_flag or any(hooks.iterdir()):
+        if _is_link_or_reparse(hooks) or any(hooks.iterdir()):
             raise BootstrapError("unable to establish an empty real hooks directory")
         remote_ref = f"refs/remotes/{remote}/{remote_branch}"
         fetch_environment = _controlled_git_environment()

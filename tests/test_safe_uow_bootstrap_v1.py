@@ -606,3 +606,25 @@ def test_local_remote_junction_alias_is_rejected_before_fetch(
         minimal_bootstrap(source, target, "chore/42-junction-remote")
 
     assert not target.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction boundary")
+def test_windows_junction_remote_is_rejected_before_fetch(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, remote, _expected = repository
+    alias = tmp_path / "forced-junction.git"
+    junction = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(alias), str(remote)],
+        text=True, capture_output=True,
+    )
+    if junction.returncode:
+        pytest.skip(f"directory junction unavailable: {junction.stderr}")
+    assert getattr(alias, "is_junction", lambda: True)()
+    git(source, "remote", "set-url", "origin", str(alias))
+    target = tmp_path / "forced-junction-target"
+
+    with pytest.raises(BootstrapError, match="symlinked/reparse local remote"):
+        minimal_bootstrap(source, target, "chore/42-forced-junction")
+
+    assert not target.exists()
