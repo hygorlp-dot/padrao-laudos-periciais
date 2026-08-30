@@ -383,12 +383,12 @@
         "column": 0
       },
       "normalizedAcquisitionAstSha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
-      "wholeFileSha256": "fefc9b328d8e0d163cbc0e13a17c0c1e94dc497d97de65a2b0953ce90cf2c97b",
-      "baselineCommit": "6edb0816a62be458fbd68da056fb915ffaee1712",
+      "wholeFileSha256": "3bdafc93b5d5a5fe3ebd26027a372bf0a7f4b050a0fb9a7722655ab8f5ef22f8",
+      "baselineCommit": "55166e88a1c50dc589d27d8f5f5b4adba4a7d128",
       "acquiredCapability": "subprocess",
       "justification": "Safe UOW bootstrap invokes explicit Git commands for fetch, exact ref resolution, isolated worktree creation and fail-closed postcondition checks.",
       "owner": "QUALITY_GOVERNANCE",
-      "reviewEvidence": "C1B_TERMINAL_FINDINGS_REPAIR_6EDB081",
+      "reviewEvidence": "C1B_SHADOW_FINDINGS_REPAIR_55166E8",
       "disposition": "ACCEPT_BASELINE",
       "reviewBy": "2027-08-29"
     }
