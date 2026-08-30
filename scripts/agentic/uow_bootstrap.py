@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import stat
+import tempfile
 from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -83,10 +84,37 @@ def _reject_tree_filters(root: Path, commit: str) -> None:
         raise BootstrapError("unable to inspect Git filter attributes")
 
 
+def _reject_external_attributes(root: Path, common: Path) -> None:
+    info_attributes = common / "info" / "attributes"
+    if info_attributes.exists() and info_attributes.read_text(encoding="utf-8").strip():
+        raise BootstrapError("Git info attributes are prohibited")
+    configured = subprocess.run(
+        ["git", "config", "--show-origin", "--get-all", "core.attributesFile"],
+        cwd=root, text=True, capture_output=True,
+    )
+    if configured.returncode == 0 and configured.stdout.strip():
+        raise BootstrapError("global/system Git attributes are prohibited")
+    if configured.returncode not in {0, 1}:
+        raise BootstrapError("unable to inspect Git attributes configuration")
+
+
+def _reject_gitlinks(root: Path, commit: str) -> None:
+    listing = _git(root, "ls-tree", "-r", commit)
+    if any(line.startswith("160000 commit ") for line in listing.splitlines()):
+        raise BootstrapError("submodule gitlinks are prohibited")
+
+
 @contextmanager
 def _exclusive_lock(common: Path):
     state_dir = common / "codex-uow"
-    state_dir.mkdir(mode=0o700, exist_ok=True)
+    try:
+        state_dir.mkdir(mode=0o700, exist_ok=True)
+        attributes = getattr(state_dir.stat(), "st_file_attributes", 0)
+    except OSError as exc:
+        raise BootstrapError("invalid UOW state directory") from exc
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if not state_dir.is_dir() or state_dir.is_symlink() or attributes & reparse_flag:
+        raise BootstrapError("UOW state directory must be a real directory")
     lock = state_dir / "bootstrap.lock"
     try:
         descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -149,7 +177,10 @@ def bootstrap_uow(
         raise BootstrapError("invalid risk")
     if not all((stage, task, mutation_owner, *lanes, *skills, *policies)):
         raise BootstrapError("manifest identity fields must be nonempty")
+    if mutation_owner not in lanes:
+        raise BootstrapError("mutation owner must be one of the declared lanes")
     root, common, destination = _validated_paths(repository, target)
+    _reject_external_attributes(root, common)
     for label, value in (("remote branch", remote_branch), ("local branch", local_branch)):
         if subprocess.run(
             ["git", "check-ref-format", "--branch", value], cwd=root, capture_output=True
@@ -161,8 +192,11 @@ def bootstrap_uow(
         raise BootstrapError(f"local branch already exists: {local_branch}")
 
     with _exclusive_lock(common) as state_dir:
-        hooks = state_dir / "empty-hooks"
-        hooks.mkdir(mode=0o700, exist_ok=True)
+        hooks = Path(tempfile.mkdtemp(prefix="empty-hooks-", dir=state_dir))
+        hook_attributes = getattr(hooks.stat(), "st_file_attributes", 0)
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if hooks.is_symlink() or hook_attributes & reparse_flag or any(hooks.iterdir()):
+            raise BootstrapError("unable to establish an empty real hooks directory")
         remote_ref = f"refs/remotes/{remote}/{remote_branch}"
         _git(root, "fetch", "--no-tags", remote, f"refs/heads/{remote_branch}:{remote_ref}")
         base_head = _git(root, "rev-parse", f"{remote_ref}^{{commit}}")
@@ -170,6 +204,7 @@ def bootstrap_uow(
         if not _SHA.fullmatch(base_head) or not _SHA.fullmatch(base_tree):
             raise BootstrapError("remote did not resolve to exact commit/tree SHAs")
         _reject_tree_filters(root, base_head)
+        _reject_gitlinks(root, base_head)
         manifest = {
             "schema_version": "1.0.0",
             "issue": issue,
@@ -182,6 +217,7 @@ def bootstrap_uow(
             "current_head": base_head,
             "lanes": list(lanes),
             "dependencies": list(dependencies),
+            "declaration_authority": "UNTRUSTED_CALLER_INPUT",
             "mutation_owner": mutation_owner,
             "open_findings": [],
             "terminal_state": "OPEN",
@@ -189,12 +225,15 @@ def bootstrap_uow(
             "policies": list(policies),
         }
         _validate_manifest(manifest)
-        _git(
-            root,
-            "-c", f"core.hooksPath={hooks}",
-            "worktree", "add", "--no-track", "-b", local_branch,
-            str(destination), base_head,
+        environment = os.environ.copy()
+        environment["GIT_ATTR_NOSYSTEM"] = "1"
+        result = subprocess.run(
+            ["git", "-c", f"core.hooksPath={hooks}", "-c", f"core.attributesFile={os.devnull}",
+             "worktree", "add", "--no-track", "-b", local_branch, str(destination), base_head],
+            cwd=root, text=True, capture_output=True, env=environment,
         )
+        if result.returncode:
+            raise BootstrapError(result.stderr.strip() or "git worktree add failed")
         _git(root, "branch", f"--set-upstream-to={remote}/{remote_branch}", local_branch)
         if _git(destination, "rev-parse", "HEAD") != base_head:
             raise BootstrapError("created worktree HEAD mismatch")

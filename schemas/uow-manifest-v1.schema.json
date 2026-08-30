@@ -5,7 +5,7 @@
   "additionalProperties": false,
   "required": [
     "schema_version", "issue", "pull_request", "stage", "task", "risk",
-    "base_head", "base_tree", "current_head", "lanes", "dependencies",
+    "base_head", "base_tree", "current_head", "lanes", "dependencies", "declaration_authority",
     "mutation_owner", "open_findings", "terminal_state", "skills", "policies"
   ],
   "properties": {
@@ -20,6 +20,7 @@
     "current_head": {"$ref": "#/$defs/sha"},
     "lanes": {"$ref": "#/$defs/nonempty_strings"},
     "dependencies": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "declaration_authority": {"const": "UNTRUSTED_CALLER_INPUT"},
     "mutation_owner": {"type": "string", "minLength": 1},
     "open_findings": {"type": "array", "items": {"type": "string", "minLength": 1}},
     "terminal_state": {"enum": ["OPEN", "FROZEN", "PASS", "FAIL", "BLOCKED"]},

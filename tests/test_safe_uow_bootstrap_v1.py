@@ -72,6 +72,7 @@ def test_bootstrap_creates_exact_clean_worktree_and_canonical_manifest(
     jsonschema.validate(payload, schema)
     assert payload["terminal_state"] == "OPEN"
     assert payload["mutation_owner"] == "IMPLEMENTER"
+    assert payload["declaration_authority"] == "UNTRUSTED_CALLER_INPUT"
     assert manifest_path.read_bytes().endswith(b"\n")
     assert dirty.read_text(encoding="utf-8") == "preserve\n"
 
@@ -148,3 +149,64 @@ def test_repository_lock_blocks_competing_owner_before_fetch(
     assert lock.read_text(encoding="utf-8") == "owned\n"
     assert git(source, "rev-parse", "HEAD") == before
     assert not target.exists()
+
+
+def test_submodule_gitlink_fails_closed_before_worktree_creation(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, expected = repository
+    git(source, "update-index", "--add", "--cacheinfo", "160000", expected, "nested-module")
+    git(source, "commit", "-m", "add synthetic gitlink")
+    git(source, "push", "origin", "main")
+    target = tmp_path / "submodule-target"
+
+    with pytest.raises(BootstrapError, match="submodule"):
+        minimal_bootstrap(source, target, "chore/42-submodule")
+
+    assert not target.exists()
+
+
+def test_preexisting_hook_directory_cannot_execute_checkout_hook(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, _expected = repository
+    common = source / Path(git(source, "rev-parse", "--git-common-dir"))
+    hooks = common / "codex-uow" / "empty-hooks"
+    hooks.mkdir(parents=True)
+    sentinel = tmp_path / "hook-executed"
+    hook = hooks / "post-checkout"
+    hook.write_text(f"#!/bin/sh\nprintf unsafe > '{sentinel.as_posix()}'\n", encoding="utf-8")
+    hook.chmod(0o755)
+
+    minimal_bootstrap(source, tmp_path / "safe-hooks", "chore/42-safe-hooks")
+
+    assert not sentinel.exists()
+
+
+def test_info_attributes_cannot_activate_external_filter(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, _expected = repository
+    common = source / Path(git(source, "rev-parse", "--git-common-dir"))
+    info = common / "info" / "attributes"
+    info.write_text("*.txt filter=danger\n", encoding="utf-8")
+    target = tmp_path / "info-attributes"
+
+    with pytest.raises(BootstrapError, match="info attributes"):
+        minimal_bootstrap(source, target, "chore/42-info-attributes")
+
+    assert not target.exists()
+
+
+def test_mutation_owner_must_belong_to_declared_lanes(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, _expected = repository
+    with pytest.raises(BootstrapError, match="owner.*lanes"):
+        bootstrap_uow(
+            repository=source, remote="origin", remote_branch="main",
+            local_branch="chore/42-owner", target=tmp_path / "owner",
+            issue=42, stage="C1", task="SAFE_UOW_BOOTSTRAP_V1", risk="MEDIUM",
+            lanes=["PR_REVIEWER"], dependencies=[], mutation_owner="IMPLEMENTER",
+            skills=["repository-safety-gate"], policies=["AGENTS.md"],
+        )
