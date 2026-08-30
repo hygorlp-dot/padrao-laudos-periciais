@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/judicial-domain-model-v1.schema.json",
+  "title": "Canonical Judicial Domain Model V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "context_id", "instance_label", "snapshot_id", "entities", "participants", "representation_links", "access_relations", "provenance"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "context_id": {"$ref": "#/$defs/id"},
+    "instance_label": {"$ref": "#/$defs/text"},
+    "snapshot_id": {"$ref": "#/$defs/id"},
+    "entities": {"type": "array", "items": {"$ref": "#/$defs/entity"}},
+    "participants": {"type": "array", "items": {"$ref": "#/$defs/participant"}},
+    "representation_links": {"type": "array", "items": {"$ref": "#/$defs/representation"}},
+    "access_relations": {"type": "array", "items": {"$ref": "#/$defs/access"}},
+    "provenance": {"$ref": "#/$defs/provenanceList"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$"},
+    "text": {"type": "string", "minLength": 1, "pattern": "\\S"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "provenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_system", "source_document_id", "source_sha256", "page", "occurrence"],
+      "properties": {
+        "source_system": {"$ref": "#/$defs/text"},
+        "source_document_id": {"$ref": "#/$defs/id"},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "page": {"type": "integer", "minimum": 1},
+        "occurrence": {"$ref": "#/$defs/text"}
+      }
+    },
+    "provenanceList": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/provenance"}},
+    "role": {
+      "type": "object", "additionalProperties": false, "required": ["raw_label", "normalized"],
+      "properties": {
+        "raw_label": {"$ref": "#/$defs/text"},
+        "normalized": {"enum": ["CLAIMANT", "DEFENDANT", "APPELLANT", "RESPONDENT", "PROSECUTOR_PARTY", "COSTS_LEGIS", "INTERESTED_THIRD_PARTY", "ASSISTANT", "AMICUS_CURIAE", "VICTIM", "COURT_WITNESS", "AUTHORITY", "OTHER", "UNKNOWN"]}
+      }
+    },
+    "entity": {
+      "type": "object", "additionalProperties": false, "required": ["entity_id", "raw_name", "kind", "provenance"],
+      "properties": {
+        "entity_id": {"$ref": "#/$defs/id"}, "raw_name": {"$ref": "#/$defs/text"},
+        "kind": {"enum": ["NATURAL_PERSON", "LEGAL_ENTITY", "PUBLIC_ENTITY", "AUTHORITY", "UNKNOWN"]},
+        "provenance": {"$ref": "#/$defs/provenanceList"}
+      }
+    },
+    "participant": {
+      "type": "object", "additionalProperties": false,
+      "required": ["participant_id", "entity_id", "context_id", "pole", "role", "principal", "status", "provenance"],
+      "properties": {
+        "participant_id": {"$ref": "#/$defs/id"}, "entity_id": {"$ref": "#/$defs/id"}, "context_id": {"$ref": "#/$defs/id"},
+        "pole": {"enum": ["ACTIVE", "PASSIVE", "THIRD", "OTHER", "UNKNOWN"]},
+        "role": {"$ref": "#/$defs/role"}, "principal": {"type": "boolean"},
+        "status": {"enum": ["ACTIVE", "INACTIVE", "SUSPENDED", "CLOSED", "UNKNOWN"]},
+        "provenance": {"$ref": "#/$defs/provenanceList"}
+      }
+    },
+    "representation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["link_id", "representative_entity_id", "represented_participant_ids", "representation_role_raw", "provenance"],
+      "properties": {
+        "link_id": {"$ref": "#/$defs/id"}, "representative_entity_id": {"$ref": "#/$defs/id"},
+        "represented_participant_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "representation_role_raw": {"$ref": "#/$defs/text"}, "provenance": {"$ref": "#/$defs/provenanceList"}
+      }
+    },
+    "access": {
+      "type": "object", "additionalProperties": false,
+      "required": ["access_id", "entity_id", "context_id", "access_type_raw", "provenance"],
+      "properties": {
+        "access_id": {"$ref": "#/$defs/id"}, "entity_id": {"$ref": "#/$defs/id"}, "context_id": {"$ref": "#/$defs/id"},
+        "access_type_raw": {"$ref": "#/$defs/text"}, "provenance": {"$ref": "#/$defs/provenanceList"}
+      }
+    }
+  }
+}
