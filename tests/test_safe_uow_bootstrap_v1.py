@@ -736,11 +736,62 @@ def test_git_authority_is_restored_after_success_and_nested_context(
     repository: tuple[Path, Path, str], tmp_path: Path
 ):
     source, _remote, _expected = repository
-    outer = bootstrap_module._GIT_EXECUTABLE.set("outer-authority")
+    outer_authority = bootstrap_module._validate_git_executable(TRUSTED_GIT)
+    outer = bootstrap_module._GIT_EXECUTABLE.set(outer_authority)
     try:
         minimal_bootstrap(source, tmp_path / "restored-authority", "chore/42-restored-authority")
-        assert bootstrap_module._git_executable() == "outer-authority"
+        assert bootstrap_module._git_executable() == str(TRUSTED_GIT)
     finally:
         bootstrap_module._GIT_EXECUTABLE.reset(outer)
     with pytest.raises(BootstrapError, match="explicit Git executable authority"):
         bootstrap_module._git_executable()
+
+
+def test_private_git_executable_authority_is_rejected_before_use(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, _expected = repository
+    private_git = tmp_path / "referencias" / "privadas" / "git.exe"
+    private_git.parent.mkdir(parents=True)
+    shutil.copy2(TRUSTED_GIT, private_git)
+
+    with pytest.raises(BootstrapError, match="private Git executable"):
+        _minimal_bootstrap(
+            source, tmp_path / "private-git-target", "chore/42-private-git",
+            git_executable=private_git,
+        )
+
+
+@pytest.mark.parametrize("candidate", [r"\\server\share\git.exe", r"\\?\C:\git.exe"])
+def test_unc_or_device_git_executable_authority_is_rejected(candidate: str):
+    with pytest.raises(BootstrapError, match="UNC/device|fixed local drive|requires a local drive"):
+        bootstrap_module._validate_git_executable(Path(candidate))
+
+
+def test_git_executable_replacement_is_detected_before_next_invocation(tmp_path: Path):
+    replaceable_git = tmp_path / "replaceable-git.exe"
+    shutil.copy2(TRUSTED_GIT, replaceable_git)
+    authority = bootstrap_module._validate_git_executable(replaceable_git)
+    token = bootstrap_module._GIT_EXECUTABLE.set(authority)
+    try:
+        assert bootstrap_module._git_executable() == str(replaceable_git)
+        replaceable_git.write_bytes(b"replaced executable image")
+        with pytest.raises(BootstrapError, match="identity changed"):
+            bootstrap_module._git_executable()
+    finally:
+        bootstrap_module._GIT_EXECUTABLE.reset(token)
+
+
+def test_mapped_drive_git_executable_authority_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    canonical_windows_path = bootstrap_module._canonical_windows_local_path
+
+    def reject_mapped_drive(raw: Path) -> Path:
+        if raw.drive == "Z:":
+            raise BootstrapError("Windows local remote must use a fixed local drive")
+        return canonical_windows_path(raw)
+
+    monkeypatch.setattr(bootstrap_module, "_canonical_windows_local_path", reject_mapped_drive)
+    with pytest.raises(BootstrapError, match="fixed local drive"):
+        bootstrap_module._validate_git_executable(Path(r"Z:\git.exe"))

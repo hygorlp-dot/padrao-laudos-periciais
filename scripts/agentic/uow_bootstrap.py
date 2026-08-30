@@ -50,25 +50,49 @@ def _reject_reparse_ancestry(path: Path) -> None:
             raise BootstrapError("symlinked/reparse local remote is prohibited")
 
 
-def _validate_git_executable(candidate: Path) -> str:
+def _file_identity(path: Path) -> tuple[int, int, int, int]:
+    metadata = path.stat()
+    return (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
+
+
+def _validate_git_executable(
+    candidate: Path,
+) -> tuple[str, str, tuple[int, int, int, int]]:
     if not candidate.is_absolute():
         raise BootstrapError("Git executable authority must be an explicit absolute path")
-    located_path = candidate.absolute()
-    _reject_reparse_ancestry(located_path)
-    executable = located_path.resolve(strict=True)
+    executable = _validated_custody_path(candidate, "Git executable")
     if not executable.is_file() or _is_link_or_reparse(executable):
         raise BootstrapError("trusted Git executable must be a real file")
-    return str(executable)
+    return str(executable), _sha256_file(executable), _file_identity(executable)
 
 
-_GIT_EXECUTABLE: ContextVar[str] = ContextVar("safe_uow_git_executable")
+_GIT_EXECUTABLE: ContextVar[tuple[str, str, tuple[int, int, int, int]]] = ContextVar(
+    "safe_uow_git_executable"
+)
 
 
 def _git_executable() -> str:
     try:
-        return _GIT_EXECUTABLE.get()
+        authority = _GIT_EXECUTABLE.get()
     except LookupError as exc:
         raise BootstrapError("explicit Git executable authority is required") from exc
+    path = Path(authority[0])
+    try:
+        current = _validated_custody_path(path, "Git executable")
+        if (
+            str(current) != authority[0]
+            or _file_identity(current) != authority[2]
+            or _sha256_file(current) != authority[1]
+        ):
+            raise BootstrapError("Git executable identity changed during bootstrap")
+    except OSError as exc:
+        raise BootstrapError("Git executable identity could not be revalidated") from exc
+    return authority[0]
+
+
+def _git_executable_sha256() -> str:
+    _git_executable()
+    return _GIT_EXECUTABLE.get()[1]
 
 
 def _sha256_file(path: Path) -> str:
@@ -136,8 +160,8 @@ def _validated_custody_path(path: Path, label: str) -> Path:
     if _has_private_components(absolute):
         raise BootstrapError(f"private {label} is prohibited")
     try:
-        _reject_reparse_ancestry(absolute)
         canonical = _canonical_windows_local_path(absolute) if os.name == "nt" else absolute
+        _reject_reparse_ancestry(absolute)
         resolved = canonical.resolve(strict=True)
         _reject_reparse_ancestry(resolved)
     except OSError as exc:
@@ -551,7 +575,7 @@ def bootstrap_uow(
             "repository_id_sha256": hashlib.sha256(str(common).casefold().encode("utf-8")).hexdigest(),
             "fetch_url_sha256": hashlib.sha256(fetch_url.encode("utf-8")).hexdigest(),
             "git_executable_path": _git_executable(),
-            "git_executable_sha256": _sha256_file(Path(_git_executable())),
+            "git_executable_sha256": _git_executable_sha256(),
             "git_common_dir": str(common),
             "worktree_git_dir": "PENDING_POSTCONDITION",
             "target_path": str(destination),

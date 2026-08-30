@@ -26,6 +26,9 @@ HEAD exato de uma branch remota explicitamente informada e emite um
 - O manifesto registra path absoluto e SHA-256 do executável Git efetivamente
   autorizado, permitindo reconstruir a proveniência do host tool sem confiar
   novamente no ambiente de execução.
+- A autoridade Git também passa pelo boundary local fixo/não privado e captura
+  SHA-256 mais identidade de arquivo antes do primeiro comando; path, identidade
+  e conteúdo são revalidados antes de cada invocação e da emissão do manifesto.
 - O manifesto é evidência local, não substitui GitHub, Issue, PR, branch
   protection, policy ou revisão.
 - Skills, policies e lanes são declarações explícitas não confiáveis do caller;
