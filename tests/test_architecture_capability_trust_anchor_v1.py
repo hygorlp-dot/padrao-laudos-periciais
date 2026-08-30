@@ -19,6 +19,7 @@ from scripts.quality.capability_trust_anchor import (
 
 PROTECTED_PATHS = (
     "scripts/quality/capability_analyzer.py",
+    "scripts/quality/capability_trust_anchor.py",
     "config/capability-policy-v1.json",
 )
 FUTURE_PATH = "scripts/quality/capability_bootstrap.py"
@@ -181,6 +182,31 @@ def test_candidate_registry_cannot_change_base_owned_path_set_or_order(inert_rep
 
     findings = validate_inert_trust_anchor(root, base, candidate)
     assert {item["code"] for item in findings} == {"CAPABILITY_PROTECTED_REGISTRY_ADVANCEMENT_INVALID"}
+
+
+def test_future_base_removal_of_protected_trust_anchor_fails_closed(inert_repo):
+    root, base = inert_repo
+    anchor = root / "scripts/quality/capability_trust_anchor.py"
+    anchor.unlink()
+    candidate = _commit(root, "remove protected trust anchor")
+
+    findings = validate_inert_trust_anchor(root, base, candidate)
+    assert {item["code"] for item in findings} == {"CAPABILITY_PROTECTED_REGISTRY_ADVANCEMENT_INVALID"}
+
+
+def test_repository_registry_protects_exact_trust_anchor_blob():
+    registry = json.loads(
+        (ROOT / trust_anchor.REGISTRY_PATH).read_text(encoding="utf-8")
+    )["artifacts"]
+    rows = [
+        row for row in registry
+        if row["path"] == "scripts/quality/capability_trust_anchor.py"
+    ]
+    assert len(rows) == 1
+    assert rows[0]["state"] == "PRESENT"
+    assert rows[0]["blobSha"] == _git(
+        ROOT, "hash-object", "scripts/quality/capability_trust_anchor.py"
+    )
 
 
 def test_base_state_ignores_windows_casefold_alias_not_present_at_canonical_git_path(inert_repo):

@@ -7,7 +7,7 @@
       "state": "PRESENT",
       "mode": "100644",
       "objectType": "blob",
-      "blobSha": "7f0397407dc89c1c7548086002a70b6bb5f7c825"
+      "blobSha": "24f219c4154b6d15cd1d05082833429abae7df0a"
     },
     {
       "path": "config/capability-policy-v1.json",
@@ -64,6 +64,13 @@
       "mode": "100644",
       "objectType": "blob",
       "blobSha": "d0c91fae0be77aad738f182412ac0dfa382ff37f"
+    },
+    {
+      "path": "scripts/quality/capability_trust_anchor.py",
+      "state": "PRESENT",
+      "mode": "100644",
+      "objectType": "blob",
+      "blobSha": "5aa98e00485a781c008a4fe22d35252af610ad31"
     },
     {
       "path": "scripts/quality/repository_inventory.py",
