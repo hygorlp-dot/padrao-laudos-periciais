@@ -83,7 +83,7 @@ def test_c1b_rotation_adds_only_the_exact_reviewed_process_acquisition():
     assert added["canonicalPath"] == "scripts/agentic/uow_bootstrap.py"
     assert added["findingCode"] == "PROCESS_NAMESPACE_ACQUISITION"
     assert added["acquiredCapability"] == "subprocess"
-    assert added["baselineCommit"] == "67d113ab7dc7be862980d23016640a4ae15cc551"
+    assert added["baselineCommit"] == "db667ca4066681b184ed82d74890e35697d28e7b"
 
 
 def test_capability_registry_and_transition_bind_exact_exception_blob():
