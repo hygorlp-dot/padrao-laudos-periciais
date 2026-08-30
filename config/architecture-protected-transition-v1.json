@@ -10,7 +10,7 @@
       "baseBlobSha": "9f3e51110006ddeb044a913e347eeb06bc66682f",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "a2df2de7417c6beeb1e7ea07ff8f8bbf864c1f30"
+      "candidateBlobSha": "81981df8d1ecdc2f73ecf0a13b4fbfb0428a9001"
     },
     {
       "path": "scripts/quality/capability_trust_anchor.py",
@@ -19,7 +19,7 @@
       "baseBlobSha": "1607e29bcfe6c79d9c9c0c2549b054804ffe5c05",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "5aa98e00485a781c008a4fe22d35252af610ad31"
+      "candidateBlobSha": "101df309b5fb2a0d2920948637bd42f82c9cf090"
     },
     {
       "path": "config/capability-protected-artifacts-v1.json",
@@ -28,7 +28,7 @@
       "baseBlobSha": "7eec886d065cef3576e5ee74a52270f25022e39a",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "996b02237f74fe3a0dc9f0783eb159b6b33fd641"
+      "candidateBlobSha": "146dc7a5b55be5db591eb3f76d49fac2d27ce220"
     }
   ],
   "supportScope": "CAPABILITY_BOOTSTRAP_V1",
@@ -40,7 +40,7 @@
       "baseBlobSha": "7f0397407dc89c1c7548086002a70b6bb5f7c825",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "24f219c4154b6d15cd1d05082833429abae7df0a"
+      "candidateBlobSha": "ccc7b02d3038ed6fa52af4430fbac0c05ee20ced"
     },
     {
       "path": "config/capability-protected-transition-v1.json",
@@ -49,7 +49,7 @@
       "baseBlobSha": "6c0a8081207eea40c8f3520a9d745d41cc3d2fe4",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "9305e30afa5746f95b6e28ab19c8ed1b03e96577"
+      "candidateBlobSha": "8088ed97a27b9bc1fd730279df4576dc0af93d0a"
     },
     {
       "path": "tests/test_repository_safety_gate.py",
@@ -58,7 +58,7 @@
       "baseBlobSha": "8f711eb8d4aad6be33130c11760933561326b2b1",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "325d227b2377adf2a21ff77c8c7d3909af5a06cf"
+      "candidateBlobSha": "3087a0656e64f5be11984a787285e89924d42527"
     }
   ]
 }

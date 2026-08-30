@@ -84,12 +84,12 @@
         "column": 0
       },
       "normalizedAcquisitionAstSha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
-      "wholeFileSha256": "638ab3f57c15c2fabe317c36326a2f7d3ed508f13b33efbd3631b4087b4e93f0",
-      "baselineCommit": "87776ce9fd37a7eb518a32f28048ab33fc5a70c0",
+      "wholeFileSha256": "4982ce83da99ff3ab3e7bab73a089ca88221148a91d807bfde7edc0cc1d00f0a",
+      "baselineCommit": "c2cbb55f1dcb0732ca8b215df28ef6148fc91566",
       "acquiredCapability": "subprocess",
       "justification": "Architecture trust-boundary judge reads protected-base git trees via subprocess git plumbing; this is the judge's own required custody mechanism.",
       "owner": "QUALITY_GOVERNANCE",
-      "reviewEvidence": "C1B_ONE_TIME_TRUST_BOOTSTRAP_PREDECESSOR_87776CE",
+      "reviewEvidence": "C1B_ONE_TIME_TRUST_BOOTSTRAP_PREDECESSOR_C2CBB55",
       "disposition": "ACCEPT_BASELINE",
       "reviewBy": "2027-08-19"
     },
@@ -153,12 +153,12 @@
         "column": 0
       },
       "normalizedAcquisitionAstSha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
-      "wholeFileSha256": "07b60039071d27987ec81cdb9d72297891814610c12faecb88154e0c004fed5e",
-      "baselineCommit": "87776ce9fd37a7eb518a32f28048ab33fc5a70c0",
+      "wholeFileSha256": "bd2055baa7eb8bd785f7f35fb55d29f17c2024d7dc292ba82d276bf473ce132a",
+      "baselineCommit": "c2cbb55f1dcb0732ca8b215df28ef6148fc91566",
       "acquiredCapability": "subprocess",
       "justification": "Capability trust anchor reads protected registry/transition documents and tree identities via git ls-tree/show/merge-base; this is the anchor's own required custody mechanism.",
       "owner": "QUALITY_GOVERNANCE",
-      "reviewEvidence": "C1B_ONE_TIME_TRUST_BOOTSTRAP_PREDECESSOR_87776CE",
+      "reviewEvidence": "C1B_ONE_TIME_TRUST_BOOTSTRAP_PREDECESSOR_C2CBB55",
       "disposition": "ACCEPT_BASELINE",
       "reviewBy": "2027-08-19"
     },
