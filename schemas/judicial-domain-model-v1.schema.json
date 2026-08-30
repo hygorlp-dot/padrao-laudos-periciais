@@ -10,15 +10,15 @@
     "context_id": {"$ref": "#/$defs/id"},
     "instance_label": {"$ref": "#/$defs/text"},
     "snapshot_id": {"$ref": "#/$defs/id"},
-    "entities": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/entity"}},
-    "participants": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/participant"}},
-    "representation_links": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/representation"}},
-    "access_relations": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/access"}},
+    "entities": {"type": "array", "maxItems": 512, "uniqueItems": true, "items": {"$ref": "#/$defs/entity"}},
+    "participants": {"type": "array", "maxItems": 512, "uniqueItems": true, "items": {"$ref": "#/$defs/participant"}},
+    "representation_links": {"type": "array", "maxItems": 512, "uniqueItems": true, "items": {"$ref": "#/$defs/representation"}},
+    "access_relations": {"type": "array", "maxItems": 512, "uniqueItems": true, "items": {"$ref": "#/$defs/access"}},
     "provenance": {"$ref": "#/$defs/provenanceList"}
   },
   "$defs": {
-    "id": {"type": "string", "pattern": "^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$"},
-    "text": {"type": "string", "minLength": 1, "pattern": "\\S"},
+    "id": {"type": "string", "maxLength": 4096, "pattern": "^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$"},
+    "text": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "\\S"},
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "provenance": {
       "type": "object", "additionalProperties": false,
@@ -32,7 +32,7 @@
         "occurrence_id": {"$ref": "#/$defs/id"}
       }
     },
-    "provenanceList": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/provenance"}},
+    "provenanceList": {"type": "array", "minItems": 1, "maxItems": 512, "items": {"$ref": "#/$defs/provenance"}},
     "role": {
       "type": "object", "additionalProperties": false, "required": ["raw_label", "normalized"],
       "properties": {
@@ -64,7 +64,7 @@
       "required": ["link_id", "representative_entity_id", "represented_participant_ids", "representation_role_raw", "provenance"],
       "properties": {
         "link_id": {"$ref": "#/$defs/id"}, "representative_entity_id": {"$ref": "#/$defs/id"},
-        "represented_participant_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "represented_participant_ids": {"type": "array", "minItems": 1, "maxItems": 512, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
         "representation_role_raw": {"$ref": "#/$defs/text"}, "provenance": {"$ref": "#/$defs/provenanceList"}
       }
     },

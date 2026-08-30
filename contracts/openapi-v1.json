@@ -1,0 +1,17 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Padrão de Laudos Periciais — Product API",
+    "version": "1.0.0",
+    "description": "Componentes canônicos compartilhados pelos endpoints do produto. Este artefato não cria endpoints.",
+    "x-semantic-boundary": "scripts.backend_contract.api_contract.parse_judicial_domain_payload"
+  },
+  "paths": {},
+  "components": {
+    "schemas": {
+      "ProceduralContext": {
+        "$ref": "../schemas/judicial-domain-model-v1.schema.json"
+      }
+    }
+  }
+}
