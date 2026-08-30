@@ -19,7 +19,7 @@
       "baseBlobSha": "1607e29bcfe6c79d9c9c0c2549b054804ffe5c05",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "101df309b5fb2a0d2920948637bd42f82c9cf090"
+      "candidateBlobSha": "621317107cb0daae99576551b99e491c7d3eb71a"
     },
     {
       "path": "config/capability-protected-artifacts-v1.json",
@@ -28,7 +28,7 @@
       "baseBlobSha": "7eec886d065cef3576e5ee74a52270f25022e39a",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "146dc7a5b55be5db591eb3f76d49fac2d27ce220"
+      "candidateBlobSha": "aa5954c501f9395b1003285183e3a4b1234472bd"
     }
   ],
   "supportScope": "CAPABILITY_BOOTSTRAP_V1",
@@ -40,7 +40,7 @@
       "baseBlobSha": "7f0397407dc89c1c7548086002a70b6bb5f7c825",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "ccc7b02d3038ed6fa52af4430fbac0c05ee20ced"
+      "candidateBlobSha": "f17a2bd00243bafb92cb05d71c2289a5a976fae4"
     },
     {
       "path": "config/capability-protected-transition-v1.json",
@@ -49,7 +49,7 @@
       "baseBlobSha": "6c0a8081207eea40c8f3520a9d745d41cc3d2fe4",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "8088ed97a27b9bc1fd730279df4576dc0af93d0a"
+      "candidateBlobSha": "5390c5589a52a6a1c45de799b14544a334ea22b7"
     },
     {
       "path": "tests/test_repository_safety_gate.py",

@@ -21,7 +21,14 @@ CAPABILITY_REGISTRY_PATH = "config/capability-protected-artifacts-v1.json"
 CAPABILITY_TRANSITION_PATH = "config/capability-protected-transition-v1.json"
 ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
 PROTECTED_BASE = "1f3f5dc479433dde0ce75600c7f16f84816e2637"
-SOURCE_ANCHOR = "c2cbb55f1dcb0732ca8b215df28ef6148fc91566"
+SOURCE_ANCHORS = {
+    "scripts/quality/architecture_analyzer.py": "c2cbb55f1dcb0732ca8b215df28ef6148fc91566",
+    "scripts/quality/capability_trust_anchor.py": "f27e80380ee4ba55661e2cf1981f5b7aab54fdf8",
+}
+REVIEW_EVIDENCE = {
+    "scripts/quality/architecture_analyzer.py": "C1B_ONE_TIME_TRUST_BOOTSTRAP_PREDECESSOR_C2CBB55",
+    "scripts/quality/capability_trust_anchor.py": "C1B_ONE_TIME_TRUST_BOOTSTRAP_PREDECESSOR_F27E803",
+}
 E1A_PROTECTED_WORKFLOWS = {
     ".github/workflows/architecture-protected.yml",
     ".github/workflows/capability-protected.yml",
@@ -103,8 +110,8 @@ def test_rebind_rotates_only_exact_judge_exception_identities():
             continue
         changed_paths.add(after["canonicalPath"])
         assert changed == {"baselineCommit", "reviewEvidence", "wholeFileSha256"}
-        assert after["baselineCommit"] == SOURCE_ANCHOR
-        assert after["reviewEvidence"] == "C1B_ONE_TIME_TRUST_BOOTSTRAP_PREDECESSOR_C2CBB55"
+        assert after["baselineCommit"] == SOURCE_ANCHORS[after["canonicalPath"]]
+        assert after["reviewEvidence"] == REVIEW_EVIDENCE[after["canonicalPath"]]
         assert after["wholeFileSha256"] == hashlib.sha256(
             (ROOT / after["canonicalPath"]).read_bytes()
         ).hexdigest()
