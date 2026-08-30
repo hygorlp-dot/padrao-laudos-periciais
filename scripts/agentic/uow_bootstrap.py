@@ -26,6 +26,14 @@ _REF_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
+def _controlled_git_environment() -> dict[str, str]:
+    blocked = {"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"}
+    return {
+        key: value for key, value in os.environ.items()
+        if key not in blocked and not key.startswith("GIT_CONFIG_")
+    }
+
+
 def _git(repository: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args], cwd=repository, text=True, capture_output=True
@@ -143,7 +151,7 @@ def _reject_private_tree(root: Path, commit: str) -> None:
 def _validated_fetch_url(root: Path, remote: str) -> str:
     result = subprocess.run(
         ["git", "config", "--get-all", f"remote.{remote}.url"],
-        cwd=root, text=True, capture_output=True,
+        cwd=root, text=True, capture_output=True, env=_controlled_git_environment(),
     )
     if result.returncode not in {0, 1}:
         raise BootstrapError("named remote is not configured")
@@ -153,13 +161,29 @@ def _validated_fetch_url(root: Path, remote: str) -> str:
     if len(urls) != 1:
         raise BootstrapError("named remote must resolve to exactly one fetch URL")
     url = urls[0]
-    standard = url.startswith(("https://", "ssh://", "file://"))
-    scp_style = bool(re.fullmatch(r"[^/@\s]+@[^/:\s]+:.+", url))
-    if not standard and not scp_style and not Path(url).is_absolute():
+    standard = url.startswith(("https://", "file://"))
+    if not standard and not Path(url).is_absolute():
         raise BootstrapError("remote transport/helper is not approved")
     if "::" in url or any(character in url for character in "\r\n"):
         raise BootstrapError("remote transport/helper is not approved")
     return url
+
+
+def _reject_fetch_execution_config(root: Path, remote: str) -> None:
+    result = subprocess.run(
+        ["git", "config", "--show-origin", "--get-regexp", r"^(url\.|remote\.)"],
+        cwd=root, text=True, capture_output=True, env=_controlled_git_environment(),
+    )
+    if result.returncode not in {0, 1}:
+        raise BootstrapError("unable to inspect fetch execution configuration")
+    forbidden_remote = {f"remote.{remote}.uploadpack", f"remote.{remote}.vcs"}
+    for line in result.stdout.splitlines():
+        fields = line.split(maxsplit=2)
+        if len(fields) < 2:
+            raise BootstrapError("ambiguous fetch execution configuration")
+        key = fields[1].casefold()
+        if key.endswith(".insteadof") or key.endswith(".pushinsteadof") or key in forbidden_remote:
+            raise BootstrapError("fetch rewrite/helper configuration is prohibited")
 
 
 @contextmanager
@@ -201,8 +225,7 @@ def _manifest_directory(state_dir: Path) -> Path:
 
 def _canonical_manifest(state_dir: Path, local_branch: str, manifest: dict[str, Any]) -> Path:
     manifests = _manifest_directory(state_dir)
-    safe_branch = re.sub(r"[^A-Za-z0-9._-]+", "-", local_branch)
-    path = manifests / f"issue-{manifest['issue']}-{safe_branch}-{manifest['base_head']}.json"
+    path = _manifest_path(manifests, local_branch, manifest)
     encoded = (json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode()
     try:
         with path.open("xb") as stream:
@@ -210,6 +233,11 @@ def _canonical_manifest(state_dir: Path, local_branch: str, manifest: dict[str, 
     except FileExistsError as exc:
         raise BootstrapError(f"manifest already exists: {path}") from exc
     return path
+
+
+def _manifest_path(manifests: Path, local_branch: str, manifest: dict[str, Any]) -> Path:
+    branch_id = hashlib.sha256(local_branch.encode("utf-8")).hexdigest()
+    return manifests / f"issue-{manifest['issue']}-{branch_id}-{manifest['base_head']}.json"
 
 
 def _validate_manifest(manifest: dict[str, Any]) -> None:
@@ -249,8 +277,15 @@ def bootstrap_uow(
         raise BootstrapError("manifest identity fields must be nonempty")
     if mutation_owner not in lanes:
         raise BootstrapError("mutation owner must be one of the declared lanes")
+    for label, values in (
+        ("lanes", lanes), ("dependencies", dependencies),
+        ("skills", skills), ("policies", policies),
+    ):
+        if len(values) != len(set(values)):
+            raise BootstrapError(f"duplicate {label} are prohibited")
     root, common, destination = _validated_paths(repository, target)
     fetch_url = _validated_fetch_url(root, remote)
+    _reject_fetch_execution_config(root, remote)
     _reject_external_attributes(root, common)
     _reject_fsmonitor(root)
     for label, value in (("remote branch", remote_branch), ("local branch", local_branch)):
@@ -271,10 +306,11 @@ def bootstrap_uow(
         if hooks.is_symlink() or hook_attributes & reparse_flag or any(hooks.iterdir()):
             raise BootstrapError("unable to establish an empty real hooks directory")
         remote_ref = f"refs/remotes/{remote}/{remote_branch}"
+        fetch_environment = _controlled_git_environment()
         fetch = subprocess.run(
             ["git", "-c", f"core.hooksPath={hooks}", "fetch", "--no-tags", remote,
              f"refs/heads/{remote_branch}:{remote_ref}"],
-            cwd=root, text=True, capture_output=True,
+            cwd=root, text=True, capture_output=True, env=fetch_environment,
         )
         if fetch.returncode:
             raise BootstrapError(fetch.stderr.strip() or "git fetch failed")
@@ -316,7 +352,11 @@ def bootstrap_uow(
             "skills": list(skills),
             "policies": list(policies),
         }
-        environment = os.environ.copy()
+        _validate_manifest(manifest)
+        manifest_destination = _manifest_path(_manifest_directory(state_dir), local_branch, manifest)
+        if manifest_destination.exists() or manifest_destination.is_symlink():
+            raise BootstrapError(f"manifest already exists: {manifest_destination}")
+        environment = _controlled_git_environment()
         environment["GIT_ATTR_NOSYSTEM"] = "1"
         result = subprocess.run(
             ["git", "-c", f"core.hooksPath={hooks}", "-c", f"core.attributesFile={os.devnull}",

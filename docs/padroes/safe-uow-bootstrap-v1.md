@@ -10,7 +10,8 @@ HEAD exato de uma branch remota explicitamente informada e emite um
   policies são entradas explícitas; o comando não os infere.
 - O único egress é `git fetch --no-tags` para o remote informado.
 - O remote deve existir, ter uma única URL de fetch e usar transporte local,
-  `file`, `https` ou `ssh`/scp-style; remote helpers arbitrários são rejeitados.
+  `file` ou `https`; SSH, remote helpers, URL rewrites e upload-pack/vcs
+  customizados são rejeitados no contrato V1.
 - O manifesto é evidência local, não substitui GitHub, Issue, PR, branch
   protection, policy ou revisão.
 - Skills, policies e lanes são declarações explícitas não confiáveis do caller;

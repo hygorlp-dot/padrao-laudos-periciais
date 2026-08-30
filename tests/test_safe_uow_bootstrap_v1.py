@@ -355,3 +355,60 @@ def test_remote_helper_transport_is_rejected_before_fetch(
     with pytest.raises(BootstrapError, match="transport/helper"):
         minimal_bootstrap(source, target, "chore/42-helper")
     assert not target.exists()
+
+
+def test_url_rewrite_cannot_turn_https_remote_into_external_helper(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, _expected = repository
+    git(source, "remote", "set-url", "origin", "https://approved.example/repository.git")
+    git(source, "config", "url.ext::arbitrary-helper.insteadOf", "https://approved.example/")
+    target = tmp_path / "rewrite"
+
+    with pytest.raises(BootstrapError, match="rewrite/helper"):
+        minimal_bootstrap(source, target, "chore/42-rewrite")
+
+    assert not target.exists()
+
+
+def test_custom_uploadpack_is_rejected_before_fetch(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, _expected = repository
+    git(source, "config", "remote.origin.uploadpack", "arbitrary-executable")
+    target = tmp_path / "uploadpack"
+
+    with pytest.raises(BootstrapError, match="rewrite/helper"):
+        minimal_bootstrap(source, target, "chore/42-uploadpack")
+
+    assert not target.exists()
+
+
+def test_duplicate_manifest_declarations_fail_before_fetch_or_worktree(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, before = repository
+    target = tmp_path / "duplicates"
+
+    with pytest.raises(BootstrapError, match="duplicate lanes"):
+        bootstrap_uow(
+            repository=source, remote="origin", remote_branch="main",
+            local_branch="chore/42-duplicates", target=target, issue=42,
+            stage="C1", task="SAFE_UOW_BOOTSTRAP_V1", risk="MEDIUM",
+            lanes=["IMPLEMENTER", "IMPLEMENTER"], dependencies=[],
+            mutation_owner="IMPLEMENTER", skills=["repository-safety-gate"],
+            policies=["AGENTS.md"],
+        )
+
+    assert git(source, "rev-parse", "HEAD") == before
+    assert not target.exists()
+
+
+def test_manifest_filename_is_collision_resistant_for_similar_branches(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, _expected = repository
+    first = minimal_bootstrap(source, tmp_path / "first", "a/b")
+    second = minimal_bootstrap(source, tmp_path / "second", "a-b")
+
+    assert first["manifest_path"] != second["manifest_path"]
