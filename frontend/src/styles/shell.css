@@ -858,3 +858,50 @@ button.text-action {
     grid-column: auto;
   }
 }
+
+.analysis-workspace {
+  margin-top: var(--space-6);
+  border-top: 1px solid var(--color-rule);
+}
+
+.analysis-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(13rem, 18rem);
+  gap: var(--space-7);
+  padding: var(--space-6) 0;
+  border-bottom: 1px solid var(--color-rule);
+}
+
+.analysis-overview h2,
+.analysis-section h3 { margin: 0; color: var(--color-graphite); }
+.analysis-overview p { max-width: 62ch; color: var(--color-slate); }
+
+.coverage { align-self: start; display: grid; gap: 0.3rem; padding-top: 0.2rem; }
+.coverage::before { width: 3.5rem; height: 0.18rem; content: ""; background: var(--color-ochre); }
+.coverage span { color: var(--color-slate); font-size: 0.88rem; font-variant-numeric: tabular-nums; }
+
+.analysis-section { padding: var(--space-6) 0; border-bottom: 1px solid var(--color-rule); }
+.analysis-section h3 { margin-bottom: var(--space-4); font-size: 1.2rem; }
+.analysis-list, .document-index, .participant-index, .relation-index { padding: 0; margin: 0; list-style: none; }
+.analysis-list > li { display: grid; gap: var(--space-2); padding: var(--space-4) 0; border-top: 1px solid var(--color-rule); }
+.analysis-list p { max-width: 72ch; margin: 0; }
+.analysis-list details { color: var(--color-slate); font-size: 0.88rem; }
+.analysis-list summary { width: fit-content; color: var(--color-graphite); cursor: pointer; text-decoration: underline; text-decoration-color: var(--color-ochre); text-underline-offset: 0.22em; }
+.analysis-list details ul { padding-left: var(--space-5); margin-top: var(--space-2); font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+.document-index li { display: grid; grid-template-columns: 2.5rem minmax(0, 1fr); gap: var(--space-3); padding: var(--space-3) 0; border-top: 1px solid var(--color-rule); }
+.document-index li > span { color: var(--color-ochre); font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+.document-index div { display: grid; gap: 0.15rem; }
+.document-index small { color: var(--color-slate); }
+.participant-index, .relation-index { display: grid; gap: 0; border-top: 1px solid var(--color-rule); }
+.participant-index li, .relation-index li { display: grid; gap: 0.2rem; padding: var(--space-3) 0; border-bottom: 1px solid var(--color-rule); }
+.participant-index span, .relation-index span { color: var(--color-slate); font-size: 0.82rem; }
+.analysis-stale { width: fit-content; color: var(--color-error); font-size: 0.78rem; font-weight: 680; }
+.analysis-empty { color: var(--color-slate); }
+
+@media (max-width: 840px) {
+  .analysis-overview { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .analysis-list details, .analysis-list summary { scroll-behavior: auto; transition: none; }
+}

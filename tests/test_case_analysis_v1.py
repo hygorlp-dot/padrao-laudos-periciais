@@ -10,6 +10,7 @@ from scripts.backend_contract.case_analysis import (
     CaseAnalysisCoverage,
     CoverageStatus,
     case_analysis_from_mapping,
+    case_analysis_to_mapping,
     query_analysis,
 )
 
@@ -103,6 +104,55 @@ def test_unchanged_hash_reuses_analysis_and_changed_hash_stales_only_dependents(
     assert changed.stale_document_ids == ("DOC-002",)
     assert changed.claims[0].stale is False
     assert changed.counterarguments[0].stale is True
+
+
+def test_stale_state_and_occurrence_identity_survive_canonical_roundtrip():
+    snapshot = case_analysis_from_mapping(fixture())
+    changed = snapshot.reconcile_sources(
+        {
+            **{document.document_id: document.source_sha256 for document in snapshot.documents},
+            "DOC-002": "f" * 64,
+        }
+    )
+
+    reopened = case_analysis_from_mapping(case_analysis_to_mapping(changed))
+
+    assert reopened.stale_document_ids == ("DOC-002",)
+    assert reopened.claims[0].stale is False
+    assert reopened.counterarguments[0].stale is True
+    assert reopened.claims[0].provenance[0].occurrence_id == "OCC-CLAIM-001"
+
+
+def test_participant_references_are_owned_by_canonical_jdm_context():
+    raw = fixture()
+    raw["participant_refs"].append("PART-SMUGGLED")
+
+    with pytest.raises(ValueError, match="canonical JDM"):
+        case_analysis_from_mapping(raw)
+
+
+def test_provenance_cannot_false_bind_a_document_sha_or_occurrence():
+    wrong_sha = fixture()
+    wrong_sha["claims"][0]["provenance"][0]["source_document_sha256"] = "f" * 64
+    with pytest.raises(ValueError, match="indexed source identity"):
+        case_analysis_from_mapping(wrong_sha)
+
+    conflicting_occurrence = fixture()
+    conflicting_occurrence["claims"][1]["provenance"][0]["occurrence_id"] = "OCC-CLAIM-001"
+    with pytest.raises(ValueError, match="conflicting source locators"):
+        case_analysis_from_mapping(conflicting_occurrence)
+
+
+def test_reconciliation_clears_persisted_stale_state_when_source_is_restored():
+    snapshot = case_analysis_from_mapping(fixture())
+    source_hashes = {document.document_id: document.source_sha256 for document in snapshot.documents}
+    changed = snapshot.reconcile_sources({**source_hashes, "DOC-002": "f" * 64})
+    reopened = case_analysis_from_mapping(case_analysis_to_mapping(changed))
+
+    restored = reopened.reconcile_sources(source_hashes)
+
+    assert restored.stale_document_ids == ()
+    assert all(not item.stale for item in restored.material_items)
 
 
 def test_human_review_preserves_original_extraction_and_never_answers_question():

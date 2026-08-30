@@ -8,6 +8,7 @@ import { PageHeader } from "../ui/PageHeader";
 import { StatusState } from "../ui/StatusState";
 import { ProcessCaseView } from "./ProcessCaseView";
 import { MaterialIntakeView } from "./MaterialIntakeView";
+import { CaseAnalysisView } from "./CaseAnalysisView";
 
 type WorkspaceViewProps = {
   currentPath: string;
@@ -151,10 +152,13 @@ export function WorkspaceView({ currentPath, workspaceId, route }: WorkspaceView
         {state.kind === "ready" && route.path === "/materiais" ? (
           <MaterialIntakeView workspaceId={workspaceId} />
         ) : null}
-        {state.kind === "ready" && route.kind === "stage" && !["/processo", "/materiais"].includes(route.path) ? (
+        {state.kind === "ready" && route.path === "/analise" ? (
+          <CaseAnalysisView workspaceId={workspaceId} />
+        ) : null}
+        {state.kind === "ready" && route.kind === "stage" && !["/processo", "/materiais", "/analise"].includes(route.path) ? (
           <StatusState kind="ready" stage={route.label} />
         ) : null}
-        {state.kind === "ready" && route.next && !["/processo", "/materiais"].includes(route.path) ? (
+        {state.kind === "ready" && route.next && !["/processo", "/materiais", "/analise"].includes(route.path) ? (
           <a
             className="primary-action"
             href={workspacePath(workspaceId, route.next.path.slice(1))}

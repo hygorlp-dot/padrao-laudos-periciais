@@ -5,6 +5,9 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 
+from .application.ports import ArtifactRevisionNotFound, RepositoryConflict
+from .judicial_domain import ProceduralContext, procedural_context_from_mapping
+
 
 class CoverageStatus(StrEnum):
     COMPLETE = "COMPLETE"
@@ -25,9 +28,13 @@ class SourceProvenance:
     source_document_sha256: str
     page_or_span: str
     source_revision: int
+    occurrence_id: str
 
     def __post_init__(self):
-        if not all(type(value) is str and value.strip() for value in (self.workspace_id, self.source_document_id, self.page_or_span)):
+        if not all(
+            type(value) is str and value.strip()
+            for value in (self.workspace_id, self.source_document_id, self.page_or_span, self.occurrence_id)
+        ):
             raise ValueError("provenance requires exact identity")
         if type(self.source_document_sha256) is not str or len(self.source_document_sha256) != 64:
             raise ValueError("provenance requires source SHA")
@@ -174,6 +181,7 @@ class CaseAnalysisSnapshot:
     workspace_id: str
     source_revision: int
     participant_refs: tuple[str, ...]
+    judicial_context: ProceduralContext
     documents: tuple[CaseDocument, ...]
     claims: tuple[CaseClaim, ...]
     counterarguments: tuple[CounterArgument, ...]
@@ -188,9 +196,47 @@ class CaseAnalysisSnapshot:
     human_reviews: tuple[HumanReviewDecision, ...]
     stale_document_ids: tuple[str, ...] = ()
 
+    def __post_init__(self):
+        participant_ids = {item.participant_id for item in self.judicial_context.participants}
+        if not set(self.participant_refs) <= participant_ids:
+            raise ValueError("Case Analysis participant references require canonical JDM participants")
+        documents = {document.document_id: document for document in self.documents}
+        if len(documents) != len(self.documents):
+            raise ValueError("Case Analysis document identities must be unique")
+        if any(not set(document.participant_refs) <= participant_ids for document in self.documents):
+            raise ValueError("document participant references require canonical JDM participants")
+        occurrences: dict[str, tuple[str, str, str]] = {}
+        for item in self.material_items:
+            if not set(item.participant_refs) <= participant_ids:
+                raise ValueError("material participant references require canonical JDM participants")
+            for source in item.provenance:
+                document = documents.get(source.source_document_id)
+                if document is None or source.source_document_sha256 != document.source_sha256:
+                    raise ValueError("provenance must bind to the indexed source identity")
+                if source.source_revision != self.source_revision:
+                    raise ValueError("provenance source revision must match the analysis source revision")
+                locator = (source.source_document_id, source.source_document_sha256, source.page_or_span)
+                previous = occurrences.setdefault(source.occurrence_id, locator)
+                if previous != locator:
+                    raise ValueError("occurrence identity resolves to conflicting source locators")
+
+    @property
+    def material_items(self):
+        return (
+            *self.claims,
+            *self.counterarguments,
+            *self.decisions,
+            *self.pericial_objects,
+            *self.questions,
+            *self.events,
+            *self.technical_document_references,
+            *self.gaps,
+            *self.conflicts,
+        )
+
     def reconcile_sources(self, source_hashes: dict[str, str]):
         changed = tuple(sorted(document.document_id for document in self.documents if source_hashes.get(document.document_id) != document.source_sha256))
-        if not changed:
+        if not changed and not self.stale_document_ids:
             return self
 
         def stale(items):
@@ -219,8 +265,8 @@ def case_analysis_to_mapping(snapshot: CaseAnalysisSnapshot) -> dict:
     if type(snapshot) is not CaseAnalysisSnapshot:
         raise TypeError("canonical Case Analysis snapshot required")
     value = _json_value(asdict(snapshot))
-    value.pop("stale_document_ids")
     value["schema_version"] = "1.0.0"
+    value["judicial_context"]["schema_version"] = "1.0.0"
     for name in (
         "claims",
         "counterarguments",
@@ -261,14 +307,10 @@ class SaveCaseAnalysis:
             raise ValueError("expected revision is invalid")
         try:
             current = self.get_latest_revision.execute(workspace_id, CASE_ANALYSIS_ARTIFACT_KIND, CASE_ANALYSIS_ARTIFACT_ID)
-        except Exception as exc:
-            if exc.__class__.__name__ != "ArtifactRevisionNotFound":
-                raise
+        except ArtifactRevisionNotFound:
             current = None
         current_revision = None if current is None else current.revision
         if current_revision != expected_revision:
-            from .application.ports import RepositoryConflict
-
             raise RepositoryConflict("Case Analysis revision conflict")
         return self.append_revision.execute(
             workspace_id=workspace_id,
@@ -302,6 +344,7 @@ _ROOT_FIELDS = {
     "workspace_id",
     "source_revision",
     "participant_refs",
+    "judicial_context",
     "documents",
     "claims",
     "counterarguments",
@@ -314,6 +357,7 @@ _ROOT_FIELDS = {
     "conflicts",
     "coverage",
     "human_reviews",
+    "stale_document_ids",
 }
 
 
@@ -326,7 +370,23 @@ def _exact(value, fields, label):
 def _prov(value, workspace_id):
     if type(value) is not list or not value:
         raise ValueError("provenance is required")
-    result = tuple(SourceProvenance(**_exact(item, {"workspace_id", "source_document_id", "source_document_sha256", "page_or_span", "source_revision"}, "provenance")) for item in value)
+    result = tuple(
+        SourceProvenance(
+            **_exact(
+                item,
+                {
+                    "workspace_id",
+                    "source_document_id",
+                    "source_document_sha256",
+                    "page_or_span",
+                    "source_revision",
+                    "occurrence_id",
+                },
+                "provenance",
+            )
+        )
+        for item in value
+    )
     if any(item.workspace_id != workspace_id for item in result):
         raise ValueError("cross-workspace provenance")
     return result
@@ -362,11 +422,12 @@ def case_analysis_from_mapping(value: object) -> CaseAnalysisSnapshot:
     documents = tuple(CaseDocument(**{**row, "participant_refs": tuple(row["participant_refs"])}) for row in root["documents"])
     coverage = CaseAnalysisCoverage(**{**root["coverage"], "status": CoverageStatus(root["coverage"]["status"])})
     reviews = tuple(HumanReviewDecision(**row) for row in root["human_reviews"])
-    return CaseAnalysisSnapshot(
+    snapshot = CaseAnalysisSnapshot(
         snapshot_id=root["snapshot_id"],
         workspace_id=workspace,
         source_revision=root["source_revision"],
         participant_refs=tuple(root["participant_refs"]),
+        judicial_context=procedural_context_from_mapping(root["judicial_context"]),
         documents=documents,
         claims=_items(root["claims"], CaseClaim, workspace),
         counterarguments=_items(root["counterarguments"], CounterArgument, workspace, {"target_claim_ids"}),
@@ -379,6 +440,32 @@ def case_analysis_from_mapping(value: object) -> CaseAnalysisSnapshot:
         conflicts=_items(root["conflicts"], DocumentConflict, workspace, {"statement_a_id", "statement_b_id", "conflict_dimension", "analysis_status", "human_review_status"}),
         coverage=coverage,
         human_reviews=reviews,
+    )
+    stale_ids = tuple(root["stale_document_ids"])
+    known_ids = {document.document_id for document in snapshot.documents}
+    if len(stale_ids) != len(set(stale_ids)) or not set(stale_ids) <= known_ids:
+        raise ValueError("stale document identities are invalid")
+    if not stale_ids:
+        return snapshot
+
+    def restore(items):
+        return tuple(
+            replace(item, stale=any(source.source_document_id in stale_ids for source in item.provenance))
+            for item in items
+        )
+
+    return replace(
+        snapshot,
+        claims=restore(snapshot.claims),
+        counterarguments=restore(snapshot.counterarguments),
+        decisions=restore(snapshot.decisions),
+        pericial_objects=restore(snapshot.pericial_objects),
+        questions=restore(snapshot.questions),
+        events=restore(snapshot.events),
+        technical_document_references=restore(snapshot.technical_document_references),
+        gaps=restore(snapshot.gaps),
+        conflicts=restore(snapshot.conflicts),
+        stale_document_ids=stale_ids,
     )
 
 
