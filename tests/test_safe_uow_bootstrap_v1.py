@@ -177,6 +177,34 @@ def test_submodule_gitlink_fails_closed_before_worktree_creation(
     assert not target.exists()
 
 
+@pytest.mark.parametrize(
+    ("link_path", "link_target"),
+    [
+        ("escape-link", "../referencias/privadas"),
+        ("absolute-link", "/outside/worktree"),
+        ("nested/path/link", "../../../outside"),
+        ("apparently-benign", "tracked.txt"),
+    ],
+)
+def test_tracked_symlink_is_rejected_before_worktree_creation(
+    repository: tuple[Path, Path, str], tmp_path: Path, link_path: str, link_target: str
+):
+    source, _remote, _expected = repository
+    blob = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"], cwd=source,
+        input=link_target.encode("utf-8"), capture_output=True, check=True,
+    ).stdout.decode().strip()
+    git(source, "update-index", "--add", "--cacheinfo", "120000", blob, link_path)
+    git(source, "commit", "-m", "add synthetic tracked symlink")
+    git(source, "push", "origin", "main")
+    target = tmp_path / "symlink-target"
+
+    with pytest.raises(BootstrapError, match="tracked symlinks"):
+        minimal_bootstrap(source, target, "chore/42-symlink")
+
+    assert not target.exists()
+
+
 def test_preexisting_hook_directory_cannot_execute_checkout_hook(
     repository: tuple[Path, Path, str], tmp_path: Path
 ):
@@ -467,3 +495,45 @@ def test_hostile_git_repository_and_config_environment_cannot_redirect_bootstrap
     monkeypatch.undo()
     assert result["base_head"] == expected
     assert git(target, "rev-parse", "HEAD") == expected
+
+
+@pytest.mark.parametrize("as_file_url", [False, True])
+def test_private_local_remote_is_rejected_before_fetch(
+    repository: tuple[Path, Path, str], tmp_path: Path, as_file_url: bool
+):
+    source, _remote, _expected = repository
+    private_remote = tmp_path / "referencias" / "privadas" / "remote.git"
+    private_remote.parent.mkdir(parents=True)
+    git(tmp_path, "init", "--bare", str(private_remote))
+    git(source, "remote", "set-url", "origin", str(private_remote))
+    git(source, "push", "-u", "origin", "main")
+    if as_file_url:
+        git(source, "remote", "set-url", "origin", private_remote.as_uri())
+    target = tmp_path / "private-remote-target"
+
+    with pytest.raises(BootstrapError, match="private local remote"):
+        minimal_bootstrap(source, target, "chore/42-private-remote")
+
+    assert not target.exists()
+
+
+def test_path_cannot_substitute_pinned_git_executable(
+    repository: tuple[Path, Path, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    source, _remote, expected = repository
+    hostile = tmp_path / "hostile-bin"
+    hostile.mkdir()
+    sentinel = tmp_path / "path-git-executed"
+    if os.name == "nt":
+        fake = hostile / "git.cmd"
+        fake.write_text(f"@echo unsafe>{sentinel}\r\n@exit /b 1\r\n", encoding="utf-8")
+    else:
+        fake = hostile / "git"
+        fake.write_text(f"#!/bin/sh\nprintf unsafe > '{sentinel}'\nexit 1\n", encoding="utf-8")
+        fake.chmod(0o755)
+    monkeypatch.setenv("PATH", str(hostile) + os.pathsep + os.environ.get("PATH", ""))
+
+    result = minimal_bootstrap(source, tmp_path / "pinned-git", "chore/42-pinned-git")
+
+    assert result["base_head"] == expected
+    assert not sentinel.exists()

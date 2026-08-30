@@ -15,6 +15,10 @@ HEAD exato de uma branch remota explicitamente informada e emite um
 - Fetch e checkout usam uma policy Git hermética: config global/system e
   injeções `GIT_CONFIG_*` são ignoradas; exec-path, SSH/askpass e prompts são
   removidos; credential helpers ficam vazios; protocolos são deny-by-default.
+- O executável Git é resolvido uma vez para path absoluto real/não-reparse;
+  alterações posteriores de `PATH` não substituem o host tool. Remotes local/
+  `file` são resolvidos e não podem estar sob `referencias/privadas` nem aliases
+  symlink/reparse.
 - O manifesto é evidência local, não substitui GitHub, Issue, PR, branch
   protection, policy ou revisão.
 - Skills, policies e lanes são declarações explícitas não confiáveis do caller;
@@ -28,7 +32,7 @@ HEAD exato de uma branch remota explicitamente informada e emite um
 Antes de criar a worktree, o comando rejeita destino existente, dentro da
 worktree fonte, na raiz do drive/home, sob `referencias/privadas`, com ancestry
 symlink/reparse, branch local existente, filtro de checkout versionado ou
-atributo local/global, `core.fsmonitor`, gitlink/submódulo, ref/identidade
+atributo local/global, `core.fsmonitor`, symlink versionado, gitlink/submódulo, ref/identidade
 inválida, path privado versionado ou lock concorrente. Hooks são desabilitados
 desde o fetch, inclusive para `reference-transaction`.
 

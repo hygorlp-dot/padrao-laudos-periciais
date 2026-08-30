@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import stat
 import tempfile
@@ -14,6 +15,8 @@ from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 
 import jsonschema
 
@@ -24,6 +27,21 @@ class BootstrapError(RuntimeError):
 
 _REF_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _resolve_git_executable() -> str:
+    located = shutil.which("git")
+    if not located:
+        raise RuntimeError("trusted Git executable is unavailable")
+    executable = Path(located).resolve(strict=True)
+    attributes = getattr(executable.stat(), "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if not executable.is_file() or executable.is_symlink() or attributes & reparse_flag:
+        raise RuntimeError("trusted Git executable must be a real file")
+    return str(executable)
+
+
+_GIT_EXECUTABLE = _resolve_git_executable()
 
 
 def _controlled_git_environment() -> dict[str, str]:
@@ -56,7 +74,7 @@ def _git_execution_policy(hooks: Path) -> list[str]:
 
 def _git(repository: Path, *args: str) -> str:
     result = subprocess.run(
-        ["git", *args], cwd=repository, text=True, capture_output=True,
+        [_GIT_EXECUTABLE, *args], cwd=repository, text=True, capture_output=True,
         env=_controlled_git_environment(),
     )
     if result.returncode:
@@ -111,7 +129,7 @@ def _validated_paths(repository: Path, target: Path) -> tuple[Path, Path, Path]:
 
 def _reject_tree_filters(root: Path, commit: str) -> None:
     result = subprocess.run(
-        ["git", "grep", "-n", "filter=", commit, "--", ".gitattributes", "**/.gitattributes"],
+        [_GIT_EXECUTABLE, "grep", "-n", "filter=", commit, "--", ".gitattributes", "**/.gitattributes"],
         cwd=root,
         text=True,
         capture_output=True,
@@ -128,7 +146,7 @@ def _reject_external_attributes(root: Path, common: Path) -> None:
     if info_attributes.exists() and info_attributes.read_text(encoding="utf-8").strip():
         raise BootstrapError("Git info attributes are prohibited")
     configured = subprocess.run(
-        ["git", "config", "--show-origin", "--get-all", "core.attributesFile"],
+        [_GIT_EXECUTABLE, "config", "--show-origin", "--get-all", "core.attributesFile"],
         cwd=root, text=True, capture_output=True, env=_controlled_git_environment(),
     )
     if configured.returncode == 0 and configured.stdout.strip():
@@ -139,7 +157,7 @@ def _reject_external_attributes(root: Path, common: Path) -> None:
 
 def _reject_fsmonitor(root: Path) -> None:
     configured = subprocess.run(
-        ["git", "config", "--show-origin", "--get-all", "core.fsmonitor"],
+        [_GIT_EXECUTABLE, "config", "--show-origin", "--get-all", "core.fsmonitor"],
         cwd=root, text=True, capture_output=True, env=_controlled_git_environment(),
     )
     if configured.returncode == 0 and configured.stdout.strip():
@@ -148,15 +166,24 @@ def _reject_fsmonitor(root: Path) -> None:
         raise BootstrapError("unable to inspect Git fsmonitor configuration")
 
 
-def _reject_gitlinks(root: Path, commit: str) -> None:
-    listing = _git(root, "ls-tree", "-r", commit)
-    if any(line.startswith("160000 commit ") for line in listing.splitlines()):
-        raise BootstrapError("submodule gitlinks are prohibited")
+def _reject_special_tree_entries(root: Path, commit: str) -> None:
+    result = subprocess.run(
+        [_GIT_EXECUTABLE, "ls-tree", "-rz", commit], cwd=root, capture_output=True,
+        env=_controlled_git_environment(),
+    )
+    if result.returncode:
+        raise BootstrapError("unable to inspect candidate tree modes")
+    for record in (value for value in result.stdout.split(b"\0") if value):
+        metadata = record.split(b"\t", 1)[0]
+        if metadata.startswith(b"160000 commit "):
+            raise BootstrapError("submodule gitlinks are prohibited")
+        if metadata.startswith(b"120000 blob "):
+            raise BootstrapError("tracked symlinks are prohibited")
 
 
 def _reject_private_tree(root: Path, commit: str) -> None:
     result = subprocess.run(
-        ["git", "ls-tree", "-rz", "--name-only", commit], cwd=root, capture_output=True,
+        [_GIT_EXECUTABLE, "ls-tree", "-rz", "--name-only", commit], cwd=root, capture_output=True,
         env=_controlled_git_environment(),
     )
     if result.returncode:
@@ -173,7 +200,7 @@ def _reject_private_tree(root: Path, commit: str) -> None:
 
 def _validated_fetch_url(root: Path, remote: str) -> str:
     result = subprocess.run(
-        ["git", "config", "--get-all", f"remote.{remote}.url"],
+        [_GIT_EXECUTABLE, "config", "--get-all", f"remote.{remote}.url"],
         cwd=root, text=True, capture_output=True, env=_controlled_git_environment(),
     )
     if result.returncode not in {0, 1}:
@@ -189,12 +216,42 @@ def _validated_fetch_url(root: Path, remote: str) -> str:
         raise BootstrapError("remote transport/helper is not approved")
     if "::" in url or any(character in url for character in "\r\n"):
         raise BootstrapError("remote transport/helper is not approved")
+    if url.startswith("file://") or Path(url).is_absolute():
+        _validate_local_remote(url)
     return url
+
+
+def _validate_local_remote(url: str) -> None:
+    if url.startswith("file://"):
+        parsed = urlparse(url)
+        if parsed.netloc not in {"", "localhost"}:
+            raise BootstrapError("non-local file remote is prohibited")
+        raw = Path(url2pathname(unquote(parsed.path)))
+    else:
+        raw = Path(url)
+    try:
+        absolute = raw.absolute()
+        resolved = absolute.resolve(strict=True)
+    except OSError as exc:
+        raise BootstrapError("local remote must exist and resolve safely") from exc
+    resolved_parts = [part.casefold() for part in resolved.parts]
+    if any(
+        resolved_parts[index:index + 2] == ["referencias", "privadas"]
+        for index in range(len(resolved_parts) - 1)
+    ):
+        raise BootstrapError("private local remote is prohibited")
+    for ancestor in [absolute, *absolute.parents]:
+        if not ancestor.exists():
+            continue
+        attributes = getattr(ancestor.stat(), "st_file_attributes", 0)
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if ancestor.is_symlink() or attributes & reparse_flag:
+            raise BootstrapError("symlinked/reparse local remote is prohibited")
 
 
 def _reject_fetch_execution_config(root: Path, remote: str) -> None:
     result = subprocess.run(
-        ["git", "config", "--show-origin", "--get-regexp", r"^(url\.|remote\.|credential\.|core\.askpass$)"],
+        [_GIT_EXECUTABLE, "config", "--show-origin", "--get-regexp", r"^(url\.|remote\.|credential\.|core\.askpass$)"],
         cwd=root, text=True, capture_output=True, env=_controlled_git_environment(),
     )
     if result.returncode not in {0, 1}:
@@ -315,12 +372,12 @@ def bootstrap_uow(
     _reject_fsmonitor(root)
     for label, value in (("remote branch", remote_branch), ("local branch", local_branch)):
         if subprocess.run(
-            ["git", "check-ref-format", "--branch", value], cwd=root, capture_output=True,
+            [_GIT_EXECUTABLE, "check-ref-format", "--branch", value], cwd=root, capture_output=True,
             env=_controlled_git_environment(),
         ).returncode:
             raise BootstrapError(f"invalid {label}: {value!r}")
     if subprocess.run(
-        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{local_branch}"], cwd=root,
+        [_GIT_EXECUTABLE, "show-ref", "--verify", "--quiet", f"refs/heads/{local_branch}"], cwd=root,
         env=_controlled_git_environment(),
     ).returncode == 0:
         raise BootstrapError(f"local branch already exists: {local_branch}")
@@ -335,7 +392,7 @@ def bootstrap_uow(
         remote_ref = f"refs/remotes/{remote}/{remote_branch}"
         fetch_environment = _controlled_git_environment()
         fetch = subprocess.run(
-            ["git", *_git_execution_policy(hooks), "fetch", "--no-tags", fetch_url,
+            [_GIT_EXECUTABLE, *_git_execution_policy(hooks), "fetch", "--no-tags", fetch_url,
              f"refs/heads/{remote_branch}:{remote_ref}"],
             cwd=root, text=True, capture_output=True, env=fetch_environment,
         )
@@ -346,7 +403,7 @@ def bootstrap_uow(
         if not _SHA.fullmatch(base_head) or not _SHA.fullmatch(base_tree):
             raise BootstrapError("remote did not resolve to exact commit/tree SHAs")
         _reject_tree_filters(root, base_head)
-        _reject_gitlinks(root, base_head)
+        _reject_special_tree_entries(root, base_head)
         _reject_private_tree(root, base_head)
         manifest = {
             "schema_version": "1.0.0",
@@ -386,7 +443,7 @@ def bootstrap_uow(
         environment = _controlled_git_environment()
         environment["GIT_ATTR_NOSYSTEM"] = "1"
         result = subprocess.run(
-            ["git", *_git_execution_policy(hooks), "worktree", "add", "--no-track",
+            [_GIT_EXECUTABLE, *_git_execution_policy(hooks), "worktree", "add", "--no-track",
              "-b", local_branch, str(destination), base_head],
             cwd=root, text=True, capture_output=True, env=environment,
         )
