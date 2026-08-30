@@ -416,6 +416,15 @@
                          "provenance":  "SYNTHETIC"
                      },
                      {
+                         "arquivo":  "tests/fixtures/case-analysis-snapshot-v1.json",
+                         "dominio":  "CASE_ANALYSIS_SNAPSHOT_V1",
+                         "schema":  "schemas/case-analysis-snapshot-v1.schema.json",
+                         "consumer":  "tests/test_case_analysis_v1.py",
+                         "finalidade":  "Corpus sintético source-grounded de Case Analysis Stage 3",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
                          "arquivo":  "tests/fixtures/golden_corpus/gerar_delimitacao.json",
                          "dominio":  "GOLDEN_CORPUS_GERAR_DELIMITACAO",
                          "schema":  null,
