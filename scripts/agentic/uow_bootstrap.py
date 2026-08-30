@@ -98,6 +98,17 @@ def _reject_external_attributes(root: Path, common: Path) -> None:
         raise BootstrapError("unable to inspect Git attributes configuration")
 
 
+def _reject_fsmonitor(root: Path) -> None:
+    configured = subprocess.run(
+        ["git", "config", "--show-origin", "--get-all", "core.fsmonitor"],
+        cwd=root, text=True, capture_output=True,
+    )
+    if configured.returncode == 0 and configured.stdout.strip():
+        raise BootstrapError("Git fsmonitor configuration is prohibited")
+    if configured.returncode not in {0, 1}:
+        raise BootstrapError("unable to inspect Git fsmonitor configuration")
+
+
 def _reject_gitlinks(root: Path, commit: str) -> None:
     listing = _git(root, "ls-tree", "-r", commit)
     if any(line.startswith("160000 commit ") for line in listing.splitlines()):
@@ -128,9 +139,21 @@ def _exclusive_lock(common: Path):
         lock.unlink(missing_ok=True)
 
 
-def _canonical_manifest(state_dir: Path, local_branch: str, manifest: dict[str, Any]) -> Path:
+def _manifest_directory(state_dir: Path) -> Path:
     manifests = state_dir / "manifests"
-    manifests.mkdir(mode=0o700, exist_ok=True)
+    try:
+        manifests.mkdir(mode=0o700, exist_ok=True)
+        attributes = getattr(manifests.stat(), "st_file_attributes", 0)
+    except OSError as exc:
+        raise BootstrapError("invalid manifests directory") from exc
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if not manifests.is_dir() or manifests.is_symlink() or attributes & reparse_flag:
+        raise BootstrapError("manifests directory must be a real non-reparse directory")
+    return manifests
+
+
+def _canonical_manifest(state_dir: Path, local_branch: str, manifest: dict[str, Any]) -> Path:
+    manifests = _manifest_directory(state_dir)
     safe_branch = re.sub(r"[^A-Za-z0-9._-]+", "-", local_branch)
     path = manifests / f"issue-{manifest['issue']}-{safe_branch}-{manifest['base_head']}.json"
     encoded = (json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode()
@@ -181,6 +204,7 @@ def bootstrap_uow(
         raise BootstrapError("mutation owner must be one of the declared lanes")
     root, common, destination = _validated_paths(repository, target)
     _reject_external_attributes(root, common)
+    _reject_fsmonitor(root)
     for label, value in (("remote branch", remote_branch), ("local branch", local_branch)):
         if subprocess.run(
             ["git", "check-ref-format", "--branch", value], cwd=root, capture_output=True
@@ -192,6 +216,7 @@ def bootstrap_uow(
         raise BootstrapError(f"local branch already exists: {local_branch}")
 
     with _exclusive_lock(common) as state_dir:
+        _manifest_directory(state_dir)
         hooks = Path(tempfile.mkdtemp(prefix="empty-hooks-", dir=state_dir))
         hook_attributes = getattr(hooks.stat(), "st_file_attributes", 0)
         reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
@@ -239,7 +264,7 @@ def bootstrap_uow(
             raise BootstrapError("created worktree HEAD mismatch")
         if _git(destination, "rev-parse", "HEAD^{tree}") != base_tree:
             raise BootstrapError("created worktree tree mismatch")
-        if _git(destination, "status", "--porcelain=v1"):
+        if _git(destination, "-c", "core.fsmonitor=false", "status", "--porcelain=v1"):
             raise BootstrapError("created worktree is not clean")
         if _git(destination, "rev-parse", "@{upstream}") != base_head:
             raise BootstrapError("created worktree upstream mismatch")

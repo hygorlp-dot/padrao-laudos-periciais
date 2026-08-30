@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -210,3 +211,49 @@ def test_mutation_owner_must_belong_to_declared_lanes(
             lanes=["PR_REVIEWER"], dependencies=[], mutation_owner="IMPLEMENTER",
             skills=["repository-safety-gate"], policies=["AGENTS.md"],
         )
+
+
+def test_reparse_manifest_directory_cannot_redirect_write(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, _expected = repository
+    common = source / Path(git(source, "rev-parse", "--git-common-dir"))
+    state = common / "codex-uow"
+    state.mkdir()
+    outside = tmp_path / "outside-manifests"
+    outside.mkdir()
+    link = state / "manifests"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        if os.name != "nt":
+            pytest.skip(f"directory symlink unavailable: {exc}")
+        junction = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(outside)],
+            text=True, capture_output=True,
+        )
+        if junction.returncode:
+            pytest.skip(f"directory reparse unavailable: {junction.stderr}")
+
+    with pytest.raises(BootstrapError, match="manifests directory"):
+        minimal_bootstrap(source, tmp_path / "redirect", "chore/42-redirect")
+
+    assert list(outside.iterdir()) == []
+
+
+def test_configured_fsmonitor_is_rejected_before_any_worktree_creation(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, _expected = repository
+    sentinel = tmp_path / "fsmonitor-executed"
+    monitor = tmp_path / "monitor.sh"
+    monitor.write_text(f"#!/bin/sh\nprintf unsafe > '{sentinel.as_posix()}'\n", encoding="utf-8")
+    monitor.chmod(0o755)
+    git(source, "config", "core.fsmonitor", str(monitor))
+    target = tmp_path / "fsmonitor-target"
+
+    with pytest.raises(BootstrapError, match="fsmonitor"):
+        minimal_bootstrap(source, target, "chore/42-fsmonitor")
+
+    assert not target.exists()
+    assert not sentinel.exists()

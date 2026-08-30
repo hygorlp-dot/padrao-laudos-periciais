@@ -22,12 +22,14 @@ HEAD exato de uma branch remota explicitamente informada e emite um
 Antes de criar a worktree, o comando rejeita destino existente, dentro da
 worktree fonte, na raiz do drive/home, sob `referencias/privadas`, com ancestry
 symlink/reparse, branch local existente, filtro de checkout versionado ou
-atributo local/global, gitlink/submódulo, ref/identidade
+atributo local/global, `core.fsmonitor`, gitlink/submódulo, ref/identidade
 inválida ou lock concorrente. Hooks são desabilitados na criação.
 
 Depois da criação, exige HEAD/tree exatos, worktree limpa e upstream apontando
 ao mesmo commit remoto. O checkout usa diretório de hooks exclusivo, novo,
-vazio e não-reparse, além de desabilitar atributos globais/sistêmicos. Qualquer
+vazio e não-reparse, desabilita atributos globais/sistêmicos e neutraliza
+fsmonitor no status final. Diretórios de estado e manifests também devem ser
+diretórios reais, não symlink/reparse. Qualquer
 falha bloqueia a emissão do manifesto. Estado
 parcial é preservado para diagnóstico; o comando nunca executa `reset --hard`,
 `clean`, `prune`, remoção de worktree, exclusão de dados ou force operation.
@@ -37,3 +39,7 @@ parcial é preservado para diagnóstico; o comando nunca executa `reset --hard`,
 O contrato fechado está em `schemas/uow-manifest-v1.schema.json`. A serialização
 é JSON canônico (chaves ordenadas, UTF-8, newline final) e inicia com
 `terminal_state=OPEN` e `open_findings=[]`.
+
+O lock coordena instâncias cooperativas do bootstrap. Um ator local com poder
+para substituir diretórios do Git common-dir durante a execução está fora do
+threat model V1; essa condição exige isolamento/ACL do sistema operacional.
