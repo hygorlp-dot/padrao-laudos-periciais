@@ -12,6 +12,9 @@ HEAD exato de uma branch remota explicitamente informada e emite um
 - O remote deve existir, ter uma única URL de fetch e usar transporte local,
   `file` ou `https`; SSH, remote helpers, URL rewrites e upload-pack/vcs
   customizados são rejeitados no contrato V1.
+- Fetch e checkout usam uma policy Git hermética: config global/system e
+  injeções `GIT_CONFIG_*` são ignoradas; exec-path, SSH/askpass e prompts são
+  removidos; credential helpers ficam vazios; protocolos são deny-by-default.
 - O manifesto é evidência local, não substitui GitHub, Issue, PR, branch
   protection, policy ou revisão.
 - Skills, policies e lanes são declarações explícitas não confiáveis do caller;

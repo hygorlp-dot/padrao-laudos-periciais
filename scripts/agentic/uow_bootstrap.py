@@ -27,11 +27,31 @@ _SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _controlled_git_environment() -> dict[str, str]:
-    blocked = {"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"}
-    return {
+    blocked = {
+        "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+        "GIT_EXEC_PATH", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_SSH_COMMAND",
+    }
+    environment = {
         key: value for key, value in os.environ.items()
         if key not in blocked and not key.startswith("GIT_CONFIG_")
     }
+    environment["GIT_CONFIG_GLOBAL"] = os.devnull
+    environment["GIT_CONFIG_NOSYSTEM"] = "1"
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    return environment
+
+
+def _git_execution_policy(hooks: Path) -> list[str]:
+    return [
+        "-c", f"core.hooksPath={hooks}",
+        "-c", f"core.attributesFile={os.devnull}",
+        "-c", "core.fsmonitor=false",
+        "-c", "credential.helper=",
+        "-c", "core.askPass=",
+        "-c", "protocol.allow=never",
+        "-c", "protocol.file.allow=always",
+        "-c", "protocol.https.allow=always",
+    ]
 
 
 def _git(repository: Path, *args: str) -> str:
@@ -171,7 +191,7 @@ def _validated_fetch_url(root: Path, remote: str) -> str:
 
 def _reject_fetch_execution_config(root: Path, remote: str) -> None:
     result = subprocess.run(
-        ["git", "config", "--show-origin", "--get-regexp", r"^(url\.|remote\.)"],
+        ["git", "config", "--show-origin", "--get-regexp", r"^(url\.|remote\.|credential\.|core\.askpass$)"],
         cwd=root, text=True, capture_output=True, env=_controlled_git_environment(),
     )
     if result.returncode not in {0, 1}:
@@ -184,6 +204,8 @@ def _reject_fetch_execution_config(root: Path, remote: str) -> None:
         key = fields[1].casefold()
         if key.endswith(".insteadof") or key.endswith(".pushinsteadof") or key in forbidden_remote:
             raise BootstrapError("fetch rewrite/helper configuration is prohibited")
+        if key == "core.askpass" or key.startswith("credential.") and key.endswith(".helper"):
+            raise BootstrapError("credential/askpass execution configuration is prohibited")
 
 
 @contextmanager
@@ -308,7 +330,7 @@ def bootstrap_uow(
         remote_ref = f"refs/remotes/{remote}/{remote_branch}"
         fetch_environment = _controlled_git_environment()
         fetch = subprocess.run(
-            ["git", "-c", f"core.hooksPath={hooks}", "fetch", "--no-tags", remote,
+            ["git", *_git_execution_policy(hooks), "fetch", "--no-tags", fetch_url,
              f"refs/heads/{remote_branch}:{remote_ref}"],
             cwd=root, text=True, capture_output=True, env=fetch_environment,
         )
@@ -359,8 +381,8 @@ def bootstrap_uow(
         environment = _controlled_git_environment()
         environment["GIT_ATTR_NOSYSTEM"] = "1"
         result = subprocess.run(
-            ["git", "-c", f"core.hooksPath={hooks}", "-c", f"core.attributesFile={os.devnull}",
-             "worktree", "add", "--no-track", "-b", local_branch, str(destination), base_head],
+            ["git", *_git_execution_policy(hooks), "worktree", "add", "--no-track",
+             "-b", local_branch, str(destination), base_head],
             cwd=root, text=True, capture_output=True, env=environment,
         )
         if result.returncode:

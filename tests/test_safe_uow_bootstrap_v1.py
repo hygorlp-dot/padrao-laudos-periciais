@@ -412,3 +412,36 @@ def test_manifest_filename_is_collision_resistant_for_similar_branches(
     second = minimal_bootstrap(source, tmp_path / "second", "a-b")
 
     assert first["manifest_path"] != second["manifest_path"]
+
+
+def test_git_exec_path_cannot_substitute_https_transport_helper(
+    repository: tuple[Path, Path, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    source, _remote, _expected = repository
+    helpers = tmp_path / "helpers"
+    helpers.mkdir()
+    sentinel = tmp_path / "transport-helper-executed"
+    helper = helpers / ("git-remote-https.exe" if os.name == "nt" else "git-remote-https")
+    helper.write_text(f"#!/bin/sh\nprintf unsafe > '{sentinel.as_posix()}'\n", encoding="utf-8")
+    helper.chmod(0o755)
+    monkeypatch.setenv("GIT_EXEC_PATH", str(helpers))
+    git(source, "remote", "set-url", "origin", "https://127.0.0.1:9/repository.git")
+
+    with pytest.raises(BootstrapError, match="fetch failed|unable to access|Failed to connect"):
+        minimal_bootstrap(source, tmp_path / "exec-path", "chore/42-exec-path")
+
+    assert not sentinel.exists()
+
+
+@pytest.mark.parametrize("key", ["credential.helper", "core.askPass"])
+def test_credential_execution_config_is_rejected_before_fetch(
+    repository: tuple[Path, Path, str], tmp_path: Path, key: str
+):
+    source, _remote, _expected = repository
+    git(source, "config", key, "arbitrary-executable")
+    target = tmp_path / "credential-helper"
+
+    with pytest.raises(BootstrapError, match="credential/askpass"):
+        minimal_bootstrap(source, target, "chore/42-credential-helper")
+
+    assert not target.exists()
