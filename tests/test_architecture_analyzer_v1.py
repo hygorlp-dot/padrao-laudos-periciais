@@ -1089,6 +1089,31 @@ def test_v3_transition_rejects_malformed_support_artifact_row(clean_protected_tr
     assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
 
 
+def test_c1b_support_scope_accepts_only_exact_bootstrap_artifact(clean_protected_transition_repo):
+    tmp_path, protected_base = clean_protected_transition_repo
+    candidate = _commit_protected_transition(
+        tmp_path,
+        protected_base,
+        schema_version="3.0.0",
+        support_scope="C1B_SAFE_UOW_BOOTSTRAP_V1",
+        support_artifacts=["scripts/agentic/uow_bootstrap.py"],
+    )
+    assert _protected_artifact_findings(tmp_path, protected_base, candidate) == []
+
+
+def test_c1b_support_scope_rejects_sibling_artifact(clean_protected_transition_repo):
+    tmp_path, protected_base = clean_protected_transition_repo
+    candidate = _commit_protected_transition(
+        tmp_path,
+        protected_base,
+        schema_version="3.0.0",
+        support_scope="C1B_SAFE_UOW_BOOTSTRAP_V1",
+        support_artifacts=["scripts/agentic/sibling.py"],
+    )
+    findings = _protected_artifact_findings(tmp_path, protected_base, candidate)
+    assert any(item["code"] == "ARCHITECTURE_PROTECTED_TRANSITION_INVALID" for item in findings)
+
+
 def _v3_commit_rotation_with_support_row(tmp_path, protected_base, support_path, support_row):
     analyzer = tmp_path / "scripts/quality/architecture_analyzer.py"
     analyzer.write_text("# rotated trust anchor\n", encoding="utf-8")

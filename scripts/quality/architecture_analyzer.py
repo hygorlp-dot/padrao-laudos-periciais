@@ -48,6 +48,16 @@ PROTECTED_TRANSITION_SUPPORT_SCOPES = {
             "tests/test_repository_safety_gate.py",
         ),
     },
+    "C1B_SAFE_UOW_BOOTSTRAP_V1": {
+        "prefixes": (),
+        "paths": (
+            "config/capability-exceptions-v1.json",
+            "config/capability-protected-transition-v1.json",
+            "docs/padroes/safe-uow-bootstrap-v1.md",
+            "schemas/uow-manifest-v1.schema.json",
+            "scripts/agentic/uow_bootstrap.py",
+        ),
+    },
 }
 
 
