@@ -20,15 +20,11 @@ from ..streaming import (
 )
 
 
-_CANONICAL_UUID = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-)
+_CANONICAL_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _ASSET_PATH = re.compile(r"/assets/[A-Za-z0-9][A-Za-z0-9._-]*")
 _SECURITY_HEADERS = {
     "Content-Security-Policy": (
-        "default-src 'self'; script-src 'self'; style-src 'self'; "
-        "connect-src 'self'; img-src 'self' data:; font-src 'self'; "
-        "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     ),
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
@@ -76,13 +72,7 @@ def _error(status: int, code: str, message: str) -> BridgeResponse:
 
 
 def _canonical_path(target: str) -> str:
-    if (
-        type(target) is not str
-        or not target.startswith("/")
-        or any(ord(character) < 32 or character.isspace() for character in target)
-        or "%" in target
-        or "\\" in target
-    ):
+    if type(target) is not str or not target.startswith("/") or any(ord(character) < 32 or character.isspace() for character in target) or "%" in target or "\\" in target:
         raise ValueError("target inválido")
     parsed = urlsplit(target)
     if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
@@ -103,45 +93,30 @@ def _proxy_target(path: str, method: str) -> str | None:
     prefix = "/app-api/v1/workspaces/"
     if path.startswith(prefix):
         remainder = path[len(prefix) :].split("/")
-        if (
-            len(remainder) == 2
-            and _CANONICAL_UUID.fullmatch(remainder[0])
-            and remainder[1] == "materials"
-            and method in {"GET", "POST"}
-        ):
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "materials" and method in {"GET", "POST"}:
             return f"/v1/workspaces/{remainder[0]}/materials"
-        if (
-            len(remainder) == 3
-            and _CANONICAL_UUID.fullmatch(remainder[0])
-            and remainder[1] == "materials"
-            and _CANONICAL_UUID.fullmatch(remainder[2])
-            and method == "GET"
-        ):
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "case-analysis" and method in {"GET", "POST"}:
+            return f"/v1/workspaces/{remainder[0]}/case-analysis"
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "materials" and _CANONICAL_UUID.fullmatch(remainder[2]) and method == "GET":
             return f"/v1/workspaces/{remainder[0]}/materials/{remainder[2]}"
         if (
             len(remainder) == 3
             and _CANONICAL_UUID.fullmatch(remainder[0])
-            and remainder[1:] == [
+            and remainder[1:]
+            == [
                 "process-metadata",
                 "source-span-confirmations",
             ]
             and method == "POST"
         ):
-            return (
-                f"/v1/workspaces/{remainder[0]}/process-metadata/"
-                "source-span-confirmations"
-            )
+            return f"/v1/workspaces/{remainder[0]}/process-metadata/source-span-confirmations"
     process_case_suffix = "/process-case"
-    if method in {"GET", "POST"} and path.startswith(prefix) and path.endswith(
-        process_case_suffix
-    ):
+    if method in {"GET", "POST"} and path.startswith(prefix) and path.endswith(process_case_suffix):
         workspace_id = path[len(prefix) : -len(process_case_suffix)]
         if _CANONICAL_UUID.fullmatch(workspace_id):
             return f"/v1/workspaces/{workspace_id}/process-case"
     process_metadata_suffix = "/process-metadata"
-    if method == "GET" and path.startswith(prefix) and path.endswith(
-        process_metadata_suffix
-    ):
+    if method == "GET" and path.startswith(prefix) and path.endswith(process_metadata_suffix):
         workspace_id = path[len(prefix) : -len(process_metadata_suffix)]
         if _CANONICAL_UUID.fullmatch(workspace_id):
             return f"/v1/workspaces/{workspace_id}/process-metadata"
@@ -171,25 +146,13 @@ class ProductBridge:
             raise ValueError("build frontend inválido")
         if not re.fullmatch(r"http://127\.0\.0\.1:[1-9][0-9]{0,4}", public_origin):
             raise ValueError("origem local inválida")
-        if (
-            type(upstream_address) is not tuple
-            or len(upstream_address) != 2
-            or upstream_address[0] != "127.0.0.1"
-            or type(upstream_address[1]) is not int
-            or not 1 <= upstream_address[1] <= 65_535
-        ):
+        if type(upstream_address) is not tuple or len(upstream_address) != 2 or upstream_address[0] != "127.0.0.1" or type(upstream_address[1]) is not int or not 1 <= upstream_address[1] <= 65_535:
             raise ValueError("upstream local inválido")
         if type(token) is not str or len(token) < 32:
             raise ValueError("token local inválido")
-        if (
-            type(max_body_bytes) is not int
-            or not 1 <= max_body_bytes <= 1_048_576
-        ):
+        if type(max_body_bytes) is not int or not 1 <= max_body_bytes <= 1_048_576:
             raise ValueError("limite de body inválido")
-        if (
-            type(max_document_body_bytes) is not int
-            or not 1 <= max_document_body_bytes <= MAX_DOCUMENT_BYTES
-        ):
+        if type(max_document_body_bytes) is not int or not 1 <= max_document_body_bytes <= MAX_DOCUMENT_BYTES:
             raise ValueError("limite de documento inválido")
         self._frontend_root = root
         self._public_origin = public_origin
@@ -209,22 +172,15 @@ class ProductBridge:
         except (AttributeError, TypeError, ValueError):
             return self._max_body_bytes
         upstream_target = _proxy_target(path, normalized_method)
-        if (
-            normalized_method == "POST"
-            and upstream_target is not None
-            and upstream_target.endswith("/materials")
-        ):
+        if normalized_method == "POST" and upstream_target is not None and upstream_target.endswith("/materials"):
             return self._max_document_body_bytes
         return self._max_body_bytes
 
     def _response_body_limit(self, method: str, upstream_target: str) -> int:
-        if (
-            method == "GET"
-            and re.fullmatch(
-                rf"/v1/workspaces/{_CANONICAL_UUID.pattern}/materials/"
-                rf"{_CANONICAL_UUID.pattern}",
-                upstream_target,
-            )
+        if method == "GET" and re.fullmatch(
+            rf"/v1/workspaces/{_CANONICAL_UUID.pattern}/materials/"
+            rf"{_CANONICAL_UUID.pattern}",
+            upstream_target,
         ):
             return self._max_document_body_bytes
         return self._max_body_bytes
@@ -232,9 +188,7 @@ class ProductBridge:
     def __repr__(self) -> str:
         return f"ProductBridge(public_origin={self._public_origin!r})"
 
-    def _browser_request_allowed(
-        self, method: str, headers: dict[str, str]
-    ) -> bool:
+    def _browser_request_allowed(self, method: str, headers: dict[str, str]) -> bool:
         if headers.get("host") != self._public_host:
             return False
         origin = headers.get("origin")
@@ -277,11 +231,7 @@ class ProductBridge:
         headers: dict[str, str],
         body: bytes | SeekableContent,
     ) -> BridgeResponse:
-        request_limit = (
-            self._max_document_body_bytes
-            if method == "POST" and upstream_target.endswith("/materials")
-            else self._max_body_bytes
-        )
+        request_limit = self._max_document_body_bytes if method == "POST" and upstream_target.endswith("/materials") else self._max_body_bytes
         body_size = len(body) if type(body) is bytes else as_seekable_content(body).byte_size
         if body_size > request_limit:
             return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
@@ -296,12 +246,7 @@ class ProductBridge:
                 return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
             if is_document:
                 filename = headers.get("x-document-filename", "")
-                if (
-                    not filename
-                    or len(filename) > 1024
-                    or not filename.isascii()
-                    or any(ord(character) < 33 or ord(character) > 126 for character in filename)
-                ):
+                if not filename or len(filename) > 1024 or not filename.isascii() or any(ord(character) < 33 or ord(character) > 126 for character in filename):
                     return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
                 upstream_headers["X-Document-Filename"] = filename
             upstream_headers["Content-Type"] = content_type
@@ -324,12 +269,7 @@ class ProductBridge:
             if is_document_read and upstream.status == 200:
                 raw_length = upstream.getheader("Content-Length") or ""
                 content_type = (upstream.getheader("Content-Type") or "").split(";", 1)[0].strip().lower()
-                if (
-                    not raw_length.isascii()
-                    or not raw_length.isdecimal()
-                    or int(raw_length) > response_limit
-                    or content_type != "application/pdf"
-                ):
+                if not raw_length.isascii() or not raw_length.isdecimal() or int(raw_length) > response_limit or content_type != "application/pdf":
                     return _error(502, "INVALID_LOCAL_API_RESPONSE", "resposta local inválida")
                 length = int(raw_length)
                 retained_connection = True

@@ -1,0 +1,398 @@
+{
+  "schema_version": "1.0.0",
+  "snapshot_id": "ANALYSIS-001",
+  "workspace_id": "11111111-1111-4111-8111-111111111111",
+  "source_revision": 4,
+  "participant_refs": ["PART-CLAIMANT", "PART-DEFENDANT"],
+  "judicial_context_workspace_id": "11111111-1111-4111-8111-111111111111",
+  "judicial_context": {
+    "schema_version": "1.0.0",
+    "context_id": "CTX-ANALYSIS-001",
+    "instance_label": "PRIMEIRO_GRAU",
+    "snapshot_id": "JDM-SNAPSHOT-001",
+    "entities": [
+      {
+        "entity_id": "ENT-CLAIMANT",
+        "raw_name": "Pessoa Autora Sintética",
+        "kind": "NATURAL_PERSON",
+        "provenance": [
+          {
+            "source_system": "SYNTHETIC_PJE",
+            "source_document_id": "DOC-001",
+            "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "page": 1,
+            "occurrence": "AUTOR",
+            "occurrence_id": "OCC-JDM-ENTITY-001"
+          }
+        ]
+      },
+      {
+        "entity_id": "ENT-DEFENDANT",
+        "raw_name": "Empresa Ré Sintética",
+        "kind": "LEGAL_ENTITY",
+        "provenance": [
+          {
+            "source_system": "SYNTHETIC_PJE",
+            "source_document_id": "DOC-002",
+            "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "page": 1,
+            "occurrence": "RÉU",
+            "occurrence_id": "OCC-JDM-ENTITY-002"
+          }
+        ]
+      },
+      {
+        "entity_id": "ENT-REPRESENTATIVE",
+        "raw_name": "Representante Sintética",
+        "kind": "NATURAL_PERSON",
+        "provenance": [
+          {
+            "source_system": "SYNTHETIC_PJE",
+            "source_document_id": "DOC-001",
+            "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "page": 1,
+            "occurrence": "REPRESENTANTE",
+            "occurrence_id": "OCC-JDM-ENTITY-003"
+          }
+        ]
+      }
+    ],
+    "participants": [
+      {
+        "participant_id": "PART-CLAIMANT",
+        "entity_id": "ENT-CLAIMANT",
+        "context_id": "CTX-ANALYSIS-001",
+        "pole": "ACTIVE",
+        "role": { "raw_label": "AUTOR", "normalized": "CLAIMANT" },
+        "principal": true,
+        "status": "ACTIVE",
+        "provenance": [
+          {
+            "source_system": "SYNTHETIC_PJE",
+            "source_document_id": "DOC-001",
+            "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "page": 1,
+            "occurrence": "AUTOR",
+            "occurrence_id": "OCC-JDM-PARTICIPANT-001"
+          }
+        ]
+      },
+      {
+        "participant_id": "PART-DEFENDANT",
+        "entity_id": "ENT-DEFENDANT",
+        "context_id": "CTX-ANALYSIS-001",
+        "pole": "PASSIVE",
+        "role": { "raw_label": "RÉU", "normalized": "DEFENDANT" },
+        "principal": true,
+        "status": "ACTIVE",
+        "provenance": [
+          {
+            "source_system": "SYNTHETIC_PJE",
+            "source_document_id": "DOC-002",
+            "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "page": 1,
+            "occurrence": "RÉU",
+            "occurrence_id": "OCC-JDM-PARTICIPANT-002"
+          }
+        ]
+      }
+    ],
+    "representation_links": [
+      {
+        "link_id": "REP-001",
+        "representative_entity_id": "ENT-REPRESENTATIVE",
+        "represented_participant_ids": ["PART-CLAIMANT"],
+        "representation_role_raw": "REPRESENTANTE",
+        "provenance": [
+          {
+            "source_system": "SYNTHETIC_PJE",
+            "source_document_id": "DOC-001",
+            "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "page": 1,
+            "occurrence": "REPRESENTANTE DA PARTE AUTORA",
+            "occurrence_id": "OCC-JDM-REPRESENTATION-001"
+          }
+        ]
+      }
+    ],
+    "access_relations": [],
+    "provenance": [
+      {
+        "source_system": "SYNTHETIC_PJE",
+        "source_document_id": "DOC-001",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "page": 1,
+        "occurrence": "CONTEXTO PROCESSUAL SINTÉTICO",
+        "occurrence_id": "OCC-JDM-CONTEXT-001"
+      }
+    ]
+  },
+  "documents": [
+    {
+      "document_id": "DOC-001",
+      "storage_content_id": "10000000-0000-4000-8000-000000000001",
+      "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sequence": 1,
+      "document_role": "INITIAL_PETITION",
+      "raw_type": "Petição inicial",
+      "normalized_type": "INITIAL_PETITION",
+      "timestamp": "2026-01-10T10:00:00-03:00",
+      "participant_refs": ["PART-CLAIMANT"],
+      "page_count_or_span": "1-8",
+      "content_available": true,
+      "analysis_revision": 1
+    },
+    {
+      "document_id": "DOC-002",
+      "storage_content_id": "10000000-0000-4000-8000-000000000002",
+      "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sequence": 2,
+      "document_role": "DEFENSE",
+      "raw_type": "Contestação",
+      "normalized_type": "DEFENSE",
+      "timestamp": "2026-02-10T10:00:00-03:00",
+      "participant_refs": ["PART-DEFENDANT"],
+      "page_count_or_span": "1-6",
+      "content_available": true,
+      "analysis_revision": 1
+    },
+    {
+      "document_id": "DOC-003",
+      "storage_content_id": "10000000-0000-4000-8000-000000000003",
+      "source_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "sequence": 3,
+      "document_role": "TECHNICAL_ATTACHMENT",
+      "raw_type": "Anexo indisponível",
+      "normalized_type": "TECHNICAL_ATTACHMENT",
+      "timestamp": null,
+      "participant_refs": [],
+      "page_count_or_span": "UNAVAILABLE",
+      "content_available": false,
+      "analysis_revision": 0
+    }
+  ],
+  "claims": [
+    {
+      "item_id": "CLAIM-001",
+      "text": "A parte autora alega manifestação no imóvel.",
+      "participant_refs": ["PART-CLAIMANT"],
+      "technical_subjects": ["fundação"],
+      "provenance": [
+        {
+          "workspace_id": "11111111-1111-4111-8111-111111111111",
+          "source_document_id": "DOC-001",
+          "source_document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "page_or_span": "p. 3, §2",
+          "source_revision": 4,
+          "occurrence_id": "OCC-CLAIM-001"
+        }
+      ]
+    },
+    {
+      "item_id": "CLAIM-002",
+      "text": "A parte autora requer análise do levantamento topográfico.",
+      "participant_refs": ["PART-CLAIMANT"],
+      "technical_subjects": ["levantamento topográfico"],
+      "provenance": [
+        {
+          "workspace_id": "11111111-1111-4111-8111-111111111111",
+          "source_document_id": "DOC-001",
+          "source_document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "page_or_span": "p. 5, §1",
+          "source_revision": 4,
+          "occurrence_id": "OCC-CLAIM-002"
+        }
+      ]
+    }
+  ],
+  "counterarguments": [
+    {
+      "item_id": "COUNTER-001",
+      "text": "A parte ré contesta as duas alegações.",
+      "participant_refs": ["PART-DEFENDANT"],
+      "technical_subjects": ["levantamento topográfico"],
+      "provenance": [
+        {
+          "workspace_id": "11111111-1111-4111-8111-111111111111",
+          "source_document_id": "DOC-002",
+          "source_document_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "page_or_span": "p. 2, §§1-2",
+          "source_revision": 4,
+          "occurrence_id": "OCC-COUNTER-001"
+        }
+      ],
+      "target_claim_ids": ["CLAIM-001", "CLAIM-002"]
+    }
+  ],
+  "decisions": [
+    {
+      "item_id": "DECISION-001",
+      "text": "O juízo delimitou parcialmente a controvérsia.",
+      "participant_refs": [],
+      "technical_subjects": ["fundação"],
+      "provenance": [
+        {
+          "workspace_id": "11111111-1111-4111-8111-111111111111",
+          "source_document_id": "DOC-002",
+          "source_document_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "page_or_span": "p. 6, §4",
+          "source_revision": 4,
+          "occurrence_id": "OCC-DECISION-001"
+        }
+      ],
+      "addressed_claim_ids": ["CLAIM-001"],
+      "addressed_counterargument_ids": ["COUNTER-001"]
+    }
+  ],
+  "pericial_objects": [
+    {
+      "item_id": "OBJECT-001",
+      "text": "Delimitar a manifestação descrita nos autos sintéticos.",
+      "participant_refs": [],
+      "technical_subjects": ["fundação"],
+      "provenance": [
+        {
+          "workspace_id": "11111111-1111-4111-8111-111111111111",
+          "source_document_id": "DOC-002",
+          "source_document_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "page_or_span": "p. 6, §5",
+          "source_revision": 4,
+          "occurrence_id": "OCC-OBJECT-001"
+        }
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "item_id": "QUESTION-001",
+      "text": "Qual é a descrição da manifestação alegada?",
+      "participant_refs": ["PART-CLAIMANT"],
+      "technical_subjects": ["fundação"],
+      "provenance": [
+        {
+          "workspace_id": "11111111-1111-4111-8111-111111111111",
+          "source_document_id": "DOC-001",
+          "source_document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "page_or_span": "p. 7, item 1",
+          "source_revision": 4,
+          "occurrence_id": "OCC-QUESTION-001"
+        }
+      ],
+      "answer": null
+    }
+  ],
+  "events": [
+    {
+      "item_id": "EVENT-001",
+      "text": "Juntada da petição inicial.",
+      "participant_refs": ["PART-CLAIMANT"],
+      "technical_subjects": [],
+      "provenance": [
+        {
+          "workspace_id": "11111111-1111-4111-8111-111111111111",
+          "source_document_id": "DOC-001",
+          "source_document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "page_or_span": "capa",
+          "source_revision": 4,
+          "occurrence_id": "OCC-EVENT-001"
+        }
+      ],
+      "event_raw": "Juntada de petição",
+      "event_normalized": "DOCUMENT_FILED",
+      "timestamp": "2026-01-10T10:00:00-03:00",
+      "normalization_authority": "SOURCE_ADAPTER_V1"
+    }
+  ],
+  "technical_document_references": [
+    {
+      "item_id": "TECHREF-001",
+      "text": "Referência a levantamento de processo estrangeiro, sem promoção factual.",
+      "participant_refs": [],
+      "technical_subjects": ["levantamento topográfico"],
+      "provenance": [
+        {
+          "workspace_id": "11111111-1111-4111-8111-111111111111",
+          "source_document_id": "DOC-002",
+          "source_document_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "page_or_span": "p. 4, nota 1",
+          "source_revision": 4,
+          "occurrence_id": "OCC-TECHREF-001"
+        }
+      ],
+      "external_reference": true
+    }
+  ],
+  "gaps": [
+    {
+      "item_id": "GAP-001",
+      "text": "Anexo técnico indicado não está disponível.",
+      "participant_refs": [],
+      "technical_subjects": ["levantamento topográfico"],
+      "provenance": [
+        {
+          "workspace_id": "11111111-1111-4111-8111-111111111111",
+          "source_document_id": "DOC-003",
+          "source_document_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "page_or_span": "UNAVAILABLE",
+          "source_revision": 4,
+          "occurrence_id": "OCC-GAP-001"
+        }
+      ]
+    }
+  ],
+  "conflicts": [
+    {
+      "item_id": "CONFLICT-001",
+      "text": "Proposição de divergência entre alegação e contestação.",
+      "participant_refs": ["PART-CLAIMANT", "PART-DEFENDANT"],
+      "technical_subjects": ["fundação"],
+      "provenance": [
+        {
+          "workspace_id": "11111111-1111-4111-8111-111111111111",
+          "source_document_id": "DOC-001",
+          "source_document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "page_or_span": "p. 3, §2",
+          "source_revision": 4,
+          "occurrence_id": "OCC-CLAIM-001"
+        },
+        {
+          "workspace_id": "11111111-1111-4111-8111-111111111111",
+          "source_document_id": "DOC-002",
+          "source_document_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "page_or_span": "p. 2, §1",
+          "source_revision": 4,
+          "occurrence_id": "OCC-CONFLICT-001-B"
+        }
+      ],
+      "statement_a_id": "CLAIM-001",
+      "statement_b_id": "COUNTER-001",
+      "conflict_dimension": "descrição da origem alegada",
+      "analysis_status": "PROPOSED_CONFLICT",
+      "human_review_status": "PENDING"
+    }
+  ],
+  "coverage": {
+    "status": "PARTIAL",
+    "documents_total": 3,
+    "documents_analyzed": 2,
+    "documents_unavailable": 1,
+    "documents_failed": 0,
+    "source_revision": 4
+  },
+  "human_reviews": [
+    {
+      "review_id": "REVIEW-001",
+      "target_item_id": "CLAIM-001",
+      "original_extraction": "fundação inadequada",
+      "decision": "CORRECTED",
+      "corrected_value": "alegação sobre fundação",
+      "reviewer": "PERITO-SYNTHETIC",
+      "revision": 1,
+      "timestamp": "2026-03-01T10:00:00-03:00",
+      "reason": "Correção sintética de natureza da afirmação."
+    }
+  ],
+  "stale_document_ids": [],
+  "source_inventory_stale": false,
+  "unindexed_source_count": 0
+}

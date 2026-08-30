@@ -4,6 +4,7 @@ import subprocess
 import sys
 import http.client
 import json
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Event, Lock, Thread
@@ -126,9 +127,145 @@ def services(**overrides):
         "list_artifact_revisions": RecordingService((revision(),)),
         "get_process_case": RecordingService(None),
         "save_process_case": RecordingService(None),
+        "save_case_analysis": RecordingService(revision(payload={})),
+        "get_case_analysis": RecordingService(revision(payload={})),
     }
     defaults.update(overrides)
     return LocalApiServices(**defaults)
+
+
+def case_analysis_payload():
+    return json.loads((Path(__file__).parent / "fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8"))
+
+
+def test_case_analysis_route_validates_and_delegates_canonical_snapshot():
+    payload = case_analysis_payload()
+    saved = RecordingService(revision(payload=payload))
+    bundle = services(save_case_analysis=saved)
+
+    response = request(
+        LocalApi(bundle, token=TOKEN),
+        "POST",
+        f"/v1/workspaces/{WORKSPACE_UUID}/case-analysis",
+        body={"expected_revision": None, "snapshot": payload},
+    )
+
+    assert response.status == 200
+    assert saved.calls[0][0][0] == WORKSPACE_ID
+    assert saved.calls[0][0][1].snapshot_id == "ANALYSIS-001"
+
+
+def test_case_analysis_get_returns_validated_canonical_payload():
+    payload = case_analysis_payload()
+    from scripts.backend_contract.case_analysis import case_analysis_from_mapping
+
+    response = request(
+        LocalApi(
+            services(get_case_analysis=RecordingService((revision(payload=payload), case_analysis_from_mapping(payload)))),
+            token=TOKEN,
+        ),
+        "GET",
+        f"/v1/workspaces/{WORKSPACE_UUID}/case-analysis",
+        headers={"X-Local-API-Token": TOKEN},
+    )
+
+    assert response.status == 200
+    assert decoded(response)["snapshot"]["snapshot_id"] == "ANALYSIS-001"
+
+
+def test_case_analysis_save_close_reopen_is_semantically_equivalent(tmp_path):
+    database = tmp_path / "case-analysis.db"
+    runtime = build_local_api(
+        database,
+        token=TOKEN,
+        clock=FixedClock(),
+        private_root=tmp_path / "private",
+    )
+    runtime.start()
+    try:
+        created_status, _, created_body = http_request(
+            runtime.server,
+            "POST",
+            "/v1/workspaces",
+            value={"name": "Perícia sintética"},
+            headers={"X-Local-API-Token": TOKEN},
+        )
+        workspace_id = json.loads(created_body)["workspace_id"]
+        payload = case_analysis_payload()
+        payload["workspace_id"] = workspace_id
+        payload["judicial_context_workspace_id"] = workspace_id
+        imported = []
+        for index in range(3):
+            content = f"%PDF-1.7\nsynthetic-{index}\n%%EOF\n".encode()
+            status, _, body = http_request(
+                runtime.server,
+                "POST",
+                f"/v1/workspaces/{workspace_id}/materials",
+                raw_body=content,
+                headers={
+                    "X-Local-API-Token": TOKEN,
+                    "Content-Type": "application/pdf",
+                    "X-Document-Filename": f"synthetic-{index}.pdf",
+                },
+            )
+            assert status == 201, body
+            imported.append(json.loads(body))
+        source_by_id = {}
+        for document, material in zip(payload["documents"], imported, strict=True):
+            document["storage_content_id"] = material["content_id"]
+            document["source_sha256"] = material["checksum_sha256"]
+            source_by_id[document["document_id"]] = material["checksum_sha256"]
+        for collection in ("claims", "counterarguments", "decisions", "pericial_objects", "questions", "events", "technical_document_references", "gaps", "conflicts"):
+            for item in payload[collection]:
+                for source in item["provenance"]:
+                    source["workspace_id"] = workspace_id
+                    source["source_document_sha256"] = source_by_id[source["source_document_id"]]
+        context = payload["judicial_context"]
+        for owner in [context, *context["entities"], *context["participants"], *context["representation_links"], *context["access_relations"]]:
+            for source in owner["provenance"]:
+                source["source_sha256"] = source_by_id[source["source_document_id"]]
+        saved_status, _, saved_body = http_request(
+            runtime.server,
+            "POST",
+            f"/v1/workspaces/{workspace_id}/case-analysis",
+            value={"expected_revision": None, "snapshot": payload},
+            headers={"X-Local-API-Token": TOKEN},
+        )
+    finally:
+        runtime.close()
+
+    assert created_status == 201
+    assert saved_status == 200, saved_body
+    assert json.loads(saved_body)["revision"] == 1
+
+    reopened = build_local_api(database, token=TOKEN, private_root=tmp_path / "private")
+    reopened.start()
+    try:
+        status, _, body = http_request(
+            reopened.server,
+            "GET",
+            f"/v1/workspaces/{workspace_id}/case-analysis",
+            headers={"X-Local-API-Token": TOKEN},
+        )
+    finally:
+        reopened.close()
+
+    assert status == 200
+    assert json.loads(body)["snapshot"] == payload
+
+
+def test_case_analysis_is_private_and_generic_artifact_route_cannot_bypass_validation():
+    api = LocalApi(services(), token=TOKEN)
+    private = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/case-analysis")
+    bypass = request(
+        api,
+        "POST",
+        f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/CASE_ANALYSIS_SNAPSHOT_V1/CASE-ANALYSIS/revisions",
+        body={"payload": {"pericial_conclusion": "smuggled"}},
+    )
+
+    assert private.status == 403
+    assert bypass.status == 404
 
 
 def request(api, method, target, *, body=None, headers=None):
@@ -136,9 +273,7 @@ def request(api, method, target, *, body=None, headers=None):
     if method == "POST":
         request_headers.setdefault("Content-Type", "application/json; charset=utf-8")
         request_headers.setdefault("X-Local-API-Token", TOKEN)
-    encoded = b"" if body is None else json.dumps(
-        body, ensure_ascii=False, separators=(",", ":")
-    ).encode("utf-8")
+    encoded = b"" if body is None else json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     request_headers.setdefault("Content-Length", str(len(encoded)))
     return api.handle(method, target, request_headers, encoded)
 
@@ -164,7 +299,7 @@ def test_post_workspace_delegates_name_and_serializes_created_model():
         "name": "Perícia sintética",
         "workspace_id": str(WORKSPACE_UUID),
     }
-    assert bundle.create_workspace.calls == [(('Perícia sintética',), {})]
+    assert bundle.create_workspace.calls == [(("Perícia sintética",), {})]
 
 
 def test_get_workspace_delegates_typed_uuid_and_serializes_model():
@@ -209,9 +344,7 @@ def test_list_workspaces_preserves_service_order_and_empty_list():
     assert listed.calls == [((), {})]
 
     empty = services(list_workspaces=RecordingService(()))
-    assert decoded(request(LocalApi(empty, token=TOKEN), "GET", "/v1/workspaces")) == {
-        "items": []
-    }
+    assert decoded(request(LocalApi(empty, token=TOKEN), "GET", "/v1/workspaces")) == {"items": []}
 
 
 def test_post_revision_delegates_exact_identity_and_nested_payload():
@@ -259,9 +392,7 @@ def test_post_revision_delegates_exact_identity_and_nested_payload():
 def test_get_latest_revision_uses_latest_service():
     latest = RecordingService(revision())
     bundle = services(get_latest_artifact=latest)
-    target = (
-        f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions/latest"
-    )
+    target = f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions/latest"
     response = request(LocalApi(bundle, token=TOKEN), "GET", target)
 
     assert response.status == 200
@@ -358,14 +489,10 @@ def test_list_revisions_preserves_order_and_payload_fidelity():
         ("GET", "/v1/workspaces?offset=1", 400, "INVALID_REQUEST"),
     ),
 )
-def test_invalid_routes_methods_and_path_values_fail_explicitly(
-    method, target, expected_status, expected_code
-):
+def test_invalid_routes_methods_and_path_values_fail_explicitly(method, target, expected_status, expected_code):
     response = request(LocalApi(services(), token=TOKEN), method, target)
     assert response.status == expected_status
-    assert decoded(response) == {
-        "error": {"code": expected_code, "message": "requisição local inválida"}
-    }
+    assert decoded(response) == {"error": {"code": expected_code, "message": "requisição local inválida"}}
 
 
 @pytest.mark.parametrize(
@@ -450,9 +577,7 @@ def test_raw_target_delimiters_and_whitespace_cannot_be_normalized_away(target):
 
 @pytest.mark.parametrize("encoded_control", ("%01", "%09", "%0A", "%7F"))
 @pytest.mark.parametrize("segment", ("artifact-kind", "artifact-id"))
-def test_percent_decoded_ascii_controls_are_rejected_before_service(
-    encoded_control, segment
-):
+def test_percent_decoded_ascii_controls_are_rejected_before_service(encoded_control, segment):
     latest = RecordingService(revision())
     artifact_kind = encoded_control if segment == "artifact-kind" else "LAUDO"
     artifact_id = encoded_control if segment == "artifact-id" else "LAU-001"
@@ -477,9 +602,7 @@ def test_max_safe_json_revision_path_is_delegated_without_transport_overflow():
     )
 
     assert response.status == 200
-    assert exact.calls == [
-        ((WORKSPACE_ID, "LAUDO", "LAU-001", 9007199254740991), {})
-    ]
+    assert exact.calls == [((WORKSPACE_ID, "LAUDO", "LAU-001", 9007199254740991), {})]
 
 
 @pytest.mark.parametrize("malformed", ("%", "%Z0", "%0Z"))
@@ -499,9 +622,7 @@ def test_malformed_percent_encoding_is_not_aliased_to_a_literal_path(malformed):
     ),
 )
 def test_workspace_dto_requires_exact_text_name(body):
-    response = request(
-        LocalApi(services(), token=TOKEN), "POST", "/v1/workspaces", body=body
-    )
+    response = request(LocalApi(services(), token=TOKEN), "POST", "/v1/workspaces", body=body)
     assert response.status == 400
     assert decoded(response)["error"]["code"] == "INVALID_REQUEST"
 
@@ -544,9 +665,7 @@ def test_malformed_utf8_json_and_non_object_json_fail_explicitly():
         ),
     ),
 )
-def test_duplicate_json_object_keys_are_rejected_at_any_depth(
-    target, raw_body, service_name
-):
+def test_duplicate_json_object_keys_are_rejected_at_any_depth(target, raw_body, service_name):
     bundle = services()
     response = LocalApi(bundle, token=TOKEN).handle(
         "POST",
@@ -645,9 +764,7 @@ def test_json_integer_without_cross_runtime_value_fidelity_is_rejected(number):
 def test_json_safe_integer_boundaries_are_preserved(number):
     append = RecordingService(revision())
     bundle = services(append_artifact_revision=append)
-    raw_body = (
-        b'{"payload":{"measurement":' + str(number).encode("ascii") + b"}}"
-    )
+    raw_body = b'{"payload":{"measurement":' + str(number).encode("ascii") + b"}}"
     response = LocalApi(bundle, token=TOKEN).handle(
         "POST",
         f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions",
@@ -740,9 +857,7 @@ def test_transport_does_not_mutate_payload_passed_to_service():
     append = NonMutatingContractService(revision(payload=original))
     bundle = services(append_artifact_revision=append)
     target = f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/LAUDO/LAU-001/revisions"
-    response = request(
-        LocalApi(bundle, token=TOKEN), "POST", target, body={"payload": original}
-    )
+    response = request(LocalApi(bundle, token=TOKEN), "POST", target, body={"payload": original})
     assert response.status == 201
     assert original == {"nested": {"items": [2, 1]}, "unknown": None}
 
@@ -812,9 +927,7 @@ def test_transport_does_not_mutate_payload_passed_to_service():
         ),
     ),
 )
-def test_application_error_taxonomy_maps_without_internal_detail_leak(
-    override, method, target, body, error, status, code, message
-):
+def test_application_error_taxonomy_maps_without_internal_detail_leak(override, method, target, body, error, status, code, message):
     bundle = services(**{override: FailingService(error)})
     response = request(LocalApi(bundle, token=TOKEN), method, target, body=body)
 
@@ -848,9 +961,7 @@ def test_server_configuration_rejects_invalid_ports(port):
         LocalServerConfig(port=port)
 
 
-@pytest.mark.parametrize(
-    "timeout", (0, -1, True, "5", float("nan"), float("inf"), 31)
-)
+@pytest.mark.parametrize("timeout", (0, -1, True, "5", float("nan"), float("inf"), 31))
 def test_server_configuration_rejects_invalid_request_timeout(timeout):
     with pytest.raises(ValueError, match="timeout"):
         LocalServerConfig(request_timeout_seconds=timeout)
@@ -918,9 +1029,7 @@ def test_composition_rejects_invalid_config_before_opening_sqlite(tmp_path, conf
     ),
 )
 def test_missing_or_nonlocal_host_fails_closed(headers):
-    response = LocalApi(services(), token=TOKEN).handle(
-        "GET", "/v1/workspaces", headers, b""
-    )
+    response = LocalApi(services(), token=TOKEN).handle("GET", "/v1/workspaces", headers, b"")
     assert response.status == 403
     assert decoded(response)["error"] == {
         "code": "FORBIDDEN_LOCAL_REQUEST",
@@ -976,14 +1085,14 @@ def test_transfer_encoding_is_rejected_instead_of_interpreted():
     assert decoded(response)["error"]["code"] == "INVALID_REQUEST"
 
 
-def http_request(server, method, target, *, value=None, headers=None):
+def http_request(server, method, target, *, value=None, raw_body=None, headers=None):
     host, port = server.address
-    body = None
+    body = raw_body
     request_headers = dict(headers or {})
     if value is not None:
-        body = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode(
-            "utf-8"
-        )
+        if raw_body is not None:
+            raise ValueError("request body is ambiguous")
+        body = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         request_headers.setdefault("Content-Type", "application/json; charset=utf-8")
     connection = http.client.HTTPConnection(host, port, timeout=5)
     try:
@@ -996,14 +1105,10 @@ def http_request(server, method, target, *, value=None, headers=None):
 
 def test_real_http_server_accepts_local_get_and_exactly_authorized_post():
     bundle = services()
-    server = LocalApiServer(
-        LocalApi(bundle, token=TOKEN), LocalServerConfig(port=0)
-    )
+    server = LocalApiServer(LocalApi(bundle, token=TOKEN), LocalServerConfig(port=0))
     server.start()
     try:
-        get_status, get_headers, get_body = http_request(
-            server, "GET", "/v1/workspaces"
-        )
+        get_status, get_headers, get_body = http_request(server, "GET", "/v1/workspaces")
         post_status, post_headers, post_body = http_request(
             server,
             "POST",
@@ -1026,9 +1131,7 @@ def test_real_http_server_accepts_local_get_and_exactly_authorized_post():
 def test_real_http_server_blocks_cross_origin_mutation_even_with_valid_token():
     create = RecordingService(workspace())
     bundle = services(create_workspace=create)
-    server = LocalApiServer(
-        LocalApi(bundle, token=TOKEN), LocalServerConfig(port=0)
-    )
+    server = LocalApiServer(LocalApi(bundle, token=TOKEN), LocalServerConfig(port=0))
     server.start()
     try:
         status, headers, body = http_request(
@@ -1046,17 +1149,13 @@ def test_real_http_server_blocks_cross_origin_mutation_even_with_valid_token():
 
     assert status == 403
     assert "Access-Control-Allow-Origin" not in headers
-    assert json.loads(body.decode("utf-8"))["error"]["code"] == (
-        "FORBIDDEN_LOCAL_REQUEST"
-    )
+    assert json.loads(body.decode("utf-8"))["error"]["code"] == ("FORBIDDEN_LOCAL_REQUEST")
     assert create.calls == []
 
 
 @pytest.mark.parametrize("method", ("TRACE", "CONNECT", "FROB"))
 def test_real_http_server_sanitizes_every_unsupported_method(method):
-    server = LocalApiServer(
-        LocalApi(services(), token=TOKEN), LocalServerConfig(port=0)
-    )
+    server = LocalApiServer(LocalApi(services(), token=TOKEN), LocalServerConfig(port=0))
     server.start()
     try:
         status, headers, body = http_request(server, method, "/v1/workspaces")
@@ -1066,15 +1165,11 @@ def test_real_http_server_sanitizes_every_unsupported_method(method):
     assert status == 405
     assert "Server" not in headers
     assert "Date" not in headers
-    assert json.loads(body.decode("utf-8"))["error"]["code"] == (
-        "METHOD_NOT_ALLOWED"
-    )
+    assert json.loads(body.decode("utf-8"))["error"]["code"] == ("METHOD_NOT_ALLOWED")
 
 
 def test_real_http_head_is_sanitized_without_default_server_fingerprint():
-    server = LocalApiServer(
-        LocalApi(services(), token=TOKEN), LocalServerConfig(port=0)
-    )
+    server = LocalApiServer(LocalApi(services(), token=TOKEN), LocalServerConfig(port=0))
     server.start()
     try:
         status, headers, body = http_request(server, "HEAD", "/v1/workspaces")
@@ -1089,14 +1184,10 @@ def test_real_http_head_is_sanitized_without_default_server_fingerprint():
 
 
 def test_deeply_nested_json_returns_sanitized_error_instead_of_dropping_connection():
-    server = LocalApiServer(
-        LocalApi(services(), token=TOKEN), LocalServerConfig(port=0)
-    )
+    server = LocalApiServer(LocalApi(services(), token=TOKEN), LocalServerConfig(port=0))
     server.start()
     host, port = server.address
-    body = (
-        '{"payload":' + "[" * 20_000 + "0" + "]" * 20_000 + "}"
-    ).encode("ascii")
+    body = ('{"payload":' + "[" * 20_000 + "0" + "]" * 20_000 + "}").encode("ascii")
     connection = http.client.HTTPConnection(host, port, timeout=5)
     try:
         connection.request(
@@ -1115,21 +1206,15 @@ def test_deeply_nested_json_returns_sanitized_error_instead_of_dropping_connecti
         server.close()
 
     assert response.status == 400
-    assert json.loads(response_body.decode("utf-8"))["error"]["code"] == (
-        "INVALID_REQUEST"
-    )
+    assert json.loads(response_body.decode("utf-8"))["error"]["code"] == ("INVALID_REQUEST")
 
 
 def test_oversized_request_line_is_sanitized_before_method_parsing():
-    server = LocalApiServer(
-        LocalApi(services(), token=TOKEN), LocalServerConfig(port=0)
-    )
+    server = LocalApiServer(LocalApi(services(), token=TOKEN), LocalServerConfig(port=0))
     server.start()
     client = socket.create_connection(server.address, timeout=5)
     try:
-        client.sendall(
-            b"GET /" + b"a" * 70_000 + b" HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
-        )
+        client.sendall(b"GET /" + b"a" * 70_000 + b" HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
         chunks = []
         while chunk := client.recv(65_536):
             chunks.append(chunk)
@@ -1144,17 +1229,11 @@ def test_oversized_request_line_is_sanitized_before_method_parsing():
 
 
 def test_oversized_header_is_sanitized_by_the_parser_error_path():
-    server = LocalApiServer(
-        LocalApi(services(), token=TOKEN), LocalServerConfig(port=0)
-    )
+    server = LocalApiServer(LocalApi(services(), token=TOKEN), LocalServerConfig(port=0))
     server.start()
     client = socket.create_connection(server.address, timeout=5)
     try:
-        client.sendall(
-            b"GET /v1/workspaces HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Large: "
-            + b"a" * 70_000
-            + b"\r\n\r\n"
-        )
+        client.sendall(b"GET /v1/workspaces HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Large: " + b"a" * 70_000 + b"\r\n\r\n")
         chunks = []
         while chunk := client.recv(65_536):
             chunks.append(chunk)
@@ -1169,9 +1248,7 @@ def test_oversized_header_is_sanitized_by_the_parser_error_path():
 
 
 def test_http09_request_still_receives_explicit_status_line():
-    server = LocalApiServer(
-        LocalApi(services(), token=TOKEN), LocalServerConfig(port=0)
-    )
+    server = LocalApiServer(LocalApi(services(), token=TOKEN), LocalServerConfig(port=0))
     server.start()
     client = socket.create_connection(server.address, timeout=5)
     try:
@@ -1234,9 +1311,7 @@ def test_noncanonical_raw_request_line_is_rejected_before_service_delegation(
     ),
 )
 def test_malformed_request_lines_receive_http_status_and_sanitized_json(request_bytes):
-    server = LocalApiServer(
-        LocalApi(services(), token=TOKEN), LocalServerConfig(port=0)
-    )
+    server = LocalApiServer(LocalApi(services(), token=TOKEN), LocalServerConfig(port=0))
     server.start()
     client = socket.create_connection(server.address, timeout=5)
     try:
@@ -1287,14 +1362,10 @@ def test_malformed_request_lines_receive_http_status_and_sanitized_json(request_
         ),
     ),
 )
-def test_unexpected_service_exception_is_sanitized_without_stderr_leak(
-    capsys, override, method, target, value
-):
+def test_unexpected_service_exception_is_sanitized_without_stderr_leak(capsys, override, method, target, value):
     secret = "PRIVATE_TOKEN_payload_xyz"
     bundle = services(**{override: FailingService(RuntimeError(secret))})
-    server = LocalApiServer(
-        LocalApi(bundle, token=TOKEN), LocalServerConfig(port=0)
-    )
+    server = LocalApiServer(LocalApi(bundle, token=TOKEN), LocalServerConfig(port=0))
     server.start()
     try:
         status, _headers, body = http_request(
@@ -1308,16 +1379,12 @@ def test_unexpected_service_exception_is_sanitized_without_stderr_leak(
         server.close()
 
     assert status == 500
-    assert json.loads(body.decode("utf-8"))["error"]["code"] == (
-        "INTERNAL_SERVER_ERROR"
-    )
+    assert json.loads(body.decode("utf-8"))["error"]["code"] == ("INTERNAL_SERVER_ERROR")
     assert secret not in body.decode("utf-8")
     assert secret not in capsys.readouterr().err
 
 
-def test_partial_body_times_out_without_unbounded_shutdown_or_traceback(
-    capsys, tmp_path
-):
+def test_partial_body_times_out_without_unbounded_shutdown_or_traceback(capsys, tmp_path):
     runtime = build_local_api(
         tmp_path / "partial.db",
         token=TOKEN,
@@ -1325,14 +1392,7 @@ def test_partial_body_times_out_without_unbounded_shutdown_or_traceback(
     )
     runtime.start()
     client = socket.create_connection(runtime.address, timeout=5)
-    client.sendall(
-        b"POST /v1/workspaces HTTP/1.1\r\n"
-        b"Host: 127.0.0.1\r\n"
-        b"Content-Type: application/json\r\n"
-        b"X-Local-API-Token: "
-        + TOKEN.encode("ascii")
-        + b"\r\nContent-Length: 100\r\n\r\n{"
-    )
+    client.sendall(b"POST /v1/workspaces HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nX-Local-API-Token: " + TOKEN.encode("ascii") + b"\r\nContent-Length: 100\r\n\r\n{")
     Event().wait(0.05)
     closing = Thread(target=runtime.close)
     closing.start()
@@ -1354,11 +1414,7 @@ def test_short_body_at_eof_is_rejected_before_any_service_call():
     server.start()
     client = socket.create_connection(server.address, timeout=5)
     try:
-        client.sendall(
-            b"GET /v1/workspaces HTTP/1.1\r\n"
-            b"Host: 127.0.0.1\r\n"
-            b"Content-Length: 10\r\n\r\nabc"
-        )
+        client.sendall(b"GET /v1/workspaces HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 10\r\n\r\nabc")
         client.shutdown(socket.SHUT_WR)
         chunks = []
         while True:
@@ -1386,21 +1442,14 @@ def test_non_http_decimal_content_length_is_rejected_before_service(invalid_styl
     server.start()
     body = b'{"name":"Valid"}'
     digits = str(len(body))
-    raw_length = (
-        f"+{digits}"
-        if invalid_style == "sign"
-        else f"{digits[:-1]}_{digits[-1]}"
-    )
+    raw_length = f"+{digits}" if invalid_style == "sign" else f"{digits[:-1]}_{digits[-1]}"
     client = socket.create_connection(server.address, timeout=5)
     try:
         client.sendall(
             b"POST /v1/workspaces HTTP/1.1\r\n"
             b"Host: 127.0.0.1\r\n"
             b"Content-Type: application/json\r\n"
-            b"X-Local-API-Token: "
-            + TOKEN.encode("ascii")
-            + f"\r\nContent-Length: {raw_length}\r\n\r\n".encode("ascii")
-            + body
+            b"X-Local-API-Token: " + TOKEN.encode("ascii") + f"\r\nContent-Length: {raw_length}\r\n\r\n".encode("ascii") + body
         )
         chunks = []
         while True:
@@ -1419,14 +1468,7 @@ def test_non_http_decimal_content_length_is_rejected_before_service(invalid_styl
 @pytest.mark.parametrize(
     "request_prefix",
     (
-        (
-            b"POST /v1/workspaces HTTP/1.1\r\n"
-            b"Host: 127.0.0.1\r\n"
-            b"Content-Type: application/json\r\n"
-            b"X-Local-API-Token: "
-            + TOKEN.encode("ascii")
-            + b"\r\nContent-Length: 100\r\n\r\n{"
-        ),
+        (b"POST /v1/workspaces HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nX-Local-API-Token: " + TOKEN.encode("ascii") + b"\r\nContent-Length: 100\r\n\r\n{"),
         b"POST /v1/workspaces HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Slow-Header:",
     ),
 )
@@ -1648,9 +1690,7 @@ def test_composition_starts_on_dynamic_loopback_port_and_closes_idempotently(tmp
     try:
         assert address[0] == "127.0.0.1"
         assert 1 <= address[1] <= 65_535
-        status, _headers, body = http_request(
-            runtime.server, "GET", "/v1/workspaces"
-        )
+        status, _headers, body = http_request(runtime.server, "GET", "/v1/workspaces")
         assert status == 200
         assert json.loads(body.decode("utf-8")) == {"items": []}
     finally:
@@ -1694,9 +1734,7 @@ def test_runtime_repr_never_exposes_mutation_token(tmp_path):
 
 def test_runtime_close_drains_accepted_request_before_closing_sqlite(tmp_path):
     ids = BlockingIds(WORKSPACE_UUID)
-    runtime = build_local_api(
-        tmp_path / "drain.db", token=TOKEN, clock=FixedClock(), ids=ids
-    )
+    runtime = build_local_api(tmp_path / "drain.db", token=TOKEN, clock=FixedClock(), ids=ids)
     runtime.start()
     result = []
     client = Thread(
@@ -1853,9 +1891,7 @@ def test_real_http_sqlite_round_trip_append_only_and_reopen(tmp_path):
     reopened.start()
     try:
         status, _headers, body = http_request(reopened.server, "GET", target)
-        latest_status, _headers, latest_body = http_request(
-            reopened.server, "GET", f"{target}/latest"
-        )
+        latest_status, _headers, latest_body = http_request(reopened.server, "GET", f"{target}/latest")
     finally:
         reopened.close()
 
@@ -1875,9 +1911,7 @@ def test_two_concurrent_http_appends_are_monotonic_and_workspace_isolated(tmp_pa
         database,
         token=TOKEN,
         clock=FixedClock(),
-        ids=SequenceIds(
-            [WORKSPACE_UUID, workspace_two, UUID(REVISION_UUID), revision_two]
-        ),
+        ids=SequenceIds([WORKSPACE_UUID, workspace_two, UUID(REVISION_UUID), revision_two]),
     )
     runtime.start()
     try:
@@ -1903,25 +1937,15 @@ def test_two_concurrent_http_appends_are_monotonic_and_workspace_isolated(tmp_pa
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             results = tuple(executor.map(append, (1, 2)))
-        list_status, _headers, list_body = http_request(
-            runtime.server, "GET", target
-        )
-        other_target = (
-            f"/v1/workspaces/{workspace_two}/artifacts/LAUDO/LAU-001/revisions"
-        )
-        other_status, _headers, other_body = http_request(
-            runtime.server, "GET", other_target
-        )
+        list_status, _headers, list_body = http_request(runtime.server, "GET", target)
+        other_target = f"/v1/workspaces/{workspace_two}/artifacts/LAUDO/LAU-001/revisions"
+        other_status, _headers, other_body = http_request(runtime.server, "GET", other_target)
     finally:
         runtime.close()
 
     assert {item[0] for item in results} == {201}
-    assert {
-        json.loads(item[2].decode("utf-8"))["revision"] for item in results
-    } == {1, 2}
+    assert {json.loads(item[2].decode("utf-8"))["revision"] for item in results} == {1, 2}
     assert list_status == 200
-    assert [
-        item["revision"] for item in json.loads(list_body.decode("utf-8"))["items"]
-    ] == [1, 2]
+    assert [item["revision"] for item in json.loads(list_body.decode("utf-8"))["items"]] == [1, 2]
     assert other_status == 200
     assert json.loads(other_body.decode("utf-8")) == {"items": []}
