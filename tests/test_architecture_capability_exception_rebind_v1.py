@@ -31,7 +31,11 @@ ROTATED_PROTECTED_ARTIFACTS = {
     "scripts/quality/capability_trust_anchor.py",
     CAPABILITY_REGISTRY_PATH,
 }
-SUPPORT_ARTIFACTS = {EXCEPTIONS_PATH, CAPABILITY_TRANSITION_PATH}
+SUPPORT_ARTIFACTS = {
+    EXCEPTIONS_PATH,
+    CAPABILITY_TRANSITION_PATH,
+    "tests/test_repository_safety_gate.py",
+}
 ROTATED_EXCEPTION_PATHS = {
     "scripts/quality/architecture_analyzer.py",
     "scripts/quality/capability_trust_anchor.py",

@@ -352,7 +352,19 @@ def test_c1b_exact_support_scope_rejects_wildcards_siblings_and_directory_grants
     common = {protected, trust_anchor.REGISTRY_PATH, trust_anchor.TRANSITION_PATH}
     assert _transition_document_valid(transition, base, changed, common | {support_path})
 
-    for invalid_path in ("scripts/agentic/*", "scripts/agentic/", "scripts/agentic/sibling.py"):
+    for undeclared_path in ("tests/evil_payload.py", "docs/arquitetura/unrelated.md"):
+        assert not _transition_document_valid(
+            transition,
+            base,
+            changed,
+            common | {support_path, undeclared_path},
+        )
+
+    for invalid_path in (
+        "scripts/agentic/*",
+        "scripts/agentic/",
+        "scripts/agentic/sibling.py",
+    ):
         invalid = json.loads(json.dumps(transition))
         invalid["supportArtifacts"][0]["path"] = invalid_path
         invalid["supportArtifacts"][0]["base"]["path"] = invalid_path

@@ -50,6 +50,15 @@
       "candidateMode": "100644",
       "candidateObjectType": "blob",
       "candidateBlobSha": "9305e30afa5746f95b6e28ab19c8ed1b03e96577"
+    },
+    {
+      "path": "tests/test_repository_safety_gate.py",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "8f711eb8d4aad6be33130c11760933561326b2b1",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "325d227b2377adf2a21ff77c8c7d3909af5a06cf"
     }
   ]
 }

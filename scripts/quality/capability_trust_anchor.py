@@ -15,6 +15,7 @@ _SUPPORT_SCOPES = {
         "docs/padroes/safe-uow-bootstrap-v1.md",
         "schemas/uow-manifest-v1.schema.json",
         "scripts/agentic/uow_bootstrap.py",
+        "tests/test_safe_uow_bootstrap_v1.py",
     },
 }
 
@@ -228,7 +229,7 @@ def _transition_document_valid(
         # sole semantic authority over that file's content; this only accounts
         # for its presence in the diff, exact path, no prefix, no wildcard.
         allowed = allowed | {ARCHITECTURE_TRANSITION_PATH}
-    return changed_paths <= allowed | {path for path in changed_paths if path.startswith("tests/") or path.startswith("docs/arquitetura/")}
+    return changed_paths <= allowed
 
 
 def _transition_valid(

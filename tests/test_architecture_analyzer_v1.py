@@ -1214,7 +1214,9 @@ def test_v3_support_artifact_with_wrong_base_identity_for_existing_file_is_block
 @pytest.mark.parametrize("out_of_scope_path", [
     "scripts/motor_vicios/motor.py",
     "scripts/quality/unrelated.py",
+    "scripts/quality/capability_backdoor.py",
     "tests/test_unrelated.py",
+    "tests/test_capability_backdoor.py",
 ])
 def test_v3_transition_rejects_out_of_scope_support_artifact_even_with_exact_identity(
     clean_protected_transition_repo, out_of_scope_path,
@@ -1230,8 +1232,10 @@ def test_v3_transition_rejects_out_of_scope_support_artifact_even_with_exact_ide
 
 
 @pytest.mark.parametrize("in_scope_path", [
-    "scripts/quality/capability_example.py",
-    "tests/test_capability_example.py",
+    "scripts/quality/capability_bootstrap.py",
+    "scripts/quality/capability_gate_adapter.py",
+    "tests/test_capability_analyzer_v1.py",
+    "tests/test_capability_contracts_v1.py",
     "scripts/quality/verify_core.py",
     "tests/test_repository_safety_gate.py",
     "config/capability-exceptions-v1.json",
