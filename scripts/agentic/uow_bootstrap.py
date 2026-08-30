@@ -236,6 +236,8 @@ def _validate_local_remote(url: str) -> None:
     raw_text = str(raw).replace("/", "\\")
     if raw_text.startswith(("\\\\", "\\\\?\\", "\\\\.\\")):
         raise BootstrapError("UNC/device remote is prohibited")
+    original_absolute = raw.absolute()
+    _reject_reparse_ancestry(original_absolute)
     if os.name == "nt":
         raw = _canonical_windows_local_path(raw)
     try:
@@ -249,7 +251,11 @@ def _validate_local_remote(url: str) -> None:
         for index in range(len(resolved_parts) - 1)
     ):
         raise BootstrapError("private local remote is prohibited")
-    for ancestor in [absolute, *absolute.parents]:
+    _reject_reparse_ancestry(absolute)
+
+
+def _reject_reparse_ancestry(path: Path) -> None:
+    for ancestor in [path, *path.parents]:
         if not ancestor.exists():
             continue
         attributes = getattr(ancestor.stat(), "st_file_attributes", 0)

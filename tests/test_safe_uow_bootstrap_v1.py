@@ -581,3 +581,28 @@ def test_mapped_drive_is_rejected_by_canonical_windows_volume_check(
         minimal_bootstrap(source, target, "chore/42-mapped-drive")
 
     assert not target.exists()
+
+
+def test_local_remote_junction_alias_is_rejected_before_fetch(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, remote, _expected = repository
+    alias = tmp_path / "remote-alias.git"
+    try:
+        alias.symlink_to(remote, target_is_directory=True)
+    except OSError as exc:
+        if os.name != "nt":
+            pytest.skip(f"directory symlink unavailable: {exc}")
+        junction = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(alias), str(remote)],
+            text=True, capture_output=True,
+        )
+        if junction.returncode:
+            pytest.skip(f"directory reparse unavailable: {junction.stderr}")
+    git(source, "remote", "set-url", "origin", str(alias))
+    target = tmp_path / "junction-remote-target"
+
+    with pytest.raises(BootstrapError, match="symlinked/reparse local remote"):
+        minimal_bootstrap(source, target, "chore/42-junction-remote")
+
+    assert not target.exists()
