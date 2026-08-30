@@ -331,6 +331,12 @@ def _support_identity(path: str, blob: str, *, state: str = "PRESENT") -> dict:
 
 
 def test_c1b_exact_support_scope_rejects_wildcards_siblings_and_directory_grants():
+    assert "tests/test_architecture_capability_exception_rebind_v1.py" in (
+        trust_anchor._SUPPORT_SCOPES["C1B_SAFE_UOW_BOOTSTRAP_V1"]
+    )
+    assert "tests/test_architecture_capability_exception_rebind_sibling.py" not in (
+        trust_anchor._SUPPORT_SCOPES["C1B_SAFE_UOW_BOOTSTRAP_V1"]
+    )
     base = "a" * 40
     protected = PROTECTED_PATHS[0]
     base_identity = _support_identity(protected, "b" * 40)

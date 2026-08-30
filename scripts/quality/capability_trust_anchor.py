@@ -15,6 +15,7 @@ _SUPPORT_SCOPES = {
         "docs/padroes/safe-uow-bootstrap-v1.md",
         "schemas/uow-manifest-v1.schema.json",
         "scripts/agentic/uow_bootstrap.py",
+        "tests/test_architecture_capability_exception_rebind_v1.py",
         "tests/test_safe_uow_bootstrap_v1.py",
     },
 }
