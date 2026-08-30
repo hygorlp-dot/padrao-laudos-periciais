@@ -40,7 +40,7 @@ from ..application.ports import (
     WorkspaceNotFound,
     UnsupportedCaseDocument,
 )
-from ..case_analysis import (
+from ..application.case_analysis import (
     CASE_ANALYSIS_ARTIFACT_KIND,
     CaseAnalysisSnapshot,
     case_analysis_from_mapping,
@@ -79,8 +79,8 @@ class LocalApiServices:
     list_artifact_revisions: object
     get_process_case: object
     save_process_case: object
-    save_case_analysis: object
-    get_case_analysis: object
+    save_case_analysis: object | None = None
+    get_case_analysis: object | None = None
     get_process_metadata_review: object | None = None
     confirm_process_metadata_source_span: object | None = None
     import_case_document: object | None = None

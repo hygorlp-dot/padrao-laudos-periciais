@@ -37,7 +37,7 @@ from ..infrastructure.rapid_ocr import RapidOcrLatinEngine
 from ..infrastructure.sqlite import SQLiteApplicationStore
 from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
-from ..case_analysis import GetCaseAnalysis, SaveCaseAnalysis
+from ..application.case_analysis import GetCaseAnalysis, SaveCaseAnalysis
 
 
 class LocalApiStartupError(RuntimeError):
