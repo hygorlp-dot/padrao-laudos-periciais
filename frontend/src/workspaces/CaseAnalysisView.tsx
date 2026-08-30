@@ -31,7 +31,14 @@ export function CaseAnalysisView({ workspaceId }: { workspaceId: string }) {
   const participants = new Map(snapshot.judicial_context.participants.map((participant) => [participant.participant_id, participant]));
   const staleSources = new Set(snapshot.stale_document_ids);
   const contextProvenance = snapshot.judicial_context.provenance;
-  const judicialContextStale = contextProvenance.some((source) => staleSources.has(source.source_document_id));
+  const judicialContextProvenance = [
+    ...contextProvenance,
+    ...snapshot.judicial_context.entities.flatMap((entity) => entity.provenance),
+    ...snapshot.judicial_context.participants.flatMap((participant) => participant.provenance),
+    ...snapshot.judicial_context.representation_links.flatMap((link) => link.provenance),
+    ...snapshot.judicial_context.access_relations.flatMap((relation) => relation.provenance),
+  ];
+  const judicialContextStale = judicialContextProvenance.some((source) => staleSources.has(source.source_document_id));
   return <section className="analysis-workspace" aria-labelledby="analysis-map-title">
     <header className="analysis-overview"><div><h2 id="analysis-map-title">Mapa do processo</h2><p>Leitura estruturada das fontes documentais. Não contém conclusão pericial.</p></div><div className={`coverage coverage--${snapshot.coverage.status.toLowerCase()}`}><strong>{coverageLabel}</strong><span>{snapshot.coverage.documents_analyzed} de {snapshot.coverage.documents_total} documentos analisados</span></div></header>
     {snapshot.source_inventory_stale && <p className="analysis-inventory-warning" role="status">{snapshot.unindexed_source_count} fonte nova ainda não foi incorporada à análise.</p>}

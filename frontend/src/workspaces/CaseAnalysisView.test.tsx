@@ -97,4 +97,21 @@ describe("case analysis view", () => {
 
     expect(await screen.findByText("Fonte alterada — contexto judicial requer revisão")).toBeInTheDocument();
   });
+
+  test.each([
+    ["an unlisted entity", (snapshot: typeof SNAPSHOT) => { snapshot.judicial_context.entities[0].provenance = [{ source_document_id: "DOC-HIDDEN" }]; }],
+    ["an access relation", (snapshot: typeof SNAPSHOT) => { (snapshot.judicial_context.access_relations as { provenance: { source_document_id: string }[] }[]).push({ provenance: [{ source_document_id: "DOC-HIDDEN" }] }); }],
+  ])("warns when stale provenance belongs only to %s", async (_label, mutate) => {
+    const contextOnly = structuredClone(SNAPSHOT);
+    contextOnly.participant_refs = [];
+    contextOnly.judicial_context.participants = [];
+    contextOnly.judicial_context.representation_links = [];
+    contextOnly.stale_document_ids = ["DOC-HIDDEN"];
+    mutate(contextOnly);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(200, { revision: 1, updated_at: "2026-03-01T10:00:00-03:00", snapshot: contextOnly })));
+
+    render(<CaseAnalysisView workspaceId={WORKSPACE_ID} />);
+
+    expect(await screen.findByText("Fonte alterada — contexto judicial requer revisão")).toBeInTheDocument();
+  });
 });

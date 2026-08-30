@@ -14,7 +14,7 @@ export type JudicialContext = {
   entities: { entity_id: string; raw_name: string; kind: string; provenance: { source_document_id: string }[] }[];
   participants: { participant_id: string; entity_id: string; pole: string; role: { raw_label: string; normalized: string }; status: string; provenance: { source_document_id: string }[] }[];
   representation_links: { link_id: string; representative_entity_id: string; represented_participant_ids: string[]; representation_role_raw: string; provenance: { source_document_id: string }[] }[];
-  access_relations: unknown[];
+  access_relations: { provenance: { source_document_id: string }[] }[];
 };
 
 export type AnalysisItem = {
