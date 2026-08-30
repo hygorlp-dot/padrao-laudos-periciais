@@ -392,5 +392,7 @@
       "reason": "Correção sintética de natureza da afirmação."
     }
   ],
-  "stale_document_ids": []
+  "stale_document_ids": [],
+  "source_inventory_stale": false,
+  "unindexed_source_count": 0
 }

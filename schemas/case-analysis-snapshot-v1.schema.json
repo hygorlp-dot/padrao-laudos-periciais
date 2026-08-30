@@ -24,7 +24,9 @@
     "conflicts",
     "coverage",
     "human_reviews",
-    "stale_document_ids"
+    "stale_document_ids",
+    "source_inventory_stale",
+    "unindexed_source_count"
   ],
   "properties": {
     "schema_version": { "const": "1.0.0" },
@@ -38,26 +40,26 @@
     },
     "judicial_context_workspace_id": { "type": "string", "format": "uuid" },
     "judicial_context": {
-      "type": "object",
-      "required": ["schema_version", "context_id", "instance_label", "snapshot_id", "entities", "participants", "representation_links", "access_relations", "provenance"],
-      "properties": {
-        "schema_version": { "const": "1.0.0" },
-        "context_id": { "$ref": "#/$defs/text" },
-        "instance_label": { "$ref": "#/$defs/text" },
-        "snapshot_id": { "$ref": "#/$defs/text" },
-        "entities": { "type": "array" },
-        "participants": { "type": "array" },
-        "representation_links": { "type": "array" },
-        "access_relations": { "type": "array" },
-        "provenance": { "type": "array", "minItems": 1 }
-      },
-      "additionalProperties": false
+      "$ref": "https://padrao-laudos-periciais.local/schemas/judicial-domain-model-v1.schema.json"
     },
     "documents": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["document_id", "storage_content_id", "source_sha256", "sequence", "document_role", "raw_type", "normalized_type", "timestamp", "participant_refs", "page_count_or_span", "content_available", "analysis_revision"],
+        "required": [
+          "document_id",
+          "storage_content_id",
+          "source_sha256",
+          "sequence",
+          "document_role",
+          "raw_type",
+          "normalized_type",
+          "timestamp",
+          "participant_refs",
+          "page_count_or_span",
+          "content_available",
+          "analysis_revision"
+        ],
         "properties": {
           "document_id": { "$ref": "#/$defs/text" },
           "storage_content_id": { "type": "string", "format": "uuid" },
@@ -67,7 +69,10 @@
           "raw_type": { "$ref": "#/$defs/text" },
           "normalized_type": { "$ref": "#/$defs/text" },
           "timestamp": { "type": ["string", "null"] },
-          "participant_refs": { "type": "array", "items": { "$ref": "#/$defs/text" } },
+          "participant_refs": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/text" }
+          },
           "page_count_or_span": { "$ref": "#/$defs/text" },
           "content_available": { "type": "boolean" },
           "analysis_revision": { "type": "integer", "minimum": 0 }
@@ -75,15 +80,17 @@
         "additionalProperties": false
       }
     },
-    "claims": { "$ref": "#/$defs/items" },
-    "counterarguments": { "$ref": "#/$defs/items" },
-    "decisions": { "$ref": "#/$defs/items" },
-    "pericial_objects": { "$ref": "#/$defs/items" },
-    "questions": { "$ref": "#/$defs/items" },
-    "events": { "$ref": "#/$defs/items" },
-    "technical_document_references": { "$ref": "#/$defs/items" },
-    "gaps": { "$ref": "#/$defs/items" },
-    "conflicts": { "$ref": "#/$defs/items" },
+    "claims": { "$ref": "#/$defs/baseItems" },
+    "counterarguments": { "$ref": "#/$defs/counterargumentItems" },
+    "decisions": { "$ref": "#/$defs/decisionItems" },
+    "pericial_objects": { "$ref": "#/$defs/baseItems" },
+    "questions": { "$ref": "#/$defs/questionItems" },
+    "events": { "$ref": "#/$defs/eventItems" },
+    "technical_document_references": {
+      "$ref": "#/$defs/technicalReferenceItems"
+    },
+    "gaps": { "$ref": "#/$defs/baseItems" },
+    "conflicts": { "$ref": "#/$defs/conflictItems" },
     "coverage": {
       "type": "object",
       "additionalProperties": false,
@@ -108,7 +115,17 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["review_id", "target_item_id", "original_extraction", "decision", "corrected_value", "reviewer", "revision", "timestamp", "reason"],
+        "required": [
+          "review_id",
+          "target_item_id",
+          "original_extraction",
+          "decision",
+          "corrected_value",
+          "reviewer",
+          "revision",
+          "timestamp",
+          "reason"
+        ],
         "properties": {
           "review_id": { "$ref": "#/$defs/text" },
           "target_item_id": { "$ref": "#/$defs/text" },
@@ -127,7 +144,9 @@
       "type": "array",
       "uniqueItems": true,
       "items": { "$ref": "#/$defs/text" }
-    }
+    },
+    "source_inventory_stale": { "type": "boolean" },
+    "unindexed_source_count": { "type": "integer", "minimum": 0 }
   },
   "$defs": {
     "text": { "type": "string", "minLength": 1, "maxLength": 4096 },
@@ -177,9 +196,18 @@
           "minItems": 1,
           "items": { "$ref": "#/$defs/provenance" }
         },
-        "target_claim_ids": { "type": "array", "items": { "$ref": "#/$defs/text" } },
-        "addressed_claim_ids": { "type": "array", "items": { "$ref": "#/$defs/text" } },
-        "addressed_counterargument_ids": { "type": "array", "items": { "$ref": "#/$defs/text" } },
+        "target_claim_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/text" }
+        },
+        "addressed_claim_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/text" }
+        },
+        "addressed_counterargument_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/text" }
+        },
         "answer": { "type": "null" },
         "event_raw": { "$ref": "#/$defs/text" },
         "event_normalized": { "$ref": "#/$defs/text" },
@@ -189,11 +217,96 @@
         "statement_a_id": { "$ref": "#/$defs/text" },
         "statement_b_id": { "$ref": "#/$defs/text" },
         "conflict_dimension": { "$ref": "#/$defs/text" },
-        "analysis_status": { "enum": ["PROPOSED_CONFLICT", "HUMAN_CONFIRMED", "HUMAN_REJECTED"] },
+        "analysis_status": {
+          "enum": ["PROPOSED_CONFLICT", "HUMAN_CONFIRMED", "HUMAN_REJECTED"]
+        },
         "human_review_status": { "$ref": "#/$defs/text" }
       },
       "additionalProperties": false
     },
-    "items": { "type": "array", "items": { "$ref": "#/$defs/item" } }
+    "baseItems": {
+      "type": "array",
+      "items": {
+        "allOf": [{ "$ref": "#/$defs/item" }],
+        "not": {
+          "anyOf": [
+            { "required": ["target_claim_ids"] },
+            { "required": ["addressed_claim_ids"] },
+            { "required": ["answer"] },
+            { "required": ["event_raw"] },
+            { "required": ["external_reference"] },
+            { "required": ["statement_a_id"] }
+          ]
+        }
+      }
+    },
+    "counterargumentItems": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          { "$ref": "#/$defs/item" },
+          { "required": ["target_claim_ids"] }
+        ]
+      }
+    },
+    "decisionItems": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          { "$ref": "#/$defs/item" },
+          {
+            "required": ["addressed_claim_ids", "addressed_counterargument_ids"]
+          }
+        ]
+      }
+    },
+    "questionItems": {
+      "type": "array",
+      "items": {
+        "allOf": [{ "$ref": "#/$defs/item" }, { "required": ["answer"] }]
+      }
+    },
+    "eventItems": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          { "$ref": "#/$defs/item" },
+          {
+            "required": [
+              "event_raw",
+              "event_normalized",
+              "timestamp",
+              "normalization_authority"
+            ]
+          }
+        ]
+      }
+    },
+    "technicalReferenceItems": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          { "$ref": "#/$defs/item" },
+          { "required": ["external_reference"] }
+        ]
+      }
+    },
+    "conflictItems": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          { "$ref": "#/$defs/item" },
+          {
+            "required": [
+              "statement_a_id",
+              "statement_b_id",
+              "conflict_dimension",
+              "analysis_status",
+              "human_review_status"
+            ]
+          }
+        ]
+      }
+    }
   }
 }

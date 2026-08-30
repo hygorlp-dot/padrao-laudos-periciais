@@ -1,10 +1,11 @@
 """Application operations for workspace-owned Case Analysis snapshots."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 
 from jsonschema import Draft202012Validator, ValidationError
+from referencing import Registry, Resource
 
 from ..case_analysis import (
     CASE_ANALYSIS_ARTIFACT_ID,
@@ -18,7 +19,10 @@ from .ports import RepositoryIntegrityError
 
 
 _SCHEMA_PATH = Path(__file__).resolve().parents[3] / "schemas" / "case-analysis-snapshot-v1.schema.json"
-_VALIDATOR = Draft202012Validator(json.loads(_SCHEMA_PATH.read_text(encoding="utf-8")))
+_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+_JDM_SCHEMA = json.loads((_SCHEMA_PATH.parent / "judicial-domain-model-v1.schema.json").read_text(encoding="utf-8"))
+_REGISTRY = Registry().with_resource(_JDM_SCHEMA["$id"], Resource.from_contents(_JDM_SCHEMA))
+_VALIDATOR = Draft202012Validator(_SCHEMA, registry=_REGISTRY)
 
 
 def validated_case_analysis_from_mapping(value: object) -> CaseAnalysisSnapshot:
@@ -48,7 +52,7 @@ class SaveCaseAnalysis:
             for document in self.list_documents.execute(workspace_id)
         }
         storage_ids = [document.storage_content_id for document in snapshot.documents]
-        if len(storage_ids) != len(set(storage_ids)) or any(
+        if snapshot.source_inventory_stale or set(storage_ids) != set(authoritative) or len(storage_ids) != len(set(storage_ids)) or any(
             authoritative.get(document.storage_content_id) != document.source_sha256
             for document in snapshot.documents
         ):
@@ -91,4 +95,10 @@ class GetCaseAnalysis:
             document.document_id: authoritative.get(document.storage_content_id)
             for document in snapshot.documents
         }
-        return record, snapshot.reconcile_sources(current_hashes)
+        reconciled = snapshot.reconcile_sources(current_hashes)
+        unindexed = set(authoritative) - {document.storage_content_id for document in snapshot.documents}
+        return record, replace(
+            reconciled,
+            source_inventory_stale=bool(unindexed),
+            unindexed_source_count=len(unindexed),
+        )

@@ -10,9 +10,9 @@ export type Provenance = {
 };
 
 export type JudicialContext = {
-  entities: { entity_id: string; raw_name: string; kind: string }[];
-  participants: { participant_id: string; entity_id: string; pole: string; role: { raw_label: string; normalized: string }; status: string }[];
-  representation_links: { link_id: string; representative_entity_id: string; represented_participant_ids: string[]; representation_role_raw: string }[];
+  entities: { entity_id: string; raw_name: string; kind: string; provenance: { source_document_id: string }[] }[];
+  participants: { participant_id: string; entity_id: string; pole: string; role: { raw_label: string; normalized: string }; status: string; provenance: { source_document_id: string }[] }[];
+  representation_links: { link_id: string; representative_entity_id: string; represented_participant_ids: string[]; representation_role_raw: string; provenance: { source_document_id: string }[] }[];
   access_relations: unknown[];
 };
 
@@ -46,6 +46,8 @@ export type CaseAnalysisSnapshot = {
   coverage: { status: "COMPLETE" | "PARTIAL" | "UNAVAILABLE"; documents_total: number; documents_analyzed: number; documents_unavailable: number; documents_failed: number; source_revision: number };
   human_reviews: Record<string, unknown>[];
   stale_document_ids: string[];
+  source_inventory_stale: boolean;
+  unindexed_source_count: number;
 };
 
 export type CaseAnalysisEnvelope = { revision: number; updated_at: string; snapshot: CaseAnalysisSnapshot };
@@ -64,7 +66,7 @@ function parseEnvelope(value: unknown, workspaceId: string): CaseAnalysisEnvelop
   const snapshot = envelope.snapshot as Record<string, unknown>;
   const collections = ["claims", "counterarguments", "decisions", "pericial_objects", "questions", "events", "technical_document_references", "gaps", "conflicts"];
   const context = snapshot?.judicial_context as Record<string, unknown> | undefined;
-  if (!snapshot || snapshot.workspace_id !== workspaceId || snapshot.judicial_context_workspace_id !== workspaceId || snapshot.schema_version !== "1.0.0" || !Number.isSafeInteger(envelope.revision) || (envelope.revision as number) < 1 || typeof envelope.updated_at !== "string" || collections.some((name) => !Array.isArray(snapshot[name])) || !Array.isArray(snapshot.stale_document_ids) || !context || !Array.isArray(context.entities) || !Array.isArray(context.participants) || !Array.isArray(context.representation_links)) throw new CaseAnalysisApiError("invalid-response", "Resposta local inválida");
+  if (!snapshot || snapshot.workspace_id !== workspaceId || snapshot.judicial_context_workspace_id !== workspaceId || snapshot.schema_version !== "1.0.0" || !Number.isSafeInteger(envelope.revision) || (envelope.revision as number) < 1 || typeof envelope.updated_at !== "string" || collections.some((name) => !Array.isArray(snapshot[name])) || !Array.isArray(snapshot.stale_document_ids) || typeof snapshot.source_inventory_stale !== "boolean" || !Number.isSafeInteger(snapshot.unindexed_source_count) || !context || !Array.isArray(context.entities) || !Array.isArray(context.participants) || !Array.isArray(context.representation_links)) throw new CaseAnalysisApiError("invalid-response", "Resposta local inválida");
   for (const name of collections) {
     for (const item of snapshot[name] as AnalysisItem[]) {
       if (!Array.isArray(item.provenance) || item.provenance.length === 0 || item.provenance.some((source) => source.workspace_id !== workspaceId || typeof source.occurrence_id !== "string" || !source.occurrence_id)) throw new CaseAnalysisApiError("invalid-response", "Resposta local inválida");

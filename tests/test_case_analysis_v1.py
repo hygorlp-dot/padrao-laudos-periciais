@@ -35,7 +35,8 @@ def fixture():
 def test_synthetic_snapshot_is_structurally_and_semantically_canonical():
     raw = fixture()
     schema = json.loads((ROOT / "schemas/case-analysis-snapshot-v1.schema.json").read_text(encoding="utf-8"))
-    jsonschema.Draft202012Validator(schema).validate(raw)
+    jsonschema.Draft202012Validator.check_schema(schema)
+    validated_case_analysis_from_mapping(raw)
 
     snapshot = case_analysis_from_mapping(raw)
 
@@ -174,6 +175,7 @@ def test_reconciliation_clears_persisted_stale_state_when_source_is_restored():
         (lambda raw: raw["human_reviews"][0].update(target_item_id="ITEM-MISSING"), "human review target"),
         (lambda raw: raw["coverage"].update(source_revision=99), "coverage"),
         (lambda raw: raw["coverage"].update(documents_total=4, documents_unavailable=2), "coverage"),
+        (lambda raw: raw["coverage"].update(status="COMPLETE", documents_analyzed=3, documents_unavailable=0), "availability"),
         (lambda raw: raw["claims"][0].update(text=""), "material item"),
     ),
 )
@@ -246,6 +248,17 @@ def test_save_uses_atomic_repository_cas_and_authoritative_inventory():
             WorkspaceId.parse(snapshot.workspace_id), snapshot, None
         )
 
+    extra = SimpleNamespace(
+        execute=lambda _workspace: (
+            *_authoritative_documents(snapshot),
+            SimpleNamespace(content_id="10000000-0000-4000-8000-000000000004", checksum_sha256="e" * 64),
+        )
+    )
+    with pytest.raises(RepositoryIntegrityError, match="source inventory mismatch"):
+        SaveCaseAnalysis(revisions, clock, ids, extra).execute(
+            WorkspaceId.parse(snapshot.workspace_id), snapshot, None
+        )
+
 
 def test_get_reconciles_current_snapshot_against_live_inventory():
     snapshot = case_analysis_from_mapping(fixture())
@@ -267,6 +280,28 @@ def test_get_reconciles_current_snapshot_against_live_inventory():
     assert reopened.stale_document_ids == ("DOC-002",)
     assert reopened.claims[0].stale is False
     assert reopened.counterarguments[0].stale is True
+
+
+def test_get_marks_live_inventory_additions_as_unindexed_and_stale():
+    snapshot = case_analysis_from_mapping(fixture())
+    record = ArtifactRevision(
+        workspace_id=WorkspaceId.parse(snapshot.workspace_id), artifact_kind="CASE_ANALYSIS_SNAPSHOT_V1",
+        artifact_id="CASE-ANALYSIS", revision_id="99999999-9999-4999-8999-999999999999",
+        revision=1, created_at="2026-08-30T12:00:00+00:00", checksum_sha256="0" * 64,
+        payload=case_analysis_to_mapping(snapshot),
+    )
+    latest = SimpleNamespace(execute=lambda *_args: record)
+    documents = SimpleNamespace(
+        execute=lambda _workspace: (
+            *_authoritative_documents(snapshot),
+            SimpleNamespace(content_id="10000000-0000-4000-8000-000000000004", checksum_sha256="e" * 64),
+        )
+    )
+
+    _, reopened = GetCaseAnalysis(latest, documents).execute(WorkspaceId.parse(snapshot.workspace_id))
+
+    assert reopened.source_inventory_stale is True
+    assert reopened.unindexed_source_count == 1
 
 
 def test_human_review_preserves_original_extraction_and_never_answers_question():

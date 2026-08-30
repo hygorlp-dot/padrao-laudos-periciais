@@ -241,8 +241,14 @@ class CaseAnalysisSnapshot:
     coverage: CaseAnalysisCoverage
     human_reviews: tuple[HumanReviewDecision, ...]
     stale_document_ids: tuple[str, ...] = ()
+    source_inventory_stale: bool = False
+    unindexed_source_count: int = 0
 
     def __post_init__(self):
+        if type(self.source_inventory_stale) is not bool or type(self.unindexed_source_count) is not int or self.unindexed_source_count < 0:
+            raise ValueError("source inventory state is invalid")
+        if self.source_inventory_stale != (self.unindexed_source_count > 0):
+            raise ValueError("source inventory stale state is dishonest")
         if self.judicial_context_workspace_id != self.workspace_id:
             raise ValueError("JDM context workspace identity mismatch")
         participant_ids = {item.participant_id for item in self.judicial_context.participants}
@@ -255,6 +261,9 @@ class CaseAnalysisSnapshot:
             raise ValueError("document participant references require canonical JDM participants")
         if self.coverage.source_revision != self.source_revision or self.coverage.documents_total != len(self.documents):
             raise ValueError("coverage must reconcile with the analysis snapshot")
+        unavailable = sum(not document.content_available for document in self.documents)
+        if self.coverage.documents_unavailable != unavailable or self.coverage.documents_analyzed + self.coverage.documents_failed != len(self.documents) - unavailable:
+            raise ValueError("coverage must reflect indexed document availability")
         occurrences: dict[str, tuple[str, str, str]] = {}
         item_ids = [item.item_id for item in self.material_items]
         if len(item_ids) != len(set(item_ids)):
@@ -399,6 +408,8 @@ _ROOT_FIELDS = {
     "coverage",
     "human_reviews",
     "stale_document_ids",
+    "source_inventory_stale",
+    "unindexed_source_count",
 }
 
 
@@ -482,6 +493,8 @@ def case_analysis_from_mapping(value: object) -> CaseAnalysisSnapshot:
         conflicts=_items(root["conflicts"], DocumentConflict, workspace, {"statement_a_id", "statement_b_id", "conflict_dimension", "analysis_status", "human_review_status"}),
         coverage=coverage,
         human_reviews=reviews,
+        source_inventory_stale=root["source_inventory_stale"],
+        unindexed_source_count=root["unindexed_source_count"],
     )
     stale_ids = tuple(root["stale_document_ids"])
     known_ids = {document.document_id for document in snapshot.documents}

@@ -896,6 +896,7 @@ button.text-action {
 .participant-index li, .relation-index li { display: grid; gap: 0.2rem; padding: var(--space-3) 0; border-bottom: 1px solid var(--color-rule); }
 .participant-index span, .relation-index span { color: var(--color-slate); font-size: 0.82rem; }
 .analysis-stale { width: fit-content; color: var(--color-error); font-size: 0.78rem; font-weight: 680; }
+.analysis-inventory-warning { margin: var(--space-4) 0 0; color: var(--color-error); font-weight: 680; }
 .analysis-empty { color: var(--color-slate); }
 
 @media (max-width: 840px) {
