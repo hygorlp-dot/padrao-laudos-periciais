@@ -179,22 +179,56 @@ def test_case_analysis_save_close_reopen_is_semantically_equivalent(tmp_path):
         database,
         token=TOKEN,
         clock=FixedClock(),
-        ids=SequenceIds([WORKSPACE_UUID, UUID(REVISION_UUID)]),
+        private_root=tmp_path / "private",
     )
     runtime.start()
     try:
-        created_status, _, _ = http_request(
+        created_status, _, created_body = http_request(
             runtime.server,
             "POST",
             "/v1/workspaces",
             value={"name": "Perícia sintética"},
             headers={"X-Local-API-Token": TOKEN},
         )
+        workspace_id = json.loads(created_body)["workspace_id"]
+        payload = case_analysis_payload()
+        payload["workspace_id"] = workspace_id
+        payload["judicial_context_workspace_id"] = workspace_id
+        imported = []
+        for index in range(3):
+            content = f"%PDF-1.7\nsynthetic-{index}\n%%EOF\n".encode()
+            status, _, body = http_request(
+                runtime.server,
+                "POST",
+                f"/v1/workspaces/{workspace_id}/materials",
+                raw_body=content,
+                headers={
+                    "X-Local-API-Token": TOKEN,
+                    "Content-Type": "application/pdf",
+                    "X-Document-Filename": f"synthetic-{index}.pdf",
+                },
+            )
+            assert status == 201, body
+            imported.append(json.loads(body))
+        source_by_id = {}
+        for document, material in zip(payload["documents"], imported, strict=True):
+            document["storage_content_id"] = material["content_id"]
+            document["source_sha256"] = material["checksum_sha256"]
+            source_by_id[document["document_id"]] = material["checksum_sha256"]
+        for collection in ("claims", "counterarguments", "decisions", "pericial_objects", "questions", "events", "technical_document_references", "gaps", "conflicts"):
+            for item in payload[collection]:
+                for source in item["provenance"]:
+                    source["workspace_id"] = workspace_id
+                    source["source_document_sha256"] = source_by_id[source["source_document_id"]]
+        context = payload["judicial_context"]
+        for owner in [context, *context["entities"], *context["participants"], *context["representation_links"], *context["access_relations"]]:
+            for source in owner["provenance"]:
+                source["source_sha256"] = source_by_id[source["source_document_id"]]
         saved_status, _, saved_body = http_request(
             runtime.server,
             "POST",
-            f"/v1/workspaces/{WORKSPACE_UUID}/case-analysis",
-            value={"expected_revision": None, "snapshot": case_analysis_payload()},
+            f"/v1/workspaces/{workspace_id}/case-analysis",
+            value={"expected_revision": None, "snapshot": payload},
             headers={"X-Local-API-Token": TOKEN},
         )
     finally:
@@ -204,20 +238,20 @@ def test_case_analysis_save_close_reopen_is_semantically_equivalent(tmp_path):
     assert saved_status == 200, saved_body
     assert json.loads(saved_body)["revision"] == 1
 
-    reopened = build_local_api(database, token=TOKEN, ids=SequenceIds([]))
+    reopened = build_local_api(database, token=TOKEN, private_root=tmp_path / "private")
     reopened.start()
     try:
         status, _, body = http_request(
             reopened.server,
             "GET",
-            f"/v1/workspaces/{WORKSPACE_UUID}/case-analysis",
+            f"/v1/workspaces/{workspace_id}/case-analysis",
             headers={"X-Local-API-Token": TOKEN},
         )
     finally:
         reopened.close()
 
     assert status == 200
-    assert json.loads(body)["snapshot"] == case_analysis_payload()
+    assert json.loads(body)["snapshot"] == payload
 
 
 def test_case_analysis_is_private_and_generic_artifact_route_cannot_bypass_validation():
@@ -1051,11 +1085,13 @@ def test_transfer_encoding_is_rejected_instead_of_interpreted():
     assert decoded(response)["error"]["code"] == "INVALID_REQUEST"
 
 
-def http_request(server, method, target, *, value=None, headers=None):
+def http_request(server, method, target, *, value=None, raw_body=None, headers=None):
     host, port = server.address
-    body = None
+    body = raw_body
     request_headers = dict(headers or {})
     if value is not None:
+        if raw_body is not None:
+            raise ValueError("request body is ambiguous")
         body = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         request_headers.setdefault("Content-Type", "application/json; charset=utf-8")
     connection = http.client.HTTPConnection(host, port, timeout=5)

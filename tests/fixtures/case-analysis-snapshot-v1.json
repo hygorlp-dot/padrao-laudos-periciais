@@ -4,6 +4,7 @@
   "workspace_id": "11111111-1111-4111-8111-111111111111",
   "source_revision": 4,
   "participant_refs": ["PART-CLAIMANT", "PART-DEFENDANT"],
+  "judicial_context_workspace_id": "11111111-1111-4111-8111-111111111111",
   "judicial_context": {
     "schema_version": "1.0.0",
     "context_id": "CTX-ANALYSIS-001",
@@ -129,6 +130,7 @@
   "documents": [
     {
       "document_id": "DOC-001",
+      "storage_content_id": "10000000-0000-4000-8000-000000000001",
       "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "sequence": 1,
       "document_role": "INITIAL_PETITION",
@@ -142,6 +144,7 @@
     },
     {
       "document_id": "DOC-002",
+      "storage_content_id": "10000000-0000-4000-8000-000000000002",
       "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "sequence": 2,
       "document_role": "DEFENSE",
@@ -155,6 +158,7 @@
     },
     {
       "document_id": "DOC-003",
+      "storage_content_id": "10000000-0000-4000-8000-000000000003",
       "source_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "sequence": 3,
       "document_role": "TECHNICAL_ATTACHMENT",

@@ -7,7 +7,7 @@ type State = { kind: "loading" } | { kind: "ready"; value: CaseAnalysisEnvelope 
 function ItemList({ items, staleDocumentIds }: { items: AnalysisItem[]; staleDocumentIds: string[] }) {
   if (items.length === 0) return <p className="analysis-empty">Nenhum item identificado nesta revisão.</p>;
   const stale = new Set(staleDocumentIds);
-  return <ul className="analysis-list">{items.map((item) => <li key={item.item_id}><p>{item.text}</p>{item.provenance.some((source) => stale.has(source.source_document_id)) && <span className="analysis-stale">Fonte alterada — revisão necessária</span>}<details><summary>Ver proveniência</summary><ul>{item.provenance.map((source) => <li key={source.occurrence_id}>{source.source_document_id} · {source.page_or_span} · ocorrência {source.occurrence_id} · revisão {source.source_revision}</li>)}</ul></details></li>)}</ul>;
+  return <ul className="analysis-list">{items.map((item) => <li key={item.item_id}><p>{item.text}</p>{item.provenance.some((source) => stale.has(source.source_document_id)) && <span className="analysis-stale">Fonte alterada — revisão necessária</span>}<details><summary>Ver proveniência</summary><ul>{item.provenance.map((source) => <li key={source.occurrence_id}>{source.source_document_id} · {source.page_or_span} · ocorrência {source.occurrence_id} · SHA {source.source_document_sha256} · revisão {source.source_revision}</li>)}</ul></details></li>)}</ul>;
 }
 
 export function CaseAnalysisView({ workspaceId }: { workspaceId: string }) {

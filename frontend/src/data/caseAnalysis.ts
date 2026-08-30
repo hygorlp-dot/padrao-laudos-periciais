@@ -31,6 +31,7 @@ export type CaseAnalysisSnapshot = {
   workspace_id: string;
   source_revision: number;
   participant_refs: string[];
+  judicial_context_workspace_id: string;
   judicial_context: JudicialContext;
   documents: Record<string, unknown>[];
   claims: AnalysisItem[];
@@ -63,7 +64,7 @@ function parseEnvelope(value: unknown, workspaceId: string): CaseAnalysisEnvelop
   const snapshot = envelope.snapshot as Record<string, unknown>;
   const collections = ["claims", "counterarguments", "decisions", "pericial_objects", "questions", "events", "technical_document_references", "gaps", "conflicts"];
   const context = snapshot?.judicial_context as Record<string, unknown> | undefined;
-  if (!snapshot || snapshot.workspace_id !== workspaceId || snapshot.schema_version !== "1.0.0" || !Number.isSafeInteger(envelope.revision) || (envelope.revision as number) < 1 || typeof envelope.updated_at !== "string" || collections.some((name) => !Array.isArray(snapshot[name])) || !Array.isArray(snapshot.stale_document_ids) || !context || !Array.isArray(context.entities) || !Array.isArray(context.participants) || !Array.isArray(context.representation_links)) throw new CaseAnalysisApiError("invalid-response", "Resposta local inválida");
+  if (!snapshot || snapshot.workspace_id !== workspaceId || snapshot.judicial_context_workspace_id !== workspaceId || snapshot.schema_version !== "1.0.0" || !Number.isSafeInteger(envelope.revision) || (envelope.revision as number) < 1 || typeof envelope.updated_at !== "string" || collections.some((name) => !Array.isArray(snapshot[name])) || !Array.isArray(snapshot.stale_document_ids) || !context || !Array.isArray(context.entities) || !Array.isArray(context.participants) || !Array.isArray(context.representation_links)) throw new CaseAnalysisApiError("invalid-response", "Resposta local inválida");
   for (const name of collections) {
     for (const item of snapshot[name] as AnalysisItem[]) {
       if (!Array.isArray(item.provenance) || item.provenance.length === 0 || item.provenance.some((source) => source.workspace_id !== workspaceId || typeof source.occurrence_id !== "string" || !source.occurrence_id)) throw new CaseAnalysisApiError("invalid-response", "Resposta local inválida");

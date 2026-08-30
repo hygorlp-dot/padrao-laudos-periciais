@@ -12,13 +12,19 @@
       "get": {
         "summary": "Reabre a análise canônica",
         "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
-        "responses": {"200": {"description": "Análise revalidada"}, "404": {"description": "Análise ausente"}}
+        "responses": {
+          "200": {"description": "Análise revalidada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CaseAnalysisEnvelope"}}}},
+          "404": {"description": "Análise ausente"}
+        }
       },
       "post": {
         "summary": "Salva nova revisão canônica",
         "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
-        "requestBody": {"required": true},
-        "responses": {"200": {"description": "Revisão persistida"}, "409": {"description": "Conflito de revisão"}}
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SaveCaseAnalysisRequest"}}}},
+        "responses": {
+          "200": {"description": "Revisão persistida", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CaseAnalysisEnvelope"}}}},
+          "409": {"description": "Conflito de revisão"}
+        }
       }
     }
   },
@@ -28,7 +34,26 @@
     },
     "schemas": {
       "ProceduralContext": {"$ref": "../schemas/judicial-domain-model-v1.schema.json"},
-      "CaseAnalysisSnapshot": {"$ref": "../schemas/case-analysis-snapshot-v1.schema.json"}
+      "CaseAnalysisSnapshot": {"$ref": "../schemas/case-analysis-snapshot-v1.schema.json"},
+      "SaveCaseAnalysisRequest": {
+        "type": "object",
+        "required": ["expected_revision", "snapshot"],
+        "properties": {
+          "expected_revision": {"type": ["integer", "null"], "minimum": 1},
+          "snapshot": {"$ref": "#/components/schemas/CaseAnalysisSnapshot"}
+        },
+        "additionalProperties": false
+      },
+      "CaseAnalysisEnvelope": {
+        "type": "object",
+        "required": ["revision", "updated_at", "snapshot"],
+        "properties": {
+          "revision": {"type": "integer", "minimum": 1},
+          "updated_at": {"type": "string"},
+          "snapshot": {"$ref": "#/components/schemas/CaseAnalysisSnapshot"}
+        },
+        "additionalProperties": false
+      }
     }
   }
 }

@@ -43,8 +43,8 @@ from ..application.ports import (
 from ..application.case_analysis import (
     CASE_ANALYSIS_ARTIFACT_KIND,
     CaseAnalysisSnapshot,
-    case_analysis_from_mapping,
     case_analysis_to_mapping,
+    validated_case_analysis_from_mapping,
 )
 
 _MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
@@ -453,7 +453,7 @@ class LocalApi:
                     expected = dto["expected_revision"]
                     if expected is not None and (type(expected) is not int or expected < 1):
                         raise ValueError("Case Analysis expected revision is invalid")
-                    snapshot = case_analysis_from_mapping(dto["snapshot"])
+                    snapshot = validated_case_analysis_from_mapping(dto["snapshot"])
                     if snapshot.workspace_id != str(workspace_id):
                         raise ValueError("Case Analysis workspace mismatch")
                     record = self._services.save_case_analysis.execute(workspace_id, snapshot, expected)

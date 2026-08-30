@@ -207,8 +207,13 @@ def build_local_api(
             if get_process_metadata_review is not None
             else save_process_case
         ),
-        save_case_analysis=SaveCaseAnalysis(append_artifact_revision, get_latest_artifact),
-        get_case_analysis=GetCaseAnalysis(get_latest_artifact),
+        save_case_analysis=SaveCaseAnalysis(
+            store.revisions,
+            local_clock,
+            local_ids,
+            list_case_documents,
+        ),
+        get_case_analysis=GetCaseAnalysis(get_latest_artifact, list_case_documents),
         get_process_metadata_review=get_process_metadata_review,
         confirm_process_metadata_source_span=confirm_process_metadata_source_span,
         import_case_document=import_case_document,

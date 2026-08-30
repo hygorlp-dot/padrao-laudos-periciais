@@ -10,6 +10,7 @@
     "workspace_id",
     "source_revision",
     "participant_refs",
+    "judicial_context_workspace_id",
     "judicial_context",
     "documents",
     "claims",
@@ -35,8 +36,45 @@
       "uniqueItems": true,
       "items": { "$ref": "#/$defs/text" }
     },
-    "judicial_context": { "type": "object" },
-    "documents": { "type": "array", "items": { "type": "object" } },
+    "judicial_context_workspace_id": { "type": "string", "format": "uuid" },
+    "judicial_context": {
+      "type": "object",
+      "required": ["schema_version", "context_id", "instance_label", "snapshot_id", "entities", "participants", "representation_links", "access_relations", "provenance"],
+      "properties": {
+        "schema_version": { "const": "1.0.0" },
+        "context_id": { "$ref": "#/$defs/text" },
+        "instance_label": { "$ref": "#/$defs/text" },
+        "snapshot_id": { "$ref": "#/$defs/text" },
+        "entities": { "type": "array" },
+        "participants": { "type": "array" },
+        "representation_links": { "type": "array" },
+        "access_relations": { "type": "array" },
+        "provenance": { "type": "array", "minItems": 1 }
+      },
+      "additionalProperties": false
+    },
+    "documents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["document_id", "storage_content_id", "source_sha256", "sequence", "document_role", "raw_type", "normalized_type", "timestamp", "participant_refs", "page_count_or_span", "content_available", "analysis_revision"],
+        "properties": {
+          "document_id": { "$ref": "#/$defs/text" },
+          "storage_content_id": { "type": "string", "format": "uuid" },
+          "source_sha256": { "$ref": "#/$defs/sha" },
+          "sequence": { "type": "integer", "minimum": 1 },
+          "document_role": { "$ref": "#/$defs/text" },
+          "raw_type": { "$ref": "#/$defs/text" },
+          "normalized_type": { "$ref": "#/$defs/text" },
+          "timestamp": { "type": ["string", "null"] },
+          "participant_refs": { "type": "array", "items": { "$ref": "#/$defs/text" } },
+          "page_count_or_span": { "$ref": "#/$defs/text" },
+          "content_available": { "type": "boolean" },
+          "analysis_revision": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
     "claims": { "$ref": "#/$defs/items" },
     "counterarguments": { "$ref": "#/$defs/items" },
     "decisions": { "$ref": "#/$defs/items" },
@@ -66,7 +104,25 @@
         "source_revision": { "type": "integer", "minimum": 1 }
       }
     },
-    "human_reviews": { "type": "array", "items": { "type": "object" } },
+    "human_reviews": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["review_id", "target_item_id", "original_extraction", "decision", "corrected_value", "reviewer", "revision", "timestamp", "reason"],
+        "properties": {
+          "review_id": { "$ref": "#/$defs/text" },
+          "target_item_id": { "$ref": "#/$defs/text" },
+          "original_extraction": { "$ref": "#/$defs/text" },
+          "decision": { "$ref": "#/$defs/text" },
+          "corrected_value": { "$ref": "#/$defs/text" },
+          "reviewer": { "$ref": "#/$defs/text" },
+          "revision": { "type": "integer", "minimum": 1 },
+          "timestamp": { "$ref": "#/$defs/text" },
+          "reason": { "$ref": "#/$defs/text" }
+        },
+        "additionalProperties": false
+      }
+    },
     "stale_document_ids": {
       "type": "array",
       "uniqueItems": true,
@@ -120,8 +176,23 @@
           "type": "array",
           "minItems": 1,
           "items": { "$ref": "#/$defs/provenance" }
-        }
-      }
+        },
+        "target_claim_ids": { "type": "array", "items": { "$ref": "#/$defs/text" } },
+        "addressed_claim_ids": { "type": "array", "items": { "$ref": "#/$defs/text" } },
+        "addressed_counterargument_ids": { "type": "array", "items": { "$ref": "#/$defs/text" } },
+        "answer": { "type": "null" },
+        "event_raw": { "$ref": "#/$defs/text" },
+        "event_normalized": { "$ref": "#/$defs/text" },
+        "timestamp": { "type": ["string", "null"] },
+        "normalization_authority": { "$ref": "#/$defs/text" },
+        "external_reference": { "type": "boolean" },
+        "statement_a_id": { "$ref": "#/$defs/text" },
+        "statement_b_id": { "$ref": "#/$defs/text" },
+        "conflict_dimension": { "$ref": "#/$defs/text" },
+        "analysis_status": { "enum": ["PROPOSED_CONFLICT", "HUMAN_CONFIRMED", "HUMAN_REJECTED"] },
+        "human_review_status": { "$ref": "#/$defs/text" }
+      },
+      "additionalProperties": false
     },
     "items": { "type": "array", "items": { "$ref": "#/$defs/item" } }
   }

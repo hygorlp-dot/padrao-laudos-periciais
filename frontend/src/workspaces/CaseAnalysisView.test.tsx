@@ -17,6 +17,7 @@ const ITEM = { item_id: "CLAIM-001", text: "A parte autora alega manifestação.
 const SNAPSHOT = {
   schema_version: "1.0.0", snapshot_id: "ANALYSIS-001", workspace_id: WORKSPACE_ID,
   source_revision: 4, participant_refs: ["PART-CLAIMANT", "PART-DEFENDANT"],
+  judicial_context_workspace_id: WORKSPACE_ID,
   judicial_context: {
     entities: [
       { entity_id: "ENT-CLAIMANT", raw_name: "Pessoa Autora Sintética", kind: "NATURAL_PERSON" },
@@ -69,7 +70,7 @@ describe("case analysis view", () => {
     expect(screen.getByText(/representa Pessoa Autora Sintética/)).toBeInTheDocument();
     expect(screen.getAllByText("Fonte alterada — revisão necessária").length).toBeGreaterThan(0);
     await user.click(screen.getAllByText("Ver proveniência")[0]);
-    expect(screen.getAllByText("DOC-001 · p. 3, §2 · ocorrência OCC-CLAIM-001 · revisão 4").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(`DOC-001 · p. 3, §2 · ocorrência OCC-CLAIM-001 · SHA ${"a".repeat(64)} · revisão 4`).length).toBeGreaterThan(0);
   });
 
   test("shows an honest not-yet-analyzed state", async () => {

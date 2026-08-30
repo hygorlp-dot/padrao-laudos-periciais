@@ -31,11 +31,13 @@ def frontend_build(tmp_path: Path) -> Path:
     return root
 
 
-def request(runtime, method, target, *, headers=None, body=None):
-    encoded = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
+def request(runtime, method, target, *, headers=None, body=None, raw_body=None):
+    if body is not None and raw_body is not None:
+        raise ValueError("request body is ambiguous")
+    encoded = raw_body if raw_body is not None else (None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8"))
     request_headers = dict(headers or {})
     if encoded is not None:
-        request_headers.setdefault("Content-Type", "application/json")
+        request_headers.setdefault("Content-Type", "application/octet-stream" if raw_body is not None else "application/json")
         request_headers.setdefault("Content-Length", str(len(encoded)))
     connection = http.client.HTTPConnection(*runtime.address, timeout=5)
     try:
@@ -238,7 +240,12 @@ def test_same_origin_mutation_is_forwarded_and_token_stays_server_side(tmp_path)
 
 def test_case_analysis_bridge_saves_and_reopens_canonical_snapshot(tmp_path):
     payload = json.loads((Path(__file__).parent / "fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8"))
-    runtime = build_product_runtime(tmp_path / "analysis.db", frontend_build(tmp_path), token=TOKEN)
+    runtime = build_product_runtime(
+        tmp_path / "analysis.db",
+        frontend_build(tmp_path),
+        token=TOKEN,
+        private_root=tmp_path / "private",
+    )
     try:
         runtime.start()
         workspace_status, _, workspace_body = request(
@@ -250,6 +257,28 @@ def test_case_analysis_bridge_saves_and_reopens_canonical_snapshot(tmp_path):
         )
         workspace_id = json.loads(workspace_body)["workspace_id"]
         payload["workspace_id"] = workspace_id
+        payload["judicial_context_workspace_id"] = workspace_id
+        imported = []
+        for index in range(3):
+            content = f"%PDF-1.7\nbridge-synthetic-{index}\n%%EOF\n".encode()
+            status, _, body = request(
+                runtime,
+                "POST",
+                f"/app-api/v1/workspaces/{workspace_id}/materials",
+                headers={
+                    **browser_mutation_headers(runtime),
+                    "Content-Type": "application/pdf",
+                    "X-Document-Filename": f"synthetic-{index}.pdf",
+                },
+                raw_body=content,
+            )
+            assert status == 201, body
+            imported.append(json.loads(body))
+        source_by_id = {}
+        for document, material in zip(payload["documents"], imported, strict=True):
+            document["storage_content_id"] = material["content_id"]
+            document["source_sha256"] = material["checksum_sha256"]
+            source_by_id[document["document_id"]] = material["checksum_sha256"]
         for collection in (
             "claims",
             "counterarguments",
@@ -264,6 +293,11 @@ def test_case_analysis_bridge_saves_and_reopens_canonical_snapshot(tmp_path):
             for item in payload[collection]:
                 for provenance in item["provenance"]:
                     provenance["workspace_id"] = workspace_id
+                    provenance["source_document_sha256"] = source_by_id[provenance["source_document_id"]]
+        context = payload["judicial_context"]
+        for owner in [context, *context["entities"], *context["participants"], *context["representation_links"], *context["access_relations"]]:
+            for source in owner["provenance"]:
+                source["source_sha256"] = source_by_id[source["source_document_id"]]
         saved_status, _, saved_body = request(
             runtime,
             "POST",

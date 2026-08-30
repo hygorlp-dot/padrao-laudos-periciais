@@ -1,6 +1,9 @@
 import copy
 import json
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+from uuid import UUID
 
 import jsonschema
 import pytest
@@ -13,6 +16,13 @@ from scripts.backend_contract.case_analysis import (
     case_analysis_to_mapping,
     query_analysis,
 )
+from scripts.backend_contract.application.case_analysis import (
+    GetCaseAnalysis,
+    SaveCaseAnalysis,
+    validated_case_analysis_from_mapping,
+)
+from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
+from scripts.backend_contract.application.ports import RepositoryIntegrityError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -155,6 +165,110 @@ def test_reconciliation_clears_persisted_stale_state_when_source_is_restored():
     assert all(not item.stale for item in restored.material_items)
 
 
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    (
+        (lambda raw: raw["counterarguments"][0]["target_claim_ids"].append("CLAIM-MISSING"), "counterargument targets"),
+        (lambda raw: raw["decisions"][0]["addressed_claim_ids"].append("CLAIM-MISSING"), "decision targets"),
+        (lambda raw: raw["conflicts"][0].update(statement_a_id="ITEM-MISSING"), "conflict statements"),
+        (lambda raw: raw["human_reviews"][0].update(target_item_id="ITEM-MISSING"), "human review target"),
+        (lambda raw: raw["coverage"].update(source_revision=99), "coverage"),
+        (lambda raw: raw["coverage"].update(documents_total=4, documents_unavailable=2), "coverage"),
+        (lambda raw: raw["claims"][0].update(text=""), "material item"),
+    ),
+)
+def test_semantic_graph_rejects_dangling_or_dishonest_state(mutate, message):
+    raw = fixture()
+    mutate(raw)
+    with pytest.raises(ValueError, match=message):
+        case_analysis_from_mapping(raw)
+
+
+def test_runtime_schema_rejects_nonhex_sha_and_workspace_promoted_jdm():
+    raw = fixture()
+    raw["documents"][0]["source_sha256"] = "z" * 64
+    for collection in ("claims", "conflicts"):
+        for item in raw[collection]:
+            for source in item["provenance"]:
+                if source["source_document_id"] == "DOC-001":
+                    source["source_document_sha256"] = "z" * 64
+    with pytest.raises(ValueError, match="invalid Case Analysis payload"):
+        validated_case_analysis_from_mapping(raw)
+
+    promoted = fixture()
+    promoted["workspace_id"] = "22222222-2222-4222-8222-222222222222"
+    for collection in ("claims", "counterarguments", "decisions", "pericial_objects", "questions", "events", "technical_document_references", "gaps", "conflicts"):
+        for item in promoted[collection]:
+            for source in item["provenance"]:
+                source["workspace_id"] = promoted["workspace_id"]
+    with pytest.raises(ValueError, match="JDM context workspace"):
+        case_analysis_from_mapping(promoted)
+
+
+def test_duplicate_material_identity_is_rejected():
+    raw = fixture()
+    raw["claims"][1]["item_id"] = raw["claims"][0]["item_id"]
+    with pytest.raises(ValueError, match="identities must be unique"):
+        case_analysis_from_mapping(raw)
+
+
+def _authoritative_documents(snapshot, *, changed_document_id=None):
+    return tuple(
+        SimpleNamespace(
+            content_id=document.storage_content_id,
+            checksum_sha256=("f" * 64 if document.document_id == changed_document_id else document.source_sha256),
+        )
+        for document in snapshot.documents
+    )
+
+
+def test_save_uses_atomic_repository_cas_and_authoritative_inventory():
+    snapshot = case_analysis_from_mapping(fixture())
+    calls = []
+    revisions = SimpleNamespace(append_if_latest=lambda **kwargs: calls.append(kwargs) or SimpleNamespace(revision=1))
+    clock = SimpleNamespace(now=lambda: datetime(2026, 8, 30, tzinfo=UTC))
+    ids = SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999"))
+    documents = SimpleNamespace(execute=lambda _workspace: _authoritative_documents(snapshot))
+
+    result = SaveCaseAnalysis(revisions, clock, ids, documents).execute(
+        WorkspaceId.parse(snapshot.workspace_id), snapshot, None
+    )
+
+    assert result.revision == 1
+    assert calls[0]["expected_revision"] is None
+    assert calls[0]["payload"] == case_analysis_to_mapping(snapshot)
+
+    mismatched = SimpleNamespace(
+        execute=lambda _workspace: _authoritative_documents(snapshot, changed_document_id="DOC-002")
+    )
+    with pytest.raises(RepositoryIntegrityError, match="source inventory mismatch"):
+        SaveCaseAnalysis(revisions, clock, ids, mismatched).execute(
+            WorkspaceId.parse(snapshot.workspace_id), snapshot, None
+        )
+
+
+def test_get_reconciles_current_snapshot_against_live_inventory():
+    snapshot = case_analysis_from_mapping(fixture())
+    record = ArtifactRevision(
+        workspace_id=WorkspaceId.parse(snapshot.workspace_id),
+        artifact_kind="CASE_ANALYSIS_SNAPSHOT_V1",
+        artifact_id="CASE-ANALYSIS",
+        revision_id="99999999-9999-4999-8999-999999999999",
+        revision=1,
+        created_at="2026-08-30T12:00:00+00:00",
+        checksum_sha256="0" * 64,
+        payload=case_analysis_to_mapping(snapshot),
+    )
+    latest = SimpleNamespace(execute=lambda *_args: record)
+    documents = SimpleNamespace(execute=lambda _workspace: _authoritative_documents(snapshot, changed_document_id="DOC-002"))
+
+    _, reopened = GetCaseAnalysis(latest, documents).execute(WorkspaceId.parse(snapshot.workspace_id))
+
+    assert reopened.stale_document_ids == ("DOC-002",)
+    assert reopened.claims[0].stale is False
+    assert reopened.counterarguments[0].stale is True
+
+
 def test_human_review_preserves_original_extraction_and_never_answers_question():
     snapshot = case_analysis_from_mapping(fixture())
     review = snapshot.human_reviews[0]
@@ -190,3 +304,9 @@ def test_openapi_exposes_only_minimum_case_analysis_operations_and_canonical_sch
     assert contract["info"]["x-case-analysis-semantic-boundary"] == (
         "scripts.backend_contract.case_analysis.case_analysis_from_mapping"
     )
+    assert path["post"]["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/SaveCaseAnalysisRequest"
+    }
+    assert path["get"]["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/CaseAnalysisEnvelope"
+    }
