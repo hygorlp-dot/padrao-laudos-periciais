@@ -84,4 +84,17 @@ describe("case analysis view", () => {
     render(<CaseAnalysisView workspaceId={WORKSPACE_ID} />);
     expect(await screen.findByRole("heading", { name: "Análise ainda não disponível" })).toBeInTheDocument();
   });
+
+  test("warns when only the root judicial context provenance is stale", async () => {
+    const contextOnly = structuredClone(SNAPSHOT);
+    contextOnly.participant_refs = [];
+    contextOnly.judicial_context.participants = [];
+    contextOnly.judicial_context.representation_links = [];
+    contextOnly.stale_document_ids = ["DOC-CONTEXT"];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(200, { revision: 1, updated_at: "2026-03-01T10:00:00-03:00", snapshot: contextOnly })));
+
+    render(<CaseAnalysisView workspaceId={WORKSPACE_ID} />);
+
+    expect(await screen.findByText("Fonte alterada — contexto judicial requer revisão")).toBeInTheDocument();
+  });
 });
