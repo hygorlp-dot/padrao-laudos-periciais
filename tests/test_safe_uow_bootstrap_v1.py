@@ -829,3 +829,24 @@ def test_junction_source_repository_is_rejected_before_git_execution(
 
     with pytest.raises(BootstrapError, match="symlinked/reparse"):
         minimal_bootstrap(alias, tmp_path / "junction-source-target", "chore/42-junction-source")
+
+
+def test_git_identity_change_before_manifest_emission_fails_without_manifest(
+    repository: tuple[Path, Path, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    source, _remote, _expected = repository
+    original_manifest = bootstrap_module._canonical_manifest
+
+    def simulate_replacement(state_dir: Path, local_branch: str, manifest: dict):
+        monkeypatch.setattr(bootstrap_module, "_sha256_file", lambda _path: "0" * 64)
+        return original_manifest(state_dir, local_branch, manifest)
+
+    monkeypatch.setattr(bootstrap_module, "_canonical_manifest", simulate_replacement)
+    with pytest.raises(BootstrapError, match="identity changed"):
+        minimal_bootstrap(
+            source, tmp_path / "pre-manifest-replacement", "chore/42-pre-manifest-replacement"
+        )
+
+    common = source / Path(git(source, "rev-parse", "--git-common-dir"))
+    manifests = common / "codex-uow" / "manifests"
+    assert not manifests.exists() or list(manifests.glob("*.json")) == []

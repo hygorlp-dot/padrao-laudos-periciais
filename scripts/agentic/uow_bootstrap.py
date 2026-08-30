@@ -460,6 +460,11 @@ def _manifest_directory(state_dir: Path) -> Path:
 
 
 def _canonical_manifest(state_dir: Path, local_branch: str, manifest: dict[str, Any]) -> Path:
+    if (
+        manifest["git_executable_path"] != _git_executable()
+        or manifest["git_executable_sha256"] != _git_executable_sha256()
+    ):
+        raise BootstrapError("Git executable attestation changed before manifest emission")
     manifests = _manifest_directory(state_dir)
     path = _manifest_path(manifests, local_branch, manifest)
     encoded = (json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode()
