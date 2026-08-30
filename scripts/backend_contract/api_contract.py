@@ -11,6 +11,9 @@ from .judicial_domain import ProceduralContext, procedural_context_from_mapping
 
 
 MAX_JUDICIAL_DOMAIN_PAYLOAD_BYTES = 1_048_576
+MAX_JUDICIAL_DOMAIN_COLLECTION_ITEMS = 512
+MAX_JUDICIAL_DOMAIN_TEXT_CHARS = 4_096
+MAX_JUDICIAL_DOMAIN_NODES = 10_000
 _SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "judicial-domain-model-v1.schema.json"
 _SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
 _VALIDATOR = Draft202012Validator(_SCHEMA)
@@ -29,6 +32,24 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return value
 
 
+def _require_bounded_json(value: object) -> None:
+    pending = [value]
+    visited = 0
+    while pending:
+        item = pending.pop()
+        visited += 1
+        if visited > MAX_JUDICIAL_DOMAIN_NODES:
+            raise ValueError("JSON graph exceeds limit")
+        if type(item) is str and len(item) > MAX_JUDICIAL_DOMAIN_TEXT_CHARS:
+            raise ValueError("JSON text exceeds limit")
+        if type(item) is list:
+            if len(item) > MAX_JUDICIAL_DOMAIN_COLLECTION_ITEMS:
+                raise ValueError("JSON collection exceeds limit")
+            pending.extend(item)
+        elif type(item) is dict:
+            pending.extend(item.values())
+
+
 def parse_judicial_domain_payload(payload: bytes) -> ProceduralContext:
     """Decode and semantically validate a canonical judicial-domain payload.
 
@@ -45,8 +66,9 @@ def parse_judicial_domain_payload(payload: bytes) -> ProceduralContext:
             object_pairs_hook=_unique_object,
             parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
         )
+        _require_bounded_json(value)
         _VALIDATOR.validate(value)
-        return procedural_context_from_mapping(value)
+        context = procedural_context_from_mapping(value)
     except (
         UnicodeError,
         json.JSONDecodeError,
@@ -54,5 +76,10 @@ def parse_judicial_domain_payload(payload: bytes) -> ProceduralContext:
         RecursionError,
         ValueError,
         TypeError,
-    ) as exc:
-        raise JudicialDomainPayloadError("invalid judicial domain payload") from exc
+    ):
+        pass
+    else:
+        return context
+    # Raise after leaving the handler so no payload-bearing exception survives
+    # as either __cause__ or __context__ on the public boundary error.
+    raise JudicialDomainPayloadError("invalid judicial domain payload")

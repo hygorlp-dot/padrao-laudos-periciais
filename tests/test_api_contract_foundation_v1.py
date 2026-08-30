@@ -1,8 +1,11 @@
 import copy
 import json
+import traceback
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from scripts.backend_contract.api_contract import (
     JudicialDomainPayloadError,
@@ -25,6 +28,11 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
     component = contract["components"]["schemas"]["ProceduralContext"]
     assert component == {"$ref": "../schemas/judicial-domain-model-v1.schema.json"}
     assert contract["info"]["x-semantic-boundary"] == ("scripts.backend_contract.api_contract.parse_judicial_domain_payload")
+    referenced = (ROOT / "contracts" / component["$ref"]).resolve()
+    assert referenced.is_relative_to(ROOT)
+    schema = json.loads(referenced.read_text(encoding="utf-8"))
+    Draft202012Validator.check_schema(schema)
+    Draft202012Validator(schema).validate(_fixture())
 
 
 def test_boundary_accepts_synthetic_canonical_payload():
@@ -70,3 +78,45 @@ def test_boundary_rejects_duplicate_json_members():
 
     with pytest.raises(JudicialDomainPayloadError):
         parse_judicial_domain_payload(ambiguous)
+
+
+def test_sanitized_error_discards_payload_bearing_exception_state():
+    marker = "SYNTHETIC-PRIVATE-MARKER"
+    payload = _fixture()
+    payload["entities"][0]["unexpected_private_value"] = marker
+
+    with pytest.raises(JudicialDomainPayloadError) as caught:
+        parse_judicial_domain_payload(json.dumps(payload).encode("utf-8"))
+
+    error = caught.value
+    rendered = "".join(traceback.format_exception(error))
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert marker not in rendered
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda value: value.update(entities=[value["entities"][0]] * 513),
+        lambda value: value["entities"][0].update(raw_name="x" * 4097),
+        lambda value: value["entities"][0].update(provenance=value["entities"][0]["provenance"] * 513),
+        lambda value: value["representation_links"][0].update(represented_participant_ids=[f"PART-{index:03d}" for index in range(513)]),
+    ),
+)
+def test_boundary_rejects_over_budget_semantic_collections_before_schema_validation(monkeypatch, mutate):
+    payload = _fixture()
+    mutate(payload)
+    schema_called = False
+
+    def unexpected_schema_validation(_value):
+        nonlocal schema_called
+        schema_called = True
+
+    monkeypatch.setattr(
+        "scripts.backend_contract.api_contract._VALIDATOR",
+        SimpleNamespace(validate=unexpected_schema_validation),
+    )
+    with pytest.raises(JudicialDomainPayloadError):
+        parse_judicial_domain_payload(json.dumps(payload).encode("utf-8"))
+    assert schema_called is False
