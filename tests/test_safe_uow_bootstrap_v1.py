@@ -257,3 +257,19 @@ def test_configured_fsmonitor_is_rejected_before_any_worktree_creation(
 
     assert not target.exists()
     assert not sentinel.exists()
+
+
+def test_parent_traversal_cannot_hide_private_target(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, before = repository
+    base = tmp_path / "boundary"
+    (base / "referencias" / "x").mkdir(parents=True)
+    (base / "referencias" / "privadas").mkdir()
+    target = base / "referencias" / "x" / ".." / "privadas" / "uow"
+
+    with pytest.raises(BootstrapError, match="traversal|private"):
+        minimal_bootstrap(source, target, "chore/42-private-traversal")
+
+    assert git(source, "rev-parse", "HEAD") == before
+    assert not (base / "referencias" / "privadas" / "uow").exists()

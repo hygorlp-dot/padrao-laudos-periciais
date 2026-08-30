@@ -48,6 +48,8 @@ def _validated_paths(repository: Path, target: Path) -> tuple[Path, Path, Path]:
     if destination.exists() or destination.is_symlink():
         raise BootstrapError(f"target already exists: {destination}")
     private = [part.casefold() for part in destination.parts]
+    if ".." in destination.parts:
+        raise BootstrapError("parent traversal in target is prohibited")
     if any(private[index:index + 2] == ["referencias", "privadas"] for index in range(len(private) - 1)):
         raise BootstrapError("private target is prohibited")
     try:
@@ -55,6 +57,12 @@ def _validated_paths(repository: Path, target: Path) -> tuple[Path, Path, Path]:
     except OSError as exc:
         raise BootstrapError("target parent must already exist and be resolvable") from exc
     resolved = resolved_parent / destination.name
+    resolved_parts = [part.casefold() for part in resolved.parts]
+    if any(
+        resolved_parts[index:index + 2] == ["referencias", "privadas"]
+        for index in range(len(resolved_parts) - 1)
+    ):
+        raise BootstrapError("private resolved target is prohibited")
     if resolved == Path.home().resolve() or resolved == Path(resolved.anchor):
         raise BootstrapError("home or drive-root target is prohibited")
     try:
