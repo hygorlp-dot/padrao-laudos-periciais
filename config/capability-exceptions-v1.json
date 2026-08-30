@@ -379,16 +379,16 @@
       "canonicalPath": "scripts/agentic/uow_bootstrap.py",
       "module": "scripts.agentic.uow_bootstrap",
       "acquisitionLocation": {
-        "line": 10,
+        "line": 11,
         "column": 0
       },
       "normalizedAcquisitionAstSha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
-      "wholeFileSha256": "6ce8fc3379df46ade1b433b255d92d2b0098eeedfea6229fb08eefdd3a287901",
-      "baselineCommit": "db667ca4066681b184ed82d74890e35697d28e7b",
+      "wholeFileSha256": "29c76d070158f3afc067b8e69fb6b45c4ad65ab3393d3b0c55605ece45f3b2b3",
+      "baselineCommit": "e38504fb2151a255a9b3085f2987365c99d8f24f",
       "acquiredCapability": "subprocess",
       "justification": "Safe UOW bootstrap invokes explicit Git commands for fetch, exact ref resolution, isolated worktree creation and fail-closed postcondition checks.",
       "owner": "QUALITY_GOVERNANCE",
-      "reviewEvidence": "C1B_HERMETIC_BOUNDARY_REPAIR_DB667CA",
+      "reviewEvidence": "C1B_TERMINAL_SYSTEMIC_REPAIR_E38504F",
       "disposition": "ACCEPT_BASELINE",
       "reviewBy": "2027-08-29"
     }
