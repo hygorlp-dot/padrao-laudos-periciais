@@ -18,7 +18,8 @@ HEAD exato de uma branch remota explicitamente informada e emite um
 - O executável Git é resolvido uma vez para path absoluto real/não-reparse;
   alterações posteriores de `PATH` não substituem o host tool. Remotes local/
   `file` são resolvidos e não podem estar sob `referencias/privadas` nem aliases
-  symlink/reparse.
+  symlink/reparse. UNC/SMB, device namespaces e file URLs com query/fragment/
+  userinfo são rejeitados; no Windows o remote precisa de drive local real.
 - O manifesto é evidência local, não substitui GitHub, Issue, PR, branch
   protection, policy ou revisão.
 - Skills, policies e lanes são declarações explícitas não confiáveis do caller;

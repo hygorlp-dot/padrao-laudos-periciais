@@ -224,11 +224,19 @@ def _validated_fetch_url(root: Path, remote: str) -> str:
 def _validate_local_remote(url: str) -> None:
     if url.startswith("file://"):
         parsed = urlparse(url)
-        if parsed.netloc not in {"", "localhost"}:
+        if parsed.netloc not in {"", "localhost"} or parsed.query or parsed.fragment or parsed.username:
             raise BootstrapError("non-local file remote is prohibited")
-        raw = Path(url2pathname(unquote(parsed.path)))
+        decoded_path = unquote(parsed.path)
+        if decoded_path.replace("\\", "/").startswith("//"):
+            raise BootstrapError("UNC/device remote is prohibited")
+        raw = Path(url2pathname(decoded_path))
     else:
         raw = Path(url)
+    raw_text = str(raw).replace("/", "\\")
+    if raw_text.startswith(("\\\\", "\\\\?\\", "\\\\.\\")):
+        raise BootstrapError("UNC/device remote is prohibited")
+    if os.name == "nt" and (not raw.drive or raw.drive.startswith("\\")):
+        raise BootstrapError("Windows local remote requires a local drive")
     try:
         absolute = raw.absolute()
         resolved = absolute.resolve(strict=True)

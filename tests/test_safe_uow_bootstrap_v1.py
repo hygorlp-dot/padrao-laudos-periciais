@@ -537,3 +537,28 @@ def test_path_cannot_substitute_pinned_git_executable(
 
     assert result["base_head"] == expected
     assert not sentinel.exists()
+
+
+@pytest.mark.parametrize(
+    "remote_url",
+    [
+        r"\\server\share\repo.git",
+        "file:////server/share/repo.git",
+        "file://localhost//server/share/repo.git",
+        "file:///%2F%2Fserver/share/repo.git",
+        r"\\?\C:\repo.git",
+        "file:///C:/repo.git?query=unsafe",
+        "file:///C:/repo.git#fragment",
+    ],
+)
+def test_unc_device_and_ambiguous_file_remotes_are_rejected_before_fetch(
+    repository: tuple[Path, Path, str], tmp_path: Path, remote_url: str
+):
+    source, _remote, _expected = repository
+    git(source, "remote", "set-url", "origin", remote_url)
+    target = tmp_path / "unc-target"
+
+    with pytest.raises(BootstrapError, match="UNC/device|non-local file|transport/helper"):
+        minimal_bootstrap(source, target, "chore/42-unc")
+
+    assert not target.exists()
