@@ -1,5 +1,9 @@
 # Matriz de Skills por fase do roadmap
 
+`SKILL_ROUTING_V3 = ACTIVE`. O manifesto canônico de seleção é
+`.agents/skill-router.json`; esta matriz preserva a expansão humana por fase e
+não constitui uma segunda cadeia de gates.
+
 ## Regra de precedência
 
 AGENTS.md e contratos first-party prevalecem sempre. Skills de terceiros não

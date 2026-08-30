@@ -1,0 +1,15 @@
+{
+  "schema_version": "3.0.0",
+  "precedence": ["AGENTS.md", "FIRST_PARTY_SKILL", "APPROVED_PRODUCT_PRINCIPLE", "PINNED_THIRD_PARTY_SKILL"],
+  "material_bundle": ["engenharia-seguranca-pericial", "test-driven-development", "verification-before-completion", "repository-safety-gate"],
+  "condition_requires": {"external_review_eligible": ["terminal_head"]},
+  "profiles": {
+    "engineering": {"required": ["autonomia-desenvolvimento"], "conditional": {"reproduced_bug": ["systematic-debugging"], "multi_step": ["writing-plans"], "stable_plan": ["executing-plans"], "dependency_decision": ["research-ranking"]}},
+    "assurance": {"required": [], "conditional": {"review_requested": ["requesting-code-review", "receiving-code-review"], "independent_review_required": ["reviewer-independente"], "systemic_risk": ["systemic-auditor"], "terminal_head": [], "external_review_eligible": ["external-diversity-review"]}},
+    "ui": {"required": ["ui-pericial", "frontend-design", "design-motion-principles"], "conditional": {"polish_requested": ["impeccable"]}},
+    "case_analysis": {"required": ["triagem-delimitacao-pericial"], "conditional": {"material_claims": ["auditoria-grounding-pericial", "trilha-auditoria-pericial"], "continuous_audit": ["auditoria-pericial-continua"], "terminal_head": ["auditoria-pericial-integrada"]}},
+    "planning_findings": {"required": ["planejamento-pericial-autonomo"], "conditional": {"tipo_pericia_vicios": ["motor-vicios-construtivos"], "material_claims": ["auditoria-grounding-pericial", "trilha-auditoria-pericial"]}},
+    "report": {"required": ["redacao-laudo-pericial"], "conditional": {"language_audit": ["auditoria-linguagem-pericial"], "material_claims": ["auditoria-grounding-pericial"], "terminal_head": ["auditoria-pericial-integrada"], "report_review": ["revisao-laudo-pericial"]}}
+  },
+  "reference_only": ["claim-audit", "proposition-audit", "using-superpowers"]
+}
