@@ -1,13 +1,28 @@
 import json
 import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 import jsonschema
 
 import scripts.agentic.uow_bootstrap as bootstrap_module
-from scripts.agentic.uow_bootstrap import BootstrapError, bootstrap_uow, minimal_bootstrap
+from scripts.agentic.uow_bootstrap import (
+    BootstrapError,
+    bootstrap_uow,
+    minimal_bootstrap as _minimal_bootstrap,
+)
+
+
+TRUSTED_GIT = Path(shutil.which("git") or "").resolve(strict=True)
+
+
+def minimal_bootstrap(repository: Path, target: Path, local_branch: str):
+    return _minimal_bootstrap(
+        repository, target, local_branch, git_executable=TRUSTED_GIT
+    )
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -43,6 +58,7 @@ def test_bootstrap_creates_exact_clean_worktree_and_canonical_manifest(
     dirty.write_text("preserve\n", encoding="utf-8")
 
     result = bootstrap_uow(
+        git_executable=TRUSTED_GIT,
         repository=source,
         remote="origin",
         remote_branch="main",
@@ -244,6 +260,7 @@ def test_mutation_owner_must_belong_to_declared_lanes(
     source, _remote, _expected = repository
     with pytest.raises(BootstrapError, match="owner.*lanes"):
         bootstrap_uow(
+            git_executable=TRUSTED_GIT,
             repository=source, remote="origin", remote_branch="main",
             local_branch="chore/42-owner", target=tmp_path / "owner",
             issue=42, stage="C1", task="SAFE_UOW_BOOTSTRAP_V1", risk="MEDIUM",
@@ -421,6 +438,7 @@ def test_duplicate_manifest_declarations_fail_before_fetch_or_worktree(
 
     with pytest.raises(BootstrapError, match="duplicate lanes"):
         bootstrap_uow(
+            git_executable=TRUSTED_GIT,
             repository=source, remote="origin", remote_branch="main",
             local_branch="chore/42-duplicates", target=target, issue=42,
             stage="C1", task="SAFE_UOW_BOOTSTRAP_V1", risk="MEDIUM",
@@ -571,10 +589,12 @@ def test_mapped_drive_is_rejected_by_canonical_windows_volume_check(
     source, _remote, _expected = repository
     git(source, "remote", "set-url", "origin", r"Z:\repo.git")
     target = tmp_path / "mapped-drive-target"
+    canonical_windows_path = bootstrap_module._canonical_windows_local_path
 
     def reject_mapped_drive(raw: Path) -> Path:
-        assert raw.drive == "Z:"
-        raise BootstrapError("Windows local remote must use a fixed local drive")
+        if raw.drive == "Z:":
+            raise BootstrapError("Windows local remote must use a fixed local drive")
+        return canonical_windows_path(raw)
 
     monkeypatch.setattr(bootstrap_module, "_canonical_windows_local_path", reject_mapped_drive)
     with pytest.raises(BootstrapError, match="fixed local drive"):
@@ -628,3 +648,71 @@ def test_windows_junction_remote_is_rejected_before_fetch(
         minimal_bootstrap(source, target, "chore/42-forced-junction")
 
     assert not target.exists()
+
+
+def test_private_source_repository_is_rejected_before_git_execution(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, _expected = repository
+    private_parent = tmp_path / "referencias" / "privadas"
+    private_parent.mkdir(parents=True)
+    private_source = private_parent / "source"
+    source.rename(private_source)
+    target = tmp_path / "private-source-target"
+
+    with pytest.raises(BootstrapError, match="private source repository"):
+        minimal_bootstrap(private_source, target, "chore/42-private-source")
+
+    assert not target.exists()
+
+
+def test_private_git_common_directory_is_rejected_before_fetch(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    _source, remote, _expected = repository
+    private_common = tmp_path / "referencias" / "privadas" / "common.git"
+    private_common.parent.mkdir(parents=True)
+    checkout = tmp_path / "separate-checkout"
+    git(
+        tmp_path, "clone", "--separate-git-dir", str(private_common),
+        str(remote), str(checkout),
+    )
+    git(checkout, "checkout", "main")
+    target = tmp_path / "private-common-target"
+
+    with pytest.raises(BootstrapError, match="private git common directory"):
+        minimal_bootstrap(checkout, target, "chore/42-private-common")
+
+    assert not target.exists()
+
+
+def test_fresh_process_hostile_path_cannot_select_git_authority(tmp_path: Path):
+    hostile = tmp_path / "hostile-launch-path"
+    hostile.mkdir()
+    (hostile / "git.exe").write_bytes(b"not trusted")
+    environment = os.environ.copy()
+    environment["PATH"] = str(hostile) + os.pathsep + environment.get("PATH", "")
+    script = (
+        "from scripts.agentic import uow_bootstrap as b\n"
+        "try:\n b._git_executable()\n"
+        "except b.BootstrapError:\n print('EXPLICIT_AUTHORITY_REQUIRED')\n"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=Path(__file__).resolve().parents[1],
+        env=environment, text=True, capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "EXPLICIT_AUTHORITY_REQUIRED"
+
+
+def test_relative_git_executable_authority_is_rejected(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, _expected = repository
+    with pytest.raises(BootstrapError, match="explicit absolute path"):
+        _minimal_bootstrap(
+            source, tmp_path / "relative-git", "chore/42-relative-git",
+            git_executable=Path("git"),
+        )

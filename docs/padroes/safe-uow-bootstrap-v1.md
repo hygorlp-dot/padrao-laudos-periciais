@@ -15,8 +15,9 @@ HEAD exato de uma branch remota explicitamente informada e emite um
 - Fetch e checkout usam uma policy Git hermética: config global/system e
   injeções `GIT_CONFIG_*` são ignoradas; exec-path, SSH/askpass e prompts são
   removidos; credential helpers ficam vazios; protocolos são deny-by-default.
-- O executável Git é resolvido uma vez para path absoluto real/não-reparse;
-  alterações posteriores de `PATH` não substituem o host tool. Remotes local/
+- O executável Git é autoridade explícita obrigatória do launcher/API: path
+  absoluto real/não-reparse, nunca descoberto pelo `PATH` ambiente. Source,
+  git-common-dir e target são rejeitados se privados ou aliases. Remotes local/
   `file` são resolvidos e não podem estar sob `referencias/privadas` nem aliases
   symlink/reparse. UNC/SMB, device namespaces e file URLs com query/fragment/
   userinfo são rejeitados; no Windows o remote precisa de volume local fixo
