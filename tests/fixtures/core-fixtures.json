@@ -2,6 +2,15 @@
     "schema_version":  "1.0.0",
     "fixtures":  [
                      {
+                         "arquivo": "tests/fixtures/judicial-domain-model-v1.json",
+                         "dominio": "BACKEND_AUTHORITY",
+                         "schema": "judicial-domain-model-v1.schema.json",
+                         "consumer": "tests/test_judicial_domain_model_v1.py::test_synthetic_fixture_satisfies_closed_serialization_contract",
+                         "finalidade": "Grafo judicial canônico inteiramente sintético",
+                         "expected": "VALID",
+                         "provenance": "SYNTHETIC"
+                     },
+                     {
                          "arquivo":  "tests/fixtures/pje-registry.json",
                          "dominio":  "PJE_EXTRACTION",
                          "schema":  null,

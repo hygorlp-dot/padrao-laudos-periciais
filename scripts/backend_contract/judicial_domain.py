@@ -79,6 +79,7 @@ class SourceProvenance:
     source_sha256: str
     page: int
     occurrence: str
+    occurrence_id: str
 
     def __post_init__(self) -> None:
         _text(self.source_system, "source_system")
@@ -88,6 +89,7 @@ class SourceProvenance:
         if type(self.page) is not int or self.page < 1:
             raise ValueError("page is invalid")
         _text(self.occurrence, "occurrence")
+        _identifier(self.occurrence_id, "occurrence_id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,9 +241,98 @@ def legacy_singular_party_view(context: ProceduralContext) -> dict[str, str] | N
         if item.pole is ProcessPole.PASSIVE and item.role.normalized is NormalizedProceduralRole.DEFENDANT
         and item.principal and item.status is ParticipantStatus.ACTIVE
     ]
-    if len(active) != 1 or len(passive) != 1 or len(context.participants) != 2:
+    if len(active) != 1 or len(passive) != 1:
         return None
     return {
         "parte_requerente": entity_names[active[0].entity_id],
         "parte_requerida": entity_names[passive[0].entity_id],
     }
+
+
+def _exact_mapping(value: object, fields: set[str], label: str) -> dict:
+    if type(value) is not dict or set(value) != fields:
+        raise ValueError(f"{label} shape is invalid")
+    return value
+
+
+def _provenance_from_mapping(value: object) -> SourceProvenance:
+    row = _exact_mapping(
+        value,
+        {"source_system", "source_document_id", "source_sha256", "page", "occurrence", "occurrence_id"},
+        "SourceProvenance",
+    )
+    return SourceProvenance(**row)
+
+
+def _provenance_tuple(value: object) -> tuple[SourceProvenance, ...]:
+    if type(value) is not list:
+        raise ValueError("provenance list is invalid")
+    return tuple(_provenance_from_mapping(item) for item in value)
+
+
+def procedural_context_from_mapping(value: object) -> ProceduralContext:
+    """Deserialize JSON data through the canonical semantic graph validator."""
+    root = _exact_mapping(
+        value,
+        {
+            "schema_version", "context_id", "instance_label", "snapshot_id", "entities",
+            "participants", "representation_links", "access_relations", "provenance",
+        },
+        "ProceduralContext",
+    )
+    if root["schema_version"] != "1.0.0":
+        raise ValueError("schema_version is unsupported")
+    if not all(type(root[name]) is list for name in ("entities", "participants", "representation_links", "access_relations")):
+        raise ValueError("procedural relation collection is invalid")
+    entities = tuple(
+        JudicialEntity(
+            entity_id=row["entity_id"], raw_name=row["raw_name"], kind=EntityKind(row["kind"]),
+            provenance=_provenance_tuple(row["provenance"]),
+        )
+        for raw in root["entities"]
+        for row in [_exact_mapping(raw, {"entity_id", "raw_name", "kind", "provenance"}, "JudicialEntity")]
+    )
+    participants = []
+    for raw in root["participants"]:
+        row = _exact_mapping(
+            raw,
+            {"participant_id", "entity_id", "context_id", "pole", "role", "principal", "status", "provenance"},
+            "ProcessParticipant",
+        )
+        role = _exact_mapping(row["role"], {"raw_label", "normalized"}, "ProceduralRole")
+        participants.append(ProcessParticipant(
+            participant_id=row["participant_id"], entity_id=row["entity_id"], context_id=row["context_id"],
+            pole=ProcessPole(row["pole"]),
+            role=ProceduralRole(role["raw_label"], NormalizedProceduralRole(role["normalized"])),
+            principal=row["principal"], status=ParticipantStatus(row["status"]),
+            provenance=_provenance_tuple(row["provenance"]),
+        ))
+    representations = tuple(
+        RepresentationLink(
+            link_id=row["link_id"], representative_entity_id=row["representative_entity_id"],
+            represented_participant_ids=tuple(row["represented_participant_ids"]),
+            representation_role_raw=row["representation_role_raw"],
+            provenance=_provenance_tuple(row["provenance"]),
+        )
+        for raw in root["representation_links"]
+        for row in [_exact_mapping(
+            raw,
+            {"link_id", "representative_entity_id", "represented_participant_ids", "representation_role_raw", "provenance"},
+            "RepresentationLink",
+        )]
+    )
+    accesses = tuple(
+        AccessRelation(
+            access_id=row["access_id"], entity_id=row["entity_id"], context_id=row["context_id"],
+            access_type_raw=row["access_type_raw"], provenance=_provenance_tuple(row["provenance"]),
+        )
+        for raw in root["access_relations"]
+        for row in [_exact_mapping(
+            raw, {"access_id", "entity_id", "context_id", "access_type_raw", "provenance"}, "AccessRelation",
+        )]
+    )
+    return ProceduralContext(
+        context_id=root["context_id"], instance_label=root["instance_label"], snapshot_id=root["snapshot_id"],
+        entities=entities, participants=tuple(participants), representation_links=representations,
+        access_relations=accesses, provenance=_provenance_tuple(root["provenance"]),
+    )

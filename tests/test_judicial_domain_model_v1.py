@@ -21,6 +21,7 @@ from scripts.backend_contract.judicial_domain import (
     RepresentationLink,
     SourceProvenance,
     legacy_singular_party_view,
+    procedural_context_from_mapping,
 )
 
 
@@ -35,6 +36,7 @@ def provenance(occurrence: str = "Parte autora sintética") -> SourceProvenance:
         source_sha256=SHA,
         page=1,
         occurrence=occurrence,
+        occurrence_id="OCC-SYNTHETIC-001",
     )
 
 
@@ -187,6 +189,8 @@ def test_synthetic_fixture_satisfies_closed_serialization_contract():
     schema = json.loads((ROOT / "schemas/judicial-domain-model-v1.schema.json").read_text(encoding="utf-8"))
     fixture = json.loads((ROOT / "tests/fixtures/judicial-domain-model-v1.json").read_text(encoding="utf-8"))
     jsonschema.Draft202012Validator(schema).validate(fixture)
+    context = procedural_context_from_mapping(fixture)
+    assert context.context_id == fixture["context_id"]
     assert {item["entity_id"] for item in fixture["participants"]} == {"ENT-001", "ENT-002"}
     assert fixture["representation_links"][0]["representative_entity_id"] == "ENT-003"
     assert fixture["access_relations"][0]["entity_id"] == "ENT-004"
@@ -210,6 +214,24 @@ def test_serialization_contract_rejects_semantic_flattening(mutate):
     mutate(candidate)
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.Draft202012Validator(schema).validate(candidate)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda value: value["entities"].append({**value["entities"][0], "raw_name": "Nome divergente"}),
+        lambda value: value["participants"][0].update(entity_id="ENT-MISSING"),
+        lambda value: value["participants"][0].update(context_id="CTX-OTHER"),
+        lambda value: value["representation_links"][0].update(represented_participant_ids=["PAR-MISSING"]),
+        lambda value: value["access_relations"][0].update(entity_id="ENT-MISSING"),
+    ],
+    ids=["duplicate-id", "dangling-participant", "foreign-context", "dangling-representation", "dangling-access"],
+)
+def test_canonical_deserializer_rejects_every_schema_graph_escape(mutate):
+    fixture = json.loads((ROOT / "tests/fixtures/judicial-domain-model-v1.json").read_text(encoding="utf-8"))
+    mutate(fixture)
+    with pytest.raises((TypeError, ValueError)):
+        procedural_context_from_mapping(fixture)
 
 
 @pytest.mark.parametrize(
@@ -300,3 +322,19 @@ def test_relation_order_and_irrelevant_access_do_not_change_legacy_projection():
     )
     augmented = replace(reordered, access_relations=(*reordered.access_relations, extra_access))
     assert legacy_singular_party_view(augmented) == legacy_singular_party_view(context)
+
+
+def test_same_entity_can_hold_explicit_dual_relations_without_role_promotion():
+    context = valid_context()
+    dual_representation = replace(
+        context.representation_links[0], representative_entity_id="ENT-001",
+    )
+    dual_access = replace(context.access_relations[0], entity_id="ENT-001")
+    dual = replace(
+        context,
+        representation_links=(dual_representation,),
+        access_relations=(dual_access,),
+    )
+    assert [item.entity_id for item in dual.participants].count("ENT-001") == 1
+    assert dual.representation_links[0].representative_entity_id == "ENT-001"
+    assert dual.access_relations[0].entity_id == "ENT-001"
