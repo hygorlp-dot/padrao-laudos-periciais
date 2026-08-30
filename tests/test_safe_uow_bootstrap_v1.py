@@ -74,6 +74,16 @@ def test_bootstrap_creates_exact_clean_worktree_and_canonical_manifest(
     assert payload["terminal_state"] == "OPEN"
     assert payload["mutation_owner"] == "IMPLEMENTER"
     assert payload["declaration_authority"] == "UNTRUSTED_CALLER_INPUT"
+    assert payload["remote"] == "origin"
+    assert payload["remote_branch"] == "main"
+    assert payload["local_branch"] == "chore/42-example"
+    assert payload["target_path"] == str(target)
+    assert payload["postconditions"] == {
+        "clean": True,
+        "head": expected,
+        "tree": git(target, "rev-parse", "HEAD^{tree}"),
+        "upstream_head": expected,
+    }
     assert manifest_path.read_bytes().endswith(b"\n")
     assert dirty.read_text(encoding="utf-8") == "preserve\n"
 
@@ -273,3 +283,75 @@ def test_parent_traversal_cannot_hide_private_target(
 
     assert git(source, "rev-parse", "HEAD") == before
     assert not (base / "referencias" / "privadas" / "uow").exists()
+
+
+@pytest.mark.parametrize(
+    "private_path",
+    ["referencias/privadas/secret.txt", "Referencias/Privadas/mixed-case.txt"],
+)
+def test_private_remote_tree_is_rejected_before_checkout(
+    repository: tuple[Path, Path, str], tmp_path: Path, private_path: str
+):
+    source, _remote, _expected = repository
+    private = source / private_path
+    private.parent.mkdir(parents=True, exist_ok=True)
+    private.write_text("synthetic secret\n", encoding="utf-8")
+    git(source, "add", "--", private_path)
+    git(source, "commit", "-m", "add prohibited private path")
+    git(source, "push", "origin", "main")
+    target = tmp_path / "private-tree"
+
+    with pytest.raises(BootstrapError, match="private tracked path"):
+        minimal_bootstrap(source, target, "chore/42-private-tree")
+
+    assert not target.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows filenames cannot contain newline")
+def test_private_remote_tree_inventory_is_nul_safe_for_newline_path(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, _expected = repository
+    private = source / "referencias" / "privadas" / "line\nbreak.txt"
+    private.parent.mkdir(parents=True)
+    private.write_text("synthetic secret\n", encoding="utf-8")
+    git(source, "add", "--", str(private.relative_to(source)))
+    git(source, "commit", "-m", "add newline private path")
+    git(source, "push", "origin", "main")
+
+    with pytest.raises(BootstrapError, match="private tracked path"):
+        minimal_bootstrap(source, tmp_path / "newline-tree", "chore/42-newline-tree")
+
+
+def test_fetch_cannot_execute_repository_reference_transaction_hook(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, remote, _expected = repository
+    other = tmp_path / "other"
+    git(tmp_path, "clone", str(remote), str(other))
+    git(other, "checkout", "-b", "main", "origin/main")
+    git(other, "config", "user.name", "Other")
+    git(other, "config", "user.email", "other@example.invalid")
+    (other / "remote-change.txt").write_text("advance\n", encoding="utf-8")
+    git(other, "add", "remote-change.txt")
+    git(other, "commit", "-m", "advance remote")
+    git(other, "push", "origin", "main")
+    sentinel = tmp_path / "fetch-hook-executed"
+    hook = source / ".git" / "hooks" / "reference-transaction"
+    hook.write_text(f"#!/bin/sh\nprintf unsafe > '{sentinel.as_posix()}'\n", encoding="utf-8")
+    hook.chmod(0o755)
+
+    minimal_bootstrap(source, tmp_path / "safe-fetch", "chore/42-safe-fetch")
+
+    assert not sentinel.exists()
+
+
+def test_remote_helper_transport_is_rejected_before_fetch(
+    repository: tuple[Path, Path, str], tmp_path: Path
+):
+    source, _remote, _expected = repository
+    git(source, "remote", "set-url", "origin", "ext::arbitrary-helper")
+    target = tmp_path / "helper"
+    with pytest.raises(BootstrapError, match="transport/helper"):
+        minimal_bootstrap(source, target, "chore/42-helper")
+    assert not target.exists()

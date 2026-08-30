@@ -9,6 +9,8 @@ HEAD exato de uma branch remota explicitamente informada e emite um
 - Issue, remote, branches, destino, risco, lanes, mutation owner, Skills e
   policies são entradas explícitas; o comando não os infere.
 - O único egress é `git fetch --no-tags` para o remote informado.
+- O remote deve existir, ter uma única URL de fetch e usar transporte local,
+  `file`, `https` ou `ssh`/scp-style; remote helpers arbitrários são rejeitados.
 - O manifesto é evidência local, não substitui GitHub, Issue, PR, branch
   protection, policy ou revisão.
 - Skills, policies e lanes são declarações explícitas não confiáveis do caller;
@@ -23,7 +25,8 @@ Antes de criar a worktree, o comando rejeita destino existente, dentro da
 worktree fonte, na raiz do drive/home, sob `referencias/privadas`, com ancestry
 symlink/reparse, branch local existente, filtro de checkout versionado ou
 atributo local/global, `core.fsmonitor`, gitlink/submódulo, ref/identidade
-inválida ou lock concorrente. Hooks são desabilitados na criação.
+inválida, path privado versionado ou lock concorrente. Hooks são desabilitados
+desde o fetch, inclusive para `reference-transaction`.
 
 Depois da criação, exige HEAD/tree exatos, worktree limpa e upstream apontando
 ao mesmo commit remoto. O checkout usa diretório de hooks exclusivo, novo,
@@ -39,6 +42,8 @@ parcial é preservado para diagnóstico; o comando nunca executa `reset --hard`,
 O contrato fechado está em `schemas/uow-manifest-v1.schema.json`. A serialização
 é JSON canônico (chaves ordenadas, UTF-8, newline final) e inicia com
 `terminal_state=OPEN` e `open_findings=[]`.
+O payload vincula identidade hashed do repositório/URL, common-dir, git-dir,
+destino, remote/branches e postconditions observadas de HEAD/tree/upstream/clean.
 
 O lock coordena instâncias cooperativas do bootstrap. Um ator local com poder
 para substituir diretórios do Git common-dir durante a execução está fora do

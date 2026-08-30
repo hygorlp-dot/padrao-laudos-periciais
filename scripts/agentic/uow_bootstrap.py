@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -123,6 +124,44 @@ def _reject_gitlinks(root: Path, commit: str) -> None:
         raise BootstrapError("submodule gitlinks are prohibited")
 
 
+def _reject_private_tree(root: Path, commit: str) -> None:
+    result = subprocess.run(
+        ["git", "ls-tree", "-rz", "--name-only", commit], cwd=root, capture_output=True
+    )
+    if result.returncode:
+        raise BootstrapError("unable to inventory candidate tree paths")
+    try:
+        paths = [value.decode("utf-8", errors="strict") for value in result.stdout.split(b"\0") if value]
+    except UnicodeDecodeError as exc:
+        raise BootstrapError("candidate tree contains a non-UTF-8 path") from exc
+    for path in paths:
+        normalized = path.replace("\\", "/").casefold()
+        if normalized == "referencias/privadas" or normalized.startswith("referencias/privadas/"):
+            raise BootstrapError("candidate tree contains a private tracked path")
+
+
+def _validated_fetch_url(root: Path, remote: str) -> str:
+    result = subprocess.run(
+        ["git", "config", "--get-all", f"remote.{remote}.url"],
+        cwd=root, text=True, capture_output=True,
+    )
+    if result.returncode not in {0, 1}:
+        raise BootstrapError("named remote is not configured")
+    urls = [value for value in result.stdout.splitlines() if value]
+    if not urls:
+        raise BootstrapError("named remote is not configured")
+    if len(urls) != 1:
+        raise BootstrapError("named remote must resolve to exactly one fetch URL")
+    url = urls[0]
+    standard = url.startswith(("https://", "ssh://", "file://"))
+    scp_style = bool(re.fullmatch(r"[^/@\s]+@[^/:\s]+:.+", url))
+    if not standard and not scp_style and not Path(url).is_absolute():
+        raise BootstrapError("remote transport/helper is not approved")
+    if "::" in url or any(character in url for character in "\r\n"):
+        raise BootstrapError("remote transport/helper is not approved")
+    return url
+
+
 @contextmanager
 def _exclusive_lock(common: Path):
     state_dir = common / "codex-uow"
@@ -211,6 +250,7 @@ def bootstrap_uow(
     if mutation_owner not in lanes:
         raise BootstrapError("mutation owner must be one of the declared lanes")
     root, common, destination = _validated_paths(repository, target)
+    fetch_url = _validated_fetch_url(root, remote)
     _reject_external_attributes(root, common)
     _reject_fsmonitor(root)
     for label, value in (("remote branch", remote_branch), ("local branch", local_branch)):
@@ -231,13 +271,20 @@ def bootstrap_uow(
         if hooks.is_symlink() or hook_attributes & reparse_flag or any(hooks.iterdir()):
             raise BootstrapError("unable to establish an empty real hooks directory")
         remote_ref = f"refs/remotes/{remote}/{remote_branch}"
-        _git(root, "fetch", "--no-tags", remote, f"refs/heads/{remote_branch}:{remote_ref}")
+        fetch = subprocess.run(
+            ["git", "-c", f"core.hooksPath={hooks}", "fetch", "--no-tags", remote,
+             f"refs/heads/{remote_branch}:{remote_ref}"],
+            cwd=root, text=True, capture_output=True,
+        )
+        if fetch.returncode:
+            raise BootstrapError(fetch.stderr.strip() or "git fetch failed")
         base_head = _git(root, "rev-parse", f"{remote_ref}^{{commit}}")
         base_tree = _git(root, "rev-parse", f"{base_head}^{{tree}}")
         if not _SHA.fullmatch(base_head) or not _SHA.fullmatch(base_tree):
             raise BootstrapError("remote did not resolve to exact commit/tree SHAs")
         _reject_tree_filters(root, base_head)
         _reject_gitlinks(root, base_head)
+        _reject_private_tree(root, base_head)
         manifest = {
             "schema_version": "1.0.0",
             "issue": issue,
@@ -248,6 +295,18 @@ def bootstrap_uow(
             "base_head": base_head,
             "base_tree": base_tree,
             "current_head": base_head,
+            "repository_id_sha256": hashlib.sha256(str(common).casefold().encode("utf-8")).hexdigest(),
+            "fetch_url_sha256": hashlib.sha256(fetch_url.encode("utf-8")).hexdigest(),
+            "git_common_dir": str(common),
+            "worktree_git_dir": "PENDING_POSTCONDITION",
+            "target_path": str(destination),
+            "remote": remote,
+            "remote_branch": remote_branch,
+            "local_branch": local_branch,
+            "postconditions": {
+                "clean": True, "head": base_head, "tree": base_tree,
+                "upstream_head": base_head,
+            },
             "lanes": list(lanes),
             "dependencies": list(dependencies),
             "declaration_authority": "UNTRUSTED_CALLER_INPUT",
@@ -257,7 +316,6 @@ def bootstrap_uow(
             "skills": list(skills),
             "policies": list(policies),
         }
-        _validate_manifest(manifest)
         environment = os.environ.copy()
         environment["GIT_ATTR_NOSYSTEM"] = "1"
         result = subprocess.run(
@@ -276,6 +334,11 @@ def bootstrap_uow(
             raise BootstrapError("created worktree is not clean")
         if _git(destination, "rev-parse", "@{upstream}") != base_head:
             raise BootstrapError("created worktree upstream mismatch")
+
+        git_dir_raw = Path(_git(destination, "rev-parse", "--git-dir"))
+        git_dir = (destination / git_dir_raw).resolve() if not git_dir_raw.is_absolute() else git_dir_raw.resolve()
+        manifest["worktree_git_dir"] = str(git_dir)
+        _validate_manifest(manifest)
 
         manifest_path = _canonical_manifest(state_dir, local_branch, manifest)
         return {**manifest, "manifest_path": str(manifest_path)}

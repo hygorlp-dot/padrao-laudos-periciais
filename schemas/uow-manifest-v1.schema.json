@@ -5,7 +5,9 @@
   "additionalProperties": false,
   "required": [
     "schema_version", "issue", "pull_request", "stage", "task", "risk",
-    "base_head", "base_tree", "current_head", "lanes", "dependencies", "declaration_authority",
+    "base_head", "base_tree", "current_head", "repository_id_sha256", "fetch_url_sha256",
+    "git_common_dir", "worktree_git_dir", "target_path", "remote", "remote_branch", "local_branch",
+    "postconditions", "lanes", "dependencies", "declaration_authority",
     "mutation_owner", "open_findings", "terminal_state", "skills", "policies"
   ],
   "properties": {
@@ -18,6 +20,22 @@
     "base_head": {"$ref": "#/$defs/sha"},
     "base_tree": {"$ref": "#/$defs/sha"},
     "current_head": {"$ref": "#/$defs/sha"},
+    "repository_id_sha256": {"$ref": "#/$defs/sha256"},
+    "fetch_url_sha256": {"$ref": "#/$defs/sha256"},
+    "git_common_dir": {"type": "string", "minLength": 1},
+    "worktree_git_dir": {"type": "string", "minLength": 1},
+    "target_path": {"type": "string", "minLength": 1},
+    "remote": {"type": "string", "minLength": 1},
+    "remote_branch": {"type": "string", "minLength": 1},
+    "local_branch": {"type": "string", "minLength": 1},
+    "postconditions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["clean", "head", "tree", "upstream_head"],
+      "properties": {
+        "clean": {"const": true}, "head": {"$ref": "#/$defs/sha"},
+        "tree": {"$ref": "#/$defs/sha"}, "upstream_head": {"$ref": "#/$defs/sha"}
+      }
+    },
     "lanes": {"$ref": "#/$defs/nonempty_strings"},
     "dependencies": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
     "declaration_authority": {"const": "UNTRUSTED_CALLER_INPUT"},
@@ -29,6 +47,7 @@
   },
   "$defs": {
     "sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "nonempty_strings": {"type": "array", "uniqueItems": true, "minItems": 1, "items": {"type": "string", "minLength": 1}}
   }
 }
