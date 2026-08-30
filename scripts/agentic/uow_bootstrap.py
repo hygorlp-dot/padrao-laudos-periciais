@@ -182,8 +182,6 @@ def _validated_paths(repository: Path, target: Path) -> tuple[Path, Path, Path]:
     common_candidate = root / common_raw if not common_raw.is_absolute() else common_raw
     common = _validated_custody_path(common_candidate, "git common directory")
     destination = target.absolute()
-    if destination.exists() or destination.is_symlink():
-        raise BootstrapError(f"target already exists: {destination}")
     private = [part.casefold() for part in destination.parts]
     if ".." in destination.parts:
         raise BootstrapError("parent traversal in target is prohibited")
@@ -191,6 +189,8 @@ def _validated_paths(repository: Path, target: Path) -> tuple[Path, Path, Path]:
         raise BootstrapError("private target is prohibited")
     resolved_parent = _validated_custody_path(destination.parent, "target parent")
     resolved = resolved_parent / destination.name
+    if resolved.exists() or resolved.is_symlink():
+        raise BootstrapError(f"target already exists: {resolved}")
     resolved_parts = [part.casefold() for part in resolved.parts]
     if any(
         resolved_parts[index:index + 2] == ["referencias", "privadas"]

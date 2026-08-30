@@ -866,3 +866,27 @@ def test_mapped_drive_target_is_rejected_before_worktree_creation(
     monkeypatch.setattr(bootstrap_module, "_validate_windows_drive_identity", reject_mapped_target)
     with pytest.raises(BootstrapError, match="fixed local drive"):
         minimal_bootstrap(source, Path(r"Z:\mapped-target"), "chore/42-mapped-target")
+
+
+def test_target_is_not_probed_before_parent_custody(
+    repository: tuple[Path, Path, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    source, _remote, _expected = repository
+    target = (tmp_path / "untrusted-parent" / "target").absolute()
+    validate_custody = bootstrap_module._validated_custody_path
+    path_exists = Path.exists
+
+    def reject_parent(path: Path, label: str) -> Path:
+        if label == "target parent":
+            raise BootstrapError("target parent custody rejected")
+        return validate_custody(path, label)
+
+    def reject_early_target_probe(path: Path) -> bool:
+        if path == target:
+            raise AssertionError("target probed before parent custody")
+        return path_exists(path)
+
+    monkeypatch.setattr(bootstrap_module, "_validated_custody_path", reject_parent)
+    monkeypatch.setattr(Path, "exists", reject_early_target_probe)
+    with pytest.raises(BootstrapError, match="target parent custody rejected"):
+        minimal_bootstrap(source, target, "chore/42-target-order")
