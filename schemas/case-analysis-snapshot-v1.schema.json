@@ -232,10 +232,18 @@
           "anyOf": [
             { "required": ["target_claim_ids"] },
             { "required": ["addressed_claim_ids"] },
+            { "required": ["addressed_counterargument_ids"] },
             { "required": ["answer"] },
             { "required": ["event_raw"] },
+            { "required": ["event_normalized"] },
+            { "required": ["timestamp"] },
+            { "required": ["normalization_authority"] },
             { "required": ["external_reference"] },
-            { "required": ["statement_a_id"] }
+            { "required": ["statement_a_id"] },
+            { "required": ["statement_b_id"] },
+            { "required": ["conflict_dimension"] },
+            { "required": ["analysis_status"] },
+            { "required": ["human_review_status"] }
           ]
         }
       }
@@ -246,7 +254,15 @@
         "allOf": [
           { "$ref": "#/$defs/item" },
           { "required": ["target_claim_ids"] }
-        ]
+        ],
+        "not": { "anyOf": [
+          { "required": ["addressed_claim_ids"] }, { "required": ["addressed_counterargument_ids"] },
+          { "required": ["answer"] }, { "required": ["event_raw"] }, { "required": ["event_normalized"] },
+          { "required": ["timestamp"] }, { "required": ["normalization_authority"] },
+          { "required": ["external_reference"] }, { "required": ["statement_a_id"] },
+          { "required": ["statement_b_id"] }, { "required": ["conflict_dimension"] },
+          { "required": ["analysis_status"] }, { "required": ["human_review_status"] }
+        ] }
       }
     },
     "decisionItems": {
@@ -257,13 +273,30 @@
           {
             "required": ["addressed_claim_ids", "addressed_counterargument_ids"]
           }
-        ]
+        ],
+        "not": { "anyOf": [
+          { "required": ["target_claim_ids"] }, { "required": ["answer"] },
+          { "required": ["event_raw"] }, { "required": ["event_normalized"] }, { "required": ["timestamp"] },
+          { "required": ["normalization_authority"] }, { "required": ["external_reference"] },
+          { "required": ["statement_a_id"] }, { "required": ["statement_b_id"] },
+          { "required": ["conflict_dimension"] }, { "required": ["analysis_status"] },
+          { "required": ["human_review_status"] }
+        ] }
       }
     },
     "questionItems": {
       "type": "array",
       "items": {
-        "allOf": [{ "$ref": "#/$defs/item" }, { "required": ["answer"] }]
+        "allOf": [{ "$ref": "#/$defs/item" }, { "required": ["answer"] }],
+        "not": { "anyOf": [
+          { "required": ["target_claim_ids"] }, { "required": ["addressed_claim_ids"] },
+          { "required": ["addressed_counterargument_ids"] }, { "required": ["event_raw"] },
+          { "required": ["event_normalized"] }, { "required": ["timestamp"] },
+          { "required": ["normalization_authority"] }, { "required": ["external_reference"] },
+          { "required": ["statement_a_id"] }, { "required": ["statement_b_id"] },
+          { "required": ["conflict_dimension"] }, { "required": ["analysis_status"] },
+          { "required": ["human_review_status"] }
+        ] }
       }
     },
     "eventItems": {
@@ -279,7 +312,14 @@
               "normalization_authority"
             ]
           }
-        ]
+        ],
+        "not": { "anyOf": [
+          { "required": ["target_claim_ids"] }, { "required": ["addressed_claim_ids"] },
+          { "required": ["addressed_counterargument_ids"] }, { "required": ["answer"] },
+          { "required": ["external_reference"] }, { "required": ["statement_a_id"] },
+          { "required": ["statement_b_id"] }, { "required": ["conflict_dimension"] },
+          { "required": ["analysis_status"] }, { "required": ["human_review_status"] }
+        ] }
       }
     },
     "technicalReferenceItems": {
@@ -288,7 +328,16 @@
         "allOf": [
           { "$ref": "#/$defs/item" },
           { "required": ["external_reference"] }
-        ]
+        ],
+        "not": { "anyOf": [
+          { "required": ["target_claim_ids"] }, { "required": ["addressed_claim_ids"] },
+          { "required": ["addressed_counterargument_ids"] }, { "required": ["answer"] },
+          { "required": ["event_raw"] }, { "required": ["event_normalized"] },
+          { "required": ["timestamp"] }, { "required": ["normalization_authority"] },
+          { "required": ["statement_a_id"] }, { "required": ["statement_b_id"] },
+          { "required": ["conflict_dimension"] }, { "required": ["analysis_status"] },
+          { "required": ["human_review_status"] }
+        ] }
       }
     },
     "conflictItems": {
@@ -305,7 +354,14 @@
               "human_review_status"
             ]
           }
-        ]
+        ],
+        "not": { "anyOf": [
+          { "required": ["target_claim_ids"] }, { "required": ["addressed_claim_ids"] },
+          { "required": ["addressed_counterargument_ids"] }, { "required": ["answer"] },
+          { "required": ["event_raw"] }, { "required": ["event_normalized"] },
+          { "required": ["timestamp"] }, { "required": ["normalization_authority"] },
+          { "required": ["external_reference"] }
+        ] }
       }
     }
   }

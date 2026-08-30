@@ -7,6 +7,7 @@ from uuid import UUID
 
 import jsonschema
 import pytest
+from referencing import Registry, Resource
 
 from scripts.backend_contract.case_analysis import (
     AnalysisStatus,
@@ -30,6 +31,26 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def fixture():
     return json.loads((ROOT / "tests/fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("collection", "sibling_field", "value"),
+    (
+        ("claims", "analysis_status", "PROPOSED_CONFLICT"),
+        ("counterarguments", "addressed_claim_ids", []),
+        ("questions", "event_normalized", "DOCUMENT_FILED"),
+        ("conflicts", "target_claim_ids", []),
+    ),
+)
+def test_published_schema_rejects_sibling_subtype_fields(collection, sibling_field, value):
+    raw = fixture()
+    raw[collection][0][sibling_field] = value
+    schema = json.loads((ROOT / "schemas/case-analysis-snapshot-v1.schema.json").read_text(encoding="utf-8"))
+    judicial_schema = json.loads((ROOT / "schemas/judicial-domain-model-v1.schema.json").read_text(encoding="utf-8"))
+    registry = Registry().with_resource(judicial_schema["$id"], Resource.from_contents(judicial_schema))
+
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.Draft202012Validator(schema, registry=registry).validate(raw)
 
 
 def test_synthetic_snapshot_is_structurally_and_semantically_canonical():
@@ -176,6 +197,13 @@ def test_reconciliation_clears_persisted_stale_state_when_source_is_restored():
         (lambda raw: raw["coverage"].update(source_revision=99), "coverage"),
         (lambda raw: raw["coverage"].update(documents_total=4, documents_unavailable=2), "coverage"),
         (lambda raw: raw["coverage"].update(status="COMPLETE", documents_analyzed=3, documents_unavailable=0), "availability"),
+        (
+            lambda raw: (
+                [document.update(content_available=True, analysis_revision=0) for document in raw["documents"]],
+                raw["coverage"].update(status="COMPLETE", documents_analyzed=3, documents_unavailable=0, documents_failed=0),
+            ),
+            "availability",
+        ),
         (lambda raw: raw["claims"][0].update(text=""), "material item"),
     ),
 )

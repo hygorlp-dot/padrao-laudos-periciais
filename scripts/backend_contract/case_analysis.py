@@ -262,7 +262,13 @@ class CaseAnalysisSnapshot:
         if self.coverage.source_revision != self.source_revision or self.coverage.documents_total != len(self.documents):
             raise ValueError("coverage must reconcile with the analysis snapshot")
         unavailable = sum(not document.content_available for document in self.documents)
-        if self.coverage.documents_unavailable != unavailable or self.coverage.documents_analyzed + self.coverage.documents_failed != len(self.documents) - unavailable:
+        analyzed = sum(document.content_available and document.analysis_revision > 0 for document in self.documents)
+        failed = sum(document.content_available and document.analysis_revision == 0 for document in self.documents)
+        if (
+            self.coverage.documents_unavailable != unavailable
+            or self.coverage.documents_analyzed != analyzed
+            or self.coverage.documents_failed != failed
+        ):
             raise ValueError("coverage must reflect indexed document availability")
         occurrences: dict[str, tuple[str, str, str]] = {}
         item_ids = [item.item_id for item in self.material_items]

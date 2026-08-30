@@ -19,16 +19,17 @@ const SNAPSHOT = {
   source_revision: 4, participant_refs: ["PART-CLAIMANT", "PART-DEFENDANT"],
   judicial_context_workspace_id: WORKSPACE_ID,
   judicial_context: {
+    provenance: [{ source_document_id: "DOC-CONTEXT" }],
     entities: [
       { entity_id: "ENT-CLAIMANT", raw_name: "Pessoa Autora Sintética", kind: "NATURAL_PERSON", provenance: [{ source_document_id: "DOC-001" }] },
       { entity_id: "ENT-DEFENDANT", raw_name: "Empresa Ré Sintética", kind: "LEGAL_ENTITY", provenance: [{ source_document_id: "DOC-001" }] },
-      { entity_id: "ENT-REPRESENTATIVE", raw_name: "Representante Sintética", kind: "NATURAL_PERSON", provenance: [{ source_document_id: "DOC-001" }] },
+      { entity_id: "ENT-REPRESENTATIVE", raw_name: "Representante Sintética", kind: "NATURAL_PERSON", provenance: [{ source_document_id: "DOC-REPRESENTATIVE" }] },
     ],
     participants: [
       { participant_id: "PART-CLAIMANT", entity_id: "ENT-CLAIMANT", pole: "ACTIVE", role: { raw_label: "AUTOR", normalized: "CLAIMANT" }, status: "ACTIVE", provenance: [{ source_document_id: "DOC-001" }] },
       { participant_id: "PART-DEFENDANT", entity_id: "ENT-DEFENDANT", pole: "PASSIVE", role: { raw_label: "RÉU", normalized: "DEFENDANT" }, status: "ACTIVE", provenance: [{ source_document_id: "DOC-001" }] },
     ],
-    representation_links: [{ link_id: "REP-001", representative_entity_id: "ENT-REPRESENTATIVE", represented_participant_ids: ["PART-CLAIMANT"], representation_role_raw: "REPRESENTANTE", provenance: [{ source_document_id: "DOC-001" }] }],
+    representation_links: [{ link_id: "REP-001", representative_entity_id: "ENT-REPRESENTATIVE", represented_participant_ids: ["PART-CLAIMANT"], representation_role_raw: "REPRESENTANTE", provenance: [{ source_document_id: "DOC-LINK" }] }],
     access_relations: [],
   },
   documents: [{ document_id: "DOC-001", source_sha256: "a".repeat(64), sequence: 1, document_role: "INITIAL_PETITION", raw_type: "Petição inicial", normalized_type: "INITIAL_PETITION", timestamp: "2026-01-10T10:00:00-03:00", participant_refs: ["PART-CLAIMANT"], page_count_or_span: "1-8", content_available: true, analysis_revision: 1 }],
@@ -43,7 +44,7 @@ const SNAPSHOT = {
   conflicts: [{ ...ITEM, item_id: "CONFLICT-001", text: "Possível divergência documental.", statement_a_id: "CLAIM-001", statement_b_id: "COUNTER-001", conflict_dimension: "descrição", analysis_status: "PROPOSED_CONFLICT", human_review_status: "PENDING" }],
   coverage: { status: "PARTIAL", documents_total: 2, documents_analyzed: 1, documents_unavailable: 1, documents_failed: 0, source_revision: 4 },
   human_reviews: [{ review_id: "REVIEW-001", target_item_id: "CLAIM-001", original_extraction: "manifestação", decision: "CORRECTED", corrected_value: "alegação de manifestação", reviewer: "PERITO-SYNTHETIC", revision: 1, timestamp: "2026-03-01T10:00:00-03:00", reason: "Correção sintética." }],
-  stale_document_ids: ["DOC-001"],
+  stale_document_ids: ["DOC-001", "DOC-REPRESENTATIVE"],
   source_inventory_stale: true,
   unindexed_source_count: 1,
 };
@@ -73,6 +74,7 @@ describe("case analysis view", () => {
     expect(screen.getAllByText("Fonte alterada — revisão necessária").length).toBeGreaterThan(0);
     expect(screen.getByText("1 fonte nova ainda não foi incorporada à análise.")).toBeInTheDocument();
     expect(screen.getAllByText(/identidade judicial requer revisão/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/representação requer revisão/)).toBeInTheDocument();
     await user.click(screen.getAllByText("Ver proveniência")[0]);
     expect(screen.getAllByText(`DOC-001 · p. 3, §2 · ocorrência OCC-CLAIM-001 · SHA ${"a".repeat(64)} · revisão 4`).length).toBeGreaterThan(0);
   });
