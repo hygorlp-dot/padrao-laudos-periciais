@@ -19,7 +19,9 @@ HEAD exato de uma branch remota explicitamente informada e emite um
   alterações posteriores de `PATH` não substituem o host tool. Remotes local/
   `file` são resolvidos e não podem estar sob `referencias/privadas` nem aliases
   symlink/reparse. UNC/SMB, device namespaces e file URLs com query/fragment/
-  userinfo são rejeitados; no Windows o remote precisa de drive local real.
+  userinfo são rejeitados; no Windows o remote precisa de volume local fixo
+  comprovado por Win32, sem mapped drive, SMB, DOS device ou `SUBST`, e o path
+  final obtido por handle é revalidado contra os mesmos limites privados.
 - O manifesto é evidência local, não substitui GitHub, Issue, PR, branch
   protection, policy ou revisão.
 - Skills, policies e lanes são declarações explícitas não confiáveis do caller;

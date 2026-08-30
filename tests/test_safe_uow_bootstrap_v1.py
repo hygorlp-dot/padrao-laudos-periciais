@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 import jsonschema
 
+import scripts.agentic.uow_bootstrap as bootstrap_module
 from scripts.agentic.uow_bootstrap import BootstrapError, bootstrap_uow, minimal_bootstrap
 
 
@@ -560,5 +561,23 @@ def test_unc_device_and_ambiguous_file_remotes_are_rejected_before_fetch(
 
     with pytest.raises(BootstrapError, match="UNC/device|non-local file|transport/helper"):
         minimal_bootstrap(source, target, "chore/42-unc")
+
+    assert not target.exists()
+
+
+def test_mapped_drive_is_rejected_by_canonical_windows_volume_check(
+    repository: tuple[Path, Path, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    source, _remote, _expected = repository
+    git(source, "remote", "set-url", "origin", r"Z:\repo.git")
+    target = tmp_path / "mapped-drive-target"
+
+    def reject_mapped_drive(raw: Path) -> Path:
+        assert raw.drive == "Z:"
+        raise BootstrapError("Windows local remote must use a fixed local drive")
+
+    monkeypatch.setattr(bootstrap_module, "_canonical_windows_local_path", reject_mapped_drive)
+    with pytest.raises(BootstrapError, match="fixed local drive"):
+        minimal_bootstrap(source, target, "chore/42-mapped-drive")
 
     assert not target.exists()

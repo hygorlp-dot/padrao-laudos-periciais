@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
@@ -235,8 +236,8 @@ def _validate_local_remote(url: str) -> None:
     raw_text = str(raw).replace("/", "\\")
     if raw_text.startswith(("\\\\", "\\\\?\\", "\\\\.\\")):
         raise BootstrapError("UNC/device remote is prohibited")
-    if os.name == "nt" and (not raw.drive or raw.drive.startswith("\\")):
-        raise BootstrapError("Windows local remote requires a local drive")
+    if os.name == "nt":
+        raw = _canonical_windows_local_path(raw)
     try:
         absolute = raw.absolute()
         resolved = absolute.resolve(strict=True)
@@ -255,6 +256,63 @@ def _validate_local_remote(url: str) -> None:
         reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
         if ancestor.is_symlink() or attributes & reparse_flag:
             raise BootstrapError("symlinked/reparse local remote is prohibited")
+
+
+def _canonical_windows_local_path(raw: Path) -> Path:
+    """Resolve a path through the Win32 volume namespace, rejecting aliases."""
+    if not raw.drive or raw.drive.startswith("\\"):
+        raise BootstrapError("Windows local remote requires a local drive")
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_drive_type = kernel32.GetDriveTypeW
+    get_drive_type.argtypes = [ctypes.c_wchar_p]
+    get_drive_type.restype = ctypes.c_uint
+    drive_root = f"{raw.drive}\\"
+    if get_drive_type(drive_root) != 3:  # DRIVE_FIXED
+        raise BootstrapError("Windows local remote must use a fixed local drive")
+
+    query_device = kernel32.QueryDosDeviceW
+    query_device.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint]
+    query_device.restype = ctypes.c_uint
+    device_buffer = ctypes.create_unicode_buffer(32768)
+    if not query_device(raw.drive, device_buffer, len(device_buffer)):
+        raise BootstrapError("Windows drive identity could not be proven")
+    if device_buffer.value.casefold().replace("\\", "/").startswith("/??/"):
+        raise BootstrapError("Windows DOS/SUBST drive aliases are prohibited")
+
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p,
+        ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p,
+    ]
+    create_file.restype = ctypes.c_void_p
+    handle = create_file(
+        str(raw.absolute()), 0, 0x7, None, 3, 0x02000000, None
+    )  # shared read/write/delete; OPEN_EXISTING; FILE_FLAG_BACKUP_SEMANTICS
+    if handle == ctypes.c_void_p(-1).value:
+        raise BootstrapError("Windows local remote final path could not be opened")
+    try:
+        final_path = kernel32.GetFinalPathNameByHandleW
+        final_path.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_uint]
+        final_path.restype = ctypes.c_uint
+        final_buffer = ctypes.create_unicode_buffer(32768)
+        length = final_path(handle, final_buffer, len(final_buffer), 0)
+        if not length or length >= len(final_buffer):
+            raise BootstrapError("Windows local remote final path could not be proven")
+    finally:
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [ctypes.c_void_p]
+        close_handle.restype = ctypes.c_int
+        close_handle(handle)
+    canonical_text = final_buffer.value
+    canonical_slashes = canonical_text.casefold().replace("\\", "/")
+    if canonical_slashes.startswith("//?/unc/"):
+        raise BootstrapError("UNC/device remote is prohibited")
+    if canonical_slashes.startswith("//?/"):
+        canonical_text = canonical_text[4:]
+    canonical = Path(canonical_text)
+    if not canonical.drive or get_drive_type(f"{canonical.drive}\\") != 3:
+        raise BootstrapError("Windows final remote path is not on a fixed local drive")
+    return canonical
 
 
 def _reject_fetch_execution_config(root: Path, remote: str) -> None:
