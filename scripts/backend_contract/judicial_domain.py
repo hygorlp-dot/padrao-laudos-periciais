@@ -9,10 +9,12 @@ from enum import StrEnum
 
 _ID = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+MAX_DOMAIN_COLLECTION_ITEMS = 512
+MAX_DOMAIN_TEXT_CHARS = 4_096
 
 
 def _text(value: str, field: str) -> None:
-    if type(value) is not str or not value.strip():
+    if type(value) is not str or not value.strip() or len(value) > MAX_DOMAIN_TEXT_CHARS:
         raise ValueError(f"{field} must be nonempty text")
     try:
         value.encode("utf-8")
@@ -27,7 +29,7 @@ def _identifier(value: str, field: str) -> None:
 
 
 def _provenance(value: tuple[SourceProvenance, ...], field: str) -> None:
-    if type(value) is not tuple or not value or any(type(item) is not SourceProvenance for item in value):
+    if type(value) is not tuple or not value or len(value) > MAX_DOMAIN_COLLECTION_ITEMS or any(type(item) is not SourceProvenance for item in value):
         raise ValueError(f"{field} requires provenance")
 
 
@@ -158,6 +160,7 @@ class RepresentationLink:
         if (
             type(self.represented_participant_ids) is not tuple
             or not self.represented_participant_ids
+            or len(self.represented_participant_ids) > MAX_DOMAIN_COLLECTION_ITEMS
             or len(set(self.represented_participant_ids)) != len(self.represented_participant_ids)
         ):
             raise ValueError("represented participants are invalid")
@@ -207,7 +210,7 @@ class ProceduralContext:
         )
         identities: dict[str, set[str]] = {}
         for values, expected_type, identity_field in collections:
-            if type(values) is not tuple or any(type(item) is not expected_type for item in values):
+            if type(values) is not tuple or len(values) > MAX_DOMAIN_COLLECTION_ITEMS or any(type(item) is not expected_type for item in values):
                 raise TypeError(f"{identity_field} collection is invalid")
             ids = [getattr(item, identity_field) for item in values]
             if len(ids) != len(set(ids)):
@@ -241,29 +244,21 @@ def legacy_singular_party_view(context: ProceduralContext) -> dict[str, str] | N
     """Return a lossy legacy view only when both singular parties are unambiguous."""
     if type(context) is not ProceduralContext:
         raise TypeError("context is invalid")
-    if any(
-        item.status is not ParticipantStatus.ACTIVE
-        or item.pole is ProcessPole.UNKNOWN
-        or item.role.normalized is NormalizedProceduralRole.UNKNOWN
-        for item in context.participants
-    ):
+    if any(item.status is not ParticipantStatus.ACTIVE or item.pole is ProcessPole.UNKNOWN or item.role.normalized is NormalizedProceduralRole.UNKNOWN for item in context.participants):
         return None
     entity_names = {item.entity_id: item.raw_name for item in context.entities}
     active = [
-        item for item in context.participants
-        if item.pole is ProcessPole.ACTIVE and item.role.normalized is NormalizedProceduralRole.CLAIMANT
-        and item.principal and item.status is ParticipantStatus.ACTIVE
+        item
+        for item in context.participants
+        if item.pole is ProcessPole.ACTIVE and item.role.normalized is NormalizedProceduralRole.CLAIMANT and item.principal and item.status is ParticipantStatus.ACTIVE
     ]
     passive = [
-        item for item in context.participants
-        if item.pole is ProcessPole.PASSIVE and item.role.normalized is NormalizedProceduralRole.DEFENDANT
-        and item.principal and item.status is ParticipantStatus.ACTIVE
+        item
+        for item in context.participants
+        if item.pole is ProcessPole.PASSIVE and item.role.normalized is NormalizedProceduralRole.DEFENDANT and item.principal and item.status is ParticipantStatus.ACTIVE
     ]
     selected = {*active, *passive}
-    if (
-        len(active) != 1 or len(passive) != 1
-        or any(item.principal and item not in selected for item in context.participants)
-    ):
+    if len(active) != 1 or len(passive) != 1 or any(item.principal and item not in selected for item in context.participants):
         return None
     return {
         "parte_requerente": entity_names[active[0].entity_id],
@@ -297,8 +292,15 @@ def procedural_context_from_mapping(value: object) -> ProceduralContext:
     root = _exact_mapping(
         value,
         {
-            "schema_version", "context_id", "instance_label", "snapshot_id", "entities",
-            "participants", "representation_links", "access_relations", "provenance",
+            "schema_version",
+            "context_id",
+            "instance_label",
+            "snapshot_id",
+            "entities",
+            "participants",
+            "representation_links",
+            "access_relations",
+            "provenance",
         },
         "ProceduralContext",
     )
@@ -308,7 +310,9 @@ def procedural_context_from_mapping(value: object) -> ProceduralContext:
         raise ValueError("procedural relation collection is invalid")
     entities = tuple(
         JudicialEntity(
-            entity_id=row["entity_id"], raw_name=row["raw_name"], kind=EntityKind(row["kind"]),
+            entity_id=row["entity_id"],
+            raw_name=row["raw_name"],
+            kind=EntityKind(row["kind"]),
             provenance=_provenance_tuple(row["provenance"]),
         )
         for raw in root["entities"]
@@ -322,39 +326,59 @@ def procedural_context_from_mapping(value: object) -> ProceduralContext:
             "ProcessParticipant",
         )
         role = _exact_mapping(row["role"], {"raw_label", "normalized"}, "ProceduralRole")
-        participants.append(ProcessParticipant(
-            participant_id=row["participant_id"], entity_id=row["entity_id"], context_id=row["context_id"],
-            pole=ProcessPole(row["pole"]),
-            role=ProceduralRole(role["raw_label"], NormalizedProceduralRole(role["normalized"])),
-            principal=row["principal"], status=ParticipantStatus(row["status"]),
-            provenance=_provenance_tuple(row["provenance"]),
-        ))
+        participants.append(
+            ProcessParticipant(
+                participant_id=row["participant_id"],
+                entity_id=row["entity_id"],
+                context_id=row["context_id"],
+                pole=ProcessPole(row["pole"]),
+                role=ProceduralRole(role["raw_label"], NormalizedProceduralRole(role["normalized"])),
+                principal=row["principal"],
+                status=ParticipantStatus(row["status"]),
+                provenance=_provenance_tuple(row["provenance"]),
+            )
+        )
     representations = tuple(
         RepresentationLink(
-            link_id=row["link_id"], representative_entity_id=row["representative_entity_id"],
+            link_id=row["link_id"],
+            representative_entity_id=row["representative_entity_id"],
             represented_participant_ids=tuple(row["represented_participant_ids"]),
             representation_role_raw=row["representation_role_raw"],
             provenance=_provenance_tuple(row["provenance"]),
         )
         for raw in root["representation_links"]
-        for row in [_exact_mapping(
-            raw,
-            {"link_id", "representative_entity_id", "represented_participant_ids", "representation_role_raw", "provenance"},
-            "RepresentationLink",
-        )]
+        for row in [
+            _exact_mapping(
+                raw,
+                {"link_id", "representative_entity_id", "represented_participant_ids", "representation_role_raw", "provenance"},
+                "RepresentationLink",
+            )
+        ]
     )
     accesses = tuple(
         AccessRelation(
-            access_id=row["access_id"], entity_id=row["entity_id"], context_id=row["context_id"],
-            access_type_raw=row["access_type_raw"], provenance=_provenance_tuple(row["provenance"]),
+            access_id=row["access_id"],
+            entity_id=row["entity_id"],
+            context_id=row["context_id"],
+            access_type_raw=row["access_type_raw"],
+            provenance=_provenance_tuple(row["provenance"]),
         )
         for raw in root["access_relations"]
-        for row in [_exact_mapping(
-            raw, {"access_id", "entity_id", "context_id", "access_type_raw", "provenance"}, "AccessRelation",
-        )]
+        for row in [
+            _exact_mapping(
+                raw,
+                {"access_id", "entity_id", "context_id", "access_type_raw", "provenance"},
+                "AccessRelation",
+            )
+        ]
     )
     return ProceduralContext(
-        context_id=root["context_id"], instance_label=root["instance_label"], snapshot_id=root["snapshot_id"],
-        entities=entities, participants=tuple(participants), representation_links=representations,
-        access_relations=accesses, provenance=_provenance_tuple(root["provenance"]),
+        context_id=root["context_id"],
+        instance_label=root["instance_label"],
+        snapshot_id=root["snapshot_id"],
+        entities=entities,
+        participants=tuple(participants),
+        representation_links=representations,
+        access_relations=accesses,
+        provenance=_provenance_tuple(root["provenance"]),
     )

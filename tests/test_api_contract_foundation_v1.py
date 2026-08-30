@@ -11,6 +11,7 @@ from scripts.backend_contract.api_contract import (
     JudicialDomainPayloadError,
     parse_judicial_domain_payload,
 )
+from scripts.backend_contract.judicial_domain import procedural_context_from_mapping
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -120,3 +121,20 @@ def test_boundary_rejects_over_budget_semantic_collections_before_schema_validat
     with pytest.raises(JudicialDomainPayloadError):
         parse_judicial_domain_payload(json.dumps(payload).encode("utf-8"))
     assert schema_called is False
+
+
+def test_canonical_runtime_and_schema_share_text_and_collection_limits():
+    oversized_text = _fixture()
+    oversized_text["entities"][0]["raw_name"] = "x" * 4097
+    with pytest.raises(ValueError):
+        procedural_context_from_mapping(oversized_text)
+
+    oversized_collection = _fixture()
+    template = oversized_collection["entities"][0]
+    oversized_collection["entities"] = []
+    for index in range(513):
+        entity = copy.deepcopy(template)
+        entity["entity_id"] = f"ENT-{index:03d}"
+        oversized_collection["entities"].append(entity)
+    with pytest.raises((TypeError, ValueError)):
+        procedural_context_from_mapping(oversized_collection)
