@@ -138,3 +138,15 @@ def test_canonical_runtime_and_schema_share_text_and_collection_limits():
         oversized_collection["entities"].append(entity)
     with pytest.raises((TypeError, ValueError)):
         procedural_context_from_mapping(oversized_collection)
+
+    schema = json.loads((ROOT / "schemas/judicial-domain-model-v1.schema.json").read_text(encoding="utf-8"))
+    oversized_identifier = _fixture()
+    long_id = "A-" + ("A" * 4095)
+    oversized_identifier["context_id"] = long_id
+    for participant in oversized_identifier["participants"]:
+        participant["context_id"] = long_id
+    for access in oversized_identifier["access_relations"]:
+        access["context_id"] = long_id
+    assert list(Draft202012Validator(schema).iter_errors(oversized_identifier))
+    with pytest.raises(ValueError):
+        procedural_context_from_mapping(oversized_identifier)

@@ -7,12 +7,15 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator, ValidationError
 
-from .judicial_domain import ProceduralContext, procedural_context_from_mapping
+from .judicial_domain import (
+    MAX_DOMAIN_COLLECTION_ITEMS,
+    MAX_DOMAIN_TEXT_CHARS,
+    ProceduralContext,
+    procedural_context_from_mapping,
+)
 
 
 MAX_JUDICIAL_DOMAIN_PAYLOAD_BYTES = 1_048_576
-MAX_JUDICIAL_DOMAIN_COLLECTION_ITEMS = 512
-MAX_JUDICIAL_DOMAIN_TEXT_CHARS = 4_096
 MAX_JUDICIAL_DOMAIN_NODES = 10_000
 _SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "judicial-domain-model-v1.schema.json"
 _SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
@@ -40,10 +43,10 @@ def _require_bounded_json(value: object) -> None:
         visited += 1
         if visited > MAX_JUDICIAL_DOMAIN_NODES:
             raise ValueError("JSON graph exceeds limit")
-        if type(item) is str and len(item) > MAX_JUDICIAL_DOMAIN_TEXT_CHARS:
+        if type(item) is str and len(item) > MAX_DOMAIN_TEXT_CHARS:
             raise ValueError("JSON text exceeds limit")
         if type(item) is list:
-            if len(item) > MAX_JUDICIAL_DOMAIN_COLLECTION_ITEMS:
+            if len(item) > MAX_DOMAIN_COLLECTION_ITEMS:
                 raise ValueError("JSON collection exceeds limit")
             pending.extend(item)
         elif type(item) is dict:

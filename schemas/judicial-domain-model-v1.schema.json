@@ -17,7 +17,7 @@
     "provenance": {"$ref": "#/$defs/provenanceList"}
   },
   "$defs": {
-    "id": {"type": "string", "pattern": "^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$"},
+    "id": {"type": "string", "maxLength": 4096, "pattern": "^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$"},
     "text": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "\\S"},
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "provenance": {
