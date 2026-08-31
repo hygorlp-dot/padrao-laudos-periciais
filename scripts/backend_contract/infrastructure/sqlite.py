@@ -26,6 +26,7 @@ from ..application.ports import (
 
 
 CURRENT_SCHEMA_VERSION = 1
+RECOVERY_QUARANTINE_APPLICATION_ID = 0x52435631
 
 _WORKSPACES_SQL = """
 CREATE TABLE workspaces (
@@ -100,21 +101,10 @@ def _normalized_sql(value: str) -> str:
 
 
 def _validate_schema(connection: sqlite3.Connection) -> None:
-    unexpected_objects = tuple(
-        connection.execute(
-            "SELECT type, name FROM sqlite_master "
-            "WHERE type IN ('index', 'view', 'trigger') AND sql IS NOT NULL"
-        )
-    )
+    unexpected_objects = tuple(connection.execute("SELECT type, name FROM sqlite_master WHERE type IN ('index', 'view', 'trigger') AND sql IS NOT NULL"))
     if unexpected_objects:
         raise PersistenceSchemaError("schema SQLite contém objetos inesperados")
-    tables = {
-        row[0]: row[1]
-        for row in connection.execute(
-            "SELECT name, sql FROM sqlite_master "
-            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
-        )
-    }
+    tables = {row[0]: row[1] for row in connection.execute("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")}
     expected_sql = {
         "workspaces": _normalized_sql(_WORKSPACES_SQL),
         "artifact_revisions": _normalized_sql(_REVISIONS_SQL),
@@ -124,10 +114,7 @@ def _validate_schema(connection: sqlite3.Connection) -> None:
     for table, sql in expected_sql.items():
         if _normalized_sql(tables[table]) != sql:
             raise PersistenceSchemaError(f"schema SQLite malformado: {table}")
-        columns = tuple(
-            (row[1], row[2], row[3], row[4], row[5])
-            for row in connection.execute(f"PRAGMA table_info({table})")
-        )
+        columns = tuple((row[1], row[2], row[3], row[4], row[5]) for row in connection.execute(f"PRAGMA table_info({table})"))
         if columns != _EXPECTED_COLUMNS[table]:
             raise PersistenceSchemaError(f"colunas SQLite malformadas: {table}")
     foreign_keys = tuple(connection.execute("PRAGMA foreign_key_list(artifact_revisions)"))
@@ -203,15 +190,10 @@ def _revision_from_values(
 def _validate_persisted_records(connection: sqlite3.Connection) -> None:
     workspace_ids = set()
     revision_sequences: dict[tuple[str, str, str], list[int]] = {}
-    for values in connection.execute(
-        "SELECT workspace_id, name, created_at FROM workspaces"
-    ):
+    for values in connection.execute("SELECT workspace_id, name, created_at FROM workspaces"):
         record = _workspace_from_values(*values)
         workspace_ids.add(str(record.workspace_id))
-    for values in connection.execute(
-        "SELECT workspace_id, artifact_kind, artifact_id, revision_id, revision, "
-        "created_at, checksum_sha256, payload_json FROM artifact_revisions"
-    ):
+    for values in connection.execute("SELECT workspace_id, artifact_kind, artifact_id, revision_id, revision, created_at, checksum_sha256, payload_json FROM artifact_revisions"):
         record = _revision_from_values(*values)
         if str(record.workspace_id) not in workspace_ids:
             raise RepositoryIntegrityError("revisão persistida referencia workspace ausente")
@@ -254,9 +236,7 @@ class _DatabaseStateGuard:
             _validate_database_state(self._connection)
             validated = _database_state_token(self._connection)
             if validated != current:
-                raise RepositoryIntegrityError(
-                    "estado SQLite mudou durante a validação"
-                )
+                raise RepositoryIntegrityError("estado SQLite mudou durante a validação")
             self._trusted_token = validated
 
     def accept_current(self) -> None:
@@ -269,9 +249,7 @@ def migrate(connection: sqlite3.Connection) -> tuple[int, int, int, int]:
         connection.execute("BEGIN IMMEDIATE")
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         if type(version) is not int or version < 0 or version > CURRENT_SCHEMA_VERSION:
-            raise PersistenceSchemaError(
-                f"versão futura ou inválida do schema SQLite: {version}"
-            )
+            raise PersistenceSchemaError(f"versão futura ou inválida do schema SQLite: {version}")
         for target in range(version + 1, CURRENT_SCHEMA_VERSION + 1):
             statements = MIGRATIONS.get(target)
             if not statements:
@@ -382,9 +360,7 @@ class SQLiteWorkspaceRepository(_SQLiteRepository):
         return workspace
 
     def _from_row(self, row: sqlite3.Row) -> PericiaWorkspace:
-        return _workspace_from_values(
-            row["workspace_id"], row["name"], row["created_at"]
-        )
+        return _workspace_from_values(row["workspace_id"], row["name"], row["created_at"])
 
     def get(self, workspace_id: WorkspaceId) -> PericiaWorkspace | None:
         if type(workspace_id) is not WorkspaceId:
@@ -396,10 +372,7 @@ class SQLiteWorkspaceRepository(_SQLiteRepository):
         return None if row is None else self._from_row(row)
 
     def list_all(self) -> tuple[PericiaWorkspace, ...]:
-        rows = self._fetchall(
-            "SELECT workspace_id, name, created_at FROM workspaces "
-            "ORDER BY created_at, workspace_id"
-        )
+        rows = self._fetchall("SELECT workspace_id, name, created_at FROM workspaces ORDER BY created_at, workspace_id")
         return tuple(self._from_row(row) for row in rows)
 
 
@@ -420,6 +393,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
         "revision",
         "checksum_sha256",
     }
+
     @staticmethod
     def _text_key(value, field: str) -> str:
         if type(value) is not str or not value.strip():
@@ -431,16 +405,12 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
         return value
 
     @staticmethod
-    def _key(
-        workspace_id: WorkspaceId, artifact_kind: str, artifact_id: str
-    ) -> tuple[str, str, str]:
+    def _key(workspace_id: WorkspaceId, artifact_kind: str, artifact_id: str) -> tuple[str, str, str]:
         if type(workspace_id) is not WorkspaceId:
             raise TypeError("workspace_id inválido")
         return (
             str(workspace_id),
-            SQLiteArtifactRevisionRepository._text_key(
-                artifact_kind, "artifact_kind"
-            ),
+            SQLiteArtifactRevisionRepository._text_key(artifact_kind, "artifact_kind"),
             SQLiteArtifactRevisionRepository._text_key(artifact_id, "artifact_id"),
         )
 
@@ -477,9 +447,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
         expected_revision: int | None,
         expected_dependencies: tuple[dict[str, object], ...] = (),
     ) -> ArtifactRevision:
-        if expected_revision is not None and (
-            type(expected_revision) is not int or expected_revision < 1
-        ):
+        if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
             raise ValueError("expected_revision inválida")
         return self._append(
             workspace_id=workspace_id,
@@ -501,17 +469,9 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
         expected_first_revision: int | None,
         expected_latest: tuple[dict[str, object], ...],
     ) -> tuple[ArtifactRevision, ArtifactRevision]:
-        if expected_first_revision is not None and (
-            type(expected_first_revision) is not int or expected_first_revision < 1
-        ):
+        if expected_first_revision is not None and (type(expected_first_revision) is not int or expected_first_revision < 1):
             raise ValueError("expected_revision inválida")
-        if (
-            type(first) is not dict
-            or set(first) != self._PENDING_KEYS
-            or type(second) is not dict
-            or set(second) != self._PENDING_KEYS
-            or type(expected_latest) is not tuple
-        ):
+        if type(first) is not dict or set(first) != self._PENDING_KEYS or type(second) is not dict or set(second) != self._PENDING_KEYS or type(expected_latest) is not tuple:
             raise ValueError("par de revisões inválido")
 
         workspace_key = str(workspace_id) if type(workspace_id) is WorkspaceId else None
@@ -561,21 +521,13 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
             if revision is None:
                 if checksum is not None:
                     raise ValueError("precondição ausente possui checksum")
-            elif (
-                type(revision) is not int
-                or revision < 1
-                or type(checksum) is not str
-                or len(checksum) != 64
-                or any(character not in "0123456789abcdef" for character in checksum)
-            ):
+            elif type(revision) is not int or revision < 1 or type(checksum) is not str or len(checksum) != 64 or any(character not in "0123456789abcdef" for character in checksum):
                 raise ValueError("precondição de fonte inválida")
             normalized_expectations.append((kind, artifact_id, revision, checksum))
             identities = expected_identities_by_kind.setdefault(kind, {})
             if artifact_id in identities:
                 raise ValueError("precondição de fonte duplicada")
-            identities[artifact_id] = (
-                None if revision is None else (revision, checksum)
-            )
+            identities[artifact_id] = None if revision is None else (revision, checksum)
 
         try:
             with self._write():
@@ -587,9 +539,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
                     raise WorkspaceNotFound(f"workspace não encontrado: {workspace_id}")
                 for kind, artifact_id, revision, checksum in normalized_expectations:
                     current = self._connection.execute(
-                        "SELECT revision, checksum_sha256 FROM artifact_revisions "
-                        "WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ? "
-                        "ORDER BY revision DESC LIMIT 1",
+                        "SELECT revision, checksum_sha256 FROM artifact_revisions WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ? ORDER BY revision DESC LIMIT 1",
                         (workspace_key, kind, artifact_id),
                     ).fetchone()
                     actual = None if current is None else (current[0], current[1])
@@ -608,38 +558,24 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
                         "AND candidate.artifact_id = current.artifact_id)",
                         (workspace_key, kind),
                     ).fetchall()
-                    current_identities = {
-                        row[0]: (row[1], row[2]) for row in current_rows
-                    }
-                    expected_present = {
-                        artifact_id: identity
-                        for artifact_id, identity in expected_identities.items()
-                        if identity is not None
-                    }
+                    current_identities = {row[0]: (row[1], row[2]) for row in current_rows}
+                    expected_present = {artifact_id: identity for artifact_id, identity in expected_identities.items() if identity is not None}
                     if current_identities != expected_present:
                         raise RepositoryConflict("conjunto de fontes foi atualizado")
 
-                first_key = self._key(
-                    workspace_id, first["artifact_kind"], first["artifact_id"]
-                )
-                second_key = self._key(
-                    workspace_id, second["artifact_kind"], second["artifact_id"]
-                )
+                first_key = self._key(workspace_id, first["artifact_kind"], first["artifact_id"])
+                second_key = self._key(workspace_id, second["artifact_kind"], second["artifact_id"])
                 if first_key == second_key:
                     raise ValueError("par de revisões exige artefatos distintos")
                 first_current = self._connection.execute(
-                    "SELECT COALESCE(MAX(revision), 0) FROM artifact_revisions "
-                    "WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ?",
+                    "SELECT COALESCE(MAX(revision), 0) FROM artifact_revisions WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ?",
                     first_key,
                 ).fetchone()[0]
-                expected_current = (
-                    0 if expected_first_revision is None else expected_first_revision
-                )
+                expected_current = 0 if expected_first_revision is None else expected_first_revision
                 if first_current != expected_current:
                     raise RepositoryConflict("revisão processual desatualizada")
                 second_current = self._connection.execute(
-                    "SELECT COALESCE(MAX(revision), 0) FROM artifact_revisions "
-                    "WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ?",
+                    "SELECT COALESCE(MAX(revision), 0) FROM artifact_revisions WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ?",
                     second_key,
                 ).fetchone()[0]
                 records = (
@@ -648,10 +584,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
                 )
                 for record, canonical_json in records:
                     self._connection.execute(
-                        "INSERT INTO artifact_revisions "
-                        "(workspace_id, artifact_kind, artifact_id, revision_id, revision, "
-                        "created_at, checksum_sha256, payload_json) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO artifact_revisions (workspace_id, artifact_kind, artifact_id, revision_id, revision, created_at, checksum_sha256, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             str(record.workspace_id),
                             record.artifact_kind,
@@ -681,9 +614,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
         expected_revision: object,
         expected_dependencies: tuple[dict[str, object], ...],
     ) -> ArtifactRevision:
-        workspace_key, artifact_kind, artifact_id = self._key(
-            workspace_id, artifact_kind, artifact_id
-        )
+        workspace_key, artifact_kind, artifact_id = self._key(workspace_id, artifact_kind, artifact_id)
         canonical_json = canonical_payload_json(payload)
         payload_snapshot = json.loads(canonical_json)
         checksum = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
@@ -693,9 +624,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
         for expectation in expected_dependencies:
             if type(expectation) is not dict or set(expectation) != self._EXPECTATION_KEYS:
                 raise ValueError("invalid dependent precondition")
-            _, dependency_kind, dependency_id = self._key(
-                workspace_id, expectation["artifact_kind"], expectation["artifact_id"]
-            )
+            _, dependency_kind, dependency_id = self._key(workspace_id, expectation["artifact_kind"], expectation["artifact_id"])
             dependency_revision = expectation["revision"]
             dependency_checksum = expectation["checksum_sha256"]
             if (
@@ -706,9 +635,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
                 or any(character not in "0123456789abcdef" for character in dependency_checksum)
             ):
                 raise ValueError("invalid dependent precondition")
-            normalized_dependencies.append(
-                (dependency_kind, dependency_id, dependency_revision, dependency_checksum)
-            )
+            normalized_dependencies.append((dependency_kind, dependency_id, dependency_revision, dependency_checksum))
         try:
             canonical_revision_id = str(UUID(revision_id))
         except (TypeError, ValueError, AttributeError) as exc:
@@ -723,9 +650,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
                     raise WorkspaceNotFound(f"workspace não encontrado: {workspace_id}")
                 for dependency_kind, dependency_id, dependency_revision, dependency_checksum in normalized_dependencies:
                     current_dependency = self._connection.execute(
-                        "SELECT revision, checksum_sha256 FROM artifact_revisions "
-                        "WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ? "
-                        "ORDER BY revision DESC LIMIT 1",
+                        "SELECT revision, checksum_sha256 FROM artifact_revisions WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ? ORDER BY revision DESC LIMIT 1",
                         (workspace_key, dependency_kind, dependency_id),
                     ).fetchone()
                     if current_dependency is None or tuple(current_dependency) != (
@@ -734,8 +659,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
                     ):
                         raise RepositoryConflict("dependent artifact was updated")
                 current_revision = self._connection.execute(
-                    "SELECT COALESCE(MAX(revision), 0) FROM artifact_revisions "
-                    "WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ?",
+                    "SELECT COALESCE(MAX(revision), 0) FROM artifact_revisions WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ?",
                     (workspace_key, artifact_kind, artifact_id),
                 ).fetchone()[0]
                 if expected_revision is not _NO_REVISION_PRECONDITION:
@@ -754,9 +678,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
                     payload=payload_snapshot,
                 )
                 self._connection.execute(
-                    "INSERT INTO artifact_revisions "
-                    "(workspace_id, artifact_kind, artifact_id, revision_id, revision, "
-                    "created_at, checksum_sha256, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO artifact_revisions (workspace_id, artifact_kind, artifact_id, revision_id, revision, created_at, checksum_sha256, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         str(record.workspace_id),
                         record.artifact_kind,
@@ -798,8 +720,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
     ) -> ArtifactRevision | None:
         key = self._key(workspace_id, artifact_kind, artifact_id)
         return self._select_one(
-            "SELECT * FROM artifact_revisions WHERE workspace_id = ? "
-            "AND artifact_kind = ? AND artifact_id = ? ORDER BY revision DESC LIMIT 1",
+            "SELECT * FROM artifact_revisions WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ? ORDER BY revision DESC LIMIT 1",
             key,
         )
 
@@ -814,8 +735,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
         if type(revision) is not int or revision < 1:
             raise ValueError("revision inválida")
         return self._select_one(
-            "SELECT * FROM artifact_revisions WHERE workspace_id = ? "
-            "AND artifact_kind = ? AND artifact_id = ? AND revision = ?",
+            "SELECT * FROM artifact_revisions WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ? AND revision = ?",
             (*key, revision),
         )
 
@@ -827,8 +747,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
     ) -> tuple[ArtifactRevision, ...]:
         key = self._key(workspace_id, artifact_kind, artifact_id)
         rows = self._fetchall(
-            "SELECT * FROM artifact_revisions WHERE workspace_id = ? "
-            "AND artifact_kind = ? AND artifact_id = ? ORDER BY revision",
+            "SELECT * FROM artifact_revisions WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ? ORDER BY revision",
             key,
         )
         return tuple(self._from_row(row) for row in rows)
@@ -865,12 +784,7 @@ class SQLiteApplicationStore:
         }
         windows_target = target.replace("/", "\\")
         has_drive_prefix = len(windows_target) >= 2 and windows_target[1] == ":"
-        has_absolute_drive = (
-            has_drive_prefix
-            and windows_target[0].isalpha()
-            and len(windows_target) >= 3
-            and windows_target[2] == "\\"
-        )
+        has_absolute_drive = has_drive_prefix and windows_target[0].isalpha() and len(windows_target) >= 3 and windows_target[2] == "\\"
         without_drive = windows_target[2:] if has_drive_prefix else windows_target
         target_parts = tuple(part for part in windows_target.split("\\") if part)
         try:
@@ -879,15 +793,7 @@ class SQLiteApplicationStore:
             raise RepositoryError("target SQLite contém Unicode inválido") from exc
         ambiguous_part = any(part != part.rstrip(" .") for part in target_parts)
         superscript_digits = str.maketrans({"¹": "1", "²": "2", "³": "3"})
-        reserved_part = any(
-            part.split(":", 1)[0]
-            .split(".", 1)[0]
-            .rstrip(" .")
-            .translate(superscript_digits)
-            .upper()
-            in reserved
-            for part in target_parts
-        )
+        reserved_part = any(part.split(":", 1)[0].split(".", 1)[0].rstrip(" .").translate(superscript_digits).upper() in reserved for part in target_parts)
         if (
             not target.strip()
             or target == ":memory:"
@@ -914,12 +820,8 @@ class SQLiteApplicationStore:
             state_guard = _DatabaseStateGuard(self._connection, trusted_token)
             self._lock = lock
             self._state_guard = state_guard
-            self.workspaces = SQLiteWorkspaceRepository(
-                self._connection, lock, state_guard
-            )
-            self.revisions = SQLiteArtifactRevisionRepository(
-                self._connection, lock, state_guard
-            )
+            self.workspaces = SQLiteWorkspaceRepository(self._connection, lock, state_guard)
+            self.revisions = SQLiteArtifactRevisionRepository(self._connection, lock, state_guard)
         except RepositoryError:
             try:
                 self._connection.close()
@@ -941,6 +843,20 @@ class SQLiteApplicationStore:
                 return self._connection.serialize()
             except sqlite3.Error as exc:
                 raise RepositoryError("falha ao capturar staging SQLite") from exc
+
+    def mark_recovery_quarantine(self) -> None:
+        with self._lock:
+            current = self._connection.execute("PRAGMA application_id").fetchone()[0]
+            if current not in (0, RECOVERY_QUARANTINE_APPLICATION_ID):
+                raise RepositoryIntegrityError("SQLite application identity is already assigned")
+            self._connection.execute(f"PRAGMA application_id = {RECOVERY_QUARANTINE_APPLICATION_ID}")
+            if self._connection.execute("PRAGMA application_id").fetchone()[0] != RECOVERY_QUARANTINE_APPLICATION_ID:
+                raise RepositoryIntegrityError("SQLite recovery quarantine was not persisted")
+            self._state_guard.accept_current()
+
+    def is_recovery_quarantined(self) -> bool:
+        with self._lock:
+            return self._connection.execute("PRAGMA application_id").fetchone()[0] == RECOVERY_QUARANTINE_APPLICATION_ID
 
     def restore(self, snapshot: bytes) -> None:
         if type(snapshot) is not bytes:

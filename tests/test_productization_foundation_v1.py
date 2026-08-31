@@ -386,6 +386,21 @@ def test_active_local_api_rejects_hardlink_alias_to_quarantined_database(tmp_pat
         build_local_api(alias, token="a" * 32)
 
 
+def test_embedded_quarantine_survives_database_rename(tmp_path) -> None:
+    staging = RecoveryStaging.create(tmp_path / "staging")
+    staging.close()
+    renamed = tmp_path / "renamed.sqlite3"
+    os.replace(staging.root / "workspace.sqlite3", renamed)
+    with pytest.raises(RepositoryIntegrityError, match="quarantined"):
+        build_local_api(renamed, token="a" * 32)
+
+
+@pytest.mark.parametrize("database", (r"\\server\share\case.sqlite3", r"\\?\C:\case.sqlite3"))
+def test_active_local_api_rejects_nonlocal_database_before_filesystem_access(database) -> None:
+    with pytest.raises(RepositoryIntegrityError, match="network|device"):
+        build_local_api(database, token="a" * 32)
+
+
 @pytest.mark.parametrize("root", ("relative-staging", r"\\server\share\staging", r"\\?\C:\staging"))
 def test_recovery_staging_rejects_nonlocal_or_unanchored_root(root) -> None:
     with pytest.raises(RepositoryIntegrityError, match="root"):

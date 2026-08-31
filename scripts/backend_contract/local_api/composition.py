@@ -35,7 +35,7 @@ from ..application.services import (
     SaveProcessCase,
     StorePrivateContent,
 )
-from ..infrastructure.private_filesystem import LocalPrivateContentStore
+from ..infrastructure.private_filesystem import LocalPrivateContentStore, _validate_trusted_local_device
 from ..infrastructure.pdf_text import LocalPdfTextExtractor
 from ..infrastructure.rapid_ocr import RapidOcrLatinEngine
 from ..infrastructure.sqlite import SQLiteApplicationStore
@@ -105,20 +105,24 @@ def _path_has_recovery_quarantine(path: Path, *, path_is_file: bool) -> bool:
     return any((ancestor / "RECOVERY_NOT_PROMOTABLE").exists() for candidate in candidates for ancestor in (candidate, *candidate.parents))
 
 
-def _assert_plain_single_link_database(path: Path) -> None:
+def _assert_plain_single_link_database(path: Path) -> tuple[int, int] | None:
     absolute = path.absolute()
     for component in (absolute, *absolute.parents):
         is_junction = getattr(component, "is_junction", lambda: False)
         if component.is_symlink() or is_junction():
             raise RepositoryIntegrityError("local database cannot use a link or reparse ancestry")
     if not absolute.exists():
-        return
+        parent_identity = os.lstat(absolute.parent.resolve(strict=True))
+        _validate_trusted_local_device(parent_identity)
+        return None
     try:
         identity = os.stat(absolute, follow_symlinks=False)
     except OSError as exc:
         raise RepositoryIntegrityError("local database identity cannot be verified") from exc
     if identity.st_nlink != 1:
         raise RepositoryIntegrityError("local database must have exactly one filesystem link")
+    _validate_trusted_local_device(identity)
+    return identity.st_dev, identity.st_ino
 
 
 @dataclass(slots=True)
@@ -204,13 +208,20 @@ def build_local_api(
     _require_local_token(local_token)
     local_clock = _SystemClock() if clock is None else clock
     local_ids = _UuidGenerator() if ids is None else ids
+    raw_database = str(database)
+    if raw_database.startswith(("\\\\", "//", "\\\\?\\", "\\\\.\\")):
+        raise RepositoryIntegrityError("local database cannot use network or device paths")
     database_path = Path(database)
     if _path_has_recovery_quarantine(database_path, path_is_file=True) or (private_root is not None and _path_has_recovery_quarantine(Path(private_root), path_is_file=False)):
         raise RepositoryIntegrityError("recovery staging is quarantined and cannot become active")
-    _assert_plain_single_link_database(database_path)
+    before_identity = _assert_plain_single_link_database(database_path)
     store = SQLiteApplicationStore(database)
     try:
-        _assert_plain_single_link_database(database_path)
+        after_identity = _assert_plain_single_link_database(database_path)
+        if before_identity is not None and after_identity != before_identity:
+            raise RepositoryIntegrityError("local database identity changed during opening")
+        if store.is_recovery_quarantined():
+            raise RepositoryIntegrityError("recovery SQLite is quarantined and cannot become active")
     except BaseException:
         store.close()
         raise

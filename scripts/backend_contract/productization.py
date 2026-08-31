@@ -452,6 +452,7 @@ class RecoveryStaging:
         private = None
         try:
             database = SQLiteApplicationStore(target / "workspace.sqlite3")
+            database.mark_recovery_quarantine()
             private = LocalPrivateContentStore.open_or_provision(target / "private")
             staging = object.__new__(cls)
             staging._root = target.resolve(strict=True)
