@@ -450,6 +450,15 @@
                          "finalidade":  "SessÃ£o sintÃ©tica de vistoria de campo Stage 5",
                          "expected":  "VALID",
                          "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/technical-snapshot-v1.json",
+                         "dominio":  "TECHNICAL_SNAPSHOT_V1",
+                         "schema":  "technical-snapshot-v1.schema.json",
+                         "consumer":  "tests/test_technical_findings_foundation_v1.py::test_fixture_matches_strict_published_schema",
+                         "finalidade":  "Cadeia técnica sintética de evidência, método, achado e decisão Stage 6",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      }
                  ]
 }
