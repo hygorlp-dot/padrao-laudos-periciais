@@ -85,6 +85,18 @@ describe("case analysis view", () => {
     expect(await screen.findByRole("heading", { name: "Análise ainda não disponível" })).toBeInTheDocument();
   });
 
+  test("starts the document index without a handcrafted snapshot", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(404, { error: { code: "ARTIFACT_REVISION_NOT_FOUND" } }))
+      .mockResolvedValueOnce(response(201, { revision: 1, updated_at: "2026-08-31T12:00:00+00:00", snapshot: SNAPSHOT }));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<CaseAnalysisView workspaceId={WORKSPACE_ID} />);
+    await user.click(await screen.findByRole("button", { name: "Iniciar análise" }));
+    await screen.findByRole("heading", { name: "Mapa do processo" });
+    expect(JSON.parse(String((fetchMock.mock.calls[1][1] as RequestInit).body))).toEqual({});
+  });
+
   test("warns when only the root judicial context provenance is stale", async () => {
     const contextOnly = structuredClone(SNAPSHOT);
     contextOnly.participant_refs = [];

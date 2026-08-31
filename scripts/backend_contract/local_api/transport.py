@@ -108,10 +108,13 @@ class LocalApiServices:
     get_process_case: object
     save_process_case: object
     save_case_analysis: object | None = None
+    start_case_analysis: object | None = None
+    add_case_analysis_item: object | None = None
     review_case_analysis_item: object | None = None
     get_case_analysis: object | None = None
     save_pericial_planning: object | None = None
     get_pericial_planning: object | None = None
+    start_pericial_planning: object | None = None
     review_pericial_planning: object | None = None
     save_inspection_session: object | None = None
     get_inspection_session: object | None = None
@@ -799,6 +802,11 @@ class LocalApi:
                     )
                 if normalized_method == "POST":
                     dto = self._request_dto(request_headers, body)
+                    if dto == {}:
+                        if self._services.start_case_analysis is None:
+                            return _error(503, "CASE_ANALYSIS_UNAVAILABLE")
+                        record, snapshot = self._services.start_case_analysis.execute(workspace_id)
+                        return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": case_analysis_to_mapping(snapshot)})
                     if set(dto) != {"expected_revision", "snapshot"}:
                         raise ValueError("Case Analysis request is invalid")
                     expected = dto["expected_revision"]
@@ -818,6 +826,21 @@ class LocalApi:
                     )
                 return _error(405, "METHOD_NOT_ALLOWED")
 
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("case-analysis", "items"):
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.add_case_analysis_item is None:
+                    return _error(503, "CASE_ANALYSIS_UNAVAILABLE")
+                workspace_id = self._workspace_id(raw_segments[2])
+                dto = self._request_dto(request_headers, body)
+                required = {"item_kind", "text", "source_document_id", "page_or_span", "technical_subjects", "values", "expected_revision"}
+                if set(dto) != required or type(dto["technical_subjects"]) is not list:
+                    raise ValueError("Case Analysis item request is invalid")
+                record, snapshot = self._services.add_case_analysis_item.execute(
+                    workspace_id, **{**dto, "technical_subjects": tuple(dto["technical_subjects"])}
+                )
+                return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": case_analysis_to_mapping(snapshot)})
+
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("case-analysis", "reviews"):
                 if normalized_method != "POST":
                     return _error(405, "METHOD_NOT_ALLOWED")
@@ -832,7 +855,6 @@ class LocalApi:
                 return _json_response(200, {
                     "revision": record.revision, "updated_at": record.created_at,
                     "snapshot": case_analysis_to_mapping(snapshot),
-                    "effective_reviewed_value": snapshot.effective_reviewed_value(dto["target_item_id"]),
                 })
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "pericial-planning":
@@ -868,6 +890,14 @@ class LocalApi:
                             "snapshot": pericial_planning_to_mapping(snapshot),
                         },
                     )
+                if normalized_method == "POST":
+                    if self._services.start_pericial_planning is None:
+                        return _error(503, "PERICIAL_PLANNING_UNAVAILABLE")
+                    dto = self._request_dto(request_headers, body)
+                    if set(dto) != {"title"}:
+                        raise ValueError("Pericial Planning start request is invalid")
+                    record, snapshot = self._services.start_pericial_planning.execute(workspace_id, title=dto["title"])
+                    return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": pericial_planning_to_mapping(snapshot)})
                 return _error(405, "METHOD_NOT_ALLOWED")
 
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("pericial-planning", "decisions"):

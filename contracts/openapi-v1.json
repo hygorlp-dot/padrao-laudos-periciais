@@ -25,10 +25,11 @@
         }
       },
       "post": {
-        "summary": "Salva nova revisão canônica",
+        "summary": "Inicia o índice documental ou salva revisão canônica compatível",
         "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SaveCaseAnalysisRequest"}}}},
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"oneOf": [{"type":"object","additionalProperties":false},{"$ref": "#/components/schemas/SaveCaseAnalysisRequest"}]}}}},
         "responses": {
+          "201": {"description": "Índice documental iniciado sem inferência", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CaseAnalysisEnvelope"}}}},
           "200": {"description": "Revisão persistida", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CaseAnalysisEnvelope"}}}},
           "409": {"description": "Conflito de revisão"}
         }
@@ -51,7 +52,19 @@
           "200": {"description": "Revisão persistida", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PericialPlanningEnvelope"}}}},
           "409": {"description": "Conflito de revisão"}
         }
+      },
+      "post": {
+        "summary": "Inicia propostas de planejamento a partir da análise efetiva revisada",
+        "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
+        "requestBody": {"required":true,"content":{"application/json":{"schema":{"type":"object","required":["title"],"properties":{"title":{"type":"string","minLength":1}},"additionalProperties":false}}}},
+        "responses": {"201":{"description":"Planejamento proposal-only iniciado","content":{"application/json":{"schema":{"$ref":"#/components/schemas/PericialPlanningEnvelope"}}}},"409":{"description":"Análise ausente ou stale"}}
       }
+    },
+    "/v1/workspaces/{workspace_id}/case-analysis/items": {
+      "post": {"summary":"Acrescenta item analítico tipado com proveniência resolvida pelo servidor","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["expected_revision","item_kind","text","source_document_id","page_or_span","technical_subjects","values"],"additionalProperties":false,"properties":{"expected_revision":{"type":"integer","minimum":1},"item_kind":{"enum":["CLAIM","COUNTERARGUMENT","JUDICIAL_DECISION","PERICIAL_OBJECT","PERICIAL_QUESTION","PROCEDURAL_EVENT","TECHNICAL_DOCUMENT_REFERENCE","EVIDENCE_GAP","PROPOSED_CONFLICT"]},"text":{"type":"string","minLength":1},"source_document_id":{"type":"string","minLength":1},"page_or_span":{"type":"string","minLength":1},"technical_subjects":{"type":"array","items":{"type":"string","minLength":1}},"values":{"type":"object"}}}}}},"responses":{"200":{"description":"Item anexado","content":{"application/json":{"schema":{"$ref":"#/components/schemas/CaseAnalysisEnvelope"}}}},"409":{"description":"Fonte ou revisão stale"}}}
+    },
+    "/v1/workspaces/{workspace_id}/case-analysis/reviews": {
+      "post": {"summary":"Registra revisão humana append-only com identidade e tempo do servidor","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["expected_revision","target_item_id","action","corrected_value","reviewer","reason"],"additionalProperties":false,"properties":{"expected_revision":{"type":"integer","minimum":1},"target_item_id":{"type":"string","minLength":1},"action":{"enum":["CONFIRM","CORRECT","REJECT"]},"corrected_value":{"type":["string","null"]},"reviewer":{"type":"string","minLength":1},"reason":{"type":"string","minLength":1}}}}}},"responses":{"200":{"description":"Revisão anexada","content":{"application/json":{"schema":{"$ref":"#/components/schemas/CaseAnalysisEnvelope"}}}},"409":{"description":"Fonte ou revisão stale"}}}
     },
     "/v1/workspaces/{workspace_id}/inspection-photos": {
       "post": {

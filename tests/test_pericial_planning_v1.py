@@ -1,6 +1,7 @@
 import copy
 import json
 from contextlib import contextmanager, nullcontext
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -37,12 +38,13 @@ from scripts.backend_contract.pericial_planning import (
     pericial_planning_to_mapping,
     validate_against_case_analysis,
 )
-from scripts.backend_contract.case_analysis import case_analysis_from_mapping
+from scripts.backend_contract.case_analysis import HumanReviewDecision, case_analysis_from_mapping
 from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
 from scripts.backend_contract.application.pericial_planning import (
     GetPericialPlanning,
     ReviewPericialPlanning,
     SavePericialPlanning,
+    StartPericialPlanning,
     validated_pericial_planning_from_mapping,
 )
 from scripts.backend_contract.application.ports import RepositoryConflict
@@ -400,6 +402,32 @@ def test_initial_planning_cannot_inject_professional_decision():
         service.execute(WorkspaceId.parse(planning.workspace_id), planning, None)
 
 
+def test_non_ai_planning_bootstrap_consumes_effective_review_and_excludes_rejected_item():
+    analysis = replace(
+        analysis_fixture(),
+        human_reviews=(
+            HumanReviewDecision("REVIEW-001", "CLAIM-001", analysis_fixture().claims[0].text, "CORRECT", "Área considerada = 220 m²", "PERITO", 1, "2026-08-31T12:00:00+00:00", "Correção sintética."),
+            HumanReviewDecision("REVIEW-002", "CLAIM-002", analysis_fixture().claims[1].text, "REJECT", analysis_fixture().claims[1].text, "PERITO", 1, "2026-08-31T12:01:00+00:00", "Rejeição sintética."),
+        ),
+    )
+    analysis_record = artifact(analysis, kind="CASE_ANALYSIS_SNAPSHOT_V1", artifact_id="CASE-ANALYSIS")
+    captured = []
+    generated = iter(UUID(f"88888888-8888-4888-8888-{index:012d}") for index in range(1, 40))
+    service = StartPericialPlanning(
+        SimpleNamespace(execute=lambda _workspace: (analysis_record, analysis)),
+        SimpleNamespace(execute=lambda _workspace, snapshot, expected: captured.append((snapshot, expected)) or SimpleNamespace(revision=1)),
+        SimpleNamespace(new_uuid=lambda: next(generated)),
+    )
+    _, planning = service.execute(WorkspaceId.parse(analysis.workspace_id), title="Plano sintético")
+    descriptions = {item.description for item in planning.material_items}
+    assert "Área considerada = 220 m²" in descriptions
+    assert analysis.claims[0].text not in descriptions
+    assert analysis.claims[1].text not in descriptions
+    assert planning.decisions == ()
+    assert all(item.professional_review_status.value == "PENDING" for item in planning.material_items)
+    validate_against_case_analysis(planning, analysis, artifact_revision=analysis_record.revision)
+
+
 def test_save_holds_private_inventory_authority_guard_through_the_commit():
     planning = pericial_planning_from_mapping(proposal_only_fixture())
     analysis = analysis_fixture()
@@ -596,7 +624,7 @@ def test_openapi_exposes_only_canonical_pericial_planning_operations():
     contract = json.loads((ROOT / "contracts/openapi-v1.json").read_text(encoding="utf-8"))
     path = contract["paths"]["/v1/workspaces/{workspace_id}/pericial-planning"]
 
-    assert set(path) == {"get", "put"}
+    assert set(path) == {"get", "post", "put"}
     assert contract["components"]["schemas"]["PericialPlanningSnapshot"] == {
         "$ref": "../schemas/pericial-planning-snapshot-v1.schema.json"
     }

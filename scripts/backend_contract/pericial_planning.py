@@ -556,13 +556,16 @@ def validate_against_case_analysis(
         or planning.plan.case_analysis_digest != case_analysis_digest(analysis)
     ):
         raise ValueError("planning Case Analysis dependency mismatch")
-    by_id = {item.item_id: item for item in analysis.material_items}
+    by_id = {
+        item.item_id: item for item in analysis.material_items
+        if analysis.effective_reviewed_value(item.item_id) is not None
+    }
     collection_ids = {
-        "questions": {item.item_id for item in analysis.questions},
-        "objects": {item.item_id for item in analysis.pericial_objects},
-        "decisions": {item.item_id for item in analysis.decisions},
-        "technical": {item.item_id for item in analysis.technical_document_references},
-        "gaps_conflicts": {item.item_id for item in (*analysis.gaps, *analysis.conflicts)},
+        "questions": {item.item_id for item in analysis.questions if item.item_id in by_id},
+        "objects": {item.item_id for item in analysis.pericial_objects if item.item_id in by_id},
+        "decisions": {item.item_id for item in analysis.decisions if item.item_id in by_id},
+        "technical": {item.item_id for item in analysis.technical_document_references if item.item_id in by_id},
+        "gaps_conflicts": {item.item_id for item in (*analysis.gaps, *analysis.conflicts) if item.item_id in by_id},
     }
     linked_questions = {item.question_id for item in planning.question_links}
     required_questions = collection_ids["questions"]

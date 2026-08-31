@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-import { getPericialPlanning, PericialPlanningApiError, PLANNING_COLLECTIONS, reviewPericialPlanning, type PlanningEnvelope, type PlanningItem, type ReviewAction } from "../data/pericialPlanning";
+import { getPericialPlanning, PericialPlanningApiError, PLANNING_COLLECTIONS, reviewPericialPlanning, startPericialPlanning, type PlanningEnvelope, type PlanningItem, type ReviewAction } from "../data/pericialPlanning";
 
 type State = { kind: "loading" } | { kind: "ready"; value: PlanningEnvelope } | { kind: "empty" } | { kind: "error" };
 
@@ -31,6 +31,7 @@ export function PericialPlanningView({ workspaceId }: { workspaceId: string }) {
   const [modified, setModified] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(false);
+  const [planTitle, setPlanTitle] = useState("Plano da perícia");
   const reviewTrigger = useRef<HTMLButtonElement | null>(null);
   const restoreReviewFocus = useRef(false);
   useEffect(() => {
@@ -49,7 +50,7 @@ export function PericialPlanningView({ workspaceId }: { workspaceId: string }) {
   }, [selected]);
   const allItems = useMemo(() => state.kind === "ready" ? PLANNING_COLLECTIONS.flatMap((name) => state.value.snapshot[name]) : [], [state]);
   if (state.kind === "loading") return <section className="status-state status-state--loading" role="status"><span className="state-rule" aria-hidden="true"/><div><h2>Carregando planejamento</h2><p>Reabrindo propostas, decisões e dependências.</p></div></section>;
-  if (state.kind === "empty") return <section className="status-state"><span className="state-mark" aria-hidden="true">○</span><div><h2>Planejamento ainda não disponível</h2><p>A análise do caso ainda não possui uma proposta de planejamento salva.</p></div></section>;
+  if (state.kind === "empty") return <section className="status-state"><span className="state-mark" aria-hidden="true">○</span><div><h2>Planejamento ainda não disponível</h2><p>Crie propostas a partir dos valores efetivos revisados da análise. Todos os itens iniciarão pendentes.</p><form onSubmit={async (event) => { event.preventDefault(); setSaving(true); setSaveError(false); try { setState({ kind: "ready", value: await startPericialPlanning(workspaceId, planTitle) }); } catch { setSaveError(true); } finally { setSaving(false); } }}><label>Título do planejamento<input value={planTitle} onChange={(event) => setPlanTitle(event.target.value)} required disabled={saving}/></label>{saveError && <p role="alert">Revise a análise do caso antes de iniciar o planejamento.</p>}<button className="primary-action" type="submit" disabled={saving}>{saving ? "Criando…" : "Iniciar planejamento"}</button></form></div></section>;
   if (state.kind === "error") return <section className="status-state status-state--error" role="alert"><span className="state-mark" aria-hidden="true">!</span><div><h2>Não foi possível carregar o planejamento</h2><p>Verifique o serviço local e tente novamente.</p><button className="text-action" type="button" onClick={() => { setState({ kind: "loading" }); setRequestVersion((value) => value + 1); }}>Tentar novamente</button></div></section>;
   const { snapshot } = state.value;
   const readinessLabel = snapshot.coverage.readiness === "READY" ? "Planejamento pronto" : snapshot.coverage.readiness === "BLOCKED" ? "Planejamento bloqueado" : "Planejamento parcial";

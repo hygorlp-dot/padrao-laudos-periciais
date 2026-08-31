@@ -20,9 +20,11 @@ from scripts.backend_contract.case_analysis import (
     query_analysis,
 )
 from scripts.backend_contract.application.case_analysis import (
+    AddCaseAnalysisItem,
     GetCaseAnalysis,
     ReviewCaseAnalysisItem,
     SaveCaseAnalysis,
+    StartCaseAnalysis,
     validated_case_analysis_from_mapping,
 )
 from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
@@ -378,6 +380,64 @@ def test_initial_case_analysis_cannot_forge_human_review():
         service.execute(WorkspaceId.parse(snapshot.workspace_id), snapshot, None)
 
 
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda review: review.update(decision="CORRECT", original_extraction="Texto forjado"),
+        lambda review: review.update(revision=2),
+        lambda review: review.update(decision="CONFIRM"),
+    ),
+)
+def test_review_history_rejects_wrong_original_revision_gap_and_false_action_value(mutate):
+    raw = fixture()
+    mutate(raw["human_reviews"][0])
+    with pytest.raises(ValueError, match="human review|correction"):
+        case_analysis_from_mapping(raw)
+
+
+def test_non_ai_bootstrap_indexes_stored_documents_without_inventing_analysis():
+    workspace = WorkspaceId.parse("11111111-1111-4111-8111-111111111111")
+    documents = (
+        SimpleNamespace(content_id="10000000-0000-4000-8000-000000000001", checksum_sha256="a" * 64, original_filename="autos.pdf"),
+    )
+    saved = []
+    service = StartCaseAnalysis(
+        SimpleNamespace(execute=lambda _workspace: documents),
+        SimpleNamespace(execute=lambda _workspace, snapshot, expected: saved.append((snapshot, expected)) or SimpleNamespace(revision=1)),
+        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
+    )
+    _, snapshot = service.execute(workspace)
+    assert snapshot.documents[0].source_sha256 == "a" * 64
+    assert snapshot.material_items == ()
+    assert snapshot.participant_refs == ()
+    assert saved[0][1] is None
+
+
+def test_typed_item_command_resolves_sha_server_side_and_preserves_append_only_source():
+    original = replace(case_analysis_from_mapping(fixture()), human_reviews=())
+    record = ArtifactRevision(
+        workspace_id=WorkspaceId.parse(original.workspace_id), artifact_kind="CASE_ANALYSIS_SNAPSHOT_V1",
+        artifact_id="CASE-ANALYSIS", revision_id="99999999-9999-4999-8999-999999999999", revision=1,
+        created_at="2026-08-30T12:00:00+00:00", checksum_sha256="0" * 64,
+        payload=case_analysis_to_mapping(original),
+    )
+    calls = []
+    service = AddCaseAnalysisItem(
+        SimpleNamespace(execute=lambda _workspace: (record, original)),
+        SimpleNamespace(execute=lambda *args, **kwargs: calls.append((args, kwargs)) or SimpleNamespace(revision=2)),
+        SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
+    )
+    _, amended = service.execute(
+        WorkspaceId.parse(original.workspace_id), item_kind="EVIDENCE_GAP", text="Documento complementar ausente.",
+        source_document_id="DOC-001", page_or_span="p. 1", technical_subjects=("documentação",), values={}, expected_revision=1,
+    )
+    assert amended.gaps[-1].provenance[0].source_document_sha256 == original.documents[0].source_sha256
+    assert {item.item_id: item for item in original.material_items}.items() <= {
+        item.item_id: item for item in amended.material_items
+    }.items()
+    assert calls[0][1] == {"allow_item_append": True}
+
+
 def test_coverage_counts_and_source_revision_fail_closed():
     with pytest.raises(ValueError):
         CaseAnalysisCoverage(CoverageStatus.COMPLETE, 3, 2, 1, 0, 4)
@@ -403,9 +463,12 @@ def test_openapi_exposes_only_minimum_case_analysis_operations_and_canonical_sch
     assert contract["info"]["x-case-analysis-semantic-boundary"] == (
         "scripts.backend_contract.case_analysis.case_analysis_from_mapping"
     )
-    assert path["post"]["requestBody"]["content"]["application/json"]["schema"] == {
-        "$ref": "#/components/schemas/SaveCaseAnalysisRequest"
-    }
+    assert path["post"]["requestBody"]["content"]["application/json"]["schema"] == {"oneOf": [
+        {"type": "object", "additionalProperties": False},
+        {"$ref": "#/components/schemas/SaveCaseAnalysisRequest"},
+    ]}
+    assert set(contract["paths"]["/v1/workspaces/{workspace_id}/case-analysis/items"]) == {"post"}
+    assert set(contract["paths"]["/v1/workspaces/{workspace_id}/case-analysis/reviews"]) == {"post"}
     assert path["get"]["responses"]["200"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/CaseAnalysisEnvelope"
     }

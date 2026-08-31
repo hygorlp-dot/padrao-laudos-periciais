@@ -42,8 +42,8 @@ from ..infrastructure.sqlite import SQLiteApplicationStore
 from ..infrastructure.field_mobile import DeviceOfflineVaultRegistry
 from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
-from ..application.case_analysis import GetCaseAnalysis, ReviewCaseAnalysisItem, SaveCaseAnalysis
-from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning
+from ..application.case_analysis import AddCaseAnalysisItem, GetCaseAnalysis, ReviewCaseAnalysisItem, SaveCaseAnalysis, StartCaseAnalysis
+from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning, StartPericialPlanning
 from ..application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession
 from ..application.field_mobile import GetOfflineInspection, ListPendingOfflineInspections, PrepareOfflineInspection, RevokeOfflineDevice, SyncOfflineInspection, UpdateOfflineInspection
 from ..application.technical_findings import GetTechnicalSnapshot, SaveTechnicalSnapshot, StartTechnicalSnapshot
@@ -429,6 +429,22 @@ def build_local_api(
             private_store.authority_guard if private_store is not None else nullcontext,
         ),
         get_case_analysis=get_case_analysis,
+        start_case_analysis=StartCaseAnalysis(
+            list_case_documents,
+            SaveCaseAnalysis(
+                store.revisions, get_latest_artifact, local_clock, local_ids, list_case_documents,
+                private_store.authority_guard if private_store is not None else nullcontext,
+            ),
+            local_ids,
+        ),
+        add_case_analysis_item=AddCaseAnalysisItem(
+            get_case_analysis,
+            SaveCaseAnalysis(
+                store.revisions, get_latest_artifact, local_clock, local_ids, list_case_documents,
+                private_store.authority_guard if private_store is not None else nullcontext,
+            ),
+            local_ids,
+        ),
         review_case_analysis_item=ReviewCaseAnalysisItem(
             get_case_analysis,
             SaveCaseAnalysis(
@@ -440,6 +456,7 @@ def build_local_api(
         ),
         save_pericial_planning=save_pericial_planning,
         get_pericial_planning=get_pericial_planning,
+        start_pericial_planning=StartPericialPlanning(get_case_analysis, save_pericial_planning, local_ids),
         review_pericial_planning=ReviewPericialPlanning(
             get_pericial_planning,
             save_pericial_planning,

@@ -26,7 +26,9 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
 
     assert contract["openapi"] == "3.1.0"
     assert set(contract["paths"]) == {
-        "/v1/workspaces/{workspace_id}/case-analysis",
+            "/v1/workspaces/{workspace_id}/case-analysis",
+            "/v1/workspaces/{workspace_id}/case-analysis/items",
+            "/v1/workspaces/{workspace_id}/case-analysis/reviews",
         "/v1/workspaces/{workspace_id}/pericial-planning",
         "/v1/workspaces/{workspace_id}/pericial-planning/decisions",
         "/v1/workspaces/{workspace_id}/inspection-session",

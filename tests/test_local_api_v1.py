@@ -497,6 +497,32 @@ def test_case_analysis_route_validates_and_delegates_canonical_snapshot():
     assert saved.calls[0][0][1].snapshot_id == "ANALYSIS-001"
 
 
+def test_case_analysis_bootstrap_item_and_review_routes_delegate_commands_only():
+    payload = case_analysis_payload()
+    from scripts.backend_contract.case_analysis import case_analysis_from_mapping
+    snapshot = case_analysis_from_mapping(payload)
+    started = RecordingService((revision(payload=payload), snapshot))
+    added = RecordingService((revision(number=2, payload=payload), snapshot))
+    reviewed = RecordingService((revision(number=3, payload=payload), snapshot))
+    api = LocalApi(services(start_case_analysis=started, add_case_analysis_item=added, review_case_analysis_item=reviewed), token=TOKEN)
+    assert request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/case-analysis", body={}).status == 201
+    item = {"expected_revision": 1, "item_kind": "CLAIM", "text": "Alegação sintética.", "source_document_id": "DOC-001", "page_or_span": "p. 1", "technical_subjects": ["tema"], "values": {}}
+    assert request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/case-analysis/items", body=item).status == 200
+    review = {"expected_revision": 2, "target_item_id": "CLAIM-001", "action": "CORRECT", "corrected_value": "Valor corrigido.", "reviewer": "PERITO", "reason": "Correção explícita."}
+    assert request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/case-analysis/reviews", body=review).status == 200
+    assert added.calls[0][1]["technical_subjects"] == ("tema",)
+    assert reviewed.calls[0][1]["corrected_value"] == "Valor corrigido."
+
+
+def test_planning_bootstrap_route_delegates_title_only():
+    payload = pericial_planning_payload()
+    from scripts.backend_contract.pericial_planning import pericial_planning_from_mapping
+    started = RecordingService((revision(payload=payload), pericial_planning_from_mapping(payload)))
+    response = request(LocalApi(services(start_pericial_planning=started), token=TOKEN), "POST", f"/v1/workspaces/{WORKSPACE_UUID}/pericial-planning", body={"title": "Plano sintético"})
+    assert response.status == 201
+    assert started.calls[0][1] == {"title": "Plano sintético"}
+
+
 def test_case_analysis_get_returns_validated_canonical_payload():
     payload = case_analysis_payload()
     from scripts.backend_contract.case_analysis import case_analysis_from_mapping
