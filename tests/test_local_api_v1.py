@@ -142,6 +142,35 @@ def pericial_planning_payload():
     return json.loads((Path(__file__).parent / "fixtures/pericial-planning-snapshot-v1.json").read_text(encoding="utf-8"))
 
 
+def inspection_session_payload():
+    return json.loads((Path(__file__).parent / "fixtures/inspection-session-v1.json").read_text(encoding="utf-8"))
+
+
+def test_inspection_session_route_validates_delegates_and_reopens_canonical_snapshot():
+    payload = inspection_session_payload()
+    from scripts.backend_contract.vistoria import inspection_session_from_mapping
+    saved = RecordingService(revision(payload=payload))
+    get = RecordingService((revision(payload=payload), inspection_session_from_mapping(payload)))
+    api = LocalApi(services(save_inspection_session=saved, get_inspection_session=get), token=TOKEN)
+
+    response = request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/inspection-session", body={"expected_revision": None, "snapshot": payload})
+    assert response.status == 200
+    assert saved.calls[0][0][1].session_id == "INSPECTION-SESSION-001"
+    reopened = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/inspection-session", headers={"X-Local-API-Token": TOKEN})
+    assert reopened.status == 200
+    assert decoded(reopened)["snapshot"] == payload
+
+
+def test_inspection_session_is_private_and_rejects_semantic_flattening():
+    payload = inspection_session_payload()
+    payload["observations"][0]["technical_finding"] = "forbidden"
+    api = LocalApi(services(save_inspection_session=RecordingService(None)), token=TOKEN)
+    denied = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/inspection-session")
+    invalid = request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/inspection-session", body={"expected_revision": None, "snapshot": payload})
+    assert denied.status == 403
+    assert invalid.status == 400
+
+
 def test_pericial_planning_route_validates_and_delegates_canonical_snapshot():
     payload = pericial_planning_payload()
     saved = RecordingService(revision(payload=payload))

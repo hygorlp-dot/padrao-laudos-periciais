@@ -52,6 +52,8 @@ from ..application.pericial_planning import (
     pericial_planning_to_mapping,
     validated_pericial_planning_from_mapping,
 )
+from ..application.vistoria import validated_inspection_session_from_mapping
+from ..vistoria import InspectionSession, inspection_session_to_mapping
 
 _MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
 
@@ -90,6 +92,8 @@ class LocalApiServices:
     save_pericial_planning: object | None = None
     get_pericial_planning: object | None = None
     review_pericial_planning: object | None = None
+    save_inspection_session: object | None = None
+    get_inspection_session: object | None = None
     get_process_metadata_review: object | None = None
     confirm_process_metadata_source_span: object | None = None
     import_case_document: object | None = None
@@ -419,7 +423,7 @@ class LocalApi:
                 )
             raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
-            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "case-analysis", "pericial-planning"}
+            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "case-analysis", "pericial-planning", "inspection-session"}
             if (normalized_method == "POST" or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
                 return _error(
                     403,
@@ -533,6 +537,31 @@ class LocalApi:
                     200,
                     {"revision": record.revision, "updated_at": record.created_at, "snapshot": pericial_planning_to_mapping(snapshot)},
                 )
+
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "inspection-session":
+                workspace_id = self._workspace_id(raw_segments[2])
+                if normalized_method == "GET":
+                    if self._services.get_inspection_session is None:
+                        return _error(503, "INSPECTION_SESSION_UNAVAILABLE")
+                    record, snapshot = self._services.get_inspection_session.execute(workspace_id)
+                    if type(snapshot) is not InspectionSession:
+                        raise RepositoryIntegrityError("Inspection Session persisted state is invalid")
+                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": inspection_session_to_mapping(snapshot)})
+                if normalized_method == "PUT":
+                    if self._services.save_inspection_session is None:
+                        return _error(503, "PRIVATE_STORAGE_UNAVAILABLE", "armazenamento privado indisponível")
+                    dto = self._request_dto(request_headers, body)
+                    if set(dto) != {"expected_revision", "snapshot"}:
+                        raise ValueError("Inspection Session request is invalid")
+                    expected = dto["expected_revision"]
+                    if expected is not None and (type(expected) is not int or expected < 1):
+                        raise ValueError("Inspection Session expected revision is invalid")
+                    snapshot = validated_inspection_session_from_mapping(dto["snapshot"])
+                    if snapshot.workspace_id != str(workspace_id):
+                        raise ValueError("Inspection Session workspace mismatch")
+                    record = self._services.save_inspection_session.execute(workspace_id, snapshot, expected)
+                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": inspection_session_to_mapping(snapshot)})
+                return _error(405, "METHOD_NOT_ALLOWED")
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "materials":
                 workspace_id = self._workspace_id(raw_segments[2])

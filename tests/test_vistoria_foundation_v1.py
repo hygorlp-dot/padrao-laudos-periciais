@@ -105,6 +105,14 @@ def test_fixture_matches_published_schema():
     assert list(Draft202012Validator(schema).iter_errors(payload())) == []
 
 
+def test_openapi_publishes_only_canonical_inspection_session_operations():
+    contract = json.loads((ROOT / "contracts/openapi-v1.json").read_text(encoding="utf-8"))
+    path = contract["paths"]["/v1/workspaces/{workspace_id}/inspection-session"]
+    assert set(path) == {"get", "put"}
+    assert contract["components"]["schemas"]["InspectionSession"] == {"$ref": "../schemas/inspection-session-v1.schema.json"}
+    assert contract["info"]["x-inspection-session-semantic-boundary"] == "scripts.backend_contract.vistoria.inspection_session_from_mapping"
+
+
 def test_semantic_types_and_states_are_explicit():
     session = inspection_session_from_mapping(payload())
     assert {item.state for item in session.items} == {
