@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime
 import json
 from pathlib import Path
 
 import pytest
 from jsonschema import Draft202012Validator
+
+from scripts.backend_contract.application.budget_foundation import (
+    GetBudgetHistory,
+    GetBudgetSnapshot,
+    SaveBudgetSnapshot,
+)
+from scripts.backend_contract.application.ports import RepositoryConflict
 
 from scripts.backend_contract.budget_foundation import (
     BudgetItem,
@@ -87,3 +95,47 @@ def test_canonical_synthetic_fixture_matches_schema_and_domain() -> None:
     schema = json.loads((root / "schemas/budget-snapshot-v1.schema.json").read_text(encoding="utf-8"))
     Draft202012Validator(schema).validate(payload)
     assert budget_snapshot_to_mapping(budget_snapshot_from_mapping(payload)) == payload
+
+
+def test_application_persists_reopens_and_lists_append_only_budget_history() -> None:
+    class Revisions:
+        def __init__(self): self.calls = []
+        def append_if_latest(self, **kwargs): self.calls.append(kwargs); return type("Record", (), {"revision": len(self.calls), "payload": kwargs["payload"]})()
+    class Latest:
+        def __init__(self, revisions): self.revisions = revisions
+        def execute(self, *_args):
+            if not self.revisions.calls: raise RuntimeError("missing")
+            call = self.revisions.calls[-1]
+            return type("Record", (), {"revision": len(self.revisions.calls), "payload": call["payload"]})()
+    class History:
+        def __init__(self, revisions): self.revisions = revisions
+        def execute(self, *_args): return tuple(type("Record", (), {"revision": index, "payload": call["payload"]})() for index, call in enumerate(self.revisions.calls, 1))
+    class Clock:
+        def now(self): return datetime.fromisoformat("2026-08-31T12:00:00+00:00")
+    class Ids:
+        def new_uuid(self): return "22222222-2222-4222-8222-222222222222"
+
+    revisions = Revisions(); latest = Latest(revisions)
+    save = SaveBudgetSnapshot(revisions, latest, Clock(), Ids())
+    first = save.execute(budget().workspace_id, budget(), None)
+    second_budget = replace(budget(), revision=2, status=FinancialStatus.COURT_APPROVED)
+    second = save.execute(budget().workspace_id, second_budget, 1)
+    reopened_record, reopened = GetBudgetSnapshot(latest).execute(budget().workspace_id)
+    history = GetBudgetHistory(History(revisions)).execute(budget().workspace_id)
+    assert (first.revision, second.revision, reopened_record.revision) == (1, 2, 2)
+    assert reopened == second_budget
+    assert tuple(item.revision for item, _ in history) == (1, 2)
+    assert all(call["expected_dependencies"] == () for call in revisions.calls)
+
+
+def test_application_rejects_workspace_leak_stale_write_and_history_rewrite() -> None:
+    class Latest:
+        def execute(self, *_args): return type("Record", (), {"revision": 2, "payload": budget_snapshot_to_mapping(replace(budget(), revision=2))})()
+    service = SaveBudgetSnapshot(object(), Latest(), object(), object())
+    with pytest.raises(ValueError, match="workspace"):
+        service.execute("22222222-2222-4222-8222-222222222222", budget(), None)
+    with pytest.raises(RepositoryConflict):
+        service.execute(budget().workspace_id, replace(budget(), revision=3), 1)
+    with pytest.raises(ValueError, match="history"):
+        changed = replace(budget(), revision=3, proposals=())
+        service.execute(budget().workspace_id, changed, 2)
