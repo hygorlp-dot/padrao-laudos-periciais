@@ -200,6 +200,29 @@ def test_application_rejects_workspace_leak_stale_write_and_history_rewrite() ->
         service.execute(budget().workspace_id, changed, 2)
 
 
+@pytest.mark.parametrize("field,replacement", (
+    ("proposals", lambda value: (replace(value.proposals[0], amount="2501.00"),)),
+    ("court_approvals", lambda value: (replace(value.court_approvals[0], external_court_decision_reference="OUTRA-REFERÊNCIA"),)),
+    ("expenses", lambda value: (replace(value.expenses[0], description="Despesa reescrita"),)),
+    ("payments", lambda value: (replace(value.payments[0], reference="Pagamento reescrito"),)),
+))
+def test_every_material_financial_authority_is_append_only(field, replacement) -> None:
+    predecessor = replace(budget(), revision=2)
+    class Latest:
+        def execute(self, *_args): return type("Record", (), {"revision": 2, "payload": budget_snapshot_to_mapping(predecessor)})()
+    service = SaveBudgetSnapshot(object(), Latest(), object(), object())
+    candidate = replace(predecessor, revision=3, **{field: replacement(predecessor)})
+    with pytest.raises(ValueError, match="history cannot be rewritten"):
+        service.execute(predecessor.workspace_id, candidate, 2)
+
+
+def test_supplied_outstanding_value_cannot_override_server_derived_balance() -> None:
+    payload = budget_snapshot_to_mapping(budget())
+    payload["outstanding"]["amount"] = "0.00"
+    with pytest.raises(ValueError, match="outstanding amount diverges"):
+        budget_snapshot_from_mapping(payload)
+
+
 def test_closed_budget_is_terminal_at_the_repository_boundary() -> None:
     closed = replace(budget(), revision=2, payments=(replace(budget().payments[0], amount="2200.00"),), status=FinancialStatus.CLOSED)
     class Latest:

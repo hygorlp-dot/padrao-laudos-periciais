@@ -110,7 +110,7 @@ def render_pdf_candidate(report: ReportSnapshot) -> bytes:
         page_ids.append(add(f"<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 {font_id} 0 R >> >> /Contents {content_id} 0 R >>".encode("ascii")))
     kids = " ".join(f"{item} 0 R" for item in page_ids)
     add(f"<< /Type /Pages /Count {len(page_ids)} /Kids [{kids}] >>".encode("ascii"))
-    catalog_id = add(f"<< /Type /Catalog /Pages {pages_id} 0 R /ReportSnapshotSHA256 ({report_digest}) >>".encode("ascii"))
+    catalog_id = add(f"<< /Type /Catalog /Pages {pages_id} 0 R /DiagnosticOnly true /ReportSnapshotSHA256 ({report_digest}) >>".encode("ascii"))
     output = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
     offsets = []
     for index, value in enumerate(objects, 1):
@@ -131,6 +131,8 @@ def render_final_pdf_candidate(*, word_content: bytes, word_format: str, convert
         output = converter.convert(conversion_copy, conversion_format)
     except (OSError, RuntimeError, TimeoutError) as exc:
         raise ValueError("local Office PDF conversion unavailable") from exc
+    if b"/DiagnosticOnly true" in output:
+        raise ValueError("diagnostic PDF cannot be finalized")
     validate_final_artifact(output, "PDF")
     return output
 

@@ -381,3 +381,21 @@ def test_final_pdf_conversion_fails_closed_without_a_local_converter() -> None:
         delivery_renderer.render_final_pdf_candidate(
             word_content=word.getvalue(), word_format="DOCX", converter=Unavailable(),
         )
+
+
+def test_text_only_diagnostic_pdf_can_never_become_a_final_professional_pdf() -> None:
+    report = report_snapshot_from_mapping(json.loads((Path(__file__).parent / "fixtures/report-snapshot-v1.json").read_text(encoding="utf-8")))
+    diagnostic = render_pdf_candidate(report)
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr("word/document.xml", "<document/>")
+
+    class DiagnosticConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return diagnostic
+
+    with pytest.raises(ValueError, match="diagnostic PDF cannot be finalized"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=DiagnosticConverter(),
+        )
