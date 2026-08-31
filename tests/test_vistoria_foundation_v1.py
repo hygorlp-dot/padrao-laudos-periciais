@@ -289,6 +289,16 @@ def test_completed_requirement_requires_its_exact_field_evidence(planning_item_i
         _validate_execution_against_planning(changed, planning())
 
 
+def test_professional_note_alone_cannot_complete_inspection_requirement():
+    session = inspection_session_from_mapping(payload())
+    items = list(session.items)
+    items[0] = replace(items[0], observation_ids=("OBS-002",), state=ExecutionState.COMPLETED, note="Nota não substitui observação direta.")
+    observations = tuple(record for record in session.observations if record.observation_id != "OBS-001")
+    changed = replace(session, items=tuple(items), observations=observations)
+    with pytest.raises(ValueError, match="field observation"):
+        _validate_execution_against_planning(changed, planning())
+
+
 def test_save_binds_latest_approved_plan_and_verifies_private_photo_authority():
     session = inspection_session_from_mapping(payload())
     upstream = planning()

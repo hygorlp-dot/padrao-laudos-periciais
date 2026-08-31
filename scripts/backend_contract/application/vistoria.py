@@ -17,6 +17,7 @@ from ..vistoria import (
     InspectionPlanSnapshot,
     InspectionSession,
     LocationReference,
+    ObservationType,
     inspection_session_from_mapping,
     inspection_session_to_mapping,
 )
@@ -45,9 +46,7 @@ def inspection_planning_digest(snapshot) -> str:
 
 def _executable_planning_item_ids(snapshot) -> tuple[str, ...]:
     executable_types = {
-        "InspectionRequirement", "MeasurementRequirement", "PhotoRequirement",
-        "EquipmentRequirement", "AccessRequirement", "SafetyRequirement",
-        "ProcedureCandidate", "SamplingCandidate", "MethodCandidate",
+        "InspectionRequirement", "MeasurementRequirement", "PhotoRequirement", "AccessRequirement",
     }
     return tuple(
         item.item_id for item in snapshot.material_items
@@ -87,12 +86,19 @@ def _validate_execution_against_planning(session: InspectionSession, planning) -
         if item.state is not ExecutionState.COMPLETED:
             continue
         name = type(planned).__name__
-        if name == "InspectionRequirement" and not item.observation_ids:
+        if name == "InspectionRequirement" and not any(
+            record.inspection_item_id == item.item_id and record.observation_type is ObservationType.DIRECT_OBSERVATION
+            for record in session.observations
+        ):
             raise ValueError("completed inspection requirement requires field observation")
         if name == "MeasurementRequirement" and not item.measurement_ids:
             raise ValueError("completed measurement requirement requires measurement")
         if name == "PhotoRequirement" and not item.photo_ids:
             raise ValueError("completed photo requirement requires private photo record")
+        if name == "AccessRequirement" and not any(
+            record.inspection_item_id == item.item_id for record in session.access_occurrences
+        ) and not item.limitation_ids:
+            raise ValueError("completed access requirement requires access occurrence or limitation")
 
 
 @dataclass(frozen=True, slots=True)

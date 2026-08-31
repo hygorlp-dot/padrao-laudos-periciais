@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import warnings
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
@@ -357,11 +358,13 @@ class ImportInspectionPhoto:
         expected_format = "JPEG" if media_type == "image/jpeg" else "PNG"
         try:
             source.rewind()
-            with Image.open(source.stream) as image:
-                if image.format != expected_format:
-                    raise ValueError("inspection photo decoded format diverges")
-                image.verify()
-        except (OSError, UnidentifiedImageError) as exc:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", Image.DecompressionBombWarning)
+                with Image.open(source.stream) as image:
+                    if image.format != expected_format:
+                        raise ValueError("inspection photo decoded format diverges")
+                    image.verify()
+        except (OSError, UnidentifiedImageError, Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
             raise ValueError("inspection photo is truncated or corrupt") from exc
         finally:
             source.rewind()
