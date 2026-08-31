@@ -73,6 +73,7 @@ def test_frontend_network_access_is_narrow_and_never_contains_local_api_token():
         assert not re.search(r"https?://", source)
     assert sorted(network_sources) == [
         "frontend/src/data/caseAnalysis.ts",
+        "frontend/src/data/deliverySnapshot.ts",
         "frontend/src/data/inspectionSession.ts",
         "frontend/src/data/materials.ts",
             "frontend/src/data/pericialPlanning.ts",

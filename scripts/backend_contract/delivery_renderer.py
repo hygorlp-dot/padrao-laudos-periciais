@@ -23,7 +23,7 @@ from .report_template import (
 _DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _DOCM_MEDIA = "application/vnd.ms-word.document.macroEnabled.12"
 _PDF_MEDIA = "application/pdf"
-DELIVERY_RENDERING_VERSION = "delivery-renderer/1.0.0"
+DELIVERY_RENDERING_VERSION = "delivery-renderer/1.1.0"
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _REL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 _CT = "{http://schemas.openxmlformats.org/package/2006/content-types}"
@@ -73,6 +73,46 @@ def _canonical_report_lines(report: ReportSnapshot) -> tuple[str, ...]:
     for decision in report.review_decisions:
         lines.append(f"REVISÃO PROFISSIONAL | {decision.action.value} | {decision.professional_id} | {decision.reason} | {decision.timestamp}")
     return tuple(lines)
+
+
+def render_pdf_candidate(report: ReportSnapshot) -> bytes:
+    """Render the canonical report directly into a deterministic local PDF."""
+    lines = _canonical_report_lines(report)
+    pages = [lines[index:index + 44] for index in range(0, len(lines), 44)] or [["EMPTY REPORT"]]
+    objects: list[bytes] = []
+
+    def add(value: bytes) -> int:
+        objects.append(value)
+        return len(objects)
+
+    font_id = add(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+    content_ids = []
+    for page in pages:
+        commands = [b"BT /F1 9 Tf 46 795 Td 11 TL"]
+        for line in page:
+            encoded = line.encode("cp1252", errors="replace").replace(b"\\", b"\\\\").replace(b"(", b"\\(").replace(b")", b"\\)")
+            commands.append(b"(" + encoded + b") Tj T*")
+        commands.append(b"ET")
+        stream = b"\n".join(commands)
+        content_ids.append(add(b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream"))
+    pages_id = len(objects) + len(pages) + 1
+    page_ids = []
+    for content_id in content_ids:
+        page_ids.append(add(f"<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 {font_id} 0 R >> >> /Contents {content_id} 0 R >>".encode("ascii")))
+    kids = " ".join(f"{item} 0 R" for item in page_ids)
+    add(f"<< /Type /Pages /Count {len(page_ids)} /Kids [{kids}] >>".encode("ascii"))
+    catalog_id = add(f"<< /Type /Catalog /Pages {pages_id} 0 R >>".encode("ascii"))
+    output = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
+    offsets = []
+    for index, value in enumerate(objects, 1):
+        offsets.append(len(output))
+        output.extend(f"{index} 0 obj\n".encode("ascii") + value + b"\nendobj\n")
+    xref = len(output)
+    output.extend(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode("ascii"))
+    for offset in offsets:
+        output.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    output.extend(f"trailer << /Size {len(objects) + 1} /Root {catalog_id} 0 R >>\nstartxref\n{xref}\n%%EOF".encode("ascii"))
+    return bytes(output)
 
 
 def _inject_canonical_report(content: bytes, report: ReportSnapshot) -> bytes:

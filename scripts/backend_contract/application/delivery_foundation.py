@@ -25,7 +25,7 @@ from ..delivery_foundation import (
     delivery_snapshot_from_mapping,
     delivery_snapshot_to_mapping,
 )
-from ..delivery_renderer import DELIVERY_RENDERING_VERSION, render_word_candidate, safe_pdf_conversion_copy, validate_final_artifact, validate_supporting_artifact, verify_reopened_artifact
+from ..delivery_renderer import DELIVERY_RENDERING_VERSION, render_pdf_candidate, render_word_candidate, validate_final_artifact, validate_supporting_artifact, verify_reopened_artifact
 from ..report_template import TemplateBindingManifest, template_binding_manifest_from_mapping
 from ..pericial_planning import PlanningSnapshot, pericial_planning_to_mapping
 from ..report_foundation import ReportSnapshot, ReportState, report_snapshot_to_mapping
@@ -341,7 +341,6 @@ class RenderDeliveryPackage:
     get_private_content: object
     store_private_content: object
     save_snapshot: object
-    pdf_renderer: object
     ids: object
 
     def execute(self, workspace_id, *, manifest: TemplateBindingManifest, expected_revision: int):
@@ -359,8 +358,7 @@ class RenderDeliveryPackage:
         if type(report) is not ReportSnapshot or _digest(report_snapshot_to_mapping(report)) != snapshot.binding.report_digest:
             raise ValueError("Delivery report bytes diverge from bound authority")
         word = render_word_candidate(template_bytes=template.content, report=report, manifest=manifest).output_bytes
-        conversion_bytes, conversion_format = safe_pdf_conversion_copy(word, manifest.output_kind)
-        pdf = self.pdf_renderer.convert_to_pdf(conversion_bytes, conversion_format)
+        pdf = render_pdf_candidate(report)
         word_digest, word_size, word_media = validate_final_artifact(word, manifest.output_kind)
         pdf_digest, pdf_size, pdf_media = validate_final_artifact(pdf, "PDF")
         stem = f"laudo-{snapshot.delivery_id.lower()}-r{snapshot.revision + 1}"

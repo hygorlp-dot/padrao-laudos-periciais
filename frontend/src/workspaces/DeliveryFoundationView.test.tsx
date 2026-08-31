@@ -7,7 +7,7 @@ const ID = "11111111-1111-4111-8111-111111111111";
 const snapshot = {
   schema_version: "1.0.0", delivery_id: "DELIVERY-001", revision: 6, workspace_id: ID,
   binding: { workspace_id: ID, professional_id: "EXPERT-1", report_snapshot_id: "REPORT-1", report_revision: 5, report_digest: "a".repeat(64), report_approval_id: "APPROVAL-1" },
-  template_id: "TEMPLATE-1", template_content_id: "22222222-2222-4222-8222-222222222222", template_format: "DOCM", template_revision: 1, template_digest: "b".repeat(64), rendering_version: "delivery-renderer/1.0.0",
+  template_id: "TEMPLATE-1", template_content_id: "22222222-2222-4222-8222-222222222222", template_format: "DOCM", template_revision: 1, template_digest: "b".repeat(64), rendering_version: "delivery-renderer/1.1.0",
   artifacts: [{ artifact_id: "ART-1", role: "MAIN_REPORT", format: "PDF", filename: "laudo.pdf", content_id: "33333333-3333-4333-8333-333333333333", media_type: "application/pdf", byte_size: 321, checksum_sha256: "c".repeat(64) }],
   package: { manifest_version: "1.0.0", artifact_ids: ["ART-1"] }, decisions: [], state: "DELIVERED", stale_reasons: [], stale_origin_state: null, supersedes_delivery_id: null,
 };

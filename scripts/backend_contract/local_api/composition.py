@@ -37,7 +37,6 @@ from ..application.services import (
 from ..infrastructure.private_filesystem import LocalPrivateContentStore
 from ..infrastructure.pdf_text import LocalPdfTextExtractor
 from ..infrastructure.rapid_ocr import RapidOcrLatinEngine
-from ..infrastructure.local_document_renderer import LocalLibreOfficeRenderer
 from ..infrastructure.sqlite import SQLiteApplicationStore
 from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
@@ -298,7 +297,7 @@ def build_local_api(
         review_delivery_snapshot = ReviewDeliverySnapshot(get_delivery_snapshot, save_delivery_snapshot, local_clock, local_ids)
         render_delivery_package = RenderDeliveryPackage(
             get_delivery_snapshot, get_report_snapshot, get_private_content, generic_store,
-            save_delivery_snapshot, LocalLibreOfficeRenderer(), local_ids,
+            save_delivery_snapshot, local_ids,
         )
         attach_delivery_artifact = AttachDeliveryPackageArtifact(get_delivery_snapshot, get_private_content, save_delivery_snapshot, local_ids)
         verify_delivery_package = VerifyDeliveryPackage(get_delivery_snapshot, get_private_content)

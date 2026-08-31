@@ -25,6 +25,7 @@ from scripts.backend_contract.delivery_foundation import (
     delivery_snapshot_to_mapping,
 )
 from scripts.backend_contract.delivery_renderer import (
+    render_pdf_candidate,
     render_word_candidate,
     safe_pdf_conversion_copy,
     validate_supporting_artifact,
@@ -40,7 +41,7 @@ from scripts.backend_contract.application.delivery_foundation import (
 )
 from scripts.backend_contract.case_analysis import case_analysis_from_mapping
 from scripts.backend_contract.pericial_planning import pericial_planning_from_mapping
-from scripts.backend_contract.report_foundation import report_snapshot_from_mapping
+from scripts.backend_contract.report_foundation import report_snapshot_from_mapping, report_snapshot_to_mapping
 from scripts.backend_contract.technical_findings import technical_snapshot_from_mapping
 from scripts.backend_contract.vistoria import inspection_session_from_mapping
 
@@ -79,7 +80,7 @@ def snapshot(*, decisions: tuple[DeliveryDecision, ...] = (), artifacts: tuple[D
         workspace_id="workspace-1", binding=binding(),
         template_id="TEMPLATE-1", template_content_id="22222222-2222-4222-8222-222222222222",
         template_format=DeliveryFormat.DOCX, template_revision=1, template_digest=SHA_A,
-        rendering_version="delivery-renderer/1.0.0", artifacts=artifacts,
+        rendering_version="delivery-renderer/1.1.0", artifacts=artifacts,
         package=DeliveryPackage(manifest_version="1.0.0", artifact_ids=tuple(item.artifact_id for item in artifacts)),
         decisions=decisions, state=state, stale_reasons=(), stale_origin_state=None, supersedes_delivery_id=None,
     )
@@ -311,3 +312,14 @@ def test_rendered_word_bytes_contain_and_change_with_entire_approved_report_body
     assert report.answers[0].text in rendered
     assert "REPORT_SNAPSHOT_SHA256" in rendered
     assert first != second
+
+
+def test_rendered_pdf_contains_same_canonical_report_digest_and_changes_with_report() -> None:
+    root = Path(__file__).parents[1] / "tests/fixtures"
+    report = report_snapshot_from_mapping(json.loads((root / "report-snapshot-v1.json").read_text(encoding="utf-8")))
+    first = render_pdf_candidate(report)
+    validate_final_artifact(first, "PDF")
+    mapping = report_snapshot_to_mapping(report)
+    digest = __import__("hashlib").sha256(json.dumps(mapping, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    assert digest.encode("ascii") in first
+    assert render_pdf_candidate(replace(report, report_id=f"{report.report_id}-REV")) != first
