@@ -23,6 +23,7 @@ from ..application.models import (
     PrivateContent,
     PrivateContentId,
     PrivateContentMetadata,
+    PrivateContentOrigin,
     ProcessCaseData,
     ProcessCaseSnapshot,
     WorkspaceId,
@@ -66,6 +67,8 @@ from ..application.report_foundation import (
     validated_expert_profile_from_mapping,
     validated_report_snapshot_from_mapping,
 )
+from ..application.delivery_foundation import delivery_snapshot_to_validated_mapping
+from ..report_template import template_binding_manifest_from_mapping
 
 _MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
 
@@ -117,6 +120,16 @@ class LocalApiServices:
     start_report_snapshot: object | None = None
     review_report_snapshot: object | None = None
     amend_report_draft: object | None = None
+    store_delivery_template: object | None = None
+    get_delivery_artifact: object | None = None
+    get_delivery_snapshot: object | None = None
+    start_delivery_snapshot: object | None = None
+    review_delivery_snapshot: object | None = None
+    render_delivery_package: object | None = None
+    verify_delivery_package: object | None = None
+    finalize_delivery_snapshot: object | None = None
+    deliver_delivery_snapshot: object | None = None
+    reissue_delivery_snapshot: object | None = None
     get_process_metadata_review: object | None = None
     confirm_process_metadata_source_span: object | None = None
     import_case_document: object | None = None
@@ -214,6 +227,26 @@ def _binary_response(status: int, body: bytes | OpenPrivateContent, content_type
             }
         ),
         body=body,
+    )
+
+
+def _delivery_binary_response(record: PrivateContent) -> HttpResponse:
+    allowed = {
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-word.document.macroEnabled.12",
+    }
+    if type(record) is not PrivateContent or record.metadata.media_type not in allowed:
+        raise RepositoryIntegrityError("resposta de entrega inválida")
+    return HttpResponse(
+        status=200,
+        headers=MappingProxyType({
+            "Content-Type": record.metadata.media_type,
+            "Content-Length": str(record.metadata.byte_size),
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        }),
+        body=record.content,
     )
 
 
@@ -369,7 +402,7 @@ class LocalApi:
             raw_segments, _segments = _target_segments(target)
         except (TypeError, ValueError):
             return False
-        if not (type(method) is str and method.upper() == "POST" and len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "inspection-photos"}):
+        if not (type(method) is str and method.upper() == "POST" and len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "inspection-photos", "delivery-templates"}):
             return False
         try:
             self._workspace_id(raw_segments[2])
@@ -447,7 +480,7 @@ class LocalApi:
                 )
             raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
-            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "technical-snapshot", "expert-profile", "report-snapshot"}
+            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "technical-snapshot", "expert-profile", "report-snapshot", "delivery-templates", "delivery-snapshot"}
             if (normalized_method == "POST" or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
                 return _error(
                     403,
@@ -543,6 +576,98 @@ class LocalApi:
                     raise ValueError("Report draft amendment request is invalid")
                 record, snapshot = self._services.amend_report_draft.execute(workspace_id, **dto)
                 return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_validated_mapping(snapshot)})
+
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "delivery-templates":
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                service = self._services.store_delivery_template
+                if service is None:
+                    return _error(503, "DELIVERY_STORAGE_UNAVAILABLE")
+                workspace_id = self._workspace_id(raw_segments[2])
+                media_type = request_headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                allowed = {
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+                    "application/vnd.ms-word.document.macroenabled.12": ".docm",
+                }
+                filename = _document_filename(request_headers.get("x-document-filename"))
+                if media_type not in allowed or not filename.lower().endswith(allowed[media_type]):
+                    raise ValueError("Delivery template type is invalid")
+                if _parse_content_length(request_headers.get("content-length", "")) != body_size:
+                    raise ValueError("Content-Length diverge")
+                record = service.execute(
+                    workspace_id=workspace_id, original_filename=filename, content=body,
+                    media_type=media_type, origin=PrivateContentOrigin.USER_IMPORT,
+                )
+                return _json_response(201, _private_content_dto(record, workspace_id))
+
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "delivery-snapshot":
+                workspace_id = self._workspace_id(raw_segments[2])
+                if normalized_method == "GET":
+                    service = self._services.get_delivery_snapshot
+                    if service is None:
+                        return _error(503, "DELIVERY_SNAPSHOT_UNAVAILABLE")
+                    record, snapshot = service.execute(workspace_id)
+                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": delivery_snapshot_to_validated_mapping(snapshot)})
+                if normalized_method == "POST":
+                    service = self._services.start_delivery_snapshot
+                    if service is None:
+                        return _error(503, "DELIVERY_SNAPSHOT_UNAVAILABLE")
+                    dto = self._request_dto(request_headers, body)
+                    if set(dto) != {"template_content_id", "manifest", "rendering_version"}:
+                        raise ValueError("Delivery Snapshot start request is invalid")
+                    record, snapshot = service.execute(
+                        workspace_id, template_content_id=PrivateContentId.parse(dto["template_content_id"]),
+                        manifest=template_binding_manifest_from_mapping(dto["manifest"]),
+                        rendering_version=dto["rendering_version"],
+                    )
+                    return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": delivery_snapshot_to_validated_mapping(snapshot)})
+                return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "delivery-snapshot":
+                workspace_id = self._workspace_id(raw_segments[2])
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                action = raw_segments[4]
+                dto = self._request_dto(request_headers, body)
+                if action == "render":
+                    service = self._services.render_delivery_package
+                    if service is None or set(dto) != {"expected_revision", "manifest"}:
+                        raise ValueError("Delivery render request is invalid")
+                    record, snapshot = service.execute(workspace_id, expected_revision=dto["expected_revision"], manifest=template_binding_manifest_from_mapping(dto["manifest"]))
+                elif action == "reviews":
+                    service = self._services.review_delivery_snapshot
+                    if service is None or set(dto) != {"expected_revision", "action", "professional_id", "reason"}:
+                        raise ValueError("Delivery review request is invalid")
+                    record, snapshot = service.execute(workspace_id, **dto)
+                elif action in {"finalize", "deliver"}:
+                    service = self._services.finalize_delivery_snapshot if action == "finalize" else self._services.deliver_delivery_snapshot
+                    if service is None or set(dto) != {"expected_revision", "professional_id", "reason"}:
+                        raise ValueError("Delivery final transition request is invalid")
+                    record, snapshot = service.execute(workspace_id, **dto)
+                elif action == "reissue":
+                    service = self._services.reissue_delivery_snapshot
+                    if service is None or set(dto) != {"expected_revision", "template_content_id", "manifest", "rendering_version"}:
+                        raise ValueError("Delivery reissue request is invalid")
+                    record, snapshot = service.execute(
+                        workspace_id, expected_revision=dto["expected_revision"],
+                        template_content_id=PrivateContentId.parse(dto["template_content_id"]),
+                        manifest=template_binding_manifest_from_mapping(dto["manifest"]), rendering_version=dto["rendering_version"],
+                    )
+                else:
+                    return _error(404, "NOT_FOUND")
+                return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": delivery_snapshot_to_validated_mapping(snapshot)})
+
+            if len(raw_segments) == 6 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:5] == ("delivery-snapshot", "artifacts"):
+                if normalized_method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.get_delivery_snapshot is None or self._services.get_delivery_artifact is None:
+                    return _error(503, "DELIVERY_STORAGE_UNAVAILABLE")
+                workspace_id = self._workspace_id(raw_segments[2])
+                content_id = PrivateContentId.parse(raw_segments[5])
+                _, snapshot = self._services.get_delivery_snapshot.execute(workspace_id)
+                if str(content_id) not in {item.content_id for item in snapshot.artifacts}:
+                    raise PrivateContentNotFound("Delivery artifact is not present in the bound manifest")
+                return _delivery_binary_response(self._services.get_delivery_artifact.execute(workspace_id, content_id))
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "technical-snapshot":
                 workspace_id = self._workspace_id(raw_segments[2])

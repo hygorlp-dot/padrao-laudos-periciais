@@ -98,6 +98,20 @@ def test_product_bridge_allowlists_only_the_explicit_report_review_command():
     assert _proxy_target(amendment, "POST") == f"/v1/workspaces/{workspace}/report-snapshot/draft-amendments"
 
 
+def test_product_bridge_allowlists_only_delivery_foundation_resources_and_commands():
+    workspace = "11111111-1111-4111-8111-111111111111"
+    for resource, method in (("delivery-templates", "POST"), ("delivery-snapshot", "GET"), ("delivery-snapshot", "POST")):
+        path = f"/app-api/v1/workspaces/{workspace}/{resource}"
+        assert _proxy_target(path, method) == f"/v1/workspaces/{workspace}/{resource}"
+    for action in ("render", "reviews", "finalize", "deliver", "reissue"):
+        path = f"/app-api/v1/workspaces/{workspace}/delivery-snapshot/{action}"
+        assert _proxy_target(path, "POST") == f"/v1/workspaces/{workspace}/delivery-snapshot/{action}"
+        assert _proxy_target(path, "PUT") is None
+    content_id = "22222222-2222-4222-8222-222222222222"
+    artifact = f"/app-api/v1/workspaces/{workspace}/delivery-snapshot/artifacts/{content_id}"
+    assert _proxy_target(artifact, "GET") == f"/v1/workspaces/{workspace}/delivery-snapshot/artifacts/{content_id}"
+
+
 @pytest.mark.parametrize("value", (0, -1, 31, True, float("inf"), float("nan")))
 def test_product_bridge_config_rejects_invalid_upstream_timeouts(value):
     with pytest.raises(ValueError, match="timeout upstream"):

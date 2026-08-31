@@ -94,12 +94,13 @@ class DeliveryBinding:
     report_digest: str
     report_approval_id: str
     report_approval_digest: str
+    professional_id: str
 
     def __post_init__(self) -> None:
         for name in (
             "workspace_id", "source_snapshot_id", "case_analysis_snapshot_id",
             "planning_snapshot_id", "inspection_snapshot_id", "technical_snapshot_id",
-            "report_snapshot_id", "report_approval_id",
+            "report_snapshot_id", "report_approval_id", "professional_id",
         ):
             _text(getattr(self, name), name)
         for name in (
@@ -193,6 +194,8 @@ class DeliverySnapshot:
     workspace_id: str
     binding: DeliveryBinding
     template_id: str
+    template_content_id: str
+    template_format: DeliveryFormat
     template_revision: int
     template_digest: str
     rendering_version: str
@@ -201,6 +204,7 @@ class DeliverySnapshot:
     decisions: tuple[DeliveryDecision, ...]
     state: DeliveryState
     stale_reasons: tuple[str, ...]
+    stale_origin_state: DeliveryState | None
     supersedes_delivery_id: str | None
 
     def __post_init__(self) -> None:
@@ -208,6 +212,12 @@ class DeliverySnapshot:
             raise ValueError("delivery schema version is invalid")
         for name in ("delivery_id", "workspace_id", "template_id", "rendering_version"):
             _text(getattr(self, name), name)
+        try:
+            UUID(self.template_content_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("template_content_id is invalid") from exc
+        if self.template_format not in {DeliveryFormat.DOCX, DeliveryFormat.DOCM}:
+            raise ValueError("template_format is invalid")
         _revision(self.revision, "revision")
         _revision(self.template_revision, "template_revision")
         _digest(self.template_digest, "template_digest")
@@ -228,6 +238,9 @@ class DeliverySnapshot:
         )
         if any(len(values) != len(set(values)) for values in identities):
             raise ValueError("delivery artifact identities must be unique")
+        role_formats = tuple((item.role, item.format) for item in self.artifacts)
+        if len(role_formats) != len(set(role_formats)):
+            raise ValueError("delivery artifact role and format pairs must be unique")
         if self.package.artifact_ids != identities[0]:
             raise ValueError("delivery manifest must exactly match artifacts")
         self._validate_state()
@@ -236,9 +249,13 @@ class DeliverySnapshot:
         if self.stale_reasons:
             if self.state is not DeliveryState.STALE:
                 raise ValueError("stale delivery cannot retain a current state")
+            if self.stale_origin_state is None or self.stale_origin_state is DeliveryState.STALE:
+                raise ValueError("stale delivery requires its prior lifecycle state")
             return
         if self.state is DeliveryState.STALE:
             raise ValueError("stale delivery requires reasons")
+        if self.stale_origin_state is not None:
+            raise ValueError("current delivery cannot claim a stale prior state")
         ordered = sorted(self.decisions, key=lambda item: datetime.fromisoformat(item.timestamp))
         if tuple(ordered) != self.decisions or len({item.decision_id for item in ordered}) != len(ordered) or len({item.timestamp for item in ordered}) != len(ordered):
             raise ValueError("delivery decision chronology is ambiguous")
@@ -260,8 +277,8 @@ class DeliverySnapshot:
         if self.state is not expected_state:
             raise ValueError("delivery state diverges from explicit decisions")
         if self.state in {DeliveryState.FINALIZED, DeliveryState.DELIVERED, DeliveryState.SUPERSEDED}:
-            if not self.artifacts or sum(item.role is DeliveryRole.MAIN_REPORT for item in self.artifacts) != 1:
-                raise ValueError("final delivery requires exactly one main artifact")
+            if not self.artifacts or not any(item.role is DeliveryRole.MAIN_REPORT for item in self.artifacts):
+                raise ValueError("final delivery requires a main artifact")
 
 
 T = TypeVar("T")
@@ -295,6 +312,9 @@ def delivery_snapshot_from_mapping(value: object) -> DeliverySnapshot:
         decisions.append(_construct(DeliveryDecision, item))
     data["decisions"] = tuple(decisions)
     data["state"] = DeliveryState(data["state"])
+    data["template_format"] = DeliveryFormat(data["template_format"])
+    if data["stale_origin_state"] is not None:
+        data["stale_origin_state"] = DeliveryState(data["stale_origin_state"])
     data["stale_reasons"] = tuple(data["stale_reasons"])
     return DeliverySnapshot(**data)
 

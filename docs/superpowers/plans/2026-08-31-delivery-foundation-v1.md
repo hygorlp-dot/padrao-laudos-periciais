@@ -64,11 +64,11 @@ Safe parallel lanes after the graph freezes: schema/fixture parity, DOCX/PDF ren
 - Modify: `scripts/backend_contract/application/services.py`
 - Modify: `tests/test_delivery_foundation_v1.py`
 
-- [ ] Write failing tests for start/get/reopen, exact latest-authority binding, optimistic concurrency, explicit review/approval/finalize/deliver transitions, stale derivation and reissue/supersede history.
-- [ ] Verify focused REDs.
-- [ ] Implement application services over `ArtifactRevision`, recomputing current authority digests on every reopen/material command.
-- [ ] Add sibling/adversarial tests for authority ties, approval replay, stale approval, silent overwrite, history loss, revision branching and workspace crossing.
-- [ ] Run focused application tests and commit `feat(stage8): enforce delivery lifecycle and stale history`.
+- [x] Write failing tests for start/get/reopen, exact latest-authority binding, optimistic concurrency, explicit review/approval/finalize/deliver transitions, stale derivation and reissue/supersede history.
+- [x] Verify focused REDs.
+- [x] Implement application services over `ArtifactRevision`, recomputing current authority digests on every reopen/material command.
+- [x] Add sibling/adversarial tests for authority ties, approval replay, stale approval, silent overwrite, history loss, revision branching and workspace crossing.
+- [x] Run focused application tests and commit `feat(stage8): enforce delivery lifecycle and stale history`.
 
 ### Task 3: Protected DOCX/DOCM/PDF rendering and private package integrity
 
@@ -78,13 +78,13 @@ Safe parallel lanes after the graph freezes: schema/fixture parity, DOCX/PDF ren
 - Modify: `scripts/backend_contract/infrastructure/private_filesystem.py` only if the existing immutable content API lacks a required safe primitive.
 - Modify: `tests/test_delivery_foundation_v1.py`
 
-- [ ] Write failing synthetic tests for approved-report template binding, DOCX/DOCM output, local PDF conversion, package roles, SHA-256 recomputation after reopening, and immutable content identifiers.
-- [ ] Verify RED.
-- [ ] Implement candidate rendering through the Stage 7 safe template binder, private artifact storage and a timeout-bounded local conversion port; never use external egress.
-- [ ] Make finalization reopen every private object, validate format/signature/size, recompute SHA-256 and atomically bind the explicit manifest.
-- [ ] Add malformed ZIP/PDF, macro mismatch, conversion failure, byte tampering, filename collision, missing annex and cross-workspace adversarial tests.
-- [ ] Render representative synthetic DOCX/PDF fixtures to PNG and inspect all pages when local tooling is available; retain structural checks as independent evidence.
-- [ ] Run focused tests and commit `feat(stage8): finalize protected private delivery packages`.
+- [x] Write failing synthetic tests for approved-report template binding, DOCX/DOCM output, local PDF conversion, package roles, SHA-256 recomputation after reopening, and immutable content identifiers.
+- [x] Verify RED.
+- [x] Implement candidate rendering through the Stage 7 safe template binder, private artifact storage and a timeout-bounded local conversion port; never use external egress.
+- [x] Make finalization reopen every private object, validate format/signature/size, recompute SHA-256 and atomically bind the explicit manifest.
+- [x] Add malformed ZIP/PDF, macro mismatch, conversion failure, byte tampering, filename collision, missing annex and cross-workspace adversarial tests.
+- [x] Render representative synthetic DOCX/PDF fixtures to PNG and inspect all pages when local tooling is available; retain structural checks as independent evidence. (LibreOffice is unavailable locally; structural gates remain active.)
+- [x] Run focused tests and commit `feat(stage8): finalize protected private delivery packages`.
 
 ### Task 4: Local API, OpenAPI, bridge and delivery workbench
 
@@ -100,11 +100,11 @@ Safe parallel lanes after the graph freezes: schema/fixture parity, DOCX/PDF ren
 - Modify: `frontend/src/styles/shell.css`
 - Modify: affected API/bridge/boundary tests.
 
-- [ ] Complete the required frontend skill references before UI mutation, then write failing API/bridge/parser/UI tests for empty/start/loading/error/stale, exact bindings, manifest, hash verification, explicit transitions, reissue and download.
-- [ ] Verify RED.
-- [ ] Implement private-token local routes and same-origin bridge commands with strict workspace validation and no filesystem-path disclosure.
-- [ ] Implement an accessible delivery workbench that distinguishes render, review, finalize, deliver, stale and reissue; do not imply PJe filing.
-- [ ] Run Vitest, typecheck, build, lint and affected Python boundaries; commit `feat(stage8): expose delivery finalization workbench`.
+- [x] Complete the required frontend skill references before UI mutation, then write failing API/bridge/parser/UI tests for empty/start/loading/error/stale, exact bindings, manifest, hash verification, explicit transitions, reissue and download.
+- [x] Verify RED.
+- [x] Implement private-token local routes and same-origin bridge commands with strict workspace validation and no filesystem-path disclosure.
+- [x] Implement an accessible delivery workbench that distinguishes render, review, finalize, deliver, stale and reissue; do not imply PJe filing.
+- [x] Run Vitest, typecheck, build, lint and affected Python boundaries; commit `feat(stage8): expose delivery finalization workbench`.
 
 ### Task 5: Safety gate, independent reviews, terminal assurance and normal delivery
 

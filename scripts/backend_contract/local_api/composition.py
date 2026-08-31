@@ -37,6 +37,7 @@ from ..application.services import (
 from ..infrastructure.private_filesystem import LocalPrivateContentStore
 from ..infrastructure.pdf_text import LocalPdfTextExtractor
 from ..infrastructure.rapid_ocr import RapidOcrLatinEngine
+from ..infrastructure.local_document_renderer import LocalLibreOfficeRenderer
 from ..infrastructure.sqlite import SQLiteApplicationStore
 from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
@@ -52,6 +53,17 @@ from ..application.report_foundation import (
     StartReportSnapshot,
     ReviewReportSnapshot,
     AmendReportDraft,
+)
+from ..application.delivery_foundation import (
+    DeliverDeliverySnapshot,
+    FinalizeDeliverySnapshot,
+    GetDeliverySnapshot,
+    ReissueDeliverySnapshot,
+    RenderDeliveryPackage,
+    ReviewDeliverySnapshot,
+    SaveDeliverySnapshot,
+    StartDeliverySnapshot,
+    VerifyDeliveryPackage,
 )
 
 
@@ -162,6 +174,8 @@ def build_local_api(
             raise
     import_case_document = None
     import_inspection_photo = None
+    generic_store = None
+    get_private_content = None
     list_case_documents = None
     read_case_document = None
     get_process_metadata_review = None
@@ -175,6 +189,7 @@ def build_local_api(
             local_ids,
             server_config.max_document_body_bytes,
         )
+        get_private_content = GetPrivateContent(store.workspaces, private_store)
         import_case_document = ImportCaseDocumentWithMetadata(
             ImportCaseDocument(generic_store),
             open_case_document,
@@ -257,6 +272,35 @@ def build_local_api(
         local_clock,
         local_ids,
     )
+    get_delivery_snapshot = None
+    save_delivery_snapshot = None
+    start_delivery_snapshot = None
+    review_delivery_snapshot = None
+    render_delivery_package = None
+    verify_delivery_package = None
+    finalize_delivery_snapshot = None
+    deliver_delivery_snapshot = None
+    reissue_delivery_snapshot = None
+    if private_store is not None and generic_store is not None and get_private_content is not None:
+        authorities = (get_case_analysis, get_pericial_planning, get_inspection_session, get_technical_snapshot, get_report_snapshot)
+        get_delivery_snapshot = GetDeliverySnapshot(get_latest_artifact, *authorities)
+        save_delivery_snapshot = SaveDeliverySnapshot(
+            store.revisions, get_latest_artifact, *authorities,
+            private_store.authority_guard, local_clock, local_ids,
+        )
+        start_delivery_snapshot = StartDeliverySnapshot(*authorities, get_private_content, save_delivery_snapshot, local_ids)
+        review_delivery_snapshot = ReviewDeliverySnapshot(get_delivery_snapshot, save_delivery_snapshot, local_clock, local_ids)
+        render_delivery_package = RenderDeliveryPackage(
+            get_delivery_snapshot, get_report_snapshot, get_private_content, generic_store,
+            save_delivery_snapshot, LocalLibreOfficeRenderer(), local_ids,
+        )
+        verify_delivery_package = VerifyDeliveryPackage(get_delivery_snapshot, get_private_content)
+        finalize_delivery_snapshot = FinalizeDeliverySnapshot(verify_delivery_package, review_delivery_snapshot)
+        deliver_delivery_snapshot = DeliverDeliverySnapshot(verify_delivery_package, review_delivery_snapshot)
+        reissue_delivery_snapshot = ReissueDeliverySnapshot(
+            get_delivery_snapshot, save_delivery_snapshot, *authorities,
+            get_private_content, local_ids,
+        )
     services = LocalApiServices(
         create_workspace=CreateWorkspace(store.workspaces, local_clock, local_ids),
         get_workspace=GetWorkspace(store.workspaces),
@@ -318,6 +362,16 @@ def build_local_api(
         ),
         review_report_snapshot=ReviewReportSnapshot(get_report_snapshot, save_report_snapshot, local_clock, local_ids),
         amend_report_draft=AmendReportDraft(get_report_snapshot, save_report_snapshot, local_ids),
+        store_delivery_template=generic_store,
+        get_delivery_artifact=get_private_content,
+        get_delivery_snapshot=get_delivery_snapshot,
+        start_delivery_snapshot=start_delivery_snapshot,
+        review_delivery_snapshot=review_delivery_snapshot,
+        render_delivery_package=render_delivery_package,
+        verify_delivery_package=verify_delivery_package,
+        finalize_delivery_snapshot=finalize_delivery_snapshot,
+        deliver_delivery_snapshot=deliver_delivery_snapshot,
+        reissue_delivery_snapshot=reissue_delivery_snapshot,
         get_process_metadata_review=get_process_metadata_review,
         confirm_process_metadata_source_span=confirm_process_metadata_source_span,
         import_case_document=import_case_document,

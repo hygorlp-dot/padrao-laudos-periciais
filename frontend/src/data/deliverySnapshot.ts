@@ -1,0 +1,29 @@
+export type DeliveryState = "DRAFT" | "READY_FOR_REVIEW" | "APPROVED" | "FINALIZED" | "DELIVERED" | "SUPERSEDED" | "STALE";
+export type DeliveryFormat = "DOCX" | "DOCM" | "PDF" | "OTHER";
+export type DeliveryArtifact = { artifact_id: string; role: string; format: DeliveryFormat; filename: string; content_id: string; media_type: string; byte_size: number; checksum_sha256: string };
+export type DeliverySnapshot = {
+  schema_version: "1.0.0"; delivery_id: string; revision: number; workspace_id: string;
+  binding: { workspace_id: string; professional_id: string; report_snapshot_id: string; report_revision: number; report_digest: string; report_approval_id: string; [key: string]: string | number };
+  template_id: string; template_content_id: string; template_format: "DOCX" | "DOCM"; template_revision: number; template_digest: string; rendering_version: string;
+  artifacts: DeliveryArtifact[]; package: { manifest_version: "1.0.0"; artifact_ids: string[] };
+  decisions: Array<{ decision_id: string; action: string; professional_id: string; reason: string; timestamp: string; supersedes_decision_id: string | null }>;
+  state: DeliveryState; stale_reasons: string[]; stale_origin_state: Exclude<DeliveryState, "STALE"> | null; supersedes_delivery_id: string | null;
+};
+export type DeliveryEnvelope = { revision: number; updated_at: string; snapshot: DeliverySnapshot };
+export type TemplateMetadata = { workspace_id: string; content_id: string; original_filename: string; byte_size: number; checksum_sha256: string; media_type: string };
+export type TemplateManifest = { schema_version: "1.0.0"; template_id: string; output_kind: "DOCX" | "DOCM"; bindings: Array<{ field: string; placeholder: string }> };
+export class DeliveryApiError extends Error { constructor(readonly kind: "not-found" | "invalid" | "unavailable") { super(kind); } }
+const base = (workspaceId: string) => `/app-api/v1/workspaces/${encodeURIComponent(workspaceId)}`;
+async function decode(response: Response) { if (response.status === 404) throw new DeliveryApiError("not-found"); if (!response.ok) throw new DeliveryApiError("unavailable"); return response.json(); }
+function envelope(value: unknown, workspaceId: string): DeliveryEnvelope { const item = value as DeliveryEnvelope; const snapshot = item?.snapshot; if (!Number.isInteger(item?.revision) || item.revision < 1 || snapshot?.schema_version !== "1.0.0" || snapshot.workspace_id !== workspaceId || snapshot.binding?.workspace_id !== workspaceId || !Array.isArray(snapshot.artifacts) || !Array.isArray(snapshot.decisions) || !Array.isArray(snapshot.stale_reasons)) throw new DeliveryApiError("invalid"); return item; }
+export function templateManifest(templateId: string, outputKind: "DOCX" | "DOCM"): TemplateManifest { return { schema_version: "1.0.0", template_id: templateId, output_kind: outputKind, bindings: [{ field: "EXPERT_FULL_NAME", placeholder: "[[EXPERT_FULL_NAME]]" }, { field: "EXPERT_REGISTRATION", placeholder: "[[EXPERT_REGISTRATION]]" }, { field: "REPORT_ID", placeholder: "[[REPORT_ID]]" }] }; }
+export async function getDeliverySnapshot(workspaceId: string, signal?: AbortSignal) { return envelope(await decode(await fetch(`${base(workspaceId)}/delivery-snapshot`, { method: "GET", credentials: "same-origin", cache: "no-store", signal })), workspaceId); }
+export async function uploadDeliveryTemplate(workspaceId: string, file: File) { const response = await fetch(`${base(workspaceId)}/delivery-templates`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": file.type, "X-Document-Filename": file.name }, body: file }); return await decode(response) as TemplateMetadata; }
+async function command(workspaceId: string, path: string, body: object) { return envelope(await decode(await fetch(`${base(workspaceId)}/delivery-snapshot${path}`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })), workspaceId); }
+export async function startDeliverySnapshot(workspaceId: string, template: TemplateMetadata, manifest: TemplateManifest) { return command(workspaceId, "", { template_content_id: template.content_id, manifest, rendering_version: "delivery-renderer/1" }); }
+export async function renderDeliveryPackage(workspaceId: string, value: DeliveryEnvelope) { return command(workspaceId, "/render", { expected_revision: value.revision, manifest: templateManifest(value.snapshot.template_id, value.snapshot.template_format) }); }
+export async function reviewDeliverySnapshot(workspaceId: string, value: DeliveryEnvelope, action: "MARK_READY_FOR_REVIEW" | "APPROVE" | "SUPERSEDE", reason: string) { return command(workspaceId, "/reviews", { expected_revision: value.revision, action, professional_id: value.snapshot.binding.professional_id, reason }); }
+export async function finalizeDeliverySnapshot(workspaceId: string, value: DeliveryEnvelope, reason: string) { return command(workspaceId, "/finalize", { expected_revision: value.revision, professional_id: value.snapshot.binding.professional_id, reason }); }
+export async function deliverDeliverySnapshot(workspaceId: string, value: DeliveryEnvelope, reason: string) { return command(workspaceId, "/deliver", { expected_revision: value.revision, professional_id: value.snapshot.binding.professional_id, reason }); }
+export async function reissueDeliverySnapshot(workspaceId: string, value: DeliveryEnvelope, template: TemplateMetadata, manifest: TemplateManifest) { return command(workspaceId, "/reissue", { expected_revision: value.revision, template_content_id: template.content_id, manifest, rendering_version: "delivery-renderer/1" }); }
+export function artifactDownloadUrl(workspaceId: string, contentId: string) { return `${base(workspaceId)}/delivery-snapshot/artifacts/${encodeURIComponent(contentId)}`; }
