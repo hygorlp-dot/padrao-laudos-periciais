@@ -156,6 +156,10 @@ class LocalApiServices:
     get_budget_snapshot: object | None = None
     get_budget_history: object | None = None
     start_budget_snapshot: object | None = None
+    add_budget_item: object | None = None
+    add_professional_effort_estimate: object | None = None
+    add_travel_estimate: object | None = None
+    add_third_party_estimate: object | None = None
     add_fee_proposal: object | None = None
     record_court_approval: object | None = None
     record_budget_expense: object | None = None
@@ -626,6 +630,10 @@ class LocalApi:
                 if normalized_method != "POST": return _error(405, "METHOD_NOT_ALLOWED")
                 dto = self._request_dto(request_headers, body)
                 routes = {
+                    "items": (self._services.add_budget_item, {"expected_revision", "category", "description", "quantity", "unit_amount"}),
+                    "effort-estimates": (self._services.add_professional_effort_estimate, {"expected_revision", "professional_id", "estimated_hours", "hourly_amount"}),
+                    "travel-estimates": (self._services.add_travel_estimate, {"expected_revision", "distance_km", "amount_per_km", "description"}),
+                    "third-party-estimates": (self._services.add_third_party_estimate, {"expected_revision", "provider_description", "amount", "currency"}),
                     "proposals": (self._services.add_fee_proposal, {"expected_revision", "amount", "currency", "rationale"}),
                     "court-approvals": (self._services.record_court_approval, {"expected_revision", "court_decision_id", "amount", "currency", "decided_on"}),
                     "expenses": (self._services.record_budget_expense, {"expected_revision", "category", "amount", "currency", "incurred_on", "description"}),

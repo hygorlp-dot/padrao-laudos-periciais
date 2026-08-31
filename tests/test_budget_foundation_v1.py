@@ -20,6 +20,7 @@ from scripts.backend_contract.application.budget_foundation import (
     StartBudgetSnapshot,
 )
 from scripts.backend_contract.application.ports import RepositoryConflict
+from scripts.backend_contract.application import budget_foundation as budget_application
 
 from scripts.backend_contract.budget_foundation import (
     BudgetItem,
@@ -267,3 +268,50 @@ def test_start_budget_creates_empty_financial_snapshot_without_technical_authori
     assert record.revision == 1
     assert value.status is FinancialStatus.DRAFT
     assert value.proposals == value.court_approvals == value.payments == ()
+
+
+def test_complete_budget_commands_append_server_owned_exact_estimates() -> None:
+    class Get:
+        def __init__(self, value): self.value = value
+        def execute(self, _workspace): return type("Record", (), {"revision": self.value.revision})(), self.value
+    class Save:
+        def __init__(self): self.values = []
+        def execute(self, _workspace, value, expected): self.values.append((value, expected)); return type("Record", (), {"revision": value.revision})()
+    class Ids:
+        index = 0
+        def new_uuid(self): self.index += 1; return f"00000000-0000-4000-8000-{self.index:012d}"
+
+    empty = replace(
+        budget(), revision=1, items=(), effort_estimates=(), travel_estimates=(),
+        third_party_estimates=(), expenses=(), proposals=(), proposal_revisions=(),
+        court_approvals=(), payments=(), status=FinancialStatus.DRAFT,
+    )
+    save = Save(); ids = Ids()
+    _, itemized = budget_application.AddBudgetItem(Get(empty), save, ids).execute(
+        empty.workspace_id, expected_revision=1, category="EQUIPMENT",
+        description="Locação de equipamento", quantity="2.00", unit_amount="175.50",
+    )
+    _, effort = budget_application.AddProfessionalEffortEstimate(Get(itemized), save, ids).execute(
+        empty.workspace_id, expected_revision=2, professional_id="ASSISTANT-1",
+        estimated_hours="3.50", hourly_amount="80.00",
+    )
+    _, travel = budget_application.AddTravelEstimate(Get(effort), save, ids).execute(
+        empty.workspace_id, expected_revision=3, distance_km="125.40",
+        amount_per_km="1.75", description="Diligência externa",
+    )
+    _, third_party = budget_application.AddThirdPartyEstimate(Get(travel), save, ids).execute(
+        empty.workspace_id, expected_revision=4, provider_description="Laboratório acreditado",
+        amount="900.00", currency="BRL",
+    )
+
+    assert itemized.items[-1].total_amount == "351.00"
+    assert effort.effort_estimates[-1].total_amount == "280.00"
+    assert travel.travel_estimates[-1].total_amount == "219.45"
+    assert third_party.third_party_estimates[-1].amount == "900.00"
+    assert all(value[-1].split("-", 1)[0] in {"ITEM", "EFFORT", "TRAVEL", "THIRD"} for value in (
+        (itemized.items[-1].item_id,),
+        (effort.effort_estimates[-1].estimate_id,),
+        (travel.travel_estimates[-1].estimate_id,),
+        (third_party.third_party_estimates[-1].estimate_id,),
+    ))
+    assert [expected for _, expected in save.values] == [1, 2, 3, 4]
