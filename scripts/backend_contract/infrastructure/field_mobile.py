@@ -28,7 +28,7 @@ def _is_link_or_reparse(details: os.stat_result) -> bool:
 class DeviceOfflineVault:
     """Device-local, authenticated storage; no network or cloud transport."""
 
-    def __init__(self, root: Path, *, key: bytes, device_id: str, workspace_id: str, global_revocation_path: Path | None = None):
+    def __init__(self, root: Path, *, key: bytes, device_id: str, workspace_id: str, global_revocation_path: Path | None = None, lifecycle_lock: RLock | None = None):
         if type(key) is not bytes or len(key) != 32:
             raise ValueError("device vault requires a 256-bit key")
         if any(type(value) is not str or not value.strip() for value in (device_id, workspace_id)):
@@ -49,7 +49,7 @@ class DeviceOfflineVault:
         self._key: bytes | None = key
         self._device_id = device_id
         self._workspace_id = workspace_id
-        self._lock = RLock()
+        self._lock = RLock() if lifecycle_lock is None else lifecycle_lock
         self._revocation = self._root / ".revoked"
         self._global_revocation = global_revocation_path
 
@@ -93,7 +93,7 @@ class DeviceOfflineVault:
 
     def load(self, package_id: str) -> OfflineInspectionPackage:
         key = self._require_active()
-        payload = self._path(package_id).read_bytes()
+        payload = self._read_payload(self._path(package_id))
         if not payload.startswith(b"OFFLINE-V1\0") or len(payload) < 40:
             raise ValueError("offline package storage is corrupt")
         nonce, ciphertext = payload[11:23], payload[23:]
@@ -121,7 +121,7 @@ class DeviceOfflineVault:
     def load_media(self, package_id: str, record_id: str) -> bytes:
         key = self._require_active()
         authority = self._media_authority(package_id, record_id)
-        payload = self._media_path(package_id, record_id).read_bytes()
+        payload = self._read_payload(self._media_path(package_id, record_id))
         if not payload.startswith(b"MEDIA-V1\0") or len(payload) < 38:
             raise ValueError("original media storage is corrupt")
         nonce, ciphertext = payload[9:21], payload[21:]
@@ -165,11 +165,18 @@ class DeviceOfflineVault:
     def _exclusive_write(self, target: Path, payload: bytes) -> None:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
         with self._lock:
+            self._require_active()
             try:
                 descriptor = os.open(target, flags, stat.S_IRUSR | stat.S_IWUSR)
             except FileExistsError as exc:
                 raise FileExistsError("offline data cannot be silently overwritten") from exc
             try:
+                if target != self._revocation:
+                    self._require_active()
+                else:
+                    details = os.lstat(self._root)
+                    if _is_link_or_reparse(details) or (details.st_dev, details.st_ino) != self._root_identity:
+                        raise PermissionError("device vault root identity changed")
                 with os.fdopen(descriptor, "wb", closefd=False) as stream:
                     stream.write(payload)
                     stream.flush()
@@ -180,11 +187,23 @@ class DeviceOfflineVault:
             finally:
                 os.close(descriptor)
 
+    def _read_payload(self, target: Path) -> bytes:
+        with self._lock:
+            self._require_active()
+            descriptor = os.open(target, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+            try:
+                self._require_active()
+                with os.fdopen(descriptor, "rb", closefd=False) as stream:
+                    return stream.read()
+            finally:
+                os.close(descriptor)
+
 
 class DeviceOfflineVaultRegistry:
     """Provisions one device identity/key and workspace-isolated vaults."""
 
     def __init__(self, root: Path):
+        self._lifecycle_lock = RLock()
         self._root = Path(root) / "offline-field-v1"
         self._root.mkdir(parents=True, exist_ok=True)
         if _is_link_or_reparse(os.lstat(self._root)):
@@ -220,8 +239,9 @@ class DeviceOfflineVaultRegistry:
         directory = self._root / hashlib.sha256(workspace.encode("utf-8")).hexdigest()
         if directory.exists() and _is_link_or_reparse(os.lstat(directory)):
             raise ValueError("offline workspace root cannot be a link or reparse point")
-        return DeviceOfflineVault(directory, key=self._key, device_id=self.device_id, workspace_id=workspace, global_revocation_path=self._revocation_path)
+        return DeviceOfflineVault(directory, key=self._key, device_id=self.device_id, workspace_id=workspace, global_revocation_path=self._revocation_path, lifecycle_lock=self._lifecycle_lock)
 
     def revoke_device(self) -> None:
-        if not self._revocation_path.exists():
-            self._provision(self._revocation_path, b"REVOKED\n")
+        with self._lifecycle_lock:
+            if not self._revocation_path.exists():
+                self._provision(self._revocation_path, b"REVOKED\n")
