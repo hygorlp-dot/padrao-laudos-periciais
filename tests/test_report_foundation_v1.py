@@ -238,7 +238,8 @@ def test_empty_draft_can_add_canonical_claim_context_and_answer_commands():
     current = {"snapshot": snapshot, "revision": 4}
     get = SimpleNamespace(execute=lambda _workspace: (SimpleNamespace(revision=current["revision"]), current["snapshot"]))
     save = SimpleNamespace(execute=lambda _workspace, amended, _expected: SimpleNamespace(revision=current.update(snapshot=amended, revision=current["revision"] + 1) or current["revision"]))
-    service = AmendReportDraft(get, save, SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")))
+    generated = iter(UUID(value) for value in ("99999999-9999-4999-8999-999999999991", "99999999-9999-4999-8999-999999999992", "99999999-9999-4999-8999-999999999993", "99999999-9999-4999-8999-999999999994"))
+    service = AmendReportDraft(get, save, SimpleNamespace(new_uuid=lambda: next(generated)))
     _, claimed = service.execute(WorkspaceId.parse(snapshot.workspace_id), expected_revision=4, action="ADD_CLAIM", values={"section_id":"SECTION-001","text":"Documento sintético identificado.","source_kind":"CASE_DOCUMENT","source_id":"DOC-001"})
     assert claimed.claims[0].authority is AuthorityClass.DOCUMENTED
     _, contextualized = service.execute(WorkspaceId.parse(snapshot.workspace_id), expected_revision=5, action="UPDATE_CONTEXT", values={"field":"PROCESS_NUMBER","status":"PRESENT","source_id":"DOC-001","note":"Identidade documentada."})
