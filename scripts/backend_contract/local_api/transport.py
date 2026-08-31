@@ -635,7 +635,7 @@ class LocalApi:
                     "travel-estimates": (self._services.add_travel_estimate, {"expected_revision", "distance_km", "amount_per_km", "description"}),
                     "third-party-estimates": (self._services.add_third_party_estimate, {"expected_revision", "provider_description", "amount", "currency"}),
                     "proposals": (self._services.add_fee_proposal, {"expected_revision", "amount", "currency", "rationale"}),
-                    "court-approvals": (self._services.record_court_approval, {"expected_revision", "court_decision_id", "amount", "currency", "decided_on"}),
+                    "court-approvals": (self._services.record_court_approval, {"expected_revision", "external_court_decision_reference", "amount", "currency", "decided_on"}),
                     "expenses": (self._services.record_budget_expense, {"expected_revision", "category", "amount", "currency", "incurred_on", "description"}),
                     "payments": (self._services.record_received_payment, {"expected_revision", "amount", "currency", "received_on", "reference"}),
                     "close": (self._services.close_budget_snapshot, {"expected_revision"}),

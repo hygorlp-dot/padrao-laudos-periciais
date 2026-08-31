@@ -25,6 +25,7 @@ from ..budget_foundation import (
     budget_snapshot_from_mapping,
     budget_snapshot_to_mapping,
     derive_financial_status,
+    normalize_legacy_budget_mapping,
 )
 from .models import thaw_payload
 from .ports import RepositoryConflict
@@ -56,6 +57,7 @@ def _payload(value: object) -> object:
 
 def validated_budget_snapshot_from_mapping(value: object) -> PericialBudget:
     try:
+        value = normalize_legacy_budget_mapping(value)
         _VALIDATOR.validate(value)
         return budget_snapshot_from_mapping(value)
     except (ValidationError, TypeError, ValueError) as exc:
@@ -246,10 +248,10 @@ class RecordCourtApproval:
     save_snapshot: object
     ids: object
 
-    def execute(self, workspace_id, *, expected_revision: int, court_decision_id: str, amount: str, currency: str, decided_on: str):
+    def execute(self, workspace_id, *, expected_revision: int, external_court_decision_reference: str, amount: str, currency: str, decided_on: str):
         record, predecessor = self.get_snapshot.execute(workspace_id)
         if record.revision != expected_revision: raise RepositoryConflict("expected Budget Snapshot revision is not latest")
-        approval = CourtApprovedAmount(f"APPROVAL-{str(self.ids.new_uuid()).upper()}", court_decision_id, amount, currency, decided_on)
+        approval = CourtApprovedAmount(f"APPROVAL-{str(self.ids.new_uuid()).upper()}", external_court_decision_reference, amount, currency, decided_on)
         approvals = (*predecessor.court_approvals, approval)
         value = replace(predecessor, revision=predecessor.revision + 1, court_approvals=approvals, status=derive_financial_status(predecessor.proposals, approvals, predecessor.payments))
         return self.save_snapshot.execute(workspace_id, value, expected_revision), value

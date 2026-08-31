@@ -81,6 +81,9 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
     assert contract["components"]["schemas"]["OfflineInspectionPackage"] == {"$ref": "../schemas/offline-inspection-package-v1.schema.json"}
     assert "put" not in contract["paths"]["/v1/workspaces/{workspace_id}/budget-snapshot"]
     assert contract["components"]["schemas"]["RecordBudgetExpenseRequest"]["properties"]["category"]["$ref"].endswith("#/$defs/category")
+    approval_request = contract["components"]["schemas"]["RecordCourtApprovalRequest"]
+    assert "external_court_decision_reference" in approval_request["properties"]
+    assert "court_decision_id" not in approval_request["properties"]
     referenced = (ROOT / "contracts" / component["$ref"]).resolve()
     assert referenced.is_relative_to(ROOT)
     schema = json.loads(referenced.read_text(encoding="utf-8"))

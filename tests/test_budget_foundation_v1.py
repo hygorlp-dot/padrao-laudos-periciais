@@ -87,6 +87,21 @@ def test_proposal_court_approval_and_payment_are_distinct_authorities() -> None:
         replace(value, payments=(replace(value.payments[0], currency="USD"),))
 
 
+def test_court_approval_serializes_only_an_explicit_external_reference() -> None:
+    approval = budget_snapshot_to_mapping(budget())["court_approvals"][0]
+    assert approval["external_court_decision_reference"] == "DECISION-1"
+    assert "court_decision_id" not in approval
+
+
+def test_legacy_arbitrary_court_identifier_reopens_as_an_explicit_external_reference() -> None:
+    legacy = budget_snapshot_to_mapping(budget())
+    approval = legacy["court_approvals"][0]
+    approval["court_decision_id"] = approval.pop("external_court_decision_reference")
+    reopened = budget_snapshot_from_mapping(legacy)
+    assert reopened.court_approvals[0].external_court_decision_reference == "DECISION-1"
+    assert "court_decision_id" not in budget_snapshot_to_mapping(reopened)["court_approvals"][0]
+
+
 def test_proposal_revision_history_is_linear_and_append_only_by_identity() -> None:
     value = budget()
     duplicate = replace(value.proposal_revisions[0], revision_id="REVISION-2")
@@ -224,7 +239,7 @@ def test_financial_commands_create_distinct_append_only_authorities() -> None:
     empty = replace(budget(), revision=1, proposals=(), proposal_revisions=(), court_approvals=(), payments=(), expenses=(), status=FinancialStatus.DRAFT)
     save = Save(); ids = Ids(); clock = Clock()
     proposal_record, proposal = AddFeeProposal(Get(empty), save, clock, ids).execute(empty.workspace_id, expected_revision=1, amount="3000.00", currency="BRL", rationale="Proposta inicial")
-    approval_record, approved = RecordCourtApproval(Get(proposal), save, ids).execute(empty.workspace_id, expected_revision=2, court_decision_id="DECISION-2", amount="2500.00", currency="BRL", decided_on="2026-09-01")
+    approval_record, approved = RecordCourtApproval(Get(proposal), save, ids).execute(empty.workspace_id, expected_revision=2, external_court_decision_reference="DECISION-2", amount="2500.00", currency="BRL", decided_on="2026-09-01")
     expense_record, expensed = RecordExpense(Get(approved), save, ids).execute(empty.workspace_id, expected_revision=3, category="TRAVEL", amount="100.00", currency="BRL", incurred_on="2026-09-02", description="Deslocamento")
     payment_record, paid = RecordPayment(Get(expensed), save, ids).execute(empty.workspace_id, expected_revision=4, amount="1000.00", currency="BRL", received_on="2026-09-03", reference="Depósito")
     assert (proposal_record.revision, approval_record.revision, expense_record.revision, payment_record.revision) == (2, 3, 4, 5)
@@ -251,7 +266,7 @@ def test_financial_commands_derive_status_after_final_payment_and_later_revision
     assert paid.status is FinancialStatus.RECEIVED
     _, revised = AddFeeProposal(Get(paid), save, Clock(), ids).execute(value.workspace_id, expected_revision=2, amount="2700.00", currency="BRL", rationale="Proposta suplementar")
     assert revised.status is FinancialStatus.RECEIVED
-    _, adjusted = RecordCourtApproval(Get(revised), save, ids).execute(value.workspace_id, expected_revision=3, court_decision_id="DECISION-2", amount="2700.00", currency="BRL", decided_on="2026-09-05")
+    _, adjusted = RecordCourtApproval(Get(revised), save, ids).execute(value.workspace_id, expected_revision=3, external_court_decision_reference="DECISION-2", amount="2700.00", currency="BRL", decided_on="2026-09-05")
     assert adjusted.status is FinancialStatus.PARTIALLY_RECEIVED
     assert adjusted.outstanding.amount == "500.00"
 
