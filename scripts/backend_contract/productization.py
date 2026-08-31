@@ -342,6 +342,8 @@ class RestoreWorkspaceBackup:
     rollback_participants: tuple[object, ...]
 
     def execute(self, payload: bytes) -> RestoreReceipt:
+        if type(self.rollback_participants) is not tuple or len(self.rollback_participants) != 2 or self.rollback_participants[1] is not self.private_contents:
+            raise ValueError("restore requires database and private staging rollback participants")
         backup = VerifyWorkspaceBackup().execute(payload)
         workspace_id = WorkspaceId.parse(backup.workspace.workspace_id)
         if self.workspaces.list_all() != ():
