@@ -75,6 +75,12 @@ class SavePericialPlanning:
             created_at=created_at.isoformat(),
             payload=pericial_planning_to_mapping(snapshot),
             expected_revision=expected_revision,
+            expected_dependencies=({
+                "artifact_kind": analysis_record.artifact_kind,
+                "artifact_id": analysis_record.artifact_id,
+                "revision": analysis_record.revision,
+                "checksum_sha256": analysis_record.checksum_sha256,
+            },),
         )
 
 
@@ -153,7 +159,7 @@ class ReviewPericialPlanning:
 
 def _validate_append_only_history(previous: PlanningSnapshot, current: PlanningSnapshot) -> None:
     if previous.plan.plan_id != current.plan.plan_id:
-        return
+        raise ValueError("immutable pericial plan identity cannot be replaced")
     previous_items = {item.item_id: _proposal_signature(item) for item in previous.material_items}
     current_items = {item.item_id: _proposal_signature(item) for item in current.material_items}
     if not previous_items.keys() <= current_items.keys() or any(

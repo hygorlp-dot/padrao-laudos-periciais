@@ -51,6 +51,7 @@ describe("pericial planning view", () => {
       expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument();
     }
     expect(screen.getAllByText("Derivado do objeto e do quesito pertinentes.").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Objetos periciais: OBJECT-001").length).toBeGreaterThan(0);
     expect(screen.getByText("Método proposto — não aprovado")).toBeInTheDocument();
     expect(screen.queryByText(/constatação técnica|resposta ao quesito|conclusão pericial/i)).not.toBeInTheDocument();
   });
@@ -71,6 +72,7 @@ describe("pericial planning view", () => {
     await screen.findByRole("heading", { name: "Plano da perícia" });
 
     await user.click(screen.getByRole("button", { name: "Revisar Controvérsia documental" }));
+    expect(screen.getByLabelText("Identificação do perito")).toHaveFocus();
     await user.selectOptions(screen.getByLabelText("Decisão profissional"), "MODIFY");
     await user.type(screen.getByLabelText("Identificação do perito"), "PERITO-SYNTHETIC");
     await user.type(screen.getByLabelText("Motivo da decisão"), "Ajuste profissional explícito.");

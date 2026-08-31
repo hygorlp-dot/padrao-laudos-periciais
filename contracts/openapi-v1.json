@@ -37,7 +37,7 @@
           "404": {"description": "Planejamento ausente"}
         }
       },
-      "post": {
+      "put": {
         "summary": "Salva nova revisão de planejamento",
         "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
         "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SavePericialPlanningRequest"}}}},

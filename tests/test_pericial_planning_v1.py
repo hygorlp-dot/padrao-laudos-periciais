@@ -187,6 +187,23 @@ def test_upstream_authority_rejects_foreign_or_forged_derivations(mutate):
         validate_against_case_analysis(snapshot, analysis_fixture(), artifact_revision=1)
 
 
+def test_upstream_authority_rejects_flattened_typed_derivation():
+    raw = copy.deepcopy(fixture())
+    raw["objectives"][0]["derivation"]["case_analysis_item_ids"].append("QUESTION-001")
+
+    with pytest.raises(ValueError, match="authority|provenance"):
+        validate_against_case_analysis(pericial_planning_from_mapping(raw), analysis_fixture(), artifact_revision=1)
+
+
+def test_question_linkage_is_required_before_a_plan_can_be_validated():
+    raw = copy.deepcopy(fixture())
+    raw["question_links"] = []
+    raw["coverage"].update(material_items_total=16, reviewed_items=1, pending_items=15)
+
+    with pytest.raises(ValueError, match="question linkage"):
+        validate_against_case_analysis(pericial_planning_from_mapping(raw), analysis_fixture(), artifact_revision=1)
+
+
 @pytest.mark.parametrize(
     "mutate",
     (
@@ -240,6 +257,24 @@ def test_professional_decisions_append_without_replacing_the_proposal(action, de
     assert reviewed.coverage.pending_items == 15
 
 
+def test_professional_review_recalculates_readiness_from_effective_statuses():
+    reviewed = pericial_planning_from_mapping(fixture())
+    for item in tuple(item for item in reviewed.material_items if item.professional_review_status.value == "PENDING"):
+        reviewed = append_professional_decision(
+            reviewed,
+            PlanningDecision(
+                decision_id=f"DECISION-{item.item_id}", target_item_id=item.item_id,
+                action=ReviewAction.APPROVE, proposal_value=item.description, decided_value=None,
+                reviewer="PERITO-SYNTHETIC", reason="Aprovação sintética explícita.", revision=1,
+                timestamp="2026-08-30T19:00:00+00:00",
+            ),
+        )
+
+    assert reviewed.coverage.pending_items == 0
+    assert reviewed.coverage.readiness.value == "READY"
+    assert reviewed.coverage.readiness_reasons == ()
+
+
 def test_application_schema_and_semantic_boundary_rejects_unknown_fields():
     raw = fixture()
     raw["technical_finding"] = "não permitido"
@@ -267,6 +302,12 @@ def test_save_revalidates_latest_case_analysis_and_uses_atomic_plan_cas():
     assert calls[0]["artifact_kind"] == "PERICIAL_PLANNING_SNAPSHOT_V1"
     assert calls[0]["artifact_id"] == "PERICIAL-PLANNING"
     assert calls[0]["expected_revision"] is None
+    assert calls[0]["expected_dependencies"] == ({
+        "artifact_kind": "CASE_ANALYSIS_SNAPSHOT_V1",
+        "artifact_id": "CASE-ANALYSIS",
+        "revision": analysis_record.revision,
+        "checksum_sha256": analysis_record.checksum_sha256,
+    },)
     assert calls[0]["payload"] == fixture()
 
 
@@ -303,6 +344,25 @@ def test_save_preserves_existing_proposals_and_review_history():
     )
 
     with pytest.raises(ValueError, match="immutable proposal"):
+        service.execute(WorkspaceId.parse(planning.workspace_id), planning, 1)
+
+
+def test_save_rejects_plan_identity_rotation_as_an_append_only_bypass():
+    previous = pericial_planning_from_mapping(fixture())
+    changed = fixture()
+    changed["plan"]["plan_id"] = "PERICIAL-PLAN-REPLACEMENT"
+    changed["required_documents"][0]["description"] = "Substituição destrutiva"
+    planning = pericial_planning_from_mapping(changed)
+    analysis = analysis_fixture()
+    service = SavePericialPlanning(
+        SimpleNamespace(append_if_latest=lambda **_kwargs: pytest.fail("must not append")),
+        SimpleNamespace(execute=lambda *_args: artifact(previous, kind="PERICIAL_PLANNING_SNAPSHOT_V1", artifact_id="PERICIAL-PLANNING")),
+        SimpleNamespace(execute=lambda _workspace: (artifact(analysis, kind="CASE_ANALYSIS_SNAPSHOT_V1", artifact_id="CASE-ANALYSIS"), analysis)),
+        SimpleNamespace(now=lambda: datetime(2026, 8, 30, tzinfo=UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
+    )
+
+    with pytest.raises(ValueError, match="identity|immutable"):
         service.execute(WorkspaceId.parse(planning.workspace_id), planning, 1)
 
 
@@ -411,14 +471,14 @@ def test_openapi_exposes_only_canonical_pericial_planning_operations():
     contract = json.loads((ROOT / "contracts/openapi-v1.json").read_text(encoding="utf-8"))
     path = contract["paths"]["/v1/workspaces/{workspace_id}/pericial-planning"]
 
-    assert set(path) == {"get", "post"}
+    assert set(path) == {"get", "put"}
     assert contract["components"]["schemas"]["PericialPlanningSnapshot"] == {
         "$ref": "../schemas/pericial-planning-snapshot-v1.schema.json"
     }
     assert contract["info"]["x-pericial-planning-semantic-boundary"] == (
         "scripts.backend_contract.pericial_planning.pericial_planning_from_mapping"
     )
-    assert path["post"]["requestBody"]["content"]["application/json"]["schema"] == {
+    assert path["put"]["requestBody"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/SavePericialPlanningRequest"
     }
     decision_path = contract["paths"]["/v1/workspaces/{workspace_id}/pericial-planning/decisions"]

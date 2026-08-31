@@ -25,7 +25,11 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
     contract = json.loads((ROOT / "contracts/openapi-v1.json").read_text(encoding="utf-8"))
 
     assert contract["openapi"] == "3.1.0"
-    assert set(contract["paths"]) == {"/v1/workspaces/{workspace_id}/case-analysis"}
+    assert set(contract["paths"]) == {
+        "/v1/workspaces/{workspace_id}/case-analysis",
+        "/v1/workspaces/{workspace_id}/pericial-planning",
+        "/v1/workspaces/{workspace_id}/pericial-planning/decisions",
+    }
     component = contract["components"]["schemas"]["ProceduralContext"]
     assert component == {"$ref": "../schemas/judicial-domain-model-v1.schema.json"}
     assert contract["info"]["x-semantic-boundary"] == ("scripts.backend_contract.api_contract.parse_judicial_domain_payload")

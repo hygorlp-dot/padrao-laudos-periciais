@@ -564,6 +564,10 @@ def validate_against_case_analysis(
         "technical": {item.item_id for item in analysis.technical_document_references},
         "gaps_conflicts": {item.item_id for item in (*analysis.gaps, *analysis.conflicts)},
     }
+    linked_questions = {item.question_id for item in planning.question_links}
+    required_questions = collection_ids["questions"]
+    if linked_questions != required_questions:
+        raise ValueError("planning question linkage must cover every Case Analysis question exactly")
     for item in planning.material_items:
         derivation = item.derivation
         referenced = set(derivation.case_analysis_item_ids)
@@ -574,8 +578,9 @@ def validate_against_case_analysis(
             *derivation.technical_document_reference_ids,
             *derivation.gap_or_conflict_ids,
         }
-        if not referenced <= set(by_id) or not specialized <= referenced:
-            raise ValueError("planning derivation references unknown Case Analysis items")
+        typed_referenced = referenced & set().union(*collection_ids.values())
+        if not referenced <= set(by_id) or specialized != typed_referenced:
+            raise ValueError("planning derivation authority does not match Case Analysis item types")
         if (
             not set(derivation.question_ids) <= collection_ids["questions"]
             or not set(derivation.pericial_object_ids) <= collection_ids["objects"]
@@ -631,8 +636,23 @@ def append_professional_decision(snapshot: PlanningSnapshot, decision: PlanningD
     rejected = statuses.count(ProfessionalReviewStatus.REJECTED)
     modified = statuses.count(ProfessionalReviewStatus.MODIFIED)
     deferred = statuses.count(ProfessionalReviewStatus.DEFERRED)
-    coverage = replace(
-        snapshot.coverage,
+    if pending:
+        readiness = ReadinessStatus.PARTIAL
+        reasons = ("Itens materiais aguardam revisão profissional.",)
+    elif rejected or deferred:
+        readiness = ReadinessStatus.BLOCKED
+        reasons = tuple(
+            reason
+            for count, reason in (
+                (rejected, "Itens materiais foram rejeitados pelo profissional."),
+                (deferred, "Itens materiais tiveram decisão profissional adiada."),
+            )
+            if count
+        )
+    else:
+        readiness = ReadinessStatus.READY
+        reasons = ()
+    coverage = PlanningCoverage(
         material_items_total=len(statuses),
         reviewed_items=len(statuses) - pending,
         pending_items=pending,
@@ -640,6 +660,8 @@ def append_professional_decision(snapshot: PlanningSnapshot, decision: PlanningD
         rejected_items=rejected,
         modified_items=modified,
         deferred_items=deferred,
+        readiness=readiness,
+        readiness_reasons=reasons,
     )
     return replace(
         snapshot,

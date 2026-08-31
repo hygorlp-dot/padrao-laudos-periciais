@@ -462,6 +462,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
             created_at=created_at,
             payload=payload,
             expected_revision=_NO_REVISION_PRECONDITION,
+            expected_dependencies=(),
         )
 
     def append_if_latest(
@@ -474,6 +475,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
         created_at: str,
         payload: object,
         expected_revision: int | None,
+        expected_dependencies: tuple[dict[str, object], ...] = (),
     ) -> ArtifactRevision:
         if expected_revision is not None and (
             type(expected_revision) is not int or expected_revision < 1
@@ -487,6 +489,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
             created_at=created_at,
             payload=payload,
             expected_revision=expected_revision,
+            expected_dependencies=expected_dependencies,
         )
 
     def append_pair_if_latest(
@@ -676,6 +679,7 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
         created_at: str,
         payload: object,
         expected_revision: object,
+        expected_dependencies: tuple[dict[str, object], ...],
     ) -> ArtifactRevision:
         workspace_key, artifact_kind, artifact_id = self._key(
             workspace_id, artifact_kind, artifact_id
@@ -683,6 +687,28 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
         canonical_json = canonical_payload_json(payload)
         payload_snapshot = json.loads(canonical_json)
         checksum = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        normalized_dependencies = []
+        if type(expected_dependencies) is not tuple:
+            raise ValueError("invalid dependent preconditions")
+        for expectation in expected_dependencies:
+            if type(expectation) is not dict or set(expectation) != self._EXPECTATION_KEYS:
+                raise ValueError("invalid dependent precondition")
+            _, dependency_kind, dependency_id = self._key(
+                workspace_id, expectation["artifact_kind"], expectation["artifact_id"]
+            )
+            dependency_revision = expectation["revision"]
+            dependency_checksum = expectation["checksum_sha256"]
+            if (
+                type(dependency_revision) is not int
+                or dependency_revision < 1
+                or type(dependency_checksum) is not str
+                or len(dependency_checksum) != 64
+                or any(character not in "0123456789abcdef" for character in dependency_checksum)
+            ):
+                raise ValueError("invalid dependent precondition")
+            normalized_dependencies.append(
+                (dependency_kind, dependency_id, dependency_revision, dependency_checksum)
+            )
         try:
             canonical_revision_id = str(UUID(revision_id))
         except (TypeError, ValueError, AttributeError) as exc:
@@ -695,6 +721,18 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
                 ).fetchone()
                 if exists is None:
                     raise WorkspaceNotFound(f"workspace não encontrado: {workspace_id}")
+                for dependency_kind, dependency_id, dependency_revision, dependency_checksum in normalized_dependencies:
+                    current_dependency = self._connection.execute(
+                        "SELECT revision, checksum_sha256 FROM artifact_revisions "
+                        "WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ? "
+                        "ORDER BY revision DESC LIMIT 1",
+                        (workspace_key, dependency_kind, dependency_id),
+                    ).fetchone()
+                    if current_dependency is None or tuple(current_dependency) != (
+                        dependency_revision,
+                        dependency_checksum,
+                    ):
+                        raise RepositoryConflict("dependent artifact was updated")
                 current_revision = self._connection.execute(
                     "SELECT COALESCE(MAX(revision), 0) FROM artifact_revisions "
                     "WHERE workspace_id = ? AND artifact_kind = ? AND artifact_id = ?",

@@ -149,7 +149,7 @@ def test_pericial_planning_route_validates_and_delegates_canonical_snapshot():
 
     response = request(
         LocalApi(bundle, token=TOKEN),
-        "POST",
+        "PUT",
         f"/v1/workspaces/{WORKSPACE_UUID}/pericial-planning",
         body={"expected_revision": None, "snapshot": payload},
     )
@@ -408,7 +408,7 @@ def test_pericial_planning_save_close_reopen_preserves_professional_state(tmp_pa
                     source["source_document_sha256"] = source_by_id[source["source_document_id"]]
         saved_status, _, saved_body = http_request(
             runtime.server,
-            "POST",
+            "PUT",
             f"/v1/workspaces/{workspace_id}/pericial-planning",
             value={"expected_revision": None, "snapshot": planning_payload},
             headers={"X-Local-API-Token": TOKEN},
@@ -449,7 +449,7 @@ def test_case_analysis_is_private_and_generic_artifact_route_cannot_bypass_valid
 
 def request(api, method, target, *, body=None, headers=None):
     request_headers = {"Host": "127.0.0.1", **(headers or {})}
-    if method == "POST":
+    if method in {"POST", "PUT"}:
         request_headers.setdefault("Content-Type", "application/json; charset=utf-8")
         request_headers.setdefault("X-Local-API-Token", TOKEN)
     encoded = b"" if body is None else json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")

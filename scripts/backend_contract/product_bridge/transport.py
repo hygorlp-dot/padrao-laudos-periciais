@@ -95,7 +95,9 @@ def _proxy_target(path: str, method: str) -> str | None:
         remainder = path[len(prefix) :].split("/")
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "materials" and method in {"GET", "POST"}:
             return f"/v1/workspaces/{remainder[0]}/materials"
-        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] in {"case-analysis", "pericial-planning"} and method in {"GET", "POST"}:
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "case-analysis" and method in {"GET", "POST"}:
+            return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "pericial-planning" and method in {"GET", "PUT"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["pericial-planning", "decisions"] and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/pericial-planning/decisions"

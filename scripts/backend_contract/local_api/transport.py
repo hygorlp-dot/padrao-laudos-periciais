@@ -46,11 +46,11 @@ from ..application.case_analysis import (
     case_analysis_to_mapping,
     validated_case_analysis_from_mapping,
 )
-from ..application.pericial_planning import validated_pericial_planning_from_mapping
-from ..pericial_planning import (
+from ..application.pericial_planning import (
     PERICIAL_PLANNING_ARTIFACT_KIND,
     PlanningSnapshot,
     pericial_planning_to_mapping,
+    validated_pericial_planning_from_mapping,
 )
 
 _MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
@@ -490,7 +490,7 @@ class LocalApi:
                             "snapshot": pericial_planning_to_mapping(snapshot),
                         },
                     )
-                if normalized_method == "POST":
+                if normalized_method == "PUT":
                     dto = self._request_dto(request_headers, body)
                     if set(dto) != {"expected_revision", "snapshot"}:
                         raise ValueError("Pericial Planning request is invalid")
