@@ -477,6 +477,15 @@
                          "finalidade":  "Manifesto sintético de binding protegido para template DOCM Stage 7",
                          "expected":  "VALID",
                          "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/delivery-snapshot-v1.json",
+                         "dominio":  "DELIVERY_SNAPSHOT_V1",
+                         "schema":  "delivery-snapshot-v1.schema.json",
+                         "consumer":  "tests/test_delivery_foundation_v1.py::test_canonical_synthetic_fixture_matches_strict_schema",
+                         "finalidade":  "Entrega sintética vinculada a snapshots, manifesto e revisão profissional Stage 8",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      }
                  ]
 }

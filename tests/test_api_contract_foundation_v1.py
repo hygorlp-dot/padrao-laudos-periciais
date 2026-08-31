@@ -36,10 +36,23 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
         "/v1/workspaces/{workspace_id}/report-snapshot",
         "/v1/workspaces/{workspace_id}/report-snapshot/reviews",
         "/v1/workspaces/{workspace_id}/report-snapshot/draft-amendments",
+        "/v1/workspaces/{workspace_id}/delivery-templates",
+        "/v1/workspaces/{workspace_id}/delivery-supporting-files",
+        "/v1/workspaces/{workspace_id}/delivery-snapshot",
+        "/v1/workspaces/{workspace_id}/delivery-snapshot/render",
+        "/v1/workspaces/{workspace_id}/delivery-snapshot/package-artifacts",
+        "/v1/workspaces/{workspace_id}/delivery-snapshot/reviews",
+        "/v1/workspaces/{workspace_id}/delivery-snapshot/finalize",
+        "/v1/workspaces/{workspace_id}/delivery-snapshot/deliver",
+        "/v1/workspaces/{workspace_id}/delivery-snapshot/reissue",
+        "/v1/workspaces/{workspace_id}/delivery-snapshot/history",
+        "/v1/workspaces/{workspace_id}/delivery-snapshot/artifacts/{content_id}",
     }
     component = contract["components"]["schemas"]["ProceduralContext"]
     assert component == {"$ref": "../schemas/judicial-domain-model-v1.schema.json"}
     assert contract["info"]["x-semantic-boundary"] == ("scripts.backend_contract.api_contract.parse_judicial_domain_payload")
+    assert contract["info"]["x-delivery-snapshot-semantic-boundary"] == "scripts.backend_contract.delivery_foundation.delivery_snapshot_from_mapping"
+    assert contract["components"]["schemas"]["DeliverySnapshot"] == {"$ref": "../schemas/delivery-snapshot-v1.schema.json"}
     referenced = (ROOT / "contracts" / component["$ref"]).resolve()
     assert referenced.is_relative_to(ROOT)
     schema = json.loads(referenced.read_text(encoding="utf-8"))

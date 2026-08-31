@@ -8,7 +8,7 @@ from threading import Event, Thread
 
 import pytest
 
-from scripts.backend_contract.product_bridge.transport import _proxy_target
+from scripts.backend_contract.product_bridge.transport import ProductBridge, _proxy_target
 
 from scripts.backend_contract.product_bridge.composition import build_product_runtime
 from scripts.backend_contract.product_bridge.server import (
@@ -96,6 +96,57 @@ def test_product_bridge_allowlists_only_the_explicit_report_review_command():
     assert _proxy_target(path, "PUT") is None
     amendment = f"/app-api/v1/workspaces/{workspace}/report-snapshot/draft-amendments"
     assert _proxy_target(amendment, "POST") == f"/v1/workspaces/{workspace}/report-snapshot/draft-amendments"
+
+
+def test_product_bridge_allowlists_only_delivery_foundation_resources_and_commands():
+    workspace = "11111111-1111-4111-8111-111111111111"
+    for resource, method in (("delivery-templates", "POST"), ("delivery-supporting-files", "POST"), ("delivery-snapshot", "GET"), ("delivery-snapshot", "POST")):
+        path = f"/app-api/v1/workspaces/{workspace}/{resource}"
+        assert _proxy_target(path, method) == f"/v1/workspaces/{workspace}/{resource}"
+    for action in ("render", "package-artifacts", "reviews", "finalize", "deliver", "reissue"):
+        path = f"/app-api/v1/workspaces/{workspace}/delivery-snapshot/{action}"
+        assert _proxy_target(path, "POST") == f"/v1/workspaces/{workspace}/delivery-snapshot/{action}"
+        assert _proxy_target(path, "PUT") is None
+    history = f"/app-api/v1/workspaces/{workspace}/delivery-snapshot/history"
+    assert _proxy_target(history, "GET") == f"/v1/workspaces/{workspace}/delivery-snapshot/history"
+    content_id = "22222222-2222-4222-8222-222222222222"
+    artifact = f"/app-api/v1/workspaces/{workspace}/delivery-snapshot/artifacts/{content_id}"
+    assert _proxy_target(artifact, "GET") == f"/v1/workspaces/{workspace}/delivery-snapshot/artifacts/{content_id}"
+
+
+@pytest.mark.parametrize("media_type", ("image/jpeg", "image/png"))
+def test_delivery_image_response_streams_through_product_bridge(monkeypatch, tmp_path, media_type):
+    payload = b"synthetic-verified-image"
+
+    class Response:
+        status = 200
+
+        def getheader(self, name):
+            return {"Content-Length": str(len(payload)), "Content-Type": media_type}.get(name)
+
+        def read(self, _limit=None):
+            return payload
+
+    class Connection:
+        def __init__(self, *_args, **_kwargs): pass
+        def request(self, *_args, **_kwargs): pass
+        def getresponse(self): return Response()
+        def close(self): pass
+
+    monkeypatch.setattr(http.client, "HTTPConnection", Connection)
+    bridge = ProductBridge(
+        frontend_root=frontend_build(tmp_path), public_origin="http://127.0.0.1:49152",
+        upstream_address=("127.0.0.1", 49153), token=TOKEN, max_body_bytes=1024,
+        max_document_body_bytes=1024, request_timeout_seconds=5,
+    )
+    workspace = "11111111-1111-4111-8111-111111111111"
+    content_id = "22222222-2222-4222-8222-222222222222"
+    response = bridge.handle(
+        "GET", f"/app-api/v1/workspaces/{workspace}/delivery-snapshot/artifacts/{content_id}",
+        {"Host": "127.0.0.1:49152"}, b"",
+    )
+    assert response.status == 200
+    assert response.headers["Content-Type"] == media_type
 
 
 @pytest.mark.parametrize("value", (0, -1, 31, True, float("inf"), float("nan")))

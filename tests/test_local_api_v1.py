@@ -288,6 +288,26 @@ def test_inspection_photo_upload_preserves_original_bytes_through_private_servic
     assert decoded(response)["checksum_sha256"] == "e" * 64
 
 
+def test_delivery_template_upload_is_private_typed_and_preserves_exact_bytes():
+    content = b"PK\x03\x04synthetic-docm"
+    metadata = PrivateContentMetadata(
+        workspace_id=WORKSPACE_ID, content_id=PrivateContentId(UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")),
+        original_filename="template.docm", byte_size=len(content), checksum_sha256="f" * 64,
+        media_type="application/vnd.ms-word.document.macroEnabled.12", imported_at=CREATED_AT,
+        origin=PrivateContentOrigin.USER_IMPORT,
+    )
+    stored = RecordingService(metadata)
+    api = LocalApi(services(store_delivery_template=stored), token=TOKEN)
+    response = api.handle("POST", f"/v1/workspaces/{WORKSPACE_UUID}/delivery-templates", {
+        "Host": "127.0.0.1", "X-Local-API-Token": TOKEN,
+        "Content-Type": "application/vnd.ms-word.document.macroEnabled.12",
+        "Content-Length": str(len(content)), "X-Document-Filename": "template.docm",
+    }, content)
+    assert response.status == 201
+    assert stored.calls[0][1]["content"] == content
+    assert stored.calls[0][1]["origin"] is PrivateContentOrigin.USER_IMPORT
+
+
 def test_pericial_planning_route_validates_and_delegates_canonical_snapshot():
     payload = pericial_planning_payload()
     saved = RecordingService(revision(payload=payload))

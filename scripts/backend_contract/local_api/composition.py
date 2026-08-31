@@ -53,6 +53,19 @@ from ..application.report_foundation import (
     ReviewReportSnapshot,
     AmendReportDraft,
 )
+from ..application.delivery_foundation import (
+    DeliverDeliverySnapshot,
+    AttachDeliveryPackageArtifact,
+    FinalizeDeliverySnapshot,
+    GetDeliverySnapshot,
+    GetDeliveryHistory,
+    ReissueDeliverySnapshot,
+    RenderDeliveryPackage,
+    ReviewDeliverySnapshot,
+    SaveDeliverySnapshot,
+    StartDeliverySnapshot,
+    VerifyDeliveryPackage,
+)
 
 
 class LocalApiStartupError(RuntimeError):
@@ -162,6 +175,8 @@ def build_local_api(
             raise
     import_case_document = None
     import_inspection_photo = None
+    generic_store = None
+    get_private_content = None
     list_case_documents = None
     read_case_document = None
     get_process_metadata_review = None
@@ -175,6 +190,7 @@ def build_local_api(
             local_ids,
             server_config.max_document_body_bytes,
         )
+        get_private_content = GetPrivateContent(store.workspaces, private_store)
         import_case_document = ImportCaseDocumentWithMetadata(
             ImportCaseDocument(generic_store),
             open_case_document,
@@ -204,6 +220,7 @@ def build_local_api(
     )
     append_artifact_revision = AppendArtifactRevision(store.revisions, local_clock, local_ids)
     get_latest_artifact = GetLatestArtifact(store.revisions)
+    list_artifact_revisions = ListArtifactRevisions(store.revisions)
     get_case_analysis = GetCaseAnalysis(get_latest_artifact, list_case_documents)
     save_pericial_planning = SavePericialPlanning(
         store.revisions,
@@ -257,6 +274,39 @@ def build_local_api(
         local_clock,
         local_ids,
     )
+    get_delivery_snapshot = None
+    get_delivery_history = None
+    save_delivery_snapshot = None
+    start_delivery_snapshot = None
+    review_delivery_snapshot = None
+    render_delivery_package = None
+    attach_delivery_artifact = None
+    verify_delivery_package = None
+    finalize_delivery_snapshot = None
+    deliver_delivery_snapshot = None
+    reissue_delivery_snapshot = None
+    if private_store is not None and generic_store is not None and get_private_content is not None:
+        authorities = (get_case_analysis, get_pericial_planning, get_inspection_session, get_technical_snapshot, get_report_snapshot)
+        get_delivery_snapshot = GetDeliverySnapshot(get_latest_artifact, *authorities)
+        get_delivery_history = GetDeliveryHistory(list_artifact_revisions)
+        save_delivery_snapshot = SaveDeliverySnapshot(
+            store.revisions, get_latest_artifact, *authorities,
+            private_store.authority_guard, local_clock, local_ids,
+        )
+        start_delivery_snapshot = StartDeliverySnapshot(*authorities, get_private_content, save_delivery_snapshot, local_ids)
+        review_delivery_snapshot = ReviewDeliverySnapshot(get_delivery_snapshot, save_delivery_snapshot, local_clock, local_ids)
+        render_delivery_package = RenderDeliveryPackage(
+            get_delivery_snapshot, get_report_snapshot, get_private_content, generic_store,
+            save_delivery_snapshot, local_ids,
+        )
+        attach_delivery_artifact = AttachDeliveryPackageArtifact(get_delivery_snapshot, get_private_content, save_delivery_snapshot, local_ids)
+        verify_delivery_package = VerifyDeliveryPackage(get_delivery_snapshot, get_private_content)
+        finalize_delivery_snapshot = FinalizeDeliverySnapshot(verify_delivery_package, review_delivery_snapshot)
+        deliver_delivery_snapshot = DeliverDeliverySnapshot(verify_delivery_package, review_delivery_snapshot)
+        reissue_delivery_snapshot = ReissueDeliverySnapshot(
+            get_delivery_snapshot, save_delivery_snapshot, *authorities,
+            get_private_content, local_ids,
+        )
     services = LocalApiServices(
         create_workspace=CreateWorkspace(store.workspaces, local_clock, local_ids),
         get_workspace=GetWorkspace(store.workspaces),
@@ -264,7 +314,7 @@ def build_local_api(
         append_artifact_revision=append_artifact_revision,
         get_latest_artifact=get_latest_artifact,
         get_artifact_revision=GetArtifactRevision(store.revisions),
-        list_artifact_revisions=ListArtifactRevisions(store.revisions),
+        list_artifact_revisions=list_artifact_revisions,
         get_process_case=get_process_case,
         save_process_case=(
             ConfirmProcessMetadata(
@@ -318,6 +368,19 @@ def build_local_api(
         ),
         review_report_snapshot=ReviewReportSnapshot(get_report_snapshot, save_report_snapshot, local_clock, local_ids),
         amend_report_draft=AmendReportDraft(get_report_snapshot, save_report_snapshot, local_ids),
+        store_delivery_template=generic_store,
+        get_delivery_artifact=get_private_content,
+        get_delivery_snapshot=get_delivery_snapshot,
+        get_delivery_history=get_delivery_history,
+        start_delivery_snapshot=start_delivery_snapshot,
+        review_delivery_snapshot=review_delivery_snapshot,
+        render_delivery_package=render_delivery_package,
+        attach_delivery_artifact=attach_delivery_artifact,
+        store_delivery_supporting_file=generic_store,
+        verify_delivery_package=verify_delivery_package,
+        finalize_delivery_snapshot=finalize_delivery_snapshot,
+        deliver_delivery_snapshot=deliver_delivery_snapshot,
+        reissue_delivery_snapshot=reissue_delivery_snapshot,
         get_process_metadata_review=get_process_metadata_review,
         confirm_process_metadata_source_span=confirm_process_metadata_source_span,
         import_case_document=import_case_document,
