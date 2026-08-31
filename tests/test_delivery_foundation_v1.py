@@ -332,5 +332,8 @@ def test_pdf_renderer_wraps_long_lines_and_rejects_lossy_unicode() -> None:
     wrapped = render_pdf_candidate(replace(report, claims=(replace(report.claims[0], text=long_text), *report.claims[1:])))
     assert b"MARCADOR-FINAL" in wrapped
     assert wrapped.count(b") Tj T*") > len(report.claims)
+    widest = render_pdf_candidate(replace(report, claims=(replace(report.claims[0], text="W" * 176), *report.claims[1:])))
+    assert b"W" * 56 in widest
+    assert b"W" * 57 not in widest
     with pytest.raises(ValueError, match="unsupported"):
         render_pdf_candidate(replace(report, claims=(replace(report.claims[0], text="Hipotese tecnica \u0394"), *report.claims[1:])))

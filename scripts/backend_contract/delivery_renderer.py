@@ -84,7 +84,8 @@ def render_pdf_candidate(report: ReportSnapshot) -> bytes:
             source_line.encode("cp1252")
         except UnicodeEncodeError as exc:
             raise ValueError("canonical report contains characters unsupported by the PDF renderer") from exc
-        lines.extend(textwrap.wrap(source_line, width=88, replace_whitespace=False, drop_whitespace=False, break_on_hyphens=False) or [""])
+        # 56 glyphs fits the 503pt text box even for Helvetica's widest WinAnsi glyph (W, 944/1000em) at 9pt.
+        lines.extend(textwrap.wrap(source_line, width=56, replace_whitespace=False, drop_whitespace=False, break_on_hyphens=False) or [""])
     pages = [lines[index:index + 44] for index in range(0, len(lines), 44)] or [["EMPTY REPORT"]]
     objects: list[bytes] = []
 
