@@ -37,7 +37,6 @@ from ..application.services import (
 )
 from ..infrastructure.private_filesystem import LocalPrivateContentStore, _validate_trusted_local_device
 from ..infrastructure.pdf_text import LocalPdfTextExtractor
-from ..infrastructure.office_pdf import LocalOfficePdfConverter
 from ..infrastructure.rapid_ocr import RapidOcrLatinEngine
 from ..infrastructure.sqlite import SQLiteApplicationStore
 from ..infrastructure.field_mobile import DeviceOfflineVaultRegistry
@@ -403,7 +402,6 @@ def build_local_api(
             generic_store,
             save_delivery_snapshot,
             local_ids,
-            LocalOfficePdfConverter(),
         )
         attach_delivery_artifact = AttachDeliveryPackageArtifact(get_delivery_snapshot, get_private_content, save_delivery_snapshot, local_ids)
         verify_delivery_package = VerifyDeliveryPackage(get_delivery_snapshot, get_private_content)

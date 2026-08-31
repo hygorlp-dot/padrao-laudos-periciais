@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -36,6 +36,7 @@ from scripts.backend_contract.delivery_renderer import (
 )
 from scripts.backend_contract.report_template import template_binding_manifest_from_mapping
 from scripts.backend_contract.application.delivery_foundation import (
+    RenderDeliveryPackage,
     ReviewDeliverySnapshot,
     build_delivery_binding,
     mark_delivery_authority_unavailable,
@@ -50,6 +51,14 @@ from scripts.backend_contract.vistoria import inspection_session_from_mapping
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64
+
+
+def test_production_delivery_render_has_no_local_process_or_pdf_authority() -> None:
+    root = Path(__file__).parents[1]
+    assert not (root / "scripts/backend_contract/infrastructure/office_pdf.py").exists()
+    assert "pdf_converter" not in {item.name for item in fields(RenderDeliveryPackage)}
+    composition = (root / "scripts/backend_contract/local_api/composition.py").read_text(encoding="utf-8")
+    assert "LocalOfficePdfConverter" not in composition
 
 
 def _parseable_text_pdf(text: str) -> bytes:
@@ -164,6 +173,15 @@ def test_review_cannot_approve_metadata_without_rendered_bytes() -> None:
     ready = decision(DeliveryAction.MARK_READY_FOR_REVIEW, index=1, previous=None)
     with pytest.raises(ValueError, match="rendered main artifact"):
         snapshot(decisions=(ready,), state=DeliveryState.READY_FOR_REVIEW)
+
+
+def test_reviewable_delivery_rejects_pdf_as_the_professional_main_artifact() -> None:
+    ready = decision(DeliveryAction.MARK_READY_FOR_REVIEW, index=1, previous=None)
+    pdf = replace(
+        artifact(), format=DeliveryFormat.PDF, filename="laudo-r1.pdf", media_type="application/pdf",
+    )
+    with pytest.raises(ValueError, match="Word main artifact"):
+        snapshot(decisions=(ready,), artifacts=(pdf,), state=DeliveryState.READY_FOR_REVIEW)
 
 
 def test_stale_overrides_final_state_and_cannot_be_silently_cleared() -> None:

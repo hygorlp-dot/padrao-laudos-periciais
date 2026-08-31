@@ -274,8 +274,11 @@ class DeliverySnapshot:
         if self.state is not expected_state:
             raise ValueError("delivery state diverges from explicit decisions")
         if self.state in {DeliveryState.READY_FOR_REVIEW, DeliveryState.APPROVED, DeliveryState.FINALIZED, DeliveryState.DELIVERED, DeliveryState.SUPERSEDED}:
-            if not self.artifacts or not any(item.role is DeliveryRole.MAIN_REPORT for item in self.artifacts):
+            main_artifacts = tuple(item for item in self.artifacts if item.role is DeliveryRole.MAIN_REPORT)
+            if not main_artifacts:
                 raise ValueError("reviewable delivery requires a rendered main artifact")
+            if len(main_artifacts) != 1 or main_artifacts[0].format not in {DeliveryFormat.DOCX, DeliveryFormat.DOCM}:
+                raise ValueError("reviewable delivery requires exactly one Word main artifact")
 
 
 T = TypeVar("T")

@@ -8,7 +8,7 @@ const snapshot = {
   schema_version: "1.0.0", delivery_id: "DELIVERY-001", revision: 6, workspace_id: ID,
   binding: { workspace_id: ID, professional_id: "EXPERT-1", report_snapshot_id: "REPORT-1", report_revision: 5, report_digest: "a".repeat(64), report_approval_id: "APPROVAL-1" },
   template_id: "TEMPLATE-1", template_content_id: "22222222-2222-4222-8222-222222222222", template_format: "DOCM", template_revision: 1, template_digest: "b".repeat(64), rendering_version: "delivery-renderer/1.2.0",
-  artifacts: [{ artifact_id: "ART-1", role: "MAIN_REPORT", format: "PDF", filename: "laudo.pdf", content_id: "33333333-3333-4333-8333-333333333333", media_type: "application/pdf", byte_size: 321, checksum_sha256: "c".repeat(64) }],
+  artifacts: [{ artifact_id: "ART-1", role: "MAIN_REPORT", format: "DOCM", filename: "laudo.docm", content_id: "33333333-3333-4333-8333-333333333333", media_type: "application/vnd.ms-word.document.macroEnabled.12", byte_size: 321, checksum_sha256: "c".repeat(64) }],
   package: { manifest_version: "1.0.0", artifact_ids: ["ART-1"] }, decisions: [], state: "DELIVERED", stale_reasons: [], stale_origin_state: null, supersedes_delivery_id: null,
 };
 const response = (status: number, value: object) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
@@ -24,7 +24,7 @@ describe("delivery foundation workbench", () => {
     expect(screen.getByText("DELIVERED")).toBeInTheDocument();
     expect(screen.getByText(/REPORT-1 · revisão 5/)).toBeInTheDocument();
     expect(screen.getByText("c".repeat(64))).toBeInTheDocument();
-    expect(screen.getAllByRole("link", { name: "Baixar laudo.pdf" })[0]).toHaveAttribute("href", expect.stringContaining("/delivery-snapshot/artifacts/"));
+    expect(screen.getAllByRole("link", { name: "Baixar laudo.docm" })[0]).toHaveAttribute("href", expect.stringContaining("/delivery-snapshot/artifacts/"));
     expect(screen.queryByRole("button", { name: /protocolar|pje|enviar ao tribunal/i })).not.toBeInTheDocument();
   });
 
@@ -43,5 +43,15 @@ describe("delivery foundation workbench", () => {
     expect(await screen.findByRole("heading", { name: "Iniciar entrega" })).toBeInTheDocument();
     expect(screen.getByLabelText("Template Word privado")).toBeRequired();
     expect(screen.getByRole("button", { name: "Preservar template e iniciar" })).toBeDisabled();
+  });
+
+  test("offers only the final Word artifact and never promises local final PDF", async () => {
+    const draft = { ...snapshot, state: "DRAFT", artifacts: [] };
+    const item = { revision: 6, updated_at: "2026-08-31T12:00:00Z", snapshot: draft };
+    vi.stubGlobal("fetch", vi.fn((input) => Promise.resolve(String(input).endsWith("/history") ? response(200, { items: [item] }) : response(200, item))));
+    render(<DeliveryFoundationView workspaceId={ID} />);
+    expect(await screen.findByRole("button", { name: "Renderizar Word final" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /pdf/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/PDF final local indisponível/i)).toBeInTheDocument();
   });
 });

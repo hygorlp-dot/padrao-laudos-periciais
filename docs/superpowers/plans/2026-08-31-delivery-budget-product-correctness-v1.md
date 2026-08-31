@@ -1,5 +1,11 @@
 # Delivery and Budget Product Correctness V1 Implementation Plan
 
+> Scope amendment (human decision): local final PDF is deferred by the frozen
+> protected trust boundary. Production delivery renders the authoritative bound
+> DOCX/DOCM only; the diagnostic PDF and future-converter fidelity oracles can
+> never satisfy professional finalization. Issue #169 records the deferred
+> process capability and is closed as not planned.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make final PDF delivery faithful to the bound Word artifact and expose the complete authorized Stage 9 financial workflow with truthful court-reference semantics and a read-only CLOSED state.
