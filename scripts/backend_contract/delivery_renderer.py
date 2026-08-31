@@ -6,6 +6,7 @@ from hashlib import sha256
 from io import BytesIO
 import re
 import json
+import textwrap
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
@@ -23,7 +24,7 @@ from .report_template import (
 _DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _DOCM_MEDIA = "application/vnd.ms-word.document.macroEnabled.12"
 _PDF_MEDIA = "application/pdf"
-DELIVERY_RENDERING_VERSION = "delivery-renderer/1.1.0"
+DELIVERY_RENDERING_VERSION = "delivery-renderer/1.2.0"
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _REL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 _CT = "{http://schemas.openxmlformats.org/package/2006/content-types}"
@@ -77,7 +78,13 @@ def _canonical_report_lines(report: ReportSnapshot) -> tuple[str, ...]:
 
 def render_pdf_candidate(report: ReportSnapshot) -> bytes:
     """Render the canonical report directly into a deterministic local PDF."""
-    lines = _canonical_report_lines(report)
+    lines = []
+    for source_line in _canonical_report_lines(report):
+        try:
+            source_line.encode("cp1252")
+        except UnicodeEncodeError as exc:
+            raise ValueError("canonical report contains characters unsupported by the PDF renderer") from exc
+        lines.extend(textwrap.wrap(source_line, width=88, replace_whitespace=False, drop_whitespace=False, break_on_hyphens=False) or [""])
     pages = [lines[index:index + 44] for index in range(0, len(lines), 44)] or [["EMPTY REPORT"]]
     objects: list[bytes] = []
 
@@ -90,7 +97,7 @@ def render_pdf_candidate(report: ReportSnapshot) -> bytes:
     for page in pages:
         commands = [b"BT /F1 9 Tf 46 795 Td 11 TL"]
         for line in page:
-            encoded = line.encode("cp1252", errors="replace").replace(b"\\", b"\\\\").replace(b"(", b"\\(").replace(b")", b"\\)")
+            encoded = line.encode("cp1252").replace(b"\\", b"\\\\").replace(b"(", b"\\(").replace(b")", b"\\)")
             commands.append(b"(" + encoded + b") Tj T*")
         commands.append(b"ET")
         stream = b"\n".join(commands)
