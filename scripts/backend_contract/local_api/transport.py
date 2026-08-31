@@ -71,6 +71,9 @@ from ..application.delivery_foundation import (
     delivery_snapshot_to_validated_mapping,
     validated_template_binding_manifest_from_mapping,
 )
+from ..application.budget_foundation import (
+    budget_snapshot_to_validated_mapping,
+)
 
 _MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
 
@@ -135,6 +138,15 @@ class LocalApiServices:
     finalize_delivery_snapshot: object | None = None
     deliver_delivery_snapshot: object | None = None
     reissue_delivery_snapshot: object | None = None
+    save_budget_snapshot: object | None = None
+    get_budget_snapshot: object | None = None
+    get_budget_history: object | None = None
+    start_budget_snapshot: object | None = None
+    add_fee_proposal: object | None = None
+    record_court_approval: object | None = None
+    record_budget_expense: object | None = None
+    record_received_payment: object | None = None
+    close_budget_snapshot: object | None = None
     get_process_metadata_review: object | None = None
     confirm_process_metadata_source_span: object | None = None
     import_case_document: object | None = None
@@ -487,7 +499,7 @@ class LocalApi:
                 )
             raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
-            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "technical-snapshot", "expert-profile", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot"}
+            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "technical-snapshot", "expert-profile", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
             if (normalized_method == "POST" or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
                 return _error(
                     403,
@@ -583,6 +595,48 @@ class LocalApi:
                     raise ValueError("Report draft amendment request is invalid")
                 record, snapshot = self._services.amend_report_draft.execute(workspace_id, **dto)
                 return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_validated_mapping(snapshot)})
+
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "budget-snapshot":
+                workspace_id = self._workspace_id(raw_segments[2])
+                if normalized_method == "GET":
+                    if self._services.get_budget_snapshot is None:
+                        return _error(503, "BUDGET_SNAPSHOT_UNAVAILABLE")
+                    record, snapshot = self._services.get_budget_snapshot.execute(workspace_id)
+                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": budget_snapshot_to_validated_mapping(snapshot)})
+                if normalized_method == "POST":
+                    if self._services.start_budget_snapshot is None:
+                        return _error(503, "BUDGET_SNAPSHOT_UNAVAILABLE")
+                    dto = self._request_dto(request_headers, body)
+                    if set(dto) != {"process_id", "appointment_id"}:
+                        raise ValueError("Budget Snapshot start request is invalid")
+                    if dto["process_id"] is not None or dto["appointment_id"] is not None:
+                        raise ValueError("Budget Snapshot links require a workspace authority resolver")
+                    record, snapshot = self._services.start_budget_snapshot.execute(workspace_id, **dto)
+                    return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": budget_snapshot_to_validated_mapping(snapshot)})
+                return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "budget-snapshot":
+                workspace_id = self._workspace_id(raw_segments[2])
+                action = raw_segments[4]
+                if action == "history":
+                    if normalized_method != "GET": return _error(405, "METHOD_NOT_ALLOWED")
+                    if self._services.get_budget_history is None: return _error(503, "BUDGET_SNAPSHOT_UNAVAILABLE")
+                    items = [{"revision": record.revision, "updated_at": record.created_at, "snapshot": budget_snapshot_to_validated_mapping(snapshot)} for record, snapshot in self._services.get_budget_history.execute(workspace_id)]
+                    return _json_response(200, {"items": items})
+                if normalized_method != "POST": return _error(405, "METHOD_NOT_ALLOWED")
+                dto = self._request_dto(request_headers, body)
+                routes = {
+                    "proposals": (self._services.add_fee_proposal, {"expected_revision", "amount", "currency", "rationale"}),
+                    "court-approvals": (self._services.record_court_approval, {"expected_revision", "court_decision_id", "amount", "currency", "decided_on"}),
+                    "expenses": (self._services.record_budget_expense, {"expected_revision", "category", "amount", "currency", "incurred_on", "description"}),
+                    "payments": (self._services.record_received_payment, {"expected_revision", "amount", "currency", "received_on", "reference"}),
+                    "close": (self._services.close_budget_snapshot, {"expected_revision"}),
+                }
+                if action not in routes: return _error(404, "NOT_FOUND")
+                service, expected_fields = routes[action]
+                if service is None or set(dto) != expected_fields: raise ValueError("Budget command request is invalid")
+                record, snapshot = service.execute(workspace_id, **dto)
+                return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": budget_snapshot_to_validated_mapping(snapshot)})
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "delivery-templates":
                 if normalized_method != "POST":

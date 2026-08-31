@@ -486,6 +486,15 @@
                          "finalidade":  "Entrega sintética vinculada a snapshots, manifesto e revisão profissional Stage 8",
                          "expected":  "VALID",
                          "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/budget-snapshot-v1.json",
+                         "dominio":  "BUDGET_SNAPSHOT_V1",
+                         "schema":  "budget-snapshot-v1.schema.json",
+                         "consumer":  "tests/test_budget_foundation_v1.py::test_canonical_synthetic_fixture_matches_schema_and_domain",
+                         "finalidade":  "Ledger financeiro sintético com propostas, decisão judicial, despesas e recebimentos Stage 9",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      }
                  ]
 }

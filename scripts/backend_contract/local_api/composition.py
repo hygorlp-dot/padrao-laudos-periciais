@@ -66,6 +66,17 @@ from ..application.delivery_foundation import (
     StartDeliverySnapshot,
     VerifyDeliveryPackage,
 )
+from ..application.budget_foundation import (
+    AddFeeProposal,
+    GetBudgetHistory,
+    GetBudgetSnapshot,
+    RecordCourtApproval,
+    RecordExpense,
+    RecordPayment,
+    CloseBudgetSnapshot,
+    SaveBudgetSnapshot,
+    StartBudgetSnapshot,
+)
 
 
 class LocalApiStartupError(RuntimeError):
@@ -307,6 +318,8 @@ def build_local_api(
             get_delivery_snapshot, save_delivery_snapshot, *authorities,
             get_private_content, local_ids,
         )
+    get_budget_snapshot = GetBudgetSnapshot(get_latest_artifact)
+    save_budget_snapshot = SaveBudgetSnapshot(store.revisions, get_latest_artifact, local_clock, local_ids)
     services = LocalApiServices(
         create_workspace=CreateWorkspace(store.workspaces, local_clock, local_ids),
         get_workspace=GetWorkspace(store.workspaces),
@@ -381,6 +394,15 @@ def build_local_api(
         finalize_delivery_snapshot=finalize_delivery_snapshot,
         deliver_delivery_snapshot=deliver_delivery_snapshot,
         reissue_delivery_snapshot=reissue_delivery_snapshot,
+        save_budget_snapshot=save_budget_snapshot,
+        get_budget_snapshot=get_budget_snapshot,
+        get_budget_history=GetBudgetHistory(list_artifact_revisions),
+        start_budget_snapshot=StartBudgetSnapshot(save_budget_snapshot, local_ids),
+        add_fee_proposal=AddFeeProposal(get_budget_snapshot, save_budget_snapshot, local_clock, local_ids),
+        record_court_approval=RecordCourtApproval(get_budget_snapshot, save_budget_snapshot, local_ids),
+        record_budget_expense=RecordExpense(get_budget_snapshot, save_budget_snapshot, local_ids),
+        record_received_payment=RecordPayment(get_budget_snapshot, save_budget_snapshot, local_ids),
+        close_budget_snapshot=CloseBudgetSnapshot(get_budget_snapshot, save_budget_snapshot),
         get_process_metadata_review=get_process_metadata_review,
         confirm_process_metadata_source_span=confirm_process_metadata_source_span,
         import_case_document=import_case_document,

@@ -14,8 +14,9 @@ import { InspectionSessionView } from "./InspectionSessionView";
 import { TechnicalFindingsView } from "./TechnicalFindingsView";
 import { ReportFoundationView } from "./ReportFoundationView";
 import { DeliveryFoundationView } from "./DeliveryFoundationView";
+import { BudgetFoundationView } from "./BudgetFoundationView";
 
-const IMPLEMENTED_STAGE_PATHS = ["/processo", "/materiais", "/analise", "/planejamento", "/vistoria", "/evidencias", "/laudo", "/exportar"];
+const IMPLEMENTED_STAGE_PATHS = ["/processo", "/materiais", "/analise", "/planejamento", "/vistoria", "/evidencias", "/laudo", "/exportar", "/orcamento"];
 
 type WorkspaceViewProps = {
   currentPath: string;
@@ -176,6 +177,9 @@ export function WorkspaceView({ currentPath, workspaceId, route }: WorkspaceView
         ) : null}
         {state.kind === "ready" && route.path === "/exportar" ? (
           <DeliveryFoundationView workspaceId={workspaceId} />
+        ) : null}
+        {state.kind === "ready" && route.path === "/orcamento" ? (
+          <BudgetFoundationView workspaceId={workspaceId} />
         ) : null}
         {state.kind === "ready" && route.kind === "stage" && !IMPLEMENTED_STAGE_PATHS.includes(route.path) ? (
           <StatusState kind="ready" stage={route.label} />
