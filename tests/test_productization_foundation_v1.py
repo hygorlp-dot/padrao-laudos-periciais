@@ -84,6 +84,14 @@ def test_unknown_or_expired_backup_version_fails_closed(version: int) -> None:
         migrate_backup_mapping(backup_mapping(version))
 
 
+def test_product_release_compatibility_window_is_exact_not_open_ended() -> None:
+    payload = backup_mapping()
+    payload["product_release"] = "0.99.0"
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    with pytest.raises(RepositoryIntegrityError, match="compatibility"):
+        VerifyWorkspaceBackup().execute(raw)
+
+
 def test_backup_contract_rejects_unknown_fields() -> None:
     payload = backup_mapping()
     payload["reinterpret_history"] = True

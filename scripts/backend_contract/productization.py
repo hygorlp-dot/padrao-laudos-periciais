@@ -38,6 +38,7 @@ import base64
 PRODUCT_RELEASE_VERSION = "0.11.0"
 STORAGE_FORMAT_VERSION = 1
 SUPPORTED_BACKUP_VERSIONS = frozenset({0, 1})
+SUPPORTED_PRODUCT_RELEASES = frozenset({"0.10.0", "0.11.0"})
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -238,7 +239,7 @@ class VerifyWorkspaceBackup:
         migrated = migrate_backup_mapping(raw)
         value = workspace_backup_from_mapping(migrated)
         mapping = workspace_backup_to_mapping(value)
-        if mapping["product_release"].split(".", 1)[0] != PRODUCT_RELEASE_VERSION.split(".", 1)[0] or mapping["storage_schema_version"] != 1:
+        if mapping["product_release"] not in SUPPORTED_PRODUCT_RELEASES or mapping["storage_schema_version"] != 1:
             raise RepositoryIntegrityError("backup compatibility window is unsupported")
         expected_members = {"artifact_revisions": _hash(mapping["artifact_revisions"]), "private_contents": _hash(mapping["private_contents"])}
         if mapping["member_hashes"] != expected_members or mapping["manifest_sha256"] != _manifest_hash(mapping):
