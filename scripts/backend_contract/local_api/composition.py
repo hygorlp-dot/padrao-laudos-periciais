@@ -51,6 +51,7 @@ from ..application.report_foundation import (
     SaveReportSnapshot,
     StartReportSnapshot,
     ReviewReportSnapshot,
+    AmendReportDraft,
 )
 
 
@@ -316,6 +317,7 @@ def build_local_api(
             local_ids,
         ),
         review_report_snapshot=ReviewReportSnapshot(get_report_snapshot, save_report_snapshot, local_clock, local_ids),
+        amend_report_draft=AmendReportDraft(get_report_snapshot, save_report_snapshot, local_ids),
         get_process_metadata_review=get_process_metadata_review,
         confirm_process_metadata_source_span=confirm_process_metadata_source_span,
         import_case_document=import_case_document,

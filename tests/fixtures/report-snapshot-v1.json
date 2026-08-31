@@ -44,10 +44,10 @@
     "overrides": []
   },
   "context_matrix": [
-    {"context_id":"CONTEXT-001","field":"PROCESS_NUMBER","required":true,"status":"PRESENT","source_id":"DOCUMENT-001","note":"Identidade sintética documentada."},
-    {"context_id":"CONTEXT-002","field":"COURT","required":true,"status":"PRESENT","source_id":"DOCUMENT-001","note":"Órgão sintético documentado."},
-    {"context_id":"CONTEXT-003","field":"PARTIES","required":true,"status":"PRESENT","source_id":"JUDICIAL-CONTEXT-001","note":"Participantes sintéticos canônicos."},
-    {"context_id":"CONTEXT-004","field":"ADDRESSES","required":true,"status":"PRESENT","source_id":"DOCUMENT-001","note":"Endereço sintético documentado."},
+    {"context_id":"CONTEXT-001","field":"PROCESS_NUMBER","required":true,"status":"PRESENT","source_id":"DOC-001","note":"Identidade sintética documentada."},
+    {"context_id":"CONTEXT-002","field":"COURT","required":true,"status":"PRESENT","source_id":"DOC-001","note":"Órgão sintético documentado."},
+    {"context_id":"CONTEXT-003","field":"PARTIES","required":true,"status":"PRESENT","source_id":"PART-CLAIMANT","note":"Participantes sintéticos canônicos."},
+    {"context_id":"CONTEXT-004","field":"ADDRESSES","required":true,"status":"PRESENT","source_id":"DOC-001","note":"Endereço sintético documentado."},
     {"context_id":"CONTEXT-005","field":"CLAIM_AND_GROUNDS","required":true,"status":"PRESENT","source_id":"CLAIM-001","note":"Alegação sintética, sem promoção a fato."},
     {"context_id":"CONTEXT-006","field":"REQUESTS","required":true,"status":"PRESENT","source_id":"QUESTION-001","note":"Quesito sintético preservado."}
   ],

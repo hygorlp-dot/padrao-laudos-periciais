@@ -94,6 +94,8 @@ def test_product_bridge_allowlists_only_the_explicit_report_review_command():
     path = f"/app-api/v1/workspaces/{workspace}/report-snapshot/reviews"
     assert _proxy_target(path, "POST") == f"/v1/workspaces/{workspace}/report-snapshot/reviews"
     assert _proxy_target(path, "PUT") is None
+    amendment = f"/app-api/v1/workspaces/{workspace}/report-snapshot/draft-amendments"
+    assert _proxy_target(amendment, "POST") == f"/v1/workspaces/{workspace}/report-snapshot/draft-amendments"
 
 
 @pytest.mark.parametrize("value", (0, -1, 31, True, float("inf"), float("nan")))

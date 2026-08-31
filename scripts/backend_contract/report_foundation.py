@@ -88,6 +88,14 @@ def _all_text(instance: object, names: tuple[str, ...]) -> None:
         raise ValueError(f"{type(instance).__name__} is invalid")
 
 
+def report_claim_for_source(*, claim_id: str, provenance_id: str, section_id: str, text: str, source_kind: str, source_id: str, source_revision: int) -> "ReportClaim":
+    try:
+        authority = _SOURCE_AUTHORITY[source_kind]
+    except KeyError as exc:
+        raise ValueError("report source kind is invalid") from exc
+    return ReportClaim(claim_id, section_id, text, authority, (ReportProvenance(provenance_id, source_kind, source_id, source_revision),))
+
+
 @dataclass(frozen=True, slots=True)
 class ReportSourceSnapshot:
     workspace_id: str

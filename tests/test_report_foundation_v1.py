@@ -25,6 +25,7 @@ from scripts.backend_contract.report_foundation import (
     ReportSnapshot,
     ReportSourceSnapshot,
     ReportState,
+    ReviewAction,
     report_snapshot_from_mapping,
     report_snapshot_to_mapping,
     expert_profile_from_mapping,
@@ -37,6 +38,8 @@ from scripts.backend_contract.application.report_foundation import (
     SaveReportSnapshot,
     SaveExpertProfile,
     StartReportSnapshot,
+    AmendReportDraft,
+    ReviewReportSnapshot,
     report_upstream_digest,
 )
 from scripts.backend_contract.case_analysis import case_analysis_from_mapping
@@ -101,6 +104,7 @@ def test_openapi_publishes_profile_and_report_as_canonical_private_resources():
     assert set(contract["paths"]["/v1/workspaces/{workspace_id}/expert-profile"]) == {"get", "put"}
     assert set(contract["paths"]["/v1/workspaces/{workspace_id}/report-snapshot"]) == {"get", "post", "put"}
     assert set(contract["paths"]["/v1/workspaces/{workspace_id}/report-snapshot/reviews"]) == {"post"}
+    assert set(contract["paths"]["/v1/workspaces/{workspace_id}/report-snapshot/draft-amendments"]) == {"post"}
     assert contract["components"]["schemas"]["ReportSnapshot"] == {"$ref": "../schemas/report-snapshot-v1.schema.json"}
     assert contract["info"]["x-report-snapshot-semantic-boundary"] == "scripts.backend_contract.report_foundation.report_snapshot_from_mapping"
 
@@ -229,6 +233,20 @@ def test_start_creates_an_empty_draft_bound_to_all_four_authorities():
     assert report_snapshot_from_mapping(report_snapshot_to_mapping(started)) == started
 
 
+def test_empty_draft_can_add_canonical_claim_context_and_answer_commands():
+    snapshot = replace(bound_report(), claims=(), answers=(), review_decisions=(), state=ReportState.DRAFT, context_matrix=tuple(replace(item, status=ContextStatus.MISSING, source_id=None, note="Missing") for item in bound_report().context_matrix), coverage=ReportCoverage(14, 0, 0, 0, 0, 8, 0, 6, 0, False, ("Draft",)))
+    current = {"snapshot": snapshot, "revision": 4}
+    get = SimpleNamespace(execute=lambda _workspace: (SimpleNamespace(revision=current["revision"]), current["snapshot"]))
+    save = SimpleNamespace(execute=lambda _workspace, amended, _expected: SimpleNamespace(revision=current.update(snapshot=amended, revision=current["revision"] + 1) or current["revision"]))
+    service = AmendReportDraft(get, save, SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")))
+    _, claimed = service.execute(WorkspaceId.parse(snapshot.workspace_id), expected_revision=4, action="ADD_CLAIM", values={"section_id":"SECTION-001","text":"Documento sintético identificado.","source_kind":"CASE_DOCUMENT","source_id":"DOC-001"})
+    assert claimed.claims[0].authority is AuthorityClass.DOCUMENTED
+    _, contextualized = service.execute(WorkspaceId.parse(snapshot.workspace_id), expected_revision=5, action="UPDATE_CONTEXT", values={"field":"PROCESS_NUMBER","status":"PRESENT","source_id":"DOC-001","note":"Identidade documentada."})
+    assert contextualized.context_matrix[0].status is ContextStatus.PRESENT
+    _, answered = service.execute(WorkspaceId.parse(snapshot.workspace_id), expected_revision=6, action="ADD_ANSWER", values={"section_id":"SECTION-010","question_id":"QUESTION-001","text":"Resposta rastreada.","finding_id":"FINDING-001","evidence_ids":["EVIDENCE-SUPPORT-001","EVIDENCE-CONTRARY-001"],"method_ids":["METHOD-APPLICATION-001"],"decision_id":"DECISION-001","claim_ids":[claimed.claims[0].claim_id]})
+    assert answered.answers[0].question_id == "QUESTION-001"
+
+
 def test_save_rejects_question_chain_that_does_not_match_bound_technical_authority():
     records, case, inspection, technical, profile = upstreams()
     service = SaveReportSnapshot(
@@ -288,6 +306,22 @@ def test_get_marks_upstream_change_stale_and_reopen_cannot_preserve_approval():
     assert reopened.upstream_stale is True
     assert reopened.state is ReportState.DRAFT
     assert reopened.coverage.complete is False
+
+
+def test_superseded_review_lifecycle_is_terminal_and_approval_requires_reviewed_state():
+    snapshot = bound_report()
+    service = ReviewReportSnapshot(
+        SimpleNamespace(execute=lambda _workspace: (SimpleNamespace(revision=4), snapshot)),
+        SimpleNamespace(execute=lambda *_args, **_kwargs: SimpleNamespace(revision=5)),
+        SimpleNamespace(now=lambda: datetime.now(UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
+    )
+    with pytest.raises(ValueError, match="transition"):
+        service.execute(WorkspaceId.parse(snapshot.workspace_id), action="APPROVE", professional_id=snapshot.expert_profile.profile_id, reason="Replay forbidden.", expected_revision=4)
+    superseded = replace(snapshot, state=ReportState.SUPERSEDED, review_decisions=(*snapshot.review_decisions, ReportReviewDecision("REPORT-REVIEW-003", ReviewAction.SUPERSEDE, snapshot.expert_profile.profile_id, "Substituído.", "2026-08-31T11:02:00+00:00", "REPORT-REVIEW-002")), coverage=replace(snapshot.coverage, complete=False))
+    terminal = ReviewReportSnapshot(SimpleNamespace(execute=lambda _workspace: (SimpleNamespace(revision=5), superseded)), service.save_snapshot, service.clock, service.ids)
+    with pytest.raises(ValueError, match="transition"):
+        terminal.execute(WorkspaceId.parse(snapshot.workspace_id), action="APPROVE", professional_id=snapshot.expert_profile.profile_id, reason="Cannot revive.", expected_revision=5)
 
 
 def synthetic_docm(*, duplicate_profile=False, missing_alt=False):

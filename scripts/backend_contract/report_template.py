@@ -128,10 +128,12 @@ def bind_report_template(template_bytes: bytes, report: ReportSnapshot, manifest
         raise ValueError("template manifest is invalid")
     infos, before = _safe_parts(template_bytes)
     try:
-        custom_properties = before["docProps/custom.xml"].decode("utf-8")
-    except (KeyError, UnicodeDecodeError) as exc:
+        custom_root = ElementTree.fromstring(before["docProps/custom.xml"])
+    except (KeyError, ElementTree.ParseError) as exc:
         raise ValueError("template identity is missing") from exc
-    if custom_properties.count(f">{manifest.template_id}<") != 1:
+    identity_properties = [item for item in custom_root.iter() if item.attrib.get("name") == "TEMPLATE_ID"]
+    identity_values = [text.strip() for item in identity_properties for text in item.itertext() if text.strip()]
+    if identity_values != [manifest.template_id]:
         raise ValueError("template identity does not match manifest")
     before_mechanics = _mechanics(before)
     if before_mechanics[0] != _FIELD_NAMES:

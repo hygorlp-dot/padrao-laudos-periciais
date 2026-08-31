@@ -18,6 +18,7 @@ from ..report_foundation import (
     REPORT_SNAPSHOT_ARTIFACT_ID,
     REPORT_SNAPSHOT_ARTIFACT_KIND,
     ReportCoverage,
+    ReportAnswer,
     ReportReviewDecision,
     ReportSection,
     ReportSnapshot,
@@ -28,6 +29,7 @@ from ..report_foundation import (
     report_snapshot_to_mapping,
     expert_profile_from_mapping,
     expert_profile_to_mapping,
+    report_claim_for_source,
 )
 from ..technical_findings import TechnicalSnapshot, technical_snapshot_to_mapping
 from ..vistoria import InspectionSession, inspection_session_to_mapping
@@ -141,6 +143,12 @@ def _validate_claim_provenance(snapshot: ReportSnapshot, case: CaseAnalysisSnaps
             identities, revision = sources[provenance.source_kind]
             if provenance.source_id not in identities or provenance.source_revision != revision:
                 raise ValueError("Report Snapshot claim provenance is not present in bound upstream authority")
+    context_sources = set().union(*(identities for identities, _revision in sources.values()))
+    context_sources.update(item.participant_id for item in case.judicial_context.participants)
+    context_sources.update(item.question_id for item in technical.question_links)
+    for item in snapshot.context_matrix:
+        if item.status is ContextStatus.PRESENT and item.source_id not in context_sources:
+            raise ValueError("Report Snapshot context provenance is not present in bound upstream authority")
 
 
 def _current(workspace_id, services):
@@ -156,6 +164,17 @@ def _current(workspace_id, services):
     return (case_record, case, inspection_record, inspection, technical_record, technical, profile_record, profile, binding)
 
 
+def _draft_coverage(snapshot: ReportSnapshot, *, claims=None, answers=None, context=None) -> ReportCoverage:
+    claims = snapshot.claims if claims is None else claims
+    answers = snapshot.answers if answers is None else answers
+    context = snapshot.context_matrix if context is None else context
+    required = sum(item.required_by_cpc473 for item in snapshot.sections)
+    present = sum(item.required_by_cpc473 and any(claim.section_id == item.section_id for claim in claims) for item in snapshot.sections)
+    context_required = sum(item.required for item in context)
+    context_present = sum(item.required and item.status is ContextStatus.PRESENT for item in context)
+    return ReportCoverage(len(snapshot.sections), len(claims), len(claims), len(answers), len(answers), required, present, context_required, context_present, False, ("Report draft requires complete CPC 319, CPC 473 and professional approval.",))
+
+
 @dataclass(frozen=True, slots=True)
 class SaveReportSnapshot:
     revisions: object
@@ -168,7 +187,7 @@ class SaveReportSnapshot:
     clock: object
     ids: object
 
-    def execute(self, workspace_id, snapshot: ReportSnapshot, expected_revision: int | None):
+    def execute(self, workspace_id, snapshot: ReportSnapshot, expected_revision: int | None, *, allow_review_transition: bool = False):
         if type(snapshot) is not ReportSnapshot or snapshot.workspace_id != str(workspace_id) or snapshot.upstream_stale:
             raise ValueError("Report Snapshot workspace or stale state is invalid")
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
@@ -184,6 +203,8 @@ class SaveReportSnapshot:
             if expected_revision is not None:
                 predecessor_record = self.get_latest_revision.execute(workspace_id, REPORT_SNAPSHOT_ARTIFACT_KIND, REPORT_SNAPSHOT_ARTIFACT_ID)
                 predecessor = validated_report_snapshot_from_mapping(thaw_payload(predecessor_record.payload))
+                if not allow_review_transition and snapshot.review_decisions != predecessor.review_decisions:
+                    raise ValueError("Report Snapshot review decisions require the professional review command")
                 material_fields = ("source_snapshot", "expert_profile", "editorial_profile", "context_matrix", "sections", "claims", "answers")
                 if predecessor.review_decisions and any(getattr(predecessor, name) != getattr(snapshot, name) for name in material_fields):
                     raise ValueError("Report Snapshot material change requires a new draft before professional review")
@@ -229,6 +250,9 @@ class ReviewReportSnapshot:
         record, snapshot = self.get_snapshot.execute(workspace_id)
         if record.revision != expected_revision or snapshot.upstream_stale or professional_id != snapshot.expert_profile.profile_id:
             raise ValueError("Report review authority or revision is invalid")
+        allowed = {ReportState.DRAFT: {ReviewAction.MARK_REVIEWED}, ReportState.REVIEWED: {ReviewAction.APPROVE, ReviewAction.SUPERSEDE}, ReportState.APPROVED: {ReviewAction.SUPERSEDE}, ReportState.SUPERSEDED: set()}
+        if review_action not in allowed[snapshot.state]:
+            raise ValueError("Report review transition is invalid")
         timestamp = self.clock.now()
         if timestamp.tzinfo is None or timestamp.utcoffset() is None or type(reason) is not str or not reason.strip():
             raise ValueError("Report review decision is invalid")
@@ -241,8 +265,51 @@ class ReviewReportSnapshot:
         context_present = snapshot.coverage.context_present_fields
         complete = bool(snapshot.claims) and present == required and context_present == context_required and review_action is ReviewAction.APPROVE
         reviewed = replace(snapshot, review_decisions=(*snapshot.review_decisions, decision), state=state, coverage=replace(snapshot.coverage, complete=complete, reasons=() if complete else snapshot.coverage.reasons))
-        saved = self.save_snapshot.execute(workspace_id, reviewed, expected_revision)
+        saved = self.save_snapshot.execute(workspace_id, reviewed, expected_revision, allow_review_transition=True)
         return saved, reviewed
+
+
+@dataclass(frozen=True, slots=True)
+class AmendReportDraft:
+    get_snapshot: object
+    save_snapshot: object
+    ids: object
+
+    def execute(self, workspace_id, *, expected_revision: int, action: str, values: dict):
+        record, snapshot = self.get_snapshot.execute(workspace_id)
+        if record.revision != expected_revision or snapshot.state is not ReportState.DRAFT or snapshot.review_decisions or snapshot.upstream_stale or type(values) is not dict:
+            raise ValueError("Report draft amendment is invalid")
+        if action == "ADD_CLAIM":
+            if set(values) != {"section_id", "text", "source_kind", "source_id"}:
+                raise ValueError("Report claim amendment is invalid")
+            source_kind = values["source_kind"]
+            revision = snapshot.source_snapshot.technical_snapshot_revision if source_kind in {"TECHNICAL_FINDING", "PROFESSIONAL_DECISION"} else (snapshot.source_snapshot.inspection_session_revision if source_kind in {"FIELD_OBSERVATION", "MEASUREMENT"} else snapshot.source_snapshot.case_analysis_revision)
+            token = str(self.ids.new_uuid()).upper()
+            claim = report_claim_for_source(claim_id=f"CLAIM-{token}", provenance_id=f"PROVENANCE-{token}", section_id=values["section_id"], text=values["text"], source_kind=source_kind, source_id=values["source_id"], source_revision=revision)
+            claims = (*snapshot.claims, claim)
+            amended = replace(snapshot, claims=claims, coverage=_draft_coverage(snapshot, claims=claims))
+        elif action == "UPDATE_CONTEXT":
+            if set(values) != {"field", "status", "source_id", "note"}:
+                raise ValueError("Report context amendment is invalid")
+            try:
+                status = ContextStatus(values["status"])
+            except ValueError as exc:
+                raise ValueError("Report context status is invalid") from exc
+            context = tuple(replace(item, status=status, source_id=values["source_id"], note=values["note"]) if item.field == values["field"] else item for item in snapshot.context_matrix)
+            if context == snapshot.context_matrix:
+                raise ValueError("Report context field is invalid")
+            amended = replace(snapshot, context_matrix=context, coverage=_draft_coverage(snapshot, context=context))
+        elif action == "ADD_ANSWER":
+            required = {"section_id", "question_id", "text", "finding_id", "evidence_ids", "method_ids", "decision_id", "claim_ids"}
+            if set(values) != required or any(type(values[name]) is not list for name in ("evidence_ids", "method_ids", "claim_ids")):
+                raise ValueError("Report answer amendment is invalid")
+            answer = ReportAnswer(f"ANSWER-{str(self.ids.new_uuid()).upper()}", values["section_id"], values["question_id"], values["text"], values["finding_id"], tuple(values["evidence_ids"]), tuple(values["method_ids"]), values["decision_id"], tuple(values["claim_ids"]))
+            answers = (*snapshot.answers, answer)
+            amended = replace(snapshot, answers=answers, coverage=_draft_coverage(snapshot, answers=answers))
+        else:
+            raise ValueError("Report draft amendment action is invalid")
+        saved = self.save_snapshot.execute(workspace_id, amended, expected_revision)
+        return saved, amended
 
 
 @dataclass(frozen=True, slots=True)

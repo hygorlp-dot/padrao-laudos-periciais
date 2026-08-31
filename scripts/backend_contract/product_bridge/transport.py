@@ -113,6 +113,8 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/pericial-planning/decisions"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["report-snapshot", "reviews"] and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/report-snapshot/reviews"
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["report-snapshot", "draft-amendments"] and method == "POST":
+            return f"/v1/workspaces/{remainder[0]}/report-snapshot/draft-amendments"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "materials" and _CANONICAL_UUID.fullmatch(remainder[2]) and method == "GET":
             return f"/v1/workspaces/{remainder[0]}/materials/{remainder[2]}"
         if (

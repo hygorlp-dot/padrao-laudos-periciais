@@ -108,6 +108,9 @@
     "/v1/workspaces/{workspace_id}/report-snapshot/reviews": {
       "post": {"summary":"Registra revisão profissional linear e explícita","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ReportReviewRequest"}}}},"responses":{"200":{"description":"Decisão profissional persistida","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ReportSnapshotEnvelope"}}}},"409":{"description":"Conflito, autoridade ou upstream stale"}}}
     },
+    "/v1/workspaces/{workspace_id}/report-snapshot/draft-amendments": {
+      "post": {"summary":"Altera rascunho por comando canônico rastreável","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ReportDraftAmendmentRequest"}}}},"responses":{"200":{"description":"Rascunho validado e persistido","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ReportSnapshotEnvelope"}}}},"409":{"description":"Conflito, revisão existente ou fonte inválida"}}}
+    },
     "/v1/workspaces/{workspace_id}/pericial-planning/decisions": {
       "post": {
         "summary": "Registra decisão profissional explícita sobre uma proposta",
@@ -136,6 +139,7 @@
       "ExpertProfileEnvelope": {"type":"object","additionalProperties":false,"required":["revision","updated_at","profile"],"properties":{"revision":{"type":"integer","minimum":1},"updated_at":{"type":"string","format":"date-time"},"profile":{"$ref":"#/components/schemas/ExpertProfile"}}},
       "SaveReportSnapshotRequest": {"type":"object","additionalProperties":false,"required":["expected_revision","snapshot"],"properties":{"expected_revision":{"type":["integer","null"],"minimum":1},"snapshot":{"$ref":"#/components/schemas/ReportSnapshot"}}},
       "ReportReviewRequest": {"type":"object","additionalProperties":false,"required":["expected_revision","action","professional_id","reason"],"properties":{"expected_revision":{"type":"integer","minimum":1},"action":{"enum":["MARK_REVIEWED","APPROVE","SUPERSEDE"]},"professional_id":{"type":"string","minLength":1},"reason":{"type":"string","minLength":1}}},
+      "ReportDraftAmendmentRequest": {"type":"object","additionalProperties":false,"required":["expected_revision","action","values"],"properties":{"expected_revision":{"type":"integer","minimum":1},"action":{"enum":["ADD_CLAIM","UPDATE_CONTEXT","ADD_ANSWER"]},"values":{"type":"object"}}},
       "ReportSnapshotEnvelope": {"type":"object","additionalProperties":false,"required":["revision","updated_at","snapshot"],"properties":{"revision":{"type":"integer","minimum":1},"updated_at":{"type":"string","format":"date-time"},"snapshot":{"$ref":"#/components/schemas/ReportSnapshot"}}},
       "SaveTechnicalSnapshotRequest": {
         "type":"object","additionalProperties":false,"required":["expected_revision","snapshot"],

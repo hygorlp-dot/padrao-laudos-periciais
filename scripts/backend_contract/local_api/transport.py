@@ -116,6 +116,7 @@ class LocalApiServices:
     get_report_snapshot: object | None = None
     start_report_snapshot: object | None = None
     review_report_snapshot: object | None = None
+    amend_report_draft: object | None = None
     get_process_metadata_review: object | None = None
     confirm_process_metadata_source_span: object | None = None
     import_case_document: object | None = None
@@ -529,6 +530,18 @@ class LocalApi:
                 if set(dto) != {"action", "professional_id", "reason", "expected_revision"}:
                     raise ValueError("Report review request is invalid")
                 record, snapshot = self._services.review_report_snapshot.execute(workspace_id, **dto)
+                return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_mapping(snapshot)})
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("report-snapshot", "draft-amendments"):
+                workspace_id = self._workspace_id(raw_segments[2])
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.amend_report_draft is None:
+                    return _error(503, "REPORT_SNAPSHOT_UNAVAILABLE")
+                dto = self._request_dto(request_headers, body)
+                if set(dto) != {"expected_revision", "action", "values"}:
+                    raise ValueError("Report draft amendment request is invalid")
+                record, snapshot = self._services.amend_report_draft.execute(workspace_id, **dto)
                 return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_mapping(snapshot)})
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "technical-snapshot":

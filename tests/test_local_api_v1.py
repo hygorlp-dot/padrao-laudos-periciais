@@ -170,6 +170,7 @@ def test_report_foundation_routes_are_private_validate_and_delegate():
     save_report = RecordingService(revision(payload=payload))
     get_report = RecordingService((revision(payload=payload), snapshot))
     review_report = RecordingService((revision(payload=payload), snapshot))
+    amend_report = RecordingService((revision(payload=payload), snapshot))
     api = LocalApi(services(
         save_expert_profile=save_profile,
         get_expert_profile=get_profile,
@@ -177,6 +178,7 @@ def test_report_foundation_routes_are_private_validate_and_delegate():
         save_report_snapshot=save_report,
         get_report_snapshot=get_report,
         review_report_snapshot=review_report,
+        amend_report_draft=amend_report,
     ), token=TOKEN)
 
     assert request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/expert-profile").status == 403
@@ -196,6 +198,9 @@ def test_report_foundation_routes_are_private_validate_and_delegate():
     reviewed = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/report-snapshot/reviews", body={"expected_revision": 1, "action": "MARK_REVIEWED", "professional_id": "EXPERT-PROFILE-001", "reason": "Revisão explícita."})
     assert reviewed.status == 200
     assert review_report.calls[0][1]["action"] == "MARK_REVIEWED"
+    amended = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/report-snapshot/draft-amendments", body={"expected_revision": 1, "action": "ADD_CLAIM", "values": {"section_id":"SECTION-001","text":"Texto.","source_kind":"CASE_DOCUMENT","source_id":"DOC-001"}})
+    assert amended.status == 200
+    assert amend_report.calls[0][1]["action"] == "ADD_CLAIM"
 
 
 def test_technical_snapshot_route_starts_validates_saves_and_reopens_canonical_chain():
