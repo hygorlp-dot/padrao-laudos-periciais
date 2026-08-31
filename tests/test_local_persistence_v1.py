@@ -541,8 +541,9 @@ def test_public_adapters_implement_only_append_only_port_operations():
         "append_pair_if_latest",
         "latest",
         "get_revision",
-        "list_all",
-    }
+            "list_all",
+            "list_workspace",
+        }
     assert not ({"update", "delete", "replace"} & (workspace_methods | revision_methods))
 
 

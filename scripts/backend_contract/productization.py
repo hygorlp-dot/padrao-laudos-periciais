@@ -11,6 +11,29 @@ import re
 from typing import Any
 from uuid import UUID
 
+from .application.models import (
+    ArtifactRevision,
+    PericiaWorkspace,
+    PrivateContent,
+    PrivateContentId,
+    PrivateContentMetadata,
+    PrivateContentOrigin,
+    ProcessCaseData,
+    WorkspaceId,
+    canonical_payload_json,
+    thaw_payload,
+)
+from .application.ports import RepositoryConflict, RepositoryIntegrityError
+from .budget_foundation import budget_snapshot_from_mapping
+from .case_analysis import case_analysis_from_mapping
+from .delivery_foundation import delivery_snapshot_from_mapping
+from .pericial_planning import pericial_planning_from_mapping
+from .report_foundation import expert_profile_from_mapping, report_snapshot_from_mapping
+from .technical_findings import technical_snapshot_from_mapping
+from .vistoria import inspection_session_from_mapping
+
+import base64
+
 
 PRODUCT_RELEASE_VERSION = "0.11.0"
 STORAGE_FORMAT_VERSION = 1
@@ -127,3 +150,199 @@ def workspace_backup_to_mapping(value: WorkspaceBackup) -> dict[str, Any]:
     result["artifact_revisions"] = list(result["artifact_revisions"])
     result["private_contents"] = list(result["private_contents"])
     return result
+
+
+_ARTIFACT_VALIDATORS = {
+    "BUDGET_SNAPSHOT_V1": budget_snapshot_from_mapping,
+    "CASE_ANALYSIS_SNAPSHOT_V1": case_analysis_from_mapping,
+    "DELIVERY_SNAPSHOT_V1": delivery_snapshot_from_mapping,
+    "EXPERT_MASTER_PROFILE_V1": expert_profile_from_mapping,
+    "INSPECTION_SESSION_V1": inspection_session_from_mapping,
+    "PERICIAL_PLANNING_SNAPSHOT_V1": pericial_planning_from_mapping,
+    "PROCESS_CASE": ProcessCaseData.from_mapping,
+    "REPORT_SNAPSHOT_V1": report_snapshot_from_mapping,
+    "TECHNICAL_SNAPSHOT_V1": technical_snapshot_from_mapping,
+}
+ARTIFACT_COMPATIBILITY = {
+    kind: {"current_version": "1.0.0", "supported_versions": ("1.0.0",), "migration": None, "future_version_policy": "FAIL_CLOSED"}
+    for kind in _ARTIFACT_VALIDATORS
+}
+_STRUCTURAL_ARTIFACT_KINDS = frozenset({
+    "PROCESS_METADATA_EXTRACTION", "PROCESS_METADATA_CONFIRMATION",
+    "PROCESS_METADATA_SOURCE_CONFIRMATION", "OCR_PAGE_CACHE_V1",
+})
+
+
+def _revision_mapping(record: ArtifactRevision) -> dict[str, Any]:
+    return {
+        "workspace_id": str(record.workspace_id), "artifact_kind": record.artifact_kind,
+        "artifact_id": record.artifact_id, "revision_id": record.revision_id,
+        "revision": record.revision, "created_at": record.created_at,
+        "checksum_sha256": record.checksum_sha256, "payload": thaw_payload(record.payload),
+    }
+
+
+def _revision_from_mapping(value: object, workspace_id: str) -> ArtifactRevision:
+    data = _exact(value, {"workspace_id", "artifact_kind", "artifact_id", "revision_id", "revision", "created_at", "checksum_sha256", "payload"}, "ArtifactRevision")
+    if data["workspace_id"] != workspace_id:
+        raise RepositoryIntegrityError("backup revision belongs to another workspace")
+    record = ArtifactRevision(workspace_id=WorkspaceId.parse(data["workspace_id"]), artifact_kind=data["artifact_kind"], artifact_id=data["artifact_id"], revision_id=data["revision_id"], revision=data["revision"], created_at=data["created_at"], checksum_sha256=data["checksum_sha256"], payload=data["payload"])
+    canonical = canonical_payload_json(thaw_payload(record.payload))
+    if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != record.checksum_sha256:
+        raise RepositoryIntegrityError("backup revision checksum diverges")
+    validator = _ARTIFACT_VALIDATORS.get(record.artifact_kind)
+    if validator is not None:
+        validator(thaw_payload(record.payload))
+    elif record.artifact_kind not in _STRUCTURAL_ARTIFACT_KINDS:
+        raise RepositoryIntegrityError("backup artifact kind is not portable")
+    return record
+
+
+def _private_mapping(metadata: PrivateContentMetadata, content: bytes) -> dict[str, Any]:
+    return {
+        "workspace_id": str(metadata.workspace_id), "content_id": str(metadata.content_id),
+        "original_filename": metadata.original_filename, "byte_size": metadata.byte_size,
+        "checksum_sha256": metadata.checksum_sha256, "media_type": metadata.media_type,
+        "imported_at": metadata.imported_at, "origin": metadata.origin.value,
+        "content_base64": base64.b64encode(content).decode("ascii"),
+    }
+
+
+def _private_from_mapping(value: object, workspace_id: str) -> PrivateContent:
+    data = _exact(value, {"workspace_id", "content_id", "original_filename", "byte_size", "checksum_sha256", "media_type", "imported_at", "origin", "content_base64"}, "PrivateContent")
+    if data["workspace_id"] != workspace_id:
+        raise RepositoryIntegrityError("backup private content belongs to another workspace")
+    try:
+        content = base64.b64decode(data.pop("content_base64"), validate=True)
+        data["workspace_id"] = WorkspaceId.parse(data["workspace_id"])
+        data["content_id"] = PrivateContentId.parse(data["content_id"])
+        data["origin"] = PrivateContentOrigin(data["origin"])
+        return PrivateContent(PrivateContentMetadata(**data), content)
+    except (TypeError, ValueError) as exc:
+        raise RepositoryIntegrityError("backup private content is invalid") from exc
+
+
+def _manifest_hash(mapping: dict[str, Any]) -> str:
+    return _hash({key: value for key, value in mapping.items() if key != "manifest_sha256"})
+
+
+@dataclass(frozen=True, slots=True)
+class VerifyWorkspaceBackup:
+    def execute(self, payload: bytes) -> WorkspaceBackup:
+        if type(payload) is not bytes:
+            raise TypeError("backup requires bytes")
+        try:
+            raw = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+            raise RepositoryIntegrityError("backup package is invalid") from exc
+        migrated = migrate_backup_mapping(raw)
+        value = workspace_backup_from_mapping(migrated)
+        mapping = workspace_backup_to_mapping(value)
+        if mapping["product_release"].split(".", 1)[0] != PRODUCT_RELEASE_VERSION.split(".", 1)[0] or mapping["storage_schema_version"] != 1:
+            raise RepositoryIntegrityError("backup compatibility window is unsupported")
+        expected_members = {"artifact_revisions": _hash(mapping["artifact_revisions"]), "private_contents": _hash(mapping["private_contents"])}
+        if mapping["member_hashes"] != expected_members or mapping["manifest_sha256"] != _manifest_hash(mapping):
+            raise RepositoryIntegrityError("backup package checksum diverges")
+        workspace_id = value.workspace.workspace_id
+        revisions = tuple(_revision_from_mapping(item, workspace_id) for item in value.artifact_revisions)
+        identities: set[str] = set(); sequences: dict[tuple[str, str], list[int]] = {}
+        for record in revisions:
+            if record.revision_id in identities: raise RepositoryIntegrityError("backup revision identity is duplicated")
+            identities.add(record.revision_id); sequences.setdefault((record.artifact_kind, record.artifact_id), []).append(record.revision)
+        if any(items != list(range(1, len(items) + 1)) for items in sequences.values()):
+            raise RepositoryIntegrityError("backup revision sequence is incomplete")
+        tuple(_private_from_mapping(item, workspace_id) for item in value.private_contents)
+        return value
+
+
+@dataclass(frozen=True, slots=True)
+class CreateWorkspaceBackup:
+    workspaces: object
+    revisions: object
+    private_contents: object | None
+    clock: object
+
+    def execute(self, workspace_id: WorkspaceId) -> bytes:
+        workspace = self.workspaces.get(workspace_id)
+        if workspace is None: raise ValueError("workspace is unavailable")
+        revision_items = [_revision_mapping(item) for item in self.revisions.list_workspace(workspace_id)]
+        private_items = []
+        if self.private_contents is not None:
+            for metadata in self.private_contents.list_all(workspace_id):
+                with self.private_contents.open_content(workspace_id, metadata.content_id) as opened:
+                    content = opened.stream.read()
+                private_items.append(_private_mapping(metadata, content))
+        now = self.clock.now()
+        if now.tzinfo is None or now.utcoffset() is None: raise ValueError("backup clock requires timezone")
+        mapping = {
+            "schema_version": "1.0.0", "format_version": 1,
+            "product_release": PRODUCT_RELEASE_VERSION, "storage_schema_version": 1,
+            "workspace": {"workspace_id": str(workspace.workspace_id), "name": workspace.name, "created_at": workspace.created_at},
+            "artifact_revisions": revision_items, "private_contents": private_items,
+            "member_hashes": {"artifact_revisions": _hash(revision_items), "private_contents": _hash(private_items)},
+            "manifest_sha256": "0" * 64, "created_at": now.isoformat(),
+        }
+        mapping["manifest_sha256"] = _manifest_hash(mapping)
+        payload = _canonical(mapping)
+        VerifyWorkspaceBackup().execute(payload)
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreReceipt:
+    workspace_id: str
+    backup_sha256: str
+    artifact_revisions: int
+    private_contents: int
+    product_release: str
+    storage_schema_version: int
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreWorkspaceBackup:
+    workspaces: object
+    revisions: object
+    private_contents: object | None
+
+    def execute(self, payload: bytes) -> RestoreReceipt:
+        backup = VerifyWorkspaceBackup().execute(payload)
+        workspace_id = WorkspaceId.parse(backup.workspace.workspace_id)
+        if self.workspaces.get(workspace_id) is not None:
+            raise RepositoryConflict("restore staging workspace is not empty")
+        revision_records = tuple(_revision_from_mapping(item, backup.workspace.workspace_id) for item in backup.artifact_revisions)
+        private_records = tuple(_private_from_mapping(item, backup.workspace.workspace_id) for item in backup.private_contents)
+        if private_records and self.private_contents is None:
+            raise RepositoryIntegrityError("restore staging private store is unavailable")
+        self.workspaces.create(PericiaWorkspace(workspace_id, backup.workspace.name, backup.workspace.created_at))
+        for record in revision_records:
+            self.revisions.append(workspace_id=workspace_id, artifact_kind=record.artifact_kind, artifact_id=record.artifact_id, revision_id=record.revision_id, created_at=record.created_at, payload=thaw_payload(record.payload))
+        for item in private_records:
+            self.private_contents.store(item.metadata, item.content)
+        reopened = self.revisions.list_workspace(workspace_id)
+        if tuple(_revision_mapping(item) for item in reopened) != backup.artifact_revisions:
+            raise RepositoryIntegrityError("restored workspace failed canonical reopen")
+        if self.private_contents is not None:
+            for item in private_records:
+                with self.private_contents.open_content(workspace_id, item.metadata.content_id) as opened:
+                    if opened.stream.read() != item.content: raise RepositoryIntegrityError("restored private content diverges")
+        return RestoreReceipt(str(workspace_id), hashlib.sha256(payload).hexdigest(), len(revision_records), len(private_records), backup.product_release, backup.storage_schema_version)
+
+
+@dataclass(frozen=True, slots=True)
+class SupportDiagnostic:
+    product_release: str
+    storage_schema_version: int
+    supported_backup_versions: tuple[int, ...]
+    integrity_status: str
+    artifact_revision_count: int
+    private_content_count: int
+    error_code: str | None
+    private_egress: bool = False
+
+
+def collect_support_diagnostics(payload: bytes) -> SupportDiagnostic:
+    try:
+        value = VerifyWorkspaceBackup().execute(payload)
+        return SupportDiagnostic(PRODUCT_RELEASE_VERSION, value.storage_schema_version, tuple(sorted(SUPPORTED_BACKUP_VERSIONS)), "PASS", len(value.artifact_revisions), len(value.private_contents), None)
+    except (RepositoryIntegrityError, TypeError, ValueError):
+        return SupportDiagnostic(PRODUCT_RELEASE_VERSION, 1, tuple(sorted(SUPPORTED_BACKUP_VERSIONS)), "FAIL", 0, 0, "BACKUP_INTEGRITY_INVALID")

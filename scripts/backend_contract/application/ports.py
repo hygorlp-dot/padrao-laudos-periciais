@@ -130,6 +130,10 @@ class ArtifactRevisionRepository(Protocol):
         artifact_id: str,
     ) -> tuple[ArtifactRevision, ...]: ...
 
+    def list_workspace(
+        self, workspace_id: WorkspaceId
+    ) -> tuple[ArtifactRevision, ...]: ...
+
 
 class PrivateContentRepository(Protocol):
     def store(

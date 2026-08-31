@@ -833,6 +833,17 @@ class SQLiteArtifactRevisionRepository(_SQLiteRepository):
         )
         return tuple(self._from_row(row) for row in rows)
 
+    def list_workspace(self, workspace_id: WorkspaceId) -> tuple[ArtifactRevision, ...]:
+        if type(workspace_id) is not WorkspaceId:
+            raise TypeError("workspace_id inválido")
+        rows = self._fetchall(
+            "SELECT workspace_id, artifact_kind, artifact_id, revision_id, revision, "
+            "created_at, checksum_sha256, payload_json FROM artifact_revisions "
+            "WHERE workspace_id = ? ORDER BY artifact_kind, artifact_id, revision",
+            (str(workspace_id),),
+        )
+        return tuple(self._from_row(row) for row in rows)
+
 
 class SQLiteApplicationStore:
     """Sessão local que expõe separadamente os dois ports de persistência."""
