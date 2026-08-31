@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from hashlib import sha256
 from io import BytesIO
 import json
@@ -163,11 +164,26 @@ def _image_signature(image: Image.Image) -> tuple[float, tuple[float, ...], tupl
     )
 
 
+def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple]) -> bool:
+    def matches(source: tuple, candidate: tuple) -> bool:
+        return (
+            abs(source[0] - candidate[0]) <= 0.05
+            and all(abs(a - b) <= 12 for a, b in zip(source[1], candidate[1]))
+            and all(abs(a - b) <= 12 for a, b in zip(source[2], candidate[2]))
+            and sum(a != b for a, b in zip(source[3], candidate[3])) <= 16
+        )
+
+    cursor = iter(candidates)
+    return all(any(matches(source, candidate) for candidate in cursor) for source in sources)
+
+
 def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     """Reject converter output that is not observably derived from the bound Word."""
     try:
         with ZipFile(BytesIO(word_content)) as package:
             word_fragments: list[str] = []
+            document_fragments: list[str] = []
+            repeatable_fragments: list[str] = []
             word_images: list[tuple[float, tuple[float, ...], tuple[float, ...], tuple[bool, ...]]] = []
             table_rows: list[tuple[str, ...]] = []
             for name in package.namelist():
@@ -177,9 +193,12 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                 if not (name.startswith("word/") and name.endswith(".xml")):
                     continue
                 root = ElementTree.fromstring(package.read(name))
-                word_fragments.extend(
-                    item.text for item in root.iter(f"{_W}t") if item.text and item.text.strip()
-                )
+                fragments = [item.text for item in root.iter(f"{_W}t") if item.text and item.text.strip()]
+                word_fragments.extend(fragments)
+                if name == "word/document.xml":
+                    document_fragments.extend(fragments)
+                elif name.startswith(("word/header", "word/footer")):
+                    repeatable_fragments.extend(fragments)
                 for row in root.iter(f"{_W}tr"):
                     cells = tuple(
                         _normalized_visible_text(" ".join(item.text or "" for item in cell.iter(f"{_W}t")))
@@ -202,18 +221,21 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     except (BadZipFile, KeyError, ElementTree.ParseError, PdfReadError, OSError, ValueError) as exc:
         raise ValueError("final PDF fidelity cannot be verified") from exc
     required = {_normalized_visible_text(item) for item in word_fragments if _normalized_visible_text(item)}
-    source_vocabulary = set(_lexical_tokens(" ".join(word_fragments)))
-    pdf_vocabulary = set(_lexical_tokens(pdf_text))
-    images_match = all(
-        any(
-            abs(source[0] - candidate[0]) <= 0.05
-            and all(abs(a - b) <= 12 for a, b in zip(source[1], candidate[1]))
-            and all(abs(a - b) <= 12 for a, b in zip(source[2], candidate[2]))
-            and sum(a != b for a, b in zip(source[3], candidate[3])) <= 16
-            for candidate in pdf_images
-        )
-        for source in word_images
+    source_tokens = _lexical_tokens(" ".join(word_fragments))
+    pdf_tokens = _lexical_tokens(pdf_text)
+    source_counts = Counter(source_tokens)
+    pdf_counts = Counter(pdf_tokens)
+    repeatable_counts = Counter(_lexical_tokens(" ".join(repeatable_fragments)))
+    page_repetitions = max(len(reader.pages) - 1, 0)
+    token_counts_match = all(
+        count <= source_counts[token] + repeatable_counts[token] * page_repetitions
+        for token, count in pdf_counts.items()
     )
+    document_tokens = _lexical_tokens(" ".join(document_fragments))
+    token_cursor = iter(pdf_tokens)
+    document_order_matches = all(any(candidate == token for candidate in token_cursor) for token in document_tokens)
+
+    images_match = _ordered_image_signatures_match(word_images, pdf_images)
     tables_match = all(
         any(
             all(
@@ -232,7 +254,8 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     if (
         not required
         or any(item not in pdf_text for item in required)
-        or not pdf_vocabulary <= source_vocabulary
+        or not token_counts_match
+        or not document_order_matches
         or not images_match
         or not tables_match
     ):

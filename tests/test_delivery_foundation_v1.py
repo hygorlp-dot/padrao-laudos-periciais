@@ -445,7 +445,7 @@ def test_final_pdf_is_converted_from_the_exact_bound_word_bytes() -> None:
 
     class AdditiveForgeryConverter:
         def convert(self, _content: bytes, _source_format: str) -> bytes:
-            return _parseable_text_pdf(f"{report.report_id} 999999.99")
+            return _parseable_text_pdf(f"{report.report_id} {report.report_id}")
 
     with pytest.raises(ValueError, match="does not faithfully represent"):
         delivery_renderer.render_final_pdf_candidate(
@@ -475,7 +475,12 @@ def test_final_pdf_rejects_a_table_flattened_into_unrelated_lines() -> None:
 def test_image_fidelity_signature_distinguishes_uniform_opposites() -> None:
     black = Image.new("RGB", (64, 64), "black")
     white = Image.new("RGB", (64, 64), "white")
-    assert delivery_renderer._image_signature(black) != delivery_renderer._image_signature(white)
+    black_signature = delivery_renderer._image_signature(black)
+    white_signature = delivery_renderer._image_signature(white)
+    assert black_signature != white_signature
+    assert delivery_renderer._ordered_image_signatures_match(
+        [black_signature, white_signature], [white_signature, black_signature],
+    ) is False
 
 
 def test_final_pdf_conversion_fails_closed_without_a_local_converter() -> None:
