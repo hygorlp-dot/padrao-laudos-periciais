@@ -14,7 +14,7 @@ from typing import Any
 from uuid import UUID
 from weakref import WeakKeyDictionary
 
-from .application.models import (
+from ..application.models import (
     ArtifactRevision,
     PericiaWorkspace,
     PrivateContent,
@@ -26,18 +26,18 @@ from .application.models import (
     canonical_payload_json,
     thaw_payload,
 )
-from .application.ports import RepositoryConflict, RepositoryIntegrityError
-from .application.ocr_cache import _page_from_payload
-from .application.process_metadata import document_metadata_from_payload
-from .budget_foundation import budget_snapshot_from_mapping
-from .case_analysis import case_analysis_from_mapping
-from .delivery_foundation import delivery_snapshot_from_mapping
-from .pericial_planning import pericial_planning_from_mapping
-from .report_foundation import expert_profile_from_mapping, report_snapshot_from_mapping
-from .technical_findings import technical_snapshot_from_mapping
-from .vistoria import inspection_session_from_mapping
-from .infrastructure.private_filesystem import LocalPrivateContentStore
-from .infrastructure.sqlite import SQLiteApplicationStore
+from ..application.ports import RepositoryConflict, RepositoryIntegrityError
+from ..application.ocr_cache import _page_from_payload
+from ..application.process_metadata import document_metadata_from_payload
+from ..budget_foundation import budget_snapshot_from_mapping
+from ..case_analysis import case_analysis_from_mapping
+from ..delivery_foundation import delivery_snapshot_from_mapping
+from ..pericial_planning import pericial_planning_from_mapping
+from ..report_foundation import expert_profile_from_mapping, report_snapshot_from_mapping
+from ..technical_findings import technical_snapshot_from_mapping
+from ..vistoria import inspection_session_from_mapping
+from .private_filesystem import LocalPrivateContentStore
+from .sqlite import SQLiteApplicationStore
 
 import base64
 

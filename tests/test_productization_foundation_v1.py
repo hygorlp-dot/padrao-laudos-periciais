@@ -23,7 +23,7 @@ from scripts.backend_contract.application.ports import RepositoryConflict, Repos
 from scripts.backend_contract.infrastructure.sqlite import SQLiteApplicationStore
 from scripts.backend_contract.infrastructure.private_filesystem import LocalPrivateContentStore
 from scripts.backend_contract.local_api.composition import build_local_api
-from scripts.backend_contract.productization import (
+from scripts.backend_contract.infrastructure.productization import (
     ARTIFACT_COMPATIBILITY,
     CreateWorkspaceBackup,
     PRODUCT_RELEASE_VERSION,
