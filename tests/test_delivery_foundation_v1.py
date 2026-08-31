@@ -482,6 +482,22 @@ def test_image_fidelity_signature_distinguishes_uniform_opposites() -> None:
         [black_signature, white_signature], [white_signature, black_signature],
     ) is False
 
+    black_bytes = BytesIO(); white_bytes = BytesIO()
+    black.save(black_bytes, "PNG"); white.save(white_bytes, "PNG")
+    package_bytes = BytesIO()
+    document = '''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:drawing><a:blip r:embed="rId2"/></w:drawing></w:r></w:p><w:p><w:r><w:drawing><a:blip r:embed="rId1"/></w:drawing></w:r></w:p></w:body></w:document>'''
+    relationships = '''<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="media/image1.png"/><Relationship Id="rId2" Target="media/image2.png"/></Relationships>'''
+    with ZipFile(package_bytes, "w", ZIP_DEFLATED) as package:
+        package.writestr("word/media/image1.png", black_bytes.getvalue())
+        package.writestr("word/media/image2.png", white_bytes.getvalue())
+        package.writestr("word/document.xml", document)
+        package.writestr("word/_rels/document.xml.rels", relationships)
+    with ZipFile(BytesIO(package_bytes.getvalue())) as package:
+        root = delivery_renderer.ElementTree.fromstring(package.read("word/document.xml"))
+        assert delivery_renderer._ordered_word_image_signatures(package, {"word/document.xml": root}) == [
+            white_signature, black_signature,
+        ]
+
 
 def test_final_pdf_conversion_fails_closed_without_a_local_converter() -> None:
     class Unavailable:

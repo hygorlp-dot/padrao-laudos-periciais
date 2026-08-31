@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from hashlib import sha256
 from io import BytesIO
+import posixpath
 import json
 import re
 import textwrap
@@ -15,6 +16,7 @@ from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 from PIL import Image, ImageStat, UnidentifiedImageError
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
+from pypdf.generic import ContentStream
 
 from .report_foundation import ReportSnapshot
 from .report_foundation import report_snapshot_to_mapping
@@ -32,6 +34,8 @@ DELIVERY_RENDERING_VERSION = "delivery-renderer/2.0.0"
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _REL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 _CT = "{http://schemas.openxmlformats.org/package/2006/content-types}"
+_A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+_R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 ElementTree.register_namespace("w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main")
 
 
@@ -177,6 +181,41 @@ def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple
     return all(any(matches(source, candidate) for candidate in cursor) for source in sources)
 
 
+def _ordered_word_image_signatures(package: ZipFile, xml_roots: dict[str, ElementTree.Element]) -> list[tuple]:
+    ordered: list[tuple] = []
+    def priority(name: str) -> tuple[int, str]:
+        return (0 if "/header" in name else 1 if name == "word/document.xml" else 2, name)
+    for name in sorted(xml_roots, key=priority):
+        base = posixpath.dirname(name)
+        relationships_name = f"{base}/_rels/{posixpath.basename(name)}.rels"
+        if relationships_name not in package.namelist():
+            continue
+        relationships = ElementTree.fromstring(package.read(relationships_name))
+        targets = {
+            item.attrib.get("Id"): posixpath.normpath(posixpath.join(base, item.attrib.get("Target", "")))
+            for item in relationships.iter(f"{_REL}Relationship")
+            if item.attrib.get("TargetMode", "").lower() != "external"
+        }
+        for blip in xml_roots[name].iter(f"{_A}blip"):
+            target = targets.get(blip.attrib.get(f"{_R}embed"))
+            if target and target in package.namelist():
+                with Image.open(BytesIO(package.read(target))) as image:
+                    ordered.append(_image_signature(image))
+    return ordered
+
+
+def _ordered_pdf_image_signatures(page: object, reader: PdfReader) -> list[tuple]:
+    images = {str(name): page.images[name].image for name in page.images.keys()}
+    ordered: list[tuple] = []
+    for operands, operator in ContentStream(page.get_contents(), reader).operations:
+        if operator != b"Do" or not operands:
+            continue
+        image = images.get(str(operands[0]))
+        if image is not None:
+            ordered.append(_image_signature(image))
+    return ordered
+
+
 def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     """Reject converter output that is not observably derived from the bound Word."""
     try:
@@ -184,15 +223,13 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
             word_fragments: list[str] = []
             document_fragments: list[str] = []
             repeatable_fragments: list[str] = []
-            word_images: list[tuple[float, tuple[float, ...], tuple[float, ...], tuple[bool, ...]]] = []
+            xml_roots: dict[str, ElementTree.Element] = {}
             table_rows: list[tuple[str, ...]] = []
             for name in package.namelist():
-                if name.startswith("word/media/") and not name.endswith("/"):
-                    with Image.open(BytesIO(package.read(name))) as image:
-                        word_images.append(_image_signature(image))
                 if not (name.startswith("word/") and name.endswith(".xml")):
                     continue
                 root = ElementTree.fromstring(package.read(name))
+                xml_roots[name] = root
                 fragments = [item.text for item in root.iter(f"{_W}t") if item.text and item.text.strip()]
                 word_fragments.extend(fragments)
                 if name == "word/document.xml":
@@ -206,6 +243,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                     )
                     if len(cells) > 1 and all(cells):
                         table_rows.append(cells)
+            word_images = _ordered_word_image_signatures(package, xml_roots)
         reader = PdfReader(BytesIO(pdf_content), strict=True)
         extracted_pages: list[str] = []
         positioned: list[tuple[int, str, float, float]] = []
@@ -216,7 +254,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                 if normalized:
                     positioned.append((page_number, normalized, float(tm[4]), float(tm[5])))
             extracted_pages.append(page.extract_text(visitor_text=visitor) or "")
-            pdf_images.extend(_image_signature(item.image) for item in page.images)
+            pdf_images.extend(_ordered_pdf_image_signatures(page, reader))
         pdf_text = _normalized_visible_text("\n".join(extracted_pages))
     except (BadZipFile, KeyError, ElementTree.ParseError, PdfReadError, OSError, ValueError) as exc:
         raise ValueError("final PDF fidelity cannot be verified") from exc
