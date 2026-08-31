@@ -212,11 +212,12 @@ def _validate_database_state(connection: sqlite3.Connection) -> None:
     _validate_persisted_records(connection)
 
 
-def _database_state_token(connection: sqlite3.Connection) -> tuple[int, int, int, int]:
+def _database_state_token(connection: sqlite3.Connection) -> tuple[int, int, int, int, int]:
     return (
         connection.execute("PRAGMA data_version").fetchone()[0],
         connection.execute("PRAGMA schema_version").fetchone()[0],
         connection.execute("PRAGMA user_version").fetchone()[0],
+        connection.execute("PRAGMA application_id").fetchone()[0],
         connection.total_changes,
     )
 
@@ -225,7 +226,7 @@ class _DatabaseStateGuard:
     def __init__(
         self,
         connection: sqlite3.Connection,
-        trusted_token: tuple[int, int, int, int],
+        trusted_token: tuple[int, int, int, int, int],
     ):
         self._connection = connection
         self._trusted_token = trusted_token
@@ -243,7 +244,7 @@ class _DatabaseStateGuard:
         self._trusted_token = _database_state_token(self._connection)
 
 
-def migrate(connection: sqlite3.Connection) -> tuple[int, int, int, int]:
+def migrate(connection: sqlite3.Connection) -> tuple[int, int, int, int, int]:
     """Aplica migrações conhecidas numa única transação e valida o schema exato."""
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -863,8 +864,12 @@ class SQLiteApplicationStore:
             raise TypeError("snapshot SQLite inválido")
         with self._lock:
             try:
+                application_id = self._connection.execute("PRAGMA application_id").fetchone()[0]
                 self._connection.deserialize(snapshot)
                 self._connection.execute("PRAGMA foreign_keys = ON")
+                self._connection.execute(f"PRAGMA application_id = {application_id}")
+                if self._connection.execute("PRAGMA application_id").fetchone()[0] != application_id:
+                    raise RepositoryIntegrityError("SQLite application identity was not preserved")
                 _validate_database_state(self._connection)
                 self._state_guard.accept_current()
             except sqlite3.Error as exc:

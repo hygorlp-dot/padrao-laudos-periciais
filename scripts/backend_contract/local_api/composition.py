@@ -229,7 +229,11 @@ def build_local_api(
     if private_root is not None:
         try:
             private_store = LocalPrivateContentStore.open_or_provision(private_root)
+            if private_store.is_recovery_quarantined():
+                raise RepositoryIntegrityError("recovery private storage is quarantined and cannot become active")
         except Exception:
+            if private_store is not None:
+                private_store.close()
             store.close()
             raise
     import_case_document = None
