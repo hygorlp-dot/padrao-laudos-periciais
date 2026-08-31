@@ -342,20 +342,25 @@ def test_rendered_word_bytes_contain_and_change_with_entire_approved_report_body
 
 
 @pytest.mark.parametrize(
-    ("instruction", "part"),
+    ("instruction", "part", "representation"),
     (
-        ('INCLUDETEXT "https://example.invalid/private"', "document"),
-        ('includepicture "https://example.invalid/private.png"', "document"),
-        ('DDEAUTO cmd "test"', "document"),
-        ('DDE cmd "test"', "document"),
-        ('INCLUDETEXT "https://example.invalid/header"', "header"),
+        ('INCLUDETEXT "https://example.invalid/private"', "document", "complex"),
+        ('includepicture "https://example.invalid/private.png"', "document", "complex"),
+        ('DDEAUTO cmd "test"', "document", "complex"),
+        ('DDE cmd "test"', "document", "complex"),
+        ('INCLUDETEXT "https://example.invalid/header"', "header", "complex"),
+        ('INCLUDETEXT "https://example.invalid/simple"', "document", "simple"),
     ),
 )
-def test_active_external_or_execution_word_fields_are_rejected_before_binding(instruction: str, part: str) -> None:
+def test_active_external_or_execution_word_fields_are_rejected_before_binding(instruction: str, part: str, representation: str) -> None:
     root = Path(__file__).parents[1] / "tests/fixtures"
     report = report_snapshot_from_mapping(json.loads((root / "report-snapshot-v1.json").read_text(encoding="utf-8")))
     split = len(instruction) // 2
-    active_field = f"<w:p><w:r><w:instrText>{instruction[:split]}</w:instrText><w:instrText>{instruction[split:]}</w:instrText></w:r></w:p>"
+    active_field = (
+        f'<w:p><w:fldSimple w:instr="{instruction.replace(chr(34), "&quot;")}"/></w:p>'
+        if representation == "simple"
+        else f"<w:p><w:r><w:instrText>{instruction[:split]}</w:instrText><w:instrText>{instruction[split:]}</w:instrText></w:r></w:p>"
+    )
     document = f'''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
       <w:p><w:r><w:t>[[EXPERT_FULL_NAME]]</w:t><w:t>[[EXPERT_REGISTRATION]]</w:t><w:t>[[REPORT_ID]]</w:t></w:r></w:p>
       <w:sdt><w:sdtPr><w:tag w:val="CANONICAL_REPORT"/></w:sdtPr><w:sdtContent/></w:sdt>
@@ -440,7 +445,7 @@ def test_final_pdf_is_converted_from_the_exact_bound_word_bytes() -> None:
 
     class AdditiveForgeryConverter:
         def convert(self, _content: bytes, _source_format: str) -> bytes:
-            return _parseable_text_pdf(f"{report.report_id} FORGED EXTRA CONTENT")
+            return _parseable_text_pdf(f"{report.report_id} 999999.99")
 
     with pytest.raises(ValueError, match="does not faithfully represent"):
         delivery_renderer.render_final_pdf_candidate(
@@ -459,12 +464,18 @@ def test_final_pdf_rejects_a_table_flattened_into_unrelated_lines() -> None:
 
     class FlatteningConverter:
         def convert(self, _content: bytes, _source_format: str) -> bytes:
-            return _parseable_text_pdf("Cell A\nCell B")
+            return _parseable_text_pdf("Cell A Cell B")
 
     with pytest.raises(ValueError, match="does not faithfully represent"):
         delivery_renderer.render_final_pdf_candidate(
             word_content=word.getvalue(), word_format="DOCX", converter=FlatteningConverter(),
         )
+
+
+def test_image_fidelity_signature_distinguishes_uniform_opposites() -> None:
+    black = Image.new("RGB", (64, 64), "black")
+    white = Image.new("RGB", (64, 64), "white")
+    assert delivery_renderer._image_signature(black) != delivery_renderer._image_signature(white)
 
 
 def test_final_pdf_conversion_fails_closed_without_a_local_converter() -> None:

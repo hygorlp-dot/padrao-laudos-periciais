@@ -118,6 +118,11 @@ def _mechanics(parts: dict[str, bytes]) -> tuple[set[str], tuple[str, ...], int]
     for xml_root in xml_roots:
       for paragraph in xml_root.iter(f"{_W}p"):
         nodes = [item.text or "" for item in paragraph.iter(f"{_W}instrText") if (item.text or "").strip()]
+        nodes.extend(
+            item.attrib.get(f"{_W}instr", "")
+            for item in paragraph.iter(f"{_W}fldSimple")
+            if item.attrib.get(f"{_W}instr", "").strip()
+        )
         compact = re.sub(r"\s+", "", "".join(nodes)).upper()
         if any(marker in compact for marker in ("INCLUDETEXT", "INCLUDEPICTURE", "DDEAUTO", "DDE")) or "://" in compact:
             raise ValueError("unsupported active Word field instruction")

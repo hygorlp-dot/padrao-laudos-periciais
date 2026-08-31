@@ -11,7 +11,7 @@ import unicodedata
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageStat, UnidentifiedImageError
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
@@ -146,14 +146,21 @@ def _normalized_visible_text(value: str) -> str:
 
 
 def _lexical_tokens(value: str) -> tuple[str, ...]:
-    return tuple(re.findall(r"[^\W\d_]+", _normalized_visible_text(value), flags=re.UNICODE))
+    return tuple(re.findall(r"\w+|[^\w\s]", _normalized_visible_text(value), flags=re.UNICODE))
 
 
-def _image_signature(image: Image.Image) -> tuple[float, tuple[bool, ...]]:
-    gray = image.convert("L").resize((16, 16))
-    pixels = tuple(gray.getdata())
+def _image_signature(image: Image.Image) -> tuple[float, tuple[float, ...], tuple[float, ...], tuple[bool, ...]]:
+    rgb = image.convert("RGB").resize((32, 32))
+    statistics = ImageStat.Stat(rgb)
+    gray = rgb.convert("L").resize((16, 16))
+    pixels = tuple(gray.get_flattened_data())
     mean = sum(pixels) / len(pixels)
-    return round(image.width / max(image.height, 1), 2), tuple(value >= mean for value in pixels)
+    return (
+        round(image.width / max(image.height, 1), 2),
+        tuple(round(value, 1) for value in statistics.mean),
+        tuple(round(value, 1) for value in statistics.stddev),
+        tuple(value >= mean for value in pixels),
+    )
 
 
 def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
@@ -161,7 +168,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     try:
         with ZipFile(BytesIO(word_content)) as package:
             word_fragments: list[str] = []
-            word_images: list[tuple[float, tuple[bool, ...]]] = []
+            word_images: list[tuple[float, tuple[float, ...], tuple[float, ...], tuple[bool, ...]]] = []
             table_rows: list[tuple[str, ...]] = []
             for name in package.namelist():
                 if name.startswith("word/media/") and not name.endswith("/"):
@@ -182,13 +189,13 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                         table_rows.append(cells)
         reader = PdfReader(BytesIO(pdf_content), strict=True)
         extracted_pages: list[str] = []
-        positioned: list[tuple[int, str, float]] = []
-        pdf_images: list[tuple[float, tuple[bool, ...]]] = []
+        positioned: list[tuple[int, str, float, float]] = []
+        pdf_images: list[tuple[float, tuple[float, ...], tuple[float, ...], tuple[bool, ...]]] = []
         for page_number, page in enumerate(reader.pages):
             def visitor(text: str, _cm: object, tm: list[float], _font: object, _size: float) -> None:
                 normalized = _normalized_visible_text(text)
                 if normalized:
-                    positioned.append((page_number, normalized, float(tm[5])))
+                    positioned.append((page_number, normalized, float(tm[4]), float(tm[5])))
             extracted_pages.append(page.extract_text(visitor_text=visitor) or "")
             pdf_images.extend(_image_signature(item.image) for item in page.images)
         pdf_text = _normalized_visible_text("\n".join(extracted_pages))
@@ -198,13 +205,27 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     source_vocabulary = set(_lexical_tokens(" ".join(word_fragments)))
     pdf_vocabulary = set(_lexical_tokens(pdf_text))
     images_match = all(
-        any(abs(source[0] - candidate[0]) <= 0.05 and sum(a != b for a, b in zip(source[1], candidate[1])) <= 16 for candidate in pdf_images)
+        any(
+            abs(source[0] - candidate[0]) <= 0.05
+            and all(abs(a - b) <= 12 for a, b in zip(source[1], candidate[1]))
+            and all(abs(a - b) <= 12 for a, b in zip(source[2], candidate[2]))
+            and sum(a != b for a, b in zip(source[3], candidate[3])) <= 16
+            for candidate in pdf_images
+        )
         for source in word_images
     )
     tables_match = all(
         any(
-            all(any(cell in text and page == anchor_page and abs(y - anchor_y) <= 3 for page, text, y in positioned) for cell in row[1:])
-            for anchor_page, anchor_text, anchor_y in positioned if row[0] in anchor_text
+            all(
+                any(
+                    candidate_index != anchor_index and cell in text and page == anchor_page
+                    and x > anchor_x and abs(y - anchor_y) <= 3
+                    for candidate_index, (page, text, x, y) in enumerate(positioned)
+                )
+                for cell in row[1:]
+            )
+            for anchor_index, (anchor_page, anchor_text, anchor_x, anchor_y) in enumerate(positioned)
+            if row[0] in anchor_text
         )
         for row in table_rows
     )
