@@ -459,6 +459,24 @@
                          "finalidade":  "Cadeia técnica sintética de evidência, método, achado e decisão Stage 6",
                          "expected":  "VALID",
                          "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/report-snapshot-v1.json",
+                         "dominio":  "REPORT_SNAPSHOT_V1",
+                         "schema":  "report-snapshot-v1.schema.json",
+                         "consumer":  "tests/test_report_foundation_v1.py::test_fixture_matches_strict_published_schema",
+                         "finalidade":  "Modelo canônico sintético de laudo, autoridade, rastreabilidade e revisão Stage 7",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/report-template-manifest-v1.json",
+                         "dominio":  "REPORT_TEMPLATE_MANIFEST_V1",
+                         "schema":  "report-template-manifest-v1.schema.json",
+                         "consumer":  "tests/test_report_foundation_v1.py::test_word_binding_replaces_only_whitelisted_single_source_fields_and_preserves_mechanics",
+                         "finalidade":  "Manifesto sintético de binding protegido para template DOCM Stage 7",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      }
                  ]
 }

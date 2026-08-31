@@ -44,6 +44,15 @@ from ..application.case_analysis import GetCaseAnalysis, SaveCaseAnalysis
 from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning
 from ..application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession
 from ..application.technical_findings import GetTechnicalSnapshot, SaveTechnicalSnapshot, StartTechnicalSnapshot
+from ..application.report_foundation import (
+    GetExpertProfile,
+    GetReportSnapshot,
+    SaveExpertProfile,
+    SaveReportSnapshot,
+    StartReportSnapshot,
+    ReviewReportSnapshot,
+    AmendReportDraft,
+)
 
 
 class LocalApiStartupError(RuntimeError):
@@ -227,6 +236,27 @@ def build_local_api(
         local_clock,
         local_ids,
     )
+    get_expert_profile = GetExpertProfile(get_latest_artifact)
+    save_expert_profile = SaveExpertProfile(
+        store.revisions,
+        private_store.authority_guard if private_store is not None else nullcontext,
+        local_clock,
+        local_ids,
+    )
+    get_report_snapshot = GetReportSnapshot(
+        get_latest_artifact, get_case_analysis, get_inspection_session, get_technical_snapshot, get_expert_profile
+    )
+    save_report_snapshot = SaveReportSnapshot(
+        store.revisions,
+        get_case_analysis,
+        get_inspection_session,
+        get_technical_snapshot,
+        get_expert_profile,
+        get_latest_artifact,
+        private_store.authority_guard if private_store is not None else nullcontext,
+        local_clock,
+        local_ids,
+    )
     services = LocalApiServices(
         create_workspace=CreateWorkspace(store.workspaces, local_clock, local_ids),
         get_workspace=GetWorkspace(store.workspaces),
@@ -274,6 +304,20 @@ def build_local_api(
         start_technical_snapshot=StartTechnicalSnapshot(
             get_case_analysis, get_inspection_session, save_technical_snapshot, local_ids
         ),
+        save_expert_profile=save_expert_profile,
+        get_expert_profile=get_expert_profile,
+        save_report_snapshot=save_report_snapshot,
+        get_report_snapshot=get_report_snapshot,
+        start_report_snapshot=StartReportSnapshot(
+            get_case_analysis,
+            get_inspection_session,
+            get_technical_snapshot,
+            get_expert_profile,
+            save_report_snapshot,
+            local_ids,
+        ),
+        review_report_snapshot=ReviewReportSnapshot(get_report_snapshot, save_report_snapshot, local_clock, local_ids),
+        amend_report_draft=AmendReportDraft(get_report_snapshot, save_report_snapshot, local_ids),
         get_process_metadata_review=get_process_metadata_review,
         confirm_process_metadata_source_span=confirm_process_metadata_source_span,
         import_case_document=import_case_document,
