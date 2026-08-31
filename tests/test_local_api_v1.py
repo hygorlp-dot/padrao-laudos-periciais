@@ -244,21 +244,27 @@ def test_report_foundation_routes_are_private_validate_and_delegate():
     assert amend_report.calls[0][1]["action"] == "ADD_CLAIM"
 
 
-def test_technical_snapshot_route_starts_validates_saves_and_reopens_canonical_chain():
+def test_technical_snapshot_route_denies_full_save_and_exposes_command_boundary():
     payload = technical_snapshot_payload()
     from scripts.backend_contract.technical_findings import technical_snapshot_from_mapping
     snapshot = technical_snapshot_from_mapping(payload)
     start = RecordingService((revision(payload=payload), snapshot))
-    save = RecordingService(revision(payload=payload))
+    command = RecordingService((revision(payload=payload), snapshot))
     get = RecordingService((revision(payload=payload), snapshot))
     api = LocalApi(services(
-        start_technical_snapshot=start, save_technical_snapshot=save, get_technical_snapshot=get,
+        start_technical_snapshot=start, save_technical_snapshot=RecordingService(None),
+        get_technical_snapshot=get, add_technical_evidence_proposal=command,
     ), token=TOKEN)
     started = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot", body={})
     assert started.status == 201
     saved = request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot", body={"expected_revision": 1, "snapshot": payload})
-    assert saved.status == 200
-    assert save.calls[0][0][1].snapshot_id == "TECHNICAL-SNAPSHOT-001"
+    assert saved.status == 405
+    proposed = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot/evidence-proposals", body={
+        "source_kind":"MEASUREMENT", "source_id":"MEASUREMENT-001", "proposition":"Proposta sintética.",
+        "why_relevant":"Relevância sintética.", "expected_revision":1,
+    })
+    assert proposed.status == 200
+    assert command.calls[0][1]["proposition"] == "Proposta sintética."
     reopened = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot", headers={"X-Local-API-Token": TOKEN})
     assert reopened.status == 200
     assert decoded(reopened)["snapshot"] == payload
@@ -271,7 +277,27 @@ def test_technical_snapshot_is_private_and_rejects_silent_professional_promotion
     denied = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot")
     invalid = request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot", body={"expected_revision": None, "snapshot": payload})
     assert denied.status == 403
-    assert invalid.status == 400
+    assert invalid.status == 405
+
+
+@pytest.mark.parametrize(
+    ("action", "service_name", "body"),
+    (
+        ("evidence-reviews", "review_technical_evidence", {"evidence_id":"EVIDENCE-001","action":"REJECT","professional_id":"PROFESSIONAL-001","reason":"Revisão explícita.","expected_revision":1}),
+        ("method-selections", "select_technical_method", {"evidence_id":"EVIDENCE-001","method_identity":"Método","procedure":"Procedimento.","output":"Saída.","professional_id":"PROFESSIONAL-001","expected_revision":1}),
+        ("finding-proposals", "propose_technical_finding", {"method_application_id":"METHOD-001","technical_proposition":"Proposta.","scope":"Escopo.","limitation":"Limite.","uncertainty":"Incerteza.","uncertainty_impact":"Impacto.","origin":"AI_PROPOSAL","contrary_evidence_ids":[],"expected_revision":1}),
+        ("finding-reviews", "review_technical_finding", {"proposal_id":"PROPOSAL-001","action":"REJECT","professional_id":"PROFESSIONAL-001","reason":"Decisão explícita.","modified_proposition":None,"resolve_conflicts":False,"expected_revision":1}),
+    ),
+)
+def test_technical_authority_commands_delegate_only_closed_intent_dtos(action, service_name, body):
+    payload = technical_snapshot_payload()
+    from scripts.backend_contract.technical_findings import technical_snapshot_from_mapping
+    command = RecordingService((revision(payload=payload), technical_snapshot_from_mapping(payload)))
+    api = LocalApi(services(**{service_name: command}), token=TOKEN)
+    response = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot/{action}", body=body)
+    assert response.status == 200
+    assert command.calls[0][0] == (WORKSPACE_ID,)
+    assert set(command.calls[0][1]) == set(body)
 
 
 def test_inspection_session_route_validates_delegates_and_reopens_canonical_snapshot():

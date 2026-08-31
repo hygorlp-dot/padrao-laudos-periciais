@@ -60,7 +60,6 @@ from ..application.vistoria import (
 from ..application.field_mobile import offline_package_to_mapping
 from ..application.technical_findings import (
     technical_snapshot_to_validated_mapping,
-    validated_technical_snapshot_from_mapping,
 )
 from ..application.report_foundation import (
     expert_profile_to_validated_mapping,
@@ -129,6 +128,11 @@ class LocalApiServices:
     save_technical_snapshot: object | None = None
     get_technical_snapshot: object | None = None
     start_technical_snapshot: object | None = None
+    add_technical_evidence_proposal: object | None = None
+    review_technical_evidence: object | None = None
+    select_technical_method: object | None = None
+    propose_technical_finding: object | None = None
+    review_technical_finding: object | None = None
     save_expert_profile: object | None = None
     get_expert_profile: object | None = None
     save_report_snapshot: object | None = None
@@ -770,21 +774,50 @@ class LocalApi:
                         raise ValueError("Technical Snapshot start request is invalid")
                     record, snapshot = self._services.start_technical_snapshot.execute(workspace_id)
                     return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": technical_snapshot_to_validated_mapping(snapshot)})
-                if normalized_method == "PUT":
-                    if self._services.save_technical_snapshot is None:
-                        return _error(503, "TECHNICAL_SNAPSHOT_UNAVAILABLE")
-                    dto = self._request_dto(request_headers, body)
-                    if set(dto) != {"expected_revision", "snapshot"}:
-                        raise ValueError("Technical Snapshot request is invalid")
-                    expected = dto["expected_revision"]
-                    if expected is not None and (type(expected) is not int or expected < 1):
-                        raise ValueError("Technical Snapshot expected revision is invalid")
-                    snapshot = validated_technical_snapshot_from_mapping(dto["snapshot"])
-                    if snapshot.workspace_id != str(workspace_id):
-                        raise ValueError("Technical Snapshot workspace mismatch")
-                    record = self._services.save_technical_snapshot.execute(workspace_id, snapshot, expected)
-                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": technical_snapshot_to_validated_mapping(snapshot)})
                 return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "technical-snapshot":
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                workspace_id = self._workspace_id(raw_segments[2])
+                action = raw_segments[4]
+                dto = self._request_dto(request_headers, body)
+                routes = {
+                    "evidence-proposals": (
+                        self._services.add_technical_evidence_proposal,
+                        {"source_kind", "source_id", "proposition", "why_relevant", "expected_revision"},
+                    ),
+                    "evidence-reviews": (
+                        self._services.review_technical_evidence,
+                        {"evidence_id", "action", "professional_id", "reason", "expected_revision"},
+                    ),
+                    "method-selections": (
+                        self._services.select_technical_method,
+                        {"evidence_id", "method_identity", "procedure", "output", "professional_id", "expected_revision"},
+                    ),
+                    "finding-proposals": (
+                        self._services.propose_technical_finding,
+                        {"method_application_id", "technical_proposition", "scope", "limitation", "uncertainty", "uncertainty_impact", "origin", "contrary_evidence_ids", "expected_revision"},
+                    ),
+                    "finding-reviews": (
+                        self._services.review_technical_finding,
+                        {"proposal_id", "action", "professional_id", "reason", "modified_proposition", "resolve_conflicts", "expected_revision"},
+                    ),
+                }
+                route = routes.get(action)
+                if route is None:
+                    return _error(404, "NOT_FOUND")
+                service, required = route
+                if service is None:
+                    return _error(503, "TECHNICAL_SNAPSHOT_UNAVAILABLE")
+                if set(dto) != required:
+                    raise ValueError("Technical Snapshot command request is invalid")
+                if action == "finding-proposals":
+                    if type(dto["contrary_evidence_ids"]) is not list:
+                        raise ValueError("Technical finding contrary evidence is invalid")
+                    dto["contrary_evidence_ids"] = tuple(dto["contrary_evidence_ids"])
+                record, snapshot = service.execute(workspace_id, **dto)
+                return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": technical_snapshot_to_validated_mapping(snapshot)})
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "case-analysis":
                 workspace_id = self._workspace_id(raw_segments[2])

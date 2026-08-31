@@ -23,6 +23,7 @@ from scripts.backend_contract.technical_findings import (
     MethodInput,
     MethodOutput,
     ProfessionalDecision,
+    ProposalOrigin,
     QuestionFindingLink,
     TechnicalCoverage,
     TechnicalFinding,
@@ -34,8 +35,13 @@ from scripts.backend_contract.technical_findings import (
 )
 from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
 from scripts.backend_contract.application.technical_findings import (
+    AddEvidenceProposal,
     GetTechnicalSnapshot,
+    ProposeTechnicalFinding,
+    ReviewTechnicalEvidence,
+    ReviewTechnicalFinding,
     SaveTechnicalSnapshot,
+    SelectTechnicalMethod,
     StartTechnicalSnapshot,
     technical_upstream_digest,
 )
@@ -74,6 +80,80 @@ def bound_snapshot():
     ))
 
 
+def latest_technical_record(snapshot, revision=3):
+    return ArtifactRevision(
+        workspace_id=WorkspaceId.parse(snapshot.workspace_id),
+        artifact_kind="TECHNICAL_SNAPSHOT_V1",
+        artifact_id="TECHNICAL-SNAPSHOT",
+        revision_id="77777777-7777-4777-8777-777777777777",
+        revision=revision,
+        created_at="2026-08-31T10:00:00+00:00",
+        checksum_sha256="e" * 64,
+        payload=technical_snapshot_to_mapping(snapshot),
+    )
+
+
+def save_service(snapshot, *, append=None):
+    case_record, case, inspection_record, inspection = upstreams()
+    return SaveTechnicalSnapshot(
+        SimpleNamespace(append_if_latest=append or (lambda **_kwargs: SimpleNamespace(revision=4))),
+        SimpleNamespace(execute=lambda *_args: latest_technical_record(snapshot)),
+        SimpleNamespace(execute=lambda _workspace: (case_record, case)),
+        SimpleNamespace(execute=lambda _workspace: (inspection_record, inspection)),
+        nullcontext,
+        SimpleNamespace(now=lambda: datetime(2026, 8, 31, 11, tzinfo=UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
+    )
+
+
+class CommandHarness:
+    def __init__(self, snapshot):
+        self.snapshot = snapshot
+        self.revision = 1
+
+    def get(self):
+        return SimpleNamespace(execute=lambda _workspace: (SimpleNamespace(revision=self.revision), self.snapshot))
+
+    def save(self):
+        def execute(_workspace, snapshot, expected_revision, *, mutation_authority):
+            assert expected_revision == self.revision
+            assert mutation_authority in {"PROPOSAL", "PROFESSIONAL"}
+            self.revision += 1
+            self.snapshot = snapshot
+            return SimpleNamespace(revision=self.revision)
+        return SimpleNamespace(execute=execute)
+
+
+class SequentialIds:
+    def __init__(self):
+        self.value = 1
+
+    def new_uuid(self):
+        value = UUID(f"00000000-0000-4000-8000-{self.value:012d}")
+        self.value += 1
+        return value
+
+
+class SequentialClock:
+    def __init__(self):
+        self.minute = 0
+
+    def now(self):
+        self.minute += 1
+        return datetime(2026, 8, 31, 12, self.minute, tzinfo=UTC)
+
+
+def empty_bound_snapshot():
+    snapshot = bound_snapshot()
+    return replace(
+        snapshot,
+        evidence_items=(), source_links=(), evidence_assessments=(), method_applications=(),
+        method_inputs=(), method_outputs=(), finding_proposals=(), findings=(), dependencies=(),
+        conflicts=(), limitations=(), uncertainties=(), question_links=(), decisions=(),
+        coverage=TechnicalCoverage(0, 0, 0, 0, 0, 0, False, ("Cadeia técnica vazia.",)),
+    )
+
+
 def test_canonical_fixture_round_trips_every_required_entity():
     snapshot = technical_snapshot_from_mapping(payload())
     assert type(snapshot) is TechnicalSnapshot
@@ -102,7 +182,9 @@ def test_canonical_fixture_round_trips_every_required_entity():
 def test_source_never_becomes_evidence_without_explicit_approved_assessment():
     raw = payload()
     raw["evidence_assessments"][0]["review_state"] = "PENDING"
+    raw["evidence_assessments"][0]["review_id"] = None
     raw["evidence_assessments"][0]["reviewer"] = None
+    raw["evidence_assessments"][0]["review_reason"] = None
     raw["evidence_assessments"][0]["reviewed_at"] = None
     with pytest.raises(ValueError, match="approved evidence"):
         technical_snapshot_from_mapping(raw)
@@ -209,7 +291,7 @@ def test_fixture_matches_strict_published_schema():
 def test_openapi_publishes_only_canonical_technical_snapshot_operations():
     contract = json.loads((ROOT / "contracts/openapi-v1.json").read_text(encoding="utf-8"))
     path = contract["paths"]["/v1/workspaces/{workspace_id}/technical-snapshot"]
-    assert set(path) == {"get", "post", "put"}
+    assert set(path) == {"get", "post"}
     assert contract["components"]["schemas"]["TechnicalSnapshot"] == {"$ref": "../schemas/technical-snapshot-v1.schema.json"}
     assert contract["info"]["x-technical-snapshot-semantic-boundary"] == "scripts.backend_contract.technical_findings.technical_snapshot_from_mapping"
 
@@ -220,7 +302,7 @@ def test_start_binds_exact_latest_case_analysis_and_honestly_partial_inspection(
     service = StartTechnicalSnapshot(
         SimpleNamespace(execute=lambda _workspace: (case_record, case)),
         SimpleNamespace(execute=lambda _workspace: (inspection_record, inspection)),
-        SimpleNamespace(execute=lambda workspace, snapshot, expected: saved.append((workspace, snapshot, expected)) or SimpleNamespace(revision=1)),
+        SimpleNamespace(execute=lambda workspace, snapshot, expected, **kwargs: saved.append((workspace, snapshot, expected, kwargs)) or SimpleNamespace(revision=1)),
         SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
     )
     record, snapshot = service.execute(WorkspaceId.parse(snapshot_workspace := inspection.workspace_id))
@@ -233,24 +315,101 @@ def test_start_binds_exact_latest_case_analysis_and_honestly_partial_inspection(
     assert saved[0][2] is None
 
 
+def test_command_chain_keeps_proposals_non_authoritative_and_server_owns_review_identity():
+    harness = CommandHarness(empty_bound_snapshot()); ids = SequentialIds(); clock = SequentialClock()
+    source = bound_snapshot().source_links[0]
+    AddEvidenceProposal(harness.get(), harness.save(), ids).execute(
+        WorkspaceId.parse(harness.snapshot.workspace_id), source_kind=source.source_kind,
+        source_id=source.source_id, proposition="Proposição sintética.", why_relevant="Relevância sintética.",
+        expected_revision=1,
+    )
+    evidence = harness.snapshot.evidence_items[-1]
+    assessment = harness.snapshot.evidence_assessments[-1]
+    assert assessment.review_state is EvidenceReviewState.PENDING
+    assert assessment.reviewer is None and assessment.reviewed_at is None
+    assert harness.snapshot.decisions == () and harness.snapshot.findings == ()
+
+    ReviewTechnicalEvidence(harness.get(), harness.save(), clock, ids).execute(
+        WorkspaceId.parse(harness.snapshot.workspace_id), evidence_id=evidence.evidence_id,
+        action="APPROVE", professional_id="PROFESSIONAL-001", reason="Revisão humana explícita.",
+        expected_revision=2,
+    )
+    reviewed = harness.snapshot.evidence_assessments[-1]
+    assert reviewed.review_state is EvidenceReviewState.APPROVED
+    assert reviewed.review_id.startswith("EVIDENCE-REVIEW-")
+    assert reviewed.reviewer == "PROFESSIONAL-001"
+    assert reviewed.review_reason == "Revisão humana explícita."
+    assert reviewed.why_relevant == "Relevância sintética."
+    assert reviewed.reviewed_at == "2026-08-31T12:01:00+00:00"
+
+    SelectTechnicalMethod(harness.get(), harness.save(), ids).execute(
+        WorkspaceId.parse(harness.snapshot.workspace_id), evidence_id=evidence.evidence_id,
+        method_identity="Comparação sintética", procedure="Comparar registros.", output="Resultado sintético.",
+        professional_id="PROFESSIONAL-001", expected_revision=3,
+    )
+    method = harness.snapshot.method_applications[-1]
+    assert method.selection_authority == "PROFESSIONAL:PROFESSIONAL-001"
+
+    ProposeTechnicalFinding(harness.get(), harness.save(), ids).execute(
+        WorkspaceId.parse(harness.snapshot.workspace_id), method_application_id=method.method_application_id,
+        technical_proposition="Achado candidato.", scope="Amostra sintética.", limitation="Sem extrapolação.",
+        uncertainty="Amostra única.", uncertainty_impact="Limita generalização.", origin="AI_PROPOSAL",
+        contrary_evidence_ids=(), expected_revision=4,
+    )
+    proposal = harness.snapshot.finding_proposals[-1]
+    assert proposal.origin is ProposalOrigin.AI_PROPOSAL
+    assert harness.snapshot.decisions == () and harness.snapshot.findings == ()
+
+
+def test_professional_supersession_preserves_d1_d2_d3_and_rejection_removes_only_effectiveness():
+    harness = CommandHarness(empty_bound_snapshot()); ids = SequentialIds(); clock = SequentialClock(); workspace = WorkspaceId.parse(harness.snapshot.workspace_id)
+    source = bound_snapshot().source_links[0]
+    AddEvidenceProposal(harness.get(), harness.save(), ids).execute(workspace, source_kind=source.source_kind, source_id=source.source_id, proposition="Base.", why_relevant="Base sintética.", expected_revision=1)
+    evidence_id = harness.snapshot.evidence_items[-1].evidence_id
+    ReviewTechnicalEvidence(harness.get(), harness.save(), clock, ids).execute(workspace, evidence_id=evidence_id, action="APPROVE", professional_id="PROFESSIONAL-001", reason="Aprovada.", expected_revision=2)
+    SelectTechnicalMethod(harness.get(), harness.save(), ids).execute(workspace, evidence_id=evidence_id, method_identity="Método", procedure="Procedimento.", output="Saída.", professional_id="PROFESSIONAL-001", expected_revision=3)
+    method_id = harness.snapshot.method_applications[-1].method_application_id
+    ProposeTechnicalFinding(harness.get(), harness.save(), ids).execute(workspace, method_application_id=method_id, technical_proposition="P1.", scope="Escopo.", limitation="Limite.", uncertainty="Incerteza.", uncertainty_impact="Impacto.", origin="PROFESSIONAL_PROPOSAL", contrary_evidence_ids=(), expected_revision=4)
+    proposal_id = harness.snapshot.finding_proposals[-1].proposal_id
+    review = ReviewTechnicalFinding(harness.get(), harness.save(), clock, ids)
+    review.execute(workspace, proposal_id=proposal_id, action="APPROVE", professional_id="PROFESSIONAL-001", reason="D1.", modified_proposition=None, resolve_conflicts=False, expected_revision=5)
+    review.execute(workspace, proposal_id=proposal_id, action="MODIFY", professional_id="PROFESSIONAL-001", reason="D2.", modified_proposition="P2.", resolve_conflicts=False, expected_revision=6)
+    review.execute(workspace, proposal_id=proposal_id, action="REJECT", professional_id="PROFESSIONAL-001", reason="D3.", modified_proposition=None, resolve_conflicts=False, expected_revision=7)
+    assert len(harness.snapshot.decisions) == 3
+    assert [item.supersedes_decision_id for item in harness.snapshot.decisions] == [None, harness.snapshot.decisions[0].decision_id, harness.snapshot.decisions[1].decision_id]
+    assert len(harness.snapshot.findings) == 2
+    assert harness.snapshot.coverage.effective_findings == 0
+    assert harness.snapshot.coverage.complete is False
+
+
 def test_save_is_atomic_workspace_bound_and_records_both_dependencies():
     case_record, case, inspection_record, inspection = upstreams()
     snapshot = bound_snapshot()
     calls = []
-    service = SaveTechnicalSnapshot(
-        SimpleNamespace(append_if_latest=lambda **kwargs: calls.append(kwargs) or SimpleNamespace(revision=4)),
-        SimpleNamespace(execute=lambda _workspace: (case_record, case)),
-        SimpleNamespace(execute=lambda _workspace: (inspection_record, inspection)),
-        nullcontext,
-        SimpleNamespace(now=lambda: datetime(2026, 8, 31, 11, tzinfo=UTC)),
-        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
-    )
-    saved = service.execute(WorkspaceId.parse(snapshot.workspace_id), snapshot, 3)
+    service = save_service(snapshot, append=lambda **kwargs: calls.append(kwargs) or SimpleNamespace(revision=4))
+    saved = service.execute(WorkspaceId.parse(snapshot.workspace_id), snapshot, 3, mutation_authority="PROFESSIONAL")
     assert saved.revision == 4
     assert calls[0]["expected_revision"] == 3
     assert {item["artifact_kind"] for item in calls[0]["expected_dependencies"]} == {"CASE_ANALYSIS_SNAPSHOT_V1", "INSPECTION_SESSION_V1"}
     with pytest.raises(ValueError, match="workspace"):
-        service.execute(WorkspaceId.parse("22222222-2222-4222-8222-222222222222"), snapshot, 3)
+        service.execute(WorkspaceId.parse("22222222-2222-4222-8222-222222222222"), snapshot, 3, mutation_authority="PROFESSIONAL")
+
+
+def test_structurally_valid_full_snapshot_cannot_manufacture_professional_authority():
+    snapshot = bound_snapshot(); service = save_service(snapshot)
+    with pytest.raises(ValueError, match="dedicated command"):
+        service.execute(WorkspaceId.parse(snapshot.workspace_id), snapshot, 3)
+    with pytest.raises(ValueError, match="canonical start command"):
+        service.execute(WorkspaceId.parse(snapshot.workspace_id), snapshot, None)
+
+
+def test_professional_history_rewrite_is_denied_even_when_resulting_graph_is_valid():
+    snapshot = bound_snapshot(); service = save_service(snapshot)
+    decisions = list(snapshot.decisions)
+    decisions[0] = replace(decisions[0], professional_id="FORGED-PROFESSIONAL")
+    rewritten = replace(snapshot, decisions=tuple(decisions))
+    with pytest.raises(ValueError, match="history cannot be rewritten"):
+        service.execute(WorkspaceId.parse(snapshot.workspace_id), rewritten, 3, mutation_authority="PROFESSIONAL")
 
 
 def test_reopen_marks_changed_upstream_stale_and_stale_snapshot_cannot_save():
@@ -273,32 +432,23 @@ def test_reopen_marks_changed_upstream_stale_and_stale_snapshot_cannot_save():
     _, stale = get.execute(WorkspaceId.parse(snapshot.workspace_id))
     assert stale.upstream_stale is True
     assert "case analysis artifact revision changed" in stale.upstream_stale_reasons
-    save = SaveTechnicalSnapshot(
-        SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), nullcontext,
-        SimpleNamespace(now=lambda: datetime.now(UTC)), SimpleNamespace(),
-    )
+    save = save_service(snapshot)
     with pytest.raises(ValueError, match="stale"):
-        save.execute(WorkspaceId.parse(snapshot.workspace_id), stale, 1)
+        save.execute(WorkspaceId.parse(snapshot.workspace_id), stale, 1, mutation_authority="PROFESSIONAL")
 
 
 def test_save_rejects_source_or_question_identity_absent_from_bound_upstreams():
     case_record, case, inspection_record, inspection = upstreams()
-    service = SaveTechnicalSnapshot(
-        SimpleNamespace(append_if_latest=lambda **_kwargs: SimpleNamespace(revision=4)),
-        SimpleNamespace(execute=lambda _workspace: (case_record, case)),
-        SimpleNamespace(execute=lambda _workspace: (inspection_record, inspection)),
-        nullcontext, SimpleNamespace(now=lambda: datetime.now(UTC)),
-        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
-    )
     snapshot = bound_snapshot()
+    service = save_service(snapshot)
     links = list(snapshot.source_links)
     links[0] = replace(links[0], source_id="MEASUREMENT-UNKNOWN")
-    with pytest.raises(ValueError, match="source identity"):
-        service.execute(WorkspaceId.parse(snapshot.workspace_id), replace(snapshot, source_links=tuple(links)), 3)
+    with pytest.raises(ValueError, match="origin or history"):
+        service.execute(WorkspaceId.parse(snapshot.workspace_id), replace(snapshot, source_links=tuple(links)), 3, mutation_authority="PROFESSIONAL")
     questions = list(snapshot.question_links)
     questions[0] = replace(questions[0], question_id="QUESTION-UNKNOWN")
     with pytest.raises(ValueError, match="question identity"):
-        service.execute(WorkspaceId.parse(snapshot.workspace_id), replace(snapshot, question_links=tuple(questions)), 3)
+        service.execute(WorkspaceId.parse(snapshot.workspace_id), replace(snapshot, question_links=tuple(questions)), 3, mutation_authority="PROFESSIONAL")
 
 
 def test_latest_professional_decision_controls_effectiveness_and_orphans_are_rejected():
@@ -309,7 +459,7 @@ def test_latest_professional_decision_controls_effectiveness_and_orphans_are_rej
         modified_proposition=None, timestamp="2026-08-31T10:20:00+00:00",
         supersedes_decision_id="DECISION-001",
     )
-    with pytest.raises(ValueError, match="latest professional decision"):
+    with pytest.raises(ValueError, match="question link must target effective finding"):
         replace(snapshot, decisions=snapshot.decisions + (later_rejection,))
     with pytest.raises(ValueError, match="proposal"):
         replace(snapshot, decisions=snapshot.decisions + (replace(later_rejection, decision_id="DECISION-004", proposal_id="PROPOSAL-UNKNOWN", supersedes_decision_id=None),))
@@ -344,18 +494,12 @@ def test_orphan_conflict_uncertainty_and_limitation_are_rejected():
 
 def test_source_links_require_the_exact_bound_artifact_revision():
     case_record, case, inspection_record, inspection = upstreams()
-    service = SaveTechnicalSnapshot(
-        SimpleNamespace(append_if_latest=lambda **_kwargs: SimpleNamespace(revision=4)),
-        SimpleNamespace(execute=lambda _workspace: (case_record, case)),
-        SimpleNamespace(execute=lambda _workspace: (inspection_record, inspection)),
-        nullcontext, SimpleNamespace(now=lambda: datetime.now(UTC)),
-        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
-    )
     snapshot = bound_snapshot()
+    service = save_service(snapshot)
     links = list(snapshot.source_links)
     links[0] = replace(links[0], source_revision=inspection_record.revision + 1)
-    with pytest.raises(ValueError, match="source revision"):
-        service.execute(WorkspaceId.parse(snapshot.workspace_id), replace(snapshot, source_links=tuple(links)), 3)
+    with pytest.raises(ValueError, match="origin or history"):
+        service.execute(WorkspaceId.parse(snapshot.workspace_id), replace(snapshot, source_links=tuple(links)), 3, mutation_authority="PROFESSIONAL")
 
 
 def test_proposal_support_must_be_consumed_by_its_declared_methods():
@@ -370,7 +514,7 @@ def test_conflict_resolution_requires_a_decision_for_the_same_proposal():
     snapshot = technical_snapshot_from_mapping(payload())
     conflict = replace(
         snapshot.conflicts[0], status=ConflictStatus.RESOLVED,
-        resolution_reasoning="ResoluÃ§Ã£o profissional sintÃ©tica.", decision_id="DECISION-002",
+        resolution_reasoning="Resolução profissional sintética.", decision_id="DECISION-002",
     )
     coverage = replace(snapshot.coverage, unresolved_conflicts=0)
     with pytest.raises(ValueError, match="conflict resolution decision"):
@@ -381,7 +525,7 @@ def test_professional_decisions_require_a_strict_unambiguous_supersession_order(
     snapshot = technical_snapshot_from_mapping(payload())
     tied_rejection = ProfessionalDecision(
         decision_id="DECISION-003", proposal_id="PROPOSAL-001", action=DecisionAction.REJECT,
-        professional_id="PROFESSIONAL-001", reason="RejeiÃ§Ã£o concorrente sintÃ©tica.",
+        professional_id="PROFESSIONAL-001", reason="Rejeição concorrente sintética.",
         modified_proposition=None, timestamp="2026-08-31T10:10:00+00:00",
         supersedes_decision_id=None,
     )
@@ -395,18 +539,12 @@ def test_professional_decisions_require_a_strict_unambiguous_supersession_order(
 )
 def test_source_kind_must_match_the_exact_upstream_record_type(source_kind, source_id):
     case_record, case, inspection_record, inspection = upstreams()
-    service = SaveTechnicalSnapshot(
-        SimpleNamespace(append_if_latest=lambda **_kwargs: SimpleNamespace(revision=4)),
-        SimpleNamespace(execute=lambda _workspace: (case_record, case)),
-        SimpleNamespace(execute=lambda _workspace: (inspection_record, inspection)),
-        nullcontext, SimpleNamespace(now=lambda: datetime.now(UTC)),
-        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
-    )
     snapshot = bound_snapshot()
+    service = save_service(snapshot)
     links = list(snapshot.source_links)
     links[0] = replace(links[0], source_kind=source_kind, source_id=source_id, source_revision=(case_record.revision if source_kind.startswith("CASE_") else inspection_record.revision))
-    with pytest.raises(ValueError, match="source identity"):
-        service.execute(WorkspaceId.parse(snapshot.workspace_id), replace(snapshot, source_links=tuple(links)), 3)
+    with pytest.raises(ValueError, match="origin or history"):
+        service.execute(WorkspaceId.parse(snapshot.workspace_id), replace(snapshot, source_links=tuple(links)), 3, mutation_authority="PROFESSIONAL")
 
 
 def test_rejected_evidence_review_is_preserved_but_cannot_feed_a_method():
@@ -430,7 +568,7 @@ def test_decision_cannot_predate_evidence_review_or_duplicate_an_effective_findi
         replace(snapshot, decisions=tuple(decisions))
     duplicate = replace(snapshot.findings[0], finding_id="FINDING-DUPLICATE")
     coverage = replace(snapshot.coverage, effective_findings=3)
-    with pytest.raises(ValueError, match="unique per proposal"):
+    with pytest.raises(ValueError, match="unique per decision"):
         replace(snapshot, findings=snapshot.findings + (duplicate,), coverage=coverage)
 
 
@@ -438,7 +576,7 @@ def test_finding_dependencies_must_be_acyclic():
     snapshot = technical_snapshot_from_mapping(payload())
     inverse = FindingDependency(
         dependency_id="DEPENDENCY-002", finding_id="FINDING-001",
-        depends_on_finding_id="FINDING-002", rationale="Ciclo sintÃ©tico proibido.",
+        depends_on_finding_id="FINDING-002", rationale="Ciclo sintético proibido.",
     )
     with pytest.raises(ValueError, match="dependency cycle"):
         replace(snapshot, dependencies=snapshot.dependencies + (inverse,))

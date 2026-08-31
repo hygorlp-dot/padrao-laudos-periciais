@@ -46,7 +46,16 @@ from ..application.case_analysis import AddCaseAnalysisItem, GetCaseAnalysis, Re
 from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning, StartPericialPlanning
 from ..application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession
 from ..application.field_mobile import GetOfflineInspection, ListPendingOfflineInspections, PrepareOfflineInspection, RevokeOfflineDevice, SyncOfflineInspection, UpdateOfflineInspection
-from ..application.technical_findings import GetTechnicalSnapshot, SaveTechnicalSnapshot, StartTechnicalSnapshot
+from ..application.technical_findings import (
+    AddEvidenceProposal,
+    GetTechnicalSnapshot,
+    ProposeTechnicalFinding,
+    ReviewTechnicalEvidence,
+    ReviewTechnicalFinding,
+    SaveTechnicalSnapshot,
+    SelectTechnicalMethod,
+    StartTechnicalSnapshot,
+)
 from ..application.report_foundation import (
     GetExpertProfile,
     GetReportSnapshot,
@@ -328,6 +337,7 @@ def build_local_api(
     get_technical_snapshot = GetTechnicalSnapshot(get_latest_artifact, get_case_analysis, get_inspection_session)
     save_technical_snapshot = SaveTechnicalSnapshot(
         store.revisions,
+        get_latest_artifact,
         get_case_analysis,
         get_inspection_session,
         private_store.authority_guard if private_store is not None else nullcontext,
@@ -476,6 +486,11 @@ def build_local_api(
         save_technical_snapshot=save_technical_snapshot,
         get_technical_snapshot=get_technical_snapshot,
         start_technical_snapshot=StartTechnicalSnapshot(get_case_analysis, get_inspection_session, save_technical_snapshot, local_ids),
+        add_technical_evidence_proposal=AddEvidenceProposal(get_technical_snapshot, save_technical_snapshot, local_ids),
+        review_technical_evidence=ReviewTechnicalEvidence(get_technical_snapshot, save_technical_snapshot, local_clock, local_ids),
+        select_technical_method=SelectTechnicalMethod(get_technical_snapshot, save_technical_snapshot, local_ids),
+        propose_technical_finding=ProposeTechnicalFinding(get_technical_snapshot, save_technical_snapshot, local_ids),
+        review_technical_finding=ReviewTechnicalFinding(get_technical_snapshot, save_technical_snapshot, local_clock, local_ids),
         save_expert_profile=save_expert_profile,
         get_expert_profile=get_expert_profile,
         save_report_snapshot=save_report_snapshot,

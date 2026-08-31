@@ -119,7 +119,9 @@ class EvidenceAssessment:
     contrary_evidence_ids: tuple[str, ...]
     source_link_ids: tuple[str, ...]
     review_state: EvidenceReviewState
+    review_id: str | None
     reviewer: str | None
+    review_reason: str | None
     reviewed_at: str | None
 
     def __post_init__(self):
@@ -128,10 +130,14 @@ class EvidenceAssessment:
         _texts(self.contrary_evidence_ids)
         _texts(self.source_link_ids, allow_empty=False)
         if self.review_state in (EvidenceReviewState.APPROVED, EvidenceReviewState.REJECTED):
+            if not _text(self.review_id):
+                raise ValueError("reviewed evidence requires review identity")
             if not _text(self.reviewer):
                 raise ValueError("reviewed evidence requires reviewer")
+            if not _text(self.review_reason):
+                raise ValueError("reviewed evidence requires reason")
             _timestamp(self.reviewed_at)
-        elif self.reviewer is not None or self.reviewed_at is not None:
+        elif self.review_id is not None or self.reviewer is not None or self.review_reason is not None or self.reviewed_at is not None:
             raise ValueError("unreviewed evidence cannot claim professional review")
 
 
@@ -485,8 +491,8 @@ class TechnicalSnapshot:
                 decision = decisions.get(conflict.decision_id)
                 if decision is None or decision.proposal_id != conflict.proposal_id:
                     raise ValueError("conflict resolution decision must own the proposal")
-        if len({item.proposal_id for item in self.findings}) != len(self.findings) or len({item.decision_id for item in self.findings}) != len(self.findings):
-            raise ValueError("effective finding must be unique per proposal and decision")
+        if len({item.decision_id for item in self.findings}) != len(self.findings):
+            raise ValueError("technical finding history must be unique per decision")
         for finding in self.findings:
             proposal = proposals.get(finding.proposal_id)
             decision = decisions.get(finding.decision_id)
@@ -495,9 +501,17 @@ class TechnicalSnapshot:
             expected = decision.modified_proposition if decision.action is DecisionAction.MODIFY else proposal.technical_proposition
             if finding.technical_proposition != expected or finding.scope != proposal.scope:
                 raise ValueError("effective finding diverges from professional decision")
-            latest = max((item for item in self.decisions if item.proposal_id == finding.proposal_id), key=lambda item: datetime.fromisoformat(item.timestamp))
-            if latest.decision_id != finding.decision_id:
-                raise ValueError("effective finding must follow latest professional decision")
+        effective_findings = {}
+        for proposal_id in proposals:
+            history = sorted(
+                (item for item in self.decisions if item.proposal_id == proposal_id),
+                key=lambda item: datetime.fromisoformat(item.timestamp),
+            )
+            if history and history[-1].action is not DecisionAction.REJECT:
+                current = next((item for item in self.findings if item.decision_id == history[-1].decision_id), None)
+                if current is None:
+                    raise ValueError("effective finding must follow latest professional decision")
+                effective_findings[current.finding_id] = current
         for dependency in self.dependencies:
             if dependency.finding_id not in findings or dependency.depends_on_finding_id not in findings:
                 raise ValueError("finding dependency is invalid")
@@ -519,16 +533,16 @@ class TechnicalSnapshot:
         for finding_id in dependency_edges:
             visit(finding_id)
         for link in self.question_links:
-            if link.finding_id not in findings:
+            if link.finding_id not in effective_findings:
                 raise ValueError("question link must target effective finding")
         expected = TechnicalCoverage(
             evidence_items=len(evidence),
             approved_evidence=len(approved_evidence),
             method_applications=len(methods),
             finding_proposals=len(proposals),
-            effective_findings=len(findings),
+            effective_findings=len(effective_findings),
             unresolved_conflicts=sum(item.status is ConflictStatus.UNRESOLVED for item in self.conflicts),
-            complete=bool(proposals) and len(findings) == len(proposals) and not self.upstream_stale,
+            complete=bool(proposals) and len(effective_findings) == len(proposals) and not self.upstream_stale,
             reasons=self.coverage.reasons,
         )
         if self.coverage != expected:
