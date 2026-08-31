@@ -38,6 +38,7 @@ from ..infrastructure.sqlite import SQLiteApplicationStore
 from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
 from ..application.case_analysis import GetCaseAnalysis, SaveCaseAnalysis
+from ..application.pericial_planning import GetPericialPlanning, SavePericialPlanning
 
 
 class LocalApiStartupError(RuntimeError):
@@ -187,6 +188,7 @@ def build_local_api(
     )
     append_artifact_revision = AppendArtifactRevision(store.revisions, local_clock, local_ids)
     get_latest_artifact = GetLatestArtifact(store.revisions)
+    get_case_analysis = GetCaseAnalysis(get_latest_artifact, list_case_documents)
     services = LocalApiServices(
         create_workspace=CreateWorkspace(store.workspaces, local_clock, local_ids),
         get_workspace=GetWorkspace(store.workspaces),
@@ -213,7 +215,15 @@ def build_local_api(
             local_ids,
             list_case_documents,
         ),
-        get_case_analysis=GetCaseAnalysis(get_latest_artifact, list_case_documents),
+        get_case_analysis=get_case_analysis,
+        save_pericial_planning=SavePericialPlanning(
+            store.revisions,
+            get_latest_artifact,
+            get_case_analysis,
+            local_clock,
+            local_ids,
+        ),
+        get_pericial_planning=GetPericialPlanning(get_latest_artifact, get_case_analysis),
         get_process_metadata_review=get_process_metadata_review,
         confirm_process_metadata_source_span=confirm_process_metadata_source_span,
         import_case_document=import_case_document,

@@ -5,7 +5,8 @@
     "version": "1.1.0",
     "description": "Contrato mínimo da API local do produto.",
     "x-semantic-boundary": "scripts.backend_contract.api_contract.parse_judicial_domain_payload",
-    "x-case-analysis-semantic-boundary": "scripts.backend_contract.case_analysis.case_analysis_from_mapping"
+    "x-case-analysis-semantic-boundary": "scripts.backend_contract.case_analysis.case_analysis_from_mapping",
+    "x-pericial-planning-semantic-boundary": "scripts.backend_contract.pericial_planning.pericial_planning_from_mapping"
   },
   "paths": {
     "/v1/workspaces/{workspace_id}/case-analysis": {
@@ -26,6 +27,25 @@
           "409": {"description": "Conflito de revisão"}
         }
       }
+    },
+    "/v1/workspaces/{workspace_id}/pericial-planning": {
+      "get": {
+        "summary": "Reabre o planejamento pericial canônico",
+        "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
+        "responses": {
+          "200": {"description": "Planejamento reconciliado", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PericialPlanningEnvelope"}}}},
+          "404": {"description": "Planejamento ausente"}
+        }
+      },
+      "post": {
+        "summary": "Salva nova revisão de planejamento",
+        "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SavePericialPlanningRequest"}}}},
+        "responses": {
+          "200": {"description": "Revisão persistida", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PericialPlanningEnvelope"}}}},
+          "409": {"description": "Conflito de revisão"}
+        }
+      }
     }
   },
   "components": {
@@ -35,6 +55,7 @@
     "schemas": {
       "ProceduralContext": {"$ref": "../schemas/judicial-domain-model-v1.schema.json"},
       "CaseAnalysisSnapshot": {"$ref": "../schemas/case-analysis-snapshot-v1.schema.json"},
+      "PericialPlanningSnapshot": {"$ref": "../schemas/pericial-planning-snapshot-v1.schema.json"},
       "SaveCaseAnalysisRequest": {
         "type": "object",
         "required": ["expected_revision", "snapshot"],
@@ -51,6 +72,25 @@
           "revision": {"type": "integer", "minimum": 1},
           "updated_at": {"type": "string"},
           "snapshot": {"$ref": "#/components/schemas/CaseAnalysisSnapshot"}
+        },
+        "additionalProperties": false
+      },
+      "SavePericialPlanningRequest": {
+        "type": "object",
+        "required": ["expected_revision", "snapshot"],
+        "properties": {
+          "expected_revision": {"type": ["integer", "null"], "minimum": 1},
+          "snapshot": {"$ref": "#/components/schemas/PericialPlanningSnapshot"}
+        },
+        "additionalProperties": false
+      },
+      "PericialPlanningEnvelope": {
+        "type": "object",
+        "required": ["revision", "updated_at", "snapshot"],
+        "properties": {
+          "revision": {"type": "integer", "minimum": 1},
+          "updated_at": {"type": "string"},
+          "snapshot": {"$ref": "#/components/schemas/PericialPlanningSnapshot"}
         },
         "additionalProperties": false
       }

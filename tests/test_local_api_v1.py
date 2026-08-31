@@ -138,6 +138,59 @@ def case_analysis_payload():
     return json.loads((Path(__file__).parent / "fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8"))
 
 
+def pericial_planning_payload():
+    return json.loads((Path(__file__).parent / "fixtures/pericial-planning-snapshot-v1.json").read_text(encoding="utf-8"))
+
+
+def test_pericial_planning_route_validates_and_delegates_canonical_snapshot():
+    payload = pericial_planning_payload()
+    saved = RecordingService(revision(payload=payload))
+    bundle = services(save_pericial_planning=saved)
+
+    response = request(
+        LocalApi(bundle, token=TOKEN),
+        "POST",
+        f"/v1/workspaces/{WORKSPACE_UUID}/pericial-planning",
+        body={"expected_revision": None, "snapshot": payload},
+    )
+
+    assert response.status == 200
+    assert saved.calls[0][0][0] == WORKSPACE_ID
+    assert saved.calls[0][0][1].snapshot_id == "PLANNING-SNAPSHOT-001"
+
+
+def test_pericial_planning_get_returns_reconciled_canonical_payload():
+    payload = pericial_planning_payload()
+    from scripts.backend_contract.pericial_planning import pericial_planning_from_mapping
+
+    response = request(
+        LocalApi(
+            services(get_pericial_planning=RecordingService((revision(payload=payload), pericial_planning_from_mapping(payload)))),
+            token=TOKEN,
+        ),
+        "GET",
+        f"/v1/workspaces/{WORKSPACE_UUID}/pericial-planning",
+        headers={"X-Local-API-Token": TOKEN},
+    )
+
+    assert response.status == 200
+    assert decoded(response)["snapshot"]["snapshot_id"] == "PLANNING-SNAPSHOT-001"
+
+
+def test_pericial_planning_is_private_and_reserved_from_generic_artifacts():
+    api = LocalApi(services(), token=TOKEN)
+    private = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/pericial-planning")
+    bypass = request(
+        api,
+        "POST",
+        f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/PERICIAL_PLANNING_SNAPSHOT_V1/PERICIAL-PLANNING/revisions",
+        body={"payload": {"approved_method": "smuggled"}},
+    )
+
+    assert private.status == 403
+    assert bypass.status == 404
+
+
 def test_case_analysis_route_validates_and_delegates_canonical_snapshot():
     payload = case_analysis_payload()
     saved = RecordingService(revision(payload=payload))
@@ -252,6 +305,101 @@ def test_case_analysis_save_close_reopen_is_semantically_equivalent(tmp_path):
 
     assert status == 200
     assert json.loads(body)["snapshot"] == payload
+
+
+def test_pericial_planning_save_close_reopen_preserves_professional_state(tmp_path):
+    from scripts.backend_contract.case_analysis import case_analysis_from_mapping
+    from scripts.backend_contract.pericial_planning import case_analysis_digest
+
+    database = tmp_path / "pericial-planning.db"
+    private_root = tmp_path / "private-planning"
+    runtime = build_local_api(database, token=TOKEN, clock=FixedClock(), private_root=private_root)
+    runtime.start()
+    try:
+        _, _, created_body = http_request(
+            runtime.server,
+            "POST",
+            "/v1/workspaces",
+            value={"name": "Planejamento sintético"},
+            headers={"X-Local-API-Token": TOKEN},
+        )
+        workspace_id = json.loads(created_body)["workspace_id"]
+        analysis_payload = case_analysis_payload()
+        analysis_payload["workspace_id"] = workspace_id
+        analysis_payload["judicial_context_workspace_id"] = workspace_id
+        imported = []
+        for index in range(3):
+            content = f"%PDF-1.7\nplanning-synthetic-{index}\n%%EOF\n".encode()
+            status, _, body = http_request(
+                runtime.server,
+                "POST",
+                f"/v1/workspaces/{workspace_id}/materials",
+                raw_body=content,
+                headers={"X-Local-API-Token": TOKEN, "Content-Type": "application/pdf", "X-Document-Filename": f"planning-{index}.pdf"},
+            )
+            assert status == 201, body
+            imported.append(json.loads(body))
+        source_by_id = {}
+        for document, material in zip(analysis_payload["documents"], imported, strict=True):
+            document["storage_content_id"] = material["content_id"]
+            document["source_sha256"] = material["checksum_sha256"]
+            source_by_id[document["document_id"]] = material["checksum_sha256"]
+        for collection in ("claims", "counterarguments", "decisions", "pericial_objects", "questions", "events", "technical_document_references", "gaps", "conflicts"):
+            for item in analysis_payload[collection]:
+                for source in item["provenance"]:
+                    source["workspace_id"] = workspace_id
+                    source["source_document_sha256"] = source_by_id[source["source_document_id"]]
+        context = analysis_payload["judicial_context"]
+        for owner in [context, *context["entities"], *context["participants"], *context["representation_links"], *context["access_relations"]]:
+            for source in owner["provenance"]:
+                source["source_sha256"] = source_by_id[source["source_document_id"]]
+        analysis_status, _, analysis_body = http_request(
+            runtime.server,
+            "POST",
+            f"/v1/workspaces/{workspace_id}/case-analysis",
+            value={"expected_revision": None, "snapshot": analysis_payload},
+            headers={"X-Local-API-Token": TOKEN},
+        )
+        assert analysis_status == 200, analysis_body
+        planning_payload = pericial_planning_payload()
+        planning_payload["workspace_id"] = workspace_id
+        planning_payload["plan"]["workspace_id"] = workspace_id
+        planning_payload["plan"]["case_analysis_digest"] = case_analysis_digest(case_analysis_from_mapping(analysis_payload))
+        for collection in (
+            "objectives", "issues", "question_links", "required_documents", "required_information",
+            "inspection_requirements", "measurement_requirements", "photo_requirements", "equipment_requirements",
+            "access_requirements", "method_candidates", "procedure_candidates", "sampling_candidates",
+            "safety_requirements", "external_support_requirements", "risks", "gaps",
+        ):
+            for item in planning_payload[collection]:
+                for source in item["derivation"]["source_provenance"]:
+                    source["workspace_id"] = workspace_id
+                    source["source_document_sha256"] = source_by_id[source["source_document_id"]]
+        saved_status, _, saved_body = http_request(
+            runtime.server,
+            "POST",
+            f"/v1/workspaces/{workspace_id}/pericial-planning",
+            value={"expected_revision": None, "snapshot": planning_payload},
+            headers={"X-Local-API-Token": TOKEN},
+        )
+    finally:
+        runtime.close()
+
+    assert saved_status == 200, saved_body
+    reopened = build_local_api(database, token=TOKEN, private_root=private_root)
+    reopened.start()
+    try:
+        status, _, body = http_request(
+            reopened.server,
+            "GET",
+            f"/v1/workspaces/{workspace_id}/pericial-planning",
+            headers={"X-Local-API-Token": TOKEN},
+        )
+    finally:
+        reopened.close()
+
+    assert status == 200, body
+    assert json.loads(body)["snapshot"] == planning_payload
 
 
 def test_case_analysis_is_private_and_generic_artifact_route_cannot_bypass_validation():

@@ -289,3 +289,19 @@ def replace_artifact_revision(record, *, revision):
         checksum_sha256=record.checksum_sha256,
         payload=json.loads((ROOT / "tests/fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8")),
     )
+
+
+def test_openapi_exposes_only_canonical_pericial_planning_operations():
+    contract = json.loads((ROOT / "contracts/openapi-v1.json").read_text(encoding="utf-8"))
+    path = contract["paths"]["/v1/workspaces/{workspace_id}/pericial-planning"]
+
+    assert set(path) == {"get", "post"}
+    assert contract["components"]["schemas"]["PericialPlanningSnapshot"] == {
+        "$ref": "../schemas/pericial-planning-snapshot-v1.schema.json"
+    }
+    assert contract["info"]["x-pericial-planning-semantic-boundary"] == (
+        "scripts.backend_contract.pericial_planning.pericial_planning_from_mapping"
+    )
+    assert path["post"]["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/SavePericialPlanningRequest"
+    }
