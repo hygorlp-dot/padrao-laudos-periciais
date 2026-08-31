@@ -40,6 +40,16 @@
       "future_version_policy": "FAIL_CLOSED",
       "material_fields": ["analises_tecnicas", "claims_redacao", "quesitos", "conclusao", "encerramento"],
       "protected_material_fields": ["analises_tecnicas", "claims_redacao", "quesitos", "conclusao", "encerramento"]
+    },
+    {
+      "schema": "workspace-backup-v1.schema.json",
+      "current_version": "1.0.0",
+      "versions_supported": ["0.0.0", "1.0.0"],
+      "migrator": "scripts/backend_contract/productization.py:migrate_backup_mapping",
+      "consumers": ["BACKUP", "RESTORE", "RECOVERY"],
+      "future_version_policy": "FAIL_CLOSED",
+      "material_fields": ["workspace", "artifact_revisions", "private_contents", "member_hashes", "manifest_sha256"],
+      "protected_material_fields": ["workspace", "artifact_revisions", "private_contents", "member_hashes", "manifest_sha256"]
     }
   ]
 }
