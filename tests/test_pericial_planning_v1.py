@@ -27,9 +27,11 @@ from scripts.backend_contract.pericial_planning import (
     QuestionPlanningLink,
     RequiredDocument,
     RequiredInformation,
+    ReviewAction,
     SafetyRequirement,
     SamplingCandidate,
     case_analysis_digest,
+    append_professional_decision,
     pericial_planning_from_mapping,
     pericial_planning_to_mapping,
     validate_against_case_analysis,
@@ -38,9 +40,11 @@ from scripts.backend_contract.case_analysis import case_analysis_from_mapping
 from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
 from scripts.backend_contract.application.pericial_planning import (
     GetPericialPlanning,
+    ReviewPericialPlanning,
     SavePericialPlanning,
     validated_pericial_planning_from_mapping,
 )
+from scripts.backend_contract.application.ports import RepositoryConflict
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -117,6 +121,20 @@ def test_published_schema_rejects_stage5_fields():
         jsonschema.Draft202012Validator(schema).validate(raw)
 
 
+@pytest.mark.parametrize(
+    ("action", "decided_value"),
+    (("MODIFY", None), ("APPROVE", "valor que não pode acompanhar aprovação")),
+)
+def test_published_schema_enforces_decided_value_only_for_modification(action, decided_value):
+    schema = json.loads((ROOT / "schemas/pericial-planning-snapshot-v1.schema.json").read_text(encoding="utf-8"))
+    raw = fixture()
+    raw["decisions"][0]["action"] = action
+    raw["decisions"][0]["decided_value"] = decided_value
+
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.Draft202012Validator(schema).validate(raw)
+
+
 def test_every_material_item_has_a_nonempty_derivation():
     snapshot = pericial_planning_from_mapping(fixture())
 
@@ -187,6 +205,39 @@ def test_graph_review_and_readiness_smuggling_fail_closed(mutate):
 
     with pytest.raises(ValueError):
         pericial_planning_from_mapping(raw)
+
+
+@pytest.mark.parametrize(
+    ("action", "decided_value", "expected_status"),
+    (
+        ("APPROVE", None, "APPROVED"),
+        ("REJECT", None, "REJECTED"),
+        ("MODIFY", "Proposta ajustada pelo profissional.", "MODIFIED"),
+        ("DEFER", None, "DEFERRED"),
+    ),
+)
+def test_professional_decisions_append_without_replacing_the_proposal(action, decided_value, expected_status):
+    snapshot = pericial_planning_from_mapping(fixture())
+    original = snapshot.issues[0].description
+    decision = PlanningDecision(
+        decision_id=f"PLAN-DECISION-{action}",
+        target_item_id="PLAN-ISSUE-001",
+        action=ReviewAction(action),
+        proposal_value=original,
+        decided_value=decided_value,
+        reviewer="PERITO-SYNTHETIC",
+        reason="Decisão profissional sintética explícita.",
+        revision=1,
+        timestamp="2026-08-30T19:00:00-03:00",
+    )
+
+    reviewed = append_professional_decision(snapshot, decision)
+
+    assert reviewed.issues[0].description == original
+    assert reviewed.issues[0].professional_review_status == expected_status
+    assert reviewed.decisions[-1] == decision
+    assert reviewed.coverage.reviewed_items == 2
+    assert reviewed.coverage.pending_items == 15
 
 
 def test_application_schema_and_semantic_boundary_rejects_unknown_fields():
@@ -278,6 +329,71 @@ def test_get_reopens_same_effective_state_and_marks_changed_upstream_stale():
     assert "Case Analysis artifact revision changed" in stale.upstream_stale_reasons
 
 
+def test_review_service_requires_explicit_professional_input_and_saves_with_cas():
+    planning = pericial_planning_from_mapping(fixture())
+    record = artifact(planning, kind="PERICIAL_PLANNING_SNAPSHOT_V1", artifact_id="PERICIAL-PLANNING")
+    calls = []
+    service = ReviewPericialPlanning(
+        SimpleNamespace(execute=lambda _workspace: (record, planning)),
+        SimpleNamespace(execute=lambda *args: calls.append(args) or SimpleNamespace(revision=2)),
+        SimpleNamespace(now=lambda: datetime(2026, 8, 30, 19, tzinfo=UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
+    )
+
+    saved, reviewed = service.execute(
+        WorkspaceId.parse(planning.workspace_id),
+        target_item_id="PLAN-ISSUE-001",
+        action="MODIFY",
+        reviewer="PERITO-SYNTHETIC",
+        reason="Ajuste profissional sintético.",
+        decided_value="Controvérsia será verificada documentalmente.",
+        expected_revision=1,
+    )
+
+    assert saved.revision == 2
+    assert reviewed.issues[0].description == planning.issues[0].description
+    assert reviewed.decisions[-1].action is ReviewAction.MODIFY
+    assert calls[0][2] == 1
+
+
+def test_review_service_classifies_a_stale_expected_revision_as_conflict():
+    planning = pericial_planning_from_mapping(fixture())
+    record = replace_artifact_revision(
+        artifact(planning, kind="PERICIAL_PLANNING_SNAPSHOT_V1", artifact_id="PERICIAL-PLANNING"),
+        revision=2,
+    )
+    service = ReviewPericialPlanning(
+        SimpleNamespace(execute=lambda _workspace: (record, planning)),
+        SimpleNamespace(execute=lambda *_args: pytest.fail("must not save")),
+        SimpleNamespace(now=lambda: datetime(2026, 8, 30, 19, tzinfo=UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
+    )
+
+    with pytest.raises(RepositoryConflict):
+        service.execute(
+            WorkspaceId.parse(planning.workspace_id), target_item_id="PLAN-ISSUE-001", action="APPROVE",
+            reviewer="PERITO-SYNTHETIC", reason="Decisão sintética.", decided_value=None, expected_revision=1,
+        )
+
+
+@pytest.mark.parametrize("reviewer,reason", (("", "motivo"), ("PERITO", "")))
+def test_review_service_never_synthesizes_reviewer_or_reason(reviewer, reason):
+    planning = pericial_planning_from_mapping(fixture())
+    record = artifact(planning, kind="PERICIAL_PLANNING_SNAPSHOT_V1", artifact_id="PERICIAL-PLANNING")
+    service = ReviewPericialPlanning(
+        SimpleNamespace(execute=lambda _workspace: (record, planning)),
+        SimpleNamespace(execute=lambda *_args: pytest.fail("must not save")),
+        SimpleNamespace(now=lambda: datetime(2026, 8, 30, 19, tzinfo=UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
+    )
+
+    with pytest.raises(ValueError):
+        service.execute(
+            WorkspaceId.parse(planning.workspace_id), target_item_id="PLAN-ISSUE-001", action="APPROVE",
+            reviewer=reviewer, reason=reason, decided_value=None, expected_revision=1,
+        )
+
+
 def replace_artifact_revision(record, *, revision):
     return ArtifactRevision(
         workspace_id=record.workspace_id,
@@ -304,4 +420,9 @@ def test_openapi_exposes_only_canonical_pericial_planning_operations():
     )
     assert path["post"]["requestBody"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/SavePericialPlanningRequest"
+    }
+    decision_path = contract["paths"]["/v1/workspaces/{workspace_id}/pericial-planning/decisions"]
+    assert set(decision_path) == {"post"}
+    assert decision_path["post"]["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/PericialPlanningDecisionRequest"
     }

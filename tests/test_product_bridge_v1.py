@@ -324,7 +324,8 @@ def test_pericial_planning_bridge_allowlist_is_exact():
 
     assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning", "GET") == f"/v1/workspaces/{workspace_id}/pericial-planning"
     assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning", "POST") == f"/v1/workspaces/{workspace_id}/pericial-planning"
-    assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning/decisions", "POST") is None
+    assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning/decisions", "POST") == f"/v1/workspaces/{workspace_id}/pericial-planning/decisions"
+    assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning/decisions", "GET") is None
     assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning", "DELETE") is None
 
 

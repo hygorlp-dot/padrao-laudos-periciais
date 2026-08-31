@@ -89,6 +89,7 @@ class LocalApiServices:
     get_case_analysis: object | None = None
     save_pericial_planning: object | None = None
     get_pericial_planning: object | None = None
+    review_pericial_planning: object | None = None
     get_process_metadata_review: object | None = None
     confirm_process_metadata_source_span: object | None = None
     import_case_document: object | None = None
@@ -509,6 +510,29 @@ class LocalApi:
                         },
                     )
                 return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("pericial-planning", "decisions"):
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                workspace_id = self._workspace_id(raw_segments[2])
+                dto = self._request_dto(request_headers, body)
+                if set(dto) != {"expected_revision", "target_item_id", "action", "reviewer", "reason", "decided_value"}:
+                    raise ValueError("professional planning decision request is invalid")
+                record, snapshot = self._services.review_pericial_planning.execute(
+                    workspace_id,
+                    target_item_id=dto["target_item_id"],
+                    action=dto["action"],
+                    reviewer=dto["reviewer"],
+                    reason=dto["reason"],
+                    decided_value=dto["decided_value"],
+                    expected_revision=dto["expected_revision"],
+                )
+                if type(snapshot) is not PlanningSnapshot:
+                    raise RepositoryIntegrityError("Pericial Planning reviewed state is invalid")
+                return _json_response(
+                    200,
+                    {"revision": record.revision, "updated_at": record.created_at, "snapshot": pericial_planning_to_mapping(snapshot)},
+                )
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "materials":
                 workspace_id = self._workspace_id(raw_segments[2])

@@ -595,6 +595,60 @@ def validate_against_case_analysis(
             raise ValueError("planning provenance is not exact Case Analysis provenance")
 
 
+def append_professional_decision(snapshot: PlanningSnapshot, decision: PlanningDecision) -> PlanningSnapshot:
+    if type(snapshot) is not PlanningSnapshot or type(decision) is not PlanningDecision:
+        raise TypeError("canonical planning snapshot and decision are required")
+    status_by_action = {
+        ReviewAction.APPROVE: ProfessionalReviewStatus.APPROVED,
+        ReviewAction.REJECT: ProfessionalReviewStatus.REJECTED,
+        ReviewAction.MODIFY: ProfessionalReviewStatus.MODIFIED,
+        ReviewAction.DEFER: ProfessionalReviewStatus.DEFERRED,
+    }
+    target = next((item for item in snapshot.material_items if item.item_id == decision.target_item_id), None)
+    if target is None or decision.proposal_value != target.description:
+        raise ValueError("professional decision target or proposal is invalid")
+    history = [item for item in snapshot.decisions if item.target_item_id == decision.target_item_id]
+    if decision.revision != len(history) + 1:
+        raise ValueError("professional decision revision must append contiguously")
+    collection_updates = {}
+    for collection_name in _COLLECTION_TYPES:
+        collection = getattr(snapshot, collection_name)
+        if any(item.item_id == decision.target_item_id for item in collection):
+            collection_updates[collection_name] = tuple(
+                replace(item, professional_review_status=status_by_action[decision.action])
+                if item.item_id == decision.target_item_id
+                else item
+                for item in collection
+            )
+            break
+    statuses = [
+        item.professional_review_status
+        for name in _COLLECTION_TYPES
+        for item in collection_updates.get(name, getattr(snapshot, name))
+    ]
+    pending = statuses.count(ProfessionalReviewStatus.PENDING)
+    approved = statuses.count(ProfessionalReviewStatus.APPROVED)
+    rejected = statuses.count(ProfessionalReviewStatus.REJECTED)
+    modified = statuses.count(ProfessionalReviewStatus.MODIFIED)
+    deferred = statuses.count(ProfessionalReviewStatus.DEFERRED)
+    coverage = replace(
+        snapshot.coverage,
+        material_items_total=len(statuses),
+        reviewed_items=len(statuses) - pending,
+        pending_items=pending,
+        approved_items=approved,
+        rejected_items=rejected,
+        modified_items=modified,
+        deferred_items=deferred,
+    )
+    return replace(
+        snapshot,
+        decisions=(*snapshot.decisions, decision),
+        coverage=coverage,
+        **collection_updates,
+    )
+
+
 def _item_from_mapping(item_type: type[PlanningItem], value: object) -> PlanningItem:
     raw = _object(value, _field_names(item_type))
     derivation_raw = _object(raw["derivation"], _field_names(PlanningDerivation))

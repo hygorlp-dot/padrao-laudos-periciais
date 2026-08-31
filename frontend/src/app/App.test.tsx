@@ -191,6 +191,26 @@ describe("pericia directory", () => {
 });
 
 describe("workspace-aware routing", () => {
+  test("deep-links to the real pericial planning workspace", async () => {
+    window.history.replaceState(null, "", `/pericias/${ID}/planejamento`);
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, WORKSPACE))
+      .mockResolvedValueOnce(
+        jsonResponse(404, { error: { code: "PERICIAL_PLANNING_NOT_FOUND", message: "internal" } }),
+      );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Planejamento ainda não disponível" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Planejamento disponível para integração na próxima fundação."))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Avançar para Vistoria/ })).not.toBeInTheDocument();
+  });
+
   test("renders the real process case form as the only primary action on Processo", async () => {
     window.history.replaceState(null, "", `/pericias/${ID}/processo`);
     const fetchSpy = vi

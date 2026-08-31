@@ -100,7 +100,8 @@
     "decision": {
       "type":"object","additionalProperties":false,
       "required":["decision_id","target_item_id","action","proposal_value","decided_value","reviewer","reason","revision","timestamp"],
-      "properties":{"decision_id":{"$ref":"#/$defs/id"},"target_item_id":{"$ref":"#/$defs/id"},"action":{"enum":["APPROVE","REJECT","MODIFY","DEFER"]},"proposal_value":{"$ref":"#/$defs/text"},"decided_value":{"type":["string","null"],"maxLength":4096},"reviewer":{"$ref":"#/$defs/text"},"reason":{"$ref":"#/$defs/text"},"revision":{"type":"integer","minimum":1},"timestamp":{"$ref":"#/$defs/text"}}
+      "properties":{"decision_id":{"$ref":"#/$defs/id"},"target_item_id":{"$ref":"#/$defs/id"},"action":{"enum":["APPROVE","REJECT","MODIFY","DEFER"]},"proposal_value":{"$ref":"#/$defs/text"},"decided_value":{"type":["string","null"],"maxLength":4096},"reviewer":{"$ref":"#/$defs/text"},"reason":{"$ref":"#/$defs/text"},"revision":{"type":"integer","minimum":1},"timestamp":{"$ref":"#/$defs/text"}},
+      "allOf":[{"if":{"properties":{"action":{"const":"MODIFY"}}},"then":{"properties":{"decided_value":{"type":"string","minLength":1}}},"else":{"properties":{"decided_value":{"type":"null"}}}}]
     },
     "coverage": {
       "type":"object","additionalProperties":false,

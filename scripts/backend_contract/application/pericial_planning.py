@@ -10,12 +10,16 @@ from ..pericial_planning import (
     PERICIAL_PLANNING_ARTIFACT_ID,
     PERICIAL_PLANNING_ARTIFACT_KIND,
     PlanningSnapshot,
+    PlanningDecision,
+    ReviewAction,
+    append_professional_decision,
     case_analysis_digest,
     pericial_planning_from_mapping,
     pericial_planning_to_mapping,
     validate_against_case_analysis,
 )
 from .models import thaw_payload
+from .ports import RepositoryConflict
 
 
 _SCHEMA_PATH = Path(__file__).resolve().parents[3] / "schemas" / "pericial-planning-snapshot-v1.schema.json"
@@ -96,6 +100,55 @@ class GetPericialPlanning:
             digest=case_analysis_digest(analysis),
         )
         return record, reconciled
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewPericialPlanning:
+    get_planning: object
+    save_planning: object
+    clock: object
+    ids: object
+
+    def execute(
+        self,
+        workspace_id,
+        *,
+        target_item_id: str,
+        action: str,
+        reviewer: str,
+        reason: str,
+        decided_value: str | None,
+        expected_revision: int,
+    ):
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("expected revision is invalid")
+        record, snapshot = self.get_planning.execute(workspace_id)
+        if record.revision != expected_revision:
+            raise RepositoryConflict("expected Pericial Planning revision is not latest")
+        if snapshot.upstream_stale:
+            raise ValueError("stale Pericial Planning cannot receive professional decisions")
+        target = next((item for item in snapshot.material_items if item.item_id == target_item_id), None)
+        if target is None:
+            raise ValueError("professional decision target is invalid")
+        created_at = self.clock.now()
+        if created_at.tzinfo is None or created_at.utcoffset() is None:
+            raise ValueError("professional decision clock requires timezone")
+        decision_uuid = self.ids.new_uuid()
+        history = [item for item in snapshot.decisions if item.target_item_id == target_item_id]
+        decision = PlanningDecision(
+            decision_id=f"PLANNING-DECISION-{decision_uuid.hex.upper()}",
+            target_item_id=target_item_id,
+            action=ReviewAction(action),
+            proposal_value=target.description,
+            decided_value=decided_value,
+            reviewer=reviewer,
+            reason=reason,
+            revision=len(history) + 1,
+            timestamp=created_at.isoformat(),
+        )
+        reviewed = append_professional_decision(snapshot, decision)
+        saved = self.save_planning.execute(workspace_id, reviewed, expected_revision)
+        return saved, reviewed
 
 
 def _validate_append_only_history(previous: PlanningSnapshot, current: PlanningSnapshot) -> None:

@@ -191,6 +191,37 @@ def test_pericial_planning_is_private_and_reserved_from_generic_artifacts():
     assert bypass.status == 404
 
 
+def test_pericial_planning_decision_route_requires_explicit_professional_command():
+    payload = pericial_planning_payload()
+    from scripts.backend_contract.pericial_planning import pericial_planning_from_mapping
+
+    reviewed = RecordingService((revision(number=2, payload=payload), pericial_planning_from_mapping(payload)))
+    api = LocalApi(services(review_pericial_planning=reviewed), token=TOKEN)
+    response = request(
+        api,
+        "POST",
+        f"/v1/workspaces/{WORKSPACE_UUID}/pericial-planning/decisions",
+        body={
+            "expected_revision": 1,
+            "target_item_id": "PLAN-ISSUE-001",
+            "action": "DEFER",
+            "reviewer": "PERITO-SYNTHETIC",
+            "reason": "Decisão explícita sintética.",
+            "decided_value": None,
+        },
+    )
+
+    assert response.status == 200
+    assert reviewed.calls[0][1]["reviewer"] == "PERITO-SYNTHETIC"
+    invalid = request(
+        api,
+        "POST",
+        f"/v1/workspaces/{WORKSPACE_UUID}/pericial-planning/decisions",
+        body={"expected_revision": 1, "target_item_id": "PLAN-ISSUE-001", "action": "APPROVE", "reason": "sem identidade", "decided_value": None},
+    )
+    assert invalid.status == 400
+
+
 def test_case_analysis_route_validates_and_delegates_canonical_snapshot():
     payload = case_analysis_payload()
     saved = RecordingService(revision(payload=payload))

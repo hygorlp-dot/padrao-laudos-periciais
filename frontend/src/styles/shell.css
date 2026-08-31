@@ -906,3 +906,87 @@ button.text-action {
 @media (prefers-reduced-motion: reduce) {
   .analysis-list details, .analysis-list summary { scroll-behavior: auto; transition: none; }
 }
+
+.planning-workspace {
+  margin-top: var(--space-6);
+  border-top: 1px solid var(--color-rule);
+}
+
+.planning-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(13rem, 18rem);
+  gap: var(--space-7);
+  padding: var(--space-6) 0;
+  border-bottom: 1px solid var(--color-rule);
+}
+
+.planning-overview h2,
+.planning-section h3,
+.planning-review h3 { margin: 0; color: var(--color-graphite); }
+.planning-overview p { max-width: 62ch; color: var(--color-slate); }
+
+.planning-readiness {
+  display: grid;
+  align-self: start;
+  gap: 0.3rem;
+  padding: var(--space-3);
+  border-left: 0.22rem solid var(--color-ochre);
+  background: var(--color-paper);
+}
+
+.planning-readiness span { color: var(--color-slate); font-size: 0.88rem; font-variant-numeric: tabular-nums; }
+.planning-readiness--blocked { border-left-color: var(--color-error); }
+.planning-readiness--ready { border-left-color: var(--color-graphite); }
+.planning-reasons { margin: var(--space-4) 0 0; color: var(--color-slate); }
+
+.planning-section { padding: var(--space-6) 0; border-bottom: 1px solid var(--color-rule); }
+.planning-section h3 { margin-bottom: var(--space-4); font-size: 1.2rem; }
+.planning-list, .planning-decisions { padding: 0; margin: 0; list-style: none; }
+.planning-card { display: grid; gap: var(--space-2); padding: var(--space-4) 0; border-top: 1px solid var(--color-rule); }
+.planning-card p, .planning-decisions p { max-width: 72ch; margin: 0; }
+.planning-card__heading { display: flex; align-items: start; justify-content: space-between; gap: var(--space-4); }
+.planning-card__heading > div { display: grid; gap: 0.2rem; }
+.planning-card__heading span { color: var(--color-slate); font-size: 0.78rem; }
+.planning-card__heading .text-action { flex: none; margin: 0; }
+.planning-card details { color: var(--color-slate); font-size: 0.88rem; }
+.planning-card summary { width: fit-content; color: var(--color-graphite); cursor: pointer; text-decoration: underline; text-decoration-color: var(--color-ochre); text-underline-offset: 0.22em; }
+.planning-card details ul { padding-left: var(--space-5); font-family: var(--font-data); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.planning-empty { color: var(--color-slate); }
+.planning-decisions li { display: grid; gap: 0.25rem; padding: var(--space-3) 0; border-top: 1px solid var(--color-rule); }
+.planning-decisions span { color: var(--color-slate); font-size: 0.82rem; }
+
+.planning-review {
+  padding: var(--space-6);
+  margin-top: var(--space-6);
+  background: var(--color-paper);
+  border: 1px solid var(--color-rule-strong);
+  border-radius: 0.38rem;
+}
+
+.planning-review > p { color: var(--color-slate); }
+.planning-review form { display: grid; max-width: 46rem; gap: var(--space-4); }
+.planning-review label { display: grid; gap: var(--space-2); font-weight: 680; }
+.planning-review input,
+.planning-review select,
+.planning-review textarea {
+  width: 100%;
+  padding: 0.72rem;
+  color: var(--color-graphite);
+  background: var(--color-paper);
+  border: 1px solid var(--color-rule-strong);
+  border-radius: 0.32rem;
+  font: inherit;
+}
+.planning-review textarea { min-height: 6rem; resize: vertical; }
+.planning-review__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.planning-review__actions .primary-action,
+.planning-review__actions .text-action { margin: 0; }
+
+@media (max-width: 840px) {
+  .planning-overview { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
+  .planning-card__heading { align-items: stretch; flex-direction: column; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .planning-card details, .planning-card summary { scroll-behavior: auto; transition: none; }
+}
