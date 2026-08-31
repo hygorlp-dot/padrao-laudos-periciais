@@ -1138,6 +1138,8 @@ class LocalApi:
             if artifact_route:
                 if segments[4] in {CASE_ANALYSIS_ARTIFACT_KIND, PERICIAL_PLANNING_ARTIFACT_KIND}:
                     return _error(404, "NOT_FOUND")
+                if normalized_method == "POST" and segments[4] != "LAUDO":
+                    return _error(405, "METHOD_NOT_ALLOWED")
                 if len(segments) == 7 and normalized_method == "POST":
                     dto = self._request_dto(request_headers, body)
                     if set(dto) != {"payload"}:

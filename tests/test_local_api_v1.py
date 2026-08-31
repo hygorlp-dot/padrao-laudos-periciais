@@ -8,7 +8,6 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Event, Lock, Thread
-from urllib.parse import quote
 from uuid import UUID
 
 import pytest
@@ -793,8 +792,8 @@ def test_post_revision_delegates_exact_identity_and_nested_payload():
     record = revision(payload=payload)
     appended = RecordingService(record)
     bundle = services(append_artifact_revision=appended)
-    kind = quote("LAUDO TÉCNICO", safe="")
-    artifact = quote("LAU/001", safe="")
+    kind = "LAUDO"
+    artifact = "LAU-001"
 
     response = request(
         LocalApi(bundle, token=TOKEN),
@@ -809,8 +808,8 @@ def test_post_revision_delegates_exact_identity_and_nested_payload():
             (),
             {
                 "workspace_id": WORKSPACE_ID,
-                "artifact_kind": "LAUDO TÉCNICO",
-                "artifact_id": "LAU/001",
+                "artifact_kind": "LAUDO",
+                "artifact_id": "LAU-001",
                 "payload": payload,
             },
         )
@@ -825,6 +824,34 @@ def test_post_revision_delegates_exact_identity_and_nested_payload():
         "revision_id": REVISION_UUID,
         "workspace_id": str(WORKSPACE_UUID),
     }
+
+
+@pytest.mark.parametrize(
+    ("artifact_kind", "artifact_id"),
+    (
+        ("CASE_ANALYSIS_SNAPSHOT_V1", "CASE-ANALYSIS"),
+        ("PERICIAL_PLANNING_SNAPSHOT_V1", "PERICIAL-PLANNING"),
+        ("INSPECTION_SESSION_V1", "INSPECTION-SESSION"),
+        ("TECHNICAL_SNAPSHOT_V1", "TECHNICAL-SNAPSHOT"),
+        ("EXPERT_MASTER_PROFILE_V1", "EXPERT-PROFILE"),
+        ("REPORT_SNAPSHOT_V1", "REPORT-SNAPSHOT"),
+        ("DELIVERY_SNAPSHOT_V1", "DELIVERY-SNAPSHOT"),
+        ("BUDGET_SNAPSHOT_V1", "BUDGET-SNAPSHOT"),
+        ("ARBITRARY_UNKNOWN", "POISON"),
+    ),
+)
+def test_generic_post_revision_mutation_is_not_a_product_endpoint(artifact_kind, artifact_id):
+    appended = RecordingService(revision(payload={"forged": True}))
+    response = request(
+        LocalApi(services(append_artifact_revision=appended), token=TOKEN),
+        "POST",
+        f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/{artifact_kind}/{artifact_id}/revisions",
+        body={"payload": {"forged": True}},
+    )
+
+    assert response.status in {404, 405}
+    assert decoded(response)["error"]["code"] in {"NOT_FOUND", "METHOD_NOT_ALLOWED"}
+    assert appended.calls == []
 
 
 def test_get_latest_revision_uses_latest_service():
