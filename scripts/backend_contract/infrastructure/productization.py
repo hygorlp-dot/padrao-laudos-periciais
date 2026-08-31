@@ -47,6 +47,7 @@ STORAGE_FORMAT_VERSION = 1
 SUPPORTED_BACKUP_VERSIONS = frozenset({0, 1})
 SUPPORTED_PRODUCT_RELEASES = frozenset({"0.10.0", "0.11.0"})
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_OPEN_BINARY = 0x8000 if os.name == "nt" else 0
 
 
 def _canonical(value: object) -> bytes:
@@ -427,7 +428,7 @@ class RecoveryStaging:
         if target.exists() or target.is_symlink():
             raise RepositoryConflict("recovery staging root must not exist")
         os.mkdir(target, 0o700)
-        marker_fd = os.open(target / "RECOVERY_NOT_PROMOTABLE", os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+        marker_fd = os.open(target / "RECOVERY_NOT_PROMOTABLE", os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN_BINARY, 0o600)
         try:
             remaining = memoryview(b"RECOVERY_STAGING_V1\n")
             while remaining:
