@@ -103,6 +103,9 @@ def test_fixture_matches_published_schema():
     schema = json.loads((ROOT / "schemas/inspection-session-v1.schema.json").read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(schema)
     assert list(Draft202012Validator(schema).iter_errors(payload())) == []
+    flattened = payload()
+    flattened["observations"][0]["technical_finding"] = "forbidden"
+    assert list(Draft202012Validator(schema).iter_errors(flattened))
 
 
 def test_openapi_publishes_only_canonical_inspection_session_operations():
