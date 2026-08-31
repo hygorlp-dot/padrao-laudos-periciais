@@ -39,6 +39,10 @@ describe("technical findings workbench", () => {
     expect(screen.getByText("Proposição técnica sintética.")).toBeInTheDocument();
     expect(screen.getByText(/proposta não produz conclusão efetiva/i)).toBeInTheDocument();
     expect(screen.getAllByText(/decisão profissional explícita/i)).toHaveLength(2);
+    expect(screen.getByLabelText("Tipo canônico da fonte")).toBeInTheDocument();
+    expect(screen.getByLabelText(/Evidência contrária existente/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Quesito relacionado/)).toBeInTheDocument();
+    expect(screen.getAllByRole("option", { name: "Modificar e aprovar" })).toHaveLength(2);
     expect(screen.queryByText(/responsabilidade civil|culpa jurídica|resposta final automática/i)).not.toBeInTheDocument();
   });
 
@@ -56,6 +60,13 @@ describe("technical findings workbench", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(200, { ...envelope, snapshot: { ...snapshot, upstream_stale: true, upstream_stale_reasons: ["inspection session content changed"], coverage: { ...snapshot.coverage, complete: false } } })));
     render(<TechnicalFindingsView workspaceId={ID} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("não continue");
+  });
+
+  test("fails closed when the response belongs to another workspace", async () => {
+    const other = "22222222-2222-4222-8222-222222222222";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(200, { ...envelope, snapshot: { ...snapshot, workspace_id: other, source_snapshot: { ...snapshot.source_snapshot, workspace_id: other } } })));
+    render(<TechnicalFindingsView workspaceId={ID} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível carregar");
   });
 
   test("captures explicit professional identity and never defaults approval", async () => {

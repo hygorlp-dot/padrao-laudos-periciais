@@ -442,3 +442,20 @@ def test_finding_dependencies_must_be_acyclic():
     )
     with pytest.raises(ValueError, match="dependency cycle"):
         replace(snapshot, dependencies=snapshot.dependencies + (inverse,))
+
+
+def test_decision_follows_all_classified_evidence_and_method_inputs_cannot_be_hidden():
+    snapshot = technical_snapshot_from_mapping(payload())
+    assessments = list(snapshot.evidence_assessments)
+    assessments[1] = replace(assessments[1], reviewed_at="2026-08-31T10:20:00+00:00")
+    with pytest.raises(ValueError, match="predates evidence review"):
+        replace(snapshot, evidence_assessments=tuple(assessments))
+    proposals = list(snapshot.finding_proposals)
+    proposals[1] = replace(proposals[1], supporting_evidence_ids=("EVIDENCE-SUPPORT-001",), contrary_evidence_ids=())
+    hidden_input = MethodInput(
+        input_id="METHOD-INPUT-HIDDEN", method_application_id="METHOD-APPLICATION-001",
+        evidence_id="EVIDENCE-CONTRARY-001", role="SECONDARY_INPUT",
+    )
+    methods = (replace(snapshot.method_applications[0], input_ids=("METHOD-INPUT-001", "METHOD-INPUT-HIDDEN")),)
+    with pytest.raises(ValueError, match="classified"):
+        replace(snapshot, method_applications=methods, method_inputs=snapshot.method_inputs + (hidden_input,), finding_proposals=tuple(proposals))

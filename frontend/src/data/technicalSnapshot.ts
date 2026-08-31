@@ -10,7 +10,7 @@ export type TechnicalSnapshot = {
   method_outputs: Array<{ output_id: string; method_application_id: string; description: string; provenance: string }>;
   finding_proposals: Array<{ proposal_id: string; technical_proposition: string; origin: "SOURCE_VALUE" | "ENGINE_DECISION" | "AI_PROPOSAL" | "PROFESSIONAL_PROPOSAL"; method_application_ids: string[]; supporting_evidence_ids: string[]; contrary_evidence_ids: string[]; limitation_ids: string[]; uncertainty_ids: string[]; scope: string }>;
   findings: Array<{ finding_id: string; proposal_id: string; decision_id: string; technical_proposition: string; scope: string }>;
-  dependencies: unknown[]; conflicts: Array<{ conflict_id: string; proposal_id: string; contrary_evidence_ids: string[]; status: "UNRESOLVED" | "RESOLVED"; resolution_reasoning: string | null; decision_id: string | null }>;
+  dependencies: Array<{ dependency_id: string; finding_id: string; depends_on_finding_id: string; rationale: string }>; conflicts: Array<{ conflict_id: string; proposal_id: string; contrary_evidence_ids: string[]; status: "UNRESOLVED" | "RESOLVED"; resolution_reasoning: string | null; decision_id: string | null }>;
   limitations: Array<{ limitation_id: string; owner_kind: string; owner_id: string; kind: string; description: string }>;
   uncertainties: Array<{ uncertainty_id: string; proposal_id: string; kind: string; description: string; impact: string }>;
   question_links: Array<{ link_id: string; question_id: string; finding_id: string; relevance: string }>;

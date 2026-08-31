@@ -417,6 +417,9 @@ class TechnicalSnapshot:
             }
             if not set(proposal.supporting_evidence_ids).issubset(consumed_evidence):
                 raise ValueError("finding supporting evidence must be present in method inputs")
+            classified_evidence = set(proposal.supporting_evidence_ids) | set(proposal.contrary_evidence_ids)
+            if not consumed_evidence.issubset(classified_evidence):
+                raise ValueError("every method input must be classified as supporting or contrary evidence")
             conflicts = tuple(item for item in self.conflicts if item.proposal_id == proposal.proposal_id)
             conflict_evidence = {item for conflict in conflicts for item in conflict.contrary_evidence_ids}
             if set(proposal.contrary_evidence_ids) != conflict_evidence:
@@ -465,7 +468,15 @@ class TechnicalSnapshot:
                     raise ValueError("professional decision chronology is not linear")
             reviewed_at = max(
                 datetime.fromisoformat(assessments[evidence[item_id].assessment_id].reviewed_at)
-                for item_id in proposals[proposal_id].supporting_evidence_ids
+                for item_id in (
+                    set(proposals[proposal_id].supporting_evidence_ids)
+                    | set(proposals[proposal_id].contrary_evidence_ids)
+                    | {
+                        inputs[input_id].evidence_id
+                        for method_id in proposals[proposal_id].method_application_ids
+                        for input_id in methods[method_id].input_ids
+                    }
+                )
             )
             if ordered and datetime.fromisoformat(ordered[0].timestamp) <= reviewed_at:
                 raise ValueError("professional decision predates evidence review")
