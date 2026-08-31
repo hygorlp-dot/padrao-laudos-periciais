@@ -46,6 +46,12 @@ from ..application.case_analysis import (
     case_analysis_to_mapping,
     validated_case_analysis_from_mapping,
 )
+from ..application.pericial_planning import (
+    PERICIAL_PLANNING_ARTIFACT_KIND,
+    PlanningSnapshot,
+    pericial_planning_to_mapping,
+    validated_pericial_planning_from_mapping,
+)
 
 _MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
 
@@ -81,6 +87,9 @@ class LocalApiServices:
     save_process_case: object
     save_case_analysis: object | None = None
     get_case_analysis: object | None = None
+    save_pericial_planning: object | None = None
+    get_pericial_planning: object | None = None
+    review_pericial_planning: object | None = None
     get_process_metadata_review: object | None = None
     confirm_process_metadata_source_span: object | None = None
     import_case_document: object | None = None
@@ -410,7 +419,7 @@ class LocalApi:
                 )
             raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
-            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "case-analysis"}
+            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "case-analysis", "pericial-planning"}
             if (normalized_method == "POST" or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
                 return _error(
                     403,
@@ -466,6 +475,64 @@ class LocalApi:
                         },
                     )
                 return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "pericial-planning":
+                workspace_id = self._workspace_id(raw_segments[2])
+                if normalized_method == "GET":
+                    record, snapshot = self._services.get_pericial_planning.execute(workspace_id)
+                    if type(snapshot) is not PlanningSnapshot:
+                        raise RepositoryIntegrityError("Pericial Planning persisted state is invalid")
+                    return _json_response(
+                        200,
+                        {
+                            "revision": record.revision,
+                            "updated_at": record.created_at,
+                            "snapshot": pericial_planning_to_mapping(snapshot),
+                        },
+                    )
+                if normalized_method == "PUT":
+                    dto = self._request_dto(request_headers, body)
+                    if set(dto) != {"expected_revision", "snapshot"}:
+                        raise ValueError("Pericial Planning request is invalid")
+                    expected = dto["expected_revision"]
+                    if expected is not None and (type(expected) is not int or expected < 1):
+                        raise ValueError("Pericial Planning expected revision is invalid")
+                    snapshot = validated_pericial_planning_from_mapping(dto["snapshot"])
+                    if snapshot.workspace_id != str(workspace_id):
+                        raise ValueError("Pericial Planning workspace mismatch")
+                    record = self._services.save_pericial_planning.execute(workspace_id, snapshot, expected)
+                    return _json_response(
+                        200,
+                        {
+                            "revision": record.revision,
+                            "updated_at": record.created_at,
+                            "snapshot": pericial_planning_to_mapping(snapshot),
+                        },
+                    )
+                return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("pericial-planning", "decisions"):
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                workspace_id = self._workspace_id(raw_segments[2])
+                dto = self._request_dto(request_headers, body)
+                if set(dto) != {"expected_revision", "target_item_id", "action", "reviewer", "reason", "decided_value"}:
+                    raise ValueError("professional planning decision request is invalid")
+                record, snapshot = self._services.review_pericial_planning.execute(
+                    workspace_id,
+                    target_item_id=dto["target_item_id"],
+                    action=dto["action"],
+                    reviewer=dto["reviewer"],
+                    reason=dto["reason"],
+                    decided_value=dto["decided_value"],
+                    expected_revision=dto["expected_revision"],
+                )
+                if type(snapshot) is not PlanningSnapshot:
+                    raise RepositoryIntegrityError("Pericial Planning reviewed state is invalid")
+                return _json_response(
+                    200,
+                    {"revision": record.revision, "updated_at": record.created_at, "snapshot": pericial_planning_to_mapping(snapshot)},
+                )
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "materials":
                 workspace_id = self._workspace_id(raw_segments[2])
@@ -602,7 +669,7 @@ class LocalApi:
 
             artifact_route = len(raw_segments) in {7, 8} and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "artifacts" and raw_segments[6] == "revisions"
             if artifact_route:
-                if segments[4] == CASE_ANALYSIS_ARTIFACT_KIND:
+                if segments[4] in {CASE_ANALYSIS_ARTIFACT_KIND, PERICIAL_PLANNING_ARTIFACT_KIND}:
                     return _error(404, "NOT_FOUND")
                 if len(segments) == 7 and normalized_method == "POST":
                     dto = self._request_dto(request_headers, body)

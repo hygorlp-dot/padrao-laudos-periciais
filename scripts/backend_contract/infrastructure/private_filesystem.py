@@ -10,6 +10,7 @@ import stat
 import sys
 import tempfile
 import threading
+from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
 from uuid import uuid4
@@ -1937,6 +1938,15 @@ class LocalPrivateContentStore:
             return PrivateContent(metadata, content)
         except (TypeError, ValueError) as exc:
             raise RepositoryIntegrityError("conteúdo privado corrompido") from exc
+
+    @contextmanager
+    def authority_guard(self):
+        """Serialize an authority read and its dependent local commit."""
+        self._ensure_open()
+        with self._mutex:
+            self._ensure_open()
+            self._audit_runtime_inventory()
+            yield
 
     @_controlled_filesystem_errors("falha ao armazenar conteúdo privado")
     def store(

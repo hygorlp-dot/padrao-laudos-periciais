@@ -8,6 +8,8 @@ from threading import Event, Thread
 
 import pytest
 
+from scripts.backend_contract.product_bridge.transport import _proxy_target
+
 from scripts.backend_contract.product_bridge.composition import build_product_runtime
 from scripts.backend_contract.product_bridge.server import (
     ProductBridgeConfig,
@@ -315,6 +317,17 @@ def test_case_analysis_bridge_saves_and_reopens_canonical_snapshot(tmp_path):
     assert json.loads(saved_body)["snapshot"] == payload
     assert json.loads(get_body)["snapshot"] == payload
     assert TOKEN.encode() not in saved_body + get_body
+
+
+def test_pericial_planning_bridge_allowlist_is_exact():
+    workspace_id = "11111111-1111-4111-8111-111111111111"
+
+    assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning", "GET") == f"/v1/workspaces/{workspace_id}/pericial-planning"
+    assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning", "PUT") == f"/v1/workspaces/{workspace_id}/pericial-planning"
+    assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning", "POST") is None
+    assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning/decisions", "POST") == f"/v1/workspaces/{workspace_id}/pericial-planning/decisions"
+    assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning/decisions", "GET") is None
+    assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning", "DELETE") is None
 
 
 @pytest.mark.parametrize(

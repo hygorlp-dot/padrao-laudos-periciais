@@ -48,8 +48,9 @@ def test_frontend_production_source_has_no_secret_or_unbounded_network_capabilit
 
     assert sorted(fetch_sources) == [
         "frontend/src/data/caseAnalysis.ts",
-        "frontend/src/data/materials.ts",
-        "frontend/src/data/processCase.ts",
+            "frontend/src/data/materials.ts",
+            "frontend/src/data/pericialPlanning.ts",
+            "frontend/src/data/processCase.ts",
         "frontend/src/data/processMetadata.ts",
         "frontend/src/data/workspaces.ts",
     ]

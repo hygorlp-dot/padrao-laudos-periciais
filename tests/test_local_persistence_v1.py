@@ -546,6 +546,33 @@ def test_public_adapters_implement_only_append_only_port_operations():
     assert not ({"update", "delete", "replace"} & (workspace_methods | revision_methods))
 
 
+def test_cas_rejects_append_when_a_declared_dependency_changed(repository):
+    repository.workspaces.create(workspace())
+    dependency = repository.revisions.append(
+        workspace_id=WorkspaceId.parse(WORKSPACE_1), artifact_kind="CASE_ANALYSIS_SNAPSHOT_V1",
+        artifact_id="CASE-ANALYSIS", revision_id=REVISION_1, created_at=CREATED_1,
+        payload={"revision": 1},
+    )
+    repository.revisions.append_if_latest(
+        workspace_id=WorkspaceId.parse(WORKSPACE_1), artifact_kind="CASE_ANALYSIS_SNAPSHOT_V1",
+        artifact_id="CASE-ANALYSIS", revision_id=REVISION_2, created_at=CREATED_2,
+        payload={"revision": 2}, expected_revision=1,
+    )
+
+    with pytest.raises(RepositoryConflict):
+        repository.revisions.append_if_latest(
+            workspace_id=WorkspaceId.parse(WORKSPACE_1), artifact_kind="PERICIAL_PLANNING_SNAPSHOT_V1",
+            artifact_id="PERICIAL-PLANNING", revision_id="cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            created_at=CREATED_2, payload={"plan": "proposal"}, expected_revision=None,
+            expected_dependencies=({
+                "artifact_kind": dependency.artifact_kind,
+                "artifact_id": dependency.artifact_id,
+                "revision": dependency.revision,
+                "checksum_sha256": dependency.checksum_sha256,
+            },),
+        )
+
+
 def test_atomic_pair_rolls_back_first_revision_when_second_insert_fails(repository):
     repository.workspaces.create(workspace())
     append_pair = getattr(repository.revisions, "append_pair_if_latest", None)

@@ -39,12 +39,19 @@ class SaveCaseAnalysis:
     clock: object
     ids: object
     list_documents: object | None
+    authority_guard: object
 
     def execute(self, workspace_id, snapshot: CaseAnalysisSnapshot, expected_revision: int | None):
         if type(snapshot) is not CaseAnalysisSnapshot or str(workspace_id) != snapshot.workspace_id:
             raise ValueError("Case Analysis workspace identity mismatch")
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
             raise ValueError("expected revision is invalid")
+        if not callable(self.authority_guard):
+            raise RepositoryIntegrityError("Case Analysis authority guard is unavailable")
+        with self.authority_guard():
+            return self._execute_guarded(workspace_id, snapshot, expected_revision)
+
+    def _execute_guarded(self, workspace_id, snapshot: CaseAnalysisSnapshot, expected_revision: int | None):
         if self.list_documents is None:
             raise RepositoryIntegrityError("Case Analysis source inventory is unavailable")
         authoritative = {

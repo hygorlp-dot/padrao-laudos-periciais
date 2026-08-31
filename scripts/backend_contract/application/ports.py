@@ -95,6 +95,7 @@ class ArtifactRevisionRepository(Protocol):
         created_at: str,
         payload: object,
         expected_revision: int | None,
+        expected_dependencies: tuple[dict[str, object], ...] = (),
     ) -> ArtifactRevision: ...
 
     def append_pair_if_latest(
