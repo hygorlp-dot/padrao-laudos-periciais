@@ -210,7 +210,16 @@ def test_question_linkage_must_reach_a_concrete_planning_action():
     raw["question_links"][0]["linked_item_ids"] = ["PLAN-OBJECTIVE-001"]
     raw["question_links"][0]["dependency_item_ids"] = []
 
-    with pytest.raises(ValueError, match="concrete preparation"):
+    with pytest.raises(ValueError, match="question-derived preparation"):
+        validate_against_case_analysis(pericial_planning_from_mapping(raw), analysis_fixture(), artifact_revision=1)
+
+
+def test_question_linkage_rejects_an_unrelated_concrete_action():
+    raw = copy.deepcopy(fixture())
+    raw["question_links"][0]["linked_item_ids"] = ["PLAN-DOCUMENT-001"]
+    raw["question_links"][0]["dependency_item_ids"] = []
+
+    with pytest.raises(ValueError, match="question-derived preparation"):
         validate_against_case_analysis(pericial_planning_from_mapping(raw), analysis_fixture(), artifact_revision=1)
 
 

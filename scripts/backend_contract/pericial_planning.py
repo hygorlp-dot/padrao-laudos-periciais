@@ -568,8 +568,8 @@ def validate_against_case_analysis(
     required_questions = collection_ids["questions"]
     if linked_questions != required_questions:
         raise ValueError("planning question linkage must cover every Case Analysis question exactly")
-    actionable_ids = {
-        item.item_id
+    actionable_items = {
+        item.item_id: item
         for collection_name in (
             "required_documents", "required_information", "inspection_requirements",
             "measurement_requirements", "photo_requirements", "equipment_requirements",
@@ -580,10 +580,14 @@ def validate_against_case_analysis(
     }
     if any(
         link.question_id not in link.derivation.question_ids
-        or not (set((*link.linked_item_ids, *link.dependency_item_ids)) & actionable_ids)
+        or not any(
+            link.question_id in actionable_items[item_id].derivation.question_ids
+            for item_id in (*link.linked_item_ids, *link.dependency_item_ids)
+            if item_id in actionable_items
+        )
         for link in planning.question_links
     ):
-        raise ValueError("planning question linkage requires a concrete preparation or inspection action")
+        raise ValueError("planning question linkage requires a question-derived preparation or inspection action")
     for item in planning.material_items:
         derivation = item.derivation
         referenced = set(derivation.case_analysis_item_ids)
