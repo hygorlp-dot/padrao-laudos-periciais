@@ -61,6 +61,8 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
     assert contract["components"]["schemas"]["DeliverySnapshot"] == {"$ref": "../schemas/delivery-snapshot-v1.schema.json"}
     assert contract["info"]["x-budget-snapshot-semantic-boundary"] == "scripts.backend_contract.budget_foundation.budget_snapshot_from_mapping"
     assert contract["components"]["schemas"]["BudgetSnapshot"] == {"$ref": "../schemas/budget-snapshot-v1.schema.json"}
+    assert "put" not in contract["paths"]["/v1/workspaces/{workspace_id}/budget-snapshot"]
+    assert contract["components"]["schemas"]["RecordBudgetExpenseRequest"]["properties"]["category"]["$ref"].endswith("#/$defs/category")
     referenced = (ROOT / "contracts" / component["$ref"]).resolve()
     assert referenced.is_relative_to(ROOT)
     schema = json.loads(referenced.read_text(encoding="utf-8"))

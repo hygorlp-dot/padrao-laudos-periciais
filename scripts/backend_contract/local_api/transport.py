@@ -73,7 +73,6 @@ from ..application.delivery_foundation import (
 )
 from ..application.budget_foundation import (
     budget_snapshot_to_validated_mapping,
-    validated_budget_snapshot_from_mapping,
 )
 
 _MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
@@ -609,22 +608,10 @@ class LocalApi:
                     dto = self._request_dto(request_headers, body)
                     if set(dto) != {"process_id", "appointment_id"}:
                         raise ValueError("Budget Snapshot start request is invalid")
+                    if dto["process_id"] is not None or dto["appointment_id"] is not None:
+                        raise ValueError("Budget Snapshot links require a workspace authority resolver")
                     record, snapshot = self._services.start_budget_snapshot.execute(workspace_id, **dto)
                     return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": budget_snapshot_to_validated_mapping(snapshot)})
-                if normalized_method == "PUT":
-                    if self._services.save_budget_snapshot is None:
-                        return _error(503, "BUDGET_SNAPSHOT_UNAVAILABLE")
-                    dto = self._request_dto(request_headers, body)
-                    if set(dto) != {"expected_revision", "snapshot"}:
-                        raise ValueError("Budget Snapshot request is invalid")
-                    expected = dto["expected_revision"]
-                    if expected is not None and (type(expected) is not int or expected < 1):
-                        raise ValueError("Budget Snapshot expected revision is invalid")
-                    snapshot = validated_budget_snapshot_from_mapping(dto["snapshot"])
-                    if snapshot.workspace_id != str(workspace_id):
-                        raise ValueError("Budget Snapshot workspace mismatch")
-                    record = self._services.save_budget_snapshot.execute(workspace_id, snapshot, expected)
-                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": budget_snapshot_to_validated_mapping(snapshot)})
                 return _error(405, "METHOD_NOT_ALLOWED")
 
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "budget-snapshot":

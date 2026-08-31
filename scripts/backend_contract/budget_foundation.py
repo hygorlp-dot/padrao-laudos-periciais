@@ -184,7 +184,9 @@ class ReceivedPayment:
     reference: str
 
     def __post_init__(self) -> None:
-        _text(self.payment_id, "payment_id"); _text(self.currency, "currency"); _text(self.reference, "reference"); _money(self.amount, "amount"); _day(self.received_on, "received_on")
+        _text(self.payment_id, "payment_id"); _text(self.currency, "currency"); _text(self.reference, "reference"); amount = _money(self.amount, "amount"); _day(self.received_on, "received_on")
+        if amount == 0:
+            raise ValueError("received payment must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,8 +254,18 @@ class PericialBudget:
             raise ValueError("proposal trail diverges")
         proposal_instants = [datetime.fromisoformat(item.proposed_at) for item in self.proposals]
         revision_instants = [datetime.fromisoformat(item.revised_at) for item in self.proposal_revisions]
-        if proposal_instants != sorted(proposal_instants) or revision_instants != sorted(revision_instants):
+        if any(proposal.proposed_at != trail.revised_at for proposal, trail in zip(self.proposals, self.proposal_revisions, strict=True)) or any(
+            current <= previous
+            for instants in (proposal_instants, revision_instants)
+            for previous, current in zip(instants, instants[1:])
+        ):
             raise ValueError("proposal chronology is invalid")
+        approval_days = [date.fromisoformat(item.decided_on) for item in self.court_approvals]
+        payment_days = [date.fromisoformat(item.received_on) for item in self.payments]
+        if len({item.court_decision_id for item in self.court_approvals}) != len(self.court_approvals) or approval_days != sorted(approval_days):
+            raise ValueError("court approval chronology is invalid")
+        if self.payments and (not self.court_approvals or payment_days != sorted(payment_days) or payment_days[0] < approval_days[0]):
+            raise ValueError("payment authority chronology is invalid")
         if sum((_money(item.amount, "payment") for item in self.payments), Decimal("0.00")) > Decimal(self.court_approved_total):
             raise ValueError("received payments exceed court-approved amount")
         expected_status = derive_financial_status(self.proposals, self.court_approvals, self.payments)

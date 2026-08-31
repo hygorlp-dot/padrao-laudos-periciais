@@ -77,6 +77,8 @@ class SaveBudgetSnapshot:
             if record.revision != expected_revision:
                 raise RepositoryConflict("expected Budget Snapshot revision is not latest")
             predecessor = validated_budget_snapshot_from_mapping(_payload(record.payload))
+            if predecessor.status is FinancialStatus.CLOSED:
+                raise ValueError("closed Budget Snapshot is immutable")
             if snapshot.budget_id != predecessor.budget_id or snapshot.revision != predecessor.revision + 1:
                 raise ValueError("Budget Snapshot identity or revision changed")
             if snapshot.process_id != predecessor.process_id or snapshot.appointment_id != predecessor.appointment_id:
@@ -118,6 +120,8 @@ class StartBudgetSnapshot:
     ids: object
 
     def execute(self, workspace_id, *, process_id: str | None, appointment_id: str | None):
+        if process_id is not None or appointment_id is not None:
+            raise ValueError("Budget Snapshot links require a workspace authority resolver")
         value = PericialBudget(
             schema_version="1.0.0", budget_id=f"BUDGET-{str(self.ids.new_uuid()).upper()}", revision=1,
             workspace_id=str(workspace_id), process_id=process_id, appointment_id=appointment_id,

@@ -116,6 +116,17 @@ def test_financial_status_cannot_claim_a_lifecycle_state_the_ledger_does_not_sup
     assert replace(fully_received, status=FinancialStatus.CLOSED).status is FinancialStatus.CLOSED
 
 
+def test_payment_requires_positive_value_prior_approval_and_authority_chronology() -> None:
+    with pytest.raises(ValueError, match="positive"):
+        replace(budget().payments[0], amount="0.00")
+    with pytest.raises(ValueError, match="payment authority chronology"):
+        replace(budget(), court_approvals=())
+    with pytest.raises(ValueError, match="payment authority chronology"):
+        replace(budget(), payments=(replace(budget().payments[0], received_on="2026-08-31"),))
+    with pytest.raises(ValueError, match="court approval chronology"):
+        replace(budget(), court_approvals=(*budget().court_approvals, CourtApprovedAmount("APPROVAL-2", "DECISION-2", "2300.00", "BRL", "2026-08-31")))
+
+
 def test_canonical_synthetic_fixture_matches_schema_and_domain() -> None:
     root = Path(__file__).parents[1]
     payload = json.loads((root / "tests/fixtures/budget-snapshot-v1.json").read_text(encoding="utf-8"))
@@ -172,6 +183,15 @@ def test_application_rejects_workspace_leak_stale_write_and_history_rewrite() ->
         service.execute(budget().workspace_id, changed, 2)
 
 
+def test_closed_budget_is_terminal_at_the_repository_boundary() -> None:
+    closed = replace(budget(), revision=2, payments=(replace(budget().payments[0], amount="2200.00"),), status=FinancialStatus.CLOSED)
+    class Latest:
+        def execute(self, *_args): return type("Record", (), {"revision": 2, "payload": budget_snapshot_to_mapping(closed)})()
+    service = SaveBudgetSnapshot(object(), Latest(), object(), object())
+    with pytest.raises(ValueError, match="closed"):
+        service.execute(closed.workspace_id, replace(closed, revision=3), 2)
+
+
 def test_financial_commands_create_distinct_append_only_authorities() -> None:
     class Get:
         def __init__(self, value): self.value = value
@@ -225,7 +245,10 @@ def test_start_budget_creates_empty_financial_snapshot_without_technical_authori
         def execute(self, _workspace, value, expected): assert expected is None; return type("Record", (), {"revision": 1})()
     class Ids:
         def new_uuid(self): return "22222222-2222-4222-8222-222222222222"
-    record, value = StartBudgetSnapshot(Save(), Ids()).execute(budget().workspace_id, process_id="PROCESS-1", appointment_id=None)
+    service = StartBudgetSnapshot(Save(), Ids())
+    with pytest.raises(ValueError, match="resolver"):
+        service.execute(budget().workspace_id, process_id="PROCESS-1", appointment_id=None)
+    record, value = service.execute(budget().workspace_id, process_id=None, appointment_id=None)
     assert record.revision == 1
     assert value.status is FinancialStatus.DRAFT
     assert value.proposals == value.court_approvals == value.payments == ()

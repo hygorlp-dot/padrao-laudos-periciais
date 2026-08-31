@@ -31,6 +31,14 @@ test("shows proposal, court approval, received and outstanding as distinct finan
   expect(screen.queryByText(/confiança técnica|mérito técnico/i)).not.toBeInTheDocument();
 });
 
+test("renders large canonical monetary strings without floating-point loss", async () => {
+  const exact = { ...snapshot, proposals: [{ ...snapshot.proposals[0], amount: "9999999999999999.99" }] };
+  const item = { revision: 4, updated_at: "2026-09-02T12:00:00Z", snapshot: exact };
+  vi.stubGlobal("fetch", vi.fn((input) => Promise.resolve(String(input).endsWith("/history") ? response(200, { items: [item] }) : response(200, item))));
+  render(<BudgetFoundationView workspaceId={ID} />);
+  expect(await screen.findByText(/R\$\s*9\.999\.999\.999\.999\.999,99/)).toBeInTheDocument();
+});
+
 test("starts an empty financial ledger without requiring a technical decision", async () => {
   const started = { revision: 1, updated_at: "2026-08-31T12:00:00Z", snapshot: { ...snapshot, revision: 1, proposals: [], proposal_revisions: [], court_approvals: [], payments: [], status: "DRAFT", outstanding: { amount: "0.00", currency: "BRL" } } };
   const fetchMock = vi.fn().mockResolvedValueOnce(response(404, {})).mockResolvedValueOnce(response(404, {})).mockResolvedValue(response(201, started));

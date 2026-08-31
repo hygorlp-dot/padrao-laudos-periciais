@@ -3,7 +3,12 @@ import { type FormEvent, useEffect, useState } from "react";
 import { addFeeProposal, BudgetApiError, getBudgetHistory, getBudgetSnapshot, recordCourtApproval, recordExpense, recordPayment, startBudgetSnapshot, type BudgetEnvelope } from "../data/budgetSnapshot";
 
 type State = { kind: "loading" } | { kind: "missing" } | { kind: "ready"; value: BudgetEnvelope } | { kind: "error" };
-const money = (amount: string, currency = "BRL") => new Intl.NumberFormat("pt-BR", { style: "currency", currency }).format(Number(amount));
+const cents = (amount: string) => BigInt(amount.replace(".", ""));
+const decimal = (value: bigint) => `${value / 100n}.${String(value % 100n).padStart(2, "0")}`;
+const money = (amount: string, currency = "BRL") => {
+  const [whole, fraction] = decimal(cents(amount)).split(".");
+  return `${currency === "BRL" ? "R$" : currency}\u00a0${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${fraction}`;
+};
 
 export function BudgetFoundationView({ workspaceId }: { workspaceId: string }) {
   const [state, setState] = useState<State>({ kind: "loading" });
@@ -19,7 +24,7 @@ export function BudgetFoundationView({ workspaceId }: { workspaceId: string }) {
   if (state.kind === "loading") return <section className="status-state status-state--loading" role="status"><span className="state-rule" aria-hidden="true"/><div><h2>Reabrindo orçamento</h2><p>Validando o histórico financeiro local.</p></div></section>;
   if (state.kind === "error") return <section className="status-state status-state--error" role="alert"><span className="state-mark" aria-hidden="true">!</span><div><h2>Orçamento indisponível</h2><p>Nenhuma informação foi alterada. Reabra a etapa para tentar novamente.</p></div></section>;
   if (state.kind === "missing") return <section className="budget-empty"><h2>Controle financeiro ainda não iniciado</h2><p>Crie um ledger separado da análise técnica para propostas, decisões, despesas e recebimentos.</p><button className="primary-action" type="button" disabled={busy} onClick={start}>Iniciar controle financeiro</button></section>;
-  const value = state.value.snapshot; const latestProposal = value.proposals.at(-1); const latestApproval = value.court_approvals.at(-1); const received = value.payments.reduce((total, item) => total + Number(item.amount), 0).toFixed(2);
+  const value = state.value.snapshot; const latestProposal = value.proposals.at(-1); const latestApproval = value.court_approvals.at(-1); const received = decimal(value.payments.reduce((total, item) => total + cents(item.amount), 0n));
   return <section className="budget-ledger" aria-labelledby="budget-title"><header className="budget-header"><div><h2 id="budget-title">Orçamento pericial</h2><p>Propostas, decisões, despesas e recebimentos em uma trilha financeira própria.</p></div><strong>{value.status}</strong></header>
     <dl className="budget-balance"><div><dt>Proposta profissional</dt><dd>{latestProposal ? money(latestProposal.amount, latestProposal.currency) : "—"}</dd></div><div><dt>Valor aprovado pelo Juízo</dt><dd>{latestApproval ? money(latestApproval.amount, latestApproval.currency) : "—"}</dd></div><div><dt>Recebido</dt><dd>{money(received)}</dd></div><div><dt>Saldo pendente</dt><dd>{money(value.outstanding.amount, value.outstanding.currency)}</dd></div></dl>
     {!latestProposal && <p className="budget-empty-line">Nenhuma proposta registrada</p>}

@@ -179,17 +179,15 @@ def test_budget_routes_are_private_strict_and_preserve_history() -> None:
         record_budget_expense=expense, record_received_payment=payment,
     ), token=TOKEN)
     assert request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot").status == 403
-    started = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot", body={"process_id": "PROCESS-1", "appointment_id": None})
+    started = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot", body={"process_id": None, "appointment_id": None})
     assert started.status == 201
-    saved = request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot", body={"expected_revision": None, "snapshot": payload})
-    assert saved.status == 200
-    assert save.calls[0][0][1] == snapshot
+    assert request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot", body={"process_id": "FOREIGN", "appointment_id": None}).status == 400
+    assert request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot", body={"expected_revision": None, "snapshot": payload}).status == 405
+    assert save.calls == []
     reopened = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot", headers={"X-Local-API-Token": TOKEN})
     assert decoded(reopened)["snapshot"] == payload
     listed = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot/history", headers={"X-Local-API-Token": TOKEN})
     assert decoded(listed)["items"][0]["snapshot"] == payload
-    contaminated = dict(payload, technical_confidence="HIGH")
-    assert request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot", body={"expected_revision": 1, "snapshot": contaminated}).status == 400
     commands = {
         "proposals": {"expected_revision": 1, "amount": "3000.00", "currency": "BRL", "rationale": "Proposta"},
         "court-approvals": {"expected_revision": 1, "court_decision_id": "DECISION-2", "amount": "2500.00", "currency": "BRL", "decided_on": "2026-09-01"},
