@@ -63,8 +63,8 @@ class SaveCaseAnalysis:
             raise ValueError("Case Analysis workspace identity mismatch")
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
             raise ValueError("expected revision is invalid")
-        if expected_revision is None and snapshot.human_reviews:
-            raise ValueError("initial Case Analysis cannot contain human review authority")
+        if expected_revision is None and (snapshot.human_reviews or snapshot.material_items):
+            raise ValueError("initial Case Analysis must be the canonical authority-free bootstrap")
         if not callable(self.authority_guard):
             raise RepositoryIntegrityError("Case Analysis authority guard is unavailable")
         with self.authority_guard():

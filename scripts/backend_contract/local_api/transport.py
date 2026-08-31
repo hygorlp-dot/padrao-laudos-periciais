@@ -45,7 +45,6 @@ from ..application.case_analysis import (
     CASE_ANALYSIS_ARTIFACT_KIND,
     CaseAnalysisSnapshot,
     case_analysis_to_mapping,
-    validated_case_analysis_from_mapping,
 )
 from ..application.pericial_planning import (
     PERICIAL_PLANNING_ARTIFACT_KIND,
@@ -797,7 +796,7 @@ class LocalApi:
                     ),
                     "finding-proposals": (
                         self._services.propose_technical_finding,
-                        {"method_application_id", "technical_proposition", "scope", "limitation", "uncertainty", "uncertainty_impact", "origin", "contrary_evidence_ids", "expected_revision"},
+                        {"method_application_id", "technical_proposition", "scope", "limitation", "uncertainty", "uncertainty_impact", "contrary_evidence_ids", "expected_revision"},
                     ),
                     "finding-reviews": (
                         self._services.review_technical_finding,
@@ -835,28 +834,12 @@ class LocalApi:
                     )
                 if normalized_method == "POST":
                     dto = self._request_dto(request_headers, body)
-                    if dto == {}:
-                        if self._services.start_case_analysis is None:
-                            return _error(503, "CASE_ANALYSIS_UNAVAILABLE")
-                        record, snapshot = self._services.start_case_analysis.execute(workspace_id)
-                        return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": case_analysis_to_mapping(snapshot)})
-                    if set(dto) != {"expected_revision", "snapshot"}:
+                    if dto != {}:
                         raise ValueError("Case Analysis request is invalid")
-                    expected = dto["expected_revision"]
-                    if expected is not None and (type(expected) is not int or expected < 1):
-                        raise ValueError("Case Analysis expected revision is invalid")
-                    snapshot = validated_case_analysis_from_mapping(dto["snapshot"])
-                    if snapshot.workspace_id != str(workspace_id):
-                        raise ValueError("Case Analysis workspace mismatch")
-                    record = self._services.save_case_analysis.execute(workspace_id, snapshot, expected)
-                    return _json_response(
-                        200,
-                        {
-                            "revision": record.revision,
-                            "updated_at": record.created_at,
-                            "snapshot": case_analysis_to_mapping(snapshot),
-                        },
-                    )
+                    if self._services.start_case_analysis is None:
+                        return _error(503, "CASE_ANALYSIS_UNAVAILABLE")
+                    record, snapshot = self._services.start_case_analysis.execute(workspace_id)
+                    return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": case_analysis_to_mapping(snapshot)})
                 return _error(405, "METHOD_NOT_ALLOWED")
 
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("case-analysis", "items"):

@@ -194,6 +194,14 @@ class SaveTechnicalSnapshot:
                         raise ValueError("reviewed evidence authority is immutable")
                     if mutation_authority != "PROFESSIONAL" and current_assessment != previous:
                         raise ValueError("evidence review requires a professional command")
+                if len(snapshot.conflicts) < len(predecessor.conflicts):
+                    raise ValueError("Technical conflict history cannot disappear")
+                for index, previous in enumerate(predecessor.conflicts):
+                    current_conflict = snapshot.conflicts[index]
+                    if current_conflict.conflict_id != previous.conflict_id or (
+                        previous.status is ConflictStatus.RESOLVED and current_conflict != previous
+                    ):
+                        raise ValueError("resolved Technical conflict history is immutable")
                 if mutation_authority != "PROFESSIONAL" and (
                     snapshot.decisions != predecessor.decisions or snapshot.findings != predecessor.findings
                     or snapshot.question_links != predecessor.question_links
@@ -298,6 +306,18 @@ class StartTechnicalSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class ResolveTechnicalProfessional:
+    get_inspection_session: object
+
+    def execute(self, workspace_id, claimed_professional_id: str) -> str:
+        _record, inspection = self.get_inspection_session.execute(workspace_id)
+        claimed = claimed_professional_id.strip() if type(claimed_professional_id) is str else ""
+        if inspection.upstream_stale or not claimed or claimed != inspection.responsible_professional:
+            raise ValueError("Technical professional identity is not the bound inspection authority")
+        return inspection.responsible_professional
+
+
+@dataclass(frozen=True, slots=True)
 class AddEvidenceProposal:
     get_snapshot: object
     save_snapshot: object
@@ -325,6 +345,7 @@ class ReviewTechnicalEvidence:
     save_snapshot: object
     clock: object
     ids: object
+    resolve_professional: object
 
     def execute(self, workspace_id, *, evidence_id: str, action: str, professional_id: str, reason: str, expected_revision: int):
         record, snapshot = self.get_snapshot.execute(workspace_id)
@@ -334,10 +355,11 @@ class ReviewTechnicalEvidence:
         if evidence is None:
             raise ValueError("Technical evidence review target is invalid")
         current = next(item for item in snapshot.evidence_assessments if item.assessment_id == evidence.assessment_id)
-        if current.review_state is not EvidenceReviewState.PENDING or not professional_id.strip() or not reason.strip():
+        if current.review_state is not EvidenceReviewState.PENDING or not reason.strip():
             raise ValueError("Technical evidence already reviewed or professional input is invalid")
+        canonical_professional = self.resolve_professional.execute(workspace_id, professional_id)
         now = self.clock.now()
-        reviewed = replace(current, review_state=EvidenceReviewState.APPROVED if action == "APPROVE" else EvidenceReviewState.REJECTED, review_id=f"EVIDENCE-REVIEW-{self.ids.new_uuid().hex.upper()}", reviewer=professional_id.strip(), review_reason=reason.strip(), reviewed_at=now.isoformat())
+        reviewed = replace(current, review_state=EvidenceReviewState.APPROVED if action == "APPROVE" else EvidenceReviewState.REJECTED, review_id=f"EVIDENCE-REVIEW-{self.ids.new_uuid().hex.upper()}", reviewer=canonical_professional, review_reason=reason.strip(), reviewed_at=now.isoformat())
         assessments = tuple(reviewed if item.assessment_id == reviewed.assessment_id else item for item in snapshot.evidence_assessments)
         approved = sum(item.review_state is EvidenceReviewState.APPROVED for item in assessments)
         amended = replace(snapshot, evidence_assessments=assessments, coverage=replace(snapshot.coverage, approved_evidence=approved))
@@ -349,18 +371,20 @@ class SelectTechnicalMethod:
     get_snapshot: object
     save_snapshot: object
     ids: object
+    resolve_professional: object
 
     def execute(self, workspace_id, *, evidence_id: str, method_identity: str, procedure: str, output: str, professional_id: str, expected_revision: int):
         record, snapshot = self.get_snapshot.execute(workspace_id)
         assessment = next((item for item in snapshot.evidence_assessments if item.evidence_id == evidence_id), None)
         if record.revision != expected_revision or snapshot.upstream_stale or assessment is None or assessment.review_state is not EvidenceReviewState.APPROVED:
             raise RepositoryConflict("approved current evidence is required for method selection")
-        if any(not isinstance(value, str) or not value.strip() for value in (method_identity, procedure, output, professional_id)):
+        if any(not isinstance(value, str) or not value.strip() for value in (method_identity, procedure, output)):
             raise ValueError("method selection input is invalid")
+        canonical_professional = self.resolve_professional.execute(workspace_id, professional_id)
         token = self.ids.new_uuid().hex.upper(); method_id = f"METHOD-{token}"; input_id = f"METHOD-INPUT-{token}"; output_id = f"METHOD-OUTPUT-{token}"
         method_input = MethodInput(input_id, method_id, evidence_id, "PRIMARY_INPUT")
         method_output = MethodOutput(output_id, method_id, output.strip(), "Saída rastreável do método selecionado.")
-        method = MethodApplication(method_id, method_identity.strip(), f"PROFESSIONAL:{professional_id.strip()}", procedure.strip(), (), (input_id,), (output_id,), (), (), expected_revision + 1)
+        method = MethodApplication(method_id, method_identity.strip(), f"PROFESSIONAL:{canonical_professional}", procedure.strip(), (), (input_id,), (output_id,), (), (), expected_revision + 1)
         amended = replace(snapshot, method_applications=(*snapshot.method_applications, method), method_inputs=(*snapshot.method_inputs, method_input), method_outputs=(*snapshot.method_outputs, method_output), coverage=replace(snapshot.coverage, method_applications=len(snapshot.method_applications) + 1))
         return self.save_snapshot.execute(workspace_id, amended, expected_revision, mutation_authority="PROFESSIONAL"), amended
 
@@ -371,16 +395,14 @@ class ProposeTechnicalFinding:
     save_snapshot: object
     ids: object
 
-    def execute(self, workspace_id, *, method_application_id: str, technical_proposition: str, scope: str, limitation: str, uncertainty: str, uncertainty_impact: str, origin: str, contrary_evidence_ids: tuple[str, ...], expected_revision: int):
+    def execute(self, workspace_id, *, method_application_id: str, technical_proposition: str, scope: str, limitation: str, uncertainty: str, uncertainty_impact: str, contrary_evidence_ids: tuple[str, ...], expected_revision: int):
         record, snapshot = self.get_snapshot.execute(workspace_id)
         method = next((item for item in snapshot.method_applications if item.method_application_id == method_application_id), None)
         if record.revision != expected_revision or snapshot.upstream_stale or method is None:
             raise RepositoryConflict("current selected method is required for finding proposal")
-        try: proposal_origin = ProposalOrigin(origin)
-        except ValueError as exc: raise ValueError("finding proposal origin is invalid") from exc
         token = self.ids.new_uuid().hex.upper(); proposal_id = f"PROPOSAL-{token}"; limitation_id = f"LIMITATION-{token}"; uncertainty_id = f"UNCERTAINTY-{token}"
         supporting = tuple(item.evidence_id for item in snapshot.method_inputs if item.method_application_id == method_application_id and item.evidence_id not in contrary_evidence_ids)
-        proposal = TechnicalFindingProposal(proposal_id, technical_proposition, proposal_origin, (method_application_id,), supporting, contrary_evidence_ids, (limitation_id,), (uncertainty_id,), scope)
+        proposal = TechnicalFindingProposal(proposal_id, technical_proposition, ProposalOrigin.AI_PROPOSAL, (method_application_id,), supporting, contrary_evidence_ids, (limitation_id,), (uncertainty_id,), scope)
         limit = FindingLimitation(limitation_id, "PROPOSAL", proposal_id, "SCOPE_LIMITATION", limitation)
         uncertain = FindingUncertainty(uncertainty_id, proposal_id, "EXPLICIT_UNCERTAINTY", uncertainty, uncertainty_impact)
         conflicts = snapshot.conflicts
@@ -404,6 +426,7 @@ class ReviewTechnicalFinding:
     save_snapshot: object
     clock: object
     ids: object
+    resolve_professional: object
 
     def execute(self, workspace_id, *, proposal_id: str, action: str, professional_id: str, reason: str, modified_proposition: str | None, resolve_conflicts: bool, expected_revision: int):
         record, snapshot = self.get_snapshot.execute(workspace_id)
@@ -412,18 +435,19 @@ class ReviewTechnicalFinding:
             raise RepositoryConflict("current finding proposal is required for professional review")
         try: decision_action = DecisionAction(action)
         except ValueError as exc: raise ValueError("technical decision action is invalid") from exc
-        if not professional_id.strip() or not reason.strip() or (decision_action is DecisionAction.MODIFY) != bool(modified_proposition and modified_proposition.strip()):
+        if not reason.strip() or (decision_action is DecisionAction.MODIFY) != bool(modified_proposition and modified_proposition.strip()):
             raise ValueError("technical professional review input is invalid")
+        canonical_professional = self.resolve_professional.execute(workspace_id, professional_id)
         history = [item for item in snapshot.decisions if item.proposal_id == proposal_id]
         token = self.ids.new_uuid().hex.upper(); decision_id = f"DECISION-{token}"
-        decision = ProfessionalDecision(decision_id, proposal_id, decision_action, professional_id.strip(), reason.strip(), modified_proposition.strip() if modified_proposition else None, self.clock.now().isoformat(), history[-1].decision_id if history else None)
+        decision = ProfessionalDecision(decision_id, proposal_id, decision_action, canonical_professional, reason.strip(), modified_proposition.strip() if modified_proposition else None, self.clock.now().isoformat(), history[-1].decision_id if history else None)
         findings = snapshot.findings
         question_links = tuple(item for item in snapshot.question_links if not any(old.finding_id == item.finding_id for old in snapshot.findings if old.proposal_id == proposal_id))
         if decision_action is not DecisionAction.REJECT:
             findings = (*findings, TechnicalFinding(f"FINDING-{token}", proposal_id, decision_id, modified_proposition.strip() if modified_proposition else proposal.technical_proposition, proposal.scope))
         conflicts = tuple(
             replace(item, status=ConflictStatus.RESOLVED, resolution_reasoning=reason.strip(), decision_id=decision_id)
-            if resolve_conflicts and item.proposal_id == proposal_id else item for item in snapshot.conflicts
+            if resolve_conflicts and item.proposal_id == proposal_id and item.status is ConflictStatus.UNRESOLVED else item for item in snapshot.conflicts
         )
         decisions = (*snapshot.decisions, decision)
         effective = sum(

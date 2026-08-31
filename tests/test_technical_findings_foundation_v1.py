@@ -40,6 +40,7 @@ from scripts.backend_contract.application.technical_findings import (
     ProposeTechnicalFinding,
     ReviewTechnicalEvidence,
     ReviewTechnicalFinding,
+    ResolveTechnicalProfessional,
     SaveTechnicalSnapshot,
     SelectTechnicalMethod,
     StartTechnicalSnapshot,
@@ -141,6 +142,14 @@ class SequentialClock:
     def now(self):
         self.minute += 1
         return datetime(2026, 8, 31, 12, self.minute, tzinfo=UTC)
+
+
+def bound_professional(expected="PROFESSIONAL-001"):
+    def execute(_workspace, claimed):
+        if claimed != expected:
+            raise ValueError("Technical professional identity is not the bound inspection authority")
+        return expected
+    return SimpleNamespace(execute=execute)
 
 
 def empty_bound_snapshot():
@@ -329,7 +338,7 @@ def test_command_chain_keeps_proposals_non_authoritative_and_server_owns_review_
     assert assessment.reviewer is None and assessment.reviewed_at is None
     assert harness.snapshot.decisions == () and harness.snapshot.findings == ()
 
-    ReviewTechnicalEvidence(harness.get(), harness.save(), clock, ids).execute(
+    ReviewTechnicalEvidence(harness.get(), harness.save(), clock, ids, bound_professional()).execute(
         WorkspaceId.parse(harness.snapshot.workspace_id), evidence_id=evidence.evidence_id,
         action="APPROVE", professional_id="PROFESSIONAL-001", reason="Revisão humana explícita.",
         expected_revision=2,
@@ -342,7 +351,7 @@ def test_command_chain_keeps_proposals_non_authoritative_and_server_owns_review_
     assert reviewed.why_relevant == "Relevância sintética."
     assert reviewed.reviewed_at == "2026-08-31T12:01:00+00:00"
 
-    SelectTechnicalMethod(harness.get(), harness.save(), ids).execute(
+    SelectTechnicalMethod(harness.get(), harness.save(), ids, bound_professional()).execute(
         WorkspaceId.parse(harness.snapshot.workspace_id), evidence_id=evidence.evidence_id,
         method_identity="Comparação sintética", procedure="Comparar registros.", output="Resultado sintético.",
         professional_id="PROFESSIONAL-001", expected_revision=3,
@@ -353,7 +362,7 @@ def test_command_chain_keeps_proposals_non_authoritative_and_server_owns_review_
     ProposeTechnicalFinding(harness.get(), harness.save(), ids).execute(
         WorkspaceId.parse(harness.snapshot.workspace_id), method_application_id=method.method_application_id,
         technical_proposition="Achado candidato.", scope="Amostra sintética.", limitation="Sem extrapolação.",
-        uncertainty="Amostra única.", uncertainty_impact="Limita generalização.", origin="AI_PROPOSAL",
+        uncertainty="Amostra única.", uncertainty_impact="Limita generalização.",
         contrary_evidence_ids=(), expected_revision=4,
     )
     proposal = harness.snapshot.finding_proposals[-1]
@@ -366,12 +375,12 @@ def test_professional_supersession_preserves_d1_d2_d3_and_rejection_removes_only
     source = bound_snapshot().source_links[0]
     AddEvidenceProposal(harness.get(), harness.save(), ids).execute(workspace, source_kind=source.source_kind, source_id=source.source_id, proposition="Base.", why_relevant="Base sintética.", expected_revision=1)
     evidence_id = harness.snapshot.evidence_items[-1].evidence_id
-    ReviewTechnicalEvidence(harness.get(), harness.save(), clock, ids).execute(workspace, evidence_id=evidence_id, action="APPROVE", professional_id="PROFESSIONAL-001", reason="Aprovada.", expected_revision=2)
-    SelectTechnicalMethod(harness.get(), harness.save(), ids).execute(workspace, evidence_id=evidence_id, method_identity="Método", procedure="Procedimento.", output="Saída.", professional_id="PROFESSIONAL-001", expected_revision=3)
+    ReviewTechnicalEvidence(harness.get(), harness.save(), clock, ids, bound_professional()).execute(workspace, evidence_id=evidence_id, action="APPROVE", professional_id="PROFESSIONAL-001", reason="Aprovada.", expected_revision=2)
+    SelectTechnicalMethod(harness.get(), harness.save(), ids, bound_professional()).execute(workspace, evidence_id=evidence_id, method_identity="Método", procedure="Procedimento.", output="Saída.", professional_id="PROFESSIONAL-001", expected_revision=3)
     method_id = harness.snapshot.method_applications[-1].method_application_id
-    ProposeTechnicalFinding(harness.get(), harness.save(), ids).execute(workspace, method_application_id=method_id, technical_proposition="P1.", scope="Escopo.", limitation="Limite.", uncertainty="Incerteza.", uncertainty_impact="Impacto.", origin="PROFESSIONAL_PROPOSAL", contrary_evidence_ids=(), expected_revision=4)
+    ProposeTechnicalFinding(harness.get(), harness.save(), ids).execute(workspace, method_application_id=method_id, technical_proposition="P1.", scope="Escopo.", limitation="Limite.", uncertainty="Incerteza.", uncertainty_impact="Impacto.", contrary_evidence_ids=(), expected_revision=4)
     proposal_id = harness.snapshot.finding_proposals[-1].proposal_id
-    review = ReviewTechnicalFinding(harness.get(), harness.save(), clock, ids)
+    review = ReviewTechnicalFinding(harness.get(), harness.save(), clock, ids, bound_professional())
     review.execute(workspace, proposal_id=proposal_id, action="APPROVE", professional_id="PROFESSIONAL-001", reason="D1.", modified_proposition=None, resolve_conflicts=False, expected_revision=5)
     review.execute(workspace, proposal_id=proposal_id, action="MODIFY", professional_id="PROFESSIONAL-001", reason="D2.", modified_proposition="P2.", resolve_conflicts=False, expected_revision=6)
     review.execute(workspace, proposal_id=proposal_id, action="REJECT", professional_id="PROFESSIONAL-001", reason="D3.", modified_proposition=None, resolve_conflicts=False, expected_revision=7)
@@ -403,12 +412,37 @@ def test_structurally_valid_full_snapshot_cannot_manufacture_professional_author
         service.execute(WorkspaceId.parse(snapshot.workspace_id), snapshot, None)
 
 
+def test_professional_identity_must_match_bound_inspection_authority():
+    _case_record, _case, _inspection_record, inspection = upstreams()
+    resolver = ResolveTechnicalProfessional(SimpleNamespace(execute=lambda _workspace: (_inspection_record, inspection)))
+    workspace = WorkspaceId.parse(inspection.workspace_id)
+    assert resolver.execute(workspace, inspection.responsible_professional) == inspection.responsible_professional
+    with pytest.raises(ValueError, match="bound inspection authority"):
+        resolver.execute(workspace, "AI-AGENT-SELF-AUTHORIZED")
+
+
 def test_professional_history_rewrite_is_denied_even_when_resulting_graph_is_valid():
     snapshot = bound_snapshot(); service = save_service(snapshot)
     decisions = list(snapshot.decisions)
     decisions[0] = replace(decisions[0], professional_id="FORGED-PROFESSIONAL")
     rewritten = replace(snapshot, decisions=tuple(decisions))
     with pytest.raises(ValueError, match="history cannot be rewritten"):
+        service.execute(WorkspaceId.parse(snapshot.workspace_id), rewritten, 3, mutation_authority="PROFESSIONAL")
+
+
+def test_resolved_conflict_authority_cannot_be_rewritten_by_later_decision():
+    snapshot = bound_snapshot()
+    resolved = replace(
+        snapshot,
+        conflicts=(replace(snapshot.conflicts[0], status=ConflictStatus.RESOLVED, resolution_reasoning="D1 preservada.", decision_id="DECISION-001"),),
+        coverage=replace(snapshot.coverage, unresolved_conflicts=0),
+    )
+    service = save_service(resolved)
+    rewritten = replace(
+        resolved,
+        conflicts=(replace(resolved.conflicts[0], resolution_reasoning="D2 sobrescrita.", decision_id="DECISION-001"),),
+    )
+    with pytest.raises(ValueError, match="conflict history is immutable"):
         service.execute(WorkspaceId.parse(snapshot.workspace_id), rewritten, 3, mutation_authority="PROFESSIONAL")
 
 

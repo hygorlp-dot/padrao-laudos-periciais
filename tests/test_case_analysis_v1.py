@@ -28,7 +28,6 @@ from scripts.backend_contract.application.case_analysis import (
     validated_case_analysis_from_mapping,
 )
 from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
-from scripts.backend_contract.application.ports import RepositoryIntegrityError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -257,7 +256,7 @@ def _authoritative_documents(snapshot, *, changed_document_id=None):
     )
 
 
-def test_save_uses_atomic_repository_cas_and_authoritative_inventory():
+def test_initial_full_snapshot_material_injection_is_rejected_before_repository_append():
     snapshot = replace(case_analysis_from_mapping(fixture()), human_reviews=())
     calls = []
     revisions = SimpleNamespace(append_if_latest=lambda **kwargs: calls.append(kwargs) or SimpleNamespace(revision=1))
@@ -265,18 +264,16 @@ def test_save_uses_atomic_repository_cas_and_authoritative_inventory():
     ids = SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999"))
     documents = SimpleNamespace(execute=lambda _workspace: _authoritative_documents(snapshot))
 
-    result = SaveCaseAnalysis(revisions, SimpleNamespace(), clock, ids, documents, nullcontext).execute(
-        WorkspaceId.parse(snapshot.workspace_id), snapshot, None
-    )
-
-    assert result.revision == 1
-    assert calls[0]["expected_revision"] is None
-    assert calls[0]["payload"] == case_analysis_to_mapping(snapshot)
+    with pytest.raises(ValueError, match="authority-free bootstrap"):
+        SaveCaseAnalysis(revisions, SimpleNamespace(), clock, ids, documents, nullcontext).execute(
+            WorkspaceId.parse(snapshot.workspace_id), snapshot, None
+        )
+    assert calls == []
 
     mismatched = SimpleNamespace(
         execute=lambda _workspace: _authoritative_documents(snapshot, changed_document_id="DOC-002")
     )
-    with pytest.raises(RepositoryIntegrityError, match="source inventory mismatch"):
+    with pytest.raises(ValueError, match="authority-free bootstrap"):
         SaveCaseAnalysis(revisions, SimpleNamespace(), clock, ids, mismatched, nullcontext).execute(
             WorkspaceId.parse(snapshot.workspace_id), snapshot, None
         )
@@ -287,7 +284,7 @@ def test_save_uses_atomic_repository_cas_and_authoritative_inventory():
             SimpleNamespace(content_id="10000000-0000-4000-8000-000000000004", checksum_sha256="e" * 64),
         )
     )
-    with pytest.raises(RepositoryIntegrityError, match="source inventory mismatch"):
+    with pytest.raises(ValueError, match="authority-free bootstrap"):
         SaveCaseAnalysis(revisions, SimpleNamespace(), clock, ids, extra, nullcontext).execute(
             WorkspaceId.parse(snapshot.workspace_id), snapshot, None
         )
@@ -376,7 +373,7 @@ def test_effective_review_projection_preserves_source_and_dedicated_command_owns
 def test_initial_case_analysis_cannot_forge_human_review():
     snapshot = case_analysis_from_mapping(fixture())
     service = SaveCaseAnalysis(SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), nullcontext)
-    with pytest.raises(ValueError, match="cannot contain human review"):
+    with pytest.raises(ValueError, match="authority-free bootstrap"):
         service.execute(WorkspaceId.parse(snapshot.workspace_id), snapshot, None)
 
 

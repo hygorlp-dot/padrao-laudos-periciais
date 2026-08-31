@@ -52,6 +52,7 @@ from ..application.technical_findings import (
     ProposeTechnicalFinding,
     ReviewTechnicalEvidence,
     ReviewTechnicalFinding,
+    ResolveTechnicalProfessional,
     SaveTechnicalSnapshot,
     SelectTechnicalMethod,
     StartTechnicalSnapshot,
@@ -344,6 +345,7 @@ def build_local_api(
         local_clock,
         local_ids,
     )
+    resolve_technical_professional = ResolveTechnicalProfessional(get_inspection_session)
     get_expert_profile = GetExpertProfile(get_latest_artifact)
     save_expert_profile = SaveExpertProfile(
         store.revisions,
@@ -487,10 +489,10 @@ def build_local_api(
         get_technical_snapshot=get_technical_snapshot,
         start_technical_snapshot=StartTechnicalSnapshot(get_case_analysis, get_inspection_session, save_technical_snapshot, local_ids),
         add_technical_evidence_proposal=AddEvidenceProposal(get_technical_snapshot, save_technical_snapshot, local_ids),
-        review_technical_evidence=ReviewTechnicalEvidence(get_technical_snapshot, save_technical_snapshot, local_clock, local_ids),
-        select_technical_method=SelectTechnicalMethod(get_technical_snapshot, save_technical_snapshot, local_ids),
+        review_technical_evidence=ReviewTechnicalEvidence(get_technical_snapshot, save_technical_snapshot, local_clock, local_ids, resolve_technical_professional),
+        select_technical_method=SelectTechnicalMethod(get_technical_snapshot, save_technical_snapshot, local_ids, resolve_technical_professional),
         propose_technical_finding=ProposeTechnicalFinding(get_technical_snapshot, save_technical_snapshot, local_ids),
-        review_technical_finding=ReviewTechnicalFinding(get_technical_snapshot, save_technical_snapshot, local_clock, local_ids),
+        review_technical_finding=ReviewTechnicalFinding(get_technical_snapshot, save_technical_snapshot, local_clock, local_ids, resolve_technical_professional),
         save_expert_profile=save_expert_profile,
         get_expert_profile=get_expert_profile,
         save_report_snapshot=save_report_snapshot,
