@@ -5,6 +5,7 @@ from datetime import datetime
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -213,7 +214,7 @@ def test_corruption_and_foreign_workspace_fail_closed_before_restore_mutation(tm
     staging = RecoveryStaging.create(staging_root)
     with pytest.raises(RepositoryIntegrityError):
         RestoreWorkspaceBackup(staging).execute(corrupt)
-    assert not staging_root.exists()
+    assert staging.discarded is True and staging_root.exists()
     assert collect_support_diagnostics(corrupt).error_code == "BACKUP_INTEGRITY_INVALID"
     source.close()
 
@@ -270,7 +271,7 @@ def test_duplicate_private_identity_and_failed_store_discard_owned_staging(tmp_p
     monkeypatch.setattr(LocalPrivateContentStore, "store", fail_store)
     with pytest.raises(OSError, match="synthetic"):
         RestoreWorkspaceBackup(staging).execute(package)
-    assert not staging_root.exists()
+    assert staging.discarded is True and staging_root.exists()
     assert len(source.revisions.list_workspace(workspace_id)) == 1
     source.close()
 
@@ -285,6 +286,36 @@ def test_restore_refuses_nonempty_target_as_rollback_boundary(tmp_path) -> None:
     source.close()
 
 
+def test_recovery_staging_cannot_be_composed_around_active_storage(tmp_path) -> None:
+    active_root = tmp_path / "active"
+    active_root.mkdir()
+    active = SQLiteApplicationStore(active_root / "workspace.sqlite3")
+    private = LocalPrivateContentStore.open_or_provision(active_root / "private")
+    with pytest.raises(TypeError, match="must be created"):
+        RecoveryStaging(active_root, active, private, os.lstat(active_root))
+    assert active_root.exists()
+    private.close()
+    active.close()
+
+
+def test_recovery_staging_repositories_cannot_be_redirected(tmp_path) -> None:
+    staging = RecoveryStaging.create(tmp_path / "staging")
+    unrelated = SQLiteApplicationStore(tmp_path / "unrelated.db")
+    with pytest.raises(AttributeError):
+        staging.workspaces = unrelated.workspaces
+    with pytest.raises(AttributeError):
+        staging.database = unrelated
+    assert staging.workspaces is staging.database.workspaces
+    staging.close()
+    unrelated.close()
+
+
+@pytest.mark.parametrize("root", ("relative-staging", r"\\server\share\staging", r"\\?\C:\staging"))
+def test_recovery_staging_rejects_nonlocal_or_unanchored_root(root) -> None:
+    with pytest.raises(RepositoryIntegrityError, match="root"):
+        RecoveryStaging.create(root)
+
+
 def test_restore_requires_globally_empty_staging_not_only_absent_source_id(tmp_path) -> None:
     private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", private)
@@ -294,7 +325,7 @@ def test_restore_requires_globally_empty_staging_not_only_absent_source_id(tmp_p
     staging.workspaces.create(PericiaWorkspace(WorkspaceId.parse("44444444-4444-4444-8444-444444444444"), "Outro", "2026-08-31T12:00:00+00:00"))
     with pytest.raises(RepositoryConflict, match="empty"):
         RestoreWorkspaceBackup(staging).execute(package)
-    assert not staging_root.exists()
+    assert staging.discarded is True and staging_root.exists()
     source.close()
 
 

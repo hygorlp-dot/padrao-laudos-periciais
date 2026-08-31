@@ -10,9 +10,9 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 from typing import Any
 from uuid import UUID
+from weakref import WeakSet
 
 from .application.models import (
     ArtifactRevision,
@@ -400,23 +400,30 @@ class RestoreReceipt:
     storage_schema_version: int
 
 
+_AUTHORIZED_RECOVERY_STAGING: WeakSet["RecoveryStaging"] = WeakSet()
+
+
 class RecoveryStaging:
     """Owns a new disposable storage root until external promotion."""
 
-    def __init__(self, root: Path, database: SQLiteApplicationStore, private: LocalPrivateContentStore, identity: os.stat_result):
-        self.root = root
-        self.database = database
-        self.workspaces = database.workspaces
-        self.revisions = database.revisions
-        self.private_contents = private
-        self._identity = identity
-        self._closed = False
+    __slots__ = ("_root", "_database", "_private_contents", "_identity", "_closed", "_discarded", "__weakref__")
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        raise TypeError("recovery staging must be created by RecoveryStaging.create")
 
     @classmethod
     def create(cls, root: str | Path) -> "RecoveryStaging":
         if not isinstance(root, (str, Path)):
             raise TypeError("recovery staging root is invalid")
+        raw = str(root)
+        if not raw.strip() or "\x00" in raw or raw.startswith(("\\\\", "//", "\\\\?\\", "\\\\.\\")):
+            raise RepositoryIntegrityError("recovery staging root must be local")
         target = Path(root)
+        if not target.is_absolute():
+            raise RepositoryIntegrityError("recovery staging root must be absolute")
+        parent = target.parent.resolve(strict=True)
+        if parent != target.parent.absolute():
+            raise RepositoryIntegrityError("recovery staging parent must not redirect")
         if target.exists() or target.is_symlink():
             raise RepositoryConflict("recovery staging root must not exist")
         target.mkdir(parents=False)
@@ -426,13 +433,20 @@ class RecoveryStaging:
         try:
             database = SQLiteApplicationStore(target / "workspace.sqlite3")
             private = LocalPrivateContentStore.open_or_provision(target / "private")
-            return cls(target.resolve(strict=True), database, private, identity)
+            staging = object.__new__(cls)
+            staging._root = target.resolve(strict=True)
+            staging._database = database
+            staging._private_contents = private
+            staging._identity = identity
+            staging._closed = False
+            staging._discarded = False
+            _AUTHORIZED_RECOVERY_STAGING.add(staging)
+            return staging
         except BaseException:
             if private is not None:
                 private.close()
             if database is not None:
                 database.close()
-            shutil.rmtree(target)
             raise
 
     def close(self) -> None:
@@ -440,18 +454,40 @@ class RecoveryStaging:
             return
         self._closed = True
         try:
-            self.private_contents.close()
+            self._private_contents.close()
         finally:
-            self.database.close()
+            self._database.close()
 
     def discard(self) -> None:
-        if self._closed:
+        if self._discarded:
             return
+        self._discarded = True
+        _AUTHORIZED_RECOVERY_STAGING.discard(self)
         self.close()
-        observed = os.lstat(self.root)
-        if (observed.st_dev, observed.st_ino) != (self._identity.st_dev, self._identity.st_ino) or self.root.is_symlink():
-            raise RepositoryIntegrityError("recovery staging identity changed before rollback")
-        shutil.rmtree(self.root)
+
+    @property
+    def discarded(self) -> bool:
+        return self._discarded
+
+    @property
+    def root(self) -> Path:
+        return self._root
+
+    @property
+    def database(self) -> SQLiteApplicationStore:
+        return self._database
+
+    @property
+    def workspaces(self):
+        return self._database.workspaces
+
+    @property
+    def revisions(self):
+        return self._database.revisions
+
+    @property
+    def private_contents(self) -> LocalPrivateContentStore:
+        return self._private_contents
 
 
 @dataclass(frozen=True, slots=True)
@@ -459,7 +495,7 @@ class RestoreWorkspaceBackup:
     staging: RecoveryStaging
 
     def execute(self, payload: bytes) -> RestoreReceipt:
-        if type(self.staging) is not RecoveryStaging:
+        if type(self.staging) is not RecoveryStaging or self.staging not in _AUTHORIZED_RECOVERY_STAGING or self.staging._closed:
             raise TypeError("restore requires first-party recovery staging")
         try:
             backup = VerifyWorkspaceBackup().execute(payload)
