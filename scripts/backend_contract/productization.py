@@ -429,9 +429,24 @@ class RecoveryStaging:
         os.mkdir(target, 0o700)
         marker_fd = os.open(target / "RECOVERY_NOT_PROMOTABLE", os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
         try:
-            os.write(marker_fd, b"RECOVERY_STAGING_V1\n")
+            remaining = memoryview(b"RECOVERY_STAGING_V1\n")
+            while remaining:
+                written = os.write(marker_fd, remaining)
+                if written <= 0:
+                    raise RepositoryIntegrityError("recovery quarantine marker write failed")
+                remaining = remaining[written:]
+            os.fsync(marker_fd)
         finally:
             os.close(marker_fd)
+        marker = target / "RECOVERY_NOT_PROMOTABLE"
+        if marker.read_bytes() != b"RECOVERY_STAGING_V1\n":
+            raise RepositoryIntegrityError("recovery quarantine marker is incomplete")
+        if os.name == "posix":
+            directory_fd = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
         identity = os.lstat(target)
         database = None
         private = None

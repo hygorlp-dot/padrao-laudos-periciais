@@ -22,6 +22,7 @@ from scripts.backend_contract.application.models import (
 from scripts.backend_contract.application.ports import RepositoryConflict, RepositoryIntegrityError
 from scripts.backend_contract.infrastructure.sqlite import SQLiteApplicationStore
 from scripts.backend_contract.infrastructure.private_filesystem import LocalPrivateContentStore
+from scripts.backend_contract.local_api.composition import build_local_api
 from scripts.backend_contract.productization import (
     ARTIFACT_COMPATIBILITY,
     CreateWorkspaceBackup,
@@ -342,6 +343,25 @@ def test_recovery_staging_is_restrictive_and_durably_not_promotable(tmp_path) ->
         assert marker.stat().st_mode & 0o777 == 0o600
     staging.discard()
     assert marker.read_bytes() == b"RECOVERY_STAGING_V1\n"
+
+
+def test_recovery_quarantine_marker_handles_partial_writes(tmp_path, monkeypatch) -> None:
+    original_write = os.write
+
+    def partial_write(fd, data):
+        return original_write(fd, data[:1])
+
+    monkeypatch.setattr(os, "write", partial_write)
+    staging = RecoveryStaging.create(tmp_path / "staging")
+    assert (staging.root / "RECOVERY_NOT_PROMOTABLE").read_bytes() == b"RECOVERY_STAGING_V1\n"
+    staging.close()
+
+
+def test_active_local_api_rejects_recovery_quarantine(tmp_path) -> None:
+    staging = RecoveryStaging.create(tmp_path / "staging")
+    staging.close()
+    with pytest.raises(RepositoryIntegrityError, match="quarantined"):
+        build_local_api(staging.root / "workspace.sqlite3", private_root=staging.root / "private", token="a" * 32)
 
 
 @pytest.mark.parametrize("root", ("relative-staging", r"\\server\share\staging", r"\\?\C:\staging"))

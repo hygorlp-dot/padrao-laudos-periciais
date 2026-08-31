@@ -10,7 +10,7 @@ from pathlib import Path
 from threading import Lock
 from uuid import UUID, uuid4
 
-from ..application.ports import Clock, IdGenerator, RepositoryError
+from ..application.ports import Clock, IdGenerator, RepositoryError, RepositoryIntegrityError
 from ..application.services import (
     AppendArtifactRevision,
     CreateWorkspace,
@@ -176,6 +176,12 @@ def build_local_api(
     _require_local_token(local_token)
     local_clock = _SystemClock() if clock is None else clock
     local_ids = _UuidGenerator() if ids is None else ids
+    database_path = Path(database).absolute()
+    roots = {database_path.parent}
+    if private_root is not None:
+        roots.add(Path(private_root).absolute().parent)
+    if any((root / "RECOVERY_NOT_PROMOTABLE").exists() for root in roots):
+        raise RepositoryIntegrityError("recovery staging is quarantined and cannot become active")
     store = SQLiteApplicationStore(database)
     private_store = None
     if private_root is not None:
@@ -271,9 +277,7 @@ def build_local_api(
         local_clock,
         local_ids,
     )
-    get_report_snapshot = GetReportSnapshot(
-        get_latest_artifact, get_case_analysis, get_inspection_session, get_technical_snapshot, get_expert_profile
-    )
+    get_report_snapshot = GetReportSnapshot(get_latest_artifact, get_case_analysis, get_inspection_session, get_technical_snapshot, get_expert_profile)
     save_report_snapshot = SaveReportSnapshot(
         store.revisions,
         get_case_analysis,
@@ -301,22 +305,33 @@ def build_local_api(
         get_delivery_snapshot = GetDeliverySnapshot(get_latest_artifact, *authorities)
         get_delivery_history = GetDeliveryHistory(list_artifact_revisions)
         save_delivery_snapshot = SaveDeliverySnapshot(
-            store.revisions, get_latest_artifact, *authorities,
-            private_store.authority_guard, local_clock, local_ids,
+            store.revisions,
+            get_latest_artifact,
+            *authorities,
+            private_store.authority_guard,
+            local_clock,
+            local_ids,
         )
         start_delivery_snapshot = StartDeliverySnapshot(*authorities, get_private_content, save_delivery_snapshot, local_ids)
         review_delivery_snapshot = ReviewDeliverySnapshot(get_delivery_snapshot, save_delivery_snapshot, local_clock, local_ids)
         render_delivery_package = RenderDeliveryPackage(
-            get_delivery_snapshot, get_report_snapshot, get_private_content, generic_store,
-            save_delivery_snapshot, local_ids,
+            get_delivery_snapshot,
+            get_report_snapshot,
+            get_private_content,
+            generic_store,
+            save_delivery_snapshot,
+            local_ids,
         )
         attach_delivery_artifact = AttachDeliveryPackageArtifact(get_delivery_snapshot, get_private_content, save_delivery_snapshot, local_ids)
         verify_delivery_package = VerifyDeliveryPackage(get_delivery_snapshot, get_private_content)
         finalize_delivery_snapshot = FinalizeDeliverySnapshot(verify_delivery_package, review_delivery_snapshot)
         deliver_delivery_snapshot = DeliverDeliverySnapshot(verify_delivery_package, review_delivery_snapshot)
         reissue_delivery_snapshot = ReissueDeliverySnapshot(
-            get_delivery_snapshot, save_delivery_snapshot, *authorities,
-            get_private_content, local_ids,
+            get_delivery_snapshot,
+            save_delivery_snapshot,
+            *authorities,
+            get_private_content,
+            local_ids,
         )
     get_budget_snapshot = GetBudgetSnapshot(get_latest_artifact)
     save_budget_snapshot = SaveBudgetSnapshot(store.revisions, get_latest_artifact, local_clock, local_ids)
@@ -358,15 +373,10 @@ def build_local_api(
         ),
         save_inspection_session=save_inspection_session,
         get_inspection_session=get_inspection_session,
-        start_inspection_session=(
-            StartInspectionSession(get_pericial_planning, save_inspection_session, local_clock, local_ids)
-            if save_inspection_session is not None else None
-        ),
+        start_inspection_session=(StartInspectionSession(get_pericial_planning, save_inspection_session, local_clock, local_ids) if save_inspection_session is not None else None),
         save_technical_snapshot=save_technical_snapshot,
         get_technical_snapshot=get_technical_snapshot,
-        start_technical_snapshot=StartTechnicalSnapshot(
-            get_case_analysis, get_inspection_session, save_technical_snapshot, local_ids
-        ),
+        start_technical_snapshot=StartTechnicalSnapshot(get_case_analysis, get_inspection_session, save_technical_snapshot, local_ids),
         save_expert_profile=save_expert_profile,
         get_expert_profile=get_expert_profile,
         save_report_snapshot=save_report_snapshot,
