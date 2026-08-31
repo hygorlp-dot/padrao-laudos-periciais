@@ -52,8 +52,10 @@ from ..application.pericial_planning import (
     pericial_planning_to_mapping,
     validated_pericial_planning_from_mapping,
 )
-from ..application.vistoria import validated_inspection_session_from_mapping
-from ..vistoria import InspectionSession, inspection_session_to_mapping
+from ..application.vistoria import (
+    inspection_session_to_validated_mapping,
+    validated_inspection_session_from_mapping,
+)
 
 _MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
 
@@ -546,9 +548,7 @@ class LocalApi:
                     if self._services.get_inspection_session is None:
                         return _error(503, "INSPECTION_SESSION_UNAVAILABLE")
                     record, snapshot = self._services.get_inspection_session.execute(workspace_id)
-                    if type(snapshot) is not InspectionSession:
-                        raise RepositoryIntegrityError("Inspection Session persisted state is invalid")
-                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": inspection_session_to_mapping(snapshot)})
+                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": inspection_session_to_validated_mapping(snapshot)})
                 if normalized_method == "PUT":
                     if self._services.save_inspection_session is None:
                         return _error(503, "PRIVATE_STORAGE_UNAVAILABLE", "armazenamento privado indisponível")
@@ -562,7 +562,7 @@ class LocalApi:
                     if snapshot.workspace_id != str(workspace_id):
                         raise ValueError("Inspection Session workspace mismatch")
                     record = self._services.save_inspection_session.execute(workspace_id, snapshot, expected)
-                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": inspection_session_to_mapping(snapshot)})
+                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": inspection_session_to_validated_mapping(snapshot)})
                 if normalized_method == "POST":
                     if self._services.start_inspection_session is None:
                         return _error(503, "PRIVATE_STORAGE_UNAVAILABLE", "armazenamento privado indisponível")
@@ -575,7 +575,7 @@ class LocalApi:
                         location_context=dto["location_context"],
                         participant_references=tuple(dto["participant_references"]),
                     )
-                    return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": inspection_session_to_mapping(snapshot)})
+                    return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": inspection_session_to_validated_mapping(snapshot)})
                 return _error(405, "METHOD_NOT_ALLOWED")
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "materials":

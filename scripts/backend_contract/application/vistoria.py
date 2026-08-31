@@ -38,6 +38,12 @@ def validated_inspection_session_from_mapping(value: object) -> InspectionSessio
         raise ValueError("invalid Inspection Session payload") from exc
 
 
+def inspection_session_to_validated_mapping(value: object) -> dict[str, object]:
+    if type(value) is not InspectionSession:
+        raise RepositoryIntegrityError("Inspection Session persisted state is invalid")
+    return inspection_session_to_mapping(value)
+
+
 def inspection_planning_digest(snapshot) -> str:
     encoded = json.dumps(
         pericial_planning_to_mapping(snapshot), ensure_ascii=False, sort_keys=True, separators=(",", ":")
