@@ -38,6 +38,12 @@ class ReviewAction(StrEnum):
     SUPERSEDE = "SUPERSEDE"
 
 
+class ContextStatus(StrEnum):
+    PRESENT = "PRESENT"
+    MISSING = "MISSING"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
 _SOURCE_AUTHORITY = {
     "ALLEGATION": AuthorityClass.ALLEGED,
     "COURT_DECISION": AuthorityClass.DECIDED_BY_COURT,
@@ -152,6 +158,26 @@ class EditorialProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class ContextCompletenessItem:
+    context_id: str
+    field: str
+    required: bool
+    status: ContextStatus
+    source_id: str | None
+    note: str
+
+    def __post_init__(self):
+        _all_text(self, ("context_id", "field", "note"))
+        if type(self.required) is not bool:
+            raise ValueError("process context requirement is invalid")
+        if self.status is ContextStatus.PRESENT:
+            if not _text(self.source_id):
+                raise ValueError("present process context requires source")
+        elif self.source_id is not None:
+            raise ValueError("absent process context cannot claim source")
+
+
+@dataclass(frozen=True, slots=True)
 class ReportSection:
     section_id: str
     kind: str
@@ -240,11 +266,13 @@ class ReportCoverage:
     traceable_answers: int
     cpc473_required_sections: int
     cpc473_present_sections: int
+    context_required_fields: int
+    context_present_fields: int
     complete: bool
     reasons: tuple[str, ...]
 
     def __post_init__(self):
-        values = (self.sections, self.material_claims, self.traceable_claims, self.answers, self.traceable_answers, self.cpc473_required_sections, self.cpc473_present_sections)
+        values = (self.sections, self.material_claims, self.traceable_claims, self.answers, self.traceable_answers, self.cpc473_required_sections, self.cpc473_present_sections, self.context_required_fields, self.context_present_fields)
         if any(type(value) is not int or value < 0 for value in values) or type(self.complete) is not bool:
             raise ValueError("report coverage is invalid")
         _texts(self.reasons)
@@ -258,6 +286,7 @@ class ReportSnapshot:
     source_snapshot: ReportSourceSnapshot
     expert_profile: ExpertMasterProfile
     editorial_profile: EditorialProfile
+    context_matrix: tuple[ContextCompletenessItem, ...]
     sections: tuple[ReportSection, ...]
     claims: tuple[ReportClaim, ...]
     answers: tuple[ReportAnswer, ...]
@@ -278,6 +307,8 @@ class ReportSnapshot:
             raise ValueError("report stale status is dishonest")
         if self.upstream_stale and self.state is ReportState.APPROVED:
             raise ValueError("stale report cannot remain approved")
+        if self.state is ReportState.APPROVED and any(item.required and item.status is not ContextStatus.PRESENT for item in self.context_matrix):
+            raise ValueError("approved report requires complete process context")
         self._validate_graph()
 
     def _validate_graph(self) -> None:
@@ -305,11 +336,14 @@ class ReportSnapshot:
             raise ValueError("report state diverges from professional review")
         required = sum(item.required_by_cpc473 for item in self.sections)
         present = sum(item.required_by_cpc473 and any(claim.section_id == item.section_id for claim in self.claims) for item in self.sections)
+        context_required = sum(item.required for item in self.context_matrix)
+        context_present = sum(item.required and item.status is ContextStatus.PRESENT for item in self.context_matrix)
         expected_coverage = ReportCoverage(
             sections=len(self.sections), material_claims=len(self.claims), traceable_claims=len(self.claims),
             answers=len(self.answers), traceable_answers=len(self.answers), cpc473_required_sections=required,
             cpc473_present_sections=present,
-            complete=bool(self.claims) and present == required and not self.upstream_stale and self.state is ReportState.APPROVED,
+            context_required_fields=context_required, context_present_fields=context_present,
+            complete=bool(self.claims) and present == required and context_present == context_required and not self.upstream_stale and self.state is ReportState.APPROVED,
             reasons=self.coverage.reasons,
         )
         if self.coverage != expected_coverage:
@@ -334,7 +368,7 @@ def _construct(cls: type[T], value: object, *, nested: dict[str, type] | None = 
         data[name] = tuple(_construct(child, item) for item in data[name]) if child else tuple(data[name])
     for item in fields(cls):
         enum_type = item.type
-        if enum_type in (AuthorityClass, ReportState, ReviewAction):
+        if enum_type in (AuthorityClass, ReportState, ReviewAction, ContextStatus):
             data[item.name] = enum_type(data[item.name])
     return cls(**data)
 
@@ -349,6 +383,12 @@ def report_snapshot_from_mapping(value: object) -> ReportSnapshot:
     data["source_snapshot"] = _construct(ReportSourceSnapshot, data["source_snapshot"])
     data["expert_profile"] = _construct(ExpertMasterProfile, data["expert_profile"])
     data["editorial_profile"] = _construct(EditorialProfile, data["editorial_profile"], tuples={"overrides": None})
+    context = []
+    for item in data["context_matrix"]:
+        record = dict(item)
+        record["status"] = ContextStatus(record["status"])
+        context.append(_construct(ContextCompletenessItem, record))
+    data["context_matrix"] = tuple(context)
     data["sections"] = tuple(_construct(ReportSection, item) for item in data["sections"])
     claims = []
     for item in data["claims"]:

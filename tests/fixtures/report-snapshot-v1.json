@@ -43,6 +43,14 @@
     "hyphenation": false,
     "overrides": []
   },
+  "context_matrix": [
+    {"context_id":"CONTEXT-001","field":"PROCESS_NUMBER","required":true,"status":"PRESENT","source_id":"DOCUMENT-001","note":"Identidade sintética documentada."},
+    {"context_id":"CONTEXT-002","field":"COURT","required":true,"status":"PRESENT","source_id":"DOCUMENT-001","note":"Órgão sintético documentado."},
+    {"context_id":"CONTEXT-003","field":"PARTIES","required":true,"status":"PRESENT","source_id":"JUDICIAL-CONTEXT-001","note":"Participantes sintéticos canônicos."},
+    {"context_id":"CONTEXT-004","field":"ADDRESSES","required":true,"status":"PRESENT","source_id":"DOCUMENT-001","note":"Endereço sintético documentado."},
+    {"context_id":"CONTEXT-005","field":"CLAIM_AND_GROUNDS","required":true,"status":"PRESENT","source_id":"CLAIM-001","note":"Alegação sintética, sem promoção a fato."},
+    {"context_id":"CONTEXT-006","field":"REQUESTS","required":true,"status":"PRESENT","source_id":"QUESTION-001","note":"Quesito sintético preservado."}
+  ],
   "sections": [
     {"section_id":"SECTION-001","kind":"IDENTIFICATION","title":"Identificação","order":1,"required_by_cpc473":true},
     {"section_id":"SECTION-002","kind":"PROCEDURAL_CONTEXT","title":"Contexto Processual","order":2,"required_by_cpc473":true},
@@ -77,7 +85,7 @@
     {"review_id":"REPORT-REVIEW-002","action":"APPROVE","professional_id":"EXPERT-PROFILE-001","reason":"Aprovação sintética explícita para edição controlada.","timestamp":"2026-08-31T11:01:00+00:00","supersedes_review_id":"REPORT-REVIEW-001"}
   ],
   "state": "APPROVED",
-  "coverage": {"sections":14,"material_claims":8,"traceable_claims":8,"answers":1,"traceable_answers":1,"cpc473_required_sections":8,"cpc473_present_sections":8,"complete":true,"reasons":[]},
+  "coverage": {"sections":14,"material_claims":8,"traceable_claims":8,"answers":1,"traceable_answers":1,"cpc473_required_sections":8,"cpc473_present_sections":8,"context_required_fields":6,"context_present_fields":6,"complete":true,"reasons":[]},
   "upstream_stale": false,
   "upstream_stale_reasons": []
 }
