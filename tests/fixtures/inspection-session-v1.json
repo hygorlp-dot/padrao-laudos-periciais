@@ -1,0 +1,53 @@
+{
+  "schema_version": "1.0.0",
+  "session_id": "INSPECTION-SESSION-001",
+  "workspace_id": "11111111-1111-4111-8111-111111111111",
+  "plan_snapshot": {
+    "plan_id": "PERICIAL-PLAN-001",
+    "planning_snapshot_id": "PLANNING-SNAPSHOT-001",
+    "planning_revision": 2,
+    "planning_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "workspace_id": "11111111-1111-4111-8111-111111111111",
+    "approved_item_ids": ["PLAN-INSPECTION-001", "PLAN-MEASUREMENT-001", "PLAN-PHOTO-001"],
+    "source_revision": 4
+  },
+  "started_at": "2026-08-30T12:00:00+00:00",
+  "ended_at": null,
+  "location_context": "Local sintético de inspeção",
+  "participant_references": ["PARTICIPANT-001"],
+  "responsible_professional": "PROFESSIONAL-001",
+  "source_revision": 1,
+  "items": [
+    {"item_id":"INSPECTION-ITEM-001","planning_item_id":"PLAN-INSPECTION-001","title":"Inspeção visual","state":"COMPLETED","observation_ids":["OBS-001","OBS-002"],"measurement_ids":[],"photo_ids":[],"limitation_ids":[],"note":"Execução sintética concluída."},
+    {"item_id":"INSPECTION-ITEM-002","planning_item_id":"PLAN-MEASUREMENT-001","title":"Medição dimensional","state":"PARTIAL","observation_ids":["OBS-003"],"measurement_ids":["MEASUREMENT-001"],"photo_ids":[],"limitation_ids":[],"note":"Série parcial registrada."},
+    {"item_id":"INSPECTION-ITEM-003","planning_item_id":"PLAN-PHOTO-001","title":"Registro fotográfico","state":"BLOCKED","observation_ids":[],"measurement_ids":[],"photo_ids":["PHOTO-001"],"limitation_ids":["LIMIT-001"],"note":"Acesso parcial documentado."}
+  ],
+  "observations": [
+    {"observation_id":"OBS-001","inspection_item_id":"INSPECTION-ITEM-001","observation_type":"DIRECT_OBSERVATION","raw_observation":"Superfície visível sob iluminação ambiente.","location_id":"LOCATION-001","timestamp":"2026-08-30T12:05:00+00:00","operator":"PROFESSIONAL-001","provenance":"Registro direto sintético."},
+    {"observation_id":"OBS-002","inspection_item_id":"INSPECTION-ITEM-001","observation_type":"PROFESSIONAL_NOTE","raw_observation":"Nota de orientação sem interpretação causal.","location_id":"LOCATION-001","timestamp":"2026-08-30T12:06:00+00:00","operator":"PROFESSIONAL-001","provenance":"Nota profissional sintética."},
+    {"observation_id":"OBS-003","inspection_item_id":"INSPECTION-ITEM-002","observation_type":"MEASURED_VALUE","raw_observation":"Leitura bruta indicada no visor.","location_id":"LOCATION-001","timestamp":"2026-08-30T12:10:00+00:00","operator":"PROFESSIONAL-001","provenance":"Leitura sintética associada a MEASUREMENT-001."}
+  ],
+  "statements": [
+    {"statement_id":"STATEMENT-001","inspection_item_id":"INSPECTION-ITEM-001","observation_type":"PARTY_STATEMENT_ON_SITE","speaker":"PARTICIPANT-001","declared_role":"Parte presente","verbatim_or_summary":"Declaração sintética da parte, não confirmada como fato.","capture_kind":"SUMMARY","timestamp":"2026-08-30T12:07:00+00:00","provenance":"Declaração oral sintética em campo."}
+  ],
+  "measurements": [
+    {"measurement_id":"MEASUREMENT-001","inspection_item_id":"INSPECTION-ITEM-002","quantity":"comprimento","raw_value":"1250","raw_unit":"mm","normalized_value":"1.25","normalized_unit":"m","instrument_id":"INSTRUMENT-001","method_id":"METHOD-001","location_id":"LOCATION-001","timestamp":"2026-08-30T12:10:00+00:00","operator":"PROFESSIONAL-001","uncertainty":"±1 mm","raw_observation":"Valor lido diretamente no instrumento sintético.","provenance":"Registro de medição sintético."}
+  ],
+  "measurement_series": [{"series_id":"SERIES-001","measurement_ids":["MEASUREMENT-001"],"purpose":"Preservar a série bruta disponível."}],
+  "methods": [{"method_id":"METHOD-001","name":"Medição dimensional sintética","procedure":"Leitura direta sem inferência.","provenance":"Plano aprovado PLAN-MEASUREMENT-001."}],
+  "instruments": [{"instrument_id":"INSTRUMENT-001","identity":"Instrumento dimensional sintético","model":"MODEL-001","serial_number":"SERIAL-001","capability":"0–2000 mm","calibration_claimed":true,"certificate_reference":"CERT-SYNTHETIC-001"}],
+  "instrument_statuses": [{"status_id":"INSTRUMENT-STATUS-001","instrument_id":"INSTRUMENT-001","status":"VERIFIED_FOR_SYNTHETIC_USE","checked_at":"2026-08-30T11:50:00+00:00","evidence_reference":"CERT-SYNTHETIC-001"}],
+  "photos": [{"photo_id":"PHOTO-001","inspection_item_id":"INSPECTION-ITEM-003","private_content_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","original_sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","reliable_capture_timestamp":"2026-08-30T12:15:00+00:00","location_id":"LOCATION-001","caption":"Registro sintético do limite acessível.","device":"DEVICE-001","provenance":"Original privado sintético."}],
+  "videos": [{"video_id":"VIDEO-001","inspection_item_id":"INSPECTION-ITEM-001","private_content_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","original_sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","caption":"Referência sintética de vídeo suportado."}],
+  "sketches": [{"sketch_id":"SKETCH-001","inspection_item_id":"INSPECTION-ITEM-001","private_content_id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","original_sha256":"abababababababababababababababababababababababababababababababab","caption":"Croqui sintético do local."}],
+  "locations": [{"location_id":"LOCATION-001","description":"Área sintética inspecionada","parent_location_id":null}],
+  "environmental_conditions": [{"condition_id":"ENV-001","inspection_item_id":"INSPECTION-ITEM-001","description":"Iluminação ambiente disponível.","timestamp":"2026-08-30T12:00:00+00:00","provenance":"Observação ambiental sintética."}],
+  "access_occurrences": [{"occurrence_id":"ACCESS-001","inspection_item_id":"INSPECTION-ITEM-003","outcome":"PARTIAL","description":"Acesso parcial ao ponto planejado.","timestamp":"2026-08-30T12:14:00+00:00"}],
+  "limitations": [{"limitation_id":"LIMIT-001","inspection_item_id":"INSPECTION-ITEM-003","kind":"ACCESS_LIMITATION","description":"Área complementar inacessível no cenário sintético.","consequence_for_coverage":"Registro fotográfico permanece bloqueado.","provenance":"ACCESS-001"}],
+  "missing_items": [{"missing_id":"MISSING-001","planning_item_id":"PLAN-PHOTO-001","reason":"Cobertura fotográfica complementar não executada.","limitation_id":"LIMIT-001"}],
+  "evidence_candidates": [{"candidate_id":"EVIDENCE-CANDIDATE-001","inspection_item_id":"INSPECTION-ITEM-002","source_record_ids":["OBS-003","MEASUREMENT-001"],"description":"Par de registros de campo candidato a análise técnica futura.","provenance":"Registros brutos sintéticos; não constitui achado."}],
+  "coverage": {"total_items":3,"pending_items":0,"completed_items":1,"partial_items":1,"not_executed_items":0,"not_applicable_items":0,"blocked_items":1,"complete":false,"limitation_ids":["LIMIT-001"],"reasons":["Cobertura parcial por limitação de acesso."]},
+  "reviews": [{"review_id":"INSPECTION-REVIEW-001","reviewer":"PROFESSIONAL-001","reviewed_at":"2026-08-30T12:20:00+00:00","status":"FIELD_RECORD_REVIEWED","notes":"Revisão sintética sem validação de conclusão técnica."}],
+  "upstream_stale": false,
+  "upstream_stale_reasons": []
+}
