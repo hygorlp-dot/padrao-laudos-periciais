@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 from typing import Any
 from uuid import UUID
-from weakref import WeakSet
+from weakref import WeakKeyDictionary
 
 from .application.models import (
     ArtifactRevision,
@@ -400,7 +400,7 @@ class RestoreReceipt:
     storage_schema_version: int
 
 
-_AUTHORIZED_RECOVERY_STAGING: WeakSet["RecoveryStaging"] = WeakSet()
+_AUTHORIZED_RECOVERY_STAGING: WeakKeyDictionary["RecoveryStaging", tuple[Path, SQLiteApplicationStore, LocalPrivateContentStore, os.stat_result]] = WeakKeyDictionary()
 
 
 class RecoveryStaging:
@@ -426,7 +426,12 @@ class RecoveryStaging:
             raise RepositoryIntegrityError("recovery staging parent must not redirect")
         if target.exists() or target.is_symlink():
             raise RepositoryConflict("recovery staging root must not exist")
-        target.mkdir(parents=False)
+        os.mkdir(target, 0o700)
+        marker_fd = os.open(target / "RECOVERY_NOT_PROMOTABLE", os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+        try:
+            os.write(marker_fd, b"RECOVERY_STAGING_V1\n")
+        finally:
+            os.close(marker_fd)
         identity = os.lstat(target)
         database = None
         private = None
@@ -440,7 +445,7 @@ class RecoveryStaging:
             staging._identity = identity
             staging._closed = False
             staging._discarded = False
-            _AUTHORIZED_RECOVERY_STAGING.add(staging)
+            _AUTHORIZED_RECOVERY_STAGING[staging] = (staging._root, database, private, identity)
             return staging
         except BaseException:
             if private is not None:
@@ -453,16 +458,18 @@ class RecoveryStaging:
         if self._closed:
             return
         self._closed = True
+        authority = _AUTHORIZED_RECOVERY_STAGING.pop(self, None)
+        database = authority[1] if authority is not None else self._database
+        private_contents = authority[2] if authority is not None else self._private_contents
         try:
-            self._private_contents.close()
+            private_contents.close()
         finally:
-            self._database.close()
+            database.close()
 
     def discard(self) -> None:
         if self._discarded:
             return
         self._discarded = True
-        _AUTHORIZED_RECOVERY_STAGING.discard(self)
         self.close()
 
     @property
@@ -495,18 +502,22 @@ class RestoreWorkspaceBackup:
     staging: RecoveryStaging
 
     def execute(self, payload: bytes) -> RestoreReceipt:
-        if type(self.staging) is not RecoveryStaging or self.staging not in _AUTHORIZED_RECOVERY_STAGING or self.staging._closed:
+        authority = _AUTHORIZED_RECOVERY_STAGING.get(self.staging) if type(self.staging) is RecoveryStaging else None
+        if authority is None or self.staging._closed:
             raise TypeError("restore requires first-party recovery staging")
+        _root, database, private_contents, _identity = authority
+        workspaces = database.workspaces
+        revisions = database.revisions
         try:
             backup = VerifyWorkspaceBackup().execute(payload)
             workspace_id = WorkspaceId.parse(backup.workspace.workspace_id)
-            if self.staging.workspaces.list_all() != ():
+            if workspaces.list_all() != ():
                 raise RepositoryConflict("restore staging workspace is not empty")
             revision_records = tuple(_revision_from_mapping(item, backup.workspace.workspace_id) for item in backup.artifact_revisions)
             private_records = tuple(_private_from_mapping(item, backup.workspace.workspace_id) for item in backup.private_contents)
-            self.staging.workspaces.create(PericiaWorkspace(workspace_id, backup.workspace.name, backup.workspace.created_at))
+            workspaces.create(PericiaWorkspace(workspace_id, backup.workspace.name, backup.workspace.created_at))
             for record in revision_records:
-                self.staging.revisions.append(
+                revisions.append(
                     workspace_id=workspace_id,
                     artifact_kind=record.artifact_kind,
                     artifact_id=record.artifact_id,
@@ -515,12 +526,12 @@ class RestoreWorkspaceBackup:
                     payload=thaw_payload(record.payload),
                 )
             for item in private_records:
-                self.staging.private_contents.store(item.metadata, item.content)
-            reopened = self.staging.revisions.list_workspace(workspace_id)
+                private_contents.store(item.metadata, item.content)
+            reopened = revisions.list_workspace(workspace_id)
             if tuple(_revision_mapping(item) for item in reopened) != backup.artifact_revisions:
                 raise RepositoryIntegrityError("restored workspace failed canonical reopen")
             for item in private_records:
-                with self.staging.private_contents.open_content(workspace_id, item.metadata.content_id) as opened:
+                with private_contents.open_content(workspace_id, item.metadata.content_id) as opened:
                     if opened.stream.read() != item.content:
                         raise RepositoryIntegrityError("restored private content diverges")
             return RestoreReceipt(str(workspace_id), hashlib.sha256(payload).hexdigest(), len(revision_records), len(private_records), backup.product_release, backup.storage_schema_version)

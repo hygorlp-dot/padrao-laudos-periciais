@@ -310,6 +310,40 @@ def test_recovery_staging_repositories_cannot_be_redirected(tmp_path) -> None:
     unrelated.close()
 
 
+def test_recovery_staging_authority_rejects_internal_resource_substitution(tmp_path) -> None:
+    source_private = PrivateStore()
+    source, workspace_id = seeded_store(tmp_path / "source.db", source_private)
+    package = CreateWorkspaceBackup(source.workspaces, source.revisions, source_private, Clock()).execute(workspace_id)
+    staging = RecoveryStaging.create(tmp_path / "staging")
+    owned_database = staging.database
+    active_root = tmp_path / "active"
+    active_root.mkdir()
+    active = SQLiteApplicationStore(active_root / "workspace.sqlite3")
+    active_private = LocalPrivateContentStore.open_or_provision(active_root / "private")
+    staging._database = active
+    staging._private_contents = active_private
+    receipt = RestoreWorkspaceBackup(staging).execute(package)
+    assert receipt.workspace_id == WORKSPACE_ID
+    assert active.workspaces.list_all() == ()
+    assert len(owned_database.workspaces.list_all()) == 1
+    active_private.close()
+    active.close()
+    staging.close()
+    source.close()
+
+
+def test_recovery_staging_is_restrictive_and_durably_not_promotable(tmp_path) -> None:
+    root = tmp_path / "staging"
+    staging = RecoveryStaging.create(root)
+    marker = root / "RECOVERY_NOT_PROMOTABLE"
+    assert marker.read_bytes() == b"RECOVERY_STAGING_V1\n"
+    if os.name == "posix":
+        assert root.stat().st_mode & 0o777 == 0o700
+        assert marker.stat().st_mode & 0o777 == 0o600
+    staging.discard()
+    assert marker.read_bytes() == b"RECOVERY_STAGING_V1\n"
+
+
 @pytest.mark.parametrize("root", ("relative-staging", r"\\server\share\staging", r"\\?\C:\staging"))
 def test_recovery_staging_rejects_nonlocal_or_unanchored_root(root) -> None:
     with pytest.raises(RepositoryIntegrityError, match="root"):
