@@ -566,7 +566,7 @@ def validate_against_case_analysis(
     }
     linked_questions = {item.question_id for item in planning.question_links}
     required_questions = collection_ids["questions"]
-    if linked_questions != required_questions:
+    if linked_questions != required_questions or len(planning.question_links) != len(linked_questions):
         raise ValueError("planning question linkage must cover every Case Analysis question exactly")
     actionable_items = {
         item.item_id: item
@@ -578,12 +578,14 @@ def validate_against_case_analysis(
         )
         for item in getattr(planning, collection_name)
     }
+    planning_items_by_id = {item.item_id: item for item in planning.material_items}
     if any(
         link.question_id not in link.derivation.question_ids
-        or not any(
-            link.question_id in actionable_items[item_id].derivation.question_ids
+        or bool(set(link.linked_item_ids) & set(link.dependency_item_ids))
+        or not (set((*link.linked_item_ids, *link.dependency_item_ids)) & set(actionable_items))
+        or any(
+            link.question_id not in planning_items_by_id[item_id].derivation.question_ids
             for item_id in (*link.linked_item_ids, *link.dependency_item_ids)
-            if item_id in actionable_items
         )
         for link in planning.question_links
     ):

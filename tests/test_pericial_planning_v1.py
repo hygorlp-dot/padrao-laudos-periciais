@@ -205,6 +205,17 @@ def test_question_linkage_is_required_before_a_plan_can_be_validated():
         validate_against_case_analysis(pericial_planning_from_mapping(raw), analysis_fixture(), artifact_revision=1)
 
 
+def test_question_linkage_rejects_duplicate_authority_for_the_same_question():
+    raw = copy.deepcopy(fixture())
+    duplicate = copy.deepcopy(raw["question_links"][0])
+    duplicate["item_id"] = "PLAN-QUESTION-LINK-002"
+    raw["question_links"].append(duplicate)
+    raw["coverage"].update(material_items_total=18, pending_items=17)
+
+    with pytest.raises(ValueError, match="exactly"):
+        validate_against_case_analysis(pericial_planning_from_mapping(raw), analysis_fixture(), artifact_revision=1)
+
+
 def test_question_linkage_must_reach_a_concrete_planning_action():
     raw = copy.deepcopy(fixture())
     raw["question_links"][0]["linked_item_ids"] = ["PLAN-OBJECTIVE-001"]
@@ -218,6 +229,23 @@ def test_question_linkage_rejects_an_unrelated_concrete_action():
     raw = copy.deepcopy(fixture())
     raw["question_links"][0]["linked_item_ids"] = ["PLAN-DOCUMENT-001"]
     raw["question_links"][0]["dependency_item_ids"] = []
+
+    with pytest.raises(ValueError, match="question-derived preparation"):
+        validate_against_case_analysis(pericial_planning_from_mapping(raw), analysis_fixture(), artifact_revision=1)
+
+
+def test_question_linkage_rejects_mixed_related_and_unrelated_targets():
+    raw = copy.deepcopy(fixture())
+    raw["question_links"][0]["linked_item_ids"] = ["PLAN-MEASUREMENT-001", "PLAN-DOCUMENT-001"]
+    raw["question_links"][0]["dependency_item_ids"] = []
+
+    with pytest.raises(ValueError, match="question-derived preparation"):
+        validate_against_case_analysis(pericial_planning_from_mapping(raw), analysis_fixture(), artifact_revision=1)
+
+
+def test_question_linkage_roles_are_disjoint():
+    raw = copy.deepcopy(fixture())
+    raw["question_links"][0]["dependency_item_ids"] = ["PLAN-MEASUREMENT-001"]
 
     with pytest.raises(ValueError, match="question-derived preparation"):
         validate_against_case_analysis(pericial_planning_from_mapping(raw), analysis_fixture(), artifact_revision=1)

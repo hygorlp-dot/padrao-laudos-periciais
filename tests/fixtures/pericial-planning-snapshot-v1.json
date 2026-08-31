@@ -38,7 +38,7 @@
     {
       "item_id":"PLAN-QUESTION-LINK-001","title":"Preparação orientada ao quesito","description":"Relacionar o quesito aos elementos planejados sem antecipar resposta.","priority":"HIGH",
       "derivation":{"rationale":"O quesito pertinente deve orientar a coleta futura.","case_analysis_item_ids":["QUESTION-001"],"source_provenance":[{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-001","source_document_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","page_or_span":"p. 7, item 1","source_revision":4,"occurrence_id":"OCC-QUESTION-001"}],"question_ids":["QUESTION-001"],"pericial_object_ids":[],"court_decision_ids":[],"technical_document_reference_ids":[],"gap_or_conflict_ids":[]},
-      "proposal_status":"PROPOSED","professional_review_status":"PENDING","question_id":"QUESTION-001","linked_item_ids":["PLAN-DOCUMENT-001","PLAN-INSPECTION-001","PLAN-MEASUREMENT-001","PLAN-PHOTO-001","PLAN-EQUIPMENT-001","PLAN-METHOD-001","PLAN-GAP-001"],"dependency_item_ids":["PLAN-ACCESS-001"]
+      "proposal_status":"PROPOSED","professional_review_status":"PENDING","question_id":"QUESTION-001","linked_item_ids":["PLAN-MEASUREMENT-001","PLAN-EQUIPMENT-001","PLAN-METHOD-001"],"dependency_item_ids":[]
     }
   ],
   "required_documents": [
