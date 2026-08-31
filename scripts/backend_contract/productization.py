@@ -7,7 +7,10 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 import hashlib
 import json
+import os
+from pathlib import Path
 import re
+import shutil
 from typing import Any
 from uuid import UUID
 
@@ -33,7 +36,8 @@ from .pericial_planning import pericial_planning_from_mapping
 from .report_foundation import expert_profile_from_mapping, report_snapshot_from_mapping
 from .technical_findings import technical_snapshot_from_mapping
 from .vistoria import inspection_session_from_mapping
-from .unit_of_work import UnitOfWork
+from .infrastructure.private_filesystem import LocalPrivateContentStore
+from .infrastructure.sqlite import SQLiteApplicationStore
 
 import base64
 
@@ -85,7 +89,8 @@ class BackupWorkspace:
     def __post_init__(self) -> None:
         if str(UUID(self.workspace_id)) != self.workspace_id:
             raise ValueError("workspace_id is invalid")
-        _text(self.name, "workspace name"); _instant(self.created_at, "workspace created_at")
+        _text(self.name, "workspace name")
+        _instant(self.created_at, "workspace created_at")
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,7 +142,11 @@ def migrate_backup_mapping(value: object) -> dict[str, Any]:
 
 
 def workspace_backup_from_mapping(value: object) -> WorkspaceBackup:
-    data = _exact(value, {"schema_version", "format_version", "product_release", "storage_schema_version", "workspace", "artifact_revisions", "private_contents", "member_hashes", "manifest_sha256", "created_at"}, "WorkspaceBackup")
+    data = _exact(
+        value,
+        {"schema_version", "format_version", "product_release", "storage_schema_version", "workspace", "artifact_revisions", "private_contents", "member_hashes", "manifest_sha256", "created_at"},
+        "WorkspaceBackup",
+    )
     workspace = _exact(data["workspace"], {"workspace_id", "name", "created_at"}, "BackupWorkspace")
     if type(data["artifact_revisions"]) is not list or type(data["private_contents"]) is not list:
         raise ValueError("backup collections are invalid")
@@ -167,10 +176,7 @@ _ARTIFACT_VALIDATORS = {
     "REPORT_SNAPSHOT_V1": report_snapshot_from_mapping,
     "TECHNICAL_SNAPSHOT_V1": technical_snapshot_from_mapping,
 }
-ARTIFACT_COMPATIBILITY = {
-    kind: {"current_version": "1.0.0", "supported_versions": ("1.0.0",), "migration": None, "future_version_policy": "FAIL_CLOSED"}
-    for kind in _ARTIFACT_VALIDATORS
-}
+ARTIFACT_COMPATIBILITY = {kind: {"current_version": "1.0.0", "supported_versions": ("1.0.0",), "migration": None, "future_version_policy": "FAIL_CLOSED"} for kind in _ARTIFACT_VALIDATORS}
 
 
 def _validate_ocr_cache(value: object) -> None:
@@ -181,21 +187,55 @@ def _validate_ocr_cache(value: object) -> None:
 
 
 def _validate_confirmation(value: object) -> None:
-    if type(value) is not dict or set(value) != {"schema_version", "confirmed_revision", "extraction_fingerprint"} or value["schema_version"] != 1 or type(value["confirmed_revision"]) is not int or value["confirmed_revision"] < 1 or type(value["extraction_fingerprint"]) is not str or _SHA256.fullmatch(value["extraction_fingerprint"]) is None:
+    if (
+        type(value) is not dict
+        or set(value) != {"schema_version", "confirmed_revision", "extraction_fingerprint"}
+        or value["schema_version"] != 1
+        or type(value["confirmed_revision"]) is not int
+        or value["confirmed_revision"] < 1
+        or type(value["extraction_fingerprint"]) is not str
+        or _SHA256.fullmatch(value["extraction_fingerprint"]) is None
+    ):
         raise RepositoryIntegrityError("process metadata confirmation is invalid")
 
 
 def _validate_source_confirmation(value: object) -> None:
-    expected = {"schema_version", "decision", "field_name", "process_case_revision", "extraction_fingerprint", "evidence_id", "document_id", "document_sha256", "source_page", "evidence_source_start", "selection_start", "selection_end", "source_start", "source_end", "selected_value"}
-    if type(value) is not dict or set(value) != expected or value["schema_version"] != 1 or value["decision"] != "HUMAN_CONFIRMED" or value["field_name"] not in {"parte_requerente", "parte_requerida"}:
+    expected = {
+        "schema_version",
+        "decision",
+        "field_name",
+        "process_case_revision",
+        "extraction_fingerprint",
+        "evidence_id",
+        "document_id",
+        "document_sha256",
+        "source_page",
+        "evidence_source_start",
+        "selection_start",
+        "selection_end",
+        "source_start",
+        "source_end",
+        "selected_value",
+    }
+    if (
+        type(value) is not dict
+        or set(value) != expected
+        or value["schema_version"] != 1
+        or value["decision"] != "HUMAN_CONFIRMED"
+        or value["field_name"] not in {"parte_requerente", "parte_requerida"}
+    ):
         raise RepositoryIntegrityError("process metadata source confirmation is invalid")
-    if any(type(value[name]) is not int or value[name] < 0 for name in ("process_case_revision", "source_page", "evidence_source_start", "selection_start", "selection_end", "source_start", "source_end")):
+    if any(
+        type(value[name]) is not int or value[name] < 0 for name in ("process_case_revision", "source_page", "evidence_source_start", "selection_start", "selection_end", "source_start", "source_end")
+    ):
         raise RepositoryIntegrityError("process metadata source confirmation is invalid")
     if value["process_case_revision"] < 1 or value["source_page"] < 1 or value["selection_end"] <= value["selection_start"] or value["source_end"] <= value["source_start"]:
         raise RepositoryIntegrityError("process metadata source confirmation is invalid")
     for name in ("extraction_fingerprint", "evidence_id", "document_sha256"):
-        if type(value[name]) is not str or _SHA256.fullmatch(value[name]) is None: raise RepositoryIntegrityError("process metadata source confirmation is invalid")
-    PrivateContentId.parse(value["document_id"]); _text(value["selected_value"], "selected_value")
+        if type(value[name]) is not str or _SHA256.fullmatch(value[name]) is None:
+            raise RepositoryIntegrityError("process metadata source confirmation is invalid")
+    PrivateContentId.parse(value["document_id"])
+    _text(value["selected_value"], "selected_value")
 
 
 _INTERNAL_ARTIFACT_VALIDATORS = {
@@ -208,10 +248,14 @@ _INTERNAL_ARTIFACT_VALIDATORS = {
 
 def _revision_mapping(record: ArtifactRevision) -> dict[str, Any]:
     return {
-        "workspace_id": str(record.workspace_id), "artifact_kind": record.artifact_kind,
-        "artifact_id": record.artifact_id, "revision_id": record.revision_id,
-        "revision": record.revision, "created_at": record.created_at,
-        "checksum_sha256": record.checksum_sha256, "payload": thaw_payload(record.payload),
+        "workspace_id": str(record.workspace_id),
+        "artifact_kind": record.artifact_kind,
+        "artifact_id": record.artifact_id,
+        "revision_id": record.revision_id,
+        "revision": record.revision,
+        "created_at": record.created_at,
+        "checksum_sha256": record.checksum_sha256,
+        "payload": thaw_payload(record.payload),
     }
 
 
@@ -219,7 +263,16 @@ def _revision_from_mapping(value: object, workspace_id: str) -> ArtifactRevision
     data = _exact(value, {"workspace_id", "artifact_kind", "artifact_id", "revision_id", "revision", "created_at", "checksum_sha256", "payload"}, "ArtifactRevision")
     if data["workspace_id"] != workspace_id:
         raise RepositoryIntegrityError("backup revision belongs to another workspace")
-    record = ArtifactRevision(workspace_id=WorkspaceId.parse(data["workspace_id"]), artifact_kind=data["artifact_kind"], artifact_id=data["artifact_id"], revision_id=data["revision_id"], revision=data["revision"], created_at=data["created_at"], checksum_sha256=data["checksum_sha256"], payload=data["payload"])
+    record = ArtifactRevision(
+        workspace_id=WorkspaceId.parse(data["workspace_id"]),
+        artifact_kind=data["artifact_kind"],
+        artifact_id=data["artifact_id"],
+        revision_id=data["revision_id"],
+        revision=data["revision"],
+        created_at=data["created_at"],
+        checksum_sha256=data["checksum_sha256"],
+        payload=data["payload"],
+    )
     canonical = canonical_payload_json(thaw_payload(record.payload))
     if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != record.checksum_sha256:
         raise RepositoryIntegrityError("backup revision checksum diverges")
@@ -233,10 +286,14 @@ def _revision_from_mapping(value: object, workspace_id: str) -> ArtifactRevision
 
 def _private_mapping(metadata: PrivateContentMetadata, content: bytes) -> dict[str, Any]:
     return {
-        "workspace_id": str(metadata.workspace_id), "content_id": str(metadata.content_id),
-        "original_filename": metadata.original_filename, "byte_size": metadata.byte_size,
-        "checksum_sha256": metadata.checksum_sha256, "media_type": metadata.media_type,
-        "imported_at": metadata.imported_at, "origin": metadata.origin.value,
+        "workspace_id": str(metadata.workspace_id),
+        "content_id": str(metadata.content_id),
+        "original_filename": metadata.original_filename,
+        "byte_size": metadata.byte_size,
+        "checksum_sha256": metadata.checksum_sha256,
+        "media_type": metadata.media_type,
+        "imported_at": metadata.imported_at,
+        "origin": metadata.origin.value,
         "content_base64": base64.b64encode(content).decode("ascii"),
     }
 
@@ -278,10 +335,13 @@ class VerifyWorkspaceBackup:
             raise RepositoryIntegrityError("backup package checksum diverges")
         workspace_id = value.workspace.workspace_id
         revisions = tuple(_revision_from_mapping(item, workspace_id) for item in value.artifact_revisions)
-        identities: set[str] = set(); sequences: dict[tuple[str, str], list[int]] = {}
+        identities: set[str] = set()
+        sequences: dict[tuple[str, str], list[int]] = {}
         for record in revisions:
-            if record.revision_id in identities: raise RepositoryIntegrityError("backup revision identity is duplicated")
-            identities.add(record.revision_id); sequences.setdefault((record.artifact_kind, record.artifact_id), []).append(record.revision)
+            if record.revision_id in identities:
+                raise RepositoryIntegrityError("backup revision identity is duplicated")
+            identities.add(record.revision_id)
+            sequences.setdefault((record.artifact_kind, record.artifact_id), []).append(record.revision)
         if any(items != list(range(1, len(items) + 1)) for items in sequences.values()):
             raise RepositoryIntegrityError("backup revision sequence is incomplete")
         tuple(_private_from_mapping(item, workspace_id) for item in value.private_contents)
@@ -300,7 +360,8 @@ class CreateWorkspaceBackup:
 
     def execute(self, workspace_id: WorkspaceId) -> bytes:
         workspace = self.workspaces.get(workspace_id)
-        if workspace is None: raise ValueError("workspace is unavailable")
+        if workspace is None:
+            raise ValueError("workspace is unavailable")
         revision_items = [_revision_mapping(item) for item in self.revisions.list_workspace(workspace_id)]
         private_items = []
         if self.private_contents is not None:
@@ -309,14 +370,19 @@ class CreateWorkspaceBackup:
                     content = opened.stream.read()
                 private_items.append(_private_mapping(metadata, content))
         now = self.clock.now()
-        if now.tzinfo is None or now.utcoffset() is None: raise ValueError("backup clock requires timezone")
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("backup clock requires timezone")
         mapping = {
-            "schema_version": "1.0.0", "format_version": 1,
-            "product_release": PRODUCT_RELEASE_VERSION, "storage_schema_version": 1,
+            "schema_version": "1.0.0",
+            "format_version": 1,
+            "product_release": PRODUCT_RELEASE_VERSION,
+            "storage_schema_version": 1,
             "workspace": {"workspace_id": str(workspace.workspace_id), "name": workspace.name, "created_at": workspace.created_at},
-            "artifact_revisions": revision_items, "private_contents": private_items,
+            "artifact_revisions": revision_items,
+            "private_contents": private_items,
             "member_hashes": {"artifact_revisions": _hash(revision_items), "private_contents": _hash(private_items)},
-            "manifest_sha256": "0" * 64, "created_at": now.isoformat(),
+            "manifest_sha256": "0" * 64,
+            "created_at": now.isoformat(),
         }
         mapping["manifest_sha256"] = _manifest_hash(mapping)
         payload = _canonical(mapping)
@@ -334,39 +400,97 @@ class RestoreReceipt:
     storage_schema_version: int
 
 
+class RecoveryStaging:
+    """Owns a new disposable storage root until external promotion."""
+
+    def __init__(self, root: Path, database: SQLiteApplicationStore, private: LocalPrivateContentStore, identity: os.stat_result):
+        self.root = root
+        self.database = database
+        self.workspaces = database.workspaces
+        self.revisions = database.revisions
+        self.private_contents = private
+        self._identity = identity
+        self._closed = False
+
+    @classmethod
+    def create(cls, root: str | Path) -> "RecoveryStaging":
+        if not isinstance(root, (str, Path)):
+            raise TypeError("recovery staging root is invalid")
+        target = Path(root)
+        if target.exists() or target.is_symlink():
+            raise RepositoryConflict("recovery staging root must not exist")
+        target.mkdir(parents=False)
+        identity = os.lstat(target)
+        database = None
+        private = None
+        try:
+            database = SQLiteApplicationStore(target / "workspace.sqlite3")
+            private = LocalPrivateContentStore.open_or_provision(target / "private")
+            return cls(target.resolve(strict=True), database, private, identity)
+        except BaseException:
+            if private is not None:
+                private.close()
+            if database is not None:
+                database.close()
+            shutil.rmtree(target)
+            raise
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.private_contents.close()
+        finally:
+            self.database.close()
+
+    def discard(self) -> None:
+        if self._closed:
+            return
+        self.close()
+        observed = os.lstat(self.root)
+        if (observed.st_dev, observed.st_ino) != (self._identity.st_dev, self._identity.st_ino) or self.root.is_symlink():
+            raise RepositoryIntegrityError("recovery staging identity changed before rollback")
+        shutil.rmtree(self.root)
+
+
 @dataclass(frozen=True, slots=True)
 class RestoreWorkspaceBackup:
-    workspaces: object
-    revisions: object
-    private_contents: object | None
-    rollback_participants: tuple[object, ...]
+    staging: RecoveryStaging
 
     def execute(self, payload: bytes) -> RestoreReceipt:
-        if type(self.rollback_participants) is not tuple or len(self.rollback_participants) != 2 or self.rollback_participants[1] is not self.private_contents:
-            raise ValueError("restore requires database and private staging rollback participants")
-        backup = VerifyWorkspaceBackup().execute(payload)
-        workspace_id = WorkspaceId.parse(backup.workspace.workspace_id)
-        if self.workspaces.list_all() != ():
-            raise RepositoryConflict("restore staging workspace is not empty")
-        revision_records = tuple(_revision_from_mapping(item, backup.workspace.workspace_id) for item in backup.artifact_revisions)
-        private_records = tuple(_private_from_mapping(item, backup.workspace.workspace_id) for item in backup.private_contents)
-        if private_records and self.private_contents is None:
-            raise RepositoryIntegrityError("restore staging private store is unavailable")
-        def restore() -> RestoreReceipt:
-            self.workspaces.create(PericiaWorkspace(workspace_id, backup.workspace.name, backup.workspace.created_at))
+        if type(self.staging) is not RecoveryStaging:
+            raise TypeError("restore requires first-party recovery staging")
+        try:
+            backup = VerifyWorkspaceBackup().execute(payload)
+            workspace_id = WorkspaceId.parse(backup.workspace.workspace_id)
+            if self.staging.workspaces.list_all() != ():
+                raise RepositoryConflict("restore staging workspace is not empty")
+            revision_records = tuple(_revision_from_mapping(item, backup.workspace.workspace_id) for item in backup.artifact_revisions)
+            private_records = tuple(_private_from_mapping(item, backup.workspace.workspace_id) for item in backup.private_contents)
+            self.staging.workspaces.create(PericiaWorkspace(workspace_id, backup.workspace.name, backup.workspace.created_at))
             for record in revision_records:
-                self.revisions.append(workspace_id=workspace_id, artifact_kind=record.artifact_kind, artifact_id=record.artifact_id, revision_id=record.revision_id, created_at=record.created_at, payload=thaw_payload(record.payload))
+                self.staging.revisions.append(
+                    workspace_id=workspace_id,
+                    artifact_kind=record.artifact_kind,
+                    artifact_id=record.artifact_id,
+                    revision_id=record.revision_id,
+                    created_at=record.created_at,
+                    payload=thaw_payload(record.payload),
+                )
             for item in private_records:
-                self.private_contents.store(item.metadata, item.content)
-            reopened = self.revisions.list_workspace(workspace_id)
+                self.staging.private_contents.store(item.metadata, item.content)
+            reopened = self.staging.revisions.list_workspace(workspace_id)
             if tuple(_revision_mapping(item) for item in reopened) != backup.artifact_revisions:
                 raise RepositoryIntegrityError("restored workspace failed canonical reopen")
-            if self.private_contents is not None:
-                for item in private_records:
-                    with self.private_contents.open_content(workspace_id, item.metadata.content_id) as opened:
-                        if opened.stream.read() != item.content: raise RepositoryIntegrityError("restored private content diverges")
+            for item in private_records:
+                with self.staging.private_contents.open_content(workspace_id, item.metadata.content_id) as opened:
+                    if opened.stream.read() != item.content:
+                        raise RepositoryIntegrityError("restored private content diverges")
             return RestoreReceipt(str(workspace_id), hashlib.sha256(payload).hexdigest(), len(revision_records), len(private_records), backup.product_release, backup.storage_schema_version)
-        return UnitOfWork(*self.rollback_participants).execute(restore)
+        except BaseException:
+            self.staging.discard()
+            raise
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,6 +508,8 @@ class SupportDiagnostic:
 def collect_support_diagnostics(payload: bytes) -> SupportDiagnostic:
     try:
         value = VerifyWorkspaceBackup().execute(payload)
-        return SupportDiagnostic(PRODUCT_RELEASE_VERSION, value.storage_schema_version, tuple(sorted(SUPPORTED_BACKUP_VERSIONS)), "PASS", len(value.artifact_revisions), len(value.private_contents), None)
+        return SupportDiagnostic(
+            PRODUCT_RELEASE_VERSION, value.storage_schema_version, tuple(sorted(SUPPORTED_BACKUP_VERSIONS)), "PASS", len(value.artifact_revisions), len(value.private_contents), None
+        )
     except (RepositoryIntegrityError, TypeError, ValueError):
         return SupportDiagnostic(PRODUCT_RELEASE_VERSION, 1, tuple(sorted(SUPPORTED_BACKUP_VERSIONS)), "FAIL", 0, 0, "BACKUP_INTEGRITY_INVALID")
