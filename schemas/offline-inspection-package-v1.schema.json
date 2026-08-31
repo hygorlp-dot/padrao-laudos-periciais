@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos.local/schemas/offline-inspection-package-v1.schema.json",
+  "title": "Offline Inspection Package V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version","package_id","package_revision","workspace_id","inspection_id","inspection_revision","planning_revision","planning_digest","source_revision","device_id","device_session_id","device_sequence","created_at","inspection_snapshot","media_manifest"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "package_id": {"$ref": "#/$defs/text"},
+    "package_revision": {"type": "integer", "minimum": 1},
+    "workspace_id": {"type": "string", "format": "uuid"},
+    "inspection_id": {"$ref": "#/$defs/text"},
+    "inspection_revision": {"type": "integer", "minimum": 1},
+    "planning_revision": {"type": "integer", "minimum": 1},
+    "planning_digest": {"$ref": "#/$defs/sha256"},
+    "source_revision": {"type": "integer", "minimum": 1},
+    "device_id": {"$ref": "#/$defs/text"},
+    "device_session_id": {"$ref": "#/$defs/text"},
+    "device_sequence": {"type": "integer", "minimum": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "inspection_snapshot": {"type": "object"},
+    "media_manifest": {"type": "array", "items": {"$ref": "#/$defs/media"}}
+  },
+  "$defs": {
+    "text": {"type": "string", "minLength": 1},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "media": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["record_kind","record_id","private_content_id","original_sha256","byte_size","media_type"],
+      "properties": {
+        "record_kind": {"enum": ["PHOTO","VIDEO","SKETCH"]},
+        "record_id": {"$ref": "#/$defs/text"},
+        "private_content_id": {"type": "string", "format": "uuid"},
+        "original_sha256": {"$ref": "#/$defs/sha256"},
+        "byte_size": {"type": "integer", "minimum": 1},
+        "media_type": {"$ref": "#/$defs/text"}
+      }
+    }
+  }
+}

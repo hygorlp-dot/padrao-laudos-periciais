@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 
 import { getInspectionSession, InspectionSessionApiError, saveInspectionSession, startInspectionSession, uploadInspectionPhoto, type ExecutionState, type InspectionEnvelope, type InspectionSnapshot } from "../data/inspectionSession";
+import { FieldMobileStatus } from "./FieldMobileStatus";
 
 type State = { kind: "loading" } | { kind: "ready"; value: InspectionEnvelope } | { kind: "empty" } | { kind: "error" };
 const stateLabel = { PENDING: "Pendente", COMPLETED: "Concluído", PARTIAL: "Execução parcial", NOT_EXECUTED: "Não executado", NOT_APPLICABLE: "Não aplicável", BLOCKED: "Bloqueado" } as const;
@@ -84,6 +85,12 @@ export function InspectionSessionView({ workspaceId }: { workspaceId: string }) 
     try { const value = await saveInspectionSession(workspaceId, state.value.revision, withCoverage(next)); setState({ kind: "ready", value }); setSelectedItem(null); setObservation(""); setStatementSpeaker(""); setStatementRole(""); setStatementText(""); setMeasurementQuantity(""); setMeasurementValue(""); setMeasurementUnit(""); setInstrumentIdentity(""); setInstrumentModel(""); setInstrumentSerial(""); setInstrumentCapability(""); setMethodName(""); setMethodProcedure(""); setMeasurementRawObservation(""); setPhotoContentId(""); setPhotoSha(""); setPhotoCaption(""); setLimitation(""); } catch { setSaveError(true); } finally { setSaving(false); }
   };
   return <section className="inspection-workspace" aria-labelledby="inspection-title">
+    <FieldMobileStatus
+      online={typeof navigator === "undefined" ? true : navigator.onLine}
+      pendingCaptures={0}
+      conflicts={snapshot.upstream_stale_reasons.map((message) => ({ code: "STALE_PLAN", message }))}
+      onCapture={() => { const firstPending = snapshot.items.find((item) => item.state === "PENDING") ?? snapshot.items[0]; if (firstPending) { setSelectedItem(firstPending.item_id); setItemState(firstPending.state); setNote(firstPending.note ?? ""); } }}
+    />
     {edit && <section className="inspection-editor inspection-editor--access" aria-label="Resultado de acesso"><h3>Resultado de acesso</h3><p>Somente acesso integral sustenta a conclusÃ£o de um requisito de acesso.</p><label>Resultado<select value={accessOutcome} onChange={(event) => setAccessOutcome(event.target.value as typeof accessOutcome)}><option value="FULL_ACCESS">Acesso integral</option><option value="PARTIAL_ACCESS">Acesso parcial</option><option value="DENIED">Acesso negado</option><option value="UNSAFE">Acesso inseguro</option></select></label><label>DescriÃ§Ã£o objetiva<textarea value={accessDescription} onChange={(event) => setAccessDescription(event.target.value)}/></label></section>}
     <header className="planning-overview"><div><h2 id="inspection-title">Vistoria de campo</h2><p>Registros brutos executados contra a revisão {snapshot.plan_snapshot.planning_revision} do plano. Evidências candidatas não são constatações técnicas.</p></div><div className="planning-readiness"><strong>{snapshot.coverage.complete ? "Execução coberta" : "Execução parcial"}</strong><span>{snapshot.coverage.completed_items} de {snapshot.coverage.total_items} itens concluídos</span></div></header>
     {snapshot.upstream_stale && <section className="analysis-inventory-warning" role="alert"><strong>Planejamento alterado — não continue esta sessão</strong><ul>{snapshot.upstream_stale_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul></section>}
