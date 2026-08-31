@@ -27,11 +27,15 @@ from scripts.backend_contract.report_foundation import (
     ReportState,
     report_snapshot_from_mapping,
     report_snapshot_to_mapping,
+    expert_profile_from_mapping,
+    expert_profile_to_mapping,
 )
 from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
 from scripts.backend_contract.application.report_foundation import (
     GetReportSnapshot,
+    GetExpertProfile,
     SaveReportSnapshot,
+    SaveExpertProfile,
     StartReportSnapshot,
     report_upstream_digest,
 )
@@ -90,6 +94,14 @@ def test_canonical_report_fixture_round_trips_every_required_entity():
     assert all(type(item) is ReportReviewDecision for item in snapshot.review_decisions)
     assert type(snapshot.coverage) is ReportCoverage
     assert report_snapshot_to_mapping(snapshot) == payload()
+
+
+def test_openapi_publishes_profile_and_report_as_canonical_private_resources():
+    contract = json.loads((ROOT / "contracts/openapi-v1.json").read_text(encoding="utf-8"))
+    assert set(contract["paths"]["/v1/workspaces/{workspace_id}/expert-profile"]) == {"get", "put"}
+    assert set(contract["paths"]["/v1/workspaces/{workspace_id}/report-snapshot"]) == {"get", "post", "put"}
+    assert contract["components"]["schemas"]["ReportSnapshot"] == {"$ref": "../schemas/report-snapshot-v1.schema.json"}
+    assert contract["info"]["x-report-snapshot-semantic-boundary"] == "scripts.backend_contract.report_foundation.report_snapshot_from_mapping"
 
 
 def test_report_distinguishes_every_authority_class_without_promotion():
@@ -195,7 +207,7 @@ def test_start_creates_an_empty_draft_bound_to_all_four_authorities():
         SimpleNamespace(execute=lambda _workspace: (records[0], case)),
         SimpleNamespace(execute=lambda _workspace: (records[1], inspection)),
         SimpleNamespace(execute=lambda _workspace: (records[2], technical)),
-        SimpleNamespace(execute=lambda: (records[3], profile)), save,
+        SimpleNamespace(execute=lambda _workspace: (records[3], profile)), save,
         SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
     )
     service.execute(WorkspaceId.parse(case.workspace_id))
@@ -214,7 +226,7 @@ def test_save_rejects_question_chain_that_does_not_match_bound_technical_authori
         SimpleNamespace(execute=lambda _workspace: (records[0], case)),
         SimpleNamespace(execute=lambda _workspace: (records[1], inspection)),
         SimpleNamespace(execute=lambda _workspace: (records[2], technical)),
-        SimpleNamespace(execute=lambda: (records[3], profile)), nullcontext,
+        SimpleNamespace(execute=lambda _workspace: (records[3], profile)), nullcontext,
         SimpleNamespace(now=lambda: datetime.now(UTC)),
         SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
     )
@@ -237,7 +249,7 @@ def test_get_marks_upstream_change_stale_and_reopen_cannot_preserve_approval():
         SimpleNamespace(execute=lambda _workspace: (records[0], case)),
         SimpleNamespace(execute=lambda _workspace: (records[1], inspection)),
         SimpleNamespace(execute=lambda _workspace: (changed_record, technical)),
-        SimpleNamespace(execute=lambda: (records[3], profile)),
+        SimpleNamespace(execute=lambda _workspace: (records[3], profile)),
     )
     _, reopened = service.execute(WorkspaceId.parse(snapshot.workspace_id))
     assert reopened.upstream_stale is True
@@ -304,3 +316,23 @@ def test_word_binding_rejects_unsafe_zip_paths_and_does_not_create_delivery_auth
     with pytest.raises(ValueError, match="unsafe template package"):
         bind_report_template(output.getvalue(), report_snapshot_from_mapping(payload()), template_manifest())
     assert "delivery" not in template_manifest().__dataclass_fields__
+
+
+def test_expert_master_profile_has_its_own_single_revision_authority():
+    profile = report_snapshot_from_mapping(payload()).expert_profile
+    assert expert_profile_from_mapping(expert_profile_to_mapping(profile)) == profile
+    calls = []
+    saved = SaveExpertProfile(
+        SimpleNamespace(append_if_latest=lambda **kwargs: calls.append(kwargs) or SimpleNamespace(revision=1)),
+        nullcontext, SimpleNamespace(now=lambda: datetime.now(UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
+    ).execute(WorkspaceId.parse(payload()["workspace_id"]), profile, None)
+    assert saved.revision == 1
+    assert calls[0]["artifact_kind"] == "EXPERT_MASTER_PROFILE_V1"
+    record = ArtifactRevision(
+        workspace_id=WorkspaceId.parse(payload()["workspace_id"]), artifact_kind="EXPERT_MASTER_PROFILE_V1", artifact_id="EXPERT-PROFILE",
+        revision_id="77777777-7777-4777-8777-777777777777", revision=1, created_at="2026-08-31T10:00:00+00:00",
+        checksum_sha256="e" * 64, payload=expert_profile_to_mapping(profile),
+    )
+    reopened_record, reopened = GetExpertProfile(SimpleNamespace(execute=lambda *_args: record)).execute(WorkspaceId.parse(payload()["workspace_id"]))
+    assert reopened_record.revision == 1 and reopened == profile

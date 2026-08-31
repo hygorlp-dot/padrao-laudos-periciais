@@ -80,6 +80,15 @@ def test_product_bridge_config_requires_literal_loopback():
         ProductBridgeConfig(port=80)
 
 
+@pytest.mark.parametrize(
+    ("method", "resource"),
+    (("GET", "expert-profile"), ("PUT", "expert-profile"), ("GET", "report-snapshot"), ("POST", "report-snapshot"), ("PUT", "report-snapshot")),
+)
+def test_product_bridge_allowlists_report_foundation_routes(method, resource):
+    workspace = "11111111-1111-4111-8111-111111111111"
+    assert _proxy_target(f"/app-api/v1/workspaces/{workspace}/{resource}", method) == f"/v1/workspaces/{workspace}/{resource}"
+
+
 @pytest.mark.parametrize("value", (0, -1, 31, True, float("inf"), float("nan")))
 def test_product_bridge_config_rejects_invalid_upstream_timeouts(value):
     with pytest.raises(ValueError, match="timeout upstream"):

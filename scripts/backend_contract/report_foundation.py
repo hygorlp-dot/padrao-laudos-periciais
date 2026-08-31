@@ -12,6 +12,8 @@ from typing import Any, TypeVar
 
 REPORT_SNAPSHOT_ARTIFACT_KIND = "REPORT_SNAPSHOT_V1"
 REPORT_SNAPSHOT_ARTIFACT_ID = "REPORT-SNAPSHOT"
+EXPERT_PROFILE_ARTIFACT_KIND = "EXPERT_MASTER_PROFILE_V1"
+EXPERT_PROFILE_ARTIFACT_ID = "EXPERT-PROFILE"
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -407,6 +409,16 @@ def report_snapshot_from_mapping(value: object) -> ReportSnapshot:
     data["upstream_stale_reasons"] = tuple(data["upstream_stale_reasons"])
     data["state"] = ReportState(data["state"])
     return ReportSnapshot(**data)
+
+
+def expert_profile_from_mapping(value: object) -> ExpertMasterProfile:
+    return _construct(ExpertMasterProfile, value)
+
+
+def expert_profile_to_mapping(value: ExpertMasterProfile) -> dict[str, Any]:
+    if type(value) is not ExpertMasterProfile:
+        raise TypeError("expected ExpertMasterProfile")
+    return asdict(value)
 
 
 def report_snapshot_to_mapping(value: ReportSnapshot) -> dict[str, Any]:

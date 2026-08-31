@@ -153,6 +153,46 @@ def technical_snapshot_payload():
     return json.loads((Path(__file__).parent / "fixtures/technical-snapshot-v1.json").read_text(encoding="utf-8"))
 
 
+def report_snapshot_payload():
+    return json.loads((Path(__file__).parent / "fixtures/report-snapshot-v1.json").read_text(encoding="utf-8"))
+
+
+def test_report_foundation_routes_are_private_validate_and_delegate():
+    payload = report_snapshot_payload()
+    profile_payload = payload["expert_profile"]
+    from scripts.backend_contract.report_foundation import expert_profile_from_mapping, report_snapshot_from_mapping
+
+    profile = expert_profile_from_mapping(profile_payload)
+    snapshot = report_snapshot_from_mapping(payload)
+    save_profile = RecordingService(revision(payload=profile_payload))
+    get_profile = RecordingService((revision(payload=profile_payload), profile))
+    start_report = RecordingService((revision(payload=payload), snapshot))
+    save_report = RecordingService(revision(payload=payload))
+    get_report = RecordingService((revision(payload=payload), snapshot))
+    api = LocalApi(services(
+        save_expert_profile=save_profile,
+        get_expert_profile=get_profile,
+        start_report_snapshot=start_report,
+        save_report_snapshot=save_report,
+        get_report_snapshot=get_report,
+    ), token=TOKEN)
+
+    assert request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/expert-profile").status == 403
+    saved_profile = request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/expert-profile", body={"expected_revision": None, "profile": profile_payload})
+    assert saved_profile.status == 200
+    assert save_profile.calls[0][0][1] == profile
+    reopened_profile = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/expert-profile", headers={"X-Local-API-Token": TOKEN})
+    assert decoded(reopened_profile)["profile"] == profile_payload
+
+    started = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/report-snapshot", body={})
+    assert started.status == 201
+    saved = request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/report-snapshot", body={"expected_revision": 1, "snapshot": payload})
+    assert saved.status == 200
+    assert save_report.calls[0][0][1] == snapshot
+    reopened = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/report-snapshot", headers={"X-Local-API-Token": TOKEN})
+    assert decoded(reopened)["snapshot"] == payload
+
+
 def test_technical_snapshot_route_starts_validates_saves_and_reopens_canonical_chain():
     payload = technical_snapshot_payload()
     from scripts.backend_contract.technical_findings import technical_snapshot_from_mapping

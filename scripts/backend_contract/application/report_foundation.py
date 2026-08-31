@@ -13,6 +13,8 @@ from ..report_foundation import (
     ContextStatus,
     EditorialProfile,
     ExpertMasterProfile,
+    EXPERT_PROFILE_ARTIFACT_ID,
+    EXPERT_PROFILE_ARTIFACT_KIND,
     REPORT_SNAPSHOT_ARTIFACT_ID,
     REPORT_SNAPSHOT_ARTIFACT_KIND,
     ReportCoverage,
@@ -22,6 +24,8 @@ from ..report_foundation import (
     ReportState,
     report_snapshot_from_mapping,
     report_snapshot_to_mapping,
+    expert_profile_from_mapping,
+    expert_profile_to_mapping,
 )
 from ..technical_findings import TechnicalSnapshot, technical_snapshot_to_mapping
 from ..vistoria import InspectionSession, inspection_session_to_mapping
@@ -124,7 +128,7 @@ def _current(workspace_id, services):
     case_record, case = services[0].execute(workspace_id)
     inspection_record, inspection = services[1].execute(workspace_id)
     technical_record, technical = services[2].execute(workspace_id)
-    profile_record, profile = services[3].execute()
+    profile_record, profile = services[3].execute(workspace_id)
     binding = _binding(
         workspace_id=workspace_id, case_record=case_record, case=case, inspection_record=inspection_record,
         inspection=inspection, technical_record=technical_record, technical=technical,
@@ -207,4 +211,39 @@ class StartReportSnapshot:
             coverage=ReportCoverage(14, 0, 0, 0, 0, sum(item.required_by_cpc473 for item in sections), 0, 6, 0, False, ("Report draft has no material claims.",)),
             upstream_stale=False, upstream_stale_reasons=(),
         )
-        return self.save_snapshot.execute(workspace_id, snapshot, None)
+        record = self.save_snapshot.execute(workspace_id, snapshot, None)
+        return record, snapshot
+
+
+@dataclass(frozen=True, slots=True)
+class SaveExpertProfile:
+    revisions: object
+    authority_guard: object
+    clock: object
+    ids: object
+
+    def execute(self, workspace_id, profile: ExpertMasterProfile, expected_revision: int | None):
+        if type(profile) is not ExpertMasterProfile:
+            raise ValueError("expert profile is invalid")
+        if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
+            raise ValueError("expert profile expected revision is invalid")
+        if not callable(self.authority_guard):
+            raise RepositoryIntegrityError("expert profile authority guard is unavailable")
+        with self.authority_guard():
+            created_at = self.clock.now()
+            if created_at.tzinfo is None or created_at.utcoffset() is None:
+                raise ValueError("expert profile clock requires timezone")
+            return self.revisions.append_if_latest(
+                workspace_id=workspace_id, artifact_kind=EXPERT_PROFILE_ARTIFACT_KIND, artifact_id=EXPERT_PROFILE_ARTIFACT_ID,
+                revision_id=str(self.ids.new_uuid()), created_at=created_at.isoformat(), payload=expert_profile_to_mapping(profile),
+                expected_revision=expected_revision,
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class GetExpertProfile:
+    get_latest_revision: object
+
+    def execute(self, workspace_id):
+        record = self.get_latest_revision.execute(workspace_id, EXPERT_PROFILE_ARTIFACT_KIND, EXPERT_PROFILE_ARTIFACT_ID)
+        return record, expert_profile_from_mapping(thaw_payload(record.payload))

@@ -103,6 +103,10 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "technical-snapshot" and method in {"GET", "POST", "PUT"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "expert-profile" and method in {"GET", "PUT"}:
+            return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "report-snapshot" and method in {"GET", "POST", "PUT"}:
+            return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "inspection-photos" and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/inspection-photos"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["pericial-planning", "decisions"] and method == "POST":
