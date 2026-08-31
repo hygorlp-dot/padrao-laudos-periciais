@@ -26,7 +26,7 @@ from ..delivery_foundation import (
     delivery_snapshot_to_mapping,
 )
 from ..delivery_renderer import DELIVERY_RENDERING_VERSION, render_word_candidate, safe_pdf_conversion_copy, validate_final_artifact, validate_supporting_artifact, verify_reopened_artifact
-from ..report_template import TemplateBindingManifest
+from ..report_template import TemplateBindingManifest, template_binding_manifest_from_mapping
 from ..pericial_planning import PlanningSnapshot, pericial_planning_to_mapping
 from ..report_foundation import ReportSnapshot, ReportState, report_snapshot_to_mapping
 from ..technical_findings import TechnicalSnapshot, technical_snapshot_to_mapping
@@ -38,6 +38,11 @@ from .ports import RepositoryConflict, RepositoryError, RepositoryIntegrityError
 
 _SCHEMA_PATH = Path(__file__).resolve().parents[3] / "schemas" / "delivery-snapshot-v1.schema.json"
 _VALIDATOR = Draft202012Validator(json.loads(_SCHEMA_PATH.read_text(encoding="utf-8")), format_checker=FormatChecker())
+
+
+def validated_template_binding_manifest_from_mapping(value: object) -> TemplateBindingManifest:
+    """Keep transport dependent on application validation, not the domain parser."""
+    return template_binding_manifest_from_mapping(value)
 
 
 def _digest(mapping: object) -> str:

@@ -67,8 +67,10 @@ from ..application.report_foundation import (
     validated_expert_profile_from_mapping,
     validated_report_snapshot_from_mapping,
 )
-from ..application.delivery_foundation import delivery_snapshot_to_validated_mapping
-from ..report_template import template_binding_manifest_from_mapping
+from ..application.delivery_foundation import (
+    delivery_snapshot_to_validated_mapping,
+    validated_template_binding_manifest_from_mapping,
+)
 
 _MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
 
@@ -236,6 +238,8 @@ def _binary_response(status: int, body: bytes | OpenPrivateContent, content_type
 def _delivery_binary_response(record: PrivateContent) -> HttpResponse:
     allowed = {
         "application/pdf",
+        "image/jpeg",
+        "image/png",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "application/vnd.ms-word.document.macroEnabled.12",
     }
@@ -637,7 +641,7 @@ class LocalApi:
                         raise ValueError("Delivery Snapshot start request is invalid")
                     record, snapshot = service.execute(
                         workspace_id, template_content_id=PrivateContentId.parse(dto["template_content_id"]),
-                        manifest=template_binding_manifest_from_mapping(dto["manifest"]),
+                        manifest=validated_template_binding_manifest_from_mapping(dto["manifest"]),
                     )
                     return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": delivery_snapshot_to_validated_mapping(snapshot)})
                 return _error(405, "METHOD_NOT_ALLOWED")
@@ -660,7 +664,7 @@ class LocalApi:
                     service = self._services.render_delivery_package
                     if service is None or set(dto) != {"expected_revision", "manifest"}:
                         raise ValueError("Delivery render request is invalid")
-                    record, snapshot = service.execute(workspace_id, expected_revision=dto["expected_revision"], manifest=template_binding_manifest_from_mapping(dto["manifest"]))
+                    record, snapshot = service.execute(workspace_id, expected_revision=dto["expected_revision"], manifest=validated_template_binding_manifest_from_mapping(dto["manifest"]))
                 elif action == "package-artifacts":
                     service = self._services.attach_delivery_artifact
                     if service is None or set(dto) != {"expected_revision", "content_id", "role"}:
@@ -683,7 +687,7 @@ class LocalApi:
                     record, snapshot = service.execute(
                         workspace_id, expected_revision=dto["expected_revision"],
                         template_content_id=PrivateContentId.parse(dto["template_content_id"]),
-                        manifest=template_binding_manifest_from_mapping(dto["manifest"]),
+                        manifest=validated_template_binding_manifest_from_mapping(dto["manifest"]),
                     )
                 else:
                     return _error(404, "NOT_FOUND")
