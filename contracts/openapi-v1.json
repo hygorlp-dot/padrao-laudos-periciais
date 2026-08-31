@@ -81,6 +81,21 @@
       }
     },
     "/v1/workspaces/{workspace_id}/offline-inspection": {
+      "get": {
+        "summary": "Lista revisões offline pendentes para recuperação local",
+        "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
+        "responses": {
+          "200": {
+            "description": "Inventário offline pendente",
+            "content": {"application/json": {"schema": {
+              "type": "object",
+              "required": ["items"],
+              "properties": {"items": {"type": "array", "items": {"$ref": "#/components/schemas/OfflineInspectionPackage"}}},
+              "additionalProperties": false
+            }}}
+          }
+        }
+      },
       "post": {
         "summary": "Prepara pacote de vistoria protegido para uso offline",
         "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],

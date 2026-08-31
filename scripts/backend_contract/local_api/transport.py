@@ -57,7 +57,7 @@ from ..application.vistoria import (
     inspection_session_to_validated_mapping,
     validated_inspection_session_from_mapping,
 )
-from ..field_mobile import offline_package_to_mapping
+from ..application.field_mobile import offline_package_to_mapping
 from ..application.technical_findings import (
     technical_snapshot_to_validated_mapping,
     validated_technical_snapshot_from_mapping,
@@ -120,6 +120,7 @@ class LocalApiServices:
     sync_offline_inspection: object | None = None
     update_offline_inspection: object | None = None
     get_offline_inspection: object | None = None
+    list_offline_inspections: object | None = None
     revoke_offline_device: object | None = None
     offline_device_id: str | None = None
     save_technical_snapshot: object | None = None
@@ -928,8 +929,13 @@ class LocalApi:
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "offline-inspection":
                 if self._services.offline_device_id is None:
                     return _error(503, "OFFLINE_STORAGE_UNAVAILABLE")
-                dto = self._request_dto(request_headers, body)
                 workspace_id = self._workspace_id(raw_segments[2])
+                if normalized_method == "GET":
+                    if self._services.list_offline_inspections is None:
+                        return _error(503, "OFFLINE_STORAGE_UNAVAILABLE")
+                    packages = self._services.list_offline_inspections.execute(workspace_id, device_id=self._services.offline_device_id)
+                    return _json_response(200, {"items": [offline_package_to_mapping(item) for item in packages]})
+                dto = self._request_dto(request_headers, body)
                 if normalized_method == "POST":
                     if self._services.prepare_offline_inspection is None or set(dto) != {"device_session_id"} or type(dto["device_session_id"]) is not str:
                         raise ValueError("offline inspection request is invalid")

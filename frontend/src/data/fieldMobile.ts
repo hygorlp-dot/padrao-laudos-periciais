@@ -37,6 +37,12 @@ export async function getOfflineInspection(workspaceId: string, packageId: strin
   return await response.json() as OfflinePackageEnvelope;
 }
 
+export async function listPendingOfflineInspections(workspaceId: string): Promise<{ items: OfflinePackageEnvelope["package"][] }> {
+  const response = await fetch(`/app-api/v1/workspaces/${workspaceId}/offline-inspection`, { credentials: "same-origin", cache: "no-store" });
+  if (!response.ok || !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")) throw new Error("FIELD_MOBILE_UNAVAILABLE");
+  return await response.json() as { items: OfflinePackageEnvelope["package"][] };
+}
+
 export function revokeOfflineDevice(workspaceId: string) {
   return jsonPost<{ revoked: true }>(`/app-api/v1/workspaces/${workspaceId}/offline-device/revoke`, { confirm: true });
 }

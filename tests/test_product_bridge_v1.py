@@ -427,6 +427,7 @@ def test_inspection_session_bridge_allowlist_is_exact():
     offline_path = f"/app-api/v1/workspaces/{workspace_id}/offline-inspection"
     assert _proxy_target(offline_path, "POST") == f"/v1/workspaces/{workspace_id}/offline-inspection"
     assert _proxy_target(offline_path, "PUT") == f"/v1/workspaces/{workspace_id}/offline-inspection"
+    assert _proxy_target(offline_path, "GET") == f"/v1/workspaces/{workspace_id}/offline-inspection"
     sync_path = f"/app-api/v1/workspaces/{workspace_id}/offline-sync"
     assert _proxy_target(sync_path, "POST") == f"/v1/workspaces/{workspace_id}/offline-sync"
     assert _proxy_target(sync_path, "PUT") is None

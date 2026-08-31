@@ -19,6 +19,9 @@ import json
 
 
 _REPARSE_ATTRIBUTE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+# Windows' CRT binary flag is stable (``O_BINARY == 0x8000``).  Keeping the
+# literal local avoids acquiring the broader mixed ``os`` capability surface.
+_OPEN_BINARY = 0x8000 if os.name == "nt" else 0
 
 
 def _is_link_or_reparse(details: os.stat_result) -> bool:
@@ -94,6 +97,12 @@ class DeviceOfflineVault:
     def load(self, package_id: str) -> OfflineInspectionPackage:
         key = self._require_active()
         payload = self._read_payload(self._path(package_id))
+        package = self._decode_package(payload, key)
+        if package.package_id != package_id:
+            raise ValueError("offline package storage identity mismatch")
+        return package
+
+    def _decode_package(self, payload: bytes, key: bytes) -> OfflineInspectionPackage:
         if not payload.startswith(b"OFFLINE-V1\0") or len(payload) < 40:
             raise ValueError("offline package storage is corrupt")
         nonce, ciphertext = payload[11:23], payload[23:]
@@ -102,9 +111,15 @@ class DeviceOfflineVault:
         except InvalidTag as exc:
             raise ValueError("offline package integrity verification failed") from exc
         package = offline_package_from_mapping(json.loads(clear.decode("utf-8")))
-        if package.package_id != package_id or package.device_id != self._device_id or package.workspace_id != self._workspace_id:
+        if package.device_id != self._device_id or package.workspace_id != self._workspace_id:
             raise ValueError("offline package storage identity mismatch")
         return package
+
+    def list_pending_packages(self) -> tuple[OfflineInspectionPackage, ...]:
+        key = self._require_active()
+        packages = [self._decode_package(self._read_payload(path), key) for path in self._root.glob("*.offline")]
+        pending = [item for item in packages if item.device_sequence > self.last_accepted_sequence(item.device_session_id)]
+        return tuple(sorted(pending, key=lambda item: (item.created_at, item.package_revision, item.package_id), reverse=True))
 
     def save_media(self, package_id: str, record_id: str, original: bytes) -> None:
         key = self._require_active()
@@ -163,7 +178,7 @@ class DeviceOfflineVault:
         self._exclusive_write(target, payload)
 
     def _exclusive_write(self, target: Path, payload: bytes) -> None:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN_BINARY
         with self._lock:
             self._require_active()
             try:
@@ -190,7 +205,7 @@ class DeviceOfflineVault:
     def _read_payload(self, target: Path) -> bytes:
         with self._lock:
             self._require_active()
-            descriptor = os.open(target, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+            descriptor = os.open(target, os.O_RDONLY | _OPEN_BINARY)
             try:
                 self._require_active()
                 with os.fdopen(descriptor, "rb", closefd=False) as stream:
@@ -223,7 +238,7 @@ class DeviceOfflineVaultRegistry:
 
     @staticmethod
     def _provision(path: Path, payload: bytes) -> None:
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), stat.S_IRUSR | stat.S_IWUSR)
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN_BINARY, stat.S_IRUSR | stat.S_IWUSR)
         try:
             os.write(descriptor, payload)
             os.fsync(descriptor)

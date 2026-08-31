@@ -2,8 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..field_mobile import OfflineInspectionPackage, OfflineMediaManifest
+from ..field_mobile import (
+    OfflineInspectionPackage,
+    OfflineMediaManifest,
+    offline_package_to_mapping as _offline_package_to_mapping,
+)
 from .models import PrivateContentId
+
+
+def offline_package_to_mapping(package: OfflineInspectionPackage) -> dict[str, object]:
+    """Expose serialization through the application boundary for transports."""
+    return _offline_package_to_mapping(package)
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +230,14 @@ class GetOfflineInspection:
 
     def execute(self, workspace_id, *, device_id: str, package_id: str):
         return self.vault_for(workspace_id, device_id).load(package_id)
+
+
+@dataclass(frozen=True, slots=True)
+class ListPendingOfflineInspections:
+    vault_for: object
+
+    def execute(self, workspace_id, *, device_id: str):
+        return self.vault_for(workspace_id, device_id).list_pending_packages()
 
 
 @dataclass(frozen=True, slots=True)

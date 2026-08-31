@@ -332,6 +332,7 @@ def test_offline_update_sync_and_durable_replay_receipt_form_one_vertical(tmp_pa
         WORKSPACE_ID, device_id=package.device_id, device_session_id=package.device_session_id,
     )
     assert vault.verify_media_authority(prepared.package_id)
+    assert vault.list_pending_packages()[0].package_id == prepared.package_id
 
     package = prepared
     updater = UpdateOfflineInspection(Private(), lambda *_: vault, clock, ids)
@@ -346,6 +347,7 @@ def test_offline_update_sync_and_durable_replay_receipt_form_one_vertical(tmp_pa
     sync = SyncOfflineInspection(getter, saver, lambda *_: vault)
     decision, record = sync.execute(WORKSPACE_ID, device_id=package.device_id, package_id=updated.package_id)
     assert decision.accepted and record is saved
+    assert vault.list_pending_packages() == ()
     replay, record = sync.execute(WORKSPACE_ID, device_id=package.device_id, package_id=updated.package_id)
     assert not replay.accepted and record is None
     assert "DEVICE_REPLAY" in {item.code for item in replay.conflicts}
