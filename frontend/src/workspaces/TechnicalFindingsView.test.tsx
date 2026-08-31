@@ -77,7 +77,14 @@ describe("technical findings workbench", () => {
   });
 
   test("persists a complete explicit chain while a rejected proposal stays ineffective", async () => {
-    const fetchMock = vi.fn().mockResolvedValueOnce(response(200, envelope)).mockResolvedValueOnce(response(200, envelope));
+    const withRejectedEvidence = { ...snapshot,
+      evidence_items: [...snapshot.evidence_items, { evidence_id: "EVIDENCE-REJECTED", proposition: "Fonte rejeitada.", assessment_id: "ASSESSMENT-REJECTED" }],
+      source_links: [...snapshot.source_links, { ...snapshot.source_links[0], link_id: "SOURCE-LINK-REJECTED", evidence_id: "EVIDENCE-REJECTED" }],
+      limitations: [...snapshot.limitations, { limitation_id: "LIMIT-EVIDENCE-REJECTED", owner_kind: "EVIDENCE", owner_id: "EVIDENCE-REJECTED", kind: "SOURCE_LIMITATION", description: "Fonte rejeitada explicitamente." }],
+      evidence_assessments: [...snapshot.evidence_assessments, { ...snapshot.evidence_assessments[0], assessment_id: "ASSESSMENT-REJECTED", evidence_id: "EVIDENCE-REJECTED", supported_proposition: "Fonte rejeitada.", limitation_ids: ["LIMIT-EVIDENCE-REJECTED"], source_link_ids: ["SOURCE-LINK-REJECTED"], review_state: "REJECTED", reviewer: "PROFESSIONAL-001", reviewed_at: "2026-08-31T10:01:00Z" }],
+      coverage: { ...snapshot.coverage, evidence_items: 2 },
+    };
+    const fetchMock = vi.fn().mockResolvedValueOnce(response(200, { ...envelope, snapshot: withRejectedEvidence })).mockResolvedValueOnce(response(200, envelope));
     vi.stubGlobal("fetch", fetchMock); vi.stubGlobal("crypto", { randomUUID: () => "88888888-8888-4888-8888-888888888888" });
     render(<TechnicalFindingsView workspaceId={ID} />);
     await screen.findByRole("heading", { name: "Cadeia técnica" });
@@ -98,6 +105,7 @@ describe("technical findings workbench", () => {
     expect(body.snapshot.decisions.at(-1).action).toBe("REJECT");
     expect(body.snapshot.finding_proposals.at(-1).origin).toBe("PROFESSIONAL_PROPOSAL");
     expect(body.snapshot.findings).toHaveLength(1);
+    expect(body.snapshot.coverage.approved_evidence).toBe(2);
     expect(body.snapshot.coverage.complete).toBe(false);
   });
 });
