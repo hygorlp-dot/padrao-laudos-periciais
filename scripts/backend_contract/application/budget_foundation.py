@@ -19,6 +19,7 @@ from ..budget_foundation import (
     ReceivedPayment,
     budget_snapshot_from_mapping,
     budget_snapshot_to_mapping,
+    derive_financial_status,
 )
 from .models import thaw_payload
 from .ports import RepositoryConflict
@@ -144,7 +145,8 @@ class AddFeeProposal:
         proposal = FeeProposal(proposal_id, revision, amount, currency, now.isoformat(), rationale)
         prior = predecessor.proposal_revisions[-1].revision_id if predecessor.proposal_revisions else None
         trail = ProposalRevision(revision_id, proposal_id, revision, prior, rationale, now.isoformat())
-        value = replace(predecessor, revision=predecessor.revision + 1, proposals=(*predecessor.proposals, proposal), proposal_revisions=(*predecessor.proposal_revisions, trail), status=FinancialStatus.PROPOSED)
+        proposals = (*predecessor.proposals, proposal)
+        value = replace(predecessor, revision=predecessor.revision + 1, proposals=proposals, proposal_revisions=(*predecessor.proposal_revisions, trail), status=derive_financial_status(proposals, predecessor.court_approvals, predecessor.payments))
         return self.save_snapshot.execute(workspace_id, value, expected_revision), value
 
 
@@ -158,7 +160,8 @@ class RecordCourtApproval:
         record, predecessor = self.get_snapshot.execute(workspace_id)
         if record.revision != expected_revision: raise RepositoryConflict("expected Budget Snapshot revision is not latest")
         approval = CourtApprovedAmount(f"APPROVAL-{str(self.ids.new_uuid()).upper()}", court_decision_id, amount, currency, decided_on)
-        value = replace(predecessor, revision=predecessor.revision + 1, court_approvals=(*predecessor.court_approvals, approval), status=FinancialStatus.COURT_APPROVED)
+        approvals = (*predecessor.court_approvals, approval)
+        value = replace(predecessor, revision=predecessor.revision + 1, court_approvals=approvals, status=derive_financial_status(predecessor.proposals, approvals, predecessor.payments))
         return self.save_snapshot.execute(workspace_id, value, expected_revision), value
 
 
@@ -186,6 +189,6 @@ class RecordPayment:
         record, predecessor = self.get_snapshot.execute(workspace_id)
         if record.revision != expected_revision: raise RepositoryConflict("expected Budget Snapshot revision is not latest")
         payment = ReceivedPayment(f"PAYMENT-{str(self.ids.new_uuid()).upper()}", amount, currency, received_on, reference)
-        candidate = replace(predecessor, revision=predecessor.revision + 1, payments=(*predecessor.payments, payment), status=FinancialStatus.PARTIALLY_RECEIVED)
-        value = replace(candidate, status=FinancialStatus.RECEIVED) if candidate.outstanding.amount == "0.00" else candidate
+        payments = (*predecessor.payments, payment)
+        value = replace(predecessor, revision=predecessor.revision + 1, payments=payments, status=derive_financial_status(predecessor.proposals, predecessor.court_approvals, payments))
         return self.save_snapshot.execute(workspace_id, value, expected_revision), value

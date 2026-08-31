@@ -94,6 +94,11 @@ def test_proposal_revision_history_is_linear_and_append_only_by_identity() -> No
         replace(value, proposals=(value.proposals[0], value.proposals[0]))
     with pytest.raises(ValueError, match="proposal trail"):
         replace(value, proposal_revisions=())
+    earlier = replace(value.proposals[0], proposed_at="2026-08-30T12:00:00+00:00")
+    later = replace(value.proposals[0], proposal_id="PROPOSAL-2", revision=2, proposed_at="2026-08-29T12:00:00+00:00")
+    later_trail = ProposalRevision("REVISION-2", "PROPOSAL-2", 2, "REVISION-1", "Revisão", "2026-08-29T12:00:00+00:00")
+    with pytest.raises(ValueError, match="chronology"):
+        replace(value, proposals=(earlier, later), proposal_revisions=(*value.proposal_revisions, later_trail))
 
 
 def test_financial_status_cannot_claim_a_lifecycle_state_the_ledger_does_not_support() -> None:
@@ -191,6 +196,28 @@ def test_financial_commands_create_distinct_append_only_authorities() -> None:
     assert approved.court_approved_total == "2500.00"
     assert paid.outstanding.amount == "1500.00"
     assert [expected for _, expected in save.values] == [1, 2, 3, 4]
+
+
+def test_financial_commands_derive_status_after_final_payment_and_later_revisions() -> None:
+    class Get:
+        def __init__(self, value): self.value = value
+        def execute(self, _workspace): return type("Record", (), {"revision": self.value.revision})(), self.value
+    class Save:
+        def execute(self, _workspace, value, _expected): return type("Record", (), {"revision": value.revision})()
+    class Clock:
+        def now(self): return datetime.fromisoformat("2026-09-04T12:00:00+00:00")
+    class Ids:
+        index = 0
+        def new_uuid(self): self.index += 1; return f"00000000-0000-4000-8000-{self.index:012d}"
+
+    ids = Ids(); save = Save(); value = budget()
+    _, paid = RecordPayment(Get(value), save, ids).execute(value.workspace_id, expected_revision=1, amount="1200.00", currency="BRL", received_on="2026-09-04", reference="Quitação")
+    assert paid.status is FinancialStatus.RECEIVED
+    _, revised = AddFeeProposal(Get(paid), save, Clock(), ids).execute(value.workspace_id, expected_revision=2, amount="2700.00", currency="BRL", rationale="Proposta suplementar")
+    assert revised.status is FinancialStatus.RECEIVED
+    _, adjusted = RecordCourtApproval(Get(revised), save, ids).execute(value.workspace_id, expected_revision=3, court_decision_id="DECISION-2", amount="2700.00", currency="BRL", decided_on="2026-09-05")
+    assert adjusted.status is FinancialStatus.PARTIALLY_RECEIVED
+    assert adjusted.outstanding.amount == "500.00"
 
 
 def test_start_budget_creates_empty_financial_snapshot_without_technical_authority() -> None:

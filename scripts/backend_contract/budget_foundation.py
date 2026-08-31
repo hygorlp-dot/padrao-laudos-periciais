@@ -193,6 +193,22 @@ class OutstandingAmount:
     currency: str
 
 
+def derive_financial_status(
+    proposals: tuple[FeeProposal, ...],
+    court_approvals: tuple[CourtApprovedAmount, ...],
+    payments: tuple[ReceivedPayment, ...],
+) -> FinancialStatus:
+    if payments:
+        approved = Decimal(court_approvals[-1].amount) if court_approvals else Decimal("0.00")
+        received = sum((_money(item.amount, "payment") for item in payments), Decimal("0.00"))
+        return FinancialStatus.RECEIVED if received == approved else FinancialStatus.PARTIALLY_RECEIVED
+    if court_approvals:
+        return FinancialStatus.COURT_APPROVED
+    if proposals:
+        return FinancialStatus.PROPOSED
+    return FinancialStatus.DRAFT
+
+
 @dataclass(frozen=True, slots=True)
 class PericialBudget:
     schema_version: str
@@ -234,15 +250,13 @@ class PericialBudget:
             for index, (proposal, trail) in enumerate(zip(self.proposals, self.proposal_revisions, strict=True), 1)
         ):
             raise ValueError("proposal trail diverges")
+        proposal_instants = [datetime.fromisoformat(item.proposed_at) for item in self.proposals]
+        revision_instants = [datetime.fromisoformat(item.revised_at) for item in self.proposal_revisions]
+        if proposal_instants != sorted(proposal_instants) or revision_instants != sorted(revision_instants):
+            raise ValueError("proposal chronology is invalid")
         if sum((_money(item.amount, "payment") for item in self.payments), Decimal("0.00")) > Decimal(self.court_approved_total):
             raise ValueError("received payments exceed court-approved amount")
-        expected_status = FinancialStatus.DRAFT
-        if self.proposals:
-            expected_status = FinancialStatus.PROPOSED
-        if self.court_approvals:
-            expected_status = FinancialStatus.COURT_APPROVED
-        if self.payments:
-            expected_status = FinancialStatus.RECEIVED if self.outstanding.amount == "0.00" else FinancialStatus.PARTIALLY_RECEIVED
+        expected_status = derive_financial_status(self.proposals, self.court_approvals, self.payments)
         if self.status is FinancialStatus.CLOSED:
             if expected_status is not FinancialStatus.RECEIVED:
                 raise ValueError("financial status is unsupported by ledger")
