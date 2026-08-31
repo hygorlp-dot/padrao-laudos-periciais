@@ -52,6 +52,28 @@ SHA_A = "a" * 64
 SHA_B = "b" * 64
 
 
+def _parseable_text_pdf(text: str) -> bytes:
+    encoded_lines = [line.encode("cp1252").replace(b"\\", b"\\\\").replace(b"(", b"\\(").replace(b")", b"\\)") for line in text.splitlines()]
+    stream = b"BT /F1 10 Tf 50 780 Td 12 TL " + b" Tj T* ".join(b"(" + line + b")" for line in encoded_lines) + b" Tj ET"
+    objects = (
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>",
+        b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        b"<< /Type /Catalog /Pages 4 0 R >>",
+    )
+    output = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
+    offsets = []
+    for index, value in enumerate(objects, 1):
+        offsets.append(len(output))
+        output.extend(f"{index} 0 obj\n".encode("ascii") + value + b"\nendobj\n")
+    xref = len(output)
+    output.extend(b"xref\n0 6\n0000000000 65535 f \n")
+    output.extend(b"".join(f"{offset:010d} 00000 n \n".encode("ascii") for offset in offsets))
+    output.extend(f"trailer << /Size 6 /Root 5 0 R >>\nstartxref\n{xref}\n%%EOF".encode("ascii"))
+    return bytes(output)
+
+
 def binding() -> DeliveryBinding:
     return DeliveryBinding(
         workspace_id="workspace-1",
@@ -320,18 +342,25 @@ def test_rendered_word_bytes_contain_and_change_with_entire_approved_report_body
 
 
 @pytest.mark.parametrize(
-    "instruction",
-    ('INCLUDETEXT "https://example.invalid/private"', 'includepicture "https://example.invalid/private.png"', 'DDEAUTO cmd "test"', 'DDE cmd "test"'),
+    ("instruction", "part"),
+    (
+        ('INCLUDETEXT "https://example.invalid/private"', "document"),
+        ('includepicture "https://example.invalid/private.png"', "document"),
+        ('DDEAUTO cmd "test"', "document"),
+        ('DDE cmd "test"', "document"),
+        ('INCLUDETEXT "https://example.invalid/header"', "header"),
+    ),
 )
-def test_active_external_or_execution_word_fields_are_rejected_before_binding(instruction: str) -> None:
+def test_active_external_or_execution_word_fields_are_rejected_before_binding(instruction: str, part: str) -> None:
     root = Path(__file__).parents[1] / "tests/fixtures"
     report = report_snapshot_from_mapping(json.loads((root / "report-snapshot-v1.json").read_text(encoding="utf-8")))
     split = len(instruction) // 2
+    active_field = f"<w:p><w:r><w:instrText>{instruction[:split]}</w:instrText><w:instrText>{instruction[split:]}</w:instrText></w:r></w:p>"
     document = f'''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
       <w:p><w:r><w:t>[[EXPERT_FULL_NAME]]</w:t><w:t>[[EXPERT_REGISTRATION]]</w:t><w:t>[[REPORT_ID]]</w:t></w:r></w:p>
       <w:sdt><w:sdtPr><w:tag w:val="CANONICAL_REPORT"/></w:sdtPr><w:sdtContent/></w:sdt>
       <w:p><w:bookmarkStart w:id="1" w:name="B"/><w:r><w:instrText>TOC</w:instrText><w:instrText>PAGE</w:instrText><w:instrText>NUMPAGES</w:instrText><w:instrText>SEQ Figure</w:instrText><w:instrText>REF B</w:instrText><w:instrText>PAGEREF B</w:instrText></w:r></w:p>
-      <w:p><w:r><w:instrText>{instruction[:split]}</w:instrText><w:instrText>{instruction[split:]}</w:instrText></w:r></w:p>
+      {active_field if part == "document" else ""}
     </w:body></w:document>'''
     package_bytes = BytesIO()
     with ZipFile(package_bytes, "w", ZIP_DEFLATED) as package:
@@ -339,6 +368,8 @@ def test_active_external_or_execution_word_fields_are_rejected_before_binding(in
         package.writestr("word/document.xml", document)
         package.writestr("word/styles.xml", "<styles/>")
         package.writestr("word/numbering.xml", "<numbering/>")
+        if part == "header":
+            package.writestr("word/header1.xml", f'<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{active_field}</w:hdr>')
         package.writestr("docProps/custom.xml", '<Properties><property name="TEMPLATE_ID"><value>TEMPLATE-1</value></property></Properties>')
     manifest = template_binding_manifest_from_mapping({"schema_version": "1.0.0", "template_id": "TEMPLATE-1", "output_kind": "DOCX", "bindings": [{"field": "EXPERT_FULL_NAME", "placeholder": "[[EXPERT_FULL_NAME]]"}, {"field": "EXPERT_REGISTRATION", "placeholder": "[[EXPERT_REGISTRATION]]"}, {"field": "REPORT_ID", "placeholder": "[[REPORT_ID]]"}]})
     with pytest.raises(ValueError, match="unsupported active Word field"):
@@ -386,7 +417,7 @@ def test_final_pdf_is_converted_from_the_exact_bound_word_bytes() -> None:
 
         def convert(self, content: bytes, source_format: str) -> bytes:
             self.received = (content, source_format)
-            return render_pdf_candidate(report).replace(b"/DiagnosticOnly true", b"/DiagnosticOnly fals")
+            return _parseable_text_pdf(report.report_id)
 
     converter = Converter()
     pdf = delivery_renderer.render_final_pdf_candidate(
@@ -400,11 +431,39 @@ def test_final_pdf_is_converted_from_the_exact_bound_word_bytes() -> None:
 
     class WrongConverter:
         def convert(self, _content: bytes, _source_format: str) -> bytes:
-            return render_pdf_candidate(unrelated).replace(b"/DiagnosticOnly true", b"/DiagnosticOnly fals")
+            return _parseable_text_pdf(unrelated.report_id)
 
     with pytest.raises(ValueError, match="does not faithfully represent"):
         delivery_renderer.render_final_pdf_candidate(
             word_content=word.getvalue(), word_format="DOCX", converter=WrongConverter(),
+        )
+
+    class AdditiveForgeryConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf(f"{report.report_id} FORGED EXTRA CONTENT")
+
+    with pytest.raises(ValueError, match="does not faithfully represent"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=AdditiveForgeryConverter(),
+        )
+
+
+def test_final_pdf_rejects_a_table_flattened_into_unrelated_lines() -> None:
+    word = BytesIO()
+    document = '''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+      <w:tbl><w:tr><w:tc><w:p><w:r><w:t>Cell A</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Cell B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+    </w:body></w:document>'''
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr("word/document.xml", document)
+
+    class FlatteningConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("Cell A\nCell B")
+
+    with pytest.raises(ValueError, match="does not faithfully represent"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=FlatteningConverter(),
         )
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from hashlib import sha256
 from io import BytesIO
 import json
+import re
 import textwrap
 import unicodedata
 from xml.etree import ElementTree
@@ -144,28 +145,76 @@ def _normalized_visible_text(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).split()).casefold()
 
 
+def _lexical_tokens(value: str) -> tuple[str, ...]:
+    return tuple(re.findall(r"[^\W\d_]+", _normalized_visible_text(value), flags=re.UNICODE))
+
+
+def _image_signature(image: Image.Image) -> tuple[float, tuple[bool, ...]]:
+    gray = image.convert("L").resize((16, 16))
+    pixels = tuple(gray.getdata())
+    mean = sum(pixels) / len(pixels)
+    return round(image.width / max(image.height, 1), 2), tuple(value >= mean for value in pixels)
+
+
 def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     """Reject converter output that is not observably derived from the bound Word."""
     try:
         with ZipFile(BytesIO(word_content)) as package:
             word_fragments: list[str] = []
-            word_images = 0
+            word_images: list[tuple[float, tuple[bool, ...]]] = []
+            table_rows: list[tuple[str, ...]] = []
             for name in package.namelist():
                 if name.startswith("word/media/") and not name.endswith("/"):
-                    word_images += 1
+                    with Image.open(BytesIO(package.read(name))) as image:
+                        word_images.append(_image_signature(image))
                 if not (name.startswith("word/") and name.endswith(".xml")):
                     continue
                 root = ElementTree.fromstring(package.read(name))
                 word_fragments.extend(
                     item.text for item in root.iter(f"{_W}t") if item.text and item.text.strip()
                 )
+                for row in root.iter(f"{_W}tr"):
+                    cells = tuple(
+                        _normalized_visible_text(" ".join(item.text or "" for item in cell.iter(f"{_W}t")))
+                        for cell in row.findall(f"{_W}tc")
+                    )
+                    if len(cells) > 1 and all(cells):
+                        table_rows.append(cells)
         reader = PdfReader(BytesIO(pdf_content), strict=True)
-        pdf_text = _normalized_visible_text("\n".join(page.extract_text() or "" for page in reader.pages))
-        pdf_images = sum(len(page.images) for page in reader.pages)
+        extracted_pages: list[str] = []
+        positioned: list[tuple[int, str, float]] = []
+        pdf_images: list[tuple[float, tuple[bool, ...]]] = []
+        for page_number, page in enumerate(reader.pages):
+            def visitor(text: str, _cm: object, tm: list[float], _font: object, _size: float) -> None:
+                normalized = _normalized_visible_text(text)
+                if normalized:
+                    positioned.append((page_number, normalized, float(tm[5])))
+            extracted_pages.append(page.extract_text(visitor_text=visitor) or "")
+            pdf_images.extend(_image_signature(item.image) for item in page.images)
+        pdf_text = _normalized_visible_text("\n".join(extracted_pages))
     except (BadZipFile, KeyError, ElementTree.ParseError, PdfReadError, OSError, ValueError) as exc:
         raise ValueError("final PDF fidelity cannot be verified") from exc
     required = {_normalized_visible_text(item) for item in word_fragments if _normalized_visible_text(item)}
-    if not required or any(item not in pdf_text for item in required) or pdf_images < word_images:
+    source_vocabulary = set(_lexical_tokens(" ".join(word_fragments)))
+    pdf_vocabulary = set(_lexical_tokens(pdf_text))
+    images_match = all(
+        any(abs(source[0] - candidate[0]) <= 0.05 and sum(a != b for a, b in zip(source[1], candidate[1])) <= 16 for candidate in pdf_images)
+        for source in word_images
+    )
+    tables_match = all(
+        any(
+            all(any(cell in text and page == anchor_page and abs(y - anchor_y) <= 3 for page, text, y in positioned) for cell in row[1:])
+            for anchor_page, anchor_text, anchor_y in positioned if row[0] in anchor_text
+        )
+        for row in table_rows
+    )
+    if (
+        not required
+        or any(item not in pdf_text for item in required)
+        or not pdf_vocabulary <= source_vocabulary
+        or not images_match
+        or not tables_match
+    ):
         raise ValueError("final PDF does not faithfully represent the bound Word artifact")
 
 

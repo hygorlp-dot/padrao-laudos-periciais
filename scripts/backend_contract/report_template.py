@@ -107,7 +107,16 @@ def _mechanics(parts: dict[str, bytes]) -> tuple[set[str], tuple[str, ...], int]
     # Complex fields may split one instruction over several instrText nodes.
     # Reconstruct each paragraph and reject every opcode outside the protected
     # set before a template can reach a local Office process.
-    for paragraph in root.iter(f"{_W}p"):
+    xml_roots = []
+    for name, content in parts.items():
+        if not (name.startswith("word/") and name.endswith(".xml")):
+            continue
+        try:
+            xml_roots.append(ElementTree.fromstring(content))
+        except ElementTree.ParseError as exc:
+            raise ValueError("template Word XML is invalid") from exc
+    for xml_root in xml_roots:
+      for paragraph in xml_root.iter(f"{_W}p"):
         nodes = [item.text or "" for item in paragraph.iter(f"{_W}instrText") if (item.text or "").strip()]
         compact = re.sub(r"\s+", "", "".join(nodes)).upper()
         if any(marker in compact for marker in ("INCLUDETEXT", "INCLUDEPICTURE", "DDEAUTO", "DDE")) or "://" in compact:
