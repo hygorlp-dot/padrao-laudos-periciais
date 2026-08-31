@@ -88,6 +88,12 @@ class SaveCaseAnalysis:
             if record.revision != expected_revision:
                 raise RepositoryConflict("expected Case Analysis revision is not latest")
             predecessor = validated_case_analysis_from_mapping(thaw_payload(record.payload))
+            immutable_identity = (
+                "snapshot_id", "workspace_id", "source_revision", "participant_refs",
+                "judicial_context_workspace_id", "judicial_context",
+            )
+            if any(getattr(predecessor, name) != getattr(snapshot, name) for name in immutable_identity):
+                raise ValueError("Case Analysis canonical identity and JDM provenance are immutable")
             if predecessor.documents != snapshot.documents:
                 raise ValueError("Case Analysis source extraction is immutable")
             if allow_item_append:

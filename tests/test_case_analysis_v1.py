@@ -377,6 +377,28 @@ def test_initial_case_analysis_cannot_forge_human_review():
         service.execute(WorkspaceId.parse(snapshot.workspace_id), snapshot, None)
 
 
+def test_later_save_cannot_rotate_snapshot_or_jdm_provenance_identity():
+    snapshot = replace(case_analysis_from_mapping(fixture()), human_reviews=())
+    record = ArtifactRevision(
+        workspace_id=WorkspaceId.parse(snapshot.workspace_id), artifact_kind="CASE_ANALYSIS_SNAPSHOT_V1",
+        artifact_id="CASE-ANALYSIS", revision_id="99999999-9999-4999-8999-999999999999", revision=1,
+        created_at="2026-08-30T12:00:00+00:00", checksum_sha256="0" * 64,
+        payload=case_analysis_to_mapping(snapshot),
+    )
+    changed_context = replace(snapshot.judicial_context, snapshot_id="JDM-ATTACKER")
+    forged = replace(snapshot, snapshot_id="CASE-ATTACKER", judicial_context=changed_context)
+    service = SaveCaseAnalysis(
+        SimpleNamespace(append_if_latest=lambda **_kwargs: pytest.fail("must not append")),
+        SimpleNamespace(execute=lambda *_args: record),
+        SimpleNamespace(now=lambda: datetime(2026, 8, 31, tzinfo=UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
+        SimpleNamespace(execute=lambda _workspace: _authoritative_documents(snapshot)),
+        nullcontext,
+    )
+    with pytest.raises(ValueError, match="JDM provenance are immutable"):
+        service.execute(WorkspaceId.parse(snapshot.workspace_id), forged, 1)
+
+
 @pytest.mark.parametrize(
     "mutate",
     (
@@ -460,10 +482,9 @@ def test_openapi_exposes_only_minimum_case_analysis_operations_and_canonical_sch
     assert contract["info"]["x-case-analysis-semantic-boundary"] == (
         "scripts.backend_contract.case_analysis.case_analysis_from_mapping"
     )
-    assert path["post"]["requestBody"]["content"]["application/json"]["schema"] == {"oneOf": [
-        {"type": "object", "additionalProperties": False},
-        {"$ref": "#/components/schemas/SaveCaseAnalysisRequest"},
-    ]}
+    assert path["post"]["requestBody"]["content"]["application/json"]["schema"] == {
+        "type": "object", "additionalProperties": False,
+    }
     assert set(contract["paths"]["/v1/workspaces/{workspace_id}/case-analysis/items"]) == {"post"}
     assert set(contract["paths"]["/v1/workspaces/{workspace_id}/case-analysis/reviews"]) == {"post"}
     assert path["get"]["responses"]["200"]["content"]["application/json"]["schema"] == {
