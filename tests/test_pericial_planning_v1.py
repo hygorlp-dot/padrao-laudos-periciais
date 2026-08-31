@@ -1,6 +1,7 @@
 import copy
 import json
 from contextlib import contextmanager, nullcontext
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -37,12 +38,13 @@ from scripts.backend_contract.pericial_planning import (
     pericial_planning_to_mapping,
     validate_against_case_analysis,
 )
-from scripts.backend_contract.case_analysis import case_analysis_from_mapping
+from scripts.backend_contract.case_analysis import HumanReviewDecision, case_analysis_from_mapping
 from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
 from scripts.backend_contract.application.pericial_planning import (
     GetPericialPlanning,
     ReviewPericialPlanning,
     SavePericialPlanning,
+    StartPericialPlanning,
     validated_pericial_planning_from_mapping,
 )
 from scripts.backend_contract.application.ports import RepositoryConflict
@@ -54,6 +56,30 @@ FIXTURE_PATH = ROOT / "tests/fixtures/pericial-planning-snapshot-v1.json"
 
 def fixture():
     return json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+
+
+def proposal_only_fixture():
+    raw = fixture()
+    raw["decisions"] = []
+    for collection in (
+        "objectives", "issues", "question_links", "required_documents", "required_information",
+        "inspection_requirements", "measurement_requirements", "photo_requirements", "equipment_requirements",
+        "access_requirements", "method_candidates", "procedure_candidates", "sampling_candidates",
+        "safety_requirements", "external_support_requirements", "risks", "gaps",
+    ):
+        for item in raw[collection]:
+            item["professional_review_status"] = "PENDING"
+    total = sum(len(raw[name]) for name in (
+        "objectives", "issues", "question_links", "required_documents", "required_information",
+        "inspection_requirements", "measurement_requirements", "photo_requirements", "equipment_requirements",
+        "access_requirements", "method_candidates", "procedure_candidates", "sampling_candidates",
+        "safety_requirements", "external_support_requirements", "risks", "gaps",
+    ))
+    raw["coverage"].update(
+        material_items_total=total, reviewed_items=0, pending_items=total, approved_items=0,
+        rejected_items=0, modified_items=0, deferred_items=0,
+    )
+    return raw
 
 
 def analysis_fixture():
@@ -342,7 +368,7 @@ def test_application_schema_and_semantic_boundary_rejects_unknown_fields():
 
 
 def test_save_revalidates_latest_case_analysis_and_uses_atomic_plan_cas():
-    planning = pericial_planning_from_mapping(fixture())
+    planning = pericial_planning_from_mapping(proposal_only_fixture())
     analysis = analysis_fixture()
     analysis_record = artifact(analysis, kind="CASE_ANALYSIS_SNAPSHOT_V1", artifact_id="CASE-ANALYSIS")
     calls = []
@@ -366,11 +392,44 @@ def test_save_revalidates_latest_case_analysis_and_uses_atomic_plan_cas():
         "revision": analysis_record.revision,
         "checksum_sha256": analysis_record.checksum_sha256,
     },)
-    assert calls[0]["payload"] == fixture()
+    assert calls[0]["payload"] == proposal_only_fixture()
+
+
+def test_initial_planning_cannot_inject_professional_decision():
+    planning = pericial_planning_from_mapping(fixture())
+    service = SavePericialPlanning(SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), nullcontext, SimpleNamespace(), SimpleNamespace())
+    with pytest.raises(ValueError, match="proposal-only"):
+        service.execute(WorkspaceId.parse(planning.workspace_id), planning, None)
+
+
+def test_non_ai_planning_bootstrap_consumes_effective_review_and_excludes_rejected_item():
+    analysis = replace(
+        analysis_fixture(),
+        human_reviews=(
+            HumanReviewDecision("REVIEW-001", "CLAIM-001", analysis_fixture().claims[0].text, "CORRECT", "Área considerada = 220 m²", "PERITO", 1, "2026-08-31T12:00:00+00:00", "Correção sintética."),
+            HumanReviewDecision("REVIEW-002", "CLAIM-002", analysis_fixture().claims[1].text, "REJECT", analysis_fixture().claims[1].text, "PERITO", 1, "2026-08-31T12:01:00+00:00", "Rejeição sintética."),
+        ),
+    )
+    analysis_record = artifact(analysis, kind="CASE_ANALYSIS_SNAPSHOT_V1", artifact_id="CASE-ANALYSIS")
+    captured = []
+    generated = iter(UUID(f"88888888-8888-4888-8888-{index:012d}") for index in range(1, 40))
+    service = StartPericialPlanning(
+        SimpleNamespace(execute=lambda _workspace: (analysis_record, analysis)),
+        SimpleNamespace(execute=lambda _workspace, snapshot, expected: captured.append((snapshot, expected)) or SimpleNamespace(revision=1)),
+        SimpleNamespace(new_uuid=lambda: next(generated)),
+    )
+    _, planning = service.execute(WorkspaceId.parse(analysis.workspace_id), title="Plano sintético")
+    descriptions = {item.description for item in planning.material_items}
+    assert "Área considerada = 220 m²" in descriptions
+    assert analysis.claims[0].text not in descriptions
+    assert analysis.claims[1].text not in descriptions
+    assert planning.decisions == ()
+    assert all(item.professional_review_status.value == "PENDING" for item in planning.material_items)
+    validate_against_case_analysis(planning, analysis, artifact_revision=analysis_record.revision)
 
 
 def test_save_holds_private_inventory_authority_guard_through_the_commit():
-    planning = pericial_planning_from_mapping(fixture())
+    planning = pericial_planning_from_mapping(proposal_only_fixture())
     analysis = analysis_fixture()
     analysis_record = artifact(analysis, kind="CASE_ANALYSIS_SNAPSHOT_V1", artifact_id="CASE-ANALYSIS")
     state = {"held": False}
@@ -402,7 +461,7 @@ def test_save_holds_private_inventory_authority_guard_through_the_commit():
 
 
 def test_save_rejects_a_stale_or_changed_case_analysis_dependency():
-    planning = pericial_planning_from_mapping(fixture())
+    planning = pericial_planning_from_mapping(proposal_only_fixture())
     analysis = analysis_fixture().reconcile_sources({document.document_id: "f" * 64 for document in analysis_fixture().documents})
     analysis_record = artifact(analysis, kind="CASE_ANALYSIS_SNAPSHOT_V1", artifact_id="CASE-ANALYSIS", revision=2)
     service = SavePericialPlanning(
@@ -488,7 +547,7 @@ def test_review_service_requires_explicit_professional_input_and_saves_with_cas(
     calls = []
     service = ReviewPericialPlanning(
         SimpleNamespace(execute=lambda _workspace: (record, planning)),
-        SimpleNamespace(execute=lambda *args: calls.append(args) or SimpleNamespace(revision=2)),
+        SimpleNamespace(execute=lambda *args, **kwargs: calls.append((args, kwargs)) or SimpleNamespace(revision=2)),
         SimpleNamespace(now=lambda: datetime(2026, 8, 30, 19, tzinfo=UTC)),
         SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
     )
@@ -506,7 +565,8 @@ def test_review_service_requires_explicit_professional_input_and_saves_with_cas(
     assert saved.revision == 2
     assert reviewed.issues[0].description == planning.issues[0].description
     assert reviewed.decisions[-1].action is ReviewAction.MODIFY
-    assert calls[0][2] == 1
+    assert calls[0][0][2] == 1
+    assert calls[0][1] == {"allow_review_transition": True}
 
 
 def test_review_service_classifies_a_stale_expected_revision_as_conflict():
@@ -564,7 +624,7 @@ def test_openapi_exposes_only_canonical_pericial_planning_operations():
     contract = json.loads((ROOT / "contracts/openapi-v1.json").read_text(encoding="utf-8"))
     path = contract["paths"]["/v1/workspaces/{workspace_id}/pericial-planning"]
 
-    assert set(path) == {"get", "put"}
+    assert set(path) == {"get", "post", "put"}
     assert contract["components"]["schemas"]["PericialPlanningSnapshot"] == {
         "$ref": "../schemas/pericial-planning-snapshot-v1.schema.json"
     }

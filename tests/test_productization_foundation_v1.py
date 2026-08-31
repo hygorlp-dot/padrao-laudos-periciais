@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -20,6 +21,7 @@ from scripts.backend_contract.application.models import (
     WorkspaceId,
 )
 from scripts.backend_contract.application.ports import RepositoryConflict, RepositoryIntegrityError
+from scripts.backend_contract.application.services import AppendArtifactRevision
 from scripts.backend_contract.infrastructure.sqlite import SQLiteApplicationStore
 from scripts.backend_contract.infrastructure.private_filesystem import LocalPrivateContentStore
 from scripts.backend_contract.local_api.composition import build_local_api
@@ -146,6 +148,28 @@ class PrivateStore:
 
     def restore(self, snapshot):
         self.items = dict(snapshot)
+
+
+def test_closed_noncanonical_user_artifact_has_explicit_portable_backup_policy(tmp_path) -> None:
+    private = PrivateStore()
+    workspace_id = WorkspaceId.parse(WORKSPACE_ID)
+    with SQLiteApplicationStore(tmp_path / "user-artifact.db") as store:
+        store.workspaces.create(PericiaWorkspace(workspace_id, "Synthetic expertise", "2026-08-31T12:00:00+00:00"))
+        AppendArtifactRevision(
+            store.revisions,
+            Clock(),
+            type("Ids", (), {"new_uuid": lambda _self: UUID("22222222-2222-4222-8222-222222222222")})(),
+        ).execute(
+            workspace_id=workspace_id,
+            artifact_kind="LAUDO",
+            artifact_id="USER-ARTIFACT-001",
+            payload={"provenance": "SYNTHETIC", "notes": ["portable"]},
+        )
+        package = CreateWorkspaceBackup(store.workspaces, store.revisions, private, Clock()).execute(workspace_id)
+
+    verified = VerifyWorkspaceBackup().execute(package)
+    assert len(verified.artifact_revisions) == 1
+    assert verified.artifact_revisions[0]["artifact_kind"] == "LAUDO"
 
 
 def seeded_store(path: Path, private: PrivateStore) -> tuple[SQLiteApplicationStore, WorkspaceId]:

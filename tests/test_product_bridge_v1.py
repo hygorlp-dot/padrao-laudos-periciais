@@ -389,17 +389,16 @@ def test_case_analysis_bridge_saves_and_reopens_canonical_snapshot(tmp_path):
             "POST",
             f"/app-api/v1/workspaces/{workspace_id}/case-analysis",
             headers=browser_mutation_headers(runtime),
-            body={"expected_revision": None, "snapshot": payload},
+            body={},
         )
         get_status, _, get_body = request(runtime, "GET", f"/app-api/v1/workspaces/{workspace_id}/case-analysis")
     finally:
         runtime.close()
 
     assert workspace_status == 201
-    assert saved_status == 200
+    assert saved_status == 201
     assert get_status == 200
-    assert json.loads(saved_body)["snapshot"] == payload
-    assert json.loads(get_body)["snapshot"] == payload
+    assert json.loads(get_body)["snapshot"] == json.loads(saved_body)["snapshot"]
     assert TOKEN.encode() not in saved_body + get_body
 
 

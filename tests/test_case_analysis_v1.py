@@ -1,6 +1,7 @@
 import copy
 import json
 from contextlib import nullcontext
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,12 +20,14 @@ from scripts.backend_contract.case_analysis import (
     query_analysis,
 )
 from scripts.backend_contract.application.case_analysis import (
+    AddCaseAnalysisItem,
     GetCaseAnalysis,
+    ReviewCaseAnalysisItem,
     SaveCaseAnalysis,
+    StartCaseAnalysis,
     validated_case_analysis_from_mapping,
 )
 from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
-from scripts.backend_contract.application.ports import RepositoryIntegrityError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -253,27 +256,25 @@ def _authoritative_documents(snapshot, *, changed_document_id=None):
     )
 
 
-def test_save_uses_atomic_repository_cas_and_authoritative_inventory():
-    snapshot = case_analysis_from_mapping(fixture())
+def test_initial_full_snapshot_material_injection_is_rejected_before_repository_append():
+    snapshot = replace(case_analysis_from_mapping(fixture()), human_reviews=())
     calls = []
     revisions = SimpleNamespace(append_if_latest=lambda **kwargs: calls.append(kwargs) or SimpleNamespace(revision=1))
     clock = SimpleNamespace(now=lambda: datetime(2026, 8, 30, tzinfo=UTC))
     ids = SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999"))
     documents = SimpleNamespace(execute=lambda _workspace: _authoritative_documents(snapshot))
 
-    result = SaveCaseAnalysis(revisions, clock, ids, documents, nullcontext).execute(
-        WorkspaceId.parse(snapshot.workspace_id), snapshot, None
-    )
-
-    assert result.revision == 1
-    assert calls[0]["expected_revision"] is None
-    assert calls[0]["payload"] == case_analysis_to_mapping(snapshot)
+    with pytest.raises(ValueError, match="authority-free bootstrap"):
+        SaveCaseAnalysis(revisions, SimpleNamespace(), clock, ids, documents, nullcontext).execute(
+            WorkspaceId.parse(snapshot.workspace_id), snapshot, None
+        )
+    assert calls == []
 
     mismatched = SimpleNamespace(
         execute=lambda _workspace: _authoritative_documents(snapshot, changed_document_id="DOC-002")
     )
-    with pytest.raises(RepositoryIntegrityError, match="source inventory mismatch"):
-        SaveCaseAnalysis(revisions, clock, ids, mismatched, nullcontext).execute(
+    with pytest.raises(ValueError, match="authority-free bootstrap"):
+        SaveCaseAnalysis(revisions, SimpleNamespace(), clock, ids, mismatched, nullcontext).execute(
             WorkspaceId.parse(snapshot.workspace_id), snapshot, None
         )
 
@@ -283,8 +284,8 @@ def test_save_uses_atomic_repository_cas_and_authoritative_inventory():
             SimpleNamespace(content_id="10000000-0000-4000-8000-000000000004", checksum_sha256="e" * 64),
         )
     )
-    with pytest.raises(RepositoryIntegrityError, match="source inventory mismatch"):
-        SaveCaseAnalysis(revisions, clock, ids, extra, nullcontext).execute(
+    with pytest.raises(ValueError, match="authority-free bootstrap"):
+        SaveCaseAnalysis(revisions, SimpleNamespace(), clock, ids, extra, nullcontext).execute(
             WorkspaceId.parse(snapshot.workspace_id), snapshot, None
         )
 
@@ -343,6 +344,119 @@ def test_human_review_preserves_original_extraction_and_never_answers_question()
     assert snapshot.questions[0].answer is None
 
 
+def test_effective_review_projection_preserves_source_and_dedicated_command_owns_review_metadata():
+    snapshot = replace(case_analysis_from_mapping(fixture()), human_reviews=())
+    record = ArtifactRevision(
+        workspace_id=WorkspaceId.parse(snapshot.workspace_id), artifact_kind="CASE_ANALYSIS_SNAPSHOT_V1",
+        artifact_id="CASE-ANALYSIS", revision_id="99999999-9999-4999-8999-999999999999", revision=1,
+        created_at="2026-08-30T12:00:00+00:00", checksum_sha256="0" * 64,
+        payload=case_analysis_to_mapping(snapshot),
+    )
+    calls = []
+    service = ReviewCaseAnalysisItem(
+        SimpleNamespace(execute=lambda _workspace: (record, snapshot)),
+        SimpleNamespace(execute=lambda *args, **kwargs: calls.append((args, kwargs)) or SimpleNamespace(revision=2)),
+        SimpleNamespace(now=lambda: datetime(2026, 8, 31, 12, tzinfo=UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
+    )
+    _, reviewed = service.execute(
+        WorkspaceId.parse(snapshot.workspace_id), target_item_id="CLAIM-001", action="CORRECT",
+        corrected_value="Alegação corrigida sintética.", reviewer="PERITO-SYNTHETIC",
+        reason="Correção humana explícita.", expected_revision=1,
+    )
+    assert reviewed.claims[0].text == snapshot.claims[0].text
+    assert reviewed.effective_reviewed_value("CLAIM-001") == "Alegação corrigida sintética."
+    assert reviewed.human_reviews[-1].review_id == "CASE-REVIEW-99999999999949998999999999999999"
+    assert calls[0][1] == {"allow_review_transition": True}
+
+
+def test_initial_case_analysis_cannot_forge_human_review():
+    snapshot = case_analysis_from_mapping(fixture())
+    service = SaveCaseAnalysis(SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), nullcontext)
+    with pytest.raises(ValueError, match="authority-free bootstrap"):
+        service.execute(WorkspaceId.parse(snapshot.workspace_id), snapshot, None)
+
+
+def test_later_save_cannot_rotate_snapshot_or_jdm_provenance_identity():
+    snapshot = replace(case_analysis_from_mapping(fixture()), human_reviews=())
+    record = ArtifactRevision(
+        workspace_id=WorkspaceId.parse(snapshot.workspace_id), artifact_kind="CASE_ANALYSIS_SNAPSHOT_V1",
+        artifact_id="CASE-ANALYSIS", revision_id="99999999-9999-4999-8999-999999999999", revision=1,
+        created_at="2026-08-30T12:00:00+00:00", checksum_sha256="0" * 64,
+        payload=case_analysis_to_mapping(snapshot),
+    )
+    changed_context = replace(snapshot.judicial_context, snapshot_id="JDM-ATTACKER")
+    forged = replace(snapshot, snapshot_id="CASE-ATTACKER", judicial_context=changed_context)
+    service = SaveCaseAnalysis(
+        SimpleNamespace(append_if_latest=lambda **_kwargs: pytest.fail("must not append")),
+        SimpleNamespace(execute=lambda *_args: record),
+        SimpleNamespace(now=lambda: datetime(2026, 8, 31, tzinfo=UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
+        SimpleNamespace(execute=lambda _workspace: _authoritative_documents(snapshot)),
+        nullcontext,
+    )
+    with pytest.raises(ValueError, match="JDM provenance are immutable"):
+        service.execute(WorkspaceId.parse(snapshot.workspace_id), forged, 1)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda review: review.update(decision="CORRECT", original_extraction="Texto forjado"),
+        lambda review: review.update(revision=2),
+        lambda review: review.update(decision="CONFIRM"),
+    ),
+)
+def test_review_history_rejects_wrong_original_revision_gap_and_false_action_value(mutate):
+    raw = fixture()
+    mutate(raw["human_reviews"][0])
+    with pytest.raises(ValueError, match="human review|correction"):
+        case_analysis_from_mapping(raw)
+
+
+def test_non_ai_bootstrap_indexes_stored_documents_without_inventing_analysis():
+    workspace = WorkspaceId.parse("11111111-1111-4111-8111-111111111111")
+    documents = (
+        SimpleNamespace(content_id="10000000-0000-4000-8000-000000000001", checksum_sha256="a" * 64, original_filename="autos.pdf"),
+    )
+    saved = []
+    service = StartCaseAnalysis(
+        SimpleNamespace(execute=lambda _workspace: documents),
+        SimpleNamespace(execute=lambda _workspace, snapshot, expected: saved.append((snapshot, expected)) or SimpleNamespace(revision=1)),
+        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
+    )
+    _, snapshot = service.execute(workspace)
+    assert snapshot.documents[0].source_sha256 == "a" * 64
+    assert snapshot.material_items == ()
+    assert snapshot.participant_refs == ()
+    assert saved[0][1] is None
+
+
+def test_typed_item_command_resolves_sha_server_side_and_preserves_append_only_source():
+    original = replace(case_analysis_from_mapping(fixture()), human_reviews=())
+    record = ArtifactRevision(
+        workspace_id=WorkspaceId.parse(original.workspace_id), artifact_kind="CASE_ANALYSIS_SNAPSHOT_V1",
+        artifact_id="CASE-ANALYSIS", revision_id="99999999-9999-4999-8999-999999999999", revision=1,
+        created_at="2026-08-30T12:00:00+00:00", checksum_sha256="0" * 64,
+        payload=case_analysis_to_mapping(original),
+    )
+    calls = []
+    service = AddCaseAnalysisItem(
+        SimpleNamespace(execute=lambda _workspace: (record, original)),
+        SimpleNamespace(execute=lambda *args, **kwargs: calls.append((args, kwargs)) or SimpleNamespace(revision=2)),
+        SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
+    )
+    _, amended = service.execute(
+        WorkspaceId.parse(original.workspace_id), item_kind="EVIDENCE_GAP", text="Documento complementar ausente.",
+        source_document_id="DOC-001", page_or_span="p. 1", technical_subjects=("documentação",), values={}, expected_revision=1,
+    )
+    assert amended.gaps[-1].provenance[0].source_document_sha256 == original.documents[0].source_sha256
+    assert {item.item_id: item for item in original.material_items}.items() <= {
+        item.item_id: item for item in amended.material_items
+    }.items()
+    assert calls[0][1] == {"allow_item_append": True}
+
+
 def test_coverage_counts_and_source_revision_fail_closed():
     with pytest.raises(ValueError):
         CaseAnalysisCoverage(CoverageStatus.COMPLETE, 3, 2, 1, 0, 4)
@@ -369,8 +483,10 @@ def test_openapi_exposes_only_minimum_case_analysis_operations_and_canonical_sch
         "scripts.backend_contract.case_analysis.case_analysis_from_mapping"
     )
     assert path["post"]["requestBody"]["content"]["application/json"]["schema"] == {
-        "$ref": "#/components/schemas/SaveCaseAnalysisRequest"
+        "type": "object", "additionalProperties": False,
     }
+    assert set(contract["paths"]["/v1/workspaces/{workspace_id}/case-analysis/items"]) == {"post"}
+    assert set(contract["paths"]["/v1/workspaces/{workspace_id}/case-analysis/reviews"]) == {"post"}
     assert path["get"]["responses"]["200"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/CaseAnalysisEnvelope"
     }

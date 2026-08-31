@@ -420,6 +420,7 @@ def test_expert_master_profile_has_its_own_single_revision_authority():
     calls = []
     saved = SaveExpertProfile(
         SimpleNamespace(append_if_latest=lambda **kwargs: calls.append(kwargs) or SimpleNamespace(revision=1)),
+        SimpleNamespace(),
         nullcontext, SimpleNamespace(now=lambda: datetime.now(UTC)),
         SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
     ).execute(WorkspaceId.parse(payload()["workspace_id"]), profile, None)
@@ -432,3 +433,23 @@ def test_expert_master_profile_has_its_own_single_revision_authority():
     )
     reopened_record, reopened = GetExpertProfile(SimpleNamespace(execute=lambda *_args: record)).execute(WorkspaceId.parse(payload()["workspace_id"]))
     assert reopened_record.revision == 1 and reopened == profile
+
+
+def test_expert_profile_server_owns_identity_and_existing_professional_identity_is_immutable():
+    profile = report_snapshot_from_mapping(payload()).expert_profile
+    record = ArtifactRevision(
+        workspace_id=WorkspaceId.parse(payload()["workspace_id"]), artifact_kind="EXPERT_MASTER_PROFILE_V1",
+        artifact_id="EXPERT-PROFILE", revision_id="77777777-7777-4777-8777-777777777777", revision=1,
+        created_at="2026-08-31T10:00:00+00:00", checksum_sha256="e" * 64,
+        payload=expert_profile_to_mapping(profile),
+    )
+    service = SaveExpertProfile(
+        SimpleNamespace(append_if_latest=lambda **_kwargs: SimpleNamespace(revision=2)),
+        SimpleNamespace(execute=lambda *_args: record), nullcontext,
+        SimpleNamespace(now=lambda: datetime.now(UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
+    )
+    with pytest.raises(ValueError, match="server-owned"):
+        service.execute(WorkspaceId.parse(payload()["workspace_id"]), replace(profile, profile_id="FORGED"), None)
+    with pytest.raises(ValueError, match="cannot be rewritten"):
+        service.execute(WorkspaceId.parse(payload()["workspace_id"]), replace(profile, revision=2, registration="FORGED"), 1)

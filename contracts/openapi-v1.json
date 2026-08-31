@@ -25,11 +25,11 @@
         }
       },
       "post": {
-        "summary": "Salva nova revisão canônica",
+        "summary": "Inicia o índice documental canônico sem inferência",
         "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SaveCaseAnalysisRequest"}}}},
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type":"object","additionalProperties":false}}}},
         "responses": {
-          "200": {"description": "Revisão persistida", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CaseAnalysisEnvelope"}}}},
+          "201": {"description": "Índice documental iniciado sem inferência", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CaseAnalysisEnvelope"}}}},
           "409": {"description": "Conflito de revisão"}
         }
       }
@@ -51,7 +51,19 @@
           "200": {"description": "Revisão persistida", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PericialPlanningEnvelope"}}}},
           "409": {"description": "Conflito de revisão"}
         }
+      },
+      "post": {
+        "summary": "Inicia propostas de planejamento a partir da análise efetiva revisada",
+        "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
+        "requestBody": {"required":true,"content":{"application/json":{"schema":{"type":"object","required":["title"],"properties":{"title":{"type":"string","minLength":1}},"additionalProperties":false}}}},
+        "responses": {"201":{"description":"Planejamento proposal-only iniciado","content":{"application/json":{"schema":{"$ref":"#/components/schemas/PericialPlanningEnvelope"}}}},"409":{"description":"Análise ausente ou stale"}}
       }
+    },
+    "/v1/workspaces/{workspace_id}/case-analysis/items": {
+      "post": {"summary":"Acrescenta item analítico tipado com proveniência resolvida pelo servidor","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["expected_revision","item_kind","text","source_document_id","page_or_span","technical_subjects","values"],"additionalProperties":false,"properties":{"expected_revision":{"type":"integer","minimum":1},"item_kind":{"enum":["CLAIM","COUNTERARGUMENT","JUDICIAL_DECISION","PERICIAL_OBJECT","PERICIAL_QUESTION","PROCEDURAL_EVENT","TECHNICAL_DOCUMENT_REFERENCE","EVIDENCE_GAP","PROPOSED_CONFLICT"]},"text":{"type":"string","minLength":1},"source_document_id":{"type":"string","minLength":1},"page_or_span":{"type":"string","minLength":1},"technical_subjects":{"type":"array","items":{"type":"string","minLength":1}},"values":{"type":"object"}}}}}},"responses":{"200":{"description":"Item anexado","content":{"application/json":{"schema":{"$ref":"#/components/schemas/CaseAnalysisEnvelope"}}}},"409":{"description":"Fonte ou revisão stale"}}}
+    },
+    "/v1/workspaces/{workspace_id}/case-analysis/reviews": {
+      "post": {"summary":"Registra revisão humana append-only com identidade e tempo do servidor","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["expected_revision","target_item_id","action","corrected_value","reviewer","reason"],"additionalProperties":false,"properties":{"expected_revision":{"type":"integer","minimum":1},"target_item_id":{"type":"string","minLength":1},"action":{"enum":["CONFIRM","CORRECT","REJECT"]},"corrected_value":{"type":["string","null"]},"reviewer":{"type":"string","minLength":1},"reason":{"type":"string","minLength":1}}}}}},"responses":{"200":{"description":"Revisão anexada","content":{"application/json":{"schema":{"$ref":"#/components/schemas/CaseAnalysisEnvelope"}}}},"409":{"description":"Fonte ou revisão stale"}}}
     },
     "/v1/workspaces/{workspace_id}/inspection-photos": {
       "post": {
@@ -134,13 +146,22 @@
         "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
         "requestBody": {"required": true, "content": {"application/json": {"schema": {"type":"object","additionalProperties":false}}}},
         "responses": {"201": {"description": "Cadeia técnica inicial persistida", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TechnicalSnapshotEnvelope"}}}}, "409": {"description": "Upstream ausente ou stale"}}
-      },
-      "put": {
-        "summary": "Salva revisão da cadeia técnica com autoridade profissional explícita",
-        "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SaveTechnicalSnapshotRequest"}}}},
-        "responses": {"200": {"description": "Revisão técnica persistida", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TechnicalSnapshotEnvelope"}}}}, "409": {"description": "Conflito de revisão ou upstream stale"}}
       }
+    },
+    "/v1/workspaces/{workspace_id}/technical-snapshot/evidence-proposals": {
+      "post": {"summary":"Registra proposta de evidência sem autoridade profissional","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/TechnicalEvidenceProposalRequest"}}}},"responses":{"200":{"description":"Proposta persistida","content":{"application/json":{"schema":{"$ref":"#/components/schemas/TechnicalSnapshotEnvelope"}}}}}}
+    },
+    "/v1/workspaces/{workspace_id}/technical-snapshot/evidence-reviews": {
+      "post": {"summary":"Registra revisão profissional de evidência","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/TechnicalEvidenceReviewRequest"}}}},"responses":{"200":{"description":"Revisão persistida","content":{"application/json":{"schema":{"$ref":"#/components/schemas/TechnicalSnapshotEnvelope"}}}}}}
+    },
+    "/v1/workspaces/{workspace_id}/technical-snapshot/method-selections": {
+      "post": {"summary":"Registra seleção profissional de método","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/TechnicalMethodSelectionRequest"}}}},"responses":{"200":{"description":"Método selecionado","content":{"application/json":{"schema":{"$ref":"#/components/schemas/TechnicalSnapshotEnvelope"}}}}}}
+    },
+    "/v1/workspaces/{workspace_id}/technical-snapshot/finding-proposals": {
+      "post": {"summary":"Registra proposta de achado sem promovê-la","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/TechnicalFindingProposalRequest"}}}},"responses":{"200":{"description":"Proposta persistida","content":{"application/json":{"schema":{"$ref":"#/components/schemas/TechnicalSnapshotEnvelope"}}}}}}
+    },
+    "/v1/workspaces/{workspace_id}/technical-snapshot/finding-reviews": {
+      "post": {"summary":"Registra decisão profissional e deriva o achado efetivo no servidor","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/TechnicalFindingReviewRequest"}}}},"responses":{"200":{"description":"Decisão profissional persistida","content":{"application/json":{"schema":{"$ref":"#/components/schemas/TechnicalSnapshotEnvelope"}}}}}}
     },
     "/v1/workspaces/{workspace_id}/expert-profile": {
       "get": {"summary":"Reabre o perfil mestre do perito","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"responses":{"200":{"description":"Perfil mestre atual","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ExpertProfileEnvelope"}}}},"404":{"description":"Perfil ausente"}}},
@@ -238,10 +259,11 @@
       "ReportReviewRequest": {"type":"object","additionalProperties":false,"required":["expected_revision","action","professional_id","reason"],"properties":{"expected_revision":{"type":"integer","minimum":1},"action":{"enum":["MARK_REVIEWED","APPROVE","SUPERSEDE"]},"professional_id":{"type":"string","minLength":1},"reason":{"type":"string","minLength":1}}},
       "ReportDraftAmendmentRequest": {"type":"object","additionalProperties":false,"required":["expected_revision","action","values"],"properties":{"expected_revision":{"type":"integer","minimum":1},"action":{"enum":["ADD_CLAIM","UPDATE_CONTEXT","ADD_ANSWER"]},"values":{"type":"object"}}},
       "ReportSnapshotEnvelope": {"type":"object","additionalProperties":false,"required":["revision","updated_at","snapshot"],"properties":{"revision":{"type":"integer","minimum":1},"updated_at":{"type":"string","format":"date-time"},"snapshot":{"$ref":"#/components/schemas/ReportSnapshot"}}},
-      "SaveTechnicalSnapshotRequest": {
-        "type":"object","additionalProperties":false,"required":["expected_revision","snapshot"],
-        "properties":{"expected_revision":{"type":["integer","null"],"minimum":1},"snapshot":{"$ref":"#/components/schemas/TechnicalSnapshot"}}
-      },
+      "TechnicalEvidenceProposalRequest": {"type":"object","additionalProperties":false,"required":["source_kind","source_id","proposition","why_relevant","expected_revision"],"properties":{"source_kind":{"type":"string","minLength":1},"source_id":{"type":"string","minLength":1},"proposition":{"type":"string","minLength":1},"why_relevant":{"type":"string","minLength":1},"expected_revision":{"type":"integer","minimum":1}}},
+      "TechnicalEvidenceReviewRequest": {"type":"object","additionalProperties":false,"required":["evidence_id","action","professional_id","reason","expected_revision"],"properties":{"evidence_id":{"type":"string","minLength":1},"action":{"enum":["APPROVE","REJECT"]},"professional_id":{"type":"string","minLength":1},"reason":{"type":"string","minLength":1},"expected_revision":{"type":"integer","minimum":1}}},
+      "TechnicalMethodSelectionRequest": {"type":"object","additionalProperties":false,"required":["evidence_id","method_identity","procedure","output","professional_id","expected_revision"],"properties":{"evidence_id":{"type":"string","minLength":1},"method_identity":{"type":"string","minLength":1},"procedure":{"type":"string","minLength":1},"output":{"type":"string","minLength":1},"professional_id":{"type":"string","minLength":1},"expected_revision":{"type":"integer","minimum":1}}},
+      "TechnicalFindingProposalRequest": {"type":"object","additionalProperties":false,"required":["method_application_id","technical_proposition","scope","limitation","uncertainty","uncertainty_impact","contrary_evidence_ids","expected_revision"],"properties":{"method_application_id":{"type":"string","minLength":1},"technical_proposition":{"type":"string","minLength":1},"scope":{"type":"string","minLength":1},"limitation":{"type":"string","minLength":1},"uncertainty":{"type":"string","minLength":1},"uncertainty_impact":{"type":"string","minLength":1},"contrary_evidence_ids":{"type":"array","uniqueItems":true,"items":{"type":"string","minLength":1}},"expected_revision":{"type":"integer","minimum":1}}},
+      "TechnicalFindingReviewRequest": {"type":"object","additionalProperties":false,"required":["proposal_id","action","professional_id","reason","modified_proposition","resolve_conflicts","expected_revision"],"properties":{"proposal_id":{"type":"string","minLength":1},"action":{"enum":["APPROVE","MODIFY","REJECT"]},"professional_id":{"type":"string","minLength":1},"reason":{"type":"string","minLength":1},"modified_proposition":{"type":["string","null"]},"resolve_conflicts":{"type":"boolean"},"expected_revision":{"type":"integer","minimum":1}}},
       "TechnicalSnapshotEnvelope": {
         "type":"object","additionalProperties":false,"required":["revision","updated_at","snapshot"],
         "properties":{"revision":{"type":"integer","minimum":1},"updated_at":{"type":"string","format":"date-time"},"snapshot":{"$ref":"#/components/schemas/TechnicalSnapshot"}}
@@ -260,15 +282,6 @@
       "InspectionSessionEnvelope": {
         "type": "object", "required": ["revision", "updated_at", "snapshot"],
         "properties": {"revision": {"type": "integer", "minimum": 1}, "updated_at": {"type": "string"}, "snapshot": {"$ref": "#/components/schemas/InspectionSession"}},
-        "additionalProperties": false
-      },
-      "SaveCaseAnalysisRequest": {
-        "type": "object",
-        "required": ["expected_revision", "snapshot"],
-        "properties": {
-          "expected_revision": {"type": ["integer", "null"], "minimum": 1},
-          "snapshot": {"$ref": "#/components/schemas/CaseAnalysisSnapshot"}
-        },
         "additionalProperties": false
       },
       "CaseAnalysisEnvelope": {

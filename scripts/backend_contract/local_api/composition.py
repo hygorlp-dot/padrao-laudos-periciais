@@ -42,11 +42,21 @@ from ..infrastructure.sqlite import SQLiteApplicationStore
 from ..infrastructure.field_mobile import DeviceOfflineVaultRegistry
 from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
-from ..application.case_analysis import GetCaseAnalysis, SaveCaseAnalysis
-from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning
+from ..application.case_analysis import AddCaseAnalysisItem, GetCaseAnalysis, ReviewCaseAnalysisItem, SaveCaseAnalysis, StartCaseAnalysis
+from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning, StartPericialPlanning
 from ..application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession
 from ..application.field_mobile import GetOfflineInspection, ListPendingOfflineInspections, PrepareOfflineInspection, RevokeOfflineDevice, SyncOfflineInspection, UpdateOfflineInspection
-from ..application.technical_findings import GetTechnicalSnapshot, SaveTechnicalSnapshot, StartTechnicalSnapshot
+from ..application.technical_findings import (
+    AddEvidenceProposal,
+    GetTechnicalSnapshot,
+    ProposeTechnicalFinding,
+    ReviewTechnicalEvidence,
+    ReviewTechnicalFinding,
+    ResolveTechnicalProfessional,
+    SaveTechnicalSnapshot,
+    SelectTechnicalMethod,
+    StartTechnicalSnapshot,
+)
 from ..application.report_foundation import (
     GetExpertProfile,
     GetReportSnapshot,
@@ -303,6 +313,7 @@ def build_local_api(
     save_inspection_session = (
         SaveInspectionSession(
             store.revisions,
+            get_latest_artifact,
             get_pericial_planning,
             GetPrivateContent(store.workspaces, private_store),
             private_store.authority_guard,
@@ -327,15 +338,18 @@ def build_local_api(
     get_technical_snapshot = GetTechnicalSnapshot(get_latest_artifact, get_case_analysis, get_inspection_session)
     save_technical_snapshot = SaveTechnicalSnapshot(
         store.revisions,
+        get_latest_artifact,
         get_case_analysis,
         get_inspection_session,
         private_store.authority_guard if private_store is not None else nullcontext,
         local_clock,
         local_ids,
     )
+    resolve_technical_professional = ResolveTechnicalProfessional(get_inspection_session)
     get_expert_profile = GetExpertProfile(get_latest_artifact)
     save_expert_profile = SaveExpertProfile(
         store.revisions,
+        get_latest_artifact,
         private_store.authority_guard if private_store is not None else nullcontext,
         local_clock,
         local_ids,
@@ -420,14 +434,41 @@ def build_local_api(
         ),
         save_case_analysis=SaveCaseAnalysis(
             store.revisions,
+            get_latest_artifact,
             local_clock,
             local_ids,
             list_case_documents,
             private_store.authority_guard if private_store is not None else nullcontext,
         ),
         get_case_analysis=get_case_analysis,
+        start_case_analysis=StartCaseAnalysis(
+            list_case_documents,
+            SaveCaseAnalysis(
+                store.revisions, get_latest_artifact, local_clock, local_ids, list_case_documents,
+                private_store.authority_guard if private_store is not None else nullcontext,
+            ),
+            local_ids,
+        ),
+        add_case_analysis_item=AddCaseAnalysisItem(
+            get_case_analysis,
+            SaveCaseAnalysis(
+                store.revisions, get_latest_artifact, local_clock, local_ids, list_case_documents,
+                private_store.authority_guard if private_store is not None else nullcontext,
+            ),
+            local_ids,
+        ),
+        review_case_analysis_item=ReviewCaseAnalysisItem(
+            get_case_analysis,
+            SaveCaseAnalysis(
+                store.revisions, get_latest_artifact, local_clock, local_ids, list_case_documents,
+                private_store.authority_guard if private_store is not None else nullcontext,
+            ),
+            local_clock,
+            local_ids,
+        ),
         save_pericial_planning=save_pericial_planning,
         get_pericial_planning=get_pericial_planning,
+        start_pericial_planning=StartPericialPlanning(get_case_analysis, save_pericial_planning, local_ids),
         review_pericial_planning=ReviewPericialPlanning(
             get_pericial_planning,
             save_pericial_planning,
@@ -447,6 +488,11 @@ def build_local_api(
         save_technical_snapshot=save_technical_snapshot,
         get_technical_snapshot=get_technical_snapshot,
         start_technical_snapshot=StartTechnicalSnapshot(get_case_analysis, get_inspection_session, save_technical_snapshot, local_ids),
+        add_technical_evidence_proposal=AddEvidenceProposal(get_technical_snapshot, save_technical_snapshot, local_ids),
+        review_technical_evidence=ReviewTechnicalEvidence(get_technical_snapshot, save_technical_snapshot, local_clock, local_ids, resolve_technical_professional),
+        select_technical_method=SelectTechnicalMethod(get_technical_snapshot, save_technical_snapshot, local_ids, resolve_technical_professional),
+        propose_technical_finding=ProposeTechnicalFinding(get_technical_snapshot, save_technical_snapshot, local_ids),
+        review_technical_finding=ReviewTechnicalFinding(get_technical_snapshot, save_technical_snapshot, local_clock, local_ids, resolve_technical_professional),
         save_expert_profile=save_expert_profile,
         get_expert_profile=get_expert_profile,
         save_report_snapshot=save_report_snapshot,

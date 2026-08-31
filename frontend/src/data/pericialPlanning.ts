@@ -102,6 +102,13 @@ export function getPericialPlanning(workspaceId: string, signal?: AbortSignal) {
   return localJson(`/app-api/v1/workspaces/${workspaceId}/pericial-planning`, workspaceId, { method: "GET", signal });
 }
 
+export function startPericialPlanning(workspaceId: string, title: string) {
+  if (!title.trim()) throw new PericialPlanningApiError("invalid-response", "Informe o título do planejamento");
+  return localJson(`/app-api/v1/workspaces/${workspaceId}/pericial-planning`, workspaceId, {
+    method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify({ title }),
+  });
+}
+
 export function reviewPericialPlanning(
   workspaceId: string,
   command: { expected_revision: number; target_item_id: string; action: ReviewAction; reviewer: string; reason: string; decided_value: string | null },

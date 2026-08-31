@@ -992,17 +992,13 @@ class AppendArtifactRevision:
         artifact_id: str,
         payload: object,
     ) -> ArtifactRevision:
+        from .artifact_ownership import USER_DEFINED_ARTIFACT_KINDS
+
         workspace_id = _workspace_key(workspace_id)
         artifact_kind = _artifact_key(artifact_kind, "artifact_kind")
         artifact_id = _artifact_key(artifact_id, "artifact_id")
-        if artifact_kind in {
-            _PROCESS_CASE_ARTIFACT_KIND,
-            _PROCESS_METADATA_EXTRACTION_KIND,
-            _PROCESS_METADATA_CONFIRMATION_KIND,
-            _PROCESS_METADATA_SOURCE_CONFIRMATION_KIND,
-            "OCR_PAGE_CACHE_V1",
-        }:
-            raise ValueError("identidade de artefato reservada")
+        if artifact_kind not in USER_DEFINED_ARTIFACT_KINDS:
+            raise ValueError("identidade de artefato reservada: generic artifact mutation is disabled; use the dedicated application service")
         payload_snapshot = json.loads(canonical_payload_json(payload))
         revision_id = str(_generated_uuid(self.ids))
         created_at = _generated_timestamp(self.clock)

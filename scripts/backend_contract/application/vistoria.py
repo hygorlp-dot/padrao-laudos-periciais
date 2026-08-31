@@ -23,7 +23,7 @@ from ..vistoria import (
     inspection_session_to_mapping,
 )
 from .models import PrivateContentId, thaw_payload
-from .ports import RepositoryIntegrityError
+from .ports import RepositoryConflict, RepositoryIntegrityError
 
 
 _SCHEMA_PATH = Path(__file__).resolve().parents[3] / "schemas" / "inspection-session-v1.schema.json"
@@ -112,22 +112,44 @@ def _validate_execution_against_planning(session: InspectionSession, planning) -
 @dataclass(frozen=True, slots=True)
 class SaveInspectionSession:
     revisions: object
+    get_latest_revision: object
     get_planning: object
     get_private_content: object
     authority_guard: object
     clock: object
     ids: object
 
-    def execute(self, workspace_id, session: InspectionSession, expected_revision: int | None):
+    def execute(self, workspace_id, session: InspectionSession, expected_revision: int | None, *, allow_initial_create: bool = False):
         if type(session) is not InspectionSession or str(workspace_id) != session.workspace_id:
             raise ValueError("Inspection Session workspace identity mismatch")
         if session.upstream_stale:
             raise ValueError("stale Inspection Session cannot be persisted")
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
             raise ValueError("expected revision is invalid")
+        if expected_revision is None and not allow_initial_create:
+            raise ValueError("initial Inspection Session requires the canonical start command")
         if not callable(self.authority_guard):
             raise RepositoryIntegrityError("Inspection Session authority guard is unavailable")
         with self.authority_guard():
+            if expected_revision is not None:
+                predecessor_record = self.get_latest_revision.execute(
+                    workspace_id, INSPECTION_SESSION_ARTIFACT_KIND, INSPECTION_SESSION_ARTIFACT_ID
+                )
+                if predecessor_record.revision != expected_revision:
+                    raise RepositoryConflict("expected Inspection Session revision is not latest")
+                predecessor = validated_inspection_session_from_mapping(thaw_payload(predecessor_record.payload))
+                immutable = ("session_id", "workspace_id", "plan_snapshot", "started_at", "responsible_professional", "source_revision")
+                if any(getattr(session, name) != getattr(predecessor, name) for name in immutable):
+                    raise ValueError("Inspection Session immutable authority changed")
+                if session.reviews != predecessor.reviews:
+                    raise ValueError("Inspection Session reviews require a dedicated professional command")
+                append_only = (
+                    "observations", "statements", "measurements", "measurement_series", "methods", "instruments",
+                    "instrument_statuses", "photos", "videos", "sketches", "locations", "environmental_conditions",
+                    "access_occurrences", "limitations", "missing_items", "evidence_candidates",
+                )
+                if any(getattr(session, name)[:len(getattr(predecessor, name))] != getattr(predecessor, name) for name in append_only):
+                    raise ValueError("Inspection Session field history cannot be rewritten")
             planning_record, planning = self.get_planning.execute(workspace_id)
             reconciled = _reconcile(session, planning_record=planning_record, planning=planning)
             if reconciled.upstream_stale:
@@ -241,5 +263,5 @@ class StartInspectionSession:
             ),
             reviews=(),
         )
-        saved = self.save_session.execute(workspace_id, session, None)
+        saved = self.save_session.execute(workspace_id, session, None, allow_initial_create=True)
         return saved, session

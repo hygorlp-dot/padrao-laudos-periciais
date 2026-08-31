@@ -62,6 +62,18 @@ describe("pericial planning view", () => {
     expect(await screen.findByRole("heading", { name: "Planejamento ainda não disponível" })).toBeInTheDocument();
   });
 
+  test("starts proposal-only planning from reviewed analysis", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(404, { error: { code: "ARTIFACT_REVISION_NOT_FOUND" } }))
+      .mockResolvedValueOnce(response(201, { revision: 1, updated_at: "2026-08-31T12:00:00+00:00", snapshot: SNAPSHOT }));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<PericialPlanningView workspaceId={WORKSPACE_ID} />);
+    await user.click(await screen.findByRole("button", { name: "Iniciar planejamento" }));
+    await screen.findByRole("heading", { name: "Plano da perícia" });
+    expect(JSON.parse(String((fetchMock.mock.calls[1][1] as RequestInit).body))).toEqual({ title: "Plano da perícia" });
+  });
+
   test("returns focus to the originating review action after cancel", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(200, { revision: 1, updated_at: "2026-08-30T19:00:00-03:00", snapshot: SNAPSHOT })));
     const user = userEvent.setup();

@@ -292,6 +292,22 @@ class CaseAnalysisSnapshot:
             raise ValueError("conflict statements must reference canonical analysis items")
         if any(review.target_item_id not in item_id_set for review in self.human_reviews):
             raise ValueError("human review target must reference a canonical analysis item")
+        item_by_id = {item.item_id: item for item in self.material_items}
+        review_ids: set[str] = set()
+        reviews_by_target: dict[str, list[HumanReviewDecision]] = {}
+        for review in self.human_reviews:
+            if review.review_id in review_ids or review.decision not in {"CONFIRM", "CORRECT", "CORRECTED", "REJECT"}:
+                raise ValueError("human review identity or action is invalid")
+            review_ids.add(review.review_id)
+            if review.decision != "CORRECTED" and review.original_extraction != item_by_id[review.target_item_id].text:
+                raise ValueError("human review original extraction mismatch")
+            if review.decision in {"CORRECT", "CORRECTED"} and review.corrected_value == review.original_extraction:
+                raise ValueError("human correction must change the effective value")
+            if review.decision not in {"CORRECT", "CORRECTED"} and review.corrected_value != review.original_extraction:
+                raise ValueError("only correction may change the reviewed value")
+            reviews_by_target.setdefault(review.target_item_id, []).append(review)
+        if any([review.revision for review in history] != list(range(1, len(history) + 1)) for history in reviews_by_target.values()):
+            raise ValueError("human review revisions must append contiguously")
         for item in self.material_items:
             if not set(item.participant_refs) <= participant_ids:
                 raise ValueError("material participant references require canonical JDM participants")
@@ -313,7 +329,7 @@ class CaseAnalysisSnapshot:
             *(source for participant in self.judicial_context.participants for source in participant.provenance),
             *(source for link in self.judicial_context.representation_links for source in link.provenance),
             *(source for access in self.judicial_context.access_relations for source in access.provenance),
-        ):
+            ):
             document = documents.get(source.source_document_id)
             if document is None or source.source_sha256 != document.source_sha256:
                 raise ValueError("JDM provenance must bind to the indexed source identity")
@@ -331,6 +347,22 @@ class CaseAnalysisSnapshot:
             *self.gaps,
             *self.conflicts,
         )
+
+    def effective_reviewed_value(self, item_id: str) -> str | None:
+        """Return the reviewed semantic value without mutating source extraction."""
+        item = next((candidate for candidate in self.material_items if candidate.item_id == item_id), None)
+        if item is None:
+            raise ValueError("effective review target is invalid")
+        history = sorted(
+            (review for review in self.human_reviews if review.target_item_id == item_id),
+            key=lambda review: review.revision,
+        )
+        if not history:
+            return item.text
+        latest = history[-1]
+        if latest.decision == "REJECT":
+            return None
+        return latest.corrected_value if latest.decision in {"CORRECT", "CORRECTED"} else item.text
 
     def reconcile_sources(self, source_hashes: dict[str, str]):
         changed = tuple(sorted(document.document_id for document in self.documents if source_hashes.get(document.document_id) != document.source_sha256))

@@ -26,7 +26,9 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
 
     assert contract["openapi"] == "3.1.0"
     assert set(contract["paths"]) == {
-        "/v1/workspaces/{workspace_id}/case-analysis",
+            "/v1/workspaces/{workspace_id}/case-analysis",
+            "/v1/workspaces/{workspace_id}/case-analysis/items",
+            "/v1/workspaces/{workspace_id}/case-analysis/reviews",
         "/v1/workspaces/{workspace_id}/pericial-planning",
         "/v1/workspaces/{workspace_id}/pericial-planning/decisions",
         "/v1/workspaces/{workspace_id}/inspection-session",
@@ -36,6 +38,11 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
             "/v1/workspaces/{workspace_id}/offline-inspection/{package_id}",
             "/v1/workspaces/{workspace_id}/offline-device/revoke",
         "/v1/workspaces/{workspace_id}/technical-snapshot",
+        "/v1/workspaces/{workspace_id}/technical-snapshot/evidence-proposals",
+        "/v1/workspaces/{workspace_id}/technical-snapshot/evidence-reviews",
+        "/v1/workspaces/{workspace_id}/technical-snapshot/method-selections",
+        "/v1/workspaces/{workspace_id}/technical-snapshot/finding-proposals",
+        "/v1/workspaces/{workspace_id}/technical-snapshot/finding-reviews",
         "/v1/workspaces/{workspace_id}/expert-profile",
         "/v1/workspaces/{workspace_id}/report-snapshot",
         "/v1/workspaces/{workspace_id}/report-snapshot/reviews",

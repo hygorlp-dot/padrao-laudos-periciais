@@ -93,3 +93,23 @@ export async function getCaseAnalysis(workspaceId: string, signal?: AbortSignal)
     throw new CaseAnalysisApiError("invalid-response", "Resposta local inválida");
   }
 }
+
+async function mutateCaseAnalysis(workspaceId: string, path: string, body: object) {
+  if (!UUID.test(workspaceId)) throw new CaseAnalysisApiError("invalid-response", "Identidade da perícia inválida");
+  const response = await fetch(`/app-api/v1/workspaces/${workspaceId}/case-analysis${path}`, {
+    method: "POST", credentials: "same-origin", cache: "no-store",
+    headers: { "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new CaseAnalysisApiError("unavailable", "Não foi possível atualizar a análise");
+  return parseEnvelope(await response.json(), workspaceId);
+}
+
+export function startCaseAnalysis(workspaceId: string) { return mutateCaseAnalysis(workspaceId, "", {}); }
+
+export function addCaseAnalysisItem(workspaceId: string, command: { expected_revision: number; item_kind: string; text: string; source_document_id: string; page_or_span: string; technical_subjects: string[]; values: Record<string, unknown> }) {
+  return mutateCaseAnalysis(workspaceId, "/items", command);
+}
+
+export function reviewCaseAnalysisItem(workspaceId: string, command: { expected_revision: number; target_item_id: string; action: "CONFIRM" | "CORRECT" | "REJECT"; corrected_value: string | null; reviewer: string; reason: string }) {
+  return mutateCaseAnalysis(workspaceId, "/reviews", command);
+}

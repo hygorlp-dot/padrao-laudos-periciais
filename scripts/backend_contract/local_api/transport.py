@@ -45,7 +45,6 @@ from ..application.case_analysis import (
     CASE_ANALYSIS_ARTIFACT_KIND,
     CaseAnalysisSnapshot,
     case_analysis_to_mapping,
-    validated_case_analysis_from_mapping,
 )
 from ..application.pericial_planning import (
     PERICIAL_PLANNING_ARTIFACT_KIND,
@@ -60,13 +59,11 @@ from ..application.vistoria import (
 from ..application.field_mobile import offline_package_to_mapping
 from ..application.technical_findings import (
     technical_snapshot_to_validated_mapping,
-    validated_technical_snapshot_from_mapping,
 )
 from ..application.report_foundation import (
     expert_profile_to_validated_mapping,
     report_snapshot_to_validated_mapping,
     validated_expert_profile_from_mapping,
-    validated_report_snapshot_from_mapping,
 )
 from ..application.delivery_foundation import (
     delivery_snapshot_to_validated_mapping,
@@ -109,9 +106,13 @@ class LocalApiServices:
     get_process_case: object
     save_process_case: object
     save_case_analysis: object | None = None
+    start_case_analysis: object | None = None
+    add_case_analysis_item: object | None = None
+    review_case_analysis_item: object | None = None
     get_case_analysis: object | None = None
     save_pericial_planning: object | None = None
     get_pericial_planning: object | None = None
+    start_pericial_planning: object | None = None
     review_pericial_planning: object | None = None
     save_inspection_session: object | None = None
     get_inspection_session: object | None = None
@@ -126,6 +127,11 @@ class LocalApiServices:
     save_technical_snapshot: object | None = None
     get_technical_snapshot: object | None = None
     start_technical_snapshot: object | None = None
+    add_technical_evidence_proposal: object | None = None
+    review_technical_evidence: object | None = None
+    select_technical_method: object | None = None
+    propose_technical_finding: object | None = None
+    review_technical_finding: object | None = None
     save_expert_profile: object | None = None
     get_expert_profile: object | None = None
     save_report_snapshot: object | None = None
@@ -564,20 +570,6 @@ class LocalApi:
                         raise ValueError("Report Snapshot start request is invalid")
                     record, snapshot = self._services.start_report_snapshot.execute(workspace_id)
                     return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_validated_mapping(snapshot)})
-                if normalized_method == "PUT":
-                    if self._services.save_report_snapshot is None:
-                        return _error(503, "REPORT_SNAPSHOT_UNAVAILABLE")
-                    dto = self._request_dto(request_headers, body)
-                    if set(dto) != {"expected_revision", "snapshot"}:
-                        raise ValueError("Report Snapshot request is invalid")
-                    expected = dto["expected_revision"]
-                    if expected is not None and (type(expected) is not int or expected < 1):
-                        raise ValueError("Report Snapshot expected revision is invalid")
-                    snapshot = validated_report_snapshot_from_mapping(dto["snapshot"])
-                    if snapshot.workspace_id != str(workspace_id):
-                        raise ValueError("Report Snapshot workspace mismatch")
-                    record = self._services.save_report_snapshot.execute(workspace_id, snapshot, expected)
-                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_validated_mapping(snapshot)})
                 return _error(405, "METHOD_NOT_ALLOWED")
 
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("report-snapshot", "reviews"):
@@ -781,21 +773,50 @@ class LocalApi:
                         raise ValueError("Technical Snapshot start request is invalid")
                     record, snapshot = self._services.start_technical_snapshot.execute(workspace_id)
                     return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": technical_snapshot_to_validated_mapping(snapshot)})
-                if normalized_method == "PUT":
-                    if self._services.save_technical_snapshot is None:
-                        return _error(503, "TECHNICAL_SNAPSHOT_UNAVAILABLE")
-                    dto = self._request_dto(request_headers, body)
-                    if set(dto) != {"expected_revision", "snapshot"}:
-                        raise ValueError("Technical Snapshot request is invalid")
-                    expected = dto["expected_revision"]
-                    if expected is not None and (type(expected) is not int or expected < 1):
-                        raise ValueError("Technical Snapshot expected revision is invalid")
-                    snapshot = validated_technical_snapshot_from_mapping(dto["snapshot"])
-                    if snapshot.workspace_id != str(workspace_id):
-                        raise ValueError("Technical Snapshot workspace mismatch")
-                    record = self._services.save_technical_snapshot.execute(workspace_id, snapshot, expected)
-                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": technical_snapshot_to_validated_mapping(snapshot)})
                 return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "technical-snapshot":
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                workspace_id = self._workspace_id(raw_segments[2])
+                action = raw_segments[4]
+                dto = self._request_dto(request_headers, body)
+                routes = {
+                    "evidence-proposals": (
+                        self._services.add_technical_evidence_proposal,
+                        {"source_kind", "source_id", "proposition", "why_relevant", "expected_revision"},
+                    ),
+                    "evidence-reviews": (
+                        self._services.review_technical_evidence,
+                        {"evidence_id", "action", "professional_id", "reason", "expected_revision"},
+                    ),
+                    "method-selections": (
+                        self._services.select_technical_method,
+                        {"evidence_id", "method_identity", "procedure", "output", "professional_id", "expected_revision"},
+                    ),
+                    "finding-proposals": (
+                        self._services.propose_technical_finding,
+                        {"method_application_id", "technical_proposition", "scope", "limitation", "uncertainty", "uncertainty_impact", "contrary_evidence_ids", "expected_revision"},
+                    ),
+                    "finding-reviews": (
+                        self._services.review_technical_finding,
+                        {"proposal_id", "action", "professional_id", "reason", "modified_proposition", "resolve_conflicts", "expected_revision"},
+                    ),
+                }
+                route = routes.get(action)
+                if route is None:
+                    return _error(404, "NOT_FOUND")
+                service, required = route
+                if service is None:
+                    return _error(503, "TECHNICAL_SNAPSHOT_UNAVAILABLE")
+                if set(dto) != required:
+                    raise ValueError("Technical Snapshot command request is invalid")
+                if action == "finding-proposals":
+                    if type(dto["contrary_evidence_ids"]) is not list:
+                        raise ValueError("Technical finding contrary evidence is invalid")
+                    dto["contrary_evidence_ids"] = tuple(dto["contrary_evidence_ids"])
+                record, snapshot = service.execute(workspace_id, **dto)
+                return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": technical_snapshot_to_validated_mapping(snapshot)})
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "case-analysis":
                 workspace_id = self._workspace_id(raw_segments[2])
@@ -813,24 +834,44 @@ class LocalApi:
                     )
                 if normalized_method == "POST":
                     dto = self._request_dto(request_headers, body)
-                    if set(dto) != {"expected_revision", "snapshot"}:
+                    if dto != {}:
                         raise ValueError("Case Analysis request is invalid")
-                    expected = dto["expected_revision"]
-                    if expected is not None and (type(expected) is not int or expected < 1):
-                        raise ValueError("Case Analysis expected revision is invalid")
-                    snapshot = validated_case_analysis_from_mapping(dto["snapshot"])
-                    if snapshot.workspace_id != str(workspace_id):
-                        raise ValueError("Case Analysis workspace mismatch")
-                    record = self._services.save_case_analysis.execute(workspace_id, snapshot, expected)
-                    return _json_response(
-                        200,
-                        {
-                            "revision": record.revision,
-                            "updated_at": record.created_at,
-                            "snapshot": case_analysis_to_mapping(snapshot),
-                        },
-                    )
+                    if self._services.start_case_analysis is None:
+                        return _error(503, "CASE_ANALYSIS_UNAVAILABLE")
+                    record, snapshot = self._services.start_case_analysis.execute(workspace_id)
+                    return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": case_analysis_to_mapping(snapshot)})
                 return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("case-analysis", "items"):
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.add_case_analysis_item is None:
+                    return _error(503, "CASE_ANALYSIS_UNAVAILABLE")
+                workspace_id = self._workspace_id(raw_segments[2])
+                dto = self._request_dto(request_headers, body)
+                required = {"item_kind", "text", "source_document_id", "page_or_span", "technical_subjects", "values", "expected_revision"}
+                if set(dto) != required or type(dto["technical_subjects"]) is not list:
+                    raise ValueError("Case Analysis item request is invalid")
+                record, snapshot = self._services.add_case_analysis_item.execute(
+                    workspace_id, **{**dto, "technical_subjects": tuple(dto["technical_subjects"])}
+                )
+                return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": case_analysis_to_mapping(snapshot)})
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("case-analysis", "reviews"):
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.review_case_analysis_item is None:
+                    return _error(503, "CASE_ANALYSIS_UNAVAILABLE")
+                workspace_id = self._workspace_id(raw_segments[2])
+                dto = self._request_dto(request_headers, body)
+                required = {"target_item_id", "action", "corrected_value", "reviewer", "reason", "expected_revision"}
+                if set(dto) != required:
+                    raise ValueError("Case Analysis review request is invalid")
+                record, snapshot = self._services.review_case_analysis_item.execute(workspace_id, **dto)
+                return _json_response(200, {
+                    "revision": record.revision, "updated_at": record.created_at,
+                    "snapshot": case_analysis_to_mapping(snapshot),
+                })
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "pericial-planning":
                 workspace_id = self._workspace_id(raw_segments[2])
@@ -865,6 +906,14 @@ class LocalApi:
                             "snapshot": pericial_planning_to_mapping(snapshot),
                         },
                     )
+                if normalized_method == "POST":
+                    if self._services.start_pericial_planning is None:
+                        return _error(503, "PERICIAL_PLANNING_UNAVAILABLE")
+                    dto = self._request_dto(request_headers, body)
+                    if set(dto) != {"title"}:
+                        raise ValueError("Pericial Planning start request is invalid")
+                    record, snapshot = self._services.start_pericial_planning.execute(workspace_id, title=dto["title"])
+                    return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": pericial_planning_to_mapping(snapshot)})
                 return _error(405, "METHOD_NOT_ALLOWED")
 
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("pericial-planning", "decisions"):
@@ -1138,6 +1187,8 @@ class LocalApi:
             if artifact_route:
                 if segments[4] in {CASE_ANALYSIS_ARTIFACT_KIND, PERICIAL_PLANNING_ARTIFACT_KIND}:
                     return _error(404, "NOT_FOUND")
+                if normalized_method == "POST" and segments[4] != "LAUDO":
+                    return _error(405, "METHOD_NOT_ALLOWED")
                 if len(segments) == 7 and normalized_method == "POST":
                     dto = self._request_dto(request_headers, body)
                     if set(dto) != {"payload"}:

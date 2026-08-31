@@ -8,7 +8,6 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Event, Lock, Thread
-from urllib.parse import quote
 from uuid import UUID
 
 import pytest
@@ -233,8 +232,8 @@ def test_report_foundation_routes_are_private_validate_and_delegate():
     started = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/report-snapshot", body={})
     assert started.status == 201
     saved = request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/report-snapshot", body={"expected_revision": 1, "snapshot": payload})
-    assert saved.status == 200
-    assert save_report.calls[0][0][1] == snapshot
+    assert saved.status == 405
+    assert save_report.calls == []
     reopened = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/report-snapshot", headers={"X-Local-API-Token": TOKEN})
     assert decoded(reopened)["snapshot"] == payload
     reviewed = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/report-snapshot/reviews", body={"expected_revision": 1, "action": "MARK_REVIEWED", "professional_id": "EXPERT-PROFILE-001", "reason": "Revisão explícita."})
@@ -245,21 +244,27 @@ def test_report_foundation_routes_are_private_validate_and_delegate():
     assert amend_report.calls[0][1]["action"] == "ADD_CLAIM"
 
 
-def test_technical_snapshot_route_starts_validates_saves_and_reopens_canonical_chain():
+def test_technical_snapshot_route_denies_full_save_and_exposes_command_boundary():
     payload = technical_snapshot_payload()
     from scripts.backend_contract.technical_findings import technical_snapshot_from_mapping
     snapshot = technical_snapshot_from_mapping(payload)
     start = RecordingService((revision(payload=payload), snapshot))
-    save = RecordingService(revision(payload=payload))
+    command = RecordingService((revision(payload=payload), snapshot))
     get = RecordingService((revision(payload=payload), snapshot))
     api = LocalApi(services(
-        start_technical_snapshot=start, save_technical_snapshot=save, get_technical_snapshot=get,
+        start_technical_snapshot=start, save_technical_snapshot=RecordingService(None),
+        get_technical_snapshot=get, add_technical_evidence_proposal=command,
     ), token=TOKEN)
     started = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot", body={})
     assert started.status == 201
     saved = request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot", body={"expected_revision": 1, "snapshot": payload})
-    assert saved.status == 200
-    assert save.calls[0][0][1].snapshot_id == "TECHNICAL-SNAPSHOT-001"
+    assert saved.status == 405
+    proposed = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot/evidence-proposals", body={
+        "source_kind":"MEASUREMENT", "source_id":"MEASUREMENT-001", "proposition":"Proposta sintética.",
+        "why_relevant":"Relevância sintética.", "expected_revision":1,
+    })
+    assert proposed.status == 200
+    assert command.calls[0][1]["proposition"] == "Proposta sintética."
     reopened = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot", headers={"X-Local-API-Token": TOKEN})
     assert reopened.status == 200
     assert decoded(reopened)["snapshot"] == payload
@@ -272,7 +277,27 @@ def test_technical_snapshot_is_private_and_rejects_silent_professional_promotion
     denied = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot")
     invalid = request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot", body={"expected_revision": None, "snapshot": payload})
     assert denied.status == 403
-    assert invalid.status == 400
+    assert invalid.status == 405
+
+
+@pytest.mark.parametrize(
+    ("action", "service_name", "body"),
+    (
+        ("evidence-reviews", "review_technical_evidence", {"evidence_id":"EVIDENCE-001","action":"REJECT","professional_id":"PROFESSIONAL-001","reason":"Revisão explícita.","expected_revision":1}),
+        ("method-selections", "select_technical_method", {"evidence_id":"EVIDENCE-001","method_identity":"Método","procedure":"Procedimento.","output":"Saída.","professional_id":"PROFESSIONAL-001","expected_revision":1}),
+        ("finding-proposals", "propose_technical_finding", {"method_application_id":"METHOD-001","technical_proposition":"Proposta.","scope":"Escopo.","limitation":"Limite.","uncertainty":"Incerteza.","uncertainty_impact":"Impacto.","contrary_evidence_ids":[],"expected_revision":1}),
+        ("finding-reviews", "review_technical_finding", {"proposal_id":"PROPOSAL-001","action":"REJECT","professional_id":"PROFESSIONAL-001","reason":"Decisão explícita.","modified_proposition":None,"resolve_conflicts":False,"expected_revision":1}),
+    ),
+)
+def test_technical_authority_commands_delegate_only_closed_intent_dtos(action, service_name, body):
+    payload = technical_snapshot_payload()
+    from scripts.backend_contract.technical_findings import technical_snapshot_from_mapping
+    command = RecordingService((revision(payload=payload), technical_snapshot_from_mapping(payload)))
+    api = LocalApi(services(**{service_name: command}), token=TOKEN)
+    response = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot/{action}", body=body)
+    assert response.status == 200
+    assert command.calls[0][0] == (WORKSPACE_ID,)
+    assert set(command.calls[0][1]) == set(body)
 
 
 def test_inspection_session_route_validates_delegates_and_reopens_canonical_snapshot():
@@ -481,7 +506,7 @@ def test_pericial_planning_decision_route_requires_explicit_professional_command
     assert invalid.status == 400
 
 
-def test_case_analysis_route_validates_and_delegates_canonical_snapshot():
+def test_case_analysis_route_rejects_full_snapshot_authority_injection():
     payload = case_analysis_payload()
     saved = RecordingService(revision(payload=payload))
     bundle = services(save_case_analysis=saved)
@@ -493,9 +518,34 @@ def test_case_analysis_route_validates_and_delegates_canonical_snapshot():
         body={"expected_revision": None, "snapshot": payload},
     )
 
-    assert response.status == 200
-    assert saved.calls[0][0][0] == WORKSPACE_ID
-    assert saved.calls[0][0][1].snapshot_id == "ANALYSIS-001"
+    assert response.status == 400
+    assert saved.calls == []
+
+
+def test_case_analysis_bootstrap_item_and_review_routes_delegate_commands_only():
+    payload = case_analysis_payload()
+    from scripts.backend_contract.case_analysis import case_analysis_from_mapping
+    snapshot = case_analysis_from_mapping(payload)
+    started = RecordingService((revision(payload=payload), snapshot))
+    added = RecordingService((revision(number=2, payload=payload), snapshot))
+    reviewed = RecordingService((revision(number=3, payload=payload), snapshot))
+    api = LocalApi(services(start_case_analysis=started, add_case_analysis_item=added, review_case_analysis_item=reviewed), token=TOKEN)
+    assert request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/case-analysis", body={}).status == 201
+    item = {"expected_revision": 1, "item_kind": "CLAIM", "text": "Alegação sintética.", "source_document_id": "DOC-001", "page_or_span": "p. 1", "technical_subjects": ["tema"], "values": {}}
+    assert request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/case-analysis/items", body=item).status == 200
+    review = {"expected_revision": 2, "target_item_id": "CLAIM-001", "action": "CORRECT", "corrected_value": "Valor corrigido.", "reviewer": "PERITO", "reason": "Correção explícita."}
+    assert request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/case-analysis/reviews", body=review).status == 200
+    assert added.calls[0][1]["technical_subjects"] == ("tema",)
+    assert reviewed.calls[0][1]["corrected_value"] == "Valor corrigido."
+
+
+def test_planning_bootstrap_route_delegates_title_only():
+    payload = pericial_planning_payload()
+    from scripts.backend_contract.pericial_planning import pericial_planning_from_mapping
+    started = RecordingService((revision(payload=payload), pericial_planning_from_mapping(payload)))
+    response = request(LocalApi(services(start_pericial_planning=started), token=TOKEN), "POST", f"/v1/workspaces/{WORKSPACE_UUID}/pericial-planning", body={"title": "Plano sintético"})
+    assert response.status == 201
+    assert started.calls[0][1] == {"title": "Plano sintético"}
 
 
 def test_case_analysis_get_returns_validated_canonical_payload():
@@ -535,6 +585,7 @@ def test_case_analysis_save_close_reopen_is_semantically_equivalent(tmp_path):
         )
         workspace_id = json.loads(created_body)["workspace_id"]
         payload = case_analysis_payload()
+        payload["human_reviews"] = []
         payload["workspace_id"] = workspace_id
         payload["judicial_context_workspace_id"] = workspace_id
         imported = []
@@ -571,14 +622,14 @@ def test_case_analysis_save_close_reopen_is_semantically_equivalent(tmp_path):
             runtime.server,
             "POST",
             f"/v1/workspaces/{workspace_id}/case-analysis",
-            value={"expected_revision": None, "snapshot": payload},
+            value={},
             headers={"X-Local-API-Token": TOKEN},
         )
     finally:
         runtime.close()
 
     assert created_status == 201
-    assert saved_status == 200, saved_body
+    assert saved_status == 201, saved_body
     assert json.loads(saved_body)["revision"] == 1
 
     reopened = build_local_api(database, token=TOKEN, private_root=tmp_path / "private")
@@ -594,13 +645,10 @@ def test_case_analysis_save_close_reopen_is_semantically_equivalent(tmp_path):
         reopened.close()
 
     assert status == 200
-    assert json.loads(body)["snapshot"] == payload
+    assert json.loads(body)["snapshot"] == json.loads(saved_body)["snapshot"]
 
 
 def test_pericial_planning_save_close_reopen_preserves_professional_state(tmp_path):
-    from scripts.backend_contract.case_analysis import case_analysis_from_mapping
-    from scripts.backend_contract.pericial_planning import case_analysis_digest
-
     database = tmp_path / "pericial-planning.db"
     private_root = tmp_path / "private-planning"
     runtime = build_local_api(database, token=TOKEN, clock=FixedClock(), private_root=private_root)
@@ -615,6 +663,7 @@ def test_pericial_planning_save_close_reopen_preserves_professional_state(tmp_pa
         )
         workspace_id = json.loads(created_body)["workspace_id"]
         analysis_payload = case_analysis_payload()
+        analysis_payload["human_reviews"] = []
         analysis_payload["workspace_id"] = workspace_id
         analysis_payload["judicial_context_workspace_id"] = workspace_id
         imported = []
@@ -647,35 +696,21 @@ def test_pericial_planning_save_close_reopen_preserves_professional_state(tmp_pa
             runtime.server,
             "POST",
             f"/v1/workspaces/{workspace_id}/case-analysis",
-            value={"expected_revision": None, "snapshot": analysis_payload},
+            value={},
             headers={"X-Local-API-Token": TOKEN},
         )
-        assert analysis_status == 200, analysis_body
-        planning_payload = pericial_planning_payload()
-        planning_payload["workspace_id"] = workspace_id
-        planning_payload["plan"]["workspace_id"] = workspace_id
-        planning_payload["plan"]["case_analysis_digest"] = case_analysis_digest(case_analysis_from_mapping(analysis_payload))
-        for collection in (
-            "objectives", "issues", "question_links", "required_documents", "required_information",
-            "inspection_requirements", "measurement_requirements", "photo_requirements", "equipment_requirements",
-            "access_requirements", "method_candidates", "procedure_candidates", "sampling_candidates",
-            "safety_requirements", "external_support_requirements", "risks", "gaps",
-        ):
-            for item in planning_payload[collection]:
-                for source in item["derivation"]["source_provenance"]:
-                    source["workspace_id"] = workspace_id
-                    source["source_document_sha256"] = source_by_id[source["source_document_id"]]
+        assert analysis_status == 201, analysis_body
         saved_status, _, saved_body = http_request(
             runtime.server,
-            "PUT",
+            "POST",
             f"/v1/workspaces/{workspace_id}/pericial-planning",
-            value={"expected_revision": None, "snapshot": planning_payload},
+            value={"title": "Plano sintético"},
             headers={"X-Local-API-Token": TOKEN},
         )
     finally:
         runtime.close()
 
-    assert saved_status == 200, saved_body
+    assert saved_status == 201, saved_body
     reopened = build_local_api(database, token=TOKEN, private_root=private_root)
     reopened.start()
     try:
@@ -689,7 +724,7 @@ def test_pericial_planning_save_close_reopen_preserves_professional_state(tmp_pa
         reopened.close()
 
     assert status == 200, body
-    assert json.loads(body)["snapshot"] == planning_payload
+    assert json.loads(body)["snapshot"] == json.loads(saved_body)["snapshot"]
 
 
 def test_case_analysis_is_private_and_generic_artifact_route_cannot_bypass_validation():
@@ -793,8 +828,8 @@ def test_post_revision_delegates_exact_identity_and_nested_payload():
     record = revision(payload=payload)
     appended = RecordingService(record)
     bundle = services(append_artifact_revision=appended)
-    kind = quote("LAUDO TÉCNICO", safe="")
-    artifact = quote("LAU/001", safe="")
+    kind = "LAUDO"
+    artifact = "LAU-001"
 
     response = request(
         LocalApi(bundle, token=TOKEN),
@@ -809,8 +844,8 @@ def test_post_revision_delegates_exact_identity_and_nested_payload():
             (),
             {
                 "workspace_id": WORKSPACE_ID,
-                "artifact_kind": "LAUDO TÉCNICO",
-                "artifact_id": "LAU/001",
+                "artifact_kind": "LAUDO",
+                "artifact_id": "LAU-001",
                 "payload": payload,
             },
         )
@@ -825,6 +860,34 @@ def test_post_revision_delegates_exact_identity_and_nested_payload():
         "revision_id": REVISION_UUID,
         "workspace_id": str(WORKSPACE_UUID),
     }
+
+
+@pytest.mark.parametrize(
+    ("artifact_kind", "artifact_id"),
+    (
+        ("CASE_ANALYSIS_SNAPSHOT_V1", "CASE-ANALYSIS"),
+        ("PERICIAL_PLANNING_SNAPSHOT_V1", "PERICIAL-PLANNING"),
+        ("INSPECTION_SESSION_V1", "INSPECTION-SESSION"),
+        ("TECHNICAL_SNAPSHOT_V1", "TECHNICAL-SNAPSHOT"),
+        ("EXPERT_MASTER_PROFILE_V1", "EXPERT-PROFILE"),
+        ("REPORT_SNAPSHOT_V1", "REPORT-SNAPSHOT"),
+        ("DELIVERY_SNAPSHOT_V1", "DELIVERY-SNAPSHOT"),
+        ("BUDGET_SNAPSHOT_V1", "BUDGET-SNAPSHOT"),
+        ("ARBITRARY_UNKNOWN", "POISON"),
+    ),
+)
+def test_generic_post_revision_mutation_is_not_a_product_endpoint(artifact_kind, artifact_id):
+    appended = RecordingService(revision(payload={"forged": True}))
+    response = request(
+        LocalApi(services(append_artifact_revision=appended), token=TOKEN),
+        "POST",
+        f"/v1/workspaces/{WORKSPACE_UUID}/artifacts/{artifact_kind}/{artifact_id}/revisions",
+        body={"payload": {"forged": True}},
+    )
+
+    assert response.status in {404, 405}
+    assert decoded(response)["error"]["code"] in {"NOT_FOUND", "METHOD_NOT_ALLOWED"}
+    assert appended.calls == []
 
 
 def test_get_latest_revision_uses_latest_service():

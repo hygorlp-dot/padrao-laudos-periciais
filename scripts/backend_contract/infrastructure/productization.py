@@ -27,6 +27,11 @@ from ..application.models import (
     thaw_payload,
 )
 from ..application.ports import RepositoryConflict, RepositoryIntegrityError
+from ..application.artifact_ownership import (
+    INTERNAL_ARTIFACT_KINDS,
+    PORTABLE_PRODUCT_ARTIFACT_KINDS,
+    USER_DEFINED_ARTIFACT_KINDS,
+)
 from ..application.ocr_cache import _page_from_payload
 from ..application.process_metadata import document_metadata_from_payload
 from ..budget_foundation import budget_snapshot_from_mapping
@@ -247,6 +252,18 @@ _INTERNAL_ARTIFACT_VALIDATORS = {
 }
 
 
+def _validate_user_artifact(value: object) -> None:
+    canonical_payload_json(value)
+
+
+_USER_ARTIFACT_VALIDATORS = {kind: _validate_user_artifact for kind in USER_DEFINED_ARTIFACT_KINDS}
+
+if frozenset(_ARTIFACT_VALIDATORS) != PORTABLE_PRODUCT_ARTIFACT_KINDS:
+    raise RuntimeError("portable artifact validators diverge from application ownership")
+if frozenset(_INTERNAL_ARTIFACT_VALIDATORS) != INTERNAL_ARTIFACT_KINDS:
+    raise RuntimeError("internal artifact validators diverge from application ownership")
+
+
 def _revision_mapping(record: ArtifactRevision) -> dict[str, Any]:
     return {
         "workspace_id": str(record.workspace_id),
@@ -277,7 +294,11 @@ def _revision_from_mapping(value: object, workspace_id: str) -> ArtifactRevision
     canonical = canonical_payload_json(thaw_payload(record.payload))
     if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != record.checksum_sha256:
         raise RepositoryIntegrityError("backup revision checksum diverges")
-    validator = _ARTIFACT_VALIDATORS.get(record.artifact_kind) or _INTERNAL_ARTIFACT_VALIDATORS.get(record.artifact_kind)
+    validator = (
+        _ARTIFACT_VALIDATORS.get(record.artifact_kind)
+        or _INTERNAL_ARTIFACT_VALIDATORS.get(record.artifact_kind)
+        or _USER_ARTIFACT_VALIDATORS.get(record.artifact_kind)
+    )
     if validator is not None:
         validator(thaw_payload(record.payload))
     else:
