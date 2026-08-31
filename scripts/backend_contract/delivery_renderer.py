@@ -24,7 +24,7 @@ from .report_template import (
 _DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _DOCM_MEDIA = "application/vnd.ms-word.document.macroEnabled.12"
 _PDF_MEDIA = "application/pdf"
-DELIVERY_RENDERING_VERSION = "delivery-renderer/1.2.0"
+DELIVERY_RENDERING_VERSION = "delivery-renderer/2.0.0"
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _REL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 _CT = "{http://schemas.openxmlformats.org/package/2006/content-types}"
@@ -77,7 +77,7 @@ def _canonical_report_lines(report: ReportSnapshot) -> tuple[str, ...]:
 
 
 def render_pdf_candidate(report: ReportSnapshot) -> bytes:
-    """Render the canonical report directly into a deterministic local PDF."""
+    """Render a text-only diagnostic PDF; never use as a final professional artifact."""
     report_digest = sha256(json.dumps(report_snapshot_to_mapping(report), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     lines = []
     for source_line in _canonical_report_lines(report):
@@ -122,6 +122,17 @@ def render_pdf_candidate(report: ReportSnapshot) -> bytes:
         output.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
     output.extend(f"trailer << /Size {len(objects) + 1} /Root {catalog_id} 0 R >>\nstartxref\n{xref}\n%%EOF".encode("ascii"))
     return bytes(output)
+
+
+def render_final_pdf_candidate(*, word_content: bytes, word_format: str, converter: object) -> bytes:
+    """Convert the exact bound Word artifact through an explicitly local converter."""
+    conversion_copy, conversion_format = safe_pdf_conversion_copy(word_content, word_format)
+    try:
+        output = converter.convert(conversion_copy, conversion_format)
+    except (OSError, RuntimeError, TimeoutError) as exc:
+        raise ValueError("local Office PDF conversion unavailable") from exc
+    validate_final_artifact(output, "PDF")
+    return output
 
 
 def _inject_canonical_report(content: bytes, report: ReportSnapshot) -> bytes:

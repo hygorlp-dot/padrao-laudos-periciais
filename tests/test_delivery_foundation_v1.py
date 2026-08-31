@@ -11,6 +11,8 @@ import pytest
 from jsonschema import Draft202012Validator
 from PIL import Image
 
+from scripts.backend_contract import delivery_renderer
+
 from scripts.backend_contract.delivery_foundation import (
     DeliveryAction,
     DeliveryArtifact,
@@ -337,3 +339,45 @@ def test_pdf_renderer_wraps_long_lines_and_rejects_lossy_unicode() -> None:
     assert b"W" * 57 not in widest
     with pytest.raises(ValueError, match="unsupported"):
         render_pdf_candidate(replace(report, claims=(replace(report.claims[0], text="Hipotese tecnica \u0394"), *report.claims[1:])))
+
+
+def test_final_pdf_is_converted_from_the_exact_bound_word_bytes() -> None:
+    word = BytesIO()
+    document = """<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+      <w:p><w:r><w:t>Engenharia: m² ° µ ≤ ≥</w:t></w:r></w:p>
+      <w:tbl><w:tr><w:tc><w:p><w:r><w:t>Tabela vinculada</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+    </w:body></w:document>"""
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr("word/document.xml", document)
+
+    class Converter:
+        def __init__(self) -> None:
+            self.received = None
+
+        def convert(self, content: bytes, source_format: str) -> bytes:
+            self.received = (content, source_format)
+            return b"%PDF-1.7\n1 0 obj <</Type /Page>> endobj\n%%EOF"
+
+    converter = Converter()
+    pdf = delivery_renderer.render_final_pdf_candidate(
+        word_content=word.getvalue(), word_format="DOCX", converter=converter,
+    )
+
+    assert converter.received == (word.getvalue(), "DOCX")
+    assert pdf.startswith(b"%PDF-")
+
+
+def test_final_pdf_conversion_fails_closed_without_a_local_converter() -> None:
+    class Unavailable:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            raise RuntimeError("local Office PDF converter is unavailable")
+
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr("word/document.xml", "<document/>")
+    with pytest.raises(ValueError, match="local Office PDF conversion unavailable"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=Unavailable(),
+        )
