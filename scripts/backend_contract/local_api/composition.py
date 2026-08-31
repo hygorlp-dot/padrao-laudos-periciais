@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import secrets
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -10,7 +11,7 @@ from pathlib import Path
 from threading import Lock
 from uuid import UUID, uuid4
 
-from ..application.ports import Clock, IdGenerator, RepositoryError
+from ..application.ports import Clock, IdGenerator, RepositoryError, RepositoryIntegrityError
 from ..application.services import (
     AppendArtifactRevision,
     CreateWorkspace,
@@ -34,7 +35,7 @@ from ..application.services import (
     SaveProcessCase,
     StorePrivateContent,
 )
-from ..infrastructure.private_filesystem import LocalPrivateContentStore
+from ..infrastructure.private_filesystem import LocalPrivateContentStore, _validate_trusted_local_device
 from ..infrastructure.pdf_text import LocalPdfTextExtractor
 from ..infrastructure.rapid_ocr import RapidOcrLatinEngine
 from ..infrastructure.sqlite import SQLiteApplicationStore
@@ -91,6 +92,37 @@ class _SystemClock:
 class _UuidGenerator:
     def new_uuid(self) -> UUID:
         return uuid4()
+
+
+def _path_has_recovery_quarantine(path: Path, *, path_is_file: bool) -> bool:
+    absolute = path.absolute()
+    start = absolute.parent if path_is_file else absolute
+    candidates = {start}
+    try:
+        candidates.add(start.resolve(strict=False))
+    except OSError as exc:
+        raise RepositoryIntegrityError("local storage ancestry cannot be resolved") from exc
+    return any((ancestor / "RECOVERY_NOT_PROMOTABLE").exists() for candidate in candidates for ancestor in (candidate, *candidate.parents))
+
+
+def _assert_plain_single_link_database(path: Path) -> tuple[int, int] | None:
+    absolute = path.absolute()
+    for component in (absolute, *absolute.parents):
+        is_junction = getattr(component, "is_junction", lambda: False)
+        if component.is_symlink() or is_junction():
+            raise RepositoryIntegrityError("local database cannot use a link or reparse ancestry")
+    if not absolute.exists():
+        parent_identity = os.lstat(absolute.parent.resolve(strict=True))
+        _validate_trusted_local_device(parent_identity)
+        return None
+    try:
+        identity = os.stat(absolute, follow_symlinks=False)
+    except OSError as exc:
+        raise RepositoryIntegrityError("local database identity cannot be verified") from exc
+    if identity.st_nlink != 1:
+        raise RepositoryIntegrityError("local database must have exactly one filesystem link")
+    _validate_trusted_local_device(identity)
+    return identity.st_dev, identity.st_ino
 
 
 @dataclass(slots=True)
@@ -176,12 +208,31 @@ def build_local_api(
     _require_local_token(local_token)
     local_clock = _SystemClock() if clock is None else clock
     local_ids = _UuidGenerator() if ids is None else ids
+    raw_database = str(database)
+    if raw_database.startswith(("\\\\", "//", "\\\\?\\", "\\\\.\\")):
+        raise RepositoryIntegrityError("local database cannot use network or device paths")
+    database_path = Path(database)
+    if _path_has_recovery_quarantine(database_path, path_is_file=True) or (private_root is not None and _path_has_recovery_quarantine(Path(private_root), path_is_file=False)):
+        raise RepositoryIntegrityError("recovery staging is quarantined and cannot become active")
+    before_identity = _assert_plain_single_link_database(database_path)
     store = SQLiteApplicationStore(database)
+    try:
+        after_identity = _assert_plain_single_link_database(database_path)
+        if before_identity is not None and after_identity != before_identity:
+            raise RepositoryIntegrityError("local database identity changed during opening")
+        store.assert_active_application_identity()
+    except BaseException:
+        store.close()
+        raise
     private_store = None
     if private_root is not None:
         try:
             private_store = LocalPrivateContentStore.open_or_provision(private_root)
+            if private_store.is_recovery_quarantined():
+                raise RepositoryIntegrityError("recovery private storage is quarantined and cannot become active")
         except Exception:
+            if private_store is not None:
+                private_store.close()
             store.close()
             raise
     import_case_document = None
@@ -271,9 +322,7 @@ def build_local_api(
         local_clock,
         local_ids,
     )
-    get_report_snapshot = GetReportSnapshot(
-        get_latest_artifact, get_case_analysis, get_inspection_session, get_technical_snapshot, get_expert_profile
-    )
+    get_report_snapshot = GetReportSnapshot(get_latest_artifact, get_case_analysis, get_inspection_session, get_technical_snapshot, get_expert_profile)
     save_report_snapshot = SaveReportSnapshot(
         store.revisions,
         get_case_analysis,
@@ -301,22 +350,33 @@ def build_local_api(
         get_delivery_snapshot = GetDeliverySnapshot(get_latest_artifact, *authorities)
         get_delivery_history = GetDeliveryHistory(list_artifact_revisions)
         save_delivery_snapshot = SaveDeliverySnapshot(
-            store.revisions, get_latest_artifact, *authorities,
-            private_store.authority_guard, local_clock, local_ids,
+            store.revisions,
+            get_latest_artifact,
+            *authorities,
+            private_store.authority_guard,
+            local_clock,
+            local_ids,
         )
         start_delivery_snapshot = StartDeliverySnapshot(*authorities, get_private_content, save_delivery_snapshot, local_ids)
         review_delivery_snapshot = ReviewDeliverySnapshot(get_delivery_snapshot, save_delivery_snapshot, local_clock, local_ids)
         render_delivery_package = RenderDeliveryPackage(
-            get_delivery_snapshot, get_report_snapshot, get_private_content, generic_store,
-            save_delivery_snapshot, local_ids,
+            get_delivery_snapshot,
+            get_report_snapshot,
+            get_private_content,
+            generic_store,
+            save_delivery_snapshot,
+            local_ids,
         )
         attach_delivery_artifact = AttachDeliveryPackageArtifact(get_delivery_snapshot, get_private_content, save_delivery_snapshot, local_ids)
         verify_delivery_package = VerifyDeliveryPackage(get_delivery_snapshot, get_private_content)
         finalize_delivery_snapshot = FinalizeDeliverySnapshot(verify_delivery_package, review_delivery_snapshot)
         deliver_delivery_snapshot = DeliverDeliverySnapshot(verify_delivery_package, review_delivery_snapshot)
         reissue_delivery_snapshot = ReissueDeliverySnapshot(
-            get_delivery_snapshot, save_delivery_snapshot, *authorities,
-            get_private_content, local_ids,
+            get_delivery_snapshot,
+            save_delivery_snapshot,
+            *authorities,
+            get_private_content,
+            local_ids,
         )
     get_budget_snapshot = GetBudgetSnapshot(get_latest_artifact)
     save_budget_snapshot = SaveBudgetSnapshot(store.revisions, get_latest_artifact, local_clock, local_ids)
@@ -358,15 +418,10 @@ def build_local_api(
         ),
         save_inspection_session=save_inspection_session,
         get_inspection_session=get_inspection_session,
-        start_inspection_session=(
-            StartInspectionSession(get_pericial_planning, save_inspection_session, local_clock, local_ids)
-            if save_inspection_session is not None else None
-        ),
+        start_inspection_session=(StartInspectionSession(get_pericial_planning, save_inspection_session, local_clock, local_ids) if save_inspection_session is not None else None),
         save_technical_snapshot=save_technical_snapshot,
         get_technical_snapshot=get_technical_snapshot,
-        start_technical_snapshot=StartTechnicalSnapshot(
-            get_case_analysis, get_inspection_session, save_technical_snapshot, local_ids
-        ),
+        start_technical_snapshot=StartTechnicalSnapshot(get_case_analysis, get_inspection_session, save_technical_snapshot, local_ids),
         save_expert_profile=save_expert_profile,
         get_expert_profile=get_expert_profile,
         save_report_snapshot=save_report_snapshot,
