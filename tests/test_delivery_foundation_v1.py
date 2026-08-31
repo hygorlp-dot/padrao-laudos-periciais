@@ -26,6 +26,7 @@ from scripts.backend_contract.delivery_foundation import (
 from scripts.backend_contract.delivery_renderer import (
     render_word_candidate,
     safe_pdf_conversion_copy,
+    validate_supporting_artifact,
     validate_final_artifact,
     verify_reopened_artifact,
 )
@@ -241,6 +242,17 @@ def test_artifact_validation_rejects_macro_identity_change_and_malformed_pdf() -
         validate_final_artifact(output.getvalue(), "DOCM")
     with pytest.raises(ValueError, match="PDF"):
         validate_final_artifact(b"%PDF-1.7\nno page or eof", "PDF")
+
+
+def test_supporting_image_bytes_are_verified_by_declared_media_type() -> None:
+    jpeg = b"\xff\xd8\xff\xe0synthetic-photo\xff\xd9"
+    png = b"\x89PNG\r\n\x1a\nsynthetic-photo"
+    assert validate_supporting_artifact(jpeg, "image/jpeg")[2] == "image/jpeg"
+    assert validate_supporting_artifact(png, "image/png")[2] == "image/png"
+    with pytest.raises(ValueError, match="JPEG"):
+        validate_supporting_artifact(png, "image/jpeg")
+    with pytest.raises(ValueError, match="unsupported"):
+        validate_supporting_artifact(b"opaque", "application/octet-stream")
 
 
 def test_conversion_copy_strips_macros_and_external_relationships_are_rejected() -> None:

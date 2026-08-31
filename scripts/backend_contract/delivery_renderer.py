@@ -131,6 +131,21 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
     return sha256(content).hexdigest(), len(content), media_type
 
 
+def validate_supporting_artifact(content: bytes, media_type: str) -> tuple[str, int, str]:
+    """Verify non-Office supporting bytes without trusting filename metadata."""
+    if type(content) is not bytes or not content:
+        raise ValueError("supporting artifact bytes are empty")
+    if media_type == "image/jpeg":
+        if not (content.startswith(b"\xff\xd8\xff") and content.endswith(b"\xff\xd9")):
+            raise ValueError("supporting JPEG artifact is invalid")
+    elif media_type == "image/png":
+        if not content.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError("supporting PNG artifact is invalid")
+    else:
+        raise ValueError("unsupported supporting artifact media type")
+    return sha256(content).hexdigest(), len(content), media_type
+
+
 def safe_pdf_conversion_copy(content: bytes, output_format: str) -> tuple[bytes, str]:
     """Build a macro-free, external-link-free copy used only by the local PDF renderer."""
     validate_final_artifact(content, output_format)

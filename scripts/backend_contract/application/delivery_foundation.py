@@ -25,7 +25,7 @@ from ..delivery_foundation import (
     delivery_snapshot_from_mapping,
     delivery_snapshot_to_mapping,
 )
-from ..delivery_renderer import DELIVERY_RENDERING_VERSION, render_word_candidate, safe_pdf_conversion_copy, validate_final_artifact, verify_reopened_artifact
+from ..delivery_renderer import DELIVERY_RENDERING_VERSION, render_word_candidate, safe_pdf_conversion_copy, validate_final_artifact, validate_supporting_artifact, verify_reopened_artifact
 from ..report_template import TemplateBindingManifest
 from ..pericial_planning import PlanningSnapshot, pericial_planning_to_mapping
 from ..report_foundation import ReportSnapshot, ReportState, report_snapshot_to_mapping
@@ -419,7 +419,9 @@ class AttachDeliveryPackageArtifact:
             "application/vnd.ms-word.document.macroEnabled.12": DeliveryFormat.DOCM,
         }
         output_format = known.get(media, DeliveryFormat.OTHER)
-        if output_format is not DeliveryFormat.OTHER:
+        if output_format is DeliveryFormat.OTHER:
+            validate_supporting_artifact(content.content, media)
+        else:
             validate_final_artifact(content.content, output_format.value)
         artifact = DeliveryArtifact(
             artifact_id=f"ARTIFACT-{str(self.ids.new_uuid()).upper()}", role=package_role,
@@ -449,10 +451,15 @@ class VerifyDeliveryPackage:
             content = self.get_private_content.execute(workspace_id, PrivateContentId.parse(artifact.content_id))
             if content.metadata.original_filename != artifact.filename or content.metadata.media_type != artifact.media_type:
                 raise RepositoryIntegrityError("reopened private artifact metadata diverges")
-            verify_reopened_artifact(
-                content=content.content, output_format=artifact.format.value,
-                expected_size=artifact.byte_size, expected_sha256=artifact.checksum_sha256,
-            )
+            if artifact.format is DeliveryFormat.OTHER:
+                digest, size, media = validate_supporting_artifact(content.content, artifact.media_type)
+                if size != artifact.byte_size or digest != artifact.checksum_sha256 or media != artifact.media_type:
+                    raise RepositoryIntegrityError("reopened supporting artifact bytes diverge")
+            else:
+                verify_reopened_artifact(
+                    content=content.content, output_format=artifact.format.value,
+                    expected_size=artifact.byte_size, expected_sha256=artifact.checksum_sha256,
+                )
         return record, snapshot
 
 

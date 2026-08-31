@@ -29,6 +29,10 @@ export function DeliveryFoundationView({ workspaceId }: { workspaceId: string })
   const [history, setHistory] = useState<DeliveryEnvelope[]>([]);
   const [supportingFile, setSupportingFile] = useState<File | null>(null);
   const [supportingRole, setSupportingRole] = useState<"ANNEX" | "PHOTO_APPENDIX" | "TECHNICAL_APPENDIX" | "SUPPORTING_FILE">("ANNEX");
+  const acceptMutation = (value: DeliveryEnvelope) => {
+    setState({ kind: "ready", value });
+    void getDeliveryHistory(workspaceId).then(setHistory, () => undefined);
+  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -49,7 +53,7 @@ export function DeliveryFoundationView({ workspaceId }: { workspaceId: string })
       const value = reissue && state.kind === "ready"
         ? await reissueDeliverySnapshot(workspaceId, state.value, metadata, manifest)
         : await startDeliverySnapshot(workspaceId, metadata, manifest);
-      setState({ kind: "ready", value }); setTemplateFile(null); setTemplateId("");
+      acceptMutation(value); setTemplateFile(null); setTemplateId("");
     } catch { setState({ kind: "error" }); } finally { setBusy(false); }
   };
 
@@ -63,12 +67,12 @@ export function DeliveryFoundationView({ workspaceId }: { workspaceId: string })
             : action === "finalize" ? await finalizeDeliverySnapshot(workspaceId, state.value, reason)
               : action === "deliver" ? await deliverDeliverySnapshot(workspaceId, state.value, reason)
                 : await reviewDeliverySnapshot(workspaceId, state.value, "SUPERSEDE", reason);
-      setState({ kind: "ready", value }); setReason("");
+      acceptMutation(value); setReason("");
     } catch { setState({ kind: "error" }); } finally { setBusy(false); }
   };
   const attachSupporting = async (event: FormEvent) => {
     event.preventDefault(); if (state.kind !== "ready" || !supportingFile) return; setBusy(true);
-    try { const stored = await uploadDeliverySupportingFile(workspaceId, supportingFile); const value = await attachDeliveryPackageArtifact(workspaceId, state.value, stored.content_id, supportingRole); setState({ kind: "ready", value }); setSupportingFile(null); }
+    try { const stored = await uploadDeliverySupportingFile(workspaceId, supportingFile); const value = await attachDeliveryPackageArtifact(workspaceId, state.value, stored.content_id, supportingRole); acceptMutation(value); setSupportingFile(null); }
     catch { setState({ kind: "error" }); } finally { setBusy(false); }
   };
 
