@@ -109,6 +109,8 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "delivery-snapshot" and method in {"GET", "POST"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "budget-snapshot" and method in {"GET", "POST"}:
+            return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "delivery-templates" and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "delivery-supporting-files" and method == "POST":
@@ -125,6 +127,8 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/delivery-snapshot/{remainder[2]}"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["delivery-snapshot", "history"] and method == "GET":
             return f"/v1/workspaces/{remainder[0]}/delivery-snapshot/history"
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["budget-snapshot", "history"] and method == "GET":
+            return f"/v1/workspaces/{remainder[0]}/budget-snapshot/history"
         if len(remainder) == 4 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:3] == ["delivery-snapshot", "artifacts"] and _CANONICAL_UUID.fullmatch(remainder[3]) and method == "GET":
             return f"/v1/workspaces/{remainder[0]}/delivery-snapshot/artifacts/{remainder[3]}"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "materials" and _CANONICAL_UUID.fullmatch(remainder[2]) and method == "GET":

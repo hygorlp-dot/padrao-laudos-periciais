@@ -47,12 +47,16 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
         "/v1/workspaces/{workspace_id}/delivery-snapshot/reissue",
         "/v1/workspaces/{workspace_id}/delivery-snapshot/history",
         "/v1/workspaces/{workspace_id}/delivery-snapshot/artifacts/{content_id}",
+        "/v1/workspaces/{workspace_id}/budget-snapshot",
+        "/v1/workspaces/{workspace_id}/budget-snapshot/history",
     }
     component = contract["components"]["schemas"]["ProceduralContext"]
     assert component == {"$ref": "../schemas/judicial-domain-model-v1.schema.json"}
     assert contract["info"]["x-semantic-boundary"] == ("scripts.backend_contract.api_contract.parse_judicial_domain_payload")
     assert contract["info"]["x-delivery-snapshot-semantic-boundary"] == "scripts.backend_contract.delivery_foundation.delivery_snapshot_from_mapping"
     assert contract["components"]["schemas"]["DeliverySnapshot"] == {"$ref": "../schemas/delivery-snapshot-v1.schema.json"}
+    assert contract["info"]["x-budget-snapshot-semantic-boundary"] == "scripts.backend_contract.budget_foundation.budget_snapshot_from_mapping"
+    assert contract["components"]["schemas"]["BudgetSnapshot"] == {"$ref": "../schemas/budget-snapshot-v1.schema.json"}
     referenced = (ROOT / "contracts" / component["$ref"]).resolve()
     assert referenced.is_relative_to(ROOT)
     schema = json.loads(referenced.read_text(encoding="utf-8"))

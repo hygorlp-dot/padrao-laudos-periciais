@@ -66,6 +66,7 @@ from ..application.delivery_foundation import (
     StartDeliverySnapshot,
     VerifyDeliveryPackage,
 )
+from ..application.budget_foundation import GetBudgetHistory, GetBudgetSnapshot, SaveBudgetSnapshot
 
 
 class LocalApiStartupError(RuntimeError):
@@ -381,6 +382,9 @@ def build_local_api(
         finalize_delivery_snapshot=finalize_delivery_snapshot,
         deliver_delivery_snapshot=deliver_delivery_snapshot,
         reissue_delivery_snapshot=reissue_delivery_snapshot,
+        save_budget_snapshot=SaveBudgetSnapshot(store.revisions, get_latest_artifact, local_clock, local_ids),
+        get_budget_snapshot=GetBudgetSnapshot(get_latest_artifact),
+        get_budget_history=GetBudgetHistory(list_artifact_revisions),
         get_process_metadata_review=get_process_metadata_review,
         confirm_process_metadata_source_span=confirm_process_metadata_source_span,
         import_case_document=import_case_document,

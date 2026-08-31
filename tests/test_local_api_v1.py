@@ -157,6 +157,30 @@ def report_snapshot_payload():
     return json.loads((Path(__file__).parent / "fixtures/report-snapshot-v1.json").read_text(encoding="utf-8"))
 
 
+def budget_snapshot_payload():
+    return json.loads((Path(__file__).parent / "fixtures/budget-snapshot-v1.json").read_text(encoding="utf-8"))
+
+
+def test_budget_routes_are_private_strict_and_preserve_history() -> None:
+    from scripts.backend_contract.budget_foundation import budget_snapshot_from_mapping
+
+    payload = budget_snapshot_payload(); snapshot = budget_snapshot_from_mapping(payload)
+    save = RecordingService(revision(payload=payload))
+    get = RecordingService((revision(payload=payload), snapshot))
+    history = RecordingService(((revision(payload=payload), snapshot),))
+    api = LocalApi(services(save_budget_snapshot=save, get_budget_snapshot=get, get_budget_history=history), token=TOKEN)
+    assert request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot").status == 403
+    saved = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot", body={"expected_revision": None, "snapshot": payload})
+    assert saved.status == 200
+    assert save.calls[0][0][1] == snapshot
+    reopened = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot", headers={"X-Local-API-Token": TOKEN})
+    assert decoded(reopened)["snapshot"] == payload
+    listed = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot/history", headers={"X-Local-API-Token": TOKEN})
+    assert decoded(listed)["items"][0]["snapshot"] == payload
+    contaminated = dict(payload, technical_confidence="HIGH")
+    assert request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot", body={"expected_revision": 1, "snapshot": contaminated}).status == 400
+
+
 def test_report_foundation_routes_are_private_validate_and_delegate():
     payload = report_snapshot_payload()
     profile_payload = payload["expert_profile"]

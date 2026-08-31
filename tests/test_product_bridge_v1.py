@@ -114,6 +114,17 @@ def test_product_bridge_allowlists_only_delivery_foundation_resources_and_comman
     assert _proxy_target(artifact, "GET") == f"/v1/workspaces/{workspace}/delivery-snapshot/artifacts/{content_id}"
 
 
+def test_product_bridge_allowlists_only_budget_snapshot_and_history() -> None:
+    workspace = "11111111-1111-4111-8111-111111111111"
+    snapshot = f"/app-api/v1/workspaces/{workspace}/budget-snapshot"
+    history = f"{snapshot}/history"
+    for method in ("GET", "POST"):
+        assert _proxy_target(snapshot, method) == f"/v1/workspaces/{workspace}/budget-snapshot"
+    assert _proxy_target(snapshot, "PUT") is None
+    assert _proxy_target(history, "GET") == f"/v1/workspaces/{workspace}/budget-snapshot/history"
+    assert _proxy_target(history, "POST") is None
+
+
 @pytest.mark.parametrize("media_type", ("image/jpeg", "image/png"))
 def test_delivery_image_response_streams_through_product_bridge(monkeypatch, tmp_path, media_type):
     payload = b"synthetic-verified-image"
