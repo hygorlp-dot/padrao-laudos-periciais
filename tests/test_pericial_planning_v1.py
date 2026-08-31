@@ -1,6 +1,9 @@
 import copy
 import json
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 import jsonschema
@@ -32,6 +35,12 @@ from scripts.backend_contract.pericial_planning import (
     validate_against_case_analysis,
 )
 from scripts.backend_contract.case_analysis import case_analysis_from_mapping
+from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
+from scripts.backend_contract.application.pericial_planning import (
+    GetPericialPlanning,
+    SavePericialPlanning,
+    validated_pericial_planning_from_mapping,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +54,22 @@ def fixture():
 def analysis_fixture():
     raw = json.loads((ROOT / "tests/fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8"))
     return case_analysis_from_mapping(raw)
+
+
+def artifact(snapshot, *, kind, artifact_id, revision=1):
+    payload = pericial_planning_to_mapping(snapshot) if isinstance(snapshot, PlanningSnapshot) else json.loads(
+        (ROOT / "tests/fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8")
+    )
+    return ArtifactRevision(
+        workspace_id=WorkspaceId.parse(snapshot.workspace_id),
+        artifact_kind=kind,
+        artifact_id=artifact_id,
+        revision_id="99999999-9999-4999-8999-999999999999",
+        revision=revision,
+        created_at="2026-08-30T12:00:00+00:00",
+        checksum_sha256="0" * 64,
+        payload=payload,
+    )
 
 
 def test_canonical_fixture_exposes_every_stage4_planning_entity():
@@ -162,3 +187,105 @@ def test_graph_review_and_readiness_smuggling_fail_closed(mutate):
 
     with pytest.raises(ValueError):
         pericial_planning_from_mapping(raw)
+
+
+def test_application_schema_and_semantic_boundary_rejects_unknown_fields():
+    raw = fixture()
+    raw["technical_finding"] = "não permitido"
+
+    with pytest.raises(ValueError, match="invalid Pericial Planning payload"):
+        validated_pericial_planning_from_mapping(raw)
+
+
+def test_save_revalidates_latest_case_analysis_and_uses_atomic_plan_cas():
+    planning = pericial_planning_from_mapping(fixture())
+    analysis = analysis_fixture()
+    analysis_record = artifact(analysis, kind="CASE_ANALYSIS_SNAPSHOT_V1", artifact_id="CASE-ANALYSIS")
+    calls = []
+    revisions = SimpleNamespace(append_if_latest=lambda **kwargs: calls.append(kwargs) or SimpleNamespace(revision=1))
+    get_analysis = SimpleNamespace(execute=lambda _workspace: (analysis_record, analysis))
+    get_latest = SimpleNamespace(execute=lambda *_args: (_ for _ in ()).throw(AssertionError("unexpected previous read")))
+    clock = SimpleNamespace(now=lambda: datetime(2026, 8, 30, tzinfo=UTC))
+    ids = SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888"))
+
+    result = SavePericialPlanning(revisions, get_latest, get_analysis, clock, ids).execute(
+        WorkspaceId.parse(planning.workspace_id), planning, None
+    )
+
+    assert result.revision == 1
+    assert calls[0]["artifact_kind"] == "PERICIAL_PLANNING_SNAPSHOT_V1"
+    assert calls[0]["artifact_id"] == "PERICIAL-PLANNING"
+    assert calls[0]["expected_revision"] is None
+    assert calls[0]["payload"] == fixture()
+
+
+def test_save_rejects_a_stale_or_changed_case_analysis_dependency():
+    planning = pericial_planning_from_mapping(fixture())
+    analysis = analysis_fixture().reconcile_sources({document.document_id: "f" * 64 for document in analysis_fixture().documents})
+    analysis_record = artifact(analysis, kind="CASE_ANALYSIS_SNAPSHOT_V1", artifact_id="CASE-ANALYSIS", revision=2)
+    service = SavePericialPlanning(
+        SimpleNamespace(append_if_latest=lambda **_kwargs: pytest.fail("must not append")),
+        SimpleNamespace(),
+        SimpleNamespace(execute=lambda _workspace: (analysis_record, analysis)),
+        SimpleNamespace(now=lambda: datetime(2026, 8, 30, tzinfo=UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
+    )
+
+    with pytest.raises(ValueError, match="stale|dependency"):
+        service.execute(WorkspaceId.parse(planning.workspace_id), planning, None)
+
+
+def test_save_preserves_existing_proposals_and_review_history():
+    previous = pericial_planning_from_mapping(fixture())
+    changed = fixture()
+    changed["objectives"][0]["description"] = "Substituição destrutiva"
+    changed["decisions"][0]["proposal_value"] = "Substituição destrutiva"
+    planning = pericial_planning_from_mapping(changed)
+    analysis = analysis_fixture()
+    previous_record = artifact(previous, kind="PERICIAL_PLANNING_SNAPSHOT_V1", artifact_id="PERICIAL-PLANNING")
+    service = SavePericialPlanning(
+        SimpleNamespace(append_if_latest=lambda **_kwargs: pytest.fail("must not append")),
+        SimpleNamespace(execute=lambda *_args: previous_record),
+        SimpleNamespace(execute=lambda _workspace: (artifact(analysis, kind="CASE_ANALYSIS_SNAPSHOT_V1", artifact_id="CASE-ANALYSIS"), analysis)),
+        SimpleNamespace(now=lambda: datetime(2026, 8, 30, tzinfo=UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
+    )
+
+    with pytest.raises(ValueError, match="immutable proposal"):
+        service.execute(WorkspaceId.parse(planning.workspace_id), planning, 1)
+
+
+def test_get_reopens_same_effective_state_and_marks_changed_upstream_stale():
+    planning = pericial_planning_from_mapping(fixture())
+    planning_record = artifact(planning, kind="PERICIAL_PLANNING_SNAPSHOT_V1", artifact_id="PERICIAL-PLANNING")
+    analysis = analysis_fixture()
+    analysis_record = artifact(analysis, kind="CASE_ANALYSIS_SNAPSHOT_V1", artifact_id="CASE-ANALYSIS")
+    current = GetPericialPlanning(
+        SimpleNamespace(execute=lambda *_args: planning_record),
+        SimpleNamespace(execute=lambda _workspace: (analysis_record, analysis)),
+    )
+
+    _, reopened = current.execute(WorkspaceId.parse(planning.workspace_id))
+
+    assert reopened == planning
+    changed_record = replace_artifact_revision(analysis_record, revision=2)
+    changed = GetPericialPlanning(
+        SimpleNamespace(execute=lambda *_args: planning_record),
+        SimpleNamespace(execute=lambda _workspace: (changed_record, analysis)),
+    )
+    _, stale = changed.execute(WorkspaceId.parse(planning.workspace_id))
+    assert stale.upstream_stale is True
+    assert "Case Analysis artifact revision changed" in stale.upstream_stale_reasons
+
+
+def replace_artifact_revision(record, *, revision):
+    return ArtifactRevision(
+        workspace_id=record.workspace_id,
+        artifact_kind=record.artifact_kind,
+        artifact_id=record.artifact_id,
+        revision_id="77777777-7777-4777-8777-777777777777",
+        revision=revision,
+        created_at=record.created_at,
+        checksum_sha256=record.checksum_sha256,
+        payload=json.loads((ROOT / "tests/fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8")),
+    )
