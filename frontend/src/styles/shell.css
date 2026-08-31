@@ -1091,8 +1091,14 @@ button.text-action {
 .budget-history ol { display: grid; gap: 0; padding: 0; margin: 1rem 0 0; list-style: none; }
 .budget-history li { display: grid; grid-template-columns: 1fr auto auto; gap: 1rem; padding: .7rem 0; border-top: 1px solid var(--color-rule); }
 .budget-history li span, .budget-history time, .budget-empty-line { color: var(--color-slate); font-size: .8rem; }
+.budget-ledger-history { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem 1.25rem; padding: 1.1rem; background: var(--color-paper); box-shadow: 0 0 0 1px rgba(20, 32, 45, .09); }
+.budget-ledger-history h3 { grid-column: 1 / -1; margin: 0 0 .25rem; }
+.budget-ledger-history h4 { margin: .65rem 0 0; color: var(--color-slate); font-size: .78rem; letter-spacing: .05em; text-transform: uppercase; }
+.budget-ledger-history ul { display: grid; gap: 0; padding: 0; margin: 0; list-style: none; }
+.budget-ledger-history li { display: grid; gap: .2rem; padding: .65rem 0; border-top: 1px solid var(--color-rule); }
+.budget-ledger-history li span { color: var(--color-slate); font: .8rem/1.4 var(--font-data); font-variant-numeric: tabular-nums; }
 .budget-empty { display: grid; justify-items: start; gap: .75rem; max-width: 44rem; }
 .budget-empty h2, .budget-empty p { margin: 0; }
 @media (max-width: 840px) { .budget-balance, .budget-commands { grid-template-columns: 1fr 1fr; } .budget-balance > div:nth-child(2) { border-right: 0; } }
-@media (max-width: 560px) { .budget-header { align-items: stretch; flex-direction: column; } .budget-header strong { width: fit-content; } .budget-balance, .budget-commands { grid-template-columns: 1fr; } .budget-balance > div { border-right: 0; } .budget-history li { grid-template-columns: 1fr; gap: .2rem; } }
+@media (max-width: 560px) { .budget-header { align-items: stretch; flex-direction: column; } .budget-header strong { width: fit-content; } .budget-balance, .budget-commands, .budget-ledger-history { grid-template-columns: 1fr; } .budget-ledger-history h3 { grid-column: auto; } .budget-balance > div { border-right: 0; } .budget-history li { grid-template-columns: 1fr; gap: .2rem; } }
 @media (prefers-reduced-motion: reduce) { .budget-commands details, .budget-commands summary { scroll-behavior: auto; transition: none; } }
