@@ -445,22 +445,36 @@ class InspectionSession:
         for records in (self.observations, self.statements, self.measurements, self.photos, self.videos, self.sketches, self.environmental_conditions, self.access_occurrences, self.limitations, self.evidence_candidates):
             if any(record.inspection_item_id not in item_ids for record in records):
                 raise ValueError("inspection record contains dangling item link")
-        index = {record_id for group in collections for record in group for record_id in (getattr(record, identity_names[collections.index(group)]),)}
-        if any(not set((*item.observation_ids, *item.measurement_ids, *item.photo_ids, *item.limitation_ids)) <= index for item in self.items):
-            raise ValueError("inspection item contains dangling record link")
+        observation_ids = {item.observation_id for item in self.observations}
+        measurement_ids = {item.measurement_id for item in self.measurements}
+        photo_ids = {item.photo_id for item in self.photos}
+        limitation_ids = {item.limitation_id for item in self.limitations}
+        if any(
+            not set(item.observation_ids) <= observation_ids
+            or not set(item.measurement_ids) <= measurement_ids
+            or not set(item.photo_ids) <= photo_ids
+            or not set(item.limitation_ids) <= limitation_ids
+            for item in self.items
+        ):
+            raise ValueError("inspection item contains a type-invalid record link")
         method_ids = {item.method_id for item in self.methods}
         instrument_ids = {item.instrument_id for item in self.instruments}
         location_ids = {item.location_id for item in self.locations}
-        measurement_ids = {item.measurement_id for item in self.measurements}
         if any(item.method_id not in method_ids or item.instrument_id not in instrument_ids or item.location_id not in location_ids for item in self.measurements):
             raise ValueError("measurement authority link is invalid")
+        if any(item.location_id not in location_ids for item in (*self.observations, *self.photos)):
+            raise ValueError("field record location link is invalid")
         if any(not set(series.measurement_ids) <= measurement_ids for series in self.measurement_series):
             raise ValueError("measurement series link is invalid")
         if any(item.instrument_id not in instrument_ids for item in self.instrument_statuses):
             raise ValueError("instrument status link is invalid")
-        limitation_ids = {item.limitation_id for item in self.limitations}
         if set(self.coverage.limitation_ids) != limitation_ids or any(item.limitation_id not in limitation_ids for item in self.missing_items):
             raise ValueError("coverage limitation propagation is invalid")
+        evidence_source_ids = observation_ids | measurement_ids | photo_ids | {
+            item.statement_id for item in self.statements
+        } | {item.video_id for item in self.videos} | {item.sketch_id for item in self.sketches}
+        if any(not set(item.source_record_ids) <= evidence_source_ids for item in self.evidence_candidates):
+            raise ValueError("field evidence candidate contains an invalid source record")
         counts = {state: sum(item.state is state for item in self.items) for state in ExecutionState}
         expected = (len(self.items), counts[ExecutionState.PENDING], counts[ExecutionState.COMPLETED], counts[ExecutionState.PARTIAL], counts[ExecutionState.NOT_EXECUTED], counts[ExecutionState.NOT_APPLICABLE], counts[ExecutionState.BLOCKED])
         actual = (self.coverage.total_items, self.coverage.pending_items, self.coverage.completed_items, self.coverage.partial_items, self.coverage.not_executed_items, self.coverage.not_applicable_items, self.coverage.blocked_items)

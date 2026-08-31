@@ -182,6 +182,27 @@ def test_session_rejects_duplicate_ids_dangling_links_and_workspace_mismatch():
         inspection_session_from_mapping(raw)
 
 
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    (
+        (("items", 0, "observation_ids", 0), "MEASUREMENT-001"),
+        (("items", 1, "measurement_ids", 0), "PHOTO-001"),
+        (("items", 2, "photo_ids", 0), "OBS-001"),
+        (("items", 2, "limitation_ids", 0), "PHOTO-001"),
+        (("evidence_candidates", 0, "source_record_ids", 0), "UNKNOWN"),
+        (("photos", 0, "location_id"), "UNKNOWN"),
+    ),
+)
+def test_graph_links_are_type_exact(path, replacement):
+    raw = payload()
+    target = raw
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = replacement
+    with pytest.raises(ValueError):
+        inspection_session_from_mapping(raw)
+
+
 def test_save_binds_latest_approved_plan_and_verifies_private_photo_authority():
     session = inspection_session_from_mapping(payload())
     upstream = planning()
