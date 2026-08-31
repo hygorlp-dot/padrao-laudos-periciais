@@ -30,6 +30,7 @@ from scripts.backend_contract.delivery_renderer import (
 from scripts.backend_contract.application.delivery_foundation import (
     ReviewDeliverySnapshot,
     build_delivery_binding,
+    mark_delivery_authority_unavailable,
     reconcile_delivery,
 )
 from scripts.backend_contract.case_analysis import case_analysis_from_mapping
@@ -140,6 +141,21 @@ def test_stale_overrides_final_state_and_cannot_be_silently_cleared() -> None:
     assert value.state is DeliveryState.STALE
     with pytest.raises(ValueError, match="stale"):
         replace(value, state=DeliveryState.DRAFT)
+
+
+def test_unavailable_current_authority_reopens_as_stale_instead_of_hiding_delivery() -> None:
+    delivered = snapshot(
+        decisions=(
+            decision(DeliveryAction.MARK_READY_FOR_REVIEW, index=1, previous=None),
+            decision(DeliveryAction.APPROVE, index=2, previous="DECISION-1"),
+            decision(DeliveryAction.FINALIZE, index=3, previous="DECISION-2"),
+            decision(DeliveryAction.DELIVER, index=4, previous="DECISION-3"),
+        ), artifacts=(artifact(),), state=DeliveryState.DELIVERED,
+    )
+    stale = mark_delivery_authority_unavailable(delivered)
+    assert stale.state is DeliveryState.STALE
+    assert stale.stale_origin_state is DeliveryState.DELIVERED
+    assert stale.stale_reasons == ("UPSTREAM_AUTHORITY_UNAVAILABLE",)
 
 
 def test_artifact_filename_and_content_identity_are_unique() -> None:

@@ -125,6 +125,15 @@ def reconcile_delivery(snapshot: DeliverySnapshot, current: DeliveryBinding) -> 
     return replace(snapshot, state=DeliveryState.STALE, stale_reasons=reasons, stale_origin_state=origin)
 
 
+def mark_delivery_authority_unavailable(snapshot: DeliverySnapshot) -> DeliverySnapshot:
+    if snapshot.state is DeliveryState.STALE:
+        return snapshot
+    return replace(
+        snapshot, state=DeliveryState.STALE,
+        stale_reasons=("UPSTREAM_AUTHORITY_UNAVAILABLE",), stale_origin_state=snapshot.state,
+    )
+
+
 def _current(workspace_id: object, services: tuple[object, ...]):
     records_and_values = tuple(service.execute(workspace_id) for service in services)
     return (*records_and_values, build_delivery_binding(
@@ -207,7 +216,10 @@ class GetDeliverySnapshot:
     def execute(self, workspace_id):
         record = self.get_latest_revision.execute(workspace_id, DELIVERY_SNAPSHOT_ARTIFACT_KIND, DELIVERY_SNAPSHOT_ARTIFACT_ID)
         snapshot = validated_delivery_snapshot_from_mapping(thaw_payload(record.payload))
-        current = _current(workspace_id, (self.get_case_analysis, self.get_planning, self.get_inspection, self.get_technical, self.get_report))
+        try:
+            current = _current(workspace_id, (self.get_case_analysis, self.get_planning, self.get_inspection, self.get_technical, self.get_report))
+        except ValueError:
+            return record, mark_delivery_authority_unavailable(snapshot)
         return record, reconcile_delivery(snapshot, current[-1])
 
 
