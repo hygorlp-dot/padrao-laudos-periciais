@@ -6,6 +6,7 @@ from dataclasses import asdict
 import hashlib
 import json
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -229,6 +230,17 @@ def test_device_registry_revocation_is_device_wide_and_persistent(tmp_path: Path
             reopened.vault_for(workspace, reopened.device_id)
 
 
+def test_device_registry_root_replacement_cannot_bypass_revocation(tmp_path: Path) -> None:
+    registry = DeviceOfflineVaultRegistry(tmp_path)
+    device_id = registry.device_id
+    registry.revoke_device()
+    root = tmp_path / "offline-field-v1"
+    root.rename(tmp_path / "retired-registry")
+    root.mkdir()
+    with pytest.raises(PermissionError, match="identity"):
+        registry.vault_for(WORKSPACE_ID, device_id)
+
+
 def test_device_vault_revalidates_root_identity_on_every_operation(tmp_path: Path) -> None:
     root = tmp_path / "vault"
     vault = DeviceOfflineVault(root, key=b"i" * 32, device_id="DEVICE-001", workspace_id=WORKSPACE_ID)
@@ -236,6 +248,42 @@ def test_device_vault_revalidates_root_identity_on_every_operation(tmp_path: Pat
     root.mkdir()
     with pytest.raises(PermissionError, match="identity"):
         vault.save(offline_package_from_mapping(package_mapping()))
+
+
+def test_forged_receipt_cannot_hide_pending_offline_capture(tmp_path: Path) -> None:
+    package = offline_package_from_mapping(package_mapping())
+    vault = DeviceOfflineVault(tmp_path, key=b"f" * 32, device_id=package.device_id, workspace_id=package.workspace_id)
+    vault.save(package)
+    session_hash = hashlib.sha256(package.device_session_id.encode("utf-8")).hexdigest()
+    (tmp_path / f"{session_hash}.999.receipt").write_bytes(b"forged")
+    with pytest.raises(ValueError, match="receipt storage is corrupt"):
+        vault.list_pending_packages()
+
+
+def test_revocation_linearizes_after_complete_package_read(tmp_path: Path, monkeypatch) -> None:
+    package = offline_package_from_mapping(package_mapping())
+    vault = DeviceOfflineVault(tmp_path, key=b"l" * 32, device_id=package.device_id, workspace_id=package.workspace_id)
+    vault.save(package)
+    decoding = Event()
+    release = Event()
+    original_decode = DeviceOfflineVault._decode_package
+
+    def delayed_decode(self, payload, key):
+        decoding.set()
+        assert release.wait(timeout=5)
+        return original_decode(self, payload, key)
+
+    monkeypatch.setattr(DeviceOfflineVault, "_decode_package", delayed_decode)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        loading = pool.submit(vault.load, package.package_id)
+        assert decoding.wait(timeout=5)
+        revoking = pool.submit(vault.revoke)
+        assert not revoking.done()
+        release.set()
+        assert loading.result(timeout=5) == package
+        revoking.result(timeout=5)
+    with pytest.raises(PermissionError, match="revoked"):
+        vault.load(package.package_id)
 
 
 @pytest.mark.parametrize(
