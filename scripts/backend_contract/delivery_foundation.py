@@ -276,9 +276,9 @@ class DeliverySnapshot:
             expected_state = _TRANSITIONS[transition_index][1]
         if self.state is not expected_state:
             raise ValueError("delivery state diverges from explicit decisions")
-        if self.state in {DeliveryState.FINALIZED, DeliveryState.DELIVERED, DeliveryState.SUPERSEDED}:
+        if self.state in {DeliveryState.READY_FOR_REVIEW, DeliveryState.APPROVED, DeliveryState.FINALIZED, DeliveryState.DELIVERED, DeliveryState.SUPERSEDED}:
             if not self.artifacts or not any(item.role is DeliveryRole.MAIN_REPORT for item in self.artifacts):
-                raise ValueError("final delivery requires a main artifact")
+                raise ValueError("reviewable delivery requires a rendered main artifact")
 
 
 T = TypeVar("T")

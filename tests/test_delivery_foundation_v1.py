@@ -129,6 +129,12 @@ def test_finalization_requires_hashed_main_artifact_and_exact_manifest() -> None
         )
 
 
+def test_review_cannot_approve_metadata_without_rendered_bytes() -> None:
+    ready = decision(DeliveryAction.MARK_READY_FOR_REVIEW, index=1, previous=None)
+    with pytest.raises(ValueError, match="rendered main artifact"):
+        snapshot(decisions=(ready,), state=DeliveryState.READY_FOR_REVIEW)
+
+
 def test_stale_overrides_final_state_and_cannot_be_silently_cleared() -> None:
     value = replace(snapshot(), state=DeliveryState.STALE, stale_reasons=("REPORT_DIGEST_CHANGED",), stale_origin_state=DeliveryState.DRAFT)
     assert value.state is DeliveryState.STALE
