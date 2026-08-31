@@ -21,14 +21,14 @@ export type TechnicalSnapshot = {
 export type TechnicalEnvelope = { revision: number; updated_at: string; snapshot: TechnicalSnapshot };
 export class TechnicalSnapshotApiError extends Error { constructor(readonly kind: "not-found" | "invalid" | "unavailable") { super(kind); } }
 const endpoint = (workspaceId: string) => `/app-api/v1/workspaces/${encodeURIComponent(workspaceId)}/technical-snapshot`;
-function parse(value: unknown): TechnicalEnvelope {
+function parse(value: unknown, workspaceId: string): TechnicalEnvelope {
   if (!value || typeof value !== "object") throw new TechnicalSnapshotApiError("invalid");
   const envelope = value as TechnicalEnvelope; const snapshot = envelope.snapshot;
   const arrays = ["evidence_items", "source_links", "evidence_assessments", "method_applications", "method_inputs", "method_outputs", "finding_proposals", "findings", "dependencies", "conflicts", "limitations", "uncertainties", "question_links", "decisions", "upstream_stale_reasons"] as const;
-  if (!Number.isInteger(envelope.revision) || envelope.revision < 1 || !snapshot || snapshot.schema_version !== "1.0.0" || typeof snapshot.snapshot_id !== "string" || arrays.some((name) => !Array.isArray(snapshot[name]))) throw new TechnicalSnapshotApiError("invalid");
+  if (!Number.isInteger(envelope.revision) || envelope.revision < 1 || !snapshot || snapshot.schema_version !== "1.0.0" || typeof snapshot.snapshot_id !== "string" || snapshot.workspace_id !== workspaceId || snapshot.source_snapshot?.workspace_id !== workspaceId || arrays.some((name) => !Array.isArray(snapshot[name]))) throw new TechnicalSnapshotApiError("invalid");
   return envelope;
 }
-async function decode(response: Response) { if (response.status === 404) throw new TechnicalSnapshotApiError("not-found"); if (!response.ok) throw new TechnicalSnapshotApiError("unavailable"); return parse(await response.json()); }
-export async function getTechnicalSnapshot(workspaceId: string, signal?: AbortSignal) { return decode(await fetch(endpoint(workspaceId), { method: "GET", cache: "no-store", credentials: "same-origin", signal })); }
-export async function startTechnicalSnapshot(workspaceId: string) { return decode(await fetch(endpoint(workspaceId), { method: "POST", cache: "no-store", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: "{}" })); }
-export async function saveTechnicalSnapshot(workspaceId: string, expectedRevision: number, snapshot: TechnicalSnapshot) { return decode(await fetch(endpoint(workspaceId), { method: "PUT", cache: "no-store", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: expectedRevision, snapshot }) })); }
+async function decode(response: Response, workspaceId: string) { if (response.status === 404) throw new TechnicalSnapshotApiError("not-found"); if (!response.ok) throw new TechnicalSnapshotApiError("unavailable"); return parse(await response.json(), workspaceId); }
+export async function getTechnicalSnapshot(workspaceId: string, signal?: AbortSignal) { return decode(await fetch(endpoint(workspaceId), { method: "GET", cache: "no-store", credentials: "same-origin", signal }), workspaceId); }
+export async function startTechnicalSnapshot(workspaceId: string) { return decode(await fetch(endpoint(workspaceId), { method: "POST", cache: "no-store", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: "{}" }), workspaceId); }
+export async function saveTechnicalSnapshot(workspaceId: string, expectedRevision: number, snapshot: TechnicalSnapshot) { return decode(await fetch(endpoint(workspaceId), { method: "PUT", cache: "no-store", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: expectedRevision, snapshot }) }), workspaceId); }

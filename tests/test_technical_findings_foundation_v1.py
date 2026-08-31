@@ -28,6 +28,7 @@ from scripts.backend_contract.technical_findings import (
     TechnicalFinding,
     TechnicalFindingProposal,
     TechnicalSnapshot,
+    ConflictStatus,
     technical_snapshot_from_mapping,
     technical_snapshot_to_mapping,
 )
@@ -355,3 +356,89 @@ def test_source_links_require_the_exact_bound_artifact_revision():
     links[0] = replace(links[0], source_revision=inspection_record.revision + 1)
     with pytest.raises(ValueError, match="source revision"):
         service.execute(WorkspaceId.parse(snapshot.workspace_id), replace(snapshot, source_links=tuple(links)), 3)
+
+
+def test_proposal_support_must_be_consumed_by_its_declared_methods():
+    snapshot = technical_snapshot_from_mapping(payload())
+    proposals = list(snapshot.finding_proposals)
+    proposals[1] = replace(proposals[1], supporting_evidence_ids=("EVIDENCE-CONTRARY-001",))
+    with pytest.raises(ValueError, match="method inputs"):
+        replace(snapshot, finding_proposals=tuple(proposals))
+
+
+def test_conflict_resolution_requires_a_decision_for_the_same_proposal():
+    snapshot = technical_snapshot_from_mapping(payload())
+    conflict = replace(
+        snapshot.conflicts[0], status=ConflictStatus.RESOLVED,
+        resolution_reasoning="ResoluÃ§Ã£o profissional sintÃ©tica.", decision_id="DECISION-002",
+    )
+    coverage = replace(snapshot.coverage, unresolved_conflicts=0)
+    with pytest.raises(ValueError, match="conflict resolution decision"):
+        replace(snapshot, conflicts=(conflict,), coverage=coverage)
+
+
+def test_professional_decisions_require_a_strict_unambiguous_supersession_order():
+    snapshot = technical_snapshot_from_mapping(payload())
+    tied_rejection = ProfessionalDecision(
+        decision_id="DECISION-003", proposal_id="PROPOSAL-001", action=DecisionAction.REJECT,
+        professional_id="PROFESSIONAL-001", reason="RejeiÃ§Ã£o concorrente sintÃ©tica.",
+        modified_proposition=None, timestamp="2026-08-31T10:10:00+00:00",
+        supersedes_decision_id=None,
+    )
+    with pytest.raises(ValueError, match="decision chronology"):
+        replace(snapshot, decisions=snapshot.decisions + (tied_rejection,))
+
+
+@pytest.mark.parametrize(
+    ("source_kind", "source_id"),
+    (("MEASUREMENT", "PHOTO-001"), ("FIELD_RECORD", "11111111-1111-4111-8111-111111111111"), ("CASE_QUESTION", "OCC-CLAIM-001")),
+)
+def test_source_kind_must_match_the_exact_upstream_record_type(source_kind, source_id):
+    case_record, case, inspection_record, inspection = upstreams()
+    service = SaveTechnicalSnapshot(
+        SimpleNamespace(append_if_latest=lambda **_kwargs: SimpleNamespace(revision=4)),
+        SimpleNamespace(execute=lambda _workspace: (case_record, case)),
+        SimpleNamespace(execute=lambda _workspace: (inspection_record, inspection)),
+        nullcontext, SimpleNamespace(now=lambda: datetime.now(UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
+    )
+    snapshot = bound_snapshot()
+    links = list(snapshot.source_links)
+    links[0] = replace(links[0], source_kind=source_kind, source_id=source_id, source_revision=(case_record.revision if source_kind.startswith("CASE_") else inspection_record.revision))
+    with pytest.raises(ValueError, match="source identity"):
+        service.execute(WorkspaceId.parse(snapshot.workspace_id), replace(snapshot, source_links=tuple(links)), 3)
+
+
+def test_rejected_evidence_review_is_preserved_but_cannot_feed_a_method():
+    snapshot = technical_snapshot_from_mapping(payload())
+    assessments = list(snapshot.evidence_assessments)
+    assessments[1] = replace(assessments[1], review_state=EvidenceReviewState.REJECTED)
+    coverage = replace(snapshot.coverage, approved_evidence=1)
+    reviewed = replace(snapshot, evidence_assessments=tuple(assessments), coverage=coverage)
+    assert reviewed.evidence_assessments[1].review_state is EvidenceReviewState.REJECTED
+    inputs = list(reviewed.method_inputs)
+    inputs[0] = replace(inputs[0], evidence_id="EVIDENCE-CONTRARY-001")
+    with pytest.raises(ValueError, match="approved evidence"):
+        replace(reviewed, method_inputs=tuple(inputs))
+
+
+def test_decision_cannot_predate_evidence_review_or_duplicate_an_effective_finding():
+    snapshot = technical_snapshot_from_mapping(payload())
+    decisions = list(snapshot.decisions)
+    decisions[0] = replace(decisions[0], timestamp="2020-01-01T00:00:00+00:00")
+    with pytest.raises(ValueError, match="predates evidence review"):
+        replace(snapshot, decisions=tuple(decisions))
+    duplicate = replace(snapshot.findings[0], finding_id="FINDING-DUPLICATE")
+    coverage = replace(snapshot.coverage, effective_findings=3)
+    with pytest.raises(ValueError, match="unique per proposal"):
+        replace(snapshot, findings=snapshot.findings + (duplicate,), coverage=coverage)
+
+
+def test_finding_dependencies_must_be_acyclic():
+    snapshot = technical_snapshot_from_mapping(payload())
+    inverse = FindingDependency(
+        dependency_id="DEPENDENCY-002", finding_id="FINDING-001",
+        depends_on_finding_id="FINDING-002", rationale="Ciclo sintÃ©tico proibido.",
+    )
+    with pytest.raises(ValueError, match="dependency cycle"):
+        replace(snapshot, dependencies=snapshot.dependencies + (inverse,))

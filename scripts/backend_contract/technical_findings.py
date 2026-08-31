@@ -127,9 +127,9 @@ class EvidenceAssessment:
         _texts(self.limitation_ids)
         _texts(self.contrary_evidence_ids)
         _texts(self.source_link_ids, allow_empty=False)
-        if self.review_state is EvidenceReviewState.APPROVED:
+        if self.review_state in (EvidenceReviewState.APPROVED, EvidenceReviewState.REJECTED):
             if not _text(self.reviewer):
-                raise ValueError("approved evidence requires reviewer")
+                raise ValueError("reviewed evidence requires reviewer")
             _timestamp(self.reviewed_at)
         elif self.reviewer is not None or self.reviewed_at is not None:
             raise ValueError("unreviewed evidence cannot claim professional review")
@@ -373,8 +373,8 @@ class TechnicalSnapshot:
         limitations = {item.limitation_id: item for item in self.limitations}
         for item in self.evidence_items:
             assessment = assessments.get(item.assessment_id)
-            if assessment is None or assessment.evidence_id != item.evidence_id or assessment.review_state is not EvidenceReviewState.APPROVED:
-                raise ValueError("approved evidence requires explicit approved assessment")
+            if assessment is None or assessment.evidence_id != item.evidence_id:
+                raise ValueError("evidence requires explicit assessment")
             if item.proposition != assessment.supported_proposition:
                 raise ValueError("approved evidence proposition diverges from assessment")
             if any(links.get(link_id) is None or links[link_id].evidence_id != item.evidence_id for link_id in assessment.source_link_ids):
@@ -388,10 +388,14 @@ class TechnicalSnapshot:
         if {link_id for item in self.evidence_assessments for link_id in item.source_link_ids} != set(links):
             raise ValueError("orphan source link is invalid")
         methods = {item.method_application_id: item for item in self.method_applications}
+        approved_evidence = {
+            item.evidence_id for item in self.evidence_items
+            if assessments[item.assessment_id].review_state is EvidenceReviewState.APPROVED
+        }
         inputs = {item.input_id: item for item in self.method_inputs}
         outputs = {item.output_id: item for item in self.method_outputs}
         for method in self.method_applications:
-            if any(inputs.get(input_id) is None or inputs[input_id].method_application_id != method.method_application_id or inputs[input_id].evidence_id not in evidence for input_id in method.input_ids):
+            if any(inputs.get(input_id) is None or inputs[input_id].method_application_id != method.method_application_id or inputs[input_id].evidence_id not in approved_evidence for input_id in method.input_ids):
                 raise ValueError("method input requires owned approved evidence")
             if any(outputs.get(output_id) is None or outputs[output_id].method_application_id != method.method_application_id for output_id in method.output_ids):
                 raise ValueError("method output requires owned traceable output")
@@ -404,8 +408,15 @@ class TechnicalSnapshot:
         proposals = {item.proposal_id: item for item in self.finding_proposals}
         uncertainties = {item.uncertainty_id: item for item in self.uncertainties}
         for proposal in self.finding_proposals:
-            if any(method_id not in methods for method_id in proposal.method_application_ids) or any(item_id not in evidence for item_id in proposal.supporting_evidence_ids):
+            if any(method_id not in methods for method_id in proposal.method_application_ids) or any(item_id not in approved_evidence for item_id in proposal.supporting_evidence_ids):
                 raise ValueError("finding proposal skips evidence or method")
+            consumed_evidence = {
+                inputs[input_id].evidence_id
+                for method_id in proposal.method_application_ids
+                for input_id in methods[method_id].input_ids
+            }
+            if not set(proposal.supporting_evidence_ids).issubset(consumed_evidence):
+                raise ValueError("finding supporting evidence must be present in method inputs")
             conflicts = tuple(item for item in self.conflicts if item.proposal_id == proposal.proposal_id)
             conflict_evidence = {item for conflict in conflicts for item in conflict.contrary_evidence_ids}
             if set(proposal.contrary_evidence_ids) != conflict_evidence:
@@ -441,6 +452,30 @@ class TechnicalSnapshot:
                 previous = decisions.get(decision.supersedes_decision_id)
                 if previous is None or previous.proposal_id != decision.proposal_id or datetime.fromisoformat(previous.timestamp) >= datetime.fromisoformat(decision.timestamp):
                     raise ValueError("professional decision supersession is invalid")
+        for proposal_id in proposals:
+            ordered = sorted(
+                (item for item in self.decisions if item.proposal_id == proposal_id),
+                key=lambda item: datetime.fromisoformat(item.timestamp),
+            )
+            if len({item.timestamp for item in ordered}) != len(ordered):
+                raise ValueError("professional decision chronology is ambiguous")
+            for index, decision in enumerate(ordered):
+                expected_previous = None if index == 0 else ordered[index - 1].decision_id
+                if decision.supersedes_decision_id != expected_previous:
+                    raise ValueError("professional decision chronology is not linear")
+            reviewed_at = max(
+                datetime.fromisoformat(assessments[evidence[item_id].assessment_id].reviewed_at)
+                for item_id in proposals[proposal_id].supporting_evidence_ids
+            )
+            if ordered and datetime.fromisoformat(ordered[0].timestamp) <= reviewed_at:
+                raise ValueError("professional decision predates evidence review")
+        for conflict in self.conflicts:
+            if conflict.status is ConflictStatus.RESOLVED:
+                decision = decisions.get(conflict.decision_id)
+                if decision is None or decision.proposal_id != conflict.proposal_id:
+                    raise ValueError("conflict resolution decision must own the proposal")
+        if len({item.proposal_id for item in self.findings}) != len(self.findings) or len({item.decision_id for item in self.findings}) != len(self.findings):
+            raise ValueError("effective finding must be unique per proposal and decision")
         for finding in self.findings:
             proposal = proposals.get(finding.proposal_id)
             decision = decisions.get(finding.decision_id)
@@ -455,12 +490,29 @@ class TechnicalSnapshot:
         for dependency in self.dependencies:
             if dependency.finding_id not in findings or dependency.depends_on_finding_id not in findings:
                 raise ValueError("finding dependency is invalid")
+        dependency_edges = {item.finding_id: set() for item in self.findings}
+        for dependency in self.dependencies:
+            dependency_edges[dependency.finding_id].add(dependency.depends_on_finding_id)
+        visiting: set[str] = set()
+        visited: set[str] = set()
+        def visit(finding_id: str) -> None:
+            if finding_id in visiting:
+                raise ValueError("finding dependency cycle is invalid")
+            if finding_id in visited:
+                return
+            visiting.add(finding_id)
+            for target in dependency_edges[finding_id]:
+                visit(target)
+            visiting.remove(finding_id)
+            visited.add(finding_id)
+        for finding_id in dependency_edges:
+            visit(finding_id)
         for link in self.question_links:
             if link.finding_id not in findings:
                 raise ValueError("question link must target effective finding")
         expected = TechnicalCoverage(
             evidence_items=len(evidence),
-            approved_evidence=len(evidence),
+            approved_evidence=len(approved_evidence),
             method_applications=len(methods),
             finding_proposals=len(proposals),
             effective_findings=len(findings),

@@ -88,26 +88,25 @@ def _reconcile(snapshot: TechnicalSnapshot, *, current: TechnicalSourceSnapshot)
     return replace(snapshot, coverage=coverage, upstream_stale=bool(reasons), upstream_stale_reasons=tuple(reasons))
 
 
-def _identity_values(value: object, field_name: str = "") -> set[str]:
-    found: set[str] = set()
-    if type(value) is dict:
-        for name, item in value.items():
-            found.update(_identity_values(item, name))
-    elif type(value) is list:
-        for item in value:
-            found.update(_identity_values(item, field_name))
-    elif type(value) is str and (field_name.endswith("_id") or field_name.endswith("_ids")):
-        found.add(value)
-    return found
-
-
 def _validate_upstream_links(snapshot: TechnicalSnapshot, case: CaseAnalysisSnapshot, inspection: InspectionSession) -> None:
-    case_ids = _identity_values(case_analysis_to_mapping(case))
-    inspection_ids = _identity_values(inspection_session_to_mapping(inspection))
     case_kinds = {"CASE_DOCUMENT", "DOCUMENTED_ALLEGATION", "CASE_CLAIM", "CASE_COUNTERARGUMENT", "CASE_DECISION", "CASE_QUESTION"}
-    inspection_kinds = {"FIELD_RECORD", "FIELD_OBSERVATION", "FIELD_STATEMENT", "MEASUREMENT", "PHOTO_RECORD", "ACCESS_OCCURRENCE", "FIELD_LIMITATION"}
+    authority_by_kind = {
+        "CASE_DOCUMENT": {item.document_id for item in case.documents},
+        "DOCUMENTED_ALLEGATION": {source.occurrence_id for item in case.claims for source in item.provenance},
+        "CASE_CLAIM": {item.item_id for item in case.claims},
+        "CASE_COUNTERARGUMENT": {item.item_id for item in case.counterarguments},
+        "CASE_DECISION": {item.item_id for item in case.decisions},
+        "CASE_QUESTION": {item.item_id for item in case.questions},
+        "FIELD_RECORD": {item.item_id for item in inspection.items},
+        "FIELD_OBSERVATION": {item.observation_id for item in inspection.observations},
+        "FIELD_STATEMENT": {item.statement_id for item in inspection.statements},
+        "MEASUREMENT": {item.measurement_id for item in inspection.measurements},
+        "PHOTO_RECORD": {item.photo_id for item in inspection.photos},
+        "ACCESS_OCCURRENCE": {item.occurrence_id for item in inspection.access_occurrences},
+        "FIELD_LIMITATION": {item.limitation_id for item in inspection.limitations},
+    }
     for link in snapshot.source_links:
-        authority = case_ids if link.source_kind in case_kinds else inspection_ids if link.source_kind in inspection_kinds else set()
+        authority = authority_by_kind.get(link.source_kind, set())
         if link.source_id not in authority:
             raise ValueError("Technical Snapshot source identity is absent from bound upstream")
         expected_revision = (
