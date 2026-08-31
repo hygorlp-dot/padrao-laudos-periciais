@@ -3,23 +3,29 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from decimal import Decimal, InvalidOperation
 import json
 from pathlib import Path
 
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 
 from ..budget_foundation import (
+    BudgetItem,
     CostCategory,
     CourtApprovedAmount,
     Expense,
     FeeProposal,
     FinancialStatus,
     PericialBudget,
+    ProfessionalEffortEstimate,
     ProposalRevision,
     ReceivedPayment,
+    ThirdPartyEstimate,
+    TravelEstimate,
     budget_snapshot_from_mapping,
     budget_snapshot_to_mapping,
     derive_financial_status,
+    normalize_legacy_budget_mapping,
 )
 from .models import thaw_payload
 from .ports import RepositoryConflict
@@ -35,12 +41,23 @@ _HISTORY_FIELDS = (
 )
 
 
+def _derived_total(left: str, right: str) -> str:
+    try:
+        values = (Decimal(left), Decimal(right))
+    except (InvalidOperation, TypeError) as exc:
+        raise ValueError("budget factors must be decimal strings") from exc
+    if any(value.as_tuple().exponent != -2 or not value.is_finite() or value < 0 for value in values):
+        raise ValueError("budget factors require non-negative two-decimal values")
+    return f"{values[0] * values[1]:.2f}"
+
+
 def _payload(value: object) -> object:
     return value if type(value) is dict else thaw_payload(value)
 
 
 def validated_budget_snapshot_from_mapping(value: object) -> PericialBudget:
     try:
+        value = normalize_legacy_budget_mapping(value)
         _VALIDATOR.validate(value)
         return budget_snapshot_from_mapping(value)
     except (ValidationError, TypeError, ValueError) as exc:
@@ -132,6 +149,77 @@ class StartBudgetSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class AddBudgetItem:
+    get_snapshot: object
+    save_snapshot: object
+    ids: object
+
+    def execute(self, workspace_id, *, expected_revision: int, category: str, description: str, quantity: str, unit_amount: str):
+        record, predecessor = self.get_snapshot.execute(workspace_id)
+        if record.revision != expected_revision:
+            raise RepositoryConflict("expected Budget Snapshot revision is not latest")
+        item = BudgetItem(
+            f"ITEM-{str(self.ids.new_uuid()).upper()}", CostCategory(category), description,
+            quantity, unit_amount, _derived_total(quantity, unit_amount),
+        )
+        value = replace(predecessor, revision=predecessor.revision + 1, items=(*predecessor.items, item))
+        return self.save_snapshot.execute(workspace_id, value, expected_revision), value
+
+
+@dataclass(frozen=True, slots=True)
+class AddProfessionalEffortEstimate:
+    get_snapshot: object
+    save_snapshot: object
+    ids: object
+
+    def execute(self, workspace_id, *, expected_revision: int, professional_id: str, estimated_hours: str, hourly_amount: str):
+        record, predecessor = self.get_snapshot.execute(workspace_id)
+        if record.revision != expected_revision:
+            raise RepositoryConflict("expected Budget Snapshot revision is not latest")
+        estimate = ProfessionalEffortEstimate(
+            f"EFFORT-{str(self.ids.new_uuid()).upper()}", professional_id, estimated_hours,
+            hourly_amount, _derived_total(estimated_hours, hourly_amount),
+        )
+        value = replace(predecessor, revision=predecessor.revision + 1, effort_estimates=(*predecessor.effort_estimates, estimate))
+        return self.save_snapshot.execute(workspace_id, value, expected_revision), value
+
+
+@dataclass(frozen=True, slots=True)
+class AddTravelEstimate:
+    get_snapshot: object
+    save_snapshot: object
+    ids: object
+
+    def execute(self, workspace_id, *, expected_revision: int, distance_km: str, amount_per_km: str, description: str):
+        record, predecessor = self.get_snapshot.execute(workspace_id)
+        if record.revision != expected_revision:
+            raise RepositoryConflict("expected Budget Snapshot revision is not latest")
+        estimate = TravelEstimate(
+            f"TRAVEL-{str(self.ids.new_uuid()).upper()}", distance_km, amount_per_km,
+            _derived_total(distance_km, amount_per_km), description,
+        )
+        value = replace(predecessor, revision=predecessor.revision + 1, travel_estimates=(*predecessor.travel_estimates, estimate))
+        return self.save_snapshot.execute(workspace_id, value, expected_revision), value
+
+
+@dataclass(frozen=True, slots=True)
+class AddThirdPartyEstimate:
+    get_snapshot: object
+    save_snapshot: object
+    ids: object
+
+    def execute(self, workspace_id, *, expected_revision: int, provider_description: str, amount: str, currency: str):
+        record, predecessor = self.get_snapshot.execute(workspace_id)
+        if record.revision != expected_revision:
+            raise RepositoryConflict("expected Budget Snapshot revision is not latest")
+        estimate = ThirdPartyEstimate(
+            f"THIRD-{str(self.ids.new_uuid()).upper()}", provider_description, amount, currency,
+        )
+        value = replace(predecessor, revision=predecessor.revision + 1, third_party_estimates=(*predecessor.third_party_estimates, estimate))
+        return self.save_snapshot.execute(workspace_id, value, expected_revision), value
+
+
+@dataclass(frozen=True, slots=True)
 class AddFeeProposal:
     get_snapshot: object
     save_snapshot: object
@@ -160,10 +248,10 @@ class RecordCourtApproval:
     save_snapshot: object
     ids: object
 
-    def execute(self, workspace_id, *, expected_revision: int, court_decision_id: str, amount: str, currency: str, decided_on: str):
+    def execute(self, workspace_id, *, expected_revision: int, external_court_decision_reference: str, amount: str, currency: str, decided_on: str):
         record, predecessor = self.get_snapshot.execute(workspace_id)
         if record.revision != expected_revision: raise RepositoryConflict("expected Budget Snapshot revision is not latest")
-        approval = CourtApprovedAmount(f"APPROVAL-{str(self.ids.new_uuid()).upper()}", court_decision_id, amount, currency, decided_on)
+        approval = CourtApprovedAmount(f"APPROVAL-{str(self.ids.new_uuid()).upper()}", external_court_decision_reference, amount, currency, decided_on)
         approvals = (*predecessor.court_approvals, approval)
         value = replace(predecessor, revision=predecessor.revision + 1, court_approvals=approvals, status=derive_financial_status(predecessor.proposals, approvals, predecessor.payments))
         return self.save_snapshot.execute(workspace_id, value, expected_revision), value

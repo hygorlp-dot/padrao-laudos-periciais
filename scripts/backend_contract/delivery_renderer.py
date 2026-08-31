@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from hashlib import sha256
 from io import BytesIO
-import re
+import posixpath
 import json
+import re
 import textwrap
+import unicodedata
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageStat, UnidentifiedImageError
+from pypdf import PdfReader
+from pypdf.generic import BooleanObject
+from pypdf.errors import PdfReadError
+from pypdf.generic import ContentStream
 
 from .report_foundation import ReportSnapshot
 from .report_foundation import report_snapshot_to_mapping
@@ -24,10 +31,13 @@ from .report_template import (
 _DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _DOCM_MEDIA = "application/vnd.ms-word.document.macroEnabled.12"
 _PDF_MEDIA = "application/pdf"
-DELIVERY_RENDERING_VERSION = "delivery-renderer/1.2.0"
+DELIVERY_RENDERING_VERSION = "delivery-renderer/2.0.0"
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _REL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 _CT = "{http://schemas.openxmlformats.org/package/2006/content-types}"
+_A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+_R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+_V = "{urn:schemas-microsoft-com:vml}"
 ElementTree.register_namespace("w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main")
 
 
@@ -77,7 +87,7 @@ def _canonical_report_lines(report: ReportSnapshot) -> tuple[str, ...]:
 
 
 def render_pdf_candidate(report: ReportSnapshot) -> bytes:
-    """Render the canonical report directly into a deterministic local PDF."""
+    """Render a text-only diagnostic PDF; never use as a final professional artifact."""
     report_digest = sha256(json.dumps(report_snapshot_to_mapping(report), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     lines = []
     for source_line in _canonical_report_lines(report):
@@ -110,7 +120,7 @@ def render_pdf_candidate(report: ReportSnapshot) -> bytes:
         page_ids.append(add(f"<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 {font_id} 0 R >> >> /Contents {content_id} 0 R >>".encode("ascii")))
     kids = " ".join(f"{item} 0 R" for item in page_ids)
     add(f"<< /Type /Pages /Count {len(page_ids)} /Kids [{kids}] >>".encode("ascii"))
-    catalog_id = add(f"<< /Type /Catalog /Pages {pages_id} 0 R /ReportSnapshotSHA256 ({report_digest}) >>".encode("ascii"))
+    catalog_id = add(f"<< /Type /Catalog /Pages {pages_id} 0 R /DiagnosticOnly true /ReportSnapshotSHA256 ({report_digest}) >>".encode("ascii"))
     output = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
     offsets = []
     for index, value in enumerate(objects, 1):
@@ -122,6 +132,181 @@ def render_pdf_candidate(report: ReportSnapshot) -> bytes:
         output.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
     output.extend(f"trailer << /Size {len(objects) + 1} /Root {catalog_id} 0 R >>\nstartxref\n{xref}\n%%EOF".encode("ascii"))
     return bytes(output)
+
+
+def render_final_pdf_candidate(*, word_content: bytes, word_format: str, converter: object) -> bytes:
+    """Convert the exact bound Word artifact through an explicitly local converter."""
+    conversion_copy, conversion_format = safe_pdf_conversion_copy(word_content, word_format)
+    try:
+        output = converter.convert(conversion_copy, conversion_format)
+    except (OSError, RuntimeError, TimeoutError) as exc:
+        raise ValueError("local Office PDF conversion unavailable") from exc
+    if b"/DiagnosticOnly true" in output:
+        raise ValueError("diagnostic PDF cannot be finalized")
+    validate_final_artifact(output, "PDF")
+    _validate_pdf_fidelity(conversion_copy, output)
+    return output
+
+
+def _normalized_visible_text(value: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", value).split()).casefold()
+
+
+def _lexical_tokens(value: str) -> tuple[str, ...]:
+    return tuple(re.findall(r"\w+|[^\w\s]", _normalized_visible_text(value), flags=re.UNICODE))
+
+
+def _image_signature(image: Image.Image) -> tuple[float, tuple[float, ...], tuple[float, ...], tuple[bool, ...]]:
+    rgb = image.convert("RGB").resize((32, 32))
+    statistics = ImageStat.Stat(rgb)
+    gray = rgb.convert("L").resize((16, 16))
+    pixels = tuple(gray.get_flattened_data())
+    mean = sum(pixels) / len(pixels)
+    return (
+        round(image.width / max(image.height, 1), 2),
+        tuple(round(value, 1) for value in statistics.mean),
+        tuple(round(value, 1) for value in statistics.stddev),
+        tuple(value >= mean for value in pixels),
+    )
+
+
+def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple]) -> bool:
+    def matches(source: tuple, candidate: tuple) -> bool:
+        return (
+            abs(source[0] - candidate[0]) <= 0.05
+            and all(abs(a - b) <= 12 for a, b in zip(source[1], candidate[1]))
+            and all(abs(a - b) <= 12 for a, b in zip(source[2], candidate[2]))
+            and sum(a != b for a, b in zip(source[3], candidate[3])) <= 16
+        )
+
+    return len(sources) == len(candidates) and all(
+        matches(source, candidate) for source, candidate in zip(sources, candidates)
+    )
+
+
+def _ordered_word_image_signatures(package: ZipFile, xml_roots: dict[str, ElementTree.Element]) -> list[tuple]:
+    ordered: list[tuple] = []
+    def priority(name: str) -> tuple[int, str]:
+        return (0 if "/header" in name else 1 if name == "word/document.xml" else 2, name)
+    for name in sorted(xml_roots, key=priority):
+        base = posixpath.dirname(name)
+        relationships_name = f"{base}/_rels/{posixpath.basename(name)}.rels"
+        if relationships_name not in package.namelist():
+            continue
+        relationships = ElementTree.fromstring(package.read(relationships_name))
+        targets = {
+            item.attrib.get("Id"): posixpath.normpath(posixpath.join(base, item.attrib.get("Target", "")))
+            for item in relationships.iter(f"{_REL}Relationship")
+            if item.attrib.get("TargetMode", "").lower() != "external"
+        }
+        for image_node in xml_roots[name].iter():
+            if image_node.tag == f"{_A}blip":
+                relationship_id = image_node.attrib.get(f"{_R}embed")
+            elif image_node.tag == f"{_V}imagedata":
+                relationship_id = image_node.attrib.get(f"{_R}id")
+            else:
+                continue
+            target = targets.get(relationship_id)
+            if target and target in package.namelist():
+                with Image.open(BytesIO(package.read(target))) as image:
+                    ordered.append(_image_signature(image))
+    return ordered
+
+
+def _ordered_pdf_image_signatures(page: object, reader: PdfReader) -> list[tuple]:
+    images = {str(name): page.images[name].image for name in page.images.keys()}
+    ordered: list[tuple] = []
+    for operands, operator in ContentStream(page.get_contents(), reader).operations:
+        if operator != b"Do" or not operands:
+            continue
+        image = images.get(str(operands[0]))
+        if image is not None:
+            ordered.append(_image_signature(image))
+    return ordered
+
+
+def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
+    """Reject converter output that is not observably derived from the bound Word."""
+    try:
+        with ZipFile(BytesIO(word_content)) as package:
+            word_fragments: list[str] = []
+            document_fragments: list[str] = []
+            repeatable_fragments: list[str] = []
+            xml_roots: dict[str, ElementTree.Element] = {}
+            table_rows: list[tuple[str, ...]] = []
+            for name in package.namelist():
+                if not (name.startswith("word/") and name.endswith(".xml")):
+                    continue
+                root = ElementTree.fromstring(package.read(name))
+                xml_roots[name] = root
+                fragments = [item.text for item in root.iter(f"{_W}t") if item.text and item.text.strip()]
+                word_fragments.extend(fragments)
+                if name == "word/document.xml":
+                    document_fragments.extend(fragments)
+                elif name.startswith(("word/header", "word/footer")):
+                    repeatable_fragments.extend(fragments)
+                for row in root.iter(f"{_W}tr"):
+                    cells = tuple(
+                        _normalized_visible_text(" ".join(item.text or "" for item in cell.iter(f"{_W}t")))
+                        for cell in row.findall(f"{_W}tc")
+                    )
+                    if len(cells) > 1 and all(cells):
+                        table_rows.append(cells)
+            word_images = _ordered_word_image_signatures(package, xml_roots)
+        reader = PdfReader(BytesIO(pdf_content), strict=True)
+        extracted_pages: list[str] = []
+        positioned: list[tuple[int, str, float, float]] = []
+        pdf_images: list[tuple[float, tuple[float, ...], tuple[float, ...], tuple[bool, ...]]] = []
+        for page_number, page in enumerate(reader.pages):
+            def visitor(text: str, _cm: object, tm: list[float], _font: object, _size: float) -> None:
+                normalized = _normalized_visible_text(text)
+                if normalized:
+                    positioned.append((page_number, normalized, float(tm[4]), float(tm[5])))
+            extracted_pages.append(page.extract_text(visitor_text=visitor) or "")
+            pdf_images.extend(_ordered_pdf_image_signatures(page, reader))
+        pdf_text = _normalized_visible_text("\n".join(extracted_pages))
+    except (BadZipFile, KeyError, ElementTree.ParseError, PdfReadError, OSError, ValueError) as exc:
+        raise ValueError("final PDF fidelity cannot be verified") from exc
+    required = {_normalized_visible_text(item) for item in word_fragments if _normalized_visible_text(item)}
+    source_tokens = _lexical_tokens(" ".join(word_fragments))
+    pdf_tokens = _lexical_tokens(pdf_text)
+    source_counts = Counter(source_tokens)
+    pdf_counts = Counter(pdf_tokens)
+    repeatable_counts = Counter(_lexical_tokens(" ".join(repeatable_fragments)))
+    page_repetitions = max(len(reader.pages) - 1, 0)
+    token_counts_match = all(
+        count <= source_counts[token] + repeatable_counts[token] * page_repetitions
+        for token, count in pdf_counts.items()
+    )
+    document_tokens = _lexical_tokens(" ".join(document_fragments))
+    token_cursor = iter(pdf_tokens)
+    document_order_matches = all(any(candidate == token for candidate in token_cursor) for token in document_tokens)
+
+    images_match = _ordered_image_signatures_match(word_images, pdf_images)
+    tables_match = all(
+        any(
+            all(
+                any(
+                    candidate_index != anchor_index and cell in text and page == anchor_page
+                    and x > anchor_x and abs(y - anchor_y) <= 3
+                    for candidate_index, (page, text, x, y) in enumerate(positioned)
+                )
+                for cell in row[1:]
+            )
+            for anchor_index, (anchor_page, anchor_text, anchor_x, anchor_y) in enumerate(positioned)
+            if row[0] in anchor_text
+        )
+        for row in table_rows
+    )
+    if (
+        not required
+        or any(item not in pdf_text for item in required)
+        or not token_counts_match
+        or not document_order_matches
+        or not images_match
+        or not tables_match
+    ):
+        raise ValueError("final PDF does not faithfully represent the bound Word artifact")
 
 
 def _inject_canonical_report(content: bytes, report: ReportSnapshot) -> bytes:
@@ -173,13 +358,33 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
             raise ValueError("final Word artifact macro identity changed")
         media_type = _DOCM_MEDIA if has_macro else _DOCX_MEDIA
     elif output_format == "PDF":
-        stripped = content.rstrip()
-        if not content.startswith(b"%PDF-") or not stripped.endswith(b"%%EOF") or re.search(rb"/Type\s*/Page\b", content) is None:
+        try:
+            reader = PdfReader(BytesIO(content), strict=True)
+            if not reader.pages:
+                raise ValueError("final PDF artifact is invalid")
+            for page in reader.pages:
+                _ = page.mediabox
+        except (PdfReadError, OSError, ValueError, KeyError) as exc:
+            raise ValueError("final PDF artifact is invalid") from exc
+        if not content.startswith(b"%PDF-") or not content.rstrip().endswith(b"%%EOF"):
             raise ValueError("final PDF artifact is invalid")
         media_type = _PDF_MEDIA
     else:
         raise ValueError("unsupported final artifact format")
     return sha256(content).hexdigest(), len(content), media_type
+
+
+def validate_delivery_artifact(content: bytes, output_format: str) -> tuple[str, int, str]:
+    """Validate bytes admitted to a professional Delivery package."""
+    result = validate_final_artifact(content, output_format)
+    if output_format == "PDF":
+        reader = PdfReader(BytesIO(content), strict=True)
+        marker = reader.trailer["/Root"].get("/DiagnosticOnly")
+        if marker is not None:
+            marker = marker.get_object()
+        if isinstance(marker, BooleanObject) and marker.value is True:
+            raise ValueError("diagnostic PDF cannot be a Delivery artifact")
+    return result
 
 
 def validate_supporting_artifact(content: bytes, media_type: str) -> tuple[str, int, str]:
@@ -232,6 +437,6 @@ def safe_pdf_conversion_copy(content: bytes, output_format: str) -> tuple[bytes,
 def verify_reopened_artifact(
     *, content: bytes, output_format: str, expected_size: int, expected_sha256: str,
 ) -> None:
-    digest, size, _ = validate_final_artifact(content, output_format)
+    digest, size, _ = validate_delivery_artifact(content, output_format)
     if size != expected_size or digest != expected_sha256:
         raise ValueError("reopened artifact bytes diverge from finalized manifest")

@@ -7,10 +7,15 @@ import { BudgetFoundationView } from "./BudgetFoundationView";
 const ID = "11111111-1111-4111-8111-111111111111";
 const snapshot = {
   schema_version: "1.0.0", budget_id: "BUDGET-1", revision: 4, workspace_id: ID,
-  process_id: "PROCESS-1", appointment_id: null, items: [], effort_estimates: [], travel_estimates: [], third_party_estimates: [], expenses: [],
+  process_id: "PROCESS-1", appointment_id: null,
+  items: [{ item_id: "ITEM-1", category: "EQUIPMENT", description: "Locação de câmera térmica", quantity: "2.00", unit_amount: "175.50", total_amount: "351.00" }],
+  effort_estimates: [{ estimate_id: "EFFORT-1", professional_id: "ASSISTANT-1", estimated_hours: "3.50", hourly_amount: "80.00", total_amount: "280.00" }],
+  travel_estimates: [{ estimate_id: "TRAVEL-1", distance_km: "125.40", amount_per_km: "1.75", total_amount: "219.45", description: "Diligência externa" }],
+  third_party_estimates: [{ estimate_id: "THIRD-1", provider_description: "Laboratório acreditado", amount: "900.00", currency: "BRL" }],
+  expenses: [{ expense_id: "EXPENSE-1", category: "TRAVEL", amount: "100.00", currency: "BRL", incurred_on: "2026-09-01", description: "Pedágio da diligência" }],
   proposals: [{ proposal_id: "PROPOSAL-1", revision: 1, amount: "3000.00", currency: "BRL", proposed_at: "2026-08-31T12:00:00Z", rationale: "Proposta inicial" }],
-  proposal_revisions: [{ revision_id: "REV-1", proposal_id: "PROPOSAL-1", revision: 1, supersedes_revision_id: null, reason: "Proposta inicial", revised_at: "2026-08-31T12:00:00Z" }],
-  court_approvals: [{ approval_id: "APPROVAL-1", court_decision_id: "DECISION-1", amount: "2500.00", currency: "BRL", decided_on: "2026-09-01" }],
+  proposal_revisions: [{ revision_id: "REV-1", proposal_id: "PROPOSAL-1", revision: 1, supersedes_revision_id: null, reason: "Emissão original", revised_at: "2026-08-31T12:00:00Z" }],
+  court_approvals: [{ approval_id: "APPROVAL-1", external_court_decision_reference: "Mov. 42, decisão de honorários", amount: "2500.00", currency: "BRL", decided_on: "2026-09-01" }],
   payments: [{ payment_id: "PAYMENT-1", amount: "1000.00", currency: "BRL", received_on: "2026-09-02", reference: "Depósito" }],
   status: "PARTIALLY_RECEIVED", outstanding: { amount: "1500.00", currency: "BRL" },
 };
@@ -26,7 +31,7 @@ test("shows proposal, court approval, received and outstanding as distinct finan
   expect(screen.getByText("Proposta profissional")).toBeInTheDocument();
   expect(screen.getByText("Valor aprovado pelo Juízo")).toBeInTheDocument();
   expect(screen.getByText("Saldo pendente")).toBeInTheDocument();
-  expect(screen.getByText(/R\$\s*3\.000,00/)).toBeInTheDocument();
+  expect(screen.getAllByText(/R\$\s*3\.000,00/).length).toBeGreaterThan(0);
   expect(screen.getAllByText(/R\$\s*2\.500,00/).length).toBeGreaterThan(0);
   expect(screen.queryByText(/confiança técnica|mérito técnico/i)).not.toBeInTheDocument();
 });
@@ -36,7 +41,7 @@ test("renders large canonical monetary strings without floating-point loss", asy
   const item = { revision: 4, updated_at: "2026-09-02T12:00:00Z", snapshot: exact };
   vi.stubGlobal("fetch", vi.fn((input) => Promise.resolve(String(input).endsWith("/history") ? response(200, { items: [item] }) : response(200, item))));
   render(<BudgetFoundationView workspaceId={ID} />);
-  expect(await screen.findByText(/R\$\s*9\.999\.999\.999\.999\.999,99/)).toBeInTheDocument();
+  expect((await screen.findAllByText(/R\$\s*9\.999\.999\.999\.999\.999,99/)).length).toBeGreaterThan(0);
 });
 
 test("starts an empty financial ledger without requiring a technical decision", async () => {
@@ -70,4 +75,36 @@ test("closes a fully received budget through an explicit terminal command", asyn
   await user.click(await screen.findByRole("button", { name: "Encerrar orçamento quitado" }));
   expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/budget-snapshot/close"), expect.objectContaining({ method: "POST" }));
   expect(await screen.findByText("CLOSED")).toBeInTheDocument();
+});
+
+test("makes every authorized Stage 9 budget operation reachable through explicit forms", async () => {
+  const item = { revision: 4, updated_at: "2026-09-02T12:00:00Z", snapshot };
+  vi.stubGlobal("fetch", vi.fn((input) => Promise.resolve(String(input).endsWith("/history") ? response(200, { items: [item] }) : response(200, item))));
+  render(<BudgetFoundationView workspaceId={ID} />);
+  expect(await screen.findByRole("button", { name: "Registrar item orçamentário" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Registrar esforço profissional" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Registrar estimativa de viagem" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Registrar estimativa de terceiro" })).toBeInTheDocument();
+});
+
+test("closed budget removes every mutation action while preserving detailed financial history", async () => {
+  const closed = { revision: 8, updated_at: "2026-09-04T12:00:00Z", snapshot: { ...snapshot, revision: 8, payments: [{ ...snapshot.payments[0], amount: "2500.00" }], outstanding: { amount: "0.00", currency: "BRL" }, status: "CLOSED" } };
+  vi.stubGlobal("fetch", vi.fn((input) => Promise.resolve(String(input).endsWith("/history") ? response(200, { items: [closed] }) : response(200, closed))));
+  render(<BudgetFoundationView workspaceId={ID} />);
+  expect(await screen.findByText("Orçamento encerrado")).toBeInTheDocument();
+  expect(screen.queryByText("Nova proposta")).not.toBeInTheDocument();
+  expect(screen.queryByText("Aprovação judicial")).not.toBeInTheDocument();
+  expect(screen.queryByText("Despesa efetiva")).not.toBeInTheDocument();
+  expect(screen.queryByText("Recebimento")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /registrar|encerrar/i })).not.toBeInTheDocument();
+  expect(screen.getByText("Locação de câmera térmica")).toBeInTheDocument();
+  expect(screen.getByText("ASSISTANT-1")).toBeInTheDocument();
+  expect(screen.getByText("Diligência externa")).toBeInTheDocument();
+  expect(screen.getByText("Laboratório acreditado")).toBeInTheDocument();
+  expect(screen.getByText("Pedágio da diligência")).toBeInTheDocument();
+  expect(screen.getByText("Proposta inicial")).toBeInTheDocument();
+  expect(screen.getByText("Emissão original")).toBeInTheDocument();
+  expect(screen.getByText("Mov. 42, decisão de honorários")).toBeInTheDocument();
+  expect(screen.getByText("Depósito")).toBeInTheDocument();
+  expect(screen.getByText("Histórico preservado · 1 revisões")).toBeInTheDocument();
 });

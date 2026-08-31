@@ -25,7 +25,7 @@ from ..delivery_foundation import (
     delivery_snapshot_from_mapping,
     delivery_snapshot_to_mapping,
 )
-from ..delivery_renderer import DELIVERY_RENDERING_VERSION, render_pdf_candidate, render_word_candidate, validate_final_artifact, validate_supporting_artifact, verify_reopened_artifact
+from ..delivery_renderer import DELIVERY_RENDERING_VERSION, render_word_candidate, validate_delivery_artifact, validate_final_artifact, validate_supporting_artifact, verify_reopened_artifact
 from ..report_template import TemplateBindingManifest, template_binding_manifest_from_mapping
 from ..pericial_planning import PlanningSnapshot, pericial_planning_to_mapping
 from ..report_foundation import ReportSnapshot, ReportState, report_snapshot_to_mapping
@@ -358,21 +358,14 @@ class RenderDeliveryPackage:
         if type(report) is not ReportSnapshot or _digest(report_snapshot_to_mapping(report)) != snapshot.binding.report_digest:
             raise ValueError("Delivery report bytes diverge from bound authority")
         word = render_word_candidate(template_bytes=template.content, report=report, manifest=manifest).output_bytes
-        pdf = render_pdf_candidate(report)
         word_digest, word_size, word_media = validate_final_artifact(word, manifest.output_kind)
-        pdf_digest, pdf_size, pdf_media = validate_final_artifact(pdf, "PDF")
         stem = f"laudo-{snapshot.delivery_id.lower()}-r{snapshot.revision + 1}"
         word_name = f"{stem}.{manifest.output_kind.lower()}"
-        pdf_name = f"{stem}.pdf"
         word_metadata = self.store_private_content.execute(
             workspace_id=workspace_id, original_filename=word_name, content=word,
             media_type=word_media, origin=PrivateContentOrigin.LOCAL_IMPORT,
         )
-        pdf_metadata = self.store_private_content.execute(
-            workspace_id=workspace_id, original_filename=pdf_name, content=pdf,
-            media_type=pdf_media, origin=PrivateContentOrigin.LOCAL_IMPORT,
-        )
-        if (word_metadata.byte_size, word_metadata.checksum_sha256) != (word_size, word_digest) or (pdf_metadata.byte_size, pdf_metadata.checksum_sha256) != (pdf_size, pdf_digest):
+        if (word_metadata.byte_size, word_metadata.checksum_sha256) != (word_size, word_digest):
             raise RepositoryIntegrityError("private delivery storage changed rendered bytes")
         artifacts = (
             DeliveryArtifact(
@@ -380,11 +373,6 @@ class RenderDeliveryPackage:
                 format=DeliveryFormat(manifest.output_kind), filename=word_name,
                 content_id=str(word_metadata.content_id), media_type=word_media,
                 byte_size=word_size, checksum_sha256=word_digest,
-            ),
-            DeliveryArtifact(
-                artifact_id=f"ARTIFACT-{str(self.ids.new_uuid()).upper()}", role=DeliveryRole.MAIN_REPORT,
-                format=DeliveryFormat.PDF, filename=pdf_name, content_id=str(pdf_metadata.content_id),
-                media_type=pdf_media, byte_size=pdf_size, checksum_sha256=pdf_digest,
             ),
             *(item for item in snapshot.artifacts if item.role is not DeliveryRole.MAIN_REPORT),
         )
@@ -425,7 +413,7 @@ class AttachDeliveryPackageArtifact:
         if output_format is DeliveryFormat.OTHER:
             validate_supporting_artifact(content.content, media)
         else:
-            validate_final_artifact(content.content, output_format.value)
+            validate_delivery_artifact(content.content, output_format.value)
         artifact = DeliveryArtifact(
             artifact_id=f"ARTIFACT-{str(self.ids.new_uuid()).upper()}", role=package_role,
             format=output_format, filename=content.metadata.original_filename,

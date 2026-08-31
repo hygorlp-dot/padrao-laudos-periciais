@@ -7,7 +7,7 @@
   "expenses":[{"expense_id":"EXPENSE-1","category":"EQUIPMENT","amount":"100.00","currency":"BRL","incurred_on":"2026-08-31","description":"Equipamento sintético"}],
   "proposals":[{"proposal_id":"PROPOSAL-1","revision":1,"amount":"2500.00","currency":"BRL","proposed_at":"2026-08-31T12:00:00+00:00","rationale":"Orçamento inicial"}],
   "proposal_revisions":[{"revision_id":"REVISION-1","proposal_id":"PROPOSAL-1","revision":1,"supersedes_revision_id":null,"reason":"Emissão inicial","revised_at":"2026-08-31T12:00:00+00:00"}],
-  "court_approvals":[{"approval_id":"APPROVAL-1","court_decision_id":"DECISION-1","amount":"2200.00","currency":"BRL","decided_on":"2026-09-01"}],
+  "court_approvals":[{"approval_id":"APPROVAL-1","external_court_decision_reference":"DECISION-1","amount":"2200.00","currency":"BRL","decided_on":"2026-09-01"}],
   "payments":[{"payment_id":"PAYMENT-1","amount":"1000.00","currency":"BRL","received_on":"2026-09-02","reference":"Depósito judicial sintético"}],
   "status":"PARTIALLY_RECEIVED","outstanding":{"amount":"1200.00","currency":"BRL"}
 }

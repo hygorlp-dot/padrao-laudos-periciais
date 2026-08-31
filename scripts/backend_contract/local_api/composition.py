@@ -80,7 +80,11 @@ from ..application.delivery_foundation import (
     VerifyDeliveryPackage,
 )
 from ..application.budget_foundation import (
+    AddBudgetItem,
     AddFeeProposal,
+    AddProfessionalEffortEstimate,
+    AddThirdPartyEstimate,
+    AddTravelEstimate,
     GetBudgetHistory,
     GetBudgetSnapshot,
     RecordCourtApproval,
@@ -524,6 +528,10 @@ def build_local_api(
         get_budget_snapshot=get_budget_snapshot,
         get_budget_history=GetBudgetHistory(list_artifact_revisions),
         start_budget_snapshot=StartBudgetSnapshot(save_budget_snapshot, local_ids),
+        add_budget_item=AddBudgetItem(get_budget_snapshot, save_budget_snapshot, local_ids),
+        add_professional_effort_estimate=AddProfessionalEffortEstimate(get_budget_snapshot, save_budget_snapshot, local_ids),
+        add_travel_estimate=AddTravelEstimate(get_budget_snapshot, save_budget_snapshot, local_ids),
+        add_third_party_estimate=AddThirdPartyEstimate(get_budget_snapshot, save_budget_snapshot, local_ids),
         add_fee_proposal=AddFeeProposal(get_budget_snapshot, save_budget_snapshot, local_clock, local_ids),
         record_court_approval=RecordCourtApproval(get_budget_snapshot, save_budget_snapshot, local_ids),
         record_budget_expense=RecordExpense(get_budget_snapshot, save_budget_snapshot, local_ids),

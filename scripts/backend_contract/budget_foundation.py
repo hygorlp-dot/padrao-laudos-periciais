@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, fields
+from copy import deepcopy
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
@@ -166,13 +167,13 @@ class ProposalRevision:
 @dataclass(frozen=True, slots=True)
 class CourtApprovedAmount:
     approval_id: str
-    court_decision_id: str
+    external_court_decision_reference: str
     amount: str
     currency: str
     decided_on: str
 
     def __post_init__(self) -> None:
-        _text(self.approval_id, "approval_id"); _text(self.court_decision_id, "court_decision_id"); _text(self.currency, "currency"); _money(self.amount, "amount"); _day(self.decided_on, "decided_on")
+        _text(self.approval_id, "approval_id"); _text(self.external_court_decision_reference, "external_court_decision_reference"); _text(self.currency, "currency"); _money(self.amount, "amount"); _day(self.decided_on, "decided_on")
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,7 +263,7 @@ class PericialBudget:
             raise ValueError("proposal chronology is invalid")
         approval_days = [date.fromisoformat(item.decided_on) for item in self.court_approvals]
         payment_days = [date.fromisoformat(item.received_on) for item in self.payments]
-        if len({item.court_decision_id for item in self.court_approvals}) != len(self.court_approvals) or approval_days != sorted(approval_days):
+        if len({item.external_court_decision_reference for item in self.court_approvals}) != len(self.court_approvals) or approval_days != sorted(approval_days):
             raise ValueError("court approval chronology is invalid")
         if self.payments and (not self.court_approvals or payment_days != sorted(payment_days) or payment_days[0] < approval_days[0]):
             raise ValueError("payment authority chronology is invalid")
@@ -307,7 +308,22 @@ def budget_snapshot_to_mapping(value: PericialBudget) -> dict[str, Any]:
     return mapping
 
 
+def normalize_legacy_budget_mapping(value: object) -> object:
+    """Reclassify legacy arbitrary decision text explicitly as an external reference."""
+    if type(value) is not dict:
+        return value
+    normalized = deepcopy(value)
+    approvals = normalized.get("court_approvals")
+    if type(approvals) is not list:
+        return normalized
+    for approval in approvals:
+        if type(approval) is dict and "court_decision_id" in approval and "external_court_decision_reference" not in approval:
+            approval["external_court_decision_reference"] = approval.pop("court_decision_id")
+    return normalized
+
+
 def budget_snapshot_from_mapping(value: object) -> PericialBudget:
+    value = normalize_legacy_budget_mapping(value)
     expected = {field.name for field in fields(PericialBudget)} | {"outstanding"}
     if type(value) is not dict or set(value) != expected: raise ValueError("PericialBudget fields are invalid")
     data = dict(value); supplied_outstanding = data.pop("outstanding")

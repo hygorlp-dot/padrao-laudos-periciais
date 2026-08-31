@@ -169,6 +169,10 @@ def test_budget_routes_are_private_strict_and_preserve_history() -> None:
     history = RecordingService(((revision(payload=payload), snapshot),))
     start = RecordingService((revision(payload=payload), snapshot))
     proposal = RecordingService((revision(payload=payload), snapshot))
+    item = RecordingService((revision(payload=payload), snapshot))
+    effort = RecordingService((revision(payload=payload), snapshot))
+    travel = RecordingService((revision(payload=payload), snapshot))
+    third_party = RecordingService((revision(payload=payload), snapshot))
     approval = RecordingService((revision(payload=payload), snapshot))
     expense = RecordingService((revision(payload=payload), snapshot))
     payment = RecordingService((revision(payload=payload), snapshot))
@@ -176,6 +180,8 @@ def test_budget_routes_are_private_strict_and_preserve_history() -> None:
     api = LocalApi(services(
         save_budget_snapshot=save, get_budget_snapshot=get, get_budget_history=history,
         start_budget_snapshot=start, add_fee_proposal=proposal, record_court_approval=approval,
+        add_budget_item=item, add_professional_effort_estimate=effort,
+        add_travel_estimate=travel, add_third_party_estimate=third_party,
         record_budget_expense=expense, record_received_payment=payment, close_budget_snapshot=close,
     ), token=TOKEN)
     assert request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot").status == 403
@@ -189,13 +195,18 @@ def test_budget_routes_are_private_strict_and_preserve_history() -> None:
     listed = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot/history", headers={"X-Local-API-Token": TOKEN})
     assert decoded(listed)["items"][0]["snapshot"] == payload
     commands = {
+        "items": {"expected_revision": 1, "category": "EQUIPMENT", "description": "Locação", "quantity": "2.00", "unit_amount": "175.50"},
+        "effort-estimates": {"expected_revision": 1, "professional_id": "ASSISTANT-1", "estimated_hours": "3.50", "hourly_amount": "80.00"},
+        "travel-estimates": {"expected_revision": 1, "distance_km": "125.40", "amount_per_km": "1.75", "description": "Diligência"},
+        "third-party-estimates": {"expected_revision": 1, "provider_description": "Laboratório", "amount": "900.00", "currency": "BRL"},
         "proposals": {"expected_revision": 1, "amount": "3000.00", "currency": "BRL", "rationale": "Proposta"},
-        "court-approvals": {"expected_revision": 1, "court_decision_id": "DECISION-2", "amount": "2500.00", "currency": "BRL", "decided_on": "2026-09-01"},
+        "court-approvals": {"expected_revision": 1, "external_court_decision_reference": "Mov. 42, decisão de honorários", "amount": "2500.00", "currency": "BRL", "decided_on": "2026-09-01"},
         "expenses": {"expected_revision": 1, "category": "TRAVEL", "amount": "100.00", "currency": "BRL", "incurred_on": "2026-09-01", "description": "Deslocamento"},
         "payments": {"expected_revision": 1, "amount": "1000.00", "currency": "BRL", "received_on": "2026-09-02", "reference": "Depósito"},
         "close": {"expected_revision": 1},
     }
     assert all(request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot/{action}", body=body).status == 200 for action, body in commands.items())
+    assert request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot/court-approvals", body={"expected_revision": 1, "court_decision_id": "FAKE-CANONICAL", "amount": "1.00", "currency": "BRL", "decided_on": "2026-09-01"}).status == 400
 
 
 def test_report_foundation_routes_are_private_validate_and_delegate():

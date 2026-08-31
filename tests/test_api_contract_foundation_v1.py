@@ -60,6 +60,10 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
         "/v1/workspaces/{workspace_id}/delivery-snapshot/artifacts/{content_id}",
         "/v1/workspaces/{workspace_id}/budget-snapshot",
         "/v1/workspaces/{workspace_id}/budget-snapshot/history",
+        "/v1/workspaces/{workspace_id}/budget-snapshot/items",
+        "/v1/workspaces/{workspace_id}/budget-snapshot/effort-estimates",
+        "/v1/workspaces/{workspace_id}/budget-snapshot/travel-estimates",
+        "/v1/workspaces/{workspace_id}/budget-snapshot/third-party-estimates",
         "/v1/workspaces/{workspace_id}/budget-snapshot/proposals",
         "/v1/workspaces/{workspace_id}/budget-snapshot/court-approvals",
         "/v1/workspaces/{workspace_id}/budget-snapshot/expenses",
@@ -69,6 +73,11 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
     component = contract["components"]["schemas"]["ProceduralContext"]
     assert component == {"$ref": "../schemas/judicial-domain-model-v1.schema.json"}
     assert contract["info"]["x-semantic-boundary"] == ("scripts.backend_contract.api_contract.parse_judicial_domain_payload")
+    render = contract["paths"]["/v1/workspaces/{workspace_id}/delivery-snapshot/render"]["post"]
+    promise = f"{render.get('summary', '')} {render.get('description', '')}".casefold()
+    assert "word" in promise
+    assert "pdf final local indisponível" in promise
+    assert "docx/docm e pdf" not in promise
     assert contract["info"]["x-delivery-snapshot-semantic-boundary"] == "scripts.backend_contract.delivery_foundation.delivery_snapshot_from_mapping"
     assert contract["components"]["schemas"]["DeliverySnapshot"] == {"$ref": "../schemas/delivery-snapshot-v1.schema.json"}
     assert contract["info"]["x-budget-snapshot-semantic-boundary"] == "scripts.backend_contract.budget_foundation.budget_snapshot_from_mapping"
@@ -77,6 +86,9 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
     assert contract["components"]["schemas"]["OfflineInspectionPackage"] == {"$ref": "../schemas/offline-inspection-package-v1.schema.json"}
     assert "put" not in contract["paths"]["/v1/workspaces/{workspace_id}/budget-snapshot"]
     assert contract["components"]["schemas"]["RecordBudgetExpenseRequest"]["properties"]["category"]["$ref"].endswith("#/$defs/category")
+    approval_request = contract["components"]["schemas"]["RecordCourtApprovalRequest"]
+    assert "external_court_decision_reference" in approval_request["properties"]
+    assert "court_decision_id" not in approval_request["properties"]
     referenced = (ROOT / "contracts" / component["$ref"]).resolve()
     assert referenced.is_relative_to(ROOT)
     schema = json.loads(referenced.read_text(encoding="utf-8"))

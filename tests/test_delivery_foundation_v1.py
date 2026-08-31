@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +10,8 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pytest
 from jsonschema import Draft202012Validator
 from PIL import Image
+
+from scripts.backend_contract import delivery_renderer
 
 from scripts.backend_contract.delivery_foundation import (
     DeliveryAction,
@@ -34,6 +36,7 @@ from scripts.backend_contract.delivery_renderer import (
 )
 from scripts.backend_contract.report_template import template_binding_manifest_from_mapping
 from scripts.backend_contract.application.delivery_foundation import (
+    RenderDeliveryPackage,
     ReviewDeliverySnapshot,
     build_delivery_binding,
     mark_delivery_authority_unavailable,
@@ -48,6 +51,36 @@ from scripts.backend_contract.vistoria import inspection_session_from_mapping
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64
+
+
+def test_production_delivery_render_has_no_local_process_or_pdf_authority() -> None:
+    root = Path(__file__).parents[1]
+    assert not (root / "scripts/backend_contract/infrastructure/office_pdf.py").exists()
+    assert "pdf_converter" not in {item.name for item in fields(RenderDeliveryPackage)}
+    composition = (root / "scripts/backend_contract/local_api/composition.py").read_text(encoding="utf-8")
+    assert "LocalOfficePdfConverter" not in composition
+
+
+def _parseable_text_pdf(text: str) -> bytes:
+    encoded_lines = [line.encode("cp1252").replace(b"\\", b"\\\\").replace(b"(", b"\\(").replace(b")", b"\\)") for line in text.splitlines()]
+    stream = b"BT /F1 10 Tf 50 780 Td 12 TL " + b" Tj T* ".join(b"(" + line + b")" for line in encoded_lines) + b" Tj ET"
+    objects = (
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>",
+        b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        b"<< /Type /Catalog /Pages 4 0 R >>",
+    )
+    output = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
+    offsets = []
+    for index, value in enumerate(objects, 1):
+        offsets.append(len(output))
+        output.extend(f"{index} 0 obj\n".encode("ascii") + value + b"\nendobj\n")
+    xref = len(output)
+    output.extend(b"xref\n0 6\n0000000000 65535 f \n")
+    output.extend(b"".join(f"{offset:010d} 00000 n \n".encode("ascii") for offset in offsets))
+    output.extend(f"trailer << /Size 6 /Root 5 0 R >>\nstartxref\n{xref}\n%%EOF".encode("ascii"))
+    return bytes(output)
 
 
 def binding() -> DeliveryBinding:
@@ -142,6 +175,15 @@ def test_review_cannot_approve_metadata_without_rendered_bytes() -> None:
         snapshot(decisions=(ready,), state=DeliveryState.READY_FOR_REVIEW)
 
 
+def test_reviewable_delivery_rejects_pdf_as_the_professional_main_artifact() -> None:
+    ready = decision(DeliveryAction.MARK_READY_FOR_REVIEW, index=1, previous=None)
+    pdf = replace(
+        artifact(), format=DeliveryFormat.PDF, filename="laudo-r1.pdf", media_type="application/pdf",
+    )
+    with pytest.raises(ValueError, match="Word main artifact"):
+        snapshot(decisions=(ready,), artifacts=(pdf,), state=DeliveryState.READY_FOR_REVIEW)
+
+
 def test_stale_overrides_final_state_and_cannot_be_silently_cleared() -> None:
     value = replace(snapshot(), state=DeliveryState.STALE, stale_reasons=("REPORT_DIGEST_CHANGED",), stale_origin_state=DeliveryState.DRAFT)
     assert value.state is DeliveryState.STALE
@@ -217,7 +259,7 @@ def test_delivery_review_rejects_professional_identity_outside_bound_authority()
         )
 
 
-def test_final_word_and_pdf_bytes_are_reopened_and_hashed_not_trusted() -> None:
+def test_final_word_reopens_while_diagnostic_pdf_remains_non_delivery() -> None:
     output = BytesIO()
     with ZipFile(output, "w", ZIP_DEFLATED) as package:
         package.writestr("[Content_Types].xml", "<Types/>")
@@ -227,11 +269,13 @@ def test_final_word_and_pdf_bytes_are_reopened_and_hashed_not_trusted() -> None:
     digest, size, media = validate_final_artifact(word, "DOCM")
     assert media == "application/vnd.ms-word.document.macroEnabled.12"
     verify_reopened_artifact(content=word, output_format="DOCM", expected_size=size, expected_sha256=digest)
-    pdf = b"%PDF-1.7\n1 0 obj <</Type /Page>> endobj\n%%EOF"
+    report = report_snapshot_from_mapping(json.loads((Path(__file__).parent / "fixtures/report-snapshot-v1.json").read_text(encoding="utf-8")))
+    pdf = render_pdf_candidate(report)
     pdf_digest, pdf_size, pdf_media = validate_final_artifact(pdf, "PDF")
     assert pdf_media == "application/pdf"
-    verify_reopened_artifact(content=pdf, output_format="PDF", expected_size=pdf_size, expected_sha256=pdf_digest)
-    with pytest.raises(ValueError, match="diverge"):
+    with pytest.raises(ValueError, match="diagnostic PDF cannot be a Delivery artifact"):
+        verify_reopened_artifact(content=pdf, output_format="PDF", expected_size=pdf_size, expected_sha256=pdf_digest)
+    with pytest.raises(ValueError, match="diagnostic PDF cannot be a Delivery artifact"):
         verify_reopened_artifact(content=pdf, output_format="PDF", expected_size=pdf_size, expected_sha256=SHA_A)
 
 
@@ -244,6 +288,8 @@ def test_artifact_validation_rejects_macro_identity_change_and_malformed_pdf() -
         validate_final_artifact(output.getvalue(), "DOCM")
     with pytest.raises(ValueError, match="PDF"):
         validate_final_artifact(b"%PDF-1.7\nno page or eof", "PDF")
+    with pytest.raises(ValueError, match="PDF"):
+        validate_final_artifact(b"%PDF-1.7\n1 0 obj <</Type /Page>> endobj\n%%EOF", "PDF")
 
 
 def test_supporting_image_bytes_are_verified_by_declared_media_type() -> None:
@@ -314,6 +360,46 @@ def test_rendered_word_bytes_contain_and_change_with_entire_approved_report_body
     assert first != second
 
 
+@pytest.mark.parametrize(
+    ("instruction", "part", "representation"),
+    (
+        ('INCLUDETEXT "https://example.invalid/private"', "document", "complex"),
+        ('includepicture "https://example.invalid/private.png"', "document", "complex"),
+        ('DDEAUTO cmd "test"', "document", "complex"),
+        ('DDE cmd "test"', "document", "complex"),
+        ('INCLUDETEXT "https://example.invalid/header"', "header", "complex"),
+        ('INCLUDETEXT "https://example.invalid/simple"', "document", "simple"),
+    ),
+)
+def test_active_external_or_execution_word_fields_are_rejected_before_binding(instruction: str, part: str, representation: str) -> None:
+    root = Path(__file__).parents[1] / "tests/fixtures"
+    report = report_snapshot_from_mapping(json.loads((root / "report-snapshot-v1.json").read_text(encoding="utf-8")))
+    split = len(instruction) // 2
+    active_field = (
+        f'<w:p><w:fldSimple w:instr="{instruction.replace(chr(34), "&quot;")}"/></w:p>'
+        if representation == "simple"
+        else f"<w:p><w:r><w:instrText>{instruction[:split]}</w:instrText><w:instrText>{instruction[split:]}</w:instrText></w:r></w:p>"
+    )
+    document = f'''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+      <w:p><w:r><w:t>[[EXPERT_FULL_NAME]]</w:t><w:t>[[EXPERT_REGISTRATION]]</w:t><w:t>[[REPORT_ID]]</w:t></w:r></w:p>
+      <w:sdt><w:sdtPr><w:tag w:val="CANONICAL_REPORT"/></w:sdtPr><w:sdtContent/></w:sdt>
+      <w:p><w:bookmarkStart w:id="1" w:name="B"/><w:r><w:instrText>TOC</w:instrText><w:instrText>PAGE</w:instrText><w:instrText>NUMPAGES</w:instrText><w:instrText>SEQ Figure</w:instrText><w:instrText>REF B</w:instrText><w:instrText>PAGEREF B</w:instrText></w:r></w:p>
+      {active_field if part == "document" else ""}
+    </w:body></w:document>'''
+    package_bytes = BytesIO()
+    with ZipFile(package_bytes, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", "<Types/>")
+        package.writestr("word/document.xml", document)
+        package.writestr("word/styles.xml", "<styles/>")
+        package.writestr("word/numbering.xml", "<numbering/>")
+        if part == "header":
+            package.writestr("word/header1.xml", f'<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{active_field}</w:hdr>')
+        package.writestr("docProps/custom.xml", '<Properties><property name="TEMPLATE_ID"><value>TEMPLATE-1</value></property></Properties>')
+    manifest = template_binding_manifest_from_mapping({"schema_version": "1.0.0", "template_id": "TEMPLATE-1", "output_kind": "DOCX", "bindings": [{"field": "EXPERT_FULL_NAME", "placeholder": "[[EXPERT_FULL_NAME]]"}, {"field": "EXPERT_REGISTRATION", "placeholder": "[[EXPERT_REGISTRATION]]"}, {"field": "REPORT_ID", "placeholder": "[[REPORT_ID]]"}]})
+    with pytest.raises(ValueError, match="unsupported active Word field"):
+        render_word_candidate(template_bytes=package_bytes.getvalue(), report=report, manifest=manifest)
+
+
 def test_rendered_pdf_contains_same_canonical_report_digest_and_changes_with_report() -> None:
     root = Path(__file__).parents[1] / "tests/fixtures"
     report = report_snapshot_from_mapping(json.loads((root / "report-snapshot-v1.json").read_text(encoding="utf-8")))
@@ -337,3 +423,141 @@ def test_pdf_renderer_wraps_long_lines_and_rejects_lossy_unicode() -> None:
     assert b"W" * 57 not in widest
     with pytest.raises(ValueError, match="unsupported"):
         render_pdf_candidate(replace(report, claims=(replace(report.claims[0], text="Hipotese tecnica \u0394"), *report.claims[1:])))
+
+
+def test_final_pdf_is_converted_from_the_exact_bound_word_bytes() -> None:
+    report = report_snapshot_from_mapping(json.loads((Path(__file__).parent / "fixtures/report-snapshot-v1.json").read_text(encoding="utf-8")))
+    word = BytesIO()
+    document = f"""<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+      <w:p><w:r><w:t>{report.report_id}</w:t></w:r></w:p>
+    </w:body></w:document>"""
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr("word/document.xml", document)
+
+    class Converter:
+        def __init__(self) -> None:
+            self.received = None
+
+        def convert(self, content: bytes, source_format: str) -> bytes:
+            self.received = (content, source_format)
+            return _parseable_text_pdf(report.report_id)
+
+    converter = Converter()
+    pdf = delivery_renderer.render_final_pdf_candidate(
+        word_content=word.getvalue(), word_format="DOCX", converter=converter,
+    )
+
+    assert converter.received == (word.getvalue(), "DOCX")
+    assert pdf.startswith(b"%PDF-")
+
+    unrelated = replace(report, report_id="RELATORIO-ERRADO")
+
+    class WrongConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf(unrelated.report_id)
+
+    with pytest.raises(ValueError, match="does not faithfully represent"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=WrongConverter(),
+        )
+
+    class AdditiveForgeryConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf(f"{report.report_id} {report.report_id}")
+
+    with pytest.raises(ValueError, match="does not faithfully represent"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=AdditiveForgeryConverter(),
+        )
+
+
+def test_final_pdf_rejects_a_table_flattened_into_unrelated_lines() -> None:
+    word = BytesIO()
+    document = '''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+      <w:tbl><w:tr><w:tc><w:p><w:r><w:t>Cell A</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Cell B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+    </w:body></w:document>'''
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr("word/document.xml", document)
+
+    class FlatteningConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("Cell A Cell B")
+
+    with pytest.raises(ValueError, match="does not faithfully represent"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=FlatteningConverter(),
+        )
+
+
+def test_image_fidelity_signature_distinguishes_uniform_opposites() -> None:
+    black = Image.new("RGB", (64, 64), "black")
+    white = Image.new("RGB", (64, 64), "white")
+    black_signature = delivery_renderer._image_signature(black)
+    white_signature = delivery_renderer._image_signature(white)
+    assert black_signature != white_signature
+    assert delivery_renderer._ordered_image_signatures_match(
+        [black_signature, white_signature], [white_signature, black_signature],
+    ) is False
+    red_signature = delivery_renderer._image_signature(Image.new("RGB", (64, 64), "red"))
+    assert delivery_renderer._ordered_image_signatures_match([black_signature], [red_signature, black_signature]) is False
+    assert delivery_renderer._ordered_image_signatures_match([black_signature], [black_signature, red_signature]) is False
+
+    black_bytes = BytesIO(); white_bytes = BytesIO()
+    black.save(black_bytes, "PNG"); white.save(white_bytes, "PNG")
+    package_bytes = BytesIO()
+    document = '''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:drawing><a:blip r:embed="rId2"/></w:drawing></w:r></w:p><w:p><w:r><w:pict><v:imagedata r:id="rId1"/></w:pict></w:r></w:p></w:body></w:document>'''
+    relationships = '''<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="media/image1.png"/><Relationship Id="rId2" Target="media/image2.png"/></Relationships>'''
+    with ZipFile(package_bytes, "w", ZIP_DEFLATED) as package:
+        package.writestr("word/media/image1.png", black_bytes.getvalue())
+        package.writestr("word/media/image2.png", white_bytes.getvalue())
+        package.writestr("word/document.xml", document)
+        package.writestr("word/_rels/document.xml.rels", relationships)
+    with ZipFile(BytesIO(package_bytes.getvalue())) as package:
+        root = delivery_renderer.ElementTree.fromstring(package.read("word/document.xml"))
+        assert delivery_renderer._ordered_word_image_signatures(package, {"word/document.xml": root}) == [
+            white_signature, black_signature,
+        ]
+
+
+def test_final_pdf_conversion_fails_closed_without_a_local_converter() -> None:
+    class Unavailable:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            raise RuntimeError("local Office PDF converter is unavailable")
+
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr("word/document.xml", "<document/>")
+    with pytest.raises(ValueError, match="local Office PDF conversion unavailable"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=Unavailable(),
+        )
+
+
+def test_text_only_diagnostic_pdf_can_never_become_a_final_professional_pdf() -> None:
+    report = report_snapshot_from_mapping(json.loads((Path(__file__).parent / "fixtures/report-snapshot-v1.json").read_text(encoding="utf-8")))
+    diagnostic = render_pdf_candidate(report)
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr("word/document.xml", "<document/>")
+
+    class DiagnosticConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return diagnostic
+
+    with pytest.raises(ValueError, match="diagnostic PDF cannot be finalized"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=DiagnosticConverter(),
+        )
+    digest, size, _ = validate_final_artifact(diagnostic, "PDF")
+    with pytest.raises(ValueError, match="diagnostic PDF cannot be a Delivery artifact"):
+        verify_reopened_artifact(
+            content=diagnostic, output_format="PDF", expected_size=size, expected_sha256=digest,
+        )
+    alternate_whitespace = diagnostic.replace(b"/DiagnosticOnly true", b"/DiagnosticOnly\ntrue")
+    assert b"/DiagnosticOnly true" not in alternate_whitespace
+    with pytest.raises(ValueError, match="diagnostic PDF cannot be a Delivery artifact"):
+        delivery_renderer.validate_delivery_artifact(alternate_whitespace, "PDF")

@@ -20,6 +20,7 @@ from scripts.backend_contract.application.budget_foundation import (
     StartBudgetSnapshot,
 )
 from scripts.backend_contract.application.ports import RepositoryConflict
+from scripts.backend_contract.application import budget_foundation as budget_application
 
 from scripts.backend_contract.budget_foundation import (
     BudgetItem,
@@ -84,6 +85,21 @@ def test_proposal_court_approval_and_payment_are_distinct_authorities() -> None:
     assert value.payments[0].amount != value.outstanding.amount
     with pytest.raises(ValueError, match="currency"):
         replace(value, payments=(replace(value.payments[0], currency="USD"),))
+
+
+def test_court_approval_serializes_only_an_explicit_external_reference() -> None:
+    approval = budget_snapshot_to_mapping(budget())["court_approvals"][0]
+    assert approval["external_court_decision_reference"] == "DECISION-1"
+    assert "court_decision_id" not in approval
+
+
+def test_legacy_arbitrary_court_identifier_reopens_as_an_explicit_external_reference() -> None:
+    legacy = budget_snapshot_to_mapping(budget())
+    approval = legacy["court_approvals"][0]
+    approval["court_decision_id"] = approval.pop("external_court_decision_reference")
+    reopened = budget_snapshot_from_mapping(legacy)
+    assert reopened.court_approvals[0].external_court_decision_reference == "DECISION-1"
+    assert "court_decision_id" not in budget_snapshot_to_mapping(reopened)["court_approvals"][0]
 
 
 def test_proposal_revision_history_is_linear_and_append_only_by_identity() -> None:
@@ -184,6 +200,29 @@ def test_application_rejects_workspace_leak_stale_write_and_history_rewrite() ->
         service.execute(budget().workspace_id, changed, 2)
 
 
+@pytest.mark.parametrize("field,replacement", (
+    ("proposals", lambda value: (replace(value.proposals[0], amount="2501.00"),)),
+    ("court_approvals", lambda value: (replace(value.court_approvals[0], external_court_decision_reference="OUTRA-REFERÊNCIA"),)),
+    ("expenses", lambda value: (replace(value.expenses[0], description="Despesa reescrita"),)),
+    ("payments", lambda value: (replace(value.payments[0], reference="Pagamento reescrito"),)),
+))
+def test_every_material_financial_authority_is_append_only(field, replacement) -> None:
+    predecessor = replace(budget(), revision=2)
+    class Latest:
+        def execute(self, *_args): return type("Record", (), {"revision": 2, "payload": budget_snapshot_to_mapping(predecessor)})()
+    service = SaveBudgetSnapshot(object(), Latest(), object(), object())
+    candidate = replace(predecessor, revision=3, **{field: replacement(predecessor)})
+    with pytest.raises(ValueError, match="history cannot be rewritten"):
+        service.execute(predecessor.workspace_id, candidate, 2)
+
+
+def test_supplied_outstanding_value_cannot_override_server_derived_balance() -> None:
+    payload = budget_snapshot_to_mapping(budget())
+    payload["outstanding"]["amount"] = "0.00"
+    with pytest.raises(ValueError, match="outstanding amount diverges"):
+        budget_snapshot_from_mapping(payload)
+
+
 def test_closed_budget_is_terminal_at_the_repository_boundary() -> None:
     closed = replace(budget(), revision=2, payments=(replace(budget().payments[0], amount="2200.00"),), status=FinancialStatus.CLOSED)
     class Latest:
@@ -223,7 +262,7 @@ def test_financial_commands_create_distinct_append_only_authorities() -> None:
     empty = replace(budget(), revision=1, proposals=(), proposal_revisions=(), court_approvals=(), payments=(), expenses=(), status=FinancialStatus.DRAFT)
     save = Save(); ids = Ids(); clock = Clock()
     proposal_record, proposal = AddFeeProposal(Get(empty), save, clock, ids).execute(empty.workspace_id, expected_revision=1, amount="3000.00", currency="BRL", rationale="Proposta inicial")
-    approval_record, approved = RecordCourtApproval(Get(proposal), save, ids).execute(empty.workspace_id, expected_revision=2, court_decision_id="DECISION-2", amount="2500.00", currency="BRL", decided_on="2026-09-01")
+    approval_record, approved = RecordCourtApproval(Get(proposal), save, ids).execute(empty.workspace_id, expected_revision=2, external_court_decision_reference="DECISION-2", amount="2500.00", currency="BRL", decided_on="2026-09-01")
     expense_record, expensed = RecordExpense(Get(approved), save, ids).execute(empty.workspace_id, expected_revision=3, category="TRAVEL", amount="100.00", currency="BRL", incurred_on="2026-09-02", description="Deslocamento")
     payment_record, paid = RecordPayment(Get(expensed), save, ids).execute(empty.workspace_id, expected_revision=4, amount="1000.00", currency="BRL", received_on="2026-09-03", reference="Depósito")
     assert (proposal_record.revision, approval_record.revision, expense_record.revision, payment_record.revision) == (2, 3, 4, 5)
@@ -250,7 +289,7 @@ def test_financial_commands_derive_status_after_final_payment_and_later_revision
     assert paid.status is FinancialStatus.RECEIVED
     _, revised = AddFeeProposal(Get(paid), save, Clock(), ids).execute(value.workspace_id, expected_revision=2, amount="2700.00", currency="BRL", rationale="Proposta suplementar")
     assert revised.status is FinancialStatus.RECEIVED
-    _, adjusted = RecordCourtApproval(Get(revised), save, ids).execute(value.workspace_id, expected_revision=3, court_decision_id="DECISION-2", amount="2700.00", currency="BRL", decided_on="2026-09-05")
+    _, adjusted = RecordCourtApproval(Get(revised), save, ids).execute(value.workspace_id, expected_revision=3, external_court_decision_reference="DECISION-2", amount="2700.00", currency="BRL", decided_on="2026-09-05")
     assert adjusted.status is FinancialStatus.PARTIALLY_RECEIVED
     assert adjusted.outstanding.amount == "500.00"
 
@@ -267,3 +306,50 @@ def test_start_budget_creates_empty_financial_snapshot_without_technical_authori
     assert record.revision == 1
     assert value.status is FinancialStatus.DRAFT
     assert value.proposals == value.court_approvals == value.payments == ()
+
+
+def test_complete_budget_commands_append_server_owned_exact_estimates() -> None:
+    class Get:
+        def __init__(self, value): self.value = value
+        def execute(self, _workspace): return type("Record", (), {"revision": self.value.revision})(), self.value
+    class Save:
+        def __init__(self): self.values = []
+        def execute(self, _workspace, value, expected): self.values.append((value, expected)); return type("Record", (), {"revision": value.revision})()
+    class Ids:
+        index = 0
+        def new_uuid(self): self.index += 1; return f"00000000-0000-4000-8000-{self.index:012d}"
+
+    empty = replace(
+        budget(), revision=1, items=(), effort_estimates=(), travel_estimates=(),
+        third_party_estimates=(), expenses=(), proposals=(), proposal_revisions=(),
+        court_approvals=(), payments=(), status=FinancialStatus.DRAFT,
+    )
+    save = Save(); ids = Ids()
+    _, itemized = budget_application.AddBudgetItem(Get(empty), save, ids).execute(
+        empty.workspace_id, expected_revision=1, category="EQUIPMENT",
+        description="Locação de equipamento", quantity="2.00", unit_amount="175.50",
+    )
+    _, effort = budget_application.AddProfessionalEffortEstimate(Get(itemized), save, ids).execute(
+        empty.workspace_id, expected_revision=2, professional_id="ASSISTANT-1",
+        estimated_hours="3.50", hourly_amount="80.00",
+    )
+    _, travel = budget_application.AddTravelEstimate(Get(effort), save, ids).execute(
+        empty.workspace_id, expected_revision=3, distance_km="125.40",
+        amount_per_km="1.75", description="Diligência externa",
+    )
+    _, third_party = budget_application.AddThirdPartyEstimate(Get(travel), save, ids).execute(
+        empty.workspace_id, expected_revision=4, provider_description="Laboratório acreditado",
+        amount="900.00", currency="BRL",
+    )
+
+    assert itemized.items[-1].total_amount == "351.00"
+    assert effort.effort_estimates[-1].total_amount == "280.00"
+    assert travel.travel_estimates[-1].total_amount == "219.45"
+    assert third_party.third_party_estimates[-1].amount == "900.00"
+    assert all(value[-1].split("-", 1)[0] in {"ITEM", "EFFORT", "TRAVEL", "THIRD"} for value in (
+        (itemized.items[-1].item_id,),
+        (effort.effort_estimates[-1].estimate_id,),
+        (travel.travel_estimates[-1].estimate_id,),
+        (third_party.third_party_estimates[-1].estimate_id,),
+    ))
+    assert [expected for _, expected in save.values] == [1, 2, 3, 4]
