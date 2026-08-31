@@ -330,6 +330,18 @@ def test_pericial_planning_bridge_allowlist_is_exact():
     assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning", "DELETE") is None
 
 
+def test_inspection_session_bridge_allowlist_is_exact():
+    workspace_id = "11111111-1111-4111-8111-111111111111"
+    path = f"/app-api/v1/workspaces/{workspace_id}/inspection-session"
+    assert _proxy_target(path, "GET") == f"/v1/workspaces/{workspace_id}/inspection-session"
+    assert _proxy_target(path, "PUT") == f"/v1/workspaces/{workspace_id}/inspection-session"
+    assert _proxy_target(path, "POST") == f"/v1/workspaces/{workspace_id}/inspection-session"
+    assert _proxy_target(path + "/findings", "GET") is None
+    photo_path = f"/app-api/v1/workspaces/{workspace_id}/inspection-photos"
+    assert _proxy_target(photo_path, "POST") == f"/v1/workspaces/{workspace_id}/inspection-photos"
+    assert _proxy_target(photo_path, "GET") is None
+
+
 @pytest.mark.parametrize(
     "duplicate_headers",
     (

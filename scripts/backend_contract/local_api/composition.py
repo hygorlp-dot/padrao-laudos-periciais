@@ -18,11 +18,13 @@ from ..application.services import (
     ConfirmProcessMetadataSourceSpan,
     GetArtifactRevision,
     GetLatestArtifact,
+    GetPrivateContent,
     GetProcessCase,
     GetProcessMetadataReview,
     GetWorkspace,
     ImportCaseDocument,
     ImportCaseDocumentWithMetadata,
+    ImportInspectionPhoto,
     ListArtifactRevisions,
     ListWorkspaces,
     ListCaseDocuments,
@@ -40,6 +42,7 @@ from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
 from ..application.case_analysis import GetCaseAnalysis, SaveCaseAnalysis
 from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning
+from ..application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession
 
 
 class LocalApiStartupError(RuntimeError):
@@ -148,6 +151,7 @@ def build_local_api(
             store.close()
             raise
     import_case_document = None
+    import_inspection_photo = None
     list_case_documents = None
     read_case_document = None
     get_process_metadata_review = None
@@ -169,6 +173,7 @@ def build_local_api(
             local_clock,
             local_ids,
         )
+        import_inspection_photo = ImportInspectionPhoto(generic_store)
         list_case_documents = ListCaseDocuments(ListPrivateContents(store.workspaces, private_store))
         read_case_document = open_case_document
         get_process_metadata_review = GetProcessMetadataReview(
@@ -199,6 +204,19 @@ def build_local_api(
         local_ids,
     )
     get_pericial_planning = GetPericialPlanning(get_latest_artifact, get_case_analysis)
+    get_inspection_session = GetInspectionSession(get_latest_artifact, get_pericial_planning)
+    save_inspection_session = (
+        SaveInspectionSession(
+            store.revisions,
+            get_pericial_planning,
+            GetPrivateContent(store.workspaces, private_store),
+            private_store.authority_guard,
+            local_clock,
+            local_ids,
+        )
+        if private_store is not None
+        else None
+    )
     services = LocalApiServices(
         create_workspace=CreateWorkspace(store.workspaces, local_clock, local_ids),
         get_workspace=GetWorkspace(store.workspaces),
@@ -235,11 +253,18 @@ def build_local_api(
             local_clock,
             local_ids,
         ),
+        save_inspection_session=save_inspection_session,
+        get_inspection_session=get_inspection_session,
+        start_inspection_session=(
+            StartInspectionSession(get_pericial_planning, save_inspection_session, local_clock, local_ids)
+            if save_inspection_session is not None else None
+        ),
         get_process_metadata_review=get_process_metadata_review,
         confirm_process_metadata_source_span=confirm_process_metadata_source_span,
         import_case_document=import_case_document,
         list_case_documents=list_case_documents,
         read_case_document=read_case_document,
+        import_inspection_photo=import_inspection_photo,
     )
     api = LocalApi(
         services,

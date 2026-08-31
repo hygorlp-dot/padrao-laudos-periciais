@@ -5,10 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import warnings
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
 from uuid import UUID
+
+from PIL import Image, UnidentifiedImageError
 
 from .content import (
     MAX_DOCUMENT_BYTES,
@@ -80,6 +83,14 @@ def _case_document_filename(value: str) -> str:
         raise InvalidCaseDocument("nome de arquivo PDF inválido")
     if re.match(r"^[A-Za-z]:[\\/]", value) or value.startswith(("/", "\\\\")):
         raise InvalidCaseDocument("nome de arquivo PDF não pode expor path absoluto")
+    return value
+
+
+def _inspection_photo_filename(value: str) -> str:
+    if type(value) is not str or not value.strip() or "\x00" in value:
+        raise ValueError("inspection photo filename is invalid")
+    if re.match(r"^[A-Za-z]:[\\/]", value) or value.startswith(("/", "\\\\")):
+        raise ValueError("inspection photo filename cannot expose an absolute path")
     return value
 _CASE_DOCUMENT_MAX_BYTES = MAX_DOCUMENT_BYTES
 
@@ -328,6 +339,38 @@ class ImportCaseDocument:
                 media_type="application/pdf",
                 origin=PrivateContentOrigin.USER_IMPORT,
             )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ImportInspectionPhoto:
+    contents: StorePrivateContent
+
+    def execute(self, *, workspace_id: WorkspaceId, original_filename: str, content: bytes | SeekableContent, media_type: str) -> PrivateContentMetadata:
+        if media_type not in {"image/jpeg", "image/png"}:
+            raise ValueError("only JPEG or PNG inspection photos are accepted")
+        source = as_seekable_content(content)
+        prefix = source.prefix(16)
+        if media_type == "image/jpeg" and not prefix.startswith(b"\xff\xd8\xff"):
+            raise ValueError("inspection photo bytes do not match JPEG")
+        if media_type == "image/png" and not prefix.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError("inspection photo bytes do not match PNG")
+        expected_format = "JPEG" if media_type == "image/jpeg" else "PNG"
+        try:
+            source.rewind()
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", Image.DecompressionBombWarning)
+                with Image.open(source.stream) as image:
+                    if image.format != expected_format:
+                        raise ValueError("inspection photo decoded format diverges")
+                    image.verify()
+        except (OSError, UnidentifiedImageError, Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+            raise ValueError("inspection photo is truncated or corrupt") from exc
+        finally:
+            source.rewind()
+        return self.contents.execute(
+            workspace_id=workspace_id, original_filename=_inspection_photo_filename(original_filename),
+            content=content, media_type=media_type, origin=PrivateContentOrigin.USER_IMPORT,
         )
 
 
