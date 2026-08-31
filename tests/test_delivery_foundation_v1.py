@@ -259,7 +259,7 @@ def test_delivery_review_rejects_professional_identity_outside_bound_authority()
         )
 
 
-def test_final_word_and_pdf_bytes_are_reopened_and_hashed_not_trusted() -> None:
+def test_final_word_reopens_while_diagnostic_pdf_remains_non_delivery() -> None:
     output = BytesIO()
     with ZipFile(output, "w", ZIP_DEFLATED) as package:
         package.writestr("[Content_Types].xml", "<Types/>")
@@ -273,8 +273,9 @@ def test_final_word_and_pdf_bytes_are_reopened_and_hashed_not_trusted() -> None:
     pdf = render_pdf_candidate(report)
     pdf_digest, pdf_size, pdf_media = validate_final_artifact(pdf, "PDF")
     assert pdf_media == "application/pdf"
-    verify_reopened_artifact(content=pdf, output_format="PDF", expected_size=pdf_size, expected_sha256=pdf_digest)
-    with pytest.raises(ValueError, match="diverge"):
+    with pytest.raises(ValueError, match="diagnostic PDF cannot be a Delivery artifact"):
+        verify_reopened_artifact(content=pdf, output_format="PDF", expected_size=pdf_size, expected_sha256=pdf_digest)
+    with pytest.raises(ValueError, match="diagnostic PDF cannot be a Delivery artifact"):
         verify_reopened_artifact(content=pdf, output_format="PDF", expected_size=pdf_size, expected_sha256=SHA_A)
 
 
@@ -556,3 +557,7 @@ def test_text_only_diagnostic_pdf_can_never_become_a_final_professional_pdf() ->
         verify_reopened_artifact(
             content=diagnostic, output_format="PDF", expected_size=size, expected_sha256=digest,
         )
+    alternate_whitespace = diagnostic.replace(b"/DiagnosticOnly true", b"/DiagnosticOnly\ntrue")
+    assert b"/DiagnosticOnly true" not in alternate_whitespace
+    with pytest.raises(ValueError, match="diagnostic PDF cannot be a Delivery artifact"):
+        delivery_renderer.validate_delivery_artifact(alternate_whitespace, "PDF")

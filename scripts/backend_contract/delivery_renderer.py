@@ -15,6 +15,7 @@ from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 from PIL import Image, ImageStat, UnidentifiedImageError
 from pypdf import PdfReader
+from pypdf.generic import BooleanObject
 from pypdf.errors import PdfReadError
 from pypdf.generic import ContentStream
 
@@ -375,9 +376,15 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
 
 def validate_delivery_artifact(content: bytes, output_format: str) -> tuple[str, int, str]:
     """Validate bytes admitted to a professional Delivery package."""
-    if output_format == "PDF" and b"/DiagnosticOnly true" in content:
-        raise ValueError("diagnostic PDF cannot be a Delivery artifact")
-    return validate_final_artifact(content, output_format)
+    result = validate_final_artifact(content, output_format)
+    if output_format == "PDF":
+        reader = PdfReader(BytesIO(content), strict=True)
+        marker = reader.trailer["/Root"].get("/DiagnosticOnly")
+        if marker is not None:
+            marker = marker.get_object()
+        if isinstance(marker, BooleanObject) and marker.value is True:
+            raise ValueError("diagnostic PDF cannot be a Delivery artifact")
+    return result
 
 
 def validate_supporting_artifact(content: bytes, media_type: str) -> tuple[str, int, str]:
