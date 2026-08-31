@@ -306,7 +306,7 @@ def test_unsuccessful_access_outcome_cannot_complete_access_requirement(outcome)
     generated = iter(UUID(f"88888888-8888-4888-8888-{index:012d}") for index in range(1, 5))
     service = StartInspectionSession(
         SimpleNamespace(execute=lambda _workspace: (SimpleNamespace(revision=2), upstream)),
-        SimpleNamespace(execute=lambda *_args: SimpleNamespace(revision=1, created_at="2026-08-30T12:00:00+00:00")),
+            SimpleNamespace(execute=lambda *_args, **_kwargs: SimpleNamespace(revision=1, created_at="2026-08-30T12:00:00+00:00")),
         SimpleNamespace(now=lambda: datetime(2026, 8, 30, 12, tzinfo=UTC)),
         SimpleNamespace(new_uuid=lambda: next(generated)),
     )
@@ -347,19 +347,46 @@ def test_save_binds_latest_approved_plan_and_verifies_private_photo_authority():
     ))
     service = SaveInspectionSession(
         SimpleNamespace(append_if_latest=lambda **kwargs: calls.append(kwargs) or SimpleNamespace(revision=1)),
+        SimpleNamespace(execute=lambda *_args: (_ for _ in ()).throw(AssertionError("no predecessor for initial create"))),
         SimpleNamespace(execute=lambda _workspace: (planning_record, upstream)),
         SimpleNamespace(execute=lambda *_args: content), nullcontext,
         SimpleNamespace(now=lambda: datetime(2026, 8, 30, tzinfo=UTC)),
         SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
     )
-    saved = service.execute(WorkspaceId.parse(session.workspace_id), bound, None)
+    saved = service.execute(WorkspaceId.parse(session.workspace_id), bound, None, allow_initial_create=True)
     assert saved.revision == 1
     assert calls[0]["expected_dependencies"][0]["revision"] == 2
 
     bad_content = SimpleNamespace(metadata=replace(content.metadata, checksum_sha256="a" * 64))
     bad = replace(service, get_private_content=SimpleNamespace(execute=lambda *_args: bad_content))
     with pytest.raises(ValueError, match="photo"):
-        bad.execute(WorkspaceId.parse(session.workspace_id), bound, None)
+        bad.execute(WorkspaceId.parse(session.workspace_id), bound, None, allow_initial_create=True)
+
+
+def test_full_inspection_save_cannot_create_initial_or_rewrite_professional_history():
+    session = inspection_session_from_mapping(payload())
+    upstream = planning()
+    bound = replace(session, plan_snapshot=replace(
+        session.plan_snapshot, planning_revision=2, planning_digest=inspection_planning_digest(upstream)
+    ))
+    predecessor = artifact(bound)
+    service = SaveInspectionSession(
+        SimpleNamespace(append_if_latest=lambda **_kwargs: SimpleNamespace(revision=2)),
+        SimpleNamespace(execute=lambda *_args: predecessor),
+        SimpleNamespace(execute=lambda _workspace: (SimpleNamespace(revision=2), upstream)),
+        SimpleNamespace(execute=lambda *_args: SimpleNamespace(metadata=PrivateContentMetadata(
+            workspace_id=WorkspaceId.parse(bound.workspace_id),
+            content_id=PrivateContentId.parse(bound.photos[0].private_content_id), original_filename="synthetic.jpg",
+            byte_size=10, checksum_sha256=bound.photos[0].original_sha256, media_type="image/jpeg",
+            imported_at="2026-08-30T11:00:00+00:00", origin=PrivateContentOrigin.USER_IMPORT,
+        ))), nullcontext, SimpleNamespace(now=lambda: datetime.now(UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
+    )
+    with pytest.raises(ValueError, match="canonical start command"):
+        service.execute(WorkspaceId.parse(bound.workspace_id), bound, None)
+    forged = replace(bound, reviews=(replace(bound.reviews[0], notes="Forged professional review."),))
+    with pytest.raises(ValueError, match="dedicated professional command"):
+        service.execute(WorkspaceId.parse(bound.workspace_id), forged, predecessor.revision)
 
 
 def test_reopen_preserves_state_and_marks_changed_plan_stale():
@@ -383,7 +410,7 @@ def test_start_builds_and_persists_pending_session_from_latest_approved_plan():
     generated = iter(UUID(f"88888888-8888-4888-8888-{index:012d}") for index in range(1, 6))
     service = StartInspectionSession(
         SimpleNamespace(execute=lambda _workspace: (planning_record, upstream)),
-        SimpleNamespace(execute=lambda _workspace, session, expected: saved.append((session, expected)) or SimpleNamespace(revision=1, created_at="2026-08-30T12:00:00+00:00")),
+        SimpleNamespace(execute=lambda _workspace, session, expected, **_kwargs: saved.append((session, expected)) or SimpleNamespace(revision=1, created_at="2026-08-30T12:00:00+00:00")),
         SimpleNamespace(now=lambda: datetime(2026, 8, 30, 12, tzinfo=UTC)),
         SimpleNamespace(new_uuid=lambda: next(generated)),
     )

@@ -34,7 +34,10 @@ from ..report_foundation import (
 from ..technical_findings import TechnicalSnapshot, technical_snapshot_to_mapping
 from ..vistoria import InspectionSession, inspection_session_to_mapping
 from .models import thaw_payload
-from .ports import RepositoryIntegrityError
+from .ports import RepositoryConflict, RepositoryIntegrityError
+
+
+SERVER_EXPERT_PROFILE_ID = "EXPERT-PROFILE-001"
 
 
 _SCHEMA_PATH = Path(__file__).resolve().parents[3] / "schemas" / "report-snapshot-v1.schema.json"
@@ -382,6 +385,7 @@ class StartReportSnapshot:
 @dataclass(frozen=True, slots=True)
 class SaveExpertProfile:
     revisions: object
+    get_latest_revision: object
     authority_guard: object
     clock: object
     ids: object
@@ -391,6 +395,21 @@ class SaveExpertProfile:
             raise ValueError("expert profile is invalid")
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
             raise ValueError("expert profile expected revision is invalid")
+        if profile.profile_id != SERVER_EXPERT_PROFILE_ID:
+            raise ValueError("expert profile identity is server-owned")
+        if expected_revision is None:
+            if profile.revision != 1:
+                raise ValueError("initial expert profile revision is server-owned")
+        else:
+            record = self.get_latest_revision.execute(
+                workspace_id, EXPERT_PROFILE_ARTIFACT_KIND, EXPERT_PROFILE_ARTIFACT_ID
+            )
+            predecessor = expert_profile_from_mapping(thaw_payload(record.payload))
+            if record.revision != expected_revision or profile.revision != predecessor.revision + 1:
+                raise RepositoryConflict("expected expert profile revision is not latest")
+            immutable = ("profile_id", "full_name", "professional_title", "registration", "court_registration")
+            if any(getattr(profile, name) != getattr(predecessor, name) for name in immutable):
+                raise ValueError("expert professional identity cannot be rewritten")
         if not callable(self.authority_guard):
             raise RepositoryIntegrityError("expert profile authority guard is unavailable")
         with self.authority_guard():

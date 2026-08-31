@@ -66,7 +66,6 @@ from ..application.report_foundation import (
     expert_profile_to_validated_mapping,
     report_snapshot_to_validated_mapping,
     validated_expert_profile_from_mapping,
-    validated_report_snapshot_from_mapping,
 )
 from ..application.delivery_foundation import (
     delivery_snapshot_to_validated_mapping,
@@ -564,20 +563,6 @@ class LocalApi:
                         raise ValueError("Report Snapshot start request is invalid")
                     record, snapshot = self._services.start_report_snapshot.execute(workspace_id)
                     return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_validated_mapping(snapshot)})
-                if normalized_method == "PUT":
-                    if self._services.save_report_snapshot is None:
-                        return _error(503, "REPORT_SNAPSHOT_UNAVAILABLE")
-                    dto = self._request_dto(request_headers, body)
-                    if set(dto) != {"expected_revision", "snapshot"}:
-                        raise ValueError("Report Snapshot request is invalid")
-                    expected = dto["expected_revision"]
-                    if expected is not None and (type(expected) is not int or expected < 1):
-                        raise ValueError("Report Snapshot expected revision is invalid")
-                    snapshot = validated_report_snapshot_from_mapping(dto["snapshot"])
-                    if snapshot.workspace_id != str(workspace_id):
-                        raise ValueError("Report Snapshot workspace mismatch")
-                    record = self._services.save_report_snapshot.execute(workspace_id, snapshot, expected)
-                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_validated_mapping(snapshot)})
                 return _error(405, "METHOD_NOT_ALLOWED")
 
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("report-snapshot", "reviews"):

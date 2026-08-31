@@ -232,8 +232,8 @@ def test_report_foundation_routes_are_private_validate_and_delegate():
     started = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/report-snapshot", body={})
     assert started.status == 201
     saved = request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/report-snapshot", body={"expected_revision": 1, "snapshot": payload})
-    assert saved.status == 200
-    assert save_report.calls[0][0][1] == snapshot
+    assert saved.status == 405
+    assert save_report.calls == []
     reopened = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/report-snapshot", headers={"X-Local-API-Token": TOKEN})
     assert decoded(reopened)["snapshot"] == payload
     reviewed = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/report-snapshot/reviews", body={"expected_revision": 1, "action": "MARK_REVIEWED", "professional_id": "EXPERT-PROFILE-001", "reason": "Revisão explícita."})

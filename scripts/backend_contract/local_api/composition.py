@@ -303,6 +303,7 @@ def build_local_api(
     save_inspection_session = (
         SaveInspectionSession(
             store.revisions,
+            get_latest_artifact,
             get_pericial_planning,
             GetPrivateContent(store.workspaces, private_store),
             private_store.authority_guard,
@@ -336,6 +337,7 @@ def build_local_api(
     get_expert_profile = GetExpertProfile(get_latest_artifact)
     save_expert_profile = SaveExpertProfile(
         store.revisions,
+        get_latest_artifact,
         private_store.authority_guard if private_store is not None else nullcontext,
         local_clock,
         local_ids,
