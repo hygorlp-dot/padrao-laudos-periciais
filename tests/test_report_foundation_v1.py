@@ -100,6 +100,7 @@ def test_openapi_publishes_profile_and_report_as_canonical_private_resources():
     contract = json.loads((ROOT / "contracts/openapi-v1.json").read_text(encoding="utf-8"))
     assert set(contract["paths"]["/v1/workspaces/{workspace_id}/expert-profile"]) == {"get", "put"}
     assert set(contract["paths"]["/v1/workspaces/{workspace_id}/report-snapshot"]) == {"get", "post", "put"}
+    assert set(contract["paths"]["/v1/workspaces/{workspace_id}/report-snapshot/reviews"]) == {"post"}
     assert contract["components"]["schemas"]["ReportSnapshot"] == {"$ref": "../schemas/report-snapshot-v1.schema.json"}
     assert contract["info"]["x-report-snapshot-semantic-boundary"] == "scripts.backend_contract.report_foundation.report_snapshot_from_mapping"
 
@@ -110,6 +111,14 @@ def test_report_distinguishes_every_authority_class_without_promotion():
     claims = list(snapshot.claims)
     with pytest.raises(ValueError, match="authority promotion"):
         claims[0] = replace(claims[0], authority=AuthorityClass.PROFESSIONALLY_CONCLUDED)
+
+
+def test_cpc319_and_cpc473_required_classifications_are_not_payload_controlled():
+    snapshot = report_snapshot_from_mapping(payload())
+    with pytest.raises(ValueError, match="CPC 473"):
+        replace(snapshot, sections=tuple(replace(item, required_by_cpc473=False) for item in snapshot.sections), coverage=replace(snapshot.coverage, cpc473_required_sections=0, cpc473_present_sections=0))
+    with pytest.raises(ValueError, match="CPC 319"):
+        replace(snapshot, context_matrix=tuple(replace(item, required=False) for item in snapshot.context_matrix), coverage=replace(snapshot.coverage, context_required_fields=0, context_present_fields=0))
 
 
 def test_material_claim_requires_exact_machine_provenance():
@@ -217,6 +226,7 @@ def test_start_creates_an_empty_draft_bound_to_all_four_authorities():
     assert started.coverage.complete is False
     assert started.source_snapshot.technical_snapshot_id == technical.snapshot_id
     assert captured["expected"] is None
+    assert report_snapshot_from_mapping(report_snapshot_to_mapping(started)) == started
 
 
 def test_save_rejects_question_chain_that_does_not_match_bound_technical_authority():
@@ -226,13 +236,36 @@ def test_save_rejects_question_chain_that_does_not_match_bound_technical_authori
         SimpleNamespace(execute=lambda _workspace: (records[0], case)),
         SimpleNamespace(execute=lambda _workspace: (records[1], inspection)),
         SimpleNamespace(execute=lambda _workspace: (records[2], technical)),
-        SimpleNamespace(execute=lambda _workspace: (records[3], profile)), nullcontext,
+        SimpleNamespace(execute=lambda _workspace: (records[3], profile)),
+        SimpleNamespace(execute=lambda *_args: SimpleNamespace(payload=report_snapshot_to_mapping(bound_report()))), nullcontext,
         SimpleNamespace(now=lambda: datetime.now(UTC)),
         SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
     )
     snapshot = bound_report()
     with pytest.raises(ValueError, match="answer traceability"):
         service.execute(WorkspaceId.parse(snapshot.workspace_id), replace(snapshot, answers=(replace(snapshot.answers[0], finding_id="FINDING-UNKNOWN"),)), 4)
+
+
+def test_save_rejects_missing_upstream_provenance_and_post_review_material_edit():
+    records, case, inspection, technical, profile = upstreams()
+    predecessor = bound_report()
+    predecessor_record = ArtifactRevision(WorkspaceId.parse(predecessor.workspace_id), "REPORT_SNAPSHOT_V1", "REPORT-SNAPSHOT", "77777777-7777-4777-8777-777777777777", 4, "2026-08-31T11:02:00+00:00", "e" * 64, report_snapshot_to_mapping(predecessor))
+    service = SaveReportSnapshot(
+        SimpleNamespace(append_if_latest=lambda **_kwargs: SimpleNamespace(revision=5)),
+        SimpleNamespace(execute=lambda _workspace: (records[0], case)),
+        SimpleNamespace(execute=lambda _workspace: (records[1], inspection)),
+        SimpleNamespace(execute=lambda _workspace: (records[2], technical)),
+        SimpleNamespace(execute=lambda _workspace: (records[3], profile)),
+        SimpleNamespace(execute=lambda *_args: predecessor_record),
+        nullcontext, SimpleNamespace(now=lambda: datetime.now(UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
+    )
+    unknown = replace(predecessor.claims[0], provenance=(replace(predecessor.claims[0].provenance[0], source_id="UNKNOWN"),))
+    with pytest.raises(ValueError, match="bound upstream authority"):
+        service.execute(WorkspaceId.parse(predecessor.workspace_id), replace(predecessor, claims=(unknown, *predecessor.claims[1:])), 4)
+    edited = replace(predecessor.claims[0], text="Materially edited after approval.")
+    with pytest.raises(ValueError, match="new draft"):
+        service.execute(WorkspaceId.parse(predecessor.workspace_id), replace(predecessor, claims=(edited, *predecessor.claims[1:])), 4)
 
 
 def test_get_marks_upstream_change_stale_and_reopen_cannot_preserve_approval():
@@ -273,6 +306,7 @@ def synthetic_docm(*, duplicate_profile=False, missing_alt=False):
         "word/styles.xml": "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:style w:styleId=\"Normal\"/></w:styles>",
         "word/numbering.xml": "<w:numbering xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:abstractNum w:abstractNumId=\"0\"/></w:numbering>",
         "word/vbaProject.bin": b"SYNTHETIC-MACRO-PART",
+        "docProps/custom.xml": '<Properties><property name="TEMPLATE_ID"><value>SYNTHETIC-DOCM-TEMPLATE-001</value></property></Properties>',
     }
     output = BytesIO()
     with ZipFile(output, "w", ZIP_DEFLATED) as package:
@@ -307,6 +341,8 @@ def test_word_binding_rejects_duplicate_fields_missing_alt_and_unapproved_report
         bind_report_template(synthetic_docm(missing_alt=True), snapshot, template_manifest())
     with pytest.raises(ValueError, match="approved report"):
         bind_report_template(synthetic_docm(), replace(snapshot, state=ReportState.REVIEWED, review_decisions=snapshot.review_decisions[:1], coverage=replace(snapshot.coverage, complete=False)), template_manifest())
+    with pytest.raises(ValueError, match="identity"):
+        bind_report_template(synthetic_docm(), snapshot, replace(template_manifest(), template_id="OTHER-TEMPLATE"))
 
 
 def test_word_binding_rejects_unsafe_zip_paths_and_does_not_create_delivery_authority():

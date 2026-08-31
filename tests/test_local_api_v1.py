@@ -169,12 +169,14 @@ def test_report_foundation_routes_are_private_validate_and_delegate():
     start_report = RecordingService((revision(payload=payload), snapshot))
     save_report = RecordingService(revision(payload=payload))
     get_report = RecordingService((revision(payload=payload), snapshot))
+    review_report = RecordingService((revision(payload=payload), snapshot))
     api = LocalApi(services(
         save_expert_profile=save_profile,
         get_expert_profile=get_profile,
         start_report_snapshot=start_report,
         save_report_snapshot=save_report,
         get_report_snapshot=get_report,
+        review_report_snapshot=review_report,
     ), token=TOKEN)
 
     assert request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/expert-profile").status == 403
@@ -191,6 +193,9 @@ def test_report_foundation_routes_are_private_validate_and_delegate():
     assert save_report.calls[0][0][1] == snapshot
     reopened = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/report-snapshot", headers={"X-Local-API-Token": TOKEN})
     assert decoded(reopened)["snapshot"] == payload
+    reviewed = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/report-snapshot/reviews", body={"expected_revision": 1, "action": "MARK_REVIEWED", "professional_id": "EXPERT-PROFILE-001", "reason": "Revisão explícita."})
+    assert reviewed.status == 200
+    assert review_report.calls[0][1]["action"] == "MARK_REVIEWED"
 
 
 def test_technical_snapshot_route_starts_validates_saves_and_reopens_canonical_chain():

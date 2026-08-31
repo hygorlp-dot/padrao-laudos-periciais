@@ -62,6 +62,8 @@ _SECTION_ORDER = (
     "TECHNICAL_FINDINGS", "ANSWERS_TO_QUESTIONS", "CONCLUSIONS",
     "LIMITATIONS_RESERVATIONS", "REFERENCES", "ATTACHMENTS",
 )
+_CPC473_REQUIRED = {"IDENTIFICATION", "PROCEDURAL_CONTEXT", "PURPOSE_OBJECT", "DOCUMENTS_EVIDENCE", "INSPECTION", "TECHNICAL_ANALYSIS", "TECHNICAL_FINDINGS", "ANSWERS_TO_QUESTIONS"}
+_CONTEXT_FIELDS = {"PROCESS_NUMBER", "COURT", "PARTIES", "ADDRESSES", "CLAIM_AND_GROUNDS", "REQUESTS"}
 
 
 def _text(value: object) -> bool:
@@ -317,6 +319,10 @@ class ReportSnapshot:
         section_ids = {item.section_id for item in self.sections}
         if len(section_ids) != len(self.sections) or tuple(item.kind for item in sorted(self.sections, key=lambda item: item.order)) != _SECTION_ORDER or tuple(item.order for item in sorted(self.sections, key=lambda item: item.order)) != tuple(range(1, len(_SECTION_ORDER) + 1)):
             raise ValueError("canonical report section order is invalid")
+        if any(item.required_by_cpc473 != (item.kind in _CPC473_REQUIRED) for item in self.sections):
+            raise ValueError("CPC 473 required section classification is canonical")
+        if {item.field for item in self.context_matrix} != _CONTEXT_FIELDS or len(self.context_matrix) != len(_CONTEXT_FIELDS) or any(not item.required for item in self.context_matrix):
+            raise ValueError("CPC 319 context classification is canonical")
         claim_ids = {item.claim_id for item in self.claims}
         if len(claim_ids) != len(self.claims) or any(item.section_id not in section_ids for item in self.claims):
             raise ValueError("report claim section is invalid")
@@ -340,6 +346,8 @@ class ReportSnapshot:
         present = sum(item.required_by_cpc473 and any(claim.section_id == item.section_id for claim in self.claims) for item in self.sections)
         context_required = sum(item.required for item in self.context_matrix)
         context_present = sum(item.required and item.status is ContextStatus.PRESENT for item in self.context_matrix)
+        if self.state is ReportState.APPROVED and (not self.claims or present != required or context_present != context_required):
+            raise ValueError("approved report requires complete CPC 319 and CPC 473 content")
         expected_coverage = ReportCoverage(
             sections=len(self.sections), material_claims=len(self.claims), traceable_claims=len(self.claims),
             answers=len(self.answers), traceable_answers=len(self.answers), cpc473_required_sections=required,

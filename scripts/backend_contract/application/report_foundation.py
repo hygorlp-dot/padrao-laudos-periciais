@@ -18,10 +18,12 @@ from ..report_foundation import (
     REPORT_SNAPSHOT_ARTIFACT_ID,
     REPORT_SNAPSHOT_ARTIFACT_KIND,
     ReportCoverage,
+    ReportReviewDecision,
     ReportSection,
     ReportSnapshot,
     ReportSourceSnapshot,
     ReportState,
+    ReviewAction,
     report_snapshot_from_mapping,
     report_snapshot_to_mapping,
     expert_profile_from_mapping,
@@ -124,6 +126,23 @@ def _validate_answer_chains(snapshot: ReportSnapshot, technical: TechnicalSnapsh
             raise ValueError("Report Snapshot answer traceability is invalid")
 
 
+def _validate_claim_provenance(snapshot: ReportSnapshot, case: CaseAnalysisSnapshot, inspection: InspectionSession, technical: TechnicalSnapshot) -> None:
+    sources = {
+        "ALLEGATION": ({item.item_id for item in case.claims}, snapshot.source_snapshot.case_analysis_revision),
+        "COURT_DECISION": ({item.item_id for item in case.decisions}, snapshot.source_snapshot.case_analysis_revision),
+        "CASE_DOCUMENT": ({item.document_id for item in case.documents}, snapshot.source_snapshot.case_analysis_revision),
+        "FIELD_OBSERVATION": ({item.observation_id for item in inspection.observations}, snapshot.source_snapshot.inspection_session_revision),
+        "MEASUREMENT": ({item.measurement_id for item in inspection.measurements}, snapshot.source_snapshot.inspection_session_revision),
+        "TECHNICAL_FINDING": ({item.finding_id for item in technical.findings}, snapshot.source_snapshot.technical_snapshot_revision),
+        "PROFESSIONAL_DECISION": ({item.decision_id for item in technical.decisions}, snapshot.source_snapshot.technical_snapshot_revision),
+    }
+    for claim in snapshot.claims:
+        for provenance in claim.provenance:
+            identities, revision = sources[provenance.source_kind]
+            if provenance.source_id not in identities or provenance.source_revision != revision:
+                raise ValueError("Report Snapshot claim provenance is not present in bound upstream authority")
+
+
 def _current(workspace_id, services):
     case_record, case = services[0].execute(workspace_id)
     inspection_record, inspection = services[1].execute(workspace_id)
@@ -144,6 +163,7 @@ class SaveReportSnapshot:
     get_inspection_session: object
     get_technical_snapshot: object
     get_expert_profile: object
+    get_latest_revision: object
     authority_guard: object
     clock: object
     ids: object
@@ -160,6 +180,13 @@ class SaveReportSnapshot:
             if _reconcile(snapshot, current[-1]).upstream_stale:
                 raise ValueError("Report Snapshot upstream authority is stale")
             _validate_answer_chains(snapshot, current[5])
+            _validate_claim_provenance(snapshot, current[1], current[3], current[5])
+            if expected_revision is not None:
+                predecessor_record = self.get_latest_revision.execute(workspace_id, REPORT_SNAPSHOT_ARTIFACT_KIND, REPORT_SNAPSHOT_ARTIFACT_ID)
+                predecessor = validated_report_snapshot_from_mapping(thaw_payload(predecessor_record.payload))
+                material_fields = ("source_snapshot", "expert_profile", "editorial_profile", "context_matrix", "sections", "claims", "answers")
+                if predecessor.review_decisions and any(getattr(predecessor, name) != getattr(snapshot, name) for name in material_fields):
+                    raise ValueError("Report Snapshot material change requires a new draft before professional review")
             created_at = self.clock.now()
             if created_at.tzinfo is None or created_at.utcoffset() is None:
                 raise ValueError("Report Snapshot clock requires timezone")
@@ -185,6 +212,37 @@ class GetReportSnapshot:
         snapshot = validated_report_snapshot_from_mapping(thaw_payload(record.payload))
         current = _current(workspace_id, (self.get_case_analysis, self.get_inspection_session, self.get_technical_snapshot, self.get_expert_profile))
         return record, _reconcile(snapshot, current[-1])
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewReportSnapshot:
+    get_snapshot: object
+    save_snapshot: object
+    clock: object
+    ids: object
+
+    def execute(self, workspace_id, *, action: str, professional_id: str, reason: str, expected_revision: int):
+        try:
+            review_action = ReviewAction(action)
+        except ValueError as exc:
+            raise ValueError("Report review action is invalid") from exc
+        record, snapshot = self.get_snapshot.execute(workspace_id)
+        if record.revision != expected_revision or snapshot.upstream_stale or professional_id != snapshot.expert_profile.profile_id:
+            raise ValueError("Report review authority or revision is invalid")
+        timestamp = self.clock.now()
+        if timestamp.tzinfo is None or timestamp.utcoffset() is None or type(reason) is not str or not reason.strip():
+            raise ValueError("Report review decision is invalid")
+        previous = snapshot.review_decisions[-1].review_id if snapshot.review_decisions else None
+        decision = ReportReviewDecision(str(self.ids.new_uuid()), review_action, professional_id, reason.strip(), timestamp.isoformat(), previous)
+        state = {ReviewAction.MARK_REVIEWED: ReportState.REVIEWED, ReviewAction.APPROVE: ReportState.APPROVED, ReviewAction.SUPERSEDE: ReportState.SUPERSEDED}[review_action]
+        required = snapshot.coverage.cpc473_required_sections
+        present = snapshot.coverage.cpc473_present_sections
+        context_required = snapshot.coverage.context_required_fields
+        context_present = snapshot.coverage.context_present_fields
+        complete = bool(snapshot.claims) and present == required and context_present == context_required and review_action is ReviewAction.APPROVE
+        reviewed = replace(snapshot, review_decisions=(*snapshot.review_decisions, decision), state=state, coverage=replace(snapshot.coverage, complete=complete, reasons=() if complete else snapshot.coverage.reasons))
+        saved = self.save_snapshot.execute(workspace_id, reviewed, expected_revision)
+        return saved, reviewed
 
 
 @dataclass(frozen=True, slots=True)

@@ -50,6 +50,7 @@ from ..application.report_foundation import (
     SaveExpertProfile,
     SaveReportSnapshot,
     StartReportSnapshot,
+    ReviewReportSnapshot,
 )
 
 
@@ -250,6 +251,7 @@ def build_local_api(
         get_inspection_session,
         get_technical_snapshot,
         get_expert_profile,
+        get_latest_artifact,
         private_store.authority_guard if private_store is not None else nullcontext,
         local_clock,
         local_ids,
@@ -313,6 +315,7 @@ def build_local_api(
             save_report_snapshot,
             local_ids,
         ),
+        review_report_snapshot=ReviewReportSnapshot(get_report_snapshot, save_report_snapshot, local_clock, local_ids),
         get_process_metadata_review=get_process_metadata_review,
         confirm_process_metadata_source_span=confirm_process_metadata_source_span,
         import_case_document=import_case_document,

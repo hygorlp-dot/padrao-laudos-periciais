@@ -89,6 +89,13 @@ def test_product_bridge_allowlists_report_foundation_routes(method, resource):
     assert _proxy_target(f"/app-api/v1/workspaces/{workspace}/{resource}", method) == f"/v1/workspaces/{workspace}/{resource}"
 
 
+def test_product_bridge_allowlists_only_the_explicit_report_review_command():
+    workspace = "11111111-1111-4111-8111-111111111111"
+    path = f"/app-api/v1/workspaces/{workspace}/report-snapshot/reviews"
+    assert _proxy_target(path, "POST") == f"/v1/workspaces/{workspace}/report-snapshot/reviews"
+    assert _proxy_target(path, "PUT") is None
+
+
 @pytest.mark.parametrize("value", (0, -1, 31, True, float("inf"), float("nan")))
 def test_product_bridge_config_rejects_invalid_upstream_timeouts(value):
     with pytest.raises(ValueError, match="timeout upstream"):

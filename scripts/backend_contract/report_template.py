@@ -4,6 +4,7 @@ from dataclasses import dataclass, fields
 from hashlib import sha256
 from io import BytesIO
 from pathlib import PurePosixPath
+import re
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile, ZipInfo
 
@@ -126,6 +127,12 @@ def bind_report_template(template_bytes: bytes, report: ReportSnapshot, manifest
     if type(manifest) is not TemplateBindingManifest:
         raise ValueError("template manifest is invalid")
     infos, before = _safe_parts(template_bytes)
+    try:
+        custom_properties = before["docProps/custom.xml"].decode("utf-8")
+    except (KeyError, UnicodeDecodeError) as exc:
+        raise ValueError("template identity is missing") from exc
+    if custom_properties.count(f">{manifest.template_id}<") != 1:
+        raise ValueError("template identity does not match manifest")
     before_mechanics = _mechanics(before)
     if before_mechanics[0] != _FIELD_NAMES:
         raise ValueError("protected Word fields are incomplete")
@@ -133,6 +140,9 @@ def bind_report_template(template_bytes: bytes, report: ReportSnapshot, manifest
     if (manifest.output_kind == "DOCM") != is_macro:
         raise ValueError("template kind and macro package disagree")
     document = before["word/document.xml"].decode("utf-8")
+    declared_placeholders = {item.placeholder for item in manifest.bindings}
+    if set(re.findall(r"\[\[[A-Z][A-Z0-9_]*\]\]", document)) != declared_placeholders:
+        raise ValueError("undeclared canonical template field")
     for binding in manifest.bindings:
         if document.count(binding.placeholder) != 1:
             raise ValueError("canonical field must remain single-source")

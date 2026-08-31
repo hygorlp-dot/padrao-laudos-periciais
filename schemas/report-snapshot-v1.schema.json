@@ -10,7 +10,7 @@
     "source_snapshot":{"$ref":"#/$defs/source"},"expert_profile":{"$ref":"#/$defs/expert"},"editorial_profile":{"$ref":"#/$defs/editorial"},
     "context_matrix":{"type":"array","items":{"$ref":"#/$defs/context"}},
     "sections":{"type":"array","minItems":14,"maxItems":14,"items":{"$ref":"#/$defs/section"}},
-    "claims":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/claim"}},
+    "claims":{"type":"array","items":{"$ref":"#/$defs/claim"}},
     "answers":{"type":"array","items":{"$ref":"#/$defs/answer"}},
     "review_decisions":{"type":"array","items":{"$ref":"#/$defs/review"}},
     "state":{"enum":["DRAFT","REVIEWED","APPROVED","SUPERSEDED"]},"coverage":{"$ref":"#/$defs/coverage"},
