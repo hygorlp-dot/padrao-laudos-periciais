@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/pericial-planning-snapshot-v1.schema.json",
+  "title": "Canonical Pericial Planning Snapshot V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "snapshot_id", "workspace_id", "plan", "objectives", "issues",
+    "question_links", "required_documents", "required_information", "inspection_requirements",
+    "measurement_requirements", "photo_requirements", "equipment_requirements", "access_requirements",
+    "method_candidates", "procedure_candidates", "sampling_candidates", "safety_requirements",
+    "external_support_requirements", "risks", "gaps", "decisions", "coverage",
+    "upstream_stale", "upstream_stale_reasons"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "snapshot_id": {"$ref": "#/$defs/id"},
+    "workspace_id": {"$ref": "#/$defs/uuid"},
+    "plan": {"$ref": "#/$defs/plan"},
+    "objectives": {"$ref": "#/$defs/simpleItems"},
+    "issues": {"$ref": "#/$defs/simpleItems"},
+    "question_links": {"$ref": "#/$defs/questionLinkItems"},
+    "required_documents": {"$ref": "#/$defs/requiredDocumentItems"},
+    "required_information": {"$ref": "#/$defs/requiredInformationItems"},
+    "inspection_requirements": {"$ref": "#/$defs/inspectionItems"},
+    "measurement_requirements": {"$ref": "#/$defs/measurementItems"},
+    "photo_requirements": {"$ref": "#/$defs/photoItems"},
+    "equipment_requirements": {"$ref": "#/$defs/equipmentItems"},
+    "access_requirements": {"$ref": "#/$defs/accessItems"},
+    "method_candidates": {"$ref": "#/$defs/methodItems"},
+    "procedure_candidates": {"$ref": "#/$defs/procedureItems"},
+    "sampling_candidates": {"$ref": "#/$defs/samplingItems"},
+    "safety_requirements": {"$ref": "#/$defs/safetyItems"},
+    "external_support_requirements": {"$ref": "#/$defs/supportItems"},
+    "risks": {"$ref": "#/$defs/riskItems"},
+    "gaps": {"$ref": "#/$defs/gapItems"},
+    "decisions": {"type": "array", "maxItems": 2048, "items": {"$ref": "#/$defs/decision"}},
+    "coverage": {"$ref": "#/$defs/coverage"},
+    "upstream_stale": {"type": "boolean"},
+    "upstream_stale_reasons": {"$ref": "#/$defs/textList"}
+  },
+  "$defs": {
+    "id": {"type": "string", "maxLength": 256, "pattern": "^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$"},
+    "uuid": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "text": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "\\S"},
+    "idList": {"type": "array", "maxItems": 512, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+    "nonemptyIdList": {"type": "array", "minItems": 1, "maxItems": 512, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+    "textList": {"type": "array", "maxItems": 512, "items": {"$ref": "#/$defs/text"}},
+    "nonemptyTextList": {"type": "array", "minItems": 1, "maxItems": 512, "items": {"$ref": "#/$defs/text"}},
+    "provenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["workspace_id", "source_document_id", "source_document_sha256", "page_or_span", "source_revision", "occurrence_id"],
+      "properties": {
+        "workspace_id": {"$ref": "#/$defs/uuid"}, "source_document_id": {"$ref": "#/$defs/id"},
+        "source_document_sha256": {"$ref": "#/$defs/sha256"}, "page_or_span": {"$ref": "#/$defs/text"},
+        "source_revision": {"type": "integer", "minimum": 1}, "occurrence_id": {"$ref": "#/$defs/id"}
+      }
+    },
+    "derivation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["rationale", "case_analysis_item_ids", "source_provenance", "question_ids", "pericial_object_ids", "court_decision_ids", "technical_document_reference_ids", "gap_or_conflict_ids"],
+      "properties": {
+        "rationale": {"$ref": "#/$defs/text"}, "case_analysis_item_ids": {"$ref": "#/$defs/nonemptyIdList"},
+        "source_provenance": {"type": "array", "minItems": 1, "maxItems": 512, "uniqueItems": true, "items": {"$ref": "#/$defs/provenance"}},
+        "question_ids": {"$ref": "#/$defs/idList"}, "pericial_object_ids": {"$ref": "#/$defs/idList"},
+        "court_decision_ids": {"$ref": "#/$defs/idList"}, "technical_document_reference_ids": {"$ref": "#/$defs/idList"},
+        "gap_or_conflict_ids": {"$ref": "#/$defs/idList"}
+      }
+    },
+    "baseItem": {
+      "type": "object",
+      "required": ["item_id", "title", "description", "priority", "derivation", "proposal_status", "professional_review_status"],
+      "properties": {
+        "item_id": {"$ref": "#/$defs/id"}, "title": {"$ref": "#/$defs/text"}, "description": {"$ref": "#/$defs/text"},
+        "priority": {"enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]}, "derivation": {"$ref": "#/$defs/derivation"},
+        "proposal_status": {"const": "PROPOSED"},
+        "professional_review_status": {"enum": ["PENDING", "APPROVED", "REJECTED", "MODIFIED", "DEFERRED"]}
+      }
+    },
+    "simpleItem": {"allOf": [{"$ref": "#/$defs/baseItem"}], "unevaluatedProperties": false},
+    "questionLink": {
+      "allOf": [{"$ref": "#/$defs/baseItem"}, {"type": "object", "required": ["question_id", "linked_item_ids", "dependency_item_ids"], "properties": {"question_id": {"$ref": "#/$defs/id"}, "linked_item_ids": {"$ref": "#/$defs/nonemptyIdList"}, "dependency_item_ids": {"$ref": "#/$defs/idList"}}}], "unevaluatedProperties": false
+    },
+    "requiredDocument": {"allOf": [{"$ref": "#/$defs/baseItem"}, {"type":"object","required":["document_description","required_before"],"properties":{"document_description":{"$ref":"#/$defs/text"},"required_before":{"enum":["PLANNING_REVIEW","INSPECTION","LATER_ANALYSIS"]}}}],"unevaluatedProperties":false},
+    "requiredInformation": {"allOf": [{"$ref": "#/$defs/baseItem"}, {"type":"object","required":["information_description","requested_from"],"properties":{"information_description":{"$ref":"#/$defs/text"},"requested_from":{"$ref":"#/$defs/text"}}}],"unevaluatedProperties":false},
+    "inspection": {"allOf": [{"$ref": "#/$defs/baseItem"}, {"type":"object","required":["inspection_target","field_observations_needed"],"properties":{"inspection_target":{"$ref":"#/$defs/text"},"field_observations_needed":{"$ref":"#/$defs/nonemptyTextList"}}}],"unevaluatedProperties":false},
+    "measurement": {"allOf": [{"$ref": "#/$defs/baseItem"}, {"type":"object","required":["quantity","unit","purpose"],"properties":{"quantity":{"$ref":"#/$defs/text"},"unit":{"$ref":"#/$defs/text"},"purpose":{"$ref":"#/$defs/text"}}}],"unevaluatedProperties":false},
+    "photo": {"allOf": [{"$ref": "#/$defs/baseItem"}, {"type":"object","required":["subject","purpose"],"properties":{"subject":{"$ref":"#/$defs/text"},"purpose":{"$ref":"#/$defs/text"}}}],"unevaluatedProperties":false},
+    "equipment": {"allOf": [{"$ref": "#/$defs/baseItem"}, {"type":"object","required":["equipment","purpose"],"properties":{"equipment":{"$ref":"#/$defs/text"},"purpose":{"$ref":"#/$defs/text"}}}],"unevaluatedProperties":false},
+    "access": {"allOf": [{"$ref": "#/$defs/baseItem"}, {"type":"object","required":["access_type","target","responsible_contact"],"properties":{"access_type":{"$ref":"#/$defs/text"},"target":{"$ref":"#/$defs/text"},"responsible_contact":{"$ref":"#/$defs/text"}}}],"unevaluatedProperties":false},
+    "normativeReference": {"type":"object","additionalProperties":false,"required":["reference_id","title","edition","applicability_status"],"properties":{"reference_id":{"$ref":"#/$defs/id"},"title":{"$ref":"#/$defs/text"},"edition":{"$ref":"#/$defs/text"},"applicability_status":{"const":"PENDING_PROFESSIONAL_REVIEW"}}},
+    "method": {"allOf": [{"$ref": "#/$defs/baseItem"}, {"type":"object","required":["method_name","purpose","applicability_rationale","required_inputs","limitations","normative_references"],"properties":{"method_name":{"$ref":"#/$defs/text"},"purpose":{"$ref":"#/$defs/text"},"applicability_rationale":{"$ref":"#/$defs/text"},"required_inputs":{"$ref":"#/$defs/nonemptyTextList"},"limitations":{"$ref":"#/$defs/nonemptyTextList"},"normative_references":{"type":"array","maxItems":128,"items":{"$ref":"#/$defs/normativeReference"}}}}],"unevaluatedProperties":false},
+    "procedure": {"allOf": [{"$ref": "#/$defs/baseItem"}, {"type":"object","required":["procedure_name","purpose","planned_steps","limitations"],"properties":{"procedure_name":{"$ref":"#/$defs/text"},"purpose":{"$ref":"#/$defs/text"},"planned_steps":{"$ref":"#/$defs/nonemptyTextList"},"limitations":{"$ref":"#/$defs/nonemptyTextList"}}}],"unevaluatedProperties":false},
+    "sampling": {"allOf": [{"$ref": "#/$defs/baseItem"}, {"type":"object","required":["population","candidate_strategy","limitations"],"properties":{"population":{"$ref":"#/$defs/text"},"candidate_strategy":{"$ref":"#/$defs/text"},"limitations":{"$ref":"#/$defs/nonemptyTextList"}}}],"unevaluatedProperties":false},
+    "safety": {"allOf": [{"$ref": "#/$defs/baseItem"}, {"type":"object","required":["hazard","precaution"],"properties":{"hazard":{"$ref":"#/$defs/text"},"precaution":{"$ref":"#/$defs/text"}}}],"unevaluatedProperties":false},
+    "support": {"allOf": [{"$ref": "#/$defs/baseItem"}, {"type":"object","required":["support_type","purpose"],"properties":{"support_type":{"$ref":"#/$defs/text"},"purpose":{"$ref":"#/$defs/text"}}}],"unevaluatedProperties":false},
+    "risk": {"allOf": [{"$ref": "#/$defs/baseItem"}, {"type":"object","required":["risk","mitigation"],"properties":{"risk":{"$ref":"#/$defs/text"},"mitigation":{"$ref":"#/$defs/text"}}}],"unevaluatedProperties":false},
+    "gap": {"allOf": [{"$ref": "#/$defs/baseItem"}, {"type":"object","required":["gap","consequence"],"properties":{"gap":{"$ref":"#/$defs/text"},"consequence":{"$ref":"#/$defs/text"}}}],"unevaluatedProperties":false},
+    "decision": {
+      "type":"object","additionalProperties":false,
+      "required":["decision_id","target_item_id","action","proposal_value","decided_value","reviewer","reason","revision","timestamp"],
+      "properties":{"decision_id":{"$ref":"#/$defs/id"},"target_item_id":{"$ref":"#/$defs/id"},"action":{"enum":["APPROVE","REJECT","MODIFY","DEFER"]},"proposal_value":{"$ref":"#/$defs/text"},"decided_value":{"type":["string","null"],"maxLength":4096},"reviewer":{"$ref":"#/$defs/text"},"reason":{"$ref":"#/$defs/text"},"revision":{"type":"integer","minimum":1},"timestamp":{"$ref":"#/$defs/text"}}
+    },
+    "coverage": {
+      "type":"object","additionalProperties":false,
+      "required":["material_items_total","reviewed_items","pending_items","approved_items","rejected_items","modified_items","deferred_items","readiness","readiness_reasons"],
+      "properties":{"material_items_total":{"type":"integer","minimum":0},"reviewed_items":{"type":"integer","minimum":0},"pending_items":{"type":"integer","minimum":0},"approved_items":{"type":"integer","minimum":0},"rejected_items":{"type":"integer","minimum":0},"modified_items":{"type":"integer","minimum":0},"deferred_items":{"type":"integer","minimum":0},"readiness":{"enum":["READY","PARTIAL","BLOCKED"]},"readiness_reasons":{"$ref":"#/$defs/textList"}}
+    },
+    "plan": {
+      "type":"object","additionalProperties":false,
+      "required":["plan_id","title","workspace_id","case_analysis_snapshot_id","case_analysis_revision","case_analysis_source_revision","case_analysis_digest"],
+      "properties":{"plan_id":{"$ref":"#/$defs/id"},"title":{"$ref":"#/$defs/text"},"workspace_id":{"$ref":"#/$defs/uuid"},"case_analysis_snapshot_id":{"$ref":"#/$defs/id"},"case_analysis_revision":{"type":"integer","minimum":1},"case_analysis_source_revision":{"type":"integer","minimum":1},"case_analysis_digest":{"$ref":"#/$defs/sha256"}}
+    },
+    "simpleItems": {"type":"array","maxItems":512,"items":{"$ref":"#/$defs/simpleItem"}},
+    "questionLinkItems": {"type":"array","maxItems":512,"items":{"$ref":"#/$defs/questionLink"}},
+    "requiredDocumentItems": {"type":"array","maxItems":512,"items":{"$ref":"#/$defs/requiredDocument"}},
+    "requiredInformationItems": {"type":"array","maxItems":512,"items":{"$ref":"#/$defs/requiredInformation"}},
+    "inspectionItems": {"type":"array","maxItems":512,"items":{"$ref":"#/$defs/inspection"}},
+    "measurementItems": {"type":"array","maxItems":512,"items":{"$ref":"#/$defs/measurement"}},
+    "photoItems": {"type":"array","maxItems":512,"items":{"$ref":"#/$defs/photo"}},
+    "equipmentItems": {"type":"array","maxItems":512,"items":{"$ref":"#/$defs/equipment"}},
+    "accessItems": {"type":"array","maxItems":512,"items":{"$ref":"#/$defs/access"}},
+    "methodItems": {"type":"array","maxItems":512,"items":{"$ref":"#/$defs/method"}},
+    "procedureItems": {"type":"array","maxItems":512,"items":{"$ref":"#/$defs/procedure"}},
+    "samplingItems": {"type":"array","maxItems":512,"items":{"$ref":"#/$defs/sampling"}},
+    "safetyItems": {"type":"array","maxItems":512,"items":{"$ref":"#/$defs/safety"}},
+    "supportItems": {"type":"array","maxItems":512,"items":{"$ref":"#/$defs/support"}},
+    "riskItems": {"type":"array","maxItems":512,"items":{"$ref":"#/$defs/risk"}},
+    "gapItems": {"type":"array","maxItems":512,"items":{"$ref":"#/$defs/gap"}}
+  }
+}

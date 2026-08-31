@@ -1,0 +1,148 @@
+{
+  "schema_version": "1.0.0",
+  "snapshot_id": "PLANNING-SNAPSHOT-001",
+  "workspace_id": "11111111-1111-4111-8111-111111111111",
+  "plan": {
+    "plan_id": "PERICIAL-PLAN-001",
+    "title": "Plano pericial sintético",
+    "workspace_id": "11111111-1111-4111-8111-111111111111",
+    "case_analysis_snapshot_id": "ANALYSIS-001",
+    "case_analysis_revision": 1,
+    "case_analysis_source_revision": 4,
+    "case_analysis_digest": "2b41824453077b1d881533095cb2be36b745cb9fdef44e52dd7f654885ef26ec"
+  },
+  "objectives": [
+    {
+      "item_id": "PLAN-OBJECTIVE-001",
+      "title": "Preparar exame do objeto delimitado",
+      "description": "Planejar a obtenção de elementos necessários ao exame do objeto pericial.",
+      "priority": "HIGH",
+      "derivation": {
+        "rationale": "O objeto pericial delimitado exige preparação específica.",
+        "case_analysis_item_ids": ["OBJECT-001"],
+        "source_provenance": [{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-002","source_document_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","page_or_span":"p. 6, §5","source_revision":4,"occurrence_id":"OCC-OBJECT-001"}],
+        "question_ids": [], "pericial_object_ids": ["OBJECT-001"], "court_decision_ids": [], "technical_document_reference_ids": [], "gap_or_conflict_ids": []
+      },
+      "proposal_status": "PROPOSED",
+      "professional_review_status": "APPROVED"
+    }
+  ],
+  "issues": [
+    {
+      "item_id": "PLAN-ISSUE-001", "title": "Controvérsia documental", "description": "Considerar a divergência documental no preparo da diligência.", "priority": "HIGH",
+      "derivation": {"rationale":"A análise registra conflito ainda sujeito a revisão.","case_analysis_item_ids":["CONFLICT-001"],"source_provenance":[{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-001","source_document_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","page_or_span":"p. 3, §2","source_revision":4,"occurrence_id":"OCC-CLAIM-001"}],"question_ids":[],"pericial_object_ids":[],"court_decision_ids":[],"technical_document_reference_ids":[],"gap_or_conflict_ids":["CONFLICT-001"]},
+      "proposal_status":"PROPOSED","professional_review_status":"PENDING"
+    }
+  ],
+  "question_links": [
+    {
+      "item_id":"PLAN-QUESTION-LINK-001","title":"Preparação orientada ao quesito","description":"Relacionar o quesito aos elementos planejados sem antecipar resposta.","priority":"HIGH",
+      "derivation":{"rationale":"O quesito pertinente deve orientar a coleta futura.","case_analysis_item_ids":["QUESTION-001"],"source_provenance":[{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-001","source_document_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","page_or_span":"p. 7, item 1","source_revision":4,"occurrence_id":"OCC-QUESTION-001"}],"question_ids":["QUESTION-001"],"pericial_object_ids":[],"court_decision_ids":[],"technical_document_reference_ids":[],"gap_or_conflict_ids":[]},
+      "proposal_status":"PROPOSED","professional_review_status":"PENDING","question_id":"QUESTION-001","linked_item_ids":["PLAN-DOCUMENT-001","PLAN-INSPECTION-001","PLAN-MEASUREMENT-001","PLAN-PHOTO-001","PLAN-EQUIPMENT-001","PLAN-METHOD-001","PLAN-GAP-001"],"dependency_item_ids":["PLAN-ACCESS-001"]
+    }
+  ],
+  "required_documents": [
+    {
+      "item_id":"PLAN-DOCUMENT-001","title":"Documento técnico complementar","description":"Solicitar o anexo técnico indicado como indisponível.","priority":"HIGH",
+      "derivation":{"rationale":"A lacuna documental pode limitar o exame.","case_analysis_item_ids":["GAP-001"],"source_provenance":[{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-003","source_document_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","page_or_span":"UNAVAILABLE","source_revision":4,"occurrence_id":"OCC-GAP-001"}],"question_ids":[],"pericial_object_ids":[],"court_decision_ids":[],"technical_document_reference_ids":[],"gap_or_conflict_ids":["GAP-001"]},
+      "proposal_status":"PROPOSED","professional_review_status":"PENDING","document_description":"Anexo técnico mencionado nos autos","required_before":"INSPECTION"
+    }
+  ],
+  "required_information": [
+    {
+      "item_id":"PLAN-INFORMATION-001","title":"Informação de acesso","description":"Obter previamente as condições de acesso ao local.","priority":"MEDIUM",
+      "derivation":{"rationale":"A diligência depende de acesso ao objeto delimitado.","case_analysis_item_ids":["OBJECT-001"],"source_provenance":[{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-002","source_document_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","page_or_span":"p. 6, §5","source_revision":4,"occurrence_id":"OCC-OBJECT-001"}],"question_ids":[],"pericial_object_ids":["OBJECT-001"],"court_decision_ids":[],"technical_document_reference_ids":[],"gap_or_conflict_ids":[]},
+      "proposal_status":"PROPOSED","professional_review_status":"PENDING","information_description":"Condições e horário de acesso","requested_from":"RESPONSIBLE_PARTY"
+    }
+  ],
+  "inspection_requirements": [
+    {
+      "item_id":"PLAN-INSPECTION-001","title":"Inspeção do objeto","description":"Inspecionar visualmente o objeto pericial delimitado.","priority":"HIGH",
+      "derivation":{"rationale":"O objeto delimitado requer observações de campo futuras.","case_analysis_item_ids":["OBJECT-001"],"source_provenance":[{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-002","source_document_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","page_or_span":"p. 6, §5","source_revision":4,"occurrence_id":"OCC-OBJECT-001"}],"question_ids":[],"pericial_object_ids":["OBJECT-001"],"court_decision_ids":[],"technical_document_reference_ids":[],"gap_or_conflict_ids":[]},
+      "proposal_status":"PROPOSED","professional_review_status":"PENDING","inspection_target":"Objeto pericial sintético","field_observations_needed":["Condições aparentes","Limites acessíveis"]
+    }
+  ],
+  "measurement_requirements": [
+    {
+      "item_id":"PLAN-MEASUREMENT-001","title":"Medição dimensional proposta","description":"Preparar medição dimensional pertinente ao objeto.","priority":"MEDIUM",
+      "derivation":{"rationale":"O quesito pode exigir dimensão verificável sem antecipar resultado.","case_analysis_item_ids":["QUESTION-001","OBJECT-001"],"source_provenance":[{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-001","source_document_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","page_or_span":"p. 7, item 1","source_revision":4,"occurrence_id":"OCC-QUESTION-001"},{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-002","source_document_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","page_or_span":"p. 6, §5","source_revision":4,"occurrence_id":"OCC-OBJECT-001"}],"question_ids":["QUESTION-001"],"pericial_object_ids":["OBJECT-001"],"court_decision_ids":[],"technical_document_reference_ids":[],"gap_or_conflict_ids":[]},
+      "proposal_status":"PROPOSED","professional_review_status":"PENDING","quantity":"dimensão linear","unit":"mm","purpose":"Produzir dado mensurável para futura análise"
+    }
+  ],
+  "photo_requirements": [
+    {
+      "item_id":"PLAN-PHOTO-001","title":"Registro fotográfico proposto","description":"Planejar fotografias de orientação e detalhe do objeto.","priority":"MEDIUM",
+      "derivation":{"rationale":"O objeto deve ser documentado durante a futura inspeção.","case_analysis_item_ids":["OBJECT-001"],"source_provenance":[{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-002","source_document_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","page_or_span":"p. 6, §5","source_revision":4,"occurrence_id":"OCC-OBJECT-001"}],"question_ids":[],"pericial_object_ids":["OBJECT-001"],"court_decision_ids":[],"technical_document_reference_ids":[],"gap_or_conflict_ids":[]},
+      "proposal_status":"PROPOSED","professional_review_status":"PENDING","subject":"Objeto e detalhes relevantes","purpose":"Preservar contexto visual futuro"
+    }
+  ],
+  "equipment_requirements": [
+    {
+      "item_id":"PLAN-EQUIPMENT-001","title":"Instrumento de medição candidato","description":"Disponibilizar instrumento compatível com a medição proposta.","priority":"MEDIUM",
+      "derivation":{"rationale":"A medição proposta exige instrumento apropriado.","case_analysis_item_ids":["QUESTION-001","OBJECT-001"],"source_provenance":[{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-001","source_document_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","page_or_span":"p. 7, item 1","source_revision":4,"occurrence_id":"OCC-QUESTION-001"}],"question_ids":["QUESTION-001"],"pericial_object_ids":["OBJECT-001"],"court_decision_ids":[],"technical_document_reference_ids":[],"gap_or_conflict_ids":[]},
+      "proposal_status":"PROPOSED","professional_review_status":"PENDING","equipment":"Instrumento dimensional a selecionar","purpose":"Apoiar medição futura"
+    }
+  ],
+  "access_requirements": [
+    {
+      "item_id":"PLAN-ACCESS-001","title":"Acesso ao local","description":"Confirmar autorização e condições de acesso antes da diligência.","priority":"HIGH",
+      "derivation":{"rationale":"Sem acesso não é possível executar a inspeção proposta.","case_analysis_item_ids":["OBJECT-001"],"source_provenance":[{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-002","source_document_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","page_or_span":"p. 6, §5","source_revision":4,"occurrence_id":"OCC-OBJECT-001"}],"question_ids":[],"pericial_object_ids":["OBJECT-001"],"court_decision_ids":[],"technical_document_reference_ids":[],"gap_or_conflict_ids":[]},
+      "proposal_status":"PROPOSED","professional_review_status":"PENDING","access_type":"PHYSICAL","target":"Local do objeto pericial","responsible_contact":"A definir pelo profissional"
+    }
+  ],
+  "method_candidates": [
+    {
+      "item_id":"PLAN-METHOD-001","title":"Método dimensional candidato","description":"Considerar método de medição dimensional sujeito à revisão profissional.","priority":"MEDIUM",
+      "derivation":{"rationale":"O quesito e o objeto podem demandar dado dimensional.","case_analysis_item_ids":["QUESTION-001","OBJECT-001","TECHREF-001"],"source_provenance":[{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-001","source_document_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","page_or_span":"p. 7, item 1","source_revision":4,"occurrence_id":"OCC-QUESTION-001"},{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-002","source_document_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","page_or_span":"p. 4, nota 1","source_revision":4,"occurrence_id":"OCC-TECHREF-001"}],"question_ids":["QUESTION-001"],"pericial_object_ids":["OBJECT-001"],"court_decision_ids":[],"technical_document_reference_ids":["TECHREF-001"],"gap_or_conflict_ids":[]},
+      "proposal_status":"PROPOSED","professional_review_status":"PENDING","method_name":"Medição dimensional candidata","purpose":"Obter dimensão para análise posterior","applicability_rationale":"Aplicabilidade depende de revisão profissional e condições de campo","required_inputs":["Objeto acessível","Instrumento selecionado"],"limitations":["Não produz conclusão por si só"],"normative_references":[{"reference_id":"NORM-META-001","title":"Referência normativa sintética","edition":"Edição a verificar","applicability_status":"PENDING_PROFESSIONAL_REVIEW"}]
+    }
+  ],
+  "procedure_candidates": [
+    {
+      "item_id":"PLAN-PROCEDURE-001","title":"Procedimento candidato","description":"Considerar sequência de preparação e registro sujeita à revisão.","priority":"MEDIUM",
+      "derivation":{"rationale":"A inspeção proposta exige organização prévia.","case_analysis_item_ids":["OBJECT-001"],"source_provenance":[{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-002","source_document_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","page_or_span":"p. 6, §5","source_revision":4,"occurrence_id":"OCC-OBJECT-001"}],"question_ids":[],"pericial_object_ids":["OBJECT-001"],"court_decision_ids":[],"technical_document_reference_ids":[],"gap_or_conflict_ids":[]},
+      "proposal_status":"PROPOSED","professional_review_status":"PENDING","procedure_name":"Sequência de inspeção candidata","purpose":"Organizar ações futuras","planned_steps":["Confirmar acesso","Inspecionar","Registrar"],"limitations":["Sujeito às condições encontradas"]
+    }
+  ],
+  "sampling_candidates": [
+    {
+      "item_id":"PLAN-SAMPLING-001","title":"Amostragem candidata","description":"Avaliar profissionalmente se amostragem será necessária.","priority":"LOW",
+      "derivation":{"rationale":"A extensão do objeto pode exigir decisão amostral futura.","case_analysis_item_ids":["OBJECT-001"],"source_provenance":[{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-002","source_document_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","page_or_span":"p. 6, §5","source_revision":4,"occurrence_id":"OCC-OBJECT-001"}],"question_ids":[],"pericial_object_ids":["OBJECT-001"],"court_decision_ids":[],"technical_document_reference_ids":[],"gap_or_conflict_ids":[]},
+      "proposal_status":"PROPOSED","professional_review_status":"PENDING","population":"Elementos do objeto acessíveis","candidate_strategy":"A definir após reconhecimento profissional","limitations":["Não selecionada automaticamente"]
+    }
+  ],
+  "safety_requirements": [
+    {
+      "item_id":"PLAN-SAFETY-001","title":"Avaliação prévia de segurança","description":"Confirmar condições seguras antes da atividade de campo.","priority":"HIGH",
+      "derivation":{"rationale":"Toda inspeção depende de condição segura de acesso.","case_analysis_item_ids":["OBJECT-001"],"source_provenance":[{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-002","source_document_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","page_or_span":"p. 6, §5","source_revision":4,"occurrence_id":"OCC-OBJECT-001"}],"question_ids":[],"pericial_object_ids":["OBJECT-001"],"court_decision_ids":[],"technical_document_reference_ids":[],"gap_or_conflict_ids":[]},
+      "proposal_status":"PROPOSED","professional_review_status":"PENDING","hazard":"Condições do local ainda não verificadas","precaution":"Realizar avaliação profissional antes do ingresso"
+    }
+  ],
+  "external_support_requirements": [
+    {
+      "item_id":"PLAN-SUPPORT-001","title":"Apoio externo candidato","description":"Avaliar necessidade de apoio especializado para acesso ou operação.","priority":"LOW",
+      "derivation":{"rationale":"As condições de acesso permanecem informação necessária.","case_analysis_item_ids":["OBJECT-001"],"source_provenance":[{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-002","source_document_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","page_or_span":"p. 6, §5","source_revision":4,"occurrence_id":"OCC-OBJECT-001"}],"question_ids":[],"pericial_object_ids":["OBJECT-001"],"court_decision_ids":[],"technical_document_reference_ids":[],"gap_or_conflict_ids":[]},
+      "proposal_status":"PROPOSED","professional_review_status":"PENDING","support_type":"A definir","purpose":"Viabilizar condição específica se profissionalmente necessária"
+    }
+  ],
+  "risks": [
+    {
+      "item_id":"PLAN-RISK-001","title":"Risco de documento ausente","description":"A ausência do anexo técnico pode limitar o planejamento.","priority":"HIGH",
+      "derivation":{"rationale":"A Case Analysis registra fonte indisponível.","case_analysis_item_ids":["GAP-001"],"source_provenance":[{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-003","source_document_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","page_or_span":"UNAVAILABLE","source_revision":4,"occurrence_id":"OCC-GAP-001"}],"question_ids":[],"pericial_object_ids":[],"court_decision_ids":[],"technical_document_reference_ids":[],"gap_or_conflict_ids":["GAP-001"]},
+      "proposal_status":"PROPOSED","professional_review_status":"PENDING","risk":"Planejamento incompleto por fonte ausente","mitigation":"Solicitar e revisar o documento antes da decisão profissional"
+    }
+  ],
+  "gaps": [
+    {
+      "item_id":"PLAN-GAP-001","title":"Lacuna documental","description":"Documento técnico referido ainda não está disponível.","priority":"HIGH",
+      "derivation":{"rationale":"A lacuna deriva diretamente da análise documental.","case_analysis_item_ids":["GAP-001"],"source_provenance":[{"workspace_id":"11111111-1111-4111-8111-111111111111","source_document_id":"DOC-003","source_document_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","page_or_span":"UNAVAILABLE","source_revision":4,"occurrence_id":"OCC-GAP-001"}],"question_ids":[],"pericial_object_ids":[],"court_decision_ids":[],"technical_document_reference_ids":[],"gap_or_conflict_ids":["GAP-001"]},
+      "proposal_status":"PROPOSED","professional_review_status":"PENDING","gap":"Anexo técnico indisponível","consequence":"Método e escopo podem precisar de revisão"
+    }
+  ],
+  "decisions": [
+    {"decision_id":"PLAN-DECISION-001","target_item_id":"PLAN-OBJECTIVE-001","action":"APPROVE","proposal_value":"Planejar a obtenção de elementos necessários ao exame do objeto pericial.","decided_value":null,"reviewer":"PERITO-SYNTHETIC","reason":"Objetivo sintético adequado para teste.","revision":1,"timestamp":"2026-08-30T18:00:00-03:00"}
+  ],
+  "coverage": {"material_items_total":17,"reviewed_items":1,"pending_items":16,"approved_items":1,"rejected_items":0,"modified_items":0,"deferred_items":0,"readiness":"PARTIAL","readiness_reasons":["Itens materiais aguardam revisão profissional."]},
+  "upstream_stale": false,
+  "upstream_stale_reasons": []
+}

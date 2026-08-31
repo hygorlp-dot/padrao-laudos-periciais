@@ -432,6 +432,15 @@
                          "finalidade":  "Corpus dourado - HOTSPOT-03 gerar_delimitacao",
                          "expected":  "DATASET",
                          "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/pericial-planning-snapshot-v1.json",
+                         "dominio":  "PERICIAL_PLANNING_SNAPSHOT_V1",
+                         "schema":  "pericial-planning-snapshot-v1.schema.json",
+                         "consumer":  "tests/test_pericial_planning_v1.py::test_canonical_fixture_matches_the_published_planning_schema",
+                         "finalidade":  "Proposta sintética e revisável de planejamento pericial Stage 4",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      }
                  ]
 }
