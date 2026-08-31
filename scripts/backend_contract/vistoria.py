@@ -60,6 +60,13 @@ class InstrumentCondition(StrEnum):
     CALIBRATION_VALID = "CALIBRATION_VALID"
 
 
+class AccessOutcome(StrEnum):
+    FULL_ACCESS = "FULL_ACCESS"
+    PARTIAL_ACCESS = "PARTIAL_ACCESS"
+    DENIED = "DENIED"
+    UNSAFE = "UNSAFE"
+
+
 def _text(value: object) -> bool:
     return type(value) is str and bool(value.strip())
 
@@ -332,12 +339,12 @@ class EnvironmentalCondition:
 class AccessOccurrence:
     occurrence_id: str
     inspection_item_id: str
-    outcome: str
+    outcome: AccessOutcome
     description: str
     timestamp: str
 
     def __post_init__(self):
-        if not all(_text(getattr(self, field.name)) for field in fields(self)):
+        if not all(_text(getattr(self, name)) for name in ("occurrence_id", "inspection_item_id", "description", "timestamp")):
             raise ValueError("access occurrence is invalid")
         _timestamp(self.timestamp)
 
@@ -557,7 +564,7 @@ def _record(cls: type[T], value: object) -> T:
         raise ValueError(f"invalid {cls.__name__} payload")
     converted = dict(value)
     annotations = cls.__annotations__
-    enum_fields = [("observation_type", ObservationType), ("state", ExecutionState), ("kind", LimitationKind), ("capture_timestamp_reliability", TimestampReliability)]
+    enum_fields = [("observation_type", ObservationType), ("state", ExecutionState), ("kind", LimitationKind), ("capture_timestamp_reliability", TimestampReliability), ("outcome", AccessOutcome)]
     if cls is InstrumentStatus:
         enum_fields.append(("status", InstrumentCondition))
     for name, enum_cls in enum_fields:

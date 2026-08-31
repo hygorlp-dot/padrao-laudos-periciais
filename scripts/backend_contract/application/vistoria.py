@@ -11,6 +11,7 @@ from ..pericial_planning import ProfessionalReviewStatus, pericial_planning_to_m
 from ..vistoria import (
     INSPECTION_SESSION_ARTIFACT_ID,
     INSPECTION_SESSION_ARTIFACT_KIND,
+    AccessOutcome,
     ExecutionState,
     InspectionCoverage,
     InspectionItem,
@@ -96,9 +97,10 @@ def _validate_execution_against_planning(session: InspectionSession, planning) -
         if name == "PhotoRequirement" and not item.photo_ids:
             raise ValueError("completed photo requirement requires private photo record")
         if name == "AccessRequirement" and not any(
-            record.inspection_item_id == item.item_id for record in session.access_occurrences
-        ) and not item.limitation_ids:
-            raise ValueError("completed access requirement requires access occurrence or limitation")
+            record.inspection_item_id == item.item_id and record.outcome is AccessOutcome.FULL_ACCESS
+            for record in session.access_occurrences
+        ):
+            raise ValueError("completed access requirement requires full access occurrence")
 
 
 @dataclass(frozen=True, slots=True)

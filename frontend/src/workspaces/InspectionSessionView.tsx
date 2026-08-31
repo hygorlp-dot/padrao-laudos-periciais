@@ -43,6 +43,8 @@ export function InspectionSessionView({ workspaceId }: { workspaceId: string }) 
   const [photoUploading, setPhotoUploading] = useState(false);
   const [limitation, setLimitation] = useState("");
   const [limitationKind, setLimitationKind] = useState("SCOPE_LIMITATION");
+  const [accessOutcome, setAccessOutcome] = useState<"FULL_ACCESS" | "PARTIAL_ACCESS" | "DENIED" | "UNSAFE">("FULL_ACCESS");
+  const [accessDescription, setAccessDescription] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(false);
   useEffect(() => {
@@ -76,11 +78,13 @@ export function InspectionSessionView({ workspaceId }: { workspaceId: string }) 
     else if (hasMeasurement) { setSaveError(true); setSaving(false); return; }
     if (photoContentId.trim() && photoSha.trim() && photoCaption.trim()) { const id = recordId("PHOTO"); next.photos.push({ photo_id: id, inspection_item_id: item.item_id, private_content_id: photoContentId.trim(), original_sha256: photoSha.trim(), reliable_capture_timestamp: null, capture_timestamp_reliability: "UNVERIFIED", location_id: locationId, caption: photoCaption.trim(), device: "NÃO INFORMADO", provenance: "Original privado indicado pelo profissional." }); item.photo_ids.push(id); }
     if (limitation.trim()) { const id = recordId("LIMIT"); next.limitations.push({ limitation_id: id, inspection_item_id: item.item_id, kind: limitationKind, description: limitation.trim(), consequence_for_coverage: "A limitação exige consideração na cobertura da vistoria.", provenance: `Registro da sessão ${next.session_id}.` }); item.limitation_ids.push(id); }
+    if (accessDescription.trim()) next.access_occurrences.push({ occurrence_id: recordId("ACCESS"), inspection_item_id: item.item_id, outcome: accessOutcome, description: accessDescription.trim(), timestamp: now });
     if (itemState !== "PENDING" && !note.trim()) { setSaveError(true); setSaving(false); return; }
     if (["PARTIAL", "NOT_EXECUTED", "BLOCKED"].includes(itemState) && item.limitation_ids.length === 0) { setSaveError(true); setSaving(false); return; }
     try { const value = await saveInspectionSession(workspaceId, state.value.revision, withCoverage(next)); setState({ kind: "ready", value }); setSelectedItem(null); setObservation(""); setStatementSpeaker(""); setStatementRole(""); setStatementText(""); setMeasurementQuantity(""); setMeasurementValue(""); setMeasurementUnit(""); setInstrumentIdentity(""); setInstrumentModel(""); setInstrumentSerial(""); setInstrumentCapability(""); setMethodName(""); setMethodProcedure(""); setMeasurementRawObservation(""); setPhotoContentId(""); setPhotoSha(""); setPhotoCaption(""); setLimitation(""); } catch { setSaveError(true); } finally { setSaving(false); }
   };
   return <section className="inspection-workspace" aria-labelledby="inspection-title">
+    {edit && <section className="inspection-editor inspection-editor--access" aria-label="Resultado de acesso"><h3>Resultado de acesso</h3><p>Somente acesso integral sustenta a conclusÃ£o de um requisito de acesso.</p><label>Resultado<select value={accessOutcome} onChange={(event) => setAccessOutcome(event.target.value as typeof accessOutcome)}><option value="FULL_ACCESS">Acesso integral</option><option value="PARTIAL_ACCESS">Acesso parcial</option><option value="DENIED">Acesso negado</option><option value="UNSAFE">Acesso inseguro</option></select></label><label>DescriÃ§Ã£o objetiva<textarea value={accessDescription} onChange={(event) => setAccessDescription(event.target.value)}/></label></section>}
     <header className="planning-overview"><div><h2 id="inspection-title">Vistoria de campo</h2><p>Registros brutos executados contra a revisão {snapshot.plan_snapshot.planning_revision} do plano. Evidências candidatas não são constatações técnicas.</p></div><div className="planning-readiness"><strong>{snapshot.coverage.complete ? "Execução coberta" : "Execução parcial"}</strong><span>{snapshot.coverage.completed_items} de {snapshot.coverage.total_items} itens concluídos</span></div></header>
     {snapshot.upstream_stale && <section className="analysis-inventory-warning" role="alert"><strong>Planejamento alterado — não continue esta sessão</strong><ul>{snapshot.upstream_stale_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul></section>}
     {snapshot.coverage.reasons.length > 0 && <ul className="planning-reasons">{snapshot.coverage.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>}

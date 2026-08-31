@@ -12,6 +12,7 @@ from jsonschema import Draft202012Validator
 
 from scripts.backend_contract.vistoria import (
     AccessOccurrence,
+    AccessOutcome,
     EnvironmentalCondition,
     ExecutionState,
     FieldEvidenceCandidate,
@@ -52,10 +53,10 @@ def payload():
     return json.loads(FIXTURE.read_text(encoding="utf-8"))
 
 
-def planning():
+def planning(targets=("PLAN-INSPECTION-001", "PLAN-MEASUREMENT-001", "PLAN-PHOTO-001")):
     raw = json.loads((ROOT / "tests/fixtures/pericial-planning-snapshot-v1.json").read_text(encoding="utf-8"))
     snapshot = pericial_planning_from_mapping(raw)
-    for index, target in enumerate(("PLAN-INSPECTION-001", "PLAN-MEASUREMENT-001", "PLAN-PHOTO-001"), 1):
+    for index, target in enumerate(targets, 1):
         item = next(item for item in snapshot.material_items if item.item_id == target)
         snapshot = append_professional_decision(snapshot, PlanningDecision(
             decision_id=f"INSPECTION-AUTH-{index:03d}", target_item_id=target,
@@ -297,6 +298,36 @@ def test_professional_note_alone_cannot_complete_inspection_requirement():
     changed = replace(session, items=tuple(items), observations=observations)
     with pytest.raises(ValueError, match="field observation"):
         _validate_execution_against_planning(changed, planning())
+
+
+@pytest.mark.parametrize("outcome", (AccessOutcome.PARTIAL_ACCESS, AccessOutcome.DENIED, AccessOutcome.UNSAFE))
+def test_unsuccessful_access_outcome_cannot_complete_access_requirement(outcome):
+    upstream = planning(("PLAN-ACCESS-001",))
+    generated = iter(UUID(f"88888888-8888-4888-8888-{index:012d}") for index in range(1, 5))
+    service = StartInspectionSession(
+        SimpleNamespace(execute=lambda _workspace: (SimpleNamespace(revision=2), upstream)),
+        SimpleNamespace(execute=lambda *_args: SimpleNamespace(revision=1, created_at="2026-08-30T12:00:00+00:00")),
+        SimpleNamespace(now=lambda: datetime(2026, 8, 30, 12, tzinfo=UTC)),
+        SimpleNamespace(new_uuid=lambda: next(generated)),
+    )
+    _, session = service.execute(
+        WorkspaceId.parse(upstream.workspace_id), responsible_professional="PROFESSIONAL-001",
+        location_context="Local synthetic", participant_references=(),
+    )
+    item = replace(session.items[0], state=ExecutionState.COMPLETED, note="Access outcome recorded.")
+    occurrence = AccessOccurrence(
+        occurrence_id="ACCESS-001", inspection_item_id=item.item_id, outcome=outcome,
+        description="Synthetic access outcome.", timestamp="2026-08-30T12:01:00+00:00",
+    )
+    changed = replace(
+        session, items=(item,), access_occurrences=(occurrence,),
+        coverage=replace(session.coverage, pending_items=0, completed_items=1, complete=True, reasons=()),
+    )
+    with pytest.raises(ValueError, match="full access"):
+        _validate_execution_against_planning(changed, upstream)
+    _validate_execution_against_planning(
+        replace(changed, access_occurrences=(replace(occurrence, outcome=AccessOutcome.FULL_ACCESS),)), upstream
+    )
 
 
 def test_save_binds_latest_approved_plan_and_verifies_private_photo_authority():

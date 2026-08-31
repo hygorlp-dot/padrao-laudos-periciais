@@ -69,4 +69,20 @@ describe("inspection session view", () => {
     expect(saveBody.snapshot.observations[0].observation_type).toBe("DIRECT_OBSERVATION");
     expect(saveBody.snapshot.coverage.completed_items).toBe(1);
   });
+
+  test("serializes an explicit access outcome without promoting partial access", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(200, { revision: 1, updated_at: "2026-08-30T12:00:00Z", snapshot }))
+      .mockResolvedValueOnce(response(200, { revision: 2, updated_at: "2026-08-30T12:05:00Z", snapshot }));
+    vi.stubGlobal("fetch", fetchMock); vi.stubGlobal("crypto", { randomUUID: () => "88888888-8888-4888-8888-888888888888" });
+    const user = userEvent.setup(); render(<InspectionSessionView workspaceId={ID} />);
+    await user.click(await screen.findByRole("button", { name: "Registrar campo" }));
+    await user.selectOptions(screen.getByLabelText("Resultado"), "PARTIAL_ACCESS");
+    await user.type(screen.getByLabelText("DescriÃ§Ã£o objetiva"), "Acesso restrito ao primeiro ambiente.");
+    await user.click(screen.getByRole("button", { name: "Salvar registros de campo" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const saveBody = JSON.parse(String(fetchMock.mock.calls[1][1].body));
+    expect(saveBody.snapshot.access_occurrences[0].outcome).toBe("PARTIAL_ACCESS");
+    expect(saveBody.snapshot.items[0].state).toBe("PARTIAL");
+  });
 });

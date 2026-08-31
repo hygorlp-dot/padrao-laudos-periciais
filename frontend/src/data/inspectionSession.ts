@@ -9,11 +9,12 @@ export type Measurement = { measurement_id: string; inspection_item_id: string; 
 export type PhotoRecord = { photo_id: string; inspection_item_id: string; private_content_id: string; original_sha256: string; reliable_capture_timestamp: string | null; capture_timestamp_reliability: "RELIABLE" | "UNVERIFIED" | "UNAVAILABLE"; location_id: string; caption: string; device: string; provenance: string };
 export type FieldLimitation = { limitation_id: string; inspection_item_id: string; kind: string; description: string; consequence_for_coverage: string; provenance: string };
 export type EvidenceCandidate = { candidate_id: string; inspection_item_id: string; source_record_ids: string[]; description: string; provenance: string };
+export type AccessOccurrence = { occurrence_id: string; inspection_item_id: string; outcome: "FULL_ACCESS" | "PARTIAL_ACCESS" | "DENIED" | "UNSAFE"; description: string; timestamp: string };
 export type InspectionSnapshot = {
   schema_version: "1.0.0"; session_id: string; workspace_id: string;
   plan_snapshot: { plan_id: string; planning_snapshot_id: string; planning_revision: number; planning_digest: string; workspace_id: string; approved_item_ids: string[]; source_revision: number };
   started_at: string; ended_at: string | null; location_context: string; participant_references: string[]; responsible_professional: string; source_revision: number;
-  items: InspectionItem[]; observations: FieldObservation[]; statements: FieldStatement[]; measurements: Measurement[]; measurement_series: unknown[]; methods: unknown[]; instruments: unknown[]; instrument_statuses: unknown[]; photos: PhotoRecord[]; videos: unknown[]; sketches: unknown[]; locations: unknown[]; environmental_conditions: unknown[]; access_occurrences: unknown[]; limitations: FieldLimitation[]; missing_items: unknown[]; evidence_candidates: EvidenceCandidate[];
+  items: InspectionItem[]; observations: FieldObservation[]; statements: FieldStatement[]; measurements: Measurement[]; measurement_series: unknown[]; methods: unknown[]; instruments: unknown[]; instrument_statuses: unknown[]; photos: PhotoRecord[]; videos: unknown[]; sketches: unknown[]; locations: unknown[]; environmental_conditions: unknown[]; access_occurrences: AccessOccurrence[]; limitations: FieldLimitation[]; missing_items: unknown[]; evidence_candidates: EvidenceCandidate[];
   coverage: { total_items: number; pending_items: number; completed_items: number; partial_items: number; not_executed_items: number; not_applicable_items: number; blocked_items: number; complete: boolean; limitation_ids: string[]; reasons: string[] };
   reviews: unknown[]; upstream_stale: boolean; upstream_stale_reasons: string[];
 };
