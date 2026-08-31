@@ -53,6 +53,7 @@ def test_frontend_production_source_has_no_secret_or_unbounded_network_capabilit
             "frontend/src/data/pericialPlanning.ts",
             "frontend/src/data/processCase.ts",
         "frontend/src/data/processMetadata.ts",
+        "frontend/src/data/technicalSnapshot.ts",
         "frontend/src/data/workspaces.ts",
     ]
 

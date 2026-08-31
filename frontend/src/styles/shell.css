@@ -1002,6 +1002,24 @@ button.text-action {
 .inspection-item > header > div:last-child { display: grid; justify-items: end; gap: var(--space-2); }
 .inspection-item .text-action { margin: 0; }
 
+.technical-chain { display: grid; gap: var(--space-4); list-style: none; margin: var(--space-6) 0; padding: 0; }
+.technical-chain > li, .technical-authority, .technical-audit { background: var(--color-paper); border: 1px solid var(--color-rule); padding: var(--space-5); }
+.technical-chain article + article { border-top: 1px solid var(--color-rule); margin-top: var(--space-3); padding-top: var(--space-3); }
+.technical-chain article small { display: block; margin-top: var(--space-2); overflow-wrap: anywhere; }
+.boundary-note { color: var(--color-slate); }
+.technical-authority { display: grid; gap: var(--space-3); max-width: 52rem; }
+.technical-authority form, .technical-authority fieldset { display: grid; gap: var(--space-4); }
+.technical-authority fieldset { border: 1px solid var(--color-rule); padding: var(--space-4); }
+.technical-authority legend { padding: 0 var(--space-2); font-weight: 760; }
+.technical-authority label { display: grid; gap: var(--space-2); font-weight: 680; }
+.technical-authority input, .technical-authority select, .technical-authority textarea { width: 100%; padding: 0.72rem 0.78rem; border: 1px solid var(--color-rule); background: white; color: var(--color-graphite); font: inherit; }
+.technical-authority textarea { min-height: 4.5rem; resize: vertical; }
+.technical-audit { margin-top: var(--space-4); }
+
+@media (min-width: 72rem) {
+  .technical-chain { grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: start; }
+}
+
 @media (max-width: 840px) {
   .planning-overview { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
   .planning-card__heading { align-items: stretch; flex-direction: column; }

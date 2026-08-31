@@ -78,6 +78,7 @@ def test_frontend_network_access_is_narrow_and_never_contains_local_api_token():
             "frontend/src/data/pericialPlanning.ts",
             "frontend/src/data/processCase.ts",
         "frontend/src/data/processMetadata.ts",
+        "frontend/src/data/technicalSnapshot.ts",
         "frontend/src/data/workspaces.ts",
     ]
 
