@@ -278,3 +278,48 @@ def test_reopen_marks_changed_upstream_stale_and_stale_snapshot_cannot_save():
     )
     with pytest.raises(ValueError, match="stale"):
         save.execute(WorkspaceId.parse(snapshot.workspace_id), stale, 1)
+
+
+def test_save_rejects_source_or_question_identity_absent_from_bound_upstreams():
+    case_record, case, inspection_record, inspection = upstreams()
+    service = SaveTechnicalSnapshot(
+        SimpleNamespace(append_if_latest=lambda **_kwargs: SimpleNamespace(revision=4)),
+        SimpleNamespace(execute=lambda _workspace: (case_record, case)),
+        SimpleNamespace(execute=lambda _workspace: (inspection_record, inspection)),
+        nullcontext, SimpleNamespace(now=lambda: datetime.now(UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
+    )
+    snapshot = bound_snapshot()
+    links = list(snapshot.source_links)
+    links[0] = replace(links[0], source_id="MEASUREMENT-UNKNOWN")
+    with pytest.raises(ValueError, match="source identity"):
+        service.execute(WorkspaceId.parse(snapshot.workspace_id), replace(snapshot, source_links=tuple(links)), 3)
+    questions = list(snapshot.question_links)
+    questions[0] = replace(questions[0], question_id="QUESTION-UNKNOWN")
+    with pytest.raises(ValueError, match="question identity"):
+        service.execute(WorkspaceId.parse(snapshot.workspace_id), replace(snapshot, question_links=tuple(questions)), 3)
+
+
+def test_latest_professional_decision_controls_effectiveness_and_orphans_are_rejected():
+    snapshot = technical_snapshot_from_mapping(payload())
+    later_rejection = ProfessionalDecision(
+        decision_id="DECISION-003", proposal_id="PROPOSAL-001", action=DecisionAction.REJECT,
+        professional_id="PROFESSIONAL-001", reason="Rejeição posterior sintética.",
+        modified_proposition=None, timestamp="2026-08-31T10:20:00+00:00",
+        supersedes_decision_id="DECISION-001",
+    )
+    with pytest.raises(ValueError, match="latest professional decision"):
+        replace(snapshot, decisions=snapshot.decisions + (later_rejection,))
+    with pytest.raises(ValueError, match="proposal"):
+        replace(snapshot, decisions=snapshot.decisions + (replace(later_rejection, decision_id="DECISION-004", proposal_id="PROPOSAL-UNKNOWN", supersedes_decision_id=None),))
+
+
+def test_orphan_method_records_and_limitations_are_rejected():
+    snapshot = technical_snapshot_from_mapping(payload())
+    orphan = replace(snapshot.method_inputs[0], input_id="METHOD-INPUT-ORPHAN")
+    with pytest.raises(ValueError, match="orphan method input"):
+        replace(snapshot, method_inputs=snapshot.method_inputs + (orphan,))
+    limitations = list(snapshot.limitations)
+    limitations[1] = replace(limitations[1], owner_id="METHOD-UNKNOWN")
+    with pytest.raises(ValueError, match="method limitation"):
+        replace(snapshot, limitations=tuple(limitations))

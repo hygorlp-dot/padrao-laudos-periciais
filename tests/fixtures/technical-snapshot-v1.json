@@ -18,7 +18,7 @@
   ],
   "source_links": [
     {"link_id":"SOURCE-LINK-001","evidence_id":"EVIDENCE-SUPPORT-001","source_kind":"MEASUREMENT","source_id":"MEASUREMENT-001","source_revision":2,"provenance":"Registro bruto sintético da vistoria."},
-    {"link_id":"SOURCE-LINK-002","evidence_id":"EVIDENCE-CONTRARY-001","source_kind":"DOCUMENTED_ALLEGATION","source_id":"SPAN-001","source_revision":3,"provenance":"Trecho documental sintético; não confirmado como fato."}
+    {"link_id":"SOURCE-LINK-002","evidence_id":"EVIDENCE-CONTRARY-001","source_kind":"DOCUMENTED_ALLEGATION","source_id":"OCC-CLAIM-001","source_revision":3,"provenance":"Trecho documental sintético; não confirmado como fato."}
   ],
   "evidence_assessments": [
     {"assessment_id":"ASSESSMENT-SUPPORT-001","evidence_id":"EVIDENCE-SUPPORT-001","why_relevant":"Fornece leitura bruta para a questão técnica sintética.","supported_proposition":"A leitura bruta sintética registra 1250 mm no ponto inspecionado.","limitation_ids":["LIMIT-EVIDENCE-001"],"contrary_evidence_ids":["EVIDENCE-CONTRARY-001"],"source_link_ids":["SOURCE-LINK-001"],"review_state":"APPROVED","reviewer":"PROFESSIONAL-001","reviewed_at":"2026-08-31T10:00:00+00:00"},

@@ -88,6 +88,33 @@ def _reconcile(snapshot: TechnicalSnapshot, *, current: TechnicalSourceSnapshot)
     return replace(snapshot, coverage=coverage, upstream_stale=bool(reasons), upstream_stale_reasons=tuple(reasons))
 
 
+def _identity_values(value: object, field_name: str = "") -> set[str]:
+    found: set[str] = set()
+    if type(value) is dict:
+        for name, item in value.items():
+            found.update(_identity_values(item, name))
+    elif type(value) is list:
+        for item in value:
+            found.update(_identity_values(item, field_name))
+    elif type(value) is str and (field_name.endswith("_id") or field_name.endswith("_ids")):
+        found.add(value)
+    return found
+
+
+def _validate_upstream_links(snapshot: TechnicalSnapshot, case: CaseAnalysisSnapshot, inspection: InspectionSession) -> None:
+    case_ids = _identity_values(case_analysis_to_mapping(case))
+    inspection_ids = _identity_values(inspection_session_to_mapping(inspection))
+    case_kinds = {"CASE_DOCUMENT", "DOCUMENTED_ALLEGATION", "CASE_CLAIM", "CASE_COUNTERARGUMENT", "CASE_DECISION", "CASE_QUESTION"}
+    inspection_kinds = {"FIELD_RECORD", "FIELD_OBSERVATION", "FIELD_STATEMENT", "MEASUREMENT", "PHOTO_RECORD", "ACCESS_OCCURRENCE", "FIELD_LIMITATION"}
+    for link in snapshot.source_links:
+        authority = case_ids if link.source_kind in case_kinds else inspection_ids if link.source_kind in inspection_kinds else set()
+        if link.source_id not in authority:
+            raise ValueError("Technical Snapshot source identity is absent from bound upstream")
+    question_ids = {item.item_id for item in case.questions}
+    if any(link.question_id not in question_ids for link in snapshot.question_links):
+        raise ValueError("Technical Snapshot question identity is absent from Case Analysis")
+
+
 @dataclass(frozen=True, slots=True)
 class SaveTechnicalSnapshot:
     revisions: object
@@ -115,6 +142,7 @@ class SaveTechnicalSnapshot:
             )
             if _reconcile(snapshot, current=current).upstream_stale:
                 raise ValueError("Technical Snapshot upstream authority is stale")
+            _validate_upstream_links(snapshot, case, inspection)
             created_at = self.clock.now()
             if created_at.tzinfo is None or created_at.utcoffset() is None:
                 raise ValueError("Technical Snapshot clock requires timezone")

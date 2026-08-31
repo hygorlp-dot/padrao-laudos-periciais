@@ -381,6 +381,10 @@ class TechnicalSnapshot:
                 raise ValueError("source link must be owned by assessed evidence")
             if any(limitations.get(limit_id) is None or limitations[limit_id].owner_id != item.evidence_id for limit_id in assessment.limitation_ids):
                 raise ValueError("evidence limitation ownership is invalid")
+        if {item.assessment_id for item in self.evidence_items} != set(assessments):
+            raise ValueError("orphan evidence assessment is invalid")
+        if {link_id for item in self.evidence_assessments for link_id in item.source_link_ids} != set(links):
+            raise ValueError("orphan source link is invalid")
         methods = {item.method_application_id: item for item in self.method_applications}
         inputs = {item.input_id: item for item in self.method_inputs}
         outputs = {item.output_id: item for item in self.method_outputs}
@@ -389,6 +393,12 @@ class TechnicalSnapshot:
                 raise ValueError("method input requires owned approved evidence")
             if any(outputs.get(output_id) is None or outputs[output_id].method_application_id != method.method_application_id for output_id in method.output_ids):
                 raise ValueError("method output requires owned traceable output")
+            if any(limitations.get(item_id) is None or limitations[item_id].owner_id != method.method_application_id for item_id in method.limitation_ids):
+                raise ValueError("method limitation ownership is invalid")
+        if {item_id for method in self.method_applications for item_id in method.input_ids} != set(inputs):
+            raise ValueError("orphan method input is invalid")
+        if {item_id for method in self.method_applications for item_id in method.output_ids} != set(outputs):
+            raise ValueError("orphan method output is invalid")
         proposals = {item.proposal_id: item for item in self.finding_proposals}
         uncertainties = {item.uncertainty_id: item for item in self.uncertainties}
         for proposal in self.finding_proposals:
@@ -406,6 +416,13 @@ class TechnicalSnapshot:
                 raise ValueError("finding uncertainty ownership is invalid")
         decisions = {item.decision_id: item for item in self.decisions}
         findings = {item.finding_id: item for item in self.findings}
+        for decision in self.decisions:
+            if decision.proposal_id not in proposals:
+                raise ValueError("professional decision proposal is invalid")
+            if decision.supersedes_decision_id is not None:
+                previous = decisions.get(decision.supersedes_decision_id)
+                if previous is None or previous.proposal_id != decision.proposal_id or datetime.fromisoformat(previous.timestamp) >= datetime.fromisoformat(decision.timestamp):
+                    raise ValueError("professional decision supersession is invalid")
         for finding in self.findings:
             proposal = proposals.get(finding.proposal_id)
             decision = decisions.get(finding.decision_id)
@@ -414,6 +431,9 @@ class TechnicalSnapshot:
             expected = decision.modified_proposition if decision.action is DecisionAction.MODIFY else proposal.technical_proposition
             if finding.technical_proposition != expected or finding.scope != proposal.scope:
                 raise ValueError("effective finding diverges from professional decision")
+            latest = max((item for item in self.decisions if item.proposal_id == finding.proposal_id), key=lambda item: datetime.fromisoformat(item.timestamp))
+            if latest.decision_id != finding.decision_id:
+                raise ValueError("effective finding must follow latest professional decision")
         for dependency in self.dependencies:
             if dependency.finding_id not in findings or dependency.depends_on_finding_id not in findings:
                 raise ValueError("finding dependency is invalid")
