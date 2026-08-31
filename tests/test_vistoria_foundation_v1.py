@@ -1,6 +1,10 @@
 from dataclasses import replace
+from contextlib import nullcontext
+from datetime import UTC, datetime
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -33,6 +37,9 @@ from scripts.backend_contract.vistoria import (
     inspection_session_from_mapping,
     inspection_session_to_mapping,
 )
+from scripts.backend_contract.application.models import ArtifactRevision, PrivateContentId, PrivateContentMetadata, PrivateContentOrigin, WorkspaceId
+from scripts.backend_contract.application.vistoria import GetInspectionSession, SaveInspectionSession, inspection_planning_digest
+from scripts.backend_contract.pericial_planning import PlanningDecision, ReviewAction, append_professional_decision, pericial_planning_from_mapping
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +48,29 @@ FIXTURE = ROOT / "tests/fixtures/inspection-session-v1.json"
 
 def payload():
     return json.loads(FIXTURE.read_text(encoding="utf-8"))
+
+
+def planning():
+    raw = json.loads((ROOT / "tests/fixtures/pericial-planning-snapshot-v1.json").read_text(encoding="utf-8"))
+    snapshot = pericial_planning_from_mapping(raw)
+    for index, target in enumerate(("PLAN-INSPECTION-001", "PLAN-MEASUREMENT-001", "PLAN-PHOTO-001"), 1):
+        item = next(item for item in snapshot.material_items if item.item_id == target)
+        snapshot = append_professional_decision(snapshot, PlanningDecision(
+            decision_id=f"INSPECTION-AUTH-{index:03d}", target_item_id=target,
+            action=ReviewAction.APPROVE, proposal_value=item.description, decided_value=None,
+            reviewer="PROFESSIONAL-001", reason="Aprovação sintética para teste de autoridade.",
+            revision=1, timestamp=f"2026-08-30T11:0{index}:00+00:00",
+        ))
+    return snapshot
+
+
+def artifact(session, revision=1):
+    return ArtifactRevision(
+        workspace_id=WorkspaceId.parse(session.workspace_id), artifact_kind="INSPECTION_SESSION_V1",
+        artifact_id="INSPECTION-SESSION", revision_id="99999999-9999-4999-8999-999999999999",
+        revision=revision, created_at="2026-08-30T12:00:00+00:00", checksum_sha256="0" * 64,
+        payload=inspection_session_to_mapping(session),
+    )
 
 
 def test_fixture_round_trips_every_canonical_boundary():
@@ -142,6 +172,52 @@ def test_session_rejects_duplicate_ids_dangling_links_and_workspace_mismatch():
     raw["observations"].append(raw["observations"][0])
     with pytest.raises(ValueError):
         inspection_session_from_mapping(raw)
+
+
+def test_save_binds_latest_approved_plan_and_verifies_private_photo_authority():
+    session = inspection_session_from_mapping(payload())
+    upstream = planning()
+    bound = replace(session, plan_snapshot=replace(
+        session.plan_snapshot, planning_revision=2, planning_digest=inspection_planning_digest(upstream)
+    ))
+    calls = []
+    planning_record = SimpleNamespace(revision=2)
+    content = SimpleNamespace(metadata=PrivateContentMetadata(
+        workspace_id=WorkspaceId.parse(session.workspace_id),
+        content_id=PrivateContentId.parse(session.photos[0].private_content_id),
+        original_filename="synthetic.jpg", byte_size=10,
+        checksum_sha256=session.photos[0].original_sha256, media_type="image/jpeg",
+        imported_at="2026-08-30T11:00:00+00:00", origin=PrivateContentOrigin.USER_IMPORT,
+    ))
+    service = SaveInspectionSession(
+        SimpleNamespace(append_if_latest=lambda **kwargs: calls.append(kwargs) or SimpleNamespace(revision=1)),
+        SimpleNamespace(execute=lambda _workspace: (planning_record, upstream)),
+        SimpleNamespace(execute=lambda *_args: content), nullcontext,
+        SimpleNamespace(now=lambda: datetime(2026, 8, 30, tzinfo=UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
+    )
+    saved = service.execute(WorkspaceId.parse(session.workspace_id), bound, None)
+    assert saved.revision == 1
+    assert calls[0]["expected_dependencies"][0]["revision"] == 2
+
+    bad_content = SimpleNamespace(metadata=replace(content.metadata, checksum_sha256="a" * 64))
+    bad = replace(service, get_private_content=SimpleNamespace(execute=lambda *_args: bad_content))
+    with pytest.raises(ValueError, match="photo"):
+        bad.execute(WorkspaceId.parse(session.workspace_id), bound, None)
+
+
+def test_reopen_preserves_state_and_marks_changed_plan_stale():
+    session = inspection_session_from_mapping(payload())
+    upstream = planning()
+    session = replace(session, plan_snapshot=replace(session.plan_snapshot, planning_revision=2, planning_digest=inspection_planning_digest(upstream)))
+    stored = artifact(session)
+    current = GetInspectionSession(SimpleNamespace(execute=lambda *_args: stored), SimpleNamespace(execute=lambda _workspace: (SimpleNamespace(revision=2), upstream)))
+    _, reopened = current.execute(WorkspaceId.parse(session.workspace_id))
+    assert reopened == session
+    changed = GetInspectionSession(SimpleNamespace(execute=lambda *_args: stored), SimpleNamespace(execute=lambda _workspace: (SimpleNamespace(revision=3), upstream)))
+    _, stale = changed.execute(WorkspaceId.parse(session.workspace_id))
+    assert stale.upstream_stale is True
+    assert "planning artifact revision changed" in stale.upstream_stale_reasons
     raw = payload()
     raw["measurements"][0]["inspection_item_id"] = "UNKNOWN"
     with pytest.raises(ValueError):
