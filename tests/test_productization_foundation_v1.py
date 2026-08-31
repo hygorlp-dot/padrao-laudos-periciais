@@ -151,6 +151,32 @@ def test_corruption_and_foreign_workspace_fail_closed_before_restore_mutation(tm
     source.close(); target.close()
 
 
+def test_resealed_inner_corruption_still_fails_domain_and_private_validation(tmp_path) -> None:
+    private = PrivateStore(); source, workspace_id = seeded_store(tmp_path / "source.db", private)
+    package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock()).execute(workspace_id)
+
+    def reseal(mapping: dict) -> bytes:
+        def canonical(value: object) -> bytes:
+            return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        mapping["member_hashes"] = {
+            "artifact_revisions": hashlib.sha256(canonical(mapping["artifact_revisions"])).hexdigest(),
+            "private_contents": hashlib.sha256(canonical(mapping["private_contents"])).hexdigest(),
+        }
+        mapping["manifest_sha256"] = hashlib.sha256(canonical({key: value for key, value in mapping.items() if key != "manifest_sha256"})).hexdigest()
+        return canonical(mapping)
+
+    forged_revision = json.loads(package)
+    forged_revision["artifact_revisions"][0]["checksum_sha256"] = "0" * 64
+    with pytest.raises(RepositoryIntegrityError, match="checksum"):
+        VerifyWorkspaceBackup().execute(reseal(forged_revision))
+
+    forged_private = json.loads(package)
+    forged_private["private_contents"][0]["content_base64"] = "Zm9yZ2Vk"
+    with pytest.raises(RepositoryIntegrityError, match="private"):
+        VerifyWorkspaceBackup().execute(reseal(forged_private))
+    source.close()
+
+
 def test_restore_refuses_nonempty_target_as_rollback_boundary(tmp_path) -> None:
     private = PrivateStore(); source, workspace_id = seeded_store(tmp_path / "source.db", private)
     package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock()).execute(workspace_id)
