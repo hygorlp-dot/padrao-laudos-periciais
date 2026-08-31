@@ -1,5 +1,6 @@
 import copy
 import json
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -204,6 +205,26 @@ def test_question_linkage_is_required_before_a_plan_can_be_validated():
         validate_against_case_analysis(pericial_planning_from_mapping(raw), analysis_fixture(), artifact_revision=1)
 
 
+def test_question_linkage_must_reach_a_concrete_planning_action():
+    raw = copy.deepcopy(fixture())
+    raw["question_links"][0]["linked_item_ids"] = ["PLAN-OBJECTIVE-001"]
+    raw["question_links"][0]["dependency_item_ids"] = []
+
+    with pytest.raises(ValueError, match="concrete preparation"):
+        validate_against_case_analysis(pericial_planning_from_mapping(raw), analysis_fixture(), artifact_revision=1)
+
+
+def test_each_referenced_analysis_item_requires_its_own_provenance_coverage():
+    raw = copy.deepcopy(fixture())
+    raw["objectives"][0]["derivation"].update(
+        case_analysis_item_ids=["OBJECT-001", "QUESTION-001"],
+        question_ids=["QUESTION-001"],
+    )
+
+    with pytest.raises(ValueError, match="cover every referenced"):
+        validate_against_case_analysis(pericial_planning_from_mapping(raw), analysis_fixture(), artifact_revision=1)
+
+
 @pytest.mark.parametrize(
     "mutate",
     (
@@ -294,7 +315,7 @@ def test_save_revalidates_latest_case_analysis_and_uses_atomic_plan_cas():
     clock = SimpleNamespace(now=lambda: datetime(2026, 8, 30, tzinfo=UTC))
     ids = SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888"))
 
-    result = SavePericialPlanning(revisions, get_latest, get_analysis, clock, ids).execute(
+    result = SavePericialPlanning(revisions, get_latest, get_analysis, nullcontext, clock, ids).execute(
         WorkspaceId.parse(planning.workspace_id), planning, None
     )
 
@@ -311,6 +332,38 @@ def test_save_revalidates_latest_case_analysis_and_uses_atomic_plan_cas():
     assert calls[0]["payload"] == fixture()
 
 
+def test_save_holds_private_inventory_authority_guard_through_the_commit():
+    planning = pericial_planning_from_mapping(fixture())
+    analysis = analysis_fixture()
+    analysis_record = artifact(analysis, kind="CASE_ANALYSIS_SNAPSHOT_V1", artifact_id="CASE-ANALYSIS")
+    state = {"held": False}
+
+    @contextmanager
+    def guard():
+        state["held"] = True
+        try:
+            yield
+        finally:
+            state["held"] = False
+
+    def get_analysis(_workspace):
+        assert state["held"] is True
+        return analysis_record, analysis
+
+    def append(**_kwargs):
+        assert state["held"] is True
+        return SimpleNamespace(revision=1)
+
+    SavePericialPlanning(
+        SimpleNamespace(append_if_latest=append), SimpleNamespace(),
+        SimpleNamespace(execute=get_analysis), guard,
+        SimpleNamespace(now=lambda: datetime(2026, 8, 30, tzinfo=UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
+    ).execute(WorkspaceId.parse(planning.workspace_id), planning, None)
+
+    assert state["held"] is False
+
+
 def test_save_rejects_a_stale_or_changed_case_analysis_dependency():
     planning = pericial_planning_from_mapping(fixture())
     analysis = analysis_fixture().reconcile_sources({document.document_id: "f" * 64 for document in analysis_fixture().documents})
@@ -319,6 +372,7 @@ def test_save_rejects_a_stale_or_changed_case_analysis_dependency():
         SimpleNamespace(append_if_latest=lambda **_kwargs: pytest.fail("must not append")),
         SimpleNamespace(),
         SimpleNamespace(execute=lambda _workspace: (analysis_record, analysis)),
+        nullcontext,
         SimpleNamespace(now=lambda: datetime(2026, 8, 30, tzinfo=UTC)),
         SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
     )
@@ -339,6 +393,7 @@ def test_save_preserves_existing_proposals_and_review_history():
         SimpleNamespace(append_if_latest=lambda **_kwargs: pytest.fail("must not append")),
         SimpleNamespace(execute=lambda *_args: previous_record),
         SimpleNamespace(execute=lambda _workspace: (artifact(analysis, kind="CASE_ANALYSIS_SNAPSHOT_V1", artifact_id="CASE-ANALYSIS"), analysis)),
+        nullcontext,
         SimpleNamespace(now=lambda: datetime(2026, 8, 30, tzinfo=UTC)),
         SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
     )
@@ -358,6 +413,7 @@ def test_save_rejects_plan_identity_rotation_as_an_append_only_bypass():
         SimpleNamespace(append_if_latest=lambda **_kwargs: pytest.fail("must not append")),
         SimpleNamespace(execute=lambda *_args: artifact(previous, kind="PERICIAL_PLANNING_SNAPSHOT_V1", artifact_id="PERICIAL-PLANNING")),
         SimpleNamespace(execute=lambda _workspace: (artifact(analysis, kind="CASE_ANALYSIS_SNAPSHOT_V1", artifact_id="CASE-ANALYSIS"), analysis)),
+        nullcontext,
         SimpleNamespace(now=lambda: datetime(2026, 8, 30, tzinfo=UTC)),
         SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
     )

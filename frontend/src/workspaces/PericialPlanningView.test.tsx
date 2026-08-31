@@ -62,6 +62,18 @@ describe("pericial planning view", () => {
     expect(await screen.findByRole("heading", { name: "Planejamento ainda não disponível" })).toBeInTheDocument();
   });
 
+  test("returns focus to the originating review action after cancel", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(200, { revision: 1, updated_at: "2026-08-30T19:00:00-03:00", snapshot: SNAPSHOT })));
+    const user = userEvent.setup();
+    render(<PericialPlanningView workspaceId={WORKSPACE_ID} />);
+    const trigger = await screen.findByRole("button", { name: "Revisar Controvérsia documental" });
+
+    await user.click(trigger);
+    await user.click(screen.getByRole("button", { name: "Cancelar" }));
+
+    expect(trigger).toHaveFocus();
+  });
+
   test("sends explicit professional identity, reason and modification", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response(200, { revision: 1, updated_at: "2026-08-30T19:00:00-03:00", snapshot: SNAPSHOT }))

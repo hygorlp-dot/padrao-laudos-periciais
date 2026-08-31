@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -193,6 +194,7 @@ def build_local_api(
         store.revisions,
         get_latest_artifact,
         get_case_analysis,
+        private_store.authority_guard if private_store is not None else nullcontext,
         local_clock,
         local_ids,
     )
@@ -222,6 +224,7 @@ def build_local_api(
             local_clock,
             local_ids,
             list_case_documents,
+            private_store.authority_guard if private_store is not None else nullcontext,
         ),
         get_case_analysis=get_case_analysis,
         save_pericial_planning=save_pericial_planning,

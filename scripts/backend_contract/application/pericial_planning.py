@@ -19,7 +19,7 @@ from ..pericial_planning import (
     validate_against_case_analysis,
 )
 from .models import thaw_payload
-from .ports import RepositoryConflict
+from .ports import RepositoryConflict, RepositoryIntegrityError
 
 
 _SCHEMA_PATH = Path(__file__).resolve().parents[3] / "schemas" / "pericial-planning-snapshot-v1.schema.json"
@@ -40,6 +40,7 @@ class SavePericialPlanning:
     revisions: object
     get_latest_revision: object
     get_case_analysis: object
+    authority_guard: object
     clock: object
     ids: object
 
@@ -50,6 +51,12 @@ class SavePericialPlanning:
             raise ValueError("stale Pericial Planning snapshots cannot be persisted")
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
             raise ValueError("expected revision is invalid")
+        if not callable(self.authority_guard):
+            raise RepositoryIntegrityError("Pericial Planning authority guard is unavailable")
+        with self.authority_guard():
+            return self._execute_guarded(workspace_id, snapshot, expected_revision)
+
+    def _execute_guarded(self, workspace_id, snapshot: PlanningSnapshot, expected_revision: int | None):
         analysis_record, analysis = self.get_case_analysis.execute(workspace_id)
         if analysis.stale_document_ids or analysis.source_inventory_stale:
             raise ValueError("stale Case Analysis cannot authorize Pericial Planning")

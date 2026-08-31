@@ -568,6 +568,22 @@ def validate_against_case_analysis(
     required_questions = collection_ids["questions"]
     if linked_questions != required_questions:
         raise ValueError("planning question linkage must cover every Case Analysis question exactly")
+    actionable_ids = {
+        item.item_id
+        for collection_name in (
+            "required_documents", "required_information", "inspection_requirements",
+            "measurement_requirements", "photo_requirements", "equipment_requirements",
+            "access_requirements", "method_candidates", "procedure_candidates",
+            "sampling_candidates", "safety_requirements", "external_support_requirements",
+        )
+        for item in getattr(planning, collection_name)
+    }
+    if any(
+        link.question_id not in link.derivation.question_ids
+        or not (set((*link.linked_item_ids, *link.dependency_item_ids)) & actionable_ids)
+        for link in planning.question_links
+    ):
+        raise ValueError("planning question linkage requires a concrete preparation or inspection action")
     for item in planning.material_items:
         derivation = item.derivation
         referenced = set(derivation.case_analysis_item_ids)
@@ -598,6 +614,11 @@ def validate_against_case_analysis(
             raise ValueError("planning provenance crosses workspace authority")
         if not set(derivation.source_provenance) <= allowed_provenance:
             raise ValueError("planning provenance is not exact Case Analysis provenance")
+        if any(
+            not (set(derivation.source_provenance) & set(by_id[analysis_item_id].provenance))
+            for analysis_item_id in referenced
+        ):
+            raise ValueError("planning provenance must cover every referenced Case Analysis item")
 
 
 def append_professional_decision(snapshot: PlanningSnapshot, decision: PlanningDecision) -> PlanningSnapshot:

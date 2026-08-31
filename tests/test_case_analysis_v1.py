@@ -1,5 +1,6 @@
 import copy
 import json
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -260,7 +261,7 @@ def test_save_uses_atomic_repository_cas_and_authoritative_inventory():
     ids = SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999"))
     documents = SimpleNamespace(execute=lambda _workspace: _authoritative_documents(snapshot))
 
-    result = SaveCaseAnalysis(revisions, clock, ids, documents).execute(
+    result = SaveCaseAnalysis(revisions, clock, ids, documents, nullcontext).execute(
         WorkspaceId.parse(snapshot.workspace_id), snapshot, None
     )
 
@@ -272,7 +273,7 @@ def test_save_uses_atomic_repository_cas_and_authoritative_inventory():
         execute=lambda _workspace: _authoritative_documents(snapshot, changed_document_id="DOC-002")
     )
     with pytest.raises(RepositoryIntegrityError, match="source inventory mismatch"):
-        SaveCaseAnalysis(revisions, clock, ids, mismatched).execute(
+        SaveCaseAnalysis(revisions, clock, ids, mismatched, nullcontext).execute(
             WorkspaceId.parse(snapshot.workspace_id), snapshot, None
         )
 
@@ -283,7 +284,7 @@ def test_save_uses_atomic_repository_cas_and_authoritative_inventory():
         )
     )
     with pytest.raises(RepositoryIntegrityError, match="source inventory mismatch"):
-        SaveCaseAnalysis(revisions, clock, ids, extra).execute(
+        SaveCaseAnalysis(revisions, clock, ids, extra, nullcontext).execute(
             WorkspaceId.parse(snapshot.workspace_id), snapshot, None
         )
 
