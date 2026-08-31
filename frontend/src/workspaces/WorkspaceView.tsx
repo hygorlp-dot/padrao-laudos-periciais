@@ -11,8 +11,9 @@ import { MaterialIntakeView } from "./MaterialIntakeView";
 import { CaseAnalysisView } from "./CaseAnalysisView";
 import { PericialPlanningView } from "./PericialPlanningView";
 import { InspectionSessionView } from "./InspectionSessionView";
+import { TechnicalFindingsView } from "./TechnicalFindingsView";
 
-const IMPLEMENTED_STAGE_PATHS = ["/processo", "/materiais", "/analise", "/planejamento", "/vistoria"];
+const IMPLEMENTED_STAGE_PATHS = ["/processo", "/materiais", "/analise", "/planejamento", "/vistoria", "/evidencias"];
 
 type WorkspaceViewProps = {
   currentPath: string;
@@ -164,6 +165,9 @@ export function WorkspaceView({ currentPath, workspaceId, route }: WorkspaceView
         ) : null}
         {state.kind === "ready" && route.path === "/vistoria" ? (
           <InspectionSessionView workspaceId={workspaceId} />
+        ) : null}
+        {state.kind === "ready" && route.path === "/evidencias" ? (
+          <TechnicalFindingsView workspaceId={workspaceId} />
         ) : null}
         {state.kind === "ready" && route.kind === "stage" && !IMPLEMENTED_STAGE_PATHS.includes(route.path) ? (
           <StatusState kind="ready" stage={route.label} />

@@ -7,7 +7,8 @@
     "x-semantic-boundary": "scripts.backend_contract.api_contract.parse_judicial_domain_payload",
     "x-case-analysis-semantic-boundary": "scripts.backend_contract.case_analysis.case_analysis_from_mapping",
     "x-pericial-planning-semantic-boundary": "scripts.backend_contract.pericial_planning.pericial_planning_from_mapping",
-    "x-inspection-session-semantic-boundary": "scripts.backend_contract.vistoria.inspection_session_from_mapping"
+    "x-inspection-session-semantic-boundary": "scripts.backend_contract.vistoria.inspection_session_from_mapping",
+    "x-technical-snapshot-semantic-boundary": "scripts.backend_contract.technical_findings.technical_snapshot_from_mapping"
   },
   "paths": {
     "/v1/workspaces/{workspace_id}/case-analysis": {
@@ -75,6 +76,25 @@
         "responses": {"201": {"description": "Sessão inicial persistida", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InspectionSessionEnvelope"}}}}, "409": {"description": "Planejamento indisponível ou stale"}}
       }
     },
+    "/v1/workspaces/{workspace_id}/technical-snapshot": {
+      "get": {
+        "summary": "Reabre a cadeia técnica canônica reconciliada",
+        "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
+        "responses": {"200": {"description": "Cadeia técnica reconciliada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TechnicalSnapshotEnvelope"}}}}, "404": {"description": "Cadeia técnica ausente"}}
+      },
+      "post": {
+        "summary": "Inicia cadeia técnica vazia vinculada aos upstreams atuais",
+        "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type":"object","additionalProperties":false}}}},
+        "responses": {"201": {"description": "Cadeia técnica inicial persistida", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TechnicalSnapshotEnvelope"}}}}, "409": {"description": "Upstream ausente ou stale"}}
+      },
+      "put": {
+        "summary": "Salva revisão da cadeia técnica com autoridade profissional explícita",
+        "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SaveTechnicalSnapshotRequest"}}}},
+        "responses": {"200": {"description": "Revisão técnica persistida", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TechnicalSnapshotEnvelope"}}}}, "409": {"description": "Conflito de revisão ou upstream stale"}}
+      }
+    },
     "/v1/workspaces/{workspace_id}/pericial-planning/decisions": {
       "post": {
         "summary": "Registra decisão profissional explícita sobre uma proposta",
@@ -96,6 +116,15 @@
       "CaseAnalysisSnapshot": {"$ref": "../schemas/case-analysis-snapshot-v1.schema.json"},
       "PericialPlanningSnapshot": {"$ref": "../schemas/pericial-planning-snapshot-v1.schema.json"},
       "InspectionSession": {"$ref": "../schemas/inspection-session-v1.schema.json"},
+      "TechnicalSnapshot": {"$ref": "../schemas/technical-snapshot-v1.schema.json"},
+      "SaveTechnicalSnapshotRequest": {
+        "type":"object","additionalProperties":false,"required":["expected_revision","snapshot"],
+        "properties":{"expected_revision":{"type":["integer","null"],"minimum":1},"snapshot":{"$ref":"#/components/schemas/TechnicalSnapshot"}}
+      },
+      "TechnicalSnapshotEnvelope": {
+        "type":"object","additionalProperties":false,"required":["revision","updated_at","snapshot"],
+        "properties":{"revision":{"type":"integer","minimum":1},"updated_at":{"type":"string","format":"date-time"},"snapshot":{"$ref":"#/components/schemas/TechnicalSnapshot"}}
+      },
       "PrivatePhotoMetadata": {"type":"object","additionalProperties":false,"required":["workspace_id","content_id","original_filename","byte_size","checksum_sha256","media_type","imported_at","origin"],"properties":{"workspace_id":{"type":"string","format":"uuid"},"content_id":{"type":"string","format":"uuid"},"original_filename":{"type":"string"},"byte_size":{"type":"integer","minimum":1},"checksum_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"media_type":{"enum":["image/jpeg","image/png"]},"imported_at":{"type":"string","format":"date-time"},"origin":{"const":"USER_IMPORT"}}},
       "SaveInspectionSessionRequest": {
         "type": "object", "required": ["expected_revision", "snapshot"],

@@ -43,6 +43,7 @@ from .transport import LocalApi, LocalApiServices, _require_local_token
 from ..application.case_analysis import GetCaseAnalysis, SaveCaseAnalysis
 from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning
 from ..application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession
+from ..application.technical_findings import GetTechnicalSnapshot, SaveTechnicalSnapshot, StartTechnicalSnapshot
 
 
 class LocalApiStartupError(RuntimeError):
@@ -217,6 +218,15 @@ def build_local_api(
         if private_store is not None
         else None
     )
+    get_technical_snapshot = GetTechnicalSnapshot(get_latest_artifact, get_case_analysis, get_inspection_session)
+    save_technical_snapshot = SaveTechnicalSnapshot(
+        store.revisions,
+        get_case_analysis,
+        get_inspection_session,
+        private_store.authority_guard if private_store is not None else nullcontext,
+        local_clock,
+        local_ids,
+    )
     services = LocalApiServices(
         create_workspace=CreateWorkspace(store.workspaces, local_clock, local_ids),
         get_workspace=GetWorkspace(store.workspaces),
@@ -258,6 +268,11 @@ def build_local_api(
         start_inspection_session=(
             StartInspectionSession(get_pericial_planning, save_inspection_session, local_clock, local_ids)
             if save_inspection_session is not None else None
+        ),
+        save_technical_snapshot=save_technical_snapshot,
+        get_technical_snapshot=get_technical_snapshot,
+        start_technical_snapshot=StartTechnicalSnapshot(
+            get_case_analysis, get_inspection_session, save_technical_snapshot, local_ids
         ),
         get_process_metadata_review=get_process_metadata_review,
         confirm_process_metadata_source_span=confirm_process_metadata_source_span,

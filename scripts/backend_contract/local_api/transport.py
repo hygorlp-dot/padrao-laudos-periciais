@@ -56,6 +56,10 @@ from ..application.vistoria import (
     inspection_session_to_validated_mapping,
     validated_inspection_session_from_mapping,
 )
+from ..application.technical_findings import (
+    technical_snapshot_to_validated_mapping,
+    validated_technical_snapshot_from_mapping,
+)
 
 _MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
 
@@ -97,6 +101,9 @@ class LocalApiServices:
     save_inspection_session: object | None = None
     get_inspection_session: object | None = None
     start_inspection_session: object | None = None
+    save_technical_snapshot: object | None = None
+    get_technical_snapshot: object | None = None
+    start_technical_snapshot: object | None = None
     get_process_metadata_review: object | None = None
     confirm_process_metadata_source_span: object | None = None
     import_case_document: object | None = None
@@ -427,7 +434,7 @@ class LocalApi:
                 )
             raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
-            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos"}
+            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "technical-snapshot"}
             if (normalized_method == "POST" or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
                 return _error(
                     403,
@@ -447,6 +454,36 @@ class LocalApi:
                         raise ValueError("name inválido")
                     record = self._services.create_workspace.execute(dto["name"])
                     return _json_response(201, _workspace_dto(record))
+                return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "technical-snapshot":
+                workspace_id = self._workspace_id(raw_segments[2])
+                if normalized_method == "GET":
+                    if self._services.get_technical_snapshot is None:
+                        return _error(503, "TECHNICAL_SNAPSHOT_UNAVAILABLE")
+                    record, snapshot = self._services.get_technical_snapshot.execute(workspace_id)
+                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": technical_snapshot_to_validated_mapping(snapshot)})
+                if normalized_method == "POST":
+                    if self._services.start_technical_snapshot is None:
+                        return _error(503, "TECHNICAL_SNAPSHOT_UNAVAILABLE")
+                    if self._request_dto(request_headers, body) != {}:
+                        raise ValueError("Technical Snapshot start request is invalid")
+                    record, snapshot = self._services.start_technical_snapshot.execute(workspace_id)
+                    return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": technical_snapshot_to_validated_mapping(snapshot)})
+                if normalized_method == "PUT":
+                    if self._services.save_technical_snapshot is None:
+                        return _error(503, "TECHNICAL_SNAPSHOT_UNAVAILABLE")
+                    dto = self._request_dto(request_headers, body)
+                    if set(dto) != {"expected_revision", "snapshot"}:
+                        raise ValueError("Technical Snapshot request is invalid")
+                    expected = dto["expected_revision"]
+                    if expected is not None and (type(expected) is not int or expected < 1):
+                        raise ValueError("Technical Snapshot expected revision is invalid")
+                    snapshot = validated_technical_snapshot_from_mapping(dto["snapshot"])
+                    if snapshot.workspace_id != str(workspace_id):
+                        raise ValueError("Technical Snapshot workspace mismatch")
+                    record = self._services.save_technical_snapshot.execute(workspace_id, snapshot, expected)
+                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": technical_snapshot_to_validated_mapping(snapshot)})
                 return _error(405, "METHOD_NOT_ALLOWED")
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "case-analysis":
