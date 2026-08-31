@@ -335,8 +335,11 @@ def test_inspection_session_bridge_allowlist_is_exact():
     path = f"/app-api/v1/workspaces/{workspace_id}/inspection-session"
     assert _proxy_target(path, "GET") == f"/v1/workspaces/{workspace_id}/inspection-session"
     assert _proxy_target(path, "PUT") == f"/v1/workspaces/{workspace_id}/inspection-session"
-    assert _proxy_target(path, "POST") is None
+    assert _proxy_target(path, "POST") == f"/v1/workspaces/{workspace_id}/inspection-session"
     assert _proxy_target(path + "/findings", "GET") is None
+    photo_path = f"/app-api/v1/workspaces/{workspace_id}/inspection-photos"
+    assert _proxy_target(photo_path, "POST") == f"/v1/workspaces/{workspace_id}/inspection-photos"
+    assert _proxy_target(photo_path, "GET") is None
 
 
 @pytest.mark.parametrize(

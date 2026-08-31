@@ -48,6 +48,14 @@
         }
       }
     },
+    "/v1/workspaces/{workspace_id}/inspection-photos": {
+      "post": {
+        "summary": "Preserva fotografia original privada JPEG ou PNG",
+        "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}, {"name":"X-Document-Filename","in":"header","required":true,"schema":{"type":"string","minLength":1,"maxLength":1024}}],
+        "requestBody": {"required":true,"content":{"image/jpeg":{"schema":{"type":"string","format":"binary"}},"image/png":{"schema":{"type":"string","format":"binary"}}}},
+        "responses": {"201":{"description":"Original privado preservado","content":{"application/json":{"schema":{"$ref":"#/components/schemas/PrivatePhotoMetadata"}}}}}
+      }
+    },
     "/v1/workspaces/{workspace_id}/inspection-session": {
       "get": {
         "summary": "Reabre a sessão canônica de vistoria",
@@ -59,6 +67,12 @@
         "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
         "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SaveInspectionSessionRequest"}}}},
         "responses": {"200": {"description": "Revisão persistida", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InspectionSessionEnvelope"}}}}, "409": {"description": "Conflito ou planejamento stale"}}
+      },
+      "post": {
+        "summary": "Inicia sessão pendente a partir do planejamento aprovado atual",
+        "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/StartInspectionSessionRequest"}}}},
+        "responses": {"201": {"description": "Sessão inicial persistida", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InspectionSessionEnvelope"}}}}, "409": {"description": "Planejamento indisponível ou stale"}}
       }
     },
     "/v1/workspaces/{workspace_id}/pericial-planning/decisions": {
@@ -82,9 +96,15 @@
       "CaseAnalysisSnapshot": {"$ref": "../schemas/case-analysis-snapshot-v1.schema.json"},
       "PericialPlanningSnapshot": {"$ref": "../schemas/pericial-planning-snapshot-v1.schema.json"},
       "InspectionSession": {"$ref": "../schemas/inspection-session-v1.schema.json"},
+      "PrivatePhotoMetadata": {"type":"object","additionalProperties":false,"required":["workspace_id","content_id","original_filename","byte_size","checksum_sha256","media_type","imported_at","origin"],"properties":{"workspace_id":{"type":"string","format":"uuid"},"content_id":{"type":"string","format":"uuid"},"original_filename":{"type":"string"},"byte_size":{"type":"integer","minimum":1},"checksum_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"media_type":{"enum":["image/jpeg","image/png"]},"imported_at":{"type":"string","format":"date-time"},"origin":{"const":"USER_IMPORT"}}},
       "SaveInspectionSessionRequest": {
         "type": "object", "required": ["expected_revision", "snapshot"],
         "properties": {"expected_revision": {"type": ["integer", "null"], "minimum": 1}, "snapshot": {"$ref": "#/components/schemas/InspectionSession"}},
+        "additionalProperties": false
+      },
+      "StartInspectionSessionRequest": {
+        "type": "object", "required": ["responsible_professional", "location_context", "participant_references"],
+        "properties": {"responsible_professional": {"type":"string","minLength":1}, "location_context": {"type":"string","minLength":1}, "participant_references": {"type":"array","uniqueItems":true,"items":{"type":"string","minLength":1}}},
         "additionalProperties": false
       },
       "InspectionSessionEnvelope": {

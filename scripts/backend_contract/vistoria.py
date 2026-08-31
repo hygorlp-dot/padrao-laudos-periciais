@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, fields
+from datetime import datetime
 from enum import StrEnum
 import json
 import re
@@ -46,6 +47,19 @@ class LimitationKind(StrEnum):
     ACCESS_LIMITATION = "ACCESS_LIMITATION"
 
 
+class TimestampReliability(StrEnum):
+    RELIABLE = "RELIABLE"
+    UNVERIFIED = "UNVERIFIED"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+class InstrumentCondition(StrEnum):
+    UNKNOWN = "UNKNOWN"
+    NOT_CLAIMED = "NOT_CLAIMED"
+    VERIFIED = "VERIFIED"
+    CALIBRATION_VALID = "CALIBRATION_VALID"
+
+
 def _text(value: object) -> bool:
     return type(value) is str and bool(value.strip())
 
@@ -55,6 +69,19 @@ def _texts(values: tuple[str, ...], *, allow_empty: bool = True) -> None:
         raise ValueError("identity collection is invalid")
     if any(not _text(value) for value in values) or len(values) != len(set(values)):
         raise ValueError("identity collection is invalid")
+
+
+def _timestamp(value: object, *, nullable: bool = False) -> None:
+    if nullable and value is None:
+        return
+    if not _text(value):
+        raise ValueError("timestamp is invalid")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("timestamp is invalid") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("timestamp requires timezone")
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +141,7 @@ class FieldObservation:
             raise ValueError("statement and photo records require their canonical types")
         if not all(_text(getattr(self, name)) for name in ("observation_id", "inspection_item_id", "raw_observation", "location_id", "timestamp", "operator", "provenance")):
             raise ValueError("field observation is invalid")
+        _timestamp(self.timestamp)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +161,7 @@ class FieldStatement:
             raise ValueError("field statement must remain a party statement")
         if not all(_text(getattr(self, field.name)) for field in fields(self) if field.name != "observation_type"):
             raise ValueError("field statement is invalid")
+        _timestamp(self.timestamp)
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,13 +201,14 @@ class Instrument:
 class InstrumentStatus:
     status_id: str
     instrument_id: str
-    status: str
+    status: InstrumentCondition
     checked_at: str
     evidence_reference: str
 
     def __post_init__(self):
-        if not all(_text(getattr(self, field.name)) for field in fields(self)):
+        if not all(_text(getattr(self, name)) for name in ("status_id", "instrument_id", "checked_at", "evidence_reference")):
             raise ValueError("instrument status is invalid")
+        _timestamp(self.checked_at)
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +238,7 @@ class Measurement:
         for value in (self.normalized_value, self.normalized_unit, self.uncertainty):
             if value is not None and not _text(value):
                 raise ValueError("measurement optional metadata is invalid")
+        _timestamp(self.timestamp)
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,16 +259,20 @@ class PhotoRecord:
     inspection_item_id: str
     private_content_id: str
     original_sha256: str
-    reliable_capture_timestamp: str
+    reliable_capture_timestamp: str | None
+    capture_timestamp_reliability: TimestampReliability
     location_id: str
     caption: str
     device: str
     provenance: str
 
     def __post_init__(self):
-        required = ("photo_id", "inspection_item_id", "private_content_id", "reliable_capture_timestamp", "location_id", "caption", "device", "provenance")
+        required = ("photo_id", "inspection_item_id", "private_content_id", "location_id", "caption", "device", "provenance")
         if not all(_text(getattr(self, name)) for name in required) or _SHA256.fullmatch(self.original_sha256) is None:
             raise ValueError("photo authority reference is invalid")
+        _timestamp(self.reliable_capture_timestamp, nullable=True)
+        if (self.capture_timestamp_reliability is TimestampReliability.RELIABLE) != (self.reliable_capture_timestamp is not None):
+            raise ValueError("photo timestamp reliability is dishonest")
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,6 +325,7 @@ class EnvironmentalCondition:
     def __post_init__(self):
         if not all(_text(getattr(self, field.name)) for field in fields(self)):
             raise ValueError("environmental condition is invalid")
+        _timestamp(self.timestamp)
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,6 +339,7 @@ class AccessOccurrence:
     def __post_init__(self):
         if not all(_text(getattr(self, field.name)) for field in fields(self)):
             raise ValueError("access occurrence is invalid")
+        _timestamp(self.timestamp)
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,6 +417,7 @@ class InspectionReview:
     def __post_init__(self):
         if not all(_text(getattr(self, field.name)) for field in fields(self)):
             raise ValueError("inspection review is invalid")
+        _timestamp(self.reviewed_at)
 
 
 @dataclass(frozen=True, slots=True)
@@ -421,8 +459,10 @@ class InspectionSession:
             raise ValueError("inspection session identity is invalid")
         if self.plan_snapshot.workspace_id != self.workspace_id or type(self.source_revision) is not int or self.source_revision < 1:
             raise ValueError("inspection session workspace/source identity mismatch")
-        if self.ended_at is not None and not _text(self.ended_at):
-            raise ValueError("inspection end timestamp is invalid")
+        if self.source_revision != self.plan_snapshot.source_revision:
+            raise ValueError("inspection session source revision diverges from plan authority")
+        _timestamp(self.started_at)
+        _timestamp(self.ended_at, nullable=True)
         _texts(self.participant_references)
         if type(self.upstream_stale) is not bool or self.upstream_stale != bool(self.upstream_stale_reasons):
             raise ValueError("inspection upstream stale state is dishonest")
@@ -450,10 +490,10 @@ class InspectionSession:
         photo_ids = {item.photo_id for item in self.photos}
         limitation_ids = {item.limitation_id for item in self.limitations}
         if any(
-            not set(item.observation_ids) <= observation_ids
-            or not set(item.measurement_ids) <= measurement_ids
-            or not set(item.photo_ids) <= photo_ids
-            or not set(item.limitation_ids) <= limitation_ids
+            set(item.observation_ids) != {record.observation_id for record in self.observations if record.inspection_item_id == item.item_id}
+            or set(item.measurement_ids) != {record.measurement_id for record in self.measurements if record.inspection_item_id == item.item_id}
+            or set(item.photo_ids) != {record.photo_id for record in self.photos if record.inspection_item_id == item.item_id}
+            or set(item.limitation_ids) != {record.limitation_id for record in self.limitations if record.inspection_item_id == item.item_id}
             for item in self.items
         ):
             raise ValueError("inspection item contains a type-invalid record link")
@@ -468,6 +508,16 @@ class InspectionSession:
             raise ValueError("measurement series link is invalid")
         if any(item.instrument_id not in instrument_ids for item in self.instrument_statuses):
             raise ValueError("instrument status link is invalid")
+        instrument_by_id = {item.instrument_id: item for item in self.instruments}
+        if any(
+            item.status is InstrumentCondition.CALIBRATION_VALID
+            and (
+                not instrument_by_id[item.instrument_id].calibration_claimed
+                or item.evidence_reference != instrument_by_id[item.instrument_id].certificate_reference
+            )
+            for item in self.instrument_statuses
+        ):
+            raise ValueError("calibration status requires matching certificate evidence")
         if set(self.coverage.limitation_ids) != limitation_ids or any(item.limitation_id not in limitation_ids for item in self.missing_items):
             raise ValueError("coverage limitation propagation is invalid")
         evidence_source_ids = observation_ids | measurement_ids | photo_ids | {
@@ -475,6 +525,21 @@ class InspectionSession:
         } | {item.video_id for item in self.videos} | {item.sketch_id for item in self.sketches}
         if any(not set(item.source_record_ids) <= evidence_source_ids for item in self.evidence_candidates):
             raise ValueError("field evidence candidate contains an invalid source record")
+        record_owner = {
+            record_id: record.inspection_item_id
+            for records, identity in (
+                (self.observations, "observation_id"), (self.statements, "statement_id"),
+                (self.measurements, "measurement_id"), (self.photos, "photo_id"),
+                (self.videos, "video_id"), (self.sketches, "sketch_id"),
+            )
+            for record in records for record_id in (getattr(record, identity),)
+        }
+        if any(any(record_owner[source] != item.inspection_item_id for source in item.source_record_ids) for item in self.evidence_candidates):
+            raise ValueError("field evidence candidate crosses inspection item ownership")
+        planning_by_item = {item.item_id: item.planning_item_id for item in self.items}
+        limitation_owner = {item.limitation_id: item.inspection_item_id for item in self.limitations}
+        if any(planning_by_item[limitation_owner[item.limitation_id]] != item.planning_item_id for item in self.missing_items):
+            raise ValueError("missing inspection item limitation ownership is invalid")
         counts = {state: sum(item.state is state for item in self.items) for state in ExecutionState}
         expected = (len(self.items), counts[ExecutionState.PENDING], counts[ExecutionState.COMPLETED], counts[ExecutionState.PARTIAL], counts[ExecutionState.NOT_EXECUTED], counts[ExecutionState.NOT_APPLICABLE], counts[ExecutionState.BLOCKED])
         actual = (self.coverage.total_items, self.coverage.pending_items, self.coverage.completed_items, self.coverage.partial_items, self.coverage.not_executed_items, self.coverage.not_applicable_items, self.coverage.blocked_items)
@@ -490,7 +555,10 @@ def _record(cls: type[T], value: object) -> T:
         raise ValueError(f"invalid {cls.__name__} payload")
     converted = dict(value)
     annotations = cls.__annotations__
-    for name, enum_cls in (("observation_type", ObservationType), ("state", ExecutionState), ("kind", LimitationKind)):
+    enum_fields = [("observation_type", ObservationType), ("state", ExecutionState), ("kind", LimitationKind), ("capture_timestamp_reliability", TimestampReliability)]
+    if cls is InstrumentStatus:
+        enum_fields.append(("status", InstrumentCondition))
+    for name, enum_cls in enum_fields:
         if name in converted:
             converted[name] = enum_cls(converted[name])
     for field in fields(cls):

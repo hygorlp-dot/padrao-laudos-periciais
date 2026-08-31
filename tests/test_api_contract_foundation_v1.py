@@ -30,6 +30,7 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
         "/v1/workspaces/{workspace_id}/pericial-planning",
         "/v1/workspaces/{workspace_id}/pericial-planning/decisions",
         "/v1/workspaces/{workspace_id}/inspection-session",
+        "/v1/workspaces/{workspace_id}/inspection-photos",
     }
     component = contract["components"]["schemas"]["ProceduralContext"]
     assert component == {"$ref": "../schemas/judicial-domain-model-v1.schema.json"}

@@ -24,6 +24,7 @@ from ..application.services import (
     GetWorkspace,
     ImportCaseDocument,
     ImportCaseDocumentWithMetadata,
+    ImportInspectionPhoto,
     ListArtifactRevisions,
     ListWorkspaces,
     ListCaseDocuments,
@@ -41,7 +42,7 @@ from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
 from ..application.case_analysis import GetCaseAnalysis, SaveCaseAnalysis
 from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning
-from ..application.vistoria import GetInspectionSession, SaveInspectionSession
+from ..application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession
 
 
 class LocalApiStartupError(RuntimeError):
@@ -150,6 +151,7 @@ def build_local_api(
             store.close()
             raise
     import_case_document = None
+    import_inspection_photo = None
     list_case_documents = None
     read_case_document = None
     get_process_metadata_review = None
@@ -171,6 +173,7 @@ def build_local_api(
             local_clock,
             local_ids,
         )
+        import_inspection_photo = ImportInspectionPhoto(generic_store)
         list_case_documents = ListCaseDocuments(ListPrivateContents(store.workspaces, private_store))
         read_case_document = open_case_document
         get_process_metadata_review = GetProcessMetadataReview(
@@ -252,11 +255,16 @@ def build_local_api(
         ),
         save_inspection_session=save_inspection_session,
         get_inspection_session=get_inspection_session,
+        start_inspection_session=(
+            StartInspectionSession(get_pericial_planning, save_inspection_session, local_clock, local_ids)
+            if save_inspection_session is not None else None
+        ),
         get_process_metadata_review=get_process_metadata_review,
         confirm_process_metadata_source_span=confirm_process_metadata_source_span,
         import_case_document=import_case_document,
         list_case_documents=list_case_documents,
         read_case_document=read_case_document,
+        import_inspection_photo=import_inspection_photo,
     )
     api = LocalApi(
         services,

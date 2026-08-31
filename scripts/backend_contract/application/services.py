@@ -81,6 +81,14 @@ def _case_document_filename(value: str) -> str:
     if re.match(r"^[A-Za-z]:[\\/]", value) or value.startswith(("/", "\\\\")):
         raise InvalidCaseDocument("nome de arquivo PDF não pode expor path absoluto")
     return value
+
+
+def _inspection_photo_filename(value: str) -> str:
+    if type(value) is not str or not value.strip() or "\x00" in value:
+        raise ValueError("inspection photo filename is invalid")
+    if re.match(r"^[A-Za-z]:[\\/]", value) or value.startswith(("/", "\\\\")):
+        raise ValueError("inspection photo filename cannot expose an absolute path")
+    return value
 _CASE_DOCUMENT_MAX_BYTES = MAX_DOCUMENT_BYTES
 
 
@@ -328,6 +336,25 @@ class ImportCaseDocument:
                 media_type="application/pdf",
                 origin=PrivateContentOrigin.USER_IMPORT,
             )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ImportInspectionPhoto:
+    contents: StorePrivateContent
+
+    def execute(self, *, workspace_id: WorkspaceId, original_filename: str, content: bytes | SeekableContent, media_type: str) -> PrivateContentMetadata:
+        if media_type not in {"image/jpeg", "image/png"}:
+            raise ValueError("only JPEG or PNG inspection photos are accepted")
+        source = as_seekable_content(content)
+        prefix = source.prefix(16)
+        if media_type == "image/jpeg" and not prefix.startswith(b"\xff\xd8\xff"):
+            raise ValueError("inspection photo bytes do not match JPEG")
+        if media_type == "image/png" and not prefix.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError("inspection photo bytes do not match PNG")
+        return self.contents.execute(
+            workspace_id=workspace_id, original_filename=_inspection_photo_filename(original_filename),
+            content=content, media_type=media_type, origin=PrivateContentOrigin.USER_IMPORT,
         )
 
 

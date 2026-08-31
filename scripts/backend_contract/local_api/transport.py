@@ -94,11 +94,13 @@ class LocalApiServices:
     review_pericial_planning: object | None = None
     save_inspection_session: object | None = None
     get_inspection_session: object | None = None
+    start_inspection_session: object | None = None
     get_process_metadata_review: object | None = None
     confirm_process_metadata_source_span: object | None = None
     import_case_document: object | None = None
     list_case_documents: object | None = None
     read_case_document: object | None = None
+    import_inspection_photo: object | None = None
 
 
 def _workspace_dto(record: PericiaWorkspace) -> dict:
@@ -345,7 +347,7 @@ class LocalApi:
             raw_segments, _segments = _target_segments(target)
         except (TypeError, ValueError):
             return False
-        if not (type(method) is str and method.upper() == "POST" and len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "materials"):
+        if not (type(method) is str and method.upper() == "POST" and len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "inspection-photos"}):
             return False
         try:
             self._workspace_id(raw_segments[2])
@@ -423,7 +425,7 @@ class LocalApi:
                 )
             raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
-            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "case-analysis", "pericial-planning", "inspection-session"}
+            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos"}
             if (normalized_method == "POST" or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
                 return _error(
                     403,
@@ -561,6 +563,19 @@ class LocalApi:
                         raise ValueError("Inspection Session workspace mismatch")
                     record = self._services.save_inspection_session.execute(workspace_id, snapshot, expected)
                     return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": inspection_session_to_mapping(snapshot)})
+                if normalized_method == "POST":
+                    if self._services.start_inspection_session is None:
+                        return _error(503, "PRIVATE_STORAGE_UNAVAILABLE", "armazenamento privado indisponível")
+                    dto = self._request_dto(request_headers, body)
+                    if set(dto) != {"responsible_professional", "location_context", "participant_references"} or type(dto["participant_references"]) is not list:
+                        raise ValueError("Inspection Session start request is invalid")
+                    record, snapshot = self._services.start_inspection_session.execute(
+                        workspace_id,
+                        responsible_professional=dto["responsible_professional"],
+                        location_context=dto["location_context"],
+                        participant_references=tuple(dto["participant_references"]),
+                    )
+                    return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": inspection_session_to_mapping(snapshot)})
                 return _error(405, "METHOD_NOT_ALLOWED")
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "materials":
@@ -591,6 +606,20 @@ class LocalApi:
                     )
                     return _json_response(201, _private_content_dto(record, workspace_id))
                 return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "inspection-photos":
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                service = self._services.import_inspection_photo
+                if service is None:
+                    return _error(503, "PRIVATE_STORAGE_UNAVAILABLE", "armazenamento privado indisponível")
+                workspace_id = self._workspace_id(raw_segments[2])
+                media_type = request_headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                if _parse_content_length(request_headers.get("content-length", "")) != body_size:
+                    raise ValueError("Content-Length diverge")
+                filename = _document_filename(request_headers.get("x-document-filename"))
+                record = service.execute(workspace_id=workspace_id, original_filename=filename, content=body, media_type=media_type)
+                return _json_response(201, _private_content_dto(record, workspace_id))
 
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "materials":
                 if normalized_method != "GET":

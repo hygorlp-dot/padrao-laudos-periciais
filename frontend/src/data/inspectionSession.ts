@@ -6,7 +6,7 @@ export type InspectionItem = { item_id: string; planning_item_id: string; title:
 export type FieldObservation = { observation_id: string; inspection_item_id: string; observation_type: string; raw_observation: string; location_id: string; timestamp: string; operator: string; provenance: string };
 export type FieldStatement = { statement_id: string; inspection_item_id: string; observation_type: "PARTY_STATEMENT_ON_SITE"; speaker: string; declared_role: string; verbatim_or_summary: string; capture_kind: string; timestamp: string; provenance: string };
 export type Measurement = { measurement_id: string; inspection_item_id: string; quantity: string; raw_value: string; raw_unit: string; normalized_value: string | null; normalized_unit: string | null; instrument_id: string; method_id: string; location_id: string; timestamp: string; operator: string; uncertainty: string | null; raw_observation: string; provenance: string };
-export type PhotoRecord = { photo_id: string; inspection_item_id: string; private_content_id: string; original_sha256: string; reliable_capture_timestamp: string; location_id: string; caption: string; device: string; provenance: string };
+export type PhotoRecord = { photo_id: string; inspection_item_id: string; private_content_id: string; original_sha256: string; reliable_capture_timestamp: string | null; capture_timestamp_reliability: "RELIABLE" | "UNVERIFIED" | "UNAVAILABLE"; location_id: string; caption: string; device: string; provenance: string };
 export type FieldLimitation = { limitation_id: string; inspection_item_id: string; kind: string; description: string; consequence_for_coverage: string; provenance: string };
 export type EvidenceCandidate = { candidate_id: string; inspection_item_id: string; source_record_ids: string[]; description: string; provenance: string };
 export type InspectionSnapshot = {
@@ -54,4 +54,34 @@ export async function getInspectionSession(workspaceId: string, signal?: AbortSi
   if (!response.ok || !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")) throw new InspectionSessionApiError("unavailable", "Não foi possível carregar a vistoria");
   try { return parseInspectionEnvelope(await response.json(), workspaceId); }
   catch (error) { if (error instanceof InspectionSessionApiError) throw error; throw new InspectionSessionApiError("invalid-response", "Resposta local de vistoria inválida"); }
+}
+
+async function mutate(workspaceId: string, method: "POST" | "PUT", body: object) {
+  if (!UUID.test(workspaceId)) invalid();
+  let response: Response;
+  try { response = await fetch(`/app-api/v1/workspaces/${workspaceId}/inspection-session`, { method, credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify(body) }); }
+  catch { throw new InspectionSessionApiError("unavailable", "Serviço local indisponível"); }
+  if (!response.ok || !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")) throw new InspectionSessionApiError("unavailable", "Não foi possível salvar a vistoria");
+  return parseInspectionEnvelope(await response.json(), workspaceId);
+}
+
+export function startInspectionSession(workspaceId: string, command: { responsible_professional: string; location_context: string; participant_references: string[] }) {
+  if (!command.responsible_professional.trim() || !command.location_context.trim()) invalid();
+  return mutate(workspaceId, "POST", command);
+}
+
+export function saveInspectionSession(workspaceId: string, expectedRevision: number, snapshot: InspectionSnapshot) {
+  return mutate(workspaceId, "PUT", { expected_revision: expectedRevision, snapshot });
+}
+
+export async function uploadInspectionPhoto(workspaceId: string, file: File) {
+  if (!UUID.test(workspaceId) || !["image/jpeg", "image/png"].includes(file.type) || file.size < 1) invalid();
+  let response: Response;
+  const safeFilename = file.name.normalize("NFKD").replace(/[^\x21-\x7e]/g, "_").slice(0, 1024) || "inspection-photo";
+  try { response = await fetch(`/app-api/v1/workspaces/${workspaceId}/inspection-photos`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": file.type, "X-Document-Filename": safeFilename }, body: file }); }
+  catch { throw new InspectionSessionApiError("unavailable", "Serviço local indisponível"); }
+  if (!response.ok || !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")) throw new InspectionSessionApiError("unavailable", "Não foi possível preservar a fotografia");
+  const value = await response.json() as Record<string, unknown>;
+  if (typeof value.content_id !== "string" || !UUID.test(value.content_id) || typeof value.checksum_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(value.checksum_sha256)) invalid();
+  return { contentId: value.content_id, sha256: value.checksum_sha256 };
 }

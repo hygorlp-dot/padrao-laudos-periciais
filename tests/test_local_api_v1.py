@@ -16,6 +16,9 @@ import pytest
 from scripts.backend_contract.application.models import (
     ArtifactRevision,
     PericiaWorkspace,
+    PrivateContentId,
+    PrivateContentMetadata,
+    PrivateContentOrigin,
     WorkspaceId,
 )
 from scripts.backend_contract.application.ports import (
@@ -169,6 +172,36 @@ def test_inspection_session_is_private_and_rejects_semantic_flattening():
     invalid = request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/inspection-session", body={"expected_revision": None, "snapshot": payload})
     assert denied.status == 403
     assert invalid.status == 400
+
+
+def test_inspection_session_start_delegates_explicit_professional_context():
+    payload = inspection_session_payload()
+    from scripts.backend_contract.vistoria import inspection_session_from_mapping
+    start = RecordingService((revision(payload=payload), inspection_session_from_mapping(payload)))
+    api = LocalApi(services(start_inspection_session=start), token=TOKEN)
+    response = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/inspection-session", body={
+        "responsible_professional": "PROFESSIONAL-001", "location_context": "Local sintético", "participant_references": ["PARTICIPANT-001"],
+    })
+    assert response.status == 201
+    assert start.calls[0][1]["responsible_professional"] == "PROFESSIONAL-001"
+
+
+def test_inspection_photo_upload_preserves_original_bytes_through_private_service():
+    content = b"\x89PNG\r\n\x1a\nsynthetic-original"
+    metadata = PrivateContentMetadata(
+        workspace_id=WORKSPACE_ID, content_id=PrivateContentId(UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")),
+        original_filename="inspection.png", byte_size=len(content), checksum_sha256="e" * 64,
+        media_type="image/png", imported_at=CREATED_AT, origin=PrivateContentOrigin.USER_IMPORT,
+    )
+    imported = RecordingService(metadata)
+    api = LocalApi(services(import_inspection_photo=imported), token=TOKEN)
+    response = api.handle("POST", f"/v1/workspaces/{WORKSPACE_UUID}/inspection-photos", {
+        "Host": "127.0.0.1", "X-Local-API-Token": TOKEN, "Content-Type": "image/png",
+        "Content-Length": str(len(content)), "X-Document-Filename": "inspection.png",
+    }, content)
+    assert response.status == 201
+    assert imported.calls[0][1]["content"] == content
+    assert decoded(response)["checksum_sha256"] == "e" * 64
 
 
 def test_pericial_planning_route_validates_and_delegates_canonical_snapshot():

@@ -99,8 +99,10 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "pericial-planning" and method in {"GET", "PUT"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
-        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "inspection-session" and method in {"GET", "PUT"}:
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "inspection-session" and method in {"GET", "POST", "PUT"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "inspection-photos" and method == "POST":
+            return f"/v1/workspaces/{remainder[0]}/inspection-photos"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["pericial-planning", "decisions"] and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/pericial-planning/decisions"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "materials" and _CANONICAL_UUID.fullmatch(remainder[2]) and method == "GET":
@@ -178,7 +180,7 @@ class ProductBridge:
         except (AttributeError, TypeError, ValueError):
             return self._max_body_bytes
         upstream_target = _proxy_target(path, normalized_method)
-        if normalized_method == "POST" and upstream_target is not None and upstream_target.endswith("/materials"):
+        if normalized_method == "POST" and upstream_target is not None and upstream_target.endswith(("/materials", "/inspection-photos")):
             return self._max_document_body_bytes
         return self._max_body_bytes
 
@@ -199,7 +201,7 @@ class ProductBridge:
             return False
         origin = headers.get("origin")
         fetch_site = headers.get("sec-fetch-site")
-        if method == "POST":
+        if method in {"POST", "PUT"}:
             return origin == self._public_origin and fetch_site == "same-origin"
         if origin is not None and origin != self._public_origin:
             return False
@@ -237,7 +239,7 @@ class ProductBridge:
         headers: dict[str, str],
         body: bytes | SeekableContent,
     ) -> BridgeResponse:
-        request_limit = self._max_document_body_bytes if method == "POST" and upstream_target.endswith("/materials") else self._max_body_bytes
+        request_limit = self._max_document_body_bytes if method == "POST" and upstream_target.endswith(("/materials", "/inspection-photos")) else self._max_body_bytes
         body_size = len(body) if type(body) is bytes else as_seekable_content(body).byte_size
         if body_size > request_limit:
             return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
@@ -248,9 +250,10 @@ class ProductBridge:
         if method == "POST":
             content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
             is_document = upstream_target.endswith("/materials")
-            if content_type not in ({"application/pdf"} if is_document else {"application/json"}):
+            is_photo = upstream_target.endswith("/inspection-photos")
+            if content_type not in ({"application/pdf"} if is_document else {"image/jpeg", "image/png"} if is_photo else {"application/json"}):
                 return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
-            if is_document:
+            if is_document or is_photo:
                 filename = headers.get("x-document-filename", "")
                 if not filename or len(filename) > 1024 or not filename.isascii() or any(ord(character) < 33 or ord(character) > 126 for character in filename):
                     return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")

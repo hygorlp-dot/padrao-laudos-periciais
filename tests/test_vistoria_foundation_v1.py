@@ -38,7 +38,8 @@ from scripts.backend_contract.vistoria import (
     inspection_session_to_mapping,
 )
 from scripts.backend_contract.application.models import ArtifactRevision, PrivateContentId, PrivateContentMetadata, PrivateContentOrigin, WorkspaceId
-from scripts.backend_contract.application.vistoria import GetInspectionSession, SaveInspectionSession, inspection_planning_digest
+from scripts.backend_contract.application.services import ImportInspectionPhoto
+from scripts.backend_contract.application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession, inspection_planning_digest
 from scripts.backend_contract.pericial_planning import PlanningDecision, ReviewAction, append_professional_decision, pericial_planning_from_mapping
 
 
@@ -111,7 +112,7 @@ def test_fixture_matches_published_schema():
 def test_openapi_publishes_only_canonical_inspection_session_operations():
     contract = json.loads((ROOT / "contracts/openapi-v1.json").read_text(encoding="utf-8"))
     path = contract["paths"]["/v1/workspaces/{workspace_id}/inspection-session"]
-    assert set(path) == {"get", "put"}
+    assert set(path) == {"get", "post", "put"}
     assert contract["components"]["schemas"]["InspectionSession"] == {"$ref": "../schemas/inspection-session-v1.schema.json"}
     assert contract["info"]["x-inspection-session-semantic-boundary"] == "scripts.backend_contract.vistoria.inspection_session_from_mapping"
 
@@ -206,6 +207,55 @@ def test_graph_links_are_type_exact(path, replacement):
         inspection_session_from_mapping(raw)
 
 
+def test_graph_links_require_exact_owner_and_complete_backlinks():
+    raw = payload()
+    raw["items"][0]["observation_ids"] = ["OBS-003"]
+    with pytest.raises(ValueError, match="type-invalid"):
+        inspection_session_from_mapping(raw)
+    raw = payload()
+    raw["items"][0]["observation_ids"] = []
+    with pytest.raises(ValueError, match="type-invalid"):
+        inspection_session_from_mapping(raw)
+    raw = payload()
+    raw["evidence_candidates"][0]["inspection_item_id"] = "INSPECTION-ITEM-001"
+    with pytest.raises(ValueError, match="ownership"):
+        inspection_session_from_mapping(raw)
+
+
+@pytest.mark.parametrize(("collection", "field"), ((None, "started_at"), ("observations", "timestamp"), ("measurements", "timestamp"), ("instrument_statuses", "checked_at"), ("reviews", "reviewed_at")))
+def test_material_timestamps_require_timezone_aware_iso8601(collection, field):
+    raw = payload()
+    target = raw if collection is None else raw[collection][0]
+    target[field] = "not-a-timestamp"
+    with pytest.raises(ValueError, match="timestamp"):
+        inspection_session_from_mapping(raw)
+
+
+def test_photo_can_record_unavailable_timestamp_without_fabricating_one():
+    raw = payload()
+    raw["photos"][0]["reliable_capture_timestamp"] = None
+    raw["photos"][0]["capture_timestamp_reliability"] = "UNAVAILABLE"
+    assert inspection_session_from_mapping(raw).photos[0].reliable_capture_timestamp is None
+    raw["photos"][0]["capture_timestamp_reliability"] = "RELIABLE"
+    with pytest.raises(ValueError, match="reliability"):
+        inspection_session_from_mapping(raw)
+
+
+def test_calibration_valid_status_requires_matching_certificate_authority():
+    raw = payload()
+    raw["instruments"][0]["calibration_claimed"] = False
+    raw["instruments"][0]["certificate_reference"] = None
+    with pytest.raises(ValueError, match="calibration status"):
+        inspection_session_from_mapping(raw)
+
+
+def test_session_source_revision_must_equal_bound_plan_source_revision():
+    raw = payload()
+    raw["source_revision"] = 999
+    with pytest.raises(ValueError, match="source revision"):
+        inspection_session_from_mapping(raw)
+
+
 def test_save_binds_latest_approved_plan_and_verifies_private_photo_authority():
     session = inspection_session_from_mapping(payload())
     upstream = planning()
@@ -250,6 +300,40 @@ def test_reopen_preserves_state_and_marks_changed_plan_stale():
     _, stale = changed.execute(WorkspaceId.parse(session.workspace_id))
     assert stale.upstream_stale is True
     assert "planning artifact revision changed" in stale.upstream_stale_reasons
+
+
+def test_start_builds_and_persists_pending_session_from_latest_approved_plan():
+    upstream = planning()
+    planning_record = SimpleNamespace(revision=2)
+    saved = []
+    generated = iter(UUID(f"88888888-8888-4888-8888-{index:012d}") for index in range(1, 6))
+    service = StartInspectionSession(
+        SimpleNamespace(execute=lambda _workspace: (planning_record, upstream)),
+        SimpleNamespace(execute=lambda _workspace, session, expected: saved.append((session, expected)) or SimpleNamespace(revision=1, created_at="2026-08-30T12:00:00+00:00")),
+        SimpleNamespace(now=lambda: datetime(2026, 8, 30, 12, tzinfo=UTC)),
+        SimpleNamespace(new_uuid=lambda: next(generated)),
+    )
+    record, session = service.execute(
+        WorkspaceId.parse(upstream.workspace_id), responsible_professional="PROFESSIONAL-001",
+        location_context="Local sintético", participant_references=("PARTICIPANT-001",),
+    )
+    assert record.revision == 1
+    assert {item.planning_item_id for item in session.items} == {"PLAN-INSPECTION-001", "PLAN-MEASUREMENT-001", "PLAN-PHOTO-001"}
+    assert all(item.state is ExecutionState.PENDING for item in session.items)
+    assert session.coverage.pending_items == 3
+    assert session.source_revision == upstream.plan.case_analysis_source_revision
+    assert saved[0][1] is None
+
+
+def test_inspection_photo_import_accepts_only_matching_original_image_bytes():
+    calls = []
+    service = ImportInspectionPhoto(SimpleNamespace(execute=lambda **kwargs: calls.append(kwargs) or SimpleNamespace()))
+    png = b"\x89PNG\r\n\x1a\nsynthetic-original"
+    service.execute(workspace_id=WorkspaceId.parse("11111111-1111-4111-8111-111111111111"), original_filename="inspection.png", content=png, media_type="image/png")
+    assert calls[0]["content"] == png
+    assert calls[0]["origin"] is PrivateContentOrigin.USER_IMPORT
+    with pytest.raises(ValueError, match="PNG"):
+        service.execute(workspace_id=WorkspaceId.parse("11111111-1111-4111-8111-111111111111"), original_filename="inspection.png", content=b"not-png", media_type="image/png")
     raw = payload()
     raw["measurements"][0]["inspection_item_id"] = "UNKNOWN"
     with pytest.raises(ValueError):
