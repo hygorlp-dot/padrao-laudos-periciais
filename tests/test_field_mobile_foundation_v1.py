@@ -24,6 +24,7 @@ from scripts.backend_contract.field_mobile import (
 from scripts.backend_contract.vistoria import InspectionSession
 from scripts.backend_contract.application.field_mobile import (
     SyncAuthority,
+    PrepareOfflineInspection,
     SyncOfflineInspection,
     UpdateOfflineInspection,
     adjudicate_offline_sync,
@@ -294,18 +295,23 @@ def test_offline_update_sync_and_durable_replay_receipt_form_one_vertical(tmp_pa
         mapping["inspection_snapshot"][collection][0]["original_sha256"] = digest
     package = offline_package_from_mapping(mapping)
     vault = DeviceOfflineVault(tmp_path, key=b"z" * 32, device_id=package.device_id, workspace_id=package.workspace_id)
-    vault.save(package)
-    for record_id, original in originals.items():
-        vault.save_media(package.package_id, record_id, original)
 
     by_content = {item.private_content_id: originals[item.record_id] for item in package.media_manifest}
     class Private:
         def execute(self, _workspace_id, content_id):
             original = by_content[str(content_id)]
             manifest = next(item for item in package.media_manifest if item.private_content_id == str(content_id))
-            return SimpleNamespace(metadata=SimpleNamespace(checksum_sha256=manifest.original_sha256, byte_size=len(original), media_type=manifest.media_type), content=original)
-    ids = SimpleNamespace(new_uuid=lambda: UUID("dddddddd-dddd-4ddd-8ddd-dddddddddddd"))
+            return SimpleNamespace(metadata=SimpleNamespace(workspace_id=WORKSPACE_ID, checksum_sha256=manifest.original_sha256, byte_size=len(original), media_type=manifest.media_type), content=original)
+    generated = iter((UUID("dddddddd-dddd-4ddd-8ddd-dddddddddddd"), UUID("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")))
+    ids = SimpleNamespace(new_uuid=lambda: next(generated))
     clock = SimpleNamespace(now=lambda: __import__("datetime").datetime.fromisoformat("2026-08-31T15:00:00+00:00"))
+    getter = SimpleNamespace(execute=lambda _workspace: (SimpleNamespace(revision=package.inspection_revision), package.inspection_snapshot))
+    prepared = PrepareOfflineInspection(getter, Private(), lambda *_: vault, clock, ids).execute(
+        WORKSPACE_ID, device_id=package.device_id, device_session_id=package.device_session_id,
+    )
+    assert vault.verify_media_authority(prepared.package_id)
+
+    package = prepared
     updater = UpdateOfflineInspection(Private(), lambda *_: vault, clock, ids)
     updated = updater.execute(WORKSPACE_ID, device_id=package.device_id, package_id=package.package_id, expected_package_revision=1, snapshot=package.inspection_snapshot)
     assert updated.package_revision == 2
