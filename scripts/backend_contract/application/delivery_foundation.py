@@ -25,7 +25,7 @@ from ..delivery_foundation import (
     delivery_snapshot_from_mapping,
     delivery_snapshot_to_mapping,
 )
-from ..delivery_renderer import DELIVERY_RENDERING_VERSION, render_word_candidate, validate_final_artifact, validate_supporting_artifact, verify_reopened_artifact
+from ..delivery_renderer import DELIVERY_RENDERING_VERSION, render_word_candidate, validate_delivery_artifact, validate_final_artifact, validate_supporting_artifact, verify_reopened_artifact
 from ..report_template import TemplateBindingManifest, template_binding_manifest_from_mapping
 from ..pericial_planning import PlanningSnapshot, pericial_planning_to_mapping
 from ..report_foundation import ReportSnapshot, ReportState, report_snapshot_to_mapping
@@ -413,7 +413,7 @@ class AttachDeliveryPackageArtifact:
         if output_format is DeliveryFormat.OTHER:
             validate_supporting_artifact(content.content, media)
         else:
-            validate_final_artifact(content.content, output_format.value)
+            validate_delivery_artifact(content.content, output_format.value)
         artifact = DeliveryArtifact(
             artifact_id=f"ARTIFACT-{str(self.ids.new_uuid()).upper()}", role=package_role,
             format=output_format, filename=content.metadata.original_filename,

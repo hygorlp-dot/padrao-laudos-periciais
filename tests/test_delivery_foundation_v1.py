@@ -551,3 +551,8 @@ def test_text_only_diagnostic_pdf_can_never_become_a_final_professional_pdf() ->
         delivery_renderer.render_final_pdf_candidate(
             word_content=word.getvalue(), word_format="DOCX", converter=DiagnosticConverter(),
         )
+    digest, size, _ = validate_final_artifact(diagnostic, "PDF")
+    with pytest.raises(ValueError, match="diagnostic PDF cannot be a Delivery artifact"):
+        verify_reopened_artifact(
+            content=diagnostic, output_format="PDF", expected_size=size, expected_sha256=digest,
+        )

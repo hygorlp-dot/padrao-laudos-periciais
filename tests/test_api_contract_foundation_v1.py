@@ -73,6 +73,11 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
     component = contract["components"]["schemas"]["ProceduralContext"]
     assert component == {"$ref": "../schemas/judicial-domain-model-v1.schema.json"}
     assert contract["info"]["x-semantic-boundary"] == ("scripts.backend_contract.api_contract.parse_judicial_domain_payload")
+    render = contract["paths"]["/v1/workspaces/{workspace_id}/delivery-snapshot/render"]["post"]
+    promise = f"{render.get('summary', '')} {render.get('description', '')}".casefold()
+    assert "word" in promise
+    assert "pdf final local indisponível" in promise
+    assert "docx/docm e pdf" not in promise
     assert contract["info"]["x-delivery-snapshot-semantic-boundary"] == "scripts.backend_contract.delivery_foundation.delivery_snapshot_from_mapping"
     assert contract["components"]["schemas"]["DeliverySnapshot"] == {"$ref": "../schemas/delivery-snapshot-v1.schema.json"}
     assert contract["info"]["x-budget-snapshot-semantic-boundary"] == "scripts.backend_contract.budget_foundation.budget_snapshot_from_mapping"

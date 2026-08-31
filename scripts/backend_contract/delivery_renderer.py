@@ -373,6 +373,13 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
     return sha256(content).hexdigest(), len(content), media_type
 
 
+def validate_delivery_artifact(content: bytes, output_format: str) -> tuple[str, int, str]:
+    """Validate bytes admitted to a professional Delivery package."""
+    if output_format == "PDF" and b"/DiagnosticOnly true" in content:
+        raise ValueError("diagnostic PDF cannot be a Delivery artifact")
+    return validate_final_artifact(content, output_format)
+
+
 def validate_supporting_artifact(content: bytes, media_type: str) -> tuple[str, int, str]:
     """Verify non-Office supporting bytes without trusting filename metadata."""
     if type(content) is not bytes or not content:
@@ -423,6 +430,6 @@ def safe_pdf_conversion_copy(content: bytes, output_format: str) -> tuple[bytes,
 def verify_reopened_artifact(
     *, content: bytes, output_format: str, expected_size: int, expected_sha256: str,
 ) -> None:
-    digest, size, _ = validate_final_artifact(content, output_format)
+    digest, size, _ = validate_delivery_artifact(content, output_format)
     if size != expected_size or digest != expected_sha256:
         raise ValueError("reopened artifact bytes diverge from finalized manifest")
