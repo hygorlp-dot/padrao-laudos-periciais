@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.0.0",
+  "report_id": "REPORT-001",
+  "workspace_id": "11111111-1111-4111-8111-111111111111",
+  "source_snapshot": {
+    "workspace_id": "11111111-1111-4111-8111-111111111111",
+    "case_analysis_snapshot_id": "CASE-ANALYSIS-001",
+    "case_analysis_revision": 3,
+    "case_analysis_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "inspection_session_id": "INSPECTION-SESSION-001",
+    "inspection_session_revision": 2,
+    "inspection_session_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "technical_snapshot_id": "TECHNICAL-SNAPSHOT-001",
+    "technical_snapshot_revision": 4,
+    "technical_snapshot_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "expert_profile_id": "EXPERT-PROFILE-001",
+    "expert_profile_revision": 1,
+    "expert_profile_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  },
+  "expert_profile": {
+    "profile_id": "EXPERT-PROFILE-001",
+    "revision": 1,
+    "full_name": "Profissional Sintético",
+    "professional_title": "Perito Judicial",
+    "registration": "REG-SYNTHETIC-001",
+    "court_registration": "COURT-SYNTHETIC-001",
+    "contact_line": "Contato sintético não operacional"
+  },
+  "editorial_profile": {
+    "profile_id": "JUSTICA_PLURAL_CHAPTER_4",
+    "font_family": "Arial",
+    "body_font_pt": 11,
+    "table_font_pt": 10,
+    "caption_font_pt": 9,
+    "alignment": "JUSTIFIED",
+    "line_spacing": 1.15,
+    "first_line_indent_cm": 1.25,
+    "page_size": "A4",
+    "margin_top_cm": 2,
+    "margin_bottom_cm": 2,
+    "margin_left_cm": 3,
+    "margin_right_cm": 2,
+    "hyphenation": false,
+    "overrides": []
+  },
+  "sections": [
+    {"section_id":"SECTION-001","kind":"IDENTIFICATION","title":"Identificação","order":1,"required_by_cpc473":true},
+    {"section_id":"SECTION-002","kind":"PROCEDURAL_CONTEXT","title":"Contexto Processual","order":2,"required_by_cpc473":true},
+    {"section_id":"SECTION-003","kind":"PURPOSE_OBJECT","title":"Objeto da Perícia","order":3,"required_by_cpc473":true},
+    {"section_id":"SECTION-004","kind":"SCOPE","title":"Escopo","order":4,"required_by_cpc473":false},
+    {"section_id":"SECTION-005","kind":"DOCUMENTS_EVIDENCE","title":"Documentos e Evidências Examinados","order":5,"required_by_cpc473":true},
+    {"section_id":"SECTION-006","kind":"METHODOLOGY","title":"Metodologia","order":6,"required_by_cpc473":false},
+    {"section_id":"SECTION-007","kind":"INSPECTION","title":"Vistoria","order":7,"required_by_cpc473":true},
+    {"section_id":"SECTION-008","kind":"TECHNICAL_ANALYSIS","title":"Análise Técnica","order":8,"required_by_cpc473":true},
+    {"section_id":"SECTION-009","kind":"TECHNICAL_FINDINGS","title":"Achados Técnicos","order":9,"required_by_cpc473":true},
+    {"section_id":"SECTION-010","kind":"ANSWERS_TO_QUESTIONS","title":"Respostas aos Quesitos","order":10,"required_by_cpc473":true},
+    {"section_id":"SECTION-011","kind":"CONCLUSIONS","title":"Conclusões","order":11,"required_by_cpc473":false},
+    {"section_id":"SECTION-012","kind":"LIMITATIONS_RESERVATIONS","title":"Limitações e Ressalvas","order":12,"required_by_cpc473":false},
+    {"section_id":"SECTION-013","kind":"REFERENCES","title":"Referências","order":13,"required_by_cpc473":false},
+    {"section_id":"SECTION-014","kind":"ATTACHMENTS","title":"Anexos","order":14,"required_by_cpc473":false}
+  ],
+  "claims": [
+    {"claim_id":"CLAIM-001","section_id":"SECTION-001","text":"O documento sintético identifica o processo de teste.","authority":"DOCUMENTED","provenance":[{"provenance_id":"PROV-001","source_kind":"CASE_DOCUMENT","source_id":"DOCUMENT-001","source_revision":3}]},
+    {"claim_id":"CLAIM-002","section_id":"SECTION-002","text":"A parte sintética alegou uma ocorrência.","authority":"ALLEGED","provenance":[{"provenance_id":"PROV-002","source_kind":"ALLEGATION","source_id":"CLAIM-CASE-001","source_revision":3}]},
+    {"claim_id":"CLAIM-003","section_id":"SECTION-003","text":"A decisão sintética delimitou o objeto pericial.","authority":"DECIDED_BY_COURT","provenance":[{"provenance_id":"PROV-003","source_kind":"COURT_DECISION","source_id":"DECISION-CASE-001","source_revision":3}]},
+    {"claim_id":"CLAIM-004","section_id":"SECTION-005","text":"Foi examinado o documento sintético indicado.","authority":"DOCUMENTED","provenance":[{"provenance_id":"PROV-004","source_kind":"CASE_DOCUMENT","source_id":"DOCUMENT-001","source_revision":3}]},
+    {"claim_id":"CLAIM-005","section_id":"SECTION-007","text":"Observou-se a condição sintética registrada.","authority":"OBSERVED","provenance":[{"provenance_id":"PROV-005","source_kind":"FIELD_OBSERVATION","source_id":"OBSERVATION-001","source_revision":2}]},
+    {"claim_id":"CLAIM-006","section_id":"SECTION-008","text":"Mediu-se o valor sintético de 1250 mm.","authority":"MEASURED","provenance":[{"provenance_id":"PROV-006","source_kind":"MEASUREMENT","source_id":"MEASUREMENT-001","source_revision":2}]},
+    {"claim_id":"CLAIM-007","section_id":"SECTION-009","text":"Há divergência dimensional restrita à amostra sintética.","authority":"TECHNICALLY_FOUND","provenance":[{"provenance_id":"PROV-007","source_kind":"TECHNICAL_FINDING","source_id":"FINDING-001","source_revision":4}]},
+    {"claim_id":"CLAIM-008","section_id":"SECTION-010","text":"Conclui-se profissionalmente pela divergência limitada ao ponto sintético.","authority":"PROFESSIONALLY_CONCLUDED","provenance":[{"provenance_id":"PROV-008","source_kind":"PROFESSIONAL_DECISION","source_id":"DECISION-001","source_revision":4}]}
+  ],
+  "answers": [
+    {"answer_id":"ANSWER-001","section_id":"SECTION-010","question_id":"QUESTION-001","text":"A medição sintética diverge da referência documental, limitada ao ponto examinado.","finding_id":"FINDING-001","evidence_ids":["EVIDENCE-SUPPORT-001","EVIDENCE-CONTRARY-001"],"method_ids":["METHOD-APPLICATION-001"],"decision_id":"DECISION-001","claim_ids":["CLAIM-007","CLAIM-008"]}
+  ],
+  "review_decisions": [
+    {"review_id":"REPORT-REVIEW-001","action":"MARK_REVIEWED","professional_id":"EXPERT-PROFILE-001","reason":"Revisão sintética da rastreabilidade.","timestamp":"2026-08-31T11:00:00+00:00","supersedes_review_id":null},
+    {"review_id":"REPORT-REVIEW-002","action":"APPROVE","professional_id":"EXPERT-PROFILE-001","reason":"Aprovação sintética explícita para edição controlada.","timestamp":"2026-08-31T11:01:00+00:00","supersedes_review_id":"REPORT-REVIEW-001"}
+  ],
+  "state": "APPROVED",
+  "coverage": {"sections":14,"material_claims":8,"traceable_claims":8,"answers":1,"traceable_answers":1,"cpc473_required_sections":8,"cpc473_present_sections":8,"complete":true,"reasons":[]},
+  "upstream_stale": false,
+  "upstream_stale_reasons": []
+}
