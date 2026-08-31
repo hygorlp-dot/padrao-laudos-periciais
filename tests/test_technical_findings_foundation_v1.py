@@ -323,3 +323,35 @@ def test_orphan_method_records_and_limitations_are_rejected():
     limitations[1] = replace(limitations[1], owner_id="METHOD-UNKNOWN")
     with pytest.raises(ValueError, match="method limitation"):
         replace(snapshot, limitations=tuple(limitations))
+
+
+def test_orphan_conflict_uncertainty_and_limitation_are_rejected():
+    snapshot = technical_snapshot_from_mapping(payload())
+    with pytest.raises(ValueError, match="orphan conflict"):
+        replace(snapshot, conflicts=snapshot.conflicts + (replace(
+            snapshot.conflicts[0], conflict_id="CONFLICT-ORPHAN", proposal_id="PROPOSAL-UNKNOWN"
+        ),))
+    with pytest.raises(ValueError, match="orphan finding uncertainty"):
+        replace(snapshot, uncertainties=snapshot.uncertainties + (replace(
+            snapshot.uncertainties[0], uncertainty_id="UNCERTAINTY-ORPHAN"
+        ),))
+    with pytest.raises(ValueError, match="orphan limitation"):
+        replace(snapshot, limitations=snapshot.limitations + (replace(
+            snapshot.limitations[0], limitation_id="LIMITATION-ORPHAN"
+        ),))
+
+
+def test_source_links_require_the_exact_bound_artifact_revision():
+    case_record, case, inspection_record, inspection = upstreams()
+    service = SaveTechnicalSnapshot(
+        SimpleNamespace(append_if_latest=lambda **_kwargs: SimpleNamespace(revision=4)),
+        SimpleNamespace(execute=lambda _workspace: (case_record, case)),
+        SimpleNamespace(execute=lambda _workspace: (inspection_record, inspection)),
+        nullcontext, SimpleNamespace(now=lambda: datetime.now(UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
+    )
+    snapshot = bound_snapshot()
+    links = list(snapshot.source_links)
+    links[0] = replace(links[0], source_revision=inspection_record.revision + 1)
+    with pytest.raises(ValueError, match="source revision"):
+        service.execute(WorkspaceId.parse(snapshot.workspace_id), replace(snapshot, source_links=tuple(links)), 3)

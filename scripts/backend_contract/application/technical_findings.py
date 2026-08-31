@@ -110,6 +110,13 @@ def _validate_upstream_links(snapshot: TechnicalSnapshot, case: CaseAnalysisSnap
         authority = case_ids if link.source_kind in case_kinds else inspection_ids if link.source_kind in inspection_kinds else set()
         if link.source_id not in authority:
             raise ValueError("Technical Snapshot source identity is absent from bound upstream")
+        expected_revision = (
+            snapshot.source_snapshot.case_analysis_revision
+            if link.source_kind in case_kinds
+            else snapshot.source_snapshot.inspection_session_revision
+        )
+        if link.source_revision != expected_revision:
+            raise ValueError("Technical Snapshot source revision differs from bound upstream")
     question_ids = {item.item_id for item in case.questions}
     if any(link.question_id not in question_ids for link in snapshot.question_links):
         raise ValueError("Technical Snapshot question identity is absent from Case Analysis")

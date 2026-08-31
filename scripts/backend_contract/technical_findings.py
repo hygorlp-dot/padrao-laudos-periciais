@@ -381,6 +381,8 @@ class TechnicalSnapshot:
                 raise ValueError("source link must be owned by assessed evidence")
             if any(limitations.get(limit_id) is None or limitations[limit_id].owner_id != item.evidence_id for limit_id in assessment.limitation_ids):
                 raise ValueError("evidence limitation ownership is invalid")
+            if any(item_id not in evidence for item_id in assessment.contrary_evidence_ids):
+                raise ValueError("assessment contrary evidence is invalid")
         if {item.assessment_id for item in self.evidence_items} != set(assessments):
             raise ValueError("orphan evidence assessment is invalid")
         if {link_id for item in self.evidence_assessments for link_id in item.source_link_ids} != set(links):
@@ -414,6 +416,22 @@ class TechnicalSnapshot:
                 raise ValueError("finding limitation ownership is invalid")
             if any(uncertainties.get(item_id) is None or uncertainties[item_id].proposal_id != proposal.proposal_id for item_id in proposal.uncertainty_ids):
                 raise ValueError("finding uncertainty ownership is invalid")
+        if any(item.proposal_id not in proposals for item in self.conflicts):
+            raise ValueError("orphan conflict is invalid")
+        if {item_id for proposal in self.finding_proposals for item_id in proposal.uncertainty_ids} != set(uncertainties):
+            raise ValueError("orphan finding uncertainty is invalid")
+        owned_limitation_ids = {
+            item_id
+            for owners in (
+                self.evidence_assessments,
+                self.method_applications,
+                self.finding_proposals,
+            )
+            for owner in owners
+            for item_id in owner.limitation_ids
+        }
+        if owned_limitation_ids != set(limitations):
+            raise ValueError("orphan limitation is invalid")
         decisions = {item.decision_id: item for item in self.decisions}
         findings = {item.finding_id: item for item in self.findings}
         for decision in self.decisions:
