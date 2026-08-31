@@ -309,7 +309,13 @@ class ProductBridge:
             if is_document_read and upstream.status == 200:
                 raw_length = upstream.getheader("Content-Length") or ""
                 content_type = (upstream.getheader("Content-Type") or "").split(";", 1)[0].strip().lower()
-                allowed_delivery_types = {"application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.ms-word.document.macroenabled.12"}
+                allowed_delivery_types = {
+                    "application/pdf",
+                    "image/jpeg",
+                    "image/png",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "application/vnd.ms-word.document.macroenabled.12",
+                }
                 delivery_read = "/delivery-snapshot/artifacts/" in upstream_target
                 if not raw_length.isascii() or not raw_length.isdecimal() or int(raw_length) > response_limit or content_type not in (allowed_delivery_types if delivery_read else {"application/pdf"}):
                     return _error(502, "INVALID_LOCAL_API_RESPONSE", "resposta local inválida")
