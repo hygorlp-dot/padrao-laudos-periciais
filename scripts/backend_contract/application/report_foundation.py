@@ -126,6 +126,17 @@ def _validate_answer_chains(snapshot: ReportSnapshot, technical: TechnicalSnapsh
         classified = set(proposal.supporting_evidence_ids) | set(proposal.contrary_evidence_ids)
         if set(answer.evidence_ids) != classified:
             raise ValueError("Report Snapshot answer traceability is invalid")
+        expected_claims = {
+            claim.claim_id
+            for claim in snapshot.claims
+            if any(
+                (item.source_kind == "TECHNICAL_FINDING" and item.source_id == answer.finding_id)
+                or (item.source_kind == "PROFESSIONAL_DECISION" and item.source_id == answer.decision_id)
+                for item in claim.provenance
+            )
+        }
+        if not expected_claims or set(answer.claim_ids) != expected_claims:
+            raise ValueError("Report Snapshot answer claim traceability is invalid")
 
 
 def _validate_claim_provenance(snapshot: ReportSnapshot, case: CaseAnalysisSnapshot, inspection: InspectionSession, technical: TechnicalSnapshot) -> None:

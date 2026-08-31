@@ -243,7 +243,10 @@ def test_empty_draft_can_add_canonical_claim_context_and_answer_commands():
     assert claimed.claims[0].authority is AuthorityClass.DOCUMENTED
     _, contextualized = service.execute(WorkspaceId.parse(snapshot.workspace_id), expected_revision=5, action="UPDATE_CONTEXT", values={"field":"PROCESS_NUMBER","status":"PRESENT","source_id":"DOC-001","note":"Identidade documentada."})
     assert contextualized.context_matrix[0].status is ContextStatus.PRESENT
-    _, answered = service.execute(WorkspaceId.parse(snapshot.workspace_id), expected_revision=6, action="ADD_ANSWER", values={"section_id":"SECTION-010","question_id":"QUESTION-001","text":"Resposta rastreada.","finding_id":"FINDING-001","evidence_ids":["EVIDENCE-SUPPORT-001","EVIDENCE-CONTRARY-001"],"method_ids":["METHOD-APPLICATION-001"],"decision_id":"DECISION-001","claim_ids":[claimed.claims[0].claim_id]})
+    _, finding_claim = service.execute(WorkspaceId.parse(snapshot.workspace_id), expected_revision=6, action="ADD_CLAIM", values={"section_id":"SECTION-009","text":"Achado sintético.","source_kind":"TECHNICAL_FINDING","source_id":"FINDING-001"})
+    _, decision_claim = service.execute(WorkspaceId.parse(snapshot.workspace_id), expected_revision=7, action="ADD_CLAIM", values={"section_id":"SECTION-010","text":"Conclusão profissional sintética.","source_kind":"PROFESSIONAL_DECISION","source_id":"DECISION-001"})
+    linked_claims = [finding_claim.claims[-1].claim_id, decision_claim.claims[-1].claim_id]
+    _, answered = service.execute(WorkspaceId.parse(snapshot.workspace_id), expected_revision=8, action="ADD_ANSWER", values={"section_id":"SECTION-010","question_id":"QUESTION-001","text":"Resposta rastreada.","finding_id":"FINDING-001","evidence_ids":["EVIDENCE-SUPPORT-001","EVIDENCE-CONTRARY-001"],"method_ids":["METHOD-APPLICATION-001"],"decision_id":"DECISION-001","claim_ids":linked_claims})
     assert answered.answers[0].question_id == "QUESTION-001"
 
 
