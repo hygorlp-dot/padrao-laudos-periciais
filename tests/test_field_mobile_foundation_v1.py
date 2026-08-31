@@ -224,10 +224,22 @@ def test_device_registry_revocation_is_device_wide_and_persistent(tmp_path: Path
     registry.revoke_device()
     with pytest.raises(PermissionError, match="revoked"):
         issued.load("ANY-PACKAGE")
-    reopened = DeviceOfflineVaultRegistry(tmp_path)
-    for workspace in (WORKSPACE_ID, "22222222-2222-4222-8222-222222222222"):
-        with pytest.raises(PermissionError, match="revoked"):
-            reopened.vault_for(workspace, reopened.device_id)
+    with pytest.raises(PermissionError, match="revoked"):
+        DeviceOfflineVaultRegistry(tmp_path)
+
+
+def test_device_revocation_survives_marker_deletion_for_live_and_reopened_authority(tmp_path: Path) -> None:
+    registry = DeviceOfflineVaultRegistry(tmp_path)
+    device_id = registry.device_id
+    issued = registry.vault_for(WORKSPACE_ID, device_id)
+    registry.revoke_device()
+    (tmp_path / "offline-field-v1" / ".device-revoked").unlink()
+    with pytest.raises(PermissionError, match="revoked"):
+        registry.vault_for(WORKSPACE_ID, device_id)
+    with pytest.raises(PermissionError, match="revoked"):
+        issued.load("ANY-PACKAGE")
+    with pytest.raises(PermissionError, match="revoked"):
+        DeviceOfflineVaultRegistry(tmp_path)
 
 
 def test_device_registry_root_replacement_cannot_bypass_revocation(tmp_path: Path) -> None:

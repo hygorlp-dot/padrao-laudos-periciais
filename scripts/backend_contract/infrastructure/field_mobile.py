@@ -4,7 +4,7 @@ import hashlib
 import os
 from pathlib import Path
 import stat
-from threading import RLock
+from threading import Event, RLock
 from uuid import uuid4
 
 from cryptography.exceptions import InvalidTag
@@ -31,7 +31,7 @@ def _is_link_or_reparse(details: os.stat_result) -> bool:
 class DeviceOfflineVault:
     """Device-local, authenticated storage; no network or cloud transport."""
 
-    def __init__(self, root: Path, *, key: bytes, device_id: str, workspace_id: str, global_revocation_path: Path | None = None, lifecycle_lock: RLock | None = None):
+    def __init__(self, root: Path, *, key: bytes, device_id: str, workspace_id: str, global_revocation_path: Path | None = None, lifecycle_lock: RLock | None = None, revocation_event: Event | None = None):
         if type(key) is not bytes or len(key) != 32:
             raise ValueError("device vault requires a 256-bit key")
         if any(type(value) is not str or not value.strip() for value in (device_id, workspace_id)):
@@ -55,6 +55,7 @@ class DeviceOfflineVault:
         self._lock = RLock() if lifecycle_lock is None else lifecycle_lock
         self._revocation = self._root / ".revoked"
         self._global_revocation = global_revocation_path
+        self._revocation_event = revocation_event
 
     def _require_active(self) -> bytes:
         try:
@@ -63,7 +64,7 @@ class DeviceOfflineVault:
             raise PermissionError("device vault root identity is unavailable") from exc
         if _is_link_or_reparse(details) or not stat.S_ISDIR(details.st_mode) or (details.st_dev, details.st_ino) != self._root_identity:
             raise PermissionError("device vault root identity changed")
-        if self._key is None or self._revocation.exists() or (self._global_revocation is not None and self._global_revocation.exists()):
+        if self._key is None or self._revocation.exists() or (self._revocation_event is not None and self._revocation_event.is_set()) or (self._global_revocation is not None and self._global_revocation.exists()):
             raise PermissionError("device session is revoked")
         return self._key
 
@@ -237,6 +238,7 @@ class DeviceOfflineVaultRegistry:
 
     def __init__(self, root: Path):
         self._lifecycle_lock = RLock()
+        self._revoked = Event()
         self._root = Path(root) / "offline-field-v1"
         self._root.mkdir(parents=True, exist_ok=True)
         root_details = os.lstat(self._root)
@@ -247,9 +249,12 @@ class DeviceOfflineVaultRegistry:
         self._key_path = self._root / ".device-key"
         self._identity_path = self._root / ".device-id"
         self._revocation_path = self._root / ".device-revoked"
-        if not self._key_path.exists():
+        key_exists = self._key_path.exists()
+        identity_exists = self._identity_path.exists()
+        if key_exists != identity_exists:
+            raise PermissionError("offline device authority is incomplete or revoked")
+        if not key_exists:
             self._provision(self._key_path, os.urandom(32))
-        if not self._identity_path.exists():
             self._provision(self._identity_path, f"DEVICE-{uuid4().hex.upper()}".encode("ascii"))
         self._key = self._key_path.read_bytes()
         self.device_id = self._identity_path.read_text(encoding="ascii")
@@ -280,6 +285,8 @@ class DeviceOfflineVaultRegistry:
         details = os.lstat(self._root)
         if _is_link_or_reparse(details) or not stat.S_ISDIR(details.st_mode) or (details.st_dev, details.st_ino) != self._root_identity:
             raise PermissionError("offline registry root identity changed")
+        if self._revoked.is_set():
+            raise PermissionError("offline device is revoked")
         if any(self._file_identity(path) != identity for path, identity in self._authority_identities.items()):
             raise PermissionError("offline device authority identity changed")
         if self._revocation_path.exists():
@@ -294,10 +301,12 @@ class DeviceOfflineVaultRegistry:
             directory = self._root / hashlib.sha256(workspace.encode("utf-8")).hexdigest()
             if directory.exists() and _is_link_or_reparse(os.lstat(directory)):
                 raise ValueError("offline workspace root cannot be a link or reparse point")
-            return DeviceOfflineVault(directory, key=self._key, device_id=self.device_id, workspace_id=workspace, global_revocation_path=self._revocation_path, lifecycle_lock=self._lifecycle_lock)
+            return DeviceOfflineVault(directory, key=self._key, device_id=self.device_id, workspace_id=workspace, global_revocation_path=self._revocation_path, lifecycle_lock=self._lifecycle_lock, revocation_event=self._revoked)
 
     def revoke_device(self) -> None:
         with self._lifecycle_lock:
             self._require_registry_active()
             if not self._revocation_path.exists():
                 self._provision(self._revocation_path, b"REVOKED\n")
+            self._key_path.unlink()
+            self._revoked.set()
