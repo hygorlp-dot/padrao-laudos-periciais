@@ -2008,7 +2008,9 @@ class LocalPrivateContentStore:
             )
             try:
                 payload = _read_exact(descriptor, len(_RECOVERY_QUARANTINE_PAYLOAD) + 1)
-                return details.st_size == len(_RECOVERY_QUARANTINE_PAYLOAD) and payload == _RECOVERY_QUARANTINE_PAYLOAD
+                if details.st_size != len(_RECOVERY_QUARANTINE_PAYLOAD) or payload != _RECOVERY_QUARANTINE_PAYLOAD:
+                    raise RepositoryIntegrityError("controle de quarentena privada corrompido")
+                return True
             finally:
                 os.close(descriptor)
 

@@ -220,8 +220,7 @@ def build_local_api(
         after_identity = _assert_plain_single_link_database(database_path)
         if before_identity is not None and after_identity != before_identity:
             raise RepositoryIntegrityError("local database identity changed during opening")
-        if store.is_recovery_quarantined():
-            raise RepositoryIntegrityError("recovery SQLite is quarantined and cannot become active")
+        store.assert_active_application_identity()
     except BaseException:
         store.close()
         raise

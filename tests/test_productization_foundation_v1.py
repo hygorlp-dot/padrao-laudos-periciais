@@ -418,6 +418,25 @@ def test_embedded_private_quarantine_survives_root_rename(tmp_path) -> None:
         build_local_api(tmp_path / "normal.sqlite3", private_root=renamed_private, token="a" * 32)
 
 
+def test_corrupt_embedded_private_quarantine_fails_closed(tmp_path) -> None:
+    staging = RecoveryStaging.create(tmp_path / "staging")
+    staging.close()
+    renamed_private = tmp_path / "renamed-private"
+    os.replace(staging.root / "private", renamed_private)
+    marker = renamed_private / ".recovery-not-promotable"
+    marker.write_bytes(b"BROKEN\n")
+    with pytest.raises(RepositoryIntegrityError, match="corrompido"):
+        build_local_api(tmp_path / "normal.sqlite3", private_root=renamed_private, token="a" * 32)
+
+
+def test_unknown_sqlite_application_identity_fails_closed(tmp_path) -> None:
+    store = SQLiteApplicationStore(tmp_path / "unknown.sqlite3")
+    store._connection.execute("PRAGMA application_id = 123456")
+    store.close()
+    with pytest.raises(RepositoryIntegrityError, match="unknown"):
+        build_local_api(tmp_path / "unknown.sqlite3", token="a" * 32)
+
+
 @pytest.mark.parametrize("database", (r"\\server\share\case.sqlite3", r"\\?\C:\case.sqlite3"))
 def test_active_local_api_rejects_nonlocal_database_before_filesystem_access(database) -> None:
     with pytest.raises(RepositoryIntegrityError, match="network|device"):

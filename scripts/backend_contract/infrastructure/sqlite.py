@@ -859,6 +859,14 @@ class SQLiteApplicationStore:
         with self._lock:
             return self._connection.execute("PRAGMA application_id").fetchone()[0] == RECOVERY_QUARANTINE_APPLICATION_ID
 
+    def assert_active_application_identity(self) -> None:
+        with self._lock:
+            application_id = self._connection.execute("PRAGMA application_id").fetchone()[0]
+            if application_id == RECOVERY_QUARANTINE_APPLICATION_ID:
+                raise RepositoryIntegrityError("recovery SQLite is quarantined and cannot become active")
+            if application_id != 0:
+                raise RepositoryIntegrityError("SQLite application identity is unknown")
+
     def restore(self, snapshot: bytes) -> None:
         if type(snapshot) is not bytes:
             raise TypeError("snapshot SQLite inválido")
