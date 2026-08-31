@@ -218,13 +218,24 @@ def test_device_vault_concurrent_package_write_never_silently_overwrites(tmp_pat
 
 def test_device_registry_revocation_is_device_wide_and_persistent(tmp_path: Path) -> None:
     registry = DeviceOfflineVaultRegistry(tmp_path)
-    registry.vault_for(WORKSPACE_ID, registry.device_id)
+    issued = registry.vault_for(WORKSPACE_ID, registry.device_id)
     registry.vault_for("22222222-2222-4222-8222-222222222222", registry.device_id)
     registry.revoke_device()
+    with pytest.raises(PermissionError, match="revoked"):
+        issued.load("ANY-PACKAGE")
     reopened = DeviceOfflineVaultRegistry(tmp_path)
     for workspace in (WORKSPACE_ID, "22222222-2222-4222-8222-222222222222"):
         with pytest.raises(PermissionError, match="revoked"):
             reopened.vault_for(workspace, reopened.device_id)
+
+
+def test_device_vault_revalidates_root_identity_on_every_operation(tmp_path: Path) -> None:
+    root = tmp_path / "vault"
+    vault = DeviceOfflineVault(root, key=b"i" * 32, device_id="DEVICE-001", workspace_id=WORKSPACE_ID)
+    root.rename(tmp_path / "retired-vault")
+    root.mkdir()
+    with pytest.raises(PermissionError, match="identity"):
+        vault.save(offline_package_from_mapping(package_mapping()))
 
 
 @pytest.mark.parametrize(

@@ -28,7 +28,7 @@ def _is_link_or_reparse(details: os.stat_result) -> bool:
 class DeviceOfflineVault:
     """Device-local, authenticated storage; no network or cloud transport."""
 
-    def __init__(self, root: Path, *, key: bytes, device_id: str, workspace_id: str):
+    def __init__(self, root: Path, *, key: bytes, device_id: str, workspace_id: str, global_revocation_path: Path | None = None):
         if type(key) is not bytes or len(key) != 32:
             raise ValueError("device vault requires a 256-bit key")
         if any(type(value) is not str or not value.strip() for value in (device_id, workspace_id)):
@@ -41,6 +41,7 @@ class DeviceOfflineVault:
         details = os.lstat(self._root)
         if _is_link_or_reparse(details) or not stat.S_ISDIR(details.st_mode):
             raise ValueError("device vault root must be a plain local directory")
+        self._root_identity = (details.st_dev, details.st_ino)
         try:
             os.chmod(self._root, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
         except OSError as exc:
@@ -50,9 +51,16 @@ class DeviceOfflineVault:
         self._workspace_id = workspace_id
         self._lock = RLock()
         self._revocation = self._root / ".revoked"
+        self._global_revocation = global_revocation_path
 
     def _require_active(self) -> bytes:
-        if self._key is None or self._revocation.exists():
+        try:
+            details = os.lstat(self._root)
+        except OSError as exc:
+            raise PermissionError("device vault root identity is unavailable") from exc
+        if _is_link_or_reparse(details) or not stat.S_ISDIR(details.st_mode) or (details.st_dev, details.st_ino) != self._root_identity:
+            raise PermissionError("device vault root identity changed")
+        if self._key is None or self._revocation.exists() or (self._global_revocation is not None and self._global_revocation.exists()):
             raise PermissionError("device session is revoked")
         return self._key
 
@@ -212,7 +220,7 @@ class DeviceOfflineVaultRegistry:
         directory = self._root / hashlib.sha256(workspace.encode("utf-8")).hexdigest()
         if directory.exists() and _is_link_or_reparse(os.lstat(directory)):
             raise ValueError("offline workspace root cannot be a link or reparse point")
-        return DeviceOfflineVault(directory, key=self._key, device_id=self.device_id, workspace_id=workspace)
+        return DeviceOfflineVault(directory, key=self._key, device_id=self.device_id, workspace_id=workspace, global_revocation_path=self._revocation_path)
 
     def revoke_device(self) -> None:
         if not self._revocation_path.exists():
