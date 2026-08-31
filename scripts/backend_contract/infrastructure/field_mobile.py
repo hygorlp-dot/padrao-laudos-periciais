@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+import stat
+from threading import RLock
+from uuid import uuid4
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -18,15 +21,27 @@ import json
 class DeviceOfflineVault:
     """Device-local, authenticated storage; no network or cloud transport."""
 
-    def __init__(self, root: Path, *, key: bytes, device_id: str):
+    def __init__(self, root: Path, *, key: bytes, device_id: str, workspace_id: str):
         if type(key) is not bytes or len(key) != 32:
             raise ValueError("device vault requires a 256-bit key")
-        if type(device_id) is not str or not device_id.strip():
-            raise ValueError("device identity is required")
+        if any(type(value) is not str or not value.strip() for value in (device_id, workspace_id)):
+            raise ValueError("device and workspace identity are required")
+        raw_root = str(root)
+        if raw_root.startswith(("\\\\", "//", "\\\\?\\", "\\\\.\\")):
+            raise ValueError("device vault requires trusted local storage")
         self._root = Path(root)
         self._root.mkdir(parents=True, exist_ok=True)
+        details = os.lstat(self._root)
+        if stat.S_ISLNK(details.st_mode) or not stat.S_ISDIR(details.st_mode):
+            raise ValueError("device vault root must be a plain local directory")
+        try:
+            os.chmod(self._root, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+        except OSError as exc:
+            raise ValueError("device vault permissions cannot be restricted") from exc
         self._key: bytes | None = key
         self._device_id = device_id
+        self._workspace_id = workspace_id
+        self._lock = RLock()
         self._revocation = self._root / ".revoked"
 
     def _require_active(self) -> bytes:
@@ -53,13 +68,13 @@ class DeviceOfflineVault:
         key = self._require_active()
         if package.device_id != self._device_id:
             raise PermissionError("offline package device mismatch")
+        if package.workspace_id != self._workspace_id:
+            raise PermissionError("offline package workspace mismatch")
         target = self._path(package.package_id)
-        if target.exists():
-            raise FileExistsError("offline package cannot be silently overwritten")
         nonce = os.urandom(12)
-        aad = self._device_id.encode("utf-8")
+        aad = f"{self._workspace_id}\0{self._device_id}".encode("utf-8")
         ciphertext = AESGCM(key).encrypt(nonce, canonical_offline_package_bytes(package), aad)
-        target.write_bytes(b"OFFLINE-V1\0" + nonce + ciphertext)
+        self._exclusive_write(target, b"OFFLINE-V1\0" + nonce + ciphertext)
 
     def load(self, package_id: str) -> OfflineInspectionPackage:
         key = self._require_active()
@@ -68,11 +83,11 @@ class DeviceOfflineVault:
             raise ValueError("offline package storage is corrupt")
         nonce, ciphertext = payload[11:23], payload[23:]
         try:
-            clear = AESGCM(key).decrypt(nonce, ciphertext, self._device_id.encode("utf-8"))
+            clear = AESGCM(key).decrypt(nonce, ciphertext, f"{self._workspace_id}\0{self._device_id}".encode("utf-8"))
         except InvalidTag as exc:
             raise ValueError("offline package integrity verification failed") from exc
         package = offline_package_from_mapping(json.loads(clear.decode("utf-8")))
-        if package.package_id != package_id or package.device_id != self._device_id:
+        if package.package_id != package_id or package.device_id != self._device_id or package.workspace_id != self._workspace_id:
             raise ValueError("offline package storage identity mismatch")
         return package
 
@@ -84,11 +99,9 @@ class DeviceOfflineVault:
         if len(original) != authority.byte_size or hashlib.sha256(original).hexdigest() != authority.original_sha256:
             raise ValueError("original media hash/size diverges from authority")
         target = self._media_path(package_id, record_id)
-        if target.exists():
-            raise FileExistsError("original media cannot be silently overwritten")
         nonce = os.urandom(12)
-        aad = f"{self._device_id}\0{package_id}\0{record_id}".encode("utf-8")
-        target.write_bytes(b"MEDIA-V1\0" + nonce + AESGCM(key).encrypt(nonce, original, aad))
+        aad = f"{self._workspace_id}\0{self._device_id}\0{package_id}\0{record_id}".encode("utf-8")
+        self._exclusive_write(target, b"MEDIA-V1\0" + nonce + AESGCM(key).encrypt(nonce, original, aad))
 
     def load_media(self, package_id: str, record_id: str) -> bytes:
         key = self._require_active()
@@ -97,7 +110,7 @@ class DeviceOfflineVault:
         if not payload.startswith(b"MEDIA-V1\0") or len(payload) < 38:
             raise ValueError("original media storage is corrupt")
         nonce, ciphertext = payload[9:21], payload[21:]
-        aad = f"{self._device_id}\0{package_id}\0{record_id}".encode("utf-8")
+        aad = f"{self._workspace_id}\0{self._device_id}\0{package_id}\0{record_id}".encode("utf-8")
         try:
             original = AESGCM(key).decrypt(nonce, ciphertext, aad)
         except InvalidTag as exc:
@@ -107,5 +120,84 @@ class DeviceOfflineVault:
         return original
 
     def revoke(self) -> None:
-        self._revocation.write_bytes(b"REVOKED\n")
-        self._key = None
+        with self._lock:
+            if not self._revocation.exists():
+                self._exclusive_write(self._revocation, b"REVOKED\n")
+            self._key = None
+
+    def verify_media_authority(self, package_id: str) -> bool:
+        package = self.load(package_id)
+        for item in package.media_manifest:
+            self.load_media(package_id, item.record_id)
+        return True
+
+    def last_accepted_sequence(self, device_session_id: str) -> int:
+        prefix = hashlib.sha256(device_session_id.encode("utf-8")).hexdigest() + "."
+        sequences = []
+        for path in self._root.glob(f"{prefix}*.receipt"):
+            try:
+                sequences.append(int(path.name.split(".")[1]))
+            except (ValueError, IndexError):
+                raise ValueError("offline sync receipt storage is corrupt")
+        return max(sequences, default=0)
+
+    def record_accepted_sync(self, package: OfflineInspectionPackage) -> None:
+        session_hash = hashlib.sha256(package.device_session_id.encode("utf-8")).hexdigest()
+        target = self._root / f"{session_hash}.{package.device_sequence}.receipt"
+        payload = f"{package.package_id}\n{package.package_revision}\n".encode("utf-8")
+        self._exclusive_write(target, payload)
+
+    def _exclusive_write(self, target: Path, payload: bytes) -> None:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+        with self._lock:
+            try:
+                descriptor = os.open(target, flags, stat.S_IRUSR | stat.S_IWUSR)
+            except FileExistsError as exc:
+                raise FileExistsError("offline data cannot be silently overwritten") from exc
+            try:
+                with os.fdopen(descriptor, "wb", closefd=False) as stream:
+                    stream.write(payload)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                details = os.fstat(descriptor)
+                if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1 or details.st_size != len(payload):
+                    raise ValueError("offline durable write verification failed")
+            finally:
+                os.close(descriptor)
+
+
+class DeviceOfflineVaultRegistry:
+    """Provisions one device identity/key and workspace-isolated vaults."""
+
+    def __init__(self, root: Path):
+        self._root = Path(root) / "offline-field-v1"
+        self._root.mkdir(parents=True, exist_ok=True)
+        if self._root.is_symlink():
+            raise ValueError("offline registry root cannot be a link")
+        os.chmod(self._root, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+        self._key_path = self._root / ".device-key"
+        self._identity_path = self._root / ".device-id"
+        if not self._key_path.exists():
+            self._provision(self._key_path, os.urandom(32))
+        if not self._identity_path.exists():
+            self._provision(self._identity_path, f"DEVICE-{uuid4().hex.upper()}".encode("ascii"))
+        self._key = self._key_path.read_bytes()
+        self.device_id = self._identity_path.read_text(encoding="ascii")
+        if len(self._key) != 32 or not self.device_id.startswith("DEVICE-"):
+            raise ValueError("offline device authority is corrupt")
+
+    @staticmethod
+    def _provision(path: Path, payload: bytes) -> None:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), stat.S_IRUSR | stat.S_IWUSR)
+        try:
+            os.write(descriptor, payload)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def vault_for(self, workspace_id, device_id: str) -> DeviceOfflineVault:
+        if device_id != self.device_id:
+            raise PermissionError("offline device is not authorized")
+        workspace = str(workspace_id)
+        directory = self._root / hashlib.sha256(workspace.encode("utf-8")).hexdigest()
+        return DeviceOfflineVault(directory, key=self._key, device_id=self.device_id, workspace_id=workspace)

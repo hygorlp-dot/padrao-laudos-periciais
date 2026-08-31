@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker
+from referencing import Registry, Resource
 
 from scripts.backend_contract.field_mobile import (
     OfflineInspectionPackage,
@@ -20,6 +24,8 @@ from scripts.backend_contract.field_mobile import (
 from scripts.backend_contract.vistoria import InspectionSession
 from scripts.backend_contract.application.field_mobile import (
     SyncAuthority,
+    SyncOfflineInspection,
+    UpdateOfflineInspection,
     adjudicate_offline_sync,
 )
 from scripts.backend_contract.infrastructure.field_mobile import DeviceOfflineVault
@@ -150,7 +156,9 @@ def test_media_metadata_never_promotes_mutable_exif_to_capture_authority() -> No
 
 def test_offline_package_schema_is_strict_and_registered() -> None:
     schema = json.loads((ROOT / "schemas/offline-inspection-package-v1.schema.json").read_text(encoding="utf-8"))
-    Draft202012Validator(schema, format_checker=FormatChecker()).validate(package_mapping())
+    inspection_schema = json.loads((ROOT / "schemas/inspection-session-v1.schema.json").read_text(encoding="utf-8"))
+    registry = Registry().with_resource(inspection_schema["$id"], Resource.from_contents(inspection_schema))
+    Draft202012Validator(schema, format_checker=FormatChecker(), registry=registry).validate(package_mapping())
     registry = json.loads((ROOT / "config/schema-versions.json").read_text(encoding="utf-8"))
     entry = next(item for item in registry["schemas"] if item["schema"] == "offline-inspection-package-v1.schema.json")
     assert entry["future_version_policy"] == "FAIL_CLOSED"
@@ -160,13 +168,13 @@ def test_offline_package_schema_is_strict_and_registered() -> None:
 def test_device_vault_encrypts_at_rest_reopens_offline_and_revocation_fails_closed(tmp_path: Path) -> None:
     package = offline_package_from_mapping(package_mapping())
     key = b"k" * 32
-    vault = DeviceOfflineVault(tmp_path, key=key, device_id="DEVICE-001")
+    vault = DeviceOfflineVault(tmp_path, key=key, device_id="DEVICE-001", workspace_id=WORKSPACE_ID)
     vault.save(package)
     stored = next(tmp_path.glob("*.offline"))
     assert b"PHOTO-001" not in stored.read_bytes()
     assert vault.load(package.package_id) == package
 
-    reopened = DeviceOfflineVault(tmp_path, key=key, device_id="DEVICE-001")
+    reopened = DeviceOfflineVault(tmp_path, key=key, device_id="DEVICE-001", workspace_id=WORKSPACE_ID)
     assert reopened.load(package.package_id) == package
     reopened.revoke()
     with pytest.raises(PermissionError, match="revoked"):
@@ -181,7 +189,7 @@ def test_device_vault_preserves_original_media_bytes_and_sha256(tmp_path: Path) 
     mapping["media_manifest"][0]["original_sha256"] = digest
     mapping["media_manifest"][0]["byte_size"] = len(original)
     package = offline_package_from_mapping(mapping)
-    vault = DeviceOfflineVault(tmp_path, key=b"m" * 32, device_id="DEVICE-001")
+    vault = DeviceOfflineVault(tmp_path, key=b"m" * 32, device_id="DEVICE-001", workspace_id=WORKSPACE_ID)
     vault.save(package)
     vault.save_media(package.package_id, "PHOTO-001", original)
     assert vault.load_media(package.package_id, "PHOTO-001") == original
@@ -189,6 +197,22 @@ def test_device_vault_preserves_original_media_bytes_and_sha256(tmp_path: Path) 
     assert original not in media_file.read_bytes()
     with pytest.raises(ValueError, match="hash|size|authority"):
         vault.save_media(package.package_id, "VIDEO-001", b"tampered")
+
+
+def test_device_vault_concurrent_package_write_never_silently_overwrites(tmp_path: Path) -> None:
+    package = offline_package_from_mapping(package_mapping())
+    first = DeviceOfflineVault(tmp_path, key=b"r" * 32, device_id=package.device_id, workspace_id=package.workspace_id)
+    second = DeviceOfflineVault(tmp_path, key=b"r" * 32, device_id=package.device_id, workspace_id=package.workspace_id)
+    def save(vault):
+        try:
+            vault.save(package)
+            return "saved"
+        except FileExistsError:
+            return "conflict"
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(save, (first, second)))
+    assert sorted(results) == ["conflict", "saved"]
+    assert first.load(package.package_id) == package
 
 
 @pytest.mark.parametrize(
@@ -208,6 +232,8 @@ def test_revision_aware_sync_surfaces_every_material_conflict(change: dict, expe
     authority = SyncAuthority(
         workspace_id=package.workspace_id,
         inspection_id=package.inspection_id,
+        device_id=package.device_id,
+        device_session_id=package.device_session_id,
         current_inspection_revision=package.inspection_revision,
         planning_revision=package.planning_revision,
         source_revision=package.source_revision,
@@ -227,6 +253,8 @@ def test_conflict_free_sync_is_explicitly_accepted_without_last_write_wins() -> 
     authority = SyncAuthority(
         workspace_id=package.workspace_id,
         inspection_id=package.inspection_id,
+        device_id=package.device_id,
+        device_session_id=package.device_session_id,
         current_inspection_revision=package.inspection_revision,
         planning_revision=package.planning_revision,
         source_revision=package.source_revision,
@@ -237,3 +265,59 @@ def test_conflict_free_sync_is_explicitly_accepted_without_last_write_wins() -> 
     decision = adjudicate_offline_sync(package, authority)
     assert decision.accepted is True
     assert decision.conflicts == ()
+
+
+def test_sync_rejects_device_or_session_swap_and_unverified_media() -> None:
+    package = offline_package_from_mapping(package_mapping())
+    common = dict(
+        workspace_id=package.workspace_id, inspection_id=package.inspection_id,
+        device_id=package.device_id, device_session_id=package.device_session_id,
+        current_inspection_revision=package.inspection_revision,
+        planning_revision=package.planning_revision, source_revision=package.source_revision,
+        last_device_sequence=0, deleted_record_ids=(), known_media_hashes=(),
+        media_authority_verified=True,
+    )
+    for change, code in (({"device_id": "OTHER"}, "DEVICE_MISMATCH"), ({"device_session_id": "OTHER"}, "DEVICE_SESSION_MISMATCH"), ({"media_authority_verified": False}, "MEDIA_AUTHORITY_UNVERIFIED")):
+        decision = adjudicate_offline_sync(package, SyncAuthority(**{**common, **change}))
+        assert decision.accepted is False
+        assert code in {item.code for item in decision.conflicts}
+
+
+def test_offline_update_sync_and_durable_replay_receipt_form_one_vertical(tmp_path: Path) -> None:
+    originals = {"PHOTO-001": b"photo-original", "VIDEO-001": b"video-original", "SKETCH-001": b"sketch-original"}
+    mapping = package_mapping()
+    for manifest, collection in zip(mapping["media_manifest"], ("photos", "videos", "sketches")):
+        original = originals[manifest["record_id"]]
+        digest = hashlib.sha256(original).hexdigest()
+        manifest["original_sha256"] = digest
+        manifest["byte_size"] = len(original)
+        mapping["inspection_snapshot"][collection][0]["original_sha256"] = digest
+    package = offline_package_from_mapping(mapping)
+    vault = DeviceOfflineVault(tmp_path, key=b"z" * 32, device_id=package.device_id, workspace_id=package.workspace_id)
+    vault.save(package)
+    for record_id, original in originals.items():
+        vault.save_media(package.package_id, record_id, original)
+
+    by_content = {item.private_content_id: originals[item.record_id] for item in package.media_manifest}
+    class Private:
+        def execute(self, _workspace_id, content_id):
+            original = by_content[str(content_id)]
+            manifest = next(item for item in package.media_manifest if item.private_content_id == str(content_id))
+            return SimpleNamespace(metadata=SimpleNamespace(checksum_sha256=manifest.original_sha256, byte_size=len(original), media_type=manifest.media_type), content=original)
+    ids = SimpleNamespace(new_uuid=lambda: UUID("dddddddd-dddd-4ddd-8ddd-dddddddddddd"))
+    clock = SimpleNamespace(now=lambda: __import__("datetime").datetime.fromisoformat("2026-08-31T15:00:00+00:00"))
+    updater = UpdateOfflineInspection(Private(), lambda *_: vault, clock, ids)
+    updated = updater.execute(WORKSPACE_ID, device_id=package.device_id, package_id=package.package_id, expected_package_revision=1, snapshot=package.inspection_snapshot)
+    assert updated.package_revision == 2
+    assert vault.verify_media_authority(updated.package_id)
+
+    current = SimpleNamespace(revision=package.inspection_revision)
+    getter = SimpleNamespace(execute=lambda _workspace: (current, package.inspection_snapshot))
+    saved = SimpleNamespace(revision=package.inspection_revision + 1)
+    saver = SimpleNamespace(execute=lambda *_args: saved)
+    sync = SyncOfflineInspection(getter, saver, lambda *_: vault)
+    decision, record = sync.execute(WORKSPACE_ID, device_id=package.device_id, package_id=updated.package_id)
+    assert decision.accepted and record is saved
+    replay, record = sync.execute(WORKSPACE_ID, device_id=package.device_id, package_id=updated.package_id)
+    assert not replay.accepted and record is None
+    assert "DEVICE_REPLAY" in {item.code for item in replay.conflicts}

@@ -19,7 +19,7 @@
     "device_session_id": {"$ref": "#/$defs/text"},
     "device_sequence": {"type": "integer", "minimum": 1},
     "created_at": {"type": "string", "format": "date-time"},
-    "inspection_snapshot": {"type": "object"},
+    "inspection_snapshot": {"$ref": "https://padrao-laudos.local/schemas/inspection-session-v1.schema.json"},
     "media_manifest": {"type": "array", "items": {"$ref": "#/$defs/media"}}
   },
   "$defs": {

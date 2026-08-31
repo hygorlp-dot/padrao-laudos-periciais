@@ -312,6 +312,46 @@ def test_inspection_session_start_delegates_explicit_professional_context():
     assert start.calls[0][1]["responsible_professional"] == "PROFESSIONAL-001"
 
 
+def test_offline_field_routes_are_private_and_expose_conflicts_without_overwrite():
+    from dataclasses import replace
+    from scripts.backend_contract.field_mobile import OfflineInspectionPackage, OfflineMediaManifest
+    from scripts.backend_contract.vistoria import inspection_session_from_mapping
+    from scripts.backend_contract.application.field_mobile import SyncConflict, SyncDecision
+
+    snapshot = inspection_session_from_mapping(inspection_session_payload())
+    manifests = tuple(
+        OfflineMediaManifest(kind, getattr(item, identity), item.private_content_id, item.original_sha256, 12, media_type)
+        for kind, records, identity, media_type in (
+            ("PHOTO", snapshot.photos, "photo_id", "image/jpeg"),
+            ("VIDEO", snapshot.videos, "video_id", "video/mp4"),
+            ("SKETCH", snapshot.sketches, "sketch_id", "image/png"),
+        ) for item in records
+    )
+    package = OfflineInspectionPackage(
+        "1.0.0", "OFFLINE-PACKAGE-001", 1, str(WORKSPACE_ID), snapshot.session_id, 1,
+        snapshot.plan_snapshot.planning_revision, snapshot.plan_snapshot.planning_digest,
+        snapshot.source_revision, "DEVICE-001", "SESSION-001", 1, CREATED_AT, snapshot, manifests,
+    )
+    prepare = RecordingService(package)
+    conflict = SyncConflict("STALE_PLAN", "Plano alterado.")
+    sync = RecordingService((SyncDecision(False, (conflict,)), None))
+    update = RecordingService(replace(package, package_id="OFFLINE-PACKAGE-002", package_revision=2, device_sequence=2))
+    api = LocalApi(services(
+        prepare_offline_inspection=prepare, update_offline_inspection=update,
+        sync_offline_inspection=sync, offline_device_id="DEVICE-001",
+    ), token=TOKEN)
+    assert api.handle("POST", f"/v1/workspaces/{WORKSPACE_UUID}/offline-inspection", {"Content-Type": "application/json"}, b'{"device_session_id":"SESSION-001"}').status == 403
+    prepared = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/offline-inspection", body={"device_session_id": "SESSION-001"})
+    assert prepared.status == 201
+    assert decoded(prepared)["package"]["inspection_snapshot"] == inspection_session_payload()
+    updated = request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/offline-inspection", body={"package_id": package.package_id, "expected_package_revision": 1, "snapshot": inspection_session_payload()})
+    assert updated.status == 201
+    assert decoded(updated)["package"]["package_revision"] == 2
+    conflicted = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/offline-sync", body={"package_id": package.package_id})
+    assert conflicted.status == 409
+    assert decoded(conflicted)["conflicts"][0]["code"] == "STALE_PLAN"
+
+
 def test_inspection_photo_upload_preserves_original_bytes_through_private_service():
     content = b"\x89PNG\r\n\x1a\nsynthetic-original"
     metadata = PrivateContentMetadata(

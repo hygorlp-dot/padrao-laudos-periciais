@@ -101,6 +101,8 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "inspection-session" and method in {"GET", "POST", "PUT"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] in {"offline-inspection", "offline-sync"} and method in ({"POST", "PUT"} if remainder[1] == "offline-inspection" else {"POST"}):
+            return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "technical-snapshot" and method in {"GET", "POST", "PUT"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "expert-profile" and method in {"GET", "PUT"}:
