@@ -36,6 +36,7 @@ _REL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 _CT = "{http://schemas.openxmlformats.org/package/2006/content-types}"
 _A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 _R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+_V = "{urn:schemas-microsoft-com:vml}"
 ElementTree.register_namespace("w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main")
 
 
@@ -177,8 +178,9 @@ def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple
             and sum(a != b for a, b in zip(source[3], candidate[3])) <= 16
         )
 
-    cursor = iter(candidates)
-    return all(any(matches(source, candidate) for candidate in cursor) for source in sources)
+    return len(sources) == len(candidates) and all(
+        matches(source, candidate) for source, candidate in zip(sources, candidates)
+    )
 
 
 def _ordered_word_image_signatures(package: ZipFile, xml_roots: dict[str, ElementTree.Element]) -> list[tuple]:
@@ -196,8 +198,14 @@ def _ordered_word_image_signatures(package: ZipFile, xml_roots: dict[str, Elemen
             for item in relationships.iter(f"{_REL}Relationship")
             if item.attrib.get("TargetMode", "").lower() != "external"
         }
-        for blip in xml_roots[name].iter(f"{_A}blip"):
-            target = targets.get(blip.attrib.get(f"{_R}embed"))
+        for image_node in xml_roots[name].iter():
+            if image_node.tag == f"{_A}blip":
+                relationship_id = image_node.attrib.get(f"{_R}embed")
+            elif image_node.tag == f"{_V}imagedata":
+                relationship_id = image_node.attrib.get(f"{_R}id")
+            else:
+                continue
+            target = targets.get(relationship_id)
             if target and target in package.namelist():
                 with Image.open(BytesIO(package.read(target))) as image:
                     ordered.append(_image_signature(image))

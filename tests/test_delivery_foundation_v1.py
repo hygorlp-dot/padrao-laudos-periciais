@@ -481,11 +481,14 @@ def test_image_fidelity_signature_distinguishes_uniform_opposites() -> None:
     assert delivery_renderer._ordered_image_signatures_match(
         [black_signature, white_signature], [white_signature, black_signature],
     ) is False
+    red_signature = delivery_renderer._image_signature(Image.new("RGB", (64, 64), "red"))
+    assert delivery_renderer._ordered_image_signatures_match([black_signature], [red_signature, black_signature]) is False
+    assert delivery_renderer._ordered_image_signatures_match([black_signature], [black_signature, red_signature]) is False
 
     black_bytes = BytesIO(); white_bytes = BytesIO()
     black.save(black_bytes, "PNG"); white.save(white_bytes, "PNG")
     package_bytes = BytesIO()
-    document = '''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:drawing><a:blip r:embed="rId2"/></w:drawing></w:r></w:p><w:p><w:r><w:drawing><a:blip r:embed="rId1"/></w:drawing></w:r></w:p></w:body></w:document>'''
+    document = '''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:drawing><a:blip r:embed="rId2"/></w:drawing></w:r></w:p><w:p><w:r><w:pict><v:imagedata r:id="rId1"/></w:pict></w:r></w:p></w:body></w:document>'''
     relationships = '''<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="media/image1.png"/><Relationship Id="rId2" Target="media/image2.png"/></Relationships>'''
     with ZipFile(package_bytes, "w", ZIP_DEFLATED) as package:
         package.writestr("word/media/image1.png", black_bytes.getvalue())
