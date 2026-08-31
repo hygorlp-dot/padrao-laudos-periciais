@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from hashlib import sha256
 from io import BytesIO
-import re
 import json
 import textwrap
+import unicodedata
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 from PIL import Image, UnidentifiedImageError
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 
 from .report_foundation import ReportSnapshot
 from .report_foundation import report_snapshot_to_mapping
@@ -134,7 +136,37 @@ def render_final_pdf_candidate(*, word_content: bytes, word_format: str, convert
     if b"/DiagnosticOnly true" in output:
         raise ValueError("diagnostic PDF cannot be finalized")
     validate_final_artifact(output, "PDF")
+    _validate_pdf_fidelity(conversion_copy, output)
     return output
+
+
+def _normalized_visible_text(value: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", value).split()).casefold()
+
+
+def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
+    """Reject converter output that is not observably derived from the bound Word."""
+    try:
+        with ZipFile(BytesIO(word_content)) as package:
+            word_fragments: list[str] = []
+            word_images = 0
+            for name in package.namelist():
+                if name.startswith("word/media/") and not name.endswith("/"):
+                    word_images += 1
+                if not (name.startswith("word/") and name.endswith(".xml")):
+                    continue
+                root = ElementTree.fromstring(package.read(name))
+                word_fragments.extend(
+                    item.text for item in root.iter(f"{_W}t") if item.text and item.text.strip()
+                )
+        reader = PdfReader(BytesIO(pdf_content), strict=True)
+        pdf_text = _normalized_visible_text("\n".join(page.extract_text() or "" for page in reader.pages))
+        pdf_images = sum(len(page.images) for page in reader.pages)
+    except (BadZipFile, KeyError, ElementTree.ParseError, PdfReadError, OSError, ValueError) as exc:
+        raise ValueError("final PDF fidelity cannot be verified") from exc
+    required = {_normalized_visible_text(item) for item in word_fragments if _normalized_visible_text(item)}
+    if not required or any(item not in pdf_text for item in required) or pdf_images < word_images:
+        raise ValueError("final PDF does not faithfully represent the bound Word artifact")
 
 
 def _inject_canonical_report(content: bytes, report: ReportSnapshot) -> bytes:
@@ -186,8 +218,15 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
             raise ValueError("final Word artifact macro identity changed")
         media_type = _DOCM_MEDIA if has_macro else _DOCX_MEDIA
     elif output_format == "PDF":
-        stripped = content.rstrip()
-        if not content.startswith(b"%PDF-") or not stripped.endswith(b"%%EOF") or re.search(rb"/Type\s*/Page\b", content) is None:
+        try:
+            reader = PdfReader(BytesIO(content), strict=True)
+            if not reader.pages:
+                raise ValueError("final PDF artifact is invalid")
+            for page in reader.pages:
+                _ = page.mediabox
+        except (PdfReadError, OSError, ValueError, KeyError) as exc:
+            raise ValueError("final PDF artifact is invalid") from exc
+        if not content.startswith(b"%PDF-") or not content.rstrip().endswith(b"%%EOF"):
             raise ValueError("final PDF artifact is invalid")
         media_type = _PDF_MEDIA
     else:

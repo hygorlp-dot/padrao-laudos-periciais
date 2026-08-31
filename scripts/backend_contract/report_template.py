@@ -104,11 +104,19 @@ def _mechanics(parts: dict[str, bytes]) -> tuple[set[str], tuple[str, ...], int]
     except (KeyError, ElementTree.ParseError) as exc:
         raise ValueError("template document XML is invalid") from exc
     field_names = set()
-    for item in root.iter(f"{_W}instrText"):
-        if item.text:
-            name = item.text.strip().split(maxsplit=1)[0].upper()
-            if name in _FIELD_NAMES:
-                field_names.add(name)
+    # Complex fields may split one instruction over several instrText nodes.
+    # Reconstruct each paragraph and reject every opcode outside the protected
+    # set before a template can reach a local Office process.
+    for paragraph in root.iter(f"{_W}p"):
+        nodes = [item.text or "" for item in paragraph.iter(f"{_W}instrText") if (item.text or "").strip()]
+        compact = re.sub(r"\s+", "", "".join(nodes)).upper()
+        if any(marker in compact for marker in ("INCLUDETEXT", "INCLUDEPICTURE", "DDEAUTO", "DDE")) or "://" in compact:
+            raise ValueError("unsupported active Word field instruction")
+        for instruction in nodes:
+            name = instruction.strip().split(maxsplit=1)[0].upper()
+            if name not in _FIELD_NAMES:
+                raise ValueError("unsupported active Word field instruction")
+            field_names.add(name)
     bookmarks = tuple(sorted(item.attrib.get(f"{_W}name", "") for item in root.iter(f"{_W}bookmarkStart") if item.attrib.get(f"{_W}name")))
     controls = sum(1 for _ in root.iter(f"{_W}sdt"))
     for item in root.iter(f"{_WP}docPr"):

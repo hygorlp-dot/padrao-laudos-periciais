@@ -14,7 +14,7 @@ const snapshot = {
   third_party_estimates: [{ estimate_id: "THIRD-1", provider_description: "Laboratório acreditado", amount: "900.00", currency: "BRL" }],
   expenses: [{ expense_id: "EXPENSE-1", category: "TRAVEL", amount: "100.00", currency: "BRL", incurred_on: "2026-09-01", description: "Pedágio da diligência" }],
   proposals: [{ proposal_id: "PROPOSAL-1", revision: 1, amount: "3000.00", currency: "BRL", proposed_at: "2026-08-31T12:00:00Z", rationale: "Proposta inicial" }],
-  proposal_revisions: [{ revision_id: "REV-1", proposal_id: "PROPOSAL-1", revision: 1, supersedes_revision_id: null, reason: "Proposta inicial", revised_at: "2026-08-31T12:00:00Z" }],
+  proposal_revisions: [{ revision_id: "REV-1", proposal_id: "PROPOSAL-1", revision: 1, supersedes_revision_id: null, reason: "Emissão original", revised_at: "2026-08-31T12:00:00Z" }],
   court_approvals: [{ approval_id: "APPROVAL-1", external_court_decision_reference: "Mov. 42, decisão de honorários", amount: "2500.00", currency: "BRL", decided_on: "2026-09-01" }],
   payments: [{ payment_id: "PAYMENT-1", amount: "1000.00", currency: "BRL", received_on: "2026-09-02", reference: "Depósito" }],
   status: "PARTIALLY_RECEIVED", outstanding: { amount: "1500.00", currency: "BRL" },
@@ -88,7 +88,7 @@ test("makes every authorized Stage 9 budget operation reachable through explicit
 });
 
 test("closed budget removes every mutation action while preserving detailed financial history", async () => {
-  const closed = { revision: 8, updated_at: "2026-09-04T12:00:00Z", snapshot: { ...snapshot, revision: 8, status: "CLOSED" } };
+  const closed = { revision: 8, updated_at: "2026-09-04T12:00:00Z", snapshot: { ...snapshot, revision: 8, payments: [{ ...snapshot.payments[0], amount: "2500.00" }], outstanding: { amount: "0.00", currency: "BRL" }, status: "CLOSED" } };
   vi.stubGlobal("fetch", vi.fn((input) => Promise.resolve(String(input).endsWith("/history") ? response(200, { items: [closed] }) : response(200, closed))));
   render(<BudgetFoundationView workspaceId={ID} />);
   expect(await screen.findByText("Orçamento encerrado")).toBeInTheDocument();
@@ -103,6 +103,7 @@ test("closed budget removes every mutation action while preserving detailed fina
   expect(screen.getByText("Laboratório acreditado")).toBeInTheDocument();
   expect(screen.getByText("Pedágio da diligência")).toBeInTheDocument();
   expect(screen.getByText("Proposta inicial")).toBeInTheDocument();
+  expect(screen.getByText("Emissão original")).toBeInTheDocument();
   expect(screen.getByText("Mov. 42, decisão de honorários")).toBeInTheDocument();
   expect(screen.getByText("Depósito")).toBeInTheDocument();
   expect(screen.getByText("Histórico preservado · 1 revisões")).toBeInTheDocument();

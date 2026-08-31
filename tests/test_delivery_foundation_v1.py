@@ -229,7 +229,8 @@ def test_final_word_and_pdf_bytes_are_reopened_and_hashed_not_trusted() -> None:
     digest, size, media = validate_final_artifact(word, "DOCM")
     assert media == "application/vnd.ms-word.document.macroEnabled.12"
     verify_reopened_artifact(content=word, output_format="DOCM", expected_size=size, expected_sha256=digest)
-    pdf = b"%PDF-1.7\n1 0 obj <</Type /Page>> endobj\n%%EOF"
+    report = report_snapshot_from_mapping(json.loads((Path(__file__).parent / "fixtures/report-snapshot-v1.json").read_text(encoding="utf-8")))
+    pdf = render_pdf_candidate(report)
     pdf_digest, pdf_size, pdf_media = validate_final_artifact(pdf, "PDF")
     assert pdf_media == "application/pdf"
     verify_reopened_artifact(content=pdf, output_format="PDF", expected_size=pdf_size, expected_sha256=pdf_digest)
@@ -246,6 +247,8 @@ def test_artifact_validation_rejects_macro_identity_change_and_malformed_pdf() -
         validate_final_artifact(output.getvalue(), "DOCM")
     with pytest.raises(ValueError, match="PDF"):
         validate_final_artifact(b"%PDF-1.7\nno page or eof", "PDF")
+    with pytest.raises(ValueError, match="PDF"):
+        validate_final_artifact(b"%PDF-1.7\n1 0 obj <</Type /Page>> endobj\n%%EOF", "PDF")
 
 
 def test_supporting_image_bytes_are_verified_by_declared_media_type() -> None:
@@ -316,6 +319,32 @@ def test_rendered_word_bytes_contain_and_change_with_entire_approved_report_body
     assert first != second
 
 
+@pytest.mark.parametrize(
+    "instruction",
+    ('INCLUDETEXT "https://example.invalid/private"', 'includepicture "https://example.invalid/private.png"', 'DDEAUTO cmd "test"', 'DDE cmd "test"'),
+)
+def test_active_external_or_execution_word_fields_are_rejected_before_binding(instruction: str) -> None:
+    root = Path(__file__).parents[1] / "tests/fixtures"
+    report = report_snapshot_from_mapping(json.loads((root / "report-snapshot-v1.json").read_text(encoding="utf-8")))
+    split = len(instruction) // 2
+    document = f'''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+      <w:p><w:r><w:t>[[EXPERT_FULL_NAME]]</w:t><w:t>[[EXPERT_REGISTRATION]]</w:t><w:t>[[REPORT_ID]]</w:t></w:r></w:p>
+      <w:sdt><w:sdtPr><w:tag w:val="CANONICAL_REPORT"/></w:sdtPr><w:sdtContent/></w:sdt>
+      <w:p><w:bookmarkStart w:id="1" w:name="B"/><w:r><w:instrText>TOC</w:instrText><w:instrText>PAGE</w:instrText><w:instrText>NUMPAGES</w:instrText><w:instrText>SEQ Figure</w:instrText><w:instrText>REF B</w:instrText><w:instrText>PAGEREF B</w:instrText></w:r></w:p>
+      <w:p><w:r><w:instrText>{instruction[:split]}</w:instrText><w:instrText>{instruction[split:]}</w:instrText></w:r></w:p>
+    </w:body></w:document>'''
+    package_bytes = BytesIO()
+    with ZipFile(package_bytes, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", "<Types/>")
+        package.writestr("word/document.xml", document)
+        package.writestr("word/styles.xml", "<styles/>")
+        package.writestr("word/numbering.xml", "<numbering/>")
+        package.writestr("docProps/custom.xml", '<Properties><property name="TEMPLATE_ID"><value>TEMPLATE-1</value></property></Properties>')
+    manifest = template_binding_manifest_from_mapping({"schema_version": "1.0.0", "template_id": "TEMPLATE-1", "output_kind": "DOCX", "bindings": [{"field": "EXPERT_FULL_NAME", "placeholder": "[[EXPERT_FULL_NAME]]"}, {"field": "EXPERT_REGISTRATION", "placeholder": "[[EXPERT_REGISTRATION]]"}, {"field": "REPORT_ID", "placeholder": "[[REPORT_ID]]"}]})
+    with pytest.raises(ValueError, match="unsupported active Word field"):
+        render_word_candidate(template_bytes=package_bytes.getvalue(), report=report, manifest=manifest)
+
+
 def test_rendered_pdf_contains_same_canonical_report_digest_and_changes_with_report() -> None:
     root = Path(__file__).parents[1] / "tests/fixtures"
     report = report_snapshot_from_mapping(json.loads((root / "report-snapshot-v1.json").read_text(encoding="utf-8")))
@@ -342,10 +371,10 @@ def test_pdf_renderer_wraps_long_lines_and_rejects_lossy_unicode() -> None:
 
 
 def test_final_pdf_is_converted_from_the_exact_bound_word_bytes() -> None:
+    report = report_snapshot_from_mapping(json.loads((Path(__file__).parent / "fixtures/report-snapshot-v1.json").read_text(encoding="utf-8")))
     word = BytesIO()
-    document = """<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
-      <w:p><w:r><w:t>Engenharia: m² ° µ ≤ ≥</w:t></w:r></w:p>
-      <w:tbl><w:tr><w:tc><w:p><w:r><w:t>Tabela vinculada</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+    document = f"""<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+      <w:p><w:r><w:t>{report.report_id}</w:t></w:r></w:p>
     </w:body></w:document>"""
     with ZipFile(word, "w", ZIP_DEFLATED) as package:
         package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
@@ -357,7 +386,7 @@ def test_final_pdf_is_converted_from_the_exact_bound_word_bytes() -> None:
 
         def convert(self, content: bytes, source_format: str) -> bytes:
             self.received = (content, source_format)
-            return b"%PDF-1.7\n1 0 obj <</Type /Page>> endobj\n%%EOF"
+            return render_pdf_candidate(report).replace(b"/DiagnosticOnly true", b"/DiagnosticOnly fals")
 
     converter = Converter()
     pdf = delivery_renderer.render_final_pdf_candidate(
@@ -366,6 +395,17 @@ def test_final_pdf_is_converted_from_the_exact_bound_word_bytes() -> None:
 
     assert converter.received == (word.getvalue(), "DOCX")
     assert pdf.startswith(b"%PDF-")
+
+    unrelated = replace(report, report_id="RELATORIO-ERRADO")
+
+    class WrongConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return render_pdf_candidate(unrelated).replace(b"/DiagnosticOnly true", b"/DiagnosticOnly fals")
+
+    with pytest.raises(ValueError, match="does not faithfully represent"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=WrongConverter(),
+        )
 
 
 def test_final_pdf_conversion_fails_closed_without_a_local_converter() -> None:
