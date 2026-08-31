@@ -364,6 +364,28 @@ def test_active_local_api_rejects_recovery_quarantine(tmp_path) -> None:
         build_local_api(staging.root / "workspace.sqlite3", private_root=staging.root / "private", token="a" * 32)
 
 
+def test_active_local_api_rejects_quarantine_in_higher_ancestor(tmp_path) -> None:
+    staging = RecoveryStaging.create(tmp_path / "staging")
+    staging.close()
+    nested = staging.root / "nested"
+    nested.mkdir()
+    with pytest.raises(RepositoryIntegrityError, match="quarantined"):
+        build_local_api(nested / "active.sqlite3", private_root=nested / "private", token="a" * 32)
+
+
+def test_active_local_api_rejects_hardlink_alias_to_quarantined_database(tmp_path) -> None:
+    staging = RecoveryStaging.create(tmp_path / "staging")
+    staging.close()
+    alias = tmp_path / "alias.sqlite3"
+    try:
+        os.link(staging.root / "workspace.sqlite3", alias)
+    except OSError as exc:
+        pytest.skip(f"hard links unavailable: {exc}")
+    assert os.path.samefile(staging.root / "workspace.sqlite3", alias)
+    with pytest.raises(RepositoryIntegrityError, match="link"):
+        build_local_api(alias, token="a" * 32)
+
+
 @pytest.mark.parametrize("root", ("relative-staging", r"\\server\share\staging", r"\\?\C:\staging"))
 def test_recovery_staging_rejects_nonlocal_or_unanchored_root(root) -> None:
     with pytest.raises(RepositoryIntegrityError, match="root"):

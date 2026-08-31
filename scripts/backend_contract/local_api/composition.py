@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import secrets
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -93,6 +94,33 @@ class _UuidGenerator:
         return uuid4()
 
 
+def _path_has_recovery_quarantine(path: Path, *, path_is_file: bool) -> bool:
+    absolute = path.absolute()
+    start = absolute.parent if path_is_file else absolute
+    candidates = {start}
+    try:
+        candidates.add(start.resolve(strict=False))
+    except OSError as exc:
+        raise RepositoryIntegrityError("local storage ancestry cannot be resolved") from exc
+    return any((ancestor / "RECOVERY_NOT_PROMOTABLE").exists() for candidate in candidates for ancestor in (candidate, *candidate.parents))
+
+
+def _assert_plain_single_link_database(path: Path) -> None:
+    absolute = path.absolute()
+    for component in (absolute, *absolute.parents):
+        is_junction = getattr(component, "is_junction", lambda: False)
+        if component.is_symlink() or is_junction():
+            raise RepositoryIntegrityError("local database cannot use a link or reparse ancestry")
+    if not absolute.exists():
+        return
+    try:
+        identity = os.stat(absolute, follow_symlinks=False)
+    except OSError as exc:
+        raise RepositoryIntegrityError("local database identity cannot be verified") from exc
+    if identity.st_nlink != 1:
+        raise RepositoryIntegrityError("local database must have exactly one filesystem link")
+
+
 @dataclass(slots=True)
 class LocalApiRuntime:
     """Dono explícito do servidor e da sessão SQLite."""
@@ -176,13 +204,16 @@ def build_local_api(
     _require_local_token(local_token)
     local_clock = _SystemClock() if clock is None else clock
     local_ids = _UuidGenerator() if ids is None else ids
-    database_path = Path(database).absolute()
-    roots = {database_path.parent}
-    if private_root is not None:
-        roots.add(Path(private_root).absolute().parent)
-    if any((root / "RECOVERY_NOT_PROMOTABLE").exists() for root in roots):
+    database_path = Path(database)
+    if _path_has_recovery_quarantine(database_path, path_is_file=True) or (private_root is not None and _path_has_recovery_quarantine(Path(private_root), path_is_file=False)):
         raise RepositoryIntegrityError("recovery staging is quarantined and cannot become active")
+    _assert_plain_single_link_database(database_path)
     store = SQLiteApplicationStore(database)
+    try:
+        _assert_plain_single_link_database(database_path)
+    except BaseException:
+        store.close()
+        raise
     private_store = None
     if private_root is not None:
         try:
