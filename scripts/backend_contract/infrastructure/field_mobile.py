@@ -18,6 +18,13 @@ from ..field_mobile import (
 import json
 
 
+_REPARSE_ATTRIBUTE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+
+
+def _is_link_or_reparse(details: os.stat_result) -> bool:
+    return stat.S_ISLNK(details.st_mode) or bool(getattr(details, "st_file_attributes", 0) & _REPARSE_ATTRIBUTE)
+
+
 class DeviceOfflineVault:
     """Device-local, authenticated storage; no network or cloud transport."""
 
@@ -32,7 +39,7 @@ class DeviceOfflineVault:
         self._root = Path(root)
         self._root.mkdir(parents=True, exist_ok=True)
         details = os.lstat(self._root)
-        if stat.S_ISLNK(details.st_mode) or not stat.S_ISDIR(details.st_mode):
+        if _is_link_or_reparse(details) or not stat.S_ISDIR(details.st_mode):
             raise ValueError("device vault root must be a plain local directory")
         try:
             os.chmod(self._root, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
@@ -172,11 +179,12 @@ class DeviceOfflineVaultRegistry:
     def __init__(self, root: Path):
         self._root = Path(root) / "offline-field-v1"
         self._root.mkdir(parents=True, exist_ok=True)
-        if self._root.is_symlink():
+        if _is_link_or_reparse(os.lstat(self._root)):
             raise ValueError("offline registry root cannot be a link")
         os.chmod(self._root, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
         self._key_path = self._root / ".device-key"
         self._identity_path = self._root / ".device-id"
+        self._revocation_path = self._root / ".device-revoked"
         if not self._key_path.exists():
             self._provision(self._key_path, os.urandom(32))
         if not self._identity_path.exists():
@@ -196,8 +204,16 @@ class DeviceOfflineVaultRegistry:
             os.close(descriptor)
 
     def vault_for(self, workspace_id, device_id: str) -> DeviceOfflineVault:
+        if self._revocation_path.exists():
+            raise PermissionError("offline device is revoked")
         if device_id != self.device_id:
             raise PermissionError("offline device is not authorized")
         workspace = str(workspace_id)
         directory = self._root / hashlib.sha256(workspace.encode("utf-8")).hexdigest()
+        if directory.exists() and _is_link_or_reparse(os.lstat(directory)):
+            raise ValueError("offline workspace root cannot be a link or reparse point")
         return DeviceOfflineVault(directory, key=self._key, device_id=self.device_id, workspace_id=workspace)
+
+    def revoke_device(self) -> None:
+        if not self._revocation_path.exists():
+            self._provision(self._revocation_path, b"REVOKED\n")

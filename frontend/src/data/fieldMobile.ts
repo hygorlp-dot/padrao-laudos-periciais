@@ -30,3 +30,13 @@ export function updateOfflineInspection(workspaceId: string, packageId: string, 
     package_id: packageId, expected_package_revision: expectedPackageRevision, snapshot,
   }, "PUT");
 }
+
+export async function getOfflineInspection(workspaceId: string, packageId: string): Promise<OfflinePackageEnvelope> {
+  const response = await fetch(`/app-api/v1/workspaces/${workspaceId}/offline-inspection/${encodeURIComponent(packageId)}`, { credentials: "same-origin", cache: "no-store" });
+  if (!response.ok || !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")) throw new Error("FIELD_MOBILE_UNAVAILABLE");
+  return await response.json() as OfflinePackageEnvelope;
+}
+
+export function revokeOfflineDevice(workspaceId: string) {
+  return jsonPost<{ revoked: true }>(`/app-api/v1/workspaces/${workspaceId}/offline-device/revoke`, { confirm: true });
+}

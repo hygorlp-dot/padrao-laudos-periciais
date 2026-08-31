@@ -336,8 +336,11 @@ def test_offline_field_routes_are_private_and_expose_conflicts_without_overwrite
     conflict = SyncConflict("STALE_PLAN", "Plano alterado.")
     sync = RecordingService((SyncDecision(False, (conflict,)), None))
     update = RecordingService(replace(package, package_id="OFFLINE-PACKAGE-002", package_revision=2, device_sequence=2))
+    get_offline = RecordingService(package)
+    revoke = RecordingService(None)
     api = LocalApi(services(
         prepare_offline_inspection=prepare, update_offline_inspection=update,
+        get_offline_inspection=get_offline, revoke_offline_device=revoke,
         sync_offline_inspection=sync, offline_device_id="DEVICE-001",
     ), token=TOKEN)
     assert api.handle("POST", f"/v1/workspaces/{WORKSPACE_UUID}/offline-inspection", {"Content-Type": "application/json"}, b'{"device_session_id":"SESSION-001"}').status == 403
@@ -347,6 +350,11 @@ def test_offline_field_routes_are_private_and_expose_conflicts_without_overwrite
     updated = request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/offline-inspection", body={"package_id": package.package_id, "expected_package_revision": 1, "snapshot": inspection_session_payload()})
     assert updated.status == 201
     assert decoded(updated)["package"]["package_revision"] == 2
+    reopened = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/offline-inspection/{package.package_id}", headers={"X-Local-API-Token": TOKEN})
+    assert reopened.status == 200
+    assert decoded(reopened)["package"]["package_id"] == package.package_id
+    revoked = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/offline-device/revoke", body={"confirm": True})
+    assert revoked.status == 200 and decoded(revoked) == {"revoked": True}
     conflicted = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/offline-sync", body={"package_id": package.package_id})
     assert conflicted.status == 409
     assert decoded(conflicted)["conflicts"][0]["code"] == "STALE_PLAN"

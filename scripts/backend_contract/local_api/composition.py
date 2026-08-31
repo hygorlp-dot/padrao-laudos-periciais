@@ -45,7 +45,7 @@ from .transport import LocalApi, LocalApiServices, _require_local_token
 from ..application.case_analysis import GetCaseAnalysis, SaveCaseAnalysis
 from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning
 from ..application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession
-from ..application.field_mobile import PrepareOfflineInspection, SyncOfflineInspection, UpdateOfflineInspection
+from ..application.field_mobile import GetOfflineInspection, PrepareOfflineInspection, RevokeOfflineDevice, SyncOfflineInspection, UpdateOfflineInspection
 from ..application.technical_findings import GetTechnicalSnapshot, SaveTechnicalSnapshot, StartTechnicalSnapshot
 from ..application.report_foundation import (
     GetExpertProfile,
@@ -440,6 +440,8 @@ def build_local_api(
         prepare_offline_inspection=prepare_offline_inspection,
         sync_offline_inspection=sync_offline_inspection,
         update_offline_inspection=update_offline_inspection,
+        get_offline_inspection=(GetOfflineInspection(offline_registry.vault_for) if offline_registry is not None else None),
+        revoke_offline_device=(RevokeOfflineDevice(offline_registry.revoke_device) if offline_registry is not None else None),
         offline_device_id=(offline_registry.device_id if offline_registry is not None else None),
         save_technical_snapshot=save_technical_snapshot,
         get_technical_snapshot=get_technical_snapshot,

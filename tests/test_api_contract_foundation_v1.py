@@ -33,6 +33,8 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
             "/v1/workspaces/{workspace_id}/inspection-photos",
             "/v1/workspaces/{workspace_id}/offline-inspection",
             "/v1/workspaces/{workspace_id}/offline-sync",
+            "/v1/workspaces/{workspace_id}/offline-inspection/{package_id}",
+            "/v1/workspaces/{workspace_id}/offline-device/revoke",
         "/v1/workspaces/{workspace_id}/technical-snapshot",
         "/v1/workspaces/{workspace_id}/expert-profile",
         "/v1/workspaces/{workspace_id}/report-snapshot",

@@ -12,6 +12,7 @@ describe("FieldMobileStatus", () => {
     expect(screen.getByRole("button", { name: "Registrar observação" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Adicionar medição" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Associar foto" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preparar uso offline" })).toBeDisabled();
     expect(screen.queryByText(/conclusão profissional/i)).not.toBeInTheDocument();
   });
 });

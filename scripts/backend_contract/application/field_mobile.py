@@ -213,3 +213,20 @@ class UpdateOfflineInspection:
         for record_id, original in originals.items():
             vault.save_media(updated.package_id, record_id, original)
         return updated
+
+
+@dataclass(frozen=True, slots=True)
+class GetOfflineInspection:
+    vault_for: object
+
+    def execute(self, workspace_id, *, device_id: str, package_id: str):
+        return self.vault_for(workspace_id, device_id).load(package_id)
+
+
+@dataclass(frozen=True, slots=True)
+class RevokeOfflineDevice:
+    revoke_device: object
+
+    def execute(self, workspace_id):
+        del workspace_id
+        self.revoke_device()

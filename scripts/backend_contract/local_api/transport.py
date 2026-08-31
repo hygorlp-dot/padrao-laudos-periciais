@@ -119,6 +119,8 @@ class LocalApiServices:
     prepare_offline_inspection: object | None = None
     sync_offline_inspection: object | None = None
     update_offline_inspection: object | None = None
+    get_offline_inspection: object | None = None
+    revoke_offline_device: object | None = None
     offline_device_id: str | None = None
     save_technical_snapshot: object | None = None
     get_technical_snapshot: object | None = None
@@ -504,7 +506,7 @@ class LocalApi:
                 )
             raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
-            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "technical-snapshot", "expert-profile", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
+            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "expert-profile", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
             if (normalized_method == "POST" or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
                 return _error(
                     403,
@@ -961,6 +963,23 @@ class LocalApi:
                     "conflicts": [asdict(item) for item in decision.conflicts],
                     "revision": (record.revision if record is not None else None),
                 })
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "offline-inspection":
+                if normalized_method != "GET": return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.get_offline_inspection is None or self._services.offline_device_id is None:
+                    return _error(503, "OFFLINE_STORAGE_UNAVAILABLE")
+                workspace_id = self._workspace_id(raw_segments[2])
+                package = self._services.get_offline_inspection.execute(workspace_id, device_id=self._services.offline_device_id, package_id=raw_segments[4])
+                return _json_response(200, {"device_id": self._services.offline_device_id, "package": offline_package_to_mapping(package)})
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("offline-device", "revoke"):
+                if normalized_method != "POST": return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.revoke_offline_device is None: return _error(503, "OFFLINE_STORAGE_UNAVAILABLE")
+                workspace_id = self._workspace_id(raw_segments[2])
+                dto = self._request_dto(request_headers, body)
+                if dto != {"confirm": True}: raise ValueError("offline device revocation requires confirmation")
+                self._services.revoke_offline_device.execute(workspace_id)
+                return _json_response(200, {"revoked": True})
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "materials":
                 workspace_id = self._workspace_id(raw_segments[2])

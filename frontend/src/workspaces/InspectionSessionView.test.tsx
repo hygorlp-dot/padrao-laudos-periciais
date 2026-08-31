@@ -23,9 +23,21 @@ const snapshot = {
 };
 
 const response = (status: number, value: object) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); sessionStorage.clear(); });
 
 describe("inspection session view", () => {
+  test("reopens the pending offline snapshot before further field edits", async () => {
+    const offline = { ...snapshot, items: [{ ...snapshot.items[0], title: "Item preservado offline" }] };
+    sessionStorage.setItem(`field-mobile:${ID}`, "OFFLINE-PACKAGE-001");
+    sessionStorage.setItem(`field-mobile-revision:${ID}`, "2");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(200, { revision: 1, updated_at: "2026-08-30T13:00:00Z", snapshot }))
+      .mockResolvedValueOnce(response(200, { device_id: "DEVICE-1", package: { package_id: "OFFLINE-PACKAGE-001", package_revision: 2, device_sequence: 2, inspection_snapshot: offline } }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<InspectionSessionView workspaceId={ID} />);
+    expect(await screen.findByText(/Item preservado offline/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preparar uso offline" })).toBeDisabled();
+  });
   test("separates raw field records, party statements, media authority and limitations", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(200, { revision: 1, updated_at: "2026-08-30T13:00:00Z", snapshot })));
     render(<InspectionSessionView workspaceId={ID} />);

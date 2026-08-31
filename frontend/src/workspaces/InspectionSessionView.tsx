@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { getInspectionSession, InspectionSessionApiError, saveInspectionSession, startInspectionSession, uploadInspectionPhoto, type ExecutionState, type InspectionEnvelope, type InspectionSnapshot } from "../data/inspectionSession";
 import { FieldMobileStatus } from "./FieldMobileStatus";
-import { prepareOfflineInspection, syncOfflineInspection, updateOfflineInspection, type FieldSyncConflict } from "../data/fieldMobile";
+import { getOfflineInspection, prepareOfflineInspection, revokeOfflineDevice, syncOfflineInspection, updateOfflineInspection, type FieldSyncConflict } from "../data/fieldMobile";
 
 type State = { kind: "loading" } | { kind: "ready"; value: InspectionEnvelope } | { kind: "empty" } | { kind: "error" };
 const stateLabel = { PENDING: "Pendente", COMPLETED: "Concluído", PARTIAL: "Execução parcial", NOT_EXECUTED: "Não executado", NOT_APPLICABLE: "Não aplicável", BLOCKED: "Bloqueado" } as const;
@@ -60,6 +60,15 @@ export function InspectionSessionView({ workspaceId }: { workspaceId: string }) 
     );
     return () => controller.abort();
   }, [workspaceId, version]);
+  useEffect(() => {
+    if (!offlinePackageId) return;
+    let active = true;
+    getOfflineInspection(workspaceId, offlinePackageId).then(
+      (offline) => { if (active) setState((current) => current.kind === "ready" ? { kind: "ready", value: { ...current.value, snapshot: offline.package.inspection_snapshot } } : current); },
+      () => { if (active) setSyncConflicts([{ code: "OFFLINE_REOPEN_FAILED", message: "O pacote offline pendente não pôde ser reaberto.", record_ids: [], requires_explicit_review: true }]); },
+    );
+    return () => { active = false; };
+  }, [workspaceId, offlinePackageId]);
   if (state.kind === "loading") return <section className="status-state status-state--loading" role="status"><span className="state-rule" aria-hidden="true"/><div><h2>Carregando vistoria</h2><p>Reabrindo registros de campo e suas proveniências.</p></div></section>;
   if (state.kind === "empty") {
     const start = async (event: FormEvent) => { event.preventDefault(); setSaving(true); setSaveError(false); try { const value = await startInspectionSession(workspaceId, { responsible_professional: responsible, location_context: location, participant_references: participants.split(",").map((item) => item.trim()).filter(Boolean) }); setState({ kind: "ready", value }); } catch { setSaveError(true); } finally { setSaving(false); } };
@@ -96,6 +105,7 @@ export function InspectionSessionView({ workspaceId }: { workspaceId: string }) 
       onCapture={() => { const firstPending = snapshot.items.find((item) => item.state === "PENDING") ?? snapshot.items[0]; if (firstPending) { setSelectedItem(firstPending.item_id); setItemState(firstPending.state); setNote(firstPending.note ?? ""); } }}
       onPrepare={async () => { try { const sessionId = crypto.randomUUID(); const prepared = await prepareOfflineInspection(workspaceId, sessionId); setOfflinePackageId(prepared.package.package_id); setOfflinePackageRevision(prepared.package.package_revision); sessionStorage.setItem(`field-mobile:${workspaceId}`, prepared.package.package_id); sessionStorage.setItem(`field-mobile-revision:${workspaceId}`, String(prepared.package.package_revision)); setSyncConflicts([]); } catch { setSyncConflicts([{ code: "OFFLINE_STORAGE_UNAVAILABLE", message: "Não foi possível preparar o pacote local.", record_ids: [], requires_explicit_review: true }]); } }}
       onSync={async () => { if (!offlinePackageId) return; try { const result = await syncOfflineInspection(workspaceId, offlinePackageId); setSyncConflicts(result.conflicts); if (result.accepted) { sessionStorage.removeItem(`field-mobile:${workspaceId}`); sessionStorage.removeItem(`field-mobile-revision:${workspaceId}`); setOfflinePackageId(null); setOfflinePackageRevision(0); setVersion((value) => value + 1); } } catch { setSyncConflicts([{ code: "SYNC_UNAVAILABLE", message: "A sincronização local não pôde ser concluída.", record_ids: [], requires_explicit_review: true }]); } }}
+      onRevoke={async () => { if (!window.confirm("Revogar este dispositivo impedirá reabrir e sincronizar pacotes offline. Continuar?")) return; try { await revokeOfflineDevice(workspaceId); sessionStorage.removeItem(`field-mobile:${workspaceId}`); sessionStorage.removeItem(`field-mobile-revision:${workspaceId}`); setOfflinePackageId(null); setOfflinePackageRevision(0); setSyncConflicts([{ code: "DEVICE_REVOKED", message: "Dispositivo revogado. Pacotes locais não podem mais ser abertos.", record_ids: [], requires_explicit_review: true }]); } catch { setSyncConflicts([{ code: "REVOCATION_FAILED", message: "Não foi possível revogar o dispositivo.", record_ids: [], requires_explicit_review: true }]); } }}
     />
     {edit && <section className="inspection-editor inspection-editor--access" aria-label="Resultado de acesso"><h3>Resultado de acesso</h3><p>Somente acesso integral sustenta a conclusÃ£o de um requisito de acesso.</p><label>Resultado<select value={accessOutcome} onChange={(event) => setAccessOutcome(event.target.value as typeof accessOutcome)}><option value="FULL_ACCESS">Acesso integral</option><option value="PARTIAL_ACCESS">Acesso parcial</option><option value="DENIED">Acesso negado</option><option value="UNSAFE">Acesso inseguro</option></select></label><label>DescriÃ§Ã£o objetiva<textarea value={accessDescription} onChange={(event) => setAccessDescription(event.target.value)}/></label></section>}
     <header className="planning-overview"><div><h2 id="inspection-title">Vistoria de campo</h2><p>Registros brutos executados contra a revisão {snapshot.plan_snapshot.planning_revision} do plano. Evidências candidatas não são constatações técnicas.</p></div><div className="planning-readiness"><strong>{snapshot.coverage.complete ? "Execução coberta" : "Execução parcial"}</strong><span>{snapshot.coverage.completed_items} de {snapshot.coverage.total_items} itens concluídos</span></div></header>

@@ -91,7 +91,7 @@
         "summary": "Persiste nova revisão offline sem sobrescrever a anterior",
         "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
         "requestBody": {"required": true, "content": {"application/json": {"schema": {"type":"object","required":["package_id","expected_package_revision","snapshot"],"properties":{"package_id":{"type":"string","minLength":1},"expected_package_revision":{"type":"integer","minimum":1},"snapshot":{"$ref":"#/components/schemas/InspectionSession"}},"additionalProperties":false}}}},
-        "responses": {"201":{"description":"Revisão offline preservada"},"409":{"description":"Conflito de revisão offline"}}
+        "responses": {"201":{"description":"Revisão offline preservada","content":{"application/json":{"schema":{"$ref":"#/components/schemas/OfflinePackageEnvelope"}}}},"409":{"description":"Conflito de revisão offline"}}
       }
     },
     "/v1/workspaces/{workspace_id}/offline-sync": {
@@ -99,8 +99,14 @@
         "summary": "Adjudica sincronização revision-aware sem last-write-wins",
         "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
         "requestBody": {"required": true, "content": {"application/json": {"schema": {"type":"object","required":["package_id"],"properties":{"package_id":{"type":"string","minLength":1}},"additionalProperties":false}}}},
-        "responses": {"200":{"description":"Sync aceita"},"409":{"description":"Conflitos materiais requerem revisão explícita"}}
+        "responses": {"200":{"description":"Sync aceita","content":{"application/json":{"schema":{"$ref":"#/components/schemas/OfflineSyncResult"}}}},"409":{"description":"Conflitos materiais requerem revisão explícita","content":{"application/json":{"schema":{"$ref":"#/components/schemas/OfflineSyncResult"}}}}}
       }
+    },
+    "/v1/workspaces/{workspace_id}/offline-inspection/{package_id}": {
+      "get": {"summary":"Reabre revisão offline preservada","parameters":[{"$ref":"#/components/parameters/WorkspaceId"},{"name":"package_id","in":"path","required":true,"schema":{"type":"string","minLength":1}}],"responses":{"200":{"description":"Pacote offline íntegro","content":{"application/json":{"schema":{"$ref":"#/components/schemas/OfflinePackageEnvelope"}}}},"404":{"description":"Pacote ausente"}}}
+    },
+    "/v1/workspaces/{workspace_id}/offline-device/revoke": {
+      "post": {"summary":"Revoga dispositivo offline em todos os workspaces","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["confirm"],"properties":{"confirm":{"const":true}},"additionalProperties":false}}}},"responses":{"200":{"description":"Dispositivo revogado","content":{"application/json":{"schema":{"type":"object","required":["revoked"],"properties":{"revoked":{"const":true}},"additionalProperties":false}}}}}}
     },
     "/v1/workspaces/{workspace_id}/technical-snapshot": {
       "get": {
@@ -189,6 +195,8 @@
       "PericialPlanningSnapshot": {"$ref": "../schemas/pericial-planning-snapshot-v1.schema.json"},
       "InspectionSession": {"$ref": "../schemas/inspection-session-v1.schema.json"},
       "OfflineInspectionPackage": {"$ref": "../schemas/offline-inspection-package-v1.schema.json"},
+      "OfflinePackageEnvelope": {"type":"object","required":["device_id","package"],"properties":{"device_id":{"type":"string","minLength":1},"package":{"$ref":"#/components/schemas/OfflineInspectionPackage"}},"additionalProperties":false},
+      "OfflineSyncResult": {"type":"object","required":["accepted","conflicts","revision"],"properties":{"accepted":{"type":"boolean"},"revision":{"type":["integer","null"],"minimum":1},"conflicts":{"type":"array","items":{"type":"object","required":["code","message","record_ids","requires_explicit_review"],"properties":{"code":{"type":"string","minLength":1},"message":{"type":"string","minLength":1},"record_ids":{"type":"array","items":{"type":"string"}},"requires_explicit_review":{"const":true}},"additionalProperties":false}}},"additionalProperties":false},
       "TechnicalSnapshot": {"$ref": "../schemas/technical-snapshot-v1.schema.json"},
       "ReportSnapshot": {"$ref": "../schemas/report-snapshot-v1.schema.json"},
       "DeliverySnapshot": {"$ref": "../schemas/delivery-snapshot-v1.schema.json"},

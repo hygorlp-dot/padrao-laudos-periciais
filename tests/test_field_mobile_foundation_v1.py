@@ -29,7 +29,7 @@ from scripts.backend_contract.application.field_mobile import (
     UpdateOfflineInspection,
     adjudicate_offline_sync,
 )
-from scripts.backend_contract.infrastructure.field_mobile import DeviceOfflineVault
+from scripts.backend_contract.infrastructure.field_mobile import DeviceOfflineVault, DeviceOfflineVaultRegistry
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -214,6 +214,17 @@ def test_device_vault_concurrent_package_write_never_silently_overwrites(tmp_pat
         results = list(pool.map(save, (first, second)))
     assert sorted(results) == ["conflict", "saved"]
     assert first.load(package.package_id) == package
+
+
+def test_device_registry_revocation_is_device_wide_and_persistent(tmp_path: Path) -> None:
+    registry = DeviceOfflineVaultRegistry(tmp_path)
+    registry.vault_for(WORKSPACE_ID, registry.device_id)
+    registry.vault_for("22222222-2222-4222-8222-222222222222", registry.device_id)
+    registry.revoke_device()
+    reopened = DeviceOfflineVaultRegistry(tmp_path)
+    for workspace in (WORKSPACE_ID, "22222222-2222-4222-8222-222222222222"):
+        with pytest.raises(PermissionError, match="revoked"):
+            reopened.vault_for(workspace, reopened.device_id)
 
 
 @pytest.mark.parametrize(
