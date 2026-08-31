@@ -73,6 +73,7 @@ from ..application.budget_foundation import (
     RecordCourtApproval,
     RecordExpense,
     RecordPayment,
+    CloseBudgetSnapshot,
     SaveBudgetSnapshot,
     StartBudgetSnapshot,
 )
@@ -401,6 +402,7 @@ def build_local_api(
         record_court_approval=RecordCourtApproval(get_budget_snapshot, save_budget_snapshot, local_ids),
         record_budget_expense=RecordExpense(get_budget_snapshot, save_budget_snapshot, local_ids),
         record_received_payment=RecordPayment(get_budget_snapshot, save_budget_snapshot, local_ids),
+        close_budget_snapshot=CloseBudgetSnapshot(get_budget_snapshot, save_budget_snapshot),
         get_process_metadata_review=get_process_metadata_review,
         confirm_process_metadata_source_span=confirm_process_metadata_source_span,
         import_case_document=import_case_document,

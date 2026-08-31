@@ -60,3 +60,14 @@ test("records a proposal through an explicit financial command", async () => {
   await user.click(screen.getByRole("button", { name: "Registrar proposta" }));
   expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/budget-snapshot/proposals"), expect.objectContaining({ method: "POST" }));
 });
+
+test("closes a fully received budget through an explicit terminal command", async () => {
+  const received = { revision: 5, updated_at: "2026-09-03T12:00:00Z", snapshot: { ...snapshot, revision: 5, payments: [{ ...snapshot.payments[0], amount: "2500.00" }], status: "RECEIVED", outstanding: { amount: "0.00", currency: "BRL" } } };
+  const closed = { ...received, revision: 6, snapshot: { ...received.snapshot, revision: 6, status: "CLOSED" } };
+  const fetchMock = vi.fn((input, init) => Promise.resolve(String(input).endsWith("/history") ? response(200, { items: [received] }) : init?.method === "POST" ? response(200, closed) : response(200, received)));
+  vi.stubGlobal("fetch", fetchMock);
+  const user = userEvent.setup(); render(<BudgetFoundationView workspaceId={ID} />);
+  await user.click(await screen.findByRole("button", { name: "Encerrar orçamento quitado" }));
+  expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/budget-snapshot/close"), expect.objectContaining({ method: "POST" }));
+  expect(await screen.findByText("CLOSED")).toBeInTheDocument();
+});

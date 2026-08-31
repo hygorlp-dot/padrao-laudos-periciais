@@ -10,6 +10,7 @@ from jsonschema import Draft202012Validator
 
 from scripts.backend_contract.application.budget_foundation import (
     AddFeeProposal,
+    CloseBudgetSnapshot,
     GetBudgetHistory,
     GetBudgetSnapshot,
     RecordCourtApproval,
@@ -190,6 +191,20 @@ def test_closed_budget_is_terminal_at_the_repository_boundary() -> None:
     service = SaveBudgetSnapshot(object(), Latest(), object(), object())
     with pytest.raises(ValueError, match="closed"):
         service.execute(closed.workspace_id, replace(closed, revision=3), 2)
+
+
+def test_close_command_is_explicit_requires_full_receipt_and_creates_terminal_state() -> None:
+    class Get:
+        def __init__(self, value): self.value = value
+        def execute(self, _workspace): return type("Record", (), {"revision": self.value.revision})(), self.value
+    class Save:
+        def execute(self, _workspace, value, expected): assert expected == value.revision - 1; return type("Record", (), {"revision": value.revision})()
+    received = replace(budget(), payments=(replace(budget().payments[0], amount="2200.00"),), status=FinancialStatus.RECEIVED)
+    record, closed = CloseBudgetSnapshot(Get(received), Save()).execute(received.workspace_id, expected_revision=1)
+    assert record.revision == 2
+    assert closed.status is FinancialStatus.CLOSED
+    with pytest.raises(ValueError, match="fully received"):
+        CloseBudgetSnapshot(Get(budget()), Save()).execute(budget().workspace_id, expected_revision=1)
 
 
 def test_financial_commands_create_distinct_append_only_authorities() -> None:

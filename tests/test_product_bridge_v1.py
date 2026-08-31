@@ -123,7 +123,7 @@ def test_product_bridge_allowlists_only_budget_snapshot_and_history() -> None:
     assert _proxy_target(snapshot, "PUT") is None
     assert _proxy_target(history, "GET") == f"/v1/workspaces/{workspace}/budget-snapshot/history"
     assert _proxy_target(history, "POST") is None
-    for action in ("proposals", "court-approvals", "expenses", "payments"):
+    for action in ("proposals", "court-approvals", "expenses", "payments", "close"):
         path = f"{snapshot}/{action}"
         assert _proxy_target(path, "POST") == f"/v1/workspaces/{workspace}/budget-snapshot/{action}"
         assert _proxy_target(path, "PUT") is None

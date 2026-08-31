@@ -173,10 +173,11 @@ def test_budget_routes_are_private_strict_and_preserve_history() -> None:
     approval = RecordingService((revision(payload=payload), snapshot))
     expense = RecordingService((revision(payload=payload), snapshot))
     payment = RecordingService((revision(payload=payload), snapshot))
+    close = RecordingService((revision(payload=payload), snapshot))
     api = LocalApi(services(
         save_budget_snapshot=save, get_budget_snapshot=get, get_budget_history=history,
         start_budget_snapshot=start, add_fee_proposal=proposal, record_court_approval=approval,
-        record_budget_expense=expense, record_received_payment=payment,
+        record_budget_expense=expense, record_received_payment=payment, close_budget_snapshot=close,
     ), token=TOKEN)
     assert request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot").status == 403
     started = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot", body={"process_id": None, "appointment_id": None})
@@ -193,6 +194,7 @@ def test_budget_routes_are_private_strict_and_preserve_history() -> None:
         "court-approvals": {"expected_revision": 1, "court_decision_id": "DECISION-2", "amount": "2500.00", "currency": "BRL", "decided_on": "2026-09-01"},
         "expenses": {"expected_revision": 1, "category": "TRAVEL", "amount": "100.00", "currency": "BRL", "incurred_on": "2026-09-01", "description": "Deslocamento"},
         "payments": {"expected_revision": 1, "amount": "1000.00", "currency": "BRL", "received_on": "2026-09-02", "reference": "Depósito"},
+        "close": {"expected_revision": 1},
     }
     assert all(request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot/{action}", body=body).status == 200 for action, body in commands.items())
 

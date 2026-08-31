@@ -146,6 +146,7 @@ class LocalApiServices:
     record_court_approval: object | None = None
     record_budget_expense: object | None = None
     record_received_payment: object | None = None
+    close_budget_snapshot: object | None = None
     get_process_metadata_review: object | None = None
     confirm_process_metadata_source_span: object | None = None
     import_case_document: object | None = None
@@ -629,6 +630,7 @@ class LocalApi:
                     "court-approvals": (self._services.record_court_approval, {"expected_revision", "court_decision_id", "amount", "currency", "decided_on"}),
                     "expenses": (self._services.record_budget_expense, {"expected_revision", "category", "amount", "currency", "incurred_on", "description"}),
                     "payments": (self._services.record_received_payment, {"expected_revision", "amount", "currency", "received_on", "reference"}),
+                    "close": (self._services.close_budget_snapshot, {"expected_revision"}),
                 }
                 if action not in routes: return _error(404, "NOT_FOUND")
                 service, expected_fields = routes[action]

@@ -1,6 +1,6 @@
 import { type FormEvent, useEffect, useState } from "react";
 
-import { addFeeProposal, BudgetApiError, getBudgetHistory, getBudgetSnapshot, recordCourtApproval, recordExpense, recordPayment, startBudgetSnapshot, type BudgetEnvelope } from "../data/budgetSnapshot";
+import { addFeeProposal, BudgetApiError, closeBudgetSnapshot, getBudgetHistory, getBudgetSnapshot, recordCourtApproval, recordExpense, recordPayment, startBudgetSnapshot, type BudgetEnvelope } from "../data/budgetSnapshot";
 
 type State = { kind: "loading" } | { kind: "missing" } | { kind: "ready"; value: BudgetEnvelope } | { kind: "error" };
 const cents = (amount: string) => BigInt(amount.replace(".", ""));
@@ -19,6 +19,7 @@ export function BudgetFoundationView({ workspaceId }: { workspaceId: string }) {
   useEffect(() => { const controller = new AbortController(); Promise.all([getBudgetSnapshot(workspaceId, controller.signal), getBudgetHistory(workspaceId, controller.signal)]).then(([value, items]) => { setState({ kind: "ready", value }); setHistory(items); }, (error) => { if (!controller.signal.aborted) setState({ kind: error instanceof BudgetApiError && error.kind === "not-found" ? "missing" : "error" }); }); return () => controller.abort(); }, [workspaceId]);
   const start = async () => { setBusy(true); try { accept(await startBudgetSnapshot(workspaceId)); } catch { setState({ kind: "error" }); } finally { setBusy(false); } };
   const command = async (event: FormEvent, kind: "proposal" | "approval" | "expense" | "payment") => { event.preventDefault(); if (state.kind !== "ready") return; setBusy(true); try { const revision = state.value.revision; const value = kind === "proposal" ? await addFeeProposal(workspaceId, revision, form.amount, form.rationale) : kind === "approval" ? await recordCourtApproval(workspaceId, revision, form.decision, form.amount, form.date) : kind === "expense" ? await recordExpense(workspaceId, revision, form.category, form.amount, form.date, form.description) : await recordPayment(workspaceId, revision, form.amount, form.date, form.reference); accept(value); } catch { setState({ kind: "error" }); } finally { setBusy(false); } };
+  const close = async () => { if (state.kind !== "ready") return; setBusy(true); try { accept(await closeBudgetSnapshot(workspaceId, state.value.revision)); } catch { setState({ kind: "error" }); } finally { setBusy(false); } };
   const field = (name: string) => ({ value: form[name] ?? "", onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm((current) => ({ ...current, [name]: event.target.value })) });
 
   if (state.kind === "loading") return <section className="status-state status-state--loading" role="status"><span className="state-rule" aria-hidden="true"/><div><h2>Reabrindo orçamento</h2><p>Validando o histórico financeiro local.</p></div></section>;
@@ -34,6 +35,7 @@ export function BudgetFoundationView({ workspaceId }: { workspaceId: string }) {
       <details><summary>Despesa efetiva</summary><form onSubmit={(event) => command(event, "expense")}><label>Categoria<select required {...field("category")}><option value="">Selecione</option><option value="TRAVEL">Deslocamento</option><option value="EQUIPMENT">Equipamento</option><option value="TESTS_LABORATORY">Ensaios e laboratório</option><option value="THIRD_PARTY_SERVICES">Serviços de terceiros</option><option value="ADMINISTRATIVE_COSTS">Custos administrativos</option></select></label><label>Valor<input required inputMode="decimal" {...field("amount")}/></label><label>Data<input required type="date" {...field("date")}/></label><label>Descrição<input required {...field("description")}/></label><button type="submit" disabled={busy}>Registrar despesa</button></form></details>
       <details><summary>Recebimento</summary><form onSubmit={(event) => command(event, "payment")}><label>Valor recebido<input required inputMode="decimal" {...field("amount")}/></label><label>Data do recebimento<input required type="date" {...field("date")}/></label><label>Referência<input required {...field("reference")}/></label><button type="submit" disabled={busy}>Registrar recebimento</button></form></details>
     </div>
+    {value.status === "RECEIVED" ? <button className="primary-action" type="button" disabled={busy} onClick={close}>Encerrar orçamento quitado</button> : null}
     <details className="budget-history"><summary>Histórico preservado · {history.length} revisões</summary><ol>{history.map((item) => <li key={item.revision}><strong>Revisão {item.revision}</strong><span>{item.snapshot.status}</span><time dateTime={item.updated_at}>{new Intl.DateTimeFormat("pt-BR", { dateStyle: "medium" }).format(new Date(item.updated_at))}</time></li>)}</ol></details>
   </section>;
 }

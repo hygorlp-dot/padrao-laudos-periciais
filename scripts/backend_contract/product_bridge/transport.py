@@ -129,7 +129,7 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/delivery-snapshot/history"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["budget-snapshot", "history"] and method == "GET":
             return f"/v1/workspaces/{remainder[0]}/budget-snapshot/history"
-        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "budget-snapshot" and remainder[2] in {"proposals", "court-approvals", "expenses", "payments"} and method == "POST":
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "budget-snapshot" and remainder[2] in {"proposals", "court-approvals", "expenses", "payments", "close"} and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/budget-snapshot/{remainder[2]}"
         if len(remainder) == 4 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:3] == ["delivery-snapshot", "artifacts"] and _CANONICAL_UUID.fullmatch(remainder[3]) and method == "GET":
             return f"/v1/workspaces/{remainder[0]}/delivery-snapshot/artifacts/{remainder[3]}"

@@ -196,3 +196,18 @@ class RecordPayment:
         payments = (*predecessor.payments, payment)
         value = replace(predecessor, revision=predecessor.revision + 1, payments=payments, status=derive_financial_status(predecessor.proposals, predecessor.court_approvals, payments))
         return self.save_snapshot.execute(workspace_id, value, expected_revision), value
+
+
+@dataclass(frozen=True, slots=True)
+class CloseBudgetSnapshot:
+    get_snapshot: object
+    save_snapshot: object
+
+    def execute(self, workspace_id, *, expected_revision: int):
+        record, predecessor = self.get_snapshot.execute(workspace_id)
+        if record.revision != expected_revision:
+            raise RepositoryConflict("expected Budget Snapshot revision is not latest")
+        if predecessor.status is not FinancialStatus.RECEIVED:
+            raise ValueError("only a fully received Budget Snapshot can be closed")
+        value = replace(predecessor, revision=predecessor.revision + 1, status=FinancialStatus.CLOSED)
+        return self.save_snapshot.execute(workspace_id, value, expected_revision), value
