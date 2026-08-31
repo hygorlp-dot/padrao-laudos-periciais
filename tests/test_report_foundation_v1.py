@@ -286,6 +286,28 @@ def test_save_rejects_missing_upstream_provenance_and_post_review_material_edit(
         service.execute(WorkspaceId.parse(predecessor.workspace_id), replace(predecessor, claims=(edited, *predecessor.claims[1:])), 4)
 
 
+def test_save_rejects_first_write_approval_cross_type_context_and_unanswered_or_unrelated_questions():
+    records, case, inspection, technical, profile = upstreams()
+    snapshot = bound_report()
+    service = SaveReportSnapshot(
+        SimpleNamespace(append_if_latest=lambda **_kwargs: SimpleNamespace(revision=1)),
+        SimpleNamespace(execute=lambda _workspace: (records[0], case)), SimpleNamespace(execute=lambda _workspace: (records[1], inspection)),
+        SimpleNamespace(execute=lambda _workspace: (records[2], technical)), SimpleNamespace(execute=lambda _workspace: (records[3], profile)),
+        SimpleNamespace(execute=lambda *_args: None), nullcontext, SimpleNamespace(now=lambda: datetime.now(UTC)), SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
+    )
+    workspace_id = WorkspaceId.parse(snapshot.workspace_id)
+    with pytest.raises(ValueError, match="unreviewed draft"):
+        service.execute(workspace_id, snapshot, None)
+    wrong_context = replace(snapshot.context_matrix[0], source_id="MEASUREMENT-001")
+    with pytest.raises(ValueError, match="context provenance"):
+        service.execute(workspace_id, replace(snapshot, context_matrix=(wrong_context, *snapshot.context_matrix[1:])), 4)
+    with pytest.raises(ValueError, match="canonical answers"):
+        replace(snapshot, answers=(), coverage=replace(snapshot.coverage, answers=0, traceable_answers=0))
+    unrelated = replace(snapshot.answers[0], claim_ids=("CLAIM-001",))
+    with pytest.raises(ValueError, match="answer claim"):
+        service.execute(workspace_id, replace(snapshot, answers=(unrelated,)), 4)
+
+
 def test_get_marks_upstream_change_stale_and_reopen_cannot_preserve_approval():
     records, case, inspection, technical, profile = upstreams()
     snapshot = bound_report()

@@ -143,12 +143,24 @@ def _validate_claim_provenance(snapshot: ReportSnapshot, case: CaseAnalysisSnaps
             identities, revision = sources[provenance.source_kind]
             if provenance.source_id not in identities or provenance.source_revision != revision:
                 raise ValueError("Report Snapshot claim provenance is not present in bound upstream authority")
-    context_sources = set().union(*(identities for identities, _revision in sources.values()))
-    context_sources.update(item.participant_id for item in case.judicial_context.participants)
-    context_sources.update(item.question_id for item in technical.question_links)
+    documents = {item.document_id for item in case.documents}
+    claims = {item.item_id for item in case.claims}
+    decisions = {item.item_id for item in case.decisions}
+    participants = {item.participant_id for item in case.judicial_context.participants}
+    questions = {item.item_id for item in case.questions} | {item.question_id for item in technical.question_links}
+    context_sources = {
+        "PROCESS_NUMBER": documents | decisions,
+        "COURT": documents | decisions,
+        "PARTIES": participants | documents,
+        "ADDRESSES": documents,
+        "CLAIM_AND_GROUNDS": claims | documents,
+        "REQUESTS": questions | decisions | documents,
+    }
     for item in snapshot.context_matrix:
-        if item.status is ContextStatus.PRESENT and item.source_id not in context_sources:
+        if item.status is ContextStatus.PRESENT and item.source_id not in context_sources[item.field]:
             raise ValueError("Report Snapshot context provenance is not present in bound upstream authority")
+    if snapshot.state is ReportState.APPROVED and {item.question_id for item in snapshot.answers} != {item.question_id for item in technical.question_links}:
+        raise ValueError("approved Report Snapshot must answer every bound technical question")
 
 
 def _current(workspace_id, services):
@@ -192,6 +204,8 @@ class SaveReportSnapshot:
             raise ValueError("Report Snapshot workspace or stale state is invalid")
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
             raise ValueError("Report Snapshot expected revision is invalid")
+        if expected_revision is None and (snapshot.state is not ReportState.DRAFT or snapshot.review_decisions):
+            raise ValueError("initial Report Snapshot must be an unreviewed draft")
         if not callable(self.authority_guard):
             raise RepositoryIntegrityError("Report Snapshot authority guard is unavailable")
         with self.authority_guard():

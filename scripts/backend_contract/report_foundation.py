@@ -356,6 +356,8 @@ class ReportSnapshot:
         context_present = sum(item.required and item.status is ContextStatus.PRESENT for item in self.context_matrix)
         if self.state is ReportState.APPROVED and (not self.claims or present != required or context_present != context_required):
             raise ValueError("approved report requires complete CPC 319 and CPC 473 content")
+        if self.state is ReportState.APPROVED and not self.answers:
+            raise ValueError("approved report requires canonical answers to questions")
         expected_coverage = ReportCoverage(
             sections=len(self.sections), material_claims=len(self.claims), traceable_claims=len(self.claims),
             answers=len(self.answers), traceable_answers=len(self.answers), cpc473_required_sections=required,
