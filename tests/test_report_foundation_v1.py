@@ -215,7 +215,7 @@ def test_article_319_context_matrix_preserves_missing_information_without_infere
 def test_start_creates_an_empty_draft_bound_to_all_four_authorities():
     records, case, inspection, technical, profile = upstreams()
     captured = {}
-    save = SimpleNamespace(execute=lambda _workspace, snapshot, expected: captured.update(snapshot=snapshot, expected=expected) or SimpleNamespace(revision=1))
+    save = SimpleNamespace(execute=lambda _workspace, snapshot, expected, **_kwargs: captured.update(snapshot=snapshot, expected=expected) or SimpleNamespace(revision=1))
     service = StartReportSnapshot(
         SimpleNamespace(execute=lambda _workspace: (records[0], case)),
         SimpleNamespace(execute=lambda _workspace: (records[1], inspection)),
@@ -300,7 +300,7 @@ def test_save_rejects_first_write_approval_cross_type_context_and_unanswered_or_
         SimpleNamespace(execute=lambda *_args: None), nullcontext, SimpleNamespace(now=lambda: datetime.now(UTC)), SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
     )
     workspace_id = WorkspaceId.parse(snapshot.workspace_id)
-    with pytest.raises(ValueError, match="unreviewed draft"):
+    with pytest.raises(ValueError, match="canonical start"):
         service.execute(workspace_id, snapshot, None)
     wrong_context = replace(snapshot.context_matrix[0], source_id="MEASUREMENT-001")
     with pytest.raises(ValueError, match="context provenance"):

@@ -78,7 +78,8 @@ def test_frontend_network_access_is_narrow_and_never_contains_local_api_token():
             "frontend/src/data/pericialPlanning.ts",
             "frontend/src/data/processCase.ts",
         "frontend/src/data/processMetadata.ts",
-        "frontend/src/data/technicalSnapshot.ts",
+            "frontend/src/data/reportSnapshot.ts",
+            "frontend/src/data/technicalSnapshot.ts",
         "frontend/src/data/workspaces.ts",
     ]
 
@@ -98,5 +99,6 @@ def test_process_case_domain_fields_stay_out_of_bridge_and_in_exact_frontend_mod
     assert frontend_domain_sources == {
         "frontend/src/data/processCase.ts",
         "frontend/src/data/processMetadata.ts",
-        "frontend/src/workspaces/ProcessCaseView.tsx",
+            "frontend/src/workspaces/ProcessCaseView.tsx",
+            "frontend/src/workspaces/ReportFoundationView.tsx",
     }

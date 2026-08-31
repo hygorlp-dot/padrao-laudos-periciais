@@ -336,6 +336,8 @@ class ReportSnapshot:
             raise ValueError("report claim section is invalid")
         if any(item.section_id not in section_ids or any(claim_id not in claim_ids for claim_id in item.claim_ids) for item in self.answers):
             raise ValueError("report answer traceability is invalid")
+        if len({item.answer_id for item in self.answers}) != len(self.answers) or len({item.question_id for item in self.answers}) != len(self.answers):
+            raise ValueError("report answers must be unique per canonical question")
         reviews = {item.review_id: item for item in self.review_decisions}
         ordered = sorted(self.review_decisions, key=lambda item: datetime.fromisoformat(item.timestamp))
         if len(reviews) != len(self.review_decisions) or len({item.timestamp for item in ordered}) != len(ordered):

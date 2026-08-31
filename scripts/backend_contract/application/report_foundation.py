@@ -75,6 +75,20 @@ def validated_report_snapshot_from_mapping(value: object) -> ReportSnapshot:
         raise ValueError("invalid Report Snapshot payload") from exc
 
 
+def report_snapshot_to_validated_mapping(snapshot: ReportSnapshot) -> dict:
+    mapping = report_snapshot_to_mapping(snapshot)
+    _VALIDATOR.validate(mapping)
+    return mapping
+
+
+def validated_expert_profile_from_mapping(value: object) -> ExpertMasterProfile:
+    return expert_profile_from_mapping(value)
+
+
+def expert_profile_to_validated_mapping(profile: ExpertMasterProfile) -> dict:
+    return expert_profile_to_mapping(profile)
+
+
 def _binding(*, workspace_id, case_record, case, inspection_record, inspection, technical_record, technical, profile_record, profile) -> ReportSourceSnapshot:
     if any((type(case) is not CaseAnalysisSnapshot, type(inspection) is not InspectionSession, type(technical) is not TechnicalSnapshot, type(profile) is not ExpertMasterProfile)):
         raise ValueError("Report Snapshot upstream authority type mismatch")
@@ -210,13 +224,13 @@ class SaveReportSnapshot:
     clock: object
     ids: object
 
-    def execute(self, workspace_id, snapshot: ReportSnapshot, expected_revision: int | None, *, allow_review_transition: bool = False):
+    def execute(self, workspace_id, snapshot: ReportSnapshot, expected_revision: int | None, *, allow_review_transition: bool = False, allow_initial_create: bool = False):
         if type(snapshot) is not ReportSnapshot or snapshot.workspace_id != str(workspace_id) or snapshot.upstream_stale:
             raise ValueError("Report Snapshot workspace or stale state is invalid")
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
             raise ValueError("Report Snapshot expected revision is invalid")
-        if expected_revision is None and (snapshot.state is not ReportState.DRAFT or snapshot.review_decisions):
-            raise ValueError("initial Report Snapshot must be an unreviewed draft")
+        if expected_revision is None and (not allow_initial_create or snapshot.state is not ReportState.DRAFT or snapshot.review_decisions):
+            raise ValueError("initial Report Snapshot requires the canonical start command")
         if not callable(self.authority_guard):
             raise RepositoryIntegrityError("Report Snapshot authority guard is unavailable")
         with self.authority_guard():
@@ -361,7 +375,7 @@ class StartReportSnapshot:
             coverage=ReportCoverage(14, 0, 0, 0, 0, sum(item.required_by_cpc473 for item in sections), 0, 6, 0, False, ("Report draft has no material claims.",)),
             upstream_stale=False, upstream_stale_reasons=(),
         )
-        record = self.save_snapshot.execute(workspace_id, snapshot, None)
+        record = self.save_snapshot.execute(workspace_id, snapshot, None, allow_initial_create=True)
         return record, snapshot
 
 

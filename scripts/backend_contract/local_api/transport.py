@@ -60,11 +60,11 @@ from ..application.technical_findings import (
     technical_snapshot_to_validated_mapping,
     validated_technical_snapshot_from_mapping,
 )
-from ..application.report_foundation import validated_report_snapshot_from_mapping
-from ..report_foundation import (
-    expert_profile_from_mapping,
-    expert_profile_to_mapping,
-    report_snapshot_to_mapping,
+from ..application.report_foundation import (
+    expert_profile_to_validated_mapping,
+    report_snapshot_to_validated_mapping,
+    validated_expert_profile_from_mapping,
+    validated_report_snapshot_from_mapping,
 )
 
 _MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
@@ -475,7 +475,7 @@ class LocalApi:
                     if self._services.get_expert_profile is None:
                         return _error(503, "EXPERT_PROFILE_UNAVAILABLE")
                     record, profile = self._services.get_expert_profile.execute(workspace_id)
-                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "profile": expert_profile_to_mapping(profile)})
+                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "profile": expert_profile_to_validated_mapping(profile)})
                 if normalized_method == "PUT":
                     if self._services.save_expert_profile is None:
                         return _error(503, "EXPERT_PROFILE_UNAVAILABLE")
@@ -485,9 +485,9 @@ class LocalApi:
                     expected = dto["expected_revision"]
                     if expected is not None and (type(expected) is not int or expected < 1):
                         raise ValueError("Expert Profile expected revision is invalid")
-                    profile = expert_profile_from_mapping(dto["profile"])
+                    profile = validated_expert_profile_from_mapping(dto["profile"])
                     record = self._services.save_expert_profile.execute(workspace_id, profile, expected)
-                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "profile": expert_profile_to_mapping(profile)})
+                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "profile": expert_profile_to_validated_mapping(profile)})
                 return _error(405, "METHOD_NOT_ALLOWED")
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "report-snapshot":
@@ -496,14 +496,14 @@ class LocalApi:
                     if self._services.get_report_snapshot is None:
                         return _error(503, "REPORT_SNAPSHOT_UNAVAILABLE")
                     record, snapshot = self._services.get_report_snapshot.execute(workspace_id)
-                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_mapping(snapshot)})
+                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_validated_mapping(snapshot)})
                 if normalized_method == "POST":
                     if self._services.start_report_snapshot is None:
                         return _error(503, "REPORT_SNAPSHOT_UNAVAILABLE")
                     if self._request_dto(request_headers, body) != {}:
                         raise ValueError("Report Snapshot start request is invalid")
                     record, snapshot = self._services.start_report_snapshot.execute(workspace_id)
-                    return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_mapping(snapshot)})
+                    return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_validated_mapping(snapshot)})
                 if normalized_method == "PUT":
                     if self._services.save_report_snapshot is None:
                         return _error(503, "REPORT_SNAPSHOT_UNAVAILABLE")
@@ -517,7 +517,7 @@ class LocalApi:
                     if snapshot.workspace_id != str(workspace_id):
                         raise ValueError("Report Snapshot workspace mismatch")
                     record = self._services.save_report_snapshot.execute(workspace_id, snapshot, expected)
-                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_mapping(snapshot)})
+                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_validated_mapping(snapshot)})
                 return _error(405, "METHOD_NOT_ALLOWED")
 
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("report-snapshot", "reviews"):
@@ -530,7 +530,7 @@ class LocalApi:
                 if set(dto) != {"action", "professional_id", "reason", "expected_revision"}:
                     raise ValueError("Report review request is invalid")
                 record, snapshot = self._services.review_report_snapshot.execute(workspace_id, **dto)
-                return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_mapping(snapshot)})
+                return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_validated_mapping(snapshot)})
 
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("report-snapshot", "draft-amendments"):
                 workspace_id = self._workspace_id(raw_segments[2])
@@ -542,7 +542,7 @@ class LocalApi:
                 if set(dto) != {"expected_revision", "action", "values"}:
                     raise ValueError("Report draft amendment request is invalid")
                 record, snapshot = self._services.amend_report_draft.execute(workspace_id, **dto)
-                return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_mapping(snapshot)})
+                return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_validated_mapping(snapshot)})
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "technical-snapshot":
                 workspace_id = self._workspace_id(raw_segments[2])
