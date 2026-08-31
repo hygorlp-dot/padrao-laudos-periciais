@@ -78,6 +78,7 @@ def _canonical_report_lines(report: ReportSnapshot) -> tuple[str, ...]:
 
 def render_pdf_candidate(report: ReportSnapshot) -> bytes:
     """Render the canonical report directly into a deterministic local PDF."""
+    report_digest = sha256(json.dumps(report_snapshot_to_mapping(report), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     lines = []
     for source_line in _canonical_report_lines(report):
         try:
@@ -109,7 +110,7 @@ def render_pdf_candidate(report: ReportSnapshot) -> bytes:
         page_ids.append(add(f"<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 {font_id} 0 R >> >> /Contents {content_id} 0 R >>".encode("ascii")))
     kids = " ".join(f"{item} 0 R" for item in page_ids)
     add(f"<< /Type /Pages /Count {len(page_ids)} /Kids [{kids}] >>".encode("ascii"))
-    catalog_id = add(f"<< /Type /Catalog /Pages {pages_id} 0 R >>".encode("ascii"))
+    catalog_id = add(f"<< /Type /Catalog /Pages {pages_id} 0 R /ReportSnapshotSHA256 ({report_digest}) >>".encode("ascii"))
     output = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
     offsets = []
     for index, value in enumerate(objects, 1):
