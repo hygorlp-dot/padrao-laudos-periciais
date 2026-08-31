@@ -118,6 +118,8 @@ class PrivateStore:
         stream = io.BytesIO(item.content)
         return OpenPrivateContent(item.metadata, stream, stream.close)
     def store(self, metadata, content): self.items[str(metadata.content_id)] = PrivateContent(metadata, content); return metadata
+    def snapshot(self): return dict(self.items)
+    def restore(self, snapshot): self.items = dict(snapshot)
 
 
 def seeded_store(path: Path, private: PrivateStore) -> tuple[SQLiteApplicationStore, WorkspaceId]:
@@ -139,7 +141,7 @@ def test_backup_restore_reopen_preserves_exact_history_private_bytes_and_provena
     verified = VerifyWorkspaceBackup().execute(package)
     assert verified.workspace.workspace_id == WORKSPACE_ID
     target_private = PrivateStore(); target = SQLiteApplicationStore(tmp_path / "staging.db")
-    receipt = RestoreWorkspaceBackup(target.workspaces, target.revisions, target_private).execute(package)
+    receipt = RestoreWorkspaceBackup(target.workspaces, target.revisions, target_private, (target, target_private)).execute(package)
     assert receipt.artifact_revisions == receipt.private_contents == 1
     assert target.revisions.list_workspace(workspace_id) == source.revisions.list_workspace(workspace_id)
     assert target_private.items == source_private.items
@@ -153,7 +155,8 @@ def test_corruption_and_foreign_workspace_fail_closed_before_restore_mutation(tm
     tampered["artifact_revisions"][0]["payload"]["status"] = "DRAFT"
     corrupt = json.dumps(tampered, sort_keys=True, separators=(",", ":")).encode()
     target = SQLiteApplicationStore(tmp_path / "staging.db")
-    with pytest.raises(RepositoryIntegrityError): RestoreWorkspaceBackup(target.workspaces, target.revisions, PrivateStore()).execute(corrupt)
+    target_private = PrivateStore()
+    with pytest.raises(RepositoryIntegrityError): RestoreWorkspaceBackup(target.workspaces, target.revisions, target_private, (target, target_private)).execute(corrupt)
     assert target.workspaces.list_all() == ()
     assert collect_support_diagnostics(corrupt).error_code == "BACKUP_INTEGRITY_INVALID"
     source.close(); target.close()
@@ -185,12 +188,47 @@ def test_resealed_inner_corruption_still_fails_domain_and_private_validation(tmp
     source.close()
 
 
+def test_duplicate_private_identity_and_failed_store_roll_back_all_staging_state(tmp_path) -> None:
+    private = PrivateStore(); source, workspace_id = seeded_store(tmp_path / "source.db", private)
+    package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock()).execute(workspace_id)
+    duplicated = json.loads(package)
+    duplicated["private_contents"].append(deepcopy(duplicated["private_contents"][0]))
+    def canonical(value: object) -> bytes:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    duplicated["member_hashes"]["private_contents"] = hashlib.sha256(canonical(duplicated["private_contents"])).hexdigest()
+    duplicated["manifest_sha256"] = hashlib.sha256(canonical({key: value for key, value in duplicated.items() if key != "manifest_sha256"})).hexdigest()
+    with pytest.raises(RepositoryIntegrityError, match="duplicated"):
+        VerifyWorkspaceBackup().execute(canonical(duplicated))
+
+    class FailingPrivate(PrivateStore):
+        def store(self, _metadata, _content): raise OSError("synthetic private failure")
+    target = SQLiteApplicationStore(tmp_path / "staging.db"); failing = FailingPrivate()
+    with pytest.raises(OSError, match="synthetic"):
+        RestoreWorkspaceBackup(target.workspaces, target.revisions, failing, (target, failing)).execute(package)
+    assert target.workspaces.list_all() == ()
+    assert target.revisions.list_workspace(workspace_id) == ()
+    assert failing.items == {}
+    source.close(); target.close()
+
+
 def test_restore_refuses_nonempty_target_as_rollback_boundary(tmp_path) -> None:
     private = PrivateStore(); source, workspace_id = seeded_store(tmp_path / "source.db", private)
     package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock()).execute(workspace_id)
-    with pytest.raises(RepositoryConflict): RestoreWorkspaceBackup(source.workspaces, source.revisions, private).execute(package)
+    with pytest.raises(RepositoryConflict): RestoreWorkspaceBackup(source.workspaces, source.revisions, private, (source, private)).execute(package)
     assert len(source.revisions.list_workspace(workspace_id)) == 1
     source.close()
+
+
+def test_restore_requires_globally_empty_staging_not_only_absent_source_id(tmp_path) -> None:
+    private = PrivateStore(); source, workspace_id = seeded_store(tmp_path / "source.db", private)
+    package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock()).execute(workspace_id)
+    target = SQLiteApplicationStore(tmp_path / "staging.db")
+    target.workspaces.create(PericiaWorkspace(WorkspaceId.parse("44444444-4444-4444-8444-444444444444"), "Outro", "2026-08-31T12:00:00+00:00"))
+    target_private = PrivateStore()
+    with pytest.raises(RepositoryConflict, match="empty"):
+        RestoreWorkspaceBackup(target.workspaces, target.revisions, target_private, (target, target_private)).execute(package)
+    assert len(target.workspaces.list_all()) == 1
+    source.close(); target.close()
 
 
 def test_support_diagnostics_are_sanitized_and_never_egress_private_data(tmp_path) -> None:

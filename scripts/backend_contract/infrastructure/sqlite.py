@@ -912,6 +912,8 @@ class SQLiteApplicationStore:
             trusted_token = migrate(self._connection)
             lock = RLock()
             state_guard = _DatabaseStateGuard(self._connection, trusted_token)
+            self._lock = lock
+            self._state_guard = state_guard
             self.workspaces = SQLiteWorkspaceRepository(
                 self._connection, lock, state_guard
             )
@@ -931,6 +933,26 @@ class SQLiteApplicationStore:
                 except sqlite3.Error:
                     pass
             raise RepositoryError("falha ao abrir armazenamento SQLite") from exc
+
+    def snapshot(self) -> bytes:
+        with self._lock:
+            self._state_guard.validate()
+            try:
+                return self._connection.serialize()
+            except sqlite3.Error as exc:
+                raise RepositoryError("falha ao capturar staging SQLite") from exc
+
+    def restore(self, snapshot: bytes) -> None:
+        if type(snapshot) is not bytes:
+            raise TypeError("snapshot SQLite inválido")
+        with self._lock:
+            try:
+                self._connection.deserialize(snapshot)
+                self._connection.execute("PRAGMA foreign_keys = ON")
+                _validate_database_state(self._connection)
+                self._state_guard.accept_current()
+            except sqlite3.Error as exc:
+                raise RepositoryError("falha ao restaurar staging SQLite") from exc
 
     def close(self) -> None:
         try:
