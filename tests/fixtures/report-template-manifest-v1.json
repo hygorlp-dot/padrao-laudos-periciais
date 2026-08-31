@@ -1,0 +1,10 @@
+{
+  "schema_version":"1.0.0",
+  "template_id":"SYNTHETIC-DOCM-TEMPLATE-001",
+  "output_kind":"DOCM",
+  "bindings":[
+    {"field":"EXPERT_FULL_NAME","placeholder":"[[EXPERT_FULL_NAME]]"},
+    {"field":"EXPERT_REGISTRATION","placeholder":"[[EXPERT_REGISTRATION]]"},
+    {"field":"REPORT_ID","placeholder":"[[REPORT_ID]]"}
+  ]
+}

@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
+from io import BytesIO
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -36,6 +38,11 @@ from scripts.backend_contract.application.report_foundation import (
 from scripts.backend_contract.case_analysis import case_analysis_from_mapping
 from scripts.backend_contract.technical_findings import technical_snapshot_from_mapping
 from scripts.backend_contract.vistoria import inspection_session_from_mapping
+from scripts.backend_contract.report_template import (
+    TemplateBindingManifest,
+    bind_report_template,
+    template_binding_manifest_from_mapping,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -236,3 +243,64 @@ def test_get_marks_upstream_change_stale_and_reopen_cannot_preserve_approval():
     assert reopened.upstream_stale is True
     assert reopened.state is ReportState.DRAFT
     assert reopened.coverage.complete is False
+
+
+def synthetic_docm(*, duplicate_profile=False, missing_alt=False):
+    profile_token = "[[EXPERT_FULL_NAME]] [[EXPERT_FULL_NAME]]" if duplicate_profile else "[[EXPERT_FULL_NAME]]"
+    alt = "" if missing_alt else ' descr="Synthetic inspection image"'
+    document = f'''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>
+      <w:p><w:r><w:t>{profile_token}</w:t></w:r></w:p><w:p><w:r><w:t>[[EXPERT_REGISTRATION]]</w:t></w:r></w:p>
+      <w:p><w:bookmarkStart w:id="1" w:name="PROCESS_NUMBER"/><w:r><w:t>[[REPORT_ID]]</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>
+      <w:sdt><w:sdtPr><w:tag w:val="CANONICAL_REPORT"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>content control</w:t></w:r></w:p></w:sdtContent></w:sdt>
+      <w:p><w:r><w:instrText> TOC \\o "1-3" </w:instrText><w:instrText> PAGE </w:instrText><w:instrText> NUMPAGES </w:instrText><w:instrText> SEQ Figure </w:instrText><w:instrText> REF PROCESS_NUMBER </w:instrText><w:instrText> PAGEREF PROCESS_NUMBER </w:instrText></w:r></w:p>
+      <w:p><w:r><w:drawing><wp:inline><wp:docPr id="1" name="Synthetic image"{alt}/></wp:inline></w:drawing></w:r></w:p>
+    </w:body></w:document>'''
+    parts = {
+        "[Content_Types].xml": '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/><Override PartName="/word/vbaProject.bin" ContentType="application/vnd.ms-office.vbaProject"/></Types>',
+        "word/document.xml": document,
+        "word/styles.xml": "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:style w:styleId=\"Normal\"/></w:styles>",
+        "word/numbering.xml": "<w:numbering xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:abstractNum w:abstractNumId=\"0\"/></w:numbering>",
+        "word/vbaProject.bin": b"SYNTHETIC-MACRO-PART",
+    }
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        for name, content in parts.items():
+            package.writestr(name, content)
+    return output.getvalue()
+
+
+def template_manifest():
+    return template_binding_manifest_from_mapping(json.loads((ROOT / "tests/fixtures/report-template-manifest-v1.json").read_text(encoding="utf-8")))
+
+
+def test_word_binding_replaces_only_whitelisted_single_source_fields_and_preserves_mechanics():
+    snapshot = report_snapshot_from_mapping(payload())
+    result = bind_report_template(synthetic_docm(), snapshot, template_manifest())
+    assert type(template_manifest()) is TemplateBindingManifest
+    assert result.integrity.passed is True
+    assert set(result.integrity.preserved_fields) == {"TOC", "PAGE", "NUMPAGES", "SEQ", "REF", "PAGEREF"}
+    with ZipFile(BytesIO(result.output_bytes)) as package:
+        document = package.read("word/document.xml").decode("utf-8")
+        assert snapshot.expert_profile.full_name in document
+        assert snapshot.expert_profile.registration in document
+        assert snapshot.report_id in document
+        assert package.read("word/vbaProject.bin") == b"SYNTHETIC-MACRO-PART"
+
+
+def test_word_binding_rejects_duplicate_fields_missing_alt_and_unapproved_report():
+    snapshot = report_snapshot_from_mapping(payload())
+    with pytest.raises(ValueError, match="single-source"):
+        bind_report_template(synthetic_docm(duplicate_profile=True), snapshot, template_manifest())
+    with pytest.raises(ValueError, match="alt description"):
+        bind_report_template(synthetic_docm(missing_alt=True), snapshot, template_manifest())
+    with pytest.raises(ValueError, match="approved report"):
+        bind_report_template(synthetic_docm(), replace(snapshot, state=ReportState.REVIEWED, review_decisions=snapshot.review_decisions[:1], coverage=replace(snapshot.coverage, complete=False)), template_manifest())
+
+
+def test_word_binding_rejects_unsafe_zip_paths_and_does_not_create_delivery_authority():
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr("../escape.xml", "unsafe")
+    with pytest.raises(ValueError, match="unsafe template package"):
+        bind_report_template(output.getvalue(), report_snapshot_from_mapping(payload()), template_manifest())
+    assert "delivery" not in template_manifest().__dataclass_fields__
