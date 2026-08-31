@@ -238,9 +238,6 @@ class DeliverySnapshot:
         )
         if any(len(values) != len(set(values)) for values in identities):
             raise ValueError("delivery artifact identities must be unique")
-        role_formats = tuple((item.role, item.format) for item in self.artifacts)
-        if len(role_formats) != len(set(role_formats)):
-            raise ValueError("delivery artifact role and format pairs must be unique")
         if self.package.artifact_ids != identities[0]:
             raise ValueError("delivery manifest must exactly match artifacts")
         self._validate_state()

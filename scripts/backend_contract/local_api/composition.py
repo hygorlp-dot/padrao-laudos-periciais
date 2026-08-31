@@ -56,8 +56,10 @@ from ..application.report_foundation import (
 )
 from ..application.delivery_foundation import (
     DeliverDeliverySnapshot,
+    AttachDeliveryPackageArtifact,
     FinalizeDeliverySnapshot,
     GetDeliverySnapshot,
+    GetDeliveryHistory,
     ReissueDeliverySnapshot,
     RenderDeliveryPackage,
     ReviewDeliverySnapshot,
@@ -219,6 +221,7 @@ def build_local_api(
     )
     append_artifact_revision = AppendArtifactRevision(store.revisions, local_clock, local_ids)
     get_latest_artifact = GetLatestArtifact(store.revisions)
+    list_artifact_revisions = ListArtifactRevisions(store.revisions)
     get_case_analysis = GetCaseAnalysis(get_latest_artifact, list_case_documents)
     save_pericial_planning = SavePericialPlanning(
         store.revisions,
@@ -273,10 +276,12 @@ def build_local_api(
         local_ids,
     )
     get_delivery_snapshot = None
+    get_delivery_history = None
     save_delivery_snapshot = None
     start_delivery_snapshot = None
     review_delivery_snapshot = None
     render_delivery_package = None
+    attach_delivery_artifact = None
     verify_delivery_package = None
     finalize_delivery_snapshot = None
     deliver_delivery_snapshot = None
@@ -284,6 +289,7 @@ def build_local_api(
     if private_store is not None and generic_store is not None and get_private_content is not None:
         authorities = (get_case_analysis, get_pericial_planning, get_inspection_session, get_technical_snapshot, get_report_snapshot)
         get_delivery_snapshot = GetDeliverySnapshot(get_latest_artifact, *authorities)
+        get_delivery_history = GetDeliveryHistory(list_artifact_revisions)
         save_delivery_snapshot = SaveDeliverySnapshot(
             store.revisions, get_latest_artifact, *authorities,
             private_store.authority_guard, local_clock, local_ids,
@@ -294,6 +300,7 @@ def build_local_api(
             get_delivery_snapshot, get_report_snapshot, get_private_content, generic_store,
             save_delivery_snapshot, LocalLibreOfficeRenderer(), local_ids,
         )
+        attach_delivery_artifact = AttachDeliveryPackageArtifact(get_delivery_snapshot, get_private_content, save_delivery_snapshot, local_ids)
         verify_delivery_package = VerifyDeliveryPackage(get_delivery_snapshot, get_private_content)
         finalize_delivery_snapshot = FinalizeDeliverySnapshot(verify_delivery_package, review_delivery_snapshot)
         deliver_delivery_snapshot = DeliverDeliverySnapshot(verify_delivery_package, review_delivery_snapshot)
@@ -308,7 +315,7 @@ def build_local_api(
         append_artifact_revision=append_artifact_revision,
         get_latest_artifact=get_latest_artifact,
         get_artifact_revision=GetArtifactRevision(store.revisions),
-        list_artifact_revisions=ListArtifactRevisions(store.revisions),
+        list_artifact_revisions=list_artifact_revisions,
         get_process_case=get_process_case,
         save_process_case=(
             ConfirmProcessMetadata(
@@ -365,9 +372,12 @@ def build_local_api(
         store_delivery_template=generic_store,
         get_delivery_artifact=get_private_content,
         get_delivery_snapshot=get_delivery_snapshot,
+        get_delivery_history=get_delivery_history,
         start_delivery_snapshot=start_delivery_snapshot,
         review_delivery_snapshot=review_delivery_snapshot,
         render_delivery_package=render_delivery_package,
+        attach_delivery_artifact=attach_delivery_artifact,
+        store_delivery_supporting_file=generic_store,
         verify_delivery_package=verify_delivery_package,
         finalize_delivery_snapshot=finalize_delivery_snapshot,
         deliver_delivery_snapshot=deliver_delivery_snapshot,

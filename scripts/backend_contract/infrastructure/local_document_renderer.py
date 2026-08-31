@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import shutil
 import subprocess
 import tempfile
 
@@ -21,8 +20,13 @@ class LocalLibreOfficeRenderer:
     def convert_to_pdf(self, content: bytes, source_format: str) -> bytes:
         if type(content) is not bytes or not content or source_format not in {"DOCX", "DOCM"}:
             raise ValueError("document conversion input is invalid")
-        executable = self.executable or shutil.which("soffice") or shutil.which("libreoffice")
-        if not executable:
+        candidates = (Path(self.executable),) if self.executable else (
+            Path("C:/Program Files/LibreOffice/program/soffice.exe"),
+            Path("C:/Program Files (x86)/LibreOffice/program/soffice.exe"),
+            Path("/usr/bin/libreoffice"), Path("/usr/bin/soffice"),
+        )
+        executable_path = next((item.resolve() for item in candidates if item.is_absolute() and item.is_file()), None)
+        if executable_path is None:
             raise RuntimeError("local LibreOffice renderer is unavailable")
         with tempfile.TemporaryDirectory(prefix="delivery-render-") as raw_root:
             root = Path(raw_root).resolve()
@@ -33,7 +37,7 @@ class LocalLibreOfficeRenderer:
             profile.mkdir()
             source.write_bytes(content)
             command = (
-                executable, "--headless", "--nologo", "--nodefault", "--nolockcheck",
+                str(executable_path), "--headless", "--nologo", "--nodefault", "--nolockcheck", "--safe-mode",
                 f"-env:UserInstallation={profile.as_uri()}", "--convert-to", "pdf",
                 "--outdir", str(output), str(source),
             )

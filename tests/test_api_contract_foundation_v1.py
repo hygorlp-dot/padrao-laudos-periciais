@@ -37,12 +37,15 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
         "/v1/workspaces/{workspace_id}/report-snapshot/reviews",
         "/v1/workspaces/{workspace_id}/report-snapshot/draft-amendments",
         "/v1/workspaces/{workspace_id}/delivery-templates",
+        "/v1/workspaces/{workspace_id}/delivery-supporting-files",
         "/v1/workspaces/{workspace_id}/delivery-snapshot",
         "/v1/workspaces/{workspace_id}/delivery-snapshot/render",
+        "/v1/workspaces/{workspace_id}/delivery-snapshot/package-artifacts",
         "/v1/workspaces/{workspace_id}/delivery-snapshot/reviews",
         "/v1/workspaces/{workspace_id}/delivery-snapshot/finalize",
         "/v1/workspaces/{workspace_id}/delivery-snapshot/deliver",
         "/v1/workspaces/{workspace_id}/delivery-snapshot/reissue",
+        "/v1/workspaces/{workspace_id}/delivery-snapshot/history",
         "/v1/workspaces/{workspace_id}/delivery-snapshot/artifacts/{content_id}",
     }
     component = contract["components"]["schemas"]["ProceduralContext"]

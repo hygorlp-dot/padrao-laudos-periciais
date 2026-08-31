@@ -100,13 +100,15 @@ def test_product_bridge_allowlists_only_the_explicit_report_review_command():
 
 def test_product_bridge_allowlists_only_delivery_foundation_resources_and_commands():
     workspace = "11111111-1111-4111-8111-111111111111"
-    for resource, method in (("delivery-templates", "POST"), ("delivery-snapshot", "GET"), ("delivery-snapshot", "POST")):
+    for resource, method in (("delivery-templates", "POST"), ("delivery-supporting-files", "POST"), ("delivery-snapshot", "GET"), ("delivery-snapshot", "POST")):
         path = f"/app-api/v1/workspaces/{workspace}/{resource}"
         assert _proxy_target(path, method) == f"/v1/workspaces/{workspace}/{resource}"
-    for action in ("render", "reviews", "finalize", "deliver", "reissue"):
+    for action in ("render", "package-artifacts", "reviews", "finalize", "deliver", "reissue"):
         path = f"/app-api/v1/workspaces/{workspace}/delivery-snapshot/{action}"
         assert _proxy_target(path, "POST") == f"/v1/workspaces/{workspace}/delivery-snapshot/{action}"
         assert _proxy_target(path, "PUT") is None
+    history = f"/app-api/v1/workspaces/{workspace}/delivery-snapshot/history"
+    assert _proxy_target(history, "GET") == f"/v1/workspaces/{workspace}/delivery-snapshot/history"
     content_id = "22222222-2222-4222-8222-222222222222"
     artifact = f"/app-api/v1/workspaces/{workspace}/delivery-snapshot/artifacts/{content_id}"
     assert _proxy_target(artifact, "GET") == f"/v1/workspaces/{workspace}/delivery-snapshot/artifacts/{content_id}"

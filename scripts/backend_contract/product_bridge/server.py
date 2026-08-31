@@ -181,7 +181,7 @@ class _ProductRequestHandler(BaseHTTPRequestHandler):
                         document_upload = (
                             self.command == "POST"
                             and self.path.startswith("/app-api/v1/workspaces/")
-                            and self.path.endswith(("/materials", "/inspection-photos", "/delivery-templates"))
+                            and self.path.endswith(("/materials", "/inspection-photos", "/delivery-templates", "/delivery-supporting-files"))
                         )
                         if length and document_upload:
                             spool = tempfile.SpooledTemporaryFile(max_size=1_048_576, mode="w+b")

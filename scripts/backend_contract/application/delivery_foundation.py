@@ -25,7 +25,7 @@ from ..delivery_foundation import (
     delivery_snapshot_from_mapping,
     delivery_snapshot_to_mapping,
 )
-from ..delivery_renderer import render_word_candidate, validate_final_artifact, verify_reopened_artifact
+from ..delivery_renderer import DELIVERY_RENDERING_VERSION, render_word_candidate, safe_pdf_conversion_copy, validate_final_artifact, verify_reopened_artifact
 from ..report_template import TemplateBindingManifest
 from ..pericial_planning import PlanningSnapshot, pericial_planning_to_mapping
 from ..report_foundation import ReportSnapshot, ReportState, report_snapshot_to_mapping
@@ -33,7 +33,7 @@ from ..technical_findings import TechnicalSnapshot, technical_snapshot_to_mappin
 from ..vistoria import InspectionSession, inspection_session_to_mapping
 from .models import thaw_payload
 from .models import PrivateContentId, PrivateContentOrigin
-from .ports import RepositoryConflict, RepositoryIntegrityError
+from .ports import RepositoryConflict, RepositoryError, RepositoryIntegrityError
 
 
 _SCHEMA_PATH = Path(__file__).resolve().parents[3] / "schemas" / "delivery-snapshot-v1.schema.json"
@@ -218,9 +218,18 @@ class GetDeliverySnapshot:
         snapshot = validated_delivery_snapshot_from_mapping(thaw_payload(record.payload))
         try:
             current = _current(workspace_id, (self.get_case_analysis, self.get_planning, self.get_inspection, self.get_technical, self.get_report))
-        except ValueError:
+        except (ValueError, RepositoryError):
             return record, mark_delivery_authority_unavailable(snapshot)
         return record, reconcile_delivery(snapshot, current[-1])
+
+
+@dataclass(frozen=True, slots=True)
+class GetDeliveryHistory:
+    list_revisions: object
+
+    def execute(self, workspace_id):
+        records = self.list_revisions.execute(workspace_id, DELIVERY_SNAPSHOT_ARTIFACT_KIND, DELIVERY_SNAPSHOT_ARTIFACT_ID)
+        return tuple((record, validated_delivery_snapshot_from_mapping(thaw_payload(record.payload))) for record in records)
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,7 +243,7 @@ class StartDeliverySnapshot:
     save_snapshot: object
     ids: object
 
-    def execute(self, workspace_id, *, template_content_id: PrivateContentId, manifest: TemplateBindingManifest, rendering_version: str, supersedes_delivery_id: str | None = None):
+    def execute(self, workspace_id, *, template_content_id: PrivateContentId, manifest: TemplateBindingManifest, supersedes_delivery_id: str | None = None):
         current = _current(workspace_id, (self.get_case_analysis, self.get_planning, self.get_inspection, self.get_technical, self.get_report))
         template = self.get_private_content.execute(workspace_id, template_content_id)
         if type(manifest) is not TemplateBindingManifest:
@@ -244,7 +253,7 @@ class StartDeliverySnapshot:
             workspace_id=str(workspace_id), binding=current[-1], template_id=manifest.template_id,
             template_content_id=str(template_content_id), template_format=DeliveryFormat(manifest.output_kind), template_revision=1,
             template_digest=template.metadata.checksum_sha256,
-            rendering_version=rendering_version, artifacts=(), package=DeliveryPackage("1.0.0", ()),
+            rendering_version=DELIVERY_RENDERING_VERSION, artifacts=(), package=DeliveryPackage("1.0.0", ()),
             decisions=(), state=DeliveryState.DRAFT, stale_reasons=(), stale_origin_state=None, supersedes_delivery_id=supersedes_delivery_id,
         )
         record = self.save_snapshot.execute(workspace_id, snapshot, None, allow_initial_create=True)
@@ -299,7 +308,7 @@ class ReissueDeliverySnapshot:
     get_private_content: object
     ids: object
 
-    def execute(self, workspace_id, *, expected_revision: int, template_content_id: PrivateContentId, manifest: TemplateBindingManifest, rendering_version: str):
+    def execute(self, workspace_id, *, expected_revision: int, template_content_id: PrivateContentId, manifest: TemplateBindingManifest):
         record, predecessor = self.get_snapshot.execute(workspace_id)
         valid_predecessor = predecessor.state is DeliveryState.SUPERSEDED or (predecessor.state is DeliveryState.STALE and predecessor.stale_origin_state is DeliveryState.DELIVERED)
         if record.revision != expected_revision or not valid_predecessor:
@@ -313,7 +322,7 @@ class ReissueDeliverySnapshot:
             revision=predecessor.revision + 1, workspace_id=str(workspace_id), binding=current[-1],
             template_id=manifest.template_id, template_content_id=str(template_content_id),
             template_format=DeliveryFormat(manifest.output_kind), template_revision=1, template_digest=template.metadata.checksum_sha256,
-            rendering_version=rendering_version, artifacts=(), package=DeliveryPackage("1.0.0", ()),
+            rendering_version=DELIVERY_RENDERING_VERSION, artifacts=(), package=DeliveryPackage("1.0.0", ()),
             decisions=(), state=DeliveryState.DRAFT, stale_reasons=(), stale_origin_state=None, supersedes_delivery_id=predecessor.delivery_id,
         )
         saved = self.save_snapshot.execute(workspace_id, reissue, expected_revision, allow_reissue=True)
@@ -334,6 +343,8 @@ class RenderDeliveryPackage:
         record, snapshot = self.get_snapshot.execute(workspace_id)
         if record.revision != expected_revision or snapshot.state is not DeliveryState.DRAFT:
             raise RepositoryConflict("Delivery render requires the latest draft revision")
+        if snapshot.rendering_version != DELIVERY_RENDERING_VERSION:
+            raise ValueError("Delivery renderer provenance mismatch")
         if type(manifest) is not TemplateBindingManifest or manifest.template_id != snapshot.template_id:
             raise ValueError("Delivery template manifest identity mismatch")
         template = self.get_private_content.execute(workspace_id, PrivateContentId.parse(snapshot.template_content_id))
@@ -343,7 +354,8 @@ class RenderDeliveryPackage:
         if type(report) is not ReportSnapshot or _digest(report_snapshot_to_mapping(report)) != snapshot.binding.report_digest:
             raise ValueError("Delivery report bytes diverge from bound authority")
         word = render_word_candidate(template_bytes=template.content, report=report, manifest=manifest).output_bytes
-        pdf = self.pdf_renderer.convert_to_pdf(word, manifest.output_kind)
+        conversion_bytes, conversion_format = safe_pdf_conversion_copy(word, manifest.output_kind)
+        pdf = self.pdf_renderer.convert_to_pdf(conversion_bytes, conversion_format)
         word_digest, word_size, word_media = validate_final_artifact(word, manifest.output_kind)
         pdf_digest, pdf_size, pdf_media = validate_final_artifact(pdf, "PDF")
         stem = f"laudo-{snapshot.delivery_id.lower()}-r{snapshot.revision + 1}"
@@ -371,6 +383,7 @@ class RenderDeliveryPackage:
                 format=DeliveryFormat.PDF, filename=pdf_name, content_id=str(pdf_metadata.content_id),
                 media_type=pdf_media, byte_size=pdf_size, checksum_sha256=pdf_digest,
             ),
+            *(item for item in snapshot.artifacts if item.role is not DeliveryRole.MAIN_REPORT),
         )
         rendered = replace(
             snapshot, revision=snapshot.revision + 1, artifacts=artifacts,
@@ -378,6 +391,49 @@ class RenderDeliveryPackage:
         )
         saved = self.save_snapshot.execute(workspace_id, rendered, expected_revision, allow_artifacts=True)
         return saved, rendered
+
+
+@dataclass(frozen=True, slots=True)
+class AttachDeliveryPackageArtifact:
+    get_snapshot: object
+    get_private_content: object
+    save_snapshot: object
+    ids: object
+
+    def execute(self, workspace_id, *, expected_revision: int, content_id: PrivateContentId, role: str):
+        record, snapshot = self.get_snapshot.execute(workspace_id)
+        if record.revision != expected_revision or snapshot.state is not DeliveryState.DRAFT:
+            raise RepositoryConflict("Delivery package attachment requires the latest draft")
+        try:
+            package_role = DeliveryRole(role)
+        except ValueError as exc:
+            raise ValueError("Delivery package role is invalid") from exc
+        if package_role is DeliveryRole.MAIN_REPORT:
+            raise ValueError("main report artifacts require protected rendering")
+        content = self.get_private_content.execute(workspace_id, content_id)
+        media = content.metadata.media_type or "application/octet-stream"
+        known = {
+            "application/pdf": DeliveryFormat.PDF,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": DeliveryFormat.DOCX,
+            "application/vnd.ms-word.document.macroenabled.12": DeliveryFormat.DOCM,
+            "application/vnd.ms-word.document.macroEnabled.12": DeliveryFormat.DOCM,
+        }
+        output_format = known.get(media, DeliveryFormat.OTHER)
+        if output_format is not DeliveryFormat.OTHER:
+            validate_final_artifact(content.content, output_format.value)
+        artifact = DeliveryArtifact(
+            artifact_id=f"ARTIFACT-{str(self.ids.new_uuid()).upper()}", role=package_role,
+            format=output_format, filename=content.metadata.original_filename,
+            content_id=str(content_id), media_type=media, byte_size=content.metadata.byte_size,
+            checksum_sha256=content.metadata.checksum_sha256,
+        )
+        artifacts = (*snapshot.artifacts, artifact)
+        attached = replace(
+            snapshot, revision=snapshot.revision + 1, artifacts=artifacts,
+            package=DeliveryPackage("1.0.0", tuple(item.artifact_id for item in artifacts)),
+        )
+        saved = self.save_snapshot.execute(workspace_id, attached, expected_revision, allow_artifacts=True)
+        return saved, attached
 
 
 @dataclass(frozen=True, slots=True)

@@ -24,9 +24,12 @@ from scripts.backend_contract.delivery_foundation import (
     delivery_snapshot_to_mapping,
 )
 from scripts.backend_contract.delivery_renderer import (
+    render_word_candidate,
+    safe_pdf_conversion_copy,
     validate_final_artifact,
     verify_reopened_artifact,
 )
+from scripts.backend_contract.report_template import template_binding_manifest_from_mapping
 from scripts.backend_contract.application.delivery_foundation import (
     ReviewDeliverySnapshot,
     build_delivery_binding,
@@ -74,7 +77,7 @@ def snapshot(*, decisions: tuple[DeliveryDecision, ...] = (), artifacts: tuple[D
         workspace_id="workspace-1", binding=binding(),
         template_id="TEMPLATE-1", template_content_id="22222222-2222-4222-8222-222222222222",
         template_format=DeliveryFormat.DOCX, template_revision=1, template_digest=SHA_A,
-        rendering_version="delivery-renderer/1", artifacts=artifacts,
+        rendering_version="delivery-renderer/1.0.0", artifacts=artifacts,
         package=DeliveryPackage(manifest_version="1.0.0", artifact_ids=tuple(item.artifact_id for item in artifacts)),
         decisions=decisions, state=state, stale_reasons=(), stale_origin_state=None, supersedes_delivery_id=None,
     )
@@ -238,3 +241,51 @@ def test_artifact_validation_rejects_macro_identity_change_and_malformed_pdf() -
         validate_final_artifact(output.getvalue(), "DOCM")
     with pytest.raises(ValueError, match="PDF"):
         validate_final_artifact(b"%PDF-1.7\nno page or eof", "PDF")
+
+
+def test_conversion_copy_strips_macros_and_external_relationships_are_rejected() -> None:
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/><Override PartName="/word/vbaProject.bin" ContentType="application/vnd.ms-office.vbaProject"/></Types>')
+        package.writestr("word/document.xml", "<document/>")
+        package.writestr("word/vbaProject.bin", b"macro")
+        package.writestr("word/_rels/document.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="template" Target="https://example.invalid/private" TargetMode="External"/></Relationships>')
+    with pytest.raises(ValueError, match="external relationships"):
+        validate_final_artifact(output.getvalue(), "DOCM")
+    clean = BytesIO()
+    with ZipFile(clean, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/><Override PartName="/word/vbaProject.bin" ContentType="application/vnd.ms-office.vbaProject"/></Types>')
+        package.writestr("word/document.xml", "<document/>")
+        package.writestr("word/vbaProject.bin", b"macro")
+    converted, kind = safe_pdf_conversion_copy(clean.getvalue(), "DOCM")
+    assert kind == "DOCX"
+    with ZipFile(BytesIO(converted)) as package:
+        assert "word/vbaProject.bin" not in package.namelist()
+
+
+def test_rendered_word_bytes_contain_and_change_with_entire_approved_report_body() -> None:
+    root = Path(__file__).parents[1] / "tests/fixtures"
+    report = report_snapshot_from_mapping(json.loads((root / "report-snapshot-v1.json").read_text(encoding="utf-8")))
+    document = '''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+      <w:p><w:r><w:t>[[EXPERT_FULL_NAME]]</w:t></w:r></w:p><w:p><w:r><w:t>[[EXPERT_REGISTRATION]]</w:t></w:r></w:p><w:p><w:r><w:t>[[REPORT_ID]]</w:t></w:r></w:p>
+      <w:sdt><w:sdtPr><w:tag w:val="CANONICAL_REPORT"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>empty</w:t></w:r></w:p></w:sdtContent></w:sdt>
+      <w:p><w:bookmarkStart w:id="1" w:name="B"/><w:r><w:instrText>TOC</w:instrText><w:instrText>PAGE</w:instrText><w:instrText>NUMPAGES</w:instrText><w:instrText>SEQ Figure</w:instrText><w:instrText>REF B</w:instrText><w:instrText>PAGEREF B</w:instrText></w:r><w:bookmarkEnd w:id="1"/></w:p>
+    </w:body></w:document>'''
+    package_bytes = BytesIO()
+    with ZipFile(package_bytes, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", "<Types/>")
+        package.writestr("word/document.xml", document)
+        package.writestr("word/styles.xml", "<styles/>")
+        package.writestr("word/numbering.xml", "<numbering/>")
+        package.writestr("word/vbaProject.bin", b"macro")
+        package.writestr("docProps/custom.xml", '<Properties><property name="TEMPLATE_ID"><value>TEMPLATE-1</value></property></Properties>')
+    manifest = template_binding_manifest_from_mapping({"schema_version": "1.0.0", "template_id": "TEMPLATE-1", "output_kind": "DOCM", "bindings": [{"field": "EXPERT_FULL_NAME", "placeholder": "[[EXPERT_FULL_NAME]]"}, {"field": "EXPERT_REGISTRATION", "placeholder": "[[EXPERT_REGISTRATION]]"}, {"field": "REPORT_ID", "placeholder": "[[REPORT_ID]]"}]})
+    first = render_word_candidate(template_bytes=package_bytes.getvalue(), report=report, manifest=manifest).output_bytes
+    changed = replace(report, claims=(replace(report.claims[0], text="Texto material deliberadamente alterado."), *report.claims[1:]))
+    second = render_word_candidate(template_bytes=package_bytes.getvalue(), report=changed, manifest=manifest).output_bytes
+    with ZipFile(BytesIO(first)) as package:
+        rendered = package.read("word/document.xml").decode("utf-8")
+    assert report.claims[0].text in rendered
+    assert report.answers[0].text in rendered
+    assert "REPORT_SNAPSHOT_SHA256" in rendered
+    assert first != second

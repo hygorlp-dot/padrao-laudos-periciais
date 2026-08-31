@@ -111,6 +111,8 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "delivery-templates" and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "delivery-supporting-files" and method == "POST":
+            return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "inspection-photos" and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/inspection-photos"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["pericial-planning", "decisions"] and method == "POST":
@@ -119,8 +121,10 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/report-snapshot/reviews"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["report-snapshot", "draft-amendments"] and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/report-snapshot/draft-amendments"
-        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "delivery-snapshot" and remainder[2] in {"render", "reviews", "finalize", "deliver", "reissue"} and method == "POST":
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "delivery-snapshot" and remainder[2] in {"render", "package-artifacts", "reviews", "finalize", "deliver", "reissue"} and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/delivery-snapshot/{remainder[2]}"
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["delivery-snapshot", "history"] and method == "GET":
+            return f"/v1/workspaces/{remainder[0]}/delivery-snapshot/history"
         if len(remainder) == 4 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:3] == ["delivery-snapshot", "artifacts"] and _CANONICAL_UUID.fullmatch(remainder[3]) and method == "GET":
             return f"/v1/workspaces/{remainder[0]}/delivery-snapshot/artifacts/{remainder[3]}"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "materials" and _CANONICAL_UUID.fullmatch(remainder[2]) and method == "GET":
@@ -198,7 +202,7 @@ class ProductBridge:
         except (AttributeError, TypeError, ValueError):
             return self._max_body_bytes
         upstream_target = _proxy_target(path, normalized_method)
-        if normalized_method == "POST" and upstream_target is not None and upstream_target.endswith(("/materials", "/inspection-photos", "/delivery-templates")):
+        if normalized_method == "POST" and upstream_target is not None and upstream_target.endswith(("/materials", "/inspection-photos", "/delivery-templates", "/delivery-supporting-files")):
             return self._max_document_body_bytes
         return self._max_body_bytes
 
@@ -262,7 +266,7 @@ class ProductBridge:
         headers: dict[str, str],
         body: bytes | SeekableContent,
     ) -> BridgeResponse:
-        request_limit = self._max_document_body_bytes if method == "POST" and upstream_target.endswith(("/materials", "/inspection-photos", "/delivery-templates")) else self._max_body_bytes
+        request_limit = self._max_document_body_bytes if method == "POST" and upstream_target.endswith(("/materials", "/inspection-photos", "/delivery-templates", "/delivery-supporting-files")) else self._max_body_bytes
         body_size = len(body) if type(body) is bytes else as_seekable_content(body).byte_size
         if body_size > request_limit:
             return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
@@ -275,10 +279,12 @@ class ProductBridge:
             is_document = upstream_target.endswith("/materials")
             is_photo = upstream_target.endswith("/inspection-photos")
             is_template = upstream_target.endswith("/delivery-templates")
+            is_supporting = upstream_target.endswith("/delivery-supporting-files")
             template_types = {"application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.ms-word.document.macroenabled.12"}
-            if content_type not in ({"application/pdf"} if is_document else {"image/jpeg", "image/png"} if is_photo else template_types if is_template else {"application/json"}):
+            supporting_types = {"application/pdf", "image/jpeg", "image/png", *template_types}
+            if content_type not in ({"application/pdf"} if is_document else {"image/jpeg", "image/png"} if is_photo else template_types if is_template else supporting_types if is_supporting else {"application/json"}):
                 return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
-            if is_document or is_photo or is_template:
+            if is_document or is_photo or is_template or is_supporting:
                 filename = headers.get("x-document-filename", "")
                 if not filename or len(filename) > 1024 or not filename.isascii() or any(ord(character) < 33 or ord(character) > 126 for character in filename):
                     return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")

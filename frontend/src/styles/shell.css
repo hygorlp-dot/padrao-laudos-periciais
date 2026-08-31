@@ -1035,7 +1035,7 @@ button.text-action {
 .delivery-state { padding: .45rem .7rem; border-radius: .25rem; background: var(--color-paper); box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 18%, transparent); font: 700 .72rem/1 var(--font-data); letter-spacing: .08em; }
 .delivery-state--stale { color: var(--color-error); }
 .delivery-state--delivered, .delivery-state--finalized { color: var(--color-focus); }
-.delivery-binding, .delivery-package, .delivery-actions, .delivery-template { padding: 1.1rem; background: var(--color-paper); box-shadow: 0 0 0 1px rgba(20, 32, 45, .08), 0 2px 7px rgba(20, 32, 45, .04); }
+.delivery-binding, .delivery-package, .delivery-actions, .delivery-template, .delivery-supporting, .delivery-history { padding: 1.1rem; background: var(--color-paper); box-shadow: 0 0 0 1px rgba(20, 32, 45, .08), 0 2px 7px rgba(20, 32, 45, .04); }
 .delivery-binding dl { display: grid; grid-template-columns: minmax(7rem, 10rem) 1fr; gap: .55rem 1rem; margin: 1rem 0; }
 .delivery-binding dt { color: var(--color-slate); font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; }
 .delivery-binding dd { margin: 0; }
@@ -1045,7 +1045,7 @@ button.text-action {
 .delivery-package li div { display: grid; gap: .25rem; min-width: 0; }
 .delivery-package li span { color: var(--color-slate); font-size: .82rem; }
 .delivery-package li code { overflow-wrap: anywhere; font-size: .7rem; }
-.delivery-actions, .delivery-template form { display: grid; gap: .85rem; }
+.delivery-actions, .delivery-template form, .delivery-supporting { display: grid; gap: .85rem; }
 .delivery-template { border-left: .22rem solid var(--color-ochre); }
 .delivery-template form { max-width: 42rem; }
 .delivery-actions button:active, .delivery-template button:active { transform: scale(.98); }
