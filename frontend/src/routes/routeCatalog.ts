@@ -132,6 +132,15 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
     description:
       "A saída do trabalho ficará separada da elaboração e dependerá de um fluxo posterior.",
     kind: "stage",
+    next: { path: "/orcamento", label: "Orçamento" },
+  },
+  {
+    path: "/orcamento",
+    index: "12",
+    label: "Orçamento",
+    description:
+      "Propostas, decisões, despesas e recebimentos terão controle financeiro próprio.",
+    kind: "stage",
   },
 ];
 

@@ -168,9 +168,20 @@ def test_budget_routes_are_private_strict_and_preserve_history() -> None:
     save = RecordingService(revision(payload=payload))
     get = RecordingService((revision(payload=payload), snapshot))
     history = RecordingService(((revision(payload=payload), snapshot),))
-    api = LocalApi(services(save_budget_snapshot=save, get_budget_snapshot=get, get_budget_history=history), token=TOKEN)
+    start = RecordingService((revision(payload=payload), snapshot))
+    proposal = RecordingService((revision(payload=payload), snapshot))
+    approval = RecordingService((revision(payload=payload), snapshot))
+    expense = RecordingService((revision(payload=payload), snapshot))
+    payment = RecordingService((revision(payload=payload), snapshot))
+    api = LocalApi(services(
+        save_budget_snapshot=save, get_budget_snapshot=get, get_budget_history=history,
+        start_budget_snapshot=start, add_fee_proposal=proposal, record_court_approval=approval,
+        record_budget_expense=expense, record_received_payment=payment,
+    ), token=TOKEN)
     assert request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot").status == 403
-    saved = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot", body={"expected_revision": None, "snapshot": payload})
+    started = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot", body={"process_id": "PROCESS-1", "appointment_id": None})
+    assert started.status == 201
+    saved = request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot", body={"expected_revision": None, "snapshot": payload})
     assert saved.status == 200
     assert save.calls[0][0][1] == snapshot
     reopened = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot", headers={"X-Local-API-Token": TOKEN})
@@ -178,7 +189,14 @@ def test_budget_routes_are_private_strict_and_preserve_history() -> None:
     listed = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot/history", headers={"X-Local-API-Token": TOKEN})
     assert decoded(listed)["items"][0]["snapshot"] == payload
     contaminated = dict(payload, technical_confidence="HIGH")
-    assert request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot", body={"expected_revision": 1, "snapshot": contaminated}).status == 400
+    assert request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot", body={"expected_revision": 1, "snapshot": contaminated}).status == 400
+    commands = {
+        "proposals": {"expected_revision": 1, "amount": "3000.00", "currency": "BRL", "rationale": "Proposta"},
+        "court-approvals": {"expected_revision": 1, "court_decision_id": "DECISION-2", "amount": "2500.00", "currency": "BRL", "decided_on": "2026-09-01"},
+        "expenses": {"expected_revision": 1, "category": "TRAVEL", "amount": "100.00", "currency": "BRL", "incurred_on": "2026-09-01", "description": "Deslocamento"},
+        "payments": {"expected_revision": 1, "amount": "1000.00", "currency": "BRL", "received_on": "2026-09-02", "reference": "Depósito"},
+    }
+    assert all(request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/budget-snapshot/{action}", body=body).status == 200 for action, body in commands.items())
 
 
 def test_report_foundation_routes_are_private_validate_and_delegate():

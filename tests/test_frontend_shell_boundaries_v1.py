@@ -47,6 +47,7 @@ def test_frontend_production_source_has_no_secret_or_unbounded_network_capabilit
             fetch_sources.append(source.relative_to(ROOT).as_posix())
 
     assert sorted(fetch_sources) == [
+        "frontend/src/data/budgetSnapshot.ts",
         "frontend/src/data/caseAnalysis.ts",
         "frontend/src/data/deliverySnapshot.ts",
         "frontend/src/data/inspectionSession.ts",

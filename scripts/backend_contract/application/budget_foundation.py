@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 
-from ..budget_foundation import PericialBudget, budget_snapshot_from_mapping, budget_snapshot_to_mapping
+from ..budget_foundation import (
+    CostCategory,
+    CourtApprovedAmount,
+    Expense,
+    FeeProposal,
+    FinancialStatus,
+    PericialBudget,
+    ProposalRevision,
+    ReceivedPayment,
+    budget_snapshot_from_mapping,
+    budget_snapshot_to_mapping,
+)
 from .models import thaw_payload
 from .ports import RepositoryConflict
 
@@ -98,3 +109,83 @@ class GetBudgetHistory:
     def execute(self, workspace_id):
         records = self.list_revisions.execute(workspace_id, BUDGET_SNAPSHOT_ARTIFACT_KIND, BUDGET_SNAPSHOT_ARTIFACT_ID)
         return tuple((record, validated_budget_snapshot_from_mapping(_payload(record.payload))) for record in records)
+
+
+@dataclass(frozen=True, slots=True)
+class StartBudgetSnapshot:
+    save_snapshot: object
+    ids: object
+
+    def execute(self, workspace_id, *, process_id: str | None, appointment_id: str | None):
+        value = PericialBudget(
+            schema_version="1.0.0", budget_id=f"BUDGET-{str(self.ids.new_uuid()).upper()}", revision=1,
+            workspace_id=str(workspace_id), process_id=process_id, appointment_id=appointment_id,
+            items=(), effort_estimates=(), travel_estimates=(), third_party_estimates=(), expenses=(),
+            proposals=(), proposal_revisions=(), court_approvals=(), payments=(), status=FinancialStatus.DRAFT,
+        )
+        return self.save_snapshot.execute(workspace_id, value, None), value
+
+
+@dataclass(frozen=True, slots=True)
+class AddFeeProposal:
+    get_snapshot: object
+    save_snapshot: object
+    clock: object
+    ids: object
+
+    def execute(self, workspace_id, *, expected_revision: int, amount: str, currency: str, rationale: str):
+        record, predecessor = self.get_snapshot.execute(workspace_id)
+        if record.revision != expected_revision: raise RepositoryConflict("expected Budget Snapshot revision is not latest")
+        revision = len(predecessor.proposals) + 1
+        proposal_id = f"PROPOSAL-{str(self.ids.new_uuid()).upper()}"
+        revision_id = f"PROPOSAL-REVISION-{str(self.ids.new_uuid()).upper()}"
+        now = self.clock.now()
+        if now.tzinfo is None or now.utcoffset() is None: raise ValueError("Budget proposal clock requires timezone")
+        proposal = FeeProposal(proposal_id, revision, amount, currency, now.isoformat(), rationale)
+        prior = predecessor.proposal_revisions[-1].revision_id if predecessor.proposal_revisions else None
+        trail = ProposalRevision(revision_id, proposal_id, revision, prior, rationale, now.isoformat())
+        value = replace(predecessor, revision=predecessor.revision + 1, proposals=(*predecessor.proposals, proposal), proposal_revisions=(*predecessor.proposal_revisions, trail), status=FinancialStatus.PROPOSED)
+        return self.save_snapshot.execute(workspace_id, value, expected_revision), value
+
+
+@dataclass(frozen=True, slots=True)
+class RecordCourtApproval:
+    get_snapshot: object
+    save_snapshot: object
+    ids: object
+
+    def execute(self, workspace_id, *, expected_revision: int, court_decision_id: str, amount: str, currency: str, decided_on: str):
+        record, predecessor = self.get_snapshot.execute(workspace_id)
+        if record.revision != expected_revision: raise RepositoryConflict("expected Budget Snapshot revision is not latest")
+        approval = CourtApprovedAmount(f"APPROVAL-{str(self.ids.new_uuid()).upper()}", court_decision_id, amount, currency, decided_on)
+        value = replace(predecessor, revision=predecessor.revision + 1, court_approvals=(*predecessor.court_approvals, approval), status=FinancialStatus.COURT_APPROVED)
+        return self.save_snapshot.execute(workspace_id, value, expected_revision), value
+
+
+@dataclass(frozen=True, slots=True)
+class RecordExpense:
+    get_snapshot: object
+    save_snapshot: object
+    ids: object
+
+    def execute(self, workspace_id, *, expected_revision: int, category: str, amount: str, currency: str, incurred_on: str, description: str):
+        record, predecessor = self.get_snapshot.execute(workspace_id)
+        if record.revision != expected_revision: raise RepositoryConflict("expected Budget Snapshot revision is not latest")
+        expense = Expense(f"EXPENSE-{str(self.ids.new_uuid()).upper()}", CostCategory(category), amount, currency, incurred_on, description)
+        value = replace(predecessor, revision=predecessor.revision + 1, expenses=(*predecessor.expenses, expense))
+        return self.save_snapshot.execute(workspace_id, value, expected_revision), value
+
+
+@dataclass(frozen=True, slots=True)
+class RecordPayment:
+    get_snapshot: object
+    save_snapshot: object
+    ids: object
+
+    def execute(self, workspace_id, *, expected_revision: int, amount: str, currency: str, received_on: str, reference: str):
+        record, predecessor = self.get_snapshot.execute(workspace_id)
+        if record.revision != expected_revision: raise RepositoryConflict("expected Budget Snapshot revision is not latest")
+        payment = ReceivedPayment(f"PAYMENT-{str(self.ids.new_uuid()).upper()}", amount, currency, received_on, reference)
+        candidate = replace(predecessor, revision=predecessor.revision + 1, payments=(*predecessor.payments, payment), status=FinancialStatus.PARTIALLY_RECEIVED)
+        value = replace(candidate, status=FinancialStatus.RECEIVED) if candidate.outstanding.amount == "0.00" else candidate
+        return self.save_snapshot.execute(workspace_id, value, expected_revision), value

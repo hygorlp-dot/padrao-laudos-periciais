@@ -227,8 +227,27 @@ class PericialBudget:
         for index, item in enumerate(self.proposal_revisions, 1):
             if item.revision != index or (index == 1 and item.supersedes_revision_id is not None) or (index > 1 and item.supersedes_revision_id != self.proposal_revisions[index - 2].revision_id):
                 raise ValueError("proposal revision sequence is invalid")
+        if len(self.proposals) != len(self.proposal_revisions) or any(
+            proposal.revision != index
+            or trail.revision != index
+            or proposal.proposal_id != trail.proposal_id
+            for index, (proposal, trail) in enumerate(zip(self.proposals, self.proposal_revisions, strict=True), 1)
+        ):
+            raise ValueError("proposal trail diverges")
         if sum((_money(item.amount, "payment") for item in self.payments), Decimal("0.00")) > Decimal(self.court_approved_total):
             raise ValueError("received payments exceed court-approved amount")
+        expected_status = FinancialStatus.DRAFT
+        if self.proposals:
+            expected_status = FinancialStatus.PROPOSED
+        if self.court_approvals:
+            expected_status = FinancialStatus.COURT_APPROVED
+        if self.payments:
+            expected_status = FinancialStatus.RECEIVED if self.outstanding.amount == "0.00" else FinancialStatus.PARTIALLY_RECEIVED
+        if self.status is FinancialStatus.CLOSED:
+            if expected_status is not FinancialStatus.RECEIVED:
+                raise ValueError("financial status is unsupported by ledger")
+        elif self.status is not expected_status:
+            raise ValueError("financial status is unsupported by ledger")
 
     @property
     def proposed_total(self) -> str:
