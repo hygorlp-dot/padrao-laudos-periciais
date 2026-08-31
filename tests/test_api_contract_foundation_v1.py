@@ -30,7 +30,11 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
         "/v1/workspaces/{workspace_id}/pericial-planning",
         "/v1/workspaces/{workspace_id}/pericial-planning/decisions",
         "/v1/workspaces/{workspace_id}/inspection-session",
-        "/v1/workspaces/{workspace_id}/inspection-photos",
+            "/v1/workspaces/{workspace_id}/inspection-photos",
+            "/v1/workspaces/{workspace_id}/offline-inspection",
+            "/v1/workspaces/{workspace_id}/offline-sync",
+            "/v1/workspaces/{workspace_id}/offline-inspection/{package_id}",
+            "/v1/workspaces/{workspace_id}/offline-device/revoke",
         "/v1/workspaces/{workspace_id}/technical-snapshot",
         "/v1/workspaces/{workspace_id}/expert-profile",
         "/v1/workspaces/{workspace_id}/report-snapshot",
@@ -62,6 +66,8 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
     assert contract["components"]["schemas"]["DeliverySnapshot"] == {"$ref": "../schemas/delivery-snapshot-v1.schema.json"}
     assert contract["info"]["x-budget-snapshot-semantic-boundary"] == "scripts.backend_contract.budget_foundation.budget_snapshot_from_mapping"
     assert contract["components"]["schemas"]["BudgetSnapshot"] == {"$ref": "../schemas/budget-snapshot-v1.schema.json"}
+    assert contract["info"]["x-offline-inspection-semantic-boundary"] == "scripts.backend_contract.field_mobile.offline_package_from_mapping"
+    assert contract["components"]["schemas"]["OfflineInspectionPackage"] == {"$ref": "../schemas/offline-inspection-package-v1.schema.json"}
     assert "put" not in contract["paths"]["/v1/workspaces/{workspace_id}/budget-snapshot"]
     assert contract["components"]["schemas"]["RecordBudgetExpenseRequest"]["properties"]["category"]["$ref"].endswith("#/$defs/category")
     referenced = (ROOT / "contracts" / component["$ref"]).resolve()

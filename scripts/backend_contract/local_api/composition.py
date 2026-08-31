@@ -39,11 +39,13 @@ from ..infrastructure.private_filesystem import LocalPrivateContentStore, _valid
 from ..infrastructure.pdf_text import LocalPdfTextExtractor
 from ..infrastructure.rapid_ocr import RapidOcrLatinEngine
 from ..infrastructure.sqlite import SQLiteApplicationStore
+from ..infrastructure.field_mobile import DeviceOfflineVaultRegistry
 from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
 from ..application.case_analysis import GetCaseAnalysis, SaveCaseAnalysis
 from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning
 from ..application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession
+from ..application.field_mobile import GetOfflineInspection, ListPendingOfflineInspections, PrepareOfflineInspection, RevokeOfflineDevice, SyncOfflineInspection, UpdateOfflineInspection
 from ..application.technical_findings import GetTechnicalSnapshot, SaveTechnicalSnapshot, StartTechnicalSnapshot
 from ..application.report_foundation import (
     GetExpertProfile,
@@ -225,9 +227,13 @@ def build_local_api(
         store.close()
         raise
     private_store = None
+    offline_registry = None
     if private_root is not None:
         try:
             private_store = LocalPrivateContentStore.open_or_provision(private_root)
+            offline_registry = DeviceOfflineVaultRegistry(
+                database_path.parent / f".{database_path.name}.field-mobile"
+            )
             if private_store.is_recovery_quarantined():
                 raise RepositoryIntegrityError("recovery private storage is quarantined and cannot become active")
         except Exception:
@@ -305,6 +311,18 @@ def build_local_api(
         )
         if private_store is not None
         else None
+    )
+    prepare_offline_inspection = (
+        PrepareOfflineInspection(get_inspection_session, get_private_content, offline_registry.vault_for, local_clock, local_ids)
+        if offline_registry is not None and get_private_content is not None else None
+    )
+    sync_offline_inspection = (
+        SyncOfflineInspection(get_inspection_session, save_inspection_session, offline_registry.vault_for)
+        if offline_registry is not None and save_inspection_session is not None else None
+    )
+    update_offline_inspection = (
+        UpdateOfflineInspection(get_private_content, offline_registry.vault_for, local_clock, local_ids)
+        if offline_registry is not None and get_private_content is not None else None
     )
     get_technical_snapshot = GetTechnicalSnapshot(get_latest_artifact, get_case_analysis, get_inspection_session)
     save_technical_snapshot = SaveTechnicalSnapshot(
@@ -419,6 +437,13 @@ def build_local_api(
         save_inspection_session=save_inspection_session,
         get_inspection_session=get_inspection_session,
         start_inspection_session=(StartInspectionSession(get_pericial_planning, save_inspection_session, local_clock, local_ids) if save_inspection_session is not None else None),
+        prepare_offline_inspection=prepare_offline_inspection,
+        sync_offline_inspection=sync_offline_inspection,
+        update_offline_inspection=update_offline_inspection,
+        get_offline_inspection=(GetOfflineInspection(offline_registry.vault_for) if offline_registry is not None else None),
+        list_offline_inspections=(ListPendingOfflineInspections(offline_registry.vault_for) if offline_registry is not None else None),
+        revoke_offline_device=(RevokeOfflineDevice(offline_registry.revoke_device) if offline_registry is not None else None),
+        offline_device_id=(offline_registry.device_id if offline_registry is not None else None),
         save_technical_snapshot=save_technical_snapshot,
         get_technical_snapshot=get_technical_snapshot,
         start_technical_snapshot=StartTechnicalSnapshot(get_case_analysis, get_inspection_session, save_technical_snapshot, local_ids),

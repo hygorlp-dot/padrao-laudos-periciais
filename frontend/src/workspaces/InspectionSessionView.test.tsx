@@ -23,11 +23,21 @@ const snapshot = {
 };
 
 const response = (status: number, value: object) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); sessionStorage.clear(); });
 
 describe("inspection session view", () => {
+  test("reopens the pending offline snapshot before further field edits", async () => {
+    const offline = { ...snapshot, items: [{ ...snapshot.items[0], title: "Item preservado offline" }] };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(200, { revision: 1, updated_at: "2026-08-30T13:00:00Z", snapshot }))
+      .mockResolvedValueOnce(response(200, { items: [{ package_id: "OFFLINE-PACKAGE-001", package_revision: 2, device_sequence: 2, inspection_snapshot: offline }] }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<InspectionSessionView workspaceId={ID} />);
+    expect(await screen.findByText(/Item preservado offline/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preparar uso offline" })).toBeDisabled();
+  });
   test("separates raw field records, party statements, media authority and limitations", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(200, { revision: 1, updated_at: "2026-08-30T13:00:00Z", snapshot })));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response(200, { revision: 1, updated_at: "2026-08-30T13:00:00Z", snapshot })).mockResolvedValueOnce(response(200, { items: [] })));
     render(<InspectionSessionView workspaceId={ID} />);
     expect(await screen.findByRole("heading", { name: "Vistoria de campo" })).toBeInTheDocument();
     expect(screen.getAllByText("Execução parcial")).toHaveLength(2);
@@ -73,6 +83,7 @@ describe("inspection session view", () => {
   test("serializes an explicit access outcome without promoting partial access", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response(200, { revision: 1, updated_at: "2026-08-30T12:00:00Z", snapshot }))
+      .mockResolvedValueOnce(response(200, { items: [] }))
       .mockResolvedValueOnce(response(200, { revision: 2, updated_at: "2026-08-30T12:05:00Z", snapshot }));
     vi.stubGlobal("fetch", fetchMock); vi.stubGlobal("crypto", { randomUUID: () => "88888888-8888-4888-8888-888888888888" });
     const user = userEvent.setup(); render(<InspectionSessionView workspaceId={ID} />);
@@ -80,8 +91,8 @@ describe("inspection session view", () => {
     await user.selectOptions(screen.getByLabelText("Resultado"), "PARTIAL_ACCESS");
     await user.type(screen.getByLabelText("DescriÃ§Ã£o objetiva"), "Acesso restrito ao primeiro ambiente.");
     await user.click(screen.getByRole("button", { name: "Salvar registros de campo" }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    const saveBody = JSON.parse(String(fetchMock.mock.calls[1][1].body));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    const saveBody = JSON.parse(String(fetchMock.mock.calls[2][1].body));
     expect(saveBody.snapshot.access_occurrences[0].outcome).toBe("PARTIAL_ACCESS");
     expect(saveBody.snapshot.items[0].state).toBe("PARTIAL");
   });

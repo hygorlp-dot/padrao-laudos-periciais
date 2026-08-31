@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useState } from "react";
 
 import { getInspectionSession, InspectionSessionApiError, saveInspectionSession, startInspectionSession, uploadInspectionPhoto, type ExecutionState, type InspectionEnvelope, type InspectionSnapshot } from "../data/inspectionSession";
+import { FieldMobileStatus } from "./FieldMobileStatus";
+import { listPendingOfflineInspections, prepareOfflineInspection, revokeOfflineDevice, syncOfflineInspection, updateOfflineInspection, type FieldSyncConflict } from "../data/fieldMobile";
 
 type State = { kind: "loading" } | { kind: "ready"; value: InspectionEnvelope } | { kind: "empty" } | { kind: "error" };
 const stateLabel = { PENDING: "Pendente", COMPLETED: "Concluído", PARTIAL: "Execução parcial", NOT_EXECUTED: "Não executado", NOT_APPLICABLE: "Não aplicável", BLOCKED: "Bloqueado" } as const;
@@ -47,10 +49,22 @@ export function InspectionSessionView({ workspaceId }: { workspaceId: string }) 
   const [accessDescription, setAccessDescription] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(false);
+  const [offlinePackageId, setOfflinePackageId] = useState<string | null>(null);
+  const [offlinePackageRevision, setOfflinePackageRevision] = useState(0);
+  const [syncConflicts, setSyncConflicts] = useState<FieldSyncConflict[]>([]);
   useEffect(() => {
     const controller = new AbortController();
     getInspectionSession(workspaceId, controller.signal).then(
-      (value) => setState({ kind: "ready", value }),
+      async (value) => {
+        try {
+          const pending = await listPendingOfflineInspections(workspaceId);
+          const offline = pending.items[0];
+          if (!controller.signal.aborted && offline) { setOfflinePackageId(offline.package_id); setOfflinePackageRevision(offline.package_revision); setState({ kind: "ready", value: { ...value, snapshot: offline.inspection_snapshot } }); }
+          else if (!controller.signal.aborted) setState({ kind: "ready", value });
+        } catch {
+          if (!controller.signal.aborted) { setState({ kind: "ready", value }); setSyncConflicts([{ code: "OFFLINE_REOPEN_FAILED", message: "O inventário offline não pôde ser reaberto.", record_ids: [], requires_explicit_review: true }]); }
+        }
+      },
       (error) => { if (!controller.signal.aborted) setState({ kind: error instanceof InspectionSessionApiError && error.kind === "not-found" ? "empty" : "error" }); },
     );
     return () => controller.abort();
@@ -81,9 +95,18 @@ export function InspectionSessionView({ workspaceId }: { workspaceId: string }) 
     if (accessDescription.trim()) next.access_occurrences.push({ occurrence_id: recordId("ACCESS"), inspection_item_id: item.item_id, outcome: accessOutcome, description: accessDescription.trim(), timestamp: now });
     if (itemState !== "PENDING" && !note.trim()) { setSaveError(true); setSaving(false); return; }
     if (["PARTIAL", "NOT_EXECUTED", "BLOCKED"].includes(itemState) && item.limitation_ids.length === 0) { setSaveError(true); setSaving(false); return; }
-    try { const value = await saveInspectionSession(workspaceId, state.value.revision, withCoverage(next)); setState({ kind: "ready", value }); setSelectedItem(null); setObservation(""); setStatementSpeaker(""); setStatementRole(""); setStatementText(""); setMeasurementQuantity(""); setMeasurementValue(""); setMeasurementUnit(""); setInstrumentIdentity(""); setInstrumentModel(""); setInstrumentSerial(""); setInstrumentCapability(""); setMethodName(""); setMethodProcedure(""); setMeasurementRawObservation(""); setPhotoContentId(""); setPhotoSha(""); setPhotoCaption(""); setLimitation(""); } catch { setSaveError(true); } finally { setSaving(false); }
+    try { const covered = withCoverage(next); if (offlinePackageId) { const updated = await updateOfflineInspection(workspaceId, offlinePackageId, offlinePackageRevision, covered); setOfflinePackageId(updated.package.package_id); setOfflinePackageRevision(updated.package.package_revision); setState({ kind: "ready", value: { ...state.value, snapshot: updated.package.inspection_snapshot } }); } else { const value = await saveInspectionSession(workspaceId, state.value.revision, covered); setState({ kind: "ready", value }); } setSelectedItem(null); setObservation(""); setStatementSpeaker(""); setStatementRole(""); setStatementText(""); setMeasurementQuantity(""); setMeasurementValue(""); setMeasurementUnit(""); setInstrumentIdentity(""); setInstrumentModel(""); setInstrumentSerial(""); setInstrumentCapability(""); setMethodName(""); setMethodProcedure(""); setMeasurementRawObservation(""); setPhotoContentId(""); setPhotoSha(""); setPhotoCaption(""); setLimitation(""); } catch { setSaveError(true); } finally { setSaving(false); }
   };
   return <section className="inspection-workspace" aria-labelledby="inspection-title">
+    <FieldMobileStatus
+      online={typeof navigator === "undefined" ? true : navigator.onLine}
+      pendingCaptures={offlinePackageId ? 1 : 0}
+      conflicts={[...syncConflicts, ...snapshot.upstream_stale_reasons.map((message) => ({ code: "STALE_PLAN", message, record_ids: [], requires_explicit_review: true }))]}
+      onCapture={() => { const firstPending = snapshot.items.find((item) => item.state === "PENDING") ?? snapshot.items[0]; if (firstPending) { setSelectedItem(firstPending.item_id); setItemState(firstPending.state); setNote(firstPending.note ?? ""); } }}
+      onPrepare={async () => { try { const sessionId = crypto.randomUUID(); const prepared = await prepareOfflineInspection(workspaceId, sessionId); setOfflinePackageId(prepared.package.package_id); setOfflinePackageRevision(prepared.package.package_revision); setSyncConflicts([]); } catch { setSyncConflicts([{ code: "OFFLINE_STORAGE_UNAVAILABLE", message: "Não foi possível preparar o pacote local.", record_ids: [], requires_explicit_review: true }]); } }}
+      onSync={async () => { if (!offlinePackageId) return; try { const result = await syncOfflineInspection(workspaceId, offlinePackageId); setSyncConflicts(result.conflicts); if (result.accepted) { setOfflinePackageId(null); setOfflinePackageRevision(0); setVersion((value) => value + 1); } } catch { setSyncConflicts([{ code: "SYNC_UNAVAILABLE", message: "A sincronização local não pôde ser concluída.", record_ids: [], requires_explicit_review: true }]); } }}
+      onRevoke={async () => { if (!window.confirm("Revogar este dispositivo impedirá reabrir e sincronizar pacotes offline. Continuar?")) return; try { await revokeOfflineDevice(workspaceId); setOfflinePackageId(null); setOfflinePackageRevision(0); setSyncConflicts([{ code: "DEVICE_REVOKED", message: "Dispositivo revogado. Pacotes locais não podem mais ser abertos.", record_ids: [], requires_explicit_review: true }]); } catch { setSyncConflicts([{ code: "REVOCATION_FAILED", message: "Não foi possível revogar o dispositivo.", record_ids: [], requires_explicit_review: true }]); } }}
+    />
     {edit && <section className="inspection-editor inspection-editor--access" aria-label="Resultado de acesso"><h3>Resultado de acesso</h3><p>Somente acesso integral sustenta a conclusÃ£o de um requisito de acesso.</p><label>Resultado<select value={accessOutcome} onChange={(event) => setAccessOutcome(event.target.value as typeof accessOutcome)}><option value="FULL_ACCESS">Acesso integral</option><option value="PARTIAL_ACCESS">Acesso parcial</option><option value="DENIED">Acesso negado</option><option value="UNSAFE">Acesso inseguro</option></select></label><label>DescriÃ§Ã£o objetiva<textarea value={accessDescription} onChange={(event) => setAccessDescription(event.target.value)}/></label></section>}
     <header className="planning-overview"><div><h2 id="inspection-title">Vistoria de campo</h2><p>Registros brutos executados contra a revisão {snapshot.plan_snapshot.planning_revision} do plano. Evidências candidatas não são constatações técnicas.</p></div><div className="planning-readiness"><strong>{snapshot.coverage.complete ? "Execução coberta" : "Execução parcial"}</strong><span>{snapshot.coverage.completed_items} de {snapshot.coverage.total_items} itens concluídos</span></div></header>
     {snapshot.upstream_stale && <section className="analysis-inventory-warning" role="alert"><strong>Planejamento alterado — não continue esta sessão</strong><ul>{snapshot.upstream_stale_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul></section>}

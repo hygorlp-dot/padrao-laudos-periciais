@@ -167,7 +167,7 @@ export function WorkspaceView({ currentPath, workspaceId, route }: WorkspaceView
           <PericialPlanningView workspaceId={workspaceId} />
         ) : null}
         {state.kind === "ready" && route.path === "/vistoria" ? (
-          <InspectionSessionView workspaceId={workspaceId} />
+          <InspectionSessionView key={workspaceId} workspaceId={workspaceId} />
         ) : null}
         {state.kind === "ready" && route.path === "/evidencias" ? (
           <TechnicalFindingsView workspaceId={workspaceId} />

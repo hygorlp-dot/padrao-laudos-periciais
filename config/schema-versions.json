@@ -50,6 +50,16 @@
       "future_version_policy": "FAIL_CLOSED",
       "material_fields": ["workspace", "artifact_revisions", "private_contents", "member_hashes", "manifest_sha256"],
       "protected_material_fields": ["workspace", "artifact_revisions", "private_contents", "member_hashes", "manifest_sha256"]
+    },
+    {
+      "schema": "offline-inspection-package-v1.schema.json",
+      "current_version": "1.0.0",
+      "versions_supported": ["1.0.0"],
+      "migrator": null,
+      "consumers": ["OFFLINE_INSPECTION", "FIELD_SYNC"],
+      "future_version_policy": "FAIL_CLOSED",
+      "material_fields": ["workspace_id", "inspection_snapshot", "media_manifest", "planning_revision", "source_revision", "device_sequence"],
+      "protected_material_fields": ["workspace_id", "inspection_snapshot", "media_manifest", "planning_revision", "source_revision", "device_sequence"]
     }
   ]
 }

@@ -424,6 +424,16 @@ def test_inspection_session_bridge_allowlist_is_exact():
     photo_path = f"/app-api/v1/workspaces/{workspace_id}/inspection-photos"
     assert _proxy_target(photo_path, "POST") == f"/v1/workspaces/{workspace_id}/inspection-photos"
     assert _proxy_target(photo_path, "GET") is None
+    offline_path = f"/app-api/v1/workspaces/{workspace_id}/offline-inspection"
+    assert _proxy_target(offline_path, "POST") == f"/v1/workspaces/{workspace_id}/offline-inspection"
+    assert _proxy_target(offline_path, "PUT") == f"/v1/workspaces/{workspace_id}/offline-inspection"
+    assert _proxy_target(offline_path, "GET") == f"/v1/workspaces/{workspace_id}/offline-inspection"
+    sync_path = f"/app-api/v1/workspaces/{workspace_id}/offline-sync"
+    assert _proxy_target(sync_path, "POST") == f"/v1/workspaces/{workspace_id}/offline-sync"
+    assert _proxy_target(sync_path, "PUT") is None
+    assert _proxy_target(f"{offline_path}/OFFLINE-PACKAGE-001", "GET") == f"/v1/workspaces/{workspace_id}/offline-inspection/OFFLINE-PACKAGE-001"
+    revoke_path = f"/app-api/v1/workspaces/{workspace_id}/offline-device/revoke"
+    assert _proxy_target(revoke_path, "POST") == f"/v1/workspaces/{workspace_id}/offline-device/revoke"
 
 
 def test_technical_snapshot_bridge_allowlist_is_exact():
