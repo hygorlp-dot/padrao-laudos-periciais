@@ -1,6 +1,7 @@
 import copy
 import json
 from contextlib import nullcontext
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ from scripts.backend_contract.case_analysis import (
 )
 from scripts.backend_contract.application.case_analysis import (
     GetCaseAnalysis,
+    ReviewCaseAnalysisItem,
     SaveCaseAnalysis,
     validated_case_analysis_from_mapping,
 )
@@ -254,14 +256,14 @@ def _authoritative_documents(snapshot, *, changed_document_id=None):
 
 
 def test_save_uses_atomic_repository_cas_and_authoritative_inventory():
-    snapshot = case_analysis_from_mapping(fixture())
+    snapshot = replace(case_analysis_from_mapping(fixture()), human_reviews=())
     calls = []
     revisions = SimpleNamespace(append_if_latest=lambda **kwargs: calls.append(kwargs) or SimpleNamespace(revision=1))
     clock = SimpleNamespace(now=lambda: datetime(2026, 8, 30, tzinfo=UTC))
     ids = SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999"))
     documents = SimpleNamespace(execute=lambda _workspace: _authoritative_documents(snapshot))
 
-    result = SaveCaseAnalysis(revisions, clock, ids, documents, nullcontext).execute(
+    result = SaveCaseAnalysis(revisions, SimpleNamespace(), clock, ids, documents, nullcontext).execute(
         WorkspaceId.parse(snapshot.workspace_id), snapshot, None
     )
 
@@ -273,7 +275,7 @@ def test_save_uses_atomic_repository_cas_and_authoritative_inventory():
         execute=lambda _workspace: _authoritative_documents(snapshot, changed_document_id="DOC-002")
     )
     with pytest.raises(RepositoryIntegrityError, match="source inventory mismatch"):
-        SaveCaseAnalysis(revisions, clock, ids, mismatched, nullcontext).execute(
+        SaveCaseAnalysis(revisions, SimpleNamespace(), clock, ids, mismatched, nullcontext).execute(
             WorkspaceId.parse(snapshot.workspace_id), snapshot, None
         )
 
@@ -284,7 +286,7 @@ def test_save_uses_atomic_repository_cas_and_authoritative_inventory():
         )
     )
     with pytest.raises(RepositoryIntegrityError, match="source inventory mismatch"):
-        SaveCaseAnalysis(revisions, clock, ids, extra, nullcontext).execute(
+        SaveCaseAnalysis(revisions, SimpleNamespace(), clock, ids, extra, nullcontext).execute(
             WorkspaceId.parse(snapshot.workspace_id), snapshot, None
         )
 
@@ -341,6 +343,39 @@ def test_human_review_preserves_original_extraction_and_never_answers_question()
     assert review.corrected_value == "alegação sobre fundação"
     assert review.reason == "Correção sintética de natureza da afirmação."
     assert snapshot.questions[0].answer is None
+
+
+def test_effective_review_projection_preserves_source_and_dedicated_command_owns_review_metadata():
+    snapshot = replace(case_analysis_from_mapping(fixture()), human_reviews=())
+    record = ArtifactRevision(
+        workspace_id=WorkspaceId.parse(snapshot.workspace_id), artifact_kind="CASE_ANALYSIS_SNAPSHOT_V1",
+        artifact_id="CASE-ANALYSIS", revision_id="99999999-9999-4999-8999-999999999999", revision=1,
+        created_at="2026-08-30T12:00:00+00:00", checksum_sha256="0" * 64,
+        payload=case_analysis_to_mapping(snapshot),
+    )
+    calls = []
+    service = ReviewCaseAnalysisItem(
+        SimpleNamespace(execute=lambda _workspace: (record, snapshot)),
+        SimpleNamespace(execute=lambda *args, **kwargs: calls.append((args, kwargs)) or SimpleNamespace(revision=2)),
+        SimpleNamespace(now=lambda: datetime(2026, 8, 31, 12, tzinfo=UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
+    )
+    _, reviewed = service.execute(
+        WorkspaceId.parse(snapshot.workspace_id), target_item_id="CLAIM-001", action="CORRECT",
+        corrected_value="Alegação corrigida sintética.", reviewer="PERITO-SYNTHETIC",
+        reason="Correção humana explícita.", expected_revision=1,
+    )
+    assert reviewed.claims[0].text == snapshot.claims[0].text
+    assert reviewed.effective_reviewed_value("CLAIM-001") == "Alegação corrigida sintética."
+    assert reviewed.human_reviews[-1].review_id == "CASE-REVIEW-99999999999949998999999999999999"
+    assert calls[0][1] == {"allow_review_transition": True}
+
+
+def test_initial_case_analysis_cannot_forge_human_review():
+    snapshot = case_analysis_from_mapping(fixture())
+    service = SaveCaseAnalysis(SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), nullcontext)
+    with pytest.raises(ValueError, match="cannot contain human review"):
+        service.execute(WorkspaceId.parse(snapshot.workspace_id), snapshot, None)
 
 
 def test_coverage_counts_and_source_revision_fail_closed():

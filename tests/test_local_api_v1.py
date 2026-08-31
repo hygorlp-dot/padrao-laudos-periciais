@@ -534,6 +534,7 @@ def test_case_analysis_save_close_reopen_is_semantically_equivalent(tmp_path):
         )
         workspace_id = json.loads(created_body)["workspace_id"]
         payload = case_analysis_payload()
+        payload["human_reviews"] = []
         payload["workspace_id"] = workspace_id
         payload["judicial_context_workspace_id"] = workspace_id
         imported = []
@@ -614,6 +615,7 @@ def test_pericial_planning_save_close_reopen_preserves_professional_state(tmp_pa
         )
         workspace_id = json.loads(created_body)["workspace_id"]
         analysis_payload = case_analysis_payload()
+        analysis_payload["human_reviews"] = []
         analysis_payload["workspace_id"] = workspace_id
         analysis_payload["judicial_context_workspace_id"] = workspace_id
         imported = []
@@ -651,6 +653,7 @@ def test_pericial_planning_save_close_reopen_preserves_professional_state(tmp_pa
         )
         assert analysis_status == 200, analysis_body
         planning_payload = pericial_planning_payload()
+        planning_payload["decisions"] = []
         planning_payload["workspace_id"] = workspace_id
         planning_payload["plan"]["workspace_id"] = workspace_id
         planning_payload["plan"]["case_analysis_digest"] = case_analysis_digest(case_analysis_from_mapping(analysis_payload))
@@ -661,9 +664,20 @@ def test_pericial_planning_save_close_reopen_preserves_professional_state(tmp_pa
             "safety_requirements", "external_support_requirements", "risks", "gaps",
         ):
             for item in planning_payload[collection]:
+                item["professional_review_status"] = "PENDING"
                 for source in item["derivation"]["source_provenance"]:
                     source["workspace_id"] = workspace_id
                     source["source_document_sha256"] = source_by_id[source["source_document_id"]]
+        total = sum(len(planning_payload[name]) for name in (
+            "objectives", "issues", "question_links", "required_documents", "required_information",
+            "inspection_requirements", "measurement_requirements", "photo_requirements", "equipment_requirements",
+            "access_requirements", "method_candidates", "procedure_candidates", "sampling_candidates",
+            "safety_requirements", "external_support_requirements", "risks", "gaps",
+        ))
+        planning_payload["coverage"].update(
+            material_items_total=total, reviewed_items=0, pending_items=total, approved_items=0,
+            rejected_items=0, modified_items=0, deferred_items=0,
+        )
         saved_status, _, saved_body = http_request(
             runtime.server,
             "PUT",

@@ -44,19 +44,23 @@ class SavePericialPlanning:
     clock: object
     ids: object
 
-    def execute(self, workspace_id, snapshot: PlanningSnapshot, expected_revision: int | None):
+    def execute(self, workspace_id, snapshot: PlanningSnapshot, expected_revision: int | None, *, allow_review_transition: bool = False):
         if type(snapshot) is not PlanningSnapshot or str(workspace_id) != snapshot.workspace_id:
             raise ValueError("Pericial Planning workspace identity mismatch")
         if snapshot.upstream_stale:
             raise ValueError("stale Pericial Planning snapshots cannot be persisted")
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
             raise ValueError("expected revision is invalid")
+        if expected_revision is None and (
+            snapshot.decisions or any(item.professional_review_status.value != "PENDING" for item in snapshot.material_items)
+        ):
+            raise ValueError("initial Pericial Planning must be proposal-only")
         if not callable(self.authority_guard):
             raise RepositoryIntegrityError("Pericial Planning authority guard is unavailable")
         with self.authority_guard():
-            return self._execute_guarded(workspace_id, snapshot, expected_revision)
+            return self._execute_guarded(workspace_id, snapshot, expected_revision, allow_review_transition)
 
-    def _execute_guarded(self, workspace_id, snapshot: PlanningSnapshot, expected_revision: int | None):
+    def _execute_guarded(self, workspace_id, snapshot: PlanningSnapshot, expected_revision: int | None, allow_review_transition: bool):
         analysis_record, analysis = self.get_case_analysis.execute(workspace_id)
         if analysis.stale_document_ids or analysis.source_inventory_stale:
             raise ValueError("stale Case Analysis cannot authorize Pericial Planning")
@@ -71,6 +75,8 @@ class SavePericialPlanning:
                 raise ValueError("expected Pericial Planning revision is not latest")
             previous = validated_pericial_planning_from_mapping(thaw_payload(previous_record.payload))
             _validate_append_only_history(previous, snapshot)
+            if not allow_review_transition and snapshot.decisions != previous.decisions:
+                raise ValueError("Pericial Planning decisions require the professional review command")
         created_at = self.clock.now()
         if created_at.tzinfo is None or created_at.utcoffset() is None:
             raise ValueError("Pericial Planning clock requires timezone")
@@ -160,7 +166,7 @@ class ReviewPericialPlanning:
             timestamp=created_at.isoformat(),
         )
         reviewed = append_professional_decision(snapshot, decision)
-        saved = self.save_planning.execute(workspace_id, reviewed, expected_revision)
+        saved = self.save_planning.execute(workspace_id, reviewed, expected_revision, allow_review_transition=True)
         return saved, reviewed
 
 

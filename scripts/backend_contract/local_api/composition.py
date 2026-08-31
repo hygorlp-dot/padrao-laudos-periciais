@@ -42,7 +42,7 @@ from ..infrastructure.sqlite import SQLiteApplicationStore
 from ..infrastructure.field_mobile import DeviceOfflineVaultRegistry
 from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
-from ..application.case_analysis import GetCaseAnalysis, SaveCaseAnalysis
+from ..application.case_analysis import GetCaseAnalysis, ReviewCaseAnalysisItem, SaveCaseAnalysis
 from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning
 from ..application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession
 from ..application.field_mobile import GetOfflineInspection, ListPendingOfflineInspections, PrepareOfflineInspection, RevokeOfflineDevice, SyncOfflineInspection, UpdateOfflineInspection
@@ -422,12 +422,22 @@ def build_local_api(
         ),
         save_case_analysis=SaveCaseAnalysis(
             store.revisions,
+            get_latest_artifact,
             local_clock,
             local_ids,
             list_case_documents,
             private_store.authority_guard if private_store is not None else nullcontext,
         ),
         get_case_analysis=get_case_analysis,
+        review_case_analysis_item=ReviewCaseAnalysisItem(
+            get_case_analysis,
+            SaveCaseAnalysis(
+                store.revisions, get_latest_artifact, local_clock, local_ids, list_case_documents,
+                private_store.authority_guard if private_store is not None else nullcontext,
+            ),
+            local_clock,
+            local_ids,
+        ),
         save_pericial_planning=save_pericial_planning,
         get_pericial_planning=get_pericial_planning,
         review_pericial_planning=ReviewPericialPlanning(

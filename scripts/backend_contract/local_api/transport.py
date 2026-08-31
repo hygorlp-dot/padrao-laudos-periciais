@@ -108,6 +108,7 @@ class LocalApiServices:
     get_process_case: object
     save_process_case: object
     save_case_analysis: object | None = None
+    review_case_analysis_item: object | None = None
     get_case_analysis: object | None = None
     save_pericial_planning: object | None = None
     get_pericial_planning: object | None = None
@@ -816,6 +817,23 @@ class LocalApi:
                         },
                     )
                 return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("case-analysis", "reviews"):
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.review_case_analysis_item is None:
+                    return _error(503, "CASE_ANALYSIS_UNAVAILABLE")
+                workspace_id = self._workspace_id(raw_segments[2])
+                dto = self._request_dto(request_headers, body)
+                required = {"target_item_id", "action", "corrected_value", "reviewer", "reason", "expected_revision"}
+                if set(dto) != required:
+                    raise ValueError("Case Analysis review request is invalid")
+                record, snapshot = self._services.review_case_analysis_item.execute(workspace_id, **dto)
+                return _json_response(200, {
+                    "revision": record.revision, "updated_at": record.created_at,
+                    "snapshot": case_analysis_to_mapping(snapshot),
+                    "effective_reviewed_value": snapshot.effective_reviewed_value(dto["target_item_id"]),
+                })
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "pericial-planning":
                 workspace_id = self._workspace_id(raw_segments[2])

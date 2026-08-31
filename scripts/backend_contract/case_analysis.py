@@ -313,7 +313,7 @@ class CaseAnalysisSnapshot:
             *(source for participant in self.judicial_context.participants for source in participant.provenance),
             *(source for link in self.judicial_context.representation_links for source in link.provenance),
             *(source for access in self.judicial_context.access_relations for source in access.provenance),
-        ):
+            ):
             document = documents.get(source.source_document_id)
             if document is None or source.source_sha256 != document.source_sha256:
                 raise ValueError("JDM provenance must bind to the indexed source identity")
@@ -331,6 +331,22 @@ class CaseAnalysisSnapshot:
             *self.gaps,
             *self.conflicts,
         )
+
+    def effective_reviewed_value(self, item_id: str) -> str | None:
+        """Return the reviewed semantic value without mutating source extraction."""
+        item = next((candidate for candidate in self.material_items if candidate.item_id == item_id), None)
+        if item is None:
+            raise ValueError("effective review target is invalid")
+        history = sorted(
+            (review for review in self.human_reviews if review.target_item_id == item_id),
+            key=lambda review: review.revision,
+        )
+        if not history:
+            return item.text
+        latest = history[-1]
+        if latest.decision == "REJECT":
+            return None
+        return latest.corrected_value if latest.decision == "CORRECT" else item.text
 
     def reconcile_sources(self, source_hashes: dict[str, str]):
         changed = tuple(sorted(document.document_id for document in self.documents if source_hashes.get(document.document_id) != document.source_sha256))
