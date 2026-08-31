@@ -149,6 +149,40 @@ def inspection_session_payload():
     return json.loads((Path(__file__).parent / "fixtures/inspection-session-v1.json").read_text(encoding="utf-8"))
 
 
+def technical_snapshot_payload():
+    return json.loads((Path(__file__).parent / "fixtures/technical-snapshot-v1.json").read_text(encoding="utf-8"))
+
+
+def test_technical_snapshot_route_starts_validates_saves_and_reopens_canonical_chain():
+    payload = technical_snapshot_payload()
+    from scripts.backend_contract.technical_findings import technical_snapshot_from_mapping
+    snapshot = technical_snapshot_from_mapping(payload)
+    start = RecordingService((revision(payload=payload), snapshot))
+    save = RecordingService(revision(payload=payload))
+    get = RecordingService((revision(payload=payload), snapshot))
+    api = LocalApi(services(
+        start_technical_snapshot=start, save_technical_snapshot=save, get_technical_snapshot=get,
+    ), token=TOKEN)
+    started = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot", body={})
+    assert started.status == 201
+    saved = request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot", body={"expected_revision": 1, "snapshot": payload})
+    assert saved.status == 200
+    assert save.calls[0][0][1].snapshot_id == "TECHNICAL-SNAPSHOT-001"
+    reopened = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot", headers={"X-Local-API-Token": TOKEN})
+    assert reopened.status == 200
+    assert decoded(reopened)["snapshot"] == payload
+
+
+def test_technical_snapshot_is_private_and_rejects_silent_professional_promotion():
+    payload = technical_snapshot_payload()
+    payload["decisions"][0]["action"] = "AUTO_APPROVE"
+    api = LocalApi(services(save_technical_snapshot=RecordingService(None)), token=TOKEN)
+    denied = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot")
+    invalid = request(api, "PUT", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot", body={"expected_revision": None, "snapshot": payload})
+    assert denied.status == 403
+    assert invalid.status == 400
+
+
 def test_inspection_session_route_validates_delegates_and_reopens_canonical_snapshot():
     payload = inspection_session_payload()
     from scripts.backend_contract.vistoria import inspection_session_from_mapping

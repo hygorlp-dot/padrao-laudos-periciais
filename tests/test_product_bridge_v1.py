@@ -342,6 +342,16 @@ def test_inspection_session_bridge_allowlist_is_exact():
     assert _proxy_target(photo_path, "GET") is None
 
 
+def test_technical_snapshot_bridge_allowlist_is_exact():
+    workspace_id = "11111111-1111-4111-8111-111111111111"
+    path = f"/app-api/v1/workspaces/{workspace_id}/technical-snapshot"
+    assert _proxy_target(path, "GET") == f"/v1/workspaces/{workspace_id}/technical-snapshot"
+    assert _proxy_target(path, "PUT") == f"/v1/workspaces/{workspace_id}/technical-snapshot"
+    assert _proxy_target(path, "POST") == f"/v1/workspaces/{workspace_id}/technical-snapshot"
+    assert _proxy_target(path + "/auto-final-answer", "POST") is None
+    assert _proxy_target(path, "DELETE") is None
+
+
 @pytest.mark.parametrize(
     "duplicate_headers",
     (

@@ -205,6 +205,14 @@ def test_fixture_matches_strict_published_schema():
     assert list(Draft202012Validator(schema).iter_errors(invalid))
 
 
+def test_openapi_publishes_only_canonical_technical_snapshot_operations():
+    contract = json.loads((ROOT / "contracts/openapi-v1.json").read_text(encoding="utf-8"))
+    path = contract["paths"]["/v1/workspaces/{workspace_id}/technical-snapshot"]
+    assert set(path) == {"get", "post", "put"}
+    assert contract["components"]["schemas"]["TechnicalSnapshot"] == {"$ref": "../schemas/technical-snapshot-v1.schema.json"}
+    assert contract["info"]["x-technical-snapshot-semantic-boundary"] == "scripts.backend_contract.technical_findings.technical_snapshot_from_mapping"
+
+
 def test_start_binds_exact_latest_case_analysis_and_honestly_partial_inspection():
     case_record, case, inspection_record, inspection = upstreams()
     saved = []
