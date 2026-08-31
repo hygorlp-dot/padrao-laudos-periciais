@@ -10,6 +10,8 @@ from datetime import datetime
 from types import MappingProxyType
 from uuid import UUID
 
+from PIL import Image, UnidentifiedImageError
+
 from .content import (
     MAX_DOCUMENT_BYTES,
     OpenPrivateContent,
@@ -352,6 +354,17 @@ class ImportInspectionPhoto:
             raise ValueError("inspection photo bytes do not match JPEG")
         if media_type == "image/png" and not prefix.startswith(b"\x89PNG\r\n\x1a\n"):
             raise ValueError("inspection photo bytes do not match PNG")
+        expected_format = "JPEG" if media_type == "image/jpeg" else "PNG"
+        try:
+            source.rewind()
+            with Image.open(source.stream) as image:
+                if image.format != expected_format:
+                    raise ValueError("inspection photo decoded format diverges")
+                image.verify()
+        except (OSError, UnidentifiedImageError) as exc:
+            raise ValueError("inspection photo is truncated or corrupt") from exc
+        finally:
+            source.rewind()
         return self.contents.execute(
             workspace_id=workspace_id, original_filename=_inspection_photo_filename(original_filename),
             content=content, media_type=media_type, origin=PrivateContentOrigin.USER_IMPORT,

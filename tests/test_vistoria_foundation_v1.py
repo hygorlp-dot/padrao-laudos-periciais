@@ -1,4 +1,5 @@
 from dataclasses import replace
+import base64
 from contextlib import nullcontext
 from datetime import UTC, datetime
 import json
@@ -39,7 +40,7 @@ from scripts.backend_contract.vistoria import (
 )
 from scripts.backend_contract.application.models import ArtifactRevision, PrivateContentId, PrivateContentMetadata, PrivateContentOrigin, WorkspaceId
 from scripts.backend_contract.application.services import ImportInspectionPhoto
-from scripts.backend_contract.application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession, inspection_planning_digest
+from scripts.backend_contract.application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession, _validate_execution_against_planning, inspection_planning_digest
 from scripts.backend_contract.pericial_planning import PlanningDecision, ReviewAction, append_professional_decision, pericial_planning_from_mapping
 
 
@@ -153,7 +154,7 @@ def test_coverage_is_recomputed_and_limitations_propagate():
     assert session.coverage.partial_items == 1
     assert session.coverage.blocked_items == 1
     assert session.coverage.complete is False
-    assert session.coverage.limitation_ids == ("LIMIT-001",)
+    assert session.coverage.limitation_ids == ("LIMIT-001", "LIMIT-002")
     with pytest.raises(ValueError, match="coverage"):
         replace(session, coverage=replace(session.coverage, completed_items=3))
 
@@ -231,6 +232,13 @@ def test_material_timestamps_require_timezone_aware_iso8601(collection, field):
         inspection_session_from_mapping(raw)
 
 
+def test_session_end_cannot_precede_start():
+    raw = payload()
+    raw["ended_at"] = "2026-08-29T12:00:00+00:00"
+    with pytest.raises(ValueError, match="chronology"):
+        inspection_session_from_mapping(raw)
+
+
 def test_photo_can_record_unavailable_timestamp_without_fabricating_one():
     raw = payload()
     raw["photos"][0]["reliable_capture_timestamp"] = None
@@ -254,6 +262,31 @@ def test_session_source_revision_must_equal_bound_plan_source_revision():
     raw["source_revision"] = 999
     with pytest.raises(ValueError, match="source revision"):
         inspection_session_from_mapping(raw)
+
+
+@pytest.mark.parametrize(("planning_item_id", "record_kind"), (("PLAN-INSPECTION-001", "observation"), ("PLAN-MEASUREMENT-001", "measurement"), ("PLAN-PHOTO-001", "photo")))
+def test_completed_requirement_requires_its_exact_field_evidence(planning_item_id, record_kind):
+    session = inspection_session_from_mapping(payload())
+    items = list(session.items)
+    index = next(index for index, item in enumerate(items) if item.planning_item_id == planning_item_id)
+    item = items[index]
+    kwargs = {"state": ExecutionState.COMPLETED, "note": "Execução sintética declarada."}
+    session_changes = {}
+    if record_kind == "observation":
+        kwargs["observation_ids"] = ()
+        session_changes["observations"] = tuple(record for record in session.observations if record.inspection_item_id != item.item_id)
+    elif record_kind == "measurement":
+        kwargs["measurement_ids"] = ()
+        session_changes.update(measurements=(), measurement_series=(), evidence_candidates=())
+    else:
+        kwargs["photo_ids"] = ()
+        session_changes["photos"] = ()
+    items[index] = replace(item, **kwargs)
+    counts = {state: sum(candidate.state is state for candidate in items) for state in ExecutionState}
+    coverage = replace(session.coverage, completed_items=counts[ExecutionState.COMPLETED], partial_items=counts[ExecutionState.PARTIAL], blocked_items=counts[ExecutionState.BLOCKED])
+    changed = replace(session, items=tuple(items), coverage=coverage, **session_changes)
+    with pytest.raises(ValueError, match=record_kind):
+        _validate_execution_against_planning(changed, planning())
 
 
 def test_save_binds_latest_approved_plan_and_verifies_private_photo_authority():
@@ -328,12 +361,14 @@ def test_start_builds_and_persists_pending_session_from_latest_approved_plan():
 def test_inspection_photo_import_accepts_only_matching_original_image_bytes():
     calls = []
     service = ImportInspectionPhoto(SimpleNamespace(execute=lambda **kwargs: calls.append(kwargs) or SimpleNamespace()))
-    png = b"\x89PNG\r\n\x1a\nsynthetic-original"
+    png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
     service.execute(workspace_id=WorkspaceId.parse("11111111-1111-4111-8111-111111111111"), original_filename="inspection.png", content=png, media_type="image/png")
     assert calls[0]["content"] == png
     assert calls[0]["origin"] is PrivateContentOrigin.USER_IMPORT
     with pytest.raises(ValueError, match="PNG"):
         service.execute(workspace_id=WorkspaceId.parse("11111111-1111-4111-8111-111111111111"), original_filename="inspection.png", content=b"not-png", media_type="image/png")
+    with pytest.raises(ValueError, match="truncated|corrupt"):
+        service.execute(workspace_id=WorkspaceId.parse("11111111-1111-4111-8111-111111111111"), original_filename="inspection.png", content=b"\x89PNG\r\n\x1a\n", media_type="image/png")
     raw = payload()
     raw["measurements"][0]["inspection_item_id"] = "UNKNOWN"
     with pytest.raises(ValueError):

@@ -19,7 +19,7 @@
   "source_revision": 4,
   "items": [
     {"item_id":"INSPECTION-ITEM-001","planning_item_id":"PLAN-INSPECTION-001","title":"Inspeção visual","state":"COMPLETED","observation_ids":["OBS-001","OBS-002"],"measurement_ids":[],"photo_ids":[],"limitation_ids":[],"note":"Execução sintética concluída."},
-    {"item_id":"INSPECTION-ITEM-002","planning_item_id":"PLAN-MEASUREMENT-001","title":"Medição dimensional","state":"PARTIAL","observation_ids":["OBS-003"],"measurement_ids":["MEASUREMENT-001"],"photo_ids":[],"limitation_ids":[],"note":"Série parcial registrada."},
+    {"item_id":"INSPECTION-ITEM-002","planning_item_id":"PLAN-MEASUREMENT-001","title":"Medição dimensional","state":"PARTIAL","observation_ids":["OBS-003"],"measurement_ids":["MEASUREMENT-001"],"photo_ids":[],"limitation_ids":["LIMIT-002"],"note":"Série parcial registrada."},
     {"item_id":"INSPECTION-ITEM-003","planning_item_id":"PLAN-PHOTO-001","title":"Registro fotográfico","state":"BLOCKED","observation_ids":[],"measurement_ids":[],"photo_ids":["PHOTO-001"],"limitation_ids":["LIMIT-001"],"note":"Acesso parcial documentado."}
   ],
   "observations": [
@@ -43,10 +43,10 @@
   "locations": [{"location_id":"LOCATION-001","description":"Área sintética inspecionada","parent_location_id":null}],
   "environmental_conditions": [{"condition_id":"ENV-001","inspection_item_id":"INSPECTION-ITEM-001","description":"Iluminação ambiente disponível.","timestamp":"2026-08-30T12:00:00+00:00","provenance":"Observação ambiental sintética."}],
   "access_occurrences": [{"occurrence_id":"ACCESS-001","inspection_item_id":"INSPECTION-ITEM-003","outcome":"PARTIAL","description":"Acesso parcial ao ponto planejado.","timestamp":"2026-08-30T12:14:00+00:00"}],
-  "limitations": [{"limitation_id":"LIMIT-001","inspection_item_id":"INSPECTION-ITEM-003","kind":"ACCESS_LIMITATION","description":"Área complementar inacessível no cenário sintético.","consequence_for_coverage":"Registro fotográfico permanece bloqueado.","provenance":"ACCESS-001"}],
+  "limitations": [{"limitation_id":"LIMIT-001","inspection_item_id":"INSPECTION-ITEM-003","kind":"ACCESS_LIMITATION","description":"Área complementar inacessível no cenário sintético.","consequence_for_coverage":"Registro fotográfico permanece bloqueado.","provenance":"ACCESS-001"},{"limitation_id":"LIMIT-002","inspection_item_id":"INSPECTION-ITEM-002","kind":"SCOPE_LIMITATION","description":"Série sintética incompleta.","consequence_for_coverage":"Medição permanece parcial.","provenance":"MEASUREMENT-001"}],
   "missing_items": [{"missing_id":"MISSING-001","planning_item_id":"PLAN-PHOTO-001","reason":"Cobertura fotográfica complementar não executada.","limitation_id":"LIMIT-001"}],
   "evidence_candidates": [{"candidate_id":"EVIDENCE-CANDIDATE-001","inspection_item_id":"INSPECTION-ITEM-002","source_record_ids":["OBS-003","MEASUREMENT-001"],"description":"Par de registros de campo candidato a análise técnica futura.","provenance":"Registros brutos sintéticos; não constitui achado."}],
-  "coverage": {"total_items":3,"pending_items":0,"completed_items":1,"partial_items":1,"not_executed_items":0,"not_applicable_items":0,"blocked_items":1,"complete":false,"limitation_ids":["LIMIT-001"],"reasons":["Cobertura parcial por limitação de acesso."]},
+  "coverage": {"total_items":3,"pending_items":0,"completed_items":1,"partial_items":1,"not_executed_items":0,"not_applicable_items":0,"blocked_items":1,"complete":false,"limitation_ids":["LIMIT-001","LIMIT-002"],"reasons":["Cobertura parcial por limitações registradas."]},
   "reviews": [{"review_id":"INSPECTION-REVIEW-001","reviewer":"PROFESSIONAL-001","reviewed_at":"2026-08-30T12:20:00+00:00","status":"FIELD_RECORD_REVIEWED","notes":"Revisão sintética sem validação de conclusão técnica."}],
   "upstream_stale": false,
   "upstream_stale_reasons": []

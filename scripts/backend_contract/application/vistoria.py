@@ -76,6 +76,25 @@ def _reconcile(session: InspectionSession, *, planning_record, planning) -> Insp
     return replace(session, upstream_stale=bool(reasons), upstream_stale_reasons=tuple(reasons))
 
 
+def _validate_execution_against_planning(session: InspectionSession, planning) -> None:
+    planning_by_id = {item.item_id: item for item in planning.material_items}
+    for item in session.items:
+        planned = planning_by_id[item.planning_item_id]
+        if item.state is not ExecutionState.PENDING and not (item.note and item.note.strip()):
+            raise ValueError("executed inspection item requires an explicit professional note")
+        if item.state in {ExecutionState.PARTIAL, ExecutionState.NOT_EXECUTED, ExecutionState.BLOCKED} and not item.limitation_ids:
+            raise ValueError("incomplete inspection item requires an explicit limitation")
+        if item.state is not ExecutionState.COMPLETED:
+            continue
+        name = type(planned).__name__
+        if name == "InspectionRequirement" and not item.observation_ids:
+            raise ValueError("completed inspection requirement requires field observation")
+        if name == "MeasurementRequirement" and not item.measurement_ids:
+            raise ValueError("completed measurement requirement requires measurement")
+        if name == "PhotoRequirement" and not item.photo_ids:
+            raise ValueError("completed photo requirement requires private photo record")
+
+
 @dataclass(frozen=True, slots=True)
 class SaveInspectionSession:
     revisions: object
@@ -99,6 +118,7 @@ class SaveInspectionSession:
             reconciled = _reconcile(session, planning_record=planning_record, planning=planning)
             if reconciled.upstream_stale:
                 raise ValueError("Inspection Session does not bind the latest approved planning authority")
+            _validate_execution_against_planning(session, planning)
             self._verify_photos(workspace_id, session)
             created_at = self.clock.now()
             if created_at.tzinfo is None or created_at.utcoffset() is None:

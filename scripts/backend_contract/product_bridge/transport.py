@@ -247,7 +247,7 @@ class ProductBridge:
             "Host": f"{self._upstream_address[0]}:{self._upstream_address[1]}",
             "X-Local-API-Token": self._token,
         }
-        if method == "POST":
+        if method in {"POST", "PUT"}:
             content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
             is_document = upstream_target.endswith("/materials")
             is_photo = upstream_target.endswith("/inspection-photos")

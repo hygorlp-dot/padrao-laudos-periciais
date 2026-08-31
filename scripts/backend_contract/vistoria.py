@@ -463,6 +463,8 @@ class InspectionSession:
             raise ValueError("inspection session source revision diverges from plan authority")
         _timestamp(self.started_at)
         _timestamp(self.ended_at, nullable=True)
+        if self.ended_at is not None and datetime.fromisoformat(self.ended_at) < datetime.fromisoformat(self.started_at):
+            raise ValueError("inspection session chronology is invalid")
         _texts(self.participant_references)
         if type(self.upstream_stale) is not bool or self.upstream_stale != bool(self.upstream_stale_reasons):
             raise ValueError("inspection upstream stale state is dishonest")
