@@ -9,6 +9,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from jsonschema import Draft202012Validator
+from PIL import Image
 
 from scripts.backend_contract.delivery_foundation import (
     DeliveryAction,
@@ -245,14 +246,23 @@ def test_artifact_validation_rejects_macro_identity_change_and_malformed_pdf() -
 
 
 def test_supporting_image_bytes_are_verified_by_declared_media_type() -> None:
-    jpeg = b"\xff\xd8\xff\xe0synthetic-photo\xff\xd9"
-    png = b"\x89PNG\r\n\x1a\nsynthetic-photo"
+    def image_bytes(kind: str) -> bytes:
+        output = BytesIO()
+        Image.new("RGB", (2, 2), "white").save(output, format=kind)
+        return output.getvalue()
+
+    jpeg = image_bytes("JPEG")
+    png = image_bytes("PNG")
     assert validate_supporting_artifact(jpeg, "image/jpeg")[2] == "image/jpeg"
     assert validate_supporting_artifact(png, "image/png")[2] == "image/png"
     with pytest.raises(ValueError, match="JPEG"):
         validate_supporting_artifact(png, "image/jpeg")
     with pytest.raises(ValueError, match="unsupported"):
         validate_supporting_artifact(b"opaque", "application/octet-stream")
+    with pytest.raises(ValueError, match="PNG"):
+        validate_supporting_artifact(b"\x89PNG\r\n\x1a\n", "image/png")
+    with pytest.raises(ValueError, match="JPEG"):
+        validate_supporting_artifact(b"\xff\xd8\xff\xff\xd9", "image/jpeg")
 
 
 def test_conversion_copy_strips_macros_and_external_relationships_are_rejected() -> None:

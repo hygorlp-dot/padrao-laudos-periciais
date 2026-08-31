@@ -9,6 +9,8 @@ import json
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
+from PIL import Image, UnidentifiedImageError
+
 from .report_foundation import ReportSnapshot
 from .report_foundation import report_snapshot_to_mapping
 from .report_template import (
@@ -135,14 +137,16 @@ def validate_supporting_artifact(content: bytes, media_type: str) -> tuple[str, 
     """Verify non-Office supporting bytes without trusting filename metadata."""
     if type(content) is not bytes or not content:
         raise ValueError("supporting artifact bytes are empty")
-    if media_type == "image/jpeg":
-        if not (content.startswith(b"\xff\xd8\xff") and content.endswith(b"\xff\xd9")):
-            raise ValueError("supporting JPEG artifact is invalid")
-    elif media_type == "image/png":
-        if not content.startswith(b"\x89PNG\r\n\x1a\n"):
-            raise ValueError("supporting PNG artifact is invalid")
-    else:
+    expected_format = {"image/jpeg": "JPEG", "image/png": "PNG"}.get(media_type)
+    if expected_format is None:
         raise ValueError("unsupported supporting artifact media type")
+    try:
+        with Image.open(BytesIO(content)) as image:
+            if image.format != expected_format:
+                raise ValueError(f"supporting {expected_format} artifact is invalid")
+            image.verify()
+    except (OSError, UnidentifiedImageError) as exc:
+        raise ValueError(f"supporting {expected_format} artifact is invalid") from exc
     return sha256(content).hexdigest(), len(content), media_type
 
 
