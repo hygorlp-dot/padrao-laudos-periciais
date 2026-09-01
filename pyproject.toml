@@ -5,6 +5,7 @@ requires-python = ">=3.13,<3.15"
 dependencies = [
   "jsonschema>=4.23,<5",
   "onnxruntime==1.29.0",
+  "openai==3.6.0",
   "pdfplumber>=0.11,<1",
   "pypdf>=6.15,<7",
   "rapidocr==3.9.2",
