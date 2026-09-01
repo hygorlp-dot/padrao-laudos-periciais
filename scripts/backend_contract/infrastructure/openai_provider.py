@@ -95,6 +95,30 @@ def _reject_non_finite_json(value: str):
     raise ValueError(f"non-finite JSON constant denied: {value}")
 
 
+def _translate_response(response, latency_ms: int) -> AIResponse:
+    try:
+        refusal_state = _refusal_state(response)
+        if refusal_state != "NONE":
+            payload = {}
+        else:
+            payload = json.loads(response.output_text, parse_constant=_reject_non_finite_json)
+        canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        return AIResponse(
+            provider="OPENAI",
+            model=response.model,
+            provider_response_id=getattr(response, "id", None),
+            payload=payload,
+            response_hash=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            usage=_usage(response),
+            latency_ms=latency_ms,
+            refusal_state=refusal_state,
+        )
+    except AIProviderFailure:
+        raise
+    except Exception:
+        raise AIProviderFailure("INVALID_STRUCTURED_OUTPUT", latency_ms=latency_ms) from None
+
+
 class EnvironmentOpenAIClientFactory:
     """Cria o cliente sem persistir nem devolver a credencial local."""
 
@@ -151,22 +175,4 @@ class OpenAIProvider:
             latency_ms = max(0, round((self._monotonic() - started) * 1000))
             raise AIProviderFailure(_error_code(exc), latency_ms=latency_ms) from None
         latency_ms = max(0, round((self._monotonic() - started) * 1000))
-        refusal_state = _refusal_state(response)
-        if refusal_state != "NONE":
-            payload = {}
-        else:
-            try:
-                payload = json.loads(response.output_text, parse_constant=_reject_non_finite_json)
-            except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
-                raise AIProviderFailure("INVALID_STRUCTURED_OUTPUT", latency_ms=latency_ms) from None
-        canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
-        return AIResponse(
-            provider="OPENAI",
-            model=response.model,
-            provider_response_id=getattr(response, "id", None),
-            payload=payload,
-            response_hash=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
-            usage=_usage(response),
-            latency_ms=latency_ms,
-            refusal_state=refusal_state,
-        )
+        return _translate_response(response, latency_ms)

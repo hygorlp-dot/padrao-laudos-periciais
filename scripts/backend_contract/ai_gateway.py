@@ -71,6 +71,7 @@ def _secret_key(key: str) -> bool:
     normalized = re.sub(r"[^a-z0-9]+", "_", snake_case.casefold()).strip("_")
     compact = normalized.replace("_", "")
     parts = normalized.split("_")
+    secret_parts = {"key", "token", "secret", "password", "credential", "authorization", "bearer"}
     return (
         normalized in _SECRET_FIELDS
         or compact in {field.replace("_", "") for field in _SECRET_FIELDS}
@@ -87,6 +88,7 @@ def _secret_key(key: str) -> bool:
             and parts[-2] in {"api", "secret", "private", "encryption", "signing", "access"}
         )
         or (len(parts) >= 3 and parts[-2:] == ["key", "id"] and parts[-3] == "access")
+        or any(part.rstrip("s") in secret_parts for part in parts)
     )
 
 

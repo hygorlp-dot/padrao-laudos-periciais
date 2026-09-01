@@ -263,6 +263,22 @@ def test_non_finite_json_failure_preserves_elapsed_latency() -> None:
     assert caught.value.latency_ms == 31
 
 
+def test_invalid_unicode_failure_preserves_elapsed_latency() -> None:
+    ticks = iter((10.0, 10.031))
+    responses = RecordingResponses(result=sdk_response(output_text='{"claims":["\\ud800"]}'))
+    provider = OpenAIProvider(
+        RecordingClient(responses),
+        egress_policy=EgressPolicy(remote_sanitized_enabled=True),
+        monotonic_clock=lambda: next(ticks),
+    )
+
+    with pytest.raises(AIProviderFailure) as caught:
+        provider.execute(request(), profile())
+
+    assert caught.value.code == "INVALID_STRUCTURED_OUTPUT"
+    assert caught.value.latency_ms == 31
+
+
 def test_environment_factory_requires_key_without_exposing_it(monkeypatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     factory = EnvironmentOpenAIClientFactory()
