@@ -584,6 +584,20 @@ def test_crash_after_v2_identity_transition_consumes_migration_record_on_restart
     assert recovered.lifecycle_status == {"device_id": "DEVICE-" + "A" * 32, "generation": 1, "revoked": False}
 
 
+def test_completion_cannot_self_authorize_replayed_json_migration_record(tmp_path: Path) -> None:
+    root = tmp_path / "offline-field-v1"
+    root.mkdir()
+    (root / ".device-key").write_bytes(b"L" * 32)
+    (root / ".device-id").write_text("DEVICE-" + "A" * 32, encoding="ascii")
+    DeviceOfflineVaultRegistry(tmp_path)
+    replay = json.dumps({"replayed": True}, sort_keys=True).encode("utf-8")
+    (root / ".lifecycle-migration-v1").write_bytes(replay)
+    (root / ".lifecycle-migration-v1.complete").write_text(hashlib.sha256(replay).hexdigest() + "\n", encoding="ascii")
+
+    with pytest.raises(PermissionError, match="completion is inconsistent"):
+        DeviceOfflineVaultRegistry(tmp_path)
+
+
 def _replacement_outcome(registry: DeviceOfflineVaultRegistry, expected_device_id: str) -> str:
     try:
         return registry.replace_revoked_device(expected_device_id)

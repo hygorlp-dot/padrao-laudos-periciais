@@ -439,6 +439,14 @@ class DeviceOfflineVaultRegistry:
         )
         migration_recorded = self._lifecycle_migration_path.exists() and not migration_consumed
         migration_completed = self._lifecycle_migration_complete_path.exists()
+        if migration_completed and not migration_consumed:
+            raise PermissionError("offline lifecycle migration completion is inconsistent")
+        if migration_consumed and not migration_completed:
+            self._provision(
+                self._lifecycle_migration_complete_path,
+                hashlib.sha256(self._lifecycle_migration_path.read_bytes()).hexdigest().encode("ascii") + b"\n",
+            )
+            migration_completed = True
         migration_pending = (
             migration_recorded
             and not migration_completed
