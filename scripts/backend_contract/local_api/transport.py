@@ -990,8 +990,14 @@ class LocalApi:
                 if normalized_method == "GET":
                     if self._services.list_offline_inspections is None:
                         return _error(503, "OFFLINE_STORAGE_UNAVAILABLE")
-                    packages = self._services.list_offline_inspections.execute(workspace_id, device_id=self._services.offline_device_id)
-                    return _json_response(200, {"items": [offline_package_to_mapping(item) for item in packages]})
+                    inventory = self._services.list_offline_inspections.execute(workspace_id, device_id=self._services.offline_device_id)
+                    return _json_response(200, {
+                        "items": [offline_package_to_mapping(item) for item in inventory.items],
+                        "conflicts": [
+                            {"code": item.code, "message": item.message}
+                            for item in inventory.conflicts
+                        ],
+                    })
                 dto = self._request_dto(request_headers, body)
                 if normalized_method == "POST":
                     if self._services.prepare_offline_inspection is None or set(dto) != {"device_session_id"} or type(dto["device_session_id"]) is not str:

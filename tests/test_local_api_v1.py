@@ -350,6 +350,7 @@ def test_inspection_session_start_delegates_explicit_professional_context():
 
 def test_offline_field_routes_are_private_and_expose_conflicts_without_overwrite():
     from dataclasses import replace
+    from types import SimpleNamespace
     from scripts.backend_contract.field_mobile import OfflineInspectionPackage, OfflineMediaManifest
     from scripts.backend_contract.vistoria import inspection_session_from_mapping
     from scripts.backend_contract.application.field_mobile import SyncConflict, SyncDecision
@@ -373,7 +374,10 @@ def test_offline_field_routes_are_private_and_expose_conflicts_without_overwrite
     sync = RecordingService((SyncDecision(False, (conflict,)), None))
     update = RecordingService(replace(package, package_id="OFFLINE-PACKAGE-002", package_revision=2, device_sequence=2))
     get_offline = RecordingService(package)
-    list_offline = RecordingService((package,))
+    list_offline = RecordingService(SimpleNamespace(
+        items=(package,),
+        conflicts=(SimpleNamespace(code="CORRUPT_OFFLINE_PACKAGE", message="Pacote corrompido requer recuperação."),),
+    ))
     revoke = RecordingService(None)
     api = LocalApi(services(
         prepare_offline_inspection=prepare, update_offline_inspection=update,
@@ -389,6 +393,7 @@ def test_offline_field_routes_are_private_and_expose_conflicts_without_overwrite
     assert decoded(updated)["package"]["package_revision"] == 2
     listed = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/offline-inspection", headers={"X-Local-API-Token": TOKEN})
     assert listed.status == 200 and decoded(listed)["items"][0]["package_id"] == package.package_id
+    assert decoded(listed)["conflicts"] == [{"code": "CORRUPT_OFFLINE_PACKAGE", "message": "Pacote corrompido requer recuperação."}]
     reopened = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/offline-inspection/{package.package_id}", headers={"X-Local-API-Token": TOKEN})
     assert reopened.status == 200
     assert decoded(reopened)["package"]["package_id"] == package.package_id

@@ -30,10 +30,14 @@ describe("inspection session view", () => {
     const offline = { ...snapshot, items: [{ ...snapshot.items[0], title: "Item preservado offline" }] };
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response(200, { revision: 1, updated_at: "2026-08-30T13:00:00Z", snapshot }))
-      .mockResolvedValueOnce(response(200, { items: [{ package_id: "OFFLINE-PACKAGE-001", package_revision: 2, device_sequence: 2, inspection_snapshot: offline }] }));
+      .mockResolvedValueOnce(response(200, {
+        items: [{ package_id: "OFFLINE-PACKAGE-001", package_revision: 2, device_sequence: 2, inspection_snapshot: offline }],
+        conflicts: [{ code: "CORRUPT_OFFLINE_PACKAGE", message: "Outro pacote local está corrompido e requer recuperação." }],
+      }));
     vi.stubGlobal("fetch", fetchMock);
     render(<InspectionSessionView workspaceId={ID} />);
     expect(await screen.findByText(/Item preservado offline/)).toBeInTheDocument();
+    expect(screen.getByText(/Outro pacote local está corrompido/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Preparar uso offline" })).toBeDisabled();
   });
   test("separates raw field records, party statements, media authority and limitations", async () => {

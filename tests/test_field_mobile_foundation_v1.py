@@ -281,8 +281,21 @@ def test_forged_receipt_cannot_hide_pending_offline_capture(tmp_path: Path) -> N
     vault.save(package)
     session_hash = hashlib.sha256(package.device_session_id.encode("utf-8")).hexdigest()
     (tmp_path / f"{session_hash}.999.receipt").write_bytes(b"forged")
-    with pytest.raises(ValueError, match="receipt storage is corrupt"):
-        vault.list_pending_packages()
+    inventory = vault.inventory_pending_packages()
+    assert [item.package_id for item in inventory.items] == [package.package_id]
+    assert "CORRUPT_OFFLINE_AUTHORITY" in {item.code for item in inventory.conflicts}
+
+
+def test_pending_inventory_keeps_valid_capture_visible_beside_corrupt_sibling(tmp_path: Path) -> None:
+    package = offline_package_from_mapping(package_mapping())
+    vault = DeviceOfflineVault(tmp_path, key=b"q" * 32, device_id=package.device_id, workspace_id=package.workspace_id)
+    vault.save(package)
+    (tmp_path / "corrupt.offline").write_bytes(b"truncated")
+
+    inventory = vault.inventory_pending_packages()
+
+    assert [item.package_id for item in inventory.items] == [package.package_id]
+    assert [item.code for item in inventory.conflicts] == ["CORRUPT_OFFLINE_PACKAGE"]
 
 
 def test_revocation_linearizes_after_complete_package_read(tmp_path: Path, monkeypatch) -> None:
@@ -412,6 +425,13 @@ def test_offline_update_sync_and_durable_replay_receipt_form_one_vertical(tmp_pa
     updated = updater.execute(WORKSPACE_ID, device_id=package.device_id, package_id=package.package_id, expected_package_revision=1, snapshot=package.inspection_snapshot)
     assert updated.package_revision == 2
     assert vault.verify_media_authority(updated.package_id)
+    assert [item.package_id for item in vault.list_pending_packages()] == [updated.package_id]
+
+    superseded, record = SyncOfflineInspection(getter, SimpleNamespace(), lambda *_: vault).execute(
+        WORKSPACE_ID, device_id=package.device_id, package_id=package.package_id,
+    )
+    assert record is None
+    assert "SUPERSEDED_PACKAGE" in {item.code for item in superseded.conflicts}
 
     current = SimpleNamespace(revision=package.inspection_revision)
     getter = SimpleNamespace(execute=lambda _workspace: (current, package.inspection_snapshot))
@@ -424,3 +444,55 @@ def test_offline_update_sync_and_durable_replay_receipt_form_one_vertical(tmp_pa
     replay, record = sync.execute(WORKSPACE_ID, device_id=package.device_id, package_id=updated.package_id)
     assert not replay.accepted and record is None
     assert "DEVICE_REPLAY" in {item.code for item in replay.conflicts}
+
+
+def test_sync_recovers_exact_canonical_save_after_receipt_write_failure(tmp_path: Path, monkeypatch) -> None:
+    originals = {"PHOTO-001": b"photo", "VIDEO-001": b"video", "SKETCH-001": b"sketch"}
+    mapping = package_mapping()
+    for manifest, collection in zip(mapping["media_manifest"], ("photos", "videos", "sketches")):
+        original = originals[manifest["record_id"]]
+        digest = hashlib.sha256(original).hexdigest()
+        manifest["original_sha256"] = digest
+        manifest["byte_size"] = len(original)
+        mapping["inspection_snapshot"][collection][0]["original_sha256"] = digest
+    package = offline_package_from_mapping(mapping)
+    vault = DeviceOfflineVault(tmp_path, key=b"j" * 32, device_id=package.device_id, workspace_id=package.workspace_id)
+    vault.save(package)
+    for item in package.media_manifest:
+        vault.save_media(package.package_id, item.record_id, originals[item.record_id])
+
+    state = {"revision": package.inspection_revision, "snapshot": package.inspection_snapshot, "writes": 0}
+
+    class Getter:
+        def execute(self, _workspace_id):
+            return SimpleNamespace(revision=state["revision"]), state["snapshot"]
+
+    class Saver:
+        def execute(self, _workspace_id, snapshot, expected_revision):
+            assert expected_revision == state["revision"]
+            state["revision"] += 1
+            state["snapshot"] = snapshot
+            state["writes"] += 1
+            return SimpleNamespace(revision=state["revision"])
+
+    original_receipt = vault.record_accepted_sync
+    attempts = 0
+
+    def fail_once(value):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("synthetic receipt failure")
+        return original_receipt(value)
+
+    monkeypatch.setattr(vault, "record_accepted_sync", fail_once)
+    service = SyncOfflineInspection(Getter(), Saver(), lambda *_: vault)
+    with pytest.raises(OSError, match="receipt"):
+        service.execute(WORKSPACE_ID, device_id=package.device_id, package_id=package.package_id)
+    assert state["writes"] == 1
+
+    recovered, record = service.execute(WORKSPACE_ID, device_id=package.device_id, package_id=package.package_id)
+    assert recovered.accepted is True
+    assert record.revision == state["revision"]
+    assert state["writes"] == 1
+    assert vault.list_pending_packages() == ()

@@ -59,6 +59,13 @@ export function InspectionSessionView({ workspaceId }: { workspaceId: string }) 
         try {
           const pending = await listPendingOfflineInspections(workspaceId);
           const offline = pending.items[0];
+          if (!controller.signal.aborted && pending.conflicts?.length) {
+            setSyncConflicts(pending.conflicts.map((item) => ({
+              ...item,
+              record_ids: [],
+              requires_explicit_review: true,
+            })));
+          }
           if (!controller.signal.aborted && offline) { setOfflinePackageId(offline.package_id); setOfflinePackageRevision(offline.package_revision); setState({ kind: "ready", value: { ...value, snapshot: offline.inspection_snapshot } }); }
           else if (!controller.signal.aborted) setState({ kind: "ready", value });
         } catch {

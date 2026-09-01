@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from dataclasses import dataclass
 from pathlib import Path
 import stat
 from threading import Event, RLock
@@ -14,6 +15,7 @@ from ..field_mobile import (
     OfflineInspectionPackage,
     canonical_offline_package_bytes,
     offline_package_from_mapping,
+    offline_package_sha256,
 )
 import json
 
@@ -22,6 +24,18 @@ _REPARSE_ATTRIBUTE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 # Windows' CRT binary flag is stable (``O_BINARY == 0x8000``).  Keeping the
 # literal local avoids acquiring the broader mixed ``os`` capability surface.
 _OPEN_BINARY = 0x8000 if os.name == "nt" else 0
+
+
+@dataclass(frozen=True, slots=True)
+class OfflineInventoryConflict:
+    code: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class PendingOfflineInventory:
+    items: tuple[OfflineInspectionPackage, ...]
+    conflicts: tuple[OfflineInventoryConflict, ...]
 
 
 def _is_link_or_reparse(details: os.stat_result) -> bool:
@@ -76,6 +90,14 @@ class DeviceOfflineVault:
         identity = f"{package_id}\0{record_id}".encode("utf-8")
         return self._root / f"{hashlib.sha256(identity).hexdigest()}.media"
 
+    def _supersession_path(self, package_id: str) -> Path:
+        name = hashlib.sha256(package_id.encode("utf-8")).hexdigest()
+        return self._root / f"{name}.superseded"
+
+    def _sync_intent_path(self, package_id: str) -> Path:
+        name = hashlib.sha256(package_id.encode("utf-8")).hexdigest()
+        return self._root / f"{name}.syncing"
+
     def _media_authority(self, package_id: str, record_id: str):
         package = self.load(package_id)
         matches = [item for item in package.media_manifest if item.record_id == record_id]
@@ -118,11 +140,74 @@ class DeviceOfflineVault:
         return package
 
     def list_pending_packages(self) -> tuple[OfflineInspectionPackage, ...]:
+        inventory = self.inventory_pending_packages()
+        if inventory.conflicts:
+            raise ValueError(inventory.conflicts[0].message)
+        return inventory.items
+
+    def inventory_pending_packages(self) -> PendingOfflineInventory:
         with self._lock:
             key = self._require_active()
-            packages = [self._decode_package(self._read_payload(path), key) for path in self._root.glob("*.offline")]
-            pending = [item for item in packages if item.device_sequence > self.last_accepted_sequence(item.device_session_id)]
-            return tuple(sorted(pending, key=lambda item: (item.created_at, item.package_revision, item.package_id), reverse=True))
+            packages: list[OfflineInspectionPackage] = []
+            conflicts: list[OfflineInventoryConflict] = []
+            for path in self._root.glob("*.offline"):
+                try:
+                    packages.append(self._decode_package(self._read_payload(path), key))
+                except (OSError, UnicodeError, ValueError):
+                    conflicts.append(OfflineInventoryConflict(
+                        "CORRUPT_OFFLINE_PACKAGE",
+                        "Pacote offline corrompido requer recuperação explícita.",
+                    ))
+            pending: list[OfflineInspectionPackage] = []
+            for item in packages:
+                try:
+                    accepted = self.last_accepted_sequence(item.device_session_id)
+                    superseded = self.superseding_package_id(item.package_id)
+                except (OSError, UnicodeError, ValueError):
+                    conflicts.append(OfflineInventoryConflict(
+                        "CORRUPT_OFFLINE_AUTHORITY",
+                        "Autoridade local de sync corrompida requer recuperação explícita.",
+                    ))
+                    pending.append(item)
+                    continue
+                if item.device_sequence > accepted and superseded is None:
+                    pending.append(item)
+            ordered = tuple(sorted(
+                pending,
+                key=lambda item: (item.created_at, item.package_revision, item.package_id),
+                reverse=True,
+            ))
+            return PendingOfflineInventory(ordered, tuple(conflicts))
+
+    def mark_superseded(self, package_id: str, replacement_package_id: str) -> None:
+        key = self._require_active()
+        previous = self.load(package_id)
+        replacement = self.load(replacement_package_id)
+        if (
+            previous.device_session_id != replacement.device_session_id
+            or replacement.package_revision != previous.package_revision + 1
+            or replacement.device_sequence != previous.device_sequence + 1
+        ):
+            raise ValueError("offline package supersession authority is invalid")
+        nonce = os.urandom(12)
+        aad = f"{self._workspace_id}\0{self._device_id}\0{package_id}".encode("utf-8")
+        ciphertext = AESGCM(key).encrypt(nonce, replacement_package_id.encode("utf-8"), aad)
+        self._exclusive_write(self._supersession_path(package_id), b"SUPERSEDED-V1\0" + nonce + ciphertext)
+
+    def superseding_package_id(self, package_id: str) -> str | None:
+        key = self._require_active()
+        path = self._supersession_path(package_id)
+        if not path.exists():
+            return None
+        payload = self._read_payload(path)
+        if not payload.startswith(b"SUPERSEDED-V1\0") or len(payload) < 43:
+            raise ValueError("offline supersession storage is corrupt")
+        nonce, ciphertext = payload[14:26], payload[26:]
+        aad = f"{self._workspace_id}\0{self._device_id}\0{package_id}".encode("utf-8")
+        try:
+            return AESGCM(key).decrypt(nonce, ciphertext, aad).decode("utf-8")
+        except (InvalidTag, UnicodeError) as exc:
+            raise ValueError("offline supersession storage is corrupt") from exc
 
     def save_media(self, package_id: str, record_id: str, original: bytes) -> None:
         key = self._require_active()
@@ -195,6 +280,44 @@ class DeviceOfflineVault:
         nonce = os.urandom(12)
         aad = f"{self._workspace_id}\0{self._device_id}\0{package.device_session_id}\0{package.device_sequence}".encode("utf-8")
         self._exclusive_write(target, b"RECEIPT-V1\0" + nonce + AESGCM(key).encrypt(nonce, clear, aad))
+
+    def begin_sync(self, package: OfflineInspectionPackage, expected_revision: int) -> None:
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("offline sync expected revision is invalid")
+        existing = self.sync_intent_expected_revision(package)
+        if existing is not None:
+            if existing != expected_revision:
+                raise ValueError("offline sync intent diverges from canonical revision")
+            return
+        key = self._require_active()
+        nonce = os.urandom(12)
+        digest = offline_package_sha256(package)
+        clear = f"{package.package_id}\n{digest}\n{expected_revision}".encode("utf-8")
+        aad = f"{self._workspace_id}\0{self._device_id}\0{package.package_id}".encode("utf-8")
+        payload = b"SYNCING-V1\0" + nonce + AESGCM(key).encrypt(nonce, clear, aad)
+        self._exclusive_write(self._sync_intent_path(package.package_id), payload)
+
+    def sync_intent_expected_revision(self, package: OfflineInspectionPackage) -> int | None:
+        path = self._sync_intent_path(package.package_id)
+        if not path.exists():
+            return None
+        key = self._require_active()
+        payload = self._read_payload(path)
+        if not payload.startswith(b"SYNCING-V1\0") or len(payload) < 40:
+            raise ValueError("offline sync intent storage is corrupt")
+        nonce, ciphertext = payload[11:23], payload[23:]
+        aad = f"{self._workspace_id}\0{self._device_id}\0{package.package_id}".encode("utf-8")
+        try:
+            clear = AESGCM(key).decrypt(nonce, ciphertext, aad).decode("utf-8")
+            stored_package, stored_digest, revision = clear.split("\n")
+            if stored_package != package.package_id or stored_digest != offline_package_sha256(package):
+                raise ValueError
+            expected = int(revision)
+            if expected < 1:
+                raise ValueError
+            return expected
+        except (InvalidTag, UnicodeError, ValueError) as exc:
+            raise ValueError("offline sync intent storage is corrupt") from exc
 
     def _exclusive_write(self, target: Path, payload: bytes) -> None:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN_BINARY
@@ -306,7 +429,8 @@ class DeviceOfflineVaultRegistry:
     def assert_workspace_backup_ready(self, workspace_id) -> None:
         """Refuse a canonical backup while device-local work is unresolved."""
         vault = self.vault_for(workspace_id, self.device_id)
-        if vault.list_pending_packages():
+        inventory = vault.inventory_pending_packages()
+        if inventory.items or inventory.conflicts:
             raise ValueError("pending offline field work must be synchronized before backup")
 
     def revoke_device(self) -> None:
