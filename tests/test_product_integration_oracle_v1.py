@@ -16,6 +16,7 @@ from scripts.backend_contract.case_analysis import case_analysis_from_mapping
 from scripts.backend_contract.delivery_foundation import DeliveryState, delivery_snapshot_from_mapping
 from scripts.backend_contract.infrastructure.productization import CreateWorkspaceBackup, RecoveryStaging, RestoreWorkspaceBackup, VerifyWorkspaceBackup
 from scripts.backend_contract.application.models import PrivateContentId, WorkspaceId, thaw_payload
+from scripts.backend_contract.application.ocr_cache import RevisionOcrPageCache
 from scripts.backend_contract.pericial_planning import pericial_planning_from_mapping
 from scripts.backend_contract.report_foundation import report_snapshot_from_mapping
 from scripts.backend_contract.technical_findings import technical_snapshot_from_mapping
@@ -708,7 +709,7 @@ def test_d6_final_word_and_template_bytes_are_revalidated_after_recovery() -> No
             raise AssertionError(f"invalid Delivery {expected_error} bytes were accepted")
 
 
-def test_d6_canonical_ocr_cache_survives_backup_validation() -> None:
+def test_d6_canonical_ocr_cache_survives_backup_validation_and_runtime_reopen(tmp_path: Path) -> None:
     package, _ = _longitudinal_backup()
     mapping = json.loads(package)
     ocr = {
@@ -721,17 +722,35 @@ def test_d6_canonical_ocr_cache_survives_backup_validation() -> None:
     key = tuple(ocr[name] for name in ("document_sha256", "page_number", "engine", "engine_version", "model_version", "config_version"))
     artifact_id = hashlib.sha256(json.dumps(key, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
     mapping["artifact_revisions"].append(_revision("OCR_PAGE_CACHE_V1", artifact_id, ocr, 1, 999))
+    mapping["artifact_revisions"].sort(key=lambda item: (item["artifact_kind"], item["artifact_id"], item["revision"]))
     verified = VerifyWorkspaceBackup().execute(_reseal(mapping))
     assert any(item["artifact_kind"] == "OCR_PAGE_CACHE_V1" for item in verified.artifact_revisions)
+    staging = RecoveryStaging.create(tmp_path / "ocr-recovery")
+    try:
+        RestoreWorkspaceBackup(staging).execute(_reseal(mapping))
+        reopened = RevisionOcrPageCache(staging.revisions, WorkspaceId.parse(WORKSPACE_ID), object(), object()).get(key)
+        assert reopened is not None and reopened.text == ocr["normalized_text"] and reopened.engine == ocr["engine"]
+    finally:
+        staging.close()
 
     substituted = json.loads(_reseal(mapping))
-    substituted["artifact_revisions"][-1]["artifact_id"] = "OCR-CACHE-SUBSTITUTED"
+    ocr_record = next(item for item in substituted["artifact_revisions"] if item["artifact_kind"] == "OCR_PAGE_CACHE_V1")
+    ocr_record["artifact_id"] = "OCR-CACHE-SUBSTITUTED"
     try:
         VerifyWorkspaceBackup().execute(_reseal(substituted))
     except RepositoryIntegrityError as exc:
         assert "internal artifact envelope identity" in str(exc)
     else:
         raise AssertionError("unreachable OCR cache envelope identity was accepted")
+
+    reordered = json.loads(_reseal(mapping))
+    reordered["artifact_revisions"][0], reordered["artifact_revisions"][1] = reordered["artifact_revisions"][1], reordered["artifact_revisions"][0]
+    try:
+        VerifyWorkspaceBackup().execute(_reseal(reordered))
+    except RepositoryIntegrityError as exc:
+        assert "revision order" in str(exc)
+    else:
+        raise AssertionError("non-canonical revision order was accepted")
 
 
 def test_d3_d4_superseded_report_and_invalid_annex_fail_closed() -> None:

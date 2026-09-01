@@ -458,6 +458,9 @@ class VerifyWorkspaceBackup:
             raise RepositoryIntegrityError("backup package checksum diverges")
         workspace_id = value.workspace.workspace_id
         revisions = tuple(_revision_from_mapping(item, workspace_id) for item in value.artifact_revisions)
+        revision_order = [(item.artifact_kind, item.artifact_id, item.revision) for item in revisions]
+        if revision_order != sorted(revision_order):
+            raise RepositoryIntegrityError("backup revision order is not canonical")
         identities: set[str] = set()
         sequences: dict[tuple[str, str], list[int]] = {}
         for record in revisions:
