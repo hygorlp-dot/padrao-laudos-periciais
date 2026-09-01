@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import re
 from dataclasses import dataclass, field as dataclass_field
 from decimal import Decimal
 from enum import StrEnum
@@ -53,6 +54,10 @@ def _uuid(value: object, field: str) -> str:
     if str(parsed) != value:
         raise ValueError(f"{field} invalid")
     return value
+
+
+def _semantic_normalize(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
 
 
 @dataclass(frozen=True, slots=True)
@@ -341,8 +346,9 @@ def observe_domain_proposal(
         raise ValueError("AI eval proposal contains cross-workspace source")
     cited_document_ids = {ref.document_id for ref in all_refs}
     grounded = sum(bool(item.source_refs) for item in proposal.items)
-    combined_content = " ".join(item.content for item in proposal.items).casefold()
-    semantics_valid = all(marker.casefold() in combined_content for marker in case.expected_semantic_markers)
+    combined_content = _semantic_normalize(" ".join(item.content for item in proposal.items))
+    expected_content = _semantic_normalize(" ".join(case.expected_semantic_markers))
+    semantics_valid = combined_content == expected_content
     return AIEvalObservation._from_verified_boundary(
         dataset_version=dataset_version,
         case_id=case.case_id,

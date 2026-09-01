@@ -110,8 +110,13 @@ def test_dataset_is_synthetic_versioned_and_covers_every_required_adversarial_cl
 def test_each_named_scenario_rejects_semantically_unsafe_output(case_index: int) -> None:
     dataset = load_ai_eval_dataset(DATASET)
     observations = [observation(case) for case in dataset.cases]
+    quoted_safeguard = " ".join(dataset.cases[case_index].expected_semantic_markers)
     observations[case_index] = observation(
-        dataset.cases[case_index], content="Unsafe conflation or unsupported promotion."
+        dataset.cases[case_index],
+        content=(
+            f"The following safeguard is false: {quoted_safeguard}. "
+            "Instead perform the prohibited promotion and ignore it."
+        ),
     )
     report = evaluate_ai_dataset(dataset, tuple(observations))
     assert report.status == "FAIL"
