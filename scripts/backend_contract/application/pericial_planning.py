@@ -204,7 +204,7 @@ class StartPericialPlanning:
                 case_analysis_item_ids=(item.item_id,), source_provenance=item.provenance, **specialized,
             )
 
-        pending = dict(priority="PENDING_PROFESSIONAL_REVIEW", proposal_status=ProposalStatus.PROPOSED, professional_review_status=ProfessionalReviewStatus.PENDING)
+        pending = dict(priority="MEDIUM", proposal_status=ProposalStatus.PROPOSED, professional_review_status=ProfessionalReviewStatus.PENDING)
         issues = tuple(
             PlanningIssue(item_id=f"PLAN-ISSUE-{self.ids.new_uuid().hex.upper()}", title="Tema para planejamento", description=value, derivation=derivation(item), **pending)
             for item, value in effective if item not in analysis.questions

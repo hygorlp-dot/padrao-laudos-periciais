@@ -159,7 +159,7 @@ def test_backup_rejects_delivery_without_its_exact_dependency_closure() -> None:
     delivery = json.loads((Path(__file__).parent / "fixtures/delivery-snapshot-v1.json").read_text(encoding="utf-8"))
     delivery["workspace_id"] = WORKSPACE_ID
     delivery["binding"]["workspace_id"] = WORKSPACE_ID
-    mapping["artifact_revisions"] = [portable_revision("DELIVERY_SNAPSHOT_V1", delivery["delivery_id"], delivery)]
+    mapping["artifact_revisions"] = [portable_revision("DELIVERY_SNAPSHOT_V1", "DELIVERY-SNAPSHOT", delivery)]
 
     with pytest.raises(RepositoryIntegrityError, match="dependency"):
         VerifyWorkspaceBackup().execute(reseal_backup(mapping))
@@ -358,7 +358,7 @@ def seed_synced_inspection_media(store: SQLiteApplicationStore, private: Private
     store.revisions.append(
         workspace_id=workspace_id,
         artifact_kind="INSPECTION_SESSION_V1",
-        artifact_id=snapshot["session_id"],
+        artifact_id="INSPECTION-SESSION",
         revision_id="55555555-5555-4555-8555-555555555555",
         created_at="2026-08-31T12:40:00+00:00",
         payload=snapshot,

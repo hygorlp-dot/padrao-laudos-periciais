@@ -37,7 +37,7 @@ from ..application.process_metadata import document_metadata_from_payload
 from ..budget_foundation import budget_snapshot_from_mapping
 from ..case_analysis import case_analysis_from_mapping
 from ..delivery_foundation import delivery_snapshot_from_mapping
-from ..delivery_renderer import validate_final_artifact
+from ..delivery_renderer import validate_delivery_artifact, validate_final_artifact, validate_supporting_artifact
 from ..pericial_planning import pericial_planning_from_mapping
 from ..report_foundation import expert_profile_from_mapping, report_snapshot_from_mapping
 from ..technical_findings import technical_snapshot_from_mapping
@@ -263,6 +263,23 @@ def _validate_user_artifact(value: object) -> None:
 
 _USER_ARTIFACT_VALIDATORS = {kind: _validate_user_artifact for kind in USER_DEFINED_ARTIFACT_KINDS}
 
+_CANONICAL_PRODUCT_ARTIFACT_IDS = {
+    "BUDGET_SNAPSHOT_V1": "BUDGET-SNAPSHOT",
+    "CASE_ANALYSIS_SNAPSHOT_V1": "CASE-ANALYSIS",
+    "DELIVERY_SNAPSHOT_V1": "DELIVERY-SNAPSHOT",
+    "EXPERT_MASTER_PROFILE_V1": "EXPERT-PROFILE",
+    "INSPECTION_SESSION_V1": "INSPECTION-SESSION",
+    "PERICIAL_PLANNING_SNAPSHOT_V1": "PERICIAL-PLANNING",
+    "PROCESS_CASE": "PROCESS_CASE",
+    "REPORT_SNAPSHOT_V1": "REPORT-SNAPSHOT",
+    "TECHNICAL_SNAPSHOT_V1": "TECHNICAL-SNAPSHOT",
+}
+_DOMAIN_REVISION_FIELDS = {
+    "BUDGET_SNAPSHOT_V1": "revision",
+    "DELIVERY_SNAPSHOT_V1": "revision",
+    "EXPERT_MASTER_PROFILE_V1": "revision",
+}
+
 if frozenset(_ARTIFACT_VALIDATORS) != PORTABLE_PRODUCT_ARTIFACT_KINDS:
     raise RuntimeError("portable artifact validators diverge from application ownership")
 if frozenset(_INTERNAL_ARTIFACT_VALIDATORS) != INTERNAL_ARTIFACT_KINDS:
@@ -304,8 +321,15 @@ def _revision_from_mapping(value: object, workspace_id: str) -> ArtifactRevision
         or _INTERNAL_ARTIFACT_VALIDATORS.get(record.artifact_kind)
         or _USER_ARTIFACT_VALIDATORS.get(record.artifact_kind)
     )
+    expected_artifact_id = _CANONICAL_PRODUCT_ARTIFACT_IDS.get(record.artifact_kind)
+    if expected_artifact_id is not None and record.artifact_id != expected_artifact_id:
+        raise RepositoryIntegrityError("backup canonical artifact envelope identity diverges")
+    revision_field = _DOMAIN_REVISION_FIELDS.get(record.artifact_kind)
+    payload = thaw_payload(record.payload)
+    if revision_field is not None and (type(payload) is not dict or payload.get(revision_field) != record.revision):
+        raise RepositoryIntegrityError("backup artifact envelope revision diverges")
     if validator is not None:
-        parsed = validator(thaw_payload(record.payload))
+        parsed = validator(payload)
         payload_workspace = getattr(parsed, "workspace_id", None)
         if payload_workspace is not None and str(payload_workspace) != workspace_id:
             raise RepositoryIntegrityError("backup payload belongs to another workspace")
@@ -356,7 +380,13 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
             report_record = require("REPORT_SNAPSHOT_V1", binding["report_revision"], binding["report_digest"], "report_id", binding["report_snapshot_id"])
             report = report_snapshot_from_mapping(thaw_payload(report_record.payload))
             approval = next((item for item in report.review_decisions if item.review_id == binding["report_approval_id"]), None)
-            if approval is None or approval.action.value != "APPROVE" or approval.professional_id != binding["professional_id"]:
+            if (
+                report.state.value != "APPROVED"
+                or approval is None
+                or approval is not report.review_decisions[-1]
+                or approval.action.value != "APPROVE"
+                or approval.professional_id != binding["professional_id"]
+            ):
                 raise RepositoryIntegrityError("backup delivery professional authority diverges")
 
 
@@ -453,12 +483,22 @@ class VerifyWorkspaceBackup:
                     for item in delivery.artifacts
                 ):
                     raise RepositoryIntegrityError("backup delivery byte authority is incomplete")
+                try:
+                    validate_final_artifact(
+                        private_by_id[delivery.template_content_id].content,
+                        delivery.template_format.value,
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise RepositoryIntegrityError("backup delivery template is invalid") from exc
                 for artifact in delivery.artifacts:
-                    if artifact.role.value == "MAIN_REPORT":
-                        try:
-                            validate_final_artifact(private_by_id[artifact.content_id].content, artifact.format.value)
-                        except (KeyError, TypeError, ValueError) as exc:
-                            raise RepositoryIntegrityError("backup delivery final artifact is invalid") from exc
+                    try:
+                        content = private_by_id[artifact.content_id].content
+                        if artifact.format.value == "OTHER":
+                            validate_supporting_artifact(content, artifact.media_type)
+                        else:
+                            validate_delivery_artifact(content, artifact.format.value)
+                    except (KeyError, TypeError, ValueError) as exc:
+                        raise RepositoryIntegrityError("backup delivery artifact is invalid") from exc
         return value
 
 

@@ -20,10 +20,78 @@ from scripts.backend_contract.pericial_planning import pericial_planning_from_ma
 from scripts.backend_contract.report_foundation import report_snapshot_from_mapping
 from scripts.backend_contract.technical_findings import technical_snapshot_from_mapping
 from scripts.backend_contract.vistoria import inspection_session_from_mapping
+from scripts.backend_contract.local_api.composition import build_local_api
+from tests.test_local_api_v1 import FixedClock, TOKEN, http_request
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
+
+
+def _http(runtime, method: str, path: str, value: object | None = None, raw_body: bytes | None = None, headers: dict | None = None):
+    supplied = {"X-Local-API-Token": TOKEN, **(headers or {})}
+    status, _response_headers, body = http_request(runtime.server, method, path, value=value, raw_body=raw_body, headers=supplied)
+    return status, (json.loads(body) if body else None)
+
+
+def test_d1_d2_normal_composed_product_path_reaches_technical_bootstrap_and_isolates_workspaces(tmp_path: Path) -> None:
+    runtime = build_local_api(tmp_path / "product.db", token=TOKEN, clock=FixedClock(), private_root=tmp_path / "private")
+    runtime.start()
+    try:
+        status, created = _http(runtime, "POST", "/v1/workspaces", {"name": "Caso longitudinal sintético"})
+        assert status == 201
+        workspace_id = created["workspace_id"]
+        status, foreign = _http(runtime, "POST", "/v1/workspaces", {"name": "Workspace sentinela"})
+        assert status == 201 and foreign["workspace_id"] != workspace_id
+
+        source = b"%PDF-1.7\nsynthetic longitudinal source\n%%EOF\n"
+        status, _ = _http(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", raw_body=source,
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "fonte-sintetica.pdf"},
+        )
+        assert status == 201
+        status, analysis = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis", {})
+        assert status == 201
+        document_id = analysis["snapshot"]["documents"][0]["document_id"]
+        for kind, text in (("PERICIAL_OBJECT", "Objeto técnico sintético."), ("PERICIAL_QUESTION", "Qual é a condição observável?")):
+            status, analysis = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis/items", {
+                "expected_revision": analysis["revision"], "item_kind": kind, "text": text,
+                "source_document_id": document_id, "page_or_span": "p. 1", "technical_subjects": ["tema sintético"], "values": {},
+            })
+            assert status == 200
+            target = analysis["snapshot"][{"PERICIAL_OBJECT": "pericial_objects", "PERICIAL_QUESTION": "questions"}[kind]][-1]["item_id"]
+            status, analysis = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis/reviews", {
+                "expected_revision": analysis["revision"], "target_item_id": target, "action": "CONFIRM",
+                "corrected_value": None, "reviewer": "PROFESSIONAL-001", "reason": "Revisão humana sintética.",
+            })
+            assert status == 200
+
+        injection_status, _ = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis", {"snapshot": analysis["snapshot"]})
+        assert injection_status == 400
+        foreign_status, _ = _http(runtime, "GET", f"/v1/workspaces/{foreign['workspace_id']}/case-analysis")
+        assert foreign_status == 404
+
+        status, planning = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/pericial-planning", {"title": "Plano longitudinal"})
+        assert status == 201
+        item = planning["snapshot"]["inspection_requirements"][0]
+        status, planning = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/pericial-planning/decisions", {
+            "expected_revision": planning["revision"], "target_item_id": item["item_id"], "action": "APPROVE",
+            "reviewer": "PROFESSIONAL-001", "reason": "Proposta aprovada para execução sintética.", "decided_value": None,
+        })
+        assert status == 200
+
+        status, inspection = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/inspection-session", {
+            "responsible_professional": "PROFESSIONAL-001", "location_context": "Local sintético", "participant_references": [],
+        })
+        assert status == 201 and inspection["snapshot"]["responsible_professional"] == "PROFESSIONAL-001"
+        status, technical = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/technical-snapshot", {})
+        assert status == 201 and technical["snapshot"]["source_snapshot"]["inspection_session_id"] == inspection["snapshot"]["session_id"]
+
+        status, budget = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/budget-snapshot", {"process_id": None, "appointment_id": None})
+        assert status == 201
+        assert "technical_snapshot_id" not in budget["snapshot"]
+    finally:
+        runtime.close()
 
 
 def _canonical(value: object) -> bytes:
@@ -331,26 +399,101 @@ def test_d2_d6_generic_authority_attacks_fail_closed() -> None:
     else:
         raise AssertionError("cross-workspace canonical payload was accepted")
 
-
-def test_d6_final_word_bytes_are_revalidated_after_recovery() -> None:
-    package, payloads = _longitudinal_backup()
-    mapping = json.loads(package)
-    content_id = payloads["delivery"]["artifacts"][0]["content_id"]
-    private = next(item for item in mapping["private_contents"] if item["content_id"] == content_id)
-    forged = b"not-a-docx"
-    private["content_base64"] = base64.b64encode(forged).decode("ascii")
-    private["byte_size"] = len(forged)
-    private["checksum_sha256"] = hashlib.sha256(forged).hexdigest()
-    for delivery_record in [item for item in mapping["artifact_revisions"] if item["artifact_kind"] == "DELIVERY_SNAPSHOT_V1"]:
-        for artifact in delivery_record["payload"]["artifacts"]:
-            artifact["byte_size"] = len(forged)
-            artifact["checksum_sha256"] = hashlib.sha256(forged).hexdigest()
+    substituted = json.loads(package)
+    for record in substituted["artifact_revisions"]:
+        if record["artifact_kind"] == "CASE_ANALYSIS_SNAPSHOT_V1":
+            record["artifact_id"] = "ATTACKER-CONTROLLED-ID"
     try:
-        VerifyWorkspaceBackup().execute(_reseal(mapping))
+        VerifyWorkspaceBackup().execute(_reseal(substituted))
     except RepositoryIntegrityError as exc:
-        assert "final artifact" in str(exc)
+        assert "envelope identity" in str(exc)
     else:
-        raise AssertionError("invalid final Word bytes were accepted")
+        raise AssertionError("canonical artifact envelope substitution was accepted")
+
+    divergent = json.loads(package)
+    final_delivery = [item for item in divergent["artifact_revisions"] if item["artifact_kind"] == "DELIVERY_SNAPSHOT_V1"][-1]
+    final_delivery["payload"]["revision"] = 999
+    try:
+        VerifyWorkspaceBackup().execute(_reseal(divergent))
+    except RepositoryIntegrityError as exc:
+        assert "envelope revision" in str(exc)
+    else:
+        raise AssertionError("domain/envelope revision divergence was accepted")
+
+
+def test_d6_final_word_and_template_bytes_are_revalidated_after_recovery() -> None:
+    package, payloads = _longitudinal_backup()
+    targets = (
+        (payloads["delivery"]["template_content_id"], "template"),
+        (payloads["delivery"]["artifacts"][0]["content_id"], "delivery artifact"),
+    )
+    for content_id, expected_error in targets:
+        mapping = json.loads(package)
+        private = next(item for item in mapping["private_contents"] if item["content_id"] == content_id)
+        forged = b"not-a-docx"
+        digest = hashlib.sha256(forged).hexdigest()
+        private.update(content_base64=base64.b64encode(forged).decode("ascii"), byte_size=len(forged), checksum_sha256=digest)
+        for delivery_record in [item for item in mapping["artifact_revisions"] if item["artifact_kind"] == "DELIVERY_SNAPSHOT_V1"]:
+            delivery = delivery_record["payload"]
+            if content_id == delivery["template_content_id"]:
+                delivery["template_digest"] = digest
+            for artifact in delivery["artifacts"]:
+                if artifact["content_id"] == content_id:
+                    artifact.update(byte_size=len(forged), checksum_sha256=digest)
+        try:
+            VerifyWorkspaceBackup().execute(_reseal(mapping))
+        except RepositoryIntegrityError as exc:
+            assert expected_error in str(exc)
+        else:
+            raise AssertionError(f"invalid Delivery {expected_error} bytes were accepted")
+
+
+def test_d3_d4_superseded_report_and_invalid_annex_fail_closed() -> None:
+    package, _ = _longitudinal_backup()
+    superseded = json.loads(package)
+    report_record = next(item for item in superseded["artifact_revisions"] if item["artifact_kind"] == "REPORT_SNAPSHOT_V1")
+    report = report_record["payload"]
+    previous = report["review_decisions"][-1]
+    report["review_decisions"].append({
+        "review_id": "REPORT-REVIEW-SUPERSEDE", "action": "SUPERSEDE",
+        "professional_id": previous["professional_id"], "reason": "Substituição sintética explícita.",
+        "timestamp": "2026-09-01T12:30:00+00:00", "supersedes_review_id": previous["review_id"],
+    })
+    report["state"] = "SUPERSEDED"
+    report["coverage"]["complete"] = False
+    report["coverage"]["reasons"] = ["Report superseded"]
+    report_digest = _digest(report)
+    for record in superseded["artifact_revisions"]:
+        if record["artifact_kind"] == "DELIVERY_SNAPSHOT_V1":
+            record["payload"]["binding"]["report_digest"] = report_digest
+    try:
+        VerifyWorkspaceBackup().execute(_reseal(superseded))
+    except RepositoryIntegrityError as exc:
+        assert "professional authority" in str(exc)
+    else:
+        raise AssertionError("superseded Report remained effective Delivery authority")
+
+    annexed = json.loads(package)
+    forged = b"not-an-annex-docx"
+    digest = hashlib.sha256(forged).hexdigest()
+    annex_id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+    annexed["private_contents"].append(_private(
+        annex_id, forged, "anexo.docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ))
+    final_delivery = [item for item in annexed["artifact_revisions"] if item["artifact_kind"] == "DELIVERY_SNAPSHOT_V1"][-1]["payload"]
+    final_delivery["artifacts"].append({
+        "artifact_id": "ARTIFACT-ANNEX-001", "role": "ANNEX", "format": "DOCX", "filename": "anexo.docx",
+        "content_id": annex_id, "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "byte_size": len(forged), "checksum_sha256": digest,
+    })
+    final_delivery["package"]["artifact_ids"].append("ARTIFACT-ANNEX-001")
+    try:
+        VerifyWorkspaceBackup().execute(_reseal(annexed))
+    except RepositoryIntegrityError as exc:
+        assert "delivery artifact" in str(exc)
+    else:
+        raise AssertionError("invalid supporting DOCX was accepted")
 
 
 def test_d8_runtime_and_persisted_product_text_has_no_mojibake() -> None:

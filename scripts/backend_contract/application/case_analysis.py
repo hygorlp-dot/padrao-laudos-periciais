@@ -219,7 +219,8 @@ class AddCaseAnalysisItem:
             raise ValueError("Case Analysis item structured input is invalid")
         token = self.ids.new_uuid().hex.upper()
         provenance = (SourceProvenance(str(workspace_id), document.document_id, document.source_sha256, page_or_span.strip(), snapshot.source_revision, f"OCCURRENCE-{token}"),)
-        base = dict(item_id=f"{item_kind}-{token}", text=text.strip(), participant_refs=(), technical_subjects=technical_subjects, provenance=provenance)
+        item_id_prefix = item_kind.replace("_", "-")
+        base = dict(item_id=f"{item_id_prefix}-{token}", text=text.strip(), participant_refs=(), technical_subjects=technical_subjects, provenance=provenance)
         constructors = {
             "CLAIM": lambda: CaseClaim(**base),
             "COUNTERARGUMENT": lambda: CounterArgument(**base, target_claim_ids=tuple(values.get("target_claim_ids", ()))),
