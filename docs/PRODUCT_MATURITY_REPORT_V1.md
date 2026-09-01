@@ -7,7 +7,7 @@ truth; it is not authorization to begin a later stage.
 ## Current result
 
 - Protected foundation SHA: `67f074b2ca37d9ed998736b9c86dc90af325b89d`.
-- PR-D longitudinal implementation SHA: `3e9727ea32b1cb202d0f17496dbd4067d586fff7`.
+- PR-D longitudinal implementation SHA: `479db33b194d478033516e1b235e37ad0e01d5aa`.
   The final report-only/assurance SHA is recorded by the protected CI/review
   package after stable freeze; no moving branch name substitutes for either.
 - Stages 0–9, 11 and 12 have implemented foundations covered by first-party
