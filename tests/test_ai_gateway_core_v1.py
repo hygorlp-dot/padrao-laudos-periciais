@@ -20,6 +20,10 @@ from scripts.backend_contract.ai_gateway import (
     EgressPolicy,
     SourceRevisionRef,
     UsageRecord,
+    context_manifest_sha256,
+    context_manifest_payload,
+    prompt_template_sha256,
+    structured_output_schema_sha256,
 )
 from scripts.backend_contract.application.ai_gateway import (
     AIExecutionFailed,
@@ -28,14 +32,22 @@ from scripts.backend_contract.application.ai_gateway import (
     RunAIProposal,
 )
 from scripts.backend_contract.application.models import PericiaWorkspace, WorkspaceId
+from scripts.backend_contract.application.ports import RepositoryConflict
 from scripts.backend_contract.infrastructure.sqlite import SQLiteApplicationStore
 
 
 WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
 OTHER_WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
 SHA256 = "a" * 64
-SCHEMA_SHA256 = "b" * 64
-PROMPT_SHA256 = "c" * 64
+TASK_INSTRUCTIONS = "Proponha alegações estritamente apoiadas nas fontes."
+SCHEMA = {
+    "type": "object",
+    "properties": {"claims": {"type": "array", "items": {"type": "string"}}},
+    "required": ["claims"],
+    "additionalProperties": False,
+}
+SCHEMA_SHA256 = structured_output_schema_sha256(SCHEMA)
+PROMPT_SHA256 = prompt_template_sha256("case-analysis-v1", TASK_INSTRUCTIONS)
 CONTEXT_SHA256 = "d" * 64
 
 
@@ -66,21 +78,17 @@ def manifest(
 
 
 def request(*, egress_manifest: EgressManifest | None = None) -> AIRequest:
+    context = (AIContextSegment(source=source_ref(), content="Trecho sintético."),)
     return AIRequest(
         workspace_id=WORKSPACE_ID,
         task_type="CASE_ANALYSIS_PROPOSAL",
-        task_instructions="Proponha alegações estritamente apoiadas nas fontes.",
+        task_instructions=TASK_INSTRUCTIONS,
         prompt_template_version="case-analysis-v1",
         prompt_template_hash=PROMPT_SHA256,
-        structured_output_schema={
-            "type": "object",
-            "properties": {"claims": {"type": "array", "items": {"type": "string"}}},
-            "required": ["claims"],
-            "additionalProperties": False,
-        },
+        structured_output_schema=SCHEMA,
         structured_output_schema_hash=SCHEMA_SHA256,
-        context=(AIContextSegment(source=source_ref(), content="Trecho sintético."),),
-        context_manifest_hash=CONTEXT_SHA256,
+        context=context,
+        context_manifest_hash=context_manifest_sha256(context),
         egress_manifest=egress_manifest or manifest(),
     )
 
@@ -96,9 +104,11 @@ def test_remote_sanitized_requires_policy_enablement_and_exact_manifest() -> Non
     assert policy.authorize(request()) is None
 
     mismatched = manifest()
+    foreign_context = (AIContextSegment(source=source_ref(workspace_id=OTHER_WORKSPACE_ID), content="x"),)
     foreign_request = replace(
         request(),
-        context=(AIContextSegment(source=source_ref(workspace_id=OTHER_WORKSPACE_ID), content="x"),),
+        context=foreign_context,
+        context_manifest_hash=context_manifest_sha256(foreign_context),
         egress_manifest=mismatched,
     )
     with pytest.raises(ValueError, match="workspace"):
@@ -139,6 +149,13 @@ def test_contracts_validate_hashes_ids_and_are_deeply_immutable() -> None:
             sha256="forged",
             locator="page=1",
         )
+
+    with pytest.raises(ValueError, match="structured_output_schema_hash"):
+        replace(item, structured_output_schema_hash="b" * 64)
+    with pytest.raises(ValueError, match="context_manifest_hash"):
+        replace(item, context_manifest_hash="d" * 64)
+    with pytest.raises(ValueError, match="prompt_template_hash"):
+        replace(item, prompt_template_hash="c" * 64)
     with pytest.raises(ValueError, match="UUID"):
         EgressManifest(
             workspace_id="not-a-uuid",
@@ -177,6 +194,8 @@ def test_model_profile_and_usage_have_explicit_cost_and_token_limits() -> None:
 
 
 def test_ai_proposal_and_run_ids_are_canonical_and_carry_no_authority_field() -> None:
+    context = (AIContextSegment(source=source_ref(), content="Trecho sintético."),)
+    context_manifest = context_manifest_payload(context)
     proposal = AIProposal(
         proposal_id="33333333-3333-4333-8333-333333333333",
         workspace_id=WORKSPACE_ID,
@@ -199,7 +218,8 @@ def test_ai_proposal_and_run_ids_are_canonical_and_carry_no_authority_field() ->
         prompt_template_version="case-analysis-v1",
         prompt_template_hash=PROMPT_SHA256,
         structured_output_schema_hash=SCHEMA_SHA256,
-        context_manifest_hash=CONTEXT_SHA256,
+        context_manifest=context_manifest,
+        context_manifest_hash=context_manifest_sha256(context),
         source_refs=(source_ref(),),
         egress_class=EgressClass.REMOTE_SANITIZED,
         redaction_manifest=("cpf",),
@@ -355,6 +375,10 @@ def test_valid_structured_response_persists_run_and_proposal_atomically() -> Non
     assert pair["first"]["artifact_kind"] == "AI_RUN"
     assert pair["second"]["artifact_kind"] == "AI_PROPOSAL"
     assert pair["first"]["payload"]["proposal_ids"] == [proposal.proposal_id]
+    context_manifest = pair["first"]["payload"]["context_manifest"]
+    assert context_manifest[0]["document_id"] == "document-1"
+    assert context_manifest[0]["content_sha256"]
+    assert "Trecho sintético." not in repr(context_manifest)
     assert "api_key" not in repr(pair).casefold()
 
 
@@ -393,6 +417,44 @@ def test_provider_failures_record_one_sanitized_run(provider_code: str) -> None:
     assert "sk-secret" not in repr(persisted)
 
 
+def test_provider_refusal_records_failed_run_without_proposal() -> None:
+    revisions = RecordingRevisions()
+
+    with pytest.raises(AIExecutionFailed, match="PROVIDER_REFUSAL"):
+        service(
+            RecordingProvider(result=replace(response(), refusal_state="REFUSED")),
+            revisions,
+            id_source=ids(success=False),
+        ).execute(request(), profile())
+
+    assert revisions.pairs == []
+    assert revisions.appended[0]["payload"]["refusal_state"] == "REFUSED"
+    assert revisions.appended[0]["payload"]["error_classification"] == "PROVIDER_REFUSAL"
+
+
+@pytest.mark.parametrize(
+    ("usage", "code"),
+    [
+        (UsageRecord(4_001, 0, 30, 4_031, 500), "TOKEN_CEILING_EXCEEDED"),
+        (UsageRecord(100, 0, 801, 901, 500), "TOKEN_CEILING_EXCEEDED"),
+        (UsageRecord(100, 0, 30, 130, 25_001), "COST_CEILING_EXCEEDED"),
+    ],
+)
+def test_usage_ceiling_violation_records_failed_run_without_proposal(usage, code) -> None:
+    over_limit = replace(response(), usage=usage)
+    revisions = RecordingRevisions()
+
+    with pytest.raises(AIExecutionFailed, match=code):
+        service(
+            RecordingProvider(result=over_limit),
+            revisions,
+            id_source=ids(success=False),
+        ).execute(request(), profile())
+
+    assert revisions.pairs == []
+    assert revisions.appended[0]["payload"]["error_classification"] == code
+
+
 def test_workspace_mismatch_fails_before_provider_call() -> None:
     provider = RecordingProvider(result=response())
     revisions = RecordingRevisions()
@@ -427,5 +489,39 @@ def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> No
         assert proposal_revision is not None
         assert run_revision.payload["proposal_ids"] == (proposal.proposal_id,)
         assert "effective" not in proposal_revision.payload
+    finally:
+        store.close()
+
+
+def test_ai_run_and_proposal_identity_cannot_be_rewritten(tmp_path) -> None:
+    store = SQLiteApplicationStore(tmp_path / "ai-run-rewrite.sqlite3")
+    fixed_values = tuple(str(uuid4()) for _ in range(4))
+    try:
+        workspace = WorkspaceRepo().item
+        store.workspaces.create(workspace)
+        first = RunAIProposal(
+            store.workspaces,
+            store.revisions,
+            RecordingProvider(result=response()),
+            EgressPolicy(remote_sanitized_enabled=True),
+            FixedClock(),
+            SequenceIds(*fixed_values),
+        )
+        second = RunAIProposal(
+            store.workspaces,
+            store.revisions,
+            RecordingProvider(result=response(payload={"claims": ["Outra"]})),
+            EgressPolicy(remote_sanitized_enabled=True),
+            FixedClock(),
+            SequenceIds(*fixed_values),
+        )
+        proposal = first.execute(request(), profile())
+
+        with pytest.raises(RepositoryConflict, match="revisão processual desatualizada"):
+            second.execute(request(), profile())
+
+        history = store.revisions.list_all(workspace.workspace_id, "AI_RUN", proposal.run_id)
+        assert len(history) == 1
+        assert history[0].payload["proposal_ids"] == (proposal.proposal_id,)
     finally:
         store.close()

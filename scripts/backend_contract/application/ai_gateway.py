@@ -15,6 +15,7 @@ from ..ai_gateway import (
     EgressPolicy,
     SourceRevisionRef,
     UsageRecord,
+    context_manifest_payload,
 )
 from .models import WorkspaceId, thaw_payload
 from .ports import ArtifactRevisionRepository, Clock, IdGenerator, WorkspaceRepository
@@ -75,6 +76,7 @@ def _run_payload(item: AIRun) -> dict[str, object]:
         "prompt_template_version": item.prompt_template_version,
         "prompt_template_hash": item.prompt_template_hash,
         "structured_output_schema_hash": item.structured_output_schema_hash,
+        "context_manifest": thaw_payload(item.context_manifest),
         "context_manifest_hash": item.context_manifest_hash,
         "source_refs": [_source_payload(ref) for ref in item.source_refs],
         "egress_class": item.egress_class.value,
@@ -136,6 +138,17 @@ class RunAIProposal:
                 raise AIProviderFailure("PROVIDER_PROFILE_MISMATCH")
             if response.refusal_state != "NONE":
                 raise AIProviderFailure("PROVIDER_REFUSAL")
+            if response.usage is not None and (
+                response.usage.input_tokens > profile.max_input_tokens
+                or response.usage.output_tokens > profile.max_output_tokens
+            ):
+                raise AIProviderFailure("TOKEN_CEILING_EXCEEDED")
+            if (
+                response.usage is not None
+                and response.usage.estimated_cost_microusd is not None
+                and response.usage.estimated_cost_microusd > profile.cost_ceiling_microusd
+            ):
+                raise AIProviderFailure("COST_CEILING_EXCEEDED")
             jsonschema.Draft202012Validator(thaw_payload(request.structured_output_schema)).validate(
                 thaw_payload(response.payload)
             )
@@ -209,6 +222,7 @@ class RunAIProposal:
             prompt_template_version=request.prompt_template_version,
             prompt_template_hash=request.prompt_template_hash,
             structured_output_schema_hash=request.structured_output_schema_hash,
+            context_manifest=context_manifest_payload(request.context),
             context_manifest_hash=request.context_manifest_hash,
             source_refs=request.egress_manifest.source_refs,
             egress_class=request.egress_manifest.egress_class,
