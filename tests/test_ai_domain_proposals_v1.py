@@ -62,7 +62,7 @@ def proposal(kind: DomainProposalKind, item_type: str, *, ref: SourceRevisionRef
             ]
         },
         provider="OPENAI",
-        model="synthetic-model",
+        model="model-fast",
         run_id="11111111-1111-4111-8111-111111111113",
         created_at="2026-09-01T12:00:00+00:00",
         confidence_score=None,
@@ -118,6 +118,21 @@ def test_public_domain_value_objects_reject_ungrounded_or_cross_workspace_forger
             DomainProposalKind.CASE_ANALYSIS,
             (foreign_item,),
         )
+
+
+def test_public_domain_value_object_enforces_kind_and_report_authority() -> None:
+    claim = DomainProposalItem("CLAIM", "Synthetic", (source(),))
+    report_item = DomainProposalItem("REPORT_SECTION_DRAFT", "Synthetic", (source(),))
+    base = (
+        "11111111-1111-4111-8111-111111111112",
+        WORKSPACE,
+        "11111111-1111-4111-8111-111111111113",
+        DomainProposalKind.REPORT_DRAFT,
+    )
+    with pytest.raises(ValueError, match="incompatible"):
+        DomainAIProposal(*base, (claim,), report_authority=report_authority())
+    with pytest.raises(ValueError, match="upstream authority"):
+        DomainAIProposal(*base, (report_item,))
 
 
 def test_unknown_unsourced_and_cross_workspace_refs_fail_closed() -> None:
@@ -229,13 +244,35 @@ def test_application_requires_exact_source_bound_schema_before_runner_persistenc
     validated = service.execute(domain_request(kind), profile("FAST", 1_000), kind)
     assert validated.authority == "PROPOSAL_ONLY"
     assert len(runner.calls) == 1
-
     with pytest.raises(ValueError, match="source-bound domain schema"):
-        service.execute(replace(domain_request(kind), structured_output_schema=request().structured_output_schema,
-                                structured_output_schema_hash=request().structured_output_schema_hash),
-                        profile("FAST", 1_000), kind)
+        service.execute(
+            replace(
+                domain_request(kind),
+                structured_output_schema=request().structured_output_schema,
+                structured_output_schema_hash=request().structured_output_schema_hash,
+            ),
+            profile("FAST", 1_000),
+            kind,
+        )
     assert len(runner.calls) == 1
 
+
+@pytest.mark.parametrize(
+    "result",
+    (
+        proposal(DomainProposalKind.CASE_ANALYSIS, "CLAIM", ref=source(revision="forged")),
+        replace(
+            proposal(DomainProposalKind.CASE_ANALYSIS, "CLAIM", ref=source(workspace=OTHER)),
+            workspace_id=OTHER,
+        ),
+        replace(proposal(DomainProposalKind.CASE_ANALYSIS, "CLAIM"), provider="OTHER"),
+        replace(proposal(DomainProposalKind.CASE_ANALYSIS, "CLAIM"), model="other-model"),
+    ),
+)
+def test_application_rejects_runner_result_not_bound_to_request_and_profile(result) -> None:
+    kind = DomainProposalKind.CASE_ANALYSIS
+    with pytest.raises(ValueError, match="runner result"):
+        RunDomainAIProposal(Runner(result)).execute(domain_request(kind), profile("FAST", 1_000), kind)
 
 def test_application_blocks_report_before_provider_when_upstream_is_not_authorized() -> None:
     kind = DomainProposalKind.REPORT_DRAFT

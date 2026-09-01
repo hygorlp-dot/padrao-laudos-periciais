@@ -66,4 +66,13 @@ class RunDomainAIProposal:
                 raise ValueError("report upstream authority is incomplete")
 
         proposal = self._runner.execute(request, profile)
+        if (
+            type(proposal) is not AIProposal
+            or proposal.workspace_id != request.workspace_id
+            or proposal.task_type != request.task_type
+            or proposal.source_refs != request.egress_manifest.source_refs
+            or proposal.provider != profile.provider
+            or proposal.model != profile.model
+        ):
+            raise ValueError("AI proposal runner result is not bound to request/profile")
         return validate_domain_proposal(proposal, kind, report_authority=authority)

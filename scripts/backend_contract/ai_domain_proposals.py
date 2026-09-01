@@ -174,6 +174,7 @@ class DomainAIProposal:
     kind: DomainProposalKind
     items: tuple[DomainProposalItem, ...]
     authority: str = "PROPOSAL_ONLY"
+    report_authority: ReportAuthorityContext | None = None
 
     def __post_init__(self) -> None:
         for value, field in (
@@ -195,8 +196,19 @@ class DomainAIProposal:
             raise ValueError("domain AI proposal requires material items")
         if self.authority != "PROPOSAL_ONLY":
             raise ValueError("domain AI proposal must remain proposal-only")
+        if any(item.item_type not in _ALLOWED_ITEM_TYPES[self.kind] for item in self.items):
+            raise ValueError("domain AI proposal item is incompatible with kind")
         if any(ref.workspace_id != self.workspace_id for item in self.items for ref in item.source_refs):
             raise ValueError("domain AI proposal item workspace mismatch")
+        if self.kind is DomainProposalKind.REPORT_DRAFT:
+            if (
+                type(self.report_authority) is not ReportAuthorityContext
+                or self.report_authority.workspace_id != self.workspace_id
+                or not self.report_authority.ready
+            ):
+                raise ValueError("report domain proposal requires upstream authority")
+        elif self.report_authority is not None:
+            raise ValueError("non-report domain proposal cannot carry report authority")
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,4 +333,5 @@ def validate_domain_proposal(
         run_id=proposal.run_id,
         kind=kind,
         items=tuple(items),
+        report_authority=report_authority,
     )
