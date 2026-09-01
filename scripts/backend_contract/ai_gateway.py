@@ -94,13 +94,13 @@ def _secret_key(key: str) -> bool:
         "refreshtoken", "sessiontoken", "authtoken", "bearertoken",
         "secretkey", "privatekey", "encryptionkey", "signingkey",
         "accesskey", "openaikey", "secret", "password", "credential",
-        "passphrase", "clientassertion", "sessionid",
     }
     return (
         normalized in _SECRET_FIELDS
         or any(part in sensitive_singletons for part in parts)
         or any(pair in sensitive_pairs for pair in zip(parts, parts[1:], strict=False))
         or any(marker in compact for marker in sensitive_compact_markers)
+        or compact in {"passphrase", "clientassertion", "sessionid"}
     )
 
 

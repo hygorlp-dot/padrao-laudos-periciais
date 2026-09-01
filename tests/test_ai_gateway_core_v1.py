@@ -313,7 +313,13 @@ def test_non_secret_key_and_token_semantics_remain_valid_output_fields() -> None
         workspace_id=WORKSPACE_ID,
         task_type="CASE_ANALYSIS_PROPOSAL",
         source_refs=(source_ref(),),
-        proposal_payload={"source_key": "source-1", "key_findings": 1, "token_count": 2},
+        proposal_payload={
+            "source_key": "source-1",
+            "key_findings": 1,
+            "token_count": 2,
+            "inspection_session_id": "inspection-session-1",
+            "session_identifier": "session-1",
+        },
         provider="OPENAI",
         model="configured-model",
         run_id="44444444-4444-4444-8444-444444444444",
@@ -324,6 +330,8 @@ def test_non_secret_key_and_token_semantics_remain_valid_output_fields() -> None
     assert proposal.proposal_payload["source_key"] == "source-1"
     assert proposal.proposal_payload["key_findings"] == 1
     assert proposal.proposal_payload["token_count"] == 2
+    assert proposal.proposal_payload["inspection_session_id"] == "inspection-session-1"
+    assert proposal.proposal_payload["session_identifier"] == "session-1"
 
 
 @pytest.mark.parametrize("secret_name", ["api_key", "password", "clientAssertion"])
