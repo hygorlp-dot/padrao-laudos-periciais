@@ -119,21 +119,23 @@ def test_stage10_longitudinal_synthetic_oracle_preserves_grounding_authority_and
                 }]
         }
         revisions = RecordingRevisions()
-        raw_proposal = service(RecordingProvider(result=response(payload)), revisions).execute(request, profile())
+        raw_proposal, run = service(RecordingProvider(result=response(payload)), revisions).execute_with_run(
+            request, profile()
+        )
         assert len(revisions.pairs) == 1
         proposal = validate_domain_proposal(raw_proposal, kind)
         telemetry = AIEvalTelemetry(
-            "SYNTHETIC_LOCAL",
+            run.provider,
             "EVAL_PROFILE_V1",
-            "synthetic-model-v1",
+            run.model,
             "prompt-v1",
             request.prompt_template_hash,
             request.structured_output_schema_hash,
-            selection.total_estimated_tokens,
-            0,
-            20,
-            100,
-            25,
+            run.usage.input_tokens,
+            run.usage.cached_input_tokens,
+            run.usage.output_tokens,
+            run.usage.estimated_cost_microusd,
+            run.latency_ms,
             False,
         )
         outcome = (
@@ -141,7 +143,7 @@ def test_stage10_longitudinal_synthetic_oracle_preserves_grounding_authority_and
             if case.scenario is AIEvalScenario.REJECTED_HUMAN_REVIEW
             else HumanEvalOutcome.ACCEPTED
         )
-        observations.append(observe_domain_proposal(dataset.version, case, proposal, telemetry, outcome))
+        observations.append(observe_domain_proposal(dataset.version, case, proposal, run, telemetry, outcome))
 
     report = evaluate_ai_dataset(dataset, tuple(observations))
 

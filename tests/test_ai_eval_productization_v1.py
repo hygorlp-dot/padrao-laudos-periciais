@@ -22,7 +22,14 @@ from scripts.backend_contract.ai_domain_proposals import (
     DomainProposalItem,
     DomainProposalKind,
 )
-from scripts.backend_contract.ai_gateway import SourceRevisionRef
+from scripts.backend_contract.ai_gateway import (
+    AIRun,
+    EgressClass,
+    SourceRevisionRef,
+    UsageRecord,
+    context_manifest_payload,
+    context_manifest_sha256,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -157,7 +164,15 @@ def test_success_observation_is_derived_from_immutable_domain_proposal_and_exact
         "OPENAI", "EVAL", "synthetic-model-v1", "prompt-v1", "a" * 64, "b" * 64,
         100, 20, 40, 500, 250, False,
     )
-    result = observe_domain_proposal("1.0.0", case, proposal, telemetry, HumanEvalOutcome.ACCEPTED)
+    run = AIRun(
+        proposal.run_id, case.workspace_id, case.task_type, telemetry.provider, telemetry.model, {},
+        telemetry.prompt_template_version, telemetry.prompt_template_hash,
+        telemetry.structured_output_schema_hash, context_manifest_payload(()), context_manifest_sha256(()),
+        refs, EgressClass.LOCAL_ONLY, (), UsageRecord(100, 20, 40, 140, 500), 250,
+        "response-1", "c" * 64, "NONE", None, (proposal.proposal_id,),
+        "2026-09-01T12:00:00+00:00",
+    )
+    result = observe_domain_proposal("1.0.0", case, proposal, run, telemetry, HumanEvalOutcome.ACCEPTED)
     assert result.expected_source_hits == len(case.expected_source_ids)
     assert result.unsourced_material_proposals == 0
     assert result.wrong_authority_promotions == result.self_authorizations == 0
@@ -188,6 +203,15 @@ def test_hard_safety_metrics_fail_closed(changes, failure) -> None:
     report = evaluate_ai_dataset(dataset, tuple(observations))
     assert report.status == "FAIL"
     assert failure in report.failures
+
+
+def test_provider_or_refusal_error_is_a_hard_eval_failure() -> None:
+    dataset = load_ai_eval_dataset(DATASET)
+    observations = [observation(case) for case in dataset.cases]
+    observations[0] = reobserve(observations[0], error_classification="PROVIDER_UNAVAILABLE")
+    report = evaluate_ai_dataset(dataset, tuple(observations))
+    assert report.status == "FAIL"
+    assert "EXECUTION_ERROR" in report.failures
 
 
 def test_eval_rejects_missing_duplicate_foreign_or_wrong_version_observations() -> None:

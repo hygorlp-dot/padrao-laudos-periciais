@@ -445,6 +445,10 @@ def ids(*, success: bool) -> SequenceIds:
     return SequenceIds(*(str(uuid4()) for _ in range(count)))
 
 
+def generous_cost_ledger() -> AICostLedger:
+    return AICostLedger(AICostLimits(100_000, 100_000, 1_000_000, 1_000_000))
+
+
 def service(provider, revisions, *, policy=None, id_source=None, cost_ledger=None) -> RunAIProposal:
     return RunAIProposal(
         WorkspaceRepo(),
@@ -453,7 +457,7 @@ def service(provider, revisions, *, policy=None, id_source=None, cost_ledger=Non
         policy or EgressPolicy(remote_sanitized_enabled=True),
         FixedClock(),
         id_source or ids(success=True),
-        cost_ledger,
+        cost_ledger or generous_cost_ledger(),
     )
 
 
@@ -627,6 +631,7 @@ def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> No
             EgressPolicy(remote_sanitized_enabled=True),
             FixedClock(),
             ids(success=True),
+            generous_cost_ledger(),
         )
 
         proposal = use_case.execute(request(), profile())
@@ -654,6 +659,7 @@ def test_ai_run_and_proposal_identity_cannot_be_rewritten(tmp_path) -> None:
             EgressPolicy(remote_sanitized_enabled=True),
             FixedClock(),
             SequenceIds(*fixed_values),
+            generous_cost_ledger(),
         )
         second = RunAIProposal(
             store.workspaces,
@@ -662,6 +668,7 @@ def test_ai_run_and_proposal_identity_cannot_be_rewritten(tmp_path) -> None:
             EgressPolicy(remote_sanitized_enabled=True),
             FixedClock(),
             SequenceIds(*fixed_values),
+            generous_cost_ledger(),
         )
         proposal = first.execute(request(), profile())
 
@@ -688,6 +695,7 @@ def test_failed_ai_run_identity_cannot_be_rewritten(tmp_path) -> None:
             EgressPolicy(remote_sanitized_enabled=True),
             FixedClock(),
             SequenceIds(run_id, first_revision_id),
+            generous_cost_ledger(),
         )
         second = RunAIProposal(
             store.workspaces,
@@ -696,6 +704,7 @@ def test_failed_ai_run_identity_cannot_be_rewritten(tmp_path) -> None:
             EgressPolicy(remote_sanitized_enabled=True),
             FixedClock(),
             SequenceIds(run_id, second_revision_id),
+            generous_cost_ledger(),
         )
 
         with pytest.raises(AIExecutionFailed, match="TIMEOUT"):

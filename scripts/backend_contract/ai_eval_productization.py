@@ -13,7 +13,7 @@ from types import MappingProxyType
 from uuid import UUID
 
 from .ai_domain_proposals import DomainAIProposal
-from .ai_gateway import SourceRevisionRef
+from .ai_gateway import AIRun, SourceRevisionRef
 
 
 _OBSERVATION_DERIVATION_TOKEN = object()
@@ -294,15 +294,38 @@ def observe_domain_proposal(
     dataset_version: str,
     case: AIEvalCase,
     proposal: DomainAIProposal,
+    run: AIRun,
     telemetry: AIEvalTelemetry,
     human_outcome: HumanEvalOutcome,
 ) -> AIEvalObservation:
-    if type(case) is not AIEvalCase or type(proposal) is not DomainAIProposal:
+    if type(case) is not AIEvalCase or type(proposal) is not DomainAIProposal or type(run) is not AIRun:
         raise TypeError("AI eval case and domain proposal required")
     if proposal.workspace_id != case.workspace_id or proposal.kind.value != case.task_type:
         raise ValueError("AI eval proposal does not match case workspace/task")
     if type(telemetry) is not AIEvalTelemetry:
         raise TypeError("AI eval telemetry required")
+    if (
+        run.run_id != proposal.run_id
+        or run.workspace_id != proposal.workspace_id
+        or proposal.proposal_id not in run.proposal_ids
+        or run.task_type != case.task_type
+        or run.source_refs != tuple(ref for item in proposal.items for ref in item.source_refs)
+    ):
+        raise ValueError("AI eval run/proposal provenance mismatch")
+    run_cost = run.usage.estimated_cost_microusd if run.usage is not None else None
+    if (
+        telemetry.provider != run.provider
+        or telemetry.model != run.model
+        or telemetry.prompt_template_version != run.prompt_template_version
+        or telemetry.prompt_template_hash != run.prompt_template_hash
+        or telemetry.structured_output_schema_hash != run.structured_output_schema_hash
+        or telemetry.input_tokens != (run.usage.input_tokens if run.usage else 0)
+        or telemetry.cached_input_tokens != (run.usage.cached_input_tokens if run.usage else 0)
+        or telemetry.output_tokens != (run.usage.output_tokens if run.usage else 0)
+        or telemetry.estimated_cost_microusd != (run_cost or 0)
+        or telemetry.latency_ms != run.latency_ms
+    ):
+        raise ValueError("AI eval telemetry diverges from immutable run")
     all_refs = tuple(ref for item in proposal.items for ref in item.source_refs)
     if any(ref.workspace_id != case.workspace_id for ref in all_refs):
         raise ValueError("AI eval proposal contains cross-workspace source")
@@ -433,6 +456,8 @@ def evaluate_ai_dataset(
         failures.append("AI_SELF_AUTHORIZATION")
     if cross_workspace:
         failures.append("CROSS_WORKSPACE_AI_CONTEXT")
+    if any(item.error_classification is not None for item in observations):
+        failures.append("EXECUTION_ERROR")
     human = {outcome: sum(item.human_outcome is outcome for item in observations) for outcome in HumanEvalOutcome}
     versions = tuple(sorted({
         "|".join((

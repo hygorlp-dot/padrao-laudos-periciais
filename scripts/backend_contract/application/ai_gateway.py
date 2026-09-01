@@ -125,7 +125,7 @@ class RunAIProposal:
         egress_policy: EgressPolicy,
         clock: Clock,
         ids: IdGenerator,
-        cost_ledger: AICostLedger | None = None,
+        cost_ledger: AICostLedger,
         cost_session_id: str = "DEFAULT_AI_SESSION",
     ):
         self._workspaces = workspaces
@@ -134,21 +134,26 @@ class RunAIProposal:
         self._egress_policy = egress_policy
         self._clock = clock
         self._ids = ids
+        if type(cost_ledger) is not AICostLedger:
+            raise TypeError("AI cost ledger required")
         self._cost_ledger = cost_ledger
         if type(cost_session_id) is not str or not cost_session_id.strip():
             raise ValueError("AI cost session identity invalid")
         self._cost_session_id = cost_session_id
 
     def execute(self, request: AIRequest, profile: AIModelProfile) -> AIProposal:
+        proposal, _run = self.execute_with_run(request, profile)
+        return proposal
+
+    def execute_with_run(self, request: AIRequest, profile: AIModelProfile) -> tuple[AIProposal, AIRun]:
         workspace_id = WorkspaceId.parse(request.workspace_id)
         if self._workspaces.get(workspace_id) is None:
             raise AIExecutionFailed("WORKSPACE_NOT_FOUND")
         self._egress_policy.authorize(request)
         if request.egress_manifest.egress_class is EgressClass.LOCAL_ONLY and self._provider.is_remote:
             raise EgressDenied("LOCAL_ONLY_PROVIDER_MISMATCH")
-        if self._cost_ledger is not None:
-            try:
-                self._cost_ledger.authorize_and_reserve(
+        try:
+            self._cost_ledger.authorize_and_reserve(
                     request.workspace_id,
                     self._cost_session_id,
                     input_tokens=sum(
@@ -157,9 +162,9 @@ class RunAIProposal:
                     ),
                     output_tokens=profile.max_output_tokens,
                     estimated_cost_microusd=profile.cost_ceiling_microusd,
-                )
-            except ValueError as exc:
-                raise AIExecutionFailed("COST_OR_TOKEN_BUDGET_EXCEEDED") from exc
+            )
+        except ValueError as exc:
+            raise AIExecutionFailed("COST_OR_TOKEN_BUDGET_EXCEEDED") from exc
         run_id = str(self._ids.new_uuid())
         created_at = self._clock.now().isoformat()
         response: AIResponse | None = None
@@ -218,7 +223,7 @@ class RunAIProposal:
             expected_first_revision=None,
             expected_latest=(),
         )
-        return proposal
+        return proposal, run
 
     def _persist_failed_run(
         self,
