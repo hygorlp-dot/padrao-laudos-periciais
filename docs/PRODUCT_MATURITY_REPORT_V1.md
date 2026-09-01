@@ -7,8 +7,9 @@ truth; it is not authorization to begin a later stage.
 ## Current result
 
 - Protected foundation SHA: `67f074b2ca37d9ed998736b9c86dc90af325b89d`.
-- PR-D terminal SHA: recorded by protected CI/review package after the final
-  stable freeze; this report must not substitute a moving branch name for it.
+- PR-D longitudinal implementation SHA: `d7959c9948767c898435d697af97bdcd75bdf6aa`.
+  The final report-only/assurance SHA is recorded by the protected CI/review
+  package after stable freeze; no moving branch name substitutes for either.
 - Stages 0–9, 11 and 12 have implemented foundations covered by first-party
   boundary tests.
 - Stage 8 supports the authoritative bound Word artifact. Local final PDF
@@ -43,7 +44,7 @@ without a new human product-direction decision.
   old bytes, and an upstream binding change demotes delivered state to `STALE`.
 - Financial separation: Budget/court/payment history has no authority edge into
   Technical Findings, Report or Delivery.
-- Word delivery: final DOCX bytes are hash-bound and structurally revalidated on
+- Word delivery: final DOCX/DOCM bytes are hash-bound and structurally revalidated on
   backup verification/recovery. Local final PDF remains unavailable fail-closed.
 - Workspace oracle: two-workspace/foreign inner identities fail closed.
 - Private egress: `FALSE`; all oracle fixtures and execution are local and
