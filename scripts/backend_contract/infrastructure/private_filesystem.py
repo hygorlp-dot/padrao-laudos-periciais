@@ -1992,7 +1992,7 @@ class LocalPrivateContentStore:
                 expected_root=self._root_identity,
             )
             if not self.is_recovery_quarantined():
-                raise RepositoryIntegrityError("quarentena privada nÃ£o foi persistida")
+                raise RepositoryIntegrityError("quarentena privada não foi persistida")
 
     @_controlled_filesystem_errors("falha ao verificar quarentena privada")
     def is_recovery_quarantined(self) -> bool:

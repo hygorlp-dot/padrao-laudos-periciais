@@ -3,7 +3,7 @@
     "invariants":  [
                        {
                            "id":  "NO_SILENT_LOSS",
-                           "descricao":  "Nenhum item vÃ¡lido desaparece sem diagnÃ³stico.",
+                           "descricao":  "Nenhum item válido desaparece sem diagnóstico.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "EVIDENCE_GRAPH",
@@ -20,7 +20,7 @@
                        },
                        {
                            "id":  "NO_SILENT_PAGE_LOSS",
-                           "descricao":  "Toda pÃ¡gina possui destino ou conflito explÃ­cito.",
+                           "descricao":  "Toda página possui destino ou conflito explícito.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "PJE_EXTRACTION",
@@ -36,7 +36,7 @@
                        },
                        {
                            "id":  "NO_SILENT_OVERWRITE",
-                           "descricao":  "ColisÃµes nunca sobrescrevem conteÃºdo silenciosamente.",
+                           "descricao":  "Colisões nunca sobrescrevem conteúdo silenciosamente.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "AUTOCORRECTION",
@@ -51,7 +51,7 @@
                        },
                        {
                            "id":  "NO_SILENT_EVIDENCE_LOSS",
-                           "descricao":  "NÃ³s legÃ­timos permanecem no grafo de evidÃªncias.",
+                           "descricao":  "Nós legítimos permanecem no grafo de evidências.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "AUDIT",
@@ -67,7 +67,7 @@
                        },
                        {
                            "id":  "NO_DANGLING_REFERENCE",
-                           "descricao":  "Toda referÃªncia resolve para identidade existente.",
+                           "descricao":  "Toda referência resolve para identidade existente.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "COVERAGE",
@@ -86,7 +86,7 @@
                        },
                        {
                            "id":  "CARDINALITY_CONSERVATION",
-                           "descricao":  "Contagens de entrada e saÃ­da sÃ£o conservadas.",
+                           "descricao":  "Contagens de entrada e saída são conservadas.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "PJE_EXTRACTION",
@@ -101,7 +101,7 @@
                        },
                        {
                            "id":  "EXACT_ITEM_ACCOUNTING",
-                           "descricao":  "Cada item Ã© contabilizado exatamente uma vez.",
+                           "descricao":  "Cada item é contabilizado exatamente uma vez.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "PJE_MANIFEST",
@@ -115,7 +115,7 @@
                        },
                        {
                            "id":  "EXACT_PAGE_ACCOUNTING",
-                           "descricao":  "Cada pÃ¡gina Ã© contabilizada exatamente uma vez.",
+                           "descricao":  "Cada página é contabilizada exatamente uma vez.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "PJE_EXTRACTION",
@@ -131,7 +131,7 @@
                        },
                        {
                            "id":  "SOURCE_TRUTH",
-                           "descricao":  "Consumidores derivam estado das fontes canÃ´nicas.",
+                           "descricao":  "Consumidores derivam estado das fontes canônicas.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "DELIMITATION",
@@ -150,7 +150,7 @@
                        },
                        {
                            "id":  "PROVENANCE_FIDELITY",
-                           "descricao":  "ProveniÃªncia preserva identidade e origem.",
+                           "descricao":  "Proveniência preserva identidade e origem.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "AUDIT",
@@ -170,7 +170,7 @@
                        },
                        {
                            "id":  "DOCUMENT_PAGE_FIDELITY",
-                           "descricao":  "Documento e pÃ¡gina permanecem inseparÃ¡veis.",
+                           "descricao":  "Documento e página permanecem inseparáveis.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "PJE_EXTRACTION",
@@ -185,7 +185,7 @@
                        },
                        {
                            "id":  "FAIL_CLOSED",
-                           "descricao":  "Falha material ou configuraÃ§Ã£o incerta bloqueia avanÃ§o.",
+                           "descricao":  "Falha material ou configuração incerta bloqueia avanço.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "AUDIT",
@@ -210,7 +210,7 @@
                        },
                        {
                            "id":  "PRODUCER_NOT_VALIDATOR",
-                           "descricao":  "Produtor nÃ£o prova sozinho a validade do que produziu.",
+                           "descricao":  "Produtor não prova sozinho a validade do que produziu.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "COVERAGE",
@@ -228,7 +228,7 @@
                        },
                        {
                            "id":  "CORRECTION_PERSISTENCE",
-                           "descricao":  "CorreÃ§Ã£o validada persiste no estado final.",
+                           "descricao":  "Correção validada persiste no estado final.",
                            "severidade":  "P1",
                            "boundaries":  [
                                               "AUDIT",
@@ -243,7 +243,7 @@
                        },
                        {
                            "id":  "CORRECTION_TRACEABILITY",
-                           "descricao":  "Toda correÃ§Ã£o possui trilha identificÃ¡vel.",
+                           "descricao":  "Toda correção possui trilha identificável.",
                            "severidade":  "P1",
                            "boundaries":  [
                                               "AUDIT",
@@ -272,7 +272,7 @@
                        },
                        {
                            "id":  "SEMANTIC_MONOTONICITY",
-                           "descricao":  "Mais suporte vÃ¡lido nÃ£o degrada semanticamente o resultado.",
+                           "descricao":  "Mais suporte válido não degrada semanticamente o resultado.",
                            "severidade":  "P1",
                            "boundaries":  [
                                               "AUDIT",
@@ -306,7 +306,7 @@
                        },
                        {
                            "id":  "ORDER_INVARIANCE",
-                           "descricao":  "Ordem equivalente nÃ£o altera resultado.",
+                           "descricao":  "Ordem equivalente não altera resultado.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "DOCUMENT_CLASSIFICATION",
@@ -323,7 +323,7 @@
                        },
                        {
                            "id":  "IRRELEVANT_INPUT_INVARIANCE",
-                           "descricao":  "Entrada irrelevante nÃ£o altera conclusÃ£o ou gate.",
+                           "descricao":  "Entrada irrelevante não altera conclusão ou gate.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "AUDIT",
@@ -339,7 +339,7 @@
                        },
                        {
                            "id":  "ESSENTIAL_INPUT_REMOVAL_DEGRADES_RESULT",
-                           "descricao":  "Remover suporte essencial reduz confianÃ§a ou bloqueia.",
+                           "descricao":  "Remover suporte essencial reduz confiança ou bloqueia.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "AUDIT",
@@ -355,7 +355,7 @@
                        },
                        {
                            "id":  "STABLE_IDENTITY",
-                           "descricao":  "Identidades permanecem estÃ¡veis sob entradas equivalentes.",
+                           "descricao":  "Identidades permanecem estáveis sob entradas equivalentes.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "EVIDENCE_GRAPH",
@@ -371,7 +371,7 @@
                        },
                        {
                            "id":  "VALUE_UNIT_FIDELITY",
-                           "descricao":  "Valor e unidade sÃ£o comparados estruturalmente.",
+                           "descricao":  "Valor e unidade são comparados estruturalmente.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "COVERAGE",
@@ -388,7 +388,7 @@
                        },
                        {
                            "id":  "DATE_FIDELITY",
-                           "descricao":  "Datas permanecem vinculadas Ã  fonte correta.",
+                           "descricao":  "Datas permanecem vinculadas à fonte correta.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "FIDELITY",
@@ -405,7 +405,7 @@
                        },
                        {
                            "id":  "NORMATIVE_FIDELITY",
-                           "descricao":  "Norma e item exigem autoridade e proveniÃªncia verificadas.",
+                           "descricao":  "Norma e item exigem autoridade e proveniência verificadas.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "AUDIT",
@@ -421,7 +421,7 @@
                        },
                        {
                            "id":  "TEXT_GROUNDING",
-                           "descricao":  "RedaÃ§Ã£o material permanece derivÃ¡vel das claims auditadas.",
+                           "descricao":  "Redação material permanece derivável das claims auditadas.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "AUDIT",
@@ -436,7 +436,7 @@
                        },
                        {
                            "id":  "NO_CERTAINTY_INFLATION",
-                           "descricao":  "RedaÃ§Ã£o nÃ£o eleva certeza alÃ©m do suporte.",
+                           "descricao":  "Redação não eleva certeza além do suporte.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "AUDIT",
@@ -451,7 +451,7 @@
                        },
                        {
                            "id":  "ALLEGATION_NOT_OBSERVATION",
-                           "descricao":  "AlegaÃ§Ã£o nÃ£o Ã© convertida em observaÃ§Ã£o.",
+                           "descricao":  "Alegação não é convertida em observação.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "EVIDENCE_GRAPH",
@@ -467,7 +467,7 @@
                        },
                        {
                            "id":  "DECLARATION_NOT_OBSERVATION",
-                           "descricao":  "DeclaraÃ§Ã£o nÃ£o Ã© convertida em evidÃªncia fÃ­sica.",
+                           "descricao":  "Declaração não é convertida em evidência física.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "AUDIT",
@@ -483,7 +483,7 @@
                        },
                        {
                            "id":  "NORM_NOT_PHYSICAL_EVIDENCE",
-                           "descricao":  "Norma nÃ£o prova constataÃ§Ã£o fÃ­sica.",
+                           "descricao":  "Norma não prova constatação física.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "AUDIT",
@@ -499,7 +499,7 @@
                        },
                        {
                            "id":  "NAO_CONSTATADO_NOT_INEXISTENTE",
-                           "descricao":  "NÃ£o constatado nÃ£o Ã© inexistente.",
+                           "descricao":  "Não constatado não é inexistente.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "FIDELITY",
@@ -516,7 +516,7 @@
                        },
                        {
                            "id":  "PII_DENY_BY_DEFAULT",
-                           "descricao":  "PII e dados de caso nÃ£o saem por padrÃ£o.",
+                           "descricao":  "PII e dados de caso não saem por padrão.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "EGRESS",
@@ -532,7 +532,7 @@
                        },
                        {
                            "id":  "UNKNOWN_EXTERNAL_PROVIDER_FAIL_CLOSED",
-                           "descricao":  "Provider sem capability explÃ­cita Ã© bloqueado.",
+                           "descricao":  "Provider sem capability explícita é bloqueado.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "EGRESS",
@@ -546,7 +546,7 @@
                        },
                        {
                            "id":  "EDITORIAL_IMMUTABILITY",
-                           "descricao":  "CorreÃ§Ã£o editorial nÃ£o altera conteÃºdo material.",
+                           "descricao":  "Correção editorial não altera conteúdo material.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "AUTOCORRECTION",
@@ -561,7 +561,7 @@
                        },
                        {
                            "id":  "JURIDICAL_TECHNICAL_ISOLATION",
-                           "descricao":  "MatÃ©ria jurÃ­dica nÃ£o contamina questÃ£o tÃ©cnica.",
+                           "descricao":  "Matéria jurídica não contamina questão técnica.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "DELIMITATION",
@@ -576,7 +576,7 @@
                        },
                        {
                            "id":  "MEASUREMENT_EQUIVALENCE_INTEGRITY",
-                           "descricao":  "EquivalÃªncia de mediÃ§Ã£o Ã© recalculada por propriedades estruturais.",
+                           "descricao":  "Equivalência de medição é recalculada por propriedades estruturais.",
                            "severidade":  "P0",
                            "boundaries":  [
                                               "COVERAGE",

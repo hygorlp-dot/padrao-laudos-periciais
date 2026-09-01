@@ -304,10 +304,54 @@ def _revision_from_mapping(value: object, workspace_id: str) -> ArtifactRevision
         or _USER_ARTIFACT_VALIDATORS.get(record.artifact_kind)
     )
     if validator is not None:
-        validator(thaw_payload(record.payload))
+        parsed = validator(thaw_payload(record.payload))
+        payload_workspace = getattr(parsed, "workspace_id", None)
+        if payload_workspace is not None and str(payload_workspace) != workspace_id:
+            raise RepositoryIntegrityError("backup payload belongs to another workspace")
     else:
         raise RepositoryIntegrityError("backup artifact kind is not portable")
     return record
+
+
+def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
+    by_kind_revision = {
+        (record.artifact_kind, record.revision): record
+        for record in revisions
+    }
+
+    def require(kind: str, revision: int, digest: str, identity_field: str, identity: str) -> None:
+        record = by_kind_revision.get((kind, revision))
+        if record is None or record.checksum_sha256 != digest:
+            raise RepositoryIntegrityError("backup dependency closure is incomplete")
+        payload = thaw_payload(record.payload)
+        if type(payload) is not dict or payload.get(identity_field) != identity:
+            raise RepositoryIntegrityError("backup dependency identity diverges")
+
+    for record in revisions:
+        payload = thaw_payload(record.payload)
+        if record.artifact_kind == "PERICIAL_PLANNING_SNAPSHOT_V1":
+            plan = payload["plan"]
+            require("CASE_ANALYSIS_SNAPSHOT_V1", plan["case_analysis_revision"], plan["case_analysis_digest"], "snapshot_id", plan["case_analysis_snapshot_id"])
+        elif record.artifact_kind == "INSPECTION_SESSION_V1":
+            binding = payload["plan_snapshot"]
+            require("PERICIAL_PLANNING_SNAPSHOT_V1", binding["planning_revision"], binding["planning_digest"], "snapshot_id", binding["planning_snapshot_id"])
+        elif record.artifact_kind == "TECHNICAL_SNAPSHOT_V1":
+            binding = payload["source_snapshot"]
+            require("CASE_ANALYSIS_SNAPSHOT_V1", binding["case_analysis_revision"], binding["case_analysis_digest"], "snapshot_id", binding["case_analysis_snapshot_id"])
+            require("INSPECTION_SESSION_V1", binding["inspection_session_revision"], binding["inspection_session_digest"], "session_id", binding["inspection_session_id"])
+        elif record.artifact_kind == "REPORT_SNAPSHOT_V1":
+            binding = payload["source_snapshot"]
+            require("CASE_ANALYSIS_SNAPSHOT_V1", binding["case_analysis_revision"], binding["case_analysis_digest"], "snapshot_id", binding["case_analysis_snapshot_id"])
+            require("INSPECTION_SESSION_V1", binding["inspection_session_revision"], binding["inspection_session_digest"], "session_id", binding["inspection_session_id"])
+            require("TECHNICAL_SNAPSHOT_V1", binding["technical_snapshot_revision"], binding["technical_snapshot_digest"], "snapshot_id", binding["technical_snapshot_id"])
+            require("EXPERT_MASTER_PROFILE_V1", binding["expert_profile_revision"], binding["expert_profile_digest"], "profile_id", binding["expert_profile_id"])
+        elif record.artifact_kind == "DELIVERY_SNAPSHOT_V1":
+            binding = payload["binding"]
+            require("CASE_ANALYSIS_SNAPSHOT_V1", binding["case_analysis_revision"], binding["case_analysis_digest"], "snapshot_id", binding["case_analysis_snapshot_id"])
+            require("PERICIAL_PLANNING_SNAPSHOT_V1", binding["planning_revision"], binding["planning_digest"], "snapshot_id", binding["planning_snapshot_id"])
+            require("INSPECTION_SESSION_V1", binding["inspection_revision"], binding["inspection_digest"], "session_id", binding["inspection_snapshot_id"])
+            require("TECHNICAL_SNAPSHOT_V1", binding["technical_revision"], binding["technical_digest"], "snapshot_id", binding["technical_snapshot_id"])
+            require("REPORT_SNAPSHOT_V1", binding["report_revision"], binding["report_digest"], "report_id", binding["report_snapshot_id"])
 
 
 def _private_mapping(metadata: PrivateContentMetadata, content: bytes) -> dict[str, Any]:
@@ -370,6 +414,7 @@ class VerifyWorkspaceBackup:
             sequences.setdefault((record.artifact_kind, record.artifact_id), []).append(record.revision)
         if any(items != list(range(1, len(items) + 1)) for items in sequences.values()):
             raise RepositoryIntegrityError("backup revision sequence is incomplete")
+        _verify_dependency_closure(revisions)
         private_contents = tuple(_private_from_mapping(item, workspace_id) for item in value.private_contents)
         private_ids = [item["content_id"] for item in value.private_contents]
         if len(private_ids) != len(set(private_ids)):
@@ -379,15 +424,21 @@ class VerifyWorkspaceBackup:
             for item in private_contents
         }
         for record in revisions:
-            if record.artifact_kind != "INSPECTION_SESSION_V1":
-                continue
-            inspection = inspection_session_from_mapping(thaw_payload(record.payload))
-            media = (*inspection.photos, *inspection.videos, *inspection.sketches)
-            if any(
-                private_authority.get(item.private_content_id) != item.original_sha256
-                for item in media
-            ):
-                raise RepositoryIntegrityError("backup inspection media authority is incomplete")
+            if record.artifact_kind == "INSPECTION_SESSION_V1":
+                inspection = inspection_session_from_mapping(thaw_payload(record.payload))
+                media = (*inspection.photos, *inspection.videos, *inspection.sketches)
+                if any(
+                    private_authority.get(item.private_content_id) != item.original_sha256
+                    for item in media
+                ):
+                    raise RepositoryIntegrityError("backup inspection media authority is incomplete")
+            elif record.artifact_kind == "DELIVERY_SNAPSHOT_V1":
+                delivery = delivery_snapshot_from_mapping(thaw_payload(record.payload))
+                if private_authority.get(delivery.template_content_id) != delivery.template_digest or any(
+                    private_authority.get(item.content_id) != item.checksum_sha256
+                    for item in delivery.artifacts
+                ):
+                    raise RepositoryIntegrityError("backup delivery byte authority is incomplete")
         return value
 
 

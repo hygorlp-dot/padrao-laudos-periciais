@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0.0",
+  "generated_from": "LONGITUDINAL_PRODUCT_INTEGRITY_ORACLE_V1",
+  "stages": [
+    {"stage": 0, "name": "CORE_FOUNDATION", "status": "COMPLETE"},
+    {"stage": 1, "name": "SOURCE_FOUNDATION", "status": "COMPLETE"},
+    {"stage": 2, "name": "JUDICIAL_DOMAIN_AND_API_FOUNDATION", "status": "COMPLETE"},
+    {"stage": 3, "name": "CASE_ANALYSIS_FOUNDATION", "status": "COMPLETE"},
+    {"stage": 4, "name": "PERICIAL_PLANNING_FOUNDATION", "status": "COMPLETE"},
+    {"stage": 5, "name": "VISTORIA_FOUNDATION", "status": "COMPLETE"},
+    {"stage": 6, "name": "EVIDENCE_AND_TECHNICAL_FINDINGS_FOUNDATION", "status": "COMPLETE"},
+    {"stage": 7, "name": "REPORT_FOUNDATION", "status": "COMPLETE"},
+    {"stage": 8, "name": "DELIVERY_FOUNDATION", "status": "COMPLETE_WITH_LOCAL_FINAL_PDF_DEFERRED"},
+    {"stage": 9, "name": "BUDGET_FOUNDATION", "status": "COMPLETE"},
+    {"stage": 10, "name": "AI_AUTOMATION_FOUNDATION", "status": "NOT_IMPLEMENTED_OR_NOT_PROVEN"},
+    {"stage": 11, "name": "PRODUCTIZATION_FOUNDATION", "status": "COMPLETE"},
+    {"stage": 12, "name": "FIELD_MOBILE_FOUNDATION", "status": "COMPLETE"}
+  ],
+  "product_roadmap_stage_0_to_12_complete": false,
+  "stage_10_authorized": false
+}

@@ -65,6 +65,32 @@ def backup_mapping(version: int = 1) -> dict:
     return value
 
 
+def reseal_backup(mapping: dict) -> bytes:
+    def canonical(value: object) -> bytes:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+
+    mapping["member_hashes"] = {
+        "artifact_revisions": hashlib.sha256(canonical(mapping["artifact_revisions"])).hexdigest(),
+        "private_contents": hashlib.sha256(canonical(mapping["private_contents"])).hexdigest(),
+    }
+    mapping["manifest_sha256"] = hashlib.sha256(canonical({key: value for key, value in mapping.items() if key != "manifest_sha256"})).hexdigest()
+    return canonical(mapping)
+
+
+def portable_revision(kind: str, artifact_id: str, payload: dict, revision: int = 1) -> dict:
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return {
+        "workspace_id": WORKSPACE_ID,
+        "artifact_kind": kind,
+        "artifact_id": artifact_id,
+        "revision_id": f"00000000-0000-4000-8000-{revision:012d}",
+        "revision": revision,
+        "created_at": "2026-08-31T12:10:00+00:00",
+        "checksum_sha256": hashlib.sha256(canonical.encode()).hexdigest(),
+        "payload": payload,
+    }
+
+
 def test_backup_v1_round_trip_is_exact_and_supported_window_is_finite() -> None:
     payload = backup_mapping()
     value = workspace_backup_from_mapping(payload)
@@ -116,6 +142,27 @@ def test_declared_backup_portability_releases_are_the_exact_supported_window() -
         }
         mapping["manifest_sha256"] = hashlib.sha256(canonical({key: value for key, value in mapping.items() if key != "manifest_sha256"})).hexdigest()
         assert VerifyWorkspaceBackup().execute(canonical(mapping)).product_release == release
+
+
+def test_backup_rejects_canonical_payload_owned_by_another_workspace() -> None:
+    mapping = backup_mapping()
+    budget = json.loads((Path(__file__).parent / "fixtures/budget-snapshot-v1.json").read_text(encoding="utf-8"))
+    budget["workspace_id"] = "22222222-2222-4222-8222-222222222222"
+    mapping["artifact_revisions"] = [portable_revision("BUDGET_SNAPSHOT_V1", "BUDGET-SNAPSHOT", budget)]
+
+    with pytest.raises(RepositoryIntegrityError, match="payload.*workspace"):
+        VerifyWorkspaceBackup().execute(reseal_backup(mapping))
+
+
+def test_backup_rejects_delivery_without_its_exact_dependency_closure() -> None:
+    mapping = backup_mapping()
+    delivery = json.loads((Path(__file__).parent / "fixtures/delivery-snapshot-v1.json").read_text(encoding="utf-8"))
+    delivery["workspace_id"] = WORKSPACE_ID
+    delivery["binding"]["workspace_id"] = WORKSPACE_ID
+    mapping["artifact_revisions"] = [portable_revision("DELIVERY_SNAPSHOT_V1", delivery["delivery_id"], delivery)]
+
+    with pytest.raises(RepositoryIntegrityError, match="dependency"):
+        VerifyWorkspaceBackup().execute(reseal_backup(mapping))
 
 
 def test_backup_contract_rejects_unknown_fields() -> None:
@@ -243,7 +290,25 @@ def seeded_store(path: Path, private: PrivateStore) -> tuple[SQLiteApplicationSt
 
 
 def seed_synced_inspection_media(store: SQLiteApplicationStore, private: PrivateStore, workspace_id: WorkspaceId) -> dict[str, bytes]:
+    case = json.loads((Path(__file__).parent / "fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8"))
+    planning = json.loads((Path(__file__).parent / "fixtures/pericial-planning-snapshot-v1.json").read_text(encoding="utf-8"))
+    for kind, artifact_id, payload, revisions, identity in (
+        ("CASE_ANALYSIS_SNAPSHOT_V1", "CASE-ANALYSIS", case, 1, "44444444-4444-4444-8444"),
+        ("PERICIAL_PLANNING_SNAPSHOT_V1", "PERICIAL-PLANNING", planning, 2, "66666666-6666-4666-8666"),
+    ):
+        for revision in range(1, revisions + 1):
+            store.revisions.append(
+                workspace_id=workspace_id,
+                artifact_kind=kind,
+                artifact_id=artifact_id,
+                revision_id=f"{identity}-{revision:012d}",
+                created_at="2026-08-31T12:25:00+00:00",
+                payload=payload,
+            )
     snapshot = json.loads((Path(__file__).parent / "fixtures/inspection-session-v1.json").read_text(encoding="utf-8"))
+    snapshot["plan_snapshot"]["planning_digest"] = hashlib.sha256(
+        json.dumps(planning, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    ).hexdigest()
     originals = {
         snapshot["photos"][0]["private_content_id"]: b"synced-photo-original",
         snapshot["videos"][0]["private_content_id"]: b"synced-video-original",

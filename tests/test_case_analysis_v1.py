@@ -179,7 +179,7 @@ def test_provenance_cannot_false_bind_a_document_sha_or_occurrence():
         case_analysis_from_mapping(conflicting_occurrence)
 
 
-def test_reconciliation_clears_persisted_stale_state_when_source_is_restored():
+def test_reconciliation_never_clears_persisted_stale_state_when_source_is_restored():
     snapshot = case_analysis_from_mapping(fixture())
     source_hashes = {document.document_id: document.source_sha256 for document in snapshot.documents}
     changed = snapshot.reconcile_sources({**source_hashes, "DOC-002": "f" * 64})
@@ -187,8 +187,8 @@ def test_reconciliation_clears_persisted_stale_state_when_source_is_restored():
 
     restored = reopened.reconcile_sources(source_hashes)
 
-    assert restored.stale_document_ids == ()
-    assert all(not item.stale for item in restored.material_items)
+    assert restored.stale_document_ids == ("DOC-002",)
+    assert restored.counterarguments[0].stale is True
 
 
 @pytest.mark.parametrize(
