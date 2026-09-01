@@ -255,7 +255,7 @@ def test_import_reports_the_existing_bounded_size_contract():
     assert listed.execute(WORKSPACE_ID) == ()
 
 
-def test_case_document_views_fail_closed_for_non_pdf_private_records():
+def test_case_document_list_filters_other_private_namespaces_and_direct_read_fails_closed():
     _importer, listed, reader = document_services()
     metadata = PrivateContentMetadata(
         workspace_id=WORKSPACE_ID,
@@ -269,8 +269,7 @@ def test_case_document_views_fail_closed_for_non_pdf_private_records():
     )
     listed.contents.contents.store(metadata, b"abc")
 
-    with pytest.raises(InvalidCaseDocument, match="contrato"):
-        listed.execute(WORKSPACE_ID)
+    assert listed.execute(WORKSPACE_ID) == ()
     with pytest.raises(InvalidCaseDocument, match="contrato"):
         reader.execute(WORKSPACE_ID, CONTENT_ID)
 

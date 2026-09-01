@@ -365,7 +365,14 @@ class CaseAnalysisSnapshot:
         return latest.corrected_value if latest.decision in {"CORRECT", "CORRECTED"} else item.text
 
     def reconcile_sources(self, source_hashes: dict[str, str]):
-        changed = tuple(sorted(document.document_id for document in self.documents if source_hashes.get(document.document_id) != document.source_sha256))
+        changed = tuple(sorted(
+            set(self.stale_document_ids)
+            | {
+                document.document_id
+                for document in self.documents
+                if source_hashes.get(document.document_id) != document.source_sha256
+            }
+        ))
         if not changed and not self.stale_document_ids:
             return self
 

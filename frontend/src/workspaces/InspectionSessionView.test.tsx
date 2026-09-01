@@ -112,7 +112,7 @@ describe("inspection session view", () => {
     const user = userEvent.setup(); render(<InspectionSessionView workspaceId={ID} />);
     await user.click(await screen.findByRole("button", { name: "Registrar campo" }));
     await user.selectOptions(screen.getByLabelText("Resultado"), "PARTIAL_ACCESS");
-    await user.type(screen.getByLabelText("DescriÃ§Ã£o objetiva"), "Acesso restrito ao primeiro ambiente.");
+    await user.type(screen.getByLabelText("Descrição objetiva"), "Acesso restrito ao primeiro ambiente.");
     await user.click(screen.getByRole("button", { name: "Salvar registros de campo" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
     const saveBody = JSON.parse(String(fetchMock.mock.calls[3][1].body));

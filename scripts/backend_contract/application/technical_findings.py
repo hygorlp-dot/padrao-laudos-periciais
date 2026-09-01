@@ -23,6 +23,7 @@ from ..technical_findings import (
     MethodOutput,
     ProfessionalDecision,
     ProposalOrigin,
+    QuestionFindingLink,
     TECHNICAL_SNAPSHOT_ARTIFACT_ID,
     TECHNICAL_SNAPSHOT_ARTIFACT_KIND,
     TechnicalCoverage,
@@ -444,7 +445,17 @@ class ReviewTechnicalFinding:
         findings = snapshot.findings
         question_links = tuple(item for item in snapshot.question_links if not any(old.finding_id == item.finding_id for old in snapshot.findings if old.proposal_id == proposal_id))
         if decision_action is not DecisionAction.REJECT:
-            findings = (*findings, TechnicalFinding(f"FINDING-{token}", proposal_id, decision_id, modified_proposition.strip() if modified_proposition else proposal.technical_proposition, proposal.scope))
+            finding = TechnicalFinding(f"FINDING-{token}", proposal_id, decision_id, modified_proposition.strip() if modified_proposition else proposal.technical_proposition, proposal.scope)
+            findings = (*findings, finding)
+            supporting = set(proposal.supporting_evidence_ids)
+            question_ids = tuple(dict.fromkeys(
+                link.source_id for link in snapshot.source_links
+                if link.evidence_id in supporting and link.source_kind == "CASE_QUESTION"
+            ))
+            question_links = (*question_links, *(
+                QuestionFindingLink(f"QUESTION-LINK-{token}-{index}", question_id, finding.finding_id, "Quesito vinculado à evidência de suporte aprovada.")
+                for index, question_id in enumerate(question_ids, 1)
+            ))
         conflicts = tuple(
             replace(item, status=ConflictStatus.RESOLVED, resolution_reasoning=reason.strip(), decision_id=decision_id)
             if resolve_conflicts and item.proposal_id == proposal_id and item.status is ConflictStatus.UNRESOLVED else item for item in snapshot.conflicts
