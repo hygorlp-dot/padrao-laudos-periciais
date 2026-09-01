@@ -673,7 +673,8 @@ def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> No
             generous_cost_ledger(),
         )
 
-        proposal = use_case.execute(request(), profile())
+        proposal, run = use_case.execute_with_run(request(), profile())
+        use_case.verify_persisted(run, proposal)
 
         run_revision = store.revisions.latest(workspace.workspace_id, "AI_RUN", proposal.run_id)
         proposal_revision = store.revisions.latest(workspace.workspace_id, "AI_PROPOSAL", proposal.proposal_id)
