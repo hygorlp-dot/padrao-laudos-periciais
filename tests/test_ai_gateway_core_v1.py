@@ -69,6 +69,7 @@ def request(*, egress_manifest: EgressManifest | None = None) -> AIRequest:
     return AIRequest(
         workspace_id=WORKSPACE_ID,
         task_type="CASE_ANALYSIS_PROPOSAL",
+        task_instructions="Proponha alegações estritamente apoiadas nas fontes.",
         prompt_template_version="case-analysis-v1",
         prompt_template_hash=PROMPT_SHA256,
         structured_output_schema={

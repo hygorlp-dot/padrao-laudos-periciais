@@ -203,6 +203,7 @@ class UsageRecord:
 class AIRequest:
     workspace_id: str
     task_type: str
+    task_instructions: str
     prompt_template_version: str
     prompt_template_hash: str
     structured_output_schema: object
@@ -214,6 +215,7 @@ class AIRequest:
     def __post_init__(self) -> None:
         _uuid(self.workspace_id, "workspace_id")
         _text(self.task_type, "task_type")
+        _text(self.task_instructions, "task_instructions")
         _text(self.prompt_template_version, "prompt_template_version")
         _sha256(self.prompt_template_hash, "prompt_template_hash")
         _sha256(self.structured_output_schema_hash, "structured_output_schema_hash")

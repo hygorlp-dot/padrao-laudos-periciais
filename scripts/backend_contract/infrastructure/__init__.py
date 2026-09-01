@@ -6,6 +6,7 @@ from .sqlite import (
     SQLiteWorkspaceRepository,
 )
 from .private_filesystem import LocalPrivateContentStore, provision_private_content_root
+from .openai_provider import EnvironmentOpenAIClientFactory, OpenAIProvider
 
 __all__ = [
     "SQLiteApplicationStore",
@@ -13,4 +14,6 @@ __all__ = [
     "SQLiteWorkspaceRepository",
     "LocalPrivateContentStore",
     "provision_private_content_root",
+    "EnvironmentOpenAIClientFactory",
+    "OpenAIProvider",
 ]
