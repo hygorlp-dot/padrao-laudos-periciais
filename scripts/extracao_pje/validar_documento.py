@@ -54,6 +54,7 @@ def validar_documento(documento, documento_manifesto, validador=None):
         if (
             proveniencia_imagem.get("pagina_pdf") != pagina_imagem.get("pagina_pdf")
             or proveniencia_imagem.get("pagina_documento") != pagina_imagem.get("pagina_documento")
+            or proveniencia_imagem.get("pagina_original") != pagina_imagem.get("pagina_original")
         ):
             erros.append(f"{imagem.get('imagem_id', 'imagem')}: pagina diverge da proveniencia")
     for secao in documento["secoes"]:

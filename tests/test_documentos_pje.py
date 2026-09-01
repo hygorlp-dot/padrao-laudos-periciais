@@ -100,7 +100,14 @@ class DocumentoPjeTest(unittest.TestCase):
             any("bbox diverge" in erro for erro in erros_geometria),
             "bbox da proveniencia deve identificar exatamente a imagem catalogada",
         )
-        documento["imagens"] = imagens_sem_rotulo
+        documento["imagens"] = json.loads(json.dumps(imagens_sem_rotulo))
+        documento["imagens"][0]["proveniencia"]["pagina_original"] = "FOLHA-SINTETICA"
+        erros_pagina, _ = validar_documento(documento, base)
+        self.assertTrue(
+            any("pagina diverge" in erro for erro in erros_pagina),
+            "pagina original da proveniencia deve coincidir com a imagem",
+        )
+        documento["imagens"] = json.loads(json.dumps(imagens_sem_rotulo))
         documento_nao_imagem = json.loads(
             (RAIZ / "tests/fixtures/pje/documento-simples-valido.json").read_text(encoding="utf-8")
         )
