@@ -1,7 +1,5 @@
 from typing import Protocol
 
-from .application.ai_gateway import AIProvider as AIProvider
-
 
 class CaseRepository(Protocol):
     def get(self, case_id): ...
@@ -34,3 +32,7 @@ class ReportExporter(Protocol):
 
 class SecretStore(Protocol):
     def get(self, key): ...
+
+
+class AIProvider(Protocol):
+    def generate_structured(self, request, schema): ...
