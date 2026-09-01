@@ -470,10 +470,16 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
                 if thaw_payload(proposal.payload)["run_id"] != run.artifact_id:
                     raise RepositoryIntegrityError("backup AI observation provenance diverges")
         elif record.artifact_kind == "AI_EVAL_REPORT":
-            for attestation in payload["observation_attestations"]:
+            for case_id, attestation in zip(
+                payload["observation_case_ids"],
+                payload["observation_attestations"],
+                strict=True,
+            ):
                 observation = require_ai("AI_EVAL_OBSERVATION", attestation)
                 observed = thaw_payload(observation.payload)
                 if (
+                    observed["case_id"] != case_id
+                    or
                     observed["workspace_id"] != payload["workspace_id"]
                     or observed["dataset_version"] != payload["dataset_version"]
                     or observed["dataset_sha256"] != payload["dataset_sha256"]

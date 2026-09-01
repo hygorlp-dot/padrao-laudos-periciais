@@ -336,6 +336,7 @@ def test_canonical_report_loader_rejects_resealed_semantic_forgery() -> None:
         case_count=-9,
         token_usage=-1,
         schema_validity_rate="nonsense",
+        observation_case_ids=(report.observation_case_ids[0],) * report.case_count,
         observation_attestations=("not-a-sha",),
     )
     with pytest.raises(ValueError):

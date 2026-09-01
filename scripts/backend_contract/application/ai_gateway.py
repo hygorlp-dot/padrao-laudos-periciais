@@ -358,8 +358,8 @@ class RunAIProposal:
             raise AIExecutionFailed("AI_EVAL_OBSERVATION_PERSISTENCE_MISMATCH")
         return observation
 
-    def load_persisted_eval_report(self, workspace_id: str, report_id: str):
-        from ..ai_eval_productization import ai_eval_report_from_mapping
+    def load_persisted_eval_report(self, workspace_id: str, report_id: str, dataset):
+        from ..ai_eval_productization import ai_eval_report_from_mapping, evaluate_ai_dataset
 
         record = self._revisions.latest(
             WorkspaceId.parse(workspace_id), AI_EVAL_REPORT_KIND, report_id
@@ -378,6 +378,26 @@ class RunAIProposal:
             raise AIExecutionFailed("AI_EVAL_REPORT_PERSISTENCE_MISMATCH") from exc
         if report.workspace_id != workspace_id:
             raise AIExecutionFailed("AI_EVAL_REPORT_PERSISTENCE_MISMATCH")
+        if (
+            dataset.sha256 != report.dataset_sha256
+            or dataset.version != report.dataset_version
+            or tuple(case.case_id for case in dataset.cases) != report.observation_case_ids
+        ):
+            raise AIExecutionFailed("AI_EVAL_REPORT_DATASET_MISMATCH")
+        observations = []
+        for case_id, attestation in zip(
+            report.observation_case_ids, report.observation_attestations, strict=True
+        ):
+            observation = self.load_persisted_eval_observation(workspace_id, attestation)
+            if (
+                observation.case_id != case_id
+                or observation.dataset_version != report.dataset_version
+                or observation.dataset_sha256 != report.dataset_sha256
+            ):
+                raise AIExecutionFailed("AI_EVAL_REPORT_MANIFEST_MISMATCH")
+            observations.append(observation)
+        if evaluate_ai_dataset(dataset, tuple(observations)) != report:
+            raise AIExecutionFailed("AI_EVAL_REPORT_AGGREGATE_MISMATCH")
         return report
 
     def _persist_eval_observation(self, observation, created_at: str) -> None:

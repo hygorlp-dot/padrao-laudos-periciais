@@ -690,7 +690,7 @@ def test_eval_observation_reopens_from_real_append_only_repository(tmp_path) -> 
         loaded_observation = reopened_gateway.load_persisted_eval_observation(
             WORKSPACE_ID, observation.attestation_sha256
         )
-        loaded_report = reopened_gateway.load_persisted_eval_report(WORKSPACE_ID, report_id)
+        loaded_report = reopened_gateway.load_persisted_eval_report(WORKSPACE_ID, report_id, dataset)
         assert loaded_observation == observation
         assert loaded_report == report
     finally:

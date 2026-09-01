@@ -473,6 +473,7 @@ class AIEvalReport:
     cache_hits: int
     refusal_or_error_count: int
     versions: tuple[str, ...]
+    observation_case_ids: tuple[str, ...]
     observation_attestations: tuple[str, ...]
 
     def __post_init__(self) -> None:
@@ -484,6 +485,7 @@ class AIEvalReport:
         if (
             type(self.failures) is not tuple
             or type(self.versions) is not tuple
+            or type(self.observation_case_ids) is not tuple
             or type(self.observation_attestations) is not tuple
         ):
             raise TypeError("AI eval report immutable collections required")
@@ -495,6 +497,8 @@ class AIEvalReport:
             raise ValueError("AI eval report case count invalid")
         if (
             len(self.observation_attestations) != self.case_count
+            or len(self.observation_case_ids) != self.case_count
+            or len(set(self.observation_case_ids)) != self.case_count
             or len(set(self.observation_attestations)) != self.case_count
             or any(
                 type(item) is not str
@@ -504,6 +508,8 @@ class AIEvalReport:
             )
         ):
             raise ValueError("AI eval report observation manifest invalid")
+        if any(type(item) is not str or not item for item in self.observation_case_ids):
+            raise ValueError("AI eval report case manifest invalid")
         rates = (
             self.schema_validity_rate, self.scenario_semantic_validity_rate,
             self.source_grounding_rate, self.source_recall, self.unsourced_proposal_rate,
@@ -552,7 +558,7 @@ def ai_eval_report_from_mapping(value: object) -> AIEvalReport:
     if type(value) is not dict or set(value) != set(AIEvalReport.__dataclass_fields__):
         raise ValueError("AI eval report fields invalid")
     values = dict(value)
-    for field in ("failures", "versions", "observation_attestations"):
+    for field in ("failures", "versions", "observation_case_ids", "observation_attestations"):
         if type(values[field]) not in {list, tuple}:
             raise ValueError("AI eval report immutable collection invalid")
         values[field] = tuple(values[field])
@@ -655,6 +661,7 @@ def evaluate_ai_dataset(
         cache_hits=sum(item.cache_hit for item in observations),
         refusal_or_error_count=sum(item.error_classification is not None for item in observations),
         versions=versions,
+        observation_case_ids=tuple(case.case_id for case in dataset.cases),
         observation_attestations=tuple(
             next(item.attestation_sha256 for item in observations if item.case_id == case.case_id)
             for case in dataset.cases
