@@ -116,10 +116,27 @@ def test_backup_restore_preserves_workspace_ai_cost_authority(tmp_path) -> None:
     assert restored.snapshot(WORKSPACE_ID, "session-1") == ledger.snapshot(
         WORKSPACE_ID, "session-1"
     )
+    restored.authorize_and_reserve(
+        WORKSPACE_ID, "session-2", input_tokens=1, output_tokens=1,
+        estimated_cost_microusd=50,
+    )
+    with pytest.raises(RepositoryIntegrityError, match="AI cost authority"):
+        CreateWorkspaceBackup(
+            staging.workspaces, staging.revisions, None, Clock(), lambda _: None
+        ).execute(workspace_id)
+    second_package = CreateWorkspaceBackup(
+        staging.workspaces, staging.revisions, None, Clock(), lambda _: None, restored
+    ).execute(workspace_id)
+    second_staging = RecoveryStaging.create(tmp_path / "restored-again")
+    RestoreWorkspaceBackup(second_staging).execute(second_package)
+    restored_again = SQLiteAICostLedger(
+        limits, second_staging.root / "ai-cost.sqlite3"
+    )
+    assert restored_again.snapshot(WORKSPACE_ID, "session-2").workspace_cost_microusd == 550
     with pytest.raises(ValueError, match="workspace cost ceiling"):
-        restored.authorize_and_reserve(
-            WORKSPACE_ID, "session-2", input_tokens=1, output_tokens=1,
-            estimated_cost_microusd=101,
+        restored_again.authorize_and_reserve(
+            WORKSPACE_ID, "session-3", input_tokens=1, output_tokens=1,
+            estimated_cost_microusd=51,
         )
 
 
