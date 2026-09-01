@@ -20,6 +20,7 @@ from ..ai_gateway import (
     context_manifest_payload,
     response_payload_sha256,
 )
+from ..ai_eval_productization import AICostLedger
 from .models import WorkspaceId, thaw_payload
 from .ports import ArtifactRevisionRepository, Clock, IdGenerator, WorkspaceRepository
 
@@ -124,6 +125,7 @@ class RunAIProposal:
         egress_policy: EgressPolicy,
         clock: Clock,
         ids: IdGenerator,
+        cost_ledger: AICostLedger | None = None,
     ):
         self._workspaces = workspaces
         self._revisions = revisions
@@ -131,6 +133,7 @@ class RunAIProposal:
         self._egress_policy = egress_policy
         self._clock = clock
         self._ids = ids
+        self._cost_ledger = cost_ledger
 
     def execute(self, request: AIRequest, profile: AIModelProfile) -> AIProposal:
         workspace_id = WorkspaceId.parse(request.workspace_id)
@@ -139,6 +142,20 @@ class RunAIProposal:
         self._egress_policy.authorize(request)
         if request.egress_manifest.egress_class is EgressClass.LOCAL_ONLY and self._provider.is_remote:
             raise EgressDenied("LOCAL_ONLY_PROVIDER_MISMATCH")
+        if self._cost_ledger is not None:
+            try:
+                self._cost_ledger.authorize_and_reserve(
+                    request.workspace_id,
+                    request.context_manifest_hash,
+                    input_tokens=sum(
+                        (len(segment.content.encode("utf-8")) + 3) // 4
+                        for segment in request.context
+                    ),
+                    output_tokens=profile.max_output_tokens,
+                    estimated_cost_microusd=profile.cost_ceiling_microusd,
+                )
+            except ValueError as exc:
+                raise AIExecutionFailed("COST_OR_TOKEN_BUDGET_EXCEEDED") from exc
         run_id = str(self._ids.new_uuid())
         created_at = self._clock.now().isoformat()
         response: AIResponse | None = None

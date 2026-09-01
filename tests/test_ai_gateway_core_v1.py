@@ -26,6 +26,7 @@ from scripts.backend_contract.ai_gateway import (
     response_payload_sha256,
     structured_output_schema_sha256,
 )
+from scripts.backend_contract.ai_eval_productization import AICostLedger, AICostLimits
 from scripts.backend_contract.application.ai_gateway import (
     AIExecutionFailed,
     AIProvider,
@@ -444,7 +445,7 @@ def ids(*, success: bool) -> SequenceIds:
     return SequenceIds(*(str(uuid4()) for _ in range(count)))
 
 
-def service(provider, revisions, *, policy=None, id_source=None) -> RunAIProposal:
+def service(provider, revisions, *, policy=None, id_source=None, cost_ledger=None) -> RunAIProposal:
     return RunAIProposal(
         WorkspaceRepo(),
         revisions,
@@ -452,7 +453,20 @@ def service(provider, revisions, *, policy=None, id_source=None) -> RunAIProposa
         policy or EgressPolicy(remote_sanitized_enabled=True),
         FixedClock(),
         id_source or ids(success=True),
+        cost_ledger,
     )
+
+
+def test_accumulated_cost_budget_fails_before_provider_execution() -> None:
+    provider = RecordingProvider(result=response())
+    revisions = RecordingRevisions()
+    ledger = AICostLedger(AICostLimits(10_000, 30_000, 20_000, 20_000))
+
+    with pytest.raises(AIExecutionFailed, match="COST_OR_TOKEN_BUDGET_EXCEEDED"):
+        service(provider, revisions, cost_ledger=ledger).execute(request(), profile())
+
+    assert provider.calls == []
+    assert revisions.appended == []
 
 
 def test_policy_denial_never_calls_provider_or_persists_run() -> None:

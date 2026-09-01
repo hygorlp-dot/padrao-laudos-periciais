@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import hashlib
+from dataclasses import dataclass, field as dataclass_field
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
@@ -12,6 +13,10 @@ from types import MappingProxyType
 from uuid import UUID
 
 from .ai_domain_proposals import DomainAIProposal
+from .ai_gateway import SourceRevisionRef
+
+
+_OBSERVATION_DERIVATION_TOKEN = object()
 
 
 class AIEvalScenario(StrEnum):
@@ -94,6 +99,28 @@ class AIEvalDataset:
         if {item.scenario for item in self.cases} != set(AIEvalScenario):
             raise ValueError("AI eval dataset scenario coverage invalid")
 
+    @property
+    def sha256(self) -> str:
+        payload = {
+            "dataset_id": self.dataset_id,
+            "version": self.version,
+            "corpus_source": self.corpus_source,
+            "private_data": self.private_data,
+            "cases": [
+                {
+                    "case_id": item.case_id,
+                    "scenario": item.scenario.value,
+                    "workspace_id": item.workspace_id,
+                    "task_type": item.task_type,
+                    "synthetic": item.synthetic,
+                    "expected_source_ids": list(item.expected_source_ids),
+                }
+                for item in self.cases
+            ],
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
 
 def load_ai_eval_dataset(path: Path) -> AIEvalDataset:
     if not isinstance(path, Path) or not path.is_file():
@@ -143,8 +170,14 @@ class AIEvalObservation:
     latency_ms: int
     cache_hit: bool
     error_classification: str | None
+    proposal_id: str
+    run_id: str
+    source_refs: tuple[SourceRevisionRef, ...]
+    _derivation_token: object = dataclass_field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        if self._derivation_token is not _OBSERVATION_DERIVATION_TOKEN:
+            raise ValueError("AI eval observation must be derived by the evaluation harness")
         for field in (
             "dataset_version", "case_id", "task_type", "provider", "profile_id", "model",
             "prompt_template_version",
@@ -177,6 +210,18 @@ class AIEvalObservation:
             raise TypeError("human eval outcome invalid")
         if self.error_classification is not None:
             _text(self.error_classification, "error_classification")
+        _uuid(self.proposal_id, "proposal_id")
+        _uuid(self.run_id, "run_id")
+        if type(self.source_refs) is not tuple or not self.source_refs or any(
+            type(item) is not SourceRevisionRef for item in self.source_refs
+        ):
+            raise ValueError("AI eval observation requires exact source revisions")
+        if any(item.workspace_id != self.workspace_id for item in self.source_refs):
+            raise ValueError("AI eval observation source workspace mismatch")
+
+
+def _new_ai_eval_observation(**values: object) -> AIEvalObservation:
+    return AIEvalObservation(**values, _derivation_token=_OBSERVATION_DERIVATION_TOKEN)
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,7 +281,7 @@ def observe_domain_proposal(
         raise ValueError("AI eval proposal contains cross-workspace source")
     cited_document_ids = {ref.document_id for ref in all_refs}
     grounded = sum(bool(item.source_refs) for item in proposal.items)
-    return AIEvalObservation(
+    return _new_ai_eval_observation(
         dataset_version=dataset_version,
         case_id=case.case_id,
         workspace_id=case.workspace_id,
@@ -263,6 +308,9 @@ def observe_domain_proposal(
         latency_ms=telemetry.latency_ms,
         cache_hit=telemetry.cache_hit,
         error_classification=None,
+        proposal_id=proposal.proposal_id,
+        run_id=proposal.run_id,
+        source_refs=all_refs,
     )
 
 
@@ -276,6 +324,7 @@ def _rate(numerator: int, denominator: int) -> str:
 class AIEvalReport:
     dataset_id: str
     dataset_version: str
+    dataset_sha256: str
     case_count: int
     status: str
     failures: tuple[str, ...]
@@ -302,6 +351,8 @@ class AIEvalReport:
             raise ValueError("AI eval report status diverges from failures")
         if type(self.failures) is not tuple or type(self.versions) is not tuple:
             raise TypeError("AI eval report immutable collections required")
+        if len(self.dataset_sha256) != 64:
+            raise ValueError("AI eval dataset hash invalid")
 
 
 def evaluate_ai_dataset(
@@ -325,6 +376,9 @@ def evaluate_ai_dataset(
             raise ValueError("AI eval observation task mismatch")
         if item.expected_source_hits > len(case.expected_source_ids):
             raise ValueError("AI eval source recall exceeds expected sources")
+        actual_hits = len(set(case.expected_source_ids) & {ref.document_id for ref in item.source_refs})
+        if item.expected_source_hits != actual_hits:
+            raise ValueError("AI eval source recall diverges from exact source revisions")
 
     case_count = len(observations)
     material = sum(item.material_proposal_count for item in observations)
@@ -359,6 +413,7 @@ def evaluate_ai_dataset(
     return AIEvalReport(
         dataset_id=dataset.dataset_id,
         dataset_version=dataset.version,
+        dataset_sha256=dataset.sha256,
         case_count=case_count,
         status="PASS" if not failures else "FAIL",
         failures=tuple(failures),
@@ -388,6 +443,8 @@ class AICostLimits:
     max_run_cost_microusd: int
     max_workspace_cost_microusd: int
     max_session_cost_microusd: int
+    max_workspace_tokens: int | None = None
+    max_session_tokens: int | None = None
 
     def __post_init__(self) -> None:
         if any(type(value) is not int or value <= 0 for value in (
@@ -395,6 +452,11 @@ class AICostLimits:
             self.max_workspace_cost_microusd, self.max_session_cost_microusd,
         )):
             raise ValueError("AI cost limits must be positive")
+        if any(
+            value is not None and (type(value) is not int or value <= 0)
+            for value in (self.max_workspace_tokens, self.max_session_tokens)
+        ):
+            raise ValueError("AI accumulated token limits must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -414,6 +476,7 @@ class AICostLedger:
         self._workspace_costs: dict[str, int] = {}
         self._session_costs: dict[tuple[str, str], int] = {}
         self._session_tokens: dict[tuple[str, str], int] = {}
+        self._workspace_tokens: dict[str, int] = {}
         self._lock = Lock()
 
     def authorize_and_reserve(
@@ -438,13 +501,20 @@ class AICostLedger:
         with self._lock:
             workspace_cost = self._workspace_costs.get(workspace_id, 0) + estimated_cost_microusd
             session_cost = self._session_costs.get(key, 0) + estimated_cost_microusd
+            workspace_tokens = self._workspace_tokens.get(workspace_id, 0) + run_tokens
+            session_tokens = self._session_tokens.get(key, 0) + run_tokens
             if session_cost > self._limits.max_session_cost_microusd:
                 raise ValueError("AI session cost ceiling exceeded")
             if workspace_cost > self._limits.max_workspace_cost_microusd:
                 raise ValueError("AI workspace cost ceiling exceeded")
+            if self._limits.max_session_tokens is not None and session_tokens > self._limits.max_session_tokens:
+                raise ValueError("AI session token ceiling exceeded")
+            if self._limits.max_workspace_tokens is not None and workspace_tokens > self._limits.max_workspace_tokens:
+                raise ValueError("AI workspace token ceiling exceeded")
             self._workspace_costs[workspace_id] = workspace_cost
             self._session_costs[key] = session_cost
-            self._session_tokens[key] = self._session_tokens.get(key, 0) + run_tokens
+            self._workspace_tokens[workspace_id] = workspace_tokens
+            self._session_tokens[key] = session_tokens
             return AICostReservation(
                 workspace_id, session_id, workspace_cost, session_cost, self._session_tokens[key]
             )
@@ -495,12 +565,19 @@ def compare_eval_reports(
 ) -> AIEvalComparison:
     if type(baseline) is not AIEvalReport or type(current) is not AIEvalReport:
         raise TypeError("AI eval reports required")
-    if baseline.dataset_id != current.dataset_id or baseline.dataset_version != current.dataset_version:
+    if (
+        baseline.dataset_id != current.dataset_id
+        or baseline.dataset_version != current.dataset_version
+        or baseline.dataset_sha256 != current.dataset_sha256
+    ):
         raise ValueError("AI eval comparison dataset mismatch")
     if any(type(value) is not int or value < 0 for value in (max_cost_increase_bps, max_latency_increase_bps)):
         raise ValueError("AI eval comparison allowance invalid")
     dimensions = {
-        "quality": "PASS" if current.schema_validity_rate >= baseline.schema_validity_rate else "FAIL",
+        "quality": "PASS" if (
+            baseline.status == current.status == "PASS"
+            and current.schema_validity_rate >= baseline.schema_validity_rate
+        ) else "FAIL",
         "source_grounding": "PASS" if (
             current.source_grounding_rate >= baseline.source_grounding_rate
             and current.source_recall >= baseline.source_recall

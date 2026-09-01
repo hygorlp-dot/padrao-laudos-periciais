@@ -15,6 +15,7 @@ from scripts.backend_contract.ai_eval_productization import (
     evaluate_ai_dataset,
     load_ai_eval_dataset,
     observe_domain_proposal,
+    _new_ai_eval_observation,
 )
 from scripts.backend_contract.ai_domain_proposals import (
     DomainAIProposal,
@@ -57,9 +58,23 @@ def observation(case, *, human_outcome=HumanEvalOutcome.ACCEPTED, **changes):
         "latency_ms": 250,
         "cache_hit": False,
         "error_classification": None,
+        "proposal_id": "33333333-3333-4333-8333-333333333333",
+        "run_id": "44444444-4444-4444-8444-444444444444",
+        "source_refs": tuple(
+            SourceRevisionRef(case.workspace_id, item, "revision-1", "a" * 64, "segment=1")
+            for item in case.expected_source_ids
+        ),
     }
     values.update(changes)
-    return AIEvalObservation(**values)
+    return _new_ai_eval_observation(**values)
+
+
+def test_observation_cannot_be_self_attested_outside_eval_harness() -> None:
+    dataset = load_ai_eval_dataset(DATASET)
+    trusted = observation(dataset.cases[0])
+    values = {field: getattr(trusted, field) for field in trusted.__dataclass_fields__ if field != "_derivation_token"}
+    with pytest.raises(ValueError, match="derived by the evaluation harness"):
+        AIEvalObservation(**values)
 
 
 def test_dataset_is_synthetic_versioned_and_covers_every_required_adversarial_class() -> None:
@@ -188,6 +203,22 @@ def test_cost_ledger_fails_before_reservation_exceeds_run_workspace_or_session_c
     assert ledger.snapshot(WORKSPACE, "session-1") == first
 
 
+def test_cost_ledger_enforces_accumulated_workspace_and_session_token_ceilings_atomically() -> None:
+    ledger = AICostLedger(AICostLimits(1_000, 5_000, 20_000, 20_000, 700, 600))
+    first = ledger.authorize_and_reserve(
+        WORKSPACE, "session-1", input_tokens=400, output_tokens=100, estimated_cost_microusd=1
+    )
+    with pytest.raises(ValueError, match="session token"):
+        ledger.authorize_and_reserve(
+            WORKSPACE, "session-1", input_tokens=100, output_tokens=1, estimated_cost_microusd=1
+        )
+    with pytest.raises(ValueError, match="workspace token"):
+        ledger.authorize_and_reserve(
+            WORKSPACE, "session-2", input_tokens=200, output_tokens=1, estimated_cost_microusd=1
+        )
+    assert ledger.snapshot(WORKSPACE, "session-1") == first
+
+
 def test_golden_comparison_separates_quality_grounding_authority_cost_and_latency() -> None:
     dataset = load_ai_eval_dataset(DATASET)
     baseline = evaluate_ai_dataset(dataset, tuple(observation(case) for case in dataset.cases))
@@ -206,3 +237,24 @@ def test_golden_comparison_separates_quality_grounding_authority_cost_and_latenc
     assert comparison.dimensions["cost"] == "FAIL"
     assert comparison.dimensions["latency"] == "FAIL"
     assert comparison.baseline_versions == comparison.current_versions
+
+
+def test_golden_comparison_never_accepts_absolute_hard_gate_failure() -> None:
+    dataset = load_ai_eval_dataset(DATASET)
+    observations = [observation(case) for case in dataset.cases]
+    observations[0] = replace(observations[0], self_authorizations=1)
+    failed = evaluate_ai_dataset(dataset, tuple(observations))
+    assert failed.status == "FAIL"
+    assert compare_eval_reports(failed, failed, max_cost_increase_bps=0, max_latency_increase_bps=0).status == "FAIL"
+
+
+def test_golden_comparison_rejects_changed_corpus_under_same_id_and_version() -> None:
+    dataset = load_ai_eval_dataset(DATASET)
+    baseline = evaluate_ai_dataset(dataset, tuple(observation(case) for case in dataset.cases))
+    changed = replace(
+        dataset,
+        cases=(replace(dataset.cases[0], expected_source_ids=("different-source",)), *dataset.cases[1:]),
+    )
+    current = evaluate_ai_dataset(changed, tuple(observation(case) for case in changed.cases))
+    with pytest.raises(ValueError, match="dataset mismatch"):
+        compare_eval_reports(baseline, current, max_cost_increase_bps=0, max_latency_increase_bps=0)
