@@ -560,6 +560,30 @@ def test_interrupted_legacy_migration_rejects_provisional_generation_substitutio
         DeviceOfflineVaultRegistry(tmp_path)
 
 
+def test_crash_after_v2_identity_transition_consumes_migration_record_on_restart(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "offline-field-v1"
+    root.mkdir()
+    (root / ".device-key").write_bytes(b"L" * 32)
+    (root / ".device-id").write_text("DEVICE-" + "A" * 32, encoding="ascii")
+    original_replace = os.replace
+
+    def interrupt(source, target):
+        if Path(target).name == ".lifecycle-migration-v1" and Path(source).name.endswith(".consumed"):
+            raise OSError("synthetic consumption interruption")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(os, "replace", interrupt)
+    with pytest.raises(OSError, match="consumption interruption"):
+        DeviceOfflineVaultRegistry(tmp_path)
+    monkeypatch.undo()
+    assert (root / ".device-id").read_text(encoding="ascii").startswith("V2\n")
+    assert (root / ".lifecycle-state").exists()
+
+    recovered = DeviceOfflineVaultRegistry(tmp_path)
+    assert (root / ".lifecycle-migration-v1").read_bytes().startswith(b"CONSUMED-V1\n")
+    assert recovered.lifecycle_status == {"device_id": "DEVICE-" + "A" * 32, "generation": 1, "revoked": False}
+
+
 def _replacement_outcome(registry: DeviceOfflineVaultRegistry, expected_device_id: str) -> str:
     try:
         return registry.replace_revoked_device(expected_device_id)

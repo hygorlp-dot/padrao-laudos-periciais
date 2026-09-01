@@ -439,7 +439,11 @@ class DeviceOfflineVaultRegistry:
         )
         migration_recorded = self._lifecycle_migration_path.exists() and not migration_consumed
         migration_completed = self._lifecycle_migration_complete_path.exists()
-        migration_pending = migration_recorded and not migration_completed and identity_is_legacy
+        migration_pending = (
+            migration_recorded
+            and not migration_completed
+            and (identity_is_legacy or self._lifecycle_state_path.exists())
+        )
         if migration_pending:
             try:
                 legacy = json.loads(self._lifecycle_migration_path.read_text(encoding="utf-8"))
