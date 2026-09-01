@@ -51,6 +51,18 @@ def validar_documento(documento, documento_manifesto, validador=None):
             continue
         if proveniencia_imagem.get("bbox") != imagem.get("bbox"):
             erros.append(f"{imagem.get('imagem_id', 'imagem')}: bbox diverge da proveniencia")
+        arquivo_manifesto = documento_manifesto.get("_arquivo")
+        fonte_esperada = {
+            "documento_id": documento.get("documento_id"),
+            "id_pje": documento.get("id_pje"),
+        }
+        if isinstance(arquivo_manifesto, dict):
+            fonte_esperada.update({
+                "arquivo": arquivo_manifesto.get("nome"),
+                "sha256": arquivo_manifesto.get("sha256"),
+            })
+        if any(proveniencia_imagem.get(campo) != valor for campo, valor in fonte_esperada.items()):
+            erros.append(f"{imagem.get('imagem_id', 'imagem')}: fonte diverge da proveniencia")
         if (
             proveniencia_imagem.get("pagina_pdf") != pagina_imagem.get("pagina_pdf")
             or proveniencia_imagem.get("pagina_documento") != pagina_imagem.get("pagina_documento")

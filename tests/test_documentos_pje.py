@@ -93,6 +93,7 @@ class DocumentoPjeTest(unittest.TestCase):
             "status_reconciliacao": documento["status_reconciliacao"],
             "_processo_cnj": documento["processo_cnj"],
             "_paginas_manifesto": [],
+            "_arquivo": {"nome": CONTEXTO["arquivo"], "sha256": CONTEXTO["sha256"]},
         }
         documento["imagens"][0]["proveniencia"]["bbox"]["x0"] = 99
         erros_geometria, _ = validar_documento(documento, base)
@@ -107,6 +108,21 @@ class DocumentoPjeTest(unittest.TestCase):
             any("pagina diverge" in erro for erro in erros_pagina),
             "pagina original da proveniencia deve coincidir com a imagem",
         )
+        adulteracoes_fonte = {
+            "documento_id": "DOC-PJE-999",
+            "id_pje": "999999",
+            "arquivo": "outro-processo.pdf",
+            "sha256": "f" * 64,
+        }
+        for campo, valor in adulteracoes_fonte.items():
+            with self.subTest(campo_fonte=campo):
+                documento["imagens"] = json.loads(json.dumps(imagens_sem_rotulo))
+                documento["imagens"][0]["proveniencia"][campo] = valor
+                erros_fonte, _ = validar_documento(documento, base)
+                self.assertTrue(
+                    any("fonte diverge" in erro for erro in erros_fonte),
+                    f"identidade de fonte {campo} deve permanecer vinculada",
+                )
         documento["imagens"] = json.loads(json.dumps(imagens_sem_rotulo))
         documento_nao_imagem = json.loads(
             (RAIZ / "tests/fixtures/pje/documento-simples-valido.json").read_text(encoding="utf-8")
