@@ -47,10 +47,14 @@ from .sqlite import SQLiteApplicationStore
 import base64
 
 
-PRODUCT_RELEASE_VERSION = "0.11.0"
+BACKUP_PORTABILITY_RELEASE = "0.11.0"
+# Serialized backup compatibility is a portability contract generation, not
+# the independently versioned application release.
+PRODUCT_RELEASE_VERSION = BACKUP_PORTABILITY_RELEASE
 STORAGE_FORMAT_VERSION = 1
 SUPPORTED_BACKUP_VERSIONS = frozenset({0, 1})
-SUPPORTED_PRODUCT_RELEASES = frozenset({"0.10.0", "0.11.0"})
+SUPPORTED_BACKUP_PORTABILITY_RELEASES = frozenset({"0.10.0", "0.11.0"})
+SUPPORTED_PRODUCT_RELEASES = SUPPORTED_BACKUP_PORTABILITY_RELEASES
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _OPEN_BINARY = 0x8000 if os.name == "nt" else 0
 
@@ -366,10 +370,24 @@ class VerifyWorkspaceBackup:
             sequences.setdefault((record.artifact_kind, record.artifact_id), []).append(record.revision)
         if any(items != list(range(1, len(items) + 1)) for items in sequences.values()):
             raise RepositoryIntegrityError("backup revision sequence is incomplete")
-        tuple(_private_from_mapping(item, workspace_id) for item in value.private_contents)
+        private_contents = tuple(_private_from_mapping(item, workspace_id) for item in value.private_contents)
         private_ids = [item["content_id"] for item in value.private_contents]
         if len(private_ids) != len(set(private_ids)):
             raise RepositoryIntegrityError("backup private identity is duplicated")
+        private_authority = {
+            str(item.metadata.content_id): item.metadata.checksum_sha256
+            for item in private_contents
+        }
+        for record in revisions:
+            if record.artifact_kind != "INSPECTION_SESSION_V1":
+                continue
+            inspection = inspection_session_from_mapping(thaw_payload(record.payload))
+            media = (*inspection.photos, *inspection.videos, *inspection.sketches)
+            if any(
+                private_authority.get(item.private_content_id) != item.original_sha256
+                for item in media
+            ):
+                raise RepositoryIntegrityError("backup inspection media authority is incomplete")
         return value
 
 
@@ -379,8 +397,10 @@ class CreateWorkspaceBackup:
     revisions: object
     private_contents: object | None
     clock: object
+    assert_backup_ready: object
 
     def execute(self, workspace_id: WorkspaceId) -> bytes:
+        self.assert_backup_ready(workspace_id)
         workspace = self.workspaces.get(workspace_id)
         if workspace is None:
             raise ValueError("workspace is unavailable")

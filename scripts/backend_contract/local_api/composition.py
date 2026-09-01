@@ -45,7 +45,7 @@ from .transport import LocalApi, LocalApiServices, _require_local_token
 from ..application.case_analysis import AddCaseAnalysisItem, GetCaseAnalysis, ReviewCaseAnalysisItem, SaveCaseAnalysis, StartCaseAnalysis
 from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning, StartPericialPlanning
 from ..application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession
-from ..application.field_mobile import GetOfflineInspection, ListPendingOfflineInspections, PrepareOfflineInspection, RevokeOfflineDevice, SyncOfflineInspection, UpdateOfflineInspection
+from ..application.field_mobile import GetOfflineInspection, ListPendingOfflineInspections, PrepareOfflineInspection, ReplaceRevokedOfflineDevice, RevokeOfflineDevice, SyncOfflineInspection, UpdateOfflineInspection
 from ..application.technical_findings import (
     AddEvidenceProposal,
     GetTechnicalSnapshot,
@@ -488,7 +488,9 @@ def build_local_api(
         get_offline_inspection=(GetOfflineInspection(offline_registry.vault_for) if offline_registry is not None else None),
         list_offline_inspections=(ListPendingOfflineInspections(offline_registry.vault_for) if offline_registry is not None else None),
         revoke_offline_device=(RevokeOfflineDevice(offline_registry.revoke_device) if offline_registry is not None else None),
+        replace_offline_device=(ReplaceRevokedOfflineDevice(offline_registry.replace_revoked_device) if offline_registry is not None else None),
         offline_device_id=(offline_registry.device_id if offline_registry is not None else None),
+        offline_device_authority=offline_registry,
         save_technical_snapshot=save_technical_snapshot,
         get_technical_snapshot=get_technical_snapshot,
         start_technical_snapshot=StartTechnicalSnapshot(get_case_analysis, get_inspection_session, save_technical_snapshot, local_ids),

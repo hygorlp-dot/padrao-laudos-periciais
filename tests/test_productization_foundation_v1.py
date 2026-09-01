@@ -27,11 +27,13 @@ from scripts.backend_contract.infrastructure.private_filesystem import LocalPriv
 from scripts.backend_contract.local_api.composition import build_local_api
 from scripts.backend_contract.infrastructure.productization import (
     ARTIFACT_COMPATIBILITY,
+    BACKUP_PORTABILITY_RELEASE,
     CreateWorkspaceBackup,
     PRODUCT_RELEASE_VERSION,
     RecoveryStaging,
     RestoreWorkspaceBackup,
     STORAGE_FORMAT_VERSION,
+    SUPPORTED_BACKUP_PORTABILITY_RELEASES,
     VerifyWorkspaceBackup,
     collect_support_diagnostics,
     migrate_backup_mapping,
@@ -96,6 +98,24 @@ def test_product_release_compatibility_window_is_exact_not_open_ended() -> None:
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     with pytest.raises(RepositoryIntegrityError, match="compatibility"):
         VerifyWorkspaceBackup().execute(raw)
+
+
+def test_declared_backup_portability_releases_are_the_exact_supported_window() -> None:
+    assert BACKUP_PORTABILITY_RELEASE == PRODUCT_RELEASE_VERSION == "0.11.0"
+    assert SUPPORTED_BACKUP_PORTABILITY_RELEASES == frozenset({"0.10.0", "0.11.0"})
+
+    def canonical(value: object) -> bytes:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+
+    for release in SUPPORTED_BACKUP_PORTABILITY_RELEASES:
+        mapping = backup_mapping()
+        mapping["product_release"] = release
+        mapping["member_hashes"] = {
+            "artifact_revisions": hashlib.sha256(canonical(mapping["artifact_revisions"])).hexdigest(),
+            "private_contents": hashlib.sha256(canonical(mapping["private_contents"])).hexdigest(),
+        }
+        mapping["manifest_sha256"] = hashlib.sha256(canonical({key: value for key, value in mapping.items() if key != "manifest_sha256"})).hexdigest()
+        assert VerifyWorkspaceBackup().execute(canonical(mapping)).product_release == release
 
 
 def test_backup_contract_rejects_unknown_fields() -> None:
@@ -165,11 +185,33 @@ def test_closed_noncanonical_user_artifact_has_explicit_portable_backup_policy(t
             artifact_id="USER-ARTIFACT-001",
             payload={"provenance": "SYNTHETIC", "notes": ["portable"]},
         )
-        package = CreateWorkspaceBackup(store.workspaces, store.revisions, private, Clock()).execute(workspace_id)
+        package = CreateWorkspaceBackup(store.workspaces, store.revisions, private, Clock(), lambda _: None).execute(workspace_id)
 
     verified = VerifyWorkspaceBackup().execute(package)
     assert len(verified.artifact_revisions) == 1
     assert verified.artifact_revisions[0]["artifact_kind"] == "LAUDO"
+
+
+def test_workspace_backup_refuses_pending_offline_field_work_before_reading_workspace() -> None:
+    calls: list[str] = []
+
+    class Workspaces:
+        def get(self, _workspace_id):
+            calls.append("workspace-read")
+            raise AssertionError("backup read started before offline readiness")
+
+    def assert_ready(_workspace_id) -> None:
+        raise ValueError("pending offline field work must be synchronized before backup")
+
+    service = CreateWorkspaceBackup(Workspaces(), object(), None, Clock(), assert_ready)
+    with pytest.raises(ValueError, match="pending offline field work must be synchronized before backup"):
+        service.execute(WorkspaceId.parse(WORKSPACE_ID))
+    assert calls == []
+
+
+def test_workspace_backup_without_offline_readiness_authority_fails_closed() -> None:
+    with pytest.raises(TypeError, match="assert_backup_ready"):
+        CreateWorkspaceBackup(object(), object(), None, object())
 
 
 def seeded_store(path: Path, private: PrivateStore) -> tuple[SQLiteApplicationStore, WorkspaceId]:
@@ -200,11 +242,44 @@ def seeded_store(path: Path, private: PrivateStore) -> tuple[SQLiteApplicationSt
     return store, workspace_id
 
 
+def seed_synced_inspection_media(store: SQLiteApplicationStore, private: PrivateStore, workspace_id: WorkspaceId) -> dict[str, bytes]:
+    snapshot = json.loads((Path(__file__).parent / "fixtures/inspection-session-v1.json").read_text(encoding="utf-8"))
+    originals = {
+        snapshot["photos"][0]["private_content_id"]: b"synced-photo-original",
+        snapshot["videos"][0]["private_content_id"]: b"synced-video-original",
+        snapshot["sketches"][0]["private_content_id"]: b"synced-sketch-original",
+    }
+    for collection in ("photos", "videos", "sketches"):
+        item = snapshot[collection][0]
+        content = originals[item["private_content_id"]]
+        item["original_sha256"] = hashlib.sha256(content).hexdigest()
+        metadata = PrivateContentMetadata(
+            workspace_id,
+            PrivateContentId.parse(item["private_content_id"]),
+            f"synthetic-{collection}.bin",
+            len(content),
+            item["original_sha256"],
+            {"photos": "image/jpeg", "videos": "video/mp4", "sketches": "image/png"}[collection],
+            "2026-08-31T12:30:00+00:00",
+            PrivateContentOrigin.LOCAL_IMPORT,
+        )
+        private.store(metadata, content)
+    store.revisions.append(
+        workspace_id=workspace_id,
+        artifact_kind="INSPECTION_SESSION_V1",
+        artifact_id=snapshot["session_id"],
+        revision_id="55555555-5555-4555-8555-555555555555",
+        created_at="2026-08-31T12:40:00+00:00",
+        payload=snapshot,
+    )
+    return originals
+
+
 def test_backup_restore_reopen_preserves_exact_history_private_bytes_and_provenance(tmp_path) -> None:
     source_private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", source_private)
-    package = CreateWorkspaceBackup(source.workspaces, source.revisions, source_private, Clock()).execute(workspace_id)
-    assert package == CreateWorkspaceBackup(source.workspaces, source.revisions, source_private, Clock()).execute(workspace_id)
+    package = CreateWorkspaceBackup(source.workspaces, source.revisions, source_private, Clock(), lambda _: None).execute(workspace_id)
+    assert package == CreateWorkspaceBackup(source.workspaces, source.revisions, source_private, Clock(), lambda _: None).execute(workspace_id)
     verified = VerifyWorkspaceBackup().execute(package)
     assert verified.workspace.workspace_id == WORKSPACE_ID
     staging = RecoveryStaging.create(tmp_path / "staging")
@@ -217,10 +292,39 @@ def test_backup_restore_reopen_preserves_exact_history_private_bytes_and_provena
     staging.close()
 
 
+def test_synced_inspection_backup_restore_requires_every_referenced_original_media(tmp_path) -> None:
+    private = PrivateStore()
+    source, workspace_id = seeded_store(tmp_path / "source.db", private)
+    originals = seed_synced_inspection_media(source, private, workspace_id)
+    package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock(), lambda _: None).execute(workspace_id)
+    verified = VerifyWorkspaceBackup().execute(package)
+    assert len(verified.private_contents) == 4
+
+    staging = RecoveryStaging.create(tmp_path / "staging")
+    RestoreWorkspaceBackup(staging).execute(package)
+    for content_id, expected in originals.items():
+        with staging.private_contents.open_content(workspace_id, PrivateContentId.parse(content_id)) as opened:
+            assert opened.stream.read() == expected
+    staging.close()
+
+    missing = json.loads(package)
+    removed_id = next(iter(originals))
+    missing["private_contents"] = [item for item in missing["private_contents"] if item["content_id"] != removed_id]
+
+    def canonical(value: object) -> bytes:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+
+    missing["member_hashes"]["private_contents"] = hashlib.sha256(canonical(missing["private_contents"])).hexdigest()
+    missing["manifest_sha256"] = hashlib.sha256(canonical({key: value for key, value in missing.items() if key != "manifest_sha256"})).hexdigest()
+    with pytest.raises(RepositoryIntegrityError, match="inspection media"):
+        VerifyWorkspaceBackup().execute(canonical(missing))
+    source.close()
+
+
 def test_restore_without_private_members_uses_same_owned_recovery_boundary(tmp_path) -> None:
     source_private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", source_private)
-    package = CreateWorkspaceBackup(source.workspaces, source.revisions, None, Clock()).execute(workspace_id)
+    package = CreateWorkspaceBackup(source.workspaces, source.revisions, None, Clock(), lambda _: None).execute(workspace_id)
     staging = RecoveryStaging.create(tmp_path / "staging")
     receipt = RestoreWorkspaceBackup(staging).execute(package)
     assert receipt.private_contents == 0 and len(staging.revisions.list_workspace(workspace_id)) == 1
@@ -231,7 +335,7 @@ def test_restore_without_private_members_uses_same_owned_recovery_boundary(tmp_p
 def test_corruption_and_foreign_workspace_fail_closed_before_restore_mutation(tmp_path) -> None:
     private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", private)
-    package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock()).execute(workspace_id)
+    package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock(), lambda _: None).execute(workspace_id)
     tampered = json.loads(package)
     tampered["artifact_revisions"][0]["payload"]["status"] = "DRAFT"
     corrupt = json.dumps(tampered, sort_keys=True, separators=(",", ":")).encode()
@@ -247,7 +351,7 @@ def test_corruption_and_foreign_workspace_fail_closed_before_restore_mutation(tm
 def test_resealed_inner_corruption_still_fails_domain_and_private_validation(tmp_path) -> None:
     private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", private)
-    package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock()).execute(workspace_id)
+    package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock(), lambda _: None).execute(workspace_id)
 
     def reseal(mapping: dict) -> bytes:
         def canonical(value: object) -> bytes:
@@ -275,7 +379,7 @@ def test_resealed_inner_corruption_still_fails_domain_and_private_validation(tmp
 def test_duplicate_private_identity_and_failed_store_discard_owned_staging(tmp_path, monkeypatch) -> None:
     private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", private)
-    package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock()).execute(workspace_id)
+    package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock(), lambda _: None).execute(workspace_id)
     duplicated = json.loads(package)
     duplicated["private_contents"].append(deepcopy(duplicated["private_contents"][0]))
 
@@ -304,7 +408,7 @@ def test_duplicate_private_identity_and_failed_store_discard_owned_staging(tmp_p
 def test_restore_refuses_nonempty_target_as_rollback_boundary(tmp_path) -> None:
     private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", private)
-    package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock()).execute(workspace_id)
+    package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock(), lambda _: None).execute(workspace_id)
     with pytest.raises(TypeError):
         RestoreWorkspaceBackup(source).execute(package)
     assert len(source.revisions.list_workspace(workspace_id)) == 1
@@ -338,7 +442,7 @@ def test_recovery_staging_repositories_cannot_be_redirected(tmp_path) -> None:
 def test_recovery_staging_authority_rejects_internal_resource_substitution(tmp_path) -> None:
     source_private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", source_private)
-    package = CreateWorkspaceBackup(source.workspaces, source.revisions, source_private, Clock()).execute(workspace_id)
+    package = CreateWorkspaceBackup(source.workspaces, source.revisions, source_private, Clock(), lambda _: None).execute(workspace_id)
     staging = RecoveryStaging.create(tmp_path / "staging")
     owned_database = staging.database
     active_root = tmp_path / "active"
@@ -476,7 +580,7 @@ def test_recovery_staging_rejects_nonlocal_or_unanchored_root(root) -> None:
 def test_restore_requires_globally_empty_staging_not_only_absent_source_id(tmp_path) -> None:
     private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", private)
-    package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock()).execute(workspace_id)
+    package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock(), lambda _: None).execute(workspace_id)
     staging_root = tmp_path / "staging"
     staging = RecoveryStaging.create(staging_root)
     staging.workspaces.create(PericiaWorkspace(WorkspaceId.parse("44444444-4444-4444-8444-444444444444"), "Outro", "2026-08-31T12:00:00+00:00"))
@@ -489,7 +593,7 @@ def test_restore_requires_globally_empty_staging_not_only_absent_source_id(tmp_p
 def test_support_diagnostics_are_sanitized_and_never_egress_private_data(tmp_path) -> None:
     private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", private)
-    package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock()).execute(workspace_id)
+    package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock(), lambda _: None).execute(workspace_id)
     diagnostic = collect_support_diagnostics(package)
     rendered = repr(diagnostic)
     assert diagnostic.integrity_status == "PASS" and diagnostic.private_egress is False

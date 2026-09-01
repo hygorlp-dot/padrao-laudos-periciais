@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { getInspectionSession, InspectionSessionApiError, saveInspectionSession, startInspectionSession, uploadInspectionPhoto, type ExecutionState, type InspectionEnvelope, type InspectionSnapshot } from "../data/inspectionSession";
 import { FieldMobileStatus } from "./FieldMobileStatus";
-import { listPendingOfflineInspections, prepareOfflineInspection, revokeOfflineDevice, syncOfflineInspection, updateOfflineInspection, type FieldSyncConflict } from "../data/fieldMobile";
+import { getOfflineDeviceStatus, listPendingOfflineInspections, prepareOfflineInspection, replaceOfflineDevice, revokeOfflineDevice, syncOfflineInspection, updateOfflineInspection, type FieldSyncConflict } from "../data/fieldMobile";
 
 type State = { kind: "loading" } | { kind: "ready"; value: InspectionEnvelope } | { kind: "empty" } | { kind: "error" };
 const stateLabel = { PENDING: "Pendente", COMPLETED: "Concluído", PARTIAL: "Execução parcial", NOT_EXECUTED: "Não executado", NOT_APPLICABLE: "Não aplicável", BLOCKED: "Bloqueado" } as const;
@@ -51,14 +51,33 @@ export function InspectionSessionView({ workspaceId }: { workspaceId: string }) 
   const [saveError, setSaveError] = useState(false);
   const [offlinePackageId, setOfflinePackageId] = useState<string | null>(null);
   const [offlinePackageRevision, setOfflinePackageRevision] = useState(0);
+  const [offlineDeviceId, setOfflineDeviceId] = useState<string | null>(null);
+  const [deviceRevoked, setDeviceRevoked] = useState(false);
   const [syncConflicts, setSyncConflicts] = useState<FieldSyncConflict[]>([]);
   useEffect(() => {
     const controller = new AbortController();
     getInspectionSession(workspaceId, controller.signal).then(
       async (value) => {
         try {
+          const device = await getOfflineDeviceStatus(workspaceId);
+          if (!controller.signal.aborted) {
+            setOfflineDeviceId(device.device_id);
+            setDeviceRevoked(device.revoked);
+          }
+          if (device.revoked) {
+            if (!controller.signal.aborted) setState({ kind: "ready", value });
+            return;
+          }
           const pending = await listPendingOfflineInspections(workspaceId);
+          if (!controller.signal.aborted && pending.device_id) setOfflineDeviceId(pending.device_id);
           const offline = pending.items[0];
+          if (!controller.signal.aborted && pending.conflicts?.length) {
+            setSyncConflicts(pending.conflicts.map((item) => ({
+              ...item,
+              record_ids: [],
+              requires_explicit_review: true,
+            })));
+          }
           if (!controller.signal.aborted && offline) { setOfflinePackageId(offline.package_id); setOfflinePackageRevision(offline.package_revision); setState({ kind: "ready", value: { ...value, snapshot: offline.inspection_snapshot } }); }
           else if (!controller.signal.aborted) setState({ kind: "ready", value });
         } catch {
@@ -103,9 +122,11 @@ export function InspectionSessionView({ workspaceId }: { workspaceId: string }) 
       pendingCaptures={offlinePackageId ? 1 : 0}
       conflicts={[...syncConflicts, ...snapshot.upstream_stale_reasons.map((message) => ({ code: "STALE_PLAN", message, record_ids: [], requires_explicit_review: true }))]}
       onCapture={() => { const firstPending = snapshot.items.find((item) => item.state === "PENDING") ?? snapshot.items[0]; if (firstPending) { setSelectedItem(firstPending.item_id); setItemState(firstPending.state); setNote(firstPending.note ?? ""); } }}
-      onPrepare={async () => { try { const sessionId = crypto.randomUUID(); const prepared = await prepareOfflineInspection(workspaceId, sessionId); setOfflinePackageId(prepared.package.package_id); setOfflinePackageRevision(prepared.package.package_revision); setSyncConflicts([]); } catch { setSyncConflicts([{ code: "OFFLINE_STORAGE_UNAVAILABLE", message: "Não foi possível preparar o pacote local.", record_ids: [], requires_explicit_review: true }]); } }}
+      onPrepare={async () => { try { const sessionId = crypto.randomUUID(); const prepared = await prepareOfflineInspection(workspaceId, sessionId); setOfflineDeviceId(prepared.device_id); setOfflinePackageId(prepared.package.package_id); setOfflinePackageRevision(prepared.package.package_revision); setSyncConflicts([]); } catch { setSyncConflicts([{ code: "OFFLINE_STORAGE_UNAVAILABLE", message: "Não foi possível preparar o pacote local.", record_ids: [], requires_explicit_review: true }]); } }}
       onSync={async () => { if (!offlinePackageId) return; try { const result = await syncOfflineInspection(workspaceId, offlinePackageId); setSyncConflicts(result.conflicts); if (result.accepted) { setOfflinePackageId(null); setOfflinePackageRevision(0); setVersion((value) => value + 1); } } catch { setSyncConflicts([{ code: "SYNC_UNAVAILABLE", message: "A sincronização local não pôde ser concluída.", record_ids: [], requires_explicit_review: true }]); } }}
-      onRevoke={async () => { if (!window.confirm("Revogar este dispositivo impedirá reabrir e sincronizar pacotes offline. Continuar?")) return; try { await revokeOfflineDevice(workspaceId); setOfflinePackageId(null); setOfflinePackageRevision(0); setSyncConflicts([{ code: "DEVICE_REVOKED", message: "Dispositivo revogado. Pacotes locais não podem mais ser abertos.", record_ids: [], requires_explicit_review: true }]); } catch { setSyncConflicts([{ code: "REVOCATION_FAILED", message: "Não foi possível revogar o dispositivo.", record_ids: [], requires_explicit_review: true }]); } }}
+      onRevoke={async () => { if (!window.confirm("Revogar este dispositivo tornará o trabalho offline ainda não sincronizado inacessível. Continuar?")) return; try { await revokeOfflineDevice(workspaceId); setDeviceRevoked(true); setOfflinePackageId(null); setOfflinePackageRevision(0); setSyncConflicts([{ code: "DEVICE_REVOKED", message: "Dispositivo revogado. Pacotes locais não podem mais ser abertos.", record_ids: [], requires_explicit_review: true }]); } catch { setSyncConflicts([{ code: "REVOCATION_FAILED", message: "Não foi possível revogar o dispositivo.", record_ids: [], requires_explicit_review: true }]); } }}
+      deviceRevoked={deviceRevoked}
+      onReplace={async () => { if (!offlineDeviceId) return; try { const replacement = await replaceOfflineDevice(workspaceId, offlineDeviceId); setOfflineDeviceId(replacement.device_id); setDeviceRevoked(false); setSyncConflicts([{ code: "DEVICE_REPLACED", message: "Novo dispositivo cadastrado. O trabalho da identidade revogada permanece inacessível.", record_ids: [], requires_explicit_review: true }]); } catch { setSyncConflicts([{ code: "DEVICE_REPLACEMENT_FAILED", message: "Não foi possível cadastrar um novo dispositivo.", record_ids: [], requires_explicit_review: true }]); } }}
     />
     {edit && <section className="inspection-editor inspection-editor--access" aria-label="Resultado de acesso"><h3>Resultado de acesso</h3><p>Somente acesso integral sustenta a conclusÃ£o de um requisito de acesso.</p><label>Resultado<select value={accessOutcome} onChange={(event) => setAccessOutcome(event.target.value as typeof accessOutcome)}><option value="FULL_ACCESS">Acesso integral</option><option value="PARTIAL_ACCESS">Acesso parcial</option><option value="DENIED">Acesso negado</option><option value="UNSAFE">Acesso inseguro</option></select></label><label>DescriÃ§Ã£o objetiva<textarea value={accessDescription} onChange={(event) => setAccessDescription(event.target.value)}/></label></section>}
     <header className="planning-overview"><div><h2 id="inspection-title">Vistoria de campo</h2><p>Registros brutos executados contra a revisão {snapshot.plan_snapshot.planning_revision} do plano. Evidências candidatas não são constatações técnicas.</p></div><div className="planning-readiness"><strong>{snapshot.coverage.complete ? "Execução coberta" : "Execução parcial"}</strong><span>{snapshot.coverage.completed_items} de {snapshot.coverage.total_items} itens concluídos</span></div></header>

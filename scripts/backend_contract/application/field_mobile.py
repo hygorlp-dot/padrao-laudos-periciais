@@ -156,8 +156,30 @@ class SyncOfflineInspection:
     def execute(self, workspace_id, *, device_id: str, package_id: str):
         vault = self.vault_for(workspace_id, device_id)
         package = vault.load(package_id)
+        replacement = vault.superseding_package_id(package_id)
+        if replacement is not None:
+            return SyncDecision(False, (SyncConflict(
+                "SUPERSEDED_PACKAGE",
+                "Uma revisão offline posterior substituiu este pacote.",
+            ),)), None
         media_verified = vault.verify_media_authority(package_id)
         record, current = self.get_inspection.execute(workspace_id)
+        if vault.has_accepted_sync(package):
+            if current == package.inspection_snapshot:
+                return SyncDecision(True, ()), record
+            return SyncDecision(False, (SyncConflict(
+                "DEVICE_REPLAY",
+                "O pacote já foi sincronizado e o estado canônico avançou.",
+            ),)), None
+        sync_intent_revision = vault.sync_intent_expected_revision(package)
+        if sync_intent_revision is not None and record.revision == sync_intent_revision + 1:
+            if current != package.inspection_snapshot:
+                return SyncDecision(False, (SyncConflict(
+                    "INTERRUPTED_SYNC_DIVERGED",
+                    "A vistoria canônica divergiu do pacote durante a recuperação do sync.",
+                ),)), None
+            vault.record_accepted_sync(package)
+            return SyncDecision(True, ()), record
         current_media = {
             getattr(item, identity): item.original_sha256
             for records, identity in ((current.photos, "photo_id"), (current.videos, "video_id"), (current.sketches, "sketch_id"))
@@ -181,6 +203,7 @@ class SyncOfflineInspection:
         decision = adjudicate_offline_sync(package, authority)
         if not decision.accepted:
             return decision, None
+        vault.begin_sync(package, record.revision)
         saved = self.save_inspection.execute(workspace_id, package.inspection_snapshot, record.revision)
         vault.record_accepted_sync(package)
         return decision, saved
@@ -205,6 +228,8 @@ class UpdateOfflineInspection:
         for kind, records, identity in (("PHOTO", snapshot.photos, "photo_id"), ("VIDEO", snapshot.videos, "video_id"), ("SKETCH", snapshot.sketches, "sketch_id")):
             for item in records:
                 private = self.get_private_content.execute(workspace_id, PrivateContentId.parse(item.private_content_id))
+                if str(private.metadata.workspace_id) != str(workspace_id):
+                    raise ValueError("offline update media belongs to another workspace")
                 if private.metadata.checksum_sha256 != item.original_sha256:
                     raise ValueError("offline update media diverges from private authority")
                 record_id = getattr(item, identity)
@@ -221,6 +246,7 @@ class UpdateOfflineInspection:
         vault.save(updated)
         for record_id, original in originals.items():
             vault.save_media(updated.package_id, record_id, original)
+        vault.mark_superseded(previous.package_id, updated.package_id)
         return updated
 
 
@@ -237,7 +263,7 @@ class ListPendingOfflineInspections:
     vault_for: object
 
     def execute(self, workspace_id, *, device_id: str):
-        return self.vault_for(workspace_id, device_id).list_pending_packages()
+        return self.vault_for(workspace_id, device_id).inventory_pending_packages()
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,3 +273,12 @@ class RevokeOfflineDevice:
     def execute(self, workspace_id):
         del workspace_id
         self.revoke_device()
+
+
+@dataclass(frozen=True, slots=True)
+class ReplaceRevokedOfflineDevice:
+    replace_device: object
+
+    def execute(self, workspace_id, *, expected_device_id: str) -> str:
+        del workspace_id
+        return self.replace_device(expected_device_id)
