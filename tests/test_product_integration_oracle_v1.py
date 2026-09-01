@@ -92,9 +92,41 @@ def test_d1_d11_normal_composed_product_path_delivers_closes_and_recovers_withou
         })
         assert status == 201
         offline = offline["package"]
+        photo_bytes = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+        status, photo = _http(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/inspection-photos", raw_body=photo_bytes,
+            headers={"Content-Type": "image/png", "X-Document-Filename": "campo.png"},
+        )
+        assert status == 201
+        field = offline["inspection_snapshot"]
+        field_item = field["items"][0]
+        field_item.update(state="COMPLETED", observation_ids=["OBS-LONGITUDINAL-001"], photo_ids=["PHOTO-LONGITUDINAL-001"],
+                          note="Execução offline sintética registrada pelo profissional.")
+        field["locations"].append({"location_id": "LOCATION-LONGITUDINAL-001", "description": "Local sintético offline.", "parent_location_id": None})
+        field["observations"] = [{
+            "observation_id": "OBS-LONGITUDINAL-001", "inspection_item_id": field_item["item_id"],
+            "observation_type": "DIRECT_OBSERVATION", "raw_observation": "Registro de campo offline sintético.",
+            "location_id": "LOCATION-LONGITUDINAL-001", "timestamp": "2026-09-01T12:05:00+00:00",
+            "operator": "PROFESSIONAL-001", "provenance": "Captura offline local sintética.",
+        }]
+        field["photos"] = [{
+            "photo_id": "PHOTO-LONGITUDINAL-001", "inspection_item_id": field_item["item_id"],
+            "private_content_id": photo["content_id"], "original_sha256": photo["checksum_sha256"],
+            "reliable_capture_timestamp": "2026-09-01T12:06:00+00:00", "capture_timestamp_reliability": "RELIABLE",
+            "location_id": "LOCATION-LONGITUDINAL-001", "caption": "Foto de campo sintética.",
+            "device": "DEVICE-SYNTHETIC", "provenance": "Bytes originais preservados localmente.",
+        }]
+        field["evidence_candidates"] = [{
+            "candidate_id": "EVIDENCE-CANDIDATE-LONGITUDINAL-001", "inspection_item_id": field_item["item_id"],
+            "source_record_ids": ["OBS-LONGITUDINAL-001", "PHOTO-LONGITUDINAL-001"],
+            "description": "Observação e mídia candidatas à análise técnica.", "provenance": "Captura offline sincronizada.",
+        }]
+        field["coverage"] = {"total_items": 1, "pending_items": 0, "completed_items": 1, "partial_items": 0,
+                             "not_executed_items": 0, "not_applicable_items": 0, "blocked_items": 0,
+                             "complete": True, "limitation_ids": [], "reasons": []}
         status, offline = _http(runtime, "PUT", f"/v1/workspaces/{workspace_id}/offline-inspection", {
             "package_id": offline["package_id"], "expected_package_revision": offline["package_revision"],
-            "snapshot": offline["inspection_snapshot"],
+            "snapshot": field,
         })
         assert status == 201
         offline = offline["package"]
@@ -102,16 +134,17 @@ def test_d1_d11_normal_composed_product_path_delivers_closes_and_recovers_withou
         status, sync = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/offline-sync", {
             "package_id": offline["package_id"],
         })
-        assert status == 200 and sync["accepted"] is True and sync["conflicts"] == []
+        assert status == 200, sync
+        assert sync["accepted"] is True and sync["conflicts"] == []
         status, inspection = _http(runtime, "GET", f"/v1/workspaces/{workspace_id}/inspection-session")
         assert status == 200
         status, technical = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/technical-snapshot", {})
         assert status == 201 and technical["snapshot"]["source_snapshot"]["inspection_session_id"] == inspection["snapshot"]["session_id"]
 
         status, technical = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/technical-snapshot/evidence-proposals", {
-            "source_kind": "CASE_QUESTION", "source_id": question_id,
-            "proposition": "O documento sintético integra a cadeia técnica.",
-            "why_relevant": "Fonte primária do caso sintético.", "expected_revision": technical["revision"],
+            "source_kind": "FIELD_OBSERVATION", "source_id": "OBS-LONGITUDINAL-001",
+            "proposition": "A observação offline sincronizada integra a cadeia técnica.",
+            "why_relevant": "Fonte de campo do caso sintético.", "expected_revision": technical["revision"],
         })
         assert status == 200
         evidence_id = technical["snapshot"]["evidence_items"][0]["evidence_id"]
@@ -142,8 +175,46 @@ def test_d1_d11_normal_composed_product_path_delivers_closes_and_recovers_withou
         })
         assert status == 200, technical
         assert technical["snapshot"]["coverage"]["effective_findings"] == 1
-        finding = technical["snapshot"]["findings"][0]
-        decision = technical["snapshot"]["decisions"][0]
+        field_finding = technical["snapshot"]["findings"][0]
+        field_evidence_id = evidence_id
+        assert technical["snapshot"]["source_links"][0]["source_kind"] == "FIELD_OBSERVATION"
+
+        status, technical = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/technical-snapshot/evidence-proposals", {
+            "source_kind": "CASE_QUESTION", "source_id": question_id,
+            "proposition": "O quesito sintético integra a cadeia de resposta.",
+            "why_relevant": "Autoridade processual do quesito.", "expected_revision": technical["revision"],
+        })
+        assert status == 200
+        evidence_id = technical["snapshot"]["evidence_items"][-1]["evidence_id"]
+        status, technical = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/technical-snapshot/evidence-reviews", {
+            "evidence_id": evidence_id, "action": "APPROVE", "professional_id": "PROFESSIONAL-001",
+            "reason": "Quesito sintético conferido.", "expected_revision": technical["revision"],
+        })
+        assert status == 200
+        status, technical = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/technical-snapshot/method-selections", {
+            "evidence_id": evidence_id, "method_identity": "Análise do quesito sintético",
+            "procedure": "Vinculação ao achado de campo aprovado.", "output": "Resposta técnica rastreável.",
+            "professional_id": "PROFESSIONAL-001", "expected_revision": technical["revision"],
+        })
+        assert status == 200
+        method_id = technical["snapshot"]["method_applications"][-1]["method_application_id"]
+        status, technical = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/technical-snapshot/finding-proposals", {
+            "method_application_id": method_id, "technical_proposition": "O quesito possui resposta técnica sintética.",
+            "scope": "Caso longitudinal sintético.", "limitation": "Sem dados reais.",
+            "uncertainty": "Fixture controlada.", "uncertainty_impact": "Não afeta a autoridade testada.",
+            "contrary_evidence_ids": [], "expected_revision": technical["revision"],
+        })
+        assert status == 200
+        proposal_id = technical["snapshot"]["finding_proposals"][-1]["proposal_id"]
+        status, technical = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/technical-snapshot/finding-reviews", {
+            "proposal_id": proposal_id, "action": "APPROVE", "professional_id": "PROFESSIONAL-001",
+            "reason": "Resposta técnica sintética aprovada.", "modified_proposition": None,
+            "resolve_conflicts": False, "expected_revision": technical["revision"],
+        })
+        assert status == 200
+        assert technical["snapshot"]["coverage"]["effective_findings"] == 2
+        finding = technical["snapshot"]["findings"][-1]
+        decision = technical["snapshot"]["decisions"][-1]
         assert technical["snapshot"]["question_links"][0]["question_id"] == question_id
 
         profile = _fixture("report-snapshot-v1.json")["expert_profile"]
@@ -170,9 +241,16 @@ def test_d1_d11_normal_composed_product_path_delivers_closes_and_recovers_withou
         answer_section = report["snapshot"]["sections"][0]["section_id"]
         status, report = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/report-snapshot/draft-amendments", {
             "expected_revision": report["revision"], "action": "ADD_CLAIM",
+            "values": {"section_id": answer_section, "text": "Achado originado da captura offline sincronizada.",
+                       "source_kind": "TECHNICAL_FINDING", "source_id": field_finding["finding_id"]},
+        })
+        assert status == 200
+        status, report = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/report-snapshot/draft-amendments", {
+            "expected_revision": report["revision"], "action": "ADD_CLAIM",
             "values": {"section_id": answer_section, "text": "Achado técnico efetivo sintético.", "source_kind": "TECHNICAL_FINDING", "source_id": finding["finding_id"]},
         })
         assert status == 200
+        assert field_evidence_id in technical["snapshot"]["finding_proposals"][0]["supporting_evidence_ids"]
         finding_claim_id = report["snapshot"]["claims"][-1]["claim_id"]
         status, report = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/report-snapshot/draft-amendments", {
             "expected_revision": report["revision"], "action": "ADD_ANSWER",
@@ -626,6 +704,21 @@ def test_d6_final_word_and_template_bytes_are_revalidated_after_recovery() -> No
             assert expected_error in str(exc)
         else:
             raise AssertionError(f"invalid Delivery {expected_error} bytes were accepted")
+
+
+def test_d6_canonical_ocr_cache_survives_backup_validation() -> None:
+    package, _ = _longitudinal_backup()
+    mapping = json.loads(package)
+    ocr = {
+        "schema_version": 2, "document_sha256": "a" * 64, "page_number": 1,
+        "engine": "SYNTHETIC-OCR", "engine_version": "1.0", "model_version": "pt-v1",
+        "config_version": "config-v1", "normalized_text": "Texto OCR sintético.", "confidence": 0.99,
+        "processing_status": "AVAILABLE",
+        "blocks": [{"text": "Texto OCR sintético.", "confidence": 0.99, "bounding_box": [1.0, 2.0, 3.0, 4.0]}],
+    }
+    mapping["artifact_revisions"].append(_revision("OCR_PAGE_CACHE_V1", "OCR-CACHE-001", ocr, 1, 999))
+    verified = VerifyWorkspaceBackup().execute(_reseal(mapping))
+    assert any(item["artifact_kind"] == "OCR_PAGE_CACHE_V1" for item in verified.artifact_revisions)
 
 
 def test_d3_d4_superseded_report_and_invalid_annex_fail_closed() -> None:

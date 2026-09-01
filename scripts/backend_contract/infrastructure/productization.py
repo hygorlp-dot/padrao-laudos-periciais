@@ -191,9 +191,10 @@ ARTIFACT_COMPATIBILITY = {kind: {"current_version": "1.0.0", "supported_versions
 
 
 def _validate_ocr_cache(value: object) -> None:
-    if type(value) is not dict:
+    payload = thaw_payload(value)
+    if type(payload) is not dict:
         raise RepositoryIntegrityError("cache OCR persistido inválido")
-    key = tuple(value.get(name) for name in ("document_sha256", "page_number", "engine", "engine_version", "model_version", "config_version"))
+    key = tuple(payload.get(name) for name in ("document_sha256", "page_number", "engine", "engine_version", "model_version", "config_version"))
     _page_from_payload(value, key)
 
 
