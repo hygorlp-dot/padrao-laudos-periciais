@@ -439,7 +439,7 @@ def profile() -> AIModelProfile:
 
 
 def _legacy_response_fixture(payload=None) -> AIResponse:
-    response_payload = {"claims": ["AlegaÃ§Ã£o sintÃ©tica"]} if payload is None else payload
+    response_payload = {"claims": ["Alegação sintética"]} if payload is None else payload
     return AIResponse(
         provider="OPENAI",
         model="configured-model",
