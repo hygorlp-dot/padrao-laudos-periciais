@@ -412,10 +412,7 @@ class DeviceOfflineVaultRegistry:
         self._lifecycle_migration_path = self._root / ".lifecycle-migration-v1"
         self._lifecycle_migration_complete_path = self._root / ".lifecycle-migration-v1.complete"
         identity_is_legacy = self._identity_path.exists() and not self._identity_path.read_bytes().startswith(b"V2\n")
-        pristine = not any(path.exists() for path in (
-            self._key_path, self._identity_path, self._revocation_path,
-            self._generation_path, self._lifecycle_key_path, self._lifecycle_state_path,
-        ))
+        pristine = not any(self._root.iterdir())
         legacy_candidate = (
             self._key_path.exists() and self._identity_path.exists() and identity_is_legacy
             and not any(path.exists() for path in (
@@ -423,6 +420,7 @@ class DeviceOfflineVaultRegistry:
                 self._lifecycle_key_path, self._lifecycle_state_path,
             ))
             and not any(self._root.glob(".replacement-*.json"))
+            and not self._lifecycle_migration_path.exists()
         )
         if legacy_candidate and not self._lifecycle_migration_path.exists():
             legacy = {
@@ -435,7 +433,11 @@ class DeviceOfflineVaultRegistry:
                 self._lifecycle_migration_path,
                 json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode("utf-8"),
             )
-        migration_recorded = self._lifecycle_migration_path.exists()
+        migration_consumed = (
+            self._lifecycle_migration_path.exists()
+            and self._lifecycle_migration_path.read_bytes().startswith(b"CONSUMED-V1\n")
+        )
+        migration_recorded = self._lifecycle_migration_path.exists() and not migration_consumed
         migration_completed = self._lifecycle_migration_complete_path.exists()
         migration_pending = migration_recorded and not migration_completed and identity_is_legacy
         if migration_pending:
@@ -505,12 +507,17 @@ class DeviceOfflineVaultRegistry:
             self._provision(self._lifecycle_state_path, self._lifecycle_state_payload(
                 self.device_id, self._generation, self._key,
             ))
-        self._validate_lifecycle_state()
         if migration_pending:
             temporary_identity = self._root / f".device-id.{uuid4().hex}.new"
             self._provision(temporary_identity, f"V2\n{self.device_id}".encode("ascii"))
             os.replace(temporary_identity, self._identity_path)
             self._authority_identities[self._identity_path] = self._file_identity(self._identity_path)
+            consumed = self._root / f".lifecycle-migration.{uuid4().hex}.consumed"
+            self._provision(
+                consumed,
+                b"CONSUMED-V1\n" + hashlib.sha256(self._lifecycle_migration_path.read_bytes()).hexdigest().encode("ascii") + b"\n",
+            )
+            os.replace(consumed, self._lifecycle_migration_path)
             self._provision(
                 self._lifecycle_migration_complete_path,
                 hashlib.sha256(self._lifecycle_migration_path.read_bytes()).hexdigest().encode("ascii") + b"\n",
@@ -522,6 +529,7 @@ class DeviceOfflineVaultRegistry:
                     raise ValueError
             except (OSError, UnicodeError, ValueError) as exc:
                 raise PermissionError("offline lifecycle migration completion is corrupt") from exc
+        self._validate_lifecycle_state()
 
     @property
     def security_classification(self) -> DeviceSecurityClassification:
@@ -651,6 +659,7 @@ class DeviceOfflineVaultRegistry:
             raise PermissionError("offline committed lifecycle key is unavailable")
         unsigned = json.dumps({
             "device_id": device_id,
+            "identity_version": "V2",
             "generation": generation,
             "device_key_sha256": hashlib.sha256(key).hexdigest(),
         }, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -666,10 +675,12 @@ class DeviceOfflineVaultRegistry:
             unsigned, supplied_mac = self._lifecycle_state_path.read_bytes().splitlines()
             expected = hmac.new(self._lifecycle_key, unsigned, hashlib.sha256).hexdigest().encode("ascii")
             value = json.loads(unsigned.decode("utf-8"))
-            if not hmac.compare_digest(supplied_mac, expected) or set(value) != {"device_id", "generation", "device_key_sha256"}:
+            if not hmac.compare_digest(supplied_mac, expected) or set(value) != {"device_id", "identity_version", "generation", "device_key_sha256"}:
                 raise ValueError
             if (
                 value["device_id"] != self.device_id
+                or value["identity_version"] != "V2"
+                or not self._identity_path.read_bytes().startswith(b"V2\n")
                 or value["generation"] != self._generation
                 or (self._key is not None and value["device_key_sha256"] != hashlib.sha256(self._key).hexdigest())
             ):

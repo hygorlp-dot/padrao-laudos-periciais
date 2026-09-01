@@ -518,6 +518,26 @@ def test_versioned_identity_prevents_completion_marker_rollback_from_reopening_m
         DeviceOfflineVaultRegistry(tmp_path)
 
 
+def test_versioned_identity_downgrade_is_rejected_by_committed_state(tmp_path: Path) -> None:
+    registry = DeviceOfflineVaultRegistry(tmp_path)
+    (tmp_path / "offline-field-v1" / ".device-id").write_text(registry.device_id, encoding="ascii")
+
+    with pytest.raises(PermissionError, match="committed lifecycle state is corrupt"):
+        DeviceOfflineVaultRegistry(tmp_path)
+
+
+def test_surviving_offline_data_prevents_pristine_reprovision_after_authority_loss(tmp_path: Path) -> None:
+    registry = DeviceOfflineVaultRegistry(tmp_path)
+    package = offline_package_from_mapping({**package_mapping(), "device_id": registry.device_id})
+    registry.vault_for(WORKSPACE_ID, registry.device_id).save(package)
+    root = tmp_path / "offline-field-v1"
+    for name in (".device-key", ".device-id", ".device-generation", ".lifecycle-key", ".lifecycle-state"):
+        (root / name).unlink()
+
+    with pytest.raises(PermissionError, match="lifecycle authority is incomplete"):
+        DeviceOfflineVaultRegistry(tmp_path)
+
+
 def test_interrupted_legacy_migration_rejects_provisional_generation_substitution(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "offline-field-v1"
     root.mkdir()
