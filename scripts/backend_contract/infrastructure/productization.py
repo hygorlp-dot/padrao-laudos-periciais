@@ -845,6 +845,16 @@ class CreateWorkspaceBackup:
             _revision_mapping(item) for item in self.revisions.list_workspace(workspace_id)
             if self.ai_cost_ledger is None or item.artifact_kind != "AI_COST_LEDGER_V1"
         ]
+        ai_activity = any(
+            item["artifact_kind"].startswith("AI_")
+            and item["artifact_kind"] != "AI_COST_LEDGER_V1"
+            for item in revision_items
+        )
+        has_cost_authority = any(
+            item["artifact_kind"] == "AI_COST_LEDGER_V1" for item in revision_items
+        )
+        if ai_activity and self.ai_cost_ledger is None and not has_cost_authority:
+            raise RepositoryIntegrityError("AI cost authority is required for backup")
         private_items = []
         if self.private_contents is not None:
             for metadata in self.private_contents.list_all(workspace_id):

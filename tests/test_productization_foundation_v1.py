@@ -99,7 +99,7 @@ def test_backup_restore_preserves_workspace_ai_cost_authority(tmp_path) -> None:
     source.workspaces.create(
         PericiaWorkspace(workspace_id, "Pericia sintetica", "2026-08-31T12:00:00+00:00")
     )
-    limits = AICostLimits(1_000, 10_000, 10_000, 10_000)
+    limits = AICostLimits(1_000, 1_000, 600, 10_000)
     ledger = SQLiteAICostLedger(limits, tmp_path / "source-cost.sqlite3")
     ledger.authorize_and_reserve(
         WORKSPACE_ID, "session-1", input_tokens=100, output_tokens=50,
@@ -116,6 +116,11 @@ def test_backup_restore_preserves_workspace_ai_cost_authority(tmp_path) -> None:
     assert restored.snapshot(WORKSPACE_ID, "session-1") == ledger.snapshot(
         WORKSPACE_ID, "session-1"
     )
+    with pytest.raises(ValueError, match="workspace cost ceiling"):
+        restored.authorize_and_reserve(
+            WORKSPACE_ID, "session-2", input_tokens=1, output_tokens=1,
+            estimated_cost_microusd=101,
+        )
 
 
 def test_backup_v1_round_trip_is_exact_and_supported_window_is_finite() -> None:

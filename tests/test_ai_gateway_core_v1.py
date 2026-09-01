@@ -622,11 +622,12 @@ def test_eval_observation_reopens_from_real_append_only_repository(tmp_path) -> 
     store = SQLiteApplicationStore(path)
     workspace = WorkspaceRepo().item
     store.workspaces.create(workspace)
+    ledger = generous_cost_ledger()
     gateway = RunAIProposal(
         store.workspaces, store.revisions,
         RecordingProvider(error=AIProviderFailure("TIMEOUT")),
         EgressPolicy(remote_sanitized_enabled=True), FixedClock(),
-        SequenceIds(*(str(uuid4()) for _ in range(40))), generous_cost_ledger(),
+        SequenceIds(*(str(uuid4()) for _ in range(40))), ledger,
     )
     observations = []
     for case in dataset.cases:
@@ -640,8 +641,12 @@ def test_eval_observation_reopens_from_real_append_only_repository(tmp_path) -> 
         for item in store.revisions.list_workspace(workspace.workspace_id)
         if item.artifact_kind == "AI_EVAL_REPORT"
     )
+    with pytest.raises(RepositoryIntegrityError, match="AI cost authority"):
+        CreateWorkspaceBackup(
+            store.workspaces, store.revisions, None, FixedClock(), lambda _: None
+        ).execute(workspace.workspace_id)
     backup = CreateWorkspaceBackup(
-        store.workspaces, store.revisions, None, FixedClock(), lambda _: None
+        store.workspaces, store.revisions, None, FixedClock(), lambda _: None, ledger
     ).execute(workspace.workspace_id)
     assert b'"AI_EVAL_REPORT"' in backup
     assert b'"AI_EVAL_DATASET"' in backup
@@ -782,6 +787,7 @@ def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> No
     try:
         workspace = WorkspaceRepo().item
         store.workspaces.create(workspace)
+        ledger = generous_cost_ledger()
         use_case = RunAIProposal(
             store.workspaces,
             store.revisions,
@@ -789,7 +795,7 @@ def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> No
             EgressPolicy(remote_sanitized_enabled=True),
             FixedClock(),
             ids(success=True),
-            generous_cost_ledger(),
+            ledger,
         )
 
         proposal, run = use_case.execute_with_run(request(), profile())
@@ -803,7 +809,7 @@ def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> No
         assert "effective" not in proposal_revision.payload
 
         backup = CreateWorkspaceBackup(
-            store.workspaces, store.revisions, None, FixedClock(), lambda _: None
+            store.workspaces, store.revisions, None, FixedClock(), lambda _: None, ledger
         ).execute(workspace.workspace_id)
         missing = json.loads(backup)
         missing["artifact_revisions"] = [
