@@ -323,6 +323,8 @@ def test_d1_d11_normal_composed_product_path_delivers_closes_and_recovers_withou
         assert {"PROCESS_METADATA_EXTRACTION", "CASE_ANALYSIS_SNAPSHOT_V1", "PERICIAL_PLANNING_SNAPSHOT_V1",
                 "INSPECTION_SESSION_V1", "TECHNICAL_SNAPSHOT_V1", "REPORT_SNAPSHOT_V1",
                 "DELIVERY_SNAPSHOT_V1", "BUDGET_SNAPSHOT_V1"} <= kinds
+        metadata_records = [item for item in verified.artifact_revisions if item["artifact_kind"] == "PROCESS_METADATA_EXTRACTION"]
+        assert metadata_records and all(item["artifact_id"] == item["payload"]["document_id"] for item in metadata_records)
         staging = RecoveryStaging.create(tmp_path / "recovery")
         try:
             receipt = RestoreWorkspaceBackup(staging).execute(package)
@@ -716,9 +718,20 @@ def test_d6_canonical_ocr_cache_survives_backup_validation() -> None:
         "processing_status": "AVAILABLE",
         "blocks": [{"text": "Texto OCR sintético.", "confidence": 0.99, "bounding_box": [1.0, 2.0, 3.0, 4.0]}],
     }
-    mapping["artifact_revisions"].append(_revision("OCR_PAGE_CACHE_V1", "OCR-CACHE-001", ocr, 1, 999))
+    key = tuple(ocr[name] for name in ("document_sha256", "page_number", "engine", "engine_version", "model_version", "config_version"))
+    artifact_id = hashlib.sha256(json.dumps(key, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+    mapping["artifact_revisions"].append(_revision("OCR_PAGE_CACHE_V1", artifact_id, ocr, 1, 999))
     verified = VerifyWorkspaceBackup().execute(_reseal(mapping))
     assert any(item["artifact_kind"] == "OCR_PAGE_CACHE_V1" for item in verified.artifact_revisions)
+
+    substituted = json.loads(_reseal(mapping))
+    substituted["artifact_revisions"][-1]["artifact_id"] = "OCR-CACHE-SUBSTITUTED"
+    try:
+        VerifyWorkspaceBackup().execute(_reseal(substituted))
+    except RepositoryIntegrityError as exc:
+        assert "internal artifact envelope identity" in str(exc)
+    else:
+        raise AssertionError("unreachable OCR cache envelope identity was accepted")
 
 
 def test_d3_d4_superseded_report_and_invalid_annex_fail_closed() -> None:

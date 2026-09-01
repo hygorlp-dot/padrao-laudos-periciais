@@ -281,6 +281,18 @@ _DOMAIN_REVISION_FIELDS = {
     "EXPERT_MASTER_PROFILE_V1": "revision",
 }
 
+
+def _expected_internal_artifact_id(kind: str, payload: object) -> str | None:
+    if type(payload) is not dict:
+        return None
+    if kind == "PROCESS_METADATA_EXTRACTION":
+        return payload.get("document_id") if type(payload.get("document_id")) is str else None
+    if kind == "OCR_PAGE_CACHE_V1":
+        names = ("document_sha256", "page_number", "engine", "engine_version", "model_version", "config_version")
+        key = tuple(payload.get(name) for name in names)
+        return hashlib.sha256(json.dumps(key, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return None
+
 if frozenset(_ARTIFACT_VALIDATORS) != PORTABLE_PRODUCT_ARTIFACT_KINDS:
     raise RuntimeError("portable artifact validators diverge from application ownership")
 if frozenset(_INTERNAL_ARTIFACT_VALIDATORS) != INTERNAL_ARTIFACT_KINDS:
@@ -327,6 +339,9 @@ def _revision_from_mapping(value: object, workspace_id: str) -> ArtifactRevision
         raise RepositoryIntegrityError("backup canonical artifact envelope identity diverges")
     revision_field = _DOMAIN_REVISION_FIELDS.get(record.artifact_kind)
     payload = thaw_payload(record.payload)
+    expected_internal_id = _expected_internal_artifact_id(record.artifact_kind, payload)
+    if expected_internal_id is not None and record.artifact_id != expected_internal_id:
+        raise RepositoryIntegrityError("backup internal artifact envelope identity diverges")
     if revision_field is not None and (type(payload) is not dict or payload.get(revision_field) != record.revision):
         raise RepositoryIntegrityError("backup artifact envelope revision diverges")
     if validator is not None:
