@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -405,6 +406,14 @@ class DeviceOfflineVaultRegistry:
         self._identity_path = self._root / ".device-id"
         self._revocation_path = self._root / ".device-revoked"
         self._generation_path = self._root / ".device-generation"
+        self._lifecycle_key_path = self._root / ".lifecycle-key"
+        if not self._lifecycle_key_path.exists():
+            self._provision(self._lifecycle_key_path, os.urandom(32))
+        self._lifecycle_key = self._lifecycle_key_path.read_bytes()
+        if len(self._lifecycle_key) != 32:
+            raise PermissionError("offline lifecycle authority is corrupt")
+        if not self._generation_path.exists():
+            self._provision(self._generation_path, b"1\n")
         self._recover_pending_replacement()
         key_exists = self._key_path.exists()
         identity_exists = self._identity_path.exists()
@@ -430,6 +439,7 @@ class DeviceOfflineVaultRegistry:
         self._authority_identities = {
             self._identity_path: self._file_identity(self._identity_path),
             self._generation_path: self._file_identity(self._generation_path),
+            self._lifecycle_key_path: self._file_identity(self._lifecycle_key_path),
         }
         if self._key is not None:
             self._authority_identities[self._key_path] = self._file_identity(self._key_path)
@@ -471,15 +481,24 @@ class DeviceOfflineVaultRegistry:
     def _replacement_intent(self, path: Path) -> dict:
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
-            if set(value) != {"old_device_id", "new_device_id", "new_generation", "new_key_hex"}:
+            if set(value) != {"old_device_id", "previous_generation", "new_device_id", "new_generation", "new_key_hex", "mac"}:
                 raise ValueError
+            unsigned = {key: item for key, item in value.items() if key != "mac"}
+            expected_mac = hmac.new(
+                self._lifecycle_key,
+                json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
             key = bytes.fromhex(value["new_key_hex"])
             if (
                 type(value["old_device_id"]) is not str
+                or type(value["previous_generation"]) is not int
                 or type(value["new_device_id"]) is not str
                 or type(value["new_generation"]) is not int
                 or len(key) != 32
                 or not value["new_device_id"].startswith("DEVICE-")
+                or value["new_generation"] != value["previous_generation"] + 1
+                or not hmac.compare_digest(value["mac"], expected_mac)
             ):
                 raise ValueError
             return value
@@ -506,30 +525,43 @@ class DeviceOfflineVaultRegistry:
             self._provision(complete, b"COMPLETE\n")
 
     def _recover_pending_replacement(self) -> None:
-        if not self._identity_path.exists():
+        if not self._identity_path.exists() or not self._revocation_path.exists():
             return
+        revoked_device, revoked_generation = self._read_revocation_authority()
+        path = self._replacement_path(revoked_device)
+        if not path.exists() or path.with_suffix(".complete").exists():
+            return
+        intent = self._replacement_intent(path)
+        if intent["old_device_id"] != revoked_device or intent["previous_generation"] != revoked_generation:
+            raise PermissionError("offline device replacement authority diverged")
         current = self._identity_path.read_text(encoding="ascii")
-        matches = []
-        for path in self._root.glob(".replacement-*.json"):
-            if path.with_suffix(".complete").exists():
-                continue
-            intent = self._replacement_intent(path)
-            if current in {intent["old_device_id"], intent["new_device_id"]}:
-                matches.append((path, intent))
-        if len(matches) > 1:
-            raise PermissionError("offline device replacement authority is ambiguous")
-        if matches:
-            path, intent = matches[0]
-            if not self._revocation_path.exists():
-                expected = (
-                    self._key_path.exists()
-                    and self._key_path.read_bytes().hex() == intent["new_key_hex"]
-                    and current == intent["new_device_id"]
-                    and self._generation_path.read_text(encoding="ascii").strip() == str(intent["new_generation"])
-                )
-                if not expected:
-                    raise PermissionError("offline device replacement authority diverged")
-            self._finish_replacement(intent, path)
+        if current not in {intent["old_device_id"], intent["new_device_id"]}:
+            raise PermissionError("offline device replacement authority diverged")
+        self._finish_replacement(intent, path)
+
+    def _revocation_payload(self) -> bytes:
+        unsigned = f"{self.device_id}\n{self._generation}".encode("ascii")
+        return unsigned + b"\n" + hmac.new(self._lifecycle_key, unsigned, hashlib.sha256).hexdigest().encode("ascii") + b"\n"
+
+    def _read_revocation_authority(self) -> tuple[str, int]:
+        try:
+            device_id, generation, supplied_mac = self._revocation_path.read_text(encoding="ascii").splitlines()
+            unsigned = f"{device_id}\n{generation}".encode("ascii")
+            expected = hmac.new(self._lifecycle_key, unsigned, hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(supplied_mac, expected):
+                raise ValueError
+            return device_id, int(generation)
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise PermissionError("offline device revocation authority is corrupt") from exc
+
+    def _publish_intent(self, target: Path, payload: bytes) -> None:
+        temporary = self._root / f".replacement-intent.{uuid4().hex}.new"
+        self._provision(temporary, payload)
+        try:
+            os.link(temporary, target)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
 
     def _require_registry_active(self) -> None:
         details = os.lstat(self._root)
@@ -569,7 +601,7 @@ class DeviceOfflineVaultRegistry:
                 return
             self._require_registry_active()
             if not self._revocation_path.exists():
-                self._provision(self._revocation_path, b"REVOKED\n")
+                self._provision(self._revocation_path, self._revocation_payload())
             self._key_path.unlink()
             self._key = None
             self._revoked.set()
@@ -592,12 +624,18 @@ class DeviceOfflineVaultRegistry:
             new_key = os.urandom(32)
             intent = {
                 "old_device_id": self.device_id,
+                "previous_generation": self._generation,
                 "new_device_id": new_device_id,
                 "new_generation": new_generation,
                 "new_key_hex": new_key.hex(),
             }
+            intent["mac"] = hmac.new(
+                self._lifecycle_key,
+                json.dumps(intent, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
             intent_path = self._replacement_path(self.device_id)
-            self._provision(intent_path, json.dumps(intent, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+            self._publish_intent(intent_path, json.dumps(intent, sort_keys=True, separators=(",", ":")).encode("utf-8"))
             self._finish_replacement(intent, intent_path)
 
             self.device_id = new_device_id

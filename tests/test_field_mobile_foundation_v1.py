@@ -370,6 +370,60 @@ def test_concurrent_device_replacement_has_one_authoritative_winner(tmp_path: Pa
     assert DeviceOfflineVaultRegistry(tmp_path).device_id == winners[0]
 
 
+def test_forged_replacement_journal_cannot_reactivate_revoked_device(tmp_path: Path) -> None:
+    registry = DeviceOfflineVaultRegistry(tmp_path)
+    old_device = registry.device_id
+    registry.revoke_device()
+    forged = {
+        "old_device_id": old_device,
+        "previous_generation": 1,
+        "new_device_id": "DEVICE-" + "F" * 32,
+        "new_generation": 2,
+        "new_key_hex": "5a" * 32,
+        "mac": "0" * 64,
+    }
+    registry._replacement_path(old_device).write_text(json.dumps(forged), encoding="utf-8")
+
+    with pytest.raises(PermissionError, match="intent is corrupt"):
+        DeviceOfflineVaultRegistry(tmp_path)
+
+
+def test_stale_completed_journal_cannot_resurrect_later_revocation(tmp_path: Path) -> None:
+    registry = DeviceOfflineVaultRegistry(tmp_path)
+    device_a = registry.device_id
+    registry.revoke_device()
+    device_b = registry.replace_revoked_device(device_a)
+    registry._replacement_path(device_a).with_suffix(".complete").unlink()
+    registry.revoke_device()
+
+    reopened = DeviceOfflineVaultRegistry(tmp_path)
+    assert reopened.lifecycle_status == {"device_id": device_b, "generation": 2, "revoked": True}
+    with pytest.raises(PermissionError, match="revoked"):
+        reopened.vault_for(WORKSPACE_ID, device_b)
+
+
+def test_partial_unpublished_replacement_intent_does_not_brick_revoked_lifecycle(tmp_path: Path, monkeypatch) -> None:
+    registry = DeviceOfflineVaultRegistry(tmp_path)
+    old_device = registry.device_id
+    registry.revoke_device()
+    original = DeviceOfflineVaultRegistry._provision
+
+    def partial(path, payload):
+        if path.name.startswith(".replacement-intent."):
+            path.write_bytes(payload[:7])
+            raise OSError("synthetic partial journal crash")
+        return original(path, payload)
+
+    monkeypatch.setattr(DeviceOfflineVaultRegistry, "_provision", staticmethod(partial))
+    with pytest.raises(OSError, match="partial journal"):
+        registry.replace_revoked_device(old_device)
+    monkeypatch.undo()
+
+    reopened = DeviceOfflineVaultRegistry(tmp_path)
+    assert reopened.lifecycle_status["revoked"] is True
+    assert reopened.replace_revoked_device(old_device) != old_device
+
+
 def _replacement_outcome(registry: DeviceOfflineVaultRegistry, expected_device_id: str) -> str:
     try:
         return registry.replace_revoked_device(expected_device_id)
