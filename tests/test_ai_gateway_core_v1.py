@@ -260,6 +260,12 @@ def test_ai_proposal_and_run_ids_are_canonical_and_carry_no_authority_field() ->
         "auth_token",
         "openaiApiKey",
         "xApiKey",
+        "apiToken",
+        "idToken",
+        "jwtToken",
+        "encryptionKey",
+        "signingKey",
+        "accessKeyId",
     ],
 )
 def test_ai_payload_rejects_secret_shaped_fields(secret_field: str) -> None:
@@ -276,6 +282,23 @@ def test_ai_payload_rejects_secret_shaped_fields(secret_field: str) -> None:
             created_at="2026-09-01T12:00:00+00:00",
             confidence_score=None,
         )
+
+
+def test_non_secret_key_and_token_metrics_remain_valid_output_fields() -> None:
+    proposal = AIProposal(
+        proposal_id="33333333-3333-4333-8333-333333333333",
+        workspace_id=WORKSPACE_ID,
+        task_type="CASE_ANALYSIS_PROPOSAL",
+        source_refs=(source_ref(),),
+        proposal_payload={"source_key": "source-1", "token_count": 2},
+        provider="OPENAI",
+        model="configured-model",
+        run_id="44444444-4444-4444-8444-444444444444",
+        created_at="2026-09-01T12:00:00+00:00",
+        confidence_score=None,
+    )
+
+    assert proposal.proposal_payload["source_key"] == "source-1"
 
 
 class FixedClock:

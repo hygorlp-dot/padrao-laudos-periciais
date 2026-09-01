@@ -91,6 +91,10 @@ def _usage(response) -> UsageRecord | None:
     )
 
 
+def _reject_non_finite_json(value: str):
+    raise ValueError(f"non-finite JSON constant denied: {value}")
+
+
 class EnvironmentOpenAIClientFactory:
     """Cria o cliente sem persistir nem devolver a credencial local."""
 
@@ -152,8 +156,8 @@ class OpenAIProvider:
             payload = {}
         else:
             try:
-                payload = json.loads(response.output_text)
-            except (AttributeError, TypeError, json.JSONDecodeError):
+                payload = json.loads(response.output_text, parse_constant=_reject_non_finite_json)
+            except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
                 raise AIProviderFailure("INVALID_STRUCTURED_OUTPUT", latency_ms=latency_ms) from None
         canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
         return AIResponse(
