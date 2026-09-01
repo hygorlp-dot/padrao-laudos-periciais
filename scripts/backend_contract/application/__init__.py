@@ -47,6 +47,7 @@ from .services import (
     StorePrivateContent,
     ReadCaseDocument,
 )
+from .ai_gateway import AIExecutionFailed, AIProvider, AIProviderFailure, RunAIProposal
 
 __all__ = [
     "ArtifactRevision",
@@ -90,4 +91,8 @@ __all__ = [
     "ListPrivateContents",
     "canonical_payload_json",
     "thaw_payload",
+    "AIExecutionFailed",
+    "AIProvider",
+    "AIProviderFailure",
+    "RunAIProposal",
 ]

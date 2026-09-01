@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
+from datetime import datetime, timezone
 from types import MappingProxyType
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -11,6 +12,7 @@ from scripts.backend_contract.ai_gateway import (
     AIModelProfile,
     AIProposal,
     AIRequest,
+    AIResponse,
     AIRun,
     EgressClass,
     EgressDenied,
@@ -19,6 +21,14 @@ from scripts.backend_contract.ai_gateway import (
     SourceRevisionRef,
     UsageRecord,
 )
+from scripts.backend_contract.application.ai_gateway import (
+    AIExecutionFailed,
+    AIProvider,
+    AIProviderFailure,
+    RunAIProposal,
+)
+from scripts.backend_contract.application.models import PericiaWorkspace, WorkspaceId
+from scripts.backend_contract.infrastructure.sqlite import SQLiteApplicationStore
 
 
 WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
@@ -224,3 +234,197 @@ def test_ai_payload_rejects_secret_shaped_fields(secret_field: str) -> None:
             created_at="2026-09-01T12:00:00+00:00",
             confidence_score=None,
         )
+
+
+class FixedClock:
+    def now(self) -> datetime:
+        return datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+
+
+class SequenceIds:
+    def __init__(self, *values: str):
+        self._values = iter(UUID(value) for value in values)
+
+    def new_uuid(self) -> UUID:
+        return next(self._values)
+
+
+class WorkspaceRepo:
+    def __init__(self):
+        self.item = PericiaWorkspace(WorkspaceId.parse(WORKSPACE_ID), "Sintético", "2026-09-01T12:00:00+00:00")
+
+    def get(self, workspace_id):
+        return self.item if workspace_id == self.item.workspace_id else None
+
+
+class RecordingRevisions:
+    def __init__(self):
+        self.appended = []
+        self.pairs = []
+
+    def append(self, **value):
+        self.appended.append(value)
+        return value
+
+    def append_pair_if_latest(self, **value):
+        self.pairs.append(value)
+        return value["first"], value["second"]
+
+
+class RecordingProvider(AIProvider):
+    def __init__(self, result=None, error: Exception | None = None):
+        self.result = result
+        self.error = error
+        self.calls = []
+
+    def execute(self, ai_request, profile):
+        self.calls.append((ai_request, profile))
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+def profile() -> AIModelProfile:
+    return AIModelProfile(
+        profile_id="FAST_EXTRACTION",
+        provider="OPENAI",
+        model="configured-model",
+        max_input_tokens=4_000,
+        max_output_tokens=800,
+        cost_ceiling_microusd=25_000,
+        timeout_seconds=30.0,
+        structured_output_required=True,
+        model_parameters={"temperature": 0},
+    )
+
+
+def response(payload=None) -> AIResponse:
+    return AIResponse(
+        provider="OPENAI",
+        model="configured-model",
+        provider_response_id="response-1",
+        payload={"claims": ["Alegação sintética"]} if payload is None else payload,
+        response_hash=SHA256,
+        usage=UsageRecord(100, 20, 30, 130, 500),
+        latency_ms=25,
+        refusal_state="NONE",
+    )
+
+
+def ids(*, success: bool) -> SequenceIds:
+    count = 4 if success else 2
+    return SequenceIds(*(str(uuid4()) for _ in range(count)))
+
+
+def service(provider, revisions, *, policy=None, id_source=None) -> RunAIProposal:
+    return RunAIProposal(
+        WorkspaceRepo(),
+        revisions,
+        provider,
+        policy or EgressPolicy(remote_sanitized_enabled=True),
+        FixedClock(),
+        id_source or ids(success=True),
+    )
+
+
+def test_policy_denial_never_calls_provider_or_persists_run() -> None:
+    provider = RecordingProvider(result=response())
+    revisions = RecordingRevisions()
+    use_case = service(provider, revisions, policy=EgressPolicy())
+
+    with pytest.raises(EgressDenied):
+        use_case.execute(request(), profile())
+
+    assert provider.calls == []
+    assert revisions.appended == []
+    assert revisions.pairs == []
+
+
+def test_valid_structured_response_persists_run_and_proposal_atomically() -> None:
+    provider = RecordingProvider(result=response())
+    revisions = RecordingRevisions()
+
+    proposal = service(provider, revisions).execute(request(), profile())
+
+    assert proposal.proposal_payload["claims"] == ("Alegação sintética",)
+    assert len(provider.calls) == 1
+    assert revisions.appended == []
+    assert len(revisions.pairs) == 1
+    pair = revisions.pairs[0]
+    assert pair["first"]["artifact_kind"] == "AI_RUN"
+    assert pair["second"]["artifact_kind"] == "AI_PROPOSAL"
+    assert pair["first"]["payload"]["proposal_ids"] == [proposal.proposal_id]
+    assert "api_key" not in repr(pair).casefold()
+
+
+@pytest.mark.parametrize(
+    ("payload", "code"),
+    [
+        ({"claims": "not-an-array"}, "INVALID_STRUCTURED_OUTPUT"),
+        ({"claims": [], "approved": True}, "INVALID_STRUCTURED_OUTPUT"),
+    ],
+)
+def test_invalid_or_extra_provider_output_records_sanitized_failed_run(payload, code) -> None:
+    provider = RecordingProvider(result=response(payload))
+    revisions = RecordingRevisions()
+
+    with pytest.raises(AIExecutionFailed, match=code):
+        service(provider, revisions, id_source=ids(success=False)).execute(request(), profile())
+
+    assert len(revisions.appended) == 1
+    assert revisions.appended[0]["artifact_kind"] == "AI_RUN"
+    assert revisions.appended[0]["payload"]["error_classification"] == code
+    assert revisions.pairs == []
+
+
+@pytest.mark.parametrize("provider_code", ["TIMEOUT", "INVALID_CREDENTIALS", "RATE_LIMIT"])
+def test_provider_failures_record_one_sanitized_run(provider_code: str) -> None:
+    provider = RecordingProvider(error=AIProviderFailure(provider_code, "sk-secret-must-not-leak"))
+    revisions = RecordingRevisions()
+
+    with pytest.raises(AIExecutionFailed, match=provider_code) as caught:
+        service(provider, revisions, id_source=ids(success=False)).execute(request(), profile())
+
+    assert "secret" not in str(caught.value).casefold()
+    assert len(revisions.appended) == 1
+    persisted = revisions.appended[0]
+    assert persisted["payload"]["error_classification"] == provider_code
+    assert "sk-secret" not in repr(persisted)
+
+
+def test_workspace_mismatch_fails_before_provider_call() -> None:
+    provider = RecordingProvider(result=response())
+    revisions = RecordingRevisions()
+    foreign = replace(request(), workspace_id=OTHER_WORKSPACE_ID)
+
+    with pytest.raises(AIExecutionFailed, match="WORKSPACE_NOT_FOUND"):
+        service(provider, revisions, id_source=ids(success=False)).execute(foreign, profile())
+
+    assert provider.calls == []
+    assert revisions.appended == []
+
+
+def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> None:
+    store = SQLiteApplicationStore(tmp_path / "ai-gateway.sqlite3")
+    try:
+        workspace = WorkspaceRepo().item
+        store.workspaces.create(workspace)
+        use_case = RunAIProposal(
+            store.workspaces,
+            store.revisions,
+            RecordingProvider(result=response()),
+            EgressPolicy(remote_sanitized_enabled=True),
+            FixedClock(),
+            ids(success=True),
+        )
+
+        proposal = use_case.execute(request(), profile())
+
+        run_revision = store.revisions.latest(workspace.workspace_id, "AI_RUN", proposal.run_id)
+        proposal_revision = store.revisions.latest(workspace.workspace_id, "AI_PROPOSAL", proposal.proposal_id)
+        assert run_revision is not None
+        assert proposal_revision is not None
+        assert run_revision.payload["proposal_ids"] == (proposal.proposal_id,)
+        assert "effective" not in proposal_revision.payload
+    finally:
+        store.close()

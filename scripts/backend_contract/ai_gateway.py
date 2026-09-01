@@ -226,6 +226,30 @@ class AIRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class AIResponse:
+    provider: str
+    model: str
+    provider_response_id: str | None
+    payload: object
+    response_hash: str
+    usage: UsageRecord | None
+    latency_ms: int
+    refusal_state: str
+
+    def __post_init__(self) -> None:
+        for field in ("provider", "model", "refusal_state"):
+            _text(getattr(self, field), field)
+        if self.provider_response_id is not None:
+            _text(self.provider_response_id, "provider_response_id")
+        _sha256(self.response_hash, "response_hash")
+        if self.usage is not None and type(self.usage) is not UsageRecord:
+            raise TypeError("usage inválido")
+        if type(self.latency_ms) is not int or self.latency_ms < 0:
+            raise ValueError("latency_ms inválido")
+        object.__setattr__(self, "payload", _freeze_json(self.payload, reject_secrets=True))
+
+
+@dataclass(frozen=True, slots=True)
 class AIProposal:
     proposal_id: str
     workspace_id: str
@@ -337,4 +361,3 @@ class EgressPolicy:
             return
         if not self._remote_private_enabled or not manifest.explicitly_authorized:
             raise EgressDenied("PRIVATE_EGRESS_NOT_AUTHORIZED")
-
