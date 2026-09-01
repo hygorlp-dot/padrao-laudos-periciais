@@ -820,6 +820,20 @@ def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> No
         with pytest.raises(RepositoryIntegrityError, match="AI dependency"):
             VerifyWorkspaceBackup().execute(reseal(missing))
 
+        erased = json.loads(backup)
+        erased["artifact_revisions"] = [
+            item for item in erased["artifact_revisions"] if item["artifact_kind"] != "AI_PROPOSAL"
+        ]
+        erased_run = next(
+            item for item in erased["artifact_revisions"] if item["artifact_kind"] == "AI_RUN"
+        )
+        erased_run["payload"]["proposal_ids"] = []
+        erased_run["checksum_sha256"] = hashlib.sha256(
+            canonical(erased_run["payload"])
+        ).hexdigest()
+        with pytest.raises(RepositoryIntegrityError, match="domain invariants"):
+            VerifyWorkspaceBackup().execute(reseal(erased))
+
         for mutation in (
             "task", "foreign-source", "empty-source", "context-hash", "context-source",
             "context-extra", "context-content-hash", "redaction-string", "proposal-ids-string",

@@ -37,10 +37,15 @@ from ..application.process_metadata import document_metadata_from_payload
 from ..budget_foundation import budget_snapshot_from_mapping
 from ..ai_gateway import AIRun, AIProposal, EgressClass, SourceRevisionRef, UsageRecord
 from ..ai_eval_productization import (
+    AIEvalTelemetry,
+    HumanEvalOutcome,
     ai_eval_dataset_from_mapping,
     ai_eval_observation_from_mapping,
     ai_eval_report_from_mapping,
+    observe_domain_proposal,
+    observe_failed_run,
 )
+from ..ai_domain_proposals import DomainProposalKind, validate_domain_proposal
 from ..case_analysis import case_analysis_from_mapping
 from ..delivery_foundation import delivery_snapshot_from_mapping
 from ..delivery_renderer import validate_delivery_artifact, validate_final_artifact, validate_supporting_artifact
@@ -246,6 +251,11 @@ def _validate_ai_envelope(value: object, kind: str) -> _ValidatedAIArtifact:
                 proposal_ids=tuple(data["proposal_ids"]), created_at=data["created_at"],
                 profile_id=data["profile_id"], cache_hit=data["cache_hit"],
             )
+            if (
+                (parsed.error_classification is None and parsed.refusal_state == "NONE" and not parsed.proposal_ids)
+                or (parsed.error_classification is not None and parsed.proposal_ids)
+            ):
+                raise ValueError("AI run outcome cardinality invalid")
             context_manifest = data["context_manifest"]
             context_fields = {
                 "workspace_id", "document_id", "revision_id", "source_sha256",
@@ -577,9 +587,14 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
             ):
                 raise RepositoryIntegrityError("backup AI proposal/run identity diverges")
         elif record.artifact_kind == "AI_EVAL_OBSERVATION":
-            require_ai("AI_EVAL_DATASET", payload["dataset_sha256"])
+            dataset_record = require_ai("AI_EVAL_DATASET", payload["dataset_sha256"])
+            dataset = ai_eval_dataset_from_mapping(thaw_payload(dataset_record.payload))
+            case = next((item for item in dataset.cases if item.case_id == payload["case_id"]), None)
+            if case is None:
+                raise RepositoryIntegrityError("backup AI observation case is absent")
             run = require_ai("AI_RUN", payload["run_id"])
             run_payload = thaw_payload(run.payload)
+            canonical_run = _validate_ai_envelope(run_payload, "AI_RUN")
             usage = run_payload["usage"]
             expected_usage = {
                 "input_tokens": usage["input_tokens"] if usage else 0,
@@ -612,6 +627,34 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
                 proposal = require_ai("AI_PROPOSAL", payload["proposal_id"])
                 if thaw_payload(proposal.payload)["run_id"] != run.artifact_id:
                     raise RepositoryIntegrityError("backup AI observation provenance diverges")
+                canonical_proposal = _validate_ai_envelope(
+                    thaw_payload(proposal.payload), "AI_PROPOSAL"
+                )
+                domain_proposal = validate_domain_proposal(
+                    canonical_proposal, DomainProposalKind(case.task_type)
+                )
+                usage = canonical_run.usage
+                telemetry = AIEvalTelemetry(
+                    canonical_run.provider, canonical_run.profile_id, canonical_run.model,
+                    canonical_run.prompt_template_version, canonical_run.prompt_template_hash,
+                    canonical_run.structured_output_schema_hash,
+                    usage.input_tokens if usage else 0,
+                    usage.cached_input_tokens if usage else 0,
+                    usage.output_tokens if usage else 0,
+                    (usage.estimated_cost_microusd or 0) if usage else 0,
+                    canonical_run.latency_ms, canonical_run.cache_hit,
+                )
+                expected_observation = observe_domain_proposal(
+                    dataset.version, dataset.sha256, case, domain_proposal, canonical_run,
+                    telemetry, HumanEvalOutcome(payload["human_outcome"]),
+                )
+            else:
+                expected_observation = observe_failed_run(
+                    dataset.version, dataset.sha256, case, canonical_run,
+                    HumanEvalOutcome(payload["human_outcome"]),
+                )
+            if ai_eval_observation_from_mapping(payload) != expected_observation:
+                raise RepositoryIntegrityError("backup AI observation derivation diverges")
         elif record.artifact_kind == "AI_EVAL_REPORT":
             dataset_record = require_ai("AI_EVAL_DATASET", payload["dataset_sha256"])
             dataset = ai_eval_dataset_from_mapping(thaw_payload(dataset_record.payload))
