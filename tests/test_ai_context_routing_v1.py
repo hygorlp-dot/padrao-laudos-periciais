@@ -49,7 +49,7 @@ def candidate(
         locator=f"page=1;segment={name}",
     )
     return ContextCandidate(
-        segment=AIContextSegment(source=ref, content=f"Synthetic {name}"),
+        segment=AIContextSegment(source=ref, content=(name + "x" * (tokens * 4))[: tokens * 4]),
         priority=priority,
         estimated_tokens=tokens,
         relevance_micros=relevance,
@@ -181,18 +181,30 @@ class LocalRetriever:
         return self.candidates
 
 
+class SourceAuthority:
+    def __init__(self, refs: tuple[SourceRevisionRef, ...]):
+        self.refs = set(refs)
+
+    def is_current(self, ref: SourceRevisionRef) -> bool:
+        return ref in self.refs
+
+
 def test_application_builds_request_from_only_the_audited_local_selection() -> None:
     selected = candidate("target", ContextPriority.EXPLICIT_TARGET, 20, 900)
     omitted = candidate("support", ContextPriority.SUPPORTING, 80, 999)
     retriever = LocalRetriever((omitted, selected))
 
-    routed = BuildRoutedAIRequest(retriever).execute(
+    routed = BuildRoutedAIRequest(retriever, SourceAuthority((selected.segment.source, omitted.segment.source))).execute(
         request(),
-        evidence_classes=("TARGET", "SUPPORTING"),
+        evidence_classes=("EXPLICIT_TARGET", "CONTRARY_EVIDENCE", "SUPPORTING"),
         max_input_tokens=20,
     )
 
-    assert retriever.calls == [(WORKSPACE, "CASE_ANALYSIS_PROPOSAL", ("TARGET", "SUPPORTING"))]
+    assert retriever.calls == [(
+        WORKSPACE,
+        "CASE_ANALYSIS_PROPOSAL",
+        ("EXPLICIT_TARGET", "CONTRARY_EVIDENCE", "SUPPORTING"),
+    )]
     assert routed.context == (selected.segment,)
     assert routed.context_manifest_hash == context_manifest_sha256(routed.context)
     assert routed.egress_manifest.source_refs == (selected.segment.source,)
@@ -202,7 +214,33 @@ def test_application_builds_request_from_only_the_audited_local_selection() -> N
 def test_application_fails_closed_when_retriever_returns_foreign_context() -> None:
     retriever = LocalRetriever((candidate("foreign", ContextPriority.EXACT_EVIDENCE, 10, 1, workspace=OTHER),))
     with pytest.raises(ValueError, match="workspace"):
-        BuildRoutedAIRequest(retriever).execute(request(), evidence_classes=("EVIDENCE",), max_input_tokens=100)
+        BuildRoutedAIRequest(retriever, SourceAuthority(())).execute(
+            request(),
+            evidence_classes=("EXPLICIT_TARGET", "CONTRARY_EVIDENCE"),
+            max_input_tokens=100,
+        )
+
+
+def test_application_requires_contrary_retrieval_and_current_source_authority() -> None:
+    target = candidate("target", ContextPriority.EXPLICIT_TARGET, 10, 1)
+    retriever = LocalRetriever((target,))
+    builder = BuildRoutedAIRequest(retriever, SourceAuthority((target.segment.source,)))
+    with pytest.raises(ValueError, match="CONTRARY_EVIDENCE"):
+        builder.execute(request(), evidence_classes=("EXPLICIT_TARGET",), max_input_tokens=100)
+
+    forged = replace(target, segment=replace(target.segment, source=replace(target.segment.source, sha256="f" * 64)))
+    with pytest.raises(ValueError, match="current source"):
+        BuildRoutedAIRequest(LocalRetriever((forged,)), SourceAuthority((target.segment.source,))).execute(
+            request(),
+            evidence_classes=("EXPLICIT_TARGET", "CONTRARY_EVIDENCE"),
+            max_input_tokens=100,
+        )
+
+
+def test_token_budget_is_derived_from_content_not_retriever_claim() -> None:
+    segment = candidate("large", ContextPriority.EXPLICIT_TARGET, 1, 1).segment
+    with pytest.raises(ValueError, match="estimated_tokens"):
+        ContextCandidate(segment=replace(segment, content="x" * 1_000_000), priority=ContextPriority.EXPLICIT_TARGET, estimated_tokens=1, relevance_micros=1)
 
 
 def test_local_result_cache_invalidates_stale_source_and_never_crosses_workspace() -> None:
@@ -217,7 +255,15 @@ def test_local_result_cache_invalidates_stale_source_and_never_crosses_workspace
         item.result["proposal"] = "mutated"
     stale = tuple(replace(ref, revision_id="changed-revision") for ref in current)
     assert cache.get(ai_request, profile("FAST", 1_000), stale) is None
+    assert cache.get(ai_request, profile("FAST", 1_000), current + stale) is None
 
     foreign = replace(item, workspace_id=OTHER)
     with pytest.raises(ValueError, match="workspace"):
         cache.put(foreign)
+
+
+def test_router_rejects_duplicate_policy_identity() -> None:
+    fast = profile("FAST", 1_000)
+    policy = RoutePolicy("FAST", ("EXTRACTION",), 1, 1, 1_000)
+    with pytest.raises(ValueError, match="duplicate route policy"):
+        ModelRouter((fast,), (policy, policy))

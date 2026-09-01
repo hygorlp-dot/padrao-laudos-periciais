@@ -1,6 +1,6 @@
 # AI Context Routing Efficiency V1 — Implementation Plan
 
-**Issue:** #3, Stage 10 slice S10-B  
+**Issue:** #3, Stage 10 slice S10-B
 **Protected base:** `cdedc83d45ce315325e3ca4efed210746a3b3930`
 
 ## Causal DAG and critical path

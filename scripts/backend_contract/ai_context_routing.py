@@ -36,8 +36,17 @@ class ContextCandidate:
             raise TypeError("context priority invalid")
         if type(self.estimated_tokens) is not int or self.estimated_tokens <= 0:
             raise ValueError("estimated_tokens must be positive")
+        if self.estimated_tokens != estimate_context_tokens(self.segment.content):
+            raise ValueError("estimated_tokens diverges from deterministic content estimate")
         if type(self.relevance_micros) is not int or not 0 <= self.relevance_micros <= 1_000_000:
             raise ValueError("relevance_micros invalid")
+
+
+def estimate_context_tokens(content: str) -> int:
+    """Deterministic conservative local estimate; provider usage remains authoritative telemetry."""
+    if type(content) is not str or not content:
+        raise ValueError("context content invalid")
+    return max(1, (len(content.encode("utf-8")) + 3) // 4)
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +175,9 @@ class ModelRouter:
         if len(self._profiles) != len(profiles):
             raise ValueError("duplicate model profile")
         self._policies = policies
+        policy_ids = tuple(item.policy_id for item in policies)
+        if len(set(policy_ids)) != len(policy_ids):
+            raise ValueError("duplicate route policy")
         if any(item.policy_id not in self._profiles for item in policies):
             raise ValueError("route policy references unknown profile")
 
@@ -276,8 +288,12 @@ class AIResultCache:
         entry = self._entries.get(ai_result_cache_key(request, profile))
         if entry is None or entry.workspace_id != request.workspace_id:
             return None
-        if not set(entry.source_refs).issubset(set(current_sources)):
-            return None
+        expected_documents = {item.document_id for item in entry.source_refs}
+        for document_id in expected_documents:
+            expected = {item for item in entry.source_refs if item.document_id == document_id}
+            current = {item for item in current_sources if item.document_id == document_id}
+            if current != expected:
+                return None
         return entry
 
 
