@@ -277,6 +277,18 @@ def test_ai_proposal_and_run_ids_are_canonical_and_carry_no_authority_field() ->
         "credentials",
         "passwords",
         "secrets",
+        "apitokenvalue",
+        "idtokenvalue",
+        "jwttokenvalue",
+        "encryptionkeyvalue",
+        "signingkeypem",
+        "accesskeyidvalue",
+        "openaikeyvalue",
+        "secretvalue",
+        "credentialvalue",
+        "passphrase",
+        "clientassertion",
+        "sessionid",
     ],
 )
 def test_ai_payload_rejects_secret_shaped_fields(secret_field: str) -> None:
@@ -295,13 +307,13 @@ def test_ai_payload_rejects_secret_shaped_fields(secret_field: str) -> None:
         )
 
 
-def test_non_secret_ids_and_metrics_remain_valid_output_fields() -> None:
+def test_non_secret_key_and_token_semantics_remain_valid_output_fields() -> None:
     proposal = AIProposal(
         proposal_id="33333333-3333-4333-8333-333333333333",
         workspace_id=WORKSPACE_ID,
         task_type="CASE_ANALYSIS_PROPOSAL",
         source_refs=(source_ref(),),
-        proposal_payload={"source_id": "source-1", "claim_count": 2},
+        proposal_payload={"source_key": "source-1", "key_findings": 1, "token_count": 2},
         provider="OPENAI",
         model="configured-model",
         run_id="44444444-4444-4444-8444-444444444444",
@@ -309,7 +321,26 @@ def test_non_secret_ids_and_metrics_remain_valid_output_fields() -> None:
         confidence_score=None,
     )
 
-    assert proposal.proposal_payload["source_id"] == "source-1"
+    assert proposal.proposal_payload["source_key"] == "source-1"
+    assert proposal.proposal_payload["key_findings"] == 1
+    assert proposal.proposal_payload["token_count"] == 2
+
+
+@pytest.mark.parametrize("secret_name", ["api_key", "password", "clientAssertion"])
+def test_name_value_secret_representation_is_rejected(secret_name: str) -> None:
+    with pytest.raises(ValueError, match="secret"):
+        AIProposal(
+            proposal_id="33333333-3333-4333-8333-333333333333",
+            workspace_id=WORKSPACE_ID,
+            task_type="CASE_ANALYSIS_PROPOSAL",
+            source_refs=(source_ref(),),
+            proposal_payload={"parameters": [{"name": secret_name, "value": "must-not-persist"}]},
+            provider="OPENAI",
+            model="configured-model",
+            run_id="44444444-4444-4444-8444-444444444444",
+            created_at="2026-09-01T12:00:00+00:00",
+            confidence_score=None,
+        )
 
 
 class FixedClock:

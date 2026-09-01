@@ -69,26 +69,38 @@ def _timestamp(value: object, field: str) -> str:
 def _secret_key(key: str) -> bool:
     snake_case = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key)
     normalized = re.sub(r"[^a-z0-9]+", "_", snake_case.casefold()).strip("_")
-    compact = normalized.replace("_", "")
-    parts = normalized.split("_")
-    secret_parts = {"key", "token", "secret", "password", "credential", "authorization", "bearer"}
+    singular = {"secrets": "secret", "passwords": "password", "credentials": "credential"}
+    parts = tuple(singular.get(part, part) for part in normalized.split("_"))
+    sensitive_singletons = {"secret", "password", "credential", "authorization", "bearer"}
+    sensitive_pairs = {
+        ("api", "key"),
+        ("api", "token"),
+        ("id", "token"),
+        ("jwt", "token"),
+        ("access", "token"),
+        ("refresh", "token"),
+        ("session", "token"),
+        ("auth", "token"),
+        ("bearer", "token"),
+        ("secret", "key"),
+        ("private", "key"),
+        ("encryption", "key"),
+        ("signing", "key"),
+        ("access", "key"),
+    }
+    compact = "".join(parts)
+    sensitive_compact_markers = {
+        "apikey", "apitoken", "idtoken", "jwttoken", "accesstoken",
+        "refreshtoken", "sessiontoken", "authtoken", "bearertoken",
+        "secretkey", "privatekey", "encryptionkey", "signingkey",
+        "accesskey", "openaikey", "secret", "password", "credential",
+        "passphrase", "clientassertion", "sessionid",
+    }
     return (
         normalized in _SECRET_FIELDS
-        or compact in {field.replace("_", "") for field in _SECRET_FIELDS}
-        or any(normalized.endswith(f"_{field}") for field in _SECRET_FIELDS)
-        or parts[-1] in {"secret", "password", "credential", "authorization", "bearer"}
-        or (
-            len(parts) >= 2
-            and parts[-1] == "token"
-            and parts[-2] in {"api", "id", "jwt", "access", "refresh", "session", "auth", "bearer"}
-        )
-        or (
-            len(parts) >= 2
-            and parts[-1] == "key"
-            and parts[-2] in {"api", "secret", "private", "encryption", "signing", "access"}
-        )
-        or (len(parts) >= 3 and parts[-2:] == ["key", "id"] and parts[-3] == "access")
-        or any(part.rstrip("s") in secret_parts for part in parts)
+        or any(part in sensitive_singletons for part in parts)
+        or any(pair in sensitive_pairs for pair in zip(parts, parts[1:], strict=False))
+        or any(marker in compact for marker in sensitive_compact_markers)
     )
 
 
@@ -112,6 +124,11 @@ def _freeze_json(value: object, *, reject_secrets: bool = False, active: set[int
             raise TypeError("payload JSON exige chaves textuais")
         if reject_secrets and any(_secret_key(key) for key in value):
             raise ValueError("payload de IA não pode persistir campo secret")
+        if reject_secrets and any(
+            type(value.get(label)) is str and _secret_key(value[label])
+            for label in ("name", "field", "key", "parameter", "label")
+        ):
+            raise ValueError("AI payload cannot persist a secret field")
         return MappingProxyType(
             {
                 key: _freeze_json(item, reject_secrets=reject_secrets, active=active)
