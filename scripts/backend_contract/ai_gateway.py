@@ -15,7 +15,10 @@ from uuid import UUID
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _SECRET_FIELDS = frozenset(
-    {"api_key", "apikey", "secret", "authorization", "bearer", "bearer_token", "password", "credential"}
+    {
+        "api_key", "apikey", "secret", "authorization", "bearer", "bearer_token",
+        "password", "credential", "access_token", "refresh_token", "client_secret",
+    }
 )
 SYSTEM_AUTHORITY_CONTRACT = (
     "AI output is proposal-only. It is never an effective value, professional decision, "
@@ -64,7 +67,12 @@ def _timestamp(value: object, field: str) -> str:
 
 def _secret_key(key: str) -> bool:
     normalized = re.sub(r"[^a-z0-9]+", "_", key.casefold()).strip("_")
-    return normalized in _SECRET_FIELDS or any(part in _SECRET_FIELDS for part in normalized.split("_"))
+    compact = normalized.replace("_", "")
+    return (
+        normalized in _SECRET_FIELDS
+        or compact in {field.replace("_", "") for field in _SECRET_FIELDS}
+        or any(normalized.endswith(f"_{field}") for field in _SECRET_FIELDS)
+    )
 
 
 def _freeze_json(value: object, *, reject_secrets: bool = False, active: set[int] | None = None):

@@ -6,7 +6,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts.backend_contract.ai_gateway import AIContextSegment, AIModelProfile, context_manifest_sha256
+from scripts.backend_contract.ai_gateway import (
+    AIContextSegment,
+    AIModelProfile,
+    EgressClass,
+    context_manifest_sha256,
+)
 from scripts.backend_contract.application.ai_gateway import AIProviderFailure
 from scripts.backend_contract.infrastructure.openai_provider import (
     EnvironmentOpenAIClientFactory,
@@ -98,6 +103,19 @@ def test_adapter_uses_responses_strict_schema_and_only_manifest_context() -> Non
     assert "tools" not in sent
 
 
+def test_openai_adapter_rejects_local_only_before_any_remote_call() -> None:
+    responses = RecordingResponses(result=sdk_response())
+    provider = OpenAIProvider(RecordingClient(responses))
+    local_request = request(
+        egress_manifest=replace(request().egress_manifest, egress_class=EgressClass.LOCAL_ONLY)
+    )
+
+    with pytest.raises(AIProviderFailure, match="LOCAL_ONLY_PROVIDER_MISMATCH"):
+        provider.execute(local_request, profile())
+
+    assert responses.calls == []
+
+
 def test_document_prompt_injection_remains_user_data_not_system_instruction() -> None:
     responses = RecordingResponses(result=sdk_response())
     provider = OpenAIProvider(RecordingClient(responses))
@@ -169,6 +187,19 @@ def test_adapter_sanitizes_official_sdk_failures(error_name: str, expected: str)
 
     assert "secret" not in str(caught.value).casefold()
     assert len(responses.calls) == 1
+
+
+def test_adapter_records_elapsed_latency_on_sdk_failure() -> None:
+    ticks = iter((10.0, 10.031))
+    error_type = type("APITimeoutError", (RuntimeError,), {})
+    responses = RecordingResponses(error=error_type("private detail"))
+    provider = OpenAIProvider(RecordingClient(responses), monotonic_clock=lambda: next(ticks))
+
+    with pytest.raises(AIProviderFailure) as caught:
+        provider.execute(request(), profile())
+
+    assert caught.value.code == "TIMEOUT"
+    assert caught.value.latency_ms == 31
 
 
 def test_environment_factory_requires_key_without_exposing_it(monkeypatch) -> None:

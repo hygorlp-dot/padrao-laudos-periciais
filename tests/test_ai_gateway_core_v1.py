@@ -240,7 +240,20 @@ def test_ai_proposal_and_run_ids_are_canonical_and_carry_no_authority_field() ->
     assert not hasattr(run, "professional_decision")
 
 
-@pytest.mark.parametrize("secret_field", ["api_key", "secret", "authorization", "bearer_token"])
+@pytest.mark.parametrize(
+    "secret_field",
+    [
+        "api_key",
+        "secret",
+        "authorization",
+        "bearer_token",
+        "openai_api_key",
+        "x_api_key",
+        "access_token",
+        "refresh_token",
+        "client_secret",
+    ],
+)
 def test_ai_payload_rejects_secret_shaped_fields(secret_field: str) -> None:
     with pytest.raises(ValueError, match="secret"):
         AIProposal(
@@ -287,12 +300,18 @@ class RecordingRevisions:
         self.appended.append(value)
         return value
 
+    def append_if_latest(self, **value):
+        self.appended.append(value)
+        return value
+
     def append_pair_if_latest(self, **value):
         self.pairs.append(value)
         return value["first"], value["second"]
 
 
 class RecordingProvider(AIProvider):
+    is_remote = True
+
     def __init__(self, result=None, error: Exception | None = None):
         self.result = result
         self.error = error
@@ -361,6 +380,20 @@ def test_policy_denial_never_calls_provider_or_persists_run() -> None:
     assert revisions.pairs == []
 
 
+def test_local_only_request_never_calls_remote_provider() -> None:
+    provider = RecordingProvider(result=response())
+    revisions = RecordingRevisions()
+    local_request = request(
+        egress_manifest=replace(request().egress_manifest, egress_class=EgressClass.LOCAL_ONLY)
+    )
+
+    with pytest.raises(EgressDenied, match="LOCAL_ONLY_PROVIDER_MISMATCH"):
+        service(provider, revisions, policy=EgressPolicy()).execute(local_request, profile())
+
+    assert provider.calls == []
+    assert revisions.appended == []
+
+
 def test_valid_structured_response_persists_run_and_proposal_atomically() -> None:
     provider = RecordingProvider(result=response())
     revisions = RecordingRevisions()
@@ -404,7 +437,7 @@ def test_invalid_or_extra_provider_output_records_sanitized_failed_run(payload, 
 
 @pytest.mark.parametrize("provider_code", ["TIMEOUT", "INVALID_CREDENTIALS", "RATE_LIMIT"])
 def test_provider_failures_record_one_sanitized_run(provider_code: str) -> None:
-    provider = RecordingProvider(error=AIProviderFailure(provider_code, "sk-secret-must-not-leak"))
+    provider = RecordingProvider(error=AIProviderFailure(provider_code, "sk-secret-must-not-leak", latency_ms=31))
     revisions = RecordingRevisions()
 
     with pytest.raises(AIExecutionFailed, match=provider_code) as caught:
@@ -414,6 +447,7 @@ def test_provider_failures_record_one_sanitized_run(provider_code: str) -> None:
     assert len(revisions.appended) == 1
     persisted = revisions.appended[0]
     assert persisted["payload"]["error_classification"] == provider_code
+    assert persisted["payload"]["latency_ms"] == 31
     assert "sk-secret" not in repr(persisted)
 
 
@@ -523,5 +557,40 @@ def test_ai_run_and_proposal_identity_cannot_be_rewritten(tmp_path) -> None:
         history = store.revisions.list_all(workspace.workspace_id, "AI_RUN", proposal.run_id)
         assert len(history) == 1
         assert history[0].payload["proposal_ids"] == (proposal.proposal_id,)
+    finally:
+        store.close()
+
+
+def test_failed_ai_run_identity_cannot_be_rewritten(tmp_path) -> None:
+    store = SQLiteApplicationStore(tmp_path / "failed-ai-run-rewrite.sqlite3")
+    run_id, first_revision_id, second_revision_id = (str(uuid4()) for _ in range(3))
+    try:
+        workspace = WorkspaceRepo().item
+        store.workspaces.create(workspace)
+        first = RunAIProposal(
+            store.workspaces,
+            store.revisions,
+            RecordingProvider(error=AIProviderFailure("TIMEOUT")),
+            EgressPolicy(remote_sanitized_enabled=True),
+            FixedClock(),
+            SequenceIds(run_id, first_revision_id),
+        )
+        second = RunAIProposal(
+            store.workspaces,
+            store.revisions,
+            RecordingProvider(error=AIProviderFailure("RATE_LIMIT")),
+            EgressPolicy(remote_sanitized_enabled=True),
+            FixedClock(),
+            SequenceIds(run_id, second_revision_id),
+        )
+
+        with pytest.raises(AIExecutionFailed, match="TIMEOUT"):
+            first.execute(request(), profile())
+        with pytest.raises(RepositoryConflict):
+            second.execute(request(), profile())
+
+        history = store.revisions.list_all(workspace.workspace_id, "AI_RUN", run_id)
+        assert len(history) == 1
+        assert history[0].payload["error_classification"] == "TIMEOUT"
     finally:
         store.close()

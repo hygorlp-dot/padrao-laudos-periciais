@@ -102,20 +102,25 @@ class EnvironmentOpenAIClientFactory:
 
 
 class OpenAIProvider:
-    def __init__(self, client):
+    is_remote = True
+
+    def __init__(self, client, *, monotonic_clock=monotonic):
         if client is None or not hasattr(client, "responses"):
             raise TypeError("OpenAI client inválido")
         self._client = client
+        self._monotonic = monotonic_clock
 
     def execute(self, request: AIRequest, profile: AIModelProfile) -> AIResponse:
         if profile.provider != "OPENAI":
             raise AIProviderFailure("PROVIDER_PROFILE_MISMATCH")
+        if request.egress_manifest.egress_class.value == "LOCAL_ONLY":
+            raise AIProviderFailure("LOCAL_ONLY_PROVIDER_MISMATCH")
         if not profile.structured_output_required:
             raise AIProviderFailure("STRUCTURED_OUTPUT_REQUIRED")
         parameters = thaw_payload(profile.model_parameters)
         if set(parameters) - _ALLOWED_MODEL_PARAMETERS:
             raise AIProviderFailure("MODEL_PARAMETERS_DENIED")
-        started = monotonic()
+        started = self._monotonic()
         try:
             response = self._client.responses.create(
                 model=profile.model,
@@ -137,8 +142,9 @@ class OpenAIProvider:
         except AIProviderFailure:
             raise
         except Exception as exc:
-            raise AIProviderFailure(_error_code(exc)) from None
-        latency_ms = max(0, round((monotonic() - started) * 1000))
+            latency_ms = max(0, round((self._monotonic() - started) * 1000))
+            raise AIProviderFailure(_error_code(exc), latency_ms=latency_ms) from None
+        latency_ms = max(0, round((self._monotonic() - started) * 1000))
         refusal_state = _refusal_state(response)
         if refusal_state != "NONE":
             payload = {}
