@@ -822,6 +822,7 @@ def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> No
 
         for mutation in (
             "task", "foreign-source", "empty-source", "context-hash", "context-source",
+            "context-extra", "context-content-hash",
         ):
             forged = json.loads(backup)
             proposal_item = next(
@@ -839,8 +840,18 @@ def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> No
                 run_item["payload"]["source_refs"][0]["document_id"] = ""
             elif mutation == "context-hash":
                 run_item["payload"]["context_manifest"][0]["document_id"] = "FORGED-DOCUMENT"
-            else:
+            elif mutation == "context-source":
                 run_item["payload"]["context_manifest"][0]["document_id"] = "FORGED-DOCUMENT"
+                run_item["payload"]["context_manifest_hash"] = response_payload_sha256(
+                    run_item["payload"]["context_manifest"]
+                )
+            elif mutation == "context-extra":
+                run_item["payload"]["context_manifest"].append("FORGED")
+                run_item["payload"]["context_manifest_hash"] = response_payload_sha256(
+                    run_item["payload"]["context_manifest"]
+                )
+            else:
+                run_item["payload"]["context_manifest"][0]["content_sha256"] = "invalid"
                 run_item["payload"]["context_manifest_hash"] = response_payload_sha256(
                     run_item["payload"]["context_manifest"]
                 )

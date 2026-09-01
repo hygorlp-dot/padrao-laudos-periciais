@@ -238,13 +238,29 @@ def _validate_ai_envelope(value: object, kind: str) -> _ValidatedAIArtifact:
                 proposal_ids=tuple(data["proposal_ids"]), created_at=data["created_at"],
                 profile_id=data["profile_id"], cache_hit=data["cache_hit"],
             )
+            context_manifest = data["context_manifest"]
+            context_fields = {
+                "workspace_id", "document_id", "revision_id", "source_sha256",
+                "locator", "content_sha256",
+            }
+            if (
+                type(context_manifest) not in {list, tuple}
+                or len(context_manifest) != len(canonical_refs)
+                or any(
+                    type(item) is not dict
+                    or set(item) != context_fields
+                    or _SHA256.fullmatch(item["source_sha256"]) is None
+                    or _SHA256.fullmatch(item["content_sha256"]) is None
+                    for item in context_manifest
+                )
+            ):
+                raise ValueError("AI run context manifest shape invalid")
             context_sources = tuple(
                 (
                     item.get("workspace_id"), item.get("document_id"), item.get("revision_id"),
                     item.get("source_sha256"), item.get("locator"),
                 )
-                for item in data["context_manifest"]
-                if type(item) is dict
+                for item in context_manifest
             )
             declared_sources = tuple(
                 (ref.workspace_id, ref.document_id, ref.revision_id, ref.sha256, ref.locator)
