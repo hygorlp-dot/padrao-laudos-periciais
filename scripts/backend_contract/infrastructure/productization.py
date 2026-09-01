@@ -47,10 +47,14 @@ from .sqlite import SQLiteApplicationStore
 import base64
 
 
-PRODUCT_RELEASE_VERSION = "0.11.0"
+BACKUP_PORTABILITY_RELEASE = "0.11.0"
+# Serialized backup compatibility is a portability contract generation, not
+# the independently versioned application release.
+PRODUCT_RELEASE_VERSION = BACKUP_PORTABILITY_RELEASE
 STORAGE_FORMAT_VERSION = 1
 SUPPORTED_BACKUP_VERSIONS = frozenset({0, 1})
-SUPPORTED_PRODUCT_RELEASES = frozenset({"0.10.0", "0.11.0"})
+SUPPORTED_BACKUP_PORTABILITY_RELEASES = frozenset({"0.10.0", "0.11.0"})
+SUPPORTED_PRODUCT_RELEASES = SUPPORTED_BACKUP_PORTABILITY_RELEASES
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _OPEN_BINARY = 0x8000 if os.name == "nt" else 0
 

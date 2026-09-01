@@ -27,11 +27,13 @@ from scripts.backend_contract.infrastructure.private_filesystem import LocalPriv
 from scripts.backend_contract.local_api.composition import build_local_api
 from scripts.backend_contract.infrastructure.productization import (
     ARTIFACT_COMPATIBILITY,
+    BACKUP_PORTABILITY_RELEASE,
     CreateWorkspaceBackup,
     PRODUCT_RELEASE_VERSION,
     RecoveryStaging,
     RestoreWorkspaceBackup,
     STORAGE_FORMAT_VERSION,
+    SUPPORTED_BACKUP_PORTABILITY_RELEASES,
     VerifyWorkspaceBackup,
     collect_support_diagnostics,
     migrate_backup_mapping,
@@ -96,6 +98,24 @@ def test_product_release_compatibility_window_is_exact_not_open_ended() -> None:
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     with pytest.raises(RepositoryIntegrityError, match="compatibility"):
         VerifyWorkspaceBackup().execute(raw)
+
+
+def test_declared_backup_portability_releases_are_the_exact_supported_window() -> None:
+    assert BACKUP_PORTABILITY_RELEASE == PRODUCT_RELEASE_VERSION == "0.11.0"
+    assert SUPPORTED_BACKUP_PORTABILITY_RELEASES == frozenset({"0.10.0", "0.11.0"})
+
+    def canonical(value: object) -> bytes:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+
+    for release in SUPPORTED_BACKUP_PORTABILITY_RELEASES:
+        mapping = backup_mapping()
+        mapping["product_release"] = release
+        mapping["member_hashes"] = {
+            "artifact_revisions": hashlib.sha256(canonical(mapping["artifact_revisions"])).hexdigest(),
+            "private_contents": hashlib.sha256(canonical(mapping["private_contents"])).hexdigest(),
+        }
+        mapping["manifest_sha256"] = hashlib.sha256(canonical({key: value for key, value in mapping.items() if key != "manifest_sha256"})).hexdigest()
+        assert VerifyWorkspaceBackup().execute(canonical(mapping)).product_release == release
 
 
 def test_backup_contract_rejects_unknown_fields() -> None:
