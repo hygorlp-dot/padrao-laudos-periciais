@@ -1,7 +1,7 @@
 # Longitudinal Product Integrity Oracle V1 — Implementation Plan
 
-**Issue:** #173  
-**Branch:** `feat/173-longitudinal-product-integrity-oracle`  
+**Issue:** #173
+**Branch:** `feat/173-longitudinal-product-integrity-oracle`
 **Base:** protected `main` at `67f074b2ca37d9ed998736b9c86dc90af325b89d`
 
 ## Scope and invariants

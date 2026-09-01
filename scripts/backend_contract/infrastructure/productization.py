@@ -37,6 +37,7 @@ from ..application.process_metadata import document_metadata_from_payload
 from ..budget_foundation import budget_snapshot_from_mapping
 from ..case_analysis import case_analysis_from_mapping
 from ..delivery_foundation import delivery_snapshot_from_mapping
+from ..delivery_renderer import validate_final_artifact
 from ..pericial_planning import pericial_planning_from_mapping
 from ..report_foundation import expert_profile_from_mapping, report_snapshot_from_mapping
 from ..technical_findings import technical_snapshot_from_mapping
@@ -319,13 +320,14 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
         for record in revisions
     }
 
-    def require(kind: str, revision: int, digest: str, identity_field: str, identity: str) -> None:
+    def require(kind: str, revision: int, digest: str, identity_field: str, identity: str) -> ArtifactRevision:
         record = by_kind_revision.get((kind, revision))
         if record is None or record.checksum_sha256 != digest:
             raise RepositoryIntegrityError("backup dependency closure is incomplete")
         payload = thaw_payload(record.payload)
         if type(payload) is not dict or payload.get(identity_field) != identity:
             raise RepositoryIntegrityError("backup dependency identity diverges")
+        return record
 
     for record in revisions:
         payload = thaw_payload(record.payload)
@@ -351,7 +353,11 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
             require("PERICIAL_PLANNING_SNAPSHOT_V1", binding["planning_revision"], binding["planning_digest"], "snapshot_id", binding["planning_snapshot_id"])
             require("INSPECTION_SESSION_V1", binding["inspection_revision"], binding["inspection_digest"], "session_id", binding["inspection_snapshot_id"])
             require("TECHNICAL_SNAPSHOT_V1", binding["technical_revision"], binding["technical_digest"], "snapshot_id", binding["technical_snapshot_id"])
-            require("REPORT_SNAPSHOT_V1", binding["report_revision"], binding["report_digest"], "report_id", binding["report_snapshot_id"])
+            report_record = require("REPORT_SNAPSHOT_V1", binding["report_revision"], binding["report_digest"], "report_id", binding["report_snapshot_id"])
+            report = report_snapshot_from_mapping(thaw_payload(report_record.payload))
+            approval = next((item for item in report.review_decisions if item.review_id == binding["report_approval_id"]), None)
+            if approval is None or approval.action.value != "APPROVE" or approval.professional_id != binding["professional_id"]:
+                raise RepositoryIntegrityError("backup delivery professional authority diverges")
 
 
 def _private_mapping(metadata: PrivateContentMetadata, content: bytes) -> dict[str, Any]:
@@ -423,8 +429,16 @@ class VerifyWorkspaceBackup:
             str(item.metadata.content_id): item.metadata.checksum_sha256
             for item in private_contents
         }
+        private_by_id = {str(item.metadata.content_id): item for item in private_contents}
         for record in revisions:
-            if record.artifact_kind == "INSPECTION_SESSION_V1":
+            if record.artifact_kind == "CASE_ANALYSIS_SNAPSHOT_V1":
+                case = case_analysis_from_mapping(thaw_payload(record.payload))
+                if any(
+                    private_authority.get(item.storage_content_id) != item.source_sha256
+                    for item in case.documents
+                ):
+                    raise RepositoryIntegrityError("backup Case Analysis source authority is incomplete")
+            elif record.artifact_kind == "INSPECTION_SESSION_V1":
                 inspection = inspection_session_from_mapping(thaw_payload(record.payload))
                 media = (*inspection.photos, *inspection.videos, *inspection.sketches)
                 if any(
@@ -439,6 +453,12 @@ class VerifyWorkspaceBackup:
                     for item in delivery.artifacts
                 ):
                     raise RepositoryIntegrityError("backup delivery byte authority is incomplete")
+                for artifact in delivery.artifacts:
+                    if artifact.role.value == "MAIN_REPORT":
+                        try:
+                            validate_final_artifact(private_by_id[artifact.content_id].content, artifact.format.value)
+                        except (KeyError, TypeError, ValueError) as exc:
+                            raise RepositoryIntegrityError("backup delivery final artifact is invalid") from exc
         return value
 
 

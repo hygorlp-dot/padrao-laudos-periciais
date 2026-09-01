@@ -292,6 +292,31 @@ def seeded_store(path: Path, private: PrivateStore) -> tuple[SQLiteApplicationSt
 def seed_synced_inspection_media(store: SQLiteApplicationStore, private: PrivateStore, workspace_id: WorkspaceId) -> dict[str, bytes]:
     case = json.loads((Path(__file__).parent / "fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8"))
     planning = json.loads((Path(__file__).parent / "fixtures/pericial-planning-snapshot-v1.json").read_text(encoding="utf-8"))
+
+    def replace_text(value, replacements):
+        if type(value) is dict:
+            return {key: replace_text(item, replacements) for key, item in value.items()}
+        if type(value) is list:
+            return [replace_text(item, replacements) for item in value]
+        return replacements.get(value, value) if type(value) is str else value
+
+    replacements = {}
+    for index, document in enumerate(case["documents"], 1):
+        content = f"synthetic-case-source-{index}".encode()
+        digest = hashlib.sha256(content).hexdigest()
+        replacements[document["source_sha256"]] = digest
+        private.store(
+            PrivateContentMetadata(
+                workspace_id, PrivateContentId.parse(document["storage_content_id"]), f"source-{index}.pdf",
+                len(content), digest, "application/pdf", "2026-08-31T12:24:00+00:00", PrivateContentOrigin.LOCAL_IMPORT,
+            ),
+            content,
+        )
+    case = replace_text(case, replacements)
+    planning = replace_text(planning, replacements)
+    planning["plan"]["case_analysis_digest"] = hashlib.sha256(
+        json.dumps(case, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    ).hexdigest()
     for kind, artifact_id, payload, revisions, identity in (
         ("CASE_ANALYSIS_SNAPSHOT_V1", "CASE-ANALYSIS", case, 1, "44444444-4444-4444-8444"),
         ("PERICIAL_PLANNING_SNAPSHOT_V1", "PERICIAL-PLANNING", planning, 2, "66666666-6666-4666-8666"),
@@ -306,6 +331,7 @@ def seed_synced_inspection_media(store: SQLiteApplicationStore, private: Private
                 payload=payload,
             )
     snapshot = json.loads((Path(__file__).parent / "fixtures/inspection-session-v1.json").read_text(encoding="utf-8"))
+    snapshot = replace_text(snapshot, replacements)
     snapshot["plan_snapshot"]["planning_digest"] = hashlib.sha256(
         json.dumps(planning, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     ).hexdigest()
@@ -363,7 +389,7 @@ def test_synced_inspection_backup_restore_requires_every_referenced_original_med
     originals = seed_synced_inspection_media(source, private, workspace_id)
     package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock(), lambda _: None).execute(workspace_id)
     verified = VerifyWorkspaceBackup().execute(package)
-    assert len(verified.private_contents) == 4
+    assert len(verified.private_contents) == 7  # budget support + 3 case sources + 3 inspection originals
 
     staging = RecoveryStaging.create(tmp_path / "staging")
     RestoreWorkspaceBackup(staging).execute(package)
