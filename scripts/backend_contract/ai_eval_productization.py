@@ -477,6 +477,8 @@ class AIEvalReport:
 
     def __post_init__(self) -> None:
         _uuid(self.workspace_id, "workspace_id")
+        _text(self.dataset_id, "dataset_id")
+        _text(self.dataset_version, "dataset_version")
         if self.status not in {"PASS", "FAIL"} or self.status != ("PASS" if not self.failures else "FAIL"):
             raise ValueError("AI eval report status diverges from failures")
         if (
@@ -485,8 +487,46 @@ class AIEvalReport:
             or type(self.observation_attestations) is not tuple
         ):
             raise TypeError("AI eval report immutable collections required")
-        if len(self.dataset_sha256) != 64:
+        if len(self.dataset_sha256) != 64 or any(
+            item not in "0123456789abcdef" for item in self.dataset_sha256
+        ):
             raise ValueError("AI eval dataset hash invalid")
+        if type(self.case_count) is not int or self.case_count <= 0:
+            raise ValueError("AI eval report case count invalid")
+        if (
+            len(self.observation_attestations) != self.case_count
+            or len(set(self.observation_attestations)) != self.case_count
+            or any(
+                type(item) is not str
+                or len(item) != 64
+                or any(char not in "0123456789abcdef" for char in item)
+                for item in self.observation_attestations
+            )
+        ):
+            raise ValueError("AI eval report observation manifest invalid")
+        rates = (
+            self.schema_validity_rate, self.scenario_semantic_validity_rate,
+            self.source_grounding_rate, self.source_recall, self.unsourced_proposal_rate,
+            self.wrong_authority_promotion_rate, self.human_accept_rate,
+            self.human_modify_rate, self.human_reject_rate,
+        )
+        try:
+            parsed_rates = tuple(Decimal(value) for value in rates)
+        except Exception as exc:
+            raise ValueError("AI eval report rate invalid") from exc
+        if any(value < 0 or value > 1 for value in parsed_rates):
+            raise ValueError("AI eval report rate invalid")
+        counters = (
+            self.token_usage, self.cached_token_usage, self.estimated_cost_microusd,
+            self.latency_ms, self.ai_self_authorization, self.cross_workspace_ai_context,
+            self.cache_hits, self.refusal_or_error_count,
+        )
+        if any(type(value) is not int or value < 0 for value in counters):
+            raise ValueError("AI eval report counter invalid")
+        if self.cached_token_usage > self.token_usage or self.cache_hits > self.case_count:
+            raise ValueError("AI eval report aggregate invalid")
+        if any(type(item) is not str or not item for item in (*self.failures, *self.versions)):
+            raise ValueError("AI eval report labels invalid")
 
 
 def ai_eval_observation_from_mapping(value: object) -> AIEvalObservation:

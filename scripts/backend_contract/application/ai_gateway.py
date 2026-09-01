@@ -373,9 +373,12 @@ class RunAIProposal:
         if calculated != report_id:
             raise AIExecutionFailed("AI_EVAL_REPORT_PERSISTENCE_MISMATCH")
         try:
-            return ai_eval_report_from_mapping(payload)
+            report = ai_eval_report_from_mapping(payload)
         except (TypeError, ValueError) as exc:
             raise AIExecutionFailed("AI_EVAL_REPORT_PERSISTENCE_MISMATCH") from exc
+        if report.workspace_id != workspace_id:
+            raise AIExecutionFailed("AI_EVAL_REPORT_PERSISTENCE_MISMATCH")
+        return report
 
     def _persist_eval_observation(self, observation, created_at: str) -> None:
         workspace_id = WorkspaceId.parse(observation.workspace_id)

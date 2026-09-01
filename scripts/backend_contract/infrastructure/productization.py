@@ -404,6 +404,16 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
         (record.artifact_kind, record.revision): record
         for record in revisions
     }
+    by_kind_id = {
+        (record.artifact_kind, record.artifact_id): record
+        for record in revisions
+    }
+
+    def require_ai(kind: str, artifact_id: str) -> ArtifactRevision:
+        record = by_kind_id.get((kind, artifact_id))
+        if record is None:
+            raise RepositoryIntegrityError("backup AI dependency closure is incomplete")
+        return record
 
     def require(kind: str, revision: int, digest: str, identity_field: str, identity: str) -> ArtifactRevision:
         record = by_kind_revision.get((kind, revision))
@@ -449,6 +459,26 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
                 or approval.professional_id != binding["professional_id"]
             ):
                 raise RepositoryIntegrityError("backup delivery professional authority diverges")
+        elif record.artifact_kind == "AI_PROPOSAL":
+            run = require_ai("AI_RUN", payload["run_id"])
+            if payload["proposal_id"] not in thaw_payload(run.payload)["proposal_ids"]:
+                raise RepositoryIntegrityError("backup AI proposal/run identity diverges")
+        elif record.artifact_kind == "AI_EVAL_OBSERVATION":
+            run = require_ai("AI_RUN", payload["run_id"])
+            if payload["proposal_id"] is not None:
+                proposal = require_ai("AI_PROPOSAL", payload["proposal_id"])
+                if thaw_payload(proposal.payload)["run_id"] != run.artifact_id:
+                    raise RepositoryIntegrityError("backup AI observation provenance diverges")
+        elif record.artifact_kind == "AI_EVAL_REPORT":
+            for attestation in payload["observation_attestations"]:
+                observation = require_ai("AI_EVAL_OBSERVATION", attestation)
+                observed = thaw_payload(observation.payload)
+                if (
+                    observed["workspace_id"] != payload["workspace_id"]
+                    or observed["dataset_version"] != payload["dataset_version"]
+                    or observed["dataset_sha256"] != payload["dataset_sha256"]
+                ):
+                    raise RepositoryIntegrityError("backup AI report provenance diverges")
 
 
 def _private_mapping(metadata: PrivateContentMetadata, content: bytes) -> dict[str, Any]:

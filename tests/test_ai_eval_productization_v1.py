@@ -17,6 +17,7 @@ from scripts.backend_contract.ai_eval_productization import (
     load_ai_eval_dataset,
     observe_domain_proposal,
     observe_failed_run,
+    ai_eval_report_from_mapping,
 )
 from scripts.backend_contract.infrastructure.ai_cost_ledger import SQLiteAICostLedger
 from scripts.backend_contract.ai_domain_proposals import (
@@ -325,6 +326,20 @@ def test_golden_comparison_never_accepts_absolute_hard_gate_failure() -> None:
     baseline = evaluate_ai_dataset(dataset, tuple(observation(case) for case in dataset.cases))
     failed = replace(baseline, status="FAIL", failures=("AI_SELF_AUTHORIZATION",), ai_self_authorization=1)
     assert compare_eval_reports(failed, failed, max_cost_increase_bps=0, max_latency_increase_bps=0).status == "FAIL"
+
+
+def test_canonical_report_loader_rejects_resealed_semantic_forgery() -> None:
+    dataset = load_ai_eval_dataset(DATASET)
+    report = evaluate_ai_dataset(dataset, tuple(observation(case) for case in dataset.cases))
+    forged = {field: getattr(report, field) for field in report.__dataclass_fields__}
+    forged.update(
+        case_count=-9,
+        token_usage=-1,
+        schema_validity_rate="nonsense",
+        observation_attestations=("not-a-sha",),
+    )
+    with pytest.raises(ValueError):
+        ai_eval_report_from_mapping(forged)
 
 
 def test_golden_comparison_rejects_changed_corpus_under_same_id_and_version() -> None:

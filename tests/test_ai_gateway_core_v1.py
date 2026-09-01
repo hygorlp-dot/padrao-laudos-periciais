@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
+import hashlib
+import json
 import tempfile
 from types import SimpleNamespace
 from datetime import datetime, timezone
@@ -41,9 +43,12 @@ from scripts.backend_contract.application.ai_gateway import (
     RunAIProposal,
 )
 from scripts.backend_contract.application.models import PericiaWorkspace, WorkspaceId
-from scripts.backend_contract.application.ports import RepositoryConflict
+from scripts.backend_contract.application.ports import RepositoryConflict, RepositoryIntegrityError
 from scripts.backend_contract.infrastructure.sqlite import SQLiteApplicationStore
-from scripts.backend_contract.infrastructure.productization import CreateWorkspaceBackup
+from scripts.backend_contract.infrastructure.productization import (
+    CreateWorkspaceBackup,
+    VerifyWorkspaceBackup,
+)
 
 
 WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
@@ -639,6 +644,26 @@ def test_eval_observation_reopens_from_real_append_only_repository(tmp_path) -> 
         store.workspaces, store.revisions, None, FixedClock(), lambda _: None
     ).execute(workspace.workspace_id)
     assert b'"AI_EVAL_REPORT"' in backup
+    missing_observation = json.loads(backup)
+    missing_observation["artifact_revisions"] = [
+        item for item in missing_observation["artifact_revisions"]
+        if not (
+            item["artifact_kind"] == "AI_EVAL_OBSERVATION"
+            and item["artifact_id"] == observation.attestation_sha256
+        )
+    ]
+    def canonical(value):
+        return json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+    missing_observation["member_hashes"]["artifact_revisions"] = hashlib.sha256(
+        canonical(missing_observation["artifact_revisions"])
+    ).hexdigest()
+    missing_observation["manifest_sha256"] = hashlib.sha256(canonical({
+        key: value for key, value in missing_observation.items() if key != "manifest_sha256"
+    })).hexdigest()
+    with pytest.raises(RepositoryIntegrityError, match="AI dependency"):
+        VerifyWorkspaceBackup().execute(canonical(missing_observation))
     store.close()
 
     reopened = SQLiteApplicationStore(path)
