@@ -238,6 +238,20 @@ def _validate_ai_envelope(value: object, kind: str) -> _ValidatedAIArtifact:
                 proposal_ids=tuple(data["proposal_ids"]), created_at=data["created_at"],
                 profile_id=data["profile_id"], cache_hit=data["cache_hit"],
             )
+            context_sources = tuple(
+                (
+                    item.get("workspace_id"), item.get("document_id"), item.get("revision_id"),
+                    item.get("source_sha256"), item.get("locator"),
+                )
+                for item in data["context_manifest"]
+                if type(item) is dict
+            )
+            declared_sources = tuple(
+                (ref.workspace_id, ref.document_id, ref.revision_id, ref.sha256, ref.locator)
+                for ref in canonical_refs
+            )
+            if context_sources != declared_sources:
+                raise ValueError("AI run context/source provenance diverges")
         else:
             parsed = AIProposal(
                 proposal_id=data["proposal_id"], workspace_id=workspace_id,
