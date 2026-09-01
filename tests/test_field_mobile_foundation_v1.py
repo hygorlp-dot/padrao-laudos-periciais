@@ -462,6 +462,10 @@ def test_legacy_generation_one_authority_migrates_and_reopens_existing_package(t
     assert migrated.vault_for(WORKSPACE_ID, device_id).load(package.package_id) == package
     assert (root / ".lifecycle-migration-v1").exists()
     assert DeviceOfflineVaultRegistry(tmp_path).device_id == device_id
+    migrated.revoke_device()
+    replacement = migrated.replace_revoked_device(device_id)
+    restarted = DeviceOfflineVaultRegistry(tmp_path)
+    assert restarted.lifecycle_status == {"device_id": replacement, "generation": 2, "revoked": False}
 
 
 def test_interrupted_legacy_lifecycle_migration_resumes_from_bound_record(tmp_path: Path, monkeypatch) -> None:
@@ -484,6 +488,42 @@ def test_interrupted_legacy_lifecycle_migration_resumes_from_bound_record(tmp_pa
     recovered = DeviceOfflineVaultRegistry(tmp_path)
     assert recovered.lifecycle_status["generation"] == 1
     assert recovered.lifecycle_status["revoked"] is False
+
+
+def test_completed_legacy_migration_record_cannot_be_replayed_after_authority_loss(tmp_path: Path) -> None:
+    root = tmp_path / "offline-field-v1"
+    root.mkdir()
+    (root / ".device-key").write_bytes(b"L" * 32)
+    (root / ".device-id").write_text("DEVICE-" + "A" * 32, encoding="ascii")
+    DeviceOfflineVaultRegistry(tmp_path)
+    assert (root / ".lifecycle-migration-v1.complete").exists()
+    for name in (".lifecycle-state", ".lifecycle-key", ".device-generation"):
+        (root / name).unlink()
+
+    with pytest.raises(PermissionError, match="lifecycle"):
+        DeviceOfflineVaultRegistry(tmp_path)
+
+
+def test_interrupted_legacy_migration_rejects_provisional_generation_substitution(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "offline-field-v1"
+    root.mkdir()
+    (root / ".device-key").write_bytes(b"L" * 32)
+    (root / ".device-id").write_text("DEVICE-" + "A" * 32, encoding="ascii")
+    original = DeviceOfflineVaultRegistry._provision
+
+    def interrupt(path, payload):
+        if path.name == ".lifecycle-state":
+            raise OSError("synthetic state interruption")
+        return original(path, payload)
+
+    monkeypatch.setattr(DeviceOfflineVaultRegistry, "_provision", staticmethod(interrupt))
+    with pytest.raises(OSError, match="state interruption"):
+        DeviceOfflineVaultRegistry(tmp_path)
+    monkeypatch.undo()
+    (root / ".device-generation").write_text("999\n", encoding="ascii")
+
+    with pytest.raises(PermissionError, match="migration authority is corrupt"):
+        DeviceOfflineVaultRegistry(tmp_path)
 
 
 def _replacement_outcome(registry: DeviceOfflineVaultRegistry, expected_device_id: str) -> str:

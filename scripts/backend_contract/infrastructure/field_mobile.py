@@ -410,6 +410,7 @@ class DeviceOfflineVaultRegistry:
         self._lifecycle_key_path = self._root / ".lifecycle-key"
         self._lifecycle_state_path = self._root / ".lifecycle-state"
         self._lifecycle_migration_path = self._root / ".lifecycle-migration-v1"
+        self._lifecycle_migration_complete_path = self._root / ".lifecycle-migration-v1.complete"
         pristine = not any(path.exists() for path in (
             self._key_path, self._identity_path, self._revocation_path,
             self._generation_path, self._lifecycle_key_path, self._lifecycle_state_path,
@@ -427,29 +428,38 @@ class DeviceOfflineVaultRegistry:
                 "device_id": self._identity_path.read_text(encoding="ascii"),
                 "device_key_sha256": hashlib.sha256(self._key_path.read_bytes()).hexdigest(),
                 "generation": 1,
+                "lifecycle_key_hex": os.urandom(32).hex(),
             }
             self._publish_intent(
                 self._lifecycle_migration_path,
                 json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode("utf-8"),
             )
         migration_recorded = self._lifecycle_migration_path.exists()
-        if migration_recorded and not self._lifecycle_state_path.exists():
+        migration_completed = self._lifecycle_migration_complete_path.exists()
+        migration_pending = migration_recorded and not migration_completed
+        if migration_pending:
             try:
                 legacy = json.loads(self._lifecycle_migration_path.read_text(encoding="utf-8"))
                 if (
-                    set(legacy) != {"device_id", "device_key_sha256", "generation"}
+                    set(legacy) != {"device_id", "device_key_sha256", "generation", "lifecycle_key_hex"}
                     or legacy["generation"] != 1
                     or legacy["device_id"] != self._identity_path.read_text(encoding="ascii")
                     or legacy["device_key_sha256"] != hashlib.sha256(self._key_path.read_bytes()).hexdigest()
+                    or len(bytes.fromhex(legacy["lifecycle_key_hex"])) != 32
+                    or (self._lifecycle_key_path.exists() and self._lifecycle_key_path.read_bytes().hex() != legacy["lifecycle_key_hex"])
+                    or (self._generation_path.exists() and self._generation_path.read_text(encoding="ascii").strip() != "1")
                 ):
                     raise ValueError
             except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
                 raise PermissionError("offline lifecycle migration authority is corrupt") from exc
-        migrating = migration_recorded and not self._lifecycle_state_path.exists()
+        migrating = migration_pending and not self._lifecycle_state_path.exists()
         if not self._lifecycle_key_path.exists():
             if not pristine and not migrating:
                 raise PermissionError("offline lifecycle authority is incomplete")
-            self._provision(self._lifecycle_key_path, os.urandom(32))
+            self._provision(
+                self._lifecycle_key_path,
+                bytes.fromhex(legacy["lifecycle_key_hex"]) if migrating else os.urandom(32),
+            )
         self._lifecycle_key = self._lifecycle_key_path.read_bytes()
         if len(self._lifecycle_key) != 32:
             raise PermissionError("offline lifecycle authority is corrupt")
@@ -495,6 +505,18 @@ class DeviceOfflineVaultRegistry:
                 self.device_id, self._generation, self._key,
             ))
         self._validate_lifecycle_state()
+        if migration_pending:
+            self._provision(
+                self._lifecycle_migration_complete_path,
+                hashlib.sha256(self._lifecycle_migration_path.read_bytes()).hexdigest().encode("ascii") + b"\n",
+            )
+        elif migration_completed:
+            try:
+                expected_state = self._lifecycle_migration_complete_path.read_text(encoding="ascii").strip()
+                if expected_state != hashlib.sha256(self._lifecycle_migration_path.read_bytes()).hexdigest():
+                    raise ValueError
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise PermissionError("offline lifecycle migration completion is corrupt") from exc
 
     @property
     def security_classification(self) -> DeviceSecurityClassification:
