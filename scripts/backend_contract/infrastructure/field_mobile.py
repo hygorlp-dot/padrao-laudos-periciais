@@ -409,19 +409,52 @@ class DeviceOfflineVaultRegistry:
         self._generation_path = self._root / ".device-generation"
         self._lifecycle_key_path = self._root / ".lifecycle-key"
         self._lifecycle_state_path = self._root / ".lifecycle-state"
+        self._lifecycle_migration_path = self._root / ".lifecycle-migration-v1"
         pristine = not any(path.exists() for path in (
             self._key_path, self._identity_path, self._revocation_path,
             self._generation_path, self._lifecycle_key_path, self._lifecycle_state_path,
         ))
+        legacy_candidate = (
+            self._key_path.exists() and self._identity_path.exists()
+            and not any(path.exists() for path in (
+                self._revocation_path, self._generation_path,
+                self._lifecycle_key_path, self._lifecycle_state_path,
+            ))
+            and not any(self._root.glob(".replacement-*.json"))
+        )
+        if legacy_candidate and not self._lifecycle_migration_path.exists():
+            legacy = {
+                "device_id": self._identity_path.read_text(encoding="ascii"),
+                "device_key_sha256": hashlib.sha256(self._key_path.read_bytes()).hexdigest(),
+                "generation": 1,
+            }
+            self._publish_intent(
+                self._lifecycle_migration_path,
+                json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+            )
+        migration_recorded = self._lifecycle_migration_path.exists()
+        if migration_recorded and not self._lifecycle_state_path.exists():
+            try:
+                legacy = json.loads(self._lifecycle_migration_path.read_text(encoding="utf-8"))
+                if (
+                    set(legacy) != {"device_id", "device_key_sha256", "generation"}
+                    or legacy["generation"] != 1
+                    or legacy["device_id"] != self._identity_path.read_text(encoding="ascii")
+                    or legacy["device_key_sha256"] != hashlib.sha256(self._key_path.read_bytes()).hexdigest()
+                ):
+                    raise ValueError
+            except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                raise PermissionError("offline lifecycle migration authority is corrupt") from exc
+        migrating = migration_recorded and not self._lifecycle_state_path.exists()
         if not self._lifecycle_key_path.exists():
-            if not pristine:
+            if not pristine and not migrating:
                 raise PermissionError("offline lifecycle authority is incomplete")
             self._provision(self._lifecycle_key_path, os.urandom(32))
         self._lifecycle_key = self._lifecycle_key_path.read_bytes()
         if len(self._lifecycle_key) != 32:
             raise PermissionError("offline lifecycle authority is corrupt")
         if not self._generation_path.exists():
-            if not pristine:
+            if not pristine and not migrating:
                 raise PermissionError("offline lifecycle generation is missing")
             self._provision(self._generation_path, b"1\n")
         self._recover_pending_replacement()
@@ -456,7 +489,7 @@ class DeviceOfflineVaultRegistry:
         if (self._key is not None and len(self._key) != 32) or not self.device_id.startswith("DEVICE-"):
             raise ValueError("offline device authority is corrupt")
         if not self._lifecycle_state_path.exists():
-            if not pristine:
+            if not pristine and not migrating:
                 raise PermissionError("offline committed lifecycle state is missing")
             self._provision(self._lifecycle_state_path, self._lifecycle_state_payload(
                 self.device_id, self._generation, self._key,

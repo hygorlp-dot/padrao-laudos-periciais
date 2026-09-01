@@ -442,6 +442,50 @@ def test_committed_lifecycle_authority_rejects_missing_or_substituted_state(tmp_
         DeviceOfflineVaultRegistry(tmp_path)
 
 
+def test_legacy_generation_one_authority_migrates_and_reopens_existing_package(tmp_path: Path) -> None:
+    root = tmp_path / "offline-field-v1"
+    root.mkdir()
+    key = b"L" * 32
+    device_id = "DEVICE-" + "A" * 32
+    (root / ".device-key").write_bytes(key)
+    (root / ".device-id").write_text(device_id, encoding="ascii")
+    package = offline_package_from_mapping({**package_mapping(), "device_id": device_id})
+    legacy_vault = DeviceOfflineVault(
+        root / hashlib.sha256(WORKSPACE_ID.encode("utf-8")).hexdigest(),
+        key=key, device_id=device_id, workspace_id=WORKSPACE_ID,
+    )
+    legacy_vault.save(package)
+
+    migrated = DeviceOfflineVaultRegistry(tmp_path)
+
+    assert migrated.lifecycle_status == {"device_id": device_id, "generation": 1, "revoked": False}
+    assert migrated.vault_for(WORKSPACE_ID, device_id).load(package.package_id) == package
+    assert (root / ".lifecycle-migration-v1").exists()
+    assert DeviceOfflineVaultRegistry(tmp_path).device_id == device_id
+
+
+def test_interrupted_legacy_lifecycle_migration_resumes_from_bound_record(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "offline-field-v1"
+    root.mkdir()
+    (root / ".device-key").write_bytes(b"L" * 32)
+    (root / ".device-id").write_text("DEVICE-" + "A" * 32, encoding="ascii")
+    original = DeviceOfflineVaultRegistry._provision
+
+    def interrupt(path, payload):
+        if path.name == ".lifecycle-key":
+            raise OSError("synthetic migration interruption")
+        return original(path, payload)
+
+    monkeypatch.setattr(DeviceOfflineVaultRegistry, "_provision", staticmethod(interrupt))
+    with pytest.raises(OSError, match="migration interruption"):
+        DeviceOfflineVaultRegistry(tmp_path)
+    monkeypatch.undo()
+
+    recovered = DeviceOfflineVaultRegistry(tmp_path)
+    assert recovered.lifecycle_status["generation"] == 1
+    assert recovered.lifecycle_status["revoked"] is False
+
+
 def _replacement_outcome(registry: DeviceOfflineVaultRegistry, expected_device_id: str) -> str:
     try:
         return registry.replace_revoked_device(expected_device_id)
