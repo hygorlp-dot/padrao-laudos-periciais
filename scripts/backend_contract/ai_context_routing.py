@@ -223,6 +223,13 @@ def _thaw(value: object):
 
 
 def ai_result_cache_key(request: AIRequest, profile: AIModelProfile) -> str:
+    context_refs = tuple(segment.source for segment in request.context)
+    if (
+        request.egress_manifest.workspace_id != request.workspace_id
+        or context_refs != request.egress_manifest.source_refs
+        or any(ref.workspace_id != request.workspace_id for ref in context_refs)
+    ):
+        raise ValueError("workspace/source manifest mismatch")
     payload = {
         "workspace_id": request.workspace_id,
         "task_type": request.task_type,
@@ -238,7 +245,18 @@ def ai_result_cache_key(request: AIRequest, profile: AIModelProfile) -> str:
         "structured_output_schema_hash": request.structured_output_schema_hash,
         "context_manifest_hash": request.context_manifest_hash,
         "egress": {
+            "workspace_id": request.egress_manifest.workspace_id,
             "class": request.egress_manifest.egress_class.value,
+            "source_refs": [
+                {
+                    "workspace_id": ref.workspace_id,
+                    "document_id": ref.document_id,
+                    "revision_id": ref.revision_id,
+                    "sha256": ref.sha256,
+                    "locator": ref.locator,
+                }
+                for ref in request.egress_manifest.source_refs
+            ],
             "redaction_manifest": list(request.egress_manifest.redaction_manifest),
             "contains_private_data": request.egress_manifest.contains_private_data,
             "explicitly_authorized": request.egress_manifest.explicitly_authorized,

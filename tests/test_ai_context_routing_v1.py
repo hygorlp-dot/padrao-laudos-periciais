@@ -194,6 +194,10 @@ def test_cache_key_binds_workspace_profile_prompt_schema_context_and_parameters(
         replace(base_profile, structured_output_required=False),
     )
     assert all(ai_result_cache_key(ai_request, item) != key for item in profile_mutations)
+    divergent_ref = replace(ai_request.egress_manifest.source_refs[0], revision_id="divergent")
+    divergent_egress = replace(ai_request.egress_manifest, source_refs=(divergent_ref,))
+    with pytest.raises(ValueError, match="workspace/source manifest mismatch"):
+        ai_result_cache_key(replace(ai_request, egress_manifest=divergent_egress), base_profile)
 
 
 class LocalRetriever:
