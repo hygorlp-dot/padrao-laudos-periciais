@@ -80,6 +80,21 @@ class DocumentoPjeTest(unittest.TestCase):
             [],
             "proveniencia geometrica exata de imagem nao deve exigir trecho textual inventado",
         )
+        documento_nao_imagem = json.loads(
+            (RAIZ / "tests/fixtures/pje/documento-simples-valido.json").read_text(encoding="utf-8")
+        )
+        fonte = documento_nao_imagem["fontes"][0]
+        fonte.update({
+            "natureza": "DOCUMENTADO",
+            "metodo_extracao": "CAMPO_ESTRUTURADO",
+            "trecho": None,
+            "bbox": {"x0": 1, "y0": 1, "x1": 2, "y1": 2},
+        })
+        erros_nao_imagem = list(criar_validador().iter_errors(documento_nao_imagem))
+        self.assertTrue(
+            any(list(erro.path)[:2] == ["fontes", 0] for erro in erros_nao_imagem),
+            "excecao geometrica nao pode escapar para proveniencia compartilhada",
+        )
         documento["imagens"][0]["proveniencia"]["metodo_extracao"] = "TEXTO_DIGITAL"
         erros_textuais = list(criar_validador().iter_errors(documento))
         self.assertIn(
