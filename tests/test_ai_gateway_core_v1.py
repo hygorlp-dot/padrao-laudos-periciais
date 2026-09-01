@@ -803,6 +803,14 @@ def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> No
             return json.dumps(
                 value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
             ).encode("utf-8")
+        def reseal(value):
+            value["member_hashes"]["artifact_revisions"] = hashlib.sha256(
+                canonical(value["artifact_revisions"])
+            ).hexdigest()
+            value["manifest_sha256"] = hashlib.sha256(canonical({
+                key: item for key, item in value.items() if key != "manifest_sha256"
+            })).hexdigest()
+            return canonical(value)
         missing["member_hashes"]["artifact_revisions"] = hashlib.sha256(
             canonical(missing["artifact_revisions"])
         ).hexdigest()
@@ -810,7 +818,22 @@ def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> No
             key: value for key, value in missing.items() if key != "manifest_sha256"
         })).hexdigest()
         with pytest.raises(RepositoryIntegrityError, match="AI dependency"):
-            VerifyWorkspaceBackup().execute(canonical(missing))
+            VerifyWorkspaceBackup().execute(reseal(missing))
+
+        for mutation in ("task", "foreign-source"):
+            forged = json.loads(backup)
+            proposal_item = next(
+                item for item in forged["artifact_revisions"] if item["artifact_kind"] == "AI_PROPOSAL"
+            )
+            if mutation == "task":
+                proposal_item["payload"]["task_type"] = "FORGED_DIFFERENT_TASK"
+            else:
+                proposal_item["payload"]["source_refs"][0]["workspace_id"] = OTHER_WORKSPACE_ID
+            proposal_item["checksum_sha256"] = hashlib.sha256(
+                canonical(proposal_item["payload"])
+            ).hexdigest()
+            with pytest.raises(RepositoryIntegrityError):
+                VerifyWorkspaceBackup().execute(reseal(forged))
     finally:
         store.close()
 

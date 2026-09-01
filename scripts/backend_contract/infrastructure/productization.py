@@ -203,6 +203,15 @@ def _validate_ai_envelope(value: object, kind: str) -> _ValidatedAIArtifact:
     }[kind]
     data = _exact(value, fields, kind)
     workspace_id = str(WorkspaceId.parse(data["workspace_id"]))
+    source_refs = data["source_refs"]
+    if type(source_refs) not in {list, tuple} or not source_refs or any(
+        type(ref) is not dict
+        or set(ref) != {"workspace_id", "document_id", "revision_id", "sha256", "locator"}
+        or ref["workspace_id"] != workspace_id
+        or _SHA256.fullmatch(ref["sha256"]) is None
+        for ref in source_refs
+    ):
+        raise RepositoryIntegrityError("AI artifact source provenance is invalid")
     canonical_payload_json(data)
     return _ValidatedAIArtifact(workspace_id)
 
@@ -472,11 +481,27 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
         elif record.artifact_kind == "AI_RUN":
             for proposal_id in payload["proposal_ids"]:
                 proposal = require_ai("AI_PROPOSAL", proposal_id)
-                if thaw_payload(proposal.payload)["run_id"] != record.artifact_id:
+                proposal_payload = thaw_payload(proposal.payload)
+                if (
+                    proposal_payload["run_id"] != record.artifact_id
+                    or proposal_payload["workspace_id"] != payload["workspace_id"]
+                    or proposal_payload["task_type"] != payload["task_type"]
+                    or proposal_payload["provider"] != payload["provider"]
+                    or proposal_payload["model"] != payload["model"]
+                    or proposal_payload["source_refs"] != payload["source_refs"]
+                ):
                     raise RepositoryIntegrityError("backup AI run/proposal identity diverges")
         elif record.artifact_kind == "AI_PROPOSAL":
             run = require_ai("AI_RUN", payload["run_id"])
-            if payload["proposal_id"] not in thaw_payload(run.payload)["proposal_ids"]:
+            run_payload = thaw_payload(run.payload)
+            if (
+                payload["proposal_id"] not in run_payload["proposal_ids"]
+                or payload["workspace_id"] != run_payload["workspace_id"]
+                or payload["task_type"] != run_payload["task_type"]
+                or payload["provider"] != run_payload["provider"]
+                or payload["model"] != run_payload["model"]
+                or payload["source_refs"] != run_payload["source_refs"]
+            ):
                 raise RepositoryIntegrityError("backup AI proposal/run identity diverges")
         elif record.artifact_kind == "AI_EVAL_OBSERVATION":
             require_ai("AI_EVAL_DATASET", payload["dataset_sha256"])
