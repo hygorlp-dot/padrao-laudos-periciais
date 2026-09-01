@@ -469,6 +469,11 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
                 or approval.professional_id != binding["professional_id"]
             ):
                 raise RepositoryIntegrityError("backup delivery professional authority diverges")
+        elif record.artifact_kind == "AI_RUN":
+            for proposal_id in payload["proposal_ids"]:
+                proposal = require_ai("AI_PROPOSAL", proposal_id)
+                if thaw_payload(proposal.payload)["run_id"] != record.artifact_id:
+                    raise RepositoryIntegrityError("backup AI run/proposal identity diverges")
         elif record.artifact_kind == "AI_PROPOSAL":
             run = require_ai("AI_RUN", payload["run_id"])
             if payload["proposal_id"] not in thaw_payload(run.payload)["proposal_ids"]:

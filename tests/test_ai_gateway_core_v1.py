@@ -790,6 +790,27 @@ def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> No
         assert proposal_revision is not None
         assert run_revision.payload["proposal_ids"] == (proposal.proposal_id,)
         assert "effective" not in proposal_revision.payload
+
+        backup = CreateWorkspaceBackup(
+            store.workspaces, store.revisions, None, FixedClock(), lambda _: None
+        ).execute(workspace.workspace_id)
+        missing = json.loads(backup)
+        missing["artifact_revisions"] = [
+            item for item in missing["artifact_revisions"]
+            if item["artifact_kind"] != "AI_PROPOSAL"
+        ]
+        def canonical(value):
+            return json.dumps(
+                value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+            ).encode("utf-8")
+        missing["member_hashes"]["artifact_revisions"] = hashlib.sha256(
+            canonical(missing["artifact_revisions"])
+        ).hexdigest()
+        missing["manifest_sha256"] = hashlib.sha256(canonical({
+            key: value for key, value in missing.items() if key != "manifest_sha256"
+        })).hexdigest()
+        with pytest.raises(RepositoryIntegrityError, match="AI dependency"):
+            VerifyWorkspaceBackup().execute(canonical(missing))
     finally:
         store.close()
 
