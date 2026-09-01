@@ -95,6 +95,8 @@ def select_context(
         identities.add(identity)
 
     ordered = tuple(sorted(candidates, key=_candidate_key))
+    if not any(item.priority is ContextPriority.EXPLICIT_TARGET for item in ordered):
+        raise ValueError("source-grounded context requires EXPLICIT_TARGET")
     required = tuple(
         item
         for item in ordered
@@ -223,12 +225,19 @@ def _thaw(value: object):
 def ai_result_cache_key(request: AIRequest, profile: AIModelProfile) -> str:
     payload = {
         "workspace_id": request.workspace_id,
+        "task_type": request.task_type,
         "provider": profile.provider,
         "profile_id": profile.profile_id,
         "model": profile.model,
         "prompt_template_hash": request.prompt_template_hash,
         "structured_output_schema_hash": request.structured_output_schema_hash,
         "context_manifest_hash": request.context_manifest_hash,
+        "egress": {
+            "class": request.egress_manifest.egress_class.value,
+            "redaction_manifest": list(request.egress_manifest.redaction_manifest),
+            "contains_private_data": request.egress_manifest.contains_private_data,
+            "explicitly_authorized": request.egress_manifest.explicitly_authorized,
+        },
         "model_parameters": _thaw(profile.model_parameters),
     }
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
@@ -249,6 +258,8 @@ class AIResultCacheEntry:
             raise ValueError("cache workspace invalid")
         if type(self.source_refs) is not tuple or any(type(item) is not SourceRevisionRef for item in self.source_refs):
             raise TypeError("cache source refs invalid")
+        if any(item.workspace_id != self.workspace_id for item in self.source_refs):
+            raise ValueError("cache source workspace mismatch")
         object.__setattr__(self, "result", _freeze_cache_result(self.result))
 
     @classmethod

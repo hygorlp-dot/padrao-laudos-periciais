@@ -102,6 +102,16 @@ def test_contrary_evidence_is_never_silently_dropped_by_budget() -> None:
     }
 
 
+def test_source_grounded_selection_requires_an_explicit_target_match() -> None:
+    with pytest.raises(ValueError, match="EXPLICIT_TARGET"):
+        select_context((), ContextSelectionRequest(WORKSPACE, 100))
+    with pytest.raises(ValueError, match="EXPLICIT_TARGET"):
+        select_context(
+            (candidate("evidence", ContextPriority.EXACT_EVIDENCE, 10, 1),),
+            ContextSelectionRequest(WORKSPACE, 100),
+        )
+
+
 def profile(profile_id: str, cost: int, *, output: int = 800) -> AIModelProfile:
     return AIModelProfile(
         profile_id=profile_id,
@@ -171,6 +181,11 @@ def test_cache_key_binds_workspace_profile_prompt_schema_context_and_parameters(
     )
     assert all(ai_result_cache_key(value, base_profile) != key for value in mutations[:1])
     assert all(ai_result_cache_key(ai_request, value) != key for value in mutations[1:])
+    assert ai_result_cache_key(replace(ai_request, task_type="REPORT_PROPOSAL"), base_profile) != key
+    assert ai_result_cache_key(
+        replace(ai_request, egress_manifest=replace(ai_request.egress_manifest, egress_class=EgressClass.LOCAL_ONLY)),
+        base_profile,
+    ) != key
 
 
 class LocalRetriever:
@@ -333,9 +348,11 @@ def test_local_result_cache_invalidates_stale_source_and_never_crosses_workspace
     assert cache.get(ai_request, profile("FAST", 1_000), stale) is None
     assert cache.get(ai_request, profile("FAST", 1_000), current + stale) is None
 
-    foreign = replace(item, workspace_id=OTHER)
     with pytest.raises(ValueError, match="workspace"):
-        cache.put(foreign)
+        replace(item, workspace_id=OTHER)
+    foreign_ref = replace(item.source_refs[0], workspace_id=OTHER)
+    with pytest.raises(ValueError, match="source workspace"):
+        replace(item, source_refs=(foreign_ref,))
 
 
 def test_router_rejects_duplicate_policy_identity() -> None:
