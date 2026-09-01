@@ -288,7 +288,6 @@ def test_ai_proposal_and_run_ids_are_canonical_and_carry_no_authority_field() ->
         "credentialvalue",
         "passphrase",
         "clientassertion",
-        "sessionid",
     ],
 )
 def test_ai_payload_rejects_secret_shaped_fields(secret_field: str) -> None:
@@ -319,6 +318,7 @@ def test_non_secret_key_and_token_semantics_remain_valid_output_fields() -> None
             "token_count": 2,
             "inspection_session_id": "inspection-session-1",
             "session_identifier": "session-1",
+            "session_id": "session-1",
         },
         provider="OPENAI",
         model="configured-model",
@@ -332,6 +332,7 @@ def test_non_secret_key_and_token_semantics_remain_valid_output_fields() -> None
     assert proposal.proposal_payload["token_count"] == 2
     assert proposal.proposal_payload["inspection_session_id"] == "inspection-session-1"
     assert proposal.proposal_payload["session_identifier"] == "session-1"
+    assert proposal.proposal_payload["session_id"] == "session-1"
 
 
 @pytest.mark.parametrize("secret_name", ["api_key", "password", "clientAssertion"])
