@@ -822,7 +822,7 @@ def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> No
 
         for mutation in (
             "task", "foreign-source", "empty-source", "context-hash", "context-source",
-            "context-extra", "context-content-hash",
+            "context-extra", "context-content-hash", "redaction-string", "proposal-ids-string",
         ):
             forged = json.loads(backup)
             proposal_item = next(
@@ -850,11 +850,15 @@ def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> No
                 run_item["payload"]["context_manifest_hash"] = response_payload_sha256(
                     run_item["payload"]["context_manifest"]
                 )
-            else:
+            elif mutation == "context-content-hash":
                 run_item["payload"]["context_manifest"][0]["content_sha256"] = "invalid"
                 run_item["payload"]["context_manifest_hash"] = response_payload_sha256(
                     run_item["payload"]["context_manifest"]
                 )
+            elif mutation == "redaction-string":
+                run_item["payload"]["redaction_manifest"] = ""
+            else:
+                run_item["payload"]["proposal_ids"] = ""
             for item in (proposal_item, run_item):
                 item["checksum_sha256"] = hashlib.sha256(canonical(item["payload"])).hexdigest()
             with pytest.raises(RepositoryIntegrityError):

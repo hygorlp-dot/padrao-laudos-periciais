@@ -223,6 +223,14 @@ def _validate_ai_envelope(value: object, kind: str) -> _ValidatedAIArtifact:
     try:
         if kind == "AI_RUN":
             usage = data["usage"]
+            if (
+                type(data["redaction_manifest"]) not in {list, tuple}
+                or any(type(item) is not str or not item for item in data["redaction_manifest"])
+                or type(data["proposal_ids"]) not in {list, tuple}
+            ):
+                raise ValueError("AI run immutable collections invalid")
+            for proposal_id in data["proposal_ids"]:
+                UUID(proposal_id)
             parsed = AIRun(
                 run_id=data["run_id"], workspace_id=workspace_id, task_type=data["task_type"],
                 provider=data["provider"], model=data["model"], model_parameters=data["model_parameters"],
@@ -571,6 +579,35 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
         elif record.artifact_kind == "AI_EVAL_OBSERVATION":
             require_ai("AI_EVAL_DATASET", payload["dataset_sha256"])
             run = require_ai("AI_RUN", payload["run_id"])
+            run_payload = thaw_payload(run.payload)
+            usage = run_payload["usage"]
+            expected_usage = {
+                "input_tokens": usage["input_tokens"] if usage else 0,
+                "cached_input_tokens": usage["cached_input_tokens"] if usage else 0,
+                "output_tokens": usage["output_tokens"] if usage else 0,
+                "estimated_cost_microusd": (usage["estimated_cost_microusd"] or 0) if usage else 0,
+            }
+            if (
+                payload["workspace_id"] != run_payload["workspace_id"]
+                or payload["task_type"] != run_payload["task_type"]
+                or payload["provider"] != run_payload["provider"]
+                or payload["profile_id"] != run_payload["profile_id"]
+                or payload["model"] != run_payload["model"]
+                or payload["prompt_template_version"] != run_payload["prompt_template_version"]
+                or payload["prompt_template_hash"] != run_payload["prompt_template_hash"]
+                or payload["structured_output_schema_hash"] != run_payload["structured_output_schema_hash"]
+                or payload["source_refs"] != run_payload["source_refs"]
+                or payload["latency_ms"] != run_payload["latency_ms"]
+                or payload["cache_hit"] != run_payload["cache_hit"]
+                or payload["error_classification"] != run_payload["error_classification"]
+                or any(payload[key] != value for key, value in expected_usage.items())
+                or (payload["proposal_id"] is None) != (not run_payload["proposal_ids"])
+                or (
+                    payload["proposal_id"] is not None
+                    and payload["proposal_id"] not in run_payload["proposal_ids"]
+                )
+            ):
+                raise RepositoryIntegrityError("backup AI observation/run provenance diverges")
             if payload["proposal_id"] is not None:
                 proposal = require_ai("AI_PROPOSAL", payload["proposal_id"])
                 if thaw_payload(proposal.payload)["run_id"] != run.artifact_id:
