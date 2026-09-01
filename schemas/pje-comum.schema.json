@@ -131,7 +131,10 @@
         "status_verificacao": { "$ref": "#/$defs/statusVerificacao" }
       },
       "allOf": [
-        { "if": { "properties": { "natureza": { "const": "DOCUMENTADO" }, "status_verificacao": { "const": "VERIFICADO" } }, "required": ["natureza", "status_verificacao"] }, "then": { "properties": { "pagina_pdf": { "type": "integer", "minimum": 1 }, "trecho": { "type": "string", "minLength": 1 } } } },
+        { "if": { "properties": { "natureza": { "const": "DOCUMENTADO" }, "status_verificacao": { "const": "VERIFICADO" } }, "required": ["natureza", "status_verificacao"] }, "then": { "properties": { "pagina_pdf": { "type": "integer", "minimum": 1 } }, "anyOf": [
+          { "properties": { "trecho": { "type": "string", "minLength": 1 } }, "required": ["trecho"] },
+          { "properties": { "metodo_extracao": { "const": "CAMPO_ESTRUTURADO" } }, "required": ["metodo_extracao", "bbox"] }
+        ] } },
         { "if": { "properties": { "pagina_pdf": { "type": "null" } }, "required": ["pagina_pdf"] }, "then": { "properties": { "natureza": { "const": "INCONCLUSIVO" }, "status_verificacao": { "const": "INCONCLUSIVO" }, "trecho": { "type": "null" } } } }
       ]
     },

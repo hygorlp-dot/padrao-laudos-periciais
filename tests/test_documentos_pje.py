@@ -7,7 +7,7 @@ from scripts.extracao_pje.classificar_documentos import classificar_documento
 from scripts.extracao_pje.detectar_secoes_internas import criar_subdocumentos, detectar_secoes
 from scripts.extracao_pje.extrair_blocos_texto import extrair_pagina_e_blocos
 from scripts.extracao_pje.extrair_tabelas_documento import extrair_tabelas
-from scripts.extracao_pje.validar_documento import validar_documento
+from scripts.extracao_pje.validar_documento import criar_validador, validar_documento
 
 RAIZ = Path(__file__).resolve().parents[1]
 CASOS = json.loads((RAIZ / "tests/fixtures/pje_documentos/casos-classificacao.json").read_text(encoding="utf-8"))
@@ -58,6 +58,35 @@ class DocumentoPjeTest(unittest.TestCase):
         self.assertEqual(tabelas[0]["linhas"], 2)
         self.assertEqual(len(imagens), 1)
         self.assertEqual(fotos[0]["numero_original"], "1")
+
+        class PaginaSemRotulo(PaginaFalsa):
+            def extract_words(self, **_):
+                return []
+
+        class LeitorSemRotulo:
+            def pagina_geometrica(self, _):
+                return PaginaSemRotulo()
+
+        imagens_sem_rotulo, _ = catalogar_imagens(
+            LeitorSemRotulo(), 3, 1, CONTEXTO, 1, 1
+        )
+        documento = json.loads(
+            (RAIZ / "tests/fixtures/pje/documento-simples-valido.json").read_text(encoding="utf-8")
+        )
+        documento["imagens"] = imagens_sem_rotulo
+        erros = list(criar_validador().iter_errors(documento))
+        self.assertEqual(
+            ["/".join(map(str, erro.path)) for erro in erros],
+            [],
+            "proveniencia geometrica exata de imagem nao deve exigir trecho textual inventado",
+        )
+        documento["imagens"][0]["proveniencia"]["metodo_extracao"] = "TEXTO_DIGITAL"
+        erros_textuais = list(criar_validador().iter_errors(documento))
+        self.assertIn(
+            "imagens/0/proveniencia",
+            ["/".join(map(str, erro.path)) for erro in erros_textuais],
+            "bbox nao pode liberar proveniencia textual sem trecho exato",
+        )
 
     def test_anexo_interno_sem_novo_id_pje(self):
         textos = [(3, 1, "CORPO"), (4, 2, "ANEXO I — RELATÓRIO FOTOGRÁFICO")]
