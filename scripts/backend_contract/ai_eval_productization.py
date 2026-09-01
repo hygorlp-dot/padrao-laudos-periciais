@@ -63,6 +63,7 @@ class AIEvalCase:
     task_type: str
     synthetic: bool
     expected_source_ids: tuple[str, ...]
+    expected_semantic_markers: tuple[str, ...]
 
     def __post_init__(self) -> None:
         _text(self.case_id, "case_id")
@@ -76,6 +77,10 @@ class AIEvalCase:
             raise ValueError("AI eval case requires expected sources")
         if len(set(self.expected_source_ids)) != len(self.expected_source_ids):
             raise ValueError("AI eval case source identities must be unique")
+        if type(self.expected_semantic_markers) is not tuple or not self.expected_semantic_markers or any(
+            type(item) is not str or not item.strip() for item in self.expected_semantic_markers
+        ):
+            raise ValueError("AI eval case semantic markers required")
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +118,7 @@ class AIEvalDataset:
                     "task_type": item.task_type,
                     "synthetic": item.synthetic,
                     "expected_source_ids": list(item.expected_source_ids),
+                    "expected_semantic_markers": list(item.expected_semantic_markers),
                 }
                 for item in self.cases
             ],
@@ -135,6 +141,7 @@ def load_ai_eval_dataset(path: Path) -> AIEvalDataset:
             task_type=item["task_type"],
             synthetic=item["synthetic"],
             expected_source_ids=tuple(item["expected_source_ids"]),
+            expected_semantic_markers=tuple(item["expected_semantic_markers"]),
         )
         for item in raw["cases"]
     )
@@ -154,6 +161,7 @@ class AIEvalObservation:
     prompt_template_hash: str
     structured_output_schema_hash: str
     schema_valid: bool
+    scenario_semantics_valid: bool
     material_proposal_count: int
     source_grounded_count: int
     expected_source_hits: int
@@ -188,7 +196,7 @@ class AIEvalObservation:
             value = getattr(self, field)
             if type(value) is not str or len(value) != 64 or any(item not in "0123456789abcdef" for item in value):
                 raise ValueError(f"{field} invalid")
-        if type(self.schema_valid) is not bool or type(self.cache_hit) is not bool:
+        if type(self.schema_valid) is not bool or type(self.scenario_semantics_valid) is not bool or type(self.cache_hit) is not bool:
             raise TypeError("AI eval boolean telemetry invalid")
         counters = (
             self.material_proposal_count, self.source_grounded_count, self.expected_source_hits,
@@ -333,6 +341,8 @@ def observe_domain_proposal(
         raise ValueError("AI eval proposal contains cross-workspace source")
     cited_document_ids = {ref.document_id for ref in all_refs}
     grounded = sum(bool(item.source_refs) for item in proposal.items)
+    combined_content = " ".join(item.content for item in proposal.items).casefold()
+    semantics_valid = all(marker.casefold() in combined_content for marker in case.expected_semantic_markers)
     return AIEvalObservation._from_verified_boundary(
         dataset_version=dataset_version,
         case_id=case.case_id,
@@ -345,6 +355,7 @@ def observe_domain_proposal(
         prompt_template_hash=telemetry.prompt_template_hash,
         structured_output_schema_hash=telemetry.structured_output_schema_hash,
         schema_valid=True,
+        scenario_semantics_valid=semantics_valid,
         material_proposal_count=len(proposal.items),
         source_grounded_count=grounded,
         expected_source_hits=len(set(case.expected_source_ids) & cited_document_ids),
@@ -396,6 +407,7 @@ def observe_failed_run(
         prompt_template_hash=run.prompt_template_hash,
         structured_output_schema_hash=run.structured_output_schema_hash,
         schema_valid=False,
+        scenario_semantics_valid=False,
         material_proposal_count=0,
         source_grounded_count=0,
         expected_source_hits=len(set(case.expected_source_ids) & {ref.document_id for ref in refs}),
@@ -432,6 +444,7 @@ class AIEvalReport:
     status: str
     failures: tuple[str, ...]
     schema_validity_rate: str
+    scenario_semantic_validity_rate: str
     source_grounding_rate: str
     source_recall: str
     unsourced_proposal_rate: str
@@ -499,6 +512,8 @@ def evaluate_ai_dataset(
     failures = []
     if any(not item.schema_valid for item in observations):
         failures.append("SCHEMA_VALIDITY")
+    if any(not item.scenario_semantics_valid for item in observations):
+        failures.append("SCENARIO_SEMANTICS")
     if unsourced or grounded != material:
         failures.append("UNSOURCED_MATERIAL_PROPOSAL")
     if source_hits != expected_sources:
@@ -527,6 +542,9 @@ def evaluate_ai_dataset(
         status="PASS" if not failures else "FAIL",
         failures=tuple(failures),
         schema_validity_rate=_rate(sum(item.schema_valid for item in observations), case_count),
+        scenario_semantic_validity_rate=_rate(
+            sum(item.scenario_semantics_valid for item in observations), case_count
+        ),
         source_grounding_rate=_rate(grounded, material),
         source_recall=_rate(source_hits, expected_sources),
         unsourced_proposal_rate=_rate(unsourced, material),
@@ -621,6 +639,7 @@ def compare_eval_reports(
         "quality": "PASS" if (
             baseline.status == current.status == "PASS"
             and current.schema_validity_rate >= baseline.schema_validity_rate
+            and current.scenario_semantic_validity_rate >= baseline.scenario_semantic_validity_rate
         ) else "FAIL",
         "source_grounding": "PASS" if (
             current.source_grounding_rate >= baseline.source_grounding_rate

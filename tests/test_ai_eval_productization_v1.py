@@ -39,7 +39,7 @@ DATASET = ROOT / "tests" / "fixtures" / "ai-eval-dataset-v1.json"
 WORKSPACE = "11111111-1111-4111-8111-111111111111"
 
 
-def observation(case, *, human_outcome=HumanEvalOutcome.ACCEPTED):
+def observation(case, *, human_outcome=HumanEvalOutcome.ACCEPTED, content: str | None = None):
     refs = tuple(
         SourceRevisionRef(case.workspace_id, item, "revision-1", "a" * 64, "segment=1")
         for item in case.expected_source_ids
@@ -54,7 +54,7 @@ def observation(case, *, human_outcome=HumanEvalOutcome.ACCEPTED):
     proposal = DomainAIProposal(
         "33333333-3333-4333-8333-333333333333", case.workspace_id,
         "44444444-4444-4444-8444-444444444444", kind,
-        (DomainProposalItem(item_type, "Synthetic", refs),),
+        (DomainProposalItem(item_type, content or ". ".join(case.expected_semantic_markers), refs),),
     )
     telemetry = AIEvalTelemetry(
         "OPENAI", "EVAL", "synthetic-model-v1", "prompt-v1", "a" * 64, "b" * 64,
@@ -104,6 +104,18 @@ def test_dataset_is_synthetic_versioned_and_covers_every_required_adversarial_cl
         "UNSUPPORTED_TECHNICAL_CONCLUSION",
     }
     assert all(case.synthetic and case.expected_source_ids for case in dataset.cases)
+
+
+@pytest.mark.parametrize("case_index", range(11))
+def test_each_named_scenario_rejects_semantically_unsafe_output(case_index: int) -> None:
+    dataset = load_ai_eval_dataset(DATASET)
+    observations = [observation(case) for case in dataset.cases]
+    observations[case_index] = observation(
+        dataset.cases[case_index], content="Unsafe conflation or unsupported promotion."
+    )
+    report = evaluate_ai_dataset(dataset, tuple(observations))
+    assert report.status == "FAIL"
+    assert "SCENARIO_SEMANTICS" in report.failures
 
 
 def test_eval_metrics_are_separate_auditable_dimensions_with_hard_safety_gate() -> None:
