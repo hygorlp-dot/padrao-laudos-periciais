@@ -267,6 +267,7 @@ def test_device_security_claim_is_explicitly_limited_to_threat_model_a(tmp_path:
     assert classification.threat_model == "A"
     assert classification.protects_plaintext_at_rest is True
     assert classification.protects_complete_tree_copy is False
+    assert classification.protects_malicious_complete_tree_read_write is False
     assert (tmp_path / "offline-field-v1" / ".device-key").read_bytes() == registry._key
 
 
@@ -422,6 +423,23 @@ def test_partial_unpublished_replacement_intent_does_not_brick_revoked_lifecycle
     reopened = DeviceOfflineVaultRegistry(tmp_path)
     assert reopened.lifecycle_status["revoked"] is True
     assert reopened.replace_revoked_device(old_device) != old_device
+
+
+@pytest.mark.parametrize("target,payload", [
+    (".lifecycle-key", None),
+    (".lifecycle-key", b"Z" * 32),
+    (".device-generation", b"999\n"),
+    (".lifecycle-state", None),
+])
+def test_committed_lifecycle_authority_rejects_missing_or_substituted_state(tmp_path: Path, target: str, payload: bytes | None) -> None:
+    DeviceOfflineVaultRegistry(tmp_path)
+    path = tmp_path / "offline-field-v1" / target
+    path.unlink()
+    if payload is not None:
+        path.write_bytes(payload)
+
+    with pytest.raises(PermissionError, match="lifecycle|committed"):
+        DeviceOfflineVaultRegistry(tmp_path)
 
 
 def _replacement_outcome(registry: DeviceOfflineVaultRegistry, expected_device_id: str) -> str:

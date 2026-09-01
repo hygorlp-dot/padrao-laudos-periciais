@@ -44,6 +44,7 @@ class DeviceSecurityClassification:
     threat_model: str = "A"
     protects_plaintext_at_rest: bool = True
     protects_complete_tree_copy: bool = False
+    protects_malicious_complete_tree_read_write: bool = False
 
 
 def _is_link_or_reparse(details: os.stat_result) -> bool:
@@ -407,12 +408,21 @@ class DeviceOfflineVaultRegistry:
         self._revocation_path = self._root / ".device-revoked"
         self._generation_path = self._root / ".device-generation"
         self._lifecycle_key_path = self._root / ".lifecycle-key"
+        self._lifecycle_state_path = self._root / ".lifecycle-state"
+        pristine = not any(path.exists() for path in (
+            self._key_path, self._identity_path, self._revocation_path,
+            self._generation_path, self._lifecycle_key_path, self._lifecycle_state_path,
+        ))
         if not self._lifecycle_key_path.exists():
+            if not pristine:
+                raise PermissionError("offline lifecycle authority is incomplete")
             self._provision(self._lifecycle_key_path, os.urandom(32))
         self._lifecycle_key = self._lifecycle_key_path.read_bytes()
         if len(self._lifecycle_key) != 32:
             raise PermissionError("offline lifecycle authority is corrupt")
         if not self._generation_path.exists():
+            if not pristine:
+                raise PermissionError("offline lifecycle generation is missing")
             self._provision(self._generation_path, b"1\n")
         self._recover_pending_replacement()
         key_exists = self._key_path.exists()
@@ -445,6 +455,13 @@ class DeviceOfflineVaultRegistry:
             self._authority_identities[self._key_path] = self._file_identity(self._key_path)
         if (self._key is not None and len(self._key) != 32) or not self.device_id.startswith("DEVICE-"):
             raise ValueError("offline device authority is corrupt")
+        if not self._lifecycle_state_path.exists():
+            if not pristine:
+                raise PermissionError("offline committed lifecycle state is missing")
+            self._provision(self._lifecycle_state_path, self._lifecycle_state_payload(
+                self.device_id, self._generation, self._key,
+            ))
+        self._validate_lifecycle_state()
 
     @property
     def security_classification(self) -> DeviceSecurityClassification:
@@ -518,6 +535,9 @@ class DeviceOfflineVaultRegistry:
             temporary = self._root / f".{target.name}.{uuid4().hex}.new"
             self._provision(temporary, payload)
             os.replace(temporary, target)
+        self._replace_lifecycle_state(
+            intent["new_device_id"], intent["new_generation"], new_key,
+        )
         if self._revocation_path.exists():
             self._revocation_path.unlink()
         complete = intent_path.with_suffix(".complete")
@@ -553,6 +573,37 @@ class DeviceOfflineVaultRegistry:
             return device_id, int(generation)
         except (OSError, UnicodeError, ValueError) as exc:
             raise PermissionError("offline device revocation authority is corrupt") from exc
+
+    def _lifecycle_state_payload(self, device_id: str, generation: int, key: bytes | None) -> bytes:
+        if key is None:
+            raise PermissionError("offline committed lifecycle key is unavailable")
+        unsigned = json.dumps({
+            "device_id": device_id,
+            "generation": generation,
+            "device_key_sha256": hashlib.sha256(key).hexdigest(),
+        }, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return unsigned + b"\n" + hmac.new(self._lifecycle_key, unsigned, hashlib.sha256).hexdigest().encode("ascii") + b"\n"
+
+    def _replace_lifecycle_state(self, device_id: str, generation: int, key: bytes) -> None:
+        temporary = self._root / f".lifecycle-state.{uuid4().hex}.new"
+        self._provision(temporary, self._lifecycle_state_payload(device_id, generation, key))
+        os.replace(temporary, self._lifecycle_state_path)
+
+    def _validate_lifecycle_state(self) -> None:
+        try:
+            unsigned, supplied_mac = self._lifecycle_state_path.read_bytes().splitlines()
+            expected = hmac.new(self._lifecycle_key, unsigned, hashlib.sha256).hexdigest().encode("ascii")
+            value = json.loads(unsigned.decode("utf-8"))
+            if not hmac.compare_digest(supplied_mac, expected) or set(value) != {"device_id", "generation", "device_key_sha256"}:
+                raise ValueError
+            if (
+                value["device_id"] != self.device_id
+                or value["generation"] != self._generation
+                or (self._key is not None and value["device_key_sha256"] != hashlib.sha256(self._key).hexdigest())
+            ):
+                raise ValueError
+        except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise PermissionError("offline committed lifecycle state is corrupt") from exc
 
     def _publish_intent(self, target: Path, payload: bytes) -> None:
         temporary = self._root / f".replacement-intent.{uuid4().hex}.new"
