@@ -820,18 +820,25 @@ def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> No
         with pytest.raises(RepositoryIntegrityError, match="AI dependency"):
             VerifyWorkspaceBackup().execute(reseal(missing))
 
-        for mutation in ("task", "foreign-source"):
+        for mutation in ("task", "foreign-source", "empty-source", "context-hash"):
             forged = json.loads(backup)
             proposal_item = next(
                 item for item in forged["artifact_revisions"] if item["artifact_kind"] == "AI_PROPOSAL"
             )
+            run_item = next(
+                item for item in forged["artifact_revisions"] if item["artifact_kind"] == "AI_RUN"
+            )
             if mutation == "task":
                 proposal_item["payload"]["task_type"] = "FORGED_DIFFERENT_TASK"
-            else:
+            elif mutation == "foreign-source":
                 proposal_item["payload"]["source_refs"][0]["workspace_id"] = OTHER_WORKSPACE_ID
-            proposal_item["checksum_sha256"] = hashlib.sha256(
-                canonical(proposal_item["payload"])
-            ).hexdigest()
+            elif mutation == "empty-source":
+                proposal_item["payload"]["source_refs"][0]["document_id"] = ""
+                run_item["payload"]["source_refs"][0]["document_id"] = ""
+            else:
+                run_item["payload"]["context_manifest"][0]["document_id"] = "FORGED-DOCUMENT"
+            for item in (proposal_item, run_item):
+                item["checksum_sha256"] = hashlib.sha256(canonical(item["payload"])).hexdigest()
             with pytest.raises(RepositoryIntegrityError):
                 VerifyWorkspaceBackup().execute(reseal(forged))
     finally:

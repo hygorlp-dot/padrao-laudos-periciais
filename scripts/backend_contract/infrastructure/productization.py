@@ -35,6 +35,7 @@ from ..application.artifact_ownership import (
 from ..application.ocr_cache import _page_from_payload
 from ..application.process_metadata import document_metadata_from_payload
 from ..budget_foundation import budget_snapshot_from_mapping
+from ..ai_gateway import AIRun, AIProposal, EgressClass, SourceRevisionRef, UsageRecord
 from ..ai_eval_productization import (
     ai_eval_dataset_from_mapping,
     ai_eval_observation_from_mapping,
@@ -212,8 +213,42 @@ def _validate_ai_envelope(value: object, kind: str) -> _ValidatedAIArtifact:
         for ref in source_refs
     ):
         raise RepositoryIntegrityError("AI artifact source provenance is invalid")
+    try:
+        canonical_refs = tuple(SourceRevisionRef(**ref) for ref in source_refs)
+    except (TypeError, ValueError) as exc:
+        raise RepositoryIntegrityError("AI artifact source provenance is invalid") from exc
+    if any(ref.workspace_id != workspace_id for ref in canonical_refs):
+        raise RepositoryIntegrityError("AI artifact source provenance is invalid")
     canonical_payload_json(data)
-    return _ValidatedAIArtifact(workspace_id)
+    try:
+        if kind == "AI_RUN":
+            usage = data["usage"]
+            parsed = AIRun(
+                run_id=data["run_id"], workspace_id=workspace_id, task_type=data["task_type"],
+                provider=data["provider"], model=data["model"], model_parameters=data["model_parameters"],
+                prompt_template_version=data["prompt_template_version"],
+                prompt_template_hash=data["prompt_template_hash"],
+                structured_output_schema_hash=data["structured_output_schema_hash"],
+                context_manifest=data["context_manifest"], context_manifest_hash=data["context_manifest_hash"],
+                source_refs=canonical_refs, egress_class=EgressClass(data["egress_class"]),
+                redaction_manifest=tuple(data["redaction_manifest"]),
+                usage=None if usage is None else UsageRecord(**usage), latency_ms=data["latency_ms"],
+                provider_response_id=data["provider_response_id"], response_hash=data["response_hash"],
+                refusal_state=data["refusal_state"], error_classification=data["error_classification"],
+                proposal_ids=tuple(data["proposal_ids"]), created_at=data["created_at"],
+                profile_id=data["profile_id"], cache_hit=data["cache_hit"],
+            )
+        else:
+            parsed = AIProposal(
+                proposal_id=data["proposal_id"], workspace_id=workspace_id,
+                task_type=data["task_type"], source_refs=canonical_refs,
+                proposal_payload=data["proposal_payload"], provider=data["provider"],
+                model=data["model"], run_id=data["run_id"], created_at=data["created_at"],
+                confidence_score=data["confidence_score"],
+            )
+    except (TypeError, ValueError) as exc:
+        raise RepositoryIntegrityError("AI artifact domain invariants are invalid") from exc
+    return parsed
 
 
 _ARTIFACT_VALIDATORS = {
