@@ -221,6 +221,8 @@ class UpdateOfflineInspection:
         for kind, records, identity in (("PHOTO", snapshot.photos, "photo_id"), ("VIDEO", snapshot.videos, "video_id"), ("SKETCH", snapshot.sketches, "sketch_id")):
             for item in records:
                 private = self.get_private_content.execute(workspace_id, PrivateContentId.parse(item.private_content_id))
+                if str(private.metadata.workspace_id) != str(workspace_id):
+                    raise ValueError("offline update media belongs to another workspace")
                 if private.metadata.checksum_sha256 != item.original_sha256:
                     raise ValueError("offline update media diverges from private authority")
                 record_id = getattr(item, identity)

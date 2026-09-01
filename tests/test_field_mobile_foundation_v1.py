@@ -201,6 +201,37 @@ def test_device_vault_preserves_original_media_bytes_and_sha256(tmp_path: Path) 
         vault.save_media(package.package_id, "VIDEO-001", b"tampered")
 
 
+def test_package_and_media_ciphertext_tamper_fail_closed(tmp_path: Path) -> None:
+    original = b"synthetic original photo bytes"
+    mapping = package_mapping()
+    digest = hashlib.sha256(original).hexdigest()
+    mapping["inspection_snapshot"]["photos"][0]["original_sha256"] = digest
+    mapping["media_manifest"][0]["original_sha256"] = digest
+    mapping["media_manifest"][0]["byte_size"] = len(original)
+    package = offline_package_from_mapping(mapping)
+
+    package_root = tmp_path / "package"
+    package_vault = DeviceOfflineVault(package_root, key=b"t" * 32, device_id=package.device_id, workspace_id=package.workspace_id)
+    package_vault.save(package)
+    package_path = next(package_root.glob("*.offline"))
+    tampered = bytearray(package_path.read_bytes())
+    tampered[-1] ^= 1
+    package_path.write_bytes(tampered)
+    with pytest.raises(ValueError, match="integrity"):
+        package_vault.load(package.package_id)
+
+    media_root = tmp_path / "media"
+    media_vault = DeviceOfflineVault(media_root, key=b"u" * 32, device_id=package.device_id, workspace_id=package.workspace_id)
+    media_vault.save(package)
+    media_vault.save_media(package.package_id, "PHOTO-001", original)
+    media_path = next(media_root.glob("*.media"))
+    tampered = bytearray(media_path.read_bytes())
+    tampered[-1] ^= 1
+    media_path.write_bytes(tampered)
+    with pytest.raises(ValueError, match="integrity"):
+        media_vault.load_media(package.package_id, "PHOTO-001")
+
+
 def test_device_vault_concurrent_package_write_never_silently_overwrites(tmp_path: Path) -> None:
     package = offline_package_from_mapping(package_mapping())
     first = DeviceOfflineVault(tmp_path, key=b"r" * 32, device_id=package.device_id, workspace_id=package.workspace_id)
@@ -376,6 +407,7 @@ def test_revocation_linearizes_after_complete_package_read(tmp_path: Path, monke
     ("change", "expected_code"),
     [
         ({"workspace_id": "22222222-2222-4222-8222-222222222222"}, "WORKSPACE_MISMATCH"),
+        ({"inspection_id": "OTHER-INSPECTION"}, "INSPECTION_MISMATCH"),
         ({"planning_revision": 3}, "STALE_PLAN"),
         ({"source_revision": 5}, "CHANGED_SOURCE"),
         ({"last_device_sequence": 1}, "DEVICE_REPLAY"),
@@ -438,6 +470,72 @@ def test_sync_rejects_device_or_session_swap_and_unverified_media() -> None:
         decision = adjudicate_offline_sync(package, SyncAuthority(**{**common, **change}))
         assert decision.accepted is False
         assert code in {item.code for item in decision.conflicts}
+
+
+def test_offline_update_rejects_foreign_workspace_media_even_with_identical_hash(tmp_path: Path) -> None:
+    originals = {"PHOTO-001": b"photo", "VIDEO-001": b"video", "SKETCH-001": b"sketch"}
+    mapping = package_mapping()
+    for manifest, collection in zip(mapping["media_manifest"], ("photos", "videos", "sketches")):
+        original = originals[manifest["record_id"]]
+        digest = hashlib.sha256(original).hexdigest()
+        manifest["original_sha256"] = digest
+        manifest["byte_size"] = len(original)
+        mapping["inspection_snapshot"][collection][0]["original_sha256"] = digest
+    package = offline_package_from_mapping(mapping)
+    vault = DeviceOfflineVault(tmp_path, key=b"w" * 32, device_id=package.device_id, workspace_id=package.workspace_id)
+    vault.save(package)
+
+    class ForeignPrivate:
+        def execute(self, _workspace_id, content_id):
+            manifest = next(item for item in package.media_manifest if item.private_content_id == str(content_id))
+            original = originals[manifest.record_id]
+            return SimpleNamespace(
+                metadata=SimpleNamespace(
+                    workspace_id="22222222-2222-4222-8222-222222222222",
+                    checksum_sha256=manifest.original_sha256,
+                    byte_size=len(original),
+                    media_type=manifest.media_type,
+                ),
+                content=original,
+            )
+
+    updater = UpdateOfflineInspection(
+        ForeignPrivate(),
+        lambda *_: vault,
+        SimpleNamespace(now=lambda: __import__("datetime").datetime.fromisoformat("2026-08-31T15:00:00+00:00")),
+        SimpleNamespace(new_uuid=lambda: UUID("dddddddd-dddd-4ddd-8ddd-dddddddddddd")),
+    )
+    with pytest.raises(ValueError, match="revision conflict"):
+        updater.execute(
+            WORKSPACE_ID,
+            device_id=package.device_id,
+            package_id=package.package_id,
+            expected_package_revision=2,
+            snapshot=package.inspection_snapshot,
+        )
+    with pytest.raises(ValueError, match="workspace"):
+        updater.execute(
+            WORKSPACE_ID,
+            device_id=package.device_id,
+            package_id=package.package_id,
+            expected_package_revision=1,
+            snapshot=package.inspection_snapshot,
+        )
+
+
+def test_field_mobile_boundary_has_no_remote_egress_client_or_absolute_frontend_url() -> None:
+    backend = "\n".join(
+        (ROOT / path).read_text(encoding="utf-8")
+        for path in (
+            "scripts/backend_contract/field_mobile.py",
+            "scripts/backend_contract/application/field_mobile.py",
+            "scripts/backend_contract/infrastructure/field_mobile.py",
+        )
+    )
+    frontend = (ROOT / "frontend/src/data/fieldMobile.ts").read_text(encoding="utf-8")
+    assert not any(token in backend for token in ("import requests", "import httpx", "urllib.request", "socket."))
+    assert "http://" not in frontend and "https://" not in frontend and "//server" not in frontend
+    assert "`/app-api/v1/workspaces/${workspaceId}/" in frontend
 
 
 def test_offline_update_sync_and_durable_replay_receipt_form_one_vertical(tmp_path: Path) -> None:
