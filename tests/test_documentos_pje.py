@@ -7,7 +7,7 @@ from scripts.extracao_pje.classificar_documentos import classificar_documento
 from scripts.extracao_pje.detectar_secoes_internas import criar_subdocumentos, detectar_secoes
 from scripts.extracao_pje.extrair_blocos_texto import extrair_pagina_e_blocos
 from scripts.extracao_pje.extrair_tabelas_documento import extrair_tabelas
-from scripts.extracao_pje.validar_documento import validar_documento
+from scripts.extracao_pje.validar_documento import criar_validador, validar_documento
 
 RAIZ = Path(__file__).resolve().parents[1]
 CASOS = json.loads((RAIZ / "tests/fixtures/pje_documentos/casos-classificacao.json").read_text(encoding="utf-8"))
@@ -58,6 +58,94 @@ class DocumentoPjeTest(unittest.TestCase):
         self.assertEqual(tabelas[0]["linhas"], 2)
         self.assertEqual(len(imagens), 1)
         self.assertEqual(fotos[0]["numero_original"], "1")
+
+        class PaginaSemRotulo(PaginaFalsa):
+            def extract_words(self, **_):
+                return []
+
+        class LeitorSemRotulo:
+            def pagina_geometrica(self, _):
+                return PaginaSemRotulo()
+
+        imagens_sem_rotulo, _ = catalogar_imagens(
+            LeitorSemRotulo(), 3, 1, CONTEXTO, 1, 1
+        )
+        documento = json.loads(
+            (RAIZ / "tests/fixtures/pje/documento-simples-valido.json").read_text(encoding="utf-8")
+        )
+        documento["imagens"] = imagens_sem_rotulo
+        documento = json.loads(json.dumps(documento))
+        erros = list(criar_validador().iter_errors(documento))
+        self.assertEqual(
+            ["/".join(map(str, erro.path)) for erro in erros],
+            [],
+            "proveniencia geometrica exata de imagem nao deve exigir trecho textual inventado",
+        )
+        base = {
+            "documento_id": documento["documento_id"],
+            "id_pje": documento["id_pje"],
+            "pagina_pdf_inicio": 3,
+            "pagina_pdf_fim": 3,
+            "titulo_original": documento["titulo_original"],
+            "tipo_original": documento["tipo_original"],
+            "ordem_indice": documento["ordem_indice"],
+            "data_hora": documento["data_hora"],
+            "status_reconciliacao": documento["status_reconciliacao"],
+            "_processo_cnj": documento["processo_cnj"],
+            "_paginas_manifesto": [],
+            "_arquivo": {"nome": CONTEXTO["arquivo"], "sha256": CONTEXTO["sha256"]},
+        }
+        documento["imagens"][0]["proveniencia"]["bbox"]["x0"] = 99
+        erros_geometria, _ = validar_documento(documento, base)
+        self.assertTrue(
+            any("bbox diverge" in erro for erro in erros_geometria),
+            "bbox da proveniencia deve identificar exatamente a imagem catalogada",
+        )
+        documento["imagens"] = json.loads(json.dumps(imagens_sem_rotulo))
+        documento["imagens"][0]["proveniencia"]["pagina_original"] = "FOLHA-SINTETICA"
+        erros_pagina, _ = validar_documento(documento, base)
+        self.assertTrue(
+            any("pagina diverge" in erro for erro in erros_pagina),
+            "pagina original da proveniencia deve coincidir com a imagem",
+        )
+        adulteracoes_fonte = {
+            "documento_id": "DOC-PJE-999",
+            "id_pje": "999999",
+            "arquivo": "outro-processo.pdf",
+            "sha256": "f" * 64,
+        }
+        for campo, valor in adulteracoes_fonte.items():
+            with self.subTest(campo_fonte=campo):
+                documento["imagens"] = json.loads(json.dumps(imagens_sem_rotulo))
+                documento["imagens"][0]["proveniencia"][campo] = valor
+                erros_fonte, _ = validar_documento(documento, base)
+                self.assertTrue(
+                    any("fonte diverge" in erro for erro in erros_fonte),
+                    f"identidade de fonte {campo} deve permanecer vinculada",
+                )
+        documento["imagens"] = json.loads(json.dumps(imagens_sem_rotulo))
+        documento_nao_imagem = json.loads(
+            (RAIZ / "tests/fixtures/pje/documento-simples-valido.json").read_text(encoding="utf-8")
+        )
+        fonte = documento_nao_imagem["fontes"][0]
+        fonte.update({
+            "natureza": "DOCUMENTADO",
+            "metodo_extracao": "CAMPO_ESTRUTURADO",
+            "trecho": None,
+            "bbox": {"x0": 1, "y0": 1, "x1": 2, "y1": 2},
+        })
+        erros_nao_imagem = list(criar_validador().iter_errors(documento_nao_imagem))
+        self.assertTrue(
+            any(list(erro.path)[:2] == ["fontes", 0] for erro in erros_nao_imagem),
+            "excecao geometrica nao pode escapar para proveniencia compartilhada",
+        )
+        documento["imagens"][0]["proveniencia"]["metodo_extracao"] = "TEXTO_DIGITAL"
+        erros_textuais = list(criar_validador().iter_errors(documento))
+        self.assertIn(
+            "imagens/0/proveniencia",
+            ["/".join(map(str, erro.path)) for erro in erros_textuais],
+            "bbox nao pode liberar proveniencia textual sem trecho exato",
+        )
 
     def test_anexo_interno_sem_novo_id_pje(self):
         textos = [(3, 1, "CORPO"), (4, 2, "ANEXO I — RELATÓRIO FOTOGRÁFICO")]

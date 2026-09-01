@@ -135,6 +135,33 @@
         { "if": { "properties": { "pagina_pdf": { "type": "null" } }, "required": ["pagina_pdf"] }, "then": { "properties": { "natureza": { "const": "INCONCLUSIVO" }, "status_verificacao": { "const": "INCONCLUSIVO" }, "trecho": { "type": "null" } } } }
       ]
     },
+    "provenienciaImagem": {
+      "type": "object",
+      "required": ["arquivo", "sha256", "documento_id", "id_pje", "pagina_pdf", "pagina_documento", "pagina_original", "trecho", "natureza", "metodo_extracao", "confianca", "status_verificacao"],
+      "additionalProperties": false,
+      "properties": {
+        "arquivo": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "documento_id": { "type": ["string", "null"], "pattern": "^DOC-PJE-[0-9]{3,}$" },
+        "id_pje": { "oneOf": [{ "$ref": "#/$defs/idPje" }, { "type": "null" }] },
+        "pagina_pdf": { "type": ["integer", "null"], "minimum": 1 },
+        "pagina_documento": { "type": ["integer", "null"], "minimum": 1 },
+        "pagina_original": { "type": ["string", "null"], "minLength": 1 },
+        "bbox": { "$ref": "#/$defs/bbox" },
+        "trecho": { "type": ["string", "null"] },
+        "natureza": { "$ref": "#/$defs/naturezaInformacao" },
+        "metodo_extracao": { "$ref": "#/$defs/metodoExtracao" },
+        "confianca": { "$ref": "#/$defs/confianca" },
+        "status_verificacao": { "$ref": "#/$defs/statusVerificacao" }
+      },
+      "allOf": [
+        { "if": { "properties": { "natureza": { "const": "DOCUMENTADO" }, "status_verificacao": { "const": "VERIFICADO" } }, "required": ["natureza", "status_verificacao"] }, "then": { "properties": { "pagina_pdf": { "type": "integer", "minimum": 1 } }, "anyOf": [
+          { "properties": { "trecho": { "type": "string", "minLength": 1 } }, "required": ["trecho"] },
+          { "properties": { "metodo_extracao": { "const": "CAMPO_ESTRUTURADO" } }, "required": ["metodo_extracao", "bbox"] }
+        ] } },
+        { "if": { "properties": { "pagina_pdf": { "type": "null" } }, "required": ["pagina_pdf"] }, "then": { "properties": { "natureza": { "const": "INCONCLUSIVO" }, "status_verificacao": { "const": "INCONCLUSIVO" }, "trecho": { "type": "null" } } } }
+      ]
+    },
     "referenciaFonte": { "$ref": "#/$defs/proveniencia" },
     "statusReconciliacao": {
       "enum": ["CONFIRMADO", "PROVAVEL", "CONFLITANTE", "NAO_LOCALIZADO", "SEM_ITEM_NO_INDICE"]
@@ -469,7 +496,7 @@
         "altura": { "type": "number", "exclusiveMinimum": 0 },
         "tipo_provavel": { "type": "string", "minLength": 1 },
         "descricao": { "type": ["string", "null"] },
-        "proveniencia": { "$ref": "#/$defs/proveniencia" },
+        "proveniencia": { "$ref": "#/$defs/provenienciaImagem" },
         "confianca": { "$ref": "#/$defs/confianca" }
       }
     },

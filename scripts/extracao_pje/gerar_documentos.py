@@ -72,7 +72,8 @@ def gerar_documentos(manifesto, caminho_pdf, diretorio_saida, sobrescrever=False
                    "entidades": [], "referencias_normativas": [], "fontes": [fonte], "conflitos": [], "alertas": alertas,
                    "status_reconciliacao": base["status_reconciliacao"], "status_validacao": "RASCUNHO"}
             base_validacao = {**base, "_paginas_manifesto": manifesto["paginas"],
-                              "_processo_cnj": manifesto["processo"]["numero_cnj"]["valor"]}
+                              "_processo_cnj": manifesto["processo"]["numero_cnj"]["valor"],
+                              "_arquivo": manifesto["arquivo"]}
             erros, avisos = validar_documento(doc, base_validacao, validador)
             doc["status_validacao"] = "BLOQUEADO" if erros else "VALIDADO"
             # O status não participa das regras relacionais; valida-se novamente

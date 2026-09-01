@@ -44,6 +44,31 @@ def validar_documento(documento, documento_manifesto, validador=None):
     for foto in documento["fotografias"]:
         if foto["pagina_pdf"] not in internas:
             erros.append(f"fotografias: objeto aponta para página externa {foto['pagina_pdf']}")
+    for imagem in documento["imagens"]:
+        proveniencia_imagem = imagem.get("proveniencia")
+        pagina_imagem = imagem.get("pagina")
+        if not isinstance(proveniencia_imagem, dict) or not isinstance(pagina_imagem, dict):
+            continue
+        if proveniencia_imagem.get("bbox") != imagem.get("bbox"):
+            erros.append(f"{imagem.get('imagem_id', 'imagem')}: bbox diverge da proveniencia")
+        arquivo_manifesto = documento_manifesto.get("_arquivo")
+        fonte_esperada = {
+            "documento_id": documento.get("documento_id"),
+            "id_pje": documento.get("id_pje"),
+        }
+        if isinstance(arquivo_manifesto, dict):
+            fonte_esperada.update({
+                "arquivo": arquivo_manifesto.get("nome"),
+                "sha256": arquivo_manifesto.get("sha256"),
+            })
+        if any(proveniencia_imagem.get(campo) != valor for campo, valor in fonte_esperada.items()):
+            erros.append(f"{imagem.get('imagem_id', 'imagem')}: fonte diverge da proveniencia")
+        if (
+            proveniencia_imagem.get("pagina_pdf") != pagina_imagem.get("pagina_pdf")
+            or proveniencia_imagem.get("pagina_documento") != pagina_imagem.get("pagina_documento")
+            or proveniencia_imagem.get("pagina_original") != pagina_imagem.get("pagina_original")
+        ):
+            erros.append(f"{imagem.get('imagem_id', 'imagem')}: pagina diverge da proveniencia")
     for secao in documento["secoes"]:
         if "id_pje" in secao:
             erros.append(f"{secao['secao_id']}: seção interna não pode possuir id_pje")
