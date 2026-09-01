@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
+from pathlib import Path
+import hashlib
+import json
+import tempfile
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from types import MappingProxyType
 from uuid import UUID, uuid4
@@ -26,6 +31,11 @@ from scripts.backend_contract.ai_gateway import (
     response_payload_sha256,
     structured_output_schema_sha256,
 )
+from scripts.backend_contract.ai_eval_productization import (
+    AICostLimits,
+    load_ai_eval_dataset,
+)
+from scripts.backend_contract.infrastructure.ai_cost_ledger import SQLiteAICostLedger
 from scripts.backend_contract.application.ai_gateway import (
     AIExecutionFailed,
     AIProvider,
@@ -33,8 +43,12 @@ from scripts.backend_contract.application.ai_gateway import (
     RunAIProposal,
 )
 from scripts.backend_contract.application.models import PericiaWorkspace, WorkspaceId
-from scripts.backend_contract.application.ports import RepositoryConflict
+from scripts.backend_contract.application.ports import RepositoryConflict, RepositoryIntegrityError
 from scripts.backend_contract.infrastructure.sqlite import SQLiteApplicationStore
+from scripts.backend_contract.infrastructure.productization import (
+    CreateWorkspaceBackup,
+    VerifyWorkspaceBackup,
+)
 
 
 WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
@@ -232,6 +246,8 @@ def test_ai_proposal_and_run_ids_are_canonical_and_carry_no_authority_field() ->
         error_classification=None,
         proposal_ids=(proposal.proposal_id,),
         created_at=proposal.created_at,
+        profile_id="FAST_EXTRACTION",
+        cache_hit=False,
     )
 
     assert UUID(proposal.proposal_id).version == 4
@@ -377,6 +393,7 @@ class RecordingRevisions:
     def __init__(self):
         self.appended = []
         self.pairs = []
+        self.records = {}
 
     def append(self, **value):
         self.appended.append(value)
@@ -384,11 +401,18 @@ class RecordingRevisions:
 
     def append_if_latest(self, **value):
         self.appended.append(value)
+        self.records[(value["artifact_kind"], value["artifact_id"])] = value["payload"]
         return value
 
     def append_pair_if_latest(self, **value):
         self.pairs.append(value)
+        for item in (value["first"], value["second"]):
+            self.records[(item["artifact_kind"], item["artifact_id"])] = item["payload"]
         return value["first"], value["second"]
+
+    def latest(self, _workspace_id, artifact_kind, artifact_id):
+        payload = self.records.get((artifact_kind, artifact_id))
+        return None if payload is None else SimpleNamespace(payload=payload)
 
 
 class RecordingProvider(AIProvider):
@@ -421,7 +445,7 @@ def profile() -> AIModelProfile:
 
 
 def _legacy_response_fixture(payload=None) -> AIResponse:
-    response_payload = {"claims": ["AlegaÃ§Ã£o sintÃ©tica"]} if payload is None else payload
+    response_payload = {"claims": ["Alegação sintética"]} if payload is None else payload
     return AIResponse(
         provider="OPENAI",
         model="configured-model",
@@ -440,11 +464,16 @@ def response(payload=None) -> AIResponse:
 
 
 def ids(*, success: bool) -> SequenceIds:
-    count = 4 if success else 2
+    count = 8 if success else 4
     return SequenceIds(*(str(uuid4()) for _ in range(count)))
 
 
-def service(provider, revisions, *, policy=None, id_source=None) -> RunAIProposal:
+def generous_cost_ledger() -> SQLiteAICostLedger:
+    path = Path(tempfile.gettempdir()) / f"ai-cost-test-{uuid4()}.sqlite3"
+    return SQLiteAICostLedger(AICostLimits(100_000, 100_000, 1_000_000, 1_000_000), path)
+
+
+def service(provider, revisions, *, policy=None, id_source=None, cost_ledger=None) -> RunAIProposal:
     return RunAIProposal(
         WorkspaceRepo(),
         revisions,
@@ -452,7 +481,23 @@ def service(provider, revisions, *, policy=None, id_source=None) -> RunAIProposa
         policy or EgressPolicy(remote_sanitized_enabled=True),
         FixedClock(),
         id_source or ids(success=True),
+        cost_ledger or generous_cost_ledger(),
     )
+
+
+def test_accumulated_cost_budget_fails_before_provider_execution() -> None:
+    provider = RecordingProvider(result=response())
+    revisions = RecordingRevisions()
+    ledger = SQLiteAICostLedger(
+        AICostLimits(10_000, 30_000, 20_000, 20_000),
+        Path(tempfile.gettempdir()) / f"ai-cost-test-{uuid4()}.sqlite3",
+    )
+
+    with pytest.raises(AIExecutionFailed, match="COST_OR_TOKEN_BUDGET_EXCEEDED"):
+        service(provider, revisions, cost_ledger=ledger).execute(request(), profile())
+
+    assert provider.calls == []
+    assert revisions.appended == []
 
 
 def test_policy_denial_never_calls_provider_or_persists_run() -> None:
@@ -551,6 +596,142 @@ def test_provider_failures_record_one_sanitized_run(provider_code: str) -> None:
     assert "sk-secret" not in repr(persisted)
 
 
+def test_persisted_provider_failure_enters_eval_as_hard_failure_observation() -> None:
+    dataset = load_ai_eval_dataset(Path(__file__).parent / "fixtures" / "ai-eval-dataset-v1.json")
+    case = dataset.cases[0]
+    failed_request = replace(request(), task_type=case.task_type)
+    revisions = RecordingRevisions()
+    gateway = service(
+        RecordingProvider(error=AIProviderFailure("TIMEOUT")), revisions,
+        id_source=ids(success=False),
+    )
+    with pytest.raises(AIExecutionFailed, match="TIMEOUT") as caught:
+        gateway.execute(failed_request, profile())
+
+    observation = gateway.observe_persisted_failed_run(dataset, case, caught.value.run)
+    assert observation.error_classification == "TIMEOUT"
+    assert observation.schema_valid is False
+    assert observation.proposal_id is None
+    assert revisions.appended[-1]["artifact_kind"] == "AI_EVAL_OBSERVATION"
+    assert revisions.appended[-1]["artifact_id"] == observation.attestation_sha256
+
+
+def test_eval_observation_reopens_from_real_append_only_repository(tmp_path) -> None:
+    path = tmp_path / "ai-eval-reopen.sqlite3"
+    dataset = load_ai_eval_dataset(Path(__file__).parent / "fixtures" / "ai-eval-dataset-v1.json")
+    store = SQLiteApplicationStore(path)
+    workspace = WorkspaceRepo().item
+    store.workspaces.create(workspace)
+    ledger = generous_cost_ledger()
+    gateway = RunAIProposal(
+        store.workspaces, store.revisions,
+        RecordingProvider(error=AIProviderFailure("TIMEOUT")),
+        EgressPolicy(remote_sanitized_enabled=True), FixedClock(),
+        SequenceIds(*(str(uuid4()) for _ in range(40))), ledger,
+    )
+    observations = []
+    for case in dataset.cases:
+        with pytest.raises(AIExecutionFailed) as caught:
+            gateway.execute(replace(request(), task_type=case.task_type), profile())
+        observations.append(gateway.observe_persisted_failed_run(dataset, case, caught.value.run))
+    report = gateway.evaluate_persisted_dataset(dataset, tuple(observations))
+    observation = observations[0]
+    report_id = next(
+        item.artifact_id
+        for item in store.revisions.list_workspace(workspace.workspace_id)
+        if item.artifact_kind == "AI_EVAL_REPORT"
+    )
+    with pytest.raises(RepositoryIntegrityError, match="AI cost authority"):
+        CreateWorkspaceBackup(
+            store.workspaces, store.revisions, None, FixedClock(), lambda _: None
+        ).execute(workspace.workspace_id)
+    backup = CreateWorkspaceBackup(
+        store.workspaces, store.revisions, None, FixedClock(), lambda _: None, ledger
+    ).execute(workspace.workspace_id)
+    assert b'"AI_EVAL_REPORT"' in backup
+    assert b'"AI_EVAL_DATASET"' in backup
+    def canonical(value):
+        return json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+
+    def reseal(value):
+        value["artifact_revisions"].sort(
+            key=lambda item: (item["artifact_kind"], item["artifact_id"], item["revision"])
+        )
+        value["member_hashes"]["artifact_revisions"] = hashlib.sha256(
+            canonical(value["artifact_revisions"])
+        ).hexdigest()
+        value["manifest_sha256"] = hashlib.sha256(canonical({
+            key: item for key, item in value.items() if key != "manifest_sha256"
+        })).hexdigest()
+        return canonical(value)
+
+    missing_observation = json.loads(backup)
+    missing_observation["artifact_revisions"] = [
+        item for item in missing_observation["artifact_revisions"]
+        if not (
+            item["artifact_kind"] == "AI_EVAL_OBSERVATION"
+            and item["artifact_id"] == observation.attestation_sha256
+        )
+    ]
+    with pytest.raises(RepositoryIntegrityError, match="AI dependency"):
+        VerifyWorkspaceBackup().execute(reseal(missing_observation))
+
+    reordered = json.loads(backup)
+    report_revision = next(
+        item for item in reordered["artifact_revisions"] if item["artifact_kind"] == "AI_EVAL_REPORT"
+    )
+    report_revision["payload"]["observation_case_ids"].reverse()
+    report_revision["payload"]["observation_attestations"].reverse()
+    report_revision["artifact_id"] = hashlib.sha256(canonical(report_revision["payload"])).hexdigest()
+    report_revision["checksum_sha256"] = report_revision["artifact_id"]
+    with pytest.raises(RepositoryIntegrityError, match="dataset manifest"):
+        VerifyWorkspaceBackup().execute(reseal(reordered))
+
+    forged_aggregate = json.loads(backup)
+    forged_report = next(
+        item for item in forged_aggregate["artifact_revisions"]
+        if item["artifact_kind"] == "AI_EVAL_REPORT"
+    )
+    forged_report["payload"]["token_usage"] += 1
+    forged_report["artifact_id"] = hashlib.sha256(canonical(forged_report["payload"])).hexdigest()
+    forged_report["checksum_sha256"] = forged_report["artifact_id"]
+    with pytest.raises(RepositoryIntegrityError, match="aggregate"):
+        VerifyWorkspaceBackup().execute(reseal(forged_aggregate))
+    store.close()
+
+    reopened = SQLiteApplicationStore(path)
+    try:
+        record = reopened.revisions.latest(
+            workspace.workspace_id, "AI_EVAL_OBSERVATION", observation.attestation_sha256
+        )
+        assert record is not None
+        assert record.payload["attestation_sha256"] == observation.attestation_sha256
+        assert len(reopened.revisions.list_all(
+            workspace.workspace_id, "AI_EVAL_OBSERVATION", observation.attestation_sha256
+        )) == 1
+        report_record = reopened.revisions.latest(
+            workspace.workspace_id, "AI_EVAL_REPORT", report_id
+        )
+        assert report_record is not None
+        assert report_record.payload["observation_attestations"] == report.observation_attestations
+        assert len(report_record.payload["observation_attestations"]) == len(dataset.cases)
+        reopened_gateway = RunAIProposal(
+            reopened.workspaces, reopened.revisions,
+            RecordingProvider(error=AIProviderFailure("UNUSED")),
+            EgressPolicy(), FixedClock(), ids(success=False), generous_cost_ledger(),
+        )
+        loaded_observation = reopened_gateway.load_persisted_eval_observation(
+            WORKSPACE_ID, observation.attestation_sha256
+        )
+        loaded_report = reopened_gateway.load_persisted_eval_report(WORKSPACE_ID, report_id, dataset)
+        assert loaded_observation == observation
+        assert loaded_report == report
+    finally:
+        reopened.close()
+
+
 def test_provider_refusal_records_failed_run_without_proposal() -> None:
     revisions = RecordingRevisions()
 
@@ -606,6 +787,7 @@ def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> No
     try:
         workspace = WorkspaceRepo().item
         store.workspaces.create(workspace)
+        ledger = generous_cost_ledger()
         use_case = RunAIProposal(
             store.workspaces,
             store.revisions,
@@ -613,9 +795,11 @@ def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> No
             EgressPolicy(remote_sanitized_enabled=True),
             FixedClock(),
             ids(success=True),
+            ledger,
         )
 
-        proposal = use_case.execute(request(), profile())
+        proposal, run = use_case.execute_with_run(request(), profile())
+        use_case.verify_persisted(run, proposal)
 
         run_revision = store.revisions.latest(workspace.workspace_id, "AI_RUN", proposal.run_id)
         proposal_revision = store.revisions.latest(workspace.workspace_id, "AI_PROPOSAL", proposal.proposal_id)
@@ -623,6 +807,93 @@ def test_successful_run_reopens_from_real_append_only_repository(tmp_path) -> No
         assert proposal_revision is not None
         assert run_revision.payload["proposal_ids"] == (proposal.proposal_id,)
         assert "effective" not in proposal_revision.payload
+
+        backup = CreateWorkspaceBackup(
+            store.workspaces, store.revisions, None, FixedClock(), lambda _: None, ledger
+        ).execute(workspace.workspace_id)
+        missing = json.loads(backup)
+        missing["artifact_revisions"] = [
+            item for item in missing["artifact_revisions"]
+            if item["artifact_kind"] != "AI_PROPOSAL"
+        ]
+        def canonical(value):
+            return json.dumps(
+                value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+            ).encode("utf-8")
+        def reseal(value):
+            value["member_hashes"]["artifact_revisions"] = hashlib.sha256(
+                canonical(value["artifact_revisions"])
+            ).hexdigest()
+            value["manifest_sha256"] = hashlib.sha256(canonical({
+                key: item for key, item in value.items() if key != "manifest_sha256"
+            })).hexdigest()
+            return canonical(value)
+        missing["member_hashes"]["artifact_revisions"] = hashlib.sha256(
+            canonical(missing["artifact_revisions"])
+        ).hexdigest()
+        missing["manifest_sha256"] = hashlib.sha256(canonical({
+            key: value for key, value in missing.items() if key != "manifest_sha256"
+        })).hexdigest()
+        with pytest.raises(RepositoryIntegrityError, match="AI dependency"):
+            VerifyWorkspaceBackup().execute(reseal(missing))
+
+        erased = json.loads(backup)
+        erased["artifact_revisions"] = [
+            item for item in erased["artifact_revisions"] if item["artifact_kind"] != "AI_PROPOSAL"
+        ]
+        erased_run = next(
+            item for item in erased["artifact_revisions"] if item["artifact_kind"] == "AI_RUN"
+        )
+        erased_run["payload"]["proposal_ids"] = []
+        erased_run["checksum_sha256"] = hashlib.sha256(
+            canonical(erased_run["payload"])
+        ).hexdigest()
+        with pytest.raises(RepositoryIntegrityError, match="domain invariants"):
+            VerifyWorkspaceBackup().execute(reseal(erased))
+
+        for mutation in (
+            "task", "foreign-source", "empty-source", "context-hash", "context-source",
+            "context-extra", "context-content-hash", "redaction-string", "proposal-ids-string",
+        ):
+            forged = json.loads(backup)
+            proposal_item = next(
+                item for item in forged["artifact_revisions"] if item["artifact_kind"] == "AI_PROPOSAL"
+            )
+            run_item = next(
+                item for item in forged["artifact_revisions"] if item["artifact_kind"] == "AI_RUN"
+            )
+            if mutation == "task":
+                proposal_item["payload"]["task_type"] = "FORGED_DIFFERENT_TASK"
+            elif mutation == "foreign-source":
+                proposal_item["payload"]["source_refs"][0]["workspace_id"] = OTHER_WORKSPACE_ID
+            elif mutation == "empty-source":
+                proposal_item["payload"]["source_refs"][0]["document_id"] = ""
+                run_item["payload"]["source_refs"][0]["document_id"] = ""
+            elif mutation == "context-hash":
+                run_item["payload"]["context_manifest"][0]["document_id"] = "FORGED-DOCUMENT"
+            elif mutation == "context-source":
+                run_item["payload"]["context_manifest"][0]["document_id"] = "FORGED-DOCUMENT"
+                run_item["payload"]["context_manifest_hash"] = response_payload_sha256(
+                    run_item["payload"]["context_manifest"]
+                )
+            elif mutation == "context-extra":
+                run_item["payload"]["context_manifest"].append("FORGED")
+                run_item["payload"]["context_manifest_hash"] = response_payload_sha256(
+                    run_item["payload"]["context_manifest"]
+                )
+            elif mutation == "context-content-hash":
+                run_item["payload"]["context_manifest"][0]["content_sha256"] = "invalid"
+                run_item["payload"]["context_manifest_hash"] = response_payload_sha256(
+                    run_item["payload"]["context_manifest"]
+                )
+            elif mutation == "redaction-string":
+                run_item["payload"]["redaction_manifest"] = ""
+            else:
+                run_item["payload"]["proposal_ids"] = ""
+            for item in (proposal_item, run_item):
+                item["checksum_sha256"] = hashlib.sha256(canonical(item["payload"])).hexdigest()
+            with pytest.raises(RepositoryIntegrityError):
+                VerifyWorkspaceBackup().execute(reseal(forged))
     finally:
         store.close()
 
@@ -640,6 +911,7 @@ def test_ai_run_and_proposal_identity_cannot_be_rewritten(tmp_path) -> None:
             EgressPolicy(remote_sanitized_enabled=True),
             FixedClock(),
             SequenceIds(*fixed_values),
+            generous_cost_ledger(),
         )
         second = RunAIProposal(
             store.workspaces,
@@ -648,6 +920,7 @@ def test_ai_run_and_proposal_identity_cannot_be_rewritten(tmp_path) -> None:
             EgressPolicy(remote_sanitized_enabled=True),
             FixedClock(),
             SequenceIds(*fixed_values),
+            generous_cost_ledger(),
         )
         proposal = first.execute(request(), profile())
 
@@ -674,6 +947,7 @@ def test_failed_ai_run_identity_cannot_be_rewritten(tmp_path) -> None:
             EgressPolicy(remote_sanitized_enabled=True),
             FixedClock(),
             SequenceIds(run_id, first_revision_id),
+            generous_cost_ledger(),
         )
         second = RunAIProposal(
             store.workspaces,
@@ -682,6 +956,7 @@ def test_failed_ai_run_identity_cannot_be_rewritten(tmp_path) -> None:
             EgressPolicy(remote_sanitized_enabled=True),
             FixedClock(),
             SequenceIds(run_id, second_revision_id),
+            generous_cost_ledger(),
         )
 
         with pytest.raises(AIExecutionFailed, match="TIMEOUT"):

@@ -495,6 +495,15 @@
                          "finalidade":  "Ledger financeiro sintético com propostas, decisão judicial, despesas e recebimentos Stage 9",
                          "expected":  "VALID",
                          "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/ai-eval-dataset-v1.json",
+                         "dominio":  "AI_EVAL_DATASET_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_ai_eval_productization_v1.py::test_dataset_is_synthetic_versioned_and_covers_every_required_adversarial_class",
+                         "finalidade":  "Corpus sintético adversarial versionado para avaliação e hard gates de IA Stage 10",
+                         "expected":  "DATASET",
+                         "provenance":  "SYNTHETIC"
                      }
                  ]
 }

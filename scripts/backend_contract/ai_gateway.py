@@ -425,6 +425,8 @@ class AIRun:
     error_classification: str | None
     proposal_ids: tuple[str, ...]
     created_at: str
+    profile_id: str
+    cache_hit: bool
 
     def __post_init__(self) -> None:
         _uuid(self.run_id, "run_id", version_four=True)
@@ -458,6 +460,9 @@ class AIRun:
         for proposal_id in self.proposal_ids:
             _uuid(proposal_id, "proposal_id", version_four=True)
         _timestamp(self.created_at, "created_at")
+        _text(self.profile_id, "profile_id")
+        if type(self.cache_hit) is not bool:
+            raise TypeError("cache_hit invalid")
         object.__setattr__(self, "model_parameters", _freeze_json(self.model_parameters, reject_secrets=True))
 
 

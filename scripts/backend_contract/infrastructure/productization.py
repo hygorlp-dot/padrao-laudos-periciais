@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 import re
 from typing import Any
-from uuid import UUID
+from uuid import UUID, NAMESPACE_URL, uuid5
 from weakref import WeakKeyDictionary
 
 from ..application.models import (
@@ -35,6 +35,19 @@ from ..application.artifact_ownership import (
 from ..application.ocr_cache import _page_from_payload
 from ..application.process_metadata import document_metadata_from_payload
 from ..budget_foundation import budget_snapshot_from_mapping
+from ..ai_gateway import AIRun, AIProposal, EgressClass, SourceRevisionRef, UsageRecord
+from ..ai_eval_productization import (
+    AICostLimits,
+    AIEvalTelemetry,
+    HumanEvalOutcome,
+    ai_eval_dataset_from_mapping,
+    ai_eval_observation_from_mapping,
+    ai_eval_report_from_mapping,
+    evaluate_ai_dataset,
+    observe_domain_proposal,
+    observe_failed_run,
+)
+from ..ai_domain_proposals import DomainProposalKind, validate_domain_proposal
 from ..case_analysis import case_analysis_from_mapping
 from ..delivery_foundation import delivery_snapshot_from_mapping
 from ..delivery_renderer import validate_delivery_artifact, validate_final_artifact, validate_supporting_artifact
@@ -43,6 +56,7 @@ from ..report_foundation import expert_profile_from_mapping, report_snapshot_fro
 from ..technical_findings import technical_snapshot_from_mapping
 from ..vistoria import inspection_session_from_mapping
 from .private_filesystem import LocalPrivateContentStore
+from .ai_cost_ledger import AI_COST_LEDGER_FILENAME, SQLiteAICostLedger
 from .sqlite import SQLiteApplicationStore
 
 import base64
@@ -176,6 +190,118 @@ def workspace_backup_to_mapping(value: WorkspaceBackup) -> dict[str, Any]:
     return result
 
 
+@dataclass(frozen=True, slots=True)
+class _ValidatedAIArtifact:
+    workspace_id: str
+
+
+def _validate_ai_envelope(value: object, kind: str) -> _ValidatedAIArtifact:
+    fields = {
+        "AI_RUN": {
+            "run_id", "workspace_id", "task_type", "provider", "model", "model_parameters",
+            "prompt_template_version", "prompt_template_hash", "structured_output_schema_hash",
+            "context_manifest", "context_manifest_hash", "source_refs", "egress_class",
+            "redaction_manifest", "usage", "latency_ms", "provider_response_id", "response_hash",
+            "refusal_state", "error_classification", "proposal_ids", "created_at", "profile_id",
+            "cache_hit",
+        },
+        "AI_PROPOSAL": {
+            "proposal_id", "workspace_id", "task_type", "source_refs", "proposal_payload",
+            "provider", "model", "run_id", "created_at", "confidence_score",
+        },
+    }[kind]
+    data = _exact(value, fields, kind)
+    workspace_id = str(WorkspaceId.parse(data["workspace_id"]))
+    source_refs = data["source_refs"]
+    if type(source_refs) not in {list, tuple} or not source_refs or any(
+        type(ref) is not dict
+        or set(ref) != {"workspace_id", "document_id", "revision_id", "sha256", "locator"}
+        or ref["workspace_id"] != workspace_id
+        or _SHA256.fullmatch(ref["sha256"]) is None
+        for ref in source_refs
+    ):
+        raise RepositoryIntegrityError("AI artifact source provenance is invalid")
+    try:
+        canonical_refs = tuple(SourceRevisionRef(**ref) for ref in source_refs)
+    except (TypeError, ValueError) as exc:
+        raise RepositoryIntegrityError("AI artifact source provenance is invalid") from exc
+    if any(ref.workspace_id != workspace_id for ref in canonical_refs):
+        raise RepositoryIntegrityError("AI artifact source provenance is invalid")
+    canonical_payload_json(data)
+    try:
+        if kind == "AI_RUN":
+            usage = data["usage"]
+            if (
+                type(data["redaction_manifest"]) not in {list, tuple}
+                or any(type(item) is not str or not item for item in data["redaction_manifest"])
+                or type(data["proposal_ids"]) not in {list, tuple}
+            ):
+                raise ValueError("AI run immutable collections invalid")
+            for proposal_id in data["proposal_ids"]:
+                UUID(proposal_id)
+            parsed = AIRun(
+                run_id=data["run_id"], workspace_id=workspace_id, task_type=data["task_type"],
+                provider=data["provider"], model=data["model"], model_parameters=data["model_parameters"],
+                prompt_template_version=data["prompt_template_version"],
+                prompt_template_hash=data["prompt_template_hash"],
+                structured_output_schema_hash=data["structured_output_schema_hash"],
+                context_manifest=data["context_manifest"], context_manifest_hash=data["context_manifest_hash"],
+                source_refs=canonical_refs, egress_class=EgressClass(data["egress_class"]),
+                redaction_manifest=tuple(data["redaction_manifest"]),
+                usage=None if usage is None else UsageRecord(**usage), latency_ms=data["latency_ms"],
+                provider_response_id=data["provider_response_id"], response_hash=data["response_hash"],
+                refusal_state=data["refusal_state"], error_classification=data["error_classification"],
+                proposal_ids=tuple(data["proposal_ids"]), created_at=data["created_at"],
+                profile_id=data["profile_id"], cache_hit=data["cache_hit"],
+            )
+            if (
+                (parsed.error_classification is None and parsed.refusal_state == "NONE" and not parsed.proposal_ids)
+                or (parsed.error_classification is not None and parsed.proposal_ids)
+            ):
+                raise ValueError("AI run outcome cardinality invalid")
+            context_manifest = data["context_manifest"]
+            context_fields = {
+                "workspace_id", "document_id", "revision_id", "source_sha256",
+                "locator", "content_sha256",
+            }
+            if (
+                type(context_manifest) not in {list, tuple}
+                or len(context_manifest) != len(canonical_refs)
+                or any(
+                    type(item) is not dict
+                    or set(item) != context_fields
+                    or _SHA256.fullmatch(item["source_sha256"]) is None
+                    or _SHA256.fullmatch(item["content_sha256"]) is None
+                    for item in context_manifest
+                )
+            ):
+                raise ValueError("AI run context manifest shape invalid")
+            context_sources = tuple(
+                (
+                    item.get("workspace_id"), item.get("document_id"), item.get("revision_id"),
+                    item.get("source_sha256"), item.get("locator"),
+                )
+                for item in context_manifest
+            )
+            declared_sources = tuple(
+                (ref.workspace_id, ref.document_id, ref.revision_id, ref.sha256, ref.locator)
+                for ref in canonical_refs
+            )
+            if context_sources != declared_sources:
+                raise ValueError("AI run context/source provenance diverges")
+        else:
+            parsed = AIProposal(
+                proposal_id=data["proposal_id"], workspace_id=workspace_id,
+                task_type=data["task_type"], source_refs=canonical_refs,
+                proposal_payload=data["proposal_payload"], provider=data["provider"],
+                model=data["model"], run_id=data["run_id"], created_at=data["created_at"],
+                confidence_score=data["confidence_score"],
+            )
+    except (TypeError, ValueError) as exc:
+        raise RepositoryIntegrityError("AI artifact domain invariants are invalid") from exc
+    return parsed
+
+
 _ARTIFACT_VALIDATORS = {
     "BUDGET_SNAPSHOT_V1": budget_snapshot_from_mapping,
     "CASE_ANALYSIS_SNAPSHOT_V1": case_analysis_from_mapping,
@@ -186,8 +312,36 @@ _ARTIFACT_VALIDATORS = {
     "PROCESS_CASE": ProcessCaseData.from_mapping,
     "REPORT_SNAPSHOT_V1": report_snapshot_from_mapping,
     "TECHNICAL_SNAPSHOT_V1": technical_snapshot_from_mapping,
+    "AI_RUN": lambda value: _validate_ai_envelope(value, "AI_RUN"),
+    "AI_PROPOSAL": lambda value: _validate_ai_envelope(value, "AI_PROPOSAL"),
+    "AI_EVAL_OBSERVATION": ai_eval_observation_from_mapping,
+    "AI_EVAL_REPORT": ai_eval_report_from_mapping,
+    "AI_EVAL_DATASET": ai_eval_dataset_from_mapping,
+    "AI_COST_LEDGER_V1": lambda value: _validate_ai_cost_ledger(value),
 }
 ARTIFACT_COMPATIBILITY = {kind: {"current_version": "1.0.0", "supported_versions": ("1.0.0",), "migration": None, "future_version_policy": "FAIL_CLOSED"} for kind in _ARTIFACT_VALIDATORS}
+
+
+def _validate_ai_cost_ledger(value: object) -> _ValidatedAIArtifact:
+    data = _exact(value, {"workspace_id", "reservations"}, "AI cost ledger")
+    workspace_id = str(WorkspaceId.parse(data["workspace_id"]))
+    rows = data["reservations"]
+    if type(rows) not in {list, tuple}:
+        raise RepositoryIntegrityError("AI cost ledger reservations are invalid")
+    for row in rows:
+        if (
+            type(row) is not dict
+            or set(row) != {"session_id", "tokens", "cost_microusd"}
+            or type(row["session_id"]) is not str
+            or not row["session_id"].strip()
+            or type(row["tokens"]) is not int
+            or row["tokens"] < 0
+            or type(row["cost_microusd"]) is not int
+            or row["cost_microusd"] < 0
+        ):
+            raise RepositoryIntegrityError("AI cost ledger reservation is invalid")
+    canonical_payload_json(data)
+    return _ValidatedAIArtifact(workspace_id)
 
 
 def _validate_ocr_cache(value: object) -> None:
@@ -291,6 +445,22 @@ def _expected_internal_artifact_id(kind: str, payload: object) -> str | None:
         names = ("document_sha256", "page_number", "engine", "engine_version", "model_version", "config_version")
         key = tuple(payload.get(name) for name in names)
         return hashlib.sha256(json.dumps(key, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+    if kind == "AI_RUN":
+        return payload.get("run_id") if type(payload.get("run_id")) is str else None
+    if kind == "AI_PROPOSAL":
+        return payload.get("proposal_id") if type(payload.get("proposal_id")) is str else None
+    if kind == "AI_EVAL_OBSERVATION":
+        return payload.get("attestation_sha256") if type(payload.get("attestation_sha256")) is str else None
+    if kind == "AI_EVAL_REPORT":
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+    if kind == "AI_EVAL_DATASET":
+        return hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+    if kind == "AI_COST_LEDGER_V1":
+        return "AI-COST-LEDGER"
     return None
 
 if frozenset(_ARTIFACT_VALIDATORS) != PORTABLE_PRODUCT_ARTIFACT_KINDS:
@@ -350,6 +520,10 @@ def _revision_from_mapping(value: object, workspace_id: str) -> ArtifactRevision
         payload_workspace = getattr(parsed, "workspace_id", None)
         if payload_workspace is not None and str(payload_workspace) != workspace_id:
             raise RepositoryIntegrityError("backup payload belongs to another workspace")
+        if record.artifact_kind == "AI_EVAL_DATASET" and any(
+            case.workspace_id != workspace_id for case in parsed.cases
+        ):
+            raise RepositoryIntegrityError("backup AI dataset belongs to another workspace")
     else:
         raise RepositoryIntegrityError("backup artifact kind is not portable")
     return record
@@ -360,6 +534,16 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
         (record.artifact_kind, record.revision): record
         for record in revisions
     }
+    by_kind_id = {
+        (record.artifact_kind, record.artifact_id): record
+        for record in revisions
+    }
+
+    def require_ai(kind: str, artifact_id: str) -> ArtifactRevision:
+        record = by_kind_id.get((kind, artifact_id))
+        if record is None:
+            raise RepositoryIntegrityError("backup AI dependency closure is incomplete")
+        return record
 
     def require(kind: str, revision: int, digest: str, identity_field: str, identity: str) -> ArtifactRevision:
         record = by_kind_revision.get((kind, revision))
@@ -405,6 +589,127 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
                 or approval.professional_id != binding["professional_id"]
             ):
                 raise RepositoryIntegrityError("backup delivery professional authority diverges")
+        elif record.artifact_kind == "AI_RUN":
+            for proposal_id in payload["proposal_ids"]:
+                proposal = require_ai("AI_PROPOSAL", proposal_id)
+                proposal_payload = thaw_payload(proposal.payload)
+                if (
+                    proposal_payload["run_id"] != record.artifact_id
+                    or proposal_payload["workspace_id"] != payload["workspace_id"]
+                    or proposal_payload["task_type"] != payload["task_type"]
+                    or proposal_payload["provider"] != payload["provider"]
+                    or proposal_payload["model"] != payload["model"]
+                    or proposal_payload["source_refs"] != payload["source_refs"]
+                ):
+                    raise RepositoryIntegrityError("backup AI run/proposal identity diverges")
+        elif record.artifact_kind == "AI_PROPOSAL":
+            run = require_ai("AI_RUN", payload["run_id"])
+            run_payload = thaw_payload(run.payload)
+            if (
+                payload["proposal_id"] not in run_payload["proposal_ids"]
+                or payload["workspace_id"] != run_payload["workspace_id"]
+                or payload["task_type"] != run_payload["task_type"]
+                or payload["provider"] != run_payload["provider"]
+                or payload["model"] != run_payload["model"]
+                or payload["source_refs"] != run_payload["source_refs"]
+            ):
+                raise RepositoryIntegrityError("backup AI proposal/run identity diverges")
+        elif record.artifact_kind == "AI_EVAL_OBSERVATION":
+            dataset_record = require_ai("AI_EVAL_DATASET", payload["dataset_sha256"])
+            dataset = ai_eval_dataset_from_mapping(thaw_payload(dataset_record.payload))
+            case = next((item for item in dataset.cases if item.case_id == payload["case_id"]), None)
+            if case is None:
+                raise RepositoryIntegrityError("backup AI observation case is absent")
+            run = require_ai("AI_RUN", payload["run_id"])
+            run_payload = thaw_payload(run.payload)
+            canonical_run = _validate_ai_envelope(run_payload, "AI_RUN")
+            usage = run_payload["usage"]
+            expected_usage = {
+                "input_tokens": usage["input_tokens"] if usage else 0,
+                "cached_input_tokens": usage["cached_input_tokens"] if usage else 0,
+                "output_tokens": usage["output_tokens"] if usage else 0,
+                "estimated_cost_microusd": (usage["estimated_cost_microusd"] or 0) if usage else 0,
+            }
+            if (
+                payload["workspace_id"] != run_payload["workspace_id"]
+                or payload["task_type"] != run_payload["task_type"]
+                or payload["provider"] != run_payload["provider"]
+                or payload["profile_id"] != run_payload["profile_id"]
+                or payload["model"] != run_payload["model"]
+                or payload["prompt_template_version"] != run_payload["prompt_template_version"]
+                or payload["prompt_template_hash"] != run_payload["prompt_template_hash"]
+                or payload["structured_output_schema_hash"] != run_payload["structured_output_schema_hash"]
+                or payload["source_refs"] != run_payload["source_refs"]
+                or payload["latency_ms"] != run_payload["latency_ms"]
+                or payload["cache_hit"] != run_payload["cache_hit"]
+                or payload["error_classification"] != run_payload["error_classification"]
+                or any(payload[key] != value for key, value in expected_usage.items())
+                or (payload["proposal_id"] is None) != (not run_payload["proposal_ids"])
+                or (
+                    payload["proposal_id"] is not None
+                    and payload["proposal_id"] not in run_payload["proposal_ids"]
+                )
+            ):
+                raise RepositoryIntegrityError("backup AI observation/run provenance diverges")
+            if payload["proposal_id"] is not None:
+                proposal = require_ai("AI_PROPOSAL", payload["proposal_id"])
+                if thaw_payload(proposal.payload)["run_id"] != run.artifact_id:
+                    raise RepositoryIntegrityError("backup AI observation provenance diverges")
+                canonical_proposal = _validate_ai_envelope(
+                    thaw_payload(proposal.payload), "AI_PROPOSAL"
+                )
+                domain_proposal = validate_domain_proposal(
+                    canonical_proposal, DomainProposalKind(case.task_type)
+                )
+                usage = canonical_run.usage
+                telemetry = AIEvalTelemetry(
+                    canonical_run.provider, canonical_run.profile_id, canonical_run.model,
+                    canonical_run.prompt_template_version, canonical_run.prompt_template_hash,
+                    canonical_run.structured_output_schema_hash,
+                    usage.input_tokens if usage else 0,
+                    usage.cached_input_tokens if usage else 0,
+                    usage.output_tokens if usage else 0,
+                    (usage.estimated_cost_microusd or 0) if usage else 0,
+                    canonical_run.latency_ms, canonical_run.cache_hit,
+                )
+                expected_observation = observe_domain_proposal(
+                    dataset.version, dataset.sha256, case, domain_proposal, canonical_run,
+                    telemetry, HumanEvalOutcome(payload["human_outcome"]),
+                )
+            else:
+                expected_observation = observe_failed_run(
+                    dataset.version, dataset.sha256, case, canonical_run,
+                    HumanEvalOutcome(payload["human_outcome"]),
+                )
+            if ai_eval_observation_from_mapping(payload) != expected_observation:
+                raise RepositoryIntegrityError("backup AI observation derivation diverges")
+        elif record.artifact_kind == "AI_EVAL_REPORT":
+            dataset_record = require_ai("AI_EVAL_DATASET", payload["dataset_sha256"])
+            dataset = ai_eval_dataset_from_mapping(thaw_payload(dataset_record.payload))
+            if (
+                dataset.version != payload["dataset_version"]
+                or tuple(case.case_id for case in dataset.cases) != tuple(payload["observation_case_ids"])
+            ):
+                raise RepositoryIntegrityError("backup AI report dataset manifest diverges")
+            observations = []
+            for case_id, attestation in zip(
+                payload["observation_case_ids"],
+                payload["observation_attestations"],
+                strict=True,
+            ):
+                observation = require_ai("AI_EVAL_OBSERVATION", attestation)
+                observed = thaw_payload(observation.payload)
+                if (
+                    observed["case_id"] != case_id
+                    or
+                    observed["workspace_id"] != payload["workspace_id"]
+                    or observed["dataset_version"] != payload["dataset_version"]
+                    or observed["dataset_sha256"] != payload["dataset_sha256"]
+                ):
+                    raise RepositoryIntegrityError("backup AI report provenance diverges")
+                observations.append(ai_eval_observation_from_mapping(observed))
+            if evaluate_ai_dataset(dataset, tuple(observations)) != ai_eval_report_from_mapping(payload):
+                raise RepositoryIntegrityError("backup AI report aggregate diverges")
 
 
 def _private_mapping(metadata: PrivateContentMetadata, content: bytes) -> dict[str, Any]:
@@ -529,13 +834,20 @@ class CreateWorkspaceBackup:
     private_contents: object | None
     clock: object
     assert_backup_ready: object
+    ai_cost_ledger: object | None = None
 
     def execute(self, workspace_id: WorkspaceId) -> bytes:
         self.assert_backup_ready(workspace_id)
         workspace = self.workspaces.get(workspace_id)
         if workspace is None:
             raise ValueError("workspace is unavailable")
-        revision_items = [_revision_mapping(item) for item in self.revisions.list_workspace(workspace_id)]
+        revision_items = [
+            _revision_mapping(item) for item in self.revisions.list_workspace(workspace_id)
+            if self.ai_cost_ledger is None or item.artifact_kind != "AI_COST_LEDGER_V1"
+        ]
+        ai_activity = any(item["artifact_kind"].startswith("AI_") for item in revision_items)
+        if ai_activity and self.ai_cost_ledger is None:
+            raise RepositoryIntegrityError("AI cost authority is required for backup")
         private_items = []
         if self.private_contents is not None:
             for metadata in self.private_contents.list_all(workspace_id):
@@ -545,6 +857,21 @@ class CreateWorkspaceBackup:
         now = self.clock.now()
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("backup clock requires timezone")
+        if self.ai_cost_ledger is not None:
+            rows = self.ai_cost_ledger.export_workspace(str(workspace_id))
+            cost_payload = {"workspace_id": str(workspace_id), "reservations": list(rows)}
+            cost_checksum = hashlib.sha256(canonical_payload_json(cost_payload).encode("utf-8")).hexdigest()
+            revision_items.append({
+                "workspace_id": str(workspace_id),
+                "artifact_kind": "AI_COST_LEDGER_V1",
+                "artifact_id": "AI-COST-LEDGER",
+                "revision_id": str(uuid5(NAMESPACE_URL, f"ai-cost-ledger:{workspace_id}:{cost_checksum}")),
+                "revision": 1,
+                "created_at": now.isoformat(),
+                "checksum_sha256": cost_checksum,
+                "payload": cost_payload,
+            })
+        revision_items.sort(key=lambda item: (item["artifact_kind"], item["artifact_id"], item["revision"]))
         mapping = {
             "schema_version": "1.0.0",
             "format_version": 1,
@@ -717,6 +1044,15 @@ class RestoreWorkspaceBackup:
                 )
             for item in private_records:
                 private_contents.store(item.metadata, item.content)
+            cost_records = [item for item in revision_records if item.artifact_kind == "AI_COST_LEDGER_V1"]
+            if len(cost_records) > 1:
+                raise RepositoryIntegrityError("restored AI cost authority is ambiguous")
+            if cost_records:
+                cost_payload = thaw_payload(cost_records[0].payload)
+                ledger = SQLiteAICostLedger(
+                    AICostLimits(1, 1, 1, 1), self.staging.root / AI_COST_LEDGER_FILENAME
+                )
+                ledger.import_workspace(str(workspace_id), cost_payload["reservations"])
             reopened = revisions.list_workspace(workspace_id)
             if tuple(_revision_mapping(item) for item in reopened) != backup.artifact_revisions:
                 raise RepositoryIntegrityError("restored workspace failed canonical reopen")

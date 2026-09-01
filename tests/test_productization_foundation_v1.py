@@ -23,6 +23,8 @@ from scripts.backend_contract.application.models import (
 from scripts.backend_contract.application.ports import RepositoryConflict, RepositoryIntegrityError
 from scripts.backend_contract.application.services import AppendArtifactRevision
 from scripts.backend_contract.infrastructure.sqlite import SQLiteApplicationStore
+from scripts.backend_contract.ai_eval_productization import AICostLimits
+from scripts.backend_contract.infrastructure.ai_cost_ledger import SQLiteAICostLedger
 from scripts.backend_contract.infrastructure.private_filesystem import LocalPrivateContentStore
 from scripts.backend_contract.local_api.composition import build_local_api
 from scripts.backend_contract.infrastructure.productization import (
@@ -89,6 +91,53 @@ def portable_revision(kind: str, artifact_id: str, payload: dict, revision: int 
         "checksum_sha256": hashlib.sha256(canonical.encode()).hexdigest(),
         "payload": payload,
     }
+
+
+def test_backup_restore_preserves_workspace_ai_cost_authority(tmp_path) -> None:
+    source = SQLiteApplicationStore(tmp_path / "source.sqlite3")
+    workspace_id = WorkspaceId.parse(WORKSPACE_ID)
+    source.workspaces.create(
+        PericiaWorkspace(workspace_id, "Pericia sintetica", "2026-08-31T12:00:00+00:00")
+    )
+    limits = AICostLimits(1_000, 1_000, 600, 10_000)
+    ledger = SQLiteAICostLedger(limits, tmp_path / "source-cost.sqlite3")
+    ledger.authorize_and_reserve(
+        WORKSPACE_ID, "session-1", input_tokens=100, output_tokens=50,
+        estimated_cost_microusd=500,
+    )
+
+    package = CreateWorkspaceBackup(
+        source.workspaces, source.revisions, None, Clock(), lambda _: None, ledger
+    ).execute(workspace_id)
+    staging = RecoveryStaging.create(tmp_path / "restored")
+    RestoreWorkspaceBackup(staging).execute(package)
+
+    restored = SQLiteAICostLedger(limits, staging.root / "ai-cost.sqlite3")
+    assert restored.snapshot(WORKSPACE_ID, "session-1") == ledger.snapshot(
+        WORKSPACE_ID, "session-1"
+    )
+    restored.authorize_and_reserve(
+        WORKSPACE_ID, "session-2", input_tokens=1, output_tokens=1,
+        estimated_cost_microusd=50,
+    )
+    with pytest.raises(RepositoryIntegrityError, match="AI cost authority"):
+        CreateWorkspaceBackup(
+            staging.workspaces, staging.revisions, None, Clock(), lambda _: None
+        ).execute(workspace_id)
+    second_package = CreateWorkspaceBackup(
+        staging.workspaces, staging.revisions, None, Clock(), lambda _: None, restored
+    ).execute(workspace_id)
+    second_staging = RecoveryStaging.create(tmp_path / "restored-again")
+    RestoreWorkspaceBackup(second_staging).execute(second_package)
+    restored_again = SQLiteAICostLedger(
+        limits, second_staging.root / "ai-cost.sqlite3"
+    )
+    assert restored_again.snapshot(WORKSPACE_ID, "session-2").workspace_cost_microusd == 550
+    with pytest.raises(ValueError, match="workspace cost ceiling"):
+        restored_again.authorize_and_reserve(
+            WORKSPACE_ID, "session-3", input_tokens=1, output_tokens=1,
+            estimated_cost_microusd=51,
+        )
 
 
 def test_backup_v1_round_trip_is_exact_and_supported_window_is_finite() -> None:
@@ -183,6 +232,12 @@ def test_every_portable_material_artifact_has_an_explicit_finite_strategy() -> N
         "PROCESS_CASE",
         "REPORT_SNAPSHOT_V1",
         "TECHNICAL_SNAPSHOT_V1",
+        "AI_RUN",
+        "AI_PROPOSAL",
+        "AI_EVAL_OBSERVATION",
+        "AI_EVAL_REPORT",
+        "AI_EVAL_DATASET",
+        "AI_COST_LEDGER_V1",
     }
     assert set(ARTIFACT_COMPATIBILITY) == expected
     assert all(item == {"current_version": "1.0.0", "supported_versions": ("1.0.0",), "migration": None, "future_version_policy": "FAIL_CLOSED"} for item in ARTIFACT_COMPATIBILITY.values())
