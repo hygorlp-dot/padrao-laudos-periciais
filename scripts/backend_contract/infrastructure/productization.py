@@ -42,6 +42,7 @@ from ..ai_eval_productization import (
     ai_eval_dataset_from_mapping,
     ai_eval_observation_from_mapping,
     ai_eval_report_from_mapping,
+    evaluate_ai_dataset,
     observe_domain_proposal,
     observe_failed_run,
 )
@@ -663,6 +664,7 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
                 or tuple(case.case_id for case in dataset.cases) != tuple(payload["observation_case_ids"])
             ):
                 raise RepositoryIntegrityError("backup AI report dataset manifest diverges")
+            observations = []
             for case_id, attestation in zip(
                 payload["observation_case_ids"],
                 payload["observation_attestations"],
@@ -678,6 +680,9 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
                     or observed["dataset_sha256"] != payload["dataset_sha256"]
                 ):
                     raise RepositoryIntegrityError("backup AI report provenance diverges")
+                observations.append(ai_eval_observation_from_mapping(observed))
+            if evaluate_ai_dataset(dataset, tuple(observations)) != ai_eval_report_from_mapping(payload):
+                raise RepositoryIntegrityError("backup AI report aggregate diverges")
 
 
 def _private_mapping(metadata: PrivateContentMetadata, content: bytes) -> dict[str, Any]:

@@ -683,6 +683,17 @@ def test_eval_observation_reopens_from_real_append_only_repository(tmp_path) -> 
     report_revision["checksum_sha256"] = report_revision["artifact_id"]
     with pytest.raises(RepositoryIntegrityError, match="dataset manifest"):
         VerifyWorkspaceBackup().execute(reseal(reordered))
+
+    forged_aggregate = json.loads(backup)
+    forged_report = next(
+        item for item in forged_aggregate["artifact_revisions"]
+        if item["artifact_kind"] == "AI_EVAL_REPORT"
+    )
+    forged_report["payload"]["token_usage"] += 1
+    forged_report["artifact_id"] = hashlib.sha256(canonical(forged_report["payload"])).hexdigest()
+    forged_report["checksum_sha256"] = forged_report["artifact_id"]
+    with pytest.raises(RepositoryIntegrityError, match="aggregate"):
+        VerifyWorkspaceBackup().execute(reseal(forged_aggregate))
     store.close()
 
     reopened = SQLiteApplicationStore(path)

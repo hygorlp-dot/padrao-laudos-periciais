@@ -61,12 +61,11 @@ class AIProviderFailure(RuntimeError):
 
 
 class AIExecutionFailed(RuntimeError):
+    """Erro local estável, deliberadamente sem prompt, resposta ou segredo."""
+
     def __init__(self, code: str, run: AIRun | None = None):
         self.run = run
         super().__init__(code)
-
-    """Erro local estável, deliberadamente sem prompt, resposta ou segredo."""
-
 
 def _source_payload(item: SourceRevisionRef) -> dict[str, object]:
     return {
@@ -310,6 +309,9 @@ class RunAIProposal:
     def evaluate_persisted_dataset(self, dataset, observations):
         from ..ai_eval_productization import evaluate_ai_dataset
 
+        workspace_ids = {item.workspace_id for item in observations}
+        if len(workspace_ids) != 1:
+            raise AIExecutionFailed("AI_EVAL_REPORT_WORKSPACE_MISMATCH")
         for observation in observations:
             persisted = self._revisions.latest(
                 WorkspaceId.parse(observation.workspace_id),
@@ -331,9 +333,6 @@ class RunAIProposal:
             json.dumps(report_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         created_at = self._clock.now().isoformat()
-        workspace_ids = {item.workspace_id for item in observations}
-        if len(workspace_ids) != 1:
-            raise AIExecutionFailed("AI_EVAL_REPORT_WORKSPACE_MISMATCH")
         workspace_id = WorkspaceId.parse(next(iter(workspace_ids)))
         self._revisions.append_if_latest(
             workspace_id=workspace_id,
