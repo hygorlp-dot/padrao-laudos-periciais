@@ -7,7 +7,7 @@ truth; it is not authorization to begin a later stage.
 ## Current result
 
 - Protected foundation SHA: `67f074b2ca37d9ed998736b9c86dc90af325b89d`.
-- PR-D longitudinal implementation SHA: `d7959c9948767c898435d697af97bdcd75bdf6aa`.
+- PR-D longitudinal implementation SHA: `731bfc79d4641e4b2ae23d7db4ede9bf69553a51`.
   The final report-only/assurance SHA is recorded by the protected CI/review
   package after stable freeze; no moving branch name substitutes for either.
 - Stages 0–9, 11 and 12 have implemented foundations covered by first-party
@@ -36,7 +36,8 @@ without a new human product-direction decision.
   offline work blocks backup before workspace acquisition.
 - Backup/restore/reopen: exact revision identities, checksums, payload history
   and every private source/media/template/final-artifact byte are compared after
-  recovery. Cross-workspace inner payloads and incomplete dependency graphs
+  recovery. Canonical process-metadata and OCR-cache artifacts remain
+  recoverable. Cross-workspace inner payloads and incomplete dependency graphs
   fail closed.
 - Authority oracle: Report approval and professional identity must resolve in
   the exact bound Report; generic or foreign authority is rejected.
