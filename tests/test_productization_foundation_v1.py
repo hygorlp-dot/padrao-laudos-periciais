@@ -172,6 +172,23 @@ def test_closed_noncanonical_user_artifact_has_explicit_portable_backup_policy(t
     assert verified.artifact_revisions[0]["artifact_kind"] == "LAUDO"
 
 
+def test_workspace_backup_refuses_pending_offline_field_work_before_reading_workspace() -> None:
+    calls: list[str] = []
+
+    class Workspaces:
+        def get(self, _workspace_id):
+            calls.append("workspace-read")
+            raise AssertionError("backup read started before offline readiness")
+
+    def assert_ready(_workspace_id) -> None:
+        raise ValueError("pending offline field work must be synchronized before backup")
+
+    service = CreateWorkspaceBackup(Workspaces(), object(), None, Clock(), assert_ready)
+    with pytest.raises(ValueError, match="pending offline field work must be synchronized before backup"):
+        service.execute(WorkspaceId.parse(WORKSPACE_ID))
+    assert calls == []
+
+
 def seeded_store(path: Path, private: PrivateStore) -> tuple[SQLiteApplicationStore, WorkspaceId]:
     workspace_id = WorkspaceId.parse(WORKSPACE_ID)
     store = SQLiteApplicationStore(path)
@@ -200,6 +217,39 @@ def seeded_store(path: Path, private: PrivateStore) -> tuple[SQLiteApplicationSt
     return store, workspace_id
 
 
+def seed_synced_inspection_media(store: SQLiteApplicationStore, private: PrivateStore, workspace_id: WorkspaceId) -> dict[str, bytes]:
+    snapshot = json.loads((Path(__file__).parent / "fixtures/inspection-session-v1.json").read_text(encoding="utf-8"))
+    originals = {
+        snapshot["photos"][0]["private_content_id"]: b"synced-photo-original",
+        snapshot["videos"][0]["private_content_id"]: b"synced-video-original",
+        snapshot["sketches"][0]["private_content_id"]: b"synced-sketch-original",
+    }
+    for collection in ("photos", "videos", "sketches"):
+        item = snapshot[collection][0]
+        content = originals[item["private_content_id"]]
+        item["original_sha256"] = hashlib.sha256(content).hexdigest()
+        metadata = PrivateContentMetadata(
+            workspace_id,
+            PrivateContentId.parse(item["private_content_id"]),
+            f"synthetic-{collection}.bin",
+            len(content),
+            item["original_sha256"],
+            {"photos": "image/jpeg", "videos": "video/mp4", "sketches": "image/png"}[collection],
+            "2026-08-31T12:30:00+00:00",
+            PrivateContentOrigin.LOCAL_IMPORT,
+        )
+        private.store(metadata, content)
+    store.revisions.append(
+        workspace_id=workspace_id,
+        artifact_kind="INSPECTION_SESSION_V1",
+        artifact_id=snapshot["session_id"],
+        revision_id="55555555-5555-4555-8555-555555555555",
+        created_at="2026-08-31T12:40:00+00:00",
+        payload=snapshot,
+    )
+    return originals
+
+
 def test_backup_restore_reopen_preserves_exact_history_private_bytes_and_provenance(tmp_path) -> None:
     source_private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", source_private)
@@ -215,6 +265,35 @@ def test_backup_restore_reopen_preserves_exact_history_private_bytes_and_provena
         assert opened.stream.read() == b"synthetic-private-content"
     source.close()
     staging.close()
+
+
+def test_synced_inspection_backup_restore_requires_every_referenced_original_media(tmp_path) -> None:
+    private = PrivateStore()
+    source, workspace_id = seeded_store(tmp_path / "source.db", private)
+    originals = seed_synced_inspection_media(source, private, workspace_id)
+    package = CreateWorkspaceBackup(source.workspaces, source.revisions, private, Clock()).execute(workspace_id)
+    verified = VerifyWorkspaceBackup().execute(package)
+    assert len(verified.private_contents) == 4
+
+    staging = RecoveryStaging.create(tmp_path / "staging")
+    RestoreWorkspaceBackup(staging).execute(package)
+    for content_id, expected in originals.items():
+        with staging.private_contents.open_content(workspace_id, PrivateContentId.parse(content_id)) as opened:
+            assert opened.stream.read() == expected
+    staging.close()
+
+    missing = json.loads(package)
+    removed_id = next(iter(originals))
+    missing["private_contents"] = [item for item in missing["private_contents"] if item["content_id"] != removed_id]
+
+    def canonical(value: object) -> bytes:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+
+    missing["member_hashes"]["private_contents"] = hashlib.sha256(canonical(missing["private_contents"])).hexdigest()
+    missing["manifest_sha256"] = hashlib.sha256(canonical({key: value for key, value in missing.items() if key != "manifest_sha256"})).hexdigest()
+    with pytest.raises(RepositoryIntegrityError, match="inspection media"):
+        VerifyWorkspaceBackup().execute(canonical(missing))
+    source.close()
 
 
 def test_restore_without_private_members_uses_same_owned_recovery_boundary(tmp_path) -> None:

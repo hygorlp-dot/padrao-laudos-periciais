@@ -303,6 +303,12 @@ class DeviceOfflineVaultRegistry:
                 raise ValueError("offline workspace root cannot be a link or reparse point")
             return DeviceOfflineVault(directory, key=self._key, device_id=self.device_id, workspace_id=workspace, global_revocation_path=self._revocation_path, lifecycle_lock=self._lifecycle_lock, revocation_event=self._revoked)
 
+    def assert_workspace_backup_ready(self, workspace_id) -> None:
+        """Refuse a canonical backup while device-local work is unresolved."""
+        vault = self.vault_for(workspace_id, self.device_id)
+        if vault.list_pending_packages():
+            raise ValueError("pending offline field work must be synchronized before backup")
+
     def revoke_device(self) -> None:
         with self._lifecycle_lock:
             self._require_registry_active()

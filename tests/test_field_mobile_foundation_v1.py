@@ -228,6 +228,19 @@ def test_device_registry_revocation_is_device_wide_and_persistent(tmp_path: Path
         DeviceOfflineVaultRegistry(tmp_path)
 
 
+def test_workspace_backup_readiness_fails_closed_while_offline_work_is_pending(tmp_path: Path) -> None:
+    registry = DeviceOfflineVaultRegistry(tmp_path)
+    package = offline_package_from_mapping({**package_mapping(), "device_id": registry.device_id})
+    vault = registry.vault_for(WORKSPACE_ID, registry.device_id)
+    vault.save(package)
+
+    with pytest.raises(ValueError, match="pending offline field work must be synchronized before backup"):
+        registry.assert_workspace_backup_ready(WORKSPACE_ID)
+
+    vault.record_accepted_sync(package)
+    registry.assert_workspace_backup_ready(WORKSPACE_ID)
+
+
 def test_device_revocation_survives_marker_deletion_for_live_and_reopened_authority(tmp_path: Path) -> None:
     registry = DeviceOfflineVaultRegistry(tmp_path)
     device_id = registry.device_id
