@@ -366,6 +366,12 @@ def test_local_result_cache_invalidates_stale_source_and_never_crosses_workspace
     with pytest.raises(ValueError, match="source workspace"):
         replace(item, source_refs=(foreign_ref,))
 
+    unrelated = replace(item.source_refs[0], document_id="document-unrelated")
+    forged = replace(item, source_refs=(unrelated,), result={"proposal": "forged"})
+    forged_cache = AIResultCache()
+    forged_cache.put(forged)
+    assert forged_cache.get(ai_request, profile("FAST", 1_000), (unrelated,)) is None
+
 
 def test_router_rejects_duplicate_policy_identity() -> None:
     fast = profile("FAST", 1_000)

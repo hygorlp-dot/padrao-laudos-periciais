@@ -322,6 +322,8 @@ class AIResultCache:
         entry = self._entries.get(ai_result_cache_key(request, profile))
         if entry is None or entry.workspace_id != request.workspace_id:
             return None
+        if entry.source_refs != request.egress_manifest.source_refs:
+            return None
         expected_documents = {item.document_id for item in entry.source_refs}
         for document_id in expected_documents:
             expected = {item for item in entry.source_refs if item.document_id == document_id}
