@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
+import hashlib
+import json
 from typing import Protocol
 
 import jsonschema
@@ -26,6 +29,8 @@ from .ports import ArtifactRevisionRepository, Clock, IdGenerator, WorkspaceRepo
 
 AI_RUN_KIND = "AI_RUN"
 AI_PROPOSAL_KIND = "AI_PROPOSAL"
+AI_EVAL_OBSERVATION_KIND = "AI_EVAL_OBSERVATION"
+AI_EVAL_REPORT_KIND = "AI_EVAL_REPORT"
 
 
 class AIProvider(Protocol):
@@ -128,7 +133,19 @@ def _proposal_payload(item: AIProposal) -> dict[str, object]:
     }
 
 
+def _eval_payload(item) -> dict[str, object]:
+    return {
+        field: _plain_payload(getattr(item, field))
+        for field in item.__dataclass_fields__
+        if field != "_derivation_token"
+    }
+
+
 def _plain_payload(value):
+    if isinstance(value, StrEnum):
+        return value.value
+    if isinstance(value, SourceRevisionRef):
+        return _source_payload(value)
     if isinstance(value, dict):
         return {key: _plain_payload(item) for key, item in value.items()}
     try:
@@ -273,15 +290,71 @@ class RunAIProposal:
         from ..ai_eval_productization import observe_domain_proposal
 
         self.verify_persisted(run, raw_proposal)
-        return observe_domain_proposal(
+        observation = observe_domain_proposal(
             dataset_version, case, domain_proposal, run, telemetry, human_outcome
         )
+        self._persist_eval_observation(observation, run.created_at)
+        return observation
 
     def observe_persisted_failed_run(self, dataset_version, case, run):
         from ..ai_eval_productization import observe_failed_run
 
         self.verify_persisted(run)
-        return observe_failed_run(dataset_version, case, run)
+        observation = observe_failed_run(dataset_version, case, run)
+        self._persist_eval_observation(observation, run.created_at)
+        return observation
+
+    def evaluate_persisted_dataset(self, dataset, observations):
+        from ..ai_eval_productization import evaluate_ai_dataset
+
+        for observation in observations:
+            persisted = self._revisions.latest(
+                WorkspaceId.parse(observation.workspace_id),
+                AI_EVAL_OBSERVATION_KIND,
+                observation.attestation_sha256,
+            )
+            if persisted is None or _plain_payload(persisted.payload) != _plain_payload(
+                _eval_payload(observation)
+            ):
+                raise AIExecutionFailed("AI_EVAL_OBSERVATION_PERSISTENCE_MISMATCH")
+        report = evaluate_ai_dataset(dataset, observations)
+        report_payload = _eval_payload(report)
+        report_id = hashlib.sha256(
+            json.dumps(report_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        created_at = self._clock.now().isoformat()
+        workspace_ids = {item.workspace_id for item in observations}
+        if len(workspace_ids) != 1:
+            raise AIExecutionFailed("AI_EVAL_REPORT_WORKSPACE_MISMATCH")
+        workspace_id = WorkspaceId.parse(next(iter(workspace_ids)))
+        self._revisions.append_if_latest(
+            workspace_id=workspace_id,
+            **self._append_args(AI_EVAL_REPORT_KIND, report_id, created_at, report_payload),
+            expected_revision=None,
+        )
+        persisted = self._revisions.latest(workspace_id, AI_EVAL_REPORT_KIND, report_id)
+        if persisted is None or _plain_payload(persisted.payload) != _plain_payload(report_payload):
+            raise AIExecutionFailed("AI_EVAL_REPORT_PERSISTENCE_MISMATCH")
+        return report
+
+    def _persist_eval_observation(self, observation, created_at: str) -> None:
+        workspace_id = WorkspaceId.parse(observation.workspace_id)
+        payload = _eval_payload(observation)
+        self._revisions.append_if_latest(
+            workspace_id=workspace_id,
+            **self._append_args(
+                AI_EVAL_OBSERVATION_KIND,
+                observation.attestation_sha256,
+                created_at,
+                payload,
+            ),
+            expected_revision=None,
+        )
+        persisted = self._revisions.latest(
+            workspace_id, AI_EVAL_OBSERVATION_KIND, observation.attestation_sha256
+        )
+        if persisted is None or _plain_payload(persisted.payload) != _plain_payload(payload):
+            raise AIExecutionFailed("AI_EVAL_OBSERVATION_PERSISTENCE_MISMATCH")
 
     def _persist_failed_run(
         self,

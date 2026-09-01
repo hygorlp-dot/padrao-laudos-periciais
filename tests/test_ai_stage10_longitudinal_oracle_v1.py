@@ -69,6 +69,7 @@ SAFE_CONTENT = {
 def test_stage10_longitudinal_synthetic_oracle_preserves_grounding_authority_and_isolation() -> None:
     dataset = load_ai_eval_dataset(DATASET)
     observations = []
+    revisions = RecordingRevisions()
 
     for ordinal, case in enumerate(dataset.cases, start=1):
         candidates = []
@@ -135,10 +136,9 @@ def test_stage10_longitudinal_synthetic_oracle_preserves_grounding_authority_and
                     ],
                 }]
         }
-        revisions = RecordingRevisions()
         gateway = service(RecordingProvider(result=response(payload)), revisions)
         raw_proposal, run = gateway.execute_with_run(request, profile())
-        assert len(revisions.pairs) == 1
+        assert len(revisions.pairs) == ordinal
         gateway.verify_persisted(run, raw_proposal)
         proposal = validate_domain_proposal(raw_proposal, kind)
         telemetry = AIEvalTelemetry(
@@ -166,7 +166,7 @@ def test_stage10_longitudinal_synthetic_oracle_preserves_grounding_authority_and
             )
         )
 
-    report = evaluate_ai_dataset(dataset, tuple(observations))
+    report = gateway.evaluate_persisted_dataset(dataset, tuple(observations))
 
     assert report.status == "PASS"
     assert report.source_recall == "1.000000"
@@ -174,6 +174,12 @@ def test_stage10_longitudinal_synthetic_oracle_preserves_grounding_authority_and
     assert report.ai_self_authorization == 0
     assert report.cross_workspace_ai_context == 0
     assert report.human_reject_rate == "0.090909"
+    assert sum(item["artifact_kind"] == "AI_EVAL_OBSERVATION" for item in revisions.appended) == 11
+    assert revisions.appended[-1]["artifact_kind"] == "AI_EVAL_REPORT"
+    report_id = revisions.appended[-1]["artifact_id"]
+    assert revisions.latest(
+        dataset.cases[0].workspace_id, "AI_EVAL_REPORT", report_id
+    ).payload["status"] == "PASS"
 
 
 def test_stage10_named_adversarial_boundaries_fail_closed() -> None:

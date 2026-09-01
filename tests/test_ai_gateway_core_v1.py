@@ -458,7 +458,7 @@ def response(payload=None) -> AIResponse:
 
 
 def ids(*, success: bool) -> SequenceIds:
-    count = 4 if success else 2
+    count = 8 if success else 4
     return SequenceIds(*(str(uuid4()) for _ in range(count)))
 
 
@@ -606,6 +606,40 @@ def test_persisted_provider_failure_enters_eval_as_hard_failure_observation() ->
     assert observation.error_classification == "TIMEOUT"
     assert observation.schema_valid is False
     assert observation.proposal_id is None
+    assert revisions.appended[-1]["artifact_kind"] == "AI_EVAL_OBSERVATION"
+    assert revisions.appended[-1]["artifact_id"] == observation.attestation_sha256
+
+
+def test_eval_observation_reopens_from_real_append_only_repository(tmp_path) -> None:
+    path = tmp_path / "ai-eval-reopen.sqlite3"
+    dataset = load_ai_eval_dataset(Path(__file__).parent / "fixtures" / "ai-eval-dataset-v1.json")
+    case = dataset.cases[0]
+    store = SQLiteApplicationStore(path)
+    workspace = WorkspaceRepo().item
+    store.workspaces.create(workspace)
+    gateway = RunAIProposal(
+        store.workspaces, store.revisions,
+        RecordingProvider(error=AIProviderFailure("TIMEOUT")),
+        EgressPolicy(remote_sanitized_enabled=True), FixedClock(),
+        ids(success=False), generous_cost_ledger(),
+    )
+    with pytest.raises(AIExecutionFailed) as caught:
+        gateway.execute(replace(request(), task_type=case.task_type), profile())
+    observation = gateway.observe_persisted_failed_run(dataset.version, case, caught.value.run)
+    store.close()
+
+    reopened = SQLiteApplicationStore(path)
+    try:
+        record = reopened.revisions.latest(
+            workspace.workspace_id, "AI_EVAL_OBSERVATION", observation.attestation_sha256
+        )
+        assert record is not None
+        assert record.payload["attestation_sha256"] == observation.attestation_sha256
+        assert len(reopened.revisions.list_all(
+            workspace.workspace_id, "AI_EVAL_OBSERVATION", observation.attestation_sha256
+        )) == 1
+    finally:
+        reopened.close()
 
 
 def test_provider_refusal_records_failed_run_without_proposal() -> None:
