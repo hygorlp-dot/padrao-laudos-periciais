@@ -411,12 +411,13 @@ class DeviceOfflineVaultRegistry:
         self._lifecycle_state_path = self._root / ".lifecycle-state"
         self._lifecycle_migration_path = self._root / ".lifecycle-migration-v1"
         self._lifecycle_migration_complete_path = self._root / ".lifecycle-migration-v1.complete"
+        identity_is_legacy = self._identity_path.exists() and not self._identity_path.read_bytes().startswith(b"V2\n")
         pristine = not any(path.exists() for path in (
             self._key_path, self._identity_path, self._revocation_path,
             self._generation_path, self._lifecycle_key_path, self._lifecycle_state_path,
         ))
         legacy_candidate = (
-            self._key_path.exists() and self._identity_path.exists()
+            self._key_path.exists() and self._identity_path.exists() and identity_is_legacy
             and not any(path.exists() for path in (
                 self._revocation_path, self._generation_path,
                 self._lifecycle_key_path, self._lifecycle_state_path,
@@ -425,7 +426,7 @@ class DeviceOfflineVaultRegistry:
         )
         if legacy_candidate and not self._lifecycle_migration_path.exists():
             legacy = {
-                "device_id": self._identity_path.read_text(encoding="ascii"),
+                "device_id": self._read_identity(self._identity_path),
                 "device_key_sha256": hashlib.sha256(self._key_path.read_bytes()).hexdigest(),
                 "generation": 1,
                 "lifecycle_key_hex": os.urandom(32).hex(),
@@ -436,14 +437,14 @@ class DeviceOfflineVaultRegistry:
             )
         migration_recorded = self._lifecycle_migration_path.exists()
         migration_completed = self._lifecycle_migration_complete_path.exists()
-        migration_pending = migration_recorded and not migration_completed
+        migration_pending = migration_recorded and not migration_completed and identity_is_legacy
         if migration_pending:
             try:
                 legacy = json.loads(self._lifecycle_migration_path.read_text(encoding="utf-8"))
                 if (
                     set(legacy) != {"device_id", "device_key_sha256", "generation", "lifecycle_key_hex"}
                     or legacy["generation"] != 1
-                    or legacy["device_id"] != self._identity_path.read_text(encoding="ascii")
+                    or legacy["device_id"] != self._read_identity(self._identity_path)
                     or legacy["device_key_sha256"] != hashlib.sha256(self._key_path.read_bytes()).hexdigest()
                     or len(bytes.fromhex(legacy["lifecycle_key_hex"])) != 32
                     or (self._lifecycle_key_path.exists() and self._lifecycle_key_path.read_bytes().hex() != legacy["lifecycle_key_hex"])
@@ -473,7 +474,7 @@ class DeviceOfflineVaultRegistry:
         revoked = self._revocation_path.exists()
         if not key_exists and not identity_exists and not revoked:
             self._provision(self._key_path, os.urandom(32))
-            self._provision(self._identity_path, f"DEVICE-{uuid4().hex.upper()}".encode("ascii"))
+            self._provision(self._identity_path, f"V2\nDEVICE-{uuid4().hex.upper()}".encode("ascii"))
             key_exists = identity_exists = True
         elif not key_exists and identity_exists and revoked:
             self._revoked.set()
@@ -488,7 +489,7 @@ class DeviceOfflineVaultRegistry:
         if self._generation < 1:
             raise ValueError("offline device generation is corrupt")
         self._key: bytes | None = self._key_path.read_bytes() if key_exists else None
-        self.device_id = self._identity_path.read_text(encoding="ascii")
+        self.device_id = self._read_identity(self._identity_path)
         self._authority_identities = {
             self._identity_path: self._file_identity(self._identity_path),
             self._generation_path: self._file_identity(self._generation_path),
@@ -506,6 +507,10 @@ class DeviceOfflineVaultRegistry:
             ))
         self._validate_lifecycle_state()
         if migration_pending:
+            temporary_identity = self._root / f".device-id.{uuid4().hex}.new"
+            self._provision(temporary_identity, f"V2\n{self.device_id}".encode("ascii"))
+            os.replace(temporary_identity, self._identity_path)
+            self._authority_identities[self._identity_path] = self._file_identity(self._identity_path)
             self._provision(
                 self._lifecycle_migration_complete_path,
                 hashlib.sha256(self._lifecycle_migration_path.read_bytes()).hexdigest().encode("ascii") + b"\n",
@@ -547,6 +552,18 @@ class DeviceOfflineVaultRegistry:
             raise PermissionError("offline device authority identity is invalid")
         return details.st_dev, details.st_ino
 
+    @staticmethod
+    def _read_identity(path: Path) -> str:
+        try:
+            lines = path.read_text(encoding="ascii").splitlines()
+            if len(lines) == 1 and lines[0].startswith("DEVICE-"):
+                return lines[0]
+            if len(lines) == 2 and lines[0] == "V2" and lines[1].startswith("DEVICE-"):
+                return lines[1]
+        except (OSError, UnicodeError):
+            pass
+        raise ValueError("offline device identity is corrupt")
+
     def _replacement_path(self, device_id: str) -> Path:
         return self._root / f".replacement-{hashlib.sha256(device_id.encode('utf-8')).hexdigest()}.json"
 
@@ -580,7 +597,7 @@ class DeviceOfflineVaultRegistry:
     def _finish_replacement(self, intent: dict, intent_path: Path) -> None:
         new_key = bytes.fromhex(intent["new_key_hex"])
         values = (
-            (self._identity_path, intent["new_device_id"].encode("ascii")),
+            (self._identity_path, f"V2\n{intent['new_device_id']}".encode("ascii")),
             (self._generation_path, f"{intent['new_generation']}\n".encode("ascii")),
             (self._key_path, new_key),
         )
@@ -609,7 +626,7 @@ class DeviceOfflineVaultRegistry:
         intent = self._replacement_intent(path)
         if intent["old_device_id"] != revoked_device or intent["previous_generation"] != revoked_generation:
             raise PermissionError("offline device replacement authority diverged")
-        current = self._identity_path.read_text(encoding="ascii")
+        current = self._read_identity(self._identity_path)
         if current not in {intent["old_device_id"], intent["new_device_id"]}:
             raise PermissionError("offline device replacement authority diverged")
         self._finish_replacement(intent, path)

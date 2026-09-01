@@ -504,6 +504,20 @@ def test_completed_legacy_migration_record_cannot_be_replayed_after_authority_lo
         DeviceOfflineVaultRegistry(tmp_path)
 
 
+def test_versioned_identity_prevents_completion_marker_rollback_from_reopening_migration(tmp_path: Path) -> None:
+    root = tmp_path / "offline-field-v1"
+    root.mkdir()
+    (root / ".device-key").write_bytes(b"L" * 32)
+    (root / ".device-id").write_text("DEVICE-" + "A" * 32, encoding="ascii")
+    DeviceOfflineVaultRegistry(tmp_path)
+    assert (root / ".device-id").read_text(encoding="ascii").startswith("V2\n")
+    (root / ".lifecycle-migration-v1.complete").unlink()
+    (root / ".lifecycle-state").unlink()
+
+    with pytest.raises(PermissionError, match="committed lifecycle state is missing"):
+        DeviceOfflineVaultRegistry(tmp_path)
+
+
 def test_interrupted_legacy_migration_rejects_provisional_generation_substitution(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "offline-field-v1"
     root.mkdir()
