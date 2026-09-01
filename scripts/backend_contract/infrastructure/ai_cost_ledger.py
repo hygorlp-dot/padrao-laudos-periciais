@@ -8,6 +8,8 @@ from uuid import UUID
 
 from ..ai_eval_productization import AICostLimits, AICostReservation
 
+AI_COST_LEDGER_FILENAME = "ai-cost.sqlite3"
+
 
 class SQLiteAICostLedger:
     def __init__(self, limits: AICostLimits, database_path: Path):
@@ -81,6 +83,42 @@ class SQLiteAICostLedger:
                 (workspace_id, session_id),
             ).fetchone()
         return AICostReservation(workspace_id, session_id, workspace_cost, session_cost, session_tokens)
+
+    def export_workspace(self, workspace_id: str) -> tuple[dict[str, object], ...]:
+        self._validate(workspace_id, "export")
+        with sqlite3.connect(self._path) as connection:
+            rows = connection.execute(
+                "SELECT session_id, tokens, cost_microusd FROM ai_cost_reservation "
+                "WHERE workspace_id = ? ORDER BY rowid",
+                (workspace_id,),
+            ).fetchall()
+        return tuple(
+            {"session_id": session_id, "tokens": tokens, "cost_microusd": cost}
+            for session_id, tokens, cost in rows
+        )
+
+    def import_workspace(self, workspace_id: str, rows: object) -> None:
+        self._validate(workspace_id, "import")
+        if type(rows) not in {list, tuple}:
+            raise ValueError("AI cost reservation rows invalid")
+        validated: list[tuple[str, str, int, int]] = []
+        for row in rows:
+            if type(row) is not dict or set(row) != {"session_id", "tokens", "cost_microusd"}:
+                raise ValueError("AI cost reservation row invalid")
+            session_id, tokens, cost = row["session_id"], row["tokens"], row["cost_microusd"]
+            self._validate(workspace_id, session_id)
+            if type(tokens) is not int or tokens < 0 or type(cost) is not int or cost < 0:
+                raise ValueError("AI cost reservation row invalid")
+            validated.append((workspace_id, session_id, tokens, cost))
+        with sqlite3.connect(self._path, isolation_level=None, timeout=30) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if connection.execute(
+                "SELECT 1 FROM ai_cost_reservation WHERE workspace_id = ? LIMIT 1", (workspace_id,)
+            ).fetchone() is not None:
+                connection.execute("ROLLBACK")
+                raise ValueError("AI cost workspace is not empty")
+            connection.executemany("INSERT INTO ai_cost_reservation VALUES (?, ?, ?, ?)", validated)
+            connection.execute("COMMIT")
 
     def _enforce(self, workspace_cost: int, session_cost: int, workspace_tokens: int, session_tokens: int) -> None:
         if session_cost > self._limits.max_session_cost_microusd:

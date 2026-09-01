@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 import re
 from typing import Any
-from uuid import UUID
+from uuid import UUID, NAMESPACE_URL, uuid5
 from weakref import WeakKeyDictionary
 
 from ..application.models import (
@@ -37,6 +37,7 @@ from ..application.process_metadata import document_metadata_from_payload
 from ..budget_foundation import budget_snapshot_from_mapping
 from ..ai_gateway import AIRun, AIProposal, EgressClass, SourceRevisionRef, UsageRecord
 from ..ai_eval_productization import (
+    AICostLimits,
     AIEvalTelemetry,
     HumanEvalOutcome,
     ai_eval_dataset_from_mapping,
@@ -55,6 +56,7 @@ from ..report_foundation import expert_profile_from_mapping, report_snapshot_fro
 from ..technical_findings import technical_snapshot_from_mapping
 from ..vistoria import inspection_session_from_mapping
 from .private_filesystem import LocalPrivateContentStore
+from .ai_cost_ledger import AI_COST_LEDGER_FILENAME, SQLiteAICostLedger
 from .sqlite import SQLiteApplicationStore
 
 import base64
@@ -315,8 +317,31 @@ _ARTIFACT_VALIDATORS = {
     "AI_EVAL_OBSERVATION": ai_eval_observation_from_mapping,
     "AI_EVAL_REPORT": ai_eval_report_from_mapping,
     "AI_EVAL_DATASET": ai_eval_dataset_from_mapping,
+    "AI_COST_LEDGER_V1": lambda value: _validate_ai_cost_ledger(value),
 }
 ARTIFACT_COMPATIBILITY = {kind: {"current_version": "1.0.0", "supported_versions": ("1.0.0",), "migration": None, "future_version_policy": "FAIL_CLOSED"} for kind in _ARTIFACT_VALIDATORS}
+
+
+def _validate_ai_cost_ledger(value: object) -> _ValidatedAIArtifact:
+    data = _exact(value, {"workspace_id", "reservations"}, "AI cost ledger")
+    workspace_id = str(WorkspaceId.parse(data["workspace_id"]))
+    rows = data["reservations"]
+    if type(rows) not in {list, tuple}:
+        raise RepositoryIntegrityError("AI cost ledger reservations are invalid")
+    for row in rows:
+        if (
+            type(row) is not dict
+            or set(row) != {"session_id", "tokens", "cost_microusd"}
+            or type(row["session_id"]) is not str
+            or not row["session_id"].strip()
+            or type(row["tokens"]) is not int
+            or row["tokens"] < 0
+            or type(row["cost_microusd"]) is not int
+            or row["cost_microusd"] < 0
+        ):
+            raise RepositoryIntegrityError("AI cost ledger reservation is invalid")
+    canonical_payload_json(data)
+    return _ValidatedAIArtifact(workspace_id)
 
 
 def _validate_ocr_cache(value: object) -> None:
@@ -434,6 +459,8 @@ def _expected_internal_artifact_id(kind: str, payload: object) -> str | None:
         return hashlib.sha256(
             json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
+    if kind == "AI_COST_LEDGER_V1":
+        return "AI-COST-LEDGER"
     return None
 
 if frozenset(_ARTIFACT_VALIDATORS) != PORTABLE_PRODUCT_ARTIFACT_KINDS:
@@ -807,13 +834,17 @@ class CreateWorkspaceBackup:
     private_contents: object | None
     clock: object
     assert_backup_ready: object
+    ai_cost_ledger: object | None = None
 
     def execute(self, workspace_id: WorkspaceId) -> bytes:
         self.assert_backup_ready(workspace_id)
         workspace = self.workspaces.get(workspace_id)
         if workspace is None:
             raise ValueError("workspace is unavailable")
-        revision_items = [_revision_mapping(item) for item in self.revisions.list_workspace(workspace_id)]
+        revision_items = [
+            _revision_mapping(item) for item in self.revisions.list_workspace(workspace_id)
+            if self.ai_cost_ledger is None or item.artifact_kind != "AI_COST_LEDGER_V1"
+        ]
         private_items = []
         if self.private_contents is not None:
             for metadata in self.private_contents.list_all(workspace_id):
@@ -823,6 +854,21 @@ class CreateWorkspaceBackup:
         now = self.clock.now()
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("backup clock requires timezone")
+        if self.ai_cost_ledger is not None:
+            rows = self.ai_cost_ledger.export_workspace(str(workspace_id))
+            cost_payload = {"workspace_id": str(workspace_id), "reservations": list(rows)}
+            cost_checksum = hashlib.sha256(canonical_payload_json(cost_payload).encode("utf-8")).hexdigest()
+            revision_items.append({
+                "workspace_id": str(workspace_id),
+                "artifact_kind": "AI_COST_LEDGER_V1",
+                "artifact_id": "AI-COST-LEDGER",
+                "revision_id": str(uuid5(NAMESPACE_URL, f"ai-cost-ledger:{workspace_id}:{cost_checksum}")),
+                "revision": 1,
+                "created_at": now.isoformat(),
+                "checksum_sha256": cost_checksum,
+                "payload": cost_payload,
+            })
+        revision_items.sort(key=lambda item: (item["artifact_kind"], item["artifact_id"], item["revision"]))
         mapping = {
             "schema_version": "1.0.0",
             "format_version": 1,
@@ -995,6 +1041,15 @@ class RestoreWorkspaceBackup:
                 )
             for item in private_records:
                 private_contents.store(item.metadata, item.content)
+            cost_records = [item for item in revision_records if item.artifact_kind == "AI_COST_LEDGER_V1"]
+            if len(cost_records) > 1:
+                raise RepositoryIntegrityError("restored AI cost authority is ambiguous")
+            if cost_records:
+                cost_payload = thaw_payload(cost_records[0].payload)
+                ledger = SQLiteAICostLedger(
+                    AICostLimits(1, 1, 1, 1), self.staging.root / AI_COST_LEDGER_FILENAME
+                )
+                ledger.import_workspace(str(workspace_id), cost_payload["reservations"])
             reopened = revisions.list_workspace(workspace_id)
             if tuple(_revision_mapping(item) for item in reopened) != backup.artifact_revisions:
                 raise RepositoryIntegrityError("restored workspace failed canonical reopen")
