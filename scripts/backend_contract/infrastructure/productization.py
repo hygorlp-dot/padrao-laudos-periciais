@@ -329,7 +329,8 @@ def _revision_from_mapping(value: object, workspace_id: str) -> ArtifactRevision
     if revision_field is not None and (type(payload) is not dict or payload.get(revision_field) != record.revision):
         raise RepositoryIntegrityError("backup artifact envelope revision diverges")
     if validator is not None:
-        parsed = validator(payload)
+        validation_value = record.payload if record.artifact_kind in {"PROCESS_METADATA_EXTRACTION", "OCR_PAGE_CACHE_V1"} else payload
+        parsed = validator(validation_value)
         payload_workspace = getattr(parsed, "workspace_id", None)
         if payload_workspace is not None and str(payload_workspace) != workspace_id:
             raise RepositoryIntegrityError("backup payload belongs to another workspace")

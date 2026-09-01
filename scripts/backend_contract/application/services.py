@@ -483,6 +483,7 @@ class ListCaseDocuments:
         return tuple(
             _case_document_metadata(record)
             for record in self.contents.execute(workspace_id)
+            if record.media_type == "application/pdf" and record.origin is PrivateContentOrigin.USER_IMPORT
         )
 
 

@@ -34,8 +34,8 @@ def _http(runtime, method: str, path: str, value: object | None = None, raw_body
     return status, (json.loads(body) if body else None)
 
 
-def test_d1_d2_normal_composed_product_path_reaches_technical_bootstrap_and_isolates_workspaces(tmp_path: Path) -> None:
-    runtime = build_local_api(tmp_path / "product.db", token=TOKEN, clock=FixedClock(), private_root=tmp_path / "private")
+def test_d1_d11_normal_composed_product_path_delivers_closes_and_recovers_without_ai(tmp_path: Path) -> None:
+    runtime = build_local_api(tmp_path / "product.db", token=TOKEN, private_root=tmp_path / "private")
     runtime.start()
     try:
         status, created = _http(runtime, "POST", "/v1/workspaces", {"name": "Caso longitudinal sintético"})
@@ -53,6 +53,7 @@ def test_d1_d2_normal_composed_product_path_reaches_technical_bootstrap_and_isol
         status, analysis = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis", {})
         assert status == 201
         document_id = analysis["snapshot"]["documents"][0]["document_id"]
+        question_id = None
         for kind, text in (("PERICIAL_OBJECT", "Objeto técnico sintético."), ("PERICIAL_QUESTION", "Qual é a condição observável?")):
             status, analysis = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis/items", {
                 "expected_revision": analysis["revision"], "item_kind": kind, "text": text,
@@ -60,6 +61,8 @@ def test_d1_d2_normal_composed_product_path_reaches_technical_bootstrap_and_isol
             })
             assert status == 200
             target = analysis["snapshot"][{"PERICIAL_OBJECT": "pericial_objects", "PERICIAL_QUESTION": "questions"}[kind]][-1]["item_id"]
+            if kind == "PERICIAL_QUESTION":
+                question_id = target
             status, analysis = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis/reviews", {
                 "expected_revision": analysis["revision"], "target_item_id": target, "action": "CONFIRM",
                 "corrected_value": None, "reviewer": "PROFESSIONAL-001", "reason": "Revisão humana sintética.",
@@ -84,12 +87,172 @@ def test_d1_d2_normal_composed_product_path_reaches_technical_bootstrap_and_isol
             "responsible_professional": "PROFESSIONAL-001", "location_context": "Local sintético", "participant_references": [],
         })
         assert status == 201 and inspection["snapshot"]["responsible_professional"] == "PROFESSIONAL-001"
+        status, offline = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/offline-inspection", {
+            "device_session_id": "SESSION-SYNTHETIC-001",
+        })
+        assert status == 201
+        offline = offline["package"]
+        status, offline = _http(runtime, "PUT", f"/v1/workspaces/{workspace_id}/offline-inspection", {
+            "package_id": offline["package_id"], "expected_package_revision": offline["package_revision"],
+            "snapshot": offline["inspection_snapshot"],
+        })
+        assert status == 201
+        offline = offline["package"]
+        assert offline["package_revision"] == 2
+        status, sync = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/offline-sync", {
+            "package_id": offline["package_id"],
+        })
+        assert status == 200 and sync["accepted"] is True and sync["conflicts"] == []
+        status, inspection = _http(runtime, "GET", f"/v1/workspaces/{workspace_id}/inspection-session")
+        assert status == 200
         status, technical = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/technical-snapshot", {})
         assert status == 201 and technical["snapshot"]["source_snapshot"]["inspection_session_id"] == inspection["snapshot"]["session_id"]
+
+        status, technical = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/technical-snapshot/evidence-proposals", {
+            "source_kind": "CASE_QUESTION", "source_id": question_id,
+            "proposition": "O documento sintético integra a cadeia técnica.",
+            "why_relevant": "Fonte primária do caso sintético.", "expected_revision": technical["revision"],
+        })
+        assert status == 200
+        evidence_id = technical["snapshot"]["evidence_items"][0]["evidence_id"]
+        status, technical = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/technical-snapshot/evidence-reviews", {
+            "evidence_id": evidence_id, "action": "APPROVE", "professional_id": "PROFESSIONAL-001",
+            "reason": "Evidência sintética conferida.", "expected_revision": technical["revision"],
+        })
+        assert status == 200
+        status, technical = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/technical-snapshot/method-selections", {
+            "evidence_id": evidence_id, "method_identity": "Análise documental sintética",
+            "procedure": "Conferência da fonte vinculada.", "output": "Fonte confirmada.",
+            "professional_id": "PROFESSIONAL-001", "expected_revision": technical["revision"],
+        })
+        assert status == 200
+        method_id = technical["snapshot"]["method_applications"][0]["method_application_id"]
+        status, technical = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/technical-snapshot/finding-proposals", {
+            "method_application_id": method_id, "technical_proposition": "A fonte sintética foi tecnicamente vinculada.",
+            "scope": "Caso longitudinal sintético.", "limitation": "Sem uso de dados reais.",
+            "uncertainty": "Fixture controlada.", "uncertainty_impact": "Não afeta o teste de autoridade.",
+            "contrary_evidence_ids": [], "expected_revision": technical["revision"],
+        })
+        assert status == 200
+        proposal_id = technical["snapshot"]["finding_proposals"][0]["proposal_id"]
+        status, technical = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/technical-snapshot/finding-reviews", {
+            "proposal_id": proposal_id, "action": "APPROVE", "professional_id": "PROFESSIONAL-001",
+            "reason": "Conclusão técnica sintética aprovada.", "modified_proposition": None,
+            "resolve_conflicts": False, "expected_revision": technical["revision"],
+        })
+        assert status == 200, technical
+        assert technical["snapshot"]["coverage"]["effective_findings"] == 1
+        finding = technical["snapshot"]["findings"][0]
+        decision = technical["snapshot"]["decisions"][0]
+        assert technical["snapshot"]["question_links"][0]["question_id"] == question_id
+
+        profile = _fixture("report-snapshot-v1.json")["expert_profile"]
+        status, _ = _http(runtime, "PUT", f"/v1/workspaces/{workspace_id}/expert-profile", {
+            "expected_revision": None, "profile": profile,
+        })
+        assert status == 200
+        status, report = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/report-snapshot", {})
+        assert status == 201
+        for context in report["snapshot"]["context_matrix"]:
+            status, report = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/report-snapshot/draft-amendments", {
+                "expected_revision": report["revision"], "action": "UPDATE_CONTEXT",
+                "values": {"field": context["field"], "status": "PRESENT", "source_id": document_id, "note": "Fonte sintética."},
+            })
+            assert status == 200
+        for section in report["snapshot"]["sections"]:
+            if not section["required_by_cpc473"]:
+                continue
+            status, report = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/report-snapshot/draft-amendments", {
+                "expected_revision": report["revision"], "action": "ADD_CLAIM",
+                "values": {"section_id": section["section_id"], "text": "Conteúdo profissional sintético.", "source_kind": "CASE_DOCUMENT", "source_id": document_id},
+            })
+            assert status == 200
+        answer_section = report["snapshot"]["sections"][0]["section_id"]
+        status, report = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/report-snapshot/draft-amendments", {
+            "expected_revision": report["revision"], "action": "ADD_CLAIM",
+            "values": {"section_id": answer_section, "text": "Achado técnico efetivo sintético.", "source_kind": "TECHNICAL_FINDING", "source_id": finding["finding_id"]},
+        })
+        assert status == 200
+        finding_claim_id = report["snapshot"]["claims"][-1]["claim_id"]
+        status, report = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/report-snapshot/draft-amendments", {
+            "expected_revision": report["revision"], "action": "ADD_ANSWER",
+            "values": {"section_id": answer_section, "question_id": question_id, "text": "Resposta sintética rastreável.",
+                       "finding_id": finding["finding_id"], "evidence_ids": [evidence_id], "method_ids": [method_id],
+                       "decision_id": decision["decision_id"], "claim_ids": [finding_claim_id]},
+        })
+        assert status == 200
+        for action in ("MARK_REVIEWED", "APPROVE"):
+            status, report = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/report-snapshot/reviews", {
+                "expected_revision": report["revision"], "action": action, "professional_id": profile["profile_id"],
+                "reason": "Revisão profissional sintética.",
+            })
+            assert status == 200, (action, report)
+        assert report["snapshot"]["state"] == "APPROVED" and report["snapshot"]["coverage"]["complete"] is True
+
+        manifest = _fixture("report-template-manifest-v1.json")
+        template_bytes = _bound_template_docm(manifest["template_id"])
+        status, template = _http(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/delivery-templates", raw_body=template_bytes,
+            headers={"Content-Type": "application/vnd.ms-word.document.macroenabled.12", "X-Document-Filename": "modelo.docm"},
+        )
+        assert status == 201
+        status, delivery = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/delivery-snapshot", {
+            "template_content_id": template["content_id"], "manifest": manifest,
+        })
+        assert status == 201, delivery
+        status, delivery = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/delivery-snapshot/render", {
+            "expected_revision": delivery["revision"], "manifest": manifest,
+        })
+        assert status == 200, delivery
+        for action in ("MARK_READY_FOR_REVIEW", "APPROVE"):
+            status, delivery = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/delivery-snapshot/reviews", {
+                "expected_revision": delivery["revision"], "action": action, "professional_id": profile["profile_id"],
+                "reason": "Entrega Word sintética revisada.",
+            })
+            assert status == 200
+        for action in ("finalize", "deliver"):
+            status, delivery = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/delivery-snapshot/{action}", {
+                "expected_revision": delivery["revision"], "professional_id": profile["profile_id"],
+                "reason": "Integridade Word sintética verificada.",
+            })
+            assert status == 200
+        assert delivery["snapshot"]["state"] == "DELIVERED"
+        assert delivery["snapshot"]["artifacts"][0]["format"] == "DOCM"
 
         status, budget = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/budget-snapshot", {"process_id": None, "appointment_id": None})
         assert status == 201
         assert "technical_snapshot_id" not in budget["snapshot"]
+        budget_commands = (
+            ("proposals", {"amount": "3000.00", "currency": "BRL", "rationale": "Proposta sintética."}),
+            ("court-approvals", {"external_court_decision_reference": "Mov. 42, decisão sintética.", "amount": "2500.00", "currency": "BRL", "decided_on": "2026-09-01"}),
+            ("expenses", {"category": "TRAVEL", "amount": "100.00", "currency": "BRL", "incurred_on": "2026-09-01", "description": "Deslocamento sintético."}),
+            ("payments", {"amount": "2500.00", "currency": "BRL", "received_on": "2026-09-02", "reference": "Depósito sintético."}),
+            ("close", {}),
+        )
+        for action, values in budget_commands:
+            status, budget = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/budget-snapshot/{action}", {
+                "expected_revision": budget["revision"], **values,
+            })
+            assert status == 200, (action, budget)
+        assert budget["snapshot"]["status"] == "CLOSED"
+
+        package = CreateWorkspaceBackup(
+            runtime._store.workspaces, runtime._store.revisions, runtime._private_store,
+            FixedClock(), lambda _: None,
+        ).execute(WorkspaceId.parse(workspace_id))
+        verified = VerifyWorkspaceBackup().execute(package)
+        kinds = {item["artifact_kind"] for item in verified.artifact_revisions}
+        assert {"PROCESS_METADATA_EXTRACTION", "CASE_ANALYSIS_SNAPSHOT_V1", "PERICIAL_PLANNING_SNAPSHOT_V1",
+                "INSPECTION_SESSION_V1", "TECHNICAL_SNAPSHOT_V1", "REPORT_SNAPSHOT_V1",
+                "DELIVERY_SNAPSHOT_V1", "BUDGET_SNAPSHOT_V1"} <= kinds
+        staging = RecoveryStaging.create(tmp_path / "recovery")
+        try:
+            receipt = RestoreWorkspaceBackup(staging).execute(package)
+            assert receipt.workspace_id == workspace_id
+            reopened = staging.revisions.list_workspace(WorkspaceId.parse(workspace_id))
+            assert len(reopened) == len(verified.artifact_revisions)
+        finally:
+            staging.close()
     finally:
         runtime.close()
 
@@ -132,11 +295,28 @@ def _replace_text(value: object, replacements: dict[str, str]) -> object:
     return replacements.get(value, value) if type(value) is str else value
 
 
-def _docx() -> bytes:
+def _docx(text: str = "Laudo sintético aprovado") -> bytes:
     output = BytesIO()
     with ZipFile(output, "w", ZIP_DEFLATED) as package:
         package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
-        package.writestr("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Laudo sintético aprovado</w:t></w:r></w:p></w:body></w:document>')
+        package.writestr("word/document.xml", f'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:body></w:document>')
+    return output.getvalue()
+
+
+def _bound_template_docm(template_id: str) -> bytes:
+    document = '''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+      <w:p><w:r><w:t>[[EXPERT_FULL_NAME]]</w:t></w:r></w:p><w:p><w:r><w:t>[[EXPERT_REGISTRATION]]</w:t></w:r></w:p><w:p><w:r><w:t>[[REPORT_ID]]</w:t></w:r></w:p>
+      <w:sdt><w:sdtPr><w:tag w:val="CANONICAL_REPORT"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>empty</w:t></w:r></w:p></w:sdtContent></w:sdt>
+      <w:p><w:bookmarkStart w:id="1" w:name="B"/><w:r><w:instrText>TOC</w:instrText><w:instrText>PAGE</w:instrText><w:instrText>NUMPAGES</w:instrText><w:instrText>SEQ Figure</w:instrText><w:instrText>REF B</w:instrText><w:instrText>PAGEREF B</w:instrText></w:r><w:bookmarkEnd w:id="1"/></w:p>
+    </w:body></w:document>'''
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/><Override PartName="/word/vbaProject.bin" ContentType="application/vnd.ms-office.vbaProject"/></Types>')
+        package.writestr("word/document.xml", document)
+        package.writestr("word/styles.xml", "<styles/>")
+        package.writestr("word/numbering.xml", "<numbering/>")
+        package.writestr("word/vbaProject.bin", b"synthetic-macro")
+        package.writestr("docProps/custom.xml", f'<Properties><property name="TEMPLATE_ID"><value>{template_id}</value></property></Properties>')
     return output.getvalue()
 
 
