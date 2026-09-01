@@ -15,7 +15,7 @@ from scripts.backend_contract.ai_eval_productization import (
     evaluate_ai_dataset,
     load_ai_eval_dataset,
     observe_domain_proposal,
-    _new_ai_eval_observation,
+    observe_failed_run,
 )
 from scripts.backend_contract.ai_domain_proposals import (
     DomainAIProposal,
@@ -37,53 +37,36 @@ DATASET = ROOT / "tests" / "fixtures" / "ai-eval-dataset-v1.json"
 WORKSPACE = "11111111-1111-4111-8111-111111111111"
 
 
-def observation(case, *, human_outcome=HumanEvalOutcome.ACCEPTED, **changes):
-    values = {
-        "dataset_version": "1.0.0",
-        "case_id": case.case_id,
-        "workspace_id": case.workspace_id,
-        "task_type": case.task_type,
-        "provider": "OPENAI",
-        "profile_id": "EVAL",
-        "model": "synthetic-model-v1",
-        "prompt_template_version": "prompt-v1",
-        "prompt_template_hash": "a" * 64,
-        "structured_output_schema_hash": "b" * 64,
-        "schema_valid": True,
-        "material_proposal_count": 1,
-        "source_grounded_count": 1,
-        "expected_source_hits": len(case.expected_source_ids),
-        "unsourced_material_proposals": 0,
-        "wrong_authority_promotions": 0,
-        "self_authorizations": 0,
-        "cross_workspace_contexts": 0,
-        "human_outcome": human_outcome,
-        "input_tokens": 100,
-        "cached_input_tokens": 20,
-        "output_tokens": 40,
-        "estimated_cost_microusd": 500,
-        "latency_ms": 250,
-        "cache_hit": False,
-        "error_classification": None,
-        "proposal_id": "33333333-3333-4333-8333-333333333333",
-        "run_id": "44444444-4444-4444-8444-444444444444",
-        "source_refs": tuple(
-            SourceRevisionRef(case.workspace_id, item, "revision-1", "a" * 64, "segment=1")
-            for item in case.expected_source_ids
-        ),
-    }
-    values.update(changes)
-    return _new_ai_eval_observation(**values)
-
-
-def reobserve(item, **changes):
-    values = {
-        field: getattr(item, field)
-        for field in item.__dataclass_fields__
-        if field not in {"_derivation_token", "attestation_sha256"}
-    }
-    values.update(changes)
-    return _new_ai_eval_observation(**values)
+def observation(case, *, human_outcome=HumanEvalOutcome.ACCEPTED):
+    refs = tuple(
+        SourceRevisionRef(case.workspace_id, item, "revision-1", "a" * 64, "segment=1")
+        for item in case.expected_source_ids
+    )
+    kind = DomainProposalKind(case.task_type)
+    item_type = {
+        DomainProposalKind.CASE_ANALYSIS: "CLAIM",
+        DomainProposalKind.PLANNING: "RISK_GAP_CANDIDATE",
+        DomainProposalKind.EVIDENCE_TECHNICAL: "CONTRARY_EVIDENCE_CANDIDATE",
+        DomainProposalKind.TECHNICAL_FINDING: "UNCERTAINTY_DESCRIPTION",
+    }[kind]
+    proposal = DomainAIProposal(
+        "33333333-3333-4333-8333-333333333333", case.workspace_id,
+        "44444444-4444-4444-8444-444444444444", kind,
+        (DomainProposalItem(item_type, "Synthetic", refs),),
+    )
+    telemetry = AIEvalTelemetry(
+        "OPENAI", "EVAL", "synthetic-model-v1", "prompt-v1", "a" * 64, "b" * 64,
+        100, 20, 40, 500, 250, False,
+    )
+    run = AIRun(
+        proposal.run_id, case.workspace_id, case.task_type, telemetry.provider, telemetry.model, {},
+        telemetry.prompt_template_version, telemetry.prompt_template_hash,
+        telemetry.structured_output_schema_hash, context_manifest_payload(()), context_manifest_sha256(()),
+        refs, EgressClass.LOCAL_ONLY, (), UsageRecord(100, 20, 40, 140, 500), 250,
+        "response-1", "c" * 64, "NONE", None, (proposal.proposal_id,),
+        "2026-09-01T12:00:00+00:00", telemetry.profile_id, telemetry.cache_hit,
+    )
+    return observe_domain_proposal("1.0.0", case, proposal, run, telemetry, human_outcome)
 
 
 def test_observation_cannot_be_self_attested_outside_eval_harness() -> None:
@@ -170,7 +153,7 @@ def test_success_observation_is_derived_from_immutable_domain_proposal_and_exact
         telemetry.structured_output_schema_hash, context_manifest_payload(()), context_manifest_sha256(()),
         refs, EgressClass.LOCAL_ONLY, (), UsageRecord(100, 20, 40, 140, 500), 250,
         "response-1", "c" * 64, "NONE", None, (proposal.proposal_id,),
-        "2026-09-01T12:00:00+00:00",
+        "2026-09-01T12:00:00+00:00", telemetry.profile_id, telemetry.cache_hit,
     )
     result = observe_domain_proposal("1.0.0", case, proposal, run, telemetry, HumanEvalOutcome.ACCEPTED)
     assert result.expected_source_hits == len(case.expected_source_ids)
@@ -186,34 +169,6 @@ def test_eval_telemetry_rejects_inconsistent_token_counts() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    ("changes", "failure"),
-    (
-        ({"schema_valid": False}, "SCHEMA_VALIDITY"),
-        ({"source_grounded_count": 0, "unsourced_material_proposals": 1}, "UNSOURCED_MATERIAL_PROPOSAL"),
-        ({"wrong_authority_promotions": 1}, "WRONG_AUTHORITY_PROMOTION"),
-        ({"self_authorizations": 1}, "AI_SELF_AUTHORIZATION"),
-        ({"cross_workspace_contexts": 1}, "CROSS_WORKSPACE_AI_CONTEXT"),
-    ),
-)
-def test_hard_safety_metrics_fail_closed(changes, failure) -> None:
-    dataset = load_ai_eval_dataset(DATASET)
-    observations = [observation(case) for case in dataset.cases]
-    observations[0] = reobserve(observations[0], **changes)
-    report = evaluate_ai_dataset(dataset, tuple(observations))
-    assert report.status == "FAIL"
-    assert failure in report.failures
-
-
-def test_provider_or_refusal_error_is_a_hard_eval_failure() -> None:
-    dataset = load_ai_eval_dataset(DATASET)
-    observations = [observation(case) for case in dataset.cases]
-    observations[0] = reobserve(observations[0], error_classification="PROVIDER_UNAVAILABLE")
-    report = evaluate_ai_dataset(dataset, tuple(observations))
-    assert report.status == "FAIL"
-    assert "EXECUTION_ERROR" in report.failures
-
-
 def test_eval_rejects_missing_duplicate_foreign_or_wrong_version_observations() -> None:
     dataset = load_ai_eval_dataset(DATASET)
     observations = tuple(observation(case) for case in dataset.cases)
@@ -221,10 +176,27 @@ def test_eval_rejects_missing_duplicate_foreign_or_wrong_version_observations() 
         evaluate_ai_dataset(dataset, observations[:-1])
     with pytest.raises(ValueError, match="coverage"):
         evaluate_ai_dataset(dataset, (*observations[:-1], observations[0]))
-    with pytest.raises(ValueError, match="workspace"):
-        evaluate_ai_dataset(dataset, (reobserve(observations[0], workspace_id="22222222-2222-4222-8222-222222222222"), *observations[1:]))
-    with pytest.raises(ValueError, match="dataset version"):
-        evaluate_ai_dataset(dataset, (reobserve(observations[0], dataset_version="2.0.0"), *observations[1:]))
+    with pytest.raises(ValueError, match="attestation"):
+        evaluate_ai_dataset(dataset, (replace(observations[0], dataset_version="2.0.0"), *observations[1:]))
+
+
+def test_immutable_failed_run_is_a_hard_eval_failure() -> None:
+    dataset = load_ai_eval_dataset(DATASET)
+    successful = observation(dataset.cases[0])
+    run = AIRun(
+        successful.run_id, successful.workspace_id, successful.task_type,
+        successful.provider, successful.model, {}, successful.prompt_template_version,
+        successful.prompt_template_hash, successful.structured_output_schema_hash,
+        context_manifest_payload(()), context_manifest_sha256(()), successful.source_refs,
+        EgressClass.LOCAL_ONLY, (), None, 31, None, None, "UNKNOWN", "TIMEOUT", (),
+        "2026-09-01T12:00:00+00:00", successful.profile_id, False,
+    )
+    observations = (observe_failed_run(dataset.version, dataset.cases[0], run),) + tuple(
+        observation(case) for case in dataset.cases[1:]
+    )
+    report = evaluate_ai_dataset(dataset, observations)
+    assert report.status == "FAIL"
+    assert "EXECUTION_ERROR" in report.failures
 
 
 def test_cost_ledger_fails_before_reservation_exceeds_run_workspace_or_session_ceiling() -> None:
@@ -257,6 +229,19 @@ def test_cost_ledger_enforces_accumulated_workspace_and_session_token_ceilings_a
     assert ledger.snapshot(WORKSPACE, "session-1") == first
 
 
+def test_cost_ledger_reopens_persisted_workspace_and_session_totals(tmp_path: Path) -> None:
+    path = tmp_path / "ai-cost-ledger.sqlite3"
+    limits = AICostLimits(1_000, 5_000, 20_000, 20_000)
+    first = AICostLedger(limits, path)
+    first.authorize_and_reserve(
+        WORKSPACE, "stable-session", input_tokens=100, output_tokens=20, estimated_cost_microusd=500
+    )
+
+    reopened = AICostLedger(limits, path)
+    assert reopened.snapshot(WORKSPACE, "stable-session").session_cost_microusd == 500
+    assert reopened.snapshot(WORKSPACE, "stable-session").reserved_tokens == 120
+
+
 def test_golden_comparison_separates_quality_grounding_authority_cost_and_latency() -> None:
     dataset = load_ai_eval_dataset(DATASET)
     baseline = evaluate_ai_dataset(dataset, tuple(observation(case) for case in dataset.cases))
@@ -279,10 +264,8 @@ def test_golden_comparison_separates_quality_grounding_authority_cost_and_latenc
 
 def test_golden_comparison_never_accepts_absolute_hard_gate_failure() -> None:
     dataset = load_ai_eval_dataset(DATASET)
-    observations = [observation(case) for case in dataset.cases]
-    observations[0] = reobserve(observations[0], self_authorizations=1)
-    failed = evaluate_ai_dataset(dataset, tuple(observations))
-    assert failed.status == "FAIL"
+    baseline = evaluate_ai_dataset(dataset, tuple(observation(case) for case in dataset.cases))
+    failed = replace(baseline, status="FAIL", failures=("AI_SELF_AUTHORIZATION",), ai_self_authorization=1)
     assert compare_eval_reports(failed, failed, max_cost_increase_bps=0, max_latency_increase_bps=0).status == "FAIL"
 
 

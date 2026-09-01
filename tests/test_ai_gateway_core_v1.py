@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
+from pathlib import Path
 from datetime import datetime, timezone
 from types import MappingProxyType
 from uuid import UUID, uuid4
@@ -26,7 +27,12 @@ from scripts.backend_contract.ai_gateway import (
     response_payload_sha256,
     structured_output_schema_sha256,
 )
-from scripts.backend_contract.ai_eval_productization import AICostLedger, AICostLimits
+from scripts.backend_contract.ai_eval_productization import (
+    AICostLedger,
+    AICostLimits,
+    load_ai_eval_dataset,
+    observe_failed_run,
+)
 from scripts.backend_contract.application.ai_gateway import (
     AIExecutionFailed,
     AIProvider,
@@ -233,6 +239,8 @@ def test_ai_proposal_and_run_ids_are_canonical_and_carry_no_authority_field() ->
         error_classification=None,
         proposal_ids=(proposal.proposal_id,),
         created_at=proposal.created_at,
+        profile_id="FAST_EXTRACTION",
+        cache_hit=False,
     )
 
     assert UUID(proposal.proposal_id).version == 4
@@ -567,6 +575,23 @@ def test_provider_failures_record_one_sanitized_run(provider_code: str) -> None:
     assert persisted["payload"]["error_classification"] == provider_code
     assert persisted["payload"]["latency_ms"] == 31
     assert "sk-secret" not in repr(persisted)
+
+
+def test_persisted_provider_failure_enters_eval_as_hard_failure_observation() -> None:
+    dataset = load_ai_eval_dataset(Path(__file__).parent / "fixtures" / "ai-eval-dataset-v1.json")
+    case = dataset.cases[0]
+    failed_request = replace(request(), task_type=case.task_type)
+    with pytest.raises(AIExecutionFailed, match="TIMEOUT") as caught:
+        service(
+            RecordingProvider(error=AIProviderFailure("TIMEOUT")),
+            RecordingRevisions(),
+            id_source=ids(success=False),
+        ).execute(failed_request, profile())
+
+    observation = observe_failed_run(dataset.version, case, caught.value.run)
+    assert observation.error_classification == "TIMEOUT"
+    assert observation.schema_valid is False
+    assert observation.proposal_id is None
 
 
 def test_provider_refusal_records_failed_run_without_proposal() -> None:

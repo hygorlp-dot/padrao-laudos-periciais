@@ -49,6 +49,10 @@ class AIProviderFailure(RuntimeError):
 
 
 class AIExecutionFailed(RuntimeError):
+    def __init__(self, code: str, run: AIRun | None = None):
+        self.run = run
+        super().__init__(code)
+
     """Erro local estável, deliberadamente sem prompt, resposta ou segredo."""
 
 
@@ -98,6 +102,8 @@ def _run_payload(item: AIRun) -> dict[str, object]:
         "error_classification": item.error_classification,
         "proposal_ids": list(item.proposal_ids),
         "created_at": item.created_at,
+        "profile_id": item.profile_id,
+        "cache_hit": item.cache_hit,
     }
 
 
@@ -191,14 +197,14 @@ class RunAIProposal:
             if response_payload_sha256(response.payload) != response.response_hash:
                 raise AIProviderFailure("INVALID_RESPONSE_HASH")
         except jsonschema.ValidationError:
-            self._persist_failed_run(run_id, created_at, request, profile, response, "INVALID_STRUCTURED_OUTPUT")
-            raise AIExecutionFailed("INVALID_STRUCTURED_OUTPUT") from None
+            run = self._persist_failed_run(run_id, created_at, request, profile, response, "INVALID_STRUCTURED_OUTPUT")
+            raise AIExecutionFailed("INVALID_STRUCTURED_OUTPUT", run) from None
         except AIProviderFailure as exc:
-            self._persist_failed_run(run_id, created_at, request, profile, response, exc.code, exc.latency_ms)
-            raise AIExecutionFailed(exc.code) from None
+            run = self._persist_failed_run(run_id, created_at, request, profile, response, exc.code, exc.latency_ms)
+            raise AIExecutionFailed(exc.code, run) from None
         except Exception:
-            self._persist_failed_run(run_id, created_at, request, profile, response, "PROVIDER_UNAVAILABLE")
-            raise AIExecutionFailed("PROVIDER_UNAVAILABLE") from None
+            run = self._persist_failed_run(run_id, created_at, request, profile, response, "PROVIDER_UNAVAILABLE")
+            raise AIExecutionFailed("PROVIDER_UNAVAILABLE", run) from None
 
         proposal_id = str(self._ids.new_uuid())
         proposal = AIProposal(
@@ -234,13 +240,14 @@ class RunAIProposal:
         response: AIResponse | None,
         code: str,
         latency_ms: int = 0,
-    ) -> None:
+    ) -> AIRun:
         run = self._run(run_id, created_at, request, profile, response, code, (), latency_ms)
         self._revisions.append_if_latest(
             workspace_id=WorkspaceId.parse(request.workspace_id),
             **self._append_args(AI_RUN_KIND, run_id, created_at, _run_payload(run)),
             expected_revision=None,
         )
+        return run
 
     def _run(
         self,
@@ -276,6 +283,8 @@ class RunAIProposal:
             error_classification=error,
             proposal_ids=proposal_ids,
             created_at=created_at,
+            profile_id=profile.profile_id,
+            cache_hit=False,
         )
 
     def _append_args(self, kind: str, artifact_id: str, created_at: str, payload: object) -> dict[str, object]:

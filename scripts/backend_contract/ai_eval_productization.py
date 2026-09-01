@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import sqlite3
 from dataclasses import dataclass, field as dataclass_field
 from decimal import Decimal
 from enum import StrEnum
@@ -17,6 +18,7 @@ from .ai_gateway import AIRun, SourceRevisionRef
 
 
 _OBSERVATION_DERIVATION_TOKEN = object()
+_PERSISTENT_LEDGER_LOCKS: dict[str, Lock] = {}
 
 
 class AIEvalScenario(StrEnum):
@@ -170,7 +172,7 @@ class AIEvalObservation:
     latency_ms: int
     cache_hit: bool
     error_classification: str | None
-    proposal_id: str
+    proposal_id: str | None
     run_id: str
     source_refs: tuple[SourceRevisionRef, ...]
     attestation_sha256: str
@@ -211,7 +213,8 @@ class AIEvalObservation:
             raise TypeError("human eval outcome invalid")
         if self.error_classification is not None:
             _text(self.error_classification, "error_classification")
-        _uuid(self.proposal_id, "proposal_id")
+        if self.proposal_id is not None:
+            _uuid(self.proposal_id, "proposal_id")
         _uuid(self.run_id, "run_id")
         if type(self.source_refs) is not tuple or not self.source_refs or any(
             type(item) is not SourceRevisionRef for item in self.source_refs
@@ -219,6 +222,11 @@ class AIEvalObservation:
             raise ValueError("AI eval observation requires exact source revisions")
         if any(item.workspace_id != self.workspace_id for item in self.source_refs):
             raise ValueError("AI eval observation source workspace mismatch")
+
+    @classmethod
+    def _from_verified_boundary(cls, **values: object) -> AIEvalObservation:
+        values["attestation_sha256"] = _observation_attestation(values)
+        return cls(**values, _derivation_token=_OBSERVATION_DERIVATION_TOKEN)
 
 
 def _observation_attestation(values: dict[str, object]) -> str:
@@ -244,11 +252,6 @@ def _observation_attestation(values: dict[str, object]) -> str:
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
-
-
-def _new_ai_eval_observation(**values: object) -> AIEvalObservation:
-    values["attestation_sha256"] = _observation_attestation(values)
-    return AIEvalObservation(**values, _derivation_token=_OBSERVATION_DERIVATION_TOKEN)
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,6 +318,7 @@ def observe_domain_proposal(
     run_cost = run.usage.estimated_cost_microusd if run.usage is not None else None
     if (
         telemetry.provider != run.provider
+        or telemetry.profile_id != run.profile_id
         or telemetry.model != run.model
         or telemetry.prompt_template_version != run.prompt_template_version
         or telemetry.prompt_template_hash != run.prompt_template_hash
@@ -324,6 +328,7 @@ def observe_domain_proposal(
         or telemetry.output_tokens != (run.usage.output_tokens if run.usage else 0)
         or telemetry.estimated_cost_microusd != (run_cost or 0)
         or telemetry.latency_ms != run.latency_ms
+        or telemetry.cache_hit != run.cache_hit
     ):
         raise ValueError("AI eval telemetry diverges from immutable run")
     all_refs = tuple(ref for item in proposal.items for ref in item.source_refs)
@@ -331,7 +336,7 @@ def observe_domain_proposal(
         raise ValueError("AI eval proposal contains cross-workspace source")
     cited_document_ids = {ref.document_id for ref in all_refs}
     grounded = sum(bool(item.source_refs) for item in proposal.items)
-    return _new_ai_eval_observation(
+    return AIEvalObservation._from_verified_boundary(
         dataset_version=dataset_version,
         case_id=case.case_id,
         workspace_id=case.workspace_id,
@@ -361,6 +366,57 @@ def observe_domain_proposal(
         proposal_id=proposal.proposal_id,
         run_id=proposal.run_id,
         source_refs=all_refs,
+    )
+
+
+def observe_failed_run(
+    dataset_version: str,
+    case: AIEvalCase,
+    run: AIRun,
+    human_outcome: HumanEvalOutcome = HumanEvalOutcome.REJECTED,
+) -> AIEvalObservation:
+    if type(case) is not AIEvalCase or type(run) is not AIRun:
+        raise TypeError("AI eval case and failed run required")
+    if (
+        run.error_classification is None
+        or run.proposal_ids
+        or run.workspace_id != case.workspace_id
+        or run.task_type != case.task_type
+        or not run.source_refs
+    ):
+        raise ValueError("AI eval failed run provenance invalid")
+    usage = run.usage
+    refs = run.source_refs
+    return AIEvalObservation._from_verified_boundary(
+        dataset_version=dataset_version,
+        case_id=case.case_id,
+        workspace_id=case.workspace_id,
+        task_type=case.task_type,
+        provider=run.provider,
+        profile_id=run.profile_id,
+        model=run.model,
+        prompt_template_version=run.prompt_template_version,
+        prompt_template_hash=run.prompt_template_hash,
+        structured_output_schema_hash=run.structured_output_schema_hash,
+        schema_valid=False,
+        material_proposal_count=0,
+        source_grounded_count=0,
+        expected_source_hits=len(set(case.expected_source_ids) & {ref.document_id for ref in refs}),
+        unsourced_material_proposals=0,
+        wrong_authority_promotions=0,
+        self_authorizations=0,
+        cross_workspace_contexts=0,
+        human_outcome=human_outcome,
+        input_tokens=usage.input_tokens if usage else 0,
+        cached_input_tokens=usage.cached_input_tokens if usage else 0,
+        output_tokens=usage.output_tokens if usage else 0,
+        estimated_cost_microusd=(usage.estimated_cost_microusd or 0) if usage else 0,
+        latency_ms=run.latency_ms,
+        cache_hit=run.cache_hit,
+        error_classification=run.error_classification,
+        proposal_id=None,
+        run_id=run.run_id,
+        source_refs=refs,
     )
 
 
@@ -525,15 +581,46 @@ class AICostReservation:
 
 
 class AICostLedger:
-    def __init__(self, limits: AICostLimits):
+    def __init__(self, limits: AICostLimits, database_path: Path | None = None):
         if type(limits) is not AICostLimits:
             raise TypeError("AI cost limits required")
         self._limits = limits
-        self._workspace_costs: dict[str, int] = {}
-        self._session_costs: dict[tuple[str, str], int] = {}
-        self._session_tokens: dict[tuple[str, str], int] = {}
-        self._workspace_tokens: dict[str, int] = {}
-        self._lock = Lock()
+        self._database_path = database_path
+        lock_key = str(database_path.resolve()) if database_path is not None else ""
+        self._lock = _PERSISTENT_LEDGER_LOCKS.setdefault(lock_key, Lock()) if lock_key else Lock()
+        if database_path is not None:
+            database_path.parent.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(database_path) as connection:
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS ai_cost_reservation ("
+                    "workspace_id TEXT NOT NULL, session_id TEXT NOT NULL, "
+                    "tokens INTEGER NOT NULL, cost_microusd INTEGER NOT NULL)"
+                )
+        else:
+            self._memory_rows: list[tuple[str, str, int, int]] = []
+
+    @property
+    def persistent(self) -> bool:
+        return self._database_path is not None
+
+    def _totals(self, workspace_id: str, session_id: str) -> tuple[int, int, int]:
+        if self._database_path is None:
+            rows = self._memory_rows
+        else:
+            with sqlite3.connect(self._database_path) as connection:
+                rows = list(connection.execute(
+                    "SELECT workspace_id, session_id, tokens, cost_microusd FROM ai_cost_reservation"
+                ))
+        workspace_cost = sum(cost for workspace, _session, _tokens, cost in rows if workspace == workspace_id)
+        session_cost = sum(
+            cost for workspace, session, _tokens, cost in rows
+            if workspace == workspace_id and session == session_id
+        )
+        session_tokens = sum(
+            tokens for workspace, session, tokens, _cost in rows
+            if workspace == workspace_id and session == session_id
+        )
+        return workspace_cost, session_cost, session_tokens
 
     def authorize_and_reserve(
         self,
@@ -553,12 +640,19 @@ class AICostLedger:
             raise ValueError("AI run token ceiling exceeded")
         if estimated_cost_microusd > self._limits.max_run_cost_microusd:
             raise ValueError("AI run cost ceiling exceeded")
-        key = (workspace_id, session_id)
         with self._lock:
-            workspace_cost = self._workspace_costs.get(workspace_id, 0) + estimated_cost_microusd
-            session_cost = self._session_costs.get(key, 0) + estimated_cost_microusd
-            workspace_tokens = self._workspace_tokens.get(workspace_id, 0) + run_tokens
-            session_tokens = self._session_tokens.get(key, 0) + run_tokens
+            prior_workspace_cost, prior_session_cost, prior_session_tokens = self._totals(workspace_id, session_id)
+            if self._database_path is None:
+                workspace_tokens = sum(tokens for workspace, _session, tokens, _cost in self._memory_rows if workspace == workspace_id) + run_tokens
+            else:
+                with sqlite3.connect(self._database_path) as connection:
+                    workspace_tokens = connection.execute(
+                        "SELECT COALESCE(SUM(tokens), 0) FROM ai_cost_reservation WHERE workspace_id = ?",
+                        (workspace_id,),
+                    ).fetchone()[0] + run_tokens
+            workspace_cost = prior_workspace_cost + estimated_cost_microusd
+            session_cost = prior_session_cost + estimated_cost_microusd
+            session_tokens = prior_session_tokens + run_tokens
             if session_cost > self._limits.max_session_cost_microusd:
                 raise ValueError("AI session cost ceiling exceeded")
             if workspace_cost > self._limits.max_workspace_cost_microusd:
@@ -567,25 +661,27 @@ class AICostLedger:
                 raise ValueError("AI session token ceiling exceeded")
             if self._limits.max_workspace_tokens is not None and workspace_tokens > self._limits.max_workspace_tokens:
                 raise ValueError("AI workspace token ceiling exceeded")
-            self._workspace_costs[workspace_id] = workspace_cost
-            self._session_costs[key] = session_cost
-            self._workspace_tokens[workspace_id] = workspace_tokens
-            self._session_tokens[key] = session_tokens
+            row = (workspace_id, session_id, run_tokens, estimated_cost_microusd)
+            if self._database_path is None:
+                self._memory_rows.append(row)
+            else:
+                with sqlite3.connect(self._database_path) as connection:
+                    connection.execute("INSERT INTO ai_cost_reservation VALUES (?, ?, ?, ?)", row)
             return AICostReservation(
-                workspace_id, session_id, workspace_cost, session_cost, self._session_tokens[key]
+                workspace_id, session_id, workspace_cost, session_cost, session_tokens
             )
 
     def snapshot(self, workspace_id: str, session_id: str) -> AICostReservation:
         _uuid(workspace_id, "workspace_id")
         _text(session_id, "session_id")
-        key = (workspace_id, session_id)
         with self._lock:
+            workspace_cost, session_cost, session_tokens = self._totals(workspace_id, session_id)
             return AICostReservation(
                 workspace_id,
                 session_id,
-                self._workspace_costs.get(workspace_id, 0),
-                self._session_costs.get(key, 0),
-                self._session_tokens.get(key, 0),
+                workspace_cost,
+                session_cost,
+                session_tokens,
             )
 
 
