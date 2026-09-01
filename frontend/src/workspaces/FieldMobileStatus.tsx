@@ -8,6 +8,8 @@ export function FieldMobileStatus({
   onPrepare,
   onSync,
   onRevoke,
+  deviceRevoked = false,
+  onReplace,
 }: {
   online: boolean;
   pendingCaptures: number;
@@ -16,6 +18,8 @@ export function FieldMobileStatus({
   onPrepare?: () => void;
   onSync?: () => void;
   onRevoke?: () => void;
+  deviceRevoked?: boolean;
+  onReplace?: () => void;
 }) {
   const pendingLabel = `${pendingCaptures} ${pendingCaptures === 1 ? "registro aguarda" : "registros aguardam"} sincronização`;
   return <aside className="field-mobile" aria-label="Estado da vistoria móvel">
@@ -29,7 +33,9 @@ export function FieldMobileStatus({
       <button type="button" onClick={() => onCapture?.("photo")}>Associar foto</button>
       <button type="button" onClick={onPrepare} disabled={pendingCaptures > 0}>Preparar uso offline</button>
       <button type="button" onClick={onSync} disabled={pendingCaptures === 0}>Sincronizar registros</button>
-      <button type="button" onClick={onRevoke}>Revogar dispositivo</button>
+      {deviceRevoked
+        ? <button type="button" onClick={onReplace}>Cadastrar novo dispositivo</button>
+        : <button type="button" onClick={onRevoke}>Revogar dispositivo</button>}
     </div>
     {conflicts.length > 0 && <section className="field-mobile__conflicts" role="alert">
       <strong>Sincronização requer revisão</strong>

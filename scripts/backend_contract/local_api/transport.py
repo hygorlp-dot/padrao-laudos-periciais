@@ -123,7 +123,9 @@ class LocalApiServices:
     get_offline_inspection: object | None = None
     list_offline_inspections: object | None = None
     revoke_offline_device: object | None = None
+    replace_offline_device: object | None = None
     offline_device_id: str | None = None
+    offline_device_authority: object | None = None
     save_technical_snapshot: object | None = None
     get_technical_snapshot: object | None = None
     start_technical_snapshot: object | None = None
@@ -431,6 +433,15 @@ class LocalApi:
     @property
     def body_limits(self) -> tuple[int, int]:
         return self._max_body_bytes, self._max_document_body_bytes
+
+    def _current_offline_device_id(self) -> str | None:
+        authority = self._services.offline_device_authority
+        if authority is not None:
+            value = authority.device_id
+            if type(value) is not str or not value:
+                raise RepositoryIntegrityError("offline device authority is invalid")
+            return value
+        return self._services.offline_device_id
 
     def is_document_upload(self, method: str, target: str) -> bool:
         """Reconhece somente o POST documental com workspace canônico."""
@@ -984,14 +995,16 @@ class LocalApi:
                 return _error(405, "METHOD_NOT_ALLOWED")
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "offline-inspection":
-                if self._services.offline_device_id is None:
+                offline_device_id = self._current_offline_device_id()
+                if offline_device_id is None:
                     return _error(503, "OFFLINE_STORAGE_UNAVAILABLE")
                 workspace_id = self._workspace_id(raw_segments[2])
                 if normalized_method == "GET":
                     if self._services.list_offline_inspections is None:
                         return _error(503, "OFFLINE_STORAGE_UNAVAILABLE")
-                    inventory = self._services.list_offline_inspections.execute(workspace_id, device_id=self._services.offline_device_id)
+                    inventory = self._services.list_offline_inspections.execute(workspace_id, device_id=offline_device_id)
                     return _json_response(200, {
+                        "device_id": offline_device_id,
                         "items": [offline_package_to_mapping(item) for item in inventory.items],
                         "conflicts": [
                             {"code": item.code, "message": item.message}
@@ -1002,30 +1015,31 @@ class LocalApi:
                 if normalized_method == "POST":
                     if self._services.prepare_offline_inspection is None or set(dto) != {"device_session_id"} or type(dto["device_session_id"]) is not str:
                         raise ValueError("offline inspection request is invalid")
-                    package = self._services.prepare_offline_inspection.execute(workspace_id, device_id=self._services.offline_device_id, device_session_id=dto["device_session_id"])
+                    package = self._services.prepare_offline_inspection.execute(workspace_id, device_id=offline_device_id, device_session_id=dto["device_session_id"])
                 elif normalized_method == "PUT":
                     if self._services.update_offline_inspection is None or set(dto) != {"package_id", "expected_package_revision", "snapshot"}:
                         raise ValueError("offline inspection update is invalid")
                     package = self._services.update_offline_inspection.execute(
-                        workspace_id, device_id=self._services.offline_device_id,
+                        workspace_id, device_id=offline_device_id,
                         package_id=dto["package_id"], expected_package_revision=dto["expected_package_revision"],
                         snapshot=validated_inspection_session_from_mapping(dto["snapshot"]),
                     )
                 else:
                     return _error(405, "METHOD_NOT_ALLOWED")
-                return _json_response(201, {"device_id": self._services.offline_device_id, "package": offline_package_to_mapping(package)})
+                return _json_response(201, {"device_id": offline_device_id, "package": offline_package_to_mapping(package)})
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "offline-sync":
                 if normalized_method != "POST":
                     return _error(405, "METHOD_NOT_ALLOWED")
-                if self._services.sync_offline_inspection is None or self._services.offline_device_id is None:
+                offline_device_id = self._current_offline_device_id()
+                if self._services.sync_offline_inspection is None or offline_device_id is None:
                     return _error(503, "OFFLINE_STORAGE_UNAVAILABLE")
                 dto = self._request_dto(request_headers, body)
                 if set(dto) != {"package_id"} or type(dto["package_id"]) is not str:
                     raise ValueError("offline sync request is invalid")
                 workspace_id = self._workspace_id(raw_segments[2])
                 decision, record = self._services.sync_offline_inspection.execute(
-                    workspace_id, device_id=self._services.offline_device_id, package_id=dto["package_id"],
+                    workspace_id, device_id=offline_device_id, package_id=dto["package_id"],
                 )
                 return _json_response(200 if decision.accepted else 409, {
                     "accepted": decision.accepted,
@@ -1035,11 +1049,12 @@ class LocalApi:
 
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "offline-inspection":
                 if normalized_method != "GET": return _error(405, "METHOD_NOT_ALLOWED")
-                if self._services.get_offline_inspection is None or self._services.offline_device_id is None:
+                offline_device_id = self._current_offline_device_id()
+                if self._services.get_offline_inspection is None or offline_device_id is None:
                     return _error(503, "OFFLINE_STORAGE_UNAVAILABLE")
                 workspace_id = self._workspace_id(raw_segments[2])
-                package = self._services.get_offline_inspection.execute(workspace_id, device_id=self._services.offline_device_id, package_id=raw_segments[4])
-                return _json_response(200, {"device_id": self._services.offline_device_id, "package": offline_package_to_mapping(package)})
+                package = self._services.get_offline_inspection.execute(workspace_id, device_id=offline_device_id, package_id=raw_segments[4])
+                return _json_response(200, {"device_id": offline_device_id, "package": offline_package_to_mapping(package)})
 
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("offline-device", "revoke"):
                 if normalized_method != "POST": return _error(405, "METHOD_NOT_ALLOWED")
@@ -1049,6 +1064,19 @@ class LocalApi:
                 if dto != {"confirm": True}: raise ValueError("offline device revocation requires confirmation")
                 self._services.revoke_offline_device.execute(workspace_id)
                 return _json_response(200, {"revoked": True})
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("offline-device", "replace"):
+                if normalized_method != "POST": return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.replace_offline_device is None: return _error(503, "OFFLINE_STORAGE_UNAVAILABLE")
+                workspace_id = self._workspace_id(raw_segments[2])
+                dto = self._request_dto(request_headers, body)
+                if set(dto) != {"expected_device_id", "confirm"} or dto["confirm"] is not True or type(dto["expected_device_id"]) is not str:
+                    raise ValueError("offline device replacement requires confirmation")
+                device_id = self._services.replace_offline_device.execute(
+                    workspace_id,
+                    expected_device_id=dto["expected_device_id"],
+                )
+                return _json_response(200, {"device_id": device_id})
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "materials":
                 workspace_id = self._workspace_id(raw_segments[2])

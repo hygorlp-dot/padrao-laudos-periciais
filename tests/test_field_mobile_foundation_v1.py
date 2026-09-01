@@ -224,8 +224,56 @@ def test_device_registry_revocation_is_device_wide_and_persistent(tmp_path: Path
     registry.revoke_device()
     with pytest.raises(PermissionError, match="revoked"):
         issued.load("ANY-PACKAGE")
+    reopened = DeviceOfflineVaultRegistry(tmp_path)
     with pytest.raises(PermissionError, match="revoked"):
-        DeviceOfflineVaultRegistry(tmp_path)
+        reopened.vault_for(WORKSPACE_ID, registry.device_id)
+
+
+def test_device_security_claim_is_explicitly_limited_to_threat_model_a(tmp_path: Path) -> None:
+    registry = DeviceOfflineVaultRegistry(tmp_path)
+    classification = registry.security_classification
+    assert classification.threat_model == "A"
+    assert classification.protects_plaintext_at_rest is True
+    assert classification.protects_complete_tree_copy is False
+    assert (tmp_path / "offline-field-v1" / ".device-key").read_bytes() == registry._key
+
+
+def test_revoked_device_can_be_replaced_without_reviving_old_identity(tmp_path: Path) -> None:
+    registry = DeviceOfflineVaultRegistry(tmp_path)
+    device_a = registry.device_id
+    registry.revoke_device()
+
+    revoked = DeviceOfflineVaultRegistry(tmp_path)
+    with pytest.raises(PermissionError, match="revoked"):
+        revoked.vault_for(WORKSPACE_ID, device_a)
+    device_b = revoked.replace_revoked_device(device_a)
+    assert device_b != device_a
+
+    mapping = package_mapping()
+    mapping["device_id"] = device_b
+    package = offline_package_from_mapping(mapping)
+    vault_b = revoked.vault_for(WORKSPACE_ID, device_b)
+    vault_b.save(package)
+    assert vault_b.load(package.package_id) == package
+    with pytest.raises(PermissionError, match="authorized|revoked"):
+        revoked.vault_for(WORKSPACE_ID, device_a)
+
+    restarted = DeviceOfflineVaultRegistry(tmp_path)
+    assert restarted.device_id == device_b
+    assert restarted.vault_for(WORKSPACE_ID, device_b).load(package.package_id) == package
+    with pytest.raises(PermissionError, match="authorized|revoked"):
+        restarted.vault_for(WORKSPACE_ID, device_a)
+
+
+def test_device_replacement_requires_revocation_and_exact_expected_identity(tmp_path: Path) -> None:
+    registry = DeviceOfflineVaultRegistry(tmp_path)
+    device_id = registry.device_id
+    with pytest.raises(PermissionError, match="revoked"):
+        registry.replace_revoked_device(device_id)
+    registry.revoke_device()
+    reopened = DeviceOfflineVaultRegistry(tmp_path)
+    with pytest.raises(PermissionError, match="identity"):
+        reopened.replace_revoked_device("DEVICE-WRONG")
 
 
 def test_workspace_backup_readiness_fails_closed_while_offline_work_is_pending(tmp_path: Path) -> None:

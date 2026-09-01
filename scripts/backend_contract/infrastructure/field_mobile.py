@@ -38,6 +38,13 @@ class PendingOfflineInventory:
     conflicts: tuple[OfflineInventoryConflict, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class DeviceSecurityClassification:
+    threat_model: str = "A"
+    protects_plaintext_at_rest: bool = True
+    protects_complete_tree_copy: bool = False
+
+
 def _is_link_or_reparse(details: os.stat_result) -> bool:
     return stat.S_ISLNK(details.st_mode) or bool(getattr(details, "st_file_attributes", 0) & _REPARSE_ATTRIBUTE)
 
@@ -372,21 +379,41 @@ class DeviceOfflineVaultRegistry:
         self._key_path = self._root / ".device-key"
         self._identity_path = self._root / ".device-id"
         self._revocation_path = self._root / ".device-revoked"
+        self._generation_path = self._root / ".device-generation"
         key_exists = self._key_path.exists()
         identity_exists = self._identity_path.exists()
-        if key_exists != identity_exists:
-            raise PermissionError("offline device authority is incomplete or revoked")
-        if not key_exists:
+        revoked = self._revocation_path.exists()
+        if not key_exists and not identity_exists and not revoked:
             self._provision(self._key_path, os.urandom(32))
             self._provision(self._identity_path, f"DEVICE-{uuid4().hex.upper()}".encode("ascii"))
-        self._key = self._key_path.read_bytes()
+            key_exists = identity_exists = True
+        elif not key_exists and identity_exists and revoked:
+            self._revoked.set()
+        elif key_exists != identity_exists or revoked:
+            raise PermissionError("offline device authority is incomplete or revoked")
+        if not self._generation_path.exists():
+            self._provision(self._generation_path, b"1\n")
+        try:
+            self._generation = int(self._generation_path.read_text(encoding="ascii").strip())
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise ValueError("offline device generation is corrupt") from exc
+        if self._generation < 1:
+            raise ValueError("offline device generation is corrupt")
+        self._key: bytes | None = self._key_path.read_bytes() if key_exists else None
         self.device_id = self._identity_path.read_text(encoding="ascii")
         self._authority_identities = {
-            self._key_path: self._file_identity(self._key_path),
             self._identity_path: self._file_identity(self._identity_path),
+            self._generation_path: self._file_identity(self._generation_path),
         }
-        if len(self._key) != 32 or not self.device_id.startswith("DEVICE-"):
+        if self._key is not None:
+            self._authority_identities[self._key_path] = self._file_identity(self._key_path)
+        if (self._key is not None and len(self._key) != 32) or not self.device_id.startswith("DEVICE-"):
             raise ValueError("offline device authority is corrupt")
+
+    @property
+    def security_classification(self) -> DeviceSecurityClassification:
+        """Describe proven local protection without overclaiming tree-theft resistance."""
+        return DeviceSecurityClassification()
 
     @staticmethod
     def _provision(path: Path, payload: bytes) -> None:
@@ -421,7 +448,10 @@ class DeviceOfflineVaultRegistry:
             if device_id != self.device_id:
                 raise PermissionError("offline device is not authorized")
             workspace = str(workspace_id)
-            directory = self._root / hashlib.sha256(workspace.encode("utf-8")).hexdigest()
+            if self._key is None:
+                raise PermissionError("offline device is revoked")
+            namespace = self._root if self._generation == 1 else self._root / f"generation-{self._generation}-{hashlib.sha256(self.device_id.encode('utf-8')).hexdigest()}"
+            directory = namespace / hashlib.sha256(workspace.encode("utf-8")).hexdigest()
             if directory.exists() and _is_link_or_reparse(os.lstat(directory)):
                 raise ValueError("offline workspace root cannot be a link or reparse point")
             return DeviceOfflineVault(directory, key=self._key, device_id=self.device_id, workspace_id=workspace, global_revocation_path=self._revocation_path, lifecycle_lock=self._lifecycle_lock, revocation_event=self._revoked)
@@ -435,8 +465,53 @@ class DeviceOfflineVaultRegistry:
 
     def revoke_device(self) -> None:
         with self._lifecycle_lock:
+            if self._revoked.is_set() and self._revocation_path.exists() and not self._key_path.exists():
+                return
             self._require_registry_active()
             if not self._revocation_path.exists():
                 self._provision(self._revocation_path, b"REVOKED\n")
             self._key_path.unlink()
+            self._key = None
             self._revoked.set()
+
+    def replace_revoked_device(self, expected_device_id: str) -> str:
+        """Enroll a new generation while preserving the revoked identity tombstone."""
+        with self._lifecycle_lock:
+            details = os.lstat(self._root)
+            if _is_link_or_reparse(details) or (details.st_dev, details.st_ino) != self._root_identity:
+                raise PermissionError("offline registry root identity changed")
+            if not self._revoked.is_set() or not self._revocation_path.exists() or self._key_path.exists():
+                raise PermissionError("offline device must be revoked before replacement")
+            if expected_device_id != self.device_id:
+                raise PermissionError("offline revoked device identity mismatch")
+            if self._file_identity(self._identity_path) != self._authority_identities[self._identity_path]:
+                raise PermissionError("offline device authority identity changed")
+
+            tombstone = self._root / f".revoked-{hashlib.sha256(self.device_id.encode('utf-8')).hexdigest()}"
+            if not tombstone.exists():
+                self._provision(tombstone, f"{self.device_id}\n{self._generation}\n".encode("ascii"))
+            new_device_id = f"DEVICE-{uuid4().hex.upper()}"
+            new_generation = self._generation + 1
+            nonce = uuid4().hex
+            temporary_key = self._root / f".device-key.{nonce}.new"
+            temporary_identity = self._root / f".device-id.{nonce}.new"
+            temporary_generation = self._root / f".device-generation.{nonce}.new"
+            new_key = os.urandom(32)
+            self._provision(temporary_key, new_key)
+            self._provision(temporary_identity, new_device_id.encode("ascii"))
+            self._provision(temporary_generation, f"{new_generation}\n".encode("ascii"))
+            os.replace(temporary_identity, self._identity_path)
+            os.replace(temporary_generation, self._generation_path)
+            os.replace(temporary_key, self._key_path)
+            self._revocation_path.unlink()
+
+            self.device_id = new_device_id
+            self._generation = new_generation
+            self._key = new_key
+            self._revoked.clear()
+            self._authority_identities = {
+                self._key_path: self._file_identity(self._key_path),
+                self._identity_path: self._file_identity(self._identity_path),
+                self._generation_path: self._file_identity(self._generation_path),
+            }
+            return new_device_id

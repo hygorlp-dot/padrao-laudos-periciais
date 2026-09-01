@@ -135,6 +135,9 @@
     "/v1/workspaces/{workspace_id}/offline-device/revoke": {
       "post": {"summary":"Revoga dispositivo offline em todos os workspaces","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["confirm"],"properties":{"confirm":{"const":true}},"additionalProperties":false}}}},"responses":{"200":{"description":"Dispositivo revogado","content":{"application/json":{"schema":{"type":"object","required":["revoked"],"properties":{"revoked":{"const":true}},"additionalProperties":false}}}}}}
     },
+    "/v1/workspaces/{workspace_id}/offline-device/replace": {
+      "post": {"summary":"Cadastra nova identidade após revogação sem reativar o dispositivo anterior","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["expected_device_id","confirm"],"properties":{"expected_device_id":{"type":"string","minLength":1},"confirm":{"const":true}},"additionalProperties":false}}}},"responses":{"200":{"description":"Nova identidade de dispositivo cadastrada","content":{"application/json":{"schema":{"type":"object","required":["device_id"],"properties":{"device_id":{"type":"string","minLength":1}},"additionalProperties":false}}}},"409":{"description":"Identidade não revogada ou expectativa stale"}}}
+    },
     "/v1/workspaces/{workspace_id}/technical-snapshot": {
       "get": {
         "summary": "Reabre a cadeia técnica canônica reconciliada",

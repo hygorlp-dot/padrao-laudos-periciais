@@ -379,9 +379,11 @@ def test_offline_field_routes_are_private_and_expose_conflicts_without_overwrite
         conflicts=(SimpleNamespace(code="CORRUPT_OFFLINE_PACKAGE", message="Pacote corrompido requer recuperação."),),
     ))
     revoke = RecordingService(None)
+    replace_device = RecordingService("DEVICE-002")
     api = LocalApi(services(
         prepare_offline_inspection=prepare, update_offline_inspection=update,
         get_offline_inspection=get_offline, list_offline_inspections=list_offline, revoke_offline_device=revoke,
+        replace_offline_device=replace_device,
         sync_offline_inspection=sync, offline_device_id="DEVICE-001",
     ), token=TOKEN)
     assert api.handle("POST", f"/v1/workspaces/{WORKSPACE_UUID}/offline-inspection", {"Content-Type": "application/json"}, b'{"device_session_id":"SESSION-001"}').status == 403
@@ -399,6 +401,8 @@ def test_offline_field_routes_are_private_and_expose_conflicts_without_overwrite
     assert decoded(reopened)["package"]["package_id"] == package.package_id
     revoked = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/offline-device/revoke", body={"confirm": True})
     assert revoked.status == 200 and decoded(revoked) == {"revoked": True}
+    replaced = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/offline-device/replace", body={"expected_device_id": "DEVICE-001", "confirm": True})
+    assert replaced.status == 200 and decoded(replaced) == {"device_id": "DEVICE-002"}
     conflicted = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/offline-sync", body={"package_id": package.package_id})
     assert conflicted.status == 409
     assert decoded(conflicted)["conflicts"][0]["code"] == "STALE_PLAN"

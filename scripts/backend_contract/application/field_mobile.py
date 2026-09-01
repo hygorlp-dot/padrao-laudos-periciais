@@ -264,3 +264,12 @@ class RevokeOfflineDevice:
     def execute(self, workspace_id):
         del workspace_id
         self.revoke_device()
+
+
+@dataclass(frozen=True, slots=True)
+class ReplaceRevokedOfflineDevice:
+    replace_device: object
+
+    def execute(self, workspace_id, *, expected_device_id: str) -> str:
+        del workspace_id
+        return self.replace_device(expected_device_id)
