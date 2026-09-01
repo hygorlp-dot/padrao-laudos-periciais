@@ -173,6 +173,7 @@ class AIEvalObservation:
     proposal_id: str
     run_id: str
     source_refs: tuple[SourceRevisionRef, ...]
+    attestation_sha256: str
     _derivation_token: object = dataclass_field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -220,7 +221,33 @@ class AIEvalObservation:
             raise ValueError("AI eval observation source workspace mismatch")
 
 
+def _observation_attestation(values: dict[str, object]) -> str:
+    payload = {
+        key: (
+            value.value
+            if isinstance(value, StrEnum)
+            else [
+                {
+                    "workspace_id": ref.workspace_id,
+                    "document_id": ref.document_id,
+                    "revision_id": ref.revision_id,
+                    "sha256": ref.sha256,
+                    "locator": ref.locator,
+                }
+                for ref in value
+            ]
+            if key == "source_refs"
+            else value
+        )
+        for key, value in values.items()
+        if key not in {"attestation_sha256", "_derivation_token"}
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _new_ai_eval_observation(**values: object) -> AIEvalObservation:
+    values["attestation_sha256"] = _observation_attestation(values)
     return AIEvalObservation(**values, _derivation_token=_OBSERVATION_DERIVATION_TOKEN)
 
 
@@ -367,6 +394,10 @@ def evaluate_ai_dataset(
     if len(observations) != len(expected) or {item.case_id for item in observations} != set(expected):
         raise ValueError("AI eval observation coverage mismatch")
     for item in observations:
+        if item.attestation_sha256 != _observation_attestation({
+            field_name: getattr(item, field_name) for field_name in item.__dataclass_fields__
+        }):
+            raise ValueError("AI eval observation attestation mismatch")
         case = expected[item.case_id]
         if item.dataset_version != dataset.version:
             raise ValueError("AI eval observation dataset version mismatch")

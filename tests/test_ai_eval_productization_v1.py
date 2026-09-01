@@ -69,12 +69,26 @@ def observation(case, *, human_outcome=HumanEvalOutcome.ACCEPTED, **changes):
     return _new_ai_eval_observation(**values)
 
 
+def reobserve(item, **changes):
+    values = {
+        field: getattr(item, field)
+        for field in item.__dataclass_fields__
+        if field not in {"_derivation_token", "attestation_sha256"}
+    }
+    values.update(changes)
+    return _new_ai_eval_observation(**values)
+
+
 def test_observation_cannot_be_self_attested_outside_eval_harness() -> None:
     dataset = load_ai_eval_dataset(DATASET)
     trusted = observation(dataset.cases[0])
     values = {field: getattr(trusted, field) for field in trusted.__dataclass_fields__ if field != "_derivation_token"}
     with pytest.raises(ValueError, match="derived by the evaluation harness"):
         AIEvalObservation(**values)
+
+    forged = replace(trusted, provider="FORGED", profile_id="FORGED", model="FORGED")
+    with pytest.raises(ValueError, match="attestation mismatch"):
+        evaluate_ai_dataset(dataset, (forged, *(observation(case) for case in dataset.cases[1:])))
 
 
 def test_dataset_is_synthetic_versioned_and_covers_every_required_adversarial_class() -> None:
@@ -170,7 +184,7 @@ def test_eval_telemetry_rejects_inconsistent_token_counts() -> None:
 def test_hard_safety_metrics_fail_closed(changes, failure) -> None:
     dataset = load_ai_eval_dataset(DATASET)
     observations = [observation(case) for case in dataset.cases]
-    observations[0] = replace(observations[0], **changes)
+    observations[0] = reobserve(observations[0], **changes)
     report = evaluate_ai_dataset(dataset, tuple(observations))
     assert report.status == "FAIL"
     assert failure in report.failures
@@ -184,9 +198,9 @@ def test_eval_rejects_missing_duplicate_foreign_or_wrong_version_observations() 
     with pytest.raises(ValueError, match="coverage"):
         evaluate_ai_dataset(dataset, (*observations[:-1], observations[0]))
     with pytest.raises(ValueError, match="workspace"):
-        evaluate_ai_dataset(dataset, (replace(observations[0], workspace_id="22222222-2222-4222-8222-222222222222"), *observations[1:]))
+        evaluate_ai_dataset(dataset, (reobserve(observations[0], workspace_id="22222222-2222-4222-8222-222222222222"), *observations[1:]))
     with pytest.raises(ValueError, match="dataset version"):
-        evaluate_ai_dataset(dataset, (replace(observations[0], dataset_version="2.0.0"), *observations[1:]))
+        evaluate_ai_dataset(dataset, (reobserve(observations[0], dataset_version="2.0.0"), *observations[1:]))
 
 
 def test_cost_ledger_fails_before_reservation_exceeds_run_workspace_or_session_ceiling() -> None:
@@ -242,7 +256,7 @@ def test_golden_comparison_separates_quality_grounding_authority_cost_and_latenc
 def test_golden_comparison_never_accepts_absolute_hard_gate_failure() -> None:
     dataset = load_ai_eval_dataset(DATASET)
     observations = [observation(case) for case in dataset.cases]
-    observations[0] = replace(observations[0], self_authorizations=1)
+    observations[0] = reobserve(observations[0], self_authorizations=1)
     failed = evaluate_ai_dataset(dataset, tuple(observations))
     assert failed.status == "FAIL"
     assert compare_eval_reports(failed, failed, max_cost_increase_bps=0, max_latency_increase_bps=0).status == "FAIL"

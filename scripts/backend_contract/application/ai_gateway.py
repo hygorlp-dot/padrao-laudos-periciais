@@ -126,6 +126,7 @@ class RunAIProposal:
         clock: Clock,
         ids: IdGenerator,
         cost_ledger: AICostLedger | None = None,
+        cost_session_id: str = "DEFAULT_AI_SESSION",
     ):
         self._workspaces = workspaces
         self._revisions = revisions
@@ -134,6 +135,9 @@ class RunAIProposal:
         self._clock = clock
         self._ids = ids
         self._cost_ledger = cost_ledger
+        if type(cost_session_id) is not str or not cost_session_id.strip():
+            raise ValueError("AI cost session identity invalid")
+        self._cost_session_id = cost_session_id
 
     def execute(self, request: AIRequest, profile: AIModelProfile) -> AIProposal:
         workspace_id = WorkspaceId.parse(request.workspace_id)
@@ -146,7 +150,7 @@ class RunAIProposal:
             try:
                 self._cost_ledger.authorize_and_reserve(
                     request.workspace_id,
-                    request.context_manifest_hash,
+                    self._cost_session_id,
                     input_tokens=sum(
                         (len(segment.content.encode("utf-8")) + 3) // 4
                         for segment in request.context
