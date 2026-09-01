@@ -644,6 +644,24 @@ def test_eval_observation_reopens_from_real_append_only_repository(tmp_path) -> 
         store.workspaces, store.revisions, None, FixedClock(), lambda _: None
     ).execute(workspace.workspace_id)
     assert b'"AI_EVAL_REPORT"' in backup
+    assert b'"AI_EVAL_DATASET"' in backup
+    def canonical(value):
+        return json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+
+    def reseal(value):
+        value["artifact_revisions"].sort(
+            key=lambda item: (item["artifact_kind"], item["artifact_id"], item["revision"])
+        )
+        value["member_hashes"]["artifact_revisions"] = hashlib.sha256(
+            canonical(value["artifact_revisions"])
+        ).hexdigest()
+        value["manifest_sha256"] = hashlib.sha256(canonical({
+            key: item for key, item in value.items() if key != "manifest_sha256"
+        })).hexdigest()
+        return canonical(value)
+
     missing_observation = json.loads(backup)
     missing_observation["artifact_revisions"] = [
         item for item in missing_observation["artifact_revisions"]
@@ -652,18 +670,19 @@ def test_eval_observation_reopens_from_real_append_only_repository(tmp_path) -> 
             and item["artifact_id"] == observation.attestation_sha256
         )
     ]
-    def canonical(value):
-        return json.dumps(
-            value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
-        ).encode("utf-8")
-    missing_observation["member_hashes"]["artifact_revisions"] = hashlib.sha256(
-        canonical(missing_observation["artifact_revisions"])
-    ).hexdigest()
-    missing_observation["manifest_sha256"] = hashlib.sha256(canonical({
-        key: value for key, value in missing_observation.items() if key != "manifest_sha256"
-    })).hexdigest()
     with pytest.raises(RepositoryIntegrityError, match="AI dependency"):
-        VerifyWorkspaceBackup().execute(canonical(missing_observation))
+        VerifyWorkspaceBackup().execute(reseal(missing_observation))
+
+    reordered = json.loads(backup)
+    report_revision = next(
+        item for item in reordered["artifact_revisions"] if item["artifact_kind"] == "AI_EVAL_REPORT"
+    )
+    report_revision["payload"]["observation_case_ids"].reverse()
+    report_revision["payload"]["observation_attestations"].reverse()
+    report_revision["artifact_id"] = hashlib.sha256(canonical(report_revision["payload"])).hexdigest()
+    report_revision["checksum_sha256"] = report_revision["artifact_id"]
+    with pytest.raises(RepositoryIntegrityError, match="dataset manifest"):
+        VerifyWorkspaceBackup().execute(reseal(reordered))
     store.close()
 
     reopened = SQLiteApplicationStore(path)

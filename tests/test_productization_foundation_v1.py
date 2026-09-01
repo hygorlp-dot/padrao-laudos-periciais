@@ -187,6 +187,7 @@ def test_every_portable_material_artifact_has_an_explicit_finite_strategy() -> N
         "AI_PROPOSAL",
         "AI_EVAL_OBSERVATION",
         "AI_EVAL_REPORT",
+        "AI_EVAL_DATASET",
     }
     assert set(ARTIFACT_COMPATIBILITY) == expected
     assert all(item == {"current_version": "1.0.0", "supported_versions": ("1.0.0",), "migration": None, "future_version_policy": "FAIL_CLOSED"} for item in ARTIFACT_COMPATIBILITY.values())

@@ -31,6 +31,7 @@ AI_RUN_KIND = "AI_RUN"
 AI_PROPOSAL_KIND = "AI_PROPOSAL"
 AI_EVAL_OBSERVATION_KIND = "AI_EVAL_OBSERVATION"
 AI_EVAL_REPORT_KIND = "AI_EVAL_REPORT"
+AI_EVAL_DATASET_KIND = "AI_EVAL_DATASET"
 
 
 class AIProvider(Protocol):
@@ -293,6 +294,7 @@ class RunAIProposal:
         observation = observe_domain_proposal(
             dataset.version, dataset.sha256, case, domain_proposal, run, telemetry, human_outcome
         )
+        self._ensure_eval_dataset(dataset, run.created_at)
         self._persist_eval_observation(observation, run.created_at)
         return observation
 
@@ -301,6 +303,7 @@ class RunAIProposal:
 
         self.verify_persisted(run)
         observation = observe_failed_run(dataset.version, dataset.sha256, case, run)
+        self._ensure_eval_dataset(dataset, run.created_at)
         self._persist_eval_observation(observation, run.created_at)
         return observation
 
@@ -418,6 +421,25 @@ class RunAIProposal:
         )
         if persisted is None or _plain_payload(persisted.payload) != _plain_payload(payload):
             raise AIExecutionFailed("AI_EVAL_OBSERVATION_PERSISTENCE_MISMATCH")
+
+    def _ensure_eval_dataset(self, dataset, created_at: str) -> None:
+        from ..ai_eval_productization import ai_eval_dataset_to_mapping
+
+        workspace_ids = {case.workspace_id for case in dataset.cases}
+        if len(workspace_ids) != 1:
+            raise AIExecutionFailed("AI_EVAL_DATASET_WORKSPACE_MISMATCH")
+        workspace_id = WorkspaceId.parse(next(iter(workspace_ids)))
+        payload = ai_eval_dataset_to_mapping(dataset)
+        persisted = self._revisions.latest(workspace_id, AI_EVAL_DATASET_KIND, dataset.sha256)
+        if persisted is None:
+            self._revisions.append_if_latest(
+                workspace_id=workspace_id,
+                **self._append_args(AI_EVAL_DATASET_KIND, dataset.sha256, created_at, payload),
+                expected_revision=None,
+            )
+            persisted = self._revisions.latest(workspace_id, AI_EVAL_DATASET_KIND, dataset.sha256)
+        if persisted is None or _plain_payload(persisted.payload) != _plain_payload(payload):
+            raise AIExecutionFailed("AI_EVAL_DATASET_PERSISTENCE_MISMATCH")
 
     def _persist_failed_run(
         self,

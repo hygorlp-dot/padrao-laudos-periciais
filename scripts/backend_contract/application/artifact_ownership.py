@@ -28,6 +28,7 @@ APPLICATION_ARTIFACT_OWNERSHIP = {
         ArtifactOwnership("AI_PROPOSAL", "AI Gateway Application Service", True),
         ArtifactOwnership("AI_EVAL_OBSERVATION", "AI Eval Application Service", True),
         ArtifactOwnership("AI_EVAL_REPORT", "AI Eval Application Service", True),
+        ArtifactOwnership("AI_EVAL_DATASET", "AI Eval Application Service", True),
         ArtifactOwnership("PROCESS_METADATA_EXTRACTION", "Process Metadata Application Service", False),
         ArtifactOwnership("PROCESS_METADATA_CONFIRMATION", "Process Metadata Application Service", False),
         ArtifactOwnership("PROCESS_METADATA_SOURCE_CONFIRMATION", "Process Metadata Application Service", False),

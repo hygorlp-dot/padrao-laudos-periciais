@@ -110,11 +110,19 @@ class AIEvalDataset:
 
     @property
     def sha256(self) -> str:
-        payload = {
-            "dataset_id": self.dataset_id,
-            "version": self.version,
-            "corpus_source": self.corpus_source,
-            "private_data": self.private_data,
+        payload = ai_eval_dataset_to_mapping(self)
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+
+def ai_eval_dataset_to_mapping(dataset: AIEvalDataset) -> dict[str, object]:
+    if type(dataset) is not AIEvalDataset:
+        raise TypeError("AI eval dataset required")
+    return {
+            "dataset_id": dataset.dataset_id,
+            "version": dataset.version,
+            "corpus_source": dataset.corpus_source,
+            "private_data": dataset.private_data,
             "cases": [
                 {
                     "case_id": item.case_id,
@@ -125,32 +133,32 @@ class AIEvalDataset:
                     "expected_source_ids": list(item.expected_source_ids),
                     "expected_semantic_markers": list(item.expected_semantic_markers),
                 }
-                for item in self.cases
+                for item in dataset.cases
             ],
         }
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-        return hashlib.sha256(encoded).hexdigest()
 
 
-def load_ai_eval_dataset(path: Path) -> AIEvalDataset:
-    if not isinstance(path, Path) or not path.is_file():
-        raise ValueError("AI eval dataset file missing")
-    raw = json.loads(path.read_text(encoding="utf-8"))
+def ai_eval_dataset_from_mapping(raw: object) -> AIEvalDataset:
     if type(raw) is not dict or set(raw) != {"dataset_id", "version", "corpus_source", "private_data", "cases"}:
         raise ValueError("AI eval dataset shape invalid")
+    if type(raw["cases"]) not in {list, tuple}:
+        raise ValueError("AI eval dataset cases invalid")
     cases = tuple(
         AIEvalCase(
-            case_id=item["case_id"],
-            scenario=AIEvalScenario(item["scenario"]),
-            workspace_id=item["workspace_id"],
-            task_type=item["task_type"],
-            synthetic=item["synthetic"],
-            expected_source_ids=tuple(item["expected_source_ids"]),
+            case_id=item["case_id"], scenario=AIEvalScenario(item["scenario"]),
+            workspace_id=item["workspace_id"], task_type=item["task_type"],
+            synthetic=item["synthetic"], expected_source_ids=tuple(item["expected_source_ids"]),
             expected_semantic_markers=tuple(item["expected_semantic_markers"]),
         )
         for item in raw["cases"]
     )
     return AIEvalDataset(raw["dataset_id"], raw["version"], raw["corpus_source"], raw["private_data"], cases)
+
+
+def load_ai_eval_dataset(path: Path) -> AIEvalDataset:
+    if not isinstance(path, Path) or not path.is_file():
+        raise ValueError("AI eval dataset file missing")
+    return ai_eval_dataset_from_mapping(json.loads(path.read_text(encoding="utf-8")))
 
 
 @dataclass(frozen=True, slots=True)

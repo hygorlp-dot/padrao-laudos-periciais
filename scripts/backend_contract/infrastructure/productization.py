@@ -36,6 +36,7 @@ from ..application.ocr_cache import _page_from_payload
 from ..application.process_metadata import document_metadata_from_payload
 from ..budget_foundation import budget_snapshot_from_mapping
 from ..ai_eval_productization import (
+    ai_eval_dataset_from_mapping,
     ai_eval_observation_from_mapping,
     ai_eval_report_from_mapping,
 )
@@ -220,6 +221,7 @@ _ARTIFACT_VALIDATORS = {
     "AI_PROPOSAL": lambda value: _validate_ai_envelope(value, "AI_PROPOSAL"),
     "AI_EVAL_OBSERVATION": ai_eval_observation_from_mapping,
     "AI_EVAL_REPORT": ai_eval_report_from_mapping,
+    "AI_EVAL_DATASET": ai_eval_dataset_from_mapping,
 }
 ARTIFACT_COMPATIBILITY = {kind: {"current_version": "1.0.0", "supported_versions": ("1.0.0",), "migration": None, "future_version_policy": "FAIL_CLOSED"} for kind in _ARTIFACT_VALIDATORS}
 
@@ -335,6 +337,10 @@ def _expected_internal_artifact_id(kind: str, payload: object) -> str | None:
         return hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
+    if kind == "AI_EVAL_DATASET":
+        return hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
     return None
 
 if frozenset(_ARTIFACT_VALIDATORS) != PORTABLE_PRODUCT_ARTIFACT_KINDS:
@@ -394,6 +400,10 @@ def _revision_from_mapping(value: object, workspace_id: str) -> ArtifactRevision
         payload_workspace = getattr(parsed, "workspace_id", None)
         if payload_workspace is not None and str(payload_workspace) != workspace_id:
             raise RepositoryIntegrityError("backup payload belongs to another workspace")
+        if record.artifact_kind == "AI_EVAL_DATASET" and any(
+            case.workspace_id != workspace_id for case in parsed.cases
+        ):
+            raise RepositoryIntegrityError("backup AI dataset belongs to another workspace")
     else:
         raise RepositoryIntegrityError("backup artifact kind is not portable")
     return record
@@ -464,12 +474,20 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
             if payload["proposal_id"] not in thaw_payload(run.payload)["proposal_ids"]:
                 raise RepositoryIntegrityError("backup AI proposal/run identity diverges")
         elif record.artifact_kind == "AI_EVAL_OBSERVATION":
+            require_ai("AI_EVAL_DATASET", payload["dataset_sha256"])
             run = require_ai("AI_RUN", payload["run_id"])
             if payload["proposal_id"] is not None:
                 proposal = require_ai("AI_PROPOSAL", payload["proposal_id"])
                 if thaw_payload(proposal.payload)["run_id"] != run.artifact_id:
                     raise RepositoryIntegrityError("backup AI observation provenance diverges")
         elif record.artifact_kind == "AI_EVAL_REPORT":
+            dataset_record = require_ai("AI_EVAL_DATASET", payload["dataset_sha256"])
+            dataset = ai_eval_dataset_from_mapping(thaw_payload(dataset_record.payload))
+            if (
+                dataset.version != payload["dataset_version"]
+                or tuple(case.case_id for case in dataset.cases) != tuple(payload["observation_case_ids"])
+            ):
+                raise RepositoryIntegrityError("backup AI report dataset manifest diverges")
             for case_id, attestation in zip(
                 payload["observation_case_ids"],
                 payload["observation_attestations"],
