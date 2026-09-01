@@ -186,6 +186,14 @@ def test_cache_key_binds_workspace_profile_prompt_schema_context_and_parameters(
         replace(ai_request, egress_manifest=replace(ai_request.egress_manifest, egress_class=EgressClass.LOCAL_ONLY)),
         base_profile,
     ) != key
+    profile_mutations = (
+        replace(base_profile, max_input_tokens=3_999),
+        replace(base_profile, max_output_tokens=799),
+        replace(base_profile, cost_ceiling_microusd=999),
+        replace(base_profile, timeout_seconds=29),
+        replace(base_profile, structured_output_required=False),
+    )
+    assert all(ai_result_cache_key(ai_request, item) != key for item in profile_mutations)
 
 
 class LocalRetriever:
