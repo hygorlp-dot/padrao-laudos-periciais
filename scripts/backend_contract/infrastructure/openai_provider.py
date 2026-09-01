@@ -10,7 +10,7 @@ from time import monotonic
 
 from openai import OpenAI
 
-from ..ai_gateway import AIModelProfile, AIRequest, AIResponse, SYSTEM_AUTHORITY_CONTRACT, UsageRecord
+from ..ai_gateway import AIModelProfile, AIRequest, AIResponse, EgressPolicy, SYSTEM_AUTHORITY_CONTRACT, UsageRecord
 from ..application.ai_gateway import AIProviderFailure
 from ..application.models import thaw_payload
 
@@ -104,13 +104,15 @@ class EnvironmentOpenAIClientFactory:
 class OpenAIProvider:
     is_remote = True
 
-    def __init__(self, client, *, monotonic_clock=monotonic):
+    def __init__(self, client, *, egress_policy: EgressPolicy | None = None, monotonic_clock=monotonic):
         if client is None or not hasattr(client, "responses"):
             raise TypeError("OpenAI client inválido")
         self._client = client
+        self._egress_policy = egress_policy or EgressPolicy()
         self._monotonic = monotonic_clock
 
     def execute(self, request: AIRequest, profile: AIModelProfile) -> AIResponse:
+        self._egress_policy.authorize(request)
         if profile.provider != "OPENAI":
             raise AIProviderFailure("PROVIDER_PROFILE_MISMATCH")
         if request.egress_manifest.egress_class.value == "LOCAL_ONLY":
@@ -152,7 +154,7 @@ class OpenAIProvider:
             try:
                 payload = json.loads(response.output_text)
             except (AttributeError, TypeError, json.JSONDecodeError):
-                raise AIProviderFailure("INVALID_STRUCTURED_OUTPUT") from None
+                raise AIProviderFailure("INVALID_STRUCTURED_OUTPUT", latency_ms=latency_ms) from None
         canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
         return AIResponse(
             provider="OPENAI",

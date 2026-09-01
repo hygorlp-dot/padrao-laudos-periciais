@@ -18,6 +18,7 @@ from ..ai_gateway import (
     SourceRevisionRef,
     UsageRecord,
     context_manifest_payload,
+    response_payload_sha256,
 )
 from .models import WorkspaceId, thaw_payload
 from .ports import ArtifactRevisionRepository, Clock, IdGenerator, WorkspaceRepository
@@ -161,6 +162,8 @@ class RunAIProposal:
             jsonschema.Draft202012Validator(thaw_payload(request.structured_output_schema)).validate(
                 thaw_payload(response.payload)
             )
+            if response_payload_sha256(response.payload) != response.response_hash:
+                raise AIProviderFailure("INVALID_RESPONSE_HASH")
         except jsonschema.ValidationError:
             self._persist_failed_run(run_id, created_at, request, profile, response, "INVALID_STRUCTURED_OUTPUT")
             raise AIExecutionFailed("INVALID_STRUCTURED_OUTPUT") from None

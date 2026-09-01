@@ -18,6 +18,7 @@ _SECRET_FIELDS = frozenset(
     {
         "api_key", "apikey", "secret", "authorization", "bearer", "bearer_token",
         "password", "credential", "access_token", "refresh_token", "client_secret",
+        "secret_key", "secret_access_key", "private_key", "session_token", "auth_token",
     }
 )
 SYSTEM_AUTHORITY_CONTRACT = (
@@ -66,7 +67,8 @@ def _timestamp(value: object, field: str) -> str:
 
 
 def _secret_key(key: str) -> bool:
-    normalized = re.sub(r"[^a-z0-9]+", "_", key.casefold()).strip("_")
+    snake_case = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key)
+    normalized = re.sub(r"[^a-z0-9]+", "_", snake_case.casefold()).strip("_")
     compact = normalized.replace("_", "")
     return (
         normalized in _SECRET_FIELDS
@@ -129,6 +131,10 @@ def _canonical_sha256(value: object) -> str:
 
 def structured_output_schema_sha256(schema: object) -> str:
     return _canonical_sha256(schema)
+
+
+def response_payload_sha256(payload: object) -> str:
+    return _canonical_sha256(payload)
 
 
 def prompt_template_sha256(version: str, task_instructions: str) -> str:

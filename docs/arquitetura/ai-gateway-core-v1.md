@@ -1,5 +1,14 @@
 # AI Gateway Core V1
 
+## Defense-in-depth update
+
+`OpenAIProvider` reapplies `EgressPolicy` at the transport boundary. Without
+an explicitly enabled policy, direct remote adapter calls fail before the HTTP
+client. The Application also validates the policy. Before persisting a
+proposal, the Application recomputes the canonical SHA-256 of the response
+payload and requires an exact match with `response_hash`; a mismatch records
+only a sanitized failed AIRun.
+
 ## Estado e escopo
 
 `AI_GATEWAY_CORE_V1` é o slice S10-A da Issue #3. Ele adiciona o boundary

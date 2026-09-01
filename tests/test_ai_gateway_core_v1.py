@@ -23,6 +23,7 @@ from scripts.backend_contract.ai_gateway import (
     context_manifest_sha256,
     context_manifest_payload,
     prompt_template_sha256,
+    response_payload_sha256,
     structured_output_schema_sha256,
 )
 from scripts.backend_contract.application.ai_gateway import (
@@ -252,6 +253,13 @@ def test_ai_proposal_and_run_ids_are_canonical_and_carry_no_authority_field() ->
         "access_token",
         "refresh_token",
         "client_secret",
+        "secret_key",
+        "aws_secret_access_key",
+        "private_key",
+        "session_token",
+        "auth_token",
+        "openaiApiKey",
+        "xApiKey",
     ],
 )
 def test_ai_payload_rejects_secret_shaped_fields(secret_field: str) -> None:
@@ -338,17 +346,23 @@ def profile() -> AIModelProfile:
     )
 
 
-def response(payload=None) -> AIResponse:
+def _legacy_response_fixture(payload=None) -> AIResponse:
+    response_payload = {"claims": ["AlegaÃ§Ã£o sintÃ©tica"]} if payload is None else payload
     return AIResponse(
         provider="OPENAI",
         model="configured-model",
         provider_response_id="response-1",
         payload={"claims": ["Alegação sintética"]} if payload is None else payload,
-        response_hash=SHA256,
+        response_hash=response_payload_sha256(response_payload),
         usage=UsageRecord(100, 20, 30, 130, 500),
         latency_ms=25,
         refusal_state="NONE",
     )
+
+
+def response(payload=None) -> AIResponse:
+    legacy = _legacy_response_fixture(payload)
+    return replace(legacy, response_hash=response_payload_sha256(legacy.payload))
 
 
 def ids(*, success: bool) -> SequenceIds:
@@ -413,6 +427,18 @@ def test_valid_structured_response_persists_run_and_proposal_atomically() -> Non
     assert context_manifest[0]["content_sha256"]
     assert "Trecho sintético." not in repr(context_manifest)
     assert "api_key" not in repr(pair).casefold()
+
+
+def test_forged_provider_response_hash_is_audited_and_never_creates_proposal() -> None:
+    provider = RecordingProvider(result=replace(response(), response_hash="0" * 64))
+    revisions = RecordingRevisions()
+
+    with pytest.raises(AIExecutionFailed, match="INVALID_RESPONSE_HASH"):
+        service(provider, revisions, id_source=ids(success=False)).execute(request(), profile())
+
+    assert revisions.pairs == []
+    assert len(revisions.appended) == 1
+    assert revisions.appended[0]["payload"]["error_classification"] == "INVALID_RESPONSE_HASH"
 
 
 @pytest.mark.parametrize(

@@ -10,6 +10,7 @@ from scripts.backend_contract.ai_gateway import (
     AIContextSegment,
     AIModelProfile,
     EgressClass,
+    EgressPolicy,
     context_manifest_sha256,
 )
 from scripts.backend_contract.application.ai_gateway import AIProviderFailure
@@ -71,7 +72,7 @@ def profile(**changes) -> AIModelProfile:
 
 def test_adapter_uses_responses_strict_schema_and_only_manifest_context() -> None:
     responses = RecordingResponses(result=sdk_response())
-    provider = OpenAIProvider(RecordingClient(responses))
+    provider = OpenAIProvider(RecordingClient(responses), egress_policy=EgressPolicy(remote_sanitized_enabled=True))
     ai_request = request()
 
     result = provider.execute(ai_request, profile())
@@ -116,9 +117,33 @@ def test_openai_adapter_rejects_local_only_before_any_remote_call() -> None:
     assert responses.calls == []
 
 
-def test_document_prompt_injection_remains_user_data_not_system_instruction() -> None:
+@pytest.mark.parametrize(
+    "denied_request",
+    [
+        request(),
+        request(
+            egress_manifest=replace(
+                request().egress_manifest,
+                egress_class=EgressClass.REMOTE_CASE_CONTENT_EXPLICITLY_AUTHORIZED,
+                contains_private_data=True,
+                redaction_manifest=(),
+            )
+        ),
+    ],
+)
+def test_openai_adapter_reapplies_deny_by_default_before_remote_call(denied_request) -> None:
     responses = RecordingResponses(result=sdk_response())
     provider = OpenAIProvider(RecordingClient(responses))
+
+    with pytest.raises(Exception, match="REMOTE_AI_EGRESS_DENIED|PRIVATE_EGRESS_NOT_AUTHORIZED"):
+        provider.execute(denied_request, profile())
+
+    assert responses.calls == []
+
+
+def test_document_prompt_injection_remains_user_data_not_system_instruction() -> None:
+    responses = RecordingResponses(result=sdk_response())
+    provider = OpenAIProvider(RecordingClient(responses), egress_policy=EgressPolicy(remote_sanitized_enabled=True))
     baseline = request()
     injected = replace(
         baseline,
@@ -148,7 +173,7 @@ def test_document_prompt_injection_remains_user_data_not_system_instruction() ->
 
 def test_adapter_rejects_non_structured_profile_and_unapproved_parameters() -> None:
     responses = RecordingResponses(result=sdk_response())
-    provider = OpenAIProvider(RecordingClient(responses))
+    provider = OpenAIProvider(RecordingClient(responses), egress_policy=EgressPolicy(remote_sanitized_enabled=True))
 
     with pytest.raises(AIProviderFailure, match="STRUCTURED_OUTPUT_REQUIRED"):
         provider.execute(request(), profile(structured_output_required=False))
@@ -160,7 +185,7 @@ def test_adapter_rejects_non_structured_profile_and_unapproved_parameters() -> N
 
 def test_adapter_classifies_malformed_output_without_repair_or_second_call() -> None:
     responses = RecordingResponses(result=sdk_response(output_text="not-json"))
-    provider = OpenAIProvider(RecordingClient(responses))
+    provider = OpenAIProvider(RecordingClient(responses), egress_policy=EgressPolicy(remote_sanitized_enabled=True))
 
     with pytest.raises(AIProviderFailure, match="INVALID_STRUCTURED_OUTPUT"):
         provider.execute(request(), profile())
@@ -180,7 +205,7 @@ def test_adapter_classifies_malformed_output_without_repair_or_second_call() -> 
 def test_adapter_sanitizes_official_sdk_failures(error_name: str, expected: str) -> None:
     error_type = type(error_name, (RuntimeError,), {})
     responses = RecordingResponses(error=error_type("sk-secret-must-not-leak"))
-    provider = OpenAIProvider(RecordingClient(responses))
+    provider = OpenAIProvider(RecordingClient(responses), egress_policy=EgressPolicy(remote_sanitized_enabled=True))
 
     with pytest.raises(AIProviderFailure, match=expected) as caught:
         provider.execute(request(), profile())
@@ -193,12 +218,32 @@ def test_adapter_records_elapsed_latency_on_sdk_failure() -> None:
     ticks = iter((10.0, 10.031))
     error_type = type("APITimeoutError", (RuntimeError,), {})
     responses = RecordingResponses(error=error_type("private detail"))
-    provider = OpenAIProvider(RecordingClient(responses), monotonic_clock=lambda: next(ticks))
+    provider = OpenAIProvider(
+        RecordingClient(responses),
+        egress_policy=EgressPolicy(remote_sanitized_enabled=True),
+        monotonic_clock=lambda: next(ticks),
+    )
 
     with pytest.raises(AIProviderFailure) as caught:
         provider.execute(request(), profile())
 
     assert caught.value.code == "TIMEOUT"
+    assert caught.value.latency_ms == 31
+
+
+def test_malformed_output_failure_preserves_elapsed_latency() -> None:
+    ticks = iter((10.0, 10.031))
+    responses = RecordingResponses(result=sdk_response(output_text="not-json"))
+    provider = OpenAIProvider(
+        RecordingClient(responses),
+        egress_policy=EgressPolicy(remote_sanitized_enabled=True),
+        monotonic_clock=lambda: next(ticks),
+    )
+
+    with pytest.raises(AIProviderFailure) as caught:
+        provider.execute(request(), profile())
+
+    assert caught.value.code == "INVALID_STRUCTURED_OUTPUT"
     assert caught.value.latency_ms == 31
 
 
