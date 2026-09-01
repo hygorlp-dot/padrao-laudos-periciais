@@ -74,12 +74,33 @@ class DocumentoPjeTest(unittest.TestCase):
             (RAIZ / "tests/fixtures/pje/documento-simples-valido.json").read_text(encoding="utf-8")
         )
         documento["imagens"] = imagens_sem_rotulo
+        documento = json.loads(json.dumps(documento))
         erros = list(criar_validador().iter_errors(documento))
         self.assertEqual(
             ["/".join(map(str, erro.path)) for erro in erros],
             [],
             "proveniencia geometrica exata de imagem nao deve exigir trecho textual inventado",
         )
+        base = {
+            "documento_id": documento["documento_id"],
+            "id_pje": documento["id_pje"],
+            "pagina_pdf_inicio": 3,
+            "pagina_pdf_fim": 3,
+            "titulo_original": documento["titulo_original"],
+            "tipo_original": documento["tipo_original"],
+            "ordem_indice": documento["ordem_indice"],
+            "data_hora": documento["data_hora"],
+            "status_reconciliacao": documento["status_reconciliacao"],
+            "_processo_cnj": documento["processo_cnj"],
+            "_paginas_manifesto": [],
+        }
+        documento["imagens"][0]["proveniencia"]["bbox"]["x0"] = 99
+        erros_geometria, _ = validar_documento(documento, base)
+        self.assertTrue(
+            any("bbox diverge" in erro for erro in erros_geometria),
+            "bbox da proveniencia deve identificar exatamente a imagem catalogada",
+        )
+        documento["imagens"] = imagens_sem_rotulo
         documento_nao_imagem = json.loads(
             (RAIZ / "tests/fixtures/pje/documento-simples-valido.json").read_text(encoding="utf-8")
         )

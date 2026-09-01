@@ -44,6 +44,18 @@ def validar_documento(documento, documento_manifesto, validador=None):
     for foto in documento["fotografias"]:
         if foto["pagina_pdf"] not in internas:
             erros.append(f"fotografias: objeto aponta para página externa {foto['pagina_pdf']}")
+    for imagem in documento["imagens"]:
+        proveniencia_imagem = imagem.get("proveniencia")
+        pagina_imagem = imagem.get("pagina")
+        if not isinstance(proveniencia_imagem, dict) or not isinstance(pagina_imagem, dict):
+            continue
+        if proveniencia_imagem.get("bbox") != imagem.get("bbox"):
+            erros.append(f"{imagem.get('imagem_id', 'imagem')}: bbox diverge da proveniencia")
+        if (
+            proveniencia_imagem.get("pagina_pdf") != pagina_imagem.get("pagina_pdf")
+            or proveniencia_imagem.get("pagina_documento") != pagina_imagem.get("pagina_documento")
+        ):
+            erros.append(f"{imagem.get('imagem_id', 'imagem')}: pagina diverge da proveniencia")
     for secao in documento["secoes"]:
         if "id_pje" in secao:
             erros.append(f"{secao['secao_id']}: seção interna não pode possuir id_pje")
