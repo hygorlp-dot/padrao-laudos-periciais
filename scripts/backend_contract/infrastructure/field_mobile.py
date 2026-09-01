@@ -179,6 +179,14 @@ class DeviceOfflineVault:
                     continue
                 if item.device_sequence > accepted and superseded is None:
                     pending.append(item)
+                    try:
+                        for media in item.media_manifest:
+                            self.load_media(item.package_id, media.record_id)
+                    except (OSError, UnicodeError, ValueError):
+                        conflicts.append(OfflineInventoryConflict(
+                            "CORRUPT_OFFLINE_MEDIA",
+                            "Mídia offline corrompida requer recuperação explícita.",
+                        ))
             ordered = tuple(sorted(
                 pending,
                 key=lambda item: (item.created_at, item.package_revision, item.package_id),
@@ -288,6 +296,23 @@ class DeviceOfflineVault:
         aad = f"{self._workspace_id}\0{self._device_id}\0{package.device_session_id}\0{package.device_sequence}".encode("utf-8")
         self._exclusive_write(target, b"RECEIPT-V1\0" + nonce + AESGCM(key).encrypt(nonce, clear, aad))
 
+    def has_accepted_sync(self, package: OfflineInspectionPackage) -> bool:
+        key = self._require_active()
+        session_hash = hashlib.sha256(package.device_session_id.encode("utf-8")).hexdigest()
+        path = self._root / f"{session_hash}.{package.device_sequence}.receipt"
+        if not path.exists():
+            return False
+        payload = self._read_payload(path)
+        if not payload.startswith(b"RECEIPT-V1\0") or len(payload) < 40:
+            raise ValueError("offline sync receipt storage is corrupt")
+        nonce, ciphertext = payload[11:23], payload[23:]
+        aad = f"{self._workspace_id}\0{self._device_id}\0{package.device_session_id}\0{package.device_sequence}".encode("utf-8")
+        try:
+            clear = AESGCM(key).decrypt(nonce, ciphertext, aad).decode("utf-8")
+            return clear == f"{package.device_session_id}\n{package.device_sequence}\n{package.package_id}\n{package.package_revision}"
+        except (InvalidTag, UnicodeError) as exc:
+            raise ValueError("offline sync receipt storage is corrupt") from exc
+
     def begin_sync(self, package: OfflineInspectionPackage, expected_revision: int) -> None:
         if type(expected_revision) is not int or expected_revision < 1:
             raise ValueError("offline sync expected revision is invalid")
@@ -380,6 +405,7 @@ class DeviceOfflineVaultRegistry:
         self._identity_path = self._root / ".device-id"
         self._revocation_path = self._root / ".device-revoked"
         self._generation_path = self._root / ".device-generation"
+        self._recover_pending_replacement()
         key_exists = self._key_path.exists()
         identity_exists = self._identity_path.exists()
         revoked = self._revocation_path.exists()
@@ -415,6 +441,14 @@ class DeviceOfflineVaultRegistry:
         """Describe proven local protection without overclaiming tree-theft resistance."""
         return DeviceSecurityClassification()
 
+    @property
+    def lifecycle_status(self) -> dict[str, object]:
+        return {
+            "device_id": self.device_id,
+            "generation": self._generation,
+            "revoked": self._revoked.is_set() or self._revocation_path.exists(),
+        }
+
     @staticmethod
     def _provision(path: Path, payload: bytes) -> None:
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN_BINARY, stat.S_IRUSR | stat.S_IWUSR)
@@ -430,6 +464,72 @@ class DeviceOfflineVaultRegistry:
         if _is_link_or_reparse(details) or not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
             raise PermissionError("offline device authority identity is invalid")
         return details.st_dev, details.st_ino
+
+    def _replacement_path(self, device_id: str) -> Path:
+        return self._root / f".replacement-{hashlib.sha256(device_id.encode('utf-8')).hexdigest()}.json"
+
+    def _replacement_intent(self, path: Path) -> dict:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if set(value) != {"old_device_id", "new_device_id", "new_generation", "new_key_hex"}:
+                raise ValueError
+            key = bytes.fromhex(value["new_key_hex"])
+            if (
+                type(value["old_device_id"]) is not str
+                or type(value["new_device_id"]) is not str
+                or type(value["new_generation"]) is not int
+                or len(key) != 32
+                or not value["new_device_id"].startswith("DEVICE-")
+            ):
+                raise ValueError
+            return value
+        except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise PermissionError("offline device replacement intent is corrupt") from exc
+
+    def _finish_replacement(self, intent: dict, intent_path: Path) -> None:
+        new_key = bytes.fromhex(intent["new_key_hex"])
+        values = (
+            (self._identity_path, intent["new_device_id"].encode("ascii")),
+            (self._generation_path, f"{intent['new_generation']}\n".encode("ascii")),
+            (self._key_path, new_key),
+        )
+        for target, payload in values:
+            if target.exists() and target.read_bytes() == payload:
+                continue
+            temporary = self._root / f".{target.name}.{uuid4().hex}.new"
+            self._provision(temporary, payload)
+            os.replace(temporary, target)
+        if self._revocation_path.exists():
+            self._revocation_path.unlink()
+        complete = intent_path.with_suffix(".complete")
+        if not complete.exists():
+            self._provision(complete, b"COMPLETE\n")
+
+    def _recover_pending_replacement(self) -> None:
+        if not self._identity_path.exists():
+            return
+        current = self._identity_path.read_text(encoding="ascii")
+        matches = []
+        for path in self._root.glob(".replacement-*.json"):
+            if path.with_suffix(".complete").exists():
+                continue
+            intent = self._replacement_intent(path)
+            if current in {intent["old_device_id"], intent["new_device_id"]}:
+                matches.append((path, intent))
+        if len(matches) > 1:
+            raise PermissionError("offline device replacement authority is ambiguous")
+        if matches:
+            path, intent = matches[0]
+            if not self._revocation_path.exists():
+                expected = (
+                    self._key_path.exists()
+                    and self._key_path.read_bytes().hex() == intent["new_key_hex"]
+                    and current == intent["new_device_id"]
+                    and self._generation_path.read_text(encoding="ascii").strip() == str(intent["new_generation"])
+                )
+                if not expected:
+                    raise PermissionError("offline device replacement authority diverged")
+            self._finish_replacement(intent, path)
 
     def _require_registry_active(self) -> None:
         details = os.lstat(self._root)
@@ -487,23 +587,18 @@ class DeviceOfflineVaultRegistry:
             if self._file_identity(self._identity_path) != self._authority_identities[self._identity_path]:
                 raise PermissionError("offline device authority identity changed")
 
-            tombstone = self._root / f".revoked-{hashlib.sha256(self.device_id.encode('utf-8')).hexdigest()}"
-            if not tombstone.exists():
-                self._provision(tombstone, f"{self.device_id}\n{self._generation}\n".encode("ascii"))
             new_device_id = f"DEVICE-{uuid4().hex.upper()}"
             new_generation = self._generation + 1
-            nonce = uuid4().hex
-            temporary_key = self._root / f".device-key.{nonce}.new"
-            temporary_identity = self._root / f".device-id.{nonce}.new"
-            temporary_generation = self._root / f".device-generation.{nonce}.new"
             new_key = os.urandom(32)
-            self._provision(temporary_key, new_key)
-            self._provision(temporary_identity, new_device_id.encode("ascii"))
-            self._provision(temporary_generation, f"{new_generation}\n".encode("ascii"))
-            os.replace(temporary_identity, self._identity_path)
-            os.replace(temporary_generation, self._generation_path)
-            os.replace(temporary_key, self._key_path)
-            self._revocation_path.unlink()
+            intent = {
+                "old_device_id": self.device_id,
+                "new_device_id": new_device_id,
+                "new_generation": new_generation,
+                "new_key_hex": new_key.hex(),
+            }
+            intent_path = self._replacement_path(self.device_id)
+            self._provision(intent_path, json.dumps(intent, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+            self._finish_replacement(intent, intent_path)
 
             self.device_id = new_device_id
             self._generation = new_generation

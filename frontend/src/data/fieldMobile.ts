@@ -6,6 +6,7 @@ export type OfflinePackageEnvelope = {
 };
 export type FieldSyncConflict = { code: string; message: string; record_ids: string[]; requires_explicit_review: boolean };
 export type FieldSyncResult = { accepted: boolean; conflicts: FieldSyncConflict[]; revision: number | null };
+export type OfflineDeviceStatus = { device_id: string; generation: number; revoked: boolean };
 
 async function jsonPost<T>(path: string, body: object, method: "POST" | "PUT" = "POST"): Promise<T> {
   let response: Response;
@@ -49,6 +50,12 @@ export async function listPendingOfflineInspections(workspaceId: string): Promis
     items: OfflinePackageEnvelope["package"][];
     conflicts?: Array<{ code: string; message: string }>;
   };
+}
+
+export async function getOfflineDeviceStatus(workspaceId: string): Promise<OfflineDeviceStatus> {
+  const response = await fetch(`/app-api/v1/workspaces/${workspaceId}/offline-device`, { credentials: "same-origin", cache: "no-store" });
+  if (!response.ok || !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")) throw new Error("FIELD_MOBILE_UNAVAILABLE");
+  return await response.json() as OfflineDeviceStatus;
 }
 
 export function revokeOfflineDevice(workspaceId: string) {

@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 import hashlib
 import json
+import os
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -307,6 +308,75 @@ def test_device_replacement_requires_revocation_and_exact_expected_identity(tmp_
         reopened.replace_revoked_device("DEVICE-WRONG")
 
 
+def test_device_replacement_rolls_forward_after_crash_before_revocation_cleanup(tmp_path: Path, monkeypatch) -> None:
+    registry = DeviceOfflineVaultRegistry(tmp_path)
+    old_device = registry.device_id
+    registry.revoke_device()
+    original_unlink = Path.unlink
+
+    def fail_revocation_unlink(path, *args, **kwargs):
+        if path.name == ".device-revoked":
+            raise OSError("synthetic power loss")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_revocation_unlink)
+    with pytest.raises(OSError, match="power loss"):
+        registry.replace_revoked_device(old_device)
+    monkeypatch.undo()
+
+    recovered = DeviceOfflineVaultRegistry(tmp_path)
+    assert recovered.device_id != old_device
+    assert recovered.lifecycle_status == {"device_id": recovered.device_id, "generation": 2, "revoked": False}
+    with pytest.raises(PermissionError, match="authorized"):
+        recovered.vault_for(WORKSPACE_ID, old_device)
+
+
+@pytest.mark.parametrize("failure_index", [1, 2, 3])
+def test_device_replacement_rolls_forward_after_each_authority_replace(tmp_path: Path, monkeypatch, failure_index: int) -> None:
+    registry = DeviceOfflineVaultRegistry(tmp_path)
+    old_device = registry.device_id
+    registry.revoke_device()
+    original_replace = os.replace
+    calls = 0
+
+    def fail_once(source, target):
+        nonlocal calls
+        calls += 1
+        if calls == failure_index:
+            raise OSError("synthetic replacement crash")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(os, "replace", fail_once)
+    with pytest.raises(OSError, match="replacement crash"):
+        registry.replace_revoked_device(old_device)
+    monkeypatch.undo()
+
+    recovered = DeviceOfflineVaultRegistry(tmp_path)
+    assert recovered.device_id != old_device
+    assert recovered.lifecycle_status["revoked"] is False
+
+
+def test_concurrent_device_replacement_has_one_authoritative_winner(tmp_path: Path) -> None:
+    registry = DeviceOfflineVaultRegistry(tmp_path)
+    old_device = registry.device_id
+    registry.revoke_device()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(lambda _: _replacement_outcome(registry, old_device), range(2)))
+
+    winners = [value for value in outcomes if value.startswith("DEVICE-")]
+    assert len(winners) == 1
+    assert outcomes.count("DENIED") == 1
+    assert DeviceOfflineVaultRegistry(tmp_path).device_id == winners[0]
+
+
+def _replacement_outcome(registry: DeviceOfflineVaultRegistry, expected_device_id: str) -> str:
+    try:
+        return registry.replace_revoked_device(expected_device_id)
+    except (FileExistsError, PermissionError):
+        return "DENIED"
+
+
 def test_workspace_backup_readiness_fails_closed_while_offline_work_is_pending(tmp_path: Path) -> None:
     registry = DeviceOfflineVaultRegistry(tmp_path)
     package = offline_package_from_mapping({**package_mapping(), "device_id": registry.device_id})
@@ -374,7 +444,31 @@ def test_pending_inventory_keeps_valid_capture_visible_beside_corrupt_sibling(tm
     inventory = vault.inventory_pending_packages()
 
     assert [item.package_id for item in inventory.items] == [package.package_id]
-    assert [item.code for item in inventory.conflicts] == ["CORRUPT_OFFLINE_PACKAGE"]
+    assert {item.code for item in inventory.conflicts} == {"CORRUPT_OFFLINE_PACKAGE", "CORRUPT_OFFLINE_MEDIA"}
+
+
+def test_pending_inventory_keeps_package_visible_and_reports_corrupt_media(tmp_path: Path) -> None:
+    original = b"photo-original"
+    mapping = package_mapping()
+    mapping["media_manifest"] = [mapping["media_manifest"][0]]
+    mapping["media_manifest"][0]["original_sha256"] = hashlib.sha256(original).hexdigest()
+    mapping["media_manifest"][0]["byte_size"] = len(original)
+    mapping["inspection_snapshot"]["photos"][0]["original_sha256"] = hashlib.sha256(original).hexdigest()
+    mapping["inspection_snapshot"]["videos"] = []
+    mapping["inspection_snapshot"]["sketches"] = []
+    package = offline_package_from_mapping(mapping)
+    vault = DeviceOfflineVault(tmp_path, key=b"m" * 32, device_id=package.device_id, workspace_id=package.workspace_id)
+    vault.save(package)
+    vault.save_media(package.package_id, "PHOTO-001", original)
+    media_path = vault._media_path(package.package_id, "PHOTO-001")
+    payload = bytearray(media_path.read_bytes())
+    payload[-1] ^= 1
+    media_path.write_bytes(payload)
+
+    inventory = vault.inventory_pending_packages()
+
+    assert [item.package_id for item in inventory.items] == [package.package_id]
+    assert "CORRUPT_OFFLINE_MEDIA" in {item.code for item in inventory.conflicts}
 
 
 def test_revocation_linearizes_after_complete_package_read(tmp_path: Path, monkeypatch) -> None:
@@ -588,8 +682,7 @@ def test_offline_update_sync_and_durable_replay_receipt_form_one_vertical(tmp_pa
     assert decision.accepted and record is saved
     assert vault.list_pending_packages() == ()
     replay, record = sync.execute(WORKSPACE_ID, device_id=package.device_id, package_id=updated.package_id)
-    assert not replay.accepted and record is None
-    assert "DEVICE_REPLAY" in {item.code for item in replay.conflicts}
+    assert replay.accepted and record is current
 
 
 def test_sync_recovers_exact_canonical_save_after_receipt_write_failure(tmp_path: Path, monkeypatch) -> None:

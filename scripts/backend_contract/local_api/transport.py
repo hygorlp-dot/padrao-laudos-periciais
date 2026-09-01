@@ -1056,6 +1056,12 @@ class LocalApi:
                 package = self._services.get_offline_inspection.execute(workspace_id, device_id=offline_device_id, package_id=raw_segments[4])
                 return _json_response(200, {"device_id": offline_device_id, "package": offline_package_to_mapping(package)})
 
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "offline-device":
+                if normalized_method != "GET": return _error(405, "METHOD_NOT_ALLOWED")
+                authority = self._services.offline_device_authority
+                if authority is None: return _error(503, "OFFLINE_STORAGE_UNAVAILABLE")
+                return _json_response(200, authority.lifecycle_status)
+
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("offline-device", "revoke"):
                 if normalized_method != "POST": return _error(405, "METHOD_NOT_ALLOWED")
                 if self._services.revoke_offline_device is None: return _error(503, "OFFLINE_STORAGE_UNAVAILABLE")

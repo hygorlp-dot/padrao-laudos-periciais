@@ -385,6 +385,10 @@ def test_offline_field_routes_are_private_and_expose_conflicts_without_overwrite
         get_offline_inspection=get_offline, list_offline_inspections=list_offline, revoke_offline_device=revoke,
         replace_offline_device=replace_device,
         sync_offline_inspection=sync, offline_device_id="DEVICE-001",
+        offline_device_authority=SimpleNamespace(
+            device_id="DEVICE-001",
+            lifecycle_status={"device_id": "DEVICE-001", "generation": 1, "revoked": False},
+        ),
     ), token=TOKEN)
     assert api.handle("POST", f"/v1/workspaces/{WORKSPACE_UUID}/offline-inspection", {"Content-Type": "application/json"}, b'{"device_session_id":"SESSION-001"}').status == 403
     prepared = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/offline-inspection", body={"device_session_id": "SESSION-001"})
@@ -399,6 +403,8 @@ def test_offline_field_routes_are_private_and_expose_conflicts_without_overwrite
     reopened = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/offline-inspection/{package.package_id}", headers={"X-Local-API-Token": TOKEN})
     assert reopened.status == 200
     assert decoded(reopened)["package"]["package_id"] == package.package_id
+    status = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/offline-device", headers={"X-Local-API-Token": TOKEN})
+    assert decoded(status) == {"device_id": "DEVICE-001", "generation": 1, "revoked": False}
     revoked = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/offline-device/revoke", body={"confirm": True})
     assert revoked.status == 200 and decoded(revoked) == {"revoked": True}
     replaced = request(api, "POST", f"/v1/workspaces/{WORKSPACE_UUID}/offline-device/replace", body={"expected_device_id": "DEVICE-001", "confirm": True})

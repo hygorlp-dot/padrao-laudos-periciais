@@ -101,8 +101,12 @@
             "description": "Inventário offline pendente",
             "content": {"application/json": {"schema": {
               "type": "object",
-              "required": ["items"],
-              "properties": {"items": {"type": "array", "items": {"$ref": "#/components/schemas/OfflineInspectionPackage"}}},
+              "required": ["device_id", "items", "conflicts"],
+              "properties": {
+                "device_id": {"type": "string", "minLength": 1},
+                "items": {"type": "array", "items": {"$ref": "#/components/schemas/OfflineInspectionPackage"}},
+                "conflicts": {"type":"array","items":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","minLength":1},"message":{"type":"string","minLength":1}},"additionalProperties":false}}
+              },
               "additionalProperties": false
             }}}
           }
@@ -131,6 +135,9 @@
     },
     "/v1/workspaces/{workspace_id}/offline-inspection/{package_id}": {
       "get": {"summary":"Reabre revisão offline preservada","parameters":[{"$ref":"#/components/parameters/WorkspaceId"},{"name":"package_id","in":"path","required":true,"schema":{"type":"string","minLength":1}}],"responses":{"200":{"description":"Pacote offline íntegro","content":{"application/json":{"schema":{"$ref":"#/components/schemas/OfflinePackageEnvelope"}}}},"404":{"description":"Pacote ausente"}}}
+    },
+    "/v1/workspaces/{workspace_id}/offline-device": {
+      "get": {"summary":"Consulta identidade e estado do dispositivo mesmo após revogação","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"responses":{"200":{"description":"Estado local do dispositivo","content":{"application/json":{"schema":{"type":"object","required":["device_id","generation","revoked"],"properties":{"device_id":{"type":"string","minLength":1},"generation":{"type":"integer","minimum":1},"revoked":{"type":"boolean"}},"additionalProperties":false}}}}}}
     },
     "/v1/workspaces/{workspace_id}/offline-device/revoke": {
       "post": {"summary":"Revoga dispositivo offline em todos os workspaces","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["confirm"],"properties":{"confirm":{"const":true}},"additionalProperties":false}}}},"responses":{"200":{"description":"Dispositivo revogado","content":{"application/json":{"schema":{"type":"object","required":["revoked"],"properties":{"revoked":{"const":true}},"additionalProperties":false}}}}}}

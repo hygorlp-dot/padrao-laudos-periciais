@@ -397,11 +397,10 @@ class CreateWorkspaceBackup:
     revisions: object
     private_contents: object | None
     clock: object
-    assert_backup_ready: object | None = None
+    assert_backup_ready: object
 
     def execute(self, workspace_id: WorkspaceId) -> bytes:
-        if self.assert_backup_ready is not None:
-            self.assert_backup_ready(workspace_id)
+        self.assert_backup_ready(workspace_id)
         workspace = self.workspaces.get(workspace_id)
         if workspace is None:
             raise ValueError("workspace is unavailable")

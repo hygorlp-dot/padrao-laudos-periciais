@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { getInspectionSession, InspectionSessionApiError, saveInspectionSession, startInspectionSession, uploadInspectionPhoto, type ExecutionState, type InspectionEnvelope, type InspectionSnapshot } from "../data/inspectionSession";
 import { FieldMobileStatus } from "./FieldMobileStatus";
-import { listPendingOfflineInspections, prepareOfflineInspection, replaceOfflineDevice, revokeOfflineDevice, syncOfflineInspection, updateOfflineInspection, type FieldSyncConflict } from "../data/fieldMobile";
+import { getOfflineDeviceStatus, listPendingOfflineInspections, prepareOfflineInspection, replaceOfflineDevice, revokeOfflineDevice, syncOfflineInspection, updateOfflineInspection, type FieldSyncConflict } from "../data/fieldMobile";
 
 type State = { kind: "loading" } | { kind: "ready"; value: InspectionEnvelope } | { kind: "empty" } | { kind: "error" };
 const stateLabel = { PENDING: "Pendente", COMPLETED: "Concluído", PARTIAL: "Execução parcial", NOT_EXECUTED: "Não executado", NOT_APPLICABLE: "Não aplicável", BLOCKED: "Bloqueado" } as const;
@@ -59,6 +59,15 @@ export function InspectionSessionView({ workspaceId }: { workspaceId: string }) 
     getInspectionSession(workspaceId, controller.signal).then(
       async (value) => {
         try {
+          const device = await getOfflineDeviceStatus(workspaceId);
+          if (!controller.signal.aborted) {
+            setOfflineDeviceId(device.device_id);
+            setDeviceRevoked(device.revoked);
+          }
+          if (device.revoked) {
+            if (!controller.signal.aborted) setState({ kind: "ready", value });
+            return;
+          }
           const pending = await listPendingOfflineInspections(workspaceId);
           if (!controller.signal.aborted && pending.device_id) setOfflineDeviceId(pending.device_id);
           const offline = pending.items[0];

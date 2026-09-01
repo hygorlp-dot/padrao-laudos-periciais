@@ -164,6 +164,13 @@ class SyncOfflineInspection:
             ),)), None
         media_verified = vault.verify_media_authority(package_id)
         record, current = self.get_inspection.execute(workspace_id)
+        if vault.has_accepted_sync(package):
+            if current == package.inspection_snapshot:
+                return SyncDecision(True, ()), record
+            return SyncDecision(False, (SyncConflict(
+                "DEVICE_REPLAY",
+                "O pacote já foi sincronizado e o estado canônico avançou.",
+            ),)), None
         sync_intent_revision = vault.sync_intent_expected_revision(package)
         if sync_intent_revision is not None and record.revision == sync_intent_revision + 1:
             if current != package.inspection_snapshot:
