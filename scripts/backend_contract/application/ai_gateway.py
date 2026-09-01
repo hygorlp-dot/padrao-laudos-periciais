@@ -20,7 +20,6 @@ from ..ai_gateway import (
     context_manifest_payload,
     response_payload_sha256,
 )
-from ..ai_eval_productization import AICostLedger
 from .models import WorkspaceId, thaw_payload
 from .ports import ArtifactRevisionRepository, Clock, IdGenerator, WorkspaceRepository
 
@@ -33,6 +32,13 @@ class AIProvider(Protocol):
     is_remote: bool
 
     def execute(self, request: AIRequest, profile: AIModelProfile) -> AIResponse: ...
+
+
+class AICostAuthorizer(Protocol):
+    def authorize_and_reserve(
+        self, workspace_id: str, session_id: str, *, input_tokens: int,
+        output_tokens: int, estimated_cost_microusd: int,
+    ) -> object: ...
 
 
 class AIProviderFailure(RuntimeError):
@@ -122,6 +128,20 @@ def _proposal_payload(item: AIProposal) -> dict[str, object]:
     }
 
 
+def _plain_payload(value):
+    if isinstance(value, dict):
+        return {key: _plain_payload(item) for key, item in value.items()}
+    try:
+        thawed = thaw_payload(value)
+    except TypeError:
+        thawed = value
+    if isinstance(thawed, dict):
+        return {key: _plain_payload(item) for key, item in thawed.items()}
+    if isinstance(thawed, (list, tuple)):
+        return [_plain_payload(item) for item in thawed]
+    return thawed
+
+
 class RunAIProposal:
     def __init__(
         self,
@@ -131,7 +151,7 @@ class RunAIProposal:
         egress_policy: EgressPolicy,
         clock: Clock,
         ids: IdGenerator,
-        cost_ledger: AICostLedger,
+        cost_ledger: AICostAuthorizer,
         cost_session_id: str = "DEFAULT_AI_SESSION",
     ):
         self._workspaces = workspaces
@@ -140,7 +160,7 @@ class RunAIProposal:
         self._egress_policy = egress_policy
         self._clock = clock
         self._ids = ids
-        if type(cost_ledger) is not AICostLedger:
+        if not callable(getattr(cost_ledger, "authorize_and_reserve", None)):
             raise TypeError("AI cost ledger required")
         self._cost_ledger = cost_ledger
         if type(cost_session_id) is not str or not cost_session_id.strip():
@@ -230,6 +250,38 @@ class RunAIProposal:
             expected_latest=(),
         )
         return proposal, run
+
+    def verify_persisted(self, run: AIRun, proposal: AIProposal | None = None) -> None:
+        workspace_id = WorkspaceId.parse(run.workspace_id)
+        persisted_run = self._revisions.latest(workspace_id, AI_RUN_KIND, run.run_id)
+        if persisted_run is None or _plain_payload(persisted_run.payload) != _plain_payload(_run_payload(run)):
+            raise AIExecutionFailed("AI_RUN_PERSISTENCE_MISMATCH")
+        if proposal is not None:
+            persisted_proposal = self._revisions.latest(
+                workspace_id, AI_PROPOSAL_KIND, proposal.proposal_id
+            )
+            if (
+                proposal.run_id != run.run_id
+                or persisted_proposal is None
+                or _plain_payload(persisted_proposal.payload) != _plain_payload(_proposal_payload(proposal))
+            ):
+                raise AIExecutionFailed("AI_PROPOSAL_PERSISTENCE_MISMATCH")
+
+    def observe_persisted_domain_proposal(
+        self, dataset_version, case, raw_proposal, run, domain_proposal, telemetry, human_outcome
+    ):
+        from ..ai_eval_productization import observe_domain_proposal
+
+        self.verify_persisted(run, raw_proposal)
+        return observe_domain_proposal(
+            dataset_version, case, domain_proposal, run, telemetry, human_outcome
+        )
+
+    def observe_persisted_failed_run(self, dataset_version, case, run):
+        from ..ai_eval_productization import observe_failed_run
+
+        self.verify_persisted(run)
+        return observe_failed_run(dataset_version, case, run)
 
     def _persist_failed_run(
         self,

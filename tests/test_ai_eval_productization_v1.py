@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 import pytest
 
 from scripts.backend_contract.ai_eval_productization import (
-    AICostLedger,
     AICostLimits,
     AIEvalObservation,
     AIEvalTelemetry,
@@ -17,6 +18,7 @@ from scripts.backend_contract.ai_eval_productization import (
     observe_domain_proposal,
     observe_failed_run,
 )
+from scripts.backend_contract.infrastructure.ai_cost_ledger import SQLiteAICostLedger
 from scripts.backend_contract.ai_domain_proposals import (
     DomainAIProposal,
     DomainProposalItem,
@@ -199,8 +201,8 @@ def test_immutable_failed_run_is_a_hard_eval_failure() -> None:
     assert "EXECUTION_ERROR" in report.failures
 
 
-def test_cost_ledger_fails_before_reservation_exceeds_run_workspace_or_session_ceiling() -> None:
-    ledger = AICostLedger(AICostLimits(1_000, 5_000, 8_000, 6_000))
+def test_cost_ledger_fails_before_reservation_exceeds_run_workspace_or_session_ceiling(tmp_path: Path) -> None:
+    ledger = SQLiteAICostLedger(AICostLimits(1_000, 5_000, 8_000, 6_000), tmp_path / "cost.sqlite3")
     first = ledger.authorize_and_reserve(WORKSPACE, "session-1", input_tokens=400, output_tokens=100, estimated_cost_microusd=3_000)
     assert first.workspace_cost_microusd == 3_000
     assert first.session_cost_microusd == 3_000
@@ -213,8 +215,10 @@ def test_cost_ledger_fails_before_reservation_exceeds_run_workspace_or_session_c
     assert ledger.snapshot(WORKSPACE, "session-1") == first
 
 
-def test_cost_ledger_enforces_accumulated_workspace_and_session_token_ceilings_atomically() -> None:
-    ledger = AICostLedger(AICostLimits(1_000, 5_000, 20_000, 20_000, 700, 600))
+def test_cost_ledger_enforces_accumulated_workspace_and_session_token_ceilings_atomically(tmp_path: Path) -> None:
+    ledger = SQLiteAICostLedger(
+        AICostLimits(1_000, 5_000, 20_000, 20_000, 700, 600), tmp_path / "tokens.sqlite3"
+    )
     first = ledger.authorize_and_reserve(
         WORKSPACE, "session-1", input_tokens=400, output_tokens=100, estimated_cost_microusd=1
     )
@@ -232,14 +236,39 @@ def test_cost_ledger_enforces_accumulated_workspace_and_session_token_ceilings_a
 def test_cost_ledger_reopens_persisted_workspace_and_session_totals(tmp_path: Path) -> None:
     path = tmp_path / "ai-cost-ledger.sqlite3"
     limits = AICostLimits(1_000, 5_000, 20_000, 20_000)
-    first = AICostLedger(limits, path)
+    first = SQLiteAICostLedger(limits, path)
     first.authorize_and_reserve(
         WORKSPACE, "stable-session", input_tokens=100, output_tokens=20, estimated_cost_microusd=500
     )
 
-    reopened = AICostLedger(limits, path)
+    reopened = SQLiteAICostLedger(limits, path)
     assert reopened.snapshot(WORKSPACE, "stable-session").session_cost_microusd == 500
     assert reopened.snapshot(WORKSPACE, "stable-session").reserved_tokens == 120
+
+
+def test_sqlite_cost_check_and_insert_is_atomic_across_independent_ledgers(tmp_path: Path) -> None:
+    path = tmp_path / "concurrent-cost.sqlite3"
+    limits = AICostLimits(1_000, 100, 100, 100)
+    ledgers = (SQLiteAICostLedger(limits, path), SQLiteAICostLedger(limits, path))
+    barrier = Barrier(2)
+
+    def reserve(ledger):
+        barrier.wait()
+        try:
+            ledger.authorize_and_reserve(
+                WORKSPACE, "stable-session", input_tokens=1, output_tokens=1,
+                estimated_cost_microusd=60,
+            )
+            return "ACCEPT"
+        except ValueError:
+            return "DENY"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(executor.map(reserve, ledgers))
+    assert sorted(results) == ["ACCEPT", "DENY"]
+    assert SQLiteAICostLedger(limits, path).snapshot(
+        WORKSPACE, "stable-session"
+    ).workspace_cost_microusd == 60
 
 
 def test_golden_comparison_separates_quality_grounding_authority_cost_and_latency() -> None:

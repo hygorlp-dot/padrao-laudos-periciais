@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
+import tempfile
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from types import MappingProxyType
 from uuid import UUID, uuid4
@@ -28,11 +30,10 @@ from scripts.backend_contract.ai_gateway import (
     structured_output_schema_sha256,
 )
 from scripts.backend_contract.ai_eval_productization import (
-    AICostLedger,
     AICostLimits,
     load_ai_eval_dataset,
-    observe_failed_run,
 )
+from scripts.backend_contract.infrastructure.ai_cost_ledger import SQLiteAICostLedger
 from scripts.backend_contract.application.ai_gateway import (
     AIExecutionFailed,
     AIProvider,
@@ -386,6 +387,7 @@ class RecordingRevisions:
     def __init__(self):
         self.appended = []
         self.pairs = []
+        self.records = {}
 
     def append(self, **value):
         self.appended.append(value)
@@ -393,11 +395,18 @@ class RecordingRevisions:
 
     def append_if_latest(self, **value):
         self.appended.append(value)
+        self.records[(value["artifact_kind"], value["artifact_id"])] = value["payload"]
         return value
 
     def append_pair_if_latest(self, **value):
         self.pairs.append(value)
+        for item in (value["first"], value["second"]):
+            self.records[(item["artifact_kind"], item["artifact_id"])] = item["payload"]
         return value["first"], value["second"]
+
+    def latest(self, _workspace_id, artifact_kind, artifact_id):
+        payload = self.records.get((artifact_kind, artifact_id))
+        return None if payload is None else SimpleNamespace(payload=payload)
 
 
 class RecordingProvider(AIProvider):
@@ -453,8 +462,9 @@ def ids(*, success: bool) -> SequenceIds:
     return SequenceIds(*(str(uuid4()) for _ in range(count)))
 
 
-def generous_cost_ledger() -> AICostLedger:
-    return AICostLedger(AICostLimits(100_000, 100_000, 1_000_000, 1_000_000))
+def generous_cost_ledger() -> SQLiteAICostLedger:
+    path = Path(tempfile.gettempdir()) / f"ai-cost-test-{uuid4()}.sqlite3"
+    return SQLiteAICostLedger(AICostLimits(100_000, 100_000, 1_000_000, 1_000_000), path)
 
 
 def service(provider, revisions, *, policy=None, id_source=None, cost_ledger=None) -> RunAIProposal:
@@ -472,7 +482,10 @@ def service(provider, revisions, *, policy=None, id_source=None, cost_ledger=Non
 def test_accumulated_cost_budget_fails_before_provider_execution() -> None:
     provider = RecordingProvider(result=response())
     revisions = RecordingRevisions()
-    ledger = AICostLedger(AICostLimits(10_000, 30_000, 20_000, 20_000))
+    ledger = SQLiteAICostLedger(
+        AICostLimits(10_000, 30_000, 20_000, 20_000),
+        Path(tempfile.gettempdir()) / f"ai-cost-test-{uuid4()}.sqlite3",
+    )
 
     with pytest.raises(AIExecutionFailed, match="COST_OR_TOKEN_BUDGET_EXCEEDED"):
         service(provider, revisions, cost_ledger=ledger).execute(request(), profile())
@@ -581,14 +594,15 @@ def test_persisted_provider_failure_enters_eval_as_hard_failure_observation() ->
     dataset = load_ai_eval_dataset(Path(__file__).parent / "fixtures" / "ai-eval-dataset-v1.json")
     case = dataset.cases[0]
     failed_request = replace(request(), task_type=case.task_type)
+    revisions = RecordingRevisions()
+    gateway = service(
+        RecordingProvider(error=AIProviderFailure("TIMEOUT")), revisions,
+        id_source=ids(success=False),
+    )
     with pytest.raises(AIExecutionFailed, match="TIMEOUT") as caught:
-        service(
-            RecordingProvider(error=AIProviderFailure("TIMEOUT")),
-            RecordingRevisions(),
-            id_source=ids(success=False),
-        ).execute(failed_request, profile())
+        gateway.execute(failed_request, profile())
 
-    observation = observe_failed_run(dataset.version, case, caught.value.run)
+    observation = gateway.observe_persisted_failed_run(dataset.version, case, caught.value.run)
     assert observation.error_classification == "TIMEOUT"
     assert observation.schema_valid is False
     assert observation.proposal_id is None

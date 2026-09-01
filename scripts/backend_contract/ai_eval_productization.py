@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import json
 import hashlib
-import sqlite3
 from dataclasses import dataclass, field as dataclass_field
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
-from threading import Lock
 from types import MappingProxyType
 from uuid import UUID
 
@@ -18,7 +16,6 @@ from .ai_gateway import AIRun, SourceRevisionRef
 
 
 _OBSERVATION_DERIVATION_TOKEN = object()
-_PERSISTENT_LEDGER_LOCKS: dict[str, Lock] = {}
 
 
 class AIEvalScenario(StrEnum):
@@ -578,111 +575,6 @@ class AICostReservation:
     workspace_cost_microusd: int
     session_cost_microusd: int
     reserved_tokens: int
-
-
-class AICostLedger:
-    def __init__(self, limits: AICostLimits, database_path: Path | None = None):
-        if type(limits) is not AICostLimits:
-            raise TypeError("AI cost limits required")
-        self._limits = limits
-        self._database_path = database_path
-        lock_key = str(database_path.resolve()) if database_path is not None else ""
-        self._lock = _PERSISTENT_LEDGER_LOCKS.setdefault(lock_key, Lock()) if lock_key else Lock()
-        if database_path is not None:
-            database_path.parent.mkdir(parents=True, exist_ok=True)
-            with sqlite3.connect(database_path) as connection:
-                connection.execute(
-                    "CREATE TABLE IF NOT EXISTS ai_cost_reservation ("
-                    "workspace_id TEXT NOT NULL, session_id TEXT NOT NULL, "
-                    "tokens INTEGER NOT NULL, cost_microusd INTEGER NOT NULL)"
-                )
-        else:
-            self._memory_rows: list[tuple[str, str, int, int]] = []
-
-    @property
-    def persistent(self) -> bool:
-        return self._database_path is not None
-
-    def _totals(self, workspace_id: str, session_id: str) -> tuple[int, int, int]:
-        if self._database_path is None:
-            rows = self._memory_rows
-        else:
-            with sqlite3.connect(self._database_path) as connection:
-                rows = list(connection.execute(
-                    "SELECT workspace_id, session_id, tokens, cost_microusd FROM ai_cost_reservation"
-                ))
-        workspace_cost = sum(cost for workspace, _session, _tokens, cost in rows if workspace == workspace_id)
-        session_cost = sum(
-            cost for workspace, session, _tokens, cost in rows
-            if workspace == workspace_id and session == session_id
-        )
-        session_tokens = sum(
-            tokens for workspace, session, tokens, _cost in rows
-            if workspace == workspace_id and session == session_id
-        )
-        return workspace_cost, session_cost, session_tokens
-
-    def authorize_and_reserve(
-        self,
-        workspace_id: str,
-        session_id: str,
-        *,
-        input_tokens: int,
-        output_tokens: int,
-        estimated_cost_microusd: int,
-    ) -> AICostReservation:
-        _uuid(workspace_id, "workspace_id")
-        _text(session_id, "session_id")
-        if any(type(value) is not int or value < 0 for value in (input_tokens, output_tokens, estimated_cost_microusd)):
-            raise ValueError("AI cost reservation values invalid")
-        run_tokens = input_tokens + output_tokens
-        if run_tokens > self._limits.max_run_tokens:
-            raise ValueError("AI run token ceiling exceeded")
-        if estimated_cost_microusd > self._limits.max_run_cost_microusd:
-            raise ValueError("AI run cost ceiling exceeded")
-        with self._lock:
-            prior_workspace_cost, prior_session_cost, prior_session_tokens = self._totals(workspace_id, session_id)
-            if self._database_path is None:
-                workspace_tokens = sum(tokens for workspace, _session, tokens, _cost in self._memory_rows if workspace == workspace_id) + run_tokens
-            else:
-                with sqlite3.connect(self._database_path) as connection:
-                    workspace_tokens = connection.execute(
-                        "SELECT COALESCE(SUM(tokens), 0) FROM ai_cost_reservation WHERE workspace_id = ?",
-                        (workspace_id,),
-                    ).fetchone()[0] + run_tokens
-            workspace_cost = prior_workspace_cost + estimated_cost_microusd
-            session_cost = prior_session_cost + estimated_cost_microusd
-            session_tokens = prior_session_tokens + run_tokens
-            if session_cost > self._limits.max_session_cost_microusd:
-                raise ValueError("AI session cost ceiling exceeded")
-            if workspace_cost > self._limits.max_workspace_cost_microusd:
-                raise ValueError("AI workspace cost ceiling exceeded")
-            if self._limits.max_session_tokens is not None and session_tokens > self._limits.max_session_tokens:
-                raise ValueError("AI session token ceiling exceeded")
-            if self._limits.max_workspace_tokens is not None and workspace_tokens > self._limits.max_workspace_tokens:
-                raise ValueError("AI workspace token ceiling exceeded")
-            row = (workspace_id, session_id, run_tokens, estimated_cost_microusd)
-            if self._database_path is None:
-                self._memory_rows.append(row)
-            else:
-                with sqlite3.connect(self._database_path) as connection:
-                    connection.execute("INSERT INTO ai_cost_reservation VALUES (?, ?, ?, ?)", row)
-            return AICostReservation(
-                workspace_id, session_id, workspace_cost, session_cost, session_tokens
-            )
-
-    def snapshot(self, workspace_id: str, session_id: str) -> AICostReservation:
-        _uuid(workspace_id, "workspace_id")
-        _text(session_id, "session_id")
-        with self._lock:
-            workspace_cost, session_cost, session_tokens = self._totals(workspace_id, session_id)
-            return AICostReservation(
-                workspace_id,
-                session_id,
-                workspace_cost,
-                session_cost,
-                session_tokens,
-            )
 
 
 @dataclass(frozen=True, slots=True)

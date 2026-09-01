@@ -21,7 +21,6 @@ from scripts.backend_contract.ai_eval_productization import (
     HumanEvalOutcome,
     evaluate_ai_dataset,
     load_ai_eval_dataset,
-    observe_domain_proposal,
 )
 from scripts.backend_contract.ai_gateway import (
     AIContextSegment,
@@ -52,6 +51,20 @@ ITEM_TYPES = {
     DomainProposalKind.TECHNICAL_FINDING: "UNCERTAINTY_DESCRIPTION",
 }
 
+SAFE_CONTENT = {
+    AIEvalScenario.SOURCE_CONFLICT: "Conflict preserved; no source is silently preferred.",
+    AIEvalScenario.STALE_SOURCE: "Only the current reviewed revision may ground the proposal.",
+    AIEvalScenario.MISSING_EVIDENCE: "Evidence gap remains explicit; no fact is invented.",
+    AIEvalScenario.CROSS_WORKSPACE_MATERIAL: "Foreign workspace material is excluded.",
+    AIEvalScenario.REPRESENTATIVE_VS_PARTY: "Representative is not promoted to party.",
+    AIEvalScenario.ALLEGATION_VS_DOCUMENTED_FACT: "Allegation remains distinct from documented fact.",
+    AIEvalScenario.DOCUMENTED_FACT_VS_FINDING: "Documented fact remains distinct from technical finding.",
+    AIEvalScenario.REJECTED_HUMAN_REVIEW: "Rejected review never becomes authority.",
+    AIEvalScenario.CONTRARY_EVIDENCE: "Contrary evidence remains visible.",
+    AIEvalScenario.AMBIGUOUS_QUESITO: "Ambiguity is preserved for professional review.",
+    AIEvalScenario.UNSUPPORTED_TECHNICAL_CONCLUSION: "Unsupported conclusion is withheld as uncertainty.",
+}
+
 
 def test_stage10_longitudinal_synthetic_oracle_preserves_grounding_authority_and_isolation() -> None:
     dataset = load_ai_eval_dataset(DATASET)
@@ -70,7 +83,8 @@ def test_stage10_longitudinal_synthetic_oracle_preserves_grounding_authority_and
             content = f"Synthetic reviewed evidence for {case.scenario.value}: {document_id}"
             priority = (
                 ContextPriority.CONTRARY_EVIDENCE
-                if case.scenario is AIEvalScenario.CONTRARY_EVIDENCE and source_ordinal == 1
+                    if case.scenario in {AIEvalScenario.CONTRARY_EVIDENCE, AIEvalScenario.SOURCE_CONFLICT}
+                    and source_ordinal == 1
                 else ContextPriority.EXPLICIT_TARGET
             )
             candidates.append(
@@ -108,7 +122,7 @@ def test_stage10_longitudinal_synthetic_oracle_preserves_grounding_authority_and
         payload = {
             "items": [{
                     "item_type": ITEM_TYPES[kind],
-                    "content": "Synthetic proposal requiring professional review.",
+                    "content": SAFE_CONTENT[case.scenario],
                     "source_refs": [
                         {
                             "workspace_id": ref.workspace_id,
@@ -122,10 +136,10 @@ def test_stage10_longitudinal_synthetic_oracle_preserves_grounding_authority_and
                 }]
         }
         revisions = RecordingRevisions()
-        raw_proposal, run = service(RecordingProvider(result=response(payload)), revisions).execute_with_run(
-            request, profile()
-        )
+        gateway = service(RecordingProvider(result=response(payload)), revisions)
+        raw_proposal, run = gateway.execute_with_run(request, profile())
         assert len(revisions.pairs) == 1
+        gateway.verify_persisted(run, raw_proposal)
         proposal = validate_domain_proposal(raw_proposal, kind)
         telemetry = AIEvalTelemetry(
             run.provider,
@@ -146,7 +160,11 @@ def test_stage10_longitudinal_synthetic_oracle_preserves_grounding_authority_and
             if case.scenario is AIEvalScenario.REJECTED_HUMAN_REVIEW
             else HumanEvalOutcome.ACCEPTED
         )
-        observations.append(observe_domain_proposal(dataset.version, case, proposal, run, telemetry, outcome))
+        observations.append(
+            gateway.observe_persisted_domain_proposal(
+                dataset.version, case, raw_proposal, run, proposal, telemetry, outcome
+            )
+        )
 
     report = evaluate_ai_dataset(dataset, tuple(observations))
 

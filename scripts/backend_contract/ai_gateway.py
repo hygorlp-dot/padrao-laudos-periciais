@@ -462,7 +462,7 @@ class AIRun:
         _timestamp(self.created_at, "created_at")
         _text(self.profile_id, "profile_id")
         if type(self.cache_hit) is not bool:
-            raise TypeError("cache_hit invÃ¡lido")
+            raise TypeError("cache_hit invalid")
         object.__setattr__(self, "model_parameters", _freeze_json(self.model_parameters, reject_secrets=True))
 
 
