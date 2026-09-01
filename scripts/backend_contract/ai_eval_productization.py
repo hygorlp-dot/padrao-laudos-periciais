@@ -156,6 +156,7 @@ def load_ai_eval_dataset(path: Path) -> AIEvalDataset:
 @dataclass(frozen=True, slots=True)
 class AIEvalObservation:
     dataset_version: str
+    dataset_sha256: str
     case_id: str
     workspace_id: str
     task_type: str
@@ -197,7 +198,7 @@ class AIEvalObservation:
         ):
             _text(getattr(self, field), field)
         _uuid(self.workspace_id, "workspace_id")
-        for field in ("prompt_template_hash", "structured_output_schema_hash"):
+        for field in ("dataset_sha256", "prompt_template_hash", "structured_output_schema_hash"):
             value = getattr(self, field)
             if type(value) is not str or len(value) != 64 or any(item not in "0123456789abcdef" for item in value):
                 raise ValueError(f"{field} invalid")
@@ -305,6 +306,7 @@ class AIEvalTelemetry:
 
 def observe_domain_proposal(
     dataset_version: str,
+    dataset_sha256: str,
     case: AIEvalCase,
     proposal: DomainAIProposal,
     run: AIRun,
@@ -351,6 +353,7 @@ def observe_domain_proposal(
     semantics_valid = combined_content == expected_content
     return AIEvalObservation._from_verified_boundary(
         dataset_version=dataset_version,
+        dataset_sha256=dataset_sha256,
         case_id=case.case_id,
         workspace_id=case.workspace_id,
         task_type=case.task_type,
@@ -385,6 +388,7 @@ def observe_domain_proposal(
 
 def observe_failed_run(
     dataset_version: str,
+    dataset_sha256: str,
     case: AIEvalCase,
     run: AIRun,
     human_outcome: HumanEvalOutcome = HumanEvalOutcome.REJECTED,
@@ -403,6 +407,7 @@ def observe_failed_run(
     refs = run.source_refs
     return AIEvalObservation._from_verified_boundary(
         dataset_version=dataset_version,
+        dataset_sha256=dataset_sha256,
         case_id=case.case_id,
         workspace_id=case.workspace_id,
         task_type=case.task_type,
@@ -443,6 +448,7 @@ def _rate(numerator: int, denominator: int) -> str:
 
 @dataclass(frozen=True, slots=True)
 class AIEvalReport:
+    workspace_id: str
     dataset_id: str
     dataset_version: str
     dataset_sha256: str
@@ -467,14 +473,50 @@ class AIEvalReport:
     cache_hits: int
     refusal_or_error_count: int
     versions: tuple[str, ...]
+    observation_attestations: tuple[str, ...]
 
     def __post_init__(self) -> None:
+        _uuid(self.workspace_id, "workspace_id")
         if self.status not in {"PASS", "FAIL"} or self.status != ("PASS" if not self.failures else "FAIL"):
             raise ValueError("AI eval report status diverges from failures")
-        if type(self.failures) is not tuple or type(self.versions) is not tuple:
+        if (
+            type(self.failures) is not tuple
+            or type(self.versions) is not tuple
+            or type(self.observation_attestations) is not tuple
+        ):
             raise TypeError("AI eval report immutable collections required")
         if len(self.dataset_sha256) != 64:
             raise ValueError("AI eval dataset hash invalid")
+
+
+def ai_eval_observation_from_mapping(value: object) -> AIEvalObservation:
+    if type(value) is not dict:
+        raise ValueError("AI eval observation payload invalid")
+    expected = set(AIEvalObservation.__dataclass_fields__) - {"_derivation_token"}
+    if set(value) != expected:
+        raise ValueError("AI eval observation fields invalid")
+    values = dict(value)
+    attestation = values.pop("attestation_sha256")
+    values["human_outcome"] = HumanEvalOutcome(values["human_outcome"])
+    refs = values["source_refs"]
+    if type(refs) not in {list, tuple}:
+        raise ValueError("AI eval observation sources invalid")
+    values["source_refs"] = tuple(SourceRevisionRef(**dict(ref)) for ref in refs)
+    result = AIEvalObservation._from_verified_boundary(**values)
+    if result.attestation_sha256 != attestation:
+        raise ValueError("AI eval observation attestation mismatch")
+    return result
+
+
+def ai_eval_report_from_mapping(value: object) -> AIEvalReport:
+    if type(value) is not dict or set(value) != set(AIEvalReport.__dataclass_fields__):
+        raise ValueError("AI eval report fields invalid")
+    values = dict(value)
+    for field in ("failures", "versions", "observation_attestations"):
+        if type(values[field]) not in {list, tuple}:
+            raise ValueError("AI eval report immutable collection invalid")
+        values[field] = tuple(values[field])
+    return AIEvalReport(**values)
 
 
 def evaluate_ai_dataset(
@@ -496,6 +538,8 @@ def evaluate_ai_dataset(
         case = expected[item.case_id]
         if item.dataset_version != dataset.version:
             raise ValueError("AI eval observation dataset version mismatch")
+        if item.dataset_sha256 != dataset.sha256:
+            raise ValueError("AI eval observation dataset hash mismatch")
         if item.workspace_id != case.workspace_id:
             raise ValueError("AI eval observation workspace mismatch")
         if item.task_type != case.task_type:
@@ -540,7 +584,11 @@ def evaluate_ai_dataset(
         ))
         for item in observations
     }))
+    workspace_ids = {item.workspace_id for item in observations}
+    if len(workspace_ids) != 1:
+        raise ValueError("AI eval report requires one workspace")
     return AIEvalReport(
+        workspace_id=next(iter(workspace_ids)),
         dataset_id=dataset.dataset_id,
         dataset_version=dataset.version,
         dataset_sha256=dataset.sha256,
@@ -567,6 +615,10 @@ def evaluate_ai_dataset(
         cache_hits=sum(item.cache_hit for item in observations),
         refusal_or_error_count=sum(item.error_classification is not None for item in observations),
         versions=versions,
+        observation_attestations=tuple(
+            next(item.attestation_sha256 for item in observations if item.case_id == case.case_id)
+            for case in dataset.cases
+        ),
     )
 
 

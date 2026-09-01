@@ -19,7 +19,6 @@ from scripts.backend_contract.ai_eval_productization import (
     AIEvalScenario,
     AIEvalTelemetry,
     HumanEvalOutcome,
-    evaluate_ai_dataset,
     load_ai_eval_dataset,
 )
 from scripts.backend_contract.ai_gateway import (
@@ -162,7 +161,7 @@ def test_stage10_longitudinal_synthetic_oracle_preserves_grounding_authority_and
         )
         observations.append(
             gateway.observe_persisted_domain_proposal(
-                dataset.version, case, raw_proposal, run, proposal, telemetry, outcome
+                dataset, case, raw_proposal, run, proposal, telemetry, outcome
             )
         )
 

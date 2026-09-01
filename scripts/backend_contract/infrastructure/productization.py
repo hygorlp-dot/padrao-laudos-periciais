@@ -35,6 +35,10 @@ from ..application.artifact_ownership import (
 from ..application.ocr_cache import _page_from_payload
 from ..application.process_metadata import document_metadata_from_payload
 from ..budget_foundation import budget_snapshot_from_mapping
+from ..ai_eval_productization import (
+    ai_eval_observation_from_mapping,
+    ai_eval_report_from_mapping,
+)
 from ..case_analysis import case_analysis_from_mapping
 from ..delivery_foundation import delivery_snapshot_from_mapping
 from ..delivery_renderer import validate_delivery_artifact, validate_final_artifact, validate_supporting_artifact
@@ -176,6 +180,32 @@ def workspace_backup_to_mapping(value: WorkspaceBackup) -> dict[str, Any]:
     return result
 
 
+@dataclass(frozen=True, slots=True)
+class _ValidatedAIArtifact:
+    workspace_id: str
+
+
+def _validate_ai_envelope(value: object, kind: str) -> _ValidatedAIArtifact:
+    fields = {
+        "AI_RUN": {
+            "run_id", "workspace_id", "task_type", "provider", "model", "model_parameters",
+            "prompt_template_version", "prompt_template_hash", "structured_output_schema_hash",
+            "context_manifest", "context_manifest_hash", "source_refs", "egress_class",
+            "redaction_manifest", "usage", "latency_ms", "provider_response_id", "response_hash",
+            "refusal_state", "error_classification", "proposal_ids", "created_at", "profile_id",
+            "cache_hit",
+        },
+        "AI_PROPOSAL": {
+            "proposal_id", "workspace_id", "task_type", "source_refs", "proposal_payload",
+            "provider", "model", "run_id", "created_at", "confidence_score",
+        },
+    }[kind]
+    data = _exact(value, fields, kind)
+    workspace_id = str(WorkspaceId.parse(data["workspace_id"]))
+    canonical_payload_json(data)
+    return _ValidatedAIArtifact(workspace_id)
+
+
 _ARTIFACT_VALIDATORS = {
     "BUDGET_SNAPSHOT_V1": budget_snapshot_from_mapping,
     "CASE_ANALYSIS_SNAPSHOT_V1": case_analysis_from_mapping,
@@ -186,6 +216,10 @@ _ARTIFACT_VALIDATORS = {
     "PROCESS_CASE": ProcessCaseData.from_mapping,
     "REPORT_SNAPSHOT_V1": report_snapshot_from_mapping,
     "TECHNICAL_SNAPSHOT_V1": technical_snapshot_from_mapping,
+    "AI_RUN": lambda value: _validate_ai_envelope(value, "AI_RUN"),
+    "AI_PROPOSAL": lambda value: _validate_ai_envelope(value, "AI_PROPOSAL"),
+    "AI_EVAL_OBSERVATION": ai_eval_observation_from_mapping,
+    "AI_EVAL_REPORT": ai_eval_report_from_mapping,
 }
 ARTIFACT_COMPATIBILITY = {kind: {"current_version": "1.0.0", "supported_versions": ("1.0.0",), "migration": None, "future_version_policy": "FAIL_CLOSED"} for kind in _ARTIFACT_VALIDATORS}
 
@@ -291,6 +325,16 @@ def _expected_internal_artifact_id(kind: str, payload: object) -> str | None:
         names = ("document_sha256", "page_number", "engine", "engine_version", "model_version", "config_version")
         key = tuple(payload.get(name) for name in names)
         return hashlib.sha256(json.dumps(key, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+    if kind == "AI_RUN":
+        return payload.get("run_id") if type(payload.get("run_id")) is str else None
+    if kind == "AI_PROPOSAL":
+        return payload.get("proposal_id") if type(payload.get("proposal_id")) is str else None
+    if kind == "AI_EVAL_OBSERVATION":
+        return payload.get("attestation_sha256") if type(payload.get("attestation_sha256")) is str else None
+    if kind == "AI_EVAL_REPORT":
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
     return None
 
 if frozenset(_ARTIFACT_VALIDATORS) != PORTABLE_PRODUCT_ARTIFACT_KINDS:

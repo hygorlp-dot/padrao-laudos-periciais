@@ -39,7 +39,10 @@ DATASET = ROOT / "tests" / "fixtures" / "ai-eval-dataset-v1.json"
 WORKSPACE = "11111111-1111-4111-8111-111111111111"
 
 
-def observation(case, *, human_outcome=HumanEvalOutcome.ACCEPTED, content: str | None = None):
+def observation(
+    case, *, human_outcome=HumanEvalOutcome.ACCEPTED, content: str | None = None,
+    dataset_sha256: str | None = None,
+):
     refs = tuple(
         SourceRevisionRef(case.workspace_id, item, "revision-1", "a" * 64, "segment=1")
         for item in case.expected_source_ids
@@ -68,7 +71,10 @@ def observation(case, *, human_outcome=HumanEvalOutcome.ACCEPTED, content: str |
         "response-1", "c" * 64, "NONE", None, (proposal.proposal_id,),
         "2026-09-01T12:00:00+00:00", telemetry.profile_id, telemetry.cache_hit,
     )
-    return observe_domain_proposal("1.0.0", case, proposal, run, telemetry, human_outcome)
+    return observe_domain_proposal(
+        "1.0.0", dataset_sha256 or load_ai_eval_dataset(DATASET).sha256,
+        case, proposal, run, telemetry, human_outcome,
+    )
 
 
 def test_observation_cannot_be_self_attested_outside_eval_harness() -> None:
@@ -174,7 +180,7 @@ def test_success_observation_is_derived_from_immutable_domain_proposal_and_exact
         "response-1", "c" * 64, "NONE", None, (proposal.proposal_id,),
         "2026-09-01T12:00:00+00:00", telemetry.profile_id, telemetry.cache_hit,
     )
-    result = observe_domain_proposal("1.0.0", case, proposal, run, telemetry, HumanEvalOutcome.ACCEPTED)
+    result = observe_domain_proposal("1.0.0", dataset.sha256, case, proposal, run, telemetry, HumanEvalOutcome.ACCEPTED)
     assert result.expected_source_hits == len(case.expected_source_ids)
     assert result.unsourced_material_proposals == 0
     assert result.wrong_authority_promotions == result.self_authorizations == 0
@@ -197,6 +203,12 @@ def test_eval_rejects_missing_duplicate_foreign_or_wrong_version_observations() 
         evaluate_ai_dataset(dataset, (*observations[:-1], observations[0]))
     with pytest.raises(ValueError, match="attestation"):
         evaluate_ai_dataset(dataset, (replace(observations[0], dataset_version="2.0.0"), *observations[1:]))
+    changed = replace(
+        dataset,
+        cases=(replace(dataset.cases[0], expected_semantic_markers=("changed corpus",)), *dataset.cases[1:]),
+    )
+    with pytest.raises(ValueError, match="dataset hash mismatch"):
+        evaluate_ai_dataset(changed, observations)
 
 
 def test_immutable_failed_run_is_a_hard_eval_failure() -> None:
@@ -210,7 +222,7 @@ def test_immutable_failed_run_is_a_hard_eval_failure() -> None:
         EgressClass.LOCAL_ONLY, (), None, 31, None, None, "UNKNOWN", "TIMEOUT", (),
         "2026-09-01T12:00:00+00:00", successful.profile_id, False,
     )
-    observations = (observe_failed_run(dataset.version, dataset.cases[0], run),) + tuple(
+    observations = (observe_failed_run(dataset.version, dataset.sha256, dataset.cases[0], run),) + tuple(
         observation(case) for case in dataset.cases[1:]
     )
     report = evaluate_ai_dataset(dataset, observations)
@@ -322,6 +334,8 @@ def test_golden_comparison_rejects_changed_corpus_under_same_id_and_version() ->
         dataset,
         cases=(replace(dataset.cases[0], expected_source_ids=("different-source",)), *dataset.cases[1:]),
     )
-    current = evaluate_ai_dataset(changed, tuple(observation(case) for case in changed.cases))
+    current = evaluate_ai_dataset(
+        changed, tuple(observation(case, dataset_sha256=changed.sha256) for case in changed.cases)
+    )
     with pytest.raises(ValueError, match="dataset mismatch"):
         compare_eval_reports(baseline, current, max_cost_increase_bps=0, max_latency_increase_bps=0)

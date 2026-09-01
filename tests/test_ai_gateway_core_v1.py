@@ -43,6 +43,7 @@ from scripts.backend_contract.application.ai_gateway import (
 from scripts.backend_contract.application.models import PericiaWorkspace, WorkspaceId
 from scripts.backend_contract.application.ports import RepositoryConflict
 from scripts.backend_contract.infrastructure.sqlite import SQLiteApplicationStore
+from scripts.backend_contract.infrastructure.productization import CreateWorkspaceBackup
 
 
 WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
@@ -602,7 +603,7 @@ def test_persisted_provider_failure_enters_eval_as_hard_failure_observation() ->
     with pytest.raises(AIExecutionFailed, match="TIMEOUT") as caught:
         gateway.execute(failed_request, profile())
 
-    observation = gateway.observe_persisted_failed_run(dataset.version, case, caught.value.run)
+    observation = gateway.observe_persisted_failed_run(dataset, case, caught.value.run)
     assert observation.error_classification == "TIMEOUT"
     assert observation.schema_valid is False
     assert observation.proposal_id is None
@@ -613,7 +614,6 @@ def test_persisted_provider_failure_enters_eval_as_hard_failure_observation() ->
 def test_eval_observation_reopens_from_real_append_only_repository(tmp_path) -> None:
     path = tmp_path / "ai-eval-reopen.sqlite3"
     dataset = load_ai_eval_dataset(Path(__file__).parent / "fixtures" / "ai-eval-dataset-v1.json")
-    case = dataset.cases[0]
     store = SQLiteApplicationStore(path)
     workspace = WorkspaceRepo().item
     store.workspaces.create(workspace)
@@ -621,11 +621,24 @@ def test_eval_observation_reopens_from_real_append_only_repository(tmp_path) -> 
         store.workspaces, store.revisions,
         RecordingProvider(error=AIProviderFailure("TIMEOUT")),
         EgressPolicy(remote_sanitized_enabled=True), FixedClock(),
-        ids(success=False), generous_cost_ledger(),
+        SequenceIds(*(str(uuid4()) for _ in range(40))), generous_cost_ledger(),
     )
-    with pytest.raises(AIExecutionFailed) as caught:
-        gateway.execute(replace(request(), task_type=case.task_type), profile())
-    observation = gateway.observe_persisted_failed_run(dataset.version, case, caught.value.run)
+    observations = []
+    for case in dataset.cases:
+        with pytest.raises(AIExecutionFailed) as caught:
+            gateway.execute(replace(request(), task_type=case.task_type), profile())
+        observations.append(gateway.observe_persisted_failed_run(dataset, case, caught.value.run))
+    report = gateway.evaluate_persisted_dataset(dataset, tuple(observations))
+    observation = observations[0]
+    report_id = next(
+        item.artifact_id
+        for item in store.revisions.list_workspace(workspace.workspace_id)
+        if item.artifact_kind == "AI_EVAL_REPORT"
+    )
+    backup = CreateWorkspaceBackup(
+        store.workspaces, store.revisions, None, FixedClock(), lambda _: None
+    ).execute(workspace.workspace_id)
+    assert b'"AI_EVAL_REPORT"' in backup
     store.close()
 
     reopened = SQLiteApplicationStore(path)
@@ -638,6 +651,23 @@ def test_eval_observation_reopens_from_real_append_only_repository(tmp_path) -> 
         assert len(reopened.revisions.list_all(
             workspace.workspace_id, "AI_EVAL_OBSERVATION", observation.attestation_sha256
         )) == 1
+        report_record = reopened.revisions.latest(
+            workspace.workspace_id, "AI_EVAL_REPORT", report_id
+        )
+        assert report_record is not None
+        assert report_record.payload["observation_attestations"] == report.observation_attestations
+        assert len(report_record.payload["observation_attestations"]) == len(dataset.cases)
+        reopened_gateway = RunAIProposal(
+            reopened.workspaces, reopened.revisions,
+            RecordingProvider(error=AIProviderFailure("UNUSED")),
+            EgressPolicy(), FixedClock(), ids(success=False), generous_cost_ledger(),
+        )
+        loaded_observation = reopened_gateway.load_persisted_eval_observation(
+            WORKSPACE_ID, observation.attestation_sha256
+        )
+        loaded_report = reopened_gateway.load_persisted_eval_report(WORKSPACE_ID, report_id)
+        assert loaded_observation == observation
+        assert loaded_report == report
     finally:
         reopened.close()
 

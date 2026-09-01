@@ -285,22 +285,22 @@ class RunAIProposal:
                 raise AIExecutionFailed("AI_PROPOSAL_PERSISTENCE_MISMATCH")
 
     def observe_persisted_domain_proposal(
-        self, dataset_version, case, raw_proposal, run, domain_proposal, telemetry, human_outcome
+        self, dataset, case, raw_proposal, run, domain_proposal, telemetry, human_outcome
     ):
         from ..ai_eval_productization import observe_domain_proposal
 
         self.verify_persisted(run, raw_proposal)
         observation = observe_domain_proposal(
-            dataset_version, case, domain_proposal, run, telemetry, human_outcome
+            dataset.version, dataset.sha256, case, domain_proposal, run, telemetry, human_outcome
         )
         self._persist_eval_observation(observation, run.created_at)
         return observation
 
-    def observe_persisted_failed_run(self, dataset_version, case, run):
+    def observe_persisted_failed_run(self, dataset, case, run):
         from ..ai_eval_productization import observe_failed_run
 
         self.verify_persisted(run)
-        observation = observe_failed_run(dataset_version, case, run)
+        observation = observe_failed_run(dataset.version, dataset.sha256, case, run)
         self._persist_eval_observation(observation, run.created_at)
         return observation
 
@@ -318,6 +318,11 @@ class RunAIProposal:
             ):
                 raise AIExecutionFailed("AI_EVAL_OBSERVATION_PERSISTENCE_MISMATCH")
         report = evaluate_ai_dataset(dataset, observations)
+        if report.observation_attestations != tuple(
+            next(item.attestation_sha256 for item in observations if item.case_id == case.case_id)
+            for case in dataset.cases
+        ):
+            raise AIExecutionFailed("AI_EVAL_REPORT_MANIFEST_MISMATCH")
         report_payload = _eval_payload(report)
         report_id = hashlib.sha256(
             json.dumps(report_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -336,6 +341,41 @@ class RunAIProposal:
         if persisted is None or _plain_payload(persisted.payload) != _plain_payload(report_payload):
             raise AIExecutionFailed("AI_EVAL_REPORT_PERSISTENCE_MISMATCH")
         return report
+
+    def load_persisted_eval_observation(self, workspace_id: str, attestation_sha256: str):
+        from ..ai_eval_productization import ai_eval_observation_from_mapping
+
+        record = self._revisions.latest(
+            WorkspaceId.parse(workspace_id), AI_EVAL_OBSERVATION_KIND, attestation_sha256
+        )
+        if record is None:
+            raise AIExecutionFailed("AI_EVAL_OBSERVATION_NOT_FOUND")
+        try:
+            observation = ai_eval_observation_from_mapping(_plain_payload(record.payload))
+        except (TypeError, ValueError) as exc:
+            raise AIExecutionFailed("AI_EVAL_OBSERVATION_PERSISTENCE_MISMATCH") from exc
+        if observation.workspace_id != workspace_id or observation.attestation_sha256 != attestation_sha256:
+            raise AIExecutionFailed("AI_EVAL_OBSERVATION_PERSISTENCE_MISMATCH")
+        return observation
+
+    def load_persisted_eval_report(self, workspace_id: str, report_id: str):
+        from ..ai_eval_productization import ai_eval_report_from_mapping
+
+        record = self._revisions.latest(
+            WorkspaceId.parse(workspace_id), AI_EVAL_REPORT_KIND, report_id
+        )
+        if record is None:
+            raise AIExecutionFailed("AI_EVAL_REPORT_NOT_FOUND")
+        payload = _plain_payload(record.payload)
+        calculated = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        if calculated != report_id:
+            raise AIExecutionFailed("AI_EVAL_REPORT_PERSISTENCE_MISMATCH")
+        try:
+            return ai_eval_report_from_mapping(payload)
+        except (TypeError, ValueError) as exc:
+            raise AIExecutionFailed("AI_EVAL_REPORT_PERSISTENCE_MISMATCH") from exc
 
     def _persist_eval_observation(self, observation, created_at: str) -> None:
         workspace_id = WorkspaceId.parse(observation.workspace_id)
