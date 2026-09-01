@@ -17,12 +17,14 @@ from scripts.backend_contract.ai_context_routing import (
     ai_result_cache_key,
     select_context,
 )
-from scripts.backend_contract.application.ai_context_routing import BuildRoutedAIRequest
+from scripts.backend_contract.application.ai_context_routing import BuildRoutedAIRequest, PrivacyProcessedContext
 from scripts.backend_contract.ai_gateway import (
     AIContextSegment,
     AIModelProfile,
     EgressClass,
+    EgressDenied,
     EgressManifest,
+    EgressPolicy,
     SourceRevisionRef,
     context_manifest_sha256,
 )
@@ -189,12 +191,27 @@ class SourceAuthority:
         return ref in self.refs
 
 
+class PrivacyAuthority:
+    def classify_and_redact(self, workspace_id: str, segments: tuple[AIContextSegment, ...]):
+        contains_private = any("CPF " in item.content for item in segments)
+        return PrivacyProcessedContext(
+            workspace_id=workspace_id,
+            segments=segments,
+            redaction_manifest=("CPF_PRESENT",) if contains_private else (),
+            contains_private_data=contains_private,
+        )
+
+
 def test_application_builds_request_from_only_the_audited_local_selection() -> None:
     selected = candidate("target", ContextPriority.EXPLICIT_TARGET, 20, 900)
     omitted = candidate("support", ContextPriority.SUPPORTING, 80, 999)
     retriever = LocalRetriever((omitted, selected))
 
-    routed = BuildRoutedAIRequest(retriever, SourceAuthority((selected.segment.source, omitted.segment.source))).execute(
+    routed = BuildRoutedAIRequest(
+        retriever,
+        SourceAuthority((selected.segment.source, omitted.segment.source)),
+        PrivacyAuthority(),
+    ).execute(
         request(),
         evidence_classes=("EXPLICIT_TARGET", "CONTRARY_EVIDENCE", "SUPPORTING"),
         max_input_tokens=20,
@@ -214,7 +231,7 @@ def test_application_builds_request_from_only_the_audited_local_selection() -> N
 def test_application_fails_closed_when_retriever_returns_foreign_context() -> None:
     retriever = LocalRetriever((candidate("foreign", ContextPriority.EXACT_EVIDENCE, 10, 1, workspace=OTHER),))
     with pytest.raises(ValueError, match="workspace"):
-        BuildRoutedAIRequest(retriever, SourceAuthority(())).execute(
+        BuildRoutedAIRequest(retriever, SourceAuthority(()), PrivacyAuthority()).execute(
             request(),
             evidence_classes=("EXPLICIT_TARGET", "CONTRARY_EVIDENCE"),
             max_input_tokens=100,
@@ -224,13 +241,17 @@ def test_application_fails_closed_when_retriever_returns_foreign_context() -> No
 def test_application_requires_contrary_retrieval_and_current_source_authority() -> None:
     target = candidate("target", ContextPriority.EXPLICIT_TARGET, 10, 1)
     retriever = LocalRetriever((target,))
-    builder = BuildRoutedAIRequest(retriever, SourceAuthority((target.segment.source,)))
+    builder = BuildRoutedAIRequest(retriever, SourceAuthority((target.segment.source,)), PrivacyAuthority())
     with pytest.raises(ValueError, match="CONTRARY_EVIDENCE"):
         builder.execute(request(), evidence_classes=("EXPLICIT_TARGET",), max_input_tokens=100)
 
     forged = replace(target, segment=replace(target.segment, source=replace(target.segment.source, sha256="f" * 64)))
     with pytest.raises(ValueError, match="current source"):
-        BuildRoutedAIRequest(LocalRetriever((forged,)), SourceAuthority((target.segment.source,))).execute(
+        BuildRoutedAIRequest(
+            LocalRetriever((forged,)),
+            SourceAuthority((target.segment.source,)),
+            PrivacyAuthority(),
+        ).execute(
             request(),
             evidence_classes=("EXPLICIT_TARGET", "CONTRARY_EVIDENCE"),
             max_input_tokens=100,
@@ -241,6 +262,61 @@ def test_token_budget_is_derived_from_content_not_retriever_claim() -> None:
     segment = candidate("large", ContextPriority.EXPLICIT_TARGET, 1, 1).segment
     with pytest.raises(ValueError, match="estimated_tokens"):
         ContextCandidate(segment=replace(segment, content="x" * 1_000_000), priority=ContextPriority.EXPLICIT_TARGET, estimated_tokens=1, relevance_micros=1)
+
+
+def test_routed_context_privacy_is_reclassified_and_old_authorization_is_cleared() -> None:
+    private = candidate("private", ContextPriority.EXPLICIT_TARGET, 10, 1)
+    private = replace(
+        private,
+        segment=replace(private.segment, content="CPF 123.456.789-00"),
+        estimated_tokens=5,
+    )
+    base = request()
+    stale_authorization = replace(
+        base.egress_manifest,
+        explicitly_authorized=True,
+        redaction_manifest=("STALE",),
+    )
+    routed = BuildRoutedAIRequest(
+        LocalRetriever((private,)),
+        SourceAuthority((private.segment.source,)),
+        PrivacyAuthority(),
+    ).execute(
+        replace(base, egress_manifest=stale_authorization),
+        evidence_classes=("EXPLICIT_TARGET", "CONTRARY_EVIDENCE"),
+        max_input_tokens=10,
+    )
+
+    assert routed.egress_manifest.contains_private_data is True
+    assert routed.egress_manifest.redaction_manifest == ("CPF_PRESENT",)
+    assert routed.egress_manifest.explicitly_authorized is False
+    with pytest.raises(EgressDenied, match="REMOTE_SANITIZED_MANIFEST_INVALID"):
+        EgressPolicy(remote_sanitized_enabled=True).authorize(routed)
+
+
+def test_privacy_authority_cannot_change_source_identity_or_expand_past_budget() -> None:
+    target = candidate("target", ContextPriority.EXPLICIT_TARGET, 10, 1)
+
+    class BadPrivacyAuthority:
+        def __init__(self, segment: AIContextSegment):
+            self.segment = segment
+
+        def classify_and_redact(self, workspace_id: str, segments: tuple[AIContextSegment, ...]):
+            return PrivacyProcessedContext(workspace_id, (self.segment,), (), False)
+
+    changed_source = replace(target.segment, source=replace(target.segment.source, revision_id="forged"))
+    expanded = replace(target.segment, content="x" * 1_000)
+    for processed, message in ((changed_source, "source identity"), (expanded, "token budget")):
+        with pytest.raises(ValueError, match=message):
+            BuildRoutedAIRequest(
+                LocalRetriever((target,)),
+                SourceAuthority((target.segment.source,)),
+                BadPrivacyAuthority(processed),
+            ).execute(
+                request(),
+                evidence_classes=("EXPLICIT_TARGET", "CONTRARY_EVIDENCE"),
+                max_input_tokens=10,
+            )
 
 
 def test_local_result_cache_invalidates_stale_source_and_never_crosses_workspace() -> None:
