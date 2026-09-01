@@ -433,20 +433,28 @@ class DeviceOfflineVaultRegistry:
                 self._lifecycle_migration_path,
                 json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode("utf-8"),
             )
-        migration_consumed = (
-            self._lifecycle_migration_path.exists()
-            and self._lifecycle_migration_path.read_bytes().startswith(b"CONSUMED-V1\n")
-        )
+        migration_bytes = self._lifecycle_migration_path.read_bytes() if self._lifecycle_migration_path.exists() else None
+        migration_consumed = migration_bytes is not None and migration_bytes.startswith(b"CONSUMED-V1\n")
+        if migration_consumed:
+            lines = migration_bytes.splitlines()
+            if len(lines) != 2 or lines[0] != b"CONSUMED-V1" or len(lines[1]) != 64 or migration_bytes != b"CONSUMED-V1\n" + lines[1] + b"\n":
+                raise PermissionError("offline lifecycle migration tombstone is corrupt")
+            try:
+                int(lines[1], 16)
+            except ValueError as exc:
+                raise PermissionError("offline lifecycle migration tombstone is corrupt") from exc
         migration_recorded = self._lifecycle_migration_path.exists() and not migration_consumed
+        if migration_recorded:
+            expected_tombstone = b"CONSUMED-V1\n" + hashlib.sha256(migration_bytes).hexdigest().encode("ascii") + b"\n"
+            self._migration_tombstone_sha256 = hashlib.sha256(expected_tombstone).hexdigest()
+        elif migration_consumed:
+            self._migration_tombstone_sha256 = hashlib.sha256(migration_bytes).hexdigest()
+        else:
+            self._migration_tombstone_sha256 = None
         migration_completed = self._lifecycle_migration_complete_path.exists()
         if migration_completed and not migration_consumed:
             raise PermissionError("offline lifecycle migration completion is inconsistent")
-        if migration_consumed and not migration_completed:
-            self._provision(
-                self._lifecycle_migration_complete_path,
-                hashlib.sha256(self._lifecycle_migration_path.read_bytes()).hexdigest().encode("ascii") + b"\n",
-            )
-            migration_completed = True
+        completion_recovery_required = migration_consumed and not migration_completed
         migration_pending = (
             migration_recorded
             and not migration_completed
@@ -542,6 +550,11 @@ class DeviceOfflineVaultRegistry:
             except (OSError, UnicodeError, ValueError) as exc:
                 raise PermissionError("offline lifecycle migration completion is corrupt") from exc
         self._validate_lifecycle_state()
+        if completion_recovery_required:
+            self._provision(
+                self._lifecycle_migration_complete_path,
+                hashlib.sha256(self._lifecycle_migration_path.read_bytes()).hexdigest().encode("ascii") + b"\n",
+            )
 
     @property
     def security_classification(self) -> DeviceSecurityClassification:
@@ -672,6 +685,7 @@ class DeviceOfflineVaultRegistry:
         unsigned = json.dumps({
             "device_id": device_id,
             "identity_version": "V2",
+            "migration_tombstone_sha256": self._migration_tombstone_sha256,
             "generation": generation,
             "device_key_sha256": hashlib.sha256(key).hexdigest(),
         }, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -687,11 +701,12 @@ class DeviceOfflineVaultRegistry:
             unsigned, supplied_mac = self._lifecycle_state_path.read_bytes().splitlines()
             expected = hmac.new(self._lifecycle_key, unsigned, hashlib.sha256).hexdigest().encode("ascii")
             value = json.loads(unsigned.decode("utf-8"))
-            if not hmac.compare_digest(supplied_mac, expected) or set(value) != {"device_id", "identity_version", "generation", "device_key_sha256"}:
+            if not hmac.compare_digest(supplied_mac, expected) or set(value) != {"device_id", "identity_version", "migration_tombstone_sha256", "generation", "device_key_sha256"}:
                 raise ValueError
             if (
                 value["device_id"] != self.device_id
                 or value["identity_version"] != "V2"
+                or value["migration_tombstone_sha256"] != self._migration_tombstone_sha256
                 or not self._identity_path.read_bytes().startswith(b"V2\n")
                 or value["generation"] != self._generation
                 or (self._key is not None and value["device_key_sha256"] != hashlib.sha256(self._key).hexdigest())

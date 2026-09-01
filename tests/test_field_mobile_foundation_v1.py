@@ -598,6 +598,19 @@ def test_completion_cannot_self_authorize_replayed_json_migration_record(tmp_pat
         DeviceOfflineVaultRegistry(tmp_path)
 
 
+def test_mutated_consumed_tombstone_cannot_be_resealed_after_completion_loss(tmp_path: Path) -> None:
+    root = tmp_path / "offline-field-v1"
+    root.mkdir()
+    (root / ".device-key").write_bytes(b"L" * 32)
+    (root / ".device-id").write_text("DEVICE-" + "A" * 32, encoding="ascii")
+    DeviceOfflineVaultRegistry(tmp_path)
+    (root / ".lifecycle-migration-v1").write_bytes(b"CONSUMED-V1\n" + b"f" * 64 + b"\n")
+    (root / ".lifecycle-migration-v1.complete").unlink()
+
+    with pytest.raises(PermissionError, match="committed lifecycle state is corrupt"):
+        DeviceOfflineVaultRegistry(tmp_path)
+
+
 def _replacement_outcome(registry: DeviceOfflineVaultRegistry, expected_device_id: str) -> str:
     try:
         return registry.replace_revoked_device(expected_device_id)
