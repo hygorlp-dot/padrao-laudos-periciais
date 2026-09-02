@@ -9,6 +9,7 @@ import {
 } from "../data/materials";
 import { navigate } from "../app/router";
 import { workspacePath } from "../routes/routeCatalog";
+import { PjeDocumentAvailability } from "./PjeDocumentAvailability";
 
 type MaterialIntakeViewProps = { workspaceId: string };
 type ViewState =
@@ -34,6 +35,7 @@ export function MaterialIntakeView({ workspaceId }: MaterialIntakeViewProps) {
   const [selected, setSelected] = useState<File | null>(null);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  const [inventoryRefresh, setInventoryRefresh] = useState(0);
   const importButton = useRef<HTMLButtonElement | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const activeImport = useRef<AbortController | null>(null);
@@ -69,6 +71,7 @@ export function MaterialIntakeView({ workspaceId }: MaterialIntakeViewProps) {
           ? { kind: "ready", items: [...current.items, imported] }
           : current);
         setSelected(null);
+        setInventoryRefresh((value) => value + 1);
         if (fileInput.current !== null) fileInput.current.value = "";
       }
     } catch (error) {
@@ -184,6 +187,7 @@ export function MaterialIntakeView({ workspaceId }: MaterialIntakeViewProps) {
             </li>
             ))}
           </ul>
+          <PjeDocumentAvailability workspaceId={workspaceId} refreshKey={inventoryRefresh} />
         </>
       )}
     </section>

@@ -29,7 +29,11 @@ from ..case_analysis import (
     case_analysis_from_mapping,
     case_analysis_to_mapping,
 )
-from ..judicial_domain import ProceduralContext, SourceProvenance as JudicialSourceProvenance
+from ..judicial_domain import (
+    EntityKind, JudicialEntity, NormalizedProceduralRole, ParticipantStatus,
+    ProcessParticipant, ProcessPole, ProceduralContext, ProceduralRole,
+    RepresentationLink, SourceProvenance as JudicialSourceProvenance,
+)
 from .models import thaw_payload
 from .ports import RepositoryConflict, RepositoryIntegrityError
 
@@ -78,7 +82,7 @@ class SaveCaseAnalysis:
             for document in self.list_documents.execute(workspace_id)
         }
         storage_ids = [document.storage_content_id for document in snapshot.documents]
-        if snapshot.source_inventory_stale or set(storage_ids) != set(authoritative) or len(storage_ids) != len(set(storage_ids)) or any(
+        if snapshot.source_inventory_stale or set(storage_ids) != set(authoritative) or any(
             authoritative.get(document.storage_content_id) != document.source_sha256
             for document in snapshot.documents
         ):
@@ -170,7 +174,24 @@ class StartCaseAnalysis:
         if not stored:
             raise ValueError("Case Analysis requires at least one stored document")
         source_revision = 1
+        inventory_sources = [item for item in stored if getattr(item, "pje_inventory", None) is not None]
+        if len(inventory_sources) > 1:
+            raise ValueError("Case Analysis accepts one PJe inventory per bootstrap")
+        pje_source = inventory_sources[0] if inventory_sources else None
+        inventory = pje_source.pje_inventory if pje_source is not None else None
+        source_rows = inventory["documents"] if inventory is not None else ()
         documents = tuple(
+            CaseDocument(
+                document_id=row["document_id"], storage_content_id=str(pje_source.content_id),
+                source_sha256=pje_source.checksum_sha256, sequence=index, document_role="CASE_SOURCE",
+                raw_type=row["raw_type"], normalized_type=row["normalized_type"], timestamp=None,
+                participant_refs=(), page_count_or_span=(
+                    f"p. {row['page_start']}" + (f"-{row['page_end']}" if row["page_end"] != row["page_start"] else "")
+                    + f" | PJe {row['id_pje']}"
+                ), content_available=row["available"], analysis_revision=1 if row["available"] else 0,
+            )
+            for index, row in enumerate(source_rows, 1)
+        ) if inventory is not None else tuple(
             CaseDocument(
                 document_id=f"DOC-{index:03d}", storage_content_id=str(item.content_id),
                 source_sha256=item.checksum_sha256, sequence=index, document_role="CASE_SOURCE",
@@ -180,22 +201,43 @@ class StartCaseAnalysis:
             )
             for index, item in enumerate(stored, 1)
         )
+        if not documents:
+            raise ValueError("PJe inventory requires logical documents")
         first = documents[0]
+        context_id = f"CONTEXT-{self.ids.new_uuid().hex.upper()}"
+        entities, participants, representation_links = [], [], []
+        for index, row in enumerate(inventory.get("party_rows", ()) if inventory is not None else (), 1):
+            source = JudicialSourceProvenance(
+                "PJE", first.document_id, first.source_sha256, row["page"], row["occurrence"],
+                f"OCCURRENCE-PJE-PARTY-{index:03d}",
+            )
+            entity_id, participant_id = f"ENTITY-PJE-PARTY-{index:03d}", f"PARTICIPANT-PJE-{index:03d}"
+            entities.append(JudicialEntity(entity_id, row["name"], EntityKind.UNKNOWN, (source,)))
+            pole = ProcessPole.ACTIVE if row["pole"] == "ACTIVE" else ProcessPole.PASSIVE
+            role = NormalizedProceduralRole.CLAIMANT if pole is ProcessPole.ACTIVE else NormalizedProceduralRole.DEFENDANT
+            participants.append(ProcessParticipant(participant_id, entity_id, context_id, pole, ProceduralRole(row["role"], role), True, ParticipantStatus.ACTIVE, (source,)))
+            if row.get("representative_name"):
+                representative_id = f"ENTITY-PJE-REPRESENTATIVE-{index:03d}"
+                entities.append(JudicialEntity(representative_id, row["representative_name"], EntityKind.UNKNOWN, (source,)))
+                representation_links.append(RepresentationLink(f"REPRESENTATION-PJE-{index:03d}", representative_id, (participant_id,), row["representative_role"], (source,)))
         context = ProceduralContext(
-            context_id=f"CONTEXT-{self.ids.new_uuid().hex.upper()}", instance_label="NÃO CLASSIFICADA",
-            snapshot_id=f"JDM-SNAPSHOT-{self.ids.new_uuid().hex.upper()}", entities=(), participants=(),
-            representation_links=(), access_relations=(), provenance=(JudicialSourceProvenance(
-                source_system="LOCAL_CASE_DOCUMENT", source_document_id=first.document_id,
+            context_id=context_id, instance_label=inventory.get("instance_label", "NÃO CLASSIFICADA") if inventory is not None else "NÃO CLASSIFICADA",
+            snapshot_id=f"JDM-SNAPSHOT-{self.ids.new_uuid().hex.upper()}", entities=tuple(entities), participants=tuple(participants),
+            representation_links=tuple(representation_links), access_relations=(), provenance=(JudicialSourceProvenance(
+                source_system="PJE" if inventory is not None else "LOCAL_CASE_DOCUMENT", source_document_id=first.document_id,
                 source_sha256=first.source_sha256, page=1, occurrence="Índice documental",
                 occurrence_id=f"OCCURRENCE-{self.ids.new_uuid().hex.upper()}",
             ),),
         )
+        analyzed = sum(item.content_available for item in documents)
+        unavailable = len(documents) - analyzed
+        coverage_status = CoverageStatus.COMPLETE if unavailable == 0 else CoverageStatus.PARTIAL if analyzed else CoverageStatus.UNAVAILABLE
         snapshot = CaseAnalysisSnapshot(
             snapshot_id=f"CASE-ANALYSIS-{self.ids.new_uuid().hex.upper()}", workspace_id=str(workspace_id),
-            source_revision=source_revision, participant_refs=(), judicial_context_workspace_id=str(workspace_id),
+            source_revision=source_revision, participant_refs=tuple(item.participant_id for item in participants), judicial_context_workspace_id=str(workspace_id),
             judicial_context=context, documents=documents, claims=(), counterarguments=(), decisions=(),
             pericial_objects=(), questions=(), events=(), technical_document_references=(), gaps=(), conflicts=(),
-            coverage=CaseAnalysisCoverage(CoverageStatus.COMPLETE, len(documents), len(documents), 0, 0, source_revision),
+            coverage=CaseAnalysisCoverage(coverage_status, len(documents), analyzed, unavailable, 0, source_revision),
             human_reviews=(),
         )
         saved = self.save_analysis.execute(workspace_id, snapshot, None)

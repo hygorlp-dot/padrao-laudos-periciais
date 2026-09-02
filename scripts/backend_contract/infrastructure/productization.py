@@ -34,6 +34,7 @@ from ..application.artifact_ownership import (
 )
 from ..application.ocr_cache import _page_from_payload
 from ..application.process_metadata import document_metadata_from_payload
+from ..application.services import validate_pje_intake_payload
 from ..budget_foundation import budget_snapshot_from_mapping
 from ..ai_gateway import AIRun, AIProposal, EgressClass, SourceRevisionRef, UsageRecord
 from ..ai_eval_productization import (
@@ -309,6 +310,7 @@ _ARTIFACT_VALIDATORS = {
     "EXPERT_MASTER_PROFILE_V1": expert_profile_from_mapping,
     "INSPECTION_SESSION_V1": inspection_session_from_mapping,
     "PERICIAL_PLANNING_SNAPSHOT_V1": pericial_planning_from_mapping,
+    "PJE_INTAKE_V1": validate_pje_intake_payload,
     "PROCESS_CASE": ProcessCaseData.from_mapping,
     "REPORT_SNAPSHOT_V1": report_snapshot_from_mapping,
     "TECHNICAL_SNAPSHOT_V1": technical_snapshot_from_mapping,
@@ -425,6 +427,7 @@ _CANONICAL_PRODUCT_ARTIFACT_IDS = {
     "EXPERT_MASTER_PROFILE_V1": "EXPERT-PROFILE",
     "INSPECTION_SESSION_V1": "INSPECTION-SESSION",
     "PERICIAL_PLANNING_SNAPSHOT_V1": "PERICIAL-PLANNING",
+    "PJE_INTAKE_V1": "PJE-INTAKE",
     "PROCESS_CASE": "PROCESS_CASE",
     "REPORT_SNAPSHOT_V1": "REPORT-SNAPSHOT",
     "TECHNICAL_SNAPSHOT_V1": "TECHNICAL-SNAPSHOT",

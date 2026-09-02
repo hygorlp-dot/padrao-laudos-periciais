@@ -27,6 +27,8 @@ class PjePartyTableRow:
     name: str
     role: str
     pole: PjePartyPole
+    representative_name: str
+    representative_role: str
     source_line: str
     source_start: int
     source_end: int
@@ -281,11 +283,15 @@ def parse_pje_party_table(page_text: str) -> PjePartyTableParseResult:
             normalized_end,
             len(line),
         )
+        representative_source_start = _source_bound(source_indices, scanned_row.representative_start, len(line))
+        representative_source_end = _source_bound(source_indices, scanned_row.representative_end, len(line))
         rows.append(
             PjePartyTableRow(
                 name=line[local_source_start:local_source_end],
                 role=role,
                 pole=role_pole,
+                representative_name=line[representative_source_start:representative_source_end],
+                representative_role=scanned_row.representative_role,
                 source_line=line,
                 source_start=line_start + local_source_start,
                 source_end=line_start + local_source_end,

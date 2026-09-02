@@ -173,6 +173,8 @@ class LocalApiServices:
     list_case_documents: object | None = None
     read_case_document: object | None = None
     import_inspection_photo: object | None = None
+    get_pje_intake: object | None = None
+    set_pje_document_availability: object | None = None
 
 
 def _workspace_dto(record: PericiaWorkspace) -> dict:
@@ -528,7 +530,7 @@ class LocalApi:
                 )
             raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
-            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "expert-profile", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
+            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "pje-intake", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "expert-profile", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
             if (normalized_method == "POST" or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
                 return _error(
                     403,
@@ -1112,6 +1114,20 @@ class LocalApi:
                     )
                     return _json_response(201, _private_content_dto(record, workspace_id))
                 return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "pje-intake":
+                if normalized_method != "GET": return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.get_pje_intake is None: return _error(503, "PJE_INTAKE_UNAVAILABLE")
+                record, inventory = self._services.get_pje_intake.execute(self._workspace_id(raw_segments[2]))
+                return _json_response(200, {"revision": record.revision, "inventory": inventory})
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("pje-intake", "availability"):
+                if normalized_method != "POST": return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.set_pje_document_availability is None: return _error(503, "PJE_INTAKE_UNAVAILABLE")
+                dto = self._request_dto(request_headers, body)
+                if set(dto) != {"document_id", "available", "expected_revision"}: raise ValueError("PJe availability request is invalid")
+                record, inventory = self._services.set_pje_document_availability.execute(self._workspace_id(raw_segments[2]), **dto)
+                return _json_response(200, {"revision": record.revision, "inventory": inventory})
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "inspection-photos":
                 if normalized_method != "POST":

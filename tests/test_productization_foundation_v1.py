@@ -229,6 +229,7 @@ def test_every_portable_material_artifact_has_an_explicit_finite_strategy() -> N
         "EXPERT_MASTER_PROFILE_V1",
         "INSPECTION_SESSION_V1",
         "PERICIAL_PLANNING_SNAPSHOT_V1",
+        "PJE_INTAKE_V1",
         "PROCESS_CASE",
         "REPORT_SNAPSHOT_V1",
         "TECHNICAL_SNAPSHOT_V1",

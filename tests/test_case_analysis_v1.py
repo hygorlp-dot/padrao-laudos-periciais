@@ -269,7 +269,6 @@ def test_initial_full_snapshot_material_injection_is_rejected_before_repository_
             WorkspaceId.parse(snapshot.workspace_id), snapshot, None
         )
     assert calls == []
-
     mismatched = SimpleNamespace(
         execute=lambda _workspace: _authoritative_documents(snapshot, changed_document_id="DOC-002")
     )
@@ -277,7 +276,6 @@ def test_initial_full_snapshot_material_injection_is_rejected_before_repository_
         SaveCaseAnalysis(revisions, SimpleNamespace(), clock, ids, mismatched, nullcontext).execute(
             WorkspaceId.parse(snapshot.workspace_id), snapshot, None
         )
-
     extra = SimpleNamespace(
         execute=lambda _workspace: (
             *_authoritative_documents(snapshot),
@@ -288,6 +286,46 @@ def test_initial_full_snapshot_material_injection_is_rejected_before_repository_
         SaveCaseAnalysis(revisions, SimpleNamespace(), clock, ids, extra, nullcontext).execute(
             WorkspaceId.parse(snapshot.workspace_id), snapshot, None
         )
+
+
+def test_pje_inventory_bootstraps_logical_documents_and_keeps_representative_out_of_participants():
+    """A validated PJe inventory must reach the canonical graph without semantic flattening."""
+    workspace_id = WorkspaceId.parse("11111111-1111-4111-8111-111111111111")
+    source_sha = "a" * 64
+    stored = SimpleNamespace(
+        content_id="22222222-2222-4222-8222-222222222222",
+        checksum_sha256=source_sha,
+        original_filename="autos-sinteticos.pdf",
+        pje_inventory={
+            "instance_label": "Vara sintÃ©tica",
+            "documents": (
+                {"document_id": "DOC-PJE-001", "id_pje": "900001", "title": "Petição sintética", "raw_type": "PETICAO", "normalized_type": "PETICAO_INICIAL", "page_start": 2, "page_end": 3, "available": True},
+                {"document_id": "DOC-PJE-002", "id_pje": "900002", "title": "Decisão sintética", "raw_type": "DECISAO", "normalized_type": "DECISAO", "page_start": 4, "page_end": 4, "available": False},
+            ),
+            "party_rows": (
+                {"name": "PARTE SINTETICA", "role": "AUTORA", "pole": "ACTIVE", "representative_name": "PROCURADOR SINTETICO", "representative_role": "ADVOGADO", "page": 1, "occurrence": "linha estrutural sintetica"},
+            ),
+        },
+    )
+    saved = []
+    save = SimpleNamespace(execute=lambda _workspace, snapshot, _revision: saved.append(snapshot) or (SimpleNamespace(revision=1), snapshot))
+    ids = SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999"))
+
+    _record, snapshot = StartCaseAnalysis(
+        SimpleNamespace(execute=lambda _workspace: (stored,)), save, ids
+    ).execute(workspace_id)
+
+    assert [item.document_id for item in snapshot.documents] == ["DOC-PJE-001", "DOC-PJE-002"]
+    assert snapshot.documents[0].page_count_or_span == "p. 2-3 | PJe 900001"
+    assert snapshot.documents[1].content_available is False
+    assert [item.raw_name for item in snapshot.judicial_context.entities] == [
+        "PARTE SINTETICA", "PROCURADOR SINTETICO",
+    ]
+    assert len(snapshot.judicial_context.participants) == 1
+    assert snapshot.judicial_context.representation_links[0].represented_participant_ids == (
+        snapshot.judicial_context.participants[0].participant_id,
+    )
+    assert snapshot.participant_refs == (snapshot.judicial_context.participants[0].participant_id,)
 
 
 def test_get_reconciles_current_snapshot_against_live_inventory():

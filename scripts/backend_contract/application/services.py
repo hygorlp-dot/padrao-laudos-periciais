@@ -5,21 +5,25 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import tempfile
 import warnings
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from types import MappingProxyType
 from uuid import UUID
 
 from PIL import Image, UnidentifiedImageError
 
 from .content import (
+    DOCUMENT_IO_CHUNK_BYTES,
     MAX_DOCUMENT_BYTES,
     OpenPrivateContent,
     SeekableContent,
     as_seekable_content,
 )
 from .ocr_cache import RevisionOcrPageCache
+from .pje_party_table import parse_pje_party_table
 from .process_metadata import (
     PROCESS_METADATA_FIELDS,
     DocumentExtractionSummary,
@@ -71,6 +75,41 @@ _PROCESS_METADATA_EXTRACTION_KIND = "PROCESS_METADATA_EXTRACTION"
 _PROCESS_METADATA_CONFIRMATION_KIND = "PROCESS_METADATA_CONFIRMATION"
 _PROCESS_METADATA_CONFIRMATION_ID = "PROCESS_METADATA_CONFIRMATION"
 _PROCESS_METADATA_SOURCE_CONFIRMATION_KIND = "PROCESS_METADATA_SOURCE_CONFIRMATION"
+_PJE_INTAKE_ARTIFACT_KIND = "PJE_INTAKE_V1"
+_PJE_INTAKE_ARTIFACT_ID = "PJE-INTAKE"
+
+
+def validate_pje_intake_payload(value: object) -> dict:
+    required = {"schema_version", "workspace_id", "storage_content_id", "source_sha256", "instance_label", "documents", "party_rows"}
+    if type(value) is not dict or set(value) != required or value.get("schema_version") != "1.0.0":
+        raise ValueError("PJe intake payload is invalid")
+    WorkspaceId.parse(value["workspace_id"]); PrivateContentId.parse(value["storage_content_id"])
+    if type(value["source_sha256"]) is not str or re.fullmatch(r"[0-9a-f]{64}", value["source_sha256"]) is None:
+        raise ValueError("PJe intake source hash is invalid")
+    if type(value["instance_label"]) is not str or not value["instance_label"].strip():
+        raise ValueError("PJe intake judicial unit is invalid")
+    if type(value["documents"]) is not list or not value["documents"] or type(value["party_rows"]) is not list:
+        raise ValueError("PJe intake collections are invalid")
+    document_fields = {"document_id", "id_pje", "title", "raw_type", "normalized_type", "page_start", "page_end", "available"}
+    ids = []
+    for row in value["documents"]:
+        if type(row) is not dict or set(row) != document_fields or type(row["available"]) is not bool:
+            raise ValueError("PJe logical document is invalid")
+        if any(type(row[name]) is not str or not row[name].strip() for name in ("document_id", "id_pje", "title", "raw_type", "normalized_type")):
+            raise ValueError("PJe logical document identity is invalid")
+        if any(type(row[name]) is not int or row[name] < 1 for name in ("page_start", "page_end")) or row["page_end"] < row["page_start"]:
+            raise ValueError("PJe logical document page span is invalid")
+        ids.append(row["document_id"])
+    if len(ids) != len(set(ids)):
+        raise ValueError("PJe logical document identities are duplicated")
+    party_fields = {"name", "role", "pole", "representative_name", "representative_role", "page", "occurrence"}
+    for row in value["party_rows"]:
+        if type(row) is not dict or set(row) != party_fields or row["pole"] not in {"ACTIVE", "PASSIVE"} or type(row["page"]) is not int or row["page"] < 1:
+            raise ValueError("PJe party row is invalid")
+        if any(type(row[name]) is not str or not row[name].strip() for name in party_fields - {"page", "pole"}):
+            raise ValueError("PJe party row text is invalid")
+    canonical_payload_json(value)
+    return value
 
 
 def _metadata_extraction_fingerprint(value: object) -> str:
@@ -374,6 +413,66 @@ class ImportInspectionPhoto:
         )
 
 
+def _pje_inventory_payload(record, persisted, text: PdfTextResult) -> dict | None:
+    """Validate a PJe export and retain only its canonical workspace inventory.
+
+    Every material import routes through here regardless of whether the PDF is a
+    PJe export, so a PDF the strict PJe reader (pypdf-backed) cannot even open must
+    be treated as "not a PJe export" (``None``), not as a failure of the whole
+    import. ``RepositoryIntegrityError`` stays reserved for the case where the
+    parser *did* recognize a PJe index but found it internally inconsistent.
+    """
+    from pypdf.errors import PyPdfError
+
+    from scripts.extracao_pje.gerar_documentos import gerar_documentos
+    from scripts.extracao_pje.gerar_manifesto import construir_manifesto
+
+    with tempfile.TemporaryDirectory(prefix="pje-intake-") as temporary:
+        root = Path(temporary)
+        pdf = root / "source.pdf"
+        persisted.stream.seek(0)
+        with pdf.open("wb") as sink:
+            while block := persisted.stream.read(DOCUMENT_IO_CHUNK_BYTES):
+                sink.write(block)
+        persisted.stream.seek(0)
+        try:
+            manifesto, errors, _alerts = construir_manifesto(pdf)
+        except PyPdfError:
+            return None
+        if not manifesto.get("indice", {}).get("itens"):
+            return None
+        if errors or manifesto.get("status_validacao") != "VALIDADO":
+            raise RepositoryIntegrityError("PJe manifest is not valid")
+        report = gerar_documentos(manifesto, pdf, root)
+        if report["documentos_validos"] != report["documentos_esperados"]:
+            raise RepositoryIntegrityError("PJe logical document validation failed")
+    party_rows = []
+    for page in text.pages:
+        parsed = parse_pje_party_table(page.text)
+        for row in parsed.rows:
+            party_rows.append({
+                "name": row.name, "role": row.role, "pole": row.pole.value,
+                "representative_name": row.representative_name,
+                "representative_role": row.representative_role,
+                "page": page.number, "occurrence": row.source_line,
+            })
+    process = manifesto.get("processo", {})
+    judicial_unit = process.get("orgao_julgador", {})
+    instance_label = judicial_unit.get("valor") if isinstance(judicial_unit, dict) else None
+    return {
+        "schema_version": "1.0.0", "workspace_id": str(record.workspace_id),
+        "storage_content_id": str(record.content_id), "source_sha256": record.checksum_sha256,
+        "instance_label": instance_label or "NÃO CLASSIFICADA",
+        "documents": [{
+            "document_id": row["documento_id"], "id_pje": row["id_pje"], "title": row["titulo_original"],
+            "raw_type": row["tipo_original"], "normalized_type": row["classe_normalizada"],
+            "page_start": row["pagina_pdf_inicio"], "page_end": row["pagina_pdf_fim"],
+            "available": True,
+        } for row in manifesto["documentos"]],
+        "party_rows": party_rows,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class ImportCaseDocumentWithMetadata:
     documents: object
@@ -460,6 +559,7 @@ class ImportCaseDocumentWithMetadata:
                     text=text,
                     extracted_at=extracted_at,
                 )
+            pje_inventory = _pje_inventory_payload(record, persisted, text)
         self.revisions.append(
             workspace_id=record.workspace_id,
             artifact_kind=_PROCESS_METADATA_EXTRACTION_KIND,
@@ -468,6 +568,13 @@ class ImportCaseDocumentWithMetadata:
             created_at=_generated_timestamp(self.clock),
             payload=document_metadata_payload(extracted),
         )
+        if pje_inventory is not None:
+            validate_pje_intake_payload(pje_inventory)
+            self.revisions.append(
+                workspace_id=record.workspace_id, artifact_kind=_PJE_INTAKE_ARTIFACT_KIND,
+                artifact_id=_PJE_INTAKE_ARTIFACT_ID, revision_id=str(_generated_uuid(self.ids)),
+                created_at=_generated_timestamp(self.clock), payload=pje_inventory,
+            )
         return record
 
 
@@ -485,6 +592,80 @@ class ListCaseDocuments:
             for record in self.contents.execute(workspace_id)
             if record.media_type == "application/pdf" and record.origin is PrivateContentOrigin.USER_IMPORT
         )
+
+
+@dataclass(frozen=True, slots=True)
+class PjeIndexedCaseDocument:
+    content_id: PrivateContentId
+    checksum_sha256: str
+    original_filename: str
+    pje_inventory: dict | None
+
+
+@dataclass(frozen=True, slots=True)
+class ListCaseDocumentsWithPjeInventory:
+    documents: ListCaseDocuments
+    revisions: ArtifactRevisionRepository
+
+    def execute(self, workspace_id: WorkspaceId) -> tuple[PjeIndexedCaseDocument, ...]:
+        records = self.documents.execute(workspace_id)
+        inventory_record = self.revisions.latest(workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _PJE_INTAKE_ARTIFACT_ID)
+        inventory = validate_pje_intake_payload(thaw_payload(inventory_record.payload)) if inventory_record is not None else None
+        if inventory is not None and (
+            inventory.get("workspace_id") != str(workspace_id)
+            or len(records) != 1
+            or inventory.get("storage_content_id") != str(records[0].content_id)
+            or inventory.get("source_sha256") != records[0].checksum_sha256
+        ):
+            raise RepositoryIntegrityError("PJe inventory diverges from private source authority")
+        return tuple(PjeIndexedCaseDocument(
+            item.content_id, item.checksum_sha256, item.original_filename,
+            inventory if inventory is not None and str(item.content_id) == inventory["storage_content_id"] else None,
+        ) for item in records)
+
+
+@dataclass(frozen=True, slots=True)
+class GetPjeIntake:
+    workspaces: WorkspaceRepository
+    revisions: ArtifactRevisionRepository
+
+    def execute(self, workspace_id: WorkspaceId):
+        workspace_id = _require_workspace(self.workspaces, workspace_id)
+        record = self.revisions.latest(workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _PJE_INTAKE_ARTIFACT_ID)
+        if record is None:
+            raise ArtifactRevisionNotFound("PJe intake not found")
+        return record, validate_pje_intake_payload(thaw_payload(record.payload))
+
+
+@dataclass(frozen=True, slots=True)
+class SetPjeDocumentAvailability:
+    get_intake: GetPjeIntake
+    revisions: ArtifactRevisionRepository
+    clock: Clock
+    ids: IdGenerator
+
+    def execute(self, workspace_id: WorkspaceId, *, document_id: str, available: bool, expected_revision: int):
+        if type(document_id) is not str or not document_id.strip() or type(available) is not bool or type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("PJe availability request is invalid")
+        current, payload = self.get_intake.execute(workspace_id)
+        if current.revision != expected_revision:
+            raise RepositoryConflict("expected PJe intake revision is not latest")
+        matched = False
+        documents = []
+        for row in payload["documents"]:
+            updated = dict(row)
+            if row["document_id"] == document_id:
+                updated["available"] = available; matched = True
+            documents.append(updated)
+        if not matched:
+            raise ValueError("PJe logical document is unknown")
+        amended = validate_pje_intake_payload({**payload, "documents": documents})
+        record = self.revisions.append_if_latest(
+            workspace_id=WorkspaceId.parse(payload["workspace_id"]), artifact_kind=_PJE_INTAKE_ARTIFACT_KIND,
+            artifact_id=_PJE_INTAKE_ARTIFACT_ID, revision_id=str(_generated_uuid(self.ids)),
+            created_at=_generated_timestamp(self.clock), payload=amended, expected_revision=expected_revision,
+        )
+        return record, amended
 
 
 @dataclass(frozen=True, slots=True)
