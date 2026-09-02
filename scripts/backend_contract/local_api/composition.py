@@ -279,6 +279,7 @@ def build_local_api(
             server_config.max_document_body_bytes,
         )
         get_private_content = GetPrivateContent(store.workspaces, private_store)
+        list_case_documents = ListCaseDocuments(ListPrivateContents(store.workspaces, private_store))
         import_case_document = ImportCaseDocumentWithMetadata(
             ImportCaseDocument(generic_store),
             open_case_document,
@@ -286,9 +287,9 @@ def build_local_api(
             store.revisions,
             local_clock,
             local_ids,
+            list_case_documents,
         )
         import_inspection_photo = ImportInspectionPhoto(generic_store)
-        list_case_documents = ListCaseDocuments(ListPrivateContents(store.workspaces, private_store))
         case_analysis_documents = ListCaseDocumentsWithPjeInventory(list_case_documents, store.revisions)
         read_case_document = open_case_document
         get_process_metadata_review = GetProcessMetadataReview(

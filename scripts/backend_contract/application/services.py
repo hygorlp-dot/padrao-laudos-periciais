@@ -431,6 +431,22 @@ class ImportInspectionPhoto:
         )
 
 
+def _already_imported_in_workspace(existing_documents, workspace_id, source):
+    """Return the material already holding these exact bytes in THIS workspace.
+
+    Byte identity is scoped to the workspace on purpose: the same hash appearing
+    in another workspace is a different source with its own authority, and must
+    never resolve to a shared domain identity.
+    """
+    if existing_documents is None:
+        return None
+    digest = source.sha256()
+    for item in existing_documents.execute(workspace_id):
+        if item.checksum_sha256 == digest:
+            return item
+    return None
+
+
 def _carry_forward_availability_decisions(previous_record, inventory: dict) -> dict:
     """Keep the professional's availability decisions across a re-ingest of the source.
 
@@ -536,6 +552,7 @@ class ImportCaseDocumentWithMetadata:
     revisions: ArtifactRevisionRepository
     clock: Clock
     ids: IdGenerator
+    existing_documents: object | None = None
 
     def execute(
         self,
@@ -546,6 +563,14 @@ class ImportCaseDocumentWithMetadata:
         media_type: str,
     ) -> PrivateContentMetadata:
         source = as_seekable_content(content)
+        already = _already_imported_in_workspace(self.existing_documents, workspace_id, source)
+        if already is not None:
+            # Reimportar exatamente os mesmos bytes no mesmo workspace e
+            # idempotente: uma segunda autoridade fisica sobre o mesmo conteudo
+            # duplicaria a fonte e apagaria as decisoes ja tomadas sobre ela.
+            # O escopo e o workspace -- o mesmo hash noutro workspace continua
+            # sendo outra fonte, sem identidade compartilhada.
+            return already
         record = self.documents.execute(
             workspace_id=workspace_id,
             original_filename=original_filename,
@@ -672,13 +697,19 @@ class ListCaseDocumentsWithPjeInventory:
         records = self.documents.execute(workspace_id)
         inventory_record = self.revisions.latest(workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _PJE_INTAKE_ARTIFACT_ID)
         inventory = validate_pje_intake_payload(thaw_payload(inventory_record.payload)) if inventory_record is not None else None
-        if inventory is not None and (
-            inventory.get("workspace_id") != str(workspace_id)
-            or len(records) != 1
-            or inventory.get("storage_content_id") != str(records[0].content_id)
-            or inventory.get("source_sha256") != records[0].checksum_sha256
-        ):
-            raise RepositoryIntegrityError("PJe inventory diverges from private source authority")
+        if inventory is not None:
+            # O inventario esta vinculado a UMA autoridade fisica. Exigir que ela
+            # seja o unico material do workspace confundia "inventario divergente"
+            # com "o workspace tem mais de um documento", tornando um segundo
+            # material legitimo um 500 permanente e irreparavel.
+            if inventory.get("workspace_id") != str(workspace_id):
+                raise RepositoryIntegrityError("PJe inventory belongs to another workspace")
+            bound = next(
+                (item for item in records if str(item.content_id) == inventory.get("storage_content_id")),
+                None,
+            )
+            if bound is None or inventory.get("source_sha256") != bound.checksum_sha256:
+                raise RepositoryIntegrityError("PJe inventory diverges from private source authority")
         return tuple(PjeIndexedCaseDocument(
             item.content_id, item.checksum_sha256, item.original_filename,
             inventory if inventory is not None and str(item.content_id) == inventory["storage_content_id"] else None,

@@ -179,28 +179,34 @@ class StartCaseAnalysis:
             raise ValueError("Case Analysis accepts one PJe inventory per bootstrap")
         pje_source = inventory_sources[0] if inventory_sources else None
         inventory = pje_source.pje_inventory if pje_source is not None else None
-        source_rows = inventory["documents"] if inventory is not None else ()
-        documents = tuple(
-            CaseDocument(
+        # Um export PJe abre em varios documentos logicos sobre uma unica
+        # autoridade fisica; os demais materiais do workspace continuam sendo
+        # fontes por direito proprio. Compor os dois: descartar os outros
+        # materiais so porque existe um inventario PJe seria perda silenciosa.
+        composed: list[CaseDocument] = []
+        for row in (inventory["documents"] if inventory is not None else ()):
+            composed.append(CaseDocument(
                 document_id=row["document_id"], storage_content_id=str(pje_source.content_id),
-                source_sha256=pje_source.checksum_sha256, sequence=index, document_role="CASE_SOURCE",
-                raw_type=row["raw_type"], normalized_type=row["normalized_type"], timestamp=None,
+                source_sha256=pje_source.checksum_sha256, sequence=len(composed) + 1,
+                document_role="CASE_SOURCE", raw_type=row["raw_type"],
+                normalized_type=row["normalized_type"], timestamp=None,
                 participant_refs=(), page_count_or_span=(
                     f"p. {row['page_start']}" + (f"-{row['page_end']}" if row["page_end"] != row["page_start"] else "")
                     + f" | PJe {row['id_pje']}"
                 ), content_available=row["available"], analysis_revision=1 if row["available"] else 0,
-            )
-            for index, row in enumerate(source_rows, 1)
-        ) if inventory is not None else tuple(
-            CaseDocument(
-                document_id=f"DOC-{index:03d}", storage_content_id=str(item.content_id),
-                source_sha256=item.checksum_sha256, sequence=index, document_role="CASE_SOURCE",
-                raw_type=getattr(item, "original_filename", "Documento"), normalized_type="UNCLASSIFIED",
-                timestamp=None, participant_refs=(), page_count_or_span="Documento completo",
-                content_available=True, analysis_revision=1,
-            )
-            for index, item in enumerate(stored, 1)
-        )
+            ))
+        for item in stored:
+            if pje_source is not None and item.content_id == pje_source.content_id:
+                continue
+            composed.append(CaseDocument(
+                document_id=f"DOC-{len(composed) + 1:03d}", storage_content_id=str(item.content_id),
+                source_sha256=item.checksum_sha256, sequence=len(composed) + 1,
+                document_role="CASE_SOURCE",
+                raw_type=getattr(item, "original_filename", "Documento"),
+                normalized_type="UNCLASSIFIED", timestamp=None, participant_refs=(),
+                page_count_or_span="Documento completo", content_available=True, analysis_revision=1,
+            ))
+        documents = tuple(composed)
         if not documents:
             raise ValueError("PJe inventory requires logical documents")
         first = documents[0]

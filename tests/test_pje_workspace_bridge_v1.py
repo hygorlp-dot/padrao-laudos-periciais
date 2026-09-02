@@ -152,19 +152,57 @@ def test_reimport_never_silently_restores_availability_the_professional_removed(
         assert status == 200
         decided = {row["document_id"]: row["available"] for row in intake["inventory"]["documents"]}
 
-        status, _again = _request(
+        status, again = _request(
             runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(),
             headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos.pdf"},
         )
         status, after = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
         assert status == 200
         assert {row["document_id"]: row["available"] for row in after["inventory"]["documents"]} == decided
+
+        # R-03A: bytes identicos no mesmo workspace nao criam segunda autoridade.
+        status, listed = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/materials")
+        assert len(listed["items"]) == 1, listed
+        assert again["content_id"] == listed["items"][0]["content_id"]
     finally:
         runtime.close()
 
 
-def test_second_material_alongside_pje_inventory_fails_closed_not_silently(tmp_path):
-    """A second stored material once a PJe inventory exists must not create ambiguous authority."""
+def test_identical_bytes_in_another_workspace_stay_a_separate_source(tmp_path):
+    """Byte identity is workspace-scoped; it must not create shared domain identity."""
+    pdf = tmp_path / "autos-sinteticos.pdf"
+    pdf_sintetico(pdf)
+    private = tmp_path / "private"
+    provision_private_root(private)
+    runtime = build_local_api(tmp_path / "product.sqlite3", private_root=private, token=TOKEN)
+    runtime.start()
+    try:
+        _s, first = _request(runtime, "POST", "/v1/workspaces", value={"name": "Caso A"})
+        _s, second = _request(runtime, "POST", "/v1/workspaces", value={"name": "Caso B"})
+        status, a_material = _request(
+            runtime, "POST", f"/v1/workspaces/{first['workspace_id']}/materials", body=pdf.read_bytes(),
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos.pdf"},
+        )
+        assert status == 201
+        status, b_material = _request(
+            runtime, "POST", f"/v1/workspaces/{second['workspace_id']}/materials", body=pdf.read_bytes(),
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos.pdf"},
+        )
+        assert status == 201
+        assert a_material["content_id"] != b_material["content_id"], "cross-workspace identity leaked"
+        assert a_material["checksum_sha256"] == b_material["checksum_sha256"]
+    finally:
+        runtime.close()
+
+
+def test_a_genuinely_distinct_second_material_composes_instead_of_bricking_analysis(tmp_path):
+    """SECOND_DISTINCT_MATERIAL != DUPLICATE_SOURCE: both sources must survive.
+
+    The PJe export fans out into logical documents over one physical authority;
+    an unrelated second material stays a source in its own right. Dropping it
+    would be silent loss, and rejecting it would make an accepted import produce
+    a permanently unreadable Case Analysis.
+    """
     pdf = tmp_path / "autos-sinteticos.pdf"
     pdf_sintetico(pdf)
     private = tmp_path / "private"
@@ -174,19 +212,30 @@ def test_second_material_alongside_pje_inventory_fails_closed_not_silently(tmp_p
     try:
         status, workspace = _request(runtime, "POST", "/v1/workspaces", value={"name": "Caso PJe"})
         workspace_id = workspace["workspace_id"]
-        status, _material = _request(
+        status, pje_material = _request(
             runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(),
             headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos-sinteticos.pdf"},
         )
         assert status == 201
-        status, _second = _request(
+        status, other = _request(
             runtime, "POST", f"/v1/workspaces/{workspace_id}/materials",
-            body=b"%PDF-1.7\noutro-documento\n%%EOF\n",
-            headers={"Content-Type": "application/pdf", "X-Document-Filename": "outro.pdf"},
+            body=b"%PDF-1.7\nlaudo-complementar\n%%EOF\n",
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "complementar.pdf"},
         )
         assert status == 201
+
         status, analysis = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis", value={})
-        assert status == 500 and analysis["error"]["code"] == "REPOSITORY_INTEGRITY_FAILURE"
+        assert status == 201, analysis
+        documents = analysis["snapshot"]["documents"]
+        by_storage = {item["storage_content_id"] for item in documents}
+        assert pje_material["content_id"] in by_storage, "PJe source vanished"
+        assert other["content_id"] in by_storage, "second material was silently dropped"
+        assert [item["document_id"] for item in documents] == ["DOC-PJE-001", "DOC-PJE-002", "DOC-003"]
+        assert analysis["snapshot"]["coverage"]["documents_total"] == 3
+
+        # E o estado permanece legivel, e nao um 500 permanente.
+        status, reread = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        assert status == 200, reread
     finally:
         runtime.close()
 

@@ -901,11 +901,16 @@ def test_product_flow_imports_reads_isolates_and_reopens_pdf_without_path_or_tok
         assert imported["original_filename"] == "../../Autos sintéticos.pdf"
         assert imported["checksum_sha256"] == hashlib.sha256(PDF).hexdigest()
 
+        # Reimportar exatamente os mesmos bytes no mesmo workspace e idempotente.
+        # Ate #181 cada tentativa criava um content_id proprio; isso duplicava a
+        # autoridade fisica sobre um mesmo conteudo e apagava as decisoes ja
+        # tomadas sobre ele (disponibilidade documental, review). O escopo e o
+        # workspace: o mesmo hash noutro workspace continua sendo outra fonte.
         duplicate_status, _headers, duplicate_body = import_pdf(
             first, workspace_a, "../../Autos sintéticos.pdf"
         )
         assert duplicate_status == 201
-        assert json.loads(duplicate_body)["content_id"] != content_id
+        assert json.loads(duplicate_body)["content_id"] == content_id
 
         denied_status, _headers, _body = product_request(
             first,
@@ -934,7 +939,9 @@ def test_product_flow_imports_reads_isolates_and_reopens_pdf_without_path_or_tok
         reopened.close()
 
     assert list_status == 200
-    assert len(json.loads(list_body)["items"]) == 2
+    # Uma unica autoridade fisica: a reimportacao idempotente acima nao
+    # acrescentou um segundo material sobre exatamente os mesmos bytes.
+    assert len(json.loads(list_body)["items"]) == 1
     assert read_status == 200
     assert read_headers["Content-Type"] == "application/pdf"
     assert read_body == PDF
