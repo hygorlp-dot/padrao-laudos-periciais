@@ -79,6 +79,24 @@ _PJE_INTAKE_ARTIFACT_KIND = "PJE_INTAKE_V1"
 _PJE_INTAKE_ARTIFACT_ID = "PJE-INTAKE"
 
 
+def _not_a_readable_pje_export() -> tuple[type[BaseException], ...]:
+    """Failures that mean "this file is not a readable PJe export", never "the import failed".
+
+    ``LeitorPdf`` opens the document with pypdf and with pdfplumber, so both
+    library families must be named here; listing only one lets an ordinary
+    encrypted or malformed PDF escape as an internal error.
+    """
+    from pdfminer.pdfexceptions import PDFException
+    from pdfminer.psexceptions import PSException
+    from pdfplumber.utils.exceptions import MalformedPDFException, PdfminerException
+    from pypdf.errors import PyPdfError
+
+    return (PyPdfError, PDFException, PSException, PdfminerException, MalformedPDFException, OSError)
+
+
+_NOT_A_READABLE_PJE_EXPORT = _not_a_readable_pje_export()
+
+
 def validate_pje_intake_payload(value: object) -> dict:
     required = {"schema_version", "workspace_id", "storage_content_id", "source_sha256", "instance_label", "documents", "party_rows"}
     if type(value) is not dict or set(value) != required or value.get("schema_version") != "1.0.0":
@@ -413,17 +431,54 @@ class ImportInspectionPhoto:
         )
 
 
+def _carry_forward_availability_decisions(previous_record, inventory: dict) -> dict:
+    """Keep the professional's availability decisions across a re-ingest of the source.
+
+    ``available`` is the one field in this artifact that is a professional
+    decision rather than a source-derived fact, and a fresh parse always proposes
+    ``True``. Letting the re-parse win would make a re-import silently return a
+    document the perito deliberately excluded, inverting
+    PROFESSIONAL_OVERRIDE > ENGINE_DECISION > SOURCE_VALUE. Source facts (ids,
+    spans, types) still refresh; only the decision is preserved, and only for
+    logical documents that still exist in the new inventory.
+    """
+    if previous_record is None:
+        return inventory
+    try:
+        previous = validate_pje_intake_payload(thaw_payload(previous_record.payload))
+    except (ValueError, TypeError) as exc:
+        raise RepositoryIntegrityError("stored PJe inventory is invalid") from exc
+    if previous.get("workspace_id") != inventory.get("workspace_id"):
+        raise RepositoryIntegrityError("stored PJe inventory belongs to another workspace")
+    decided = {
+        row["document_id"]: row["available"]
+        for row in previous["documents"]
+        if row["available"] is False
+    }
+    if not decided:
+        return inventory
+    return {
+        **inventory,
+        "documents": [
+            {**row, "available": decided.get(row["document_id"], row["available"])}
+            for row in inventory["documents"]
+        ],
+    }
+
+
 def _pje_inventory_payload(record, persisted, text: PdfTextResult) -> dict | None:
     """Validate a PJe export and retain only its canonical workspace inventory.
 
     Every material import routes through here regardless of whether the PDF is a
-    PJe export, so a PDF the strict PJe reader (pypdf-backed) cannot even open must
-    be treated as "not a PJe export" (``None``), not as a failure of the whole
-    import. ``RepositoryIntegrityError`` stays reserved for the case where the
-    parser *did* recognize a PJe index but found it internally inconsistent.
-    """
-    from pypdf.errors import PyPdfError
+    PJe export, so a PDF the strict PJe reader cannot even open must be treated as
+    "not a PJe export" (``None``), not as a failure of the whole import.
+    ``RepositoryIntegrityError`` stays reserved for the case where the parser *did*
+    recognize a PJe index but found it internally inconsistent.
 
+    ``LeitorPdf`` opens the same file twice, with pypdf *and* with pdfplumber, so a
+    guard naming only one of those libraries lets the other's failures escape and
+    turn an ordinary encrypted or malformed PDF into a failed import.
+    """
     from scripts.extracao_pje.gerar_documentos import gerar_documentos
     from scripts.extracao_pje.gerar_manifesto import construir_manifesto
 
@@ -437,7 +492,7 @@ def _pje_inventory_payload(record, persisted, text: PdfTextResult) -> dict | Non
         persisted.stream.seek(0)
         try:
             manifesto, errors, _alerts = construir_manifesto(pdf)
-        except PyPdfError:
+        except _NOT_A_READABLE_PJE_EXPORT:
             return None
         if not manifesto.get("indice", {}).get("itens"):
             return None
@@ -569,6 +624,12 @@ class ImportCaseDocumentWithMetadata:
             payload=document_metadata_payload(extracted),
         )
         if pje_inventory is not None:
+            pje_inventory = _carry_forward_availability_decisions(
+                self.revisions.latest(
+                    record.workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _PJE_INTAKE_ARTIFACT_ID
+                ),
+                pje_inventory,
+            )
             validate_pje_intake_payload(pje_inventory)
             self.revisions.append(
                 workspace_id=record.workspace_id, artifact_kind=_PJE_INTAKE_ARTIFACT_KIND,

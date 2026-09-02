@@ -94,6 +94,54 @@ def test_rejects_unknown_top_level_field():
         validate_pje_intake_payload(payload)
 
 
+def test_pje_inventory_survives_backup_and_restore_unchanged():
+    """The new artifact kind must round-trip through the portability boundary."""
+    import tempfile
+    from pathlib import Path
+
+    from scripts.backend_contract.application.models import PericiaWorkspace, WorkspaceId
+    from scripts.backend_contract.infrastructure.productization import (
+        CreateWorkspaceBackup,
+        RecoveryStaging,
+        RestoreWorkspaceBackup,
+    )
+    from scripts.backend_contract.infrastructure.sqlite import SQLiteApplicationStore
+
+    class Clock:
+        def now(self):
+            from datetime import UTC, datetime
+
+            return datetime(2026, 8, 31, 12, 0, tzinfo=UTC)
+
+    tmp_path = Path(tempfile.mkdtemp(prefix="pje-backup-"))
+    source = SQLiteApplicationStore(tmp_path / "source.sqlite3")
+    workspace_id = WorkspaceId.parse(WORKSPACE_ID)
+    source.workspaces.create(
+        PericiaWorkspace(workspace_id, "Pericia sintetica", "2026-08-31T12:00:00+00:00")
+    )
+    payload = base_payload()
+    source.revisions.append(
+        workspace_id=workspace_id,
+        artifact_kind="PJE_INTAKE_V1",
+        artifact_id="PJE-INTAKE",
+        revision_id="33333333-3333-4333-8333-333333333333",
+        created_at="2026-08-31T12:00:00+00:00",
+        payload=payload,
+    )
+
+    package = CreateWorkspaceBackup(
+        source.workspaces, source.revisions, None, Clock(), lambda _: None
+    ).execute(workspace_id)
+    staging = RecoveryStaging.create(tmp_path / "restored")
+    RestoreWorkspaceBackup(staging).execute(package)
+
+    restored = staging.revisions.latest(workspace_id, "PJE_INTAKE_V1", "PJE-INTAKE")
+    assert restored is not None, "PJe inventory did not survive restore"
+    from scripts.backend_contract.application.models import thaw_payload
+
+    assert validate_pje_intake_payload(thaw_payload(restored.payload)) == payload
+
+
 def test_rejects_party_row_pole_outside_enum():
     payload = base_payload()
     payload["party_rows"] = [{

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from scripts.backend_contract.local_api.composition import build_local_api
 from tests.test_document_intake_v1 import provision_private_root
 from tests.test_final_closure_r7 import pdf_sintetico
@@ -41,6 +43,56 @@ def test_non_pje_material_import_still_succeeds_without_pje_inventory(tmp_path):
         runtime.close()
 
 
+def _encrypted_pdf() -> bytes:
+    from io import BytesIO
+
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    writer.encrypt("segredo")
+    buffer = BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
+def _truncated_pdf() -> bytes:
+    from io import BytesIO
+
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    buffer = BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()[: len(buffer.getvalue()) // 2]
+
+
+@pytest.mark.parametrize("label", ["encrypted", "truncated"])
+def test_pdfs_hostile_to_either_reader_never_surface_as_internal_error(tmp_path, label):
+    """LeitorPdf opens with pypdf AND pdfplumber; neither may leak as a 500."""
+    private = tmp_path / "private"
+    provision_private_root(private)
+    runtime = build_local_api(tmp_path / "product.sqlite3", private_root=private, token=TOKEN)
+    runtime.start()
+    try:
+        status, workspace = _request(runtime, "POST", "/v1/workspaces", value={"name": "Caso"})
+        workspace_id = workspace["workspace_id"]
+        body = _encrypted_pdf() if label == "encrypted" else _truncated_pdf()
+        status, payload = _request(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=body,
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": f"{label}.pdf"},
+        )
+        assert status != 500, payload
+        assert status in {201, 400, 415}, (status, payload)
+        if status != 201:
+            # Um import recusado nao pode deixar material orfao para tras.
+            status, listed = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/materials")
+            assert listed["items"] == [], listed
+    finally:
+        runtime.close()
+
+
 def test_valid_pje_pdf_reaches_workspace_logical_documents_and_case_analysis(tmp_path):
     pdf = tmp_path / "autos-sinteticos.pdf"
     pdf_sintetico(pdf)
@@ -73,6 +125,40 @@ def test_valid_pje_pdf_reaches_workspace_logical_documents_and_case_analysis(tmp
         assert [item["page_count_or_span"] for item in documents] == ["p. 2-3 | PJe 900001", "p. 4 | PJe 900002"]
         assert analysis["snapshot"]["coverage"]["documents_total"] == 2
         assert analysis["snapshot"]["coverage"]["documents_unavailable"] == 1
+    finally:
+        runtime.close()
+
+
+def test_reimport_never_silently_restores_availability_the_professional_removed(tmp_path):
+    """PROFESSIONAL_OVERRIDE > SOURCE_VALUE: a re-parse proposes True, the decision wins."""
+    pdf = tmp_path / "autos-sinteticos.pdf"
+    pdf_sintetico(pdf)
+    private = tmp_path / "private"
+    provision_private_root(private)
+    runtime = build_local_api(tmp_path / "product.sqlite3", private_root=private, token=TOKEN)
+    runtime.start()
+    try:
+        status, workspace = _request(runtime, "POST", "/v1/workspaces", value={"name": "Caso PJe"})
+        workspace_id = workspace["workspace_id"]
+        _request(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(),
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos.pdf"},
+        )
+        status, intake = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
+        excluded = intake["inventory"]["documents"][1]["document_id"]
+        status, intake = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pje-intake/availability", value={
+            "document_id": excluded, "available": False, "expected_revision": intake["revision"],
+        })
+        assert status == 200
+        decided = {row["document_id"]: row["available"] for row in intake["inventory"]["documents"]}
+
+        status, _again = _request(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(),
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos.pdf"},
+        )
+        status, after = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
+        assert status == 200
+        assert {row["document_id"]: row["available"] for row in after["inventory"]["documents"]} == decided
     finally:
         runtime.close()
 
