@@ -79,22 +79,6 @@ _PJE_INTAKE_ARTIFACT_KIND = "PJE_INTAKE_V1"
 _PJE_INTAKE_ARTIFACT_ID = "PJE-INTAKE"
 
 
-def _not_a_readable_pje_export() -> tuple[type[BaseException], ...]:
-    """Failures that mean "this file is not a readable PJe export", never "the import failed".
-
-    ``LeitorPdf`` opens the document with pypdf and with pdfplumber, so both
-    library families must be named here; listing only one lets an ordinary
-    encrypted or malformed PDF escape as an internal error.
-    """
-    from pdfminer.pdfexceptions import PDFException
-    from pdfminer.psexceptions import PSException
-    from pdfplumber.utils.exceptions import MalformedPDFException, PdfminerException
-    from pypdf.errors import PyPdfError
-
-    return (PyPdfError, PDFException, PSException, PdfminerException, MalformedPDFException, OSError)
-
-
-_NOT_A_READABLE_PJE_EXPORT = _not_a_readable_pje_export()
 
 
 def validate_pje_intake_payload(value: object) -> dict:
@@ -120,12 +104,15 @@ def validate_pje_intake_payload(value: object) -> dict:
         ids.append(row["document_id"])
     if len(ids) != len(set(ids)):
         raise ValueError("PJe logical document identities are duplicated")
-    party_fields = {"name", "role", "pole", "representative_name", "representative_role", "page", "occurrence"}
+    party_fields = {"name", "role", "pole", "representative_name", "representative_role", "page", "occurrence", "document_id"}
     for row in value["party_rows"]:
         if type(row) is not dict or set(row) != party_fields or row["pole"] not in {"ACTIVE", "PASSIVE"} or type(row["page"]) is not int or row["page"] < 1:
             raise ValueError("PJe party row is invalid")
-        if any(type(row[name]) is not str or not row[name].strip() for name in party_fields - {"page", "pole"}):
+        if any(type(row[name]) is not str or not row[name].strip() for name in party_fields - {"page", "pole", "document_id"}):
             raise ValueError("PJe party row text is invalid")
+        # None = pagina fora de qualquer documento logico (capa/indice).
+        if row["document_id"] is not None and (row["document_id"] not in set(ids)):
+            raise ValueError("PJe party row names an unknown logical document")
     canonical_payload_json(value)
     return value
 
@@ -482,41 +469,45 @@ def _carry_forward_availability_decisions(previous_record, inventory: dict) -> d
     }
 
 
-def _pje_inventory_payload(record, persisted, text: PdfTextResult) -> dict | None:
-    """Validate a PJe export and retain only its canonical workspace inventory.
+def _pje_inventory_payload(record, persisted, text: PdfTextResult, pje_intake) -> dict | None:
+    """Build the canonical workspace inventory from an injected PJe intake port.
 
-    Every material import routes through here regardless of whether the PDF is a
-    PJe export, so a PDF the strict PJe reader cannot even open must be treated as
-    "not a PJe export" (``None``), not as a failure of the whole import.
-    ``RepositoryIntegrityError`` stays reserved for the case where the parser *did*
-    recognize a PJe index but found it internally inconsistent.
+    The backend must not know the PJe parser: `config/architecture-policy-v1.json`
+    gives BACKEND no allowed dependencies, and reading a PJe export belongs to the
+    ingestion component. The port is asked only for the logical document list; the
+    party rows are still derived here, from text this layer already extracted.
 
-    ``LeitorPdf`` opens the same file twice, with pypdf *and* with pdfplumber, so a
-    guard naming only one of those libraries lets the other's failures escape and
-    turn an ordinary encrypted or malformed PDF into a failed import.
+    The port answers with a discriminated status so the failure taxonomy crosses
+    the boundary without sharing exception types: ``NOT_PJE`` (this is not, or is
+    not readable as, a PJe export -- an ordinary import, never a failure) and
+    ``INCONSISTENT`` (it *is* a PJe export and it disagrees with itself, which
+    stays fail-closed).
     """
-    from scripts.extracao_pje.gerar_documentos import gerar_documentos
-    from scripts.extracao_pje.gerar_manifesto import construir_manifesto
-
+    if pje_intake is None:
+        return None
     with tempfile.TemporaryDirectory(prefix="pje-intake-") as temporary:
-        root = Path(temporary)
-        pdf = root / "source.pdf"
+        pdf = Path(temporary) / "source.pdf"
         persisted.stream.seek(0)
         with pdf.open("wb") as sink:
             while block := persisted.stream.read(DOCUMENT_IO_CHUNK_BYTES):
                 sink.write(block)
         persisted.stream.seek(0)
-        try:
-            manifesto, errors, _alerts = construir_manifesto(pdf)
-        except _NOT_A_READABLE_PJE_EXPORT:
-            return None
-        if not manifesto.get("indice", {}).get("itens"):
-            return None
-        if errors or manifesto.get("status_validacao") != "VALIDADO":
-            raise RepositoryIntegrityError("PJe manifest is not valid")
-        report = gerar_documentos(manifesto, pdf, root)
-        if report["documentos_validos"] != report["documentos_esperados"]:
-            raise RepositoryIntegrityError("PJe logical document validation failed")
+        outcome = pje_intake.logical_inventory(pdf)
+    if type(outcome) is not dict or outcome.get("status") not in {"OK", "NOT_PJE", "INCONSISTENT"}:
+        raise RepositoryIntegrityError("PJe intake port returned an unknown result")
+    if outcome["status"] == "NOT_PJE":
+        return None
+    if outcome["status"] == "INCONSISTENT":
+        raise RepositoryIntegrityError(str(outcome.get("detail", "PJe source is inconsistent")))
+    documents = [{**row, "available": True} for row in outcome["documents"]]
+
+    def _containing_document(page_number: int) -> str | None:
+        """Documento logico cujo intervalo de paginas contem esta pagina."""
+        for document in documents:
+            if document["page_start"] <= page_number <= document["page_end"]:
+                return document["document_id"]
+        return None
+
     party_rows = []
     for page in text.pages:
         parsed = parse_pje_party_table(page.text)
@@ -526,20 +517,19 @@ def _pje_inventory_payload(record, persisted, text: PdfTextResult) -> dict | Non
                 "representative_name": row.representative_name,
                 "representative_role": row.representative_role,
                 "page": page.number, "occurrence": row.source_line,
+                # Sem este vinculo a proveniencia da parte nao tem como nomear o
+                # documento que de fato a contem, e a exclusao profissional de um
+                # documento nao tem como alcancar o que ele afirma. `None` quando
+                # a pagina nao pertence a nenhum documento logico (capa/indice).
+                "document_id": _containing_document(page.number),
             })
-    process = manifesto.get("processo", {})
-    judicial_unit = process.get("orgao_julgador", {})
-    instance_label = judicial_unit.get("valor") if isinstance(judicial_unit, dict) else None
     return {
         "schema_version": "1.0.0", "workspace_id": str(record.workspace_id),
         "storage_content_id": str(record.content_id), "source_sha256": record.checksum_sha256,
-        "instance_label": instance_label or "NÃO CLASSIFICADA",
-        "documents": [{
-            "document_id": row["documento_id"], "id_pje": row["id_pje"], "title": row["titulo_original"],
-            "raw_type": row["tipo_original"], "normalized_type": row["classe_normalizada"],
-            "page_start": row["pagina_pdf_inicio"], "page_end": row["pagina_pdf_fim"],
-            "available": True,
-        } for row in manifesto["documentos"]],
+        # A unidade judicial vem do proprio inventario: ler o manifesto aqui
+        # exigiria conhecer o parser, que e exatamente o que a porta evita.
+        "instance_label": outcome.get("instance_label") or "NÃO CLASSIFICADA",
+        "documents": documents,
         "party_rows": party_rows,
     }
 
@@ -553,6 +543,7 @@ class ImportCaseDocumentWithMetadata:
     clock: Clock
     ids: IdGenerator
     existing_documents: object | None = None
+    pje_intake: object | None = None
 
     def execute(
         self,
@@ -639,7 +630,7 @@ class ImportCaseDocumentWithMetadata:
                     text=text,
                     extracted_at=extracted_at,
                 )
-            pje_inventory = _pje_inventory_payload(record, persisted, text)
+            pje_inventory = _pje_inventory_payload(record, persisted, text, self.pje_intake)
         self.revisions.append(
             workspace_id=record.workspace_id,
             artifact_kind=_PROCESS_METADATA_EXTRACTION_KIND,

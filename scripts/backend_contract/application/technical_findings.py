@@ -108,7 +108,10 @@ def _reconcile(snapshot: TechnicalSnapshot, *, current: TechnicalSourceSnapshot)
 def _validate_upstream_links(snapshot: TechnicalSnapshot, case: CaseAnalysisSnapshot, inspection: InspectionSession) -> None:
     case_kinds = {"CASE_DOCUMENT", "DOCUMENTED_ALLEGATION", "CASE_CLAIM", "CASE_COUNTERARGUMENT", "CASE_DECISION", "CASE_QUESTION"}
     authority_by_kind = {
-        "CASE_DOCUMENT": {item.document_id for item in case.documents},
+        # Um documento que o perito marcou indisponivel continua inventariado,
+        # mas deixa de ser autoridade documental: uma constatacao nao pode citar
+        # como fonte um documento que a decisao profissional excluiu da analise.
+        "CASE_DOCUMENT": {item.document_id for item in case.documents if item.content_available},
         "DOCUMENTED_ALLEGATION": {source.occurrence_id for item in case.claims for source in item.provenance},
         "CASE_CLAIM": {item.item_id for item in case.claims},
         "CASE_COUNTERARGUMENT": {item.item_id for item in case.counterarguments},

@@ -212,9 +212,24 @@ class StartCaseAnalysis:
         first = documents[0]
         context_id = f"CONTEXT-{self.ids.new_uuid().hex.upper()}"
         entities, participants, representation_links = [], [], []
+        # Um documento que o perito marcou indisponivel permanece inventariado,
+        # mas nao pode alimentar o contexto efetivo: deixar suas linhas de parte
+        # entrarem aqui reintroduziria, sob a identidade de outro documento,
+        # exatamente o conteudo que a exclusao mandou deixar de fora.
+        excluded = {
+            row["document_id"] for row in (inventory["documents"] if inventory is not None else ())
+            if not row["available"]
+        }
+        by_document = {item.document_id: item for item in documents}
         for index, row in enumerate(inventory.get("party_rows", ()) if inventory is not None else (), 1):
+            if row.get("document_id") in excluded:
+                continue
+            # A proveniencia nomeia o documento logico que realmente contem a
+            # pagina; atribuir tudo ao primeiro documento tornava o triplo
+            # (documento, sha, pagina) internamente inconsistente.
+            origin = by_document.get(row.get("document_id"), first)
             source = JudicialSourceProvenance(
-                "PJE", first.document_id, first.source_sha256, row["page"], row["occurrence"],
+                "PJE", origin.document_id, origin.source_sha256, row["page"], row["occurrence"],
                 f"OCCURRENCE-PJE-PARTY-{index:03d}",
             )
             entity_id, participant_id = f"ENTITY-PJE-PARTY-{index:03d}", f"PARTICIPANT-PJE-{index:03d}"

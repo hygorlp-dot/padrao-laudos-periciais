@@ -217,6 +217,7 @@ def build_local_api(
     clock: Clock | None = None,
     ids: IdGenerator | None = None,
     private_root: str | Path | None = None,
+    pje_intake: object | None = None,
 ) -> LocalApiRuntime:
     """Compõe serviços, SQLite e listener sem esconder suas dependências."""
 
@@ -288,6 +289,7 @@ def build_local_api(
             local_clock,
             local_ids,
             list_case_documents,
+            pje_intake,
         )
         import_inspection_photo = ImportInspectionPhoto(generic_store)
         case_analysis_documents = ListCaseDocumentsWithPjeInventory(list_case_documents, store.revisions)

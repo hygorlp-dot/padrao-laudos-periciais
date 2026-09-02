@@ -4,7 +4,10 @@ import json
 
 import pytest
 
-from scripts.backend_contract.local_api.composition import build_local_api
+# Os E2E percorrem o composition root REAL de producao (PLANNING), e nao
+# instanciam o adapter por conta propria: e isso que prova que a inversao de
+# dependencia esta de fato ligada, e nao apenas possivel.
+from scripts.planejamento_pericial.app_composition import build_pericial_local_api as build_local_api
 from tests.test_document_intake_v1 import provision_private_root
 from tests.test_final_closure_r7 import pdf_sintetico
 from tests.test_local_api_v1 import TOKEN, http_request
