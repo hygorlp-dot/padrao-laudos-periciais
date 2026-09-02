@@ -138,8 +138,6 @@ def test_backup_without_the_pje_source_fails_closed():
     from scripts.backend_contract.application.models import PericiaWorkspace, WorkspaceId
     from scripts.backend_contract.infrastructure.productization import (
         CreateWorkspaceBackup,
-        RecoveryStaging,
-        RestoreWorkspaceBackup,
     )
     from scripts.backend_contract.infrastructure.sqlite import SQLiteApplicationStore
 

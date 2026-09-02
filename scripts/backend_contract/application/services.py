@@ -551,7 +551,9 @@ def _pje_inventory_payload(record, persisted, text: PdfTextResult, pje_intake) -
             while block := persisted.stream.read(DOCUMENT_IO_CHUNK_BYTES):
                 sink.write(block)
         persisted.stream.seek(0)
-        outcome = pje_intake.logical_inventory(pdf)
+        # A area de trabalho e desta camada: um unico dono de materializacao
+        # privada, e uma unica remocao ao sair do bloco.
+        outcome = pje_intake.logical_inventory(pdf, Path(temporary))
     if type(outcome) is not dict or outcome.get("status") not in {"OK", "NOT_PJE", "BLOCKED"}:
         raise RepositoryIntegrityError("PJe intake port returned an unknown result")
     if outcome["status"] == "NOT_PJE":

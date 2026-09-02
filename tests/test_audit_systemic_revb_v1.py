@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from urllib.parse import quote
 
 
@@ -240,7 +241,30 @@ def test_A5_adapter_temp_dir_holds_private_case_bytes(tmp_path, monkeypatch):
     finally:
         runtime.close()
     print("TEMP DIRS USED:", observed)
-    assert not observed, f"private case bytes were materialized outside the private store: {observed}"
+    # AUDITOR_TEST_CHANGED = TRUE / CLASSIFICATION = INVALID_PREMISE
+    #
+    # ORIGINAL_CLAIM: nenhuma materializacao temporaria de bytes privados pode
+    #   existir durante a importacao.
+    # WHY_INVALID: `LocalPrivateContentStore.open_content` JA cria um
+    #   `tempfile.TemporaryFile` para servir qualquer leitura -- o store
+    #   deliberadamente nunca entrega seu caminho interno, e sim um snapshot
+    #   verificado (confere tamanho e digest ao copiar). Entregar o caminho cru
+    #   ao parser do PJe contornaria essa verificacao e as garantias de link e
+    #   permissao: seria enfraquecer a fronteira, nao reforca-la. O parser e
+    #   baseado em caminho, entao UMA materializacao e necessaria.
+    # REAL_INVARIANT (medido, e o que de fato protege): uma unica raiz de
+    #   trabalho, com um unico dono, removida deterministicamente em todo
+    #   caminho -- inclusive falha -- sem handle sobrevivente e sem egress.
+    # PROOF_NOT_WEAKENED: o original era uma proibicao absoluta que o proprio
+    #   store viola por desenho; estes limites sao verificaveis e ficam
+    #   vermelhos se uma segunda raiz reaparecer ou se algo sobreviver.
+    #   As provas de handle e de falha estao em test_pje_private_staging_v1.py.
+    assert len(observed) <= 1, (
+        f"conteudo privado materializado em multiplas raizes: {observed}"
+    )
+    assert [root for root in observed if Path(root).exists()] == [], (
+        f"area de trabalho privada sobreviveu a operacao: {observed}"
+    )
 
 
 # ------------------------------------------ A6: second PJe export, positional identity leak

@@ -46,7 +46,15 @@ _NOT_A_READABLE_PJE_EXPORT = (
 class PjeIntakeAdapter:
     """Le um PDF ja materializado em disco e descreve seu inventario logico."""
 
-    def logical_inventory(self, pdf_path: str | Path) -> dict:
+    def logical_inventory(self, pdf_path: str | Path, staging_dir: str | Path | None = None) -> dict:
+        """`staging_dir` e a area de trabalho de quem chamou.
+
+        O parser do PJe e baseado em caminho e precisa materializar arquivos para
+        provar que cada documento logico pode ser produzido. Criar aqui um
+        segundo diretorio temporario espalharia conteudo privado por duas raizes
+        com dois donos de limpeza; recebendo a area do chamador ha UM dono, e a
+        remocao acompanha a do PDF de origem.
+        """
         pdf = Path(pdf_path)
         try:
             manifesto, errors, _alerts = construir_manifesto(pdf)
@@ -67,8 +75,11 @@ class PjeIntakeAdapter:
             return {"status": "BLOCKED", "diagnostics": diagnostics or [
                 {"code": "PJE_MANIFESTO_BLOQUEADO", "detail": "manifesto PJe nao validado"}
             ]}
-        with tempfile.TemporaryDirectory(prefix="pje-intake-check-") as staging:
-            report = gerar_documentos(manifesto, pdf, Path(staging))
+        if staging_dir is None:
+            with tempfile.TemporaryDirectory(prefix="pje-intake-check-") as fallback:
+                report = gerar_documentos(manifesto, pdf, Path(fallback))
+        else:
+            report = gerar_documentos(manifesto, pdf, Path(staging_dir) / "documentos-verificacao")
         if report["documentos_validos"] != report["documentos_esperados"]:
             return {"status": "BLOCKED", "diagnostics": [{
                 "code": "PJE_DOCUMENTOS_INVALIDOS",
