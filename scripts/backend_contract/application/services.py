@@ -632,6 +632,31 @@ class ImportCaseDocumentWithMetadata:
     existing_documents: object | None = None
     pje_intake: object | None = None
 
+    def _derive_missing_pje_inventory(self, record: PrivateContentMetadata) -> None:
+        """Produz o inventario de uma fonte ja armazenada que ainda nao o tem."""
+        if self.pje_intake is None:
+            return
+        existing = self.revisions.latest(
+            record.workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _pje_intake_artifact_id(record.content_id)
+        )
+        if existing is not None:
+            return
+        page_cache = RevisionOcrPageCache(self.revisions, record.workspace_id, self.clock, self.ids)
+        with self.document_streams.execute(record.workspace_id, record.content_id) as persisted:
+            text = self.extractor.extract(
+                persisted.stream, document_sha256=record.checksum_sha256, page_cache=page_cache,
+            )
+            inventory = _pje_inventory_payload(record, persisted, text, self.pje_intake)
+        if inventory is None:
+            return
+        validate_pje_intake_payload(inventory)
+        self.revisions.append(
+            workspace_id=record.workspace_id, artifact_kind=_PJE_INTAKE_ARTIFACT_KIND,
+            artifact_id=_pje_intake_artifact_id(record.content_id),
+            revision_id=str(_generated_uuid(self.ids)),
+            created_at=_generated_timestamp(self.clock), payload=inventory,
+        )
+
     def execute(
         self,
         *,
@@ -639,16 +664,27 @@ class ImportCaseDocumentWithMetadata:
         original_filename: str,
         content: bytes | SeekableContent,
         media_type: str,
-    ) -> PrivateContentMetadata:
+    ) -> tuple[PrivateContentMetadata, bool]:
         source = as_seekable_content(content)
         already = _already_imported_in_workspace(self.existing_documents, workspace_id, source)
         if already is not None:
             # Reimportar exatamente os mesmos bytes no mesmo workspace e
-            # idempotente: uma segunda autoridade fisica sobre o mesmo conteudo
-            # duplicaria a fonte e apagaria as decisoes ja tomadas sobre ela.
-            # O escopo e o workspace -- o mesmo hash noutro workspace continua
-            # sendo outra fonte, sem identidade compartilhada.
-            return already
+            # idempotente quanto a AUTORIDADE FISICA: uma segunda autoridade
+            # sobre o mesmo conteudo duplicaria a fonte e apagaria as decisoes ja
+            # tomadas sobre ela. O escopo e o workspace -- o mesmo hash noutro
+            # workspace continua sendo outra fonte, sem identidade compartilhada.
+            #
+            # Idempotencia da fonte, porem, nao e idempotencia do PIPELINE. Uma
+            # fonte importada quando nao havia leitor de PJe nunca ganhou
+            # inventario, e o curto-circuito tornava isso permanente: reimportar
+            # devolvia sucesso e o inventario seguia ausente, sem caminho de
+            # reparo. Se a derivacao nao existe e agora pode ser feita, faz-se.
+            self._derive_missing_pje_inventory(already)
+            # Nada foi criado. O servico e frozen e compartilhado entre
+            # requisicoes, entao a distincao viaja no retorno, e nao em estado
+            # mutavel: responder "201 Created" afirmaria uma criacao que nao
+            # houve, e o nome devolvido seria o da PRIMEIRA importacao.
+            return already, False
         record = self.documents.execute(
             workspace_id=workspace_id,
             original_filename=original_filename,
@@ -740,7 +776,7 @@ class ImportCaseDocumentWithMetadata:
                 artifact_id=_pje_intake_artifact_id(record.content_id), revision_id=str(_generated_uuid(self.ids)),
                 created_at=_generated_timestamp(self.clock), payload=pje_inventory,
             )
-        return record
+        return record, True
 
 
 @dataclass(frozen=True, slots=True)

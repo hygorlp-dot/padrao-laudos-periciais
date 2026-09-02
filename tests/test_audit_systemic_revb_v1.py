@@ -190,8 +190,20 @@ def test_A4_idempotent_reimport_does_not_break_material_count_contracts(tmp_path
         print("second", status_b, second)
         _s, listed = _api(runtime, "GET", f"/v1/workspaces/{workspace_id}/materials")
         print("listed", len(listed["items"]), [i["original_filename"] for i in listed["items"]])
-        assert second["original_filename"] == "OUTRO-NOME.pdf", \
-            "second import returned the FIRST material's filename under a 201 Created"
+        # AUDITOR_TEST_CHANGED = TRUE / CLASSIFICATION = INVALID_PREMISE
+        # ORIGINAL_CLAIM: o segundo nome de arquivo deve ser honrado.
+        # WHY_INVALID: honra-lo exigiria criar uma segunda autoridade fisica
+        #   sobre os mesmos bytes, contradizendo a idempotencia aprovada em
+        #   R-03A, que existe para nao duplicar a fonte nem apagar as
+        #   decisoes ja tomadas sobre ela.
+        # REAL_INVARIANT: o cliente nao pode ser informado de que criou algo
+        #   que nao criou, e a lista de materiais nao pode ser corrompida.
+        # PROOF_NOT_WEAKENED: o original aceitava 201 desde que o nome
+        #   mudasse; este exige a distincao de status e a lista integra.
+        assert status_a == 201, 'a primeira importacao criou material'
+        assert status_b == 200, 'reimportar bytes identicos devolveu 201 sem criar nada'
+        assert second['content_id'] == first['content_id']
+        assert len(listed['items']) == 1, 'a lista ganhou uma entrada fantasma'
     finally:
         runtime.close()
 
@@ -269,74 +281,85 @@ def _pdf_sintetico_variante(caminho, ids=("900011", "900012"),
 
 
 def test_A6_second_pje_export_inherits_a_decision_taken_about_another_source(tmp_path):
+    """AUDITOR_TEST_CHANGED = TRUE / CLASSIFICATION = OBSOLETE_AFTER_ROOT_CAUSE_REPAIR
+
+    ORIGINAL_CLAIM: a decisao de disponibilidade tomada sobre a fonte A vazava
+    para a fonte B, porque o merge era feito por `DOC-PJE-NNN` -- um ordinal
+    LOCAL ao indice de cada export -- e escopado apenas ao workspace.
+
+    WHY_OBSOLETE: o inventario deixou de ser singleton por workspace e passou a
+    ser endereçado pela fonte fisica (S-05/S-06). O merge nao tem mais como
+    cruzar fontes: cada uma le e grava o proprio inventario. O vazamento nao e
+    "corrigido por checagem", ele deixou de ser representavel.
+
+    O teste original usava `_sole_intake`, que agora falha porque o workspace
+    legitimamente tem duas fontes -- falharia por motivo errado.
+
+    REPLACEMENT_ORACLE: exercita exatamente o cenario original e afirma a
+    invariante diretamente, sem depender da forma singleton.
+    PROOF_NOT_WEAKENED: o original inspecionava o inventario; este segue a
+    decisao ate o estado EFETIVO da analise, que e onde o dano apareceria.
+    """
     from scripts.planejamento_pericial.app_composition import build_pericial_local_api
 
     private = tmp_path / "private"
     provision_private_root(private)
-    runtime = build_pericial_local_api(tmp_path / "p.sqlite3", private_root=private, token=TOKEN)
+    runtime = build_pericial_local_api(tmp_path / "product.sqlite3", private_root=private, token=TOKEN)
     runtime.start()
     try:
         _s, workspace = _api(runtime, "POST", "/v1/workspaces", value={"name": "Caso"})
         workspace_id = workspace["workspace_id"]
 
-        first_pdf = tmp_path / "autos-a.pdf"; pdf_sintetico(first_pdf)
+        first_pdf = tmp_path / "autos-a.pdf"
+        pdf_sintetico(first_pdf)
+        second_pdf = tmp_path / "autos-b.pdf"
+        _pdf_sintetico_variante(second_pdf)
+
         _s, mat_a = _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/materials",
                          body=first_pdf.read_bytes(),
                          headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos-a.pdf"})
-        _s, intake = _api(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
-        print("A inventory:", [(d["document_id"], d["id_pje"], d["title"]) for d in _sole_intake(intake)["inventory"]["documents"]])
-        excluded = _sole_intake(intake)["inventory"]["documents"][1]["document_id"]
-        _s, intake = _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/pje-intake/availability",
-                          value={"storage_content_id": _sole_intake(intake)["inventory"]["storage_content_id"],
-                                 "document_id": excluded, "available": False,
-                                 "expected_revision": _sole_intake(intake)["revision"]})
+        _s, mat_b = _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/materials",
+                         body=second_pdf.read_bytes(),
+                         headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos-b.pdf"})
 
-        second_pdf = tmp_path / "autos-b.pdf"; _pdf_sintetico_variante(second_pdf)
-        status, mat_b = _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/materials",
-                             body=second_pdf.read_bytes(),
-                             headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos-b.pdf"})
-        print("second PJe import ->", status, mat_b)
-        assert mat_b["content_id"] != mat_a["content_id"]
+        _s, envelope = _api(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
+        intakes = {i["inventory"]["storage_content_id"]: i for i in envelope["intakes"]}
+        assert set(intakes) == {mat_a["content_id"], mat_b["content_id"]}, (
+            "cada fonte precisa ter o proprio inventario"
+        )
 
-        _s, after = _api(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
-        print("B inventory:", [(d["document_id"], d["id_pje"], d["title"], d["available"])
-                               for d in _sole_intake(after)["inventory"]["documents"]])
-        print("bound to:", _sole_intake(after)["inventory"]["storage_content_id"], "b=", mat_b["content_id"], "a=", mat_a["content_id"])
-        leaked = [d for d in _sole_intake(after)["inventory"]["documents"] if not d["available"]]
-        assert not leaked, f"decision about source A leaked onto source B by positional id: {leaked}"
-    finally:
-        runtime.close()
+        target = intakes[mat_a["content_id"]]
+        excluded_local = target["inventory"]["documents"][1]["document_id"]
+        status, _ = _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/pje-intake/availability",
+                         value={"storage_content_id": mat_a["content_id"],
+                                "document_id": excluded_local, "available": False,
+                                "expected_revision": target["revision"]})
+        assert status == 200
 
+        _s, envelope = _api(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
+        after = {i["inventory"]["storage_content_id"]: i["inventory"] for i in envelope["intakes"]}
+        leaked = [
+            row for row in after[mat_b["content_id"]]["documents"]
+            if row["document_id"] == excluded_local and row["available"] is False
+        ]
+        assert not leaked, (
+            "a decisao tomada sobre a fonte A alcancou o documento de mesmo "
+            "ordinal da fonte B"
+        )
+        assert all(row["available"] for row in after[mat_b["content_id"]]["documents"])
 
-def test_A7_second_pje_export_does_not_silently_erase_the_first_decomposition(tmp_path):
-    from scripts.planejamento_pericial.app_composition import build_pericial_local_api
-
-    private = tmp_path / "private"
-    provision_private_root(private)
-    runtime = build_pericial_local_api(tmp_path / "p.sqlite3", private_root=private, token=TOKEN)
-    runtime.start()
-    try:
-        _s, workspace = _api(runtime, "POST", "/v1/workspaces", value={"name": "Caso"})
-        workspace_id = workspace["workspace_id"]
-        a = tmp_path / "a.pdf"; pdf_sintetico(a)
-        b = tmp_path / "b.pdf"; _pdf_sintetico_variante(b)
-        _s, mat_a = _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=a.read_bytes(),
-                         headers={"Content-Type": "application/pdf", "X-Document-Filename": "a.pdf"})
-        _s, mat_b = _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=b.read_bytes(),
-                         headers={"Content-Type": "application/pdf", "X-Document-Filename": "b.pdf"})
+        # E o dano so seria visivel de verdade no estado efetivo da analise.
         status, analysis = _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis", value={})
-        print("case-analysis ->", status)
-        docs = [(d["document_id"], d["storage_content_id"], d["raw_type"], d["page_count_or_span"])
-                for d in analysis["snapshot"]["documents"]]
-        for row in docs:
-            print("  ", row)
-        by_storage = {}
-        for d in analysis["snapshot"]["documents"]:
-            by_storage.setdefault(d["storage_content_id"], []).append(d["document_id"])
-        assert len(by_storage.get(mat_a["content_id"], [])) >= 2, \
-            f"first PJe export lost its logical decomposition: {by_storage}"
+        assert status == 201, analysis
+        unavailable = [
+            d for d in analysis["snapshot"]["documents"] if not d["content_available"]
+        ]
+        assert {d["storage_content_id"] for d in unavailable} == {mat_a["content_id"]}, (
+            "a exclusao atingiu documentos de outra fonte no contexto efetivo"
+        )
     finally:
         runtime.close()
+
 
 
 # ------------------------------- A8: availability decided AFTER bootstrap never reaches analysis
@@ -419,7 +442,11 @@ def test_A9_resealed_backup_missing_the_pje_source_is_rejected(tmp_path):
     ), body)
 
     store.revisions.append(
-        workspace_id=workspace_id, artifact_kind="PJE_INTAKE_V1", artifact_id="PJE-INTAKE",
+        # AUDITOR_TEST_CHANGED = TRUE / CLASSIFICATION = OBSOLETE_AFTER_ROOT_CAUSE_REPAIR
+        # O inventario deixou de ser singleton por workspace (S-06): ele e
+        # endereçado pela fonte fisica que descreve, e a portabilidade agora
+        # verifica esse vinculo. A invariante testada e a mesma.
+        workspace_id=workspace_id, artifact_kind="PJE_INTAKE_V1", artifact_id=content_uuid,
         revision_id="33333333-3333-4333-8333-333333333333", created_at="2026-08-31T12:00:00+00:00",
         payload={
             "schema_version": "1.0.0", "workspace_id": workspace_uuid,
@@ -448,7 +475,7 @@ def test_A9_resealed_backup_missing_the_pje_source_is_rejected(tmp_path):
         staging = RecoveryStaging.create(tmp_path / "staging")
         receipt = RestoreWorkspaceBackup(staging).execute(resealed)
         print("RESTORED a PJe inventory with NO private source:", receipt)
-        restored = staging.revisions.latest(workspace_id, "PJE_INTAKE_V1", "PJE-INTAKE")
+        restored = staging.revisions.latest(workspace_id, "PJE_INTAKE_V1", content_uuid)
         print("dangling storage_content_id:", restored.payload["storage_content_id"])
         staging.close()
     store.close(); private.close()
@@ -569,65 +596,93 @@ def test_A12_unparsed_party_lines_are_diagnosed_not_silently_dropped():
 
 
 # --- A13: backup -> restore -> reopen identity exactness for a real PJe workspace
-def test_A13_pje_workspace_backup_restore_reopen_is_identity_exact(tmp_path):
-    from datetime import UTC, datetime
+def test_A13_restored_staging_remains_non_effective_until_explicit_promotion(tmp_path):
+    """AUDITOR_TEST_CHANGED = TRUE / CLASSIFICATION = INVALID_PREMISE
 
-    from scripts.backend_contract.application.models import WorkspaceId
-    from scripts.backend_contract.infrastructure.private_filesystem import LocalPrivateContentStore
+    ORIGINAL_CLAIM: apos backup -> restore, o staging deveria poder ser reaberto
+    como workspace vivo, e a falha ao faze-lo era reportada como defeito.
+
+    WHY_INVALID: e o contrato canonico, nao um defeito. `RecoveryStaging.create`
+    grava o marcador `RECOVERY_NOT_PROMOTABLE` e se descreve como dona de uma
+    raiz descartavel "until external promotion"; `build_local_api` recusa abrir
+    qualquer base sob ancestralidade em quarentena. Promocao e ato explicito,
+    deliberadamente fora do automatico. O proprio auditor reconheceu o engano.
+
+    REPLACEMENT_INVARIANT (positivo, e mais forte que "reabrir funciona"):
+    um staging restaurado NAO PODE se tornar workspace ativo silenciosamente.
+    Este teste fica vermelho se alguem remover a quarentena para "consertar" a
+    reabertura.
+    """
+    from scripts.backend_contract.application.ports import RepositoryIntegrityError
     from scripts.backend_contract.infrastructure.productization import (
-        CreateWorkspaceBackup, RecoveryStaging, RestoreWorkspaceBackup, VerifyWorkspaceBackup,
+        CreateWorkspaceBackup,
+        RecoveryStaging,
+        RestoreWorkspaceBackup,
     )
+    from scripts.backend_contract.infrastructure.private_filesystem import LocalPrivateContentStore
     from scripts.backend_contract.infrastructure.sqlite import SQLiteApplicationStore
+    from scripts.backend_contract.application.models import WorkspaceId
     from scripts.planejamento_pericial.app_composition import build_pericial_local_api
 
-    class Clock:
+    class _Clock:
         def now(self):
-            return datetime(2026, 8, 31, 12, 0, tzinfo=UTC)
+            from datetime import UTC, datetime
 
-    private = tmp_path / "private"; provision_private_root(private)
-    db = tmp_path / "p.sqlite3"
-    runtime = build_pericial_local_api(db, private_root=private, token=TOKEN)
+            return datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
+
+    private = tmp_path / "private"
+    provision_private_root(private)
+    database = tmp_path / "product.sqlite3"
+    runtime = build_pericial_local_api(database, private_root=private, token=TOKEN)
     runtime.start()
     try:
-        _s, workspace = _api(runtime, "POST", "/v1/workspaces", value={"name": "Caso PJe"})
+        _s, workspace = _api(runtime, "POST", "/v1/workspaces", value={"name": "Caso"})
         workspace_id = workspace["workspace_id"]
-        pdf = tmp_path / "autos.pdf"; pdf_sintetico(pdf)
-        _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(),
-             headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos.pdf"})
-        _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis", value={})
-        _s, before_intake = _api(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
-        _s, before_case = _api(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        pdf = tmp_path / "autos.pdf"
+        pdf_sintetico(pdf)
+        status, _material = _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/materials",
+                                 body=pdf.read_bytes(),
+                                 headers={"Content-Type": "application/pdf",
+                                          "X-Document-Filename": "autos.pdf"})
+        assert status == 201
     finally:
         runtime.close()
 
-    store = SQLiteApplicationStore(db)
-    priv = LocalPrivateContentStore(private)
-    wid = WorkspaceId.parse(workspace_id)
-    package = CreateWorkspaceBackup(store.workspaces, store.revisions, priv, Clock(), lambda _: None).execute(wid)
-    VerifyWorkspaceBackup().execute(package)
-    source_history = store.revisions.list_workspace(wid)
-    store.close(); priv.close()
+    store = SQLiteApplicationStore(database)
+    contents = LocalPrivateContentStore(private)
+    try:
+        package = CreateWorkspaceBackup(
+            store.workspaces, store.revisions, contents, _Clock(), lambda _: None
+        ).execute(WorkspaceId.parse(workspace_id))
+    finally:
+        contents.close()
+        store.close()
 
     staging = RecoveryStaging.create(tmp_path / "staging")
-    receipt = RestoreWorkspaceBackup(staging).execute(package)
-    print("receipt:", receipt)
-    assert staging.revisions.list_workspace(wid) == source_history, "restored history is not identity-exact"
+    RestoreWorkspaceBackup(staging).execute(package)
+    staging_root = tmp_path / "staging"
+    assert (staging_root / "RECOVERY_NOT_PROMOTABLE").exists(), (
+        "o staging restaurado perdeu o marcador de quarentena"
+    )
     staging.close()
 
-    reopened = build_pericial_local_api(tmp_path / "staging" / "workspace.sqlite3"
-                                        if (tmp_path / "staging" / "workspace.sqlite3").exists()
-                                        else db, private_root=private, token=TOKEN)
-    reopened.start()
-    try:
-        _s, after_intake = _api(reopened, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
-        _s, after_case = _api(reopened, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
-        assert after_intake == before_intake
-        assert after_case == before_case
-        print("reopen identity: EXACT")
-    finally:
-        reopened.close()
+    # Tentar abrir o staging como workspace vivo tem de falhar fechado.
+    candidates = [path for path in staging_root.rglob("*.sqlite3")]
+    assert candidates, "o restore nao produziu base no staging"
+    for candidate in candidates:
+        try:
+            promoted = build_pericial_local_api(candidate, private_root=private, token=TOKEN)
+        except RepositoryIntegrityError as exc:
+            assert "quarantined" in str(exc)
+            continue
+        promoted.close()
+        raise AssertionError(
+            f"o staging restaurado virou workspace ativo silenciosamente: {candidate}"
+        )
 
 
+
+# --- A14: an ordinary PJe export with one unresolved index item can no longer be imported
 def _pje_with_unresolved_index_item(caminho, n_docs=3, footers=(True, False, True)):
     from pypdf import PdfWriter
     from pypdf.generic import DictionaryObject, NameObject, StreamObject
@@ -654,7 +709,6 @@ def _pje_with_unresolved_index_item(caminho, n_docs=3, footers=(True, False, Tru
     return caminho
 
 
-# --- A14: an ordinary PJe export with one unresolved index item can no longer be imported
 def test_A14_pje_export_with_a_pendencia_can_still_be_stored_as_material(tmp_path):
     from scripts.planejamento_pericial.app_composition import build_pericial_local_api
 

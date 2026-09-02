@@ -71,7 +71,8 @@ def _import(runtime, workspace_id, pdf, filename):
         runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(),
         headers={"Content-Type": "application/pdf", "X-Document-Filename": filename},
     )
-    assert status == 201, material
+    # 201 quando cria; 200 quando os bytes ja estavam no workspace (idempotente).
+    assert status in {200, 201}, material
     return material
 
 

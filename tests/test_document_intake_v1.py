@@ -129,7 +129,8 @@ def api_services(**overrides):
         "list_artifact_revisions": inert,
         "get_process_case": inert,
         "save_process_case": inert,
-        "import_case_document": RecordingService(metadata()),
+        # (record, created): o transporte distingue criacao de idempotencia.
+        "import_case_document": RecordingService((metadata(), True)),
         "list_case_documents": RecordingService((metadata(),)),
         "read_case_document": RecordingService(PrivateContent(metadata(), PDF)),
     }
@@ -909,7 +910,9 @@ def test_product_flow_imports_reads_isolates_and_reopens_pdf_without_path_or_tok
         duplicate_status, _headers, duplicate_body = import_pdf(
             first, workspace_a, "../../Autos sintéticos.pdf"
         )
-        assert duplicate_status == 201
+        # 200, nao 201: nada foi criado. Dizer "Created" aqui afirmaria uma
+        # criacao que nao houve e o cliente trataria o retorno como material novo.
+        assert duplicate_status == 200
         assert json.loads(duplicate_body)["content_id"] == content_id
 
         denied_status, _headers, _body = product_request(

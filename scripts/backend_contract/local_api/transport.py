@@ -1106,13 +1106,15 @@ class LocalApi:
                         raise ValueError("Content-Type de documento inválido")
                     if _parse_content_length(request_headers.get("content-length", "")) != body_size:
                         raise ValueError("Content-Length diverge")
-                    record = service.execute(
+                    record, created = service.execute(
                         workspace_id=workspace_id,
                         original_filename=_document_filename(request_headers.get("x-document-filename")),
                         content=body,
                         media_type="application/pdf",
                     )
-                    return _json_response(201, _private_content_dto(record, workspace_id))
+                    # 201 so quando houve criacao; reimportar bytes identicos e
+                    # idempotente e devolve o material que ja existia.
+                    return _json_response(201 if created else 200, _private_content_dto(record, workspace_id))
                 return _error(405, "METHOD_NOT_ALLOWED")
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "pje-intake":
