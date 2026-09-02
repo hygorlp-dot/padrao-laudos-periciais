@@ -81,16 +81,66 @@ _PJE_INTAKE_ARTIFACT_ID = "PJE-INTAKE"
 
 
 
+PJE_INTAKE_SCHEMA_VERSION = "1.1.0"
+
+
+def migrate_pje_intake_payload(value: object) -> object:
+    """Upgrade a stored PJe inventory to the current shape.
+
+    The payload gained fields after 1.0.0 (``document_id`` on party rows, and the
+    ``status``/``diagnostics`` channel). Validation is exact-set, so without a
+    migration an inventory written by an earlier build would simply stop loading
+    and the workspace's Case Analysis would become permanently unavailable with an
+    error that blames the request. Reading is therefore tolerant of the older
+    shape; writing always produces the current one.
+    """
+    if type(value) is not dict or value.get("schema_version") != "1.0.0":
+        return value
+    return {
+        **value,
+        "schema_version": PJE_INTAKE_SCHEMA_VERSION,
+        # 1.0.0 only ever recorded inventories it considered usable.
+        "status": "OK",
+        "diagnostics": [],
+        "party_rows": [
+            {**row, "document_id": row.get("document_id")}
+            for row in value.get("party_rows", [])
+        ],
+    }
+
+
 def validate_pje_intake_payload(value: object) -> dict:
-    required = {"schema_version", "workspace_id", "storage_content_id", "source_sha256", "instance_label", "documents", "party_rows"}
-    if type(value) is not dict or set(value) != required or value.get("schema_version") != "1.0.0":
+    # A migracao acontece aqui, e nao apenas nos pontos de leitura, porque esta
+    # funcao tambem e o validador de portabilidade registrado em
+    # `_ARTIFACT_VALIDATORS`: um backup gravado por build anterior chega por um
+    # caminho que a aplicacao nao envolve.
+    value = migrate_pje_intake_payload(value)
+    required = {
+        "schema_version", "workspace_id", "storage_content_id", "source_sha256",
+        "instance_label", "documents", "party_rows", "status", "diagnostics",
+    }
+    if type(value) is not dict or set(value) != required or value.get("schema_version") != PJE_INTAKE_SCHEMA_VERSION:
         raise ValueError("PJe intake payload is invalid")
+    if value["status"] not in {"OK", "BLOCKED"}:
+        raise ValueError("PJe intake status is invalid")
+    if type(value["diagnostics"]) is not list:
+        raise ValueError("PJe intake diagnostics are invalid")
+    for item in value["diagnostics"]:
+        if type(item) is not dict or set(item) != {"code", "detail"}:
+            raise ValueError("PJe intake diagnostic is invalid")
+        if any(type(item[name]) is not str or not item[name].strip() for name in ("code", "detail")):
+            raise ValueError("PJe intake diagnostic text is invalid")
+    # Um inventario bloqueado nao afirma documentos: ele registra por que nao pode.
+    if value["status"] == "BLOCKED" and not value["diagnostics"]:
+        raise ValueError("a blocked PJe intake must say why")
     WorkspaceId.parse(value["workspace_id"]); PrivateContentId.parse(value["storage_content_id"])
     if type(value["source_sha256"]) is not str or re.fullmatch(r"[0-9a-f]{64}", value["source_sha256"]) is None:
         raise ValueError("PJe intake source hash is invalid")
     if type(value["instance_label"]) is not str or not value["instance_label"].strip():
         raise ValueError("PJe intake judicial unit is invalid")
-    if type(value["documents"]) is not list or not value["documents"] or type(value["party_rows"]) is not list:
+    if type(value["documents"]) is not list or type(value["party_rows"]) is not list:
+        raise ValueError("PJe intake collections are invalid")
+    if value["status"] == "OK" and not value["documents"]:
         raise ValueError("PJe intake collections are invalid")
     document_fields = {"document_id", "id_pje", "title", "raw_type", "normalized_type", "page_start", "page_end", "available"}
     ids = []
@@ -448,7 +498,7 @@ def _carry_forward_availability_decisions(previous_record, inventory: dict) -> d
     if previous_record is None:
         return inventory
     try:
-        previous = validate_pje_intake_payload(thaw_payload(previous_record.payload))
+        previous = validate_pje_intake_payload(migrate_pje_intake_payload(thaw_payload(previous_record.payload)))
     except (ValueError, TypeError) as exc:
         raise RepositoryIntegrityError("stored PJe inventory is invalid") from exc
     if previous.get("workspace_id") != inventory.get("workspace_id"):
@@ -493,12 +543,26 @@ def _pje_inventory_payload(record, persisted, text: PdfTextResult, pje_intake) -
                 sink.write(block)
         persisted.stream.seek(0)
         outcome = pje_intake.logical_inventory(pdf)
-    if type(outcome) is not dict or outcome.get("status") not in {"OK", "NOT_PJE", "INCONSISTENT"}:
+    if type(outcome) is not dict or outcome.get("status") not in {"OK", "NOT_PJE", "BLOCKED"}:
         raise RepositoryIntegrityError("PJe intake port returned an unknown result")
     if outcome["status"] == "NOT_PJE":
         return None
-    if outcome["status"] == "INCONSISTENT":
-        raise RepositoryIntegrityError(str(outcome.get("detail", "PJe source is inconsistent")))
+    if outcome["status"] == "BLOCKED":
+        # E um export do PJe que o parser nao pode sustentar como inventario. O
+        # material continua sendo material: derrubar a importacao aqui destruiria
+        # um documento legitimo por uma propriedade do PDF do perito. Registra-se
+        # o motivo, para que ele possa ser lido em vez de adivinhado.
+        return {
+            "schema_version": PJE_INTAKE_SCHEMA_VERSION,
+            "workspace_id": str(record.workspace_id),
+            "storage_content_id": str(record.content_id),
+            "source_sha256": record.checksum_sha256,
+            "status": "BLOCKED",
+            "diagnostics": list(outcome.get("diagnostics", ())),
+            "instance_label": "NÃO CLASSIFICADA",
+            "documents": [],
+            "party_rows": [],
+        }
     documents = [{**row, "available": True} for row in outcome["documents"]]
 
     def _containing_document(page_number: int) -> str | None:
@@ -524,8 +588,9 @@ def _pje_inventory_payload(record, persisted, text: PdfTextResult, pje_intake) -
                 "document_id": _containing_document(page.number),
             })
     return {
-        "schema_version": "1.0.0", "workspace_id": str(record.workspace_id),
+        "schema_version": PJE_INTAKE_SCHEMA_VERSION, "workspace_id": str(record.workspace_id),
         "storage_content_id": str(record.content_id), "source_sha256": record.checksum_sha256,
+        "status": "OK", "diagnostics": [],
         # A unidade judicial vem do proprio inventario: ler o manifesto aqui
         # exigiria conhecer o parser, que e exatamente o que a porta evita.
         "instance_label": outcome.get("instance_label") or "NÃO CLASSIFICADA",
@@ -687,7 +752,7 @@ class ListCaseDocumentsWithPjeInventory:
     def execute(self, workspace_id: WorkspaceId) -> tuple[PjeIndexedCaseDocument, ...]:
         records = self.documents.execute(workspace_id)
         inventory_record = self.revisions.latest(workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _PJE_INTAKE_ARTIFACT_ID)
-        inventory = validate_pje_intake_payload(thaw_payload(inventory_record.payload)) if inventory_record is not None else None
+        inventory = validate_pje_intake_payload(migrate_pje_intake_payload(thaw_payload(inventory_record.payload))) if inventory_record is not None else None
         if inventory is not None:
             # O inventario esta vinculado a UMA autoridade fisica. Exigir que ela
             # seja o unico material do workspace confundia "inventario divergente"
@@ -717,7 +782,7 @@ class GetPjeIntake:
         record = self.revisions.latest(workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _PJE_INTAKE_ARTIFACT_ID)
         if record is None:
             raise ArtifactRevisionNotFound("PJe intake not found")
-        payload = validate_pje_intake_payload(thaw_payload(record.payload))
+        payload = validate_pje_intake_payload(migrate_pje_intake_payload(thaw_payload(record.payload)))
         # O inventario declara o workspace a que pertence. Servi-lo sem conferir
         # deixaria um payload cross-linked (por restauracao, por exemplo) ser
         # lido como se fosse deste workspace.

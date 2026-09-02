@@ -268,8 +268,15 @@ def build_local_api(
     read_case_document = None
     get_process_metadata_review = None
     get_process_case = GetProcessCase(store.workspaces, store.revisions)
-    get_pje_intake = GetPjeIntake(store.workspaces, store.revisions)
-    set_pje_document_availability = SetPjeDocumentAvailability(get_pje_intake, store.revisions, local_clock, local_ids)
+    # Sem a porta injetada nao existe deteccao PJe nesta composicao. Construir os
+    # servicos assim mesmo faria a rota responder 404 ("este processo nao tem PJe"),
+    # que e indistinguivel de "esta instalacao nao le PJe". Deixando-os ausentes, o
+    # transporte responde 503 PJE_INTAKE_UNAVAILABLE e a degradacao fica visivel.
+    get_pje_intake = GetPjeIntake(store.workspaces, store.revisions) if pje_intake is not None else None
+    set_pje_document_availability = (
+        SetPjeDocumentAvailability(get_pje_intake, store.revisions, local_clock, local_ids)
+        if get_pje_intake is not None else None
+    )
     if private_store is not None:
         open_case_document = OpenCaseDocument(OpenPrivateContentStream(store.workspaces, private_store))
         generic_store = StorePrivateContent(

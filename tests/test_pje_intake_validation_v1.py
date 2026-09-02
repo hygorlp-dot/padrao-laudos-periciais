@@ -19,7 +19,9 @@ SOURCE_SHA = "a" * 64
 
 def base_payload() -> dict:
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
+        "status": "OK",
+        "diagnostics": [],
         "workspace_id": WORKSPACE_ID,
         "storage_content_id": CONTENT_ID,
         "source_sha256": SOURCE_SHA,
@@ -36,6 +38,33 @@ def base_payload() -> dict:
 def test_valid_payload_round_trips_unchanged():
     payload = base_payload()
     assert validate_pje_intake_payload(copy.deepcopy(payload)) == payload
+
+
+def test_an_inventory_written_by_an_earlier_build_still_loads():
+    """Um payload 1.0.0 persistido nao pode tornar o workspace irrecuperavel."""
+    legacy = base_payload()
+    legacy["schema_version"] = "1.0.0"
+    del legacy["status"], legacy["diagnostics"]
+    legacy["party_rows"] = [{
+        "name": "PARTE", "role": "AUTORA", "pole": "ACTIVE",
+        "representative_name": "ADV", "representative_role": "ADVOGADO",
+        "page": 1, "occurrence": "linha",
+    }]
+    migrated = validate_pje_intake_payload(legacy)
+    assert migrated["schema_version"] == "1.1.0"
+    assert migrated["status"] == "OK" and migrated["diagnostics"] == []
+    assert migrated["party_rows"][0]["document_id"] is None
+
+
+def test_a_blocked_inventory_must_record_why():
+    payload = base_payload()
+    payload["status"] = "BLOCKED"
+    payload["documents"] = []
+    payload["party_rows"] = []
+    with pytest.raises(ValueError, match="must say why"):
+        validate_pje_intake_payload(dict(payload))
+    payload["diagnostics"] = [{"code": "PEN-PJE-001", "detail": "item sem destino"}]
+    assert validate_pje_intake_payload(payload)["status"] == "BLOCKED"
 
 
 def test_rejects_page_span_where_end_precedes_start():

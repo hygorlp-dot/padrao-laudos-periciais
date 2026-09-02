@@ -9,8 +9,8 @@ a compatibilidade e estrutural.
 O resultado e discriminado em vez de excepcional para que a taxonomia de falha
 atravesse a porta sem exigir tipos de excecao compartilhados entre componentes:
 
-    {"status": "NOT_PJE"}                      nao e (ou nao e legivel como) PJe
-    {"status": "INCONSISTENT", "detail": str}  e PJe, mas internamente divergente
+    {"status": "NOT_PJE"}                       nao e (ou nao e legivel como) PJe
+    {"status": "BLOCKED", "diagnostics": [...]}  e PJe, com pendencia/conflito aberto
     {"status": "OK", "instance_label": str, "documents": [...]}
 
 `NOT_PJE` cobre deliberadamente o PDF que nenhuma das duas bibliotecas de leitura
@@ -54,12 +54,26 @@ class PjeIntakeAdapter:
             return {"status": "NOT_PJE"}
         if not manifesto.get("indice", {}).get("itens"):
             return {"status": "NOT_PJE"}
+        # Um export com pendencia ou conflito em aberto continua sendo um export
+        # do PJe: `pendencias` existe no manifesto justamente porque isso e
+        # esperado, nao corrupcao. Registrar o diagnostico preserva a informacao
+        # sem afirmar um inventario que o parser nao pode sustentar.
+        diagnostics = [
+            {"code": str(item.get("codigo") or item.get("tipo") or "PJE_ERRO"),
+             "detail": str(item.get("descricao") or item.get("campo") or "divergencia no manifesto PJe")}
+            for item in (*errors, *manifesto.get("conflitos", ()), *manifesto.get("pendencias", ()))
+        ]
         if errors or manifesto.get("status_validacao") != "VALIDADO":
-            return {"status": "INCONSISTENT", "detail": "PJe manifest is not valid"}
+            return {"status": "BLOCKED", "diagnostics": diagnostics or [
+                {"code": "PJE_MANIFESTO_BLOQUEADO", "detail": "manifesto PJe nao validado"}
+            ]}
         with tempfile.TemporaryDirectory(prefix="pje-intake-check-") as staging:
             report = gerar_documentos(manifesto, pdf, Path(staging))
         if report["documentos_validos"] != report["documentos_esperados"]:
-            return {"status": "INCONSISTENT", "detail": "PJe logical document validation failed"}
+            return {"status": "BLOCKED", "diagnostics": [{
+                "code": "PJE_DOCUMENTOS_INVALIDOS",
+                "detail": f"{report['documentos_validos']} de {report['documentos_esperados']} documentos validos",
+            }]}
         process = manifesto.get("processo", {})
         judicial_unit = process.get("orgao_julgador", {})
         instance_label = judicial_unit.get("valor") if isinstance(judicial_unit, dict) else None
