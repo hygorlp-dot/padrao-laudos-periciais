@@ -25,6 +25,13 @@ def _sole_intake(envelope):
     return intakes[0]
 
 
+def _logical(content_id: str, local_id: str) -> str:
+    """Mesma regra do produto: identidade = (fonte fisica, identificador local)."""
+    from uuid import UUID
+
+    return f"{local_id}-{UUID(content_id).hex.upper()}"
+
+
 def _request(runtime, method, path, *, value=None, body=None, headers=None):
     status, _headers, raw = http_request(
         runtime.server, method, path, value=value, raw_body=body,
@@ -135,7 +142,10 @@ def test_valid_pje_pdf_reaches_workspace_logical_documents_and_case_analysis(tmp
         status, analysis = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis", value={})
         assert status == 201
         documents = analysis["snapshot"]["documents"]
-        assert [item["document_id"] for item in documents] == ["DOC-PJE-001", "DOC-PJE-002"]
+        assert [item["document_id"] for item in documents] == [
+            _logical(material["content_id"], "DOC-PJE-001"),
+            _logical(material["content_id"], "DOC-PJE-002"),
+        ]
         assert all(item["storage_content_id"] == material["content_id"] for item in documents)
         assert all(item["source_sha256"] == material["checksum_sha256"] for item in documents)
         assert [item["page_count_or_span"] for item in documents] == ["p. 2-3 | PJe 900001", "p. 4 | PJe 900002"]
@@ -247,7 +257,11 @@ def test_a_genuinely_distinct_second_material_composes_instead_of_bricking_analy
         by_storage = {item["storage_content_id"] for item in documents}
         assert pje_material["content_id"] in by_storage, "PJe source vanished"
         assert other["content_id"] in by_storage, "second material was silently dropped"
-        assert [item["document_id"] for item in documents] == ["DOC-PJE-001", "DOC-PJE-002", "DOC-003"]
+        assert [item["document_id"] for item in documents] == [
+            _logical(pje_material["content_id"], "DOC-PJE-001"),
+            _logical(pje_material["content_id"], "DOC-PJE-002"),
+            "DOC-003",
+        ]
         assert analysis["snapshot"]["coverage"]["documents_total"] == 3
 
         # E o estado permanece legivel, e nao um 500 permanente.

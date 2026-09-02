@@ -315,7 +315,10 @@ def test_pje_inventory_bootstraps_logical_documents_and_keeps_representative_out
         SimpleNamespace(execute=lambda _workspace: (stored,)), save, ids
     ).execute(workspace_id)
 
-    assert [item.document_id for item in snapshot.documents] == ["DOC-PJE-001", "DOC-PJE-002"]
+    source = "22222222-2222-4222-8222-222222222222"
+    assert [item.document_id for item in snapshot.documents] == [
+        _expected_identity(source, "DOC-PJE-001"), _expected_identity(source, "DOC-PJE-002"),
+    ]
     assert snapshot.documents[0].page_count_or_span == "p. 2-3 | PJe 900001"
     assert snapshot.documents[1].content_available is False
     assert [item.raw_name for item in snapshot.judicial_context.entities] == [
@@ -326,6 +329,13 @@ def test_pje_inventory_bootstraps_logical_documents_and_keeps_representative_out
         snapshot.judicial_context.participants[0].participant_id,
     )
     assert snapshot.participant_refs == (snapshot.judicial_context.participants[0].participant_id,)
+
+
+def _expected_identity(content_id: str, local_id: str) -> str:
+    """Mesma regra do produto: identidade e (fonte fisica, identificador local)."""
+    from uuid import UUID
+
+    return f"{local_id}-{UUID(content_id).hex.upper()}"
 
 
 def _inventory_with_bound_party_rows(*, second_available: bool):
@@ -370,11 +380,14 @@ def _bootstrap(stored):
 def test_party_provenance_names_the_logical_document_that_contains_its_page():
     """R-05: atribuir tudo ao primeiro documento tornava a proveniencia falsa."""
     snapshot = _bootstrap(_inventory_with_bound_party_rows(second_available=True))
+    source = "22222222-2222-4222-8222-222222222222"
     spans = {item.document_id: (item.page_count_or_span) for item in snapshot.documents}
-    assert set(spans) == {"DOC-PJE-001", "DOC-PJE-002"}
+    assert set(spans) == {
+        _expected_identity(source, "DOC-PJE-001"), _expected_identity(source, "DOC-PJE-002"),
+    }
     origins = {entity.raw_name: entity.provenance[0] for entity in snapshot.judicial_context.entities}
-    assert origins["PARTE UM"].source_document_id == "DOC-PJE-001"
-    assert origins["PARTE DOIS"].source_document_id == "DOC-PJE-002"
+    assert origins["PARTE UM"].source_document_id == _expected_identity(source, "DOC-PJE-001")
+    assert origins["PARTE DOIS"].source_document_id == _expected_identity(source, "DOC-PJE-002")
     # e a pagina citada tem de cair dentro do intervalo do documento nomeado
     assert origins["PARTE DOIS"].page == 4
 
@@ -388,7 +401,10 @@ def test_an_unavailable_document_contributes_nothing_to_the_effective_context():
     assert names == ["PARTE UM", "ADV UM"]
     assert len(snapshot.judicial_context.participants) == 1
     # mas o documento continua inventariado e contabilizado como indisponivel
-    assert [item.document_id for item in snapshot.documents] == ["DOC-PJE-001", "DOC-PJE-002"]
+    source = "22222222-2222-4222-8222-222222222222"
+    assert [item.document_id for item in snapshot.documents] == [
+        _expected_identity(source, "DOC-PJE-001"), _expected_identity(source, "DOC-PJE-002"),
+    ]
     assert snapshot.coverage.documents_unavailable == 1
 
 

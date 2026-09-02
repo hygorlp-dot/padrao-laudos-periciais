@@ -61,11 +61,15 @@ def _frozen(value):
 
 def _service(records, inventory):
     documents = SimpleNamespace(execute=lambda _workspace: tuple(records))
-    revisions = SimpleNamespace(
-        latest=lambda *_args, **_kwargs: (
-            None if inventory is None else SimpleNamespace(payload=_frozen(inventory))
-        )
-    )
+    def _latest(_workspace, _kind, artifact_id):
+        # O inventario e endereçado pela fonte: o fake precisa respeitar isso,
+        # senao devolveria o mesmo inventario para toda fonte e mascararia
+        # exatamente o vinculo que estes testes existem para provar.
+        if inventory is None or str(artifact_id) != inventory["storage_content_id"]:
+            return None
+        return SimpleNamespace(payload=_frozen(inventory))
+
+    revisions = SimpleNamespace(latest=_latest)
     return ListCaseDocumentsWithPjeInventory(documents, revisions)
 
 
@@ -76,8 +80,22 @@ def test_inventory_naming_another_workspace_is_rejected_by_this_guard_alone():
         service.execute(WORKSPACE_A)
 
 
-def test_inventory_bound_to_a_content_id_absent_from_the_workspace_is_rejected():
-    service = _service([_record(content_id=CONTENT_OTHER, checksum=SHA_OTHER)], _inventory())
+def test_inventory_whose_payload_names_another_source_is_rejected():
+    """Envelope e payload tem de concordar sobre QUAL fonte o inventario descreve.
+
+    A premissa anterior deste teste (inventario apontando para uma fonte ausente
+    do workspace) deixou de ser alcancavel: o inventario passou a ser endereçado
+    pelo proprio content_id, entao um inventario orfao nunca e lido. O que
+    continua alcancavel -- por restauracao ou corrupcao -- e um payload gravado
+    sob um endereço que ele proprio nao reconhece.
+    """
+    stored_under = CONTENT_A
+    claiming_another = _inventory(storage_content_id=CONTENT_OTHER, source_sha256=SHA_OTHER)
+    documents = SimpleNamespace(execute=lambda _workspace: (_record(content_id=stored_under),))
+    revisions = SimpleNamespace(
+        latest=lambda _w, _k, _artifact_id: SimpleNamespace(payload=_frozen(claiming_another)),
+    )
+    service = ListCaseDocumentsWithPjeInventory(documents, revisions)
     with pytest.raises(RepositoryIntegrityError, match="diverges from private source authority"):
         service.execute(WORKSPACE_A)
 
@@ -112,7 +130,7 @@ def test_availability_write_targets_the_requested_workspace_not_the_stored_paylo
         append_if_latest=lambda **kwargs: written.append(kwargs) or SimpleNamespace(revision=2),
     )
     get_intake = SimpleNamespace(
-        execute=lambda _workspace: (SimpleNamespace(revision=1), foreign),
+        one=lambda _workspace, _content_id: (SimpleNamespace(revision=1), foreign),
     )
     service = SetPjeDocumentAvailability(
         get_intake, revisions,
@@ -120,7 +138,10 @@ def test_availability_write_targets_the_requested_workspace_not_the_stored_paylo
         SimpleNamespace(new_uuid=lambda: __import__("uuid").UUID(WORKSPACE_A)),
     )
     requested = WorkspaceId.parse(WORKSPACE_A)
-    service.execute(requested, document_id="DOC-PJE-001", available=False, expected_revision=1)
+    service.execute(
+        requested, storage_content_id=CONTENT_A, document_id="DOC-PJE-001",
+        available=False, expected_revision=1,
+    )
     assert written, "nenhuma escrita registrada"
     assert str(written[0]["workspace_id"]) == WORKSPACE_A, (
         "a escrita foi redirecionada pelo payload para outro workspace"

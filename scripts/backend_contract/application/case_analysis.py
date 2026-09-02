@@ -45,6 +45,28 @@ _REGISTRY = Registry().with_resource(_JDM_SCHEMA["$id"], Resource.from_contents(
 _VALIDATOR = Draft202012Validator(_SCHEMA, registry=_REGISTRY)
 
 
+def _logical_document_id(storage_content_id, local_document_id):
+    """Identidade autoritativa de um documento logico do PJe.
+
+    `DOC-PJE-NNN` e um ordinal LOCAL ao indice de um export: dois exports
+    distintos usam os mesmos rotulos. Qualificar pela posicao da fonte na
+    colecao seria pior ainda -- essa posicao muda quando uma fonte e
+    acrescentada ou quando a listagem e reordenada, e decisoes profissionais e
+    proveniencia ficam penduradas nessa identidade.
+
+    A identidade e, portanto, `(fonte fisica, identificador local)`. Ela nao
+    depende de ordem, de quantas fontes existem, nem de quando foram lidas.
+    """
+    if local_document_id is None:
+        return None
+    # O dominio judicial exige identificador canonico
+    # (`^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$`), entao a fonte entra como o hex do
+    # UUID em maiusculas -- sem separadores estranhos e sem minusculas.
+    from uuid import UUID
+
+    return f"{local_document_id}-{UUID(str(storage_content_id)).hex.upper()}"
+
+
 def validated_case_analysis_from_mapping(value: object) -> CaseAnalysisSnapshot:
     try:
         _VALIDATOR.validate(value)
@@ -180,15 +202,11 @@ class StartCaseAnalysis:
         # Descartar qualquer um dos dois grupos seria perda silenciosa.
         pje_sources = [item for item in stored if getattr(item, "pje_inventory", None) is not None]
         composed: list[CaseDocument] = []
-        for order, source in enumerate(pje_sources, 1):
+        for source in pje_sources:
             for row in source.pje_inventory["documents"]:
-                # `DOC-PJE-NNN` e um ordinal local ao indice de UM export, entao
-                # duas fontes colidem. O snapshot precisa de identidade unica, e
-                # ela e qualificada pela ordem da fonte apenas quando ha mais de
-                # uma -- uma fonte unica preserva o identificador original.
-                document_id = row["document_id"] if len(pje_sources) == 1 else f"S{order}-{row['document_id']}"
                 composed.append(CaseDocument(
-                    document_id=document_id, storage_content_id=str(source.content_id),
+                    document_id=_logical_document_id(source.content_id, row["document_id"]),
+                    storage_content_id=str(source.content_id),
                     source_sha256=source.checksum_sha256, sequence=len(composed) + 1,
                     document_role="CASE_SOURCE", raw_type=row["raw_type"],
                     normalized_type=row["normalized_type"], timestamp=None,
@@ -221,20 +239,17 @@ class StartCaseAnalysis:
         # exatamente o conteudo que a exclusao mandou deixar de fora.
         by_document = {item.document_id: item for item in documents}
 
-        def _snapshot_document_id(order: int, local_id: object) -> object:
-            """Mesma qualificacao usada ao compor os documentos, para poder casar."""
-            if local_id is None:
-                return None
-            return local_id if len(pje_sources) == 1 else f"S{order}-{local_id}"
-
         party_rows = []
         excluded = set()
-        for order, source in enumerate(pje_sources, 1):
+        for source in pje_sources:
             for row in source.pje_inventory["documents"]:
                 if not row["available"]:
-                    excluded.add(_snapshot_document_id(order, row["document_id"]))
+                    excluded.add(_logical_document_id(source.content_id, row["document_id"]))
             for row in source.pje_inventory.get("party_rows", ()):
-                party_rows.append({**row, "document_id": _snapshot_document_id(order, row.get("document_id"))})
+                party_rows.append({
+                    **row,
+                    "document_id": _logical_document_id(source.content_id, row.get("document_id")),
+                })
 
         for index, row in enumerate(party_rows, 1):
             if row.get("document_id") in excluded:

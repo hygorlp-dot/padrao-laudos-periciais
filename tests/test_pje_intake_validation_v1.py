@@ -123,8 +123,15 @@ def test_rejects_unknown_top_level_field():
         validate_pje_intake_payload(payload)
 
 
-def test_pje_inventory_survives_backup_and_restore_unchanged():
-    """The new artifact kind must round-trip through the portability boundary."""
+def test_backup_without_the_pje_source_fails_closed():
+    """S-10: um inventario nao pode ser certificado sem a fonte que ele nomeia.
+
+    O round-trip POSITIVO e provado em test_pje_multisource_identity_v1, com
+    armazenamento privado real. Aqui prova-se o negativo, que e o que o fecho de
+    autoridade existe para impedir: um pacote sem a fonte privada do inventario
+    seria restaurado como intacto e deixaria a Case Analysis permanentemente
+    indisponivel no workspace restaurado.
+    """
     import tempfile
     from pathlib import Path
 
@@ -152,23 +159,18 @@ def test_pje_inventory_survives_backup_and_restore_unchanged():
     source.revisions.append(
         workspace_id=workspace_id,
         artifact_kind="PJE_INTAKE_V1",
-        artifact_id="PJE-INTAKE",
+        artifact_id=CONTENT_ID,
         revision_id="33333333-3333-4333-8333-333333333333",
         created_at="2026-08-31T12:00:00+00:00",
         payload=payload,
     )
 
-    package = CreateWorkspaceBackup(
-        source.workspaces, source.revisions, None, Clock(), lambda _: None
-    ).execute(workspace_id)
-    staging = RecoveryStaging.create(tmp_path / "restored")
-    RestoreWorkspaceBackup(staging).execute(package)
+    from scripts.backend_contract.application.ports import RepositoryIntegrityError
 
-    restored = staging.revisions.latest(workspace_id, "PJE_INTAKE_V1", "PJE-INTAKE")
-    assert restored is not None, "PJe inventory did not survive restore"
-    from scripts.backend_contract.application.models import thaw_payload
-
-    assert validate_pje_intake_payload(thaw_payload(restored.payload)) == payload
+    with pytest.raises(RepositoryIntegrityError, match="PJe source authority is incomplete"):
+        CreateWorkspaceBackup(
+            source.workspaces, source.revisions, None, Clock(), lambda _: None
+        ).execute(workspace_id)
 
 
 def test_rejects_party_row_pole_outside_enum():
