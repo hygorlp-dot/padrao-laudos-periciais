@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -520,7 +521,7 @@ def _revision_from_mapping(value: object, workspace_id: str) -> ArtifactRevision
     if validator is not None:
         validation_value = record.payload if record.artifact_kind in {"PROCESS_METADATA_EXTRACTION", "OCR_PAGE_CACHE_V1"} else payload
         parsed = validator(validation_value)
-        payload_workspace = getattr(parsed, "workspace_id", None)
+        payload_workspace = _declared_workspace(parsed)
         if payload_workspace is not None and str(payload_workspace) != workspace_id:
             raise RepositoryIntegrityError("backup payload belongs to another workspace")
         if record.artifact_kind == "AI_EVAL_DATASET" and any(
@@ -530,6 +531,22 @@ def _revision_from_mapping(value: object, workspace_id: str) -> ArtifactRevision
     else:
         raise RepositoryIntegrityError("backup artifact kind is not portable")
     return record
+
+
+def _declared_workspace(parsed: object) -> object | None:
+    """Workspace declared by a validated artifact, whatever canonical shape it has.
+
+    Artifact validators do not agree on a return type: most build a typed object
+    carrying ``workspace_id``, while some return the validated mapping itself.
+    Reading the attribute alone therefore treated "this artifact declares no
+    workspace" and "this artifact declares one, in a mapping" as the same answer,
+    silently skipping the cross-workspace check for the second group. Both shapes
+    are now read explicitly; an artifact that genuinely declares no workspace
+    still returns ``None``.
+    """
+    if isinstance(parsed, Mapping):
+        return parsed.get("workspace_id")
+    return getattr(parsed, "workspace_id", None)
 
 
 def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:

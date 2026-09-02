@@ -726,7 +726,13 @@ class GetPjeIntake:
         record = self.revisions.latest(workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _PJE_INTAKE_ARTIFACT_ID)
         if record is None:
             raise ArtifactRevisionNotFound("PJe intake not found")
-        return record, validate_pje_intake_payload(thaw_payload(record.payload))
+        payload = validate_pje_intake_payload(thaw_payload(record.payload))
+        # O inventario declara o workspace a que pertence. Servi-lo sem conferir
+        # deixaria um payload cross-linked (por restauracao, por exemplo) ser
+        # lido como se fosse deste workspace.
+        if payload["workspace_id"] != str(workspace_id):
+            raise RepositoryIntegrityError("stored PJe inventory belongs to another workspace")
+        return record, payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -753,7 +759,11 @@ class SetPjeDocumentAvailability:
             raise ValueError("PJe logical document is unknown")
         amended = validate_pje_intake_payload({**payload, "documents": documents})
         record = self.revisions.append_if_latest(
-            workspace_id=WorkspaceId.parse(payload["workspace_id"]), artifact_kind=_PJE_INTAKE_ARTIFACT_KIND,
+            # O alvo da escrita e o workspace da requisicao autenticada, nunca um
+            # identificador lido do proprio dado armazenado: derivar o destino do
+            # payload permite que um inventario cross-linked redirecione a
+            # gravacao para outro workspace.
+            workspace_id=workspace_id, artifact_kind=_PJE_INTAKE_ARTIFACT_KIND,
             artifact_id=_PJE_INTAKE_ARTIFACT_ID, revision_id=str(_generated_uuid(self.ids)),
             created_at=_generated_timestamp(self.clock), payload=amended, expected_revision=expected_revision,
         )

@@ -101,6 +101,41 @@ def test_a_workspace_without_any_inventory_stays_untouched():
     assert [item.pje_inventory for item in result] == [None]
 
 
+def test_availability_write_targets_the_requested_workspace_not_the_stored_payload():
+    """CROSS_WORKSPACE_MUTATION = 0, provado no proprio comando."""
+    from scripts.backend_contract.application.models import WorkspaceId
+    from scripts.backend_contract.application.services import SetPjeDocumentAvailability
+
+    foreign = _inventory(workspace_id=WORKSPACE_B)
+    written: list[object] = []
+    revisions = SimpleNamespace(
+        append_if_latest=lambda **kwargs: written.append(kwargs) or SimpleNamespace(revision=2),
+    )
+    get_intake = SimpleNamespace(
+        execute=lambda _workspace: (SimpleNamespace(revision=1), foreign),
+    )
+    service = SetPjeDocumentAvailability(
+        get_intake, revisions,
+        SimpleNamespace(now=lambda: __import__("datetime").datetime.now(__import__("datetime").UTC)),
+        SimpleNamespace(new_uuid=lambda: __import__("uuid").UUID(WORKSPACE_A)),
+    )
+    requested = WorkspaceId.parse(WORKSPACE_A)
+    service.execute(requested, document_id="DOC-PJE-001", available=False, expected_revision=1)
+    assert written, "nenhuma escrita registrada"
+    assert str(written[0]["workspace_id"]) == WORKSPACE_A, (
+        "a escrita foi redirecionada pelo payload para outro workspace"
+    )
+
+
+def test_backup_guard_sees_a_workspace_declared_by_a_mapping_shaped_artifact():
+    """A guarda cross-workspace nao pode depender do formato do validador."""
+    from scripts.backend_contract.infrastructure.productization import _declared_workspace
+
+    assert _declared_workspace(_inventory(workspace_id=WORKSPACE_B)) == WORKSPACE_B
+    assert _declared_workspace(SimpleNamespace(workspace_id=WORKSPACE_B)) == WORKSPACE_B
+    assert _declared_workspace(SimpleNamespace()) is None
+
+
 def test_ORACLE_NOTE_targeted_mutation_kill():
     """Registro do resultado da mutacao dirigida (nao e uma assercao de produto).
 
