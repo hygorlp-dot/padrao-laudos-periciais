@@ -428,7 +428,6 @@ _CANONICAL_PRODUCT_ARTIFACT_IDS = {
     "EXPERT_MASTER_PROFILE_V1": "EXPERT-PROFILE",
     "INSPECTION_SESSION_V1": "INSPECTION-SESSION",
     "PERICIAL_PLANNING_SNAPSHOT_V1": "PERICIAL-PLANNING",
-    "PJE_INTAKE_V1": "PJE-INTAKE",
     "PROCESS_CASE": "PROCESS_CASE",
     "REPORT_SNAPSHOT_V1": "REPORT-SNAPSHOT",
     "TECHNICAL_SNAPSHOT_V1": "TECHNICAL-SNAPSHOT",
@@ -445,6 +444,12 @@ def _expected_internal_artifact_id(kind: str, payload: object) -> str | None:
         return None
     if kind == "PROCESS_METADATA_EXTRACTION":
         return payload.get("document_id") if type(payload.get("document_id")) is str else None
+    if kind == "PJE_INTAKE_V1":
+        # O inventario e endereçado pela fonte fisica que descreve; o envelope
+        # tem de concordar com o payload, como ja acontece com a extracao de
+        # metadados. Sem isso um inventario poderia ser restaurado sob a
+        # identidade de outra fonte.
+        return payload.get("storage_content_id") if type(payload.get("storage_content_id")) is str else None
     if kind == "OCR_PAGE_CACHE_V1":
         names = ("document_sha256", "page_number", "engine", "engine_version", "model_version", "config_version")
         key = tuple(payload.get(name) for name in names)
@@ -813,6 +818,14 @@ class VerifyWorkspaceBackup:
                     for item in case.documents
                 ):
                     raise RepositoryIntegrityError("backup Case Analysis source authority is incomplete")
+            elif record.artifact_kind == "PJE_INTAKE_V1":
+                # O inventario nomeia a fonte privada de que foi derivado. Sem
+                # este fecho, um backup podia ser certificado intacto e restaurar
+                # um inventario cuja fonte nao veio junto, deixando a Case
+                # Analysis permanentemente indisponivel no workspace restaurado.
+                inventory = validate_pje_intake_payload(thaw_payload(record.payload))
+                if private_authority.get(inventory["storage_content_id"]) != inventory["source_sha256"]:
+                    raise RepositoryIntegrityError("backup PJe source authority is incomplete")
             elif record.artifact_kind == "INSPECTION_SESSION_V1":
                 inspection = inspection_session_from_mapping(thaw_payload(record.payload))
                 media = (*inspection.photos, *inspection.videos, *inspection.sketches)

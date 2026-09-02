@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from urllib.parse import quote
 
-import pytest
 
 from tests.test_document_intake_v1 import (
     frontend_build,
@@ -14,6 +13,18 @@ from tests.test_document_intake_v1 import (
 )
 from tests.test_final_closure_r7 import pdf_sintetico
 from tests.test_local_api_v1 import TOKEN, http_request
+
+
+def _sole_intake(envelope):
+    """Adapta ao formato multi-fonte mantendo a asserção do caso de fonte única.
+
+    A rota passou a devolver {"intakes": [...]} porque um workspace pode ter mais
+    de um export PJe (S-06). Onde o teste fala de UMA fonte, esta ajuda extrai a
+    única e falha alto se houver mais — nenhuma asserção foi enfraquecida.
+    """
+    intakes = envelope["intakes"]
+    assert len(intakes) == 1, f"esperava uma unica fonte PJe, ha {len(intakes)}"
+    return intakes[0]
 
 
 def _api(runtime, method, path, *, value=None, body=None, headers=None):
@@ -71,8 +82,8 @@ def test_A1_product_bridge_never_exposes_pje_intake_routes(tmp_path):
         )
         post_status, _h, post_body = product_request(
             runtime, "POST", f"/app-api/v1/workspaces/{workspace_id}/pje-intake/availability",
-            body=json.dumps({"document_id": intake["inventory"]["documents"][0]["document_id"],
-                             "available": False, "expected_revision": intake["revision"]}).encode("utf-8"),
+            body=json.dumps({"document_id": _sole_intake(intake)["inventory"]["documents"][0]["document_id"],
+                             "available": False, "expected_revision": _sole_intake(intake)["revision"]}).encode("utf-8"),
             headers={"Origin": runtime.origin, "Sec-Fetch-Site": "same-origin",
                      "Content-Type": "application/json"},
         )
@@ -272,11 +283,11 @@ def test_A6_second_pje_export_inherits_a_decision_taken_about_another_source(tmp
                          body=first_pdf.read_bytes(),
                          headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos-a.pdf"})
         _s, intake = _api(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
-        print("A inventory:", [(d["document_id"], d["id_pje"], d["title"]) for d in intake["inventory"]["documents"]])
-        excluded = intake["inventory"]["documents"][1]["document_id"]
+        print("A inventory:", [(d["document_id"], d["id_pje"], d["title"]) for d in _sole_intake(intake)["inventory"]["documents"]])
+        excluded = _sole_intake(intake)["inventory"]["documents"][1]["document_id"]
         _s, intake = _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/pje-intake/availability",
                           value={"document_id": excluded, "available": False,
-                                 "expected_revision": intake["revision"]})
+                                 "expected_revision": _sole_intake(intake)["revision"]})
 
         second_pdf = tmp_path / "autos-b.pdf"; _pdf_sintetico_variante(second_pdf)
         status, mat_b = _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/materials",
@@ -287,9 +298,9 @@ def test_A6_second_pje_export_inherits_a_decision_taken_about_another_source(tmp
 
         _s, after = _api(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
         print("B inventory:", [(d["document_id"], d["id_pje"], d["title"], d["available"])
-                               for d in after["inventory"]["documents"]])
-        print("bound to:", after["inventory"]["storage_content_id"], "b=", mat_b["content_id"], "a=", mat_a["content_id"])
-        leaked = [d for d in after["inventory"]["documents"] if not d["available"]]
+                               for d in _sole_intake(after)["inventory"]["documents"]])
+        print("bound to:", _sole_intake(after)["inventory"]["storage_content_id"], "b=", mat_b["content_id"], "a=", mat_a["content_id"])
+        leaked = [d for d in _sole_intake(after)["inventory"]["documents"] if not d["available"]]
         assert not leaked, f"decision about source A leaked onto source B by positional id: {leaked}"
     finally:
         runtime.close()
@@ -346,10 +357,10 @@ def test_A8_availability_change_after_bootstrap_reaches_case_analysis_or_signals
         print("bootstrap coverage:", analysis["snapshot"]["coverage"])
 
         _s, intake = _api(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
-        target = intake["inventory"]["documents"][1]["document_id"]
+        target = _sole_intake(intake)["inventory"]["documents"][1]["document_id"]
         status, intake = _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/pje-intake/availability",
                               value={"document_id": target, "available": False,
-                                     "expected_revision": intake["revision"]})
+                                     "expected_revision": _sole_intake(intake)["revision"]})
         print("availability toggle after bootstrap ->", status)
         assert status == 200
 

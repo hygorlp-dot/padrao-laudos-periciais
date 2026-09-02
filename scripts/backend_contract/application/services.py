@@ -76,7 +76,16 @@ _PROCESS_METADATA_CONFIRMATION_KIND = "PROCESS_METADATA_CONFIRMATION"
 _PROCESS_METADATA_CONFIRMATION_ID = "PROCESS_METADATA_CONFIRMATION"
 _PROCESS_METADATA_SOURCE_CONFIRMATION_KIND = "PROCESS_METADATA_SOURCE_CONFIRMATION"
 _PJE_INTAKE_ARTIFACT_KIND = "PJE_INTAKE_V1"
-_PJE_INTAKE_ARTIFACT_ID = "PJE-INTAKE"
+def _pje_intake_artifact_id(storage_content_id) -> str:
+    """O inventario PJe e identificado pela fonte fisica que ele descreve.
+
+    Enquanto foi um singleton por workspace ("PJE-INTAKE"), um segundo export
+    sobrescrevia a revisao do primeiro: a decomposicao logica, os spans e as
+    decisoes de disponibilidade do primeiro desapareciam sem sinal. Autos em dois
+    volumes sao rotina. `PROCESS_METADATA_EXTRACTION` ja usa o content_id como
+    artifact_id, e a portabilidade verifica esse vinculo -- mesmo padrao aqui.
+    """
+    return str(storage_content_id)
 
 
 
@@ -707,14 +716,15 @@ class ImportCaseDocumentWithMetadata:
         if pje_inventory is not None:
             pje_inventory = _carry_forward_availability_decisions(
                 self.revisions.latest(
-                    record.workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _PJE_INTAKE_ARTIFACT_ID
+                    record.workspace_id, _PJE_INTAKE_ARTIFACT_KIND,
+                    _pje_intake_artifact_id(record.content_id),
                 ),
                 pje_inventory,
             )
             validate_pje_intake_payload(pje_inventory)
             self.revisions.append(
                 workspace_id=record.workspace_id, artifact_kind=_PJE_INTAKE_ARTIFACT_KIND,
-                artifact_id=_PJE_INTAKE_ARTIFACT_ID, revision_id=str(_generated_uuid(self.ids)),
+                artifact_id=_pje_intake_artifact_id(record.content_id), revision_id=str(_generated_uuid(self.ids)),
                 created_at=_generated_timestamp(self.clock), payload=pje_inventory,
             )
         return record
@@ -751,44 +761,65 @@ class ListCaseDocumentsWithPjeInventory:
 
     def execute(self, workspace_id: WorkspaceId) -> tuple[PjeIndexedCaseDocument, ...]:
         records = self.documents.execute(workspace_id)
-        inventory_record = self.revisions.latest(workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _PJE_INTAKE_ARTIFACT_ID)
-        inventory = validate_pje_intake_payload(migrate_pje_intake_payload(thaw_payload(inventory_record.payload))) if inventory_record is not None else None
-        if inventory is not None:
-            # O inventario esta vinculado a UMA autoridade fisica. Exigir que ela
-            # seja o unico material do workspace confundia "inventario divergente"
-            # com "o workspace tem mais de um documento", tornando um segundo
-            # material legitimo um 500 permanente e irreparavel.
-            if inventory.get("workspace_id") != str(workspace_id):
-                raise RepositoryIntegrityError("PJe inventory belongs to another workspace")
-            bound = next(
-                (item for item in records if str(item.content_id) == inventory.get("storage_content_id")),
-                None,
+        indexed = []
+        for item in records:
+            inventory_record = self.revisions.latest(
+                workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _pje_intake_artifact_id(item.content_id)
             )
-            if bound is None or inventory.get("source_sha256") != bound.checksum_sha256:
-                raise RepositoryIntegrityError("PJe inventory diverges from private source authority")
-        return tuple(PjeIndexedCaseDocument(
-            item.content_id, item.checksum_sha256, item.original_filename,
-            inventory if inventory is not None and str(item.content_id) == inventory["storage_content_id"] else None,
-        ) for item in records)
+            inventory = (
+                validate_pje_intake_payload(migrate_pje_intake_payload(thaw_payload(inventory_record.payload)))
+                if inventory_record is not None else None
+            )
+            if inventory is not None:
+                if inventory.get("workspace_id") != str(workspace_id):
+                    raise RepositoryIntegrityError("PJe inventory belongs to another workspace")
+                # O inventario e endereçado pela fonte, entao o vinculo so pode
+                # divergir se o conteudo mudou sob a mesma identidade.
+                if (
+                    inventory.get("storage_content_id") != str(item.content_id)
+                    or inventory.get("source_sha256") != item.checksum_sha256
+                ):
+                    raise RepositoryIntegrityError("PJe inventory diverges from private source authority")
+                if inventory["status"] != "OK":
+                    inventory = None
+            indexed.append(PjeIndexedCaseDocument(
+                item.content_id, item.checksum_sha256, item.original_filename, inventory,
+            ))
+        return tuple(indexed)
 
 
 @dataclass(frozen=True, slots=True)
 class GetPjeIntake:
     workspaces: WorkspaceRepository
     revisions: ArtifactRevisionRepository
+    documents: object
 
     def execute(self, workspace_id: WorkspaceId):
+        """Todos os inventarios do workspace, um por fonte fisica."""
         workspace_id = _require_workspace(self.workspaces, workspace_id)
-        record = self.revisions.latest(workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _PJE_INTAKE_ARTIFACT_ID)
-        if record is None:
+        found = []
+        for item in self.documents.execute(workspace_id):
+            record = self.revisions.latest(
+                workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _pje_intake_artifact_id(item.content_id)
+            )
+            if record is None:
+                continue
+            payload = validate_pje_intake_payload(migrate_pje_intake_payload(thaw_payload(record.payload)))
+            # O inventario declara o workspace a que pertence. Servi-lo sem
+            # conferir deixaria um payload cross-linked (por restauracao, por
+            # exemplo) ser lido como se fosse deste workspace.
+            if payload["workspace_id"] != str(workspace_id):
+                raise RepositoryIntegrityError("stored PJe inventory belongs to another workspace")
+            found.append((record, payload))
+        if not found:
             raise ArtifactRevisionNotFound("PJe intake not found")
-        payload = validate_pje_intake_payload(migrate_pje_intake_payload(thaw_payload(record.payload)))
-        # O inventario declara o workspace a que pertence. Servi-lo sem conferir
-        # deixaria um payload cross-linked (por restauracao, por exemplo) ser
-        # lido como se fosse deste workspace.
-        if payload["workspace_id"] != str(workspace_id):
-            raise RepositoryIntegrityError("stored PJe inventory belongs to another workspace")
-        return record, payload
+        return found
+
+    def one(self, workspace_id: WorkspaceId, storage_content_id: str):
+        for record, payload in self.execute(workspace_id):
+            if payload["storage_content_id"] == storage_content_id:
+                return record, payload
+        raise ArtifactRevisionNotFound("PJe intake not found")
 
 
 @dataclass(frozen=True, slots=True)
@@ -798,10 +829,16 @@ class SetPjeDocumentAvailability:
     clock: Clock
     ids: IdGenerator
 
-    def execute(self, workspace_id: WorkspaceId, *, document_id: str, available: bool, expected_revision: int):
+    def execute(self, workspace_id: WorkspaceId, *, storage_content_id: str, document_id: str, available: bool, expected_revision: int):
+        # A fonte e endereçada explicitamente: um workspace pode ter mais de um
+        # export PJe, e `DOC-PJE-NNN` e um ordinal local a um indice, nao uma
+        # identidade. Sem dizer de qual fonte se fala, a decisao do perito
+        # aterrissaria no documento de mesma posicao de outro processo.
         if type(document_id) is not str or not document_id.strip() or type(available) is not bool or type(expected_revision) is not int or expected_revision < 1:
             raise ValueError("PJe availability request is invalid")
-        current, payload = self.get_intake.execute(workspace_id)
+        if type(storage_content_id) is not str or not storage_content_id.strip():
+            raise ValueError("PJe availability request is invalid")
+        current, payload = self.get_intake.one(workspace_id, storage_content_id)
         if current.revision != expected_revision:
             raise RepositoryConflict("expected PJe intake revision is not latest")
         matched = False
@@ -820,7 +857,7 @@ class SetPjeDocumentAvailability:
             # payload permite que um inventario cross-linked redirecione a
             # gravacao para outro workspace.
             workspace_id=workspace_id, artifact_kind=_PJE_INTAKE_ARTIFACT_KIND,
-            artifact_id=_PJE_INTAKE_ARTIFACT_ID, revision_id=str(_generated_uuid(self.ids)),
+            artifact_id=_pje_intake_artifact_id(payload["storage_content_id"]), revision_id=str(_generated_uuid(self.ids)),
             created_at=_generated_timestamp(self.clock), payload=amended, expected_revision=expected_revision,
         )
         return record, amended

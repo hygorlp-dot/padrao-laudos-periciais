@@ -13,6 +13,18 @@ from tests.test_final_closure_r7 import pdf_sintetico
 from tests.test_local_api_v1 import TOKEN, http_request
 
 
+def _sole_intake(envelope):
+    """Adapta ao formato multi-fonte mantendo a asserção do caso de fonte única.
+
+    A rota passou a devolver {"intakes": [...]} porque um workspace pode ter mais
+    de um export PJe (S-06). Onde o teste fala de UMA fonte, esta ajuda extrai a
+    única e falha alto se houver mais — nenhuma asserção foi enfraquecida.
+    """
+    intakes = envelope["intakes"]
+    assert len(intakes) == 1, f"esperava uma unica fonte PJe, ha {len(intakes)}"
+    return intakes[0]
+
+
 def _request(runtime, method, path, *, value=None, body=None, headers=None):
     status, _headers, raw = http_request(
         runtime.server, method, path, value=value, raw_body=body,
@@ -114,9 +126,10 @@ def test_valid_pje_pdf_reaches_workspace_logical_documents_and_case_analysis(tmp
         assert status == 201
         status, intake = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
         assert status == 200
-        hidden = intake["inventory"]["documents"][1]
+        hidden = _sole_intake(intake)["inventory"]["documents"][1]
         status, intake = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pje-intake/availability", value={
-            "document_id": hidden["document_id"], "available": False, "expected_revision": intake["revision"],
+            "storage_content_id": material["content_id"], "document_id": hidden["document_id"],
+            "available": False, "expected_revision": _sole_intake(intake)["revision"],
         })
         assert status == 200 and intake["inventory"]["documents"][1]["available"] is False
         status, analysis = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis", value={})
@@ -148,9 +161,10 @@ def test_reimport_never_silently_restores_availability_the_professional_removed(
             headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos.pdf"},
         )
         status, intake = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
-        excluded = intake["inventory"]["documents"][1]["document_id"]
+        excluded = _sole_intake(intake)["inventory"]["documents"][1]["document_id"]
         status, intake = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pje-intake/availability", value={
-            "document_id": excluded, "available": False, "expected_revision": intake["revision"],
+            "storage_content_id": _sole_intake(intake)["inventory"]["storage_content_id"],
+            "document_id": excluded, "available": False, "expected_revision": _sole_intake(intake)["revision"],
         })
         assert status == 200
         decided = {row["document_id"]: row["available"] for row in intake["inventory"]["documents"]}
@@ -161,7 +175,7 @@ def test_reimport_never_silently_restores_availability_the_professional_removed(
         )
         status, after = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
         assert status == 200
-        assert {row["document_id"]: row["available"] for row in after["inventory"]["documents"]} == decided
+        assert {row["document_id"]: row["available"] for row in _sole_intake(after)["inventory"]["documents"]} == decided
 
         # R-03A: bytes identicos no mesmo workspace nao criam segunda autoridade.
         status, listed = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/materials")
@@ -259,7 +273,8 @@ def test_availability_toggle_rejects_unknown_document_id(tmp_path):
         )
         status, intake = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
         status, result = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pje-intake/availability", value={
-            "document_id": "DOC-PJE-DOES-NOT-EXIST", "available": False, "expected_revision": intake["revision"],
+            "storage_content_id": _sole_intake(intake)["inventory"]["storage_content_id"],
+            "document_id": "DOC-PJE-DOES-NOT-EXIST", "available": False, "expected_revision": _sole_intake(intake)["revision"],
         })
         assert status == 400 and result["error"]["code"] == "INVALID_REQUEST"
     finally:
@@ -281,13 +296,14 @@ def test_availability_toggle_rejects_stale_expected_revision(tmp_path):
             headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos-sinteticos.pdf"},
         )
         status, intake = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
-        stale_revision = intake["revision"]
-        document_id = intake["inventory"]["documents"][0]["document_id"]
+        stale_revision = _sole_intake(intake)["revision"]
+        document_id = _sole_intake(intake)["inventory"]["documents"][0]["document_id"]
+        source_id = _sole_intake(intake)["inventory"]["storage_content_id"]
         _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pje-intake/availability", value={
-            "document_id": document_id, "available": False, "expected_revision": stale_revision,
+            "storage_content_id": source_id, "document_id": document_id, "available": False, "expected_revision": stale_revision,
         })
         status, result = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pje-intake/availability", value={
-            "document_id": document_id, "available": True, "expected_revision": stale_revision,
+            "storage_content_id": source_id, "document_id": document_id, "available": True, "expected_revision": stale_revision,
         })
         assert status == 409 and result["error"]["code"] == "REPOSITORY_CONFLICT"
     finally:
@@ -318,6 +334,6 @@ def test_workspace_reopen_preserves_pje_inventory(tmp_path):
     try:
         status, after = _request(reopened, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
         assert status == 200
-        assert after["inventory"]["documents"] == before["inventory"]["documents"]
+        assert _sole_intake(after)["inventory"]["documents"] == _sole_intake(before)["inventory"]["documents"]
     finally:
         reopened.close()

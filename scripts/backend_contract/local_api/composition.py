@@ -265,6 +265,8 @@ def build_local_api(
     get_private_content = None
     list_case_documents = None
     case_analysis_documents = None
+    get_pje_intake = None
+    set_pje_document_availability = None
     read_case_document = None
     get_process_metadata_review = None
     get_process_case = GetProcessCase(store.workspaces, store.revisions)
@@ -272,11 +274,6 @@ def build_local_api(
     # servicos assim mesmo faria a rota responder 404 ("este processo nao tem PJe"),
     # que e indistinguivel de "esta instalacao nao le PJe". Deixando-os ausentes, o
     # transporte responde 503 PJE_INTAKE_UNAVAILABLE e a degradacao fica visivel.
-    get_pje_intake = GetPjeIntake(store.workspaces, store.revisions) if pje_intake is not None else None
-    set_pje_document_availability = (
-        SetPjeDocumentAvailability(get_pje_intake, store.revisions, local_clock, local_ids)
-        if get_pje_intake is not None else None
-    )
     if private_store is not None:
         open_case_document = OpenCaseDocument(OpenPrivateContentStream(store.workspaces, private_store))
         generic_store = StorePrivateContent(
@@ -300,6 +297,17 @@ def build_local_api(
         )
         import_inspection_photo = ImportInspectionPhoto(generic_store)
         case_analysis_documents = ListCaseDocumentsWithPjeInventory(list_case_documents, store.revisions)
+        # Depende de `list_case_documents`, que so existe com armazenamento
+        # privado: o inventario e endereçado por fonte, entao e preciso saber
+        # quais fontes o workspace tem.
+        get_pje_intake = (
+            GetPjeIntake(store.workspaces, store.revisions, list_case_documents)
+            if pje_intake is not None else None
+        )
+        set_pje_document_availability = (
+            SetPjeDocumentAvailability(get_pje_intake, store.revisions, local_clock, local_ids)
+            if get_pje_intake is not None else None
+        )
         read_case_document = open_case_document
         get_process_metadata_review = GetProcessMetadataReview(
             store.workspaces,

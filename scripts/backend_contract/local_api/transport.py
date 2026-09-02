@@ -1118,14 +1118,16 @@ class LocalApi:
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "pje-intake":
                 if normalized_method != "GET": return _error(405, "METHOD_NOT_ALLOWED")
                 if self._services.get_pje_intake is None: return _error(503, "PJE_INTAKE_UNAVAILABLE")
-                record, inventory = self._services.get_pje_intake.execute(self._workspace_id(raw_segments[2]))
-                return _json_response(200, {"revision": record.revision, "inventory": inventory})
+                found = self._services.get_pje_intake.execute(self._workspace_id(raw_segments[2]))
+                return _json_response(200, {"intakes": [
+                    {"revision": record.revision, "inventory": inventory} for record, inventory in found
+                ]})
 
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("pje-intake", "availability"):
                 if normalized_method != "POST": return _error(405, "METHOD_NOT_ALLOWED")
                 if self._services.set_pje_document_availability is None: return _error(503, "PJE_INTAKE_UNAVAILABLE")
                 dto = self._request_dto(request_headers, body)
-                if set(dto) != {"document_id", "available", "expected_revision"}: raise ValueError("PJe availability request is invalid")
+                if set(dto) != {"storage_content_id", "document_id", "available", "expected_revision"}: raise ValueError("PJe availability request is invalid")
                 record, inventory = self._services.set_pje_document_availability.execute(self._workspace_id(raw_segments[2]), **dto)
                 return _json_response(200, {"revision": record.revision, "inventory": inventory})
 

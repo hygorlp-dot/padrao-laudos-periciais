@@ -174,29 +174,32 @@ class StartCaseAnalysis:
         if not stored:
             raise ValueError("Case Analysis requires at least one stored document")
         source_revision = 1
-        inventory_sources = [item for item in stored if getattr(item, "pje_inventory", None) is not None]
-        if len(inventory_sources) > 1:
-            raise ValueError("Case Analysis accepts one PJe inventory per bootstrap")
-        pje_source = inventory_sources[0] if inventory_sources else None
-        inventory = pje_source.pje_inventory if pje_source is not None else None
-        # Um export PJe abre em varios documentos logicos sobre uma unica
-        # autoridade fisica; os demais materiais do workspace continuam sendo
-        # fontes por direito proprio. Compor os dois: descartar os outros
-        # materiais so porque existe um inventario PJe seria perda silenciosa.
+        # Cada export PJe abre em varios documentos logicos sobre a SUA autoridade
+        # fisica, e um workspace pode ter mais de um (autos em dois volumes sao
+        # rotina). Os demais materiais continuam sendo fontes por direito proprio.
+        # Descartar qualquer um dos dois grupos seria perda silenciosa.
+        pje_sources = [item for item in stored if getattr(item, "pje_inventory", None) is not None]
         composed: list[CaseDocument] = []
-        for row in (inventory["documents"] if inventory is not None else ()):
-            composed.append(CaseDocument(
-                document_id=row["document_id"], storage_content_id=str(pje_source.content_id),
-                source_sha256=pje_source.checksum_sha256, sequence=len(composed) + 1,
-                document_role="CASE_SOURCE", raw_type=row["raw_type"],
-                normalized_type=row["normalized_type"], timestamp=None,
-                participant_refs=(), page_count_or_span=(
-                    f"p. {row['page_start']}" + (f"-{row['page_end']}" if row["page_end"] != row["page_start"] else "")
-                    + f" | PJe {row['id_pje']}"
-                ), content_available=row["available"], analysis_revision=1 if row["available"] else 0,
-            ))
+        for order, source in enumerate(pje_sources, 1):
+            for row in source.pje_inventory["documents"]:
+                # `DOC-PJE-NNN` e um ordinal local ao indice de UM export, entao
+                # duas fontes colidem. O snapshot precisa de identidade unica, e
+                # ela e qualificada pela ordem da fonte apenas quando ha mais de
+                # uma -- uma fonte unica preserva o identificador original.
+                document_id = row["document_id"] if len(pje_sources) == 1 else f"S{order}-{row['document_id']}"
+                composed.append(CaseDocument(
+                    document_id=document_id, storage_content_id=str(source.content_id),
+                    source_sha256=source.checksum_sha256, sequence=len(composed) + 1,
+                    document_role="CASE_SOURCE", raw_type=row["raw_type"],
+                    normalized_type=row["normalized_type"], timestamp=None,
+                    participant_refs=(), page_count_or_span=(
+                        f"p. {row['page_start']}" + (f"-{row['page_end']}" if row["page_end"] != row["page_start"] else "")
+                        + f" | PJe {row['id_pje']}"
+                    ), content_available=row["available"], analysis_revision=1 if row["available"] else 0,
+                ))
+        pje_content_ids = {item.content_id for item in pje_sources}
         for item in stored:
-            if pje_source is not None and item.content_id == pje_source.content_id:
+            if item.content_id in pje_content_ids:
                 continue
             composed.append(CaseDocument(
                 document_id=f"DOC-{len(composed) + 1:03d}", storage_content_id=str(item.content_id),
@@ -216,12 +219,24 @@ class StartCaseAnalysis:
         # mas nao pode alimentar o contexto efetivo: deixar suas linhas de parte
         # entrarem aqui reintroduziria, sob a identidade de outro documento,
         # exatamente o conteudo que a exclusao mandou deixar de fora.
-        excluded = {
-            row["document_id"] for row in (inventory["documents"] if inventory is not None else ())
-            if not row["available"]
-        }
         by_document = {item.document_id: item for item in documents}
-        for index, row in enumerate(inventory.get("party_rows", ()) if inventory is not None else (), 1):
+
+        def _snapshot_document_id(order: int, local_id: object) -> object:
+            """Mesma qualificacao usada ao compor os documentos, para poder casar."""
+            if local_id is None:
+                return None
+            return local_id if len(pje_sources) == 1 else f"S{order}-{local_id}"
+
+        party_rows = []
+        excluded = set()
+        for order, source in enumerate(pje_sources, 1):
+            for row in source.pje_inventory["documents"]:
+                if not row["available"]:
+                    excluded.add(_snapshot_document_id(order, row["document_id"]))
+            for row in source.pje_inventory.get("party_rows", ()):
+                party_rows.append({**row, "document_id": _snapshot_document_id(order, row.get("document_id"))})
+
+        for index, row in enumerate(party_rows, 1):
             if row.get("document_id") in excluded:
                 continue
             # A proveniencia nomeia o documento logico que realmente contem a
@@ -242,10 +257,11 @@ class StartCaseAnalysis:
                 entities.append(JudicialEntity(representative_id, row["representative_name"], EntityKind.UNKNOWN, (source,)))
                 representation_links.append(RepresentationLink(f"REPRESENTATION-PJE-{index:03d}", representative_id, (participant_id,), row["representative_role"], (source,)))
         context = ProceduralContext(
-            context_id=context_id, instance_label=inventory.get("instance_label", "NÃO CLASSIFICADA") if inventory is not None else "NÃO CLASSIFICADA",
+            context_id=context_id,
+            instance_label=(pje_sources[0].pje_inventory.get("instance_label") or "NÃO CLASSIFICADA") if pje_sources else "NÃO CLASSIFICADA",
             snapshot_id=f"JDM-SNAPSHOT-{self.ids.new_uuid().hex.upper()}", entities=tuple(entities), participants=tuple(participants),
             representation_links=tuple(representation_links), access_relations=(), provenance=(JudicialSourceProvenance(
-                source_system="PJE" if inventory is not None else "LOCAL_CASE_DOCUMENT", source_document_id=first.document_id,
+                source_system="PJE" if pje_sources else "LOCAL_CASE_DOCUMENT", source_document_id=first.document_id,
                 source_sha256=first.source_sha256, page=1, occurrence="Índice documental",
                 occurrence_id=f"OCCURRENCE-{self.ids.new_uuid().hex.upper()}",
             ),),
