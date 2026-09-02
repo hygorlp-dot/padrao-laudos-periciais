@@ -82,7 +82,8 @@ def test_A1_product_bridge_never_exposes_pje_intake_routes(tmp_path):
         )
         post_status, _h, post_body = product_request(
             runtime, "POST", f"/app-api/v1/workspaces/{workspace_id}/pje-intake/availability",
-            body=json.dumps({"document_id": _sole_intake(intake)["inventory"]["documents"][0]["document_id"],
+            body=json.dumps({"storage_content_id": _sole_intake(intake)["inventory"]["storage_content_id"],
+                             "document_id": _sole_intake(intake)["inventory"]["documents"][0]["document_id"],
                              "available": False, "expected_revision": _sole_intake(intake)["revision"]}).encode("utf-8"),
             headers={"Origin": runtime.origin, "Sec-Fetch-Site": "same-origin",
                      "Content-Type": "application/json"},
@@ -286,7 +287,8 @@ def test_A6_second_pje_export_inherits_a_decision_taken_about_another_source(tmp
         print("A inventory:", [(d["document_id"], d["id_pje"], d["title"]) for d in _sole_intake(intake)["inventory"]["documents"]])
         excluded = _sole_intake(intake)["inventory"]["documents"][1]["document_id"]
         _s, intake = _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/pje-intake/availability",
-                          value={"document_id": excluded, "available": False,
+                          value={"storage_content_id": _sole_intake(intake)["inventory"]["storage_content_id"],
+                                 "document_id": excluded, "available": False,
                                  "expected_revision": _sole_intake(intake)["revision"]})
 
         second_pdf = tmp_path / "autos-b.pdf"; _pdf_sintetico_variante(second_pdf)
@@ -359,7 +361,8 @@ def test_A8_availability_change_after_bootstrap_reaches_case_analysis_or_signals
         _s, intake = _api(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
         target = _sole_intake(intake)["inventory"]["documents"][1]["document_id"]
         status, intake = _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/pje-intake/availability",
-                              value={"document_id": target, "available": False,
+                              value={"storage_content_id": _sole_intake(intake)["inventory"]["storage_content_id"],
+                                     "document_id": target, "available": False,
                                      "expected_revision": _sole_intake(intake)["revision"]})
         print("availability toggle after bootstrap ->", status)
         assert status == 200
@@ -369,7 +372,9 @@ def test_A8_availability_change_after_bootstrap_reaches_case_analysis_or_signals
         print("post-toggle coverage:", snap["coverage"])
         print("post-toggle stale flag:", snap["source_inventory_stale"], "stale ids:", snap.get("stale_document_ids"))
         print("post-toggle availability:", [(d["document_id"], d["content_available"]) for d in snap["documents"]])
-        excluded = next(d for d in snap["documents"] if d["document_id"] == target)
+        # A identidade no snapshot e qualificada pela fonte (S-05); o id do
+        # inventario e local. Casar pelo prefixo local preserva a assercao.
+        excluded = next(d for d in snap["documents"] if d["document_id"].startswith(f"{target}-"))
         assert excluded["content_available"] is False or snap["source_inventory_stale"] is True, (
             "the perito excluded a document and Case Analysis neither reflects it nor flags staleness"
         )

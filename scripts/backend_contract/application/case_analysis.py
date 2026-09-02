@@ -45,6 +45,18 @@ _REGISTRY = Registry().with_resource(_JDM_SCHEMA["$id"], Resource.from_contents(
 _VALIDATOR = Draft202012Validator(_SCHEMA, registry=_REGISTRY)
 
 
+def _effective_availability(sources) -> dict[str, bool]:
+    """Disponibilidade vigente por identidade logica, lida do inventario atual."""
+    current: dict[str, bool] = {}
+    for source in sources:
+        inventory = getattr(source, "pje_inventory", None)
+        if inventory is None:
+            continue
+        for row in inventory["documents"]:
+            current[_logical_document_id(source.content_id, row["document_id"])] = row["available"]
+    return current
+
+
 def _logical_document_id(storage_content_id, local_document_id):
     """Identidade autoritativa de um documento logico do PJe.
 
@@ -357,15 +369,21 @@ class GetCaseAnalysis:
             raise ValueError("persisted Case Analysis workspace mismatch")
         if self.list_documents is None:
             raise RepositoryIntegrityError("Case Analysis source inventory is unavailable")
+        sources = tuple(self.list_documents.execute(workspace_id))
         authoritative = {
             str(document.content_id): document.checksum_sha256
-            for document in self.list_documents.execute(workspace_id)
+            for document in sources
         }
         current_hashes = {
             document.document_id: authoritative.get(document.storage_content_id)
             for document in snapshot.documents
         }
         reconciled = snapshot.reconcile_sources(current_hashes)
+        # A decisao profissional de disponibilidade vive no inventario PJe, que e
+        # mutavel; a extracao de fontes do snapshot e imutavel. Sem projetar uma
+        # sobre a outra na leitura, uma exclusao decidida depois do bootstrap
+        # seria aceita, persistida e completamente inerte.
+        reconciled = reconciled.project_effective_availability(_effective_availability(sources))
         unindexed = set(authoritative) - {document.storage_content_id for document in snapshot.documents}
         return record, replace(
             reconciled,
