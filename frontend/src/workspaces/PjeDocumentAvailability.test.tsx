@@ -19,3 +19,43 @@ test("lets the professional keep a logical PJe document unavailable without ente
   expect(await screen.findByRole("checkbox", { name: "Disponível para análise" })).not.toBeChecked();
   expect(fetch).toHaveBeenLastCalledWith(expect.stringContaining("/pje-intake/availability"), expect.objectContaining({ method: "POST" }));
 });
+
+test("a workspace without a PJe inventory renders nothing", async () => {
+  const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+  vi.stubGlobal("fetch", fetch);
+  const { container } = render(<PjeDocumentAvailability workspaceId={ID} refreshKey={0} />);
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+  expect(container).toBeEmptyDOMElement();
+});
+
+test("an unreadable inventory is reported instead of silently looking empty", async () => {
+  const fetch = vi.fn()
+    .mockResolvedValueOnce(new Response(null, { status: 500 }))
+    .mockResolvedValueOnce(response(inventory(1, true)));
+  vi.stubGlobal("fetch", fetch);
+  const user = userEvent.setup();
+  render(<PjeDocumentAvailability workspaceId={ID} refreshKey={0} />);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Não foi possível ler os documentos identificados no processo.",
+  );
+  await user.click(screen.getByRole("button", { name: "Tentar novamente" }));
+  expect(await screen.findByText("Petição sintética")).toBeInTheDocument();
+});
+
+test("a failed availability save reloads the list so a stale revision cannot wedge the view", async () => {
+  const fetch = vi.fn()
+    .mockResolvedValueOnce(response(inventory(1, true)))
+    .mockResolvedValueOnce(new Response(null, { status: 409 }))
+    .mockResolvedValueOnce(response(inventory(2, false)));
+  vi.stubGlobal("fetch", fetch);
+  const user = userEvent.setup();
+  render(<PjeDocumentAvailability workspaceId={ID} refreshKey={0} />);
+  await user.click(await screen.findByRole("checkbox", { name: "Disponível para análise" }));
+  expect(await screen.findByRole("alert")).toBeInTheDocument();
+  // terceira chamada = recarga automática, e não uma nova tentativa de gravar
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+  expect(fetch).toHaveBeenLastCalledWith(
+    expect.stringContaining("/pje-intake"),
+    expect.objectContaining({ method: "GET" }),
+  );
+});
