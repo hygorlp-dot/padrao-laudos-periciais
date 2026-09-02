@@ -23,7 +23,7 @@ from .content import (
     as_seekable_content,
 )
 from .ocr_cache import RevisionOcrPageCache
-from .pje_party_table import parse_pje_party_table
+from .pje_party_table import PjePartyTableState, parse_pje_party_table
 from .process_metadata import (
     PROCESS_METADATA_FIELDS,
     DocumentExtractionSummary,
@@ -582,8 +582,18 @@ def _pje_inventory_payload(record, persisted, text: PdfTextResult, pje_intake) -
         return None
 
     party_rows = []
+    party_diagnostics: list[dict] = []
     for page in text.pages:
         parsed = parse_pje_party_table(page.text)
+        # O parser e deliberadamente fail-closed: diante da primeira linha que
+        # nao reconhece DENTRO da tabela ele para. Descartar esse sinal fazia
+        # partes desaparecerem no dominio judicial sem nenhum registro -- uma
+        # parte sem advogado, ou representada pela Defensoria, e ordinaria.
+        if parsed.final_state is PjePartyTableState.TERMINATED:
+            party_diagnostics.append({
+                "code": "PJE_TABELA_PARTES_INTERROMPIDA",
+                "detail": f"leitura da tabela de partes interrompida na pagina {page.number}",
+            })
         for row in parsed.rows:
             party_rows.append({
                 "name": row.name, "role": row.role, "pole": row.pole.value,
@@ -599,7 +609,10 @@ def _pje_inventory_payload(record, persisted, text: PdfTextResult, pje_intake) -
     return {
         "schema_version": PJE_INTAKE_SCHEMA_VERSION, "workspace_id": str(record.workspace_id),
         "storage_content_id": str(record.content_id), "source_sha256": record.checksum_sha256,
-        "status": "OK", "diagnostics": [],
+        # Uma tabela de partes interrompida nao invalida o inventario de
+        # documentos, mas nao pode sumir: o estado fica OK e o diagnostico
+        # acompanha, para que a cobertura possa refleti-lo.
+        "status": "OK", "diagnostics": party_diagnostics,
         # A unidade judicial vem do proprio inventario: ler o manifesto aqui
         # exigiria conhecer o parser, que e exatamente o que a porta evita.
         "instance_label": outcome.get("instance_label") or "NÃO CLASSIFICADA",
@@ -752,6 +765,10 @@ class PjeIndexedCaseDocument:
     checksum_sha256: str
     original_filename: str
     pje_inventory: dict | None
+    # A fonte foi reconhecida como export PJe mas sua decomposicao nao pode ser
+    # sustentada. Ela continua sendo material legitimo, e nao pode ser
+    # apresentada como plenamente analisada.
+    pje_blocked: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -780,10 +797,11 @@ class ListCaseDocumentsWithPjeInventory:
                     or inventory.get("source_sha256") != item.checksum_sha256
                 ):
                     raise RepositoryIntegrityError("PJe inventory diverges from private source authority")
-                if inventory["status"] != "OK":
-                    inventory = None
+            blocked = inventory is not None and inventory["status"] != "OK"
+            if blocked:
+                inventory = None
             indexed.append(PjeIndexedCaseDocument(
-                item.content_id, item.checksum_sha256, item.original_filename, inventory,
+                item.content_id, item.checksum_sha256, item.original_filename, inventory, blocked,
             ))
         return tuple(indexed)
 

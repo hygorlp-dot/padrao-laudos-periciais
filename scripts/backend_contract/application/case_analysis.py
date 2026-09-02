@@ -231,13 +231,19 @@ class StartCaseAnalysis:
         for item in stored:
             if item.content_id in pje_content_ids:
                 continue
+            # Uma fonte cujo export PJe foi reconhecido mas nao pode ser
+            # decomposto NAO foi entendida. Conta-la como analisada produziria
+            # COMPLETE sobre um conjunto que sabidamente tem resto nao
+            # processado -- terminar o processamento nao prova completude.
+            understood = not getattr(item, "pje_blocked", False)
             composed.append(CaseDocument(
                 document_id=f"DOC-{len(composed) + 1:03d}", storage_content_id=str(item.content_id),
                 source_sha256=item.checksum_sha256, sequence=len(composed) + 1,
                 document_role="CASE_SOURCE",
                 raw_type=getattr(item, "original_filename", "Documento"),
                 normalized_type="UNCLASSIFIED", timestamp=None, participant_refs=(),
-                page_count_or_span="Documento completo", content_available=True, analysis_revision=1,
+                page_count_or_span="Documento completo", content_available=True,
+                analysis_revision=1 if understood else 0,
             ))
         documents = tuple(composed)
         if not documents:
@@ -293,15 +299,23 @@ class StartCaseAnalysis:
                 occurrence_id=f"OCCURRENCE-{self.ids.new_uuid().hex.upper()}",
             ),),
         )
-        analyzed = sum(item.content_available for item in documents)
-        unavailable = len(documents) - analyzed
-        coverage_status = CoverageStatus.COMPLETE if unavailable == 0 else CoverageStatus.PARTIAL if analyzed else CoverageStatus.UNAVAILABLE
+        unavailable = sum(not item.content_available for item in documents)
+        analyzed = sum(item.content_available and item.analysis_revision > 0 for item in documents)
+        failed = sum(item.content_available and item.analysis_revision == 0 for item in documents)
+        # Mesma formula canonica de CaseAnalysisCoverage: COMPLETE exige que TODO
+        # documento indexado tenha sido analisado. Um resto conhecido e nao
+        # processado aparece como `failed` e impede o fecho.
+        coverage_status = (
+            CoverageStatus.UNAVAILABLE if analyzed == 0
+            else CoverageStatus.COMPLETE if analyzed == len(documents)
+            else CoverageStatus.PARTIAL
+        )
         snapshot = CaseAnalysisSnapshot(
             snapshot_id=f"CASE-ANALYSIS-{self.ids.new_uuid().hex.upper()}", workspace_id=str(workspace_id),
             source_revision=source_revision, participant_refs=tuple(item.participant_id for item in participants), judicial_context_workspace_id=str(workspace_id),
             judicial_context=context, documents=documents, claims=(), counterarguments=(), decisions=(),
             pericial_objects=(), questions=(), events=(), technical_document_references=(), gaps=(), conflicts=(),
-            coverage=CaseAnalysisCoverage(coverage_status, len(documents), analyzed, unavailable, 0, source_revision),
+            coverage=CaseAnalysisCoverage(coverage_status, len(documents), analyzed, unavailable, failed, source_revision),
             human_reviews=(),
         )
         saved = self.save_analysis.execute(workspace_id, snapshot, None)
