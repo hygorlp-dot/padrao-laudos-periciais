@@ -52,7 +52,8 @@ class AdvSafeHardening(unittest.TestCase):
     def test_cobertura_exige_identidade_qt_e_tipo(self):
         base={"requisitos_cobertura":[{"id":"REQ-001","questao_tecnica":"QT-001","tipo":"DOCUMENTO","obrigatoriedade":"OBRIGATORIA","item_planejado":"DOC-PLANO-001"}],
               "cobertura":[{"quesito":"QUE-001","questoes_tecnicas":["QT-001"],"documentos":["DOC-PLANO-999"],"atividades":[],"medicoes":[],"fotografias":[],"ensaios":[]}],
-              "atividades":[],"medicoes":[],"fotografias":[],"ensaios":[],"documentos_a_solicitar":[{"id":"DOC-PLANO-001","questoes_tecnicas":["QT-001"]}]}
+              "requisitos_semanticos":[{"quesito":"QUE-001","requisito":"memorial sintético","itens_planejados":["DOC-PLANO-001"]}],
+              "atividades":[],"medicoes":[],"fotografias":[],"ensaios":[],"documentos_a_solicitar":[{"id":"DOC-PLANO-001","descricao":"memorial sintético","criterio_satisfacao":"identidade documental","questoes_tecnicas":["QT-001"]}]}
         self.assertFalse(recalcular_cobertura(base)["apto"])
         base["cobertura"][0]["documentos"]=["DOC-PLANO-001"]
         self.assertTrue(recalcular_cobertura(base)["apto"])

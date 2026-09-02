@@ -47,9 +47,17 @@ def capability_item(tipo,item):
     valores=[str(item.get(c) or "").strip().casefold() for c in campos if item.get(c)]
     return " | ".join(valores) if valores else None
 
+def corresponde_requisito(requisito,item):
+    material=" ".join(str(item.get(c) or "") for c in ("verificar","justificativa","evidencia_esperada","motivo","finalidade","nome","descricao","criterio_satisfacao"))
+    normalizado=re.sub(r"[^a-z0-9]+"," ",_normalizar_semantica(requisito)).strip()
+    material_normalizado=re.sub(r"[^a-z0-9]+"," ",_normalizar_semantica(material)).strip()
+    return bool(normalizado and normalizado in material_normalizado)
+
 def recalcular_cobertura(dado):
     requisitos=dado.get("requisitos_cobertura",[]);por_quesito={}
-    if not requisitos:return {"cobertura":{c["quesito"]:False for c in dado.get("cobertura",[])},"apto":False}
+    if not requisitos:
+        vazia={c["quesito"]:False for c in dado.get("cobertura",[])}
+        return {"cobertura":vazia,"cobertura_relacional":vazia,"cobertura_requisitos_semanticos":vazia,"apto":False}
     catalogos={chave:{item.get("id"):set(item.get("questoes_tecnicas",[])) for item in dado.get(chave,[]) if isinstance(item,dict)} for chave in ("atividades","medicoes","fotografias","ensaios")}
     catalogos["documentos"]={item.get("id"):set(item.get("questoes_tecnicas",[])) for item in dado.get("documentos_a_solicitar",[]) if isinstance(item,dict)}
     def satisfaz(requisito,ids=None):
@@ -63,8 +71,20 @@ def recalcular_cobertura(dado):
             if requisito.get("obrigatoriedade")!="OBRIGATORIA" or requisito.get("questao_tecnica") not in qts:continue
             chave=TIPOS_COBERTURA.get(requisito.get("tipo"));ok=ok and satisfaz(requisito,c.get(chave,[]) if chave else [])
         por_quesito[c["quesito"]]=ok
+    cobertura_por_id={c.get("quesito"):c for c in dado.get("cobertura",[])}
+    itens={item.get("id"):item for chave in ("atividades","medicoes","fotografias","ensaios","documentos_a_solicitar") for item in dado.get(chave,[]) if isinstance(item,dict)}
+    semantica={qid:False for qid in por_quesito};agrupados={qid:[] for qid in por_quesito}
+    for requisito in dado.get("requisitos_semanticos",[]):
+        if requisito.get("quesito") in agrupados:agrupados[requisito["quesito"]].append(requisito)
+    for qid,grupo in agrupados.items():
+        cobertura_q=cobertura_por_id.get(qid,{})
+        vinculados={item_id for chave in ("atividades","medicoes","fotografias","ensaios","documentos") for item_id in cobertura_q.get(chave,[])}
+        semantica[qid]=bool(grupo) and all(bool(r.get("requisito")) and bool(r.get("itens_planejados")) and all(
+            item_id in vinculados and item_id in itens and corresponde_requisito(r["requisito"],itens[item_id])
+            for item_id in r.get("itens_planejados",[])) for r in grupo)
     globais=all(satisfaz(r) for r in requisitos if r.get("obrigatoriedade")=="OBRIGATORIA")
-    return {"cobertura":por_quesito,"apto":globais and all(por_quesito.values())}
+    return {"cobertura":por_quesito,"cobertura_relacional":por_quesito,"cobertura_requisitos_semanticos":semantica,
+            "apto":globais and all(por_quesito.values()) and all(semantica.values())}
 
 def recalcular_execucao(plano,vistoria):
     """Recalcula REQUIRED→EXECUTED sem confiar no status persistido."""
@@ -118,6 +138,8 @@ def validar(caminho: Path) -> list[str]:
     ids={k:{x["id"] for x in dado.get(k,[]) if isinstance(x,dict) and x.get("id")} for k in ("atividades","medicoes","fotografias")}
     quesitos=set(dado.get("quesitos_relacionados",[])); calculada=recalcular_cobertura(dado);cobertos={q for q,ok in calculada["cobertura"].items() if ok}
     if quesitos-cobertos: erros.append("Quesitos pertinentes sem cobertura: "+", ".join(sorted(quesitos-cobertos)))
+    semanticos={q for q,ok in calculada["cobertura_requisitos_semanticos"].items() if ok}
+    if quesitos-semanticos: erros.append("Quesitos pertinentes sem cobertura de requisito semântico: "+", ".join(sorted(quesitos-semanticos)))
     for c in dado.get("cobertura",[]):
         for chave in ("atividades","medicoes","fotografias"):
             faltam=set(c.get(chave,[]))-ids[chave]
