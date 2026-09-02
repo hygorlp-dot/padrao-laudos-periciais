@@ -364,6 +364,73 @@ class CaseAnalysisSnapshot:
             return None
         return latest.corrected_value if latest.decision in {"CORRECT", "CORRECTED"} else item.text
 
+    def project_effective_availability(self, availability: dict[str, bool]):
+        """Projeta a disponibilidade vigente sobre o snapshot persistido.
+
+        `content_available` e congelado no bootstrap, e a extracao de fontes e
+        imutavel por contrato -- entao uma exclusao decidida DEPOIS do bootstrap
+        nao tinha como alcancar a analise, e ficava como metadata morta. A
+        decisao profissional prevalece sobre o valor de origem, mas a revisao
+        persistida nao pode ser reescrita: o historico continua respondendo "o
+        que era efetivo naquela revisao".
+
+        A projecao resolve isso na LEITURA, como ja se faz com hash de fonte: o
+        documento excluido deixa de estar disponivel no estado efetivo, a
+        cobertura e recomputada, e ele entra em `stale_document_ids` para que
+        tudo o que dele derivou seja marcado como carente de revisao em vez de
+        seguir se declarando valido.
+        """
+        revised = {
+            document.document_id: availability[document.document_id]
+            for document in self.documents
+            if document.document_id in availability
+            and availability[document.document_id] != document.content_available
+        }
+        if not revised:
+            return self
+        documents = tuple(
+            replace(document, content_available=revised[document.document_id])
+            if document.document_id in revised else document
+            for document in self.documents
+        )
+        unavailable = sum(not document.content_available for document in documents)
+        analyzed = sum(document.content_available and document.analysis_revision > 0 for document in documents)
+        failed = sum(document.content_available and document.analysis_revision == 0 for document in documents)
+        status = (
+            CoverageStatus.COMPLETE if unavailable == 0 and failed == 0
+            else CoverageStatus.PARTIAL if analyzed
+            else CoverageStatus.UNAVAILABLE
+        )
+        changed = tuple(sorted(set(self.stale_document_ids) | set(revised)))
+
+        def stale(items):
+            return tuple(
+                replace(item, stale=any(p.source_document_id in changed for p in item.provenance))
+                for item in items
+            )
+
+        return replace(
+            self,
+            documents=documents,
+            coverage=replace(
+                self.coverage,
+                status=status,
+                documents_unavailable=unavailable,
+                documents_analyzed=analyzed,
+                documents_failed=failed,
+            ),
+            claims=stale(self.claims),
+            counterarguments=stale(self.counterarguments),
+            decisions=stale(self.decisions),
+            pericial_objects=stale(self.pericial_objects),
+            questions=stale(self.questions),
+            events=stale(self.events),
+            technical_document_references=stale(self.technical_document_references),
+            gaps=stale(self.gaps),
+            conflicts=stale(self.conflicts),
+            stale_document_ids=changed,
+        )
+
     def reconcile_sources(self, source_hashes: dict[str, str]):
         changed = tuple(sorted(
             set(self.stale_document_ids)

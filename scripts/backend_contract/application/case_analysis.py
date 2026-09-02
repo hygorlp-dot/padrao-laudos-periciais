@@ -29,7 +29,11 @@ from ..case_analysis import (
     case_analysis_from_mapping,
     case_analysis_to_mapping,
 )
-from ..judicial_domain import ProceduralContext, SourceProvenance as JudicialSourceProvenance
+from ..judicial_domain import (
+    EntityKind, JudicialEntity, NormalizedProceduralRole, ParticipantStatus,
+    ProcessParticipant, ProcessPole, ProceduralContext, ProceduralRole,
+    RepresentationLink, SourceProvenance as JudicialSourceProvenance,
+)
 from .models import thaw_payload
 from .ports import RepositoryConflict, RepositoryIntegrityError
 
@@ -39,6 +43,40 @@ _SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
 _JDM_SCHEMA = json.loads((_SCHEMA_PATH.parent / "judicial-domain-model-v1.schema.json").read_text(encoding="utf-8"))
 _REGISTRY = Registry().with_resource(_JDM_SCHEMA["$id"], Resource.from_contents(_JDM_SCHEMA))
 _VALIDATOR = Draft202012Validator(_SCHEMA, registry=_REGISTRY)
+
+
+def _effective_availability(sources) -> dict[str, bool]:
+    """Disponibilidade vigente por identidade logica, lida do inventario atual."""
+    current: dict[str, bool] = {}
+    for source in sources:
+        inventory = getattr(source, "pje_inventory", None)
+        if inventory is None:
+            continue
+        for row in inventory["documents"]:
+            current[_logical_document_id(source.content_id, row["document_id"])] = row["available"]
+    return current
+
+
+def _logical_document_id(storage_content_id, local_document_id):
+    """Identidade autoritativa de um documento logico do PJe.
+
+    `DOC-PJE-NNN` e um ordinal LOCAL ao indice de um export: dois exports
+    distintos usam os mesmos rotulos. Qualificar pela posicao da fonte na
+    colecao seria pior ainda -- essa posicao muda quando uma fonte e
+    acrescentada ou quando a listagem e reordenada, e decisoes profissionais e
+    proveniencia ficam penduradas nessa identidade.
+
+    A identidade e, portanto, `(fonte fisica, identificador local)`. Ela nao
+    depende de ordem, de quantas fontes existem, nem de quando foram lidas.
+    """
+    if local_document_id is None:
+        return None
+    # O dominio judicial exige identificador canonico
+    # (`^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$`), entao a fonte entra como o hex do
+    # UUID em maiusculas -- sem separadores estranhos e sem minusculas.
+    from uuid import UUID
+
+    return f"{local_document_id}-{UUID(str(storage_content_id)).hex.upper()}"
 
 
 def validated_case_analysis_from_mapping(value: object) -> CaseAnalysisSnapshot:
@@ -78,7 +116,7 @@ class SaveCaseAnalysis:
             for document in self.list_documents.execute(workspace_id)
         }
         storage_ids = [document.storage_content_id for document in snapshot.documents]
-        if snapshot.source_inventory_stale or set(storage_ids) != set(authoritative) or len(storage_ids) != len(set(storage_ids)) or any(
+        if snapshot.source_inventory_stale or set(storage_ids) != set(authoritative) or any(
             authoritative.get(document.storage_content_id) != document.source_sha256
             for document in snapshot.documents
         ):
@@ -170,32 +208,114 @@ class StartCaseAnalysis:
         if not stored:
             raise ValueError("Case Analysis requires at least one stored document")
         source_revision = 1
-        documents = tuple(
-            CaseDocument(
-                document_id=f"DOC-{index:03d}", storage_content_id=str(item.content_id),
-                source_sha256=item.checksum_sha256, sequence=index, document_role="CASE_SOURCE",
-                raw_type=getattr(item, "original_filename", "Documento"), normalized_type="UNCLASSIFIED",
-                timestamp=None, participant_refs=(), page_count_or_span="Documento completo",
-                content_available=True, analysis_revision=1,
-            )
-            for index, item in enumerate(stored, 1)
-        )
+        # Cada export PJe abre em varios documentos logicos sobre a SUA autoridade
+        # fisica, e um workspace pode ter mais de um (autos em dois volumes sao
+        # rotina). Os demais materiais continuam sendo fontes por direito proprio.
+        # Descartar qualquer um dos dois grupos seria perda silenciosa.
+        pje_sources = [item for item in stored if getattr(item, "pje_inventory", None) is not None]
+        composed: list[CaseDocument] = []
+        for source in pje_sources:
+            for row in source.pje_inventory["documents"]:
+                composed.append(CaseDocument(
+                    document_id=_logical_document_id(source.content_id, row["document_id"]),
+                    storage_content_id=str(source.content_id),
+                    source_sha256=source.checksum_sha256, sequence=len(composed) + 1,
+                    document_role="CASE_SOURCE", raw_type=row["raw_type"],
+                    normalized_type=row["normalized_type"], timestamp=None,
+                    participant_refs=(), page_count_or_span=(
+                        f"p. {row['page_start']}" + (f"-{row['page_end']}" if row["page_end"] != row["page_start"] else "")
+                        + f" | PJe {row['id_pje']}"
+                    ), content_available=row["available"], analysis_revision=1 if row["available"] else 0,
+                ))
+        pje_content_ids = {item.content_id for item in pje_sources}
+        for item in stored:
+            if item.content_id in pje_content_ids:
+                continue
+            # Uma fonte cujo export PJe foi reconhecido mas nao pode ser
+            # decomposto NAO foi entendida. Conta-la como analisada produziria
+            # COMPLETE sobre um conjunto que sabidamente tem resto nao
+            # processado -- terminar o processamento nao prova completude.
+            understood = not getattr(item, "pje_blocked", False)
+            composed.append(CaseDocument(
+                document_id=f"DOC-{len(composed) + 1:03d}", storage_content_id=str(item.content_id),
+                source_sha256=item.checksum_sha256, sequence=len(composed) + 1,
+                document_role="CASE_SOURCE",
+                raw_type=getattr(item, "original_filename", "Documento"),
+                normalized_type="UNCLASSIFIED", timestamp=None, participant_refs=(),
+                page_count_or_span="Documento completo", content_available=True,
+                analysis_revision=1 if understood else 0,
+            ))
+        documents = tuple(composed)
+        if not documents:
+            raise ValueError("PJe inventory requires logical documents")
         first = documents[0]
+        context_id = f"CONTEXT-{self.ids.new_uuid().hex.upper()}"
+        entities, participants, representation_links = [], [], []
+        # Um documento que o perito marcou indisponivel permanece inventariado,
+        # mas nao pode alimentar o contexto efetivo: deixar suas linhas de parte
+        # entrarem aqui reintroduziria, sob a identidade de outro documento,
+        # exatamente o conteudo que a exclusao mandou deixar de fora.
+        by_document = {item.document_id: item for item in documents}
+
+        party_rows = []
+        excluded = set()
+        for source in pje_sources:
+            for row in source.pje_inventory["documents"]:
+                if not row["available"]:
+                    excluded.add(_logical_document_id(source.content_id, row["document_id"]))
+            for row in source.pje_inventory.get("party_rows", ()):
+                party_rows.append({
+                    **row,
+                    "document_id": _logical_document_id(source.content_id, row.get("document_id")),
+                })
+
+        for index, row in enumerate(party_rows, 1):
+            if row.get("document_id") in excluded:
+                continue
+            # A proveniencia nomeia o documento logico que realmente contem a
+            # pagina; atribuir tudo ao primeiro documento tornava o triplo
+            # (documento, sha, pagina) internamente inconsistente.
+            origin = by_document.get(row.get("document_id"), first)
+            source = JudicialSourceProvenance(
+                "PJE", origin.document_id, origin.source_sha256, row["page"], row["occurrence"],
+                f"OCCURRENCE-PJE-PARTY-{index:03d}",
+            )
+            entity_id, participant_id = f"ENTITY-PJE-PARTY-{index:03d}", f"PARTICIPANT-PJE-{index:03d}"
+            entities.append(JudicialEntity(entity_id, row["name"], EntityKind.UNKNOWN, (source,)))
+            pole = ProcessPole.ACTIVE if row["pole"] == "ACTIVE" else ProcessPole.PASSIVE
+            role = NormalizedProceduralRole.CLAIMANT if pole is ProcessPole.ACTIVE else NormalizedProceduralRole.DEFENDANT
+            participants.append(ProcessParticipant(participant_id, entity_id, context_id, pole, ProceduralRole(row["role"], role), True, ParticipantStatus.ACTIVE, (source,)))
+            if row.get("representative_name"):
+                representative_id = f"ENTITY-PJE-REPRESENTATIVE-{index:03d}"
+                entities.append(JudicialEntity(representative_id, row["representative_name"], EntityKind.UNKNOWN, (source,)))
+                representation_links.append(RepresentationLink(f"REPRESENTATION-PJE-{index:03d}", representative_id, (participant_id,), row["representative_role"], (source,)))
         context = ProceduralContext(
-            context_id=f"CONTEXT-{self.ids.new_uuid().hex.upper()}", instance_label="NÃO CLASSIFICADA",
-            snapshot_id=f"JDM-SNAPSHOT-{self.ids.new_uuid().hex.upper()}", entities=(), participants=(),
-            representation_links=(), access_relations=(), provenance=(JudicialSourceProvenance(
-                source_system="LOCAL_CASE_DOCUMENT", source_document_id=first.document_id,
+            context_id=context_id,
+            instance_label=(pje_sources[0].pje_inventory.get("instance_label") or "NÃO CLASSIFICADA") if pje_sources else "NÃO CLASSIFICADA",
+            snapshot_id=f"JDM-SNAPSHOT-{self.ids.new_uuid().hex.upper()}", entities=tuple(entities), participants=tuple(participants),
+            representation_links=tuple(representation_links), access_relations=(), provenance=(JudicialSourceProvenance(
+                source_system="PJE" if pje_sources else "LOCAL_CASE_DOCUMENT", source_document_id=first.document_id,
                 source_sha256=first.source_sha256, page=1, occurrence="Índice documental",
                 occurrence_id=f"OCCURRENCE-{self.ids.new_uuid().hex.upper()}",
             ),),
         )
+        unavailable = sum(not item.content_available for item in documents)
+        analyzed = sum(item.content_available and item.analysis_revision > 0 for item in documents)
+        failed = sum(item.content_available and item.analysis_revision == 0 for item in documents)
+        # Mesma formula canonica de CaseAnalysisCoverage: COMPLETE exige que TODO
+        # documento indexado tenha sido analisado. Um resto conhecido e nao
+        # processado aparece como `failed` e impede o fecho.
+        coverage_status = (
+            CoverageStatus.UNAVAILABLE if analyzed == 0
+            else CoverageStatus.COMPLETE if analyzed == len(documents)
+            else CoverageStatus.PARTIAL
+        )
         snapshot = CaseAnalysisSnapshot(
             snapshot_id=f"CASE-ANALYSIS-{self.ids.new_uuid().hex.upper()}", workspace_id=str(workspace_id),
-            source_revision=source_revision, participant_refs=(), judicial_context_workspace_id=str(workspace_id),
+            source_revision=source_revision, participant_refs=tuple(item.participant_id for item in participants), judicial_context_workspace_id=str(workspace_id),
             judicial_context=context, documents=documents, claims=(), counterarguments=(), decisions=(),
             pericial_objects=(), questions=(), events=(), technical_document_references=(), gaps=(), conflicts=(),
-            coverage=CaseAnalysisCoverage(CoverageStatus.COMPLETE, len(documents), len(documents), 0, 0, source_revision),
+            coverage=CaseAnalysisCoverage(coverage_status, len(documents), analyzed, unavailable, failed, source_revision),
             human_reviews=(),
         )
         saved = self.save_analysis.execute(workspace_id, snapshot, None)
@@ -263,15 +383,21 @@ class GetCaseAnalysis:
             raise ValueError("persisted Case Analysis workspace mismatch")
         if self.list_documents is None:
             raise RepositoryIntegrityError("Case Analysis source inventory is unavailable")
+        sources = tuple(self.list_documents.execute(workspace_id))
         authoritative = {
             str(document.content_id): document.checksum_sha256
-            for document in self.list_documents.execute(workspace_id)
+            for document in sources
         }
         current_hashes = {
             document.document_id: authoritative.get(document.storage_content_id)
             for document in snapshot.documents
         }
         reconciled = snapshot.reconcile_sources(current_hashes)
+        # A decisao profissional de disponibilidade vive no inventario PJe, que e
+        # mutavel; a extracao de fontes do snapshot e imutavel. Sem projetar uma
+        # sobre a outra na leitura, uma exclusao decidida depois do bootstrap
+        # seria aceita, persistida e completamente inerte.
+        reconciled = reconciled.project_effective_availability(_effective_availability(sources))
         unindexed = set(authoritative) - {document.storage_content_id for document in snapshot.documents}
         return record, replace(
             reconciled,

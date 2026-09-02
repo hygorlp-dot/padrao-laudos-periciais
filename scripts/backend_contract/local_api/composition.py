@@ -22,6 +22,7 @@ from ..application.services import (
     GetPrivateContent,
     GetProcessCase,
     GetProcessMetadataReview,
+    GetPjeIntake,
     GetWorkspace,
     ImportCaseDocument,
     ImportCaseDocumentWithMetadata,
@@ -29,10 +30,12 @@ from ..application.services import (
     ListArtifactRevisions,
     ListWorkspaces,
     ListCaseDocuments,
+    ListCaseDocumentsWithPjeInventory,
     ListPrivateContents,
     OpenCaseDocument,
     OpenPrivateContentStream,
     SaveProcessCase,
+    SetPjeDocumentAvailability,
     StorePrivateContent,
 )
 from ..infrastructure.private_filesystem import LocalPrivateContentStore, _validate_trusted_local_device
@@ -214,6 +217,7 @@ def build_local_api(
     clock: Clock | None = None,
     ids: IdGenerator | None = None,
     private_root: str | Path | None = None,
+    pje_intake: object | None = None,
 ) -> LocalApiRuntime:
     """Compõe serviços, SQLite e listener sem esconder suas dependências."""
 
@@ -260,9 +264,16 @@ def build_local_api(
     generic_store = None
     get_private_content = None
     list_case_documents = None
+    case_analysis_documents = None
+    get_pje_intake = None
+    set_pje_document_availability = None
     read_case_document = None
     get_process_metadata_review = None
     get_process_case = GetProcessCase(store.workspaces, store.revisions)
+    # Sem a porta injetada nao existe deteccao PJe nesta composicao. Construir os
+    # servicos assim mesmo faria a rota responder 404 ("este processo nao tem PJe"),
+    # que e indistinguivel de "esta instalacao nao le PJe". Deixando-os ausentes, o
+    # transporte responde 503 PJE_INTAKE_UNAVAILABLE e a degradacao fica visivel.
     if private_store is not None:
         open_case_document = OpenCaseDocument(OpenPrivateContentStream(store.workspaces, private_store))
         generic_store = StorePrivateContent(
@@ -273,6 +284,7 @@ def build_local_api(
             server_config.max_document_body_bytes,
         )
         get_private_content = GetPrivateContent(store.workspaces, private_store)
+        list_case_documents = ListCaseDocuments(ListPrivateContents(store.workspaces, private_store))
         import_case_document = ImportCaseDocumentWithMetadata(
             ImportCaseDocument(generic_store),
             open_case_document,
@@ -280,9 +292,22 @@ def build_local_api(
             store.revisions,
             local_clock,
             local_ids,
+            list_case_documents,
+            pje_intake,
         )
         import_inspection_photo = ImportInspectionPhoto(generic_store)
-        list_case_documents = ListCaseDocuments(ListPrivateContents(store.workspaces, private_store))
+        case_analysis_documents = ListCaseDocumentsWithPjeInventory(list_case_documents, store.revisions)
+        # Depende de `list_case_documents`, que so existe com armazenamento
+        # privado: o inventario e endereçado por fonte, entao e preciso saber
+        # quais fontes o workspace tem.
+        get_pje_intake = (
+            GetPjeIntake(store.workspaces, store.revisions, list_case_documents)
+            if pje_intake is not None else None
+        )
+        set_pje_document_availability = (
+            SetPjeDocumentAvailability(get_pje_intake, store.revisions, local_clock, local_ids)
+            if get_pje_intake is not None else None
+        )
         read_case_document = open_case_document
         get_process_metadata_review = GetProcessMetadataReview(
             store.workspaces,
@@ -303,7 +328,7 @@ def build_local_api(
     append_artifact_revision = AppendArtifactRevision(store.revisions, local_clock, local_ids)
     get_latest_artifact = GetLatestArtifact(store.revisions)
     list_artifact_revisions = ListArtifactRevisions(store.revisions)
-    get_case_analysis = GetCaseAnalysis(get_latest_artifact, list_case_documents)
+    get_case_analysis = GetCaseAnalysis(get_latest_artifact, case_analysis_documents)
     save_pericial_planning = SavePericialPlanning(
         store.revisions,
         get_latest_artifact,
@@ -441,14 +466,14 @@ def build_local_api(
             get_latest_artifact,
             local_clock,
             local_ids,
-            list_case_documents,
+            case_analysis_documents,
             private_store.authority_guard if private_store is not None else nullcontext,
         ),
         get_case_analysis=get_case_analysis,
         start_case_analysis=StartCaseAnalysis(
-            list_case_documents,
+            case_analysis_documents,
             SaveCaseAnalysis(
-                store.revisions, get_latest_artifact, local_clock, local_ids, list_case_documents,
+                store.revisions, get_latest_artifact, local_clock, local_ids, case_analysis_documents,
                 private_store.authority_guard if private_store is not None else nullcontext,
             ),
             local_ids,
@@ -456,7 +481,7 @@ def build_local_api(
         add_case_analysis_item=AddCaseAnalysisItem(
             get_case_analysis,
             SaveCaseAnalysis(
-                store.revisions, get_latest_artifact, local_clock, local_ids, list_case_documents,
+                store.revisions, get_latest_artifact, local_clock, local_ids, case_analysis_documents,
                 private_store.authority_guard if private_store is not None else nullcontext,
             ),
             local_ids,
@@ -464,7 +489,7 @@ def build_local_api(
         review_case_analysis_item=ReviewCaseAnalysisItem(
             get_case_analysis,
             SaveCaseAnalysis(
-                store.revisions, get_latest_artifact, local_clock, local_ids, list_case_documents,
+                store.revisions, get_latest_artifact, local_clock, local_ids, case_analysis_documents,
                 private_store.authority_guard if private_store is not None else nullcontext,
             ),
             local_clock,
@@ -543,6 +568,8 @@ def build_local_api(
         confirm_process_metadata_source_span=confirm_process_metadata_source_span,
         import_case_document=import_case_document,
         list_case_documents=list_case_documents,
+        get_pje_intake=get_pje_intake,
+        set_pje_document_availability=set_pje_document_availability,
         read_case_document=read_case_document,
         import_inspection_photo=import_inspection_photo,
     )

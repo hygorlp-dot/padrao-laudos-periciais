@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -34,6 +35,7 @@ from ..application.artifact_ownership import (
 )
 from ..application.ocr_cache import _page_from_payload
 from ..application.process_metadata import document_metadata_from_payload
+from ..application.services import validate_pje_intake_payload
 from ..budget_foundation import budget_snapshot_from_mapping
 from ..ai_gateway import AIRun, AIProposal, EgressClass, SourceRevisionRef, UsageRecord
 from ..ai_eval_productization import (
@@ -309,6 +311,7 @@ _ARTIFACT_VALIDATORS = {
     "EXPERT_MASTER_PROFILE_V1": expert_profile_from_mapping,
     "INSPECTION_SESSION_V1": inspection_session_from_mapping,
     "PERICIAL_PLANNING_SNAPSHOT_V1": pericial_planning_from_mapping,
+    "PJE_INTAKE_V1": validate_pje_intake_payload,
     "PROCESS_CASE": ProcessCaseData.from_mapping,
     "REPORT_SNAPSHOT_V1": report_snapshot_from_mapping,
     "TECHNICAL_SNAPSHOT_V1": technical_snapshot_from_mapping,
@@ -441,6 +444,12 @@ def _expected_internal_artifact_id(kind: str, payload: object) -> str | None:
         return None
     if kind == "PROCESS_METADATA_EXTRACTION":
         return payload.get("document_id") if type(payload.get("document_id")) is str else None
+    if kind == "PJE_INTAKE_V1":
+        # O inventario e endereçado pela fonte fisica que descreve; o envelope
+        # tem de concordar com o payload, como ja acontece com a extracao de
+        # metadados. Sem isso um inventario poderia ser restaurado sob a
+        # identidade de outra fonte.
+        return payload.get("storage_content_id") if type(payload.get("storage_content_id")) is str else None
     if kind == "OCR_PAGE_CACHE_V1":
         names = ("document_sha256", "page_number", "engine", "engine_version", "model_version", "config_version")
         key = tuple(payload.get(name) for name in names)
@@ -517,7 +526,7 @@ def _revision_from_mapping(value: object, workspace_id: str) -> ArtifactRevision
     if validator is not None:
         validation_value = record.payload if record.artifact_kind in {"PROCESS_METADATA_EXTRACTION", "OCR_PAGE_CACHE_V1"} else payload
         parsed = validator(validation_value)
-        payload_workspace = getattr(parsed, "workspace_id", None)
+        payload_workspace = _declared_workspace(parsed)
         if payload_workspace is not None and str(payload_workspace) != workspace_id:
             raise RepositoryIntegrityError("backup payload belongs to another workspace")
         if record.artifact_kind == "AI_EVAL_DATASET" and any(
@@ -527,6 +536,22 @@ def _revision_from_mapping(value: object, workspace_id: str) -> ArtifactRevision
     else:
         raise RepositoryIntegrityError("backup artifact kind is not portable")
     return record
+
+
+def _declared_workspace(parsed: object) -> object | None:
+    """Workspace declared by a validated artifact, whatever canonical shape it has.
+
+    Artifact validators do not agree on a return type: most build a typed object
+    carrying ``workspace_id``, while some return the validated mapping itself.
+    Reading the attribute alone therefore treated "this artifact declares no
+    workspace" and "this artifact declares one, in a mapping" as the same answer,
+    silently skipping the cross-workspace check for the second group. Both shapes
+    are now read explicitly; an artifact that genuinely declares no workspace
+    still returns ``None``.
+    """
+    if isinstance(parsed, Mapping):
+        return parsed.get("workspace_id")
+    return getattr(parsed, "workspace_id", None)
 
 
 def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
@@ -793,6 +818,14 @@ class VerifyWorkspaceBackup:
                     for item in case.documents
                 ):
                     raise RepositoryIntegrityError("backup Case Analysis source authority is incomplete")
+            elif record.artifact_kind == "PJE_INTAKE_V1":
+                # O inventario nomeia a fonte privada de que foi derivado. Sem
+                # este fecho, um backup podia ser certificado intacto e restaurar
+                # um inventario cuja fonte nao veio junto, deixando a Case
+                # Analysis permanentemente indisponivel no workspace restaurado.
+                inventory = validate_pje_intake_payload(thaw_payload(record.payload))
+                if private_authority.get(inventory["storage_content_id"]) != inventory["source_sha256"]:
+                    raise RepositoryIntegrityError("backup PJe source authority is incomplete")
             elif record.artifact_kind == "INSPECTION_SESSION_V1":
                 inspection = inspection_session_from_mapping(thaw_payload(record.payload))
                 media = (*inspection.photos, *inspection.videos, *inspection.sketches)

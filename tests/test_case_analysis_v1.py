@@ -269,7 +269,6 @@ def test_initial_full_snapshot_material_injection_is_rejected_before_repository_
             WorkspaceId.parse(snapshot.workspace_id), snapshot, None
         )
     assert calls == []
-
     mismatched = SimpleNamespace(
         execute=lambda _workspace: _authoritative_documents(snapshot, changed_document_id="DOC-002")
     )
@@ -277,7 +276,6 @@ def test_initial_full_snapshot_material_injection_is_rejected_before_repository_
         SaveCaseAnalysis(revisions, SimpleNamespace(), clock, ids, mismatched, nullcontext).execute(
             WorkspaceId.parse(snapshot.workspace_id), snapshot, None
         )
-
     extra = SimpleNamespace(
         execute=lambda _workspace: (
             *_authoritative_documents(snapshot),
@@ -288,6 +286,126 @@ def test_initial_full_snapshot_material_injection_is_rejected_before_repository_
         SaveCaseAnalysis(revisions, SimpleNamespace(), clock, ids, extra, nullcontext).execute(
             WorkspaceId.parse(snapshot.workspace_id), snapshot, None
         )
+
+
+def test_pje_inventory_bootstraps_logical_documents_and_keeps_representative_out_of_participants():
+    """A validated PJe inventory must reach the canonical graph without semantic flattening."""
+    workspace_id = WorkspaceId.parse("11111111-1111-4111-8111-111111111111")
+    source_sha = "a" * 64
+    stored = SimpleNamespace(
+        content_id="22222222-2222-4222-8222-222222222222",
+        checksum_sha256=source_sha,
+        original_filename="autos-sinteticos.pdf",
+        pje_inventory={
+            "instance_label": "Vara sintÃ©tica",
+            "documents": (
+                {"document_id": "DOC-PJE-001", "id_pje": "900001", "title": "Petição sintética", "raw_type": "PETICAO", "normalized_type": "PETICAO_INICIAL", "page_start": 2, "page_end": 3, "available": True},
+                {"document_id": "DOC-PJE-002", "id_pje": "900002", "title": "Decisão sintética", "raw_type": "DECISAO", "normalized_type": "DECISAO", "page_start": 4, "page_end": 4, "available": False},
+            ),
+            "party_rows": (
+                {"name": "PARTE SINTETICA", "role": "AUTORA", "pole": "ACTIVE", "representative_name": "PROCURADOR SINTETICO", "representative_role": "ADVOGADO", "page": 1, "occurrence": "linha estrutural sintetica"},
+            ),
+        },
+    )
+    saved = []
+    save = SimpleNamespace(execute=lambda _workspace, snapshot, _revision: saved.append(snapshot) or (SimpleNamespace(revision=1), snapshot))
+    ids = SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999"))
+
+    _record, snapshot = StartCaseAnalysis(
+        SimpleNamespace(execute=lambda _workspace: (stored,)), save, ids
+    ).execute(workspace_id)
+
+    source = "22222222-2222-4222-8222-222222222222"
+    assert [item.document_id for item in snapshot.documents] == [
+        _expected_identity(source, "DOC-PJE-001"), _expected_identity(source, "DOC-PJE-002"),
+    ]
+    assert snapshot.documents[0].page_count_or_span == "p. 2-3 | PJe 900001"
+    assert snapshot.documents[1].content_available is False
+    assert [item.raw_name for item in snapshot.judicial_context.entities] == [
+        "PARTE SINTETICA", "PROCURADOR SINTETICO",
+    ]
+    assert len(snapshot.judicial_context.participants) == 1
+    assert snapshot.judicial_context.representation_links[0].represented_participant_ids == (
+        snapshot.judicial_context.participants[0].participant_id,
+    )
+    assert snapshot.participant_refs == (snapshot.judicial_context.participants[0].participant_id,)
+
+
+def _expected_identity(content_id: str, local_id: str) -> str:
+    """Mesma regra do produto: identidade e (fonte fisica, identificador local)."""
+    from uuid import UUID
+
+    return f"{local_id}-{UUID(content_id).hex.upper()}"
+
+
+def _inventory_with_bound_party_rows(*, second_available: bool):
+    return SimpleNamespace(
+        content_id="22222222-2222-4222-8222-222222222222",
+        checksum_sha256="a" * 64,
+        original_filename="autos.pdf",
+        pje_inventory={
+            "instance_label": "Vara sintetica",
+            "documents": (
+                {"document_id": "DOC-PJE-001", "id_pje": "900001", "title": "Peticao",
+                 "raw_type": "PETICAO", "normalized_type": "PETICAO_INICIAL",
+                 "page_start": 2, "page_end": 3, "available": True},
+                {"document_id": "DOC-PJE-002", "id_pje": "900002", "title": "Decisao",
+                 "raw_type": "DECISAO", "normalized_type": "DECISAO",
+                 "page_start": 4, "page_end": 4, "available": second_available},
+            ),
+            "party_rows": (
+                {"name": "PARTE UM", "role": "AUTORA", "pole": "ACTIVE",
+                 "representative_name": "ADV UM", "representative_role": "ADVOGADO",
+                 "page": 2, "occurrence": "linha na peticao", "document_id": "DOC-PJE-001"},
+                {"name": "PARTE DOIS", "role": "RE", "pole": "PASSIVE",
+                 "representative_name": "ADV DOIS", "representative_role": "ADVOGADO",
+                 "page": 4, "occurrence": "linha na decisao", "document_id": "DOC-PJE-002"},
+            ),
+        },
+    )
+
+
+def _bootstrap(stored):
+    saved = []
+    save = SimpleNamespace(
+        execute=lambda _w, snapshot, _r: saved.append(snapshot) or (SimpleNamespace(revision=1), snapshot)
+    )
+    ids = SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999"))
+    _record, snapshot = StartCaseAnalysis(
+        SimpleNamespace(execute=lambda _w: (stored,)), save, ids
+    ).execute(WorkspaceId.parse("11111111-1111-4111-8111-111111111111"))
+    return snapshot
+
+
+def test_party_provenance_names_the_logical_document_that_contains_its_page():
+    """R-05: atribuir tudo ao primeiro documento tornava a proveniencia falsa."""
+    snapshot = _bootstrap(_inventory_with_bound_party_rows(second_available=True))
+    source = "22222222-2222-4222-8222-222222222222"
+    spans = {item.document_id: (item.page_count_or_span) for item in snapshot.documents}
+    assert set(spans) == {
+        _expected_identity(source, "DOC-PJE-001"), _expected_identity(source, "DOC-PJE-002"),
+    }
+    origins = {entity.raw_name: entity.provenance[0] for entity in snapshot.judicial_context.entities}
+    assert origins["PARTE UM"].source_document_id == _expected_identity(source, "DOC-PJE-001")
+    assert origins["PARTE DOIS"].source_document_id == _expected_identity(source, "DOC-PJE-002")
+    # e a pagina citada tem de cair dentro do intervalo do documento nomeado
+    assert origins["PARTE DOIS"].page == 4
+
+
+def test_an_unavailable_document_contributes_nothing_to_the_effective_context():
+    """R-06: o excluido permanece inventariado, mas nao alimenta o contexto."""
+    snapshot = _bootstrap(_inventory_with_bound_party_rows(second_available=False))
+    names = [entity.raw_name for entity in snapshot.judicial_context.entities]
+    assert "PARTE DOIS" not in names, "conteudo de documento indisponivel vazou"
+    assert "ADV DOIS" not in names, "representante de documento indisponivel vazou"
+    assert names == ["PARTE UM", "ADV UM"]
+    assert len(snapshot.judicial_context.participants) == 1
+    # mas o documento continua inventariado e contabilizado como indisponivel
+    source = "22222222-2222-4222-8222-222222222222"
+    assert [item.document_id for item in snapshot.documents] == [
+        _expected_identity(source, "DOC-PJE-001"), _expected_identity(source, "DOC-PJE-002"),
+    ]
+    assert snapshot.coverage.documents_unavailable == 1
 
 
 def test_get_reconciles_current_snapshot_against_live_inventory():

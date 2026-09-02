@@ -5,21 +5,25 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import tempfile
 import warnings
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from types import MappingProxyType
 from uuid import UUID
 
 from PIL import Image, UnidentifiedImageError
 
 from .content import (
+    DOCUMENT_IO_CHUNK_BYTES,
     MAX_DOCUMENT_BYTES,
     OpenPrivateContent,
     SeekableContent,
     as_seekable_content,
 )
 from .ocr_cache import RevisionOcrPageCache
+from .pje_party_table import PjePartyTableState, parse_pje_party_table
 from .process_metadata import (
     PROCESS_METADATA_FIELDS,
     DocumentExtractionSummary,
@@ -71,6 +75,105 @@ _PROCESS_METADATA_EXTRACTION_KIND = "PROCESS_METADATA_EXTRACTION"
 _PROCESS_METADATA_CONFIRMATION_KIND = "PROCESS_METADATA_CONFIRMATION"
 _PROCESS_METADATA_CONFIRMATION_ID = "PROCESS_METADATA_CONFIRMATION"
 _PROCESS_METADATA_SOURCE_CONFIRMATION_KIND = "PROCESS_METADATA_SOURCE_CONFIRMATION"
+_PJE_INTAKE_ARTIFACT_KIND = "PJE_INTAKE_V1"
+def _pje_intake_artifact_id(storage_content_id) -> str:
+    """O inventario PJe e identificado pela fonte fisica que ele descreve.
+
+    Enquanto foi um singleton por workspace ("PJE-INTAKE"), um segundo export
+    sobrescrevia a revisao do primeiro: a decomposicao logica, os spans e as
+    decisoes de disponibilidade do primeiro desapareciam sem sinal. Autos em dois
+    volumes sao rotina. `PROCESS_METADATA_EXTRACTION` ja usa o content_id como
+    artifact_id, e a portabilidade verifica esse vinculo -- mesmo padrao aqui.
+    """
+    return str(storage_content_id)
+
+
+
+
+PJE_INTAKE_SCHEMA_VERSION = "1.1.0"
+
+
+def migrate_pje_intake_payload(value: object) -> object:
+    """Upgrade a stored PJe inventory to the current shape.
+
+    The payload gained fields after 1.0.0 (``document_id`` on party rows, and the
+    ``status``/``diagnostics`` channel). Validation is exact-set, so without a
+    migration an inventory written by an earlier build would simply stop loading
+    and the workspace's Case Analysis would become permanently unavailable with an
+    error that blames the request. Reading is therefore tolerant of the older
+    shape; writing always produces the current one.
+    """
+    if type(value) is not dict or value.get("schema_version") != "1.0.0":
+        return value
+    return {
+        **value,
+        "schema_version": PJE_INTAKE_SCHEMA_VERSION,
+        # 1.0.0 only ever recorded inventories it considered usable.
+        "status": "OK",
+        "diagnostics": [],
+        "party_rows": [
+            {**row, "document_id": row.get("document_id")}
+            for row in value.get("party_rows", [])
+        ],
+    }
+
+
+def validate_pje_intake_payload(value: object) -> dict:
+    # A migracao acontece aqui, e nao apenas nos pontos de leitura, porque esta
+    # funcao tambem e o validador de portabilidade registrado em
+    # `_ARTIFACT_VALIDATORS`: um backup gravado por build anterior chega por um
+    # caminho que a aplicacao nao envolve.
+    value = migrate_pje_intake_payload(value)
+    required = {
+        "schema_version", "workspace_id", "storage_content_id", "source_sha256",
+        "instance_label", "documents", "party_rows", "status", "diagnostics",
+    }
+    if type(value) is not dict or set(value) != required or value.get("schema_version") != PJE_INTAKE_SCHEMA_VERSION:
+        raise ValueError("PJe intake payload is invalid")
+    if value["status"] not in {"OK", "BLOCKED"}:
+        raise ValueError("PJe intake status is invalid")
+    if type(value["diagnostics"]) is not list:
+        raise ValueError("PJe intake diagnostics are invalid")
+    for item in value["diagnostics"]:
+        if type(item) is not dict or set(item) != {"code", "detail"}:
+            raise ValueError("PJe intake diagnostic is invalid")
+        if any(type(item[name]) is not str or not item[name].strip() for name in ("code", "detail")):
+            raise ValueError("PJe intake diagnostic text is invalid")
+    # Um inventario bloqueado nao afirma documentos: ele registra por que nao pode.
+    if value["status"] == "BLOCKED" and not value["diagnostics"]:
+        raise ValueError("a blocked PJe intake must say why")
+    WorkspaceId.parse(value["workspace_id"]); PrivateContentId.parse(value["storage_content_id"])
+    if type(value["source_sha256"]) is not str or re.fullmatch(r"[0-9a-f]{64}", value["source_sha256"]) is None:
+        raise ValueError("PJe intake source hash is invalid")
+    if type(value["instance_label"]) is not str or not value["instance_label"].strip():
+        raise ValueError("PJe intake judicial unit is invalid")
+    if type(value["documents"]) is not list or type(value["party_rows"]) is not list:
+        raise ValueError("PJe intake collections are invalid")
+    if value["status"] == "OK" and not value["documents"]:
+        raise ValueError("PJe intake collections are invalid")
+    document_fields = {"document_id", "id_pje", "title", "raw_type", "normalized_type", "page_start", "page_end", "available"}
+    ids = []
+    for row in value["documents"]:
+        if type(row) is not dict or set(row) != document_fields or type(row["available"]) is not bool:
+            raise ValueError("PJe logical document is invalid")
+        if any(type(row[name]) is not str or not row[name].strip() for name in ("document_id", "id_pje", "title", "raw_type", "normalized_type")):
+            raise ValueError("PJe logical document identity is invalid")
+        if any(type(row[name]) is not int or row[name] < 1 for name in ("page_start", "page_end")) or row["page_end"] < row["page_start"]:
+            raise ValueError("PJe logical document page span is invalid")
+        ids.append(row["document_id"])
+    if len(ids) != len(set(ids)):
+        raise ValueError("PJe logical document identities are duplicated")
+    party_fields = {"name", "role", "pole", "representative_name", "representative_role", "page", "occurrence", "document_id"}
+    for row in value["party_rows"]:
+        if type(row) is not dict or set(row) != party_fields or row["pole"] not in {"ACTIVE", "PASSIVE"} or type(row["page"]) is not int or row["page"] < 1:
+            raise ValueError("PJe party row is invalid")
+        if any(type(row[name]) is not str or not row[name].strip() for name in party_fields - {"page", "pole", "document_id"}):
+            raise ValueError("PJe party row text is invalid")
+        # None = pagina fora de qualquer documento logico (capa/indice).
+        if row["document_id"] is not None and (row["document_id"] not in set(ids)):
+            raise ValueError("PJe party row names an unknown logical document")
+    canonical_payload_json(value)
+    return value
 
 
 def _metadata_extraction_fingerprint(value: object) -> str:
@@ -374,6 +477,152 @@ class ImportInspectionPhoto:
         )
 
 
+def _already_imported_in_workspace(existing_documents, workspace_id, source):
+    """Return the material already holding these exact bytes in THIS workspace.
+
+    Byte identity is scoped to the workspace on purpose: the same hash appearing
+    in another workspace is a different source with its own authority, and must
+    never resolve to a shared domain identity.
+    """
+    if existing_documents is None:
+        return None
+    digest = source.sha256()
+    for item in existing_documents.execute(workspace_id):
+        if item.checksum_sha256 == digest:
+            return item
+    return None
+
+
+def _carry_forward_availability_decisions(previous_record, inventory: dict) -> dict:
+    """Keep the professional's availability decisions across a re-ingest of the source.
+
+    ``available`` is the one field in this artifact that is a professional
+    decision rather than a source-derived fact, and a fresh parse always proposes
+    ``True``. Letting the re-parse win would make a re-import silently return a
+    document the perito deliberately excluded, inverting
+    PROFESSIONAL_OVERRIDE > ENGINE_DECISION > SOURCE_VALUE. Source facts (ids,
+    spans, types) still refresh; only the decision is preserved, and only for
+    logical documents that still exist in the new inventory.
+    """
+    if previous_record is None:
+        return inventory
+    try:
+        previous = validate_pje_intake_payload(migrate_pje_intake_payload(thaw_payload(previous_record.payload)))
+    except (ValueError, TypeError) as exc:
+        raise RepositoryIntegrityError("stored PJe inventory is invalid") from exc
+    if previous.get("workspace_id") != inventory.get("workspace_id"):
+        raise RepositoryIntegrityError("stored PJe inventory belongs to another workspace")
+    decided = {
+        row["document_id"]: row["available"]
+        for row in previous["documents"]
+        if row["available"] is False
+    }
+    if not decided:
+        return inventory
+    return {
+        **inventory,
+        "documents": [
+            {**row, "available": decided.get(row["document_id"], row["available"])}
+            for row in inventory["documents"]
+        ],
+    }
+
+
+def _pje_inventory_payload(record, persisted, text: PdfTextResult, pje_intake) -> dict | None:
+    """Build the canonical workspace inventory from an injected PJe intake port.
+
+    The backend must not know the PJe parser: `config/architecture-policy-v1.json`
+    gives BACKEND no allowed dependencies, and reading a PJe export belongs to the
+    ingestion component. The port is asked only for the logical document list; the
+    party rows are still derived here, from text this layer already extracted.
+
+    The port answers with a discriminated status so the failure taxonomy crosses
+    the boundary without sharing exception types: ``NOT_PJE`` (this is not, or is
+    not readable as, a PJe export -- an ordinary import, never a failure) and
+    ``INCONSISTENT`` (it *is* a PJe export and it disagrees with itself, which
+    stays fail-closed).
+    """
+    if pje_intake is None:
+        return None
+    with tempfile.TemporaryDirectory(prefix="pje-intake-") as temporary:
+        pdf = Path(temporary) / "source.pdf"
+        persisted.stream.seek(0)
+        with pdf.open("wb") as sink:
+            while block := persisted.stream.read(DOCUMENT_IO_CHUNK_BYTES):
+                sink.write(block)
+        persisted.stream.seek(0)
+        # A area de trabalho e desta camada: um unico dono de materializacao
+        # privada, e uma unica remocao ao sair do bloco.
+        outcome = pje_intake.logical_inventory(pdf, Path(temporary))
+    if type(outcome) is not dict or outcome.get("status") not in {"OK", "NOT_PJE", "BLOCKED"}:
+        raise RepositoryIntegrityError("PJe intake port returned an unknown result")
+    if outcome["status"] == "NOT_PJE":
+        return None
+    if outcome["status"] == "BLOCKED":
+        # E um export do PJe que o parser nao pode sustentar como inventario. O
+        # material continua sendo material: derrubar a importacao aqui destruiria
+        # um documento legitimo por uma propriedade do PDF do perito. Registra-se
+        # o motivo, para que ele possa ser lido em vez de adivinhado.
+        return {
+            "schema_version": PJE_INTAKE_SCHEMA_VERSION,
+            "workspace_id": str(record.workspace_id),
+            "storage_content_id": str(record.content_id),
+            "source_sha256": record.checksum_sha256,
+            "status": "BLOCKED",
+            "diagnostics": list(outcome.get("diagnostics", ())),
+            "instance_label": "NÃO CLASSIFICADA",
+            "documents": [],
+            "party_rows": [],
+        }
+    documents = [{**row, "available": True} for row in outcome["documents"]]
+
+    def _containing_document(page_number: int) -> str | None:
+        """Documento logico cujo intervalo de paginas contem esta pagina."""
+        for document in documents:
+            if document["page_start"] <= page_number <= document["page_end"]:
+                return document["document_id"]
+        return None
+
+    party_rows = []
+    party_diagnostics: list[dict] = []
+    for page in text.pages:
+        parsed = parse_pje_party_table(page.text)
+        # O parser e deliberadamente fail-closed: diante da primeira linha que
+        # nao reconhece DENTRO da tabela ele para. Descartar esse sinal fazia
+        # partes desaparecerem no dominio judicial sem nenhum registro -- uma
+        # parte sem advogado, ou representada pela Defensoria, e ordinaria.
+        if parsed.final_state is PjePartyTableState.TERMINATED:
+            party_diagnostics.append({
+                "code": "PJE_TABELA_PARTES_INTERROMPIDA",
+                "detail": f"leitura da tabela de partes interrompida na pagina {page.number}",
+            })
+        for row in parsed.rows:
+            party_rows.append({
+                "name": row.name, "role": row.role, "pole": row.pole.value,
+                "representative_name": row.representative_name,
+                "representative_role": row.representative_role,
+                "page": page.number, "occurrence": row.source_line,
+                # Sem este vinculo a proveniencia da parte nao tem como nomear o
+                # documento que de fato a contem, e a exclusao profissional de um
+                # documento nao tem como alcancar o que ele afirma. `None` quando
+                # a pagina nao pertence a nenhum documento logico (capa/indice).
+                "document_id": _containing_document(page.number),
+            })
+    return {
+        "schema_version": PJE_INTAKE_SCHEMA_VERSION, "workspace_id": str(record.workspace_id),
+        "storage_content_id": str(record.content_id), "source_sha256": record.checksum_sha256,
+        # Uma tabela de partes interrompida nao invalida o inventario de
+        # documentos, mas nao pode sumir: o estado fica OK e o diagnostico
+        # acompanha, para que a cobertura possa refleti-lo.
+        "status": "OK", "diagnostics": party_diagnostics,
+        # A unidade judicial vem do proprio inventario: ler o manifesto aqui
+        # exigiria conhecer o parser, que e exatamente o que a porta evita.
+        "instance_label": outcome.get("instance_label") or "NÃO CLASSIFICADA",
+        "documents": documents,
+        "party_rows": party_rows,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class ImportCaseDocumentWithMetadata:
     documents: object
@@ -382,6 +631,33 @@ class ImportCaseDocumentWithMetadata:
     revisions: ArtifactRevisionRepository
     clock: Clock
     ids: IdGenerator
+    existing_documents: object | None = None
+    pje_intake: object | None = None
+
+    def _derive_missing_pje_inventory(self, record: PrivateContentMetadata) -> None:
+        """Produz o inventario de uma fonte ja armazenada que ainda nao o tem."""
+        if self.pje_intake is None:
+            return
+        existing = self.revisions.latest(
+            record.workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _pje_intake_artifact_id(record.content_id)
+        )
+        if existing is not None:
+            return
+        page_cache = RevisionOcrPageCache(self.revisions, record.workspace_id, self.clock, self.ids)
+        with self.document_streams.execute(record.workspace_id, record.content_id) as persisted:
+            text = self.extractor.extract(
+                persisted.stream, document_sha256=record.checksum_sha256, page_cache=page_cache,
+            )
+            inventory = _pje_inventory_payload(record, persisted, text, self.pje_intake)
+        if inventory is None:
+            return
+        validate_pje_intake_payload(inventory)
+        self.revisions.append(
+            workspace_id=record.workspace_id, artifact_kind=_PJE_INTAKE_ARTIFACT_KIND,
+            artifact_id=_pje_intake_artifact_id(record.content_id),
+            revision_id=str(_generated_uuid(self.ids)),
+            created_at=_generated_timestamp(self.clock), payload=inventory,
+        )
 
     def execute(
         self,
@@ -390,8 +666,27 @@ class ImportCaseDocumentWithMetadata:
         original_filename: str,
         content: bytes | SeekableContent,
         media_type: str,
-    ) -> PrivateContentMetadata:
+    ) -> tuple[PrivateContentMetadata, bool]:
         source = as_seekable_content(content)
+        already = _already_imported_in_workspace(self.existing_documents, workspace_id, source)
+        if already is not None:
+            # Reimportar exatamente os mesmos bytes no mesmo workspace e
+            # idempotente quanto a AUTORIDADE FISICA: uma segunda autoridade
+            # sobre o mesmo conteudo duplicaria a fonte e apagaria as decisoes ja
+            # tomadas sobre ela. O escopo e o workspace -- o mesmo hash noutro
+            # workspace continua sendo outra fonte, sem identidade compartilhada.
+            #
+            # Idempotencia da fonte, porem, nao e idempotencia do PIPELINE. Uma
+            # fonte importada quando nao havia leitor de PJe nunca ganhou
+            # inventario, e o curto-circuito tornava isso permanente: reimportar
+            # devolvia sucesso e o inventario seguia ausente, sem caminho de
+            # reparo. Se a derivacao nao existe e agora pode ser feita, faz-se.
+            self._derive_missing_pje_inventory(already)
+            # Nada foi criado. O servico e frozen e compartilhado entre
+            # requisicoes, entao a distincao viaja no retorno, e nao em estado
+            # mutavel: responder "201 Created" afirmaria uma criacao que nao
+            # houve, e o nome devolvido seria o da PRIMEIRA importacao.
+            return already, False
         record = self.documents.execute(
             workspace_id=workspace_id,
             original_filename=original_filename,
@@ -460,6 +755,7 @@ class ImportCaseDocumentWithMetadata:
                     text=text,
                     extracted_at=extracted_at,
                 )
+            pje_inventory = _pje_inventory_payload(record, persisted, text, self.pje_intake)
         self.revisions.append(
             workspace_id=record.workspace_id,
             artifact_kind=_PROCESS_METADATA_EXTRACTION_KIND,
@@ -468,7 +764,21 @@ class ImportCaseDocumentWithMetadata:
             created_at=_generated_timestamp(self.clock),
             payload=document_metadata_payload(extracted),
         )
-        return record
+        if pje_inventory is not None:
+            pje_inventory = _carry_forward_availability_decisions(
+                self.revisions.latest(
+                    record.workspace_id, _PJE_INTAKE_ARTIFACT_KIND,
+                    _pje_intake_artifact_id(record.content_id),
+                ),
+                pje_inventory,
+            )
+            validate_pje_intake_payload(pje_inventory)
+            self.revisions.append(
+                workspace_id=record.workspace_id, artifact_kind=_PJE_INTAKE_ARTIFACT_KIND,
+                artifact_id=_pje_intake_artifact_id(record.content_id), revision_id=str(_generated_uuid(self.ids)),
+                created_at=_generated_timestamp(self.clock), payload=pje_inventory,
+            )
+        return record, True
 
 
 @dataclass(frozen=True, slots=True)
@@ -485,6 +795,128 @@ class ListCaseDocuments:
             for record in self.contents.execute(workspace_id)
             if record.media_type == "application/pdf" and record.origin is PrivateContentOrigin.USER_IMPORT
         )
+
+
+@dataclass(frozen=True, slots=True)
+class PjeIndexedCaseDocument:
+    content_id: PrivateContentId
+    checksum_sha256: str
+    original_filename: str
+    pje_inventory: dict | None
+    # A fonte foi reconhecida como export PJe mas sua decomposicao nao pode ser
+    # sustentada. Ela continua sendo material legitimo, e nao pode ser
+    # apresentada como plenamente analisada.
+    pje_blocked: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ListCaseDocumentsWithPjeInventory:
+    documents: ListCaseDocuments
+    revisions: ArtifactRevisionRepository
+
+    def execute(self, workspace_id: WorkspaceId) -> tuple[PjeIndexedCaseDocument, ...]:
+        records = self.documents.execute(workspace_id)
+        indexed = []
+        for item in records:
+            inventory_record = self.revisions.latest(
+                workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _pje_intake_artifact_id(item.content_id)
+            )
+            inventory = (
+                validate_pje_intake_payload(migrate_pje_intake_payload(thaw_payload(inventory_record.payload)))
+                if inventory_record is not None else None
+            )
+            if inventory is not None:
+                if inventory.get("workspace_id") != str(workspace_id):
+                    raise RepositoryIntegrityError("PJe inventory belongs to another workspace")
+                # O inventario e endereçado pela fonte, entao o vinculo so pode
+                # divergir se o conteudo mudou sob a mesma identidade.
+                if (
+                    inventory.get("storage_content_id") != str(item.content_id)
+                    or inventory.get("source_sha256") != item.checksum_sha256
+                ):
+                    raise RepositoryIntegrityError("PJe inventory diverges from private source authority")
+            blocked = inventory is not None and inventory["status"] != "OK"
+            if blocked:
+                inventory = None
+            indexed.append(PjeIndexedCaseDocument(
+                item.content_id, item.checksum_sha256, item.original_filename, inventory, blocked,
+            ))
+        return tuple(indexed)
+
+
+@dataclass(frozen=True, slots=True)
+class GetPjeIntake:
+    workspaces: WorkspaceRepository
+    revisions: ArtifactRevisionRepository
+    documents: object
+
+    def execute(self, workspace_id: WorkspaceId):
+        """Todos os inventarios do workspace, um por fonte fisica."""
+        workspace_id = _require_workspace(self.workspaces, workspace_id)
+        found = []
+        for item in self.documents.execute(workspace_id):
+            record = self.revisions.latest(
+                workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _pje_intake_artifact_id(item.content_id)
+            )
+            if record is None:
+                continue
+            payload = validate_pje_intake_payload(migrate_pje_intake_payload(thaw_payload(record.payload)))
+            # O inventario declara o workspace a que pertence. Servi-lo sem
+            # conferir deixaria um payload cross-linked (por restauracao, por
+            # exemplo) ser lido como se fosse deste workspace.
+            if payload["workspace_id"] != str(workspace_id):
+                raise RepositoryIntegrityError("stored PJe inventory belongs to another workspace")
+            found.append((record, payload))
+        if not found:
+            raise ArtifactRevisionNotFound("PJe intake not found")
+        return found
+
+    def one(self, workspace_id: WorkspaceId, storage_content_id: str):
+        for record, payload in self.execute(workspace_id):
+            if payload["storage_content_id"] == storage_content_id:
+                return record, payload
+        raise ArtifactRevisionNotFound("PJe intake not found")
+
+
+@dataclass(frozen=True, slots=True)
+class SetPjeDocumentAvailability:
+    get_intake: GetPjeIntake
+    revisions: ArtifactRevisionRepository
+    clock: Clock
+    ids: IdGenerator
+
+    def execute(self, workspace_id: WorkspaceId, *, storage_content_id: str, document_id: str, available: bool, expected_revision: int):
+        # A fonte e endereçada explicitamente: um workspace pode ter mais de um
+        # export PJe, e `DOC-PJE-NNN` e um ordinal local a um indice, nao uma
+        # identidade. Sem dizer de qual fonte se fala, a decisao do perito
+        # aterrissaria no documento de mesma posicao de outro processo.
+        if type(document_id) is not str or not document_id.strip() or type(available) is not bool or type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("PJe availability request is invalid")
+        if type(storage_content_id) is not str or not storage_content_id.strip():
+            raise ValueError("PJe availability request is invalid")
+        current, payload = self.get_intake.one(workspace_id, storage_content_id)
+        if current.revision != expected_revision:
+            raise RepositoryConflict("expected PJe intake revision is not latest")
+        matched = False
+        documents = []
+        for row in payload["documents"]:
+            updated = dict(row)
+            if row["document_id"] == document_id:
+                updated["available"] = available; matched = True
+            documents.append(updated)
+        if not matched:
+            raise ValueError("PJe logical document is unknown")
+        amended = validate_pje_intake_payload({**payload, "documents": documents})
+        record = self.revisions.append_if_latest(
+            # O alvo da escrita e o workspace da requisicao autenticada, nunca um
+            # identificador lido do proprio dado armazenado: derivar o destino do
+            # payload permite que um inventario cross-linked redirecione a
+            # gravacao para outro workspace.
+            workspace_id=workspace_id, artifact_kind=_PJE_INTAKE_ARTIFACT_KIND,
+            artifact_id=_pje_intake_artifact_id(payload["storage_content_id"]), revision_id=str(_generated_uuid(self.ids)),
+            created_at=_generated_timestamp(self.clock), payload=amended, expected_revision=expected_revision,
+        )
+        return record, amended
 
 
 @dataclass(frozen=True, slots=True)

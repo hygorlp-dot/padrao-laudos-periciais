@@ -249,7 +249,7 @@ def test_import_persists_redacted_field_provenance_separately_from_effective_dat
         ids=SequenceIds(),
     )
 
-    record = importer.execute(
+    record, _created = importer.execute(
         workspace_id=WORKSPACE_ID,
         original_filename="autos.pdf",
         content=SeekableContent(BytesIO(PDF), len(PDF)),
@@ -282,7 +282,7 @@ def test_review_aggregates_persisted_extractions_and_confirmation_is_separate():
     importer = ImportCaseDocumentWithMetadata(
         ImportOnly(), OpenStored(), StaticTextExtractor(), revisions, FixedClock(), SequenceIds()
     )
-    metadata = importer.execute(
+    metadata, _created = importer.execute(
         workspace_id=WORKSPACE_ID,
         original_filename="autos.pdf",
         content=SeekableContent(BytesIO(PDF), len(PDF)),
@@ -357,7 +357,7 @@ def test_textless_document_is_exposed_as_controlled_document_state():
         FixedClock(),
         SequenceIds(),
     )
-    metadata = importer.execute(
+    metadata, _created = importer.execute(
         workspace_id=WORKSPACE_ID,
         original_filename="imagem-digitalizada.pdf",
         content=SeekableContent(BytesIO(PDF), len(PDF)),
@@ -383,7 +383,7 @@ def test_missing_extraction_is_error_and_new_evidence_invalidates_confirmation()
     importer = ImportCaseDocumentWithMetadata(
         ImportOnly(), OpenStored(), StaticTextExtractor(), revisions, FixedClock(), SequenceIds()
     )
-    metadata = importer.execute(
+    metadata, _created = importer.execute(
         workspace_id=WORKSPACE_ID,
         original_filename="autos.pdf",
         content=SeekableContent(BytesIO(PDF), len(PDF)),

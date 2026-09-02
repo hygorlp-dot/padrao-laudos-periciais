@@ -1,0 +1,353 @@
+from __future__ import annotations
+
+import json
+
+import pytest
+
+# Os E2E percorrem o composition root REAL de producao (PLANNING), e nao
+# instanciam o adapter por conta propria: e isso que prova que a inversao de
+# dependencia esta de fato ligada, e nao apenas possivel.
+from scripts.planejamento_pericial.app_composition import build_pericial_local_api as build_local_api
+from tests.test_document_intake_v1 import provision_private_root
+from tests.test_final_closure_r7 import pdf_sintetico
+from tests.test_local_api_v1 import TOKEN, http_request
+
+
+def _sole_intake(envelope):
+    """Adapta ao formato multi-fonte mantendo a asserção do caso de fonte única.
+
+    A rota passou a devolver {"intakes": [...]} porque um workspace pode ter mais
+    de um export PJe (S-06). Onde o teste fala de UMA fonte, esta ajuda extrai a
+    única e falha alto se houver mais — nenhuma asserção foi enfraquecida.
+    """
+    intakes = envelope["intakes"]
+    assert len(intakes) == 1, f"esperava uma unica fonte PJe, ha {len(intakes)}"
+    return intakes[0]
+
+
+def _logical(content_id: str, local_id: str) -> str:
+    """Mesma regra do produto: identidade = (fonte fisica, identificador local)."""
+    from uuid import UUID
+
+    return f"{local_id}-{UUID(content_id).hex.upper()}"
+
+
+def _request(runtime, method, path, *, value=None, body=None, headers=None):
+    status, _headers, raw = http_request(
+        runtime.server, method, path, value=value, raw_body=body,
+        headers={"X-Local-API-Token": TOKEN, **(headers or {})},
+    )
+    return status, json.loads(raw) if raw else None
+
+
+def test_non_pje_material_import_still_succeeds_without_pje_inventory(tmp_path):
+    """A PDF the strict PJe reader cannot open must not break ordinary material import."""
+    private = tmp_path / "private"
+    provision_private_root(private)
+    runtime = build_local_api(tmp_path / "product.sqlite3", private_root=private, token=TOKEN)
+    runtime.start()
+    try:
+        status, workspace = _request(runtime, "POST", "/v1/workspaces", value={"name": "Caso comum"})
+        assert status == 201
+        workspace_id = workspace["workspace_id"]
+        status, material = _request(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/materials",
+            body=b"%PDF-1.7\nnao-e-um-pje\n%%EOF\n",
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "documento-comum.pdf"},
+        )
+        assert status == 201, material
+        status, intake = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
+        assert status == 404
+        status, analysis = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis", value={})
+        assert status == 201
+        assert analysis["snapshot"]["documents"][0]["normalized_type"] == "UNCLASSIFIED"
+    finally:
+        runtime.close()
+
+
+def _encrypted_pdf() -> bytes:
+    from io import BytesIO
+
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    writer.encrypt("segredo")
+    buffer = BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
+def _truncated_pdf() -> bytes:
+    from io import BytesIO
+
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    buffer = BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()[: len(buffer.getvalue()) // 2]
+
+
+@pytest.mark.parametrize("label", ["encrypted", "truncated"])
+def test_pdfs_hostile_to_either_reader_never_surface_as_internal_error(tmp_path, label):
+    """LeitorPdf opens with pypdf AND pdfplumber; neither may leak as a 500."""
+    private = tmp_path / "private"
+    provision_private_root(private)
+    runtime = build_local_api(tmp_path / "product.sqlite3", private_root=private, token=TOKEN)
+    runtime.start()
+    try:
+        status, workspace = _request(runtime, "POST", "/v1/workspaces", value={"name": "Caso"})
+        workspace_id = workspace["workspace_id"]
+        body = _encrypted_pdf() if label == "encrypted" else _truncated_pdf()
+        status, payload = _request(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=body,
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": f"{label}.pdf"},
+        )
+        assert status != 500, payload
+        assert status in {201, 400, 415}, (status, payload)
+        if status != 201:
+            # Um import recusado nao pode deixar material orfao para tras.
+            status, listed = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/materials")
+            assert listed["items"] == [], listed
+    finally:
+        runtime.close()
+
+
+def test_valid_pje_pdf_reaches_workspace_logical_documents_and_case_analysis(tmp_path):
+    pdf = tmp_path / "autos-sinteticos.pdf"
+    pdf_sintetico(pdf)
+    private = tmp_path / "private"
+    provision_private_root(private)
+    runtime = build_local_api(tmp_path / "product.sqlite3", private_root=private, token=TOKEN)
+    runtime.start()
+    try:
+        status, workspace = _request(runtime, "POST", "/v1/workspaces", value={"name": "Caso PJe sintÃ©tico"})
+        assert status == 201
+        workspace_id = workspace["workspace_id"]
+        status, material = _request(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(),
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos-sinteticos.pdf"},
+        )
+        assert status == 201
+        status, intake = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
+        assert status == 200
+        hidden = _sole_intake(intake)["inventory"]["documents"][1]
+        status, intake = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pje-intake/availability", value={
+            "storage_content_id": material["content_id"], "document_id": hidden["document_id"],
+            "available": False, "expected_revision": _sole_intake(intake)["revision"],
+        })
+        assert status == 200 and intake["inventory"]["documents"][1]["available"] is False
+        status, analysis = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis", value={})
+        assert status == 201
+        documents = analysis["snapshot"]["documents"]
+        assert [item["document_id"] for item in documents] == [
+            _logical(material["content_id"], "DOC-PJE-001"),
+            _logical(material["content_id"], "DOC-PJE-002"),
+        ]
+        assert all(item["storage_content_id"] == material["content_id"] for item in documents)
+        assert all(item["source_sha256"] == material["checksum_sha256"] for item in documents)
+        assert [item["page_count_or_span"] for item in documents] == ["p. 2-3 | PJe 900001", "p. 4 | PJe 900002"]
+        assert analysis["snapshot"]["coverage"]["documents_total"] == 2
+        assert analysis["snapshot"]["coverage"]["documents_unavailable"] == 1
+    finally:
+        runtime.close()
+
+
+def test_reimport_never_silently_restores_availability_the_professional_removed(tmp_path):
+    """PROFESSIONAL_OVERRIDE > SOURCE_VALUE: a re-parse proposes True, the decision wins."""
+    pdf = tmp_path / "autos-sinteticos.pdf"
+    pdf_sintetico(pdf)
+    private = tmp_path / "private"
+    provision_private_root(private)
+    runtime = build_local_api(tmp_path / "product.sqlite3", private_root=private, token=TOKEN)
+    runtime.start()
+    try:
+        status, workspace = _request(runtime, "POST", "/v1/workspaces", value={"name": "Caso PJe"})
+        workspace_id = workspace["workspace_id"]
+        _request(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(),
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos.pdf"},
+        )
+        status, intake = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
+        excluded = _sole_intake(intake)["inventory"]["documents"][1]["document_id"]
+        status, intake = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pje-intake/availability", value={
+            "storage_content_id": _sole_intake(intake)["inventory"]["storage_content_id"],
+            "document_id": excluded, "available": False, "expected_revision": _sole_intake(intake)["revision"],
+        })
+        assert status == 200
+        decided = {row["document_id"]: row["available"] for row in intake["inventory"]["documents"]}
+
+        status, again = _request(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(),
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos.pdf"},
+        )
+        status, after = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
+        assert status == 200
+        assert {row["document_id"]: row["available"] for row in _sole_intake(after)["inventory"]["documents"]} == decided
+
+        # R-03A: bytes identicos no mesmo workspace nao criam segunda autoridade.
+        status, listed = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/materials")
+        assert len(listed["items"]) == 1, listed
+        assert again["content_id"] == listed["items"][0]["content_id"]
+    finally:
+        runtime.close()
+
+
+def test_identical_bytes_in_another_workspace_stay_a_separate_source(tmp_path):
+    """Byte identity is workspace-scoped; it must not create shared domain identity."""
+    pdf = tmp_path / "autos-sinteticos.pdf"
+    pdf_sintetico(pdf)
+    private = tmp_path / "private"
+    provision_private_root(private)
+    runtime = build_local_api(tmp_path / "product.sqlite3", private_root=private, token=TOKEN)
+    runtime.start()
+    try:
+        _s, first = _request(runtime, "POST", "/v1/workspaces", value={"name": "Caso A"})
+        _s, second = _request(runtime, "POST", "/v1/workspaces", value={"name": "Caso B"})
+        status, a_material = _request(
+            runtime, "POST", f"/v1/workspaces/{first['workspace_id']}/materials", body=pdf.read_bytes(),
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos.pdf"},
+        )
+        assert status == 201
+        status, b_material = _request(
+            runtime, "POST", f"/v1/workspaces/{second['workspace_id']}/materials", body=pdf.read_bytes(),
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos.pdf"},
+        )
+        assert status == 201
+        assert a_material["content_id"] != b_material["content_id"], "cross-workspace identity leaked"
+        assert a_material["checksum_sha256"] == b_material["checksum_sha256"]
+    finally:
+        runtime.close()
+
+
+def test_a_genuinely_distinct_second_material_composes_instead_of_bricking_analysis(tmp_path):
+    """SECOND_DISTINCT_MATERIAL != DUPLICATE_SOURCE: both sources must survive.
+
+    The PJe export fans out into logical documents over one physical authority;
+    an unrelated second material stays a source in its own right. Dropping it
+    would be silent loss, and rejecting it would make an accepted import produce
+    a permanently unreadable Case Analysis.
+    """
+    pdf = tmp_path / "autos-sinteticos.pdf"
+    pdf_sintetico(pdf)
+    private = tmp_path / "private"
+    provision_private_root(private)
+    runtime = build_local_api(tmp_path / "product.sqlite3", private_root=private, token=TOKEN)
+    runtime.start()
+    try:
+        status, workspace = _request(runtime, "POST", "/v1/workspaces", value={"name": "Caso PJe"})
+        workspace_id = workspace["workspace_id"]
+        status, pje_material = _request(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(),
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos-sinteticos.pdf"},
+        )
+        assert status == 201
+        status, other = _request(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/materials",
+            body=b"%PDF-1.7\nlaudo-complementar\n%%EOF\n",
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "complementar.pdf"},
+        )
+        assert status == 201
+
+        status, analysis = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis", value={})
+        assert status == 201, analysis
+        documents = analysis["snapshot"]["documents"]
+        by_storage = {item["storage_content_id"] for item in documents}
+        assert pje_material["content_id"] in by_storage, "PJe source vanished"
+        assert other["content_id"] in by_storage, "second material was silently dropped"
+        assert [item["document_id"] for item in documents] == [
+            _logical(pje_material["content_id"], "DOC-PJE-001"),
+            _logical(pje_material["content_id"], "DOC-PJE-002"),
+            "DOC-003",
+        ]
+        assert analysis["snapshot"]["coverage"]["documents_total"] == 3
+
+        # E o estado permanece legivel, e nao um 500 permanente.
+        status, reread = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        assert status == 200, reread
+    finally:
+        runtime.close()
+
+
+def test_availability_toggle_rejects_unknown_document_id(tmp_path):
+    pdf = tmp_path / "autos-sinteticos.pdf"
+    pdf_sintetico(pdf)
+    private = tmp_path / "private"
+    provision_private_root(private)
+    runtime = build_local_api(tmp_path / "product.sqlite3", private_root=private, token=TOKEN)
+    runtime.start()
+    try:
+        status, workspace = _request(runtime, "POST", "/v1/workspaces", value={"name": "Caso PJe"})
+        workspace_id = workspace["workspace_id"]
+        _request(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(),
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos-sinteticos.pdf"},
+        )
+        status, intake = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
+        status, result = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pje-intake/availability", value={
+            "storage_content_id": _sole_intake(intake)["inventory"]["storage_content_id"],
+            "document_id": "DOC-PJE-DOES-NOT-EXIST", "available": False, "expected_revision": _sole_intake(intake)["revision"],
+        })
+        assert status == 400 and result["error"]["code"] == "INVALID_REQUEST"
+    finally:
+        runtime.close()
+
+
+def test_availability_toggle_rejects_stale_expected_revision(tmp_path):
+    pdf = tmp_path / "autos-sinteticos.pdf"
+    pdf_sintetico(pdf)
+    private = tmp_path / "private"
+    provision_private_root(private)
+    runtime = build_local_api(tmp_path / "product.sqlite3", private_root=private, token=TOKEN)
+    runtime.start()
+    try:
+        status, workspace = _request(runtime, "POST", "/v1/workspaces", value={"name": "Caso PJe"})
+        workspace_id = workspace["workspace_id"]
+        _request(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(),
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos-sinteticos.pdf"},
+        )
+        status, intake = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
+        stale_revision = _sole_intake(intake)["revision"]
+        document_id = _sole_intake(intake)["inventory"]["documents"][0]["document_id"]
+        source_id = _sole_intake(intake)["inventory"]["storage_content_id"]
+        _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pje-intake/availability", value={
+            "storage_content_id": source_id, "document_id": document_id, "available": False, "expected_revision": stale_revision,
+        })
+        status, result = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pje-intake/availability", value={
+            "storage_content_id": source_id, "document_id": document_id, "available": True, "expected_revision": stale_revision,
+        })
+        assert status == 409 and result["error"]["code"] == "REPOSITORY_CONFLICT"
+    finally:
+        runtime.close()
+
+
+def test_workspace_reopen_preserves_pje_inventory(tmp_path):
+    """Closing and reopening the runtime against the same store must not lose the logical inventory."""
+    pdf = tmp_path / "autos-sinteticos.pdf"
+    pdf_sintetico(pdf)
+    private = tmp_path / "private"
+    provision_private_root(private)
+    db = tmp_path / "product.sqlite3"
+    runtime = build_local_api(db, private_root=private, token=TOKEN)
+    runtime.start()
+    try:
+        status, workspace = _request(runtime, "POST", "/v1/workspaces", value={"name": "Caso PJe"})
+        workspace_id = workspace["workspace_id"]
+        _request(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(),
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos-sinteticos.pdf"},
+        )
+        status, before = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
+    finally:
+        runtime.close()
+    reopened = build_local_api(db, private_root=private, token=TOKEN)
+    reopened.start()
+    try:
+        status, after = _request(reopened, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
+        assert status == 200
+        assert _sole_intake(after)["inventory"]["documents"] == _sole_intake(before)["inventory"]["documents"]
+    finally:
+        reopened.close()
