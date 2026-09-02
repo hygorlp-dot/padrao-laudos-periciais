@@ -8,6 +8,30 @@ from scripts.planejamento_pericial.validar_plano import recalcular_cobertura
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_generator_never_fabricates_semantic_coverage_by_text_injection():
+    """gerar_plano nao pode 'cobrir' um requisito material injetando o texto do
+    requisito na atividade: isso transforma fail-closed em fail-open e faz o
+    plano sempre anunciar 100% de cobertura semantica."""
+    fonte = (ROOT / "scripts/planejamento_pericial/gerar_plano.py").read_text(encoding="utf-8")
+    assert 'verificar"] +=' not in fonte
+    assert "Requisito do quesito:" not in fonte
+
+
+def test_unmatched_material_requirement_blocks_the_plan_and_is_surfaced():
+    """Um requisito material sem item de plano correspondente deve deixar o
+    quesito NAO planejado (apto=False) e aparecer como pendencia explicita,
+    nunca ser silenciosamente absorvido."""
+    plan = _plan()
+    plan["requisitos_semanticos"] = [
+        {"quesito": "QUE-001", "requisito": "Condição fictícia", "itens_planejados": ["ATV-001"]},
+        {"quesito": "QUE-001", "requisito": "Ensaiar a resistência do material não inspecionável.", "itens_planejados": []},
+    ]
+    result = recalcular_cobertura(plan)
+    assert result["cobertura_relacional"]["QUE-001"] is True
+    assert result["cobertura_requisitos_semanticos"]["QUE-001"] is False
+    assert result["apto"] is False
+
+
 def _plan():
     return json.loads(
         (ROOT / "tests/fixtures/planejamento/plano-vistoria-valido.json").read_text(

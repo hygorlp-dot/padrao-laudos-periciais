@@ -114,19 +114,17 @@ def gerar(diretorio: Path) -> dict[str, Any]:
         cobertura.append({"quesito": q["id"], "questoes_tecnicas": q["questoes_tecnicas_relacionadas"], "alegacoes": sorted(alg_q),
                           "atividades": atvs, "medicoes": [m["id"] for m in medicoes if any(qt in m["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])], "fotografias": [f["id"] for f in fotografias if any(qt in f["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])],
                           "ensaios": [e["id"] for e in ensaios if any(qt in e["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])], "documentos": [d["id"] for d in documentos_planejados if any(qt in d["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])], "planejada": False})
-    requisitos_semanticos=[]
+    requisitos_semanticos=[];lacunas_semanticas=[]
     for quesito in quesitos:
         textos=[x for x in quesito.get("subitens",[]) if str(x).strip()] or [quesito.get("materia_tecnica") or quesito["texto_integral"]]
         cobertura_q=next(c for c in cobertura if c["quesito"]==quesito["id"])
         for texto in textos:
             candidatos=[a["id"] for a in atividades if a["id"] in cobertura_q["atividades"] and corresponde_requisito(str(texto),a)]
-            if not candidatos:
-                atividade=next(a for a in atividades if a["id"] in cobertura_q["atividades"])
-                atividade["verificar"] += f" Requisito do quesito: {texto}"
-                candidatos=[atividade["id"]]
             requisitos_semanticos.append({"quesito":quesito["id"],"requisito":str(texto),"itens_planejados":candidatos})
+            if not candidatos:
+                lacunas_semanticas.append(f"Requisito material de {quesito['id']} sem item de plano correspondente: {texto}")
     calculada=recalcular_cobertura({"cobertura":cobertura,"requisitos_cobertura":requisitos_cobertura,"requisitos_semanticos":requisitos_semanticos,"atividades":atividades,"medicoes":medicoes,"fotografias":fotografias,"ensaios":ensaios,"documentos_a_solicitar":documentos_planejados})
-    for item in cobertura:item["planejada"]=calculada["cobertura"].get(item["quesito"],False)
+    for item in cobertura:item["planejada"]=bool(calculada["cobertura_relacional"].get(item["quesito"],False) and calculada["cobertura_requisitos_semanticos"].get(item["quesito"],False))
     bloqueante = any(c["classificacao"] == "BLOQUEANTE" and c["status"] == "ABERTO" for c in delimitacao["conflitos"])
     lacuna_cobertura = any(not c["planejada"] for c in cobertura)
     status = "BLOQUEADO_PARA_VISTORIA" if bloqueante or lacuna_cobertura else "APTO_PARA_VISTORIA_COM_RESSALVAS" if delimitacao["ressalvas"] or delimitacao["documentos_ausentes"] else "APTO_PARA_VISTORIA"
@@ -138,7 +136,7 @@ def gerar(diretorio: Path) -> dict[str, Any]:
             "atividades": atividades, "equipamentos": [{"nome": n, "finalidade": f, "questoes_tecnicas": qts} for n, f in perfil["equip"]],
             "medicoes": medicoes, "fotografias": fotografias, "ensaios": ensaios, "documentos_a_solicitar": documentos_planejados,
             "seguranca_e_acesso": perfil["seguranca"], "pontos_criticos": ["Não converter alegação em constatação", "Não concluir origem antes da análise pós-vistoria"],
-            "pendencias": delimitacao["fatores_limitantes"], "cobertura": cobertura,"requisitos_cobertura":requisitos_cobertura,"requisitos_semanticos":requisitos_semanticos,
+            "pendencias": delimitacao["fatores_limitantes"]+lacunas_semanticas, "cobertura": cobertura,"requisitos_cobertura":requisitos_cobertura,"requisitos_semanticos":requisitos_semanticos,
             "autonomia": {"decisoes_autonomas": len(atividades)+len(medicoes)+len(fotografias), "ressalvas_autonomas": len(delimitacao["ressalvas"]),
                           "lacunas_resolvidas_sem_perguntar": len(delimitacao["documentos_ausentes"]),
                           "perguntas_evitadas_autonomamente": ["tipo de perícia", "tema controvertido", "quesitos", "atividades", "fotografias", "medições", "equipamentos"],
