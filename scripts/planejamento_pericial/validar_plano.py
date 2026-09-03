@@ -153,7 +153,43 @@ def recalcular_execucao(plano,vistoria):
                          bool(meta.get("metodo_substituto")) and bool(execucao.get("justificativa_equivalencia")))
             satisfeito=satisfeito or direto or equivalente
         if not satisfeito:faltantes.append({"questao_tecnica":requisito.get("questao_tecnica"),"tipo":requisito.get("tipo"),"item_planejado":planejado})
+    # §18: a semântica canônica vale em TODAS as superfícies de recálculo.
+    faltantes.extend(_execucao_semantica_faltante(plano,cobertura))
     return {"apto":bool(plano.get("requisitos_cobertura")) and not faltantes,"faltantes":faltantes}
+
+# Tipos de EXECUÇÃO que satisfazem cada classe RE-DERIVADA do requisito material.
+# Espelha _COLECOES_POR_CLASSE do gate (autoridade estrutural, não textual).
+_TIPOS_EXEC_POR_CLASSE={"MEDICAO":frozenset({"MEDICAO","ENSAIO"}),
+                        "INDETERMINADA":frozenset({"MEDICAO","ENSAIO"}),
+                        "DOCUMENTO":frozenset({"DOCUMENTO"}),
+                        "INSPECAO":frozenset({"ATIVIDADE","FOTOGRAFIA","MEDICAO","ENSAIO","DOCUMENTO"})}
+
+def _execucao_semantica_faltante(plano,cobertura_exec):
+    """Re-deriva a classe de cada requisito material (via classificar_requisito) e
+    exige que algum item planejado do TIPO apropriado tenha sido EXECUTADO na
+    vistoria. Fecha o P1: nem a classe/status persistidos, nem a remoção da
+    obrigação relacional, nem o vínculo a item de tipo errado produzem apto na
+    execução. `requisitos_semanticos` ausente → nada a re-derivar (plano legado);
+    presente e vazio → o gate já marca GRUPO_SEMANTICO_VAZIO (não apto)."""
+    if "requisitos_semanticos" not in plano:
+        return []
+    from scripts.planejamento_pericial.requisitos_materiais import classificar_requisito
+    id_tipo={x.get("id"):tipo for tipo,chave in CATALOGOS_PLANEJADOS.items()
+             for x in plano.get(chave,[]) if isinstance(x,dict)}
+    executado={i for i,c in cobertura_exec.items() if c.get("status") in ("EXECUTADO","SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE")}
+    faltas=[]
+    sem=recalcular_cobertura(plano)
+    for rid in sem.get("requisitos_materiais_nao_mapeados",[]):
+        faltas.append({"questao_tecnica":None,"tipo":None,"item_planejado":None,"motivo":f"REQUISITO_SEMANTICO_NAO_MAPEADO:{rid}"})
+    for r in plano.get("requisitos_semanticos",[]):
+        planejados=r.get("itens_planejados") or []
+        if not planejados:continue  # já coberto por requisitos_materiais_nao_mapeados
+        classe=classificar_requisito(r.get("requisito") or "")
+        tipos_ok=_TIPOS_EXEC_POR_CLASSE.get(classe,_TIPOS_EXEC_POR_CLASSE["MEDICAO"])
+        if not any(id_tipo.get(i) in tipos_ok and i in executado for i in planejados):
+            faltas.append({"questao_tecnica":r.get("quesito"),"tipo":None,"item_planejado":None,
+                           "motivo":f"REQUISITO_SEMANTICO_NAO_EXECUTADO:{r.get('requirement_id') or (r.get('requisito') or '')[:40]}"})
+    return faltas
 
 def validar(caminho: Path) -> list[str]:
     schemas = [json.loads(p.read_text(encoding="utf-8")) for p in (RAIZ/"schemas").glob("*.schema.json")]

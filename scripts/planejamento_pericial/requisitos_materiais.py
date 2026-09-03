@@ -9,16 +9,20 @@ Classificação (natureza do requisito) — DEFAULT FAIL-CLOSED. O vocabulário 
 é a lista canônica; está reproduzido em docs/padroes/padrao-planejamento-vistoria.md.
 
 - INSPECAO — satisfazível por observação de campo. São MODALIDADE-NEUTROS e NÃO
-  estabelecem observabilidade por si sós: o verbo de REQUISIÇÃO GENÉRICO
-  ("verificar", "constatar", "apontar", "indicar", "avaliar", …) E o conector
-  EXISTENCIAL ("há", "existe", "existência de", "presença de") — "medir se HÁ
-  trinca > 0,3 mm" também usa "há". Só é atribuída com EVIDÊNCIA POSITIVA de que
-  o fato é constatável a olho nu — verbo de observação direta ("descrever"/
-  "registrar"/"fotografar"/"inspecionar"/…), qualificador explicitamente visual
-  ("visível", "aparente", "visualmente", "a olho nu", "ocular") ou substantivo
-  de fenômeno inequivocamente visual ("fissura", "infiltração", "mancha",
-  "descolamento", "mofo", "eflorescência", …) — E ausência de qualquer sinal de
-  medição.
+  estabelecem observabilidade por si sós — nenhum decide sem um sinal POSITIVO DE
+  OBJETO: o verbo de REQUISIÇÃO GENÉRICO ("verificar"/"constatar"/"avaliar"/…), o
+  conector EXISTENCIAL ("há"/"existe"/"existência de"/"presença de" — "medir se
+  HÁ trinca > 0,3 mm" também usa "há") E o verbo de OBSERVAÇÃO DIRETA
+  ("registrar"/"descrever"/"caracterizar"/"localizar"/… — "registrar o
+  assentamento diferencial" exige nivelamento topográfico). Só é atribuída com
+  EVIDÊNCIA POSITIVA no OBJETO: (i) substantivo de fenômeno inequivocamente
+  visual ("fissura", "infiltração", "mancha", "descolamento", "mofo",
+  "eflorescência", …); (ii) qualificador explicitamente visual ("visível",
+  "aparente", "visualmente", "a olho nu", "ocular", "fotograficamente"); (iii)
+  verbo de observação direta + objeto descritivo-qualitativo ("padrão
+  construtivo", "acabamento", "estado de conservação", "revestimento", …) — E
+  ausência de qualquer sinal de medição. Todo caminho de INSPECAO tem portão de
+  objeto cujo modo de falha é SOBRE-BLOQUEIO, nunca falso-verde.
 - MEDICAO  — exige leitura instrumental, ensaio ou cálculo (verbo de medição,
   grandeza inerentemente dimensional, propriedade ensaiável, patologia
   ensaiável, critério numérico/quantidade dimensionada, ou quantificador
@@ -60,10 +64,31 @@ _CONECTOR = re.compile(r"\s*(?:,|;|\se\s|\seou\s|\sou\s)\s*")
 # Verbo de REQUISIÇÃO GENÉRICO — modalidade-neutro: sozinho não classifica nada.
 # (verificar, constatar, apontar, indicar, avaliar, analisar, determinar, apurar,
 #  conferir, informar, esclarecer, dizer…) — cai em INDETERMINADA sem outro sinal.
-# Verbo de OBSERVAÇÃO DIRETA — o próprio ato já é observação de campo.
+# Verbo de OBSERVAÇÃO DIRETA. É modalidade-neutro QUANTO AO OBJETO: "registrar o
+# assentamento diferencial" / "descrever a resistividade elétrica" exigem
+# instrumento. Só estabelece INSPECAO em conjunto com _OBJETO_DESCRITIVO (abaixo);
+# sozinho → INDETERMINADA. Mesmo princípio já aplicado ao ramo do fenômeno.
 _VERBO_OBSERVACAO_DIRETA = re.compile(
     r"(?i)\b(?:descrever|registrar|fotografar|inspecionar|examinar|observar|"
     r"vistoriar|caracterizar|localizar)\b"
+)
+# Objeto de natureza DESCRITIVO-QUALITATIVA (não grandeza, não patologia
+# instrumental). Só habilita INSPECAO junto de um verbo de observação direta.
+# Lista permissiva e gated: sua incompletude causa SOBRE-BLOQUEIO (o requisito cai
+# em INDETERMINADA → medição estrita), nunca falso-verde.
+_OBJETO_DESCRITIVO = re.compile(
+    r"(?i)\b(?:padr[aã]o\s+(?:construtiv\w*|de\s+acabamento|arquitet\w*|de\s+ocupa[cç]\w*|de\s+qualidade)|"
+    r"acabament\w*|"
+    r"estado\s+(?:geral|de\s+conserva[cç]\w*|aparente|de\s+uso|construtiv\w*)|"
+    r"estado\s+d[oa]s?\s+(?:revestiment|acabament|im[óo]vel|edifica|constru|benfeitoria|"
+    r"pintura|forro|elemento|componente)\w*|"
+    r"conserva[cç][aã]o\s+(?:geral|d[oa]\s+(?:im[óo]vel|edifica\w*|constru\w*|"
+    r"revestiment\w*|acabament\w*|pintura\w*|fachada\w*|forro\w*|benfeitoria\w*|bem))|"
+    r"aspecto\s+(?:geral|visual|construtiv\w*|est[eé]tic\w*|arquitet\w*)|"
+    r"sistema\s+construtiv\w*|m[eé]todo\s+construtiv\w*|t[eé]cnica\s+construtiv\w*|"
+    r"tipologi\w*|configura[cç]\w*\s+(?:geral|arquitet\w*|espacial)|"
+    r"disposi[cç]\w*\s+d[oe]s?\s+ambientes|"
+    r"caracter[íi]sticas\s+(?:gerais|construtiv\w*|arquitet\w*|f[íi]sicas))\b"
 )
 # Qualificador que evidencia que o fato é constatável VISUALMENTE. O conector
 # existencial ("há"/"existe"/"existência de"/"presença de") NÃO entra aqui: é tão
@@ -95,7 +120,10 @@ _VERBO_MEDICAO = re.compile(r"(?i)\b(?:medir|medi[cç][aã]o|aferir|mensurar|qua
 _GRANDEZA_DIMENSIONAL = re.compile(
     r"(?i)\b(?:espessura|recalque|flecha|prumo|aprumo|desaprumo|desvio\s+de\s+prumo|"
     r"nivelamento|desn[íi]ve|inclina[cç][aã]|caimento|declividade|planicidade|planeza|"
-    r"deforma[cç][aã]|deslocamento|esquadro|dimens|[aá]rea|volume|cota|dist[aâ]ncia|"
+    r"deforma[cç][aã]|deslocamento|esquadro|dimens|"
+    r"[aá]rea(?!s?\s+d[eo]s?\s+(?:servi[cç]o|lazer|circula[cç]\w*|conv[íi]v\w*|estar|"
+    r"refei[cç]\w*|descolament\w*|destacament\w*|infiltrac\w*|umidade|corros\w*|"
+    r"manch\w*|fissur\w*|patologi\w*|dano))|volume|cota|dist[aâ]ncia|"
     r"[aâ]ngulo|largura|altura|comprimento|extens[aã]|profundidade|di[aâ]metro|"
     r"abertura\s+d[ae]s?\s+(?:fissur|trinc)|vaz[aã]o|vaz[õo]es|carga|tens[aã]o\s+atuante)\w*"
 )
@@ -165,12 +193,15 @@ def remover_ruido_estrutural(texto: str) -> str:
 def classificar_requisito(texto: str) -> str:
     """MEDICAO | DOCUMENTO | INSPECAO | INDETERMINADA.
 
-    Default fail-closed. Verbo de requisição genérico ("verificar"/"constatar"/…) E
-    conector existencial ("há"/"existe"/"existência de") são MODALIDADE-NEUTROS. Só
-    devolve INSPECAO com EVIDÊNCIA POSITIVA de observabilidade — verbo de observação
-    direta, qualificador explicitamente visual, ou substantivo de fenômeno
-    inequivocamente visual — e ausência de qualquer sinal de medição; requisito
-    ambíguo → INDETERMINADA (o gate o trata como MEDICAO estrita)."""
+    Default fail-closed. Verbo de requisição genérico ("verificar"/"constatar"/…),
+    conector existencial ("há"/"existe"/"existência de") E verbo de observação direta
+    ("registrar"/"descrever"/…) são MODALIDADE-NEUTROS — nenhum estabelece INSPECAO
+    sem um sinal POSITIVO DE OBJETO. INSPECAO só quando há (i) substantivo de
+    fenômeno inequivocamente visual, (ii) qualificador explicitamente visual, ou
+    (iii) verbo de observação direta + objeto descritivo-qualitativo — e ausência de
+    qualquer sinal de medição; senão → INDETERMINADA (o gate trata como MEDICAO
+    estrita). Todo caminho de INSPECAO tem portão de objeto cujo modo de falha é
+    sobre-bloqueio, nunca falso-verde."""
     base = " " + normalizar(texto) + " "
     bruto = " " + str(texto or "").lower().strip() + " "
     mede = bool(_VERBO_MEDICAO.search(base) or _GRANDEZA_DIMENSIONAL.search(base)
@@ -182,8 +213,8 @@ def classificar_requisito(texto: str) -> str:
         return "DOCUMENTO"
     if mede:
         return "MEDICAO"
-    if (_VERBO_OBSERVACAO_DIRETA.search(base) or _MARCADOR_VISUAL.search(base)
-            or _FENOMENO_OBSERVAVEL.search(base)):
+    if (_FENOMENO_OBSERVAVEL.search(base) or _MARCADOR_VISUAL.search(base)
+            or (_VERBO_OBSERVACAO_DIRETA.search(base) and _OBJETO_DESCRITIVO.search(base))):
         return "INSPECAO"
     return "INDETERMINADA"
 

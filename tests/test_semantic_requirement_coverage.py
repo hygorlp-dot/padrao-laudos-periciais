@@ -166,6 +166,119 @@ def test_esquadria_nao_e_sobre_bloqueada_como_medicao():
     assert classificar_requisito("Verificar o esquadro dos vãos executados.") == "MEDICAO"
 
 
+def test_metamorphic_objeto_tecnico_desconhecido_nunca_vira_inspecao():
+    """PROPRIEDADE OPEN-WORLD (obrigatória): objeto técnico NUNCA visto +
+    nenhuma prova explícita de que observação basta (visível/aparente/a olho nu/
+    fotográfico/fenômeno visual conhecido) ⇒ NUNCA INSPECAO. Na dúvida →
+    INDETERMINADA (estrito). Deve valer para substantivos artificiais."""
+    verbos = ["Verificar", "Constatar", "Avaliar", "Registrar", "Descrever",
+              "Caracterizar", "Localizar", "Observar", "Apontar", "Analisar", "Determinar"]
+    conectores = ["o {n} do elemento", "se há {n} no componente", "a existência de {n} na peça",
+                  "o {n} medido na seção", "o parâmetro {n} da camada", "o índice {n} do apoio"]
+    objetos = ["zeta", "lambda", "omega", "phi", "ksi", "qplex", "vortan", "delta-kappa",
+               "sigma-r", "grau theta", "fator wz", "resposta upsilon"]
+    combos = [f"{v} {c.format(n=n)}." for v in verbos for c in conectores for n in objetos]
+    for texto in combos:
+        assert classificar_requisito(texto) != "INSPECAO", texto
+    # amostra ponta a ponta: atividade genérica + zero medição ⇒ NÃO apto
+    for texto in combos[::37]:
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False, texto
+        assert r["cobertura_efetiva"]["QUE-001"] is False, texto
+        assert r["apto"] is False, texto
+
+
+def test_metamorphic_objeto_desconhecido_com_prova_visual_e_inspecao():
+    """Contraparte: o MESMO objeto artificial, quando há prova explícita de
+    modalidade observacional (qualificador visual), é INSPECAO — a propriedade
+    open-world nega o default, não a evidência positiva."""
+    for texto in [
+        "Registrar a mancha de zeta visível na parede.",
+        "Descrever o padrão construtivo com aspecto omega aparente.",
+        "Fotografar a fissura de lambda na viga.",
+    ]:
+        assert classificar_requisito(texto) == "INSPECAO", texto
+
+
+def test_verbo_de_observacao_direta_exige_objeto_descritivo():
+    """P0 (PASS A+B contra 45f93da): 'registrar'/'descrever'/'caracterizar'/
+    'localizar'/'observar'/'vistoriar' são modalidade-neutros QUANTO AO OBJETO —
+    'registrar o assentamento diferencial' exige nivelamento topográfico. Sem
+    objeto descritivo-qualitativo → INDETERMINADA, e não pode virar apto=True."""
+    corpus = [
+        "Registrar a velocidade de corrosão das barras de aço da laje.",
+        "Descrever a resistividade elétrica do concreto de cobrimento.",
+        "Registrar o potencial eletroquímico das armaduras da cortina.",
+        "Registrar o cobrimento das armaduras das vigas.",
+        "Registrar a queda de tensão na alimentação dos quadros.",
+        "Registrar o assentamento diferencial observado nas fundações.",
+        "Caracterizar a deriva de topo do edifício sob vento.",
+        "Localizar a região de maior tensão na laje.",
+        "Observar a folga entre o batente e a folha da porta.",
+        "Descrever a conicidade do pilar circular.",
+        "Vistoriar o afundamento de trilha de roda no pavimento.",
+        "Registrar a rotação da fundação isolada.",
+        "Registrar a umidade na parede da fachada.",
+        "Descrever a ovalização da tubulação metálica.",
+    ]
+    for texto in corpus:
+        assert classificar_requisito(texto) != "INSPECAO", texto
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False, texto
+        assert r["apto"] is False, texto
+
+
+def _vistoria_exec(*planejados):
+    return {
+        "cobertura": [{"planejado": p, "status": "EXECUTADO", "executado": [f"{p}-EXEC"]} for p in planejados],
+        "atividades_executadas": [{"id": f"{p}-EXEC", "atividade_planejada": p, "questoes_tecnicas": ["QT-001"]}
+                                  for p in planejados if p.startswith("ATV")],
+        "medicoes": [{"id": f"{p}-EXEC", "medicao_planejada": p, "questoes": ["QT-001"]}
+                     for p in planejados if p.startswith("MED")],
+    }
+
+
+def test_recalcular_execucao_A_medicao_sem_destino_executado_nao_e_apto():
+    from scripts.planejamento_pericial.validar_plano import recalcular_execucao
+    plano = _plan_with([_r("R1", "Aferir a abertura das fissuras sob carga.", ["ATV-001"])])
+    res = recalcular_execucao(plano, _vistoria_exec("ATV-001"))
+    assert res["apto"] is False
+    assert any("REQUISITO_SEMANTICO" in str(f.get("motivo", "")) for f in res["faltantes"])
+
+
+def test_recalcular_execucao_B_classe_persistida_mentirosa_e_ignorada():
+    from scripts.planejamento_pericial.validar_plano import recalcular_execucao
+    plano = _plan_with([_r("R1", "Medir a estanqueidade da laje sob pressão.", ["ATV-001"],
+                           classe="INSPECAO", status="MAPEADO")])
+    res = recalcular_execucao(plano, _vistoria_exec("ATV-001"))
+    assert res["apto"] is False
+
+
+def test_recalcular_execucao_C_item_de_tipo_errado_nao_satisfaz_medicao():
+    from scripts.planejamento_pericial.validar_plano import recalcular_execucao
+    plano = _plan_with([_r("R1", "Ensaiar a resistência do concreto estrutural.", ["ATV-001"])])
+    res = recalcular_execucao(plano, _vistoria_exec("ATV-001"))
+    assert res["apto"] is False
+    assert any("NAO_EXECUTADO" in str(f.get("motivo", "")) or "NAO_MAPEADO" in str(f.get("motivo", ""))
+               for f in res["faltantes"])
+
+
+def test_recalcular_execucao_D_semanticos_vazios_nao_fabricam_completude():
+    from scripts.planejamento_pericial.validar_plano import recalcular_execucao
+    plano = _plan_with([])
+    plano["requisitos_semanticos"] = []
+    res = recalcular_execucao(plano, _vistoria_exec("ATV-001"))
+    assert res["apto"] is False
+
+
+def test_recalcular_execucao_E_medicao_executada_satisfaz():
+    from scripts.planejamento_pericial.validar_plano import recalcular_execucao
+    plano = _plan_with([_r("R1", "Aferir a abertura das fissuras.", ["MED-PLANO-001"])],
+                       medicoes=[_med("MED-PLANO-001")])
+    res = recalcular_execucao(plano, _vistoria_exec("ATV-001", "MED-PLANO-001"))
+    assert not any("REQUISITO_SEMANTICO" in str(f.get("motivo", "")) for f in res["faltantes"])
+
+
 def test_controles_observacionais_nao_sao_sobre_bloqueados():
     """Contraparte do fail-closed: enquadramento genuinamente observacional
     (verbo de observação direta, marcador de existência/aparência, fenômeno
@@ -234,7 +347,7 @@ def test_B_medicao_sem_medicao_planejada_fica_nao_mapeada():
 
 def test_C_atividade_generica_nao_cobre_requisito_de_medicao():
     r = recalcular_cobertura(_plan_with([
-        _r("R1", "Inspecionar o imóvel de forma geral.", ["ATV-001"]),
+        _r("R1", "Inspecionar as fissuras aparentes do imóvel.", ["ATV-001"]),
         _r("R2", "Medir a estanqueidade da laje sob pressão.", ["ATV-001"]),
     ]))
     assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False
@@ -462,10 +575,10 @@ def test_topic_overlap_does_not_substitute_the_exact_requirement():
 
 def test_semantic_coverage_is_order_invariant():
     plan = _plan()
-    plan["atividades"][0]["verificar"] = "Caracterizar o acabamento e registrar a geometria do elemento."
+    plan["atividades"][0]["verificar"] = "Caracterizar o acabamento e registrar as manchas do elemento."
     plan["requisitos_semanticos"] = [
         {"quesito": "QUE-001", "requisito": "Caracterizar o acabamento superficial.", "itens_planejados": ["ATV-001"]},
-        {"quesito": "QUE-001", "requisito": "Registrar a geometria do elemento.", "itens_planejados": ["ATV-001"]},
+        {"quesito": "QUE-001", "requisito": "Registrar as manchas do elemento.", "itens_planejados": ["ATV-001"]},
     ]
     first = recalcular_cobertura(plan)
     plan["requisitos_semanticos"].reverse()
