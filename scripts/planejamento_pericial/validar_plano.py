@@ -97,7 +97,7 @@ def recalcular_cobertura(dado):
     requisitos=dado.get("requisitos_cobertura",[]);por_quesito={}
     if not requisitos:
         vazia={c["quesito"]:False for c in dado.get("cobertura",[])}
-        return {"cobertura":vazia,"cobertura_relacional":vazia,"cobertura_requisitos_semanticos":vazia,
+        return {"cobertura":vazia,"cobertura_relacional":vazia,"cobertura_efetiva":vazia,"cobertura_requisitos_semanticos":vazia,
                 "total_requisitos_materiais":0,"requisitos_materiais_cobertos":0,"requisitos_materiais_nao_mapeados":[],
                 "cobertura_semantica_fracao":0.0,"apto":False}
     catalogos={chave:{item.get("id"):set(item.get("questoes_tecnicas",[])) for item in dado.get(chave,[]) if isinstance(item,dict)} for chave in ("atividades","medicoes","fotografias","ensaios")}
@@ -116,7 +116,8 @@ def recalcular_cobertura(dado):
     sem=_cobertura_semantica(dado,por_quesito)
     globais=all(satisfaz(r) for r in requisitos if r.get("obrigatoriedade")=="OBRIGATORIA")
     apto=globais and all(por_quesito.values()) and all(sem["cobertura_requisitos_semanticos"].values()) and not sem["requisitos_materiais_nao_mapeados"]
-    return {"cobertura":por_quesito,"cobertura_relacional":por_quesito,"apto":apto,**sem}
+    efetiva={qid:bool(por_quesito.get(qid) and sem["cobertura_requisitos_semanticos"].get(qid)) for qid in por_quesito}
+    return {"cobertura":por_quesito,"cobertura_relacional":por_quesito,"cobertura_efetiva":efetiva,"apto":apto,**sem}
 
 def recalcular_execucao(plano,vistoria):
     """Recalcula REQUIRED→EXECUTED sem confiar no status persistido."""
