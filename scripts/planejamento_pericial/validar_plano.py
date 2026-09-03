@@ -76,6 +76,7 @@ def _cobertura_semantica(dado,por_quesito):
         if ausente:
             por_quesito_sem[qid]=False;total+=1;nao_mapeados.append(f"{qid}:SEM_REQUISITOS_SEMANTICOS");continue
         grupo_ok=bool(grupo)
+        if not grupo:nao_mapeados.append(f"{qid}:GRUPO_SEMANTICO_VAZIO")
         for r in grupo:
             total+=1
             planejados=r.get("itens_planejados") or []

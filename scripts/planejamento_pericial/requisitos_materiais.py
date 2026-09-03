@@ -8,16 +8,24 @@ estruturado a um item planejado de tipo apropriado (ver validar_plano).
 Classificação (natureza do requisito) — DEFAULT FAIL-CLOSED. O vocabulário abaixo
 é a lista canônica; está reproduzido em docs/padroes/padrao-planejamento-vistoria.md.
 
-- INSPECAO — satisfazível por observação de campo. Só é atribuída com SINAL
-  POSITIVO: verbo de constatação/existência E ausência de grandeza dimensional,
-  propriedade ensaiável, quantificador ou verbo de medição.
+- INSPECAO — satisfazível por observação de campo. Um verbo de REQUISIÇÃO
+  GENÉRICO ("verificar", "constatar", "apontar", "indicar", "avaliar", …) é
+  MODALIDADE-NEUTRO e NÃO estabelece observabilidade por si só. Só é atribuída
+  com EVIDÊNCIA POSITIVA de que o fato é constatável a olho nu — verbo de
+  observação direta ("descrever"/"registrar"/"fotografar"/"inspecionar"/…),
+  marcador de existência/aparência ("existência de", "há", "visível",
+  "aparente", …) ou substantivo de fenômeno inerentemente visual ("fissura",
+  "infiltração", "mancha", "descolamento", …) — E ausência de qualquer sinal
+  de medição.
 - MEDICAO  — exige leitura instrumental, ensaio ou cálculo (verbo de medição,
-  grandeza inerentemente dimensional, propriedade ensaiável, ou quantificador
+  grandeza inerentemente dimensional, propriedade ensaiável, patologia
+  ensaiável, critério numérico/quantidade dimensionada, ou quantificador
   sobre grandeza quantificável).
 - DOCUMENTO — verbo documental + artefato documental. Verificada ANTES de MEDICAO.
 - INDETERMINADA — nenhum sinal positivo de INSPECAO nem de MEDICAO/DOCUMENTO
-  (ex.: "avaliar"/"determinar"/"analisar" sem enquadramento observacional, ou
-  cláusula sem verbo). Tratada pelo gate como MEDICAO estrita: "na dúvida, MEDICAO".
+  (ex.: "verificar"/"constatar"/"avaliar" sem enquadramento observacional nem
+  fenômeno visual, ou cláusula sem verbo). Tratada pelo gate como MEDICAO
+  estrita: "na dúvida, MEDICAO".
 """
 
 from __future__ import annotations
@@ -47,14 +55,45 @@ _SEPARADOR_FORTE = re.compile(r"(?:[.;?!]+\s+)|(?:\s*\n[-–—•]\s+)|(?:\s*\n
 _CONECTOR = re.compile(r"\s*(?:,|;|\se\s|\seou\s|\sou\s)\s*")
 
 # --- vocabulário de classificação (canônico; ver padrao-planejamento-vistoria.md) ---
-_VERBO_OBSERVACAO = re.compile(r"(?i)(?:^|\W)(?:verificar|constatar|identificar|localizar|caracterizar|descrever|registrar|observar|inspecionar|examinar|apontar|indicar|existe|existir|existem|h[áa]\b|houve)\b")
+# Verbo de REQUISIÇÃO GENÉRICO — modalidade-neutro: sozinho não classifica nada.
+# (verificar, constatar, apontar, indicar, avaliar, analisar, determinar, apurar,
+#  conferir, informar, esclarecer, dizer…) — cai em INDETERMINADA sem outro sinal.
+# Verbo de OBSERVAÇÃO DIRETA — o próprio ato já é observação de campo.
+_VERBO_OBSERVACAO_DIRETA = re.compile(
+    r"(?i)\b(?:descrever|registrar|fotografar|inspecionar|examinar|observar|"
+    r"vistoriar|caracterizar|localizar)\b"
+)
+# Marcador que evidencia que o fato é constatável VISUALMENTE.
+_MARCADOR_OBSERVACIONAL = re.compile(
+    r"(?i)(?:\b(?:existencia|presenca|ausencia|ocorrencia)\s+d"
+    r"|\b(?:existe|existem|existir|ha|houve|havia)\b"
+    r"|\b(?:visivel|visiveis|aparente|aparentes|visualmente|ocular|"
+    r"perceptivel|perceptiveis)\b"
+    r"|\ba\s+olho\s+nu\b)"
+)
+# Substantivo de FENÔMENO/anomalia inerentemente avaliável por observação (NÃO
+# grandeza). Lista permissiva: sua incompletude causa SOBRE-BLOQUEIO (seguro),
+# nunca fail-open (o default é INDETERMINADA → MEDICAO estrita).
+_FENOMENO_OBSERVAVEL = re.compile(
+    r"(?i)\b(?:fissura\w*|trinca\w*|rachadura\w*|fenda\w*|mancha\w*|"
+    r"infiltra\w*|umidade\w*|mofo\w*|bolor\w*|efloresc\w*|"
+    r"destacamento\w*|descolamento\w*|desplacamento\w*|desprendimento\w*|"
+    r"desagrega\w*|pulverul\w*|bolha\w*|empolamento\w*|"
+    r"corrosao\w*|oxidacao\w*|ferrugem|"
+    r"vazamento\w*|goteira\w*|gotejamento\w*|"
+    r"patologi\w*|manifestac\w*|anomalia\w*|"
+    r"avaria\w*|deterioracao\w*|desgaste\w*|"
+    r"vegetacao\w*|entulho\w*|sujidade\w*)\b"
+)
 _VERBO_MEDICAO = re.compile(r"(?i)\b(?:medir|medi[cç][aã]o|aferir|mensurar|quantificar|dimensionar|calcular|ensai\w+|testar\s+(?:a\s+)?(?:carga|resist|press|estanqu))\b")
+# Grandezas inerentemente dimensionais — tolerante a plural/flexão (…\w*) para que
+# "flechas"/"cargas"/"desníveis" degradem para MEDICAO, nunca escapem por token exato.
 _GRANDEZA_DIMENSIONAL = re.compile(
     r"(?i)\b(?:espessura|recalque|flecha|prumo|aprumo|desaprumo|desvio\s+de\s+prumo|"
-    r"nivelamento|desn[íi]vel|inclina[cç][aã]o|caimento|declividade|planicidade|planeza|"
-    r"deforma[cç][aã]o|deslocamento|esquadr\w+|dimens\w+|[aá]rea|volume|cota|dist[aâ]ncia|"
-    r"[aâ]ngulo|largura|altura|comprimento|extens[aã]o|profundidade|di[aâ]metro|"
-    r"abertura\s+d[ae]s?\s+(?:fissur|trinc)|vaz[aã]o|carga|tens[aã]o\s+atuante)\b"
+    r"nivelamento|desn[íi]ve|inclina[cç][aã]|caimento|declividade|planicidade|planeza|"
+    r"deforma[cç][aã]|deslocamento|esquadr|dimens|[aá]rea|volume|cota|dist[aâ]ncia|"
+    r"[aâ]ngulo|largura|altura|comprimento|extens[aã]|profundidade|di[aâ]metro|"
+    r"abertura\s+d[ae]s?\s+(?:fissur|trinc)|vaz[aã]o|vaz[õo]es|carga|tens[aã]o\s+atuante)\w*"
 )
 _PROPRIEDADE_ENSAIAVEL = re.compile(
     r"(?i)\b(?:resist[eê]ncia|ader[eê]ncia|desempenho|dureza|absor[cç][aã]o|permeabilidade|"
@@ -70,7 +109,27 @@ _QUANTIFICADOR = re.compile(
     r"intensidade|amplitude|propor[cç][aã]o|quantidade)\s+d[aeo]s?\b"
 )
 _PATOLOGIA_ENSAIAVEL = re.compile(r"(?i)\b(?:carbonata[cç]\w+|cloret\w+|corros[aã]o\s+d[ae]s?\s+armadur|profundidade\s+de\s+carbonata|potencial\s+de\s+corros)\b")
-_CRITERIO_NUMERICO = re.compile(r"(?i)(?:[<>]=?|≤|≥|m[íi]nim\w+\s+de|m[áa]xim\w+\s+de|toler[âa]ncia\s+de|limite\s+de)\s*\d")
+# Critério numérico sobre texto NORMALIZADO (sem acento): "≤"/"≥" não chegam aqui
+# (normalizar faz ascii-strip) — recuperados por _SINAL_NUMERICO_BRUTO. Cobre também
+# conectivos comparativos em português ("superior a N", "no mínimo de N", …).
+_CRITERIO_NUMERICO = re.compile(
+    r"(?i)(?:"
+    r"[<>]=?\s*"
+    r"|(?:no\s+)?minim\w*\s+(?:de\s+|em\s+)?"
+    r"|(?:no\s+)?maxim\w*\s+(?:de\s+|em\s+)?"
+    r"|(?:maior|menor|superior|inferior)\s+(?:ou\s+igual\s+)?(?:a|que|do\s+que)\s+"
+    r"|acima\s+de\s+|abaixo\s+de\s+"
+    r"|tolerancia\s+de\s+|limite\s+de\s+"
+    r")\d"
+)
+# Operadores unicode e quantidade DIMENSIONADA sobre o texto CRU (pré-ascii-strip):
+# "≤ 0,3 mm", "5 kN", "30°", "2%" são sinais de medição independentemente do verbo.
+_SINAL_NUMERICO_BRUTO = re.compile(
+    r"[<>≤≥]\s*=?\s*\d"
+    r"|\d\s*(?:°|graus?\b)"
+    r"|\d[\d.,]*\s*(?:mm|cm|m²|m³|m2|m3|km|kn|kgf|tf|mpa|kpa|pa|%)(?![a-zà-ÿ])",
+    re.IGNORECASE,
+)
 _DOC_VERBO = re.compile(r"(?i)\b(?:solicitar|requisitar|juntar|apresentar|obter|anexar|exibir)\b")
 _DOC_ARTEFATO = re.compile(r"(?i)\b(?:documento|projeto|memorial|planta|art\b|rrt\b|laudo|contrato|nota\s+fiscal|as\s*built|caderno|especifica[cç][aã]o\s+t[eé]cnica|habite-se|alvar[aá]|di[aá]rio\s+de\s+obra)\b")
 
@@ -87,18 +146,23 @@ def remover_ruido_estrutural(texto: str) -> str:
 def classificar_requisito(texto: str) -> str:
     """MEDICAO | DOCUMENTO | INSPECAO | INDETERMINADA.
 
-    Default fail-closed: só devolve INSPECAO com sinal positivo de observação e
-    ausência de qualquer sinal de medição; requisito ambíguo → INDETERMINADA
-    (o gate o trata como MEDICAO estrita)."""
+    Default fail-closed: um verbo de requisição genérico ("verificar"/"constatar"/
+    "avaliar"/…) é modalidade-neutro — só devolve INSPECAO com EVIDÊNCIA POSITIVA de
+    observabilidade (verbo de observação direta, marcador de existência/aparência ou
+    substantivo de fenômeno visual) e ausência de qualquer sinal de medição;
+    requisito ambíguo → INDETERMINADA (o gate o trata como MEDICAO estrita)."""
     base = " " + normalizar(texto) + " "
+    bruto = " " + str(texto or "").lower().strip() + " "
     mede = bool(_VERBO_MEDICAO.search(base) or _GRANDEZA_DIMENSIONAL.search(base)
                 or _PROPRIEDADE_ENSAIAVEL.search(base) or _PATOLOGIA_ENSAIAVEL.search(base)
-                or _CRITERIO_NUMERICO.search(base) or _QUANTIFICADOR.search(base))
+                or _CRITERIO_NUMERICO.search(base) or _QUANTIFICADOR.search(base)
+                or _SINAL_NUMERICO_BRUTO.search(bruto))
     if _DOC_VERBO.search(base) and _DOC_ARTEFATO.search(base):
         return "DOCUMENTO"
     if mede:
         return "MEDICAO"
-    if _VERBO_OBSERVACAO.search(base):
+    if (_VERBO_OBSERVACAO_DIRETA.search(base) or _MARCADOR_OBSERVACIONAL.search(base)
+            or _FENOMENO_OBSERVAVEL.search(base)):
         return "INSPECAO"
     return "INDETERMINADA"
 
@@ -131,12 +195,23 @@ def _segmentar(texto_limpo: str) -> list[str]:
         if atual:
             fragmentos.append(atual)
     saneados: list[str] = []
+    pendente = ""
     for parte in fragmentos:
+        if pendente:
+            parte = f"{pendente} {parte}".strip()
+            pendente = ""
         if len(parte) < 8 or len(termos(parte)) < _MIN_TERMOS:
             if saneados:
                 saneados[-1] = f"{saneados[-1]} {parte}".strip()
+            else:
+                pendente = parte  # sem predecessor: funde ADIANTE, nunca descarta
             continue
         saneados.append(parte)
+    if pendente:
+        if saneados:
+            saneados[-1] = f"{saneados[-1]} {pendente}".strip()
+        else:
+            saneados.append(pendente)
     return saneados or ([texto_limpo] if texto_limpo else [])
 
 

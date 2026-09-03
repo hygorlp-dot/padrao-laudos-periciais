@@ -69,21 +69,37 @@ plano nunca é confiada.** O default é **fail-closed**: `INDETERMINADA`.
   `módulo`, `arrancamento`, `pull-off`, `estabilidade`, `capacidade portante/
   resistente/de carga/estrutural`, `comprometimento estrutural`); **ou** patologia
   ensaiável (`carbonatação`, `cloretos`, `corrosão de armadura`, `potencial de
-  corrosão`); **ou** critério numérico explícito (`≤`, `≥`, `mínimo de N`,
-  `tolerância de N`…); **ou** um marcador de quantificação seguido de `de/do/da`
-  (`teor de`, `índice de`, `nível de`, `grau de`, `percentual de`, `magnitude de`,
-  `intensidade de`, `amplitude de`, `proporção de`, `quantidade de`) —
-  independentemente da grandeza que segue, porque pedir o *grau/nível/extensão* de
-  algo é um pedido quantificado que o verbo de observação não desambigua. Coberto
-  só por `medicoes` ou `ensaios`.
-- `INSPECAO` — **só com sinal positivo**: verbo de constatação/existência
-  (`verificar`, `constatar`, `identificar`, `localizar`, `caracterizar`,
-  `descrever`, `registrar`, `observar`, `inspecionar`, `examinar`, `apontar`,
-  `indicar`, `existe`/`existir`, `há`, `houve`) **e** ausência de qualquer sinal de
-  `MEDICAO`. Coberto por atividade, fotografia, medição, ensaio ou documento.
+  corrosão`); **ou** critério numérico explícito — operadores (`<`, `>`, `≤`, `≥`),
+  conectivos comparativos com número (`superior a N`, `inferior a N`, `maior/menor
+  que N`, `no mínimo de N`, `no máximo de N`, `acima de N`, `abaixo de N`,
+  `tolerância de N`, `limite de N`) ou quantidade dimensionada (`N mm`, `N cm`,
+  `N %`, `N MPa`, `N kPa`, `N kN`, `N °`); **ou** um marcador de quantificação
+  seguido de `de/do/da` (`teor de`, `índice de`, `nível de`, `grau de`,
+  `percentual de`, `magnitude de`, `intensidade de`, `amplitude de`, `proporção
+  de`, `quantidade de`) — independentemente da grandeza que segue, porque pedir o
+  *grau/nível/extensão* de algo é um pedido quantificado que o verbo de requisição
+  não desambigua. Coberto só por `medicoes` ou `ensaios`.
+- `INSPECAO` — **exige evidência positiva de observabilidade**, e **não** basta um
+  verbo de requisição genérico. Um verbo genérico (`verificar`, `constatar`,
+  `apontar`, `indicar`, `avaliar`, `analisar`, `determinar`, `apurar`, `conferir`,
+  `informar`) é **modalidade-neutro**: `verificar se o piso está nivelado` é
+  medição, `verificar se há infiltração aparente` é inspeção — o verbo não decide.
+  Atribui-se `INSPECAO` quando há (a) verbo de **observação direta** (`descrever`,
+  `registrar`, `fotografar`, `inspecionar`, `examinar`, `observar`, `vistoriar`,
+  `caracterizar`, `localizar`); **ou** (b) marcador de existência/aparência
+  (`existência/presença/ausência de`, `há`/`houve`, `visível`, `aparente`,
+  `visualmente`, `a olho nu`, `ocular`, `perceptível`); **ou** (c) substantivo de
+  **fenômeno inerentemente visual** (`fissura`, `trinca`, `mancha`, `infiltração`,
+  `umidade`, `mofo`, `eflorescência`, `destacamento`/`descolamento`, `corrosão`
+  aparente, `vazamento`/`goteira`, `manifestação patológica`, `anomalia`,
+  `deterioração`, `desgaste`, `colapso`/`ruína`…) — **e** ausência de qualquer
+  sinal de `MEDICAO`. A lista de fenômenos é permissiva: sua incompletude causa
+  **sobre-bloqueio** (o requisito cai em `INDETERMINADA` → medição estrita), nunca
+  falso-verde. Coberto por atividade, fotografia, medição, ensaio ou documento.
 - `INDETERMINADA` — nenhum sinal positivo de `INSPECAO` nem de `MEDICAO`/
-  `DOCUMENTO` (ex.: `avaliar`/`determinar`/`analisar` sem enquadramento
-  observacional; cláusula sem verbo). Tratada como `MEDICAO` estrita pelo gate:
+  `DOCUMENTO` (ex.: verbo de requisição genérico sem marcador observacional nem
+  fenômeno visual — `verificar se está aprumado`, `constatar se o contrapiso está
+  plano`; cláusula sem verbo). Tratada como `MEDICAO` estrita pelo gate:
   **na dúvida, exige medição/ensaio.**
 
 A cobertura de um requisito material vem **exclusivamente** do vínculo estruturado

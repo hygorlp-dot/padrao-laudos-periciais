@@ -96,6 +96,63 @@ def test_classificacao_fail_closed():
     assert classificar_requisito("Verificação técnica.") == "INDETERMINADA"
 
 
+def test_verbo_de_requisicao_generico_e_modalidade_neutro():
+    """P0 (revisões terminais 6b87d19): 'verificar'/'constatar'/'apontar'/'indicar'
+    sozinhos NÃO estabelecem modalidade observacional. Requisito metrológico assim
+    fraseado não pode chegar a INSPECAO nem, ponta a ponta, a apto=True."""
+    corpus = [
+        "Verificar as flechas das vigas do pavimento superior.",
+        "Constatar se o piso está nivelado.",
+        "Verificar se a laje está em nível.",
+        "Apontar se o pavimento apresenta afundamento de trilha de roda.",
+        "Constatar se as paredes estão aprumadas.",
+        "Verificar se o revestimento está aderido.",
+        "Verificar se a temperatura superficial está abaixo do ponto de orvalho.",
+        "Verificar se a iluminância dos ambientes atende ao mínimo exigido.",
+        "Verificar se as fissuras apresentam abertura superior a 0,3 mm.",
+        "Verificar os desníveis do piso acabado.",
+        "Apontar as cargas atuantes nas vigas.",
+        "Indicar se há flecha excessiva nas vigas.",
+    ]
+    for texto in corpus:
+        assert classificar_requisito(texto) != "INSPECAO", texto
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False, texto
+        assert r["apto"] is False, texto
+
+
+def test_controles_observacionais_nao_sao_sobre_bloqueados():
+    """Contraparte do fail-closed: enquadramento genuinamente observacional
+    (verbo de observação direta, marcador de existência/aparência, fenômeno
+    visual) continua INSPECAO — o reparo do P0 não inutiliza o planejamento."""
+    for texto in [
+        "Constatar a existência de infiltração aparente.",
+        "Verificar se há goteira visível no forro.",
+        "Identificar revestimento destacado visualmente.",
+        "Caracterizar as manifestações patológicas alegadas.",
+        "Registrar fotograficamente o estado geral do imóvel.",
+        "Descrever o padrão construtivo do imóvel.",
+        "Localizar os pontos de infiltração na cobertura.",
+        "Constatar a presença de mofo no banheiro.",
+        "Apontar as manchas de umidade na laje.",
+    ]:
+        assert classificar_requisito(texto) == "INSPECAO", texto
+
+
+def test_criterio_numerico_unicode_e_conectivo_portugues():
+    """'≤'/'≥' são apagados por normalizar() (ascii-strip): recuperados sobre o
+    texto cru. Conectivos comparativos em português também disparam MEDICAO."""
+    for texto in [
+        "Verificar a fissura com abertura ≤ 0,3 mm.",
+        "Constatar se o desnível é ≥ 5 mm.",
+        "Verificar a abertura inferior a 5 mm.",
+        "Verificar a resistência no mínimo de 25 MPa.",
+        "Constatar deslocamento de 5 mm na junta.",
+        "Verificar a inclinação de 2%.",
+    ]:
+        assert classificar_requisito(texto) == "MEDICAO", texto
+
+
 def test_indeterminada_exige_medicao_no_gate():
     r = recalcular_cobertura(_plan_with([_r("R1", "Avaliar as consequências técnicas pertinentes.", ["ATV-001"])]))
     assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False and r["apto"] is False
@@ -121,7 +178,7 @@ def test_A_inspecao_com_atividade_apropriada():
 
 def test_B_medicao_sem_medicao_planejada_fica_nao_mapeada():
     reqs = [_r(f"R{i}", t, ["ATV-001"]) for i, t in enumerate(
-        ["Verificar a existência de fissuras.", "Constatar os sinais associados relevantes.", "Registrar o estado do revestimento.",
+        ["Verificar a existência de fissuras.", "Constatar a infiltração aparente no forro.", "Registrar o estado do revestimento.",
          "Aferir a abertura das fissuras."])]
     r = recalcular_cobertura(_plan_with(reqs))
     assert r["cobertura_relacional"]["QUE-001"] is True
@@ -288,6 +345,28 @@ def test_G_reordenar_clausulas_preserva_identidade():
     b = {x["texto_normalizado"]: x["requirement_id"] for x in extrair_requisitos_materiais(
         {"id": "QUE-001", "materia_tecnica": inv, "texto_integral": "x", "subitens": [], "questoes_tecnicas_relacionadas": []})}
     assert a == b and len(a) == 2
+
+
+def test_fragmento_curto_lider_nao_e_descartado():
+    """Segmentação: um fragmento curto SEM predecessor funde ADIANTE, nunca some —
+    senão um requisito de medição enxuto ('Flecha.') sumiria antes da parte
+    observável e o quesito escaparia como só-inspeção."""
+    q = {"id": "QUE-001", "materia_tecnica": "Flecha. Verificar a pintura das paredes.",
+         "texto_integral": "x", "subitens": [], "questoes_tecnicas_relacionadas": ["QT-001"]}
+    reqs = [x for x in extrair_requisitos_materiais(q) if x["status"] == "MATERIAL"]
+    assert any("flecha" in x["texto_normalizado"] for x in reqs)
+    assert any(x["classe"] == "MEDICAO" for x in reqs)
+
+
+def test_grupo_semantico_vazio_e_listado_em_nao_mapeados():
+    """P2 (PASS A): 'requisitos_semanticos' presente mas SEM entrada para um quesito
+    pertinente deixa rastro diagnóstico, não silêncio."""
+    plan = _plan_with([])
+    plan["requisitos_semanticos"] = []
+    r = recalcular_cobertura(plan)
+    assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False
+    assert "QUE-001:GRUPO_SEMANTICO_VAZIO" in r["requisitos_materiais_nao_mapeados"]
+    assert r["apto"] is False
 
 
 def test_zero_material_requirements_falha_fechado():
