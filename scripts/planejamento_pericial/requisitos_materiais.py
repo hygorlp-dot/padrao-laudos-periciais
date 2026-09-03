@@ -51,18 +51,24 @@ _VERBO_OBSERVACAO = re.compile(r"(?i)(?:^|\W)(?:verificar|constatar|identificar|
 _VERBO_MEDICAO = re.compile(r"(?i)\b(?:medir|medi[cç][aã]o|aferir|mensurar|quantificar|dimensionar|calcular|ensai\w+|testar\s+(?:a\s+)?(?:carga|resist|press|estanqu))\b")
 _GRANDEZA_DIMENSIONAL = re.compile(
     r"(?i)\b(?:espessura|recalque|flecha|prumo|aprumo|desaprumo|desvio\s+de\s+prumo|"
-    r"nivelamento|desn[íi]vel|inclina[cç][aã]o|caimento|declividade|deforma[cç][aã]o|"
-    r"deslocamento|esquadr\w+|dimens\w+|[aá]rea|volume|cota|dist[aâ]ncia|[aâ]ngulo|"
-    r"largura|altura|comprimento|profundidade|di[aâ]metro|abertura\s+d[ae]s?\s+(?:fissur|trinc)|"
-    r"vaz[aã]o|carga|tens[aã]o\s+atuante)\b"
+    r"nivelamento|desn[íi]vel|inclina[cç][aã]o|caimento|declividade|planicidade|planeza|"
+    r"deforma[cç][aã]o|deslocamento|esquadr\w+|dimens\w+|[aá]rea|volume|cota|dist[aâ]ncia|"
+    r"[aâ]ngulo|largura|altura|comprimento|extens[aã]o|profundidade|di[aâ]metro|"
+    r"abertura\s+d[ae]s?\s+(?:fissur|trinc)|vaz[aã]o|carga|tens[aã]o\s+atuante)\b"
 )
 _PROPRIEDADE_ENSAIAVEL = re.compile(
     r"(?i)\b(?:resist[eê]ncia|ader[eê]ncia|desempenho|dureza|absor[cç][aã]o|permeabilidade|"
-    r"estanqueidade|isolamento|condutividade|m[óo]dulo|capacidade\s+de\s+carga|"
-    r"est[áa]nqu\w+|arrancamento|puc?h[- ]?off|pull[- ]?off)\b"
+    r"estanqueidade|isolamento|condutividade|m[óo]dulo|arrancamento|puc?h[- ]?off|pull[- ]?off|"
+    r"est[áa]nqu\w+|estabilidade|capacidade\s+(?:de\s+carga|portante|resistente|estrutural)|"
+    r"portante|comprometimento\s+estrutural)\b"
 )
-_QUANTIFICADOR = re.compile(r"(?i)\b(?:teor|[íi]ndice|n[íi]vel|grau|percentual|coeficiente|taxa)\s+d[eo]\b")
-_GRANDEZA_QUANTIFICAVEL = re.compile(r"(?i)\b(?:umidade|temperatura|press[aã]o|pH|salinidade|acidez)\b")
+# Pedir "grau/nível/índice/teor/magnitude ... DE algo" é um pedido quantificado ->
+# MEDICAO, independentemente da grandeza que segue (verbo de observação não desambigua).
+# Não inclui "primeiro/segundo grau" (exige "de/do/dos" depois).
+_QUANTIFICADOR = re.compile(
+    r"(?i)\b(?:teor|[íi]ndice|n[íi]vel|grau|percentual|coeficiente|taxa|magnitude|"
+    r"intensidade|amplitude|propor[cç][aã]o|quantidade)\s+d[aeo]s?\b"
+)
 _PATOLOGIA_ENSAIAVEL = re.compile(r"(?i)\b(?:carbonata[cç]\w+|cloret\w+|corros[aã]o\s+d[ae]s?\s+armadur|profundidade\s+de\s+carbonata|potencial\s+de\s+corros)\b")
 _CRITERIO_NUMERICO = re.compile(r"(?i)(?:[<>]=?|≤|≥|m[íi]nim\w+\s+de|m[áa]xim\w+\s+de|toler[âa]ncia\s+de|limite\s+de)\s*\d")
 _DOC_VERBO = re.compile(r"(?i)\b(?:solicitar|requisitar|juntar|apresentar|obter|anexar|exibir)\b")
@@ -87,8 +93,7 @@ def classificar_requisito(texto: str) -> str:
     base = " " + normalizar(texto) + " "
     mede = bool(_VERBO_MEDICAO.search(base) or _GRANDEZA_DIMENSIONAL.search(base)
                 or _PROPRIEDADE_ENSAIAVEL.search(base) or _PATOLOGIA_ENSAIAVEL.search(base)
-                or _CRITERIO_NUMERICO.search(base)
-                or (_QUANTIFICADOR.search(base) and _GRANDEZA_QUANTIFICAVEL.search(base)))
+                or _CRITERIO_NUMERICO.search(base) or _QUANTIFICADOR.search(base))
     if _DOC_VERBO.search(base) and _DOC_ARTEFATO.search(base):
         return "DOCUMENTO"
     if mede:

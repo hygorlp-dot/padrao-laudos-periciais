@@ -121,7 +121,7 @@ def test_A_inspecao_com_atividade_apropriada():
 
 def test_B_medicao_sem_medicao_planejada_fica_nao_mapeada():
     reqs = [_r(f"R{i}", t, ["ATV-001"]) for i, t in enumerate(
-        ["Verificar a existência de fissuras.", "Caracterizar a extensão do dano.", "Constatar sinais associados.",
+        ["Verificar a existência de fissuras.", "Constatar os sinais associados relevantes.", "Registrar o estado do revestimento.",
          "Aferir a abertura das fissuras."])]
     r = recalcular_cobertura(_plan_with(reqs))
     assert r["cobertura_relacional"]["QUE-001"] is True

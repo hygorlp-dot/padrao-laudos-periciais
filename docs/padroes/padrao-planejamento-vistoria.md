@@ -62,16 +62,20 @@ plano nunca é confiada.** O default é **fail-closed**: `INDETERMINADA`.
   `recalque`, `flecha`, `prumo`/`aprumo`/`desaprumo`, `nivelamento`/`desnível`,
   `inclinação`/`caimento`/`declividade`, `deformação`, `deslocamento`, `esquadro`,
   `dimensão`, `área`, `volume`, `cota`, `distância`, `ângulo`, `largura`, `altura`,
-  `comprimento`, `profundidade`, `diâmetro`, `abertura de fissura/trinca`, `vazão`,
-  `carga`, `tensão atuante`); **ou** propriedade ensaiável (`resistência`,
-  `aderência`, `desempenho`, `dureza`, `absorção`, `permeabilidade`,
-  `estanqueidade`, `isolamento`, `condutividade`, `módulo`, `capacidade de carga`,
-  `arrancamento`, `pull-off`); **ou** patologia ensaiável (`carbonatação`,
-  `cloretos`, `corrosão de armadura`, `potencial de corrosão`); **ou** critério
-  numérico explícito (`≤`, `≥`, `mínimo de N`, `tolerância de N`…); **ou**
-  quantificador (`teor de`, `índice de`, `nível de`, `grau de`, `percentual de`)
-  sobre grandeza quantificável (`umidade`, `temperatura`, `pressão`, `pH`,
-  `salinidade`, `acidez`). Coberto só por `medicoes` ou `ensaios`.
+  `comprimento`, `extensão`, `profundidade`, `diâmetro`, `planicidade`/`planeza`,
+  `abertura de fissura/trinca`, `vazão`, `carga`, `tensão atuante`); **ou**
+  propriedade ensaiável (`resistência`, `aderência`, `desempenho`, `dureza`,
+  `absorção`, `permeabilidade`, `estanqueidade`, `isolamento`, `condutividade`,
+  `módulo`, `arrancamento`, `pull-off`, `estabilidade`, `capacidade portante/
+  resistente/de carga/estrutural`, `comprometimento estrutural`); **ou** patologia
+  ensaiável (`carbonatação`, `cloretos`, `corrosão de armadura`, `potencial de
+  corrosão`); **ou** critério numérico explícito (`≤`, `≥`, `mínimo de N`,
+  `tolerância de N`…); **ou** um marcador de quantificação seguido de `de/do/da`
+  (`teor de`, `índice de`, `nível de`, `grau de`, `percentual de`, `magnitude de`,
+  `intensidade de`, `amplitude de`, `proporção de`, `quantidade de`) —
+  independentemente da grandeza que segue, porque pedir o *grau/nível/extensão* de
+  algo é um pedido quantificado que o verbo de observação não desambigua. Coberto
+  só por `medicoes` ou `ensaios`.
 - `INSPECAO` — **só com sinal positivo**: verbo de constatação/existência
   (`verificar`, `constatar`, `identificar`, `localizar`, `caracterizar`,
   `descrever`, `registrar`, `observar`, `inspecionar`, `examinar`, `apontar`,
