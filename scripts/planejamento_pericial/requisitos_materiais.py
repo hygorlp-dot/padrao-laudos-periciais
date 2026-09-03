@@ -8,15 +8,17 @@ estruturado a um item planejado de tipo apropriado (ver validar_plano).
 Classificação (natureza do requisito) — DEFAULT FAIL-CLOSED. O vocabulário abaixo
 é a lista canônica; está reproduzido em docs/padroes/padrao-planejamento-vistoria.md.
 
-- INSPECAO — satisfazível por observação de campo. Um verbo de REQUISIÇÃO
-  GENÉRICO ("verificar", "constatar", "apontar", "indicar", "avaliar", …) é
-  MODALIDADE-NEUTRO e NÃO estabelece observabilidade por si só. Só é atribuída
-  com EVIDÊNCIA POSITIVA de que o fato é constatável a olho nu — verbo de
-  observação direta ("descrever"/"registrar"/"fotografar"/"inspecionar"/…),
-  marcador de existência/aparência ("existência de", "há", "visível",
-  "aparente", …) ou substantivo de fenômeno inerentemente visual ("fissura",
-  "infiltração", "mancha", "descolamento", …) — E ausência de qualquer sinal
-  de medição.
+- INSPECAO — satisfazível por observação de campo. São MODALIDADE-NEUTROS e NÃO
+  estabelecem observabilidade por si sós: o verbo de REQUISIÇÃO GENÉRICO
+  ("verificar", "constatar", "apontar", "indicar", "avaliar", …) E o conector
+  EXISTENCIAL ("há", "existe", "existência de", "presença de") — "medir se HÁ
+  trinca > 0,3 mm" também usa "há". Só é atribuída com EVIDÊNCIA POSITIVA de que
+  o fato é constatável a olho nu — verbo de observação direta ("descrever"/
+  "registrar"/"fotografar"/"inspecionar"/…), qualificador explicitamente visual
+  ("visível", "aparente", "visualmente", "a olho nu", "ocular") ou substantivo
+  de fenômeno inequivocamente visual ("fissura", "infiltração", "mancha",
+  "descolamento", "mofo", "eflorescência", …) — E ausência de qualquer sinal de
+  medição.
 - MEDICAO  — exige leitura instrumental, ensaio ou cálculo (verbo de medição,
   grandeza inerentemente dimensional, propriedade ensaiável, patologia
   ensaiável, critério numérico/quantidade dimensionada, ou quantificador
@@ -63,23 +65,25 @@ _VERBO_OBSERVACAO_DIRETA = re.compile(
     r"(?i)\b(?:descrever|registrar|fotografar|inspecionar|examinar|observar|"
     r"vistoriar|caracterizar|localizar)\b"
 )
-# Marcador que evidencia que o fato é constatável VISUALMENTE.
-_MARCADOR_OBSERVACIONAL = re.compile(
-    r"(?i)(?:\b(?:existencia|presenca|ausencia|ocorrencia)\s+d"
-    r"|\b(?:existe|existem|existir|ha|houve|havia)\b"
-    r"|\b(?:visivel|visiveis|aparente|aparentes|visualmente|ocular|"
-    r"perceptivel|perceptiveis)\b"
-    r"|\ba\s+olho\s+nu\b)"
+# Qualificador que evidencia que o fato é constatável VISUALMENTE. O conector
+# existencial ("há"/"existe"/"existência de"/"presença de") NÃO entra aqui: é tão
+# modalidade-neutro quanto o verbo genérico ("medir se HÁ trinca > 0,3 mm" também
+# usa "há"). Só qualificador explicitamente visual estabelece INSPECAO.
+_MARCADOR_VISUAL = re.compile(
+    r"(?i)(?:\b(?:visivel|visiveis|aparente|aparentes|visualmente|ocular|oculares|"
+    r"perceptivel|perceptiveis|fotograf\w*|inspecao\s+visual|exame\s+visual|"
+    r"aspecto\s+visual)\b|\ba\s+olho\s+nu\b)"
 )
-# Substantivo de FENÔMENO/anomalia inerentemente avaliável por observação (NÃO
-# grandeza). Lista permissiva: sua incompletude causa SOBRE-BLOQUEIO (seguro),
-# nunca fail-open (o default é INDETERMINADA → MEDICAO estrita).
+# Substantivo de FENÔMENO/anomalia inerentemente avaliável por observação a olho nu
+# (NÃO grandeza). Lista permissiva e DELIBERADAMENTE conservadora: só entra o que é
+# inequivocamente visual. Termos cuja avaliação usual é instrumental (umidade
+# relativa, corrosão/oxidação — profundidade/potencial/taxa) NÃO entram aqui: sem
+# outro sinal caem em INDETERMINADA → MEDICAO estrita (sobre-bloqueio seguro).
 _FENOMENO_OBSERVAVEL = re.compile(
     r"(?i)\b(?:fissura\w*|trinca\w*|rachadura\w*|fenda\w*|mancha\w*|"
-    r"infiltra\w*|umidade\w*|mofo\w*|bolor\w*|efloresc\w*|"
+    r"infiltra\w*|mofo\w*|bolor\w*|efloresc\w*|"
     r"destacamento\w*|descolamento\w*|desplacamento\w*|desprendimento\w*|"
-    r"desagrega\w*|pulverul\w*|bolha\w*|empolamento\w*|"
-    r"corrosao\w*|oxidacao\w*|ferrugem|"
+    r"desagrega\w*|pulverul\w*|bolha\w*|empolamento\w*|ferrugem\w*|"
     r"vazamento\w*|goteira\w*|gotejamento\w*|"
     r"patologi\w*|manifestac\w*|anomalia\w*|"
     r"avaria\w*|deterioracao\w*|desgaste\w*|"
@@ -91,7 +95,7 @@ _VERBO_MEDICAO = re.compile(r"(?i)\b(?:medir|medi[cç][aã]o|aferir|mensurar|qua
 _GRANDEZA_DIMENSIONAL = re.compile(
     r"(?i)\b(?:espessura|recalque|flecha|prumo|aprumo|desaprumo|desvio\s+de\s+prumo|"
     r"nivelamento|desn[íi]ve|inclina[cç][aã]|caimento|declividade|planicidade|planeza|"
-    r"deforma[cç][aã]|deslocamento|esquadr|dimens|[aá]rea|volume|cota|dist[aâ]ncia|"
+    r"deforma[cç][aã]|deslocamento|esquadro|dimens|[aá]rea|volume|cota|dist[aâ]ncia|"
     r"[aâ]ngulo|largura|altura|comprimento|extens[aã]|profundidade|di[aâ]metro|"
     r"abertura\s+d[ae]s?\s+(?:fissur|trinc)|vaz[aã]o|vaz[õo]es|carga|tens[aã]o\s+atuante)\w*"
 )
@@ -101,14 +105,29 @@ _PROPRIEDADE_ENSAIAVEL = re.compile(
     r"est[áa]nqu\w+|estabilidade|capacidade\s+(?:de\s+carga|portante|resistente|estrutural)|"
     r"portante|comprometimento\s+estrutural)\b"
 )
-# Pedir "grau/nível/índice/teor/magnitude ... DE algo" é um pedido quantificado ->
-# MEDICAO, independentemente da grandeza que segue (verbo de observação não desambigua).
-# Não inclui "primeiro/segundo grau" (exige "de/do/dos" depois).
+# Pedir "grau/nível/índice/teor/potencial/magnitude ... DE algo" é um pedido
+# quantificado -> MEDICAO, independentemente da grandeza que segue (o verbo não
+# desambigua). Não inclui "primeiro/segundo grau" (exige "de/do/dos" depois).
 _QUANTIFICADOR = re.compile(
     r"(?i)\b(?:teor|[íi]ndice|n[íi]vel|grau|percentual|coeficiente|taxa|magnitude|"
-    r"intensidade|amplitude|propor[cç][aã]o|quantidade)\s+d[aeo]s?\b"
+    r"potencial|intensidade|amplitude|propor[cç][aã]o|quantidade)\s+d[aeo]s?\b"
 )
-_PATOLOGIA_ENSAIAVEL = re.compile(r"(?i)\b(?:carbonata[cç]\w+|cloret\w+|corros[aã]o\s+d[ae]s?\s+armadur|profundidade\s+de\s+carbonata|potencial\s+de\s+corros)\b")
+# Patologias cuja caracterização usual é ensaio/instrumento. Sufixo \w* (não \b)
+# para casar formas flexionadas ("corrosão das armaduras", "potencial de corrosão").
+_PATOLOGIA_ENSAIAVEL = re.compile(
+    r"(?i)\b(?:carbonata[cç]\w*|cloret\w*|corros[aã]o\s+d[ae]s?\s+armadur\w*|"
+    r"profundidade\s+de\s+carbonata\w*|potencial\s+de\s+corros\w*|"
+    r"perda\s+de\s+se[cç][aã]o|se[cç][aã]o\s+resistente\s+d[ae]s?\s+(?:barra|armadur))\b"
+)
+# Grandezas cuja leitura é inerentemente instrumental (higrotérmica, fotométrica,
+# acústica, vibração) — não constatáveis a olho nu mesmo sem número explícito.
+_GRANDEZA_INSTRUMENTAL = re.compile(
+    r"(?i)\b(?:umidade\s+relativa|umidade\s+do\s+ar|ponto\s+de\s+orvalho|"
+    r"temperatura\s+(?:superficial|ambiente|do\s+ar|de\s+bulbo|de\s+orvalho|de\s+contato)|"
+    r"iluminanc\w*|luminanc\w*|"
+    r"n[íi]vel\s+de\s+(?:ru[íi]do|press[aã]o\s+sonora)|press[aã]o\s+sonora|"
+    r"vibra[cç][aã]o|acelera[cç][aã]o|frequ[eê]ncia\s+natural)\b"
+)
 # Critério numérico sobre texto NORMALIZADO (sem acento): "≤"/"≥" não chegam aqui
 # (normalizar faz ascii-strip) — recuperados por _SINAL_NUMERICO_BRUTO. Cobre também
 # conectivos comparativos em português ("superior a N", "no mínimo de N", …).
@@ -146,22 +165,24 @@ def remover_ruido_estrutural(texto: str) -> str:
 def classificar_requisito(texto: str) -> str:
     """MEDICAO | DOCUMENTO | INSPECAO | INDETERMINADA.
 
-    Default fail-closed: um verbo de requisição genérico ("verificar"/"constatar"/
-    "avaliar"/…) é modalidade-neutro — só devolve INSPECAO com EVIDÊNCIA POSITIVA de
-    observabilidade (verbo de observação direta, marcador de existência/aparência ou
-    substantivo de fenômeno visual) e ausência de qualquer sinal de medição;
-    requisito ambíguo → INDETERMINADA (o gate o trata como MEDICAO estrita)."""
+    Default fail-closed. Verbo de requisição genérico ("verificar"/"constatar"/…) E
+    conector existencial ("há"/"existe"/"existência de") são MODALIDADE-NEUTROS. Só
+    devolve INSPECAO com EVIDÊNCIA POSITIVA de observabilidade — verbo de observação
+    direta, qualificador explicitamente visual, ou substantivo de fenômeno
+    inequivocamente visual — e ausência de qualquer sinal de medição; requisito
+    ambíguo → INDETERMINADA (o gate o trata como MEDICAO estrita)."""
     base = " " + normalizar(texto) + " "
     bruto = " " + str(texto or "").lower().strip() + " "
     mede = bool(_VERBO_MEDICAO.search(base) or _GRANDEZA_DIMENSIONAL.search(base)
                 or _PROPRIEDADE_ENSAIAVEL.search(base) or _PATOLOGIA_ENSAIAVEL.search(base)
+                or _GRANDEZA_INSTRUMENTAL.search(base)
                 or _CRITERIO_NUMERICO.search(base) or _QUANTIFICADOR.search(base)
                 or _SINAL_NUMERICO_BRUTO.search(bruto))
     if _DOC_VERBO.search(base) and _DOC_ARTEFATO.search(base):
         return "DOCUMENTO"
     if mede:
         return "MEDICAO"
-    if (_VERBO_OBSERVACAO_DIRETA.search(base) or _MARCADOR_OBSERVACIONAL.search(base)
+    if (_VERBO_OBSERVACAO_DIRETA.search(base) or _MARCADOR_VISUAL.search(base)
             or _FENOMENO_OBSERVAVEL.search(base)):
         return "INSPECAO"
     return "INDETERMINADA"

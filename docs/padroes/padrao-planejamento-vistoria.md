@@ -68,8 +68,13 @@ plano nunca é confiada.** O default é **fail-closed**: `INDETERMINADA`.
   `absorção`, `permeabilidade`, `estanqueidade`, `isolamento`, `condutividade`,
   `módulo`, `arrancamento`, `pull-off`, `estabilidade`, `capacidade portante/
   resistente/de carga/estrutural`, `comprometimento estrutural`); **ou** patologia
-  ensaiável (`carbonatação`, `cloretos`, `corrosão de armadura`, `potencial de
-  corrosão`); **ou** critério numérico explícito — operadores (`<`, `>`, `≤`, `≥`),
+  ensaiável (`carbonatação`, `cloretos`, `corrosão de armadura` — em qualquer
+  flexão, `potencial de corrosão`, `perda de seção` das barras/armaduras); **ou**
+  grandeza inerentemente instrumental (`umidade relativa`/`umidade do ar`, `ponto
+  de orvalho`, `temperatura superficial/ambiente/do ar/de bulbo/de orvalho`,
+  `iluminância`/`luminância`, `nível de ruído`/`pressão sonora`, `vibração`/
+  `aceleração`/`frequência natural`) — não constatável a olho nu mesmo sem número;
+  **ou** critério numérico explícito — operadores (`<`, `>`, `≤`, `≥`),
   conectivos comparativos com número (`superior a N`, `inferior a N`, `maior/menor
   que N`, `no mínimo de N`, `no máximo de N`, `acima de N`, `abaixo de N`,
   `tolerância de N`, `limite de N`) ou quantidade dimensionada (`N mm`, `N cm`,
@@ -79,28 +84,35 @@ plano nunca é confiada.** O default é **fail-closed**: `INDETERMINADA`.
   de`, `quantidade de`) — independentemente da grandeza que segue, porque pedir o
   *grau/nível/extensão* de algo é um pedido quantificado que o verbo de requisição
   não desambigua. Coberto só por `medicoes` ou `ensaios`.
-- `INSPECAO` — **exige evidência positiva de observabilidade**, e **não** basta um
-  verbo de requisição genérico. Um verbo genérico (`verificar`, `constatar`,
-  `apontar`, `indicar`, `avaliar`, `analisar`, `determinar`, `apurar`, `conferir`,
-  `informar`) é **modalidade-neutro**: `verificar se o piso está nivelado` é
-  medição, `verificar se há infiltração aparente` é inspeção — o verbo não decide.
-  Atribui-se `INSPECAO` quando há (a) verbo de **observação direta** (`descrever`,
-  `registrar`, `fotografar`, `inspecionar`, `examinar`, `observar`, `vistoriar`,
-  `caracterizar`, `localizar`); **ou** (b) marcador de existência/aparência
-  (`existência/presença/ausência de`, `há`/`houve`, `visível`, `aparente`,
-  `visualmente`, `a olho nu`, `ocular`, `perceptível`); **ou** (c) substantivo de
-  **fenômeno inerentemente visual** (`fissura`, `trinca`, `mancha`, `infiltração`,
-  `umidade`, `mofo`, `eflorescência`, `destacamento`/`descolamento`, `corrosão`
-  aparente, `vazamento`/`goteira`, `manifestação patológica`, `anomalia`,
-  `deterioração`, `desgaste`, `colapso`/`ruína`…) — **e** ausência de qualquer
-  sinal de `MEDICAO`. A lista de fenômenos é permissiva: sua incompletude causa
+- `INSPECAO` — **exige evidência positiva de observabilidade**. São
+  **modalidade-neutros** e **não** classificam sozinhos: o verbo de requisição
+  genérico (`verificar`, `constatar`, `apontar`, `indicar`, `avaliar`, `analisar`,
+  `determinar`, `apurar`, `conferir`, `informar`) **e** o conector existencial
+  (`há`, `existe`, `existência/presença/ausência de`) — `medir se há trinca >
+  0,3 mm` também usa "há". `verificar se o piso está nivelado` é medição;
+  `verificar se há infiltração aparente` é inspeção — nem o verbo nem o "há"
+  decidem, o **objeto** decide. Atribui-se `INSPECAO` quando há (a) verbo de
+  **observação direta** (`descrever`, `registrar`, `fotografar`, `inspecionar`,
+  `examinar`, `observar`, `vistoriar`, `caracterizar`, `localizar`); **ou** (b)
+  qualificador **explicitamente visual** (`visível`, `aparente`, `visualmente`,
+  `a olho nu`, `ocular`, `perceptível`, `fotograficamente`, `inspeção/exame
+  visual`); **ou** (c) substantivo de **fenômeno inequivocamente visual**
+  (`fissura`, `trinca`, `mancha`, `infiltração`, `mofo`/`bolor`, `eflorescência`,
+  `destacamento`/`descolamento`/`desplacamento`, `bolha`/`empolamento`,
+  `ferrugem`, `vazamento`/`goteira`, `manifestação patológica`, `anomalia`,
+  `avaria`, `deterioração`, `desgaste`, `vegetação`/`entulho`/`sujidade`) — **e**
+  ausência de qualquer sinal de `MEDICAO`. Termos cuja avaliação usual é
+  instrumental (`umidade` sem qualificador visual, `corrosão`/`oxidação` sem
+  "aparente"/"ferrugem") **não** entram em (c): sem outro sinal caem em
+  `INDETERMINADA`. A lista de fenômenos é permissiva: sua incompletude causa
   **sobre-bloqueio** (o requisito cai em `INDETERMINADA` → medição estrita), nunca
   falso-verde. Coberto por atividade, fotografia, medição, ensaio ou documento.
 - `INDETERMINADA` — nenhum sinal positivo de `INSPECAO` nem de `MEDICAO`/
-  `DOCUMENTO` (ex.: verbo de requisição genérico sem marcador observacional nem
-  fenômeno visual — `verificar se está aprumado`, `constatar se o contrapiso está
-  plano`; cláusula sem verbo). Tratada como `MEDICAO` estrita pelo gate:
-  **na dúvida, exige medição/ensaio.**
+  `DOCUMENTO` (ex.: verbo genérico ou conector existencial sem qualificador visual
+  nem fenômeno visual — `verificar se está aprumado`, `constatar se o contrapiso
+  está plano`, `verificar se há afundamento de trilha de roda`, `constatar se
+  existe assentamento diferencial`; cláusula sem verbo). Tratada como `MEDICAO`
+  estrita pelo gate: **na dúvida, exige medição/ensaio.**
 
 A cobertura de um requisito material vem **exclusivamente** do vínculo estruturado
 `requisitos_semanticos[].itens_planejados`, validado por: o item existe, está

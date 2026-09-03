@@ -69,7 +69,7 @@ def _r(rid, requisito, itens, classe=None, status=None):
 
 
 def test_classificacao_por_natureza():
-    assert classificar_requisito("Verificar a existência de umidade na parede.") == "INSPECAO"
+    assert classificar_requisito("Verificar a mancha de umidade aparente na parede.") == "INSPECAO"
     assert classificar_requisito("Caracterizar as manifestações alegadas.") == "INSPECAO"
     assert classificar_requisito("Aferir o teor de umidade da alvenaria.") == "MEDICAO"
     assert classificar_requisito("Verificar a espessura do contrapiso executado.") == "MEDICAO"
@@ -119,6 +119,51 @@ def test_verbo_de_requisicao_generico_e_modalidade_neutro():
         r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
         assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False, texto
         assert r["apto"] is False, texto
+
+
+def test_conector_existencial_e_modalidade_neutro():
+    """P0 (PASS B contra 13e2bcf): 'há'/'existe'/'existência de' é tão
+    modalidade-neutro quanto o verbo genérico — 'medir se há trinca > 0,3 mm'
+    também usa 'há'. Substantivo metrológico fora do vocabulário de grandeza,
+    fraseado com conector existencial, não pode virar INSPECAO nem apto=True."""
+    corpus = [
+        "Verificar se há afundamento de trilha de roda no pavimento.",
+        "Constatar se há assentamento diferencial no piso.",
+        "Verificar a existência de ondulação no piso de concreto.",
+        "Constatar se há rebaixamento do lençol freático.",
+        "Verificar se existe abaulamento do piso cerâmico.",
+        "Constatar a presença de barriga na laje.",
+        "Verificar se há flambagem do pilar metálico.",
+        "Constatar se existe esmagamento do apoio de neoprene.",
+        "Verificar se há folga excessiva na junta de dilatação.",
+    ]
+    for texto in corpus:
+        assert classificar_requisito(texto) != "INSPECAO", texto
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False, texto
+        assert r["apto"] is False, texto
+
+
+def test_fenomeno_qualificado_por_instrumento_e_medicao():
+    """P0 (PASS A contra 13e2bcf): um fenômeno QUALIFICADO por termo instrumental
+    ('umidade relativa do ar', 'potencial de corrosão da armadura') é medição, não
+    observação a olho nu. _PATOLOGIA_ENSAIAVEL deixou de ter \\b morto após stem."""
+    for texto in [
+        "Verificar a umidade relativa do ar nos ambientes.",
+        "Constatar a umidade relativa do ar e o ponto de orvalho.",
+        "Verificar o potencial de corrosão da armadura das vigas.",
+        "Verificar a corrosão das armaduras dos pilares.",
+        "Constatar a perda de seção das barras de aço.",
+        "Verificar a vibração excessiva na passarela metálica.",
+    ]:
+        assert classificar_requisito(texto) == "MEDICAO", texto
+
+
+def test_esquadria_nao_e_sobre_bloqueada_como_medicao():
+    """P2 (PASS A): 'esquadr' casava 'esquadrias' (componente construtivo, item
+    de inspeção comum). Restrito a 'esquadro' (medição de esquadria)."""
+    assert classificar_requisito("Descrever o estado de conservação das esquadrias.") == "INSPECAO"
+    assert classificar_requisito("Verificar o esquadro dos vãos executados.") == "MEDICAO"
 
 
 def test_controles_observacionais_nao_sao_sobre_bloqueados():
