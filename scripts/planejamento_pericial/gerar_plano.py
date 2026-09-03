@@ -117,13 +117,14 @@ def gerar(diretorio: Path) -> dict[str, Any]:
     from .requisitos_materiais import extrair_requisitos_materiais
     # Item planejado de tipo apropriado por classe (mesma autoridade estrutural do gate).
     _colecoes_classe={"MEDICAO":((medicoes,"medicoes"),(ensaios,"ensaios")),
+                      "INDETERMINADA":((medicoes,"medicoes"),(ensaios,"ensaios")),
                       "DOCUMENTO":((documentos_planejados,"documentos"),),
                       "INSPECAO":((atividades,"atividades"),(fotografias,"fotografias"),(medicoes,"medicoes"),(ensaios,"ensaios"),(documentos_planejados,"documentos"))}
     requisitos_semanticos=[];lacunas_semanticas=[]
     for quesito in quesitos:
         cobertura_q=next(c for c in cobertura if c["quesito"]==quesito["id"])
         for req in extrair_requisitos_materiais(quesito):
-            classe=req.get("classe","INSPECAO")
+            classe=req.get("classe","INDETERMINADA")
             entrada={"requirement_id":req["requirement_id"],"quesito":quesito["id"],"requisito":req["requisito"],
                      "texto_normalizado":req["texto_normalizado"],"classe":classe,"proveniencia":req.get("proveniencia",[]),
                      "status":req["status"],"itens_planejados":[]}
@@ -134,7 +135,7 @@ def gerar(diretorio: Path) -> dict[str, Any]:
             # O gerador NÃO fabrica destino: se o perfil não provê o item, o requisito fica NAO_MAPEADO.
             candidatos=[i["id"] for grupo,chave in _colecoes_classe[classe] for i in grupo if i["id"] in cobertura_q.get(chave,[])]
             if not candidatos:
-                falta={"MEDICAO":"medição/ensaio","DOCUMENTO":"documento a solicitar"}.get(classe,"item de inspeção")
+                falta={"MEDICAO":"medição/ensaio","INDETERMINADA":"medição/ensaio","DOCUMENTO":"documento a solicitar"}.get(classe,"item de inspeção")
                 lacunas_semanticas.append(f"{quesito['id']}: requisito {classe.lower()} sem {falta} de plano correspondente ({req['requisito'][:80]})")
                 entrada["status"]="NAO_MAPEADO";requisitos_semanticos.append(entrada);continue
             entrada["itens_planejados"]=candidatos

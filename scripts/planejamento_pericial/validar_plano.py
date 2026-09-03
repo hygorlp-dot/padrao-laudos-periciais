@@ -53,6 +53,7 @@ _STATUS_NAO_COBRIVEL=frozenset({"EXTRACAO_INDETERMINADA","NAO_MAPEADO"})
 # uma atividade genérica NÃO satisfaz um requisito de medição — essa é a autoridade
 # (estrutural, não textual) que impede cobertura fabricada.
 _COLECOES_POR_CLASSE={"MEDICAO":("medicoes","ensaios"),"DOCUMENTO":("documentos",),
+                      "INDETERMINADA":("medicoes","ensaios"),
                       "INSPECAO":("atividades","fotografias","medicoes","ensaios","documentos")}
 
 def _cobertura_semantica(dado,por_quesito):
@@ -78,7 +79,8 @@ def _cobertura_semantica(dado,por_quesito):
         for r in grupo:
             total+=1
             planejados=r.get("itens_planejados") or []
-            classe=r.get("classe") or classificar_requisito(r.get("requisito") or "")
+            # classe SEMPRE re-derivada do texto: autoridade author-independent (§18).
+            classe=classificar_requisito(r.get("requisito") or "")
             apropriadas=_COLECOES_POR_CLASSE.get(classe,("medicoes","ensaios"))
             mapeado=(r.get("status") not in _STATUS_NAO_COBRIVEL and bool(planejados) and bool(str(r.get("requisito") or "").strip()) and all(
                 item_id in todos and item_id in vinculados and any(item_id in colecoes[c] for c in apropriadas)

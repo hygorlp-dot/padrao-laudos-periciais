@@ -70,13 +70,42 @@ def _r(rid, requisito, itens, classe=None, status=None):
 
 def test_classificacao_por_natureza():
     assert classificar_requisito("Verificar a existência de umidade na parede.") == "INSPECAO"
+    assert classificar_requisito("Caracterizar as manifestações alegadas.") == "INSPECAO"
     assert classificar_requisito("Aferir o teor de umidade da alvenaria.") == "MEDICAO"
     assert classificar_requisito("Verificar a espessura do contrapiso executado.") == "MEDICAO"
     assert classificar_requisito("Avaliar o recalque diferencial da fundação.") == "MEDICAO"
     assert classificar_requisito("Aferir o prumo e o nivelamento das paredes.") == "MEDICAO"
     assert classificar_requisito("Medir a abertura das fissuras sob carga.") == "MEDICAO"
     assert classificar_requisito("Solicitar o projeto executivo de impermeabilização.") == "DOCUMENTO"
-    assert classificar_requisito("Caracterizar as manifestações alegadas.") == "INSPECAO"
+    assert classificar_requisito("Juntar a planta com as dimensões dos ambientes.") == "DOCUMENTO"
+    assert classificar_requisito("Solicitar o memorial de cálculo estrutural.") == "DOCUMENTO"
+
+
+def test_classificacao_fail_closed():
+    """Requisitos metrológicos fora de verbo óbvio NÃO caem em INSPECAO."""
+    for texto in [
+        "Verificar a resistência de aderência das placas cerâmicas.",
+        "Verificar a estanqueidade da laje de cobertura.",
+        "Avaliar a carbonatação do concreto armado dos pilares.",
+        "Verificar a resistência mecânica do concreto estrutural.",
+        "Avaliar o desempenho acústico das vedações verticais.",
+    ]:
+        assert classificar_requisito(texto) == "MEDICAO", texto
+    # cláusula sem sinal de observação nem de medição -> INDETERMINADA (não INSPECAO)
+    assert classificar_requisito("Avaliar as consequências técnicas pertinentes.") == "INDETERMINADA"
+    assert classificar_requisito("Verificação técnica.") == "INDETERMINADA"
+
+
+def test_indeterminada_exige_medicao_no_gate():
+    r = recalcular_cobertura(_plan_with([_r("R1", "Avaliar as consequências técnicas pertinentes.", ["ATV-001"])]))
+    assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False and r["apto"] is False
+
+
+def test_gate_ignora_classe_persistida():
+    """Uma classe MENTIROSA no plano não engana o gate: classe é re-derivada do texto."""
+    r = recalcular_cobertura(_plan_with(
+        [_r("R1", "Medir a abertura das fissuras sob carga estrutural.", ["ATV-001"], classe="INSPECAO", status="MAPEADO")]))
+    assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False and r["apto"] is False
 
 
 # ---------------------------------------------------------------- gate: matriz
@@ -282,11 +311,11 @@ def test_relational_links_do_not_claim_semantic_requirement_coverage():
 
 def test_each_semantic_requirement_needs_a_matching_planned_item():
     plan = _plan()
-    plan["atividades"].append({**copy.deepcopy(plan["atividades"][0]), "id": "ATV-002", "verificar": "Verificar a estanqueidade da junta."})
+    plan["atividades"].append({**copy.deepcopy(plan["atividades"][0]), "id": "ATV-002", "verificar": "Verificar a existência da junta."})
     plan["cobertura"][0]["atividades"].append("ATV-002")
     plan["requisitos_cobertura"].append({"questao_tecnica": "QT-001", "tipo": "ATIVIDADE", "obrigatoriedade": "OBRIGATORIA", "item_planejado": "ATV-002"})
     plan["requisitos_semanticos"] = [
-        {"quesito": "QUE-001", "requisito": "Verificar a estanqueidade da junta.", "itens_planejados": ["ATV-002"]},
+        {"quesito": "QUE-001", "requisito": "Verificar a existência da junta.", "itens_planejados": ["ATV-002"]},
         {"quesito": "QUE-001", "requisito": "Conferir o isolamento acústico do painel.", "itens_planejados": []},
     ]
     result = recalcular_cobertura(plan)
@@ -309,10 +338,10 @@ def test_topic_overlap_does_not_substitute_the_exact_requirement():
 
 def test_semantic_coverage_is_order_invariant():
     plan = _plan()
-    plan["atividades"][0]["verificar"] = "Caracterizar o acabamento e documentar a geometria do elemento."
+    plan["atividades"][0]["verificar"] = "Caracterizar o acabamento e registrar a geometria do elemento."
     plan["requisitos_semanticos"] = [
         {"quesito": "QUE-001", "requisito": "Caracterizar o acabamento superficial.", "itens_planejados": ["ATV-001"]},
-        {"quesito": "QUE-001", "requisito": "Documentar a geometria do elemento.", "itens_planejados": ["ATV-001"]},
+        {"quesito": "QUE-001", "requisito": "Registrar a geometria do elemento.", "itens_planejados": ["ATV-001"]},
     ]
     first = recalcular_cobertura(plan)
     plan["requisitos_semanticos"].reverse()
