@@ -8,7 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any
-from .validar_plano import corresponde_requisito, recalcular_cobertura
+from .validar_plano import recalcular_cobertura
 from scripts.triagem_pericial.semantica import melhores
 
 
@@ -115,32 +115,28 @@ def gerar(diretorio: Path) -> dict[str, Any]:
                           "atividades": atvs, "medicoes": [m["id"] for m in medicoes if any(qt in m["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])], "fotografias": [f["id"] for f in fotografias if any(qt in f["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])],
                           "ensaios": [e["id"] for e in ensaios if any(qt in e["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])], "documentos": [d["id"] for d in documentos_planejados if any(qt in d["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])], "planejada": False})
     from .requisitos_materiais import extrair_requisitos_materiais
-    import re as _re
-    _quant=_re.compile(r"(?i)\b(medir|medi[cç][aã]o|quantificar|dimensionar|ensai\w+|calcular|c[aá]lculo|resist[eê]ncia|press[aã]o|carga|vaz[aã]o|deforma[cç][aã]o)\b")
+    # Item planejado de tipo apropriado por classe (mesma autoridade estrutural do gate).
+    _colecoes_classe={"MEDICAO":((medicoes,"medicoes"),(ensaios,"ensaios")),
+                      "DOCUMENTO":((documentos_planejados,"documentos"),),
+                      "INSPECAO":((atividades,"atividades"),(fotografias,"fotografias"),(medicoes,"medicoes"),(ensaios,"ensaios"),(documentos_planejados,"documentos"))}
     requisitos_semanticos=[];lacunas_semanticas=[]
     for quesito in quesitos:
         cobertura_q=next(c for c in cobertura if c["quesito"]==quesito["id"])
-        qt_base=next((q for q in quesito["questoes_tecnicas_relacionadas"]),None) or (qts[0] if qts else None)
         for req in extrair_requisitos_materiais(quesito):
+            classe=req.get("classe","INSPECAO")
             entrada={"requirement_id":req["requirement_id"],"quesito":quesito["id"],"requisito":req["requisito"],
-                     "texto_normalizado":req["texto_normalizado"],"status":req["status"],"itens_planejados":[]}
-            if req["status"]=="EXTRACAO_INDETERMINADA" or not qt_base:
+                     "texto_normalizado":req["texto_normalizado"],"classe":classe,"proveniencia":req.get("proveniencia",[]),
+                     "status":req["status"],"itens_planejados":[]}
+            if req["status"]=="EXTRACAO_INDETERMINADA":
                 lacunas_semanticas.append(f"{quesito['id']}: requisito material não determinável a partir do texto do quesito ({req['requisito'][:80]})")
                 requisitos_semanticos.append(entrada);continue
-            candidatos=[i["id"] for grupo in (atividades,medicoes,fotografias,ensaios) for i in grupo if i["id"] in cobertura_q["atividades"]+cobertura_q["medicoes"]+cobertura_q["fotografias"]+cobertura_q["ensaios"] and corresponde_requisito(req["requisito"],i)]
-            if not candidatos and _quant.search(req["requisito"]):
-                lacunas_semanticas.append(f"{quesito['id']}: requisito quantitativo sem medição/ensaio de plano correspondente ({req['requisito'][:80]})")
-                entrada["status"]="NAO_MAPEADO";requisitos_semanticos.append(entrada);continue
+            # Vincula a item planejado JÁ EXISTENTE, do tipo apropriado, ligado à cobertura do quesito.
+            # O gerador NÃO fabrica destino: se o perfil não provê o item, o requisito fica NAO_MAPEADO.
+            candidatos=[i["id"] for grupo,chave in _colecoes_classe[classe] for i in grupo if i["id"] in cobertura_q.get(chave,[])]
             if not candidatos:
-                nova={"id":f"ATV-{len(atividades)+1:03d}","verificar":req["requisito"],
-                      "justificativa":f"Obter evidência do requisito material {req['requirement_id']} do quesito {quesito['id']}.",
-                      "questoes_tecnicas":[qt_base],"quesitos":[quesito["id"]],"alegacoes":qt_por_id.get(qt_base,{}).get("alegacoes_relacionadas",[]),
-                      "metodo":"Inspeção visual sistemática","fundamentos":fundamentos,
-                      "evidencia_esperada":"Registro objetivo, rastreável e sem conclusão causal antecipada.",
-                      "obrigatoriedade":"OBRIGATORIA","consequencia_se_nao_realizada":"Limitação do requisito material e do quesito vinculado."}
-                atividades.append(nova);cobertura_q["atividades"].append(nova["id"])
-                requisitos_cobertura.append({"questao_tecnica":qt_base,"tipo":"ATIVIDADE","obrigatoriedade":"OBRIGATORIA","item_planejado":nova["id"]})
-                candidatos=[nova["id"]]
+                falta={"MEDICAO":"medição/ensaio","DOCUMENTO":"documento a solicitar"}.get(classe,"item de inspeção")
+                lacunas_semanticas.append(f"{quesito['id']}: requisito {classe.lower()} sem {falta} de plano correspondente ({req['requisito'][:80]})")
+                entrada["status"]="NAO_MAPEADO";requisitos_semanticos.append(entrada);continue
             entrada["itens_planejados"]=candidatos
             requisitos_semanticos.append(entrada)
     calculada=recalcular_cobertura({"cobertura":cobertura,"requisitos_cobertura":requisitos_cobertura,"requisitos_semanticos":requisitos_semanticos,"atividades":atividades,"medicoes":medicoes,"fotografias":fotografias,"ensaios":ensaios,"documentos_a_solicitar":documentos_planejados})

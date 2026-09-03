@@ -48,43 +48,47 @@ def capability_item(tipo,item):
     return " | ".join(valores) if valores else None
 
 _STATUS_NAO_COBRIVEL=frozenset({"EXTRACAO_INDETERMINADA","NAO_MAPEADO"})
-
-def _termos_conteudo(texto):
-    from scripts.planejamento_pericial.requisitos_materiais import termos_conteudo
-    return termos_conteudo(texto)
-
-def corresponde_requisito(requisito,item):
-    """Vínculo requisito→item DEMONSTRÁVEL: todos os termos de conteúdo do
-    requisito aparecem no material do item. Determinístico, invariante à ordem,
-    sem threshold. NÃO é o mecanismo de descoberta (isso é do gerador); é a
-    validação de um vínculo já declarado estruturalmente."""
-    material=" ".join(str(item.get(c) or "") for c in ("verificar","justificativa","evidencia_esperada","motivo","finalidade","nome","descricao","criterio_satisfacao"))
-    req=_termos_conteudo(requisito)
-    return bool(req) and req<=_termos_conteudo(material)
+# Item planejado de tipo APROPRIADO para satisfazer cada classe de requisito material.
+# MEDICAO exige leitura instrumental/ensaio; DOCUMENTO exige artefato documental;
+# uma atividade genérica NÃO satisfaz um requisito de medição — essa é a autoridade
+# (estrutural, não textual) que impede cobertura fabricada.
+_COLECOES_POR_CLASSE={"MEDICAO":("medicoes","ensaios"),"DOCUMENTO":("documentos",),
+                      "INSPECAO":("atividades","fotografias","medicoes","ensaios","documentos")}
 
 def _cobertura_semantica(dado,por_quesito):
-    """Autoridade = mapeamento estruturado explícito (requisitos_semanticos[].itens_planejados),
-    validado por: item existe, vinculado relacionalmente ao quesito, e vínculo demonstrável."""
+    """Autoridade = requisitos_semanticos[].itens_planejados, validado por, para cada item:
+    (existe) E (vinculado relacionalmente à cobertura do quesito) E (é de tipo apropriado
+    à classe do requisito). Sem qualquer comparação textual."""
     cobertura_por_id={c.get("quesito"):c for c in dado.get("cobertura",[])}
-    itens={item.get("id"):item for chave in ("atividades","medicoes","fotografias","ensaios","documentos_a_solicitar") for item in dado.get(chave,[]) if isinstance(item,dict)}
+    colecoes={chave:{item.get("id") for item in dado.get(fonte,[]) if isinstance(item,dict)}
+              for chave,fonte in (("atividades","atividades"),("medicoes","medicoes"),("fotografias","fotografias"),
+                                  ("ensaios","ensaios"),("documentos","documentos_a_solicitar"))}
+    todos={i for ids in colecoes.values() for i in ids}
+    from scripts.planejamento_pericial.requisitos_materiais import classificar_requisito
+    ausente="requisitos_semanticos" not in dado
     por_quesito_sem={qid:False for qid in por_quesito};agrupados={qid:[] for qid in por_quesito}
     for r in dado.get("requisitos_semanticos",[]):
         if r.get("quesito") in agrupados:agrupados[r["quesito"]].append(r)
     total=cobertos=0;nao_mapeados=[]
     for qid,grupo in agrupados.items():
-        vinculados={i for chave in ("atividades","medicoes","fotografias","ensaios","documentos") for i in cobertura_por_id.get(qid,{}).get(chave,[])}
+        vinculados={i for chave in colecoes for i in cobertura_por_id.get(qid,{}).get(chave,[])}
+        if ausente:
+            por_quesito_sem[qid]=False;total+=1;nao_mapeados.append(f"{qid}:SEM_REQUISITOS_SEMANTICOS");continue
         grupo_ok=bool(grupo)
         for r in grupo:
             total+=1
             planejados=r.get("itens_planejados") or []
+            classe=r.get("classe") or classificar_requisito(r.get("requisito") or "")
+            apropriadas=_COLECOES_POR_CLASSE.get(classe,("medicoes","ensaios"))
             mapeado=(r.get("status") not in _STATUS_NAO_COBRIVEL and bool(planejados) and bool(str(r.get("requisito") or "").strip()) and all(
-                item_id in itens and item_id in vinculados and corresponde_requisito(r["requisito"],itens[item_id]) for item_id in planejados))
+                item_id in todos and item_id in vinculados and any(item_id in colecoes[c] for c in apropriadas)
+                for item_id in planejados))
             if mapeado:cobertos+=1
             else:grupo_ok=False;nao_mapeados.append(r.get("requirement_id") or f"{qid}:{r.get('requisito','')[:40]}")
         por_quesito_sem[qid]=grupo_ok
     fracao=(cobertos/total) if total else 0.0
     return {"cobertura_requisitos_semanticos":por_quesito_sem,"total_requisitos_materiais":total,
-            "requisitos_materiais_cobertos":cobertos,"requisitos_materiais_nao_mapeados":nao_mapeados,
+            "requisitos_materiais_cobertos":cobertos,"requisitos_materiais_nao_mapeados":sorted(nao_mapeados),
             "cobertura_semantica_fracao":fracao}
 
 def recalcular_cobertura(dado):

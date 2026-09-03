@@ -93,11 +93,12 @@ class AceitacaoFinalMotorV1Test(unittest.TestCase):
             p=Path(td);(p/"processo.json").write_text(json.dumps(processo),encoding="utf-8");(p/"delimitacao-pericial.json").write_text(json.dumps(delim),encoding="utf-8");inicio=time.perf_counter();plano=gerar_plano(p);duracao=time.perf_counter()-inicio
         from scripts.planejamento_pericial.validar_plano import recalcular_cobertura
         self.assertEqual((len(processo["alegacoes"]),len(delim["quesitos"]),len(processo["documentos_tecnicos"])),(150,120,80))
-        # #182 V4: 150 atividades por QT + 1 atividade dedicada por requisito material de inspeção não coberto por atividade genérica.
-        self.assertEqual(len(plano["atividades"]),270);self.assertEqual(len({x["id"] for x in plano["atividades"]}),270)
-        self.assertTrue(all(len(c["atividades"])>=1 for c in plano["cobertura"]))
+        # #182 V5: o gerador NÃO fabrica destino; requisito de inspeção é coberto pela atividade da QT.
+        self.assertEqual(len(plano["atividades"]),150);self.assertEqual(len({x["id"] for x in plano["atividades"]}),150)
+        self.assertTrue(all(len(c["atividades"])==1 for c in plano["cobertura"]))
         calc=recalcular_cobertura(plano)
         self.assertEqual((len(plano["requisitos_semanticos"]),calc["total_requisitos_materiais"],calc["requisitos_materiais_nao_mapeados"]),(120,120,[]))
+        self.assertTrue(all(x["classe"]=="INSPECAO" for x in plano["requisitos_semanticos"]))
         self.assertLess(duracao,5)
 
     def test_escala_requisito_quantitativo_sem_medicao_bloqueia(self):
@@ -115,6 +116,7 @@ class AceitacaoFinalMotorV1Test(unittest.TestCase):
         self.assertEqual(calc["cobertura_requisitos_semanticos"]["QUE-001"],False)
         self.assertTrue(calc["requisitos_materiais_nao_mapeados"])
         self.assertEqual(plano["status"],"BLOQUEADO_PARA_VISTORIA")
-        self.assertTrue(any("quantitativo" in x for x in plano["pendencias"]))
+        self.assertTrue(any("medicao" in x and "sem medi" in x for x in plano["pendencias"]))
+        self.assertTrue(any(r["classe"]=="MEDICAO" and r["status"]=="NAO_MAPEADO" for r in plano["requisitos_semanticos"]))
 
 if __name__=="__main__":unittest.main()
