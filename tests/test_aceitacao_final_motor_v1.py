@@ -91,6 +91,30 @@ class AceitacaoFinalMotorV1Test(unittest.TestCase):
         delim=copy.deepcopy(self.delim);modelo=delim["questoes_tecnicas"][0];prov=copy.deepcopy(modelo["proveniencia"]);modelo_quesito={"origem":"JUIZO","documento_id":"DOC-PJE-001","id_pje":"900001","caminho_original":None,"texto_integral":"Quesito sintético","subitens":[],"paginas":[{"pagina_pdf":3,"pagina_documento":1,"pagina_original":None}],"pertinencia":"PERTINENTE_TECNICO","evidencias_necessarias":[],"materia_tecnica":"Verificação técnica","materia_juridica_associada":None,"secoes_laudisticas_previstas":["3"],"proveniencia":prov};delim["questoes_tecnicas"]=[{**copy.deepcopy(modelo),"id":f"QT-{i:03d}","descricao":f"Verificar manifestação sintética {i}","alegacoes_relacionadas":[f"ALG-{i:03d}"],"quesitos_relacionados":[f"QUE-{i:03d}"] if i<=120 else []} for i in range(1,151)];delim["quesitos"]=[{**copy.deepcopy(modelo_quesito),"id":f"QUE-{i:03d}","numero_original":str(i),"ordem_real":i,"questoes_tecnicas_relacionadas":[f"QT-{i:03d}"],"status_cobertura":"PARCIAL","ressalvas_aplicaveis":[]} for i in range(1,121)];delim["matriz_cobertura"]=[{"quesito_id":f"QUE-{i:03d}","questoes_tecnicas":[f"QT-{i:03d}"],"secoes_laudisticas":["3"],"status":"PARCIAL"} for i in range(1,121)]
         with tempfile.TemporaryDirectory() as td:
             p=Path(td);(p/"processo.json").write_text(json.dumps(processo),encoding="utf-8");(p/"delimitacao-pericial.json").write_text(json.dumps(delim),encoding="utf-8");inicio=time.perf_counter();plano=gerar_plano(p);duracao=time.perf_counter()-inicio
-        self.assertEqual((len(processo["alegacoes"]),len(delim["quesitos"]),len(processo["documentos_tecnicos"])),(150,120,80));self.assertEqual(len(plano["atividades"]),150);self.assertEqual(len({x["id"] for x in plano["atividades"]}),150);self.assertTrue(all(len(c["atividades"])==1 for c in plano["cobertura"]));self.assertLess(duracao,5)
+        from scripts.planejamento_pericial.validar_plano import recalcular_cobertura
+        self.assertEqual((len(processo["alegacoes"]),len(delim["quesitos"]),len(processo["documentos_tecnicos"])),(150,120,80))
+        # #182 V4: 150 atividades por QT + 1 atividade dedicada por requisito material de inspeção não coberto por atividade genérica.
+        self.assertEqual(len(plano["atividades"]),270);self.assertEqual(len({x["id"] for x in plano["atividades"]}),270)
+        self.assertTrue(all(len(c["atividades"])>=1 for c in plano["cobertura"]))
+        calc=recalcular_cobertura(plano)
+        self.assertEqual((len(plano["requisitos_semanticos"]),calc["total_requisitos_materiais"],calc["requisitos_materiais_nao_mapeados"]),(120,120,[]))
+        self.assertLess(duracao,5)
+
+    def test_escala_requisito_quantitativo_sem_medicao_bloqueia(self):
+        # #182 V4 E2E-negativo: requisito material quantitativo sem medição/ensaio -> NAO_MAPEADO -> plano BLOQUEADO.
+        from scripts.planejamento_pericial.validar_plano import recalcular_cobertura
+        processo=copy.deepcopy(self.processo);processo["alegacoes"]=[{"id":"ALG-001","sistema_alegado":"VEDACOES"}]
+        delim=copy.deepcopy(self.delim);modelo=delim["questoes_tecnicas"][0];prov=copy.deepcopy(modelo["proveniencia"])
+        delim["questoes_tecnicas"]=[{**copy.deepcopy(modelo),"id":"QT-001","descricao":"Caracterizar a manifestação alegada","alegacoes_relacionadas":["ALG-001"],"quesitos_relacionados":["QUE-001"]}]
+        delim["quesitos"]=[{"origem":"JUIZO","documento_id":"DOC-PJE-001","id_pje":"900001","caminho_original":None,"texto_integral":"q","subitens":[],"paginas":[{"pagina_pdf":3,"pagina_documento":1,"pagina_original":None}],"pertinencia":"PERTINENTE_TECNICO","evidencias_necessarias":[],"materia_tecnica":"Medir a abertura das fissuras sob carga estrutural.","materia_juridica_associada":None,"secoes_laudisticas_previstas":["3"],"proveniencia":prov,"id":"QUE-001","numero_original":"1","ordem_real":1,"questoes_tecnicas_relacionadas":["QT-001"],"status_cobertura":"PARCIAL","ressalvas_aplicaveis":[]}]
+        delim["matriz_cobertura"]=[{"quesito_id":"QUE-001","questoes_tecnicas":["QT-001"],"secoes_laudisticas":["3"],"status":"PARCIAL"}]
+        with tempfile.TemporaryDirectory() as td:
+            p=Path(td);(p/"processo.json").write_text(json.dumps(processo),encoding="utf-8");(p/"delimitacao-pericial.json").write_text(json.dumps(delim),encoding="utf-8");plano=gerar_plano(p)
+        calc=recalcular_cobertura(plano)
+        self.assertEqual(calc["cobertura_relacional"]["QUE-001"],True)
+        self.assertEqual(calc["cobertura_requisitos_semanticos"]["QUE-001"],False)
+        self.assertTrue(calc["requisitos_materiais_nao_mapeados"])
+        self.assertEqual(plano["status"],"BLOQUEADO_PARA_VISTORIA")
+        self.assertTrue(any("quantitativo" in x for x in plano["pendencias"]))
 
 if __name__=="__main__":unittest.main()

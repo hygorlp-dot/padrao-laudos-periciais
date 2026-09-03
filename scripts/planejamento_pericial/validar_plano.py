@@ -47,17 +47,53 @@ def capability_item(tipo,item):
     valores=[str(item.get(c) or "").strip().casefold() for c in campos if item.get(c)]
     return " | ".join(valores) if valores else None
 
+_STATUS_NAO_COBRIVEL=frozenset({"EXTRACAO_INDETERMINADA","NAO_MAPEADO"})
+
+def _termos_conteudo(texto):
+    from scripts.planejamento_pericial.requisitos_materiais import termos_conteudo
+    return termos_conteudo(texto)
+
 def corresponde_requisito(requisito,item):
+    """Vínculo requisito→item DEMONSTRÁVEL: todos os termos de conteúdo do
+    requisito aparecem no material do item. Determinístico, invariante à ordem,
+    sem threshold. NÃO é o mecanismo de descoberta (isso é do gerador); é a
+    validação de um vínculo já declarado estruturalmente."""
     material=" ".join(str(item.get(c) or "") for c in ("verificar","justificativa","evidencia_esperada","motivo","finalidade","nome","descricao","criterio_satisfacao"))
-    normalizado=re.sub(r"[^a-z0-9]+"," ",_normalizar_semantica(requisito)).strip()
-    material_normalizado=re.sub(r"[^a-z0-9]+"," ",_normalizar_semantica(material)).strip()
-    return bool(normalizado and normalizado in material_normalizado)
+    req=_termos_conteudo(requisito)
+    return bool(req) and req<=_termos_conteudo(material)
+
+def _cobertura_semantica(dado,por_quesito):
+    """Autoridade = mapeamento estruturado explícito (requisitos_semanticos[].itens_planejados),
+    validado por: item existe, vinculado relacionalmente ao quesito, e vínculo demonstrável."""
+    cobertura_por_id={c.get("quesito"):c for c in dado.get("cobertura",[])}
+    itens={item.get("id"):item for chave in ("atividades","medicoes","fotografias","ensaios","documentos_a_solicitar") for item in dado.get(chave,[]) if isinstance(item,dict)}
+    por_quesito_sem={qid:False for qid in por_quesito};agrupados={qid:[] for qid in por_quesito}
+    for r in dado.get("requisitos_semanticos",[]):
+        if r.get("quesito") in agrupados:agrupados[r["quesito"]].append(r)
+    total=cobertos=0;nao_mapeados=[]
+    for qid,grupo in agrupados.items():
+        vinculados={i for chave in ("atividades","medicoes","fotografias","ensaios","documentos") for i in cobertura_por_id.get(qid,{}).get(chave,[])}
+        grupo_ok=bool(grupo)
+        for r in grupo:
+            total+=1
+            planejados=r.get("itens_planejados") or []
+            mapeado=(r.get("status") not in _STATUS_NAO_COBRIVEL and bool(planejados) and bool(str(r.get("requisito") or "").strip()) and all(
+                item_id in itens and item_id in vinculados and corresponde_requisito(r["requisito"],itens[item_id]) for item_id in planejados))
+            if mapeado:cobertos+=1
+            else:grupo_ok=False;nao_mapeados.append(r.get("requirement_id") or f"{qid}:{r.get('requisito','')[:40]}")
+        por_quesito_sem[qid]=grupo_ok
+    fracao=(cobertos/total) if total else 0.0
+    return {"cobertura_requisitos_semanticos":por_quesito_sem,"total_requisitos_materiais":total,
+            "requisitos_materiais_cobertos":cobertos,"requisitos_materiais_nao_mapeados":nao_mapeados,
+            "cobertura_semantica_fracao":fracao}
 
 def recalcular_cobertura(dado):
     requisitos=dado.get("requisitos_cobertura",[]);por_quesito={}
     if not requisitos:
         vazia={c["quesito"]:False for c in dado.get("cobertura",[])}
-        return {"cobertura":vazia,"cobertura_relacional":vazia,"cobertura_requisitos_semanticos":vazia,"apto":False}
+        return {"cobertura":vazia,"cobertura_relacional":vazia,"cobertura_requisitos_semanticos":vazia,
+                "total_requisitos_materiais":0,"requisitos_materiais_cobertos":0,"requisitos_materiais_nao_mapeados":[],
+                "cobertura_semantica_fracao":0.0,"apto":False}
     catalogos={chave:{item.get("id"):set(item.get("questoes_tecnicas",[])) for item in dado.get(chave,[]) if isinstance(item,dict)} for chave in ("atividades","medicoes","fotografias","ensaios")}
     catalogos["documentos"]={item.get("id"):set(item.get("questoes_tecnicas",[])) for item in dado.get("documentos_a_solicitar",[]) if isinstance(item,dict)}
     def satisfaz(requisito,ids=None):
@@ -71,20 +107,10 @@ def recalcular_cobertura(dado):
             if requisito.get("obrigatoriedade")!="OBRIGATORIA" or requisito.get("questao_tecnica") not in qts:continue
             chave=TIPOS_COBERTURA.get(requisito.get("tipo"));ok=ok and satisfaz(requisito,c.get(chave,[]) if chave else [])
         por_quesito[c["quesito"]]=ok
-    cobertura_por_id={c.get("quesito"):c for c in dado.get("cobertura",[])}
-    itens={item.get("id"):item for chave in ("atividades","medicoes","fotografias","ensaios","documentos_a_solicitar") for item in dado.get(chave,[]) if isinstance(item,dict)}
-    semantica={qid:False for qid in por_quesito};agrupados={qid:[] for qid in por_quesito}
-    for requisito in dado.get("requisitos_semanticos",[]):
-        if requisito.get("quesito") in agrupados:agrupados[requisito["quesito"]].append(requisito)
-    for qid,grupo in agrupados.items():
-        cobertura_q=cobertura_por_id.get(qid,{})
-        vinculados={item_id for chave in ("atividades","medicoes","fotografias","ensaios","documentos") for item_id in cobertura_q.get(chave,[])}
-        semantica[qid]=bool(grupo) and all(bool(r.get("requisito")) and bool(r.get("itens_planejados")) and all(
-            item_id in vinculados and item_id in itens and corresponde_requisito(r["requisito"],itens[item_id])
-            for item_id in r.get("itens_planejados",[])) for r in grupo)
+    sem=_cobertura_semantica(dado,por_quesito)
     globais=all(satisfaz(r) for r in requisitos if r.get("obrigatoriedade")=="OBRIGATORIA")
-    return {"cobertura":por_quesito,"cobertura_relacional":por_quesito,"cobertura_requisitos_semanticos":semantica,
-            "apto":globais and all(por_quesito.values()) and all(semantica.values())}
+    apto=globais and all(por_quesito.values()) and all(sem["cobertura_requisitos_semanticos"].values()) and not sem["requisitos_materiais_nao_mapeados"]
+    return {"cobertura":por_quesito,"cobertura_relacional":por_quesito,"apto":apto,**sem}
 
 def recalcular_execucao(plano,vistoria):
     """Recalcula REQUIRED→EXECUTED sem confiar no status persistido."""
