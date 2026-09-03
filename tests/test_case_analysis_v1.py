@@ -472,7 +472,13 @@ def test_effective_review_projection_preserves_source_and_dedicated_command_owns
     )
     calls = []
     service = ReviewCaseAnalysisItem(
-        SimpleNamespace(execute=lambda _workspace: (record, snapshot)),
+        # AUDITOR_TEST_CHANGED | RESPONSE_SHAPE_ADAPTATION
+        # Os comandos deixaram de partir do snapshot PROJETADO e passaram a
+        # partir do persistido, com a disponibilidade vigente ao lado. O duble
+        # precisa oferecer o contrato real: se ele caisse de volta em `execute`,
+        # o teste voltaria a exercitar justamente o caminho que causava a
+        # paralisia da analise apos uma exclusao profissional.
+        SimpleNamespace(execute_for_command=lambda _workspace: (record, snapshot, {})),
         SimpleNamespace(execute=lambda *args, **kwargs: calls.append((args, kwargs)) or SimpleNamespace(revision=2)),
         SimpleNamespace(now=lambda: datetime(2026, 8, 31, 12, tzinfo=UTC)),
         SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
@@ -560,7 +566,8 @@ def test_typed_item_command_resolves_sha_server_side_and_preserves_append_only_s
     )
     calls = []
     service = AddCaseAnalysisItem(
-        SimpleNamespace(execute=lambda _workspace: (record, original)),
+        # AUDITOR_TEST_CHANGED | RESPONSE_SHAPE_ADAPTATION (ver acima)
+        SimpleNamespace(execute_for_command=lambda _workspace: (record, original, {})),
         SimpleNamespace(execute=lambda *args, **kwargs: calls.append((args, kwargs)) or SimpleNamespace(revision=2)),
         SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
     )

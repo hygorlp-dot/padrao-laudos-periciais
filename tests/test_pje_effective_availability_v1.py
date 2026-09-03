@@ -85,7 +85,14 @@ def test_S07_exclusion_can_be_reversed_and_the_history_stays_auditable(tmp_path)
         excluded = _effective(runtime, workspace_id)
         target = _find(excluded, "DOC-PJE-002")
         assert target["content_available"] is False
-        assert target["document_id"] in excluded["stale_document_ids"]
+        # AUDITOR_TEST_CHANGED | INVALID_PREMISE
+        # A afirmacao anterior era `in excluded["stale_document_ids"]`, e era ela
+        # que fixava o defeito: `stale_document_ids` e o canal de DERIVA DE
+        # FONTE, e todo comando a jusante o trata como fatal. Exigir que a
+        # decisao profissional entrasse ali tornava verde a paralisia da analise.
+        assert target["document_id"] not in excluded["stale_document_ids"], (
+            "decisao profissional nao e deriva de fonte; conflatar as duas paralisa a analise"
+        )
         assert excluded["coverage"]["documents_unavailable"] == 1
         assert excluded["coverage"]["status"] != "COMPLETE"
 
@@ -185,5 +192,70 @@ def test_S07_raw_artifact_route_never_serves_case_analysis(tmp_path):
         assert status == 404, (
             "a revisao crua de Case Analysis ficou legivel e contornaria a projecao efetiva"
         )
+    finally:
+        runtime.close()
+
+
+def test_SA03_a_professional_exclusion_does_not_freeze_the_analysis(tmp_path):
+    """Excluir um documento nao pode parar a analise inteira.
+
+    Era o desfecho anterior: apos uma exclusao, `POST /case-analysis/items` e
+    `POST /case-analysis/reviews` respondiam 409 -- inclusive para itens que
+    citavam OUTRO documento -- e a unica forma de voltar a trabalhar era o
+    perito desfazer a propria decisao. O sistema coagia ao abandono do juizo
+    profissional que esta funcionalidade existe para registrar.
+
+    Duas causas somadas: a decisao entrava no canal de deriva de fonte, e o
+    caminho de ESCRITA partia do snapshot projetado, que por construcao diverge
+    do predecessor persistido (`source extraction is immutable`).
+    """
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-a")
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_id, material = _setup(runtime, pdf)
+        analysis = _effective(runtime, workspace_id)
+        documents = analysis["documents"]
+        assert len(documents) >= 2, "a cena precisa de outro documento para citar"
+        kept = next(d for d in documents if d["document_id"].startswith("DOC-PJE-001"))
+
+        def add_item(revision, text, source_document_id):
+            return _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis/items", value={
+                "expected_revision": revision, "item_kind": "PERICIAL_OBJECT", "text": text,
+                "source_document_id": source_document_id, "page_or_span": "p. 1",
+                "technical_subjects": ["tema sintetico"], "values": {},
+            })
+
+        status, current = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        status, created = add_item(current["revision"], "Objeto anterior.", kept["document_id"])
+        assert status == 200, created
+
+        _set_available(runtime, workspace_id, material["content_id"], "DOC-PJE-002", False)
+
+        status, after = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        assert after["snapshot"]["stale_document_ids"] == []
+        assert after["snapshot"]["coverage"]["status"] != "COMPLETE"
+
+        # 1. O trabalho continua possivel sobre o que permanece disponivel.
+        status, appended = add_item(after["revision"], "Objeto posterior.", kept["document_id"])
+        assert status == 200, f"a exclusao congelou a captura de itens: {appended}"
+
+        # 2. A revisao humana tambem.
+        status, fresh = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        status, reviewed = _request(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis/reviews", value={
+                "expected_revision": fresh["revision"],
+                "target_item_id": fresh["snapshot"]["pericial_objects"][0]["item_id"],
+                "action": "CONFIRM", "corrected_value": None,
+                "reviewer": "PROFESSIONAL-001", "reason": "Revisao humana sintetica.",
+            })
+        assert status == 200, f"a exclusao congelou a revisao humana: {reviewed}"
+
+        # 3. Mas o documento excluido nao volta pela porta dos fundos.
+        status, latest = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        excluded_id = next(
+            d["document_id"] for d in latest["snapshot"]["documents"] if not d["content_available"]
+        )
+        status, refused = add_item(latest["revision"], "Objeto sobre excluido.", excluded_id)
+        assert status == 400, f"um item novo citou documento que o perito excluiu: {refused}"
     finally:
         runtime.close()

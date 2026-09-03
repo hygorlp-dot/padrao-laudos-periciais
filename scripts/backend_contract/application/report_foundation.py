@@ -379,7 +379,10 @@ def _claim_sources(binding: ReportSourceSnapshot, case, inspection, technical, p
     return {
         "ALLEGATION": ({item.item_id for item in case.claims}, binding.case_analysis_revision),
         "COURT_DECISION": ({item.item_id for item in case.decisions}, binding.case_analysis_revision),
-        "CASE_DOCUMENT": ({item.document_id for item in case.documents}, binding.case_analysis_revision),
+        # Documento excluido pelo perito continua inventariado, mas deixa de ser
+        # autoridade documental: uma afirmacao do laudo apoiada nele tornaria a
+        # exclusao meramente cosmetica na tela.
+        "CASE_DOCUMENT": ({item.document_id for item in case.documents if item.content_available}, binding.case_analysis_revision),
         "FIELD_OBSERVATION": ({item.observation_id for item in inspection.observations}, binding.inspection_session_revision),
         "MEASUREMENT": ({item.measurement_id for item in inspection.measurements}, binding.inspection_session_revision),
         "PATHOLOGY": (set(pathology.effective_pat_ids) if pathology is not None else set(), binding.construction_defect_analysis_revision),
@@ -389,7 +392,7 @@ def _claim_sources(binding: ReportSourceSnapshot, case, inspection, technical, p
 
 
 def _context_sources(case, technical) -> dict[str, set[str]]:
-    documents = {item.document_id for item in case.documents}
+    documents = {item.document_id for item in case.documents if item.content_available}
     claims = {item.item_id for item in case.claims}
     decisions = {item.item_id for item in case.decisions}
     participants = {item.participant_id for item in case.judicial_context.participants}

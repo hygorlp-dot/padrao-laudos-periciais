@@ -628,3 +628,57 @@ def test_expert_profile_server_owns_identity_and_existing_professional_identity_
         service.execute(WorkspaceId.parse(payload()["workspace_id"]), replace(profile, profile_id="FORGED"), None)
     with pytest.raises(ValueError, match="cannot be rewritten"):
         service.execute(WorkspaceId.parse(payload()["workspace_id"]), replace(profile, revision=2, registration="FORGED"), 1)
+
+
+def test_SA04_a_document_excluded_by_the_professional_is_not_report_authority():
+    """Mesma classe de vazamento, uma camada adiante -- e esta e a ENTREGA.
+
+    O laudo e o produto final: uma afirmacao apoiada em documento que o perito
+    retirou da analise faria a exclusao valer apenas na tela, enquanto a peca
+    assinada segue apoiada nele. O mesmo vale para o campo de contexto do
+    CPC-319, onde o documento responde por PROCESS_NUMBER.
+
+    Sobre o controle positivo, com precisao: `claims[0]` da fixture JA cita
+    DOC-001, entao `citing("DOC-001")` reproduz o snapshot predecessor e o que
+    ele demonstra e que o caminho aceita um documento disponivel nesta revisao.
+    Nao e um controle mais forte porque nao pode ser: qualquer mudanca material
+    de verdade e barrada antes pela guarda de rascunho pos-revisao. Por isso o
+    caso negativo casa a mensagem ESPECIFICA da guarda de autoridade -- sem
+    isso ele ficaria verde pela guarda de rascunho, que e exatamente o que
+    acontece quando o filtro de disponibilidade nao existe.
+    """
+    records, case, inspection, technical, profile = upstreams()
+    availability = {item.document_id: item.content_available for item in case.documents}
+    assert availability["DOC-003"] is False and availability["DOC-001"] is True, (
+        "a fixture precisa de um documento excluido e um disponivel"
+    )
+    snapshot = bound_report()
+    predecessor_record = ArtifactRevision(
+        WorkspaceId.parse(snapshot.workspace_id), "REPORT_SNAPSHOT_V1", "REPORT-SNAPSHOT",
+        "77777777-7777-4777-8777-777777777777", 4, "2026-08-31T11:02:00+00:00", "e" * 64,
+        report_snapshot_to_mapping(snapshot),
+    )
+    service = SaveReportSnapshot(
+        SimpleNamespace(append_if_latest=lambda **_kwargs: SimpleNamespace(revision=5)),
+        SimpleNamespace(execute=lambda _workspace: (records[0], case)),
+        SimpleNamespace(execute=lambda _workspace: (records[1], inspection)),
+        SimpleNamespace(execute=lambda _workspace: (records[2], technical)),
+        SimpleNamespace(execute=lambda _workspace: (records[3], profile)),
+        SimpleNamespace(execute=lambda *_args: predecessor_record), nullcontext,
+        SimpleNamespace(now=lambda: datetime.now(UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
+    )
+    workspace = WorkspaceId.parse(snapshot.workspace_id)
+
+    def citing(document_id):
+        claim = snapshot.claims[0]
+        provenance = replace(
+            claim.provenance[0], source_kind="CASE_DOCUMENT", source_id=document_id,
+            source_revision=snapshot.source_snapshot.case_analysis_revision,
+        )
+        return replace(snapshot, claims=(replace(claim, provenance=(provenance,)), *snapshot.claims[1:]))
+
+    with pytest.raises(ValueError, match="not present in bound upstream"):
+        service.execute(workspace, citing("DOC-003"), 4)
+    # Controle positivo: mesmo caminho, documento disponivel, aceito.
+    service.execute(workspace, citing("DOC-001"), 4)

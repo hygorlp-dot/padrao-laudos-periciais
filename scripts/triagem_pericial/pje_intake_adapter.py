@@ -20,6 +20,8 @@ truncado nao pode derrubar a importacao de quem nunca quis um PJe.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import tempfile
 from pathlib import Path
 
@@ -41,6 +43,35 @@ _NOT_A_READABLE_PJE_EXPORT = (
     MalformedPDFException,
     OSError,
 )
+
+
+def _diagnostic_from_error(item) -> dict:
+    """`validar_integridade` devolve erros como STRING, nao como registro.
+
+    Tratar os tres canais do manifesto (`erros`, `conflitos`, `pendencias`) com
+    a mesma forma quebrava a importacao inteira: `str.get` nao existe, e
+    `AttributeError` nao esta em `_NOT_A_READABLE_PJE_EXPORT`, entao a excecao
+    escapava da porta como erro interno. O canal `erros` e justamente o que
+    marca o export como BLOQUEADO -- ou seja, o caminho que o status BLOCKED
+    existe para registrar era o unico que nunca chegava a ser registrado.
+
+    O texto tem a forma "<identidade>: <descricao>"; a identidade e preservada
+    como codigo quando existe, porque e ela que diz QUAL documento divergiu.
+    """
+    text = str(item)
+    identity, separator, description = text.partition(": ")
+    if separator and identity and " " not in identity:
+        return {"code": identity, "detail": description or text}
+    return {"code": "PJE_MANIFESTO_ERRO", "detail": text}
+
+
+def _diagnostic_from_record(item, identity_field: str, fallback: str) -> dict:
+    """Conflitos e pendencias sao registros; preserva-se o id que os nomeia."""
+    if not isinstance(item, Mapping):
+        return _diagnostic_from_error(item)
+    code = item.get(identity_field) or item.get("tipo") or item.get("campo") or fallback
+    detail = item.get("descricao") or item.get("motivo_ausencia") or item.get("campo")
+    return {"code": str(code), "detail": str(detail or "divergencia no manifesto PJe")}
 
 
 class PjeIntakeAdapter:
@@ -67,9 +98,11 @@ class PjeIntakeAdapter:
         # esperado, nao corrupcao. Registrar o diagnostico preserva a informacao
         # sem afirmar um inventario que o parser nao pode sustentar.
         diagnostics = [
-            {"code": str(item.get("codigo") or item.get("tipo") or "PJE_ERRO"),
-             "detail": str(item.get("descricao") or item.get("campo") or "divergencia no manifesto PJe")}
-            for item in (*errors, *manifesto.get("conflitos", ()), *manifesto.get("pendencias", ()))
+            *(_diagnostic_from_error(item) for item in errors),
+            *(_diagnostic_from_record(item, "conflito_id", "CON-PJE")
+              for item in manifesto.get("conflitos", ())),
+            *(_diagnostic_from_record(item, "pendencia_id", "PEN-PJE")
+              for item in manifesto.get("pendencias", ())),
         ]
         if errors or manifesto.get("status_validacao") != "VALIDADO":
             return {"status": "BLOCKED", "diagnostics": diagnostics or [

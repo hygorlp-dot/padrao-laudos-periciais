@@ -186,3 +186,60 @@ def test_S08_party_table_interrupted_is_recorded_not_discarded(tmp_path):
     body = inspect.getsource(services._pje_inventory_payload)
     assert "final_state" in body, "o construtor do inventario voltou a descartar o sinal"
     assert "PJE_TABELA_PARTES_INTERROMPIDA" in body
+
+
+def _duplicated_index_pje_pdf(path):
+    """Export cujo indice lista o MESMO documento duas vezes.
+
+    Caso real: reexportacao concatenada, ou autos em dois volumes baixados
+    juntos. `validar_integridade` responde por `erros` -- e `erros` e uma lista
+    de STRING, ao contrario de `conflitos` e `pendencias`, que sao registros.
+    """
+    from pypdf import PdfReader, PdfWriter
+
+    base = path.with_name(f"base-{path.name}")
+    pdf_sintetico(base)
+    reader = PdfReader(str(base))
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    for page in list(reader.pages)[1:]:
+        writer.add_page(page)
+    with open(path, "wb") as handle:
+        writer.write(handle)
+    return path
+
+
+def test_SA02_a_manifest_error_is_recorded_as_BLOCKED_not_raised_as_internal_error(tmp_path):
+    """O canal `erros` do manifesto e o que mais marca BLOQUEADO -- e era o unico
+    que nunca chegava a ser registrado.
+
+    Os tres canais de diagnostico tem formas diferentes (`erros` sao strings;
+    `conflitos` e `pendencias` sao registros). Trata-los como uma forma so
+    levantava `AttributeError`, que nao esta em `_NOT_A_READABLE_PJE_EXPORT` e
+    portanto escapava da porta como erro interno: 500 na importacao e 404 no
+    inventario, exatamente onde o produto deveria dizer "e um PJe, e nao consegui
+    separa-lo, e aqui esta o porque".
+    """
+    pdf = _duplicated_index_pje_pdf(tmp_path / "duplicado.pdf")
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_id = _workspace(runtime)
+        # `_import` ja afirma 201: hoje isto e 500, porque a excecao escapa da porta.
+        _import(runtime, workspace_id, pdf, "duplicado.pdf")
+
+        status, envelope = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
+        assert status == 200, envelope
+        inventory = envelope["intakes"][0]["inventory"]
+        assert inventory["status"] == "BLOCKED"
+        assert inventory["diagnostics"], "um BLOCKED sem diagnostico nao diz por que"
+        # A identidade do documento divergente precisa sobreviver ao diagnostico:
+        # sem ela o perito sabe que falhou, mas nao onde.
+        codes = {item["code"] for item in inventory["diagnostics"]}
+        assert "DOC-PJE-001" in codes, codes
+        assert all(item["detail"] for item in inventory["diagnostics"])
+
+        # E a consequencia: nada disso pode fechar cobertura.
+        assert _coverage(runtime, workspace_id)["status"] != "COMPLETE"
+    finally:
+        runtime.close()

@@ -376,9 +376,22 @@ class CaseAnalysisSnapshot:
 
         A projecao resolve isso na LEITURA, como ja se faz com hash de fonte: o
         documento excluido deixa de estar disponivel no estado efetivo, a
-        cobertura e recomputada, e ele entra em `stale_document_ids` para que
-        tudo o que dele derivou seja marcado como carente de revisao em vez de
-        seguir se declarando valido.
+        cobertura e recomputada, e tudo o que dele derivou e marcado como
+        carente de revisao em vez de seguir se declarando valido.
+
+        O que a projecao NAO faz e alimentar `stale_document_ids`. Esse campo e
+        o canal de DERIVA DE FONTE -- "os bytes por baixo deste documento
+        mudaram, nao construa mais nada sobre eles" -- e todo comando a jusante
+        o trata como fatal. Uma exclusao profissional nao e deriva de fonte: e o
+        perito estreitando o escopo de proposito. Conflatar as duas paralisava a
+        analise inteira (novos itens e revisoes humanas passavam a responder
+        409, mesmo citando OUTRO documento), e a unica saida era o perito
+        desfazer a propria decisao -- ou seja, o sistema forcava o abandono do
+        juizo profissional que esta funcionalidade existe para registrar.
+
+        A exclusao continua tendo dentes onde importa: o documento sai do estado
+        efetivo, a cobertura deixa de fechar, os itens derivados ficam `stale` e
+        as guardas de autoridade a jusante recusam cita-lo como fonte.
         """
         revised = {
             document.document_id: availability[document.document_id]
@@ -401,6 +414,8 @@ class CaseAnalysisSnapshot:
             else CoverageStatus.PARTIAL if analyzed
             else CoverageStatus.UNAVAILABLE
         )
+        # `changed` marca os itens derivados; `stale_document_ids` permanece
+        # reservado a deriva de fonte e NAO recebe a decisao profissional.
         changed = tuple(sorted(set(self.stale_document_ids) | set(revised)))
 
         def stale(items):
@@ -428,7 +443,6 @@ class CaseAnalysisSnapshot:
             technical_document_references=stale(self.technical_document_references),
             gaps=stale(self.gaps),
             conflicts=stale(self.conflicts),
-            stale_document_ids=changed,
         )
 
     def reconcile_sources(self, source_hashes: dict[str, str]):
