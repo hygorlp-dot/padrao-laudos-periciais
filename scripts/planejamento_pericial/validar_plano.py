@@ -48,6 +48,11 @@ def capability_item(tipo,item):
     return " | ".join(valores) if valores else None
 
 _STATUS_NAO_COBRIVEL=frozenset({"EXTRACAO_INDETERMINADA","NAO_MAPEADO"})
+# Tipos de item cujo schema ($defs.ensaio, $defs.documentoPlanejado em
+# plano-vistoria.schema.json) NÃO tem campo `quesitos` (additionalProperties:
+# false) — para esses, a interseção de questão técnica é a ÚNICA autoridade de
+# vínculo que o próprio schema disponibiliza, não uma inferência de conveniência.
+_TIPOS_SEM_CAMPO_QUESITOS=frozenset({"ensaios","documentos"})
 # Item planejado de tipo APROPRIADO para satisfazer cada classe de requisito material.
 # MEDICAO exige leitura instrumental/ensaio; DOCUMENTO exige artefato documental;
 # uma atividade genérica NÃO satisfaz um requisito de medição — essa é a autoridade
@@ -62,9 +67,23 @@ def _cobertura_semantica(dado,por_quesito):
     à classe do requisito). Sem qualquer comparação textual.
 
     V11 (P1-A2-2): o vínculo NÃO é lido de cobertura[quesito] — lista editável que
-    admitia item ESTRANGEIRO ao quesito listado à força. O vínculo é RE-DERIVADO do
-    próprio item: existe E (qid ∈ item.quesitos OU item.questoes_tecnicas ∩
-    questoes_tecnicas da cobertura do quesito ≠ ∅)."""
+    admitia item ESTRANGEIRO ao quesito listado à força.
+
+    V12 (reparo ESTRUTURAL — PASS A3+B3 contra 00bf26b, SAME_CLASS_SURVIVED): a
+    re-derivação "qid ∈ item.quesitos OU QT ∩ QT" do V11 ainda deixava a
+    declaração explícita do item ser SOBREPOSTA por uma questão técnica
+    incidentalmente compartilhada — um item honestamente declarado a OUTRO
+    quesito (item.quesitos=["QUE-999"]) mas cuja questão técnica também é
+    relevante para este quesito (reuso legítimo de QT entre quesitos distintos,
+    comum no domínio) era creditado aqui mesmo assim. schemas/plano-vistoria.-
+    schema.json mostra que só ATIVIDADE/MEDICAO/FOTOGRAFIA têm campo `quesitos`
+    (ENSAIO/DOCUMENTO não têm — additionalProperties:false — QT é a ÚNICA
+    autoridade estrutural disponível para esses dois tipos, não uma inferência
+    de conveniência). O vínculo passa a ser: para um tipo COM campo `quesitos`,
+    a declaração do item é autoridade ÚNICA (presente ou vazia — nunca
+    sobreposta nem complementada por QT); para um tipo SEM esse campo, a
+    interseção de questão técnica com a cobertura do quesito é a única
+    autoridade disponível pelo próprio schema."""
     cobertura_por_id={c.get("quesito"):c for c in dado.get("cobertura",[])}
     itens={chave:{item.get("id"):item for item in dado.get(fonte,[]) if isinstance(item,dict)}
            for chave,fonte in (("atividades","atividades"),("medicoes","medicoes"),("fotografias","fotografias"),
@@ -79,8 +98,13 @@ def _cobertura_semantica(dado,por_quesito):
     for qid,grupo in agrupados.items():
         qts=set(cobertura_por_id.get(qid,{}).get("questoes_tecnicas",[]))
         def vinculado(item_id,qts=qts,qid=qid):
-            item=next((itens[c][item_id] for c in itens if item_id in itens[c]),None)
-            return bool(item) and (qid in item.get("quesitos",[]) or bool(qts & set(item.get("questoes_tecnicas",[]))))
+            for chave,mapa in itens.items():
+                item=mapa.get(item_id)
+                if not item:continue
+                if chave in _TIPOS_SEM_CAMPO_QUESITOS:
+                    return bool(qts & set(item.get("questoes_tecnicas",[])))
+                return qid in (item.get("quesitos") or [])
+            return False
         if ausente:
             por_quesito_sem[qid]=False;total+=1;nao_mapeados.append(f"{qid}:SEM_REQUISITOS_SEMANTICOS");continue
         grupo_ok=bool(grupo)

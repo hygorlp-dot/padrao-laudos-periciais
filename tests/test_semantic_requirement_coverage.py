@@ -725,6 +725,103 @@ def test_recheck_da_redacao_preserva_cobertura_e_detecta_nao_mapeados():
     assert r["requisitos_materiais_nao_mapeados"] == ["R1"] and r["apto"] is False
 
 
+def test_pp_locativo_nao_atravessa_coordenacao_v12():
+    """P0 (PASS A3 contra 00bf26b, SAME_CLASS_SURVIVED): _PP_LOCATIVO tinha
+    fronteira de parada assimétrica (só ' e ' ou fim de string) — coordenação
+    com 'ou'/vírgula fazia o PP locativo engolir um objeto coordenado
+    desconhecido até o fim da string. A demanda agora é partida em cláusulas
+    ANTES de qualquer remoção (mesmo conector de _segmentar); cada cláusula é
+    contabilizada isoladamente e TODAS precisam resolver para INSPECAO."""
+    for texto in [
+        "Registrar a fissura no forro ou o parâmetro omega.",
+        "Examinar a mancha aparente na fachada ou o assentamento diferencial.",
+        "Fotografar a fissura no forro ou o parâmetro omega da estrutura.",
+        "Constatar a existência de fissura no local ou o coeficiente lambda.",
+        "Registrar a fissura no forro, o parâmetro omega da estrutura.",
+    ]:
+        assert classificar_requisito(texto) != "INSPECAO", texto
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False, texto
+        assert r["apto"] is False, texto
+
+
+def test_de_complemento_desconhecido_sem_prova_de_modo_e_indeterminada_v12():
+    """P0 (PASS B3 contra 00bf26b, SAME_CLASS_SURVIVED): o de-complemento 'de X'
+    do NP observacional era IRRESTRITO — qualquer palavra virava prova de
+    objeto por forma sintática, sem checagem de conteúdo ('a fissura DO ZETA').
+    Reproduzido ponta a ponta via gerar_plano.gerar() pelo revisor: mapeado para
+    atividade genérica auto-gerada, zero medição, apto=True. O de-complemento
+    aberto só é absorvido quando há prova de modo/suficiência visual explícita
+    em algum ponto da demanda (mesmo sinal `modo_observacional`); sem essa
+    prova, um substantivo fora do vocabulário fechado permanece resíduo."""
+    for texto in [
+        "Verificar a fissura do zeta.",
+        "Verificar a fissura do zeta do omega do lambda do phi do sigma.",
+        "Constatar a existência da mancha do parâmetro omega.",
+        "Avaliar o cobrimento das armaduras do apoio zeta.",
+    ]:
+        assert classificar_requisito(texto) != "INSPECAO", texto
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False, texto
+        assert r["apto"] is False, texto
+
+
+def test_de_complemento_seguro_e_aberto_com_modo_continuam_inspecao_v12():
+    """Contraparte positiva do V12: complemento de elemento/local construtivo
+    conhecido ('da parede') continua absorvido sem exigência adicional; e um
+    de-complemento desconhecido, quando a demanda tem prova de modo/suficiência
+    visual explícita em qualquer ponto (verbo de observação direta ou
+    marcador visual), continua INSPECAO — a propriedade open-world nega o
+    default, não a evidência positiva (mesmo princípio do teste metamórfico)."""
+    for texto in [
+        "Verificar a fissura da parede.",
+        "Registrar a mancha da fachada.",
+        "Fotografar a fissura de lambda na viga.",
+        "Registrar a mancha de zeta visível na parede.",
+    ]:
+        assert classificar_requisito(texto) == "INSPECAO", texto
+
+
+def test_vinculo_nao_sobreposto_por_qt_compartilhada_entre_quesitos_v12():
+    """P0 (PASS A3+B3 contra 00bf26b, SAME_CLASS_SURVIVED): a re-derivação
+    'qid ∈ item.quesitos OU QT ∩ QT' do V11 ainda deixava a declaração
+    explícita do item ser SOBREPOSTA por questão técnica incidentalmente
+    compartilhada — um item honestamente declarado a OUTRO quesito
+    (quesitos=['QUE-999']), mas cuja questão técnica também é relevante para
+    QUE-001 (reuso legítimo de QT entre quesitos distintos), era creditado a
+    QUE-001 mesmo assim. Para tipos com campo `quesitos` no schema
+    (atividade/medicao/fotografia), a declaração do item é autoridade ÚNICA —
+    nunca sobreposta nem complementada por QT."""
+    estrangeira = {**_med("MED-PLANO-999"), "quesitos": ["QUE-999"]}  # QT-001 preservada de propósito
+    plano = _plan_with([_r("R1", "Aferir a abertura das fissuras.", ["MED-PLANO-999"])],
+                       medicoes=[estrangeira])
+    plano["requisitos_cobertura"] = [x for x in plano["requisitos_cobertura"] if x["tipo"] != "MEDICAO"]
+    r = recalcular_cobertura(plano)
+    assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False
+    assert "R1" in r["requisitos_materiais_nao_mapeados"] and r["apto"] is False
+    from scripts.planejamento_pericial.validar_plano import recalcular_execucao
+    vistoria = {
+        "cobertura": [{"planejado": "ATV-001", "status": "EXECUTADO", "executado": ["ATV-001-EXEC"]},
+                      {"planejado": "MED-PLANO-999", "status": "EXECUTADO", "executado": ["MED-999-EXEC"]}],
+        "atividades_executadas": [{"id": "ATV-001-EXEC", "atividade_planejada": "ATV-001", "questoes_tecnicas": ["QT-001"]}],
+        "medicoes": [{"id": "MED-999-EXEC", "medicao_planejada": "MED-PLANO-999", "questoes": ["QT-001"]}],
+    }
+    assert recalcular_execucao(plano, vistoria)["apto"] is False
+
+
+def test_vinculo_ignora_cobertura_adulterada_quando_item_declara_outro_quesito_v12():
+    """Variante A do P0 acima: adulterar cobertura[quesito].questoes_tecnicas
+    diretamente (lista editável) não muda o resultado — um item que declara
+    explicitamente pertencer a outro quesito nunca é creditado, qualquer que
+    seja o conteúdo de cobertura[]."""
+    estrangeira = {**_med("MED-999"), "questoes_tecnicas": ["QT-999"], "quesitos": ["QUE-999"]}
+    plano = _plan_with([_r("R1", "Aferir a abertura das fissuras.", ["MED-999"])], medicoes=[estrangeira])
+    plano["requisitos_cobertura"] = [x for x in plano["requisitos_cobertura"] if x["tipo"] != "MEDICAO"]
+    plano["cobertura"][0]["questoes_tecnicas"] = ["QT-999"]  # adulteração da lista editável
+    r = recalcular_cobertura(plano)
+    assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False and r["apto"] is False
+
+
 def test_marcador_de_modo_sem_prova_de_objeto_e_sobre_bloqueio_seguro():
     """SAFE_OVERBLOCKING != FALSE_GREEN: no funil, qualificador de modo
     ('visualmente', 'fotograficamente', ...) sem fenômeno visual conhecido nem
