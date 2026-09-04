@@ -822,6 +822,89 @@ def test_vinculo_ignora_cobertura_adulterada_quando_item_declara_outro_quesito_v
     assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False and r["apto"] is False
 
 
+def test_verbo_observacao_direta_generico_nao_libera_complemento_aberto_v121():
+    """P0 (PASS B4 contra daaceac, SAME_CLASS_SURVIVED): o V12 usava o mesmo
+    sinal `modo_observacional` (verbo de observação direta OU marcador visual)
+    para liberar o de-complemento ABERTO — mas o próprio módulo já documenta
+    esses verbos (registrar/descrever/caracterizar/localizar/observar/
+    inspecionar/examinar) como MODALIDADE-NEUTROS quanto ao objeto. Usá-los
+    para justificar o objeto do complemento contradizia essa premissa:
+    'registrar a fissura DO ZETA' não prova que 'zeta' seja observável só
+    porque 'registrar' é verbo de observação direta. Só marcador visual
+    EXPLÍCITO (_MARCADOR_VISUAL — inclui 'fotografar', definicionalmente um
+    ato visual) libera o complemento aberto; o verbo genérico sozinho não."""
+    for texto in [
+        "Registrar a fissura do zeta.",
+        "Descrever a fissura do zeta.",
+        "Caracterizar a fissura do zeta.",
+        "Localizar a fissura do zeta.",
+        "Observar a fissura do zeta.",
+        "Inspecionar a fissura do zeta.",
+        "Examinar a fissura do zeta.",
+    ]:
+        assert classificar_requisito(texto) != "INSPECAO", texto
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False, texto
+        assert r["apto"] is False, texto
+
+
+def test_marcador_visual_nao_vaza_entre_clausulas_coordenadas_v121():
+    """P0 (PASS A4+B4 contra daaceac, SAME_CLASS_SURVIVED): o sinal habilitador
+    (verbo de observação direta / marcador visual) era calculado uma única vez
+    sobre o texto INTEIRO da demanda e aplicado a TODAS as cláusulas — um
+    marcador em uma cláusula coordenada liberava o de-complemento aberto em
+    OUTRA cláusula sem marcador próprio. Cada cláusula agora recalcula seu
+    próprio sinal habilitador; o verbo inicial só é reintegrado à primeira
+    cláusula (a única que efetivamente o tinha)."""
+    for texto in [
+        "Fotografar a mancha e a fissura do zeta.",
+        "Registrar a fissura, a mancha do zeta.",
+        "Fotografar a mancha e a fissura do lambda.",
+        "Fotografar a mancha de umidade e a fissura do encunhamento das vigas.",
+    ]:
+        assert classificar_requisito(texto) != "INSPECAO", texto
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False, texto
+        assert r["apto"] is False, texto
+
+
+def test_pp_locativo_bounded_fecha_coordenadores_nao_enumerados_v121():
+    """P0 (PASS A4 contra daaceac, SAME_CLASS_SURVIVED): partir cláusulas por
+    _CONECTOR não cobre todo coordenador de português pericial ('bem como',
+    'assim como', 'além de', '/', parênteses, travessão) — dentro da MESMA
+    cláusula, o PP locativo sem limite (.* até o fim) reabria exatamente o
+    vazamento original por qualquer coordenador não enumerado. O PP locativo
+    agora é limitado a um punhado de palavras (NP locativo real é curto) —
+    fecha a classe inteira de coordenadores sem precisar enumerá-los."""
+    for texto in [
+        "Verificar a fissura na parede bem como o parametro omega.",
+        "Verificar a fissura na parede alem do parametro omega.",
+        "Verificar a fissura na parede assim como o coeficiente lambda.",
+        "Verificar a fissura na parede tanto quanto o parametro omega.",
+        "Verificar a fissura na parede (o parametro omega).",
+        "Verificar a fissura na parede - o parametro omega.",
+        "Verificar a fissura na parede / o parametro omega.",
+    ]:
+        assert classificar_requisito(texto) != "INSPECAO", texto
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False, texto
+        assert r["apto"] is False, texto
+
+
+def test_fotografar_e_marcador_visual_definicional_continua_liberando_v121():
+    """Contraparte positiva do V12.1: 'fotografar' continua suficiente SOZINHO
+    para liberar o complemento aberto (está em _MARCADOR_VISUAL — é
+    definicionalmente um ato visual/fotográfico, distinto de
+    'registrar'/'descrever'/etc, que são verbos de documentação genéricos sem
+    garantia de modalidade). Não há regressão da contraparte metamórfica
+    positiva pré-existente."""
+    for texto in [
+        "Fotografar a fissura de lambda na viga.",
+        "Fotografar a fissura do zeta.",
+    ]:
+        assert classificar_requisito(texto) == "INSPECAO", texto
+
+
 def test_marcador_de_modo_sem_prova_de_objeto_e_sobre_bloqueio_seguro():
     """SAFE_OVERBLOCKING != FALSE_GREEN: no funil, qualificador de modo
     ('visualmente', 'fotograficamente', ...) sem fenômeno visual conhecido nem

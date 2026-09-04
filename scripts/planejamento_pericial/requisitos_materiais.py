@@ -226,7 +226,8 @@ _DOC_ARTEFATO = re.compile(r"(?i)\b(?:documento|projeto|memorial|planta|art\b|rr
 #       resíduo ("VERIFICAR a fissura DO ZETA", nenhum marcador, →
 #       INDETERMINADA — este é exatamente o P0 confirmado por PASS B3).
 _PP_LOCATIVO = re.compile(
-    r"(?i)\b(?:em|n[ao]s?|numa?|junto\s+a[s]?|proximo\s+a[s]?|perto\s+d[aeo]s?)\s+.*$")
+    r"(?i)\b(?:em|n[ao]s?|numa?|junto\s+a[s]?|proximo\s+a[s]?|perto\s+d[aeo]s?)"
+    r"\s+\w+(?:\s+\w+){0,2}")
 # Qualificador admitido DENTRO do NP observacional (modo/aspecto, nunca objeto).
 # Só se ancora APÓS um head consumido — não cria prova de objeto por si só.
 _QUALIFICADOR_NP = (
@@ -244,6 +245,7 @@ _COMPLEMENTO_SEGURO = (
     r"forro\w*|calha\w*|rodap[eé]\w*|esquadria\w*|porta\w*|janela\w*|escada\w*|"
     r"corredor\w*|ambiente\w*|c[oô]modo\w*|im[óo]vel\w*|edifica[cç][aã]o\w*|edif[íi]cio\w*|"
     r"estrutura\w*|fachada\w*|alvenaria\w*|revestiment\w*|acabament\w*|cobertura\w*|"
+    r"elemento\w*|componente\w*|"
     r"contrapiso\w*|funda[cç][aã]o\w*|platibanda\w*|beiral\w*|guarda[- ]?corpo\w*|"
     r"peitoril\w*|batente\w*|soleira\w*|junta\w*|drywall|gesso\w*|banheiro\w*|"
     r"cozinha\w*|varanda\w*|sacada\w*|garagem\w*|terra[cç]o\w*|umidade\w*|bolor\w*|mofo\w*"
@@ -286,37 +288,66 @@ def remover_ruido_estrutural(texto: str) -> str:
     return re.sub(r"\s+", " ", limpo).strip()
 
 
-def _contabilidade_observacional(base, modo_observacional):
-    """Contabilidade integral da demanda (V11+V12). Retorna (heads, residual).
+def _contabilidade_observacional(base):
+    """Contabilidade integral da demanda (V11+V12+V12.1). Retorna (heads, residual).
 
     A demanda (após o verbo inicial removido) é partida em CLÁUSULAS coordenadas
     pelo mesmo conector canônico de _segmentar (_CONECTOR: ,/;/e/ou/eou) — um PP
-    locativo ou de-complemento NUNCA atravessa fronteira de coordenação (V12,
-    PASS A3 contra 00bf26b: "no forro OU o parâmetro omega" vazava por lookahead
-    assimétrico). Cada cláusula é contabilizada de forma ISOLADA: PP locativo
-    removido por inteiro (fenômeno citado como LOCAL não é demanda), NP
-    observacional consumido (head de fenômeno sempre; head descritivo SÓ com modo
-    observacional) com de-complemento e qualificador de modo, scaffolding
-    descartado. QUALQUER token de conteúdo residual (\\w{3,} fora de classe
-    fechada) OU cláusula sem nenhum head derruba a demanda INTEIRA para
-    INDETERMINADA — coordenar um fenômeno real a uma cláusula não resolvida NUNCA
-    absolve a cláusula não resolvida (mesmo princípio, fronteira agora estrutural
-    em vez de textual)."""
+    locativo ou de-complemento NUNCA atravessa fronteira de coordenação. Cada
+    cláusula é contabilizada de forma ISOLADA, incluindo os sinais habilitadores
+    (V12.1, PASS A4+B4 contra daaceac: um marcador em uma cláusula NÃO pode
+    liberar prova de objeto em outra cláusula coordenada sem marcador próprio —
+    "fotografar a mancha E a fissura do zeta" não absolve "zeta" só porque
+    "fotografar" está na cláusula vizinha):
+      - o ramo descritivo (_OBJETO_DESCRITIVO) exige, NESTA cláusula, verbo de
+        observação direta OU marcador visual (condição original, inalterada);
+      - o de-complemento ABERTO (qualquer palavra) exige, NESTA cláusula,
+        marcador visual EXPLÍCITO (_MARCADOR_VISUAL) — NUNCA o verbo de
+        observação direta genérico sozinho (V12.1, PASS B4: o próprio módulo já
+        documenta esses verbos como "modalidade-neutros QUANTO AO OBJETO";
+        usá-los para justificar o objeto do complemento contradiz essa própria
+        premissa — "registrar a fissura DO ZETA" não pode provar que "zeta" é
+        observável só porque "registrar" é um verbo de observação direta).
+        "fotografar" continua suficiente sozinho por já estar em
+        _MARCADOR_VISUAL — é definicionalmente um ato visual/fotográfico, não
+        apenas um verbo de documentação genérico (mantém a contraparte
+        positiva pré-existente: "fotografar a fissura DE LAMBDA" = INSPECAO).
+        Sem marcador nesta cláusula, só o complemento SEMPRE seguro
+        (_COMPLEMENTO_SEGURO) é absorvido.
+    Em cada cláusula: PP locativo removido por inteiro E BOUNDED (um punhado de
+    palavras após a preposição — nunca até o fim da cláusula: um NP locativo
+    real é curto; delimitar por comprimento fecha qualquer coordenador de
+    português não enumerado em _CONECTOR — "bem como"/"assim como"/"além
+    de"/parênteses/travessão/"/" — sem precisar enumerá-los um a um, V12.1,
+    PASS A4 contra daaceac), NP observacional consumido (head de fenômeno
+    sempre; head descritivo só com prova de modo desta cláusula) com
+    de-complemento e qualificador de modo, scaffolding descartado. QUALQUER
+    token de conteúdo residual (\\w{3,} fora de classe fechada) OU cláusula sem
+    nenhum head derruba a demanda INTEIRA para INDETERMINADA — coordenar um
+    fenômeno real a uma cláusula não resolvida NUNCA absolve a cláusula não
+    resolvida."""
     t = base.strip()
     partes = t.split(None, 1)
+    verbo_lider = ""
     if partes and _VERBO_TECNICO.fullmatch(re.sub(r"\W+", "", partes[0])):
+        verbo_lider = partes[0]
         t = partes[1] if len(partes) > 1 else ""
     clausulas = [c.strip() for c in _CONECTOR.split(t) if c and c.strip()]
     if not clausulas:
         clausulas = [t]
-    # O de-complemento ABERTO só é elegível quando há prova de modo/suficiência
-    # visual em algum ponto da demanda (modo_observacional) — mesmo sinal que já
-    # habilita o ramo descritivo, não um eixo novo. Sem essa prova, só o
-    # complemento SEMPRE seguro (_COMPLEMENTO_SEGURO) é absorvido.
-    padroes = ([_NP_DESCRITIVO_ABERTO, _NP_FENOMENO_ABERTO] if modo_observacional
-               else [_NP_FENOMENO_SEGURO])
     heads_total = 0
-    for clausula in clausulas:
+    for indice, clausula in enumerate(clausulas):
+        # O verbo inicial (já descartado de `t`) só é reintegrado à checagem de
+        # modo da PRIMEIRA cláusula — a única que efetivamente o tinha; uma
+        # cláusula coordenada seguinte nunca herda o verbo de outra.
+        texto_modo = f"{verbo_lider} {clausula}" if indice == 0 else clausula
+        habilita_descritivo = bool(_VERBO_OBSERVACAO_DIRETA.search(texto_modo)
+                                    or _MARCADOR_VISUAL.search(texto_modo))
+        habilita_aberto = bool(_MARCADOR_VISUAL.search(texto_modo))
+        if habilita_aberto:
+            padroes = [_NP_DESCRITIVO_ABERTO, _NP_FENOMENO_ABERTO] if habilita_descritivo else [_NP_FENOMENO_ABERTO]
+        else:
+            padroes = [_NP_DESCRITIVO_SEGURO, _NP_FENOMENO_SEGURO] if habilita_descritivo else [_NP_FENOMENO_SEGURO]
         c = _PP_LOCATIVO.sub(" ", clausula)
         heads_clausula = 0
         for padrao in padroes:
@@ -354,10 +385,15 @@ def classificar_requisito(texto: str) -> str:
     direta ou qualificador de modo) E ZERO token de conteúdo residual. O
     de-complemento do NP ("de X") só é absorvido sem exigência adicional quando X
     é um elemento/local construtivo conhecido (_COMPLEMENTO_SEGURO); um
-    complemento desconhecido só é absorvido quando a cláusula também traz um
-    qualificador de modo/suficiência visual explícito (V12: "a fissura DO ZETA"
-    sozinho é INDETERMINADA; "a mancha DE ZETA VISÍVEL" continua INSPECAO — o
-    qualificador prova que a manifestação em si é diretamente visível,
+    complemento desconhecido só é absorvido quando ESTA MESMA cláusula (nunca
+    uma cláusula vizinha, V12.1) também traz MARCADOR VISUAL EXPLÍCITO
+    (_MARCADOR_VISUAL — "visível"/"aparente"/"fotografar"/…) — NUNCA o verbo de
+    observação direta genérico sozinho (V12.1, PASS B4: esses verbos já são
+    documentados aqui mesmo como modalidade-neutros quanto ao objeto; "a
+    fissura DO ZETA" sozinho é INDETERMINADA mesmo com "registrar"/
+    "descrever"/"caracterizar"; "a mancha DE ZETA VISÍVEL" e "fotografar a
+    fissura DE LAMBDA" continuam INSPECAO — o marcador visual, não o verbo
+    genérico, prova que a manifestação em si é diretamente visível,
     independentemente do nome técnico atribuído a ela). Objeto desconhecido NUNCA
     vira INSPECAO sem essa prova, qualquer que seja o verbo, o marcador de modo
     ou o fenômeno coordenado/locativo. E ausência de qualquer sinal de medição;
@@ -374,8 +410,7 @@ def classificar_requisito(texto: str) -> str:
         return "DOCUMENTO"
     if mede:
         return "MEDICAO"
-    modo_observacional = bool(_VERBO_OBSERVACAO_DIRETA.search(base) or _MARCADOR_VISUAL.search(base))
-    heads, residual = _contabilidade_observacional(base, modo_observacional)
+    heads, residual = _contabilidade_observacional(base)
     if heads and not residual:
         return "INSPECAO"
     return "INDETERMINADA"

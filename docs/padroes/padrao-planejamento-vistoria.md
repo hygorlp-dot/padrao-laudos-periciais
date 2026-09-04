@@ -100,39 +100,59 @@ plano nunca é confiada.** O default é **fail-closed**: `INDETERMINADA`.
   medição; `verificar se há infiltração aparente` é inspeção — **o objeto decide**.
 
   A contabilidade funciona por eliminação, sobre o texto normalizado, **cláusula
-  a cláusula** (V12): (0) a demanda é primeiro partida em cláusulas coordenadas
-  pelo mesmo conector canônico de `_segmentar` (`,`/`;`/`e`/`ou`/`eou`) — um PP
-  locativo ou de-complemento nunca atravessa fronteira de coordenação; TODAS as
-  cláusulas precisam resolver para a demanda inteira ser `INSPECAO` (coordenar um
-  fenômeno real a uma cláusula não resolvida nunca absolve a cláusula não
-  resolvida: `"registrar a fissura no forro **ou** o parâmetro omega"` é
-  `INDETERMINADA` mesmo a primeira cláusula sendo observacional). Em cada
-  cláusula: (1) o verbo inicial é descartado; (2) todo **PP locativo** (`em/no/na/
-  junto a/próximo a/perto de ...`) é removido **por inteiro** — um fenômeno
-  citado como *local* da observação não é a *demanda*: `"verificar o cobrimento
-  das armaduras **junto às fissuras**"` não deixa o cobrimento (objeto real da
-  frase) virar observável só porque uma fissura foi citada ao lado; (3) ao menos
-  um **NP observacional** é consumido com seu de-complemento — substantivo de
-  **fenômeno inequivocamente visual** (`fissura`, `trinca`, `mancha`,
-  `infiltração`, `mofo`/`bolor`, `eflorescência`,
-  `destacamento`/`descolamento`/`desplacamento`, `bolha`/`empolamento`,
-  `ferrugem`, `vazamento`/`goteira`, `manifestação patológica`, `anomalia`,
-  `avaria`, `deterioração`, `desgaste`, `vegetação`/`entulho`/`sujidade`) sempre,
-  ou objeto descritivo-qualitativo (`padrão construtivo/de acabamento/
-  arquitetônico`, `acabamento`, `estado geral/de conservação/aparente`, `aspecto
-  geral/visual/estético`, `sistema/método/técnica construtiv-`, `tipologia`,
-  `configuração geral/arquitetônica`) só combinado com verbo de observação
-  direta ou qualificador de modo. O **de-complemento** (`"de X"`) só é absorvido
+  a cláusula** (V12/V12.1): (0) a demanda é primeiro partida em cláusulas
+  coordenadas pelo mesmo conector canônico de `_segmentar` (`,`/`;`/`e`/`ou`/
+  `eou`) — um PP locativo ou de-complemento nunca atravessa fronteira de
+  coordenação; TODAS as cláusulas precisam resolver para a demanda inteira ser
+  `INSPECAO`, **e cada cláusula recalcula seus próprios sinais habilitadores**
+  (o verbo de observação direta/marcador visual de uma cláusula NUNCA libera
+  prova de objeto em outra cláusula coordenada — `"fotografar a mancha **e** a
+  fissura do zeta"` é `INDETERMINADA`: "fotografar" só vale para "a mancha", a
+  segunda cláusula não tem marcador próprio; o verbo inicial da demanda só é
+  reintegrado à checagem da PRIMEIRA cláusula, a única que efetivamente o
+  tinha). Coordenar um fenômeno real a uma cláusula não resolvida nunca absolve
+  a cláusula não resolvida (`"registrar a fissura no forro **ou** o parâmetro
+  omega"` é `INDETERMINADA` mesmo a primeira cláusula sendo observacional). Em
+  cada cláusula: (1) o verbo inicial é descartado; (2) todo **PP locativo**
+  (`em/no/na/junto a/próximo a/perto de ...`) é removido, mas **limitado a um
+  punhado de palavras** após a preposição (nunca até o fim da cláusula — um NP
+  locativo real é curto; isso fecha qualquer coordenador de português não
+  enumerado em `_CONECTOR` — `"bem como"`, `"assim como"`, `"além de"`,
+  parênteses, travessão, `"/"` — sem precisar enumerá-los um a um: `"verificar
+  a fissura na parede **bem como** o parâmetro omega"` é `INDETERMINADA`
+  porque o PP para em `"parede"`, deixando `"parâmetro omega"` como resíduo);
+  um fenômeno citado como *local* da observação não é a *demanda*: `"verificar
+  o cobrimento das armaduras **junto às fissuras**"` não deixa o cobrimento
+  (objeto real da frase) virar observável só porque uma fissura foi citada ao
+  lado; (3) ao menos um **NP observacional** é consumido com seu
+  de-complemento — substantivo de **fenômeno inequivocamente visual**
+  (`fissura`, `trinca`, `mancha`, `infiltração`, `mofo`/`bolor`,
+  `eflorescência`, `destacamento`/`descolamento`/`desplacamento`,
+  `bolha`/`empolamento`, `ferrugem`, `vazamento`/`goteira`, `manifestação
+  patológica`, `anomalia`, `avaria`, `deterioração`, `desgaste`,
+  `vegetação`/`entulho`/`sujidade`) sempre, ou objeto descritivo-qualitativo
+  (`padrão construtivo/de acabamento/arquitetônico`, `acabamento`, `estado
+  geral/de conservação/aparente`, `aspecto geral/visual/estético`,
+  `sistema/método/técnica construtiv-`, `tipologia`, `configuração
+  geral/arquitetônica`) só combinado, NESTA cláusula, com verbo de observação
+  direta ou marcador visual. O **de-complemento** (`"de X"`) só é absorvido
   incondicionalmente quando `X` é um elemento/local construtivo conhecido
-  (`parede`, `teto`, `piso`, `laje`, `fachada`, `imóvel`, `estrutura`, `umidade`,
-  `bolor`/`mofo`, …) — nunca introduz conteúdo técnico novo, só localiza/atribui
-  o mesmo fenômeno já reconhecido; um `X` **fora** desse vocabulário só é
-  absorvido quando a demanda também tem prova de modo/suficiência visual
-  explícita em qualquer ponto (verbo de observação direta ou marcador visual —
-  `"fotografar a fissura **de lambda**"`, `"registrar a mancha **de zeta
-  visível**"` continuam `INSPECAO`); sem essa prova em lugar nenhum,
-  `"verificar a fissura **do zeta**"` fica com `X` como resíduo. (4) scaffolding
-  (conector existencial, `alegado`) e qualificador de modo são descartados;
+  (`parede`, `teto`, `piso`, `laje`, `fachada`, `imóvel`, `estrutura`,
+  `elemento`, `componente`, `umidade`, `bolor`/`mofo`, …) — nunca introduz
+  conteúdo técnico novo, só localiza/atribui o mesmo fenômeno já reconhecido;
+  um `X` **fora** desse vocabulário só é absorvido quando ESTA MESMA cláusula
+  também tem **marcador visual explícito** (`visível`/`aparente`/`fotografar`/
+  … — nunca o verbo de observação direta genérico sozinho: esses verbos já são
+  modalidade-neutros quanto ao objeto por definição, usá-los para justificar o
+  complemento seria a mesma contradição que o `INDETERMINADA` do parágrafo
+  acima existe para evitar) — `"fotografar a fissura **de lambda**"` continua
+  `INSPECAO` (`fotografar` já é o próprio marcador visual, ato definicionalmente
+  fotográfico), mas `"registrar a fissura **do zeta**"` **sozinho, sem marcador
+  visual em lugar nenhum da cláusula, é `INDETERMINADA`** — `registrar` não
+  prova que "zeta" seja observável só por ser verbo de observação direta.
+  `"registrar a mancha **de zeta visível**"` continua `INSPECAO` porque tem o
+  marcador `visível`, não porque tem `registrar`. (4) scaffolding (conector
+  existencial, `alegado`) e qualificador de modo são descartados;
   (5) **qualquer token de conteúdo remanescente derruba a cláusula para
   `INDETERMINADA`** — adjetivo desconhecido sobre um fenômeno reconhecido também
   conta como remanescente. E ausência de qualquer sinal de `MEDICAO`. Objeto
