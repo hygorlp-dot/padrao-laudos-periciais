@@ -80,7 +80,10 @@ class FinalClosureR7(unittest.TestCase):
         for tipo,(planejado,executado,colecao) in casos.items():
             with self.subTest(tipo=tipo):
                 chave={"MEDICAO":"medicoes","FOTOGRAFIA":"fotografias"}[tipo]
-                plano={chave:[planejado],"requisitos_cobertura":[{"questao_tecnica":"QT-001","tipo":tipo,"obrigatoriedade":"OBRIGATORIA","item_planejado":planejado["id"]}]}
+                plano={chave:[planejado],"requisitos_cobertura":[{"questao_tecnica":"QT-001","tipo":tipo,"obrigatoriedade":"OBRIGATORIA","item_planejado":planejado["id"]}],
+                       "requisitos_semanticos":[{"requirement_id":"REQ-001-EQ","quesito":"QUE-001",
+                                                 "requisito":"Medir a abertura das fissuras na Sala." if tipo=="MEDICAO" else "Fotografar a fissura em detalhe.",
+                                                 "itens_planejados":[planejado["id"]]}]}
                 cap="abertura" if tipo=="MEDICAO" else "fissura detalhe"
                 linha={"tipo":tipo,"planejado":planejado["id"],"status":"SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE","executado":[],"evidencia_equivalente":[executado["id"]],"equivalencia":{"requisito_original":planejado["id"],"tipo_evidencia":tipo,"capability":cap,"metodo_substituto":"metodo equivalente"},"justificativa_equivalencia":"equivalencia documentada"}
                 vistoria={colecao:[executado],"cobertura":[linha]};self.assertTrue(recalcular_execucao(plano,vistoria)["apto"])

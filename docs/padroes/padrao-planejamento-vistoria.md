@@ -84,38 +84,43 @@ plano nunca é confiada.** O default é **fail-closed**: `INDETERMINADA`.
   de`, `quantidade de`) — independentemente da grandeza que segue, porque pedir o
   *grau/nível/extensão* de algo é um pedido quantificado que o verbo de requisição
   não desambigua. Coberto só por `medicoes` ou `ensaios`.
-- `INSPECAO` — **exige evidência positiva de observabilidade NO OBJETO**. São
-  **modalidade-neutros** e **não** classificam sozinhos — nenhum decide sem um
-  sinal positivo de objeto: o verbo de requisição genérico (`verificar`,
-  `constatar`, `apontar`, `indicar`, `avaliar`, `analisar`, `determinar`,
-  `apurar`, `conferir`, `informar`); o conector existencial (`há`, `existe`,
-  `existência/presença/ausência de`) — `medir se há trinca > 0,3 mm` também usa
-  "há"; **e** o verbo de **observação direta** (`descrever`, `registrar`,
-  `fotografar`, `inspecionar`, `examinar`, `observar`, `vistoriar`, `caracterizar`,
-  `localizar`) — `registrar o assentamento diferencial` exige nivelamento
-  topográfico; `descrever a resistividade elétrica` exige sonda. `verificar se o
-  piso está nivelado` é medição; `verificar se há infiltração aparente` é
-  inspeção — **o objeto decide**. Atribui-se `INSPECAO` quando há (a) substantivo
-  de **fenômeno inequivocamente visual** (`fissura`, `trinca`, `mancha`,
-  `infiltração`, `mofo`/`bolor`, `eflorescência`, `destacamento`/`descolamento`/
-  `desplacamento`, `bolha`/`empolamento`, `ferrugem`, `vazamento`/`goteira`,
-  `manifestação patológica`, `anomalia`, `avaria`, `deterioração`, `desgaste`,
-  `vegetação`/`entulho`/`sujidade`); **ou** (b) qualificador **explicitamente
-  visual** (`visível`, `aparente`, `visualmente`, `a olho nu`, `ocular`,
-  `perceptível`, `fotograficamente`, `inspeção/exame visual`); **ou** (c) verbo de
-  observação direta **combinado com** objeto descritivo-qualitativo (`padrão
-  construtivo/de acabamento/arquitetônico`, `acabamento`, `estado geral/de
-  conservação/aparente`, `aspecto geral/visual/estético`, `sistema/método/técnica
-  construtiv-`, `tipologia`, `configuração geral/arquitetônica`, `revestimento`,
-  `pintura`, `forro`, `fachada`) — **e** ausência de qualquer sinal de `MEDICAO`.
-  Termos cuja avaliação usual é instrumental (`umidade` sem qualificador visual,
-  `corrosão`/`oxidação` sem "aparente"/"ferrugem", `assentamento diferencial`,
-  `deriva`, `flambagem`, `cobrimento`, `resistividade`, `potencial
-  eletroquímico`…) **não** habilitam nenhum dos três ramos: sem outro sinal caem
-  em `INDETERMINADA`. As três listas (fenômeno, objeto descritivo) são permissivas
-  e cada ramo é *gated*: sua incompletude causa **sobre-bloqueio** (o requisito
-  cai em `INDETERMINADA` → medição estrita), **nunca** falso-verde. Coberto por
-  atividade, fotografia, medição, ensaio ou documento.
+- `INSPECAO` — **exige prova positiva de observabilidade NO OBJETO, por UM funil
+  conjuntivo**. São **modalidade-neutros** e **não** classificam sozinhos: o verbo
+  de requisição genérico (`verificar`, `constatar`, `apontar`, `indicar`,
+  `avaliar`, `analisar`, `determinar`, `apurar`, `conferir`, `informar`); o
+  conector existencial (`há`, `existe`, `existência/presença/ausência de`) —
+  `medir se há trinca > 0,3 mm` também usa "há"; o verbo de **observação direta**
+  (`descrever`, `registrar`, `fotografar`, `inspecionar`, `examinar`, `observar`,
+  `vistoriar`, `caracterizar`, `localizar`) — `registrar o assentamento
+  diferencial` exige nivelamento topográfico; **e** o qualificador de **modo**
+  (`visível`, `aparente`, `visualmente`, `a olho nu`, `ocular`, `perceptível`,
+  `fotograficamente`, `inspeção/exame visual`) — modo não é objeto: `fotografar o
+  parâmetro omega` não prova que o objeto seja observável. `verificar se o piso
+  está nivelado` é medição; `verificar se há infiltração aparente` é inspeção —
+  **o objeto decide**. O funil conjuntivo tem prova de objeto como **condição
+  necessária em todo ramo**: (a) substantivo de **fenômeno inequivocamente
+  visual** (`fissura`, `trinca`, `mancha`, `infiltração`, `mofo`/`bolor`,
+  `eflorescência`, `destacamento`/`descolamento`/`desplacamento`,
+  `bolha`/`empolamento`, `ferrugem`, `vazamento`/`goteira`, `manifestação
+  patológica`, `anomalia`, `avaria`, `deterioração`, `desgaste`,
+  `vegetação`/`entulho`/`sujidade`); **ou** (b) objeto descritivo-qualitativo
+  (`padrão construtivo/de acabamento/arquitetônico`, `acabamento`, `estado
+  geral/de conservação/aparente`, `aspecto geral/visual/estético`,
+  `sistema/método/técnica construtiv-`, `tipologia`, `configuração
+  geral/arquitetônica`, `revestimento`, `pintura`, `forro`, `fachada`)
+  **combinado com** verbo de observação direta ou qualificador de modo — **e**
+  ausência de qualquer sinal de `MEDICAO`. Nenhum ramo concede `INSPECAO` sem
+  prova de objeto: objeto técnico desconhecido **nunca** vira `INSPECAO`,
+  qualquer que seja o verbo ou o marcador de modo. Termos cuja avaliação usual é
+  instrumental (`umidade` sem qualificador visual, `corrosão`/`oxidação` sem
+  "aparente"/"ferrugem", `assentamento diferencial`, `deriva`, `flambagem`,
+  `cobrimento`, `resistividade`, `potencial eletroquímico`, `área de
+  infiltração/mancha/fissura` — extensão quantificada…) **não** habilitam nenhum
+  ramo: sem prova de objeto caem em `INDETERMINADA`. As listas de prova de objeto
+  (fenômeno, objeto descritivo) são permissivas e o funil é *fail-closed*: sua
+  incompletude causa **sobre-bloqueio** (o requisito cai em `INDETERMINADA` →
+  medição estrita), **nunca** falso-verde. Coberto por atividade, fotografia,
+  medição, ensaio ou documento.
 - `INDETERMINADA` — nenhum sinal positivo de `INSPECAO` nem de `MEDICAO`/
   `DOCUMENTO` (ex.: verbo genérico, conector existencial ou verbo de observação
   direta sem fenômeno visual, sem qualificador visual e sem objeto descritivo —
@@ -129,6 +134,13 @@ pipelines de motor de vícios e de redação) **re-deriva a classe do requisito
 material** pelo mesmo `classificar_requisito`: um plano com requisito de medição
 sem destino de medição/ensaio nunca é `apto` na execução, mesmo com o vínculo
 relacional satisfeito (§18 — uma semântica canônica em todas as superfícies).
+A execução efetiva usa **uma única autoridade** (`_item_execucao_satisfeito`) nos
+caminhos relacional e semântico: status persistido nunca é autoridade —
+`EXECUTADO` exige artefato com back-reference ao item planejado e à questão
+técnica; `SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE` exige equivalência válida
+(evidence existente, mesmo tipo, capability íntegra, metadados rastreados).
+Plano legado sem `requisitos_semanticos` tem cobertura semântica **UNKNOWN**:
+é falta explícita também na execução — **UNKNOWN nunca fabrica APTO**.
 
 A cobertura de um requisito material vem **exclusivamente** do vínculo estruturado
 `requisitos_semanticos[].itens_planejados`, validado por: o item existe, está

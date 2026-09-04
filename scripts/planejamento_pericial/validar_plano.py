@@ -120,11 +120,35 @@ def recalcular_cobertura(dado):
     efetiva={qid:bool(por_quesito.get(qid) and sem["cobertura_requisitos_semanticos"].get(qid)) for qid in por_quesito}
     return {"cobertura":por_quesito,"cobertura_relacional":por_quesito,"cobertura_efetiva":efetiva,"apto":apto,**sem}
 
+_TIPOS_EXEC_POR_CLASSE={"MEDICAO":frozenset({"MEDICAO","ENSAIO"}),
+                        "INDETERMINADA":frozenset({"MEDICAO","ENSAIO"}),
+                        "DOCUMENTO":frozenset({"DOCUMENTO"}),
+                        "INSPECAO":frozenset({"ATIVIDADE","FOTOGRAFIA","MEDICAO","ENSAIO","DOCUMENTO"})}
+_CAMPOS_PLANO={"ATIVIDADE":"atividade_planejada","FOTOGRAFIA":"fotografia_planejada","MEDICAO":"medicao_planejada","ENSAIO":"ensaio_planejado","DOCUMENTO":"documento_planejado"}
+
+def _item_execucao_satisfeito(tipo,planejado,qt,item_plano,cobertura,catalogos):
+    """Execução EFETIVA de um item planejado. Status persistido NÃO é autoridade:
+    EXECUTADO exige artefato com back-reference ao item planejado e à questão
+    técnica; SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE exige equivalência válida
+    (evidência existente, do mesmo tipo, capability íntegra e metadados
+    rastreados). Mesmo critério do caminho relacional — uma autoridade só."""
+    execucao=cobertura.get(planejado,{})
+    artefatos=[catalogos.get(tipo,{}).get(i) for i in execucao.get("executado",[])]
+    direto=execucao.get("status")=="EXECUTADO" and any(a and a.get(_CAMPOS_PLANO[tipo])==planejado and qt in a.get("questoes",a.get("questoes_tecnicas",[])) for a in artefatos)
+    equivalentes=set(execucao.get("evidencia_equivalente",[]));meta=execucao.get("equivalencia") or {};todos=[(t,x) for t,cat in catalogos.items() for x in cat.values()]
+    equivalentes_validos=[e for t,e in todos if t==tipo and e.get("id") in equivalentes and qt in e.get("questoes",e.get("questoes_tecnicas",[]))]
+    capability_esperada=capability_item(tipo,item_plano)
+    integridade_tipo=all(_medicao_equivalente(item_plano,e,qt) for e in equivalentes_validos) if tipo=="MEDICAO" else True
+    equivalente=(tipo in TIPOS_EQUIVALENCIA_SUPORTADOS and execucao.get("status")=="SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE" and bool(equivalentes_validos) and integridade_tipo and
+                 bool(capability_esperada) and meta.get("requisito_original")==planejado and meta.get("tipo_evidencia")==tipo and str(meta.get("capability") or "").casefold()==capability_esperada and
+                 all(capability_item(tipo,e)==capability_esperada for e in equivalentes_validos) and
+                 bool(meta.get("metodo_substituto")) and bool(execucao.get("justificativa_equivalencia")))
+    return direto or equivalente
+
 def recalcular_execucao(plano,vistoria):
     """Recalcula REQUIRED→EXECUTED sem confiar no status persistido."""
     cobertura={c.get("planejado"):c for c in vistoria.get("cobertura",[]) if c.get("planejado")}
     catalogos={"ATIVIDADE":{x.get("id"):x for x in vistoria.get("atividades_executadas",[])},"FOTOGRAFIA":{x.get("id"):x for x in vistoria.get("fotografias",[])},"MEDICAO":{x.get("id"):x for x in vistoria.get("medicoes",[])},"ENSAIO":{x.get("id"):x for x in vistoria.get("ensaios",[])},"DOCUMENTO":{x.get("id"):x for x in vistoria.get("documentos_obtidos",[])}}
-    campos_plano={"ATIVIDADE":"atividade_planejada","FOTOGRAFIA":"fotografia_planejada","MEDICAO":"medicao_planejada","ENSAIO":"ensaio_planejado","DOCUMENTO":"documento_planejado"}
     planejados={tipo:{x.get("id"):x for x in plano.get(chave,[]) if isinstance(x,dict)} for tipo,chave in CATALOGOS_PLANEJADOS.items()}
     faltantes=[]
     if not plano.get("requisitos_cobertura"):
@@ -137,56 +161,45 @@ def recalcular_execucao(plano,vistoria):
             faltantes.append({"questao_tecnica":qt,"tipo":tipo,"item_planejado":planejado});continue
         if not planejado:
             faltantes.append({"questao_tecnica":qt,"tipo":tipo,"item_planejado":None});continue
-        candidatos=[planejado]
-        satisfeito=False
-        for item in candidatos:
-            execucao=cobertura.get(item,{})
-            artefatos=[catalogos.get(tipo,{}).get(i) for i in execucao.get("executado",[])]
-            direto=execucao.get("status")=="EXECUTADO" and any(a and a.get(campos_plano[tipo])==planejado and qt in a.get("questoes",a.get("questoes_tecnicas",[])) for a in artefatos)
-            equivalentes=set(execucao.get("evidencia_equivalente",[]));meta=execucao.get("equivalencia") or {};todos=[(t,x) for t,cat in catalogos.items() for x in cat.values()]
-            equivalentes_validos=[e for t,e in todos if t==tipo and e.get("id") in equivalentes and qt in e.get("questoes",e.get("questoes_tecnicas",[]))]
-            capability_esperada=capability_item(tipo,item_plano)
-            integridade_tipo=all(_medicao_equivalente(item_plano,e,qt) for e in equivalentes_validos) if tipo=="MEDICAO" else True
-            equivalente=(tipo in TIPOS_EQUIVALENCIA_SUPORTADOS and execucao.get("status")=="SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE" and bool(equivalentes_validos) and integridade_tipo and
-                         bool(capability_esperada) and meta.get("requisito_original")==planejado and meta.get("tipo_evidencia")==tipo and str(meta.get("capability") or "").casefold()==capability_esperada and
-                         all(capability_item(tipo,e)==capability_esperada for e in equivalentes_validos) and
-                         bool(meta.get("metodo_substituto")) and bool(execucao.get("justificativa_equivalencia")))
-            satisfeito=satisfeito or direto or equivalente
-        if not satisfeito:faltantes.append({"questao_tecnica":requisito.get("questao_tecnica"),"tipo":requisito.get("tipo"),"item_planejado":planejado})
+        if not _item_execucao_satisfeito(tipo,planejado,qt,item_plano,cobertura,catalogos):
+            faltantes.append({"questao_tecnica":requisito.get("questao_tecnica"),"tipo":requisito.get("tipo"),"item_planejado":planejado})
     # §18: a semântica canônica vale em TODAS as superfícies de recálculo.
-    faltantes.extend(_execucao_semantica_faltante(plano,cobertura))
+    faltantes.extend(_execucao_semantica_faltante(plano,cobertura,catalogos,planejados))
     return {"apto":bool(plano.get("requisitos_cobertura")) and not faltantes,"faltantes":faltantes}
 
-# Tipos de EXECUÇÃO que satisfazem cada classe RE-DERIVADA do requisito material.
-# Espelha _COLECOES_POR_CLASSE do gate (autoridade estrutural, não textual).
-_TIPOS_EXEC_POR_CLASSE={"MEDICAO":frozenset({"MEDICAO","ENSAIO"}),
-                        "INDETERMINADA":frozenset({"MEDICAO","ENSAIO"}),
-                        "DOCUMENTO":frozenset({"DOCUMENTO"}),
-                        "INSPECAO":frozenset({"ATIVIDADE","FOTOGRAFIA","MEDICAO","ENSAIO","DOCUMENTO"})}
-
-def _execucao_semantica_faltante(plano,cobertura_exec):
+def _execucao_semantica_faltante(plano,cobertura_exec,catalogos,planejados):
     """Re-deriva a classe de cada requisito material (via classificar_requisito) e
-    exige que algum item planejado do TIPO apropriado tenha sido EXECUTADO na
-    vistoria. Fecha o P1: nem a classe/status persistidos, nem a remoção da
-    obrigação relacional, nem o vínculo a item de tipo errado produzem apto na
-    execução. `requisitos_semanticos` ausente → nada a re-derivar (plano legado);
-    presente e vazio → o gate já marca GRUPO_SEMANTICO_VAZIO (não apto)."""
+    exige que algum item planejado do TIPO apropriado tenha sido EFETIVAMENTE
+    EXECUTADO — artefato com back-reference ou equivalência válida, pelo mesmo
+    critério do caminho relacional (_item_execucao_satisfeito). Status persistido
+    NÃO é autoridade em nenhuma camada. `requisitos_semanticos` ausente →
+    cobertura semântica UNKNOWN → FALTA explícita (fail-closed): plano legado
+    bloqueado no planning não fabrica apto na execução; presente e vazio → o gate
+    já marca GRUPO_SEMANTICO_VAZIO (não apto)."""
     if "requisitos_semanticos" not in plano:
-        return []
+        return [{"questao_tecnica":None,"tipo":None,"item_planejado":None,"motivo":"SEM_REQUISITOS_SEMANTICOS"}]
     from scripts.planejamento_pericial.requisitos_materiais import classificar_requisito
     id_tipo={x.get("id"):tipo for tipo,chave in CATALOGOS_PLANEJADOS.items()
              for x in plano.get(chave,[]) if isinstance(x,dict)}
-    executado={i for i,c in cobertura_exec.items() if c.get("status") in ("EXECUTADO","SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE")}
     faltas=[]
     sem=recalcular_cobertura(plano)
     for rid in sem.get("requisitos_materiais_nao_mapeados",[]):
         faltas.append({"questao_tecnica":None,"tipo":None,"item_planejado":None,"motivo":f"REQUISITO_SEMANTICO_NAO_MAPEADO:{rid}"})
     for r in plano.get("requisitos_semanticos",[]):
-        planejados=r.get("itens_planejados") or []
-        if not planejados:continue  # já coberto por requisitos_materiais_nao_mapeados
+        itens=r.get("itens_planejados") or []
+        if not itens:continue  # já coberto por requisitos_materiais_nao_mapeados
         classe=classificar_requisito(r.get("requisito") or "")
         tipos_ok=_TIPOS_EXEC_POR_CLASSE.get(classe,_TIPOS_EXEC_POR_CLASSE["MEDICAO"])
-        if not any(id_tipo.get(i) in tipos_ok and i in executado for i in planejados):
+        satisfeito=False
+        for i in itens:
+            tipo=id_tipo.get(i)
+            if tipo not in tipos_ok:continue
+            item_plano=planejados.get(tipo,{}).get(i)
+            if not item_plano:continue
+            if any(_item_execucao_satisfeito(tipo,i,qt,item_plano,cobertura_exec,catalogos)
+                   for qt in item_plano.get("questoes_tecnicas",[])):
+                satisfeito=True;break
+        if not satisfeito:
             faltas.append({"questao_tecnica":r.get("quesito"),"tipo":None,"item_planejado":None,
                            "motivo":f"REQUISITO_SEMANTICO_NAO_EXECUTADO:{r.get('requirement_id') or (r.get('requisito') or '')[:40]}"})
     return faltas

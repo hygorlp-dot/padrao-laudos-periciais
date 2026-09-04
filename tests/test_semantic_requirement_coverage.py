@@ -286,7 +286,6 @@ def test_controles_observacionais_nao_sao_sobre_bloqueados():
     for texto in [
         "Constatar a existência de infiltração aparente.",
         "Verificar se há goteira visível no forro.",
-        "Identificar revestimento destacado visualmente.",
         "Caracterizar as manifestações patológicas alegadas.",
         "Registrar fotograficamente o estado geral do imóvel.",
         "Descrever o padrão construtivo do imóvel.",
@@ -585,3 +584,197 @@ def test_semantic_coverage_is_order_invariant():
     second = recalcular_cobertura(plan)
     assert first == second
     assert first["cobertura_requisitos_semanticos"]["QUE-001"] is True and first["apto"] is True
+
+
+def test_verbo_fotografar_nao_e_prova_de_objeto():
+    """P0 (PASS A contra 41dd08f): o ramo de marcador visual casava o VERBO
+    'fotografar' e concedia INSPECAO sem nenhuma prova de objeto — 'fotografar o
+    parâmetro omega' chegava a apto=True com atividade genérica e zero medição.
+    Verbo/marcador de MODO nunca decide INSPECAO: toda concessão exige prova
+    positiva NO OBJETO (fenômeno visual conhecido ou objeto descritivo-qualitativo).
+    """
+    corpus = [
+        "Fotografar o parâmetro omega do apoio.",
+        "Fotografar o índice zeta estrutural.",
+        "Fotografar o coeficiente lambda do componente.",
+        "Fotografar a resposta phi do elemento.",
+        "Fotografar o gradiente ksi da camada.",
+        "Fotografar a velocidade de corrosão das armaduras.",
+        "Fotografar a resistividade elétrica do concreto.",
+        "Fotografar o potencial eletroquímico das armaduras.",
+        "Fotografar o assentamento diferencial da fundação.",
+        "Fotografar a deriva de topo do edifício.",
+        "Fotografar a ovalização da tubulação.",
+        "Fotografar a conicidade do pilar.",
+    ]
+    for texto in corpus:
+        assert classificar_requisito(texto) != "INSPECAO", texto
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False, texto
+        assert r["apto"] is False, texto
+
+
+def test_area_de_fenomeno_e_medicao():
+    """P1 (PASS B contra 41dd08f): um lookahead não declarado em
+    _GRANDEZA_DIMENSIONAL excluía 'área de infiltração/mancha/fissura/...' do gate
+    de medição, derrubando essas frases para INSPECAO (satisfazível por atividade
+    genérica). 'Área de <fenômeno>' é EXTENSÃO quantificada -> MEDICAO, como no
+    parent 45f93da (a exceção é revertida, não refinada)."""
+    for texto in [
+        "Verificar a área de infiltração na parede do banheiro.",
+        "Verificar a área de mancha na fachada norte.",
+        "Constatar a área de fissuração na laje.",
+        "Verificar a área de descolamento do revestimento cerâmico.",
+    ]:
+        assert classificar_requisito(texto) == "MEDICAO", texto
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["apto"] is False, texto
+
+
+def test_marcador_de_modo_sem_prova_de_objeto_e_sobre_bloqueio_seguro():
+    """SAFE_OVERBLOCKING != FALSE_GREEN: no funil, qualificador de modo
+    ('visualmente', 'fotograficamente', ...) sem fenômeno visual conhecido nem
+    objeto descritivo-qualitativo NÃO decide INSPECAO -> INDETERMINADA (estrito).
+    Caso de recall medido separadamente, aceito como sobre-bloqueio seguro."""
+    assert classificar_requisito("Identificar revestimento destacado visualmente.") == "INDETERMINADA"
+
+
+def test_execucao_semantica_status_mentiroso_nao_satisfaz():
+    """P1 (PASS A+B contra 41dd08f): a camada semântica de execução confiava no
+    STATUS persistido da vistoria (EXECUTADO/SUBSTITUIDO) sem exigir artefato —
+    status mentiroso com executado=[] fabricava apto=True. Status NÃO é
+    autoridade: a execução efetiva exige artefato com back-reference ao item
+    planejado ou equivalência válida, o mesmo critério do caminho relacional."""
+    from scripts.planejamento_pericial.validar_plano import recalcular_execucao
+    plano = _plan_with([_r("R1", "Aferir a abertura das fissuras sob carga.", ["MED-PLANO-001"])],
+                       medicoes=[_med("MED-PLANO-001")])
+    # obrigação relacional da medição removida: só a camada semântica protege
+    plano["requisitos_cobertura"] = [r for r in plano["requisitos_cobertura"] if r["tipo"] != "MEDICAO"]
+    base = {"cobertura": [{"planejado": "ATV-001", "status": "EXECUTADO", "executado": ["ATV-001-EXEC"]}],
+            "atividades_executadas": [{"id": "ATV-001-EXEC", "atividade_planejada": "ATV-001",
+                                       "questoes_tecnicas": ["QT-001"]}],
+            "medicoes": []}
+    mentirosa_exec = copy.deepcopy(base)
+    mentirosa_exec["cobertura"].append({"planejado": "MED-PLANO-001", "status": "EXECUTADO", "executado": []})
+    assert recalcular_execucao(plano, mentirosa_exec)["apto"] is False
+    mentirosa_subst = copy.deepcopy(base)
+    mentirosa_subst["cobertura"].append({
+        "planejado": "MED-PLANO-001", "status": "SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE", "executado": [],
+        "evidencia_equivalente": ["MED-EXEC-999"],
+        "equivalencia": {"requisito_original": "MED-PLANO-001", "tipo_evidencia": "MEDICAO",
+                         "capability": "abertura", "metodo_substituto": "paquimetro"},
+        "justificativa_equivalencia": "z"})
+    assert recalcular_execucao(plano, mentirosa_subst)["apto"] is False
+
+
+def test_execucao_legacy_sem_requisitos_semanticos_nao_fabrica_apto():
+    """P1 (PASS B contra 41dd08f): plano legado SEM a chave requisitos_semanticos
+    era bloqueado no planning (cobertura semântica UNKNOWN) mas recalcular_execucao
+    retornava apto=True — e nenhuma camada lia plano['status']. UNKNOWN nunca
+    fabrica APTO: ausência da chave é falta explícita na execução (fail-closed)."""
+    from scripts.planejamento_pericial.validar_plano import recalcular_execucao
+    plano = _plan_with([])
+    del plano["requisitos_semanticos"]
+    res = recalcular_execucao(plano, _vistoria_exec("ATV-001"))
+    assert res["apto"] is False
+    assert any("SEM_REQUISITOS_SEMANTICOS" in str(f.get("motivo", "")) for f in res["faltantes"])
+
+
+def _cenario_longitudinal():
+    """Caso sintético completo: delimitacao -> plano -> vistoria executada.
+    Quesito 'Existe umidade na parede?' re-deriva INDETERMINADA -> exige medição."""
+    import tempfile
+    from scripts.planejamento_pericial.aprofundar_delimitacao import aprofundar
+    from scripts.planejamento_pericial.gerar_plano import gerar as gerar_plano
+    from scripts.planejamento_pericial.gerar_processo import gerar as gerar_processo
+    from scripts.triagem_pericial.gerar_delimitacao import gerar as gerar_delimitacao
+    from scripts.vistoria_estruturada.gerar_vistoria import gerar as gerar_vistoria
+    from scripts.vistoria_estruturada.inventariar_vistoria import inventariar
+    td = tempfile.TemporaryDirectory()
+    d = Path(td.name)
+    (d / "documentos").mkdir()
+    manifesto = json.loads((ROOT / "tests/fixtures/pje/manifesto-minimo-valido.json").read_text(encoding="utf-8"))
+    doc = json.loads((ROOT / "tests/fixtures/pje/documento-simples-valido.json").read_text(encoding="utf-8"))
+    texto = ("A autora alega infiltracao, fissura, trinca e descolamento no imovel adquirido, decorrentes de vicio construtivo. "
+             "O objeto da pericia e o imovel. O objetivo da pericia e determinar a causa.\n"
+             "QUESITOS:\n1. Existe umidade na parede?\n2. Quem deve indenizar pelos danos?")
+    doc["paginas"][0]["texto_bruto"] = texto
+    doc["blocos_texto"] = [{"bloco_id": "BLT-001", "texto": texto, "pagina": doc["paginas"][0]["referencia"],
+                            "proveniencia": doc["fontes"][0]}]
+    (d / "manifesto-pje.json").write_text(json.dumps(manifesto), encoding="utf-8")
+    (d / "documentos/DOC-PJE-001.json").write_text(json.dumps(doc), encoding="utf-8")
+    doc2 = copy.deepcopy(doc)
+    doc2["documento_id"] = "DOC-PJE-002"; doc2["id_pje"] = "900002"; doc2["classe_normalizada"] = "DECISAO"
+    doc2["fontes"][0].update(documento_id="DOC-PJE-002", id_pje="900002")
+    doc2["blocos_texto"][0]["proveniencia"].update(documento_id="DOC-PJE-002", id_pje="900002")
+    (d / "documentos/DOC-PJE-002.json").write_text(json.dumps(doc2), encoding="utf-8")
+    delimitacao = gerar_delimitacao(d)
+    (d / "delimitacao-pericial.json").write_text(json.dumps(delimitacao), encoding="utf-8")
+    processo = gerar_processo(d)
+    (d / "processo.json").write_text(json.dumps(processo), encoding="utf-8")
+    delimitacao = aprofundar(d)
+    (d / "delimitacao-pericial.json").write_text(json.dumps(delimitacao), encoding="utf-8")
+    plano = gerar_plano(d)
+    campo = d / "campo"
+    campo.mkdir()
+    linhas = []
+    for a in plano["atividades"]:
+        linhas.append(f"tipo=OBS;registro_id={a['id']};descricao=condição examinada;manifestacao=umidade;"
+                      f"resultado=OBSERVADO;sistema=IMPERMEABILIZACAO;atividade_planejada={a['id']}")
+    for m in plano["medicoes"]:
+        atv = next((a["id"] for a in plano["atividades"]
+                    if set(a["questoes_tecnicas"]) & set(m["questoes_tecnicas"])), plano["atividades"][0]["id"])
+        linhas.append(f"tipo=MED;vinculo_registro={atv};grandeza={m['grandeza']};valor=0,2;unidade=mm;medicao_planejada={m['id']}")
+    (campo / "notas.txt").write_text("\n".join(linhas), encoding="utf-8")
+    for i, f in enumerate(plano["fotografias"], 1):
+        (campo / f"{f['id']}.jpg").write_bytes(f"imagem sintetica {i}".encode())
+    vistoria = gerar_vistoria(inventariar(campo), plano, processo["numero_processo"])
+    return td, processo, json.loads((d / "delimitacao-pericial.json").read_text(encoding="utf-8")), plano, vistoria
+
+
+def test_longitudinal_semantico_bloqueio_e_liberacao_motor_redacao():
+    """§7 CROSS-BOUNDARY: o bloqueio/liberação semântico propaga Planning ->
+    Execution -> Motor -> Redação; nenhuma camada reconstrói COMPLETE de
+    subconjunto relacional e UNKNOWN (legacy) nunca vira APTO downstream."""
+    from scripts.planejamento_pericial.validar_plano import recalcular_execucao
+    from scripts.motor_vicios.pipeline import executar_pipeline_motor
+    from scripts.redacao_pericial.pipeline import executar_pipeline_redacao
+
+    # CASE 1 — happy path: requisito semântico + evidência executada apropriada.
+    td, processo, delimitacao, plano, vistoria = _cenario_longitudinal()
+    try:
+        assert recalcular_execucao(plano, vistoria)["apto"] is True
+        motor = executar_pipeline_motor(processo, delimitacao, plano, vistoria)
+        assert motor["gate"] != "BLOQUEADO_PARA_REDACAO", motor.get("coverage_execucao")
+        redacao = executar_pipeline_redacao(processo, delimitacao, motor)
+        assert "laudo" in redacao
+    finally:
+        td.cleanup()
+
+    # CASE 2 — medição planejada NÃO executada: bloqueio em todas as camadas.
+    td, processo, delimitacao, plano, vistoria = _cenario_longitudinal()
+    try:
+        vistoria["medicoes"] = []
+        for c in vistoria["cobertura"]:
+            if c.get("tipo") == "MEDICAO":
+                c["status"] = "PENDENTE"; c["executado"] = []
+        assert recalcular_execucao(plano, vistoria)["apto"] is False
+        motor = executar_pipeline_motor(processo, delimitacao, plano, vistoria)
+        assert motor["gate"] == "BLOQUEADO_PARA_REDACAO"
+        redacao = executar_pipeline_redacao(processo, delimitacao, motor)
+        assert "laudo" not in redacao or redacao.get("gate") == "BLOQUEADO_PARA_LAUDO"
+    finally:
+        td.cleanup()
+
+    # CASE 6 — legacy: plano sem a chave jamais adquire APTO downstream, mesmo
+    # com a vistoria relacionalmente completa.
+    td, processo, delimitacao, plano, vistoria = _cenario_longitudinal()
+    try:
+        legado = {k: v for k, v in plano.items() if k != "requisitos_semanticos"}
+        assert recalcular_execucao(legado, vistoria)["apto"] is False
+        motor = executar_pipeline_motor(processo, delimitacao, legado, vistoria)
+        assert motor["gate"] == "BLOQUEADO_PARA_REDACAO"
+        redacao = executar_pipeline_redacao(processo, delimitacao, motor)
+        assert "laudo" not in redacao or redacao.get("gate") == "BLOQUEADO_PARA_LAUDO"
+    finally:
+        td.cleanup()

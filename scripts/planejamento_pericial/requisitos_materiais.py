@@ -9,20 +9,21 @@ Classificação (natureza do requisito) — DEFAULT FAIL-CLOSED. O vocabulário 
 é a lista canônica; está reproduzido em docs/padroes/padrao-planejamento-vistoria.md.
 
 - INSPECAO — satisfazível por observação de campo. São MODALIDADE-NEUTROS e NÃO
-  estabelecem observabilidade por si sós — nenhum decide sem um sinal POSITIVO DE
+  estabelecem observabilidade por si sós — nenhum decide sem prova POSITIVA NO
   OBJETO: o verbo de REQUISIÇÃO GENÉRICO ("verificar"/"constatar"/"avaliar"/…), o
   conector EXISTENCIAL ("há"/"existe"/"existência de"/"presença de" — "medir se
-  HÁ trinca > 0,3 mm" também usa "há") E o verbo de OBSERVAÇÃO DIRETA
-  ("registrar"/"descrever"/"caracterizar"/"localizar"/… — "registrar o
-  assentamento diferencial" exige nivelamento topográfico). Só é atribuída com
-  EVIDÊNCIA POSITIVA no OBJETO: (i) substantivo de fenômeno inequivocamente
-  visual ("fissura", "infiltração", "mancha", "descolamento", "mofo",
-  "eflorescência", …); (ii) qualificador explicitamente visual ("visível",
-  "aparente", "visualmente", "a olho nu", "ocular", "fotograficamente"); (iii)
-  verbo de observação direta + objeto descritivo-qualitativo ("padrão
-  construtivo", "acabamento", "estado de conservação", "revestimento", …) — E
-  ausência de qualquer sinal de medição. Todo caminho de INSPECAO tem portão de
-  objeto cujo modo de falha é SOBRE-BLOQUEIO, nunca falso-verde.
+  HÁ trinca > 0,3 mm" também usa "há"), o verbo de OBSERVAÇÃO DIRETA
+  ("registrar"/"descrever"/"fotografar"/"caracterizar"/"localizar"/… — "registrar
+  o assentamento diferencial" exige nivelamento topográfico) E o qualificador de
+  MODO ("visualmente"/"fotograficamente"/"aparente"/… — modo, não objeto).
+  INSPECAO existe por UM funil conjuntivo: prova de objeto observável é condição
+  necessária em todo ramo — (i) substantivo de fenômeno inequivocamente visual
+  ("fissura", "infiltração", "mancha", "descolamento", "mofo", "eflorescência",
+  …); ou (ii) objeto descritivo-qualitativo ("padrão construtivo", "acabamento",
+  "estado de conservação", "revestimento", …) combinado com verbo de observação
+  direta ou qualificador de modo — E ausência de qualquer sinal de medição.
+  Objeto técnico desconhecido NUNCA vira INSPECAO, qualquer que seja o verbo ou
+  marcador de modo: o modo de falha do funil é SOBRE-BLOQUEIO, nunca falso-verde.
 - MEDICAO  — exige leitura instrumental, ensaio ou cálculo (verbo de medição,
   grandeza inerentemente dimensional, propriedade ensaiável, patologia
   ensaiável, critério numérico/quantidade dimensionada, ou quantificador
@@ -90,10 +91,13 @@ _OBJETO_DESCRITIVO = re.compile(
     r"disposi[cç]\w*\s+d[oe]s?\s+ambientes|"
     r"caracter[íi]sticas\s+(?:gerais|construtiv\w*|arquitet\w*|f[íi]sicas))\b"
 )
-# Qualificador que evidencia que o fato é constatável VISUALMENTE. O conector
-# existencial ("há"/"existe"/"existência de"/"presença de") NÃO entra aqui: é tão
-# modalidade-neutro quanto o verbo genérico ("medir se HÁ trinca > 0,3 mm" também
-# usa "há"). Só qualificador explicitamente visual estabelece INSPECAO.
+# Qualificador de MODO que evidencia constatação VISUAL. NUNCA é prova de objeto:
+# não habilita INSPECAO sozinho (o verbo "fotografar" casa aqui e é tão
+# modalidade-neutro quanto "registrar" — "fotografar o parâmetro omega" não prova
+# que o objeto seja observável). Só conta combinado com prova positiva NO OBJETO
+# (ver _funil em classificar_requisito). O conector existencial ("há"/"existe"/
+# "existência de"/"presença de") NÃO entra aqui: é tão modalidade-neutro quanto o
+# verbo genérico ("medir se HÁ trinca > 0,3 mm" também usa "há").
 _MARCADOR_VISUAL = re.compile(
     r"(?i)(?:\b(?:visivel|visiveis|aparente|aparentes|visualmente|ocular|oculares|"
     r"perceptivel|perceptiveis|fotograf\w*|inspecao\s+visual|exame\s+visual|"
@@ -120,10 +124,7 @@ _VERBO_MEDICAO = re.compile(r"(?i)\b(?:medir|medi[cç][aã]o|aferir|mensurar|qua
 _GRANDEZA_DIMENSIONAL = re.compile(
     r"(?i)\b(?:espessura|recalque|flecha|prumo|aprumo|desaprumo|desvio\s+de\s+prumo|"
     r"nivelamento|desn[íi]ve|inclina[cç][aã]|caimento|declividade|planicidade|planeza|"
-    r"deforma[cç][aã]|deslocamento|esquadro|dimens|"
-    r"[aá]rea(?!s?\s+d[eo]s?\s+(?:servi[cç]o|lazer|circula[cç]\w*|conv[íi]v\w*|estar|"
-    r"refei[cç]\w*|descolament\w*|destacament\w*|infiltrac\w*|umidade|corros\w*|"
-    r"manch\w*|fissur\w*|patologi\w*|dano))|volume|cota|dist[aâ]ncia|"
+    r"deforma[cç][aã]|deslocamento|esquadro|dimens|[aá]rea|volume|cota|dist[aâ]ncia|"
     r"[aâ]ngulo|largura|altura|comprimento|extens[aã]|profundidade|di[aâ]metro|"
     r"abertura\s+d[ae]s?\s+(?:fissur|trinc)|vaz[aã]o|vaz[õo]es|carga|tens[aã]o\s+atuante)\w*"
 )
@@ -194,14 +195,19 @@ def classificar_requisito(texto: str) -> str:
     """MEDICAO | DOCUMENTO | INSPECAO | INDETERMINADA.
 
     Default fail-closed. Verbo de requisição genérico ("verificar"/"constatar"/…),
-    conector existencial ("há"/"existe"/"existência de") E verbo de observação direta
-    ("registrar"/"descrever"/…) são MODALIDADE-NEUTROS — nenhum estabelece INSPECAO
-    sem um sinal POSITIVO DE OBJETO. INSPECAO só quando há (i) substantivo de
-    fenômeno inequivocamente visual, (ii) qualificador explicitamente visual, ou
-    (iii) verbo de observação direta + objeto descritivo-qualitativo — e ausência de
-    qualquer sinal de medição; senão → INDETERMINADA (o gate trata como MEDICAO
-    estrita). Todo caminho de INSPECAO tem portão de objeto cujo modo de falha é
-    sobre-bloqueio, nunca falso-verde."""
+    conector existencial ("há"/"existe"/"existência de"), verbo de observação
+    direta ("registrar"/"descrever"/"fotografar"/…) e qualificador de MODO
+    ("visualmente"/"fotograficamente"/"aparente"/…) são MODALIDADE-NEUTROS —
+    nenhum estabelece INSPECAO sem prova POSITIVA NO OBJETO.
+
+    FUNIL DE AUTORIDADE (estrutural, não lexical): INSPECAO só existe por UM
+    funil conjuntivo — prova de objeto observável é CONDIÇÃO NECESSÁRIA em todo
+    ramo: (i) substantivo de fenômeno inequivocamente visual; ou (ii) objeto
+    descritivo-qualitativo combinado com verbo de observação direta ou
+    qualificador de modo. Objeto desconhecido NUNCA vira INSPECAO, qualquer que
+    seja o verbo ou o marcador de modo presente. E ausência de qualquer sinal de
+    medição; senão → INDETERMINADA (o gate trata como MEDICAO estrita). O modo de
+    falha do funil é sobre-bloqueio, nunca falso-verde."""
     base = " " + normalizar(texto) + " "
     bruto = " " + str(texto or "").lower().strip() + " "
     mede = bool(_VERBO_MEDICAO.search(base) or _GRANDEZA_DIMENSIONAL.search(base)
@@ -213,8 +219,12 @@ def classificar_requisito(texto: str) -> str:
         return "DOCUMENTO"
     if mede:
         return "MEDICAO"
-    if (_FENOMENO_OBSERVAVEL.search(base) or _MARCADOR_VISUAL.search(base)
-            or (_VERBO_OBSERVACAO_DIRETA.search(base) and _OBJETO_DESCRITIVO.search(base))):
+    # Prova de objeto observável = condição necessária de INSPECAO. Modo (verbo de
+    # observação / qualificador visual) sozinho NUNCA concede a classe permissiva.
+    prova_objeto = bool(_FENOMENO_OBSERVAVEL.search(base)) or bool(
+        _OBJETO_DESCRITIVO.search(base)
+        and (_VERBO_OBSERVACAO_DIRETA.search(base) or _MARCADOR_VISUAL.search(base)))
+    if prova_objeto:
         return "INSPECAO"
     return "INDETERMINADA"
 

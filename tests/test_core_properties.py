@@ -46,7 +46,10 @@ def test_measurement_equivalence_fails_closed_for_missing_or_incompatible_data(v
     plano = {"medicoes": [{"id": "MED-PLANO-001", "grandeza": "abertura de fissura", "local": "Sala",
                             "criterio": "resultado em mm", "questoes_tecnicas": ["QT-001"]}],
              "requisitos_cobertura": [{"questao_tecnica": "QT-001", "tipo": "MEDICAO",
-                                        "obrigatoriedade": "OBRIGATORIA", "item_planejado": "MED-PLANO-001"}]}
+                                        "obrigatoriedade": "OBRIGATORIA", "item_planejado": "MED-PLANO-001"}],
+             "requisitos_semanticos": [{"requirement_id": "REQ-001-MED", "quesito": "QUE-001",
+                                        "requisito": "Medir a abertura de fissura na Sala.",
+                                        "itens_planejados": ["MED-PLANO-001"]}]}
     med = {"id": "MED-001", "grandeza": "umidade" if unit == "%" else "abertura de fissura",
            "valor": value, "unidade": unit, "local": "Sala", "questoes": [qt],
            "observacoes": ["OBS-001"], "metodo": "paquimetro"}
