@@ -194,10 +194,13 @@ def test_metamorphic_objeto_desconhecido_com_prova_visual_e_inspecao():
     open-world nega o default, não a evidência positiva."""
     for texto in [
         "Registrar a mancha de zeta visível na parede.",
-        "Descrever o padrão construtivo com aspecto omega aparente.",
         "Fotografar a fissura de lambda na viga.",
     ]:
         assert classificar_requisito(texto) == "INSPECAO", texto
+    # V11 (P0-A2-1): contabilidade observacional INTEGRAL — "aspecto omega" é
+    # token de conteúdo NÃO contabilizado (objeto desconhecido): sobre-bloqueio
+    # seguro documentado, nunca falso-verde.
+    assert classificar_requisito("Descrever o padrão construtivo com aspecto omega aparente.") == "INDETERMINADA"
 
 
 def test_verbo_de_observacao_direta_exige_objeto_descritivo():
@@ -289,11 +292,14 @@ def test_controles_observacionais_nao_sao_sobre_bloqueados():
         "Caracterizar as manifestações patológicas alegadas.",
         "Registrar fotograficamente o estado geral do imóvel.",
         "Descrever o padrão construtivo do imóvel.",
-        "Localizar os pontos de infiltração na cobertura.",
         "Constatar a presença de mofo no banheiro.",
         "Apontar as manchas de umidade na laje.",
     ]:
         assert classificar_requisito(texto) == "INSPECAO", texto
+    # V11 (P0-A2-1): "pontos de infiltração" — "pontos" é token de conteúdo não
+    # contabilizado (o fenômeno está em de-complemento, não é o head da demanda):
+    # sobre-bloqueio seguro documentado (INDETERMINADA → medição estrita).
+    assert classificar_requisito("Localizar os pontos de infiltração na cobertura.") == "INDETERMINADA"
 
 
 def test_criterio_numerico_unicode_e_conectivo_portugues():
@@ -629,6 +635,94 @@ def test_area_de_fenomeno_e_medicao():
         assert classificar_requisito(texto) == "MEDICAO", texto
         r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
         assert r["apto"] is False, texto
+
+
+def test_fenomeno_incidental_em_pp_locativo_nao_absolve_objeto_desconhecido():
+    """P0-A2-1 (PASS A2 contra f0b3249): fenômeno observável citado DENTRO de PP
+    locativo ("junto às fissuras", "próximo à mancha") ou coordenado a um objeto
+    metrológico/desconhecido absolvia a demanda inteira — prova_objeto casava
+    _FENOMENO_OBSERVAVEL em qualquer posição e concedia INSPECAO, chegando a
+    apto=True (planning E execução) com atividade genérica e zero medição.
+
+    Reparo de AUTORIDADE (V11): a concessão de INSPECAO exige CONTABILIDADE
+    OBSERVACIONAL INTEGRAL da demanda — PP locativo é removido por inteiro (seu
+    conteúdo não conta), NPs observacionais são consumidos com seus
+    de-complementos, e qualquer token de conteúdo residual derruba a cláusula
+    para INDETERMINADA. UNKNOWN NEVER BECOMES INSPECAO EFFECTIVE."""
+    from scripts.planejamento_pericial.validar_plano import recalcular_execucao
+    corpus = [
+        "Verificar o cobrimento das armaduras junto às fissuras.",
+        "Verificar o espaçamento das fissuras.",
+        "Verificar o parâmetro omega próximo à mancha.",
+    ]
+    for texto in corpus:
+        assert classificar_requisito(texto) == "INDETERMINADA", texto
+        plano = _plan_with([_r("R1", texto, ["ATV-001"])])
+        r = recalcular_cobertura(plano)
+        assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False, texto
+        assert r["apto"] is False, texto
+        res = recalcular_execucao(plano, _vistoria_exec("ATV-001"))
+        assert res["apto"] is False, texto
+
+
+def test_contabilidade_observacional_preserva_inspecao_legitima():
+    """Contraparte do P0-A2-1: a contabilidade integral NÃO sobre-bloqueia o
+    enquadramento genuinamente observacional — head de fenômeno com
+    de-complemento e PP locativo removido, objeto descritivo com verbo/modo de
+    observação, marcador visual como qualificador do NP."""
+    for texto in [
+        "Verificar a mancha de umidade aparente na parede.",
+        "Fotografar a fissura de lambda na viga.",
+        "Constatar a presença visível de infiltração.",
+        "Registrar fotograficamente o estado aparente da fachada.",
+        "Verificar se há goteira visível no forro.",
+        "Apontar as manchas de umidade na laje.",
+        "Descrever o estado de conservação das esquadrias.",
+        "Caracterizar o acabamento superficial.",
+    ]:
+        assert classificar_requisito(texto) == "INSPECAO", texto
+
+
+def test_coordenacao_nao_absolve_objeto_desconhecido():
+    """V11: a coordenação é contabilizada por inteiro — um fenômeno observável
+    coordenado a um objeto desconhecido NÃO absolve o objeto desconhecido."""
+    for texto in [
+        "Verificar a fissura e o parâmetro omega do apoio.",
+        "Registrar as manchas e o cobrimento das armaduras.",
+    ]:
+        assert classificar_requisito(texto) == "INDETERMINADA", texto
+
+
+def test_vinculo_semantico_e_re_derivado_do_item_nao_da_cobertura_editavel():
+    """P1-A2-2 (PASS A2): 'vinculados' era lido de cobertura[quesito] — uma
+    medição ESTRANGEIRA ao quesito (quesitos=['QUE-999'], questoes_tecnicas=
+    ['QT-999']) listada à força em cobertura[QUE-001].medicoes fabricava apto
+    no planning e na execução. O vínculo passa a ser RE-DERIVADO do item: ele
+    só conta se existir E (qid ∈ item.quesitos OU item.questoes_tecnicas
+    intersecta as questões técnicas da cobertura do quesito)."""
+    from scripts.planejamento_pericial.validar_plano import recalcular_execucao
+    estrangeira = {**_med("MED-999"), "questoes_tecnicas": ["QT-999"], "quesitos": ["QUE-999"]}
+    plano = _plan_with([_r("R1", "Aferir a abertura das fissuras.", ["MED-999"])], medicoes=[estrangeira])
+    # isola a camada semântica: sem a linha relacional da medição
+    plano["requisitos_cobertura"] = [r for r in plano["requisitos_cobertura"] if r["tipo"] != "MEDICAO"]
+    r = recalcular_cobertura(plano)
+    assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False
+    assert "R1" in r["requisitos_materiais_nao_mapeados"] and r["apto"] is False
+    vistoria = _vistoria_exec("ATV-001", "MED-999")
+    vistoria["medicoes"][0]["questoes"] = ["QT-999"]
+    assert recalcular_execucao(plano, vistoria)["apto"] is False
+
+
+def test_recheck_da_redacao_preserva_cobertura_e_detecta_nao_mapeados():
+    """P2c (PASS B2): _plano_para_recheck descartava a chave 'cobertura' — o
+    recálculo no recheck da redação não via os quesitos do plano e NÃO detectava
+    requisitos_materiais_nao_mapeados (cobertura semântica fingia completude)."""
+    from scripts.motor_vicios.pipeline import _plano_para_recheck
+    plano = _plan_with([_r("R1", "Ensaiar concreto.", [])])
+    recheck = _plano_para_recheck(plano)
+    assert "cobertura" in recheck
+    r = recalcular_cobertura(recheck)
+    assert r["requisitos_materiais_nao_mapeados"] == ["R1"] and r["apto"] is False
 
 
 def test_marcador_de_modo_sem_prova_de_objeto_e_sobre_bloqueio_seguro():

@@ -59,12 +59,17 @@ _COLECOES_POR_CLASSE={"MEDICAO":("medicoes","ensaios"),"DOCUMENTO":("documentos"
 def _cobertura_semantica(dado,por_quesito):
     """Autoridade = requisitos_semanticos[].itens_planejados, validado por, para cada item:
     (existe) E (vinculado relacionalmente à cobertura do quesito) E (é de tipo apropriado
-    à classe do requisito). Sem qualquer comparação textual."""
+    à classe do requisito). Sem qualquer comparação textual.
+
+    V11 (P1-A2-2): o vínculo NÃO é lido de cobertura[quesito] — lista editável que
+    admitia item ESTRANGEIRO ao quesito listado à força. O vínculo é RE-DERIVADO do
+    próprio item: existe E (qid ∈ item.quesitos OU item.questoes_tecnicas ∩
+    questoes_tecnicas da cobertura do quesito ≠ ∅)."""
     cobertura_por_id={c.get("quesito"):c for c in dado.get("cobertura",[])}
-    colecoes={chave:{item.get("id") for item in dado.get(fonte,[]) if isinstance(item,dict)}
-              for chave,fonte in (("atividades","atividades"),("medicoes","medicoes"),("fotografias","fotografias"),
-                                  ("ensaios","ensaios"),("documentos","documentos_a_solicitar"))}
-    todos={i for ids in colecoes.values() for i in ids}
+    itens={chave:{item.get("id"):item for item in dado.get(fonte,[]) if isinstance(item,dict)}
+           for chave,fonte in (("atividades","atividades"),("medicoes","medicoes"),("fotografias","fotografias"),
+                               ("ensaios","ensaios"),("documentos","documentos_a_solicitar"))}
+    colecoes={chave:set(mapa) for chave,mapa in itens.items()}
     from scripts.planejamento_pericial.requisitos_materiais import classificar_requisito
     ausente="requisitos_semanticos" not in dado
     por_quesito_sem={qid:False for qid in por_quesito};agrupados={qid:[] for qid in por_quesito}
@@ -72,7 +77,10 @@ def _cobertura_semantica(dado,por_quesito):
         if r.get("quesito") in agrupados:agrupados[r["quesito"]].append(r)
     total=cobertos=0;nao_mapeados=[]
     for qid,grupo in agrupados.items():
-        vinculados={i for chave in colecoes for i in cobertura_por_id.get(qid,{}).get(chave,[])}
+        qts=set(cobertura_por_id.get(qid,{}).get("questoes_tecnicas",[]))
+        def vinculado(item_id,qts=qts,qid=qid):
+            item=next((itens[c][item_id] for c in itens if item_id in itens[c]),None)
+            return bool(item) and (qid in item.get("quesitos",[]) or bool(qts & set(item.get("questoes_tecnicas",[]))))
         if ausente:
             por_quesito_sem[qid]=False;total+=1;nao_mapeados.append(f"{qid}:SEM_REQUISITOS_SEMANTICOS");continue
         grupo_ok=bool(grupo)
@@ -84,7 +92,7 @@ def _cobertura_semantica(dado,por_quesito):
             classe=classificar_requisito(r.get("requisito") or "")
             apropriadas=_COLECOES_POR_CLASSE.get(classe,("medicoes","ensaios"))
             mapeado=(r.get("status") not in _STATUS_NAO_COBRIVEL and bool(planejados) and bool(str(r.get("requisito") or "").strip()) and all(
-                item_id in todos and item_id in vinculados and any(item_id in colecoes[c] for c in apropriadas)
+                vinculado(item_id) and any(item_id in colecoes[c] for c in apropriadas)
                 for item_id in planejados))
             if mapeado:cobertos+=1
             else:grupo_ok=False;nao_mapeados.append(r.get("requirement_id") or f"{qid}:{r.get('requisito','')[:40]}")

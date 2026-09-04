@@ -181,6 +181,42 @@ _SINAL_NUMERICO_BRUTO = re.compile(
 _DOC_VERBO = re.compile(r"(?i)\b(?:solicitar|requisitar|juntar|apresentar|obter|anexar|exibir)\b")
 _DOC_ARTEFATO = re.compile(r"(?i)\b(?:documento|projeto|memorial|planta|art\b|rrt\b|laudo|contrato|nota\s+fiscal|as\s*built|caderno|especifica[cç][aã]o\s+t[eé]cnica|habite-se|alvar[aá]|di[aá]rio\s+de\s+obra)\b")
 
+# --- contabilidade observacional (V11; reparo de AUTORIDADE, P0-A2-1) ---------
+# Prova de objeto por OCORRÊNCIA bastava ao fenômeno INCIDENTAL: "verificar o
+# cobrimento das armaduras JUNTO ÀS FISSURAS" casava _FENOMENO_OBSERVAVEL dentro
+# do PP locativo e concedia INSPECAO a objeto metrológico/desconhecido. A
+# concessão de INSPECAO passa a exigir CONTABILIDADE OBSERVACIONAL INTEGRAL da
+# demanda: PP locativo é removido por inteiro (seu conteúdo NÃO conta — o local
+# da observação não é a demanda), NPs observacionais são consumidos com seus
+# de-complementos e qualificadores de modo, e QUALQUER token de conteúdo residual
+# derruba a cláusula para INDETERMINADA. UNKNOWN NEVER BECOMES INSPECAO EFFECTIVE.
+_PP_LOCATIVO = re.compile(
+    r"(?i)\b(?:em|n[ao]s?|numa?|junto\s+a[s]?|proximo\s+a[s]?|perto\s+d[aeo]s?)\s+.*?(?=$|\s+e\s+)")
+# Qualificador admitido DENTRO do NP observacional (modo/aspecto, nunca objeto).
+# Só se ancora APÓS um head consumido — não cria prova de objeto por si só.
+_QUALIFICADOR_NP = (
+    r"visivel|visiveis|aparente|aparentes|visualmente|ocular|oculares|perceptivel|perceptiveis|"
+    r"fotograf\w*|superficial|superficiais|pontual|pontuais|localizad\w*|generalizad\w*|alegad\w*")
+_CADEIA_NP = r"(?:\s+(?:(?:" + _QUALIFICADOR_NP + r")\b|d[aeo]s?\s+\w+))*"
+_NP_FENOMENO = re.compile(_FENOMENO_OBSERVAVEL.pattern + _CADEIA_NP)
+_NP_DESCRITIVO = re.compile(_OBJETO_DESCRITIVO.pattern + _CADEIA_NP)
+# Scaffolding da demanda: conectores existenciais (nome E verbo conjugado —
+# "existe fissura" tem tanto valor scaffold quanto "existência de fissura"; a
+# forma verbal não vira prova de objeto sozinha, mas também não é conteúdo
+# residual que derruba um fenômeno genuíno já contabilizado) e marcador processual.
+_SCAFFOLD = re.compile(r"(?i)\b(?:presenc\w*|ausenc\w*|alegad\w*|"
+                        r"existenc\w*|existe|existem|existir|ha|houve|havia)\b")
+# Classes fechadas — nunca são demanda material.
+_CLASSE_FECHADA = frozenset({
+    "o", "a", "os", "as", "um", "uma", "uns", "umas", "de", "do", "da", "dos", "das",
+    "em", "no", "na", "nos", "nas", "num", "numa", "ao", "aos", "por", "pelo",
+    "pela", "pelos", "pelas", "com", "sem", "sob", "sobre", "entre", "ate", "apos",
+    "conforme", "perante", "para", "pra", "e", "ou", "nem", "se", "como", "que",
+    "porque", "pois", "quando", "onde", "ser", "estar", "haver", "ter", "sao", "era",
+    "eram", "foi", "esta", "estao", "esteja", "estiver", "seja", "sejam", "ha",
+    "mais", "menos", "muito",
+})
+
 _MIN_TERMOS = 1
 
 
@@ -189,6 +225,32 @@ def remover_ruido_estrutural(texto: str) -> str:
     for padrao in _RUIDO:
         limpo = padrao.sub(" ", limpo)
     return re.sub(r"\s+", " ", limpo).strip()
+
+
+def _contabilidade_observacional(base, modo_observacional):
+    """Contabilidade integral da demanda (V11). Retorna (heads, residual).
+
+    Remove o verbo inicial, os PPs locativos (por inteiro — fenômeno citado como
+    LOCAL não é demanda) e o scaffolding; consome NPs observacionais (head de
+    fenômeno sempre; head descritivo SÓ com modo observacional) com seus
+    de-complementos e qualificadores de modo. `residual` é True se sobra QUALQUER
+    token de conteúdo (\\w{3,} fora de classe fechada) — e nesse caso a cláusula
+    NÃO é INSPECAO, mesmo com head consumido."""
+    t = base.strip()
+    partes = t.split(None, 1)
+    if partes and _VERBO_TECNICO.fullmatch(re.sub(r"\W+", "", partes[0])):
+        t = partes[1] if len(partes) > 1 else ""
+    t = _PP_LOCATIVO.sub(" ", t)
+    heads = 0
+    for padrao in ([_NP_DESCRITIVO, _NP_FENOMENO] if modo_observacional else [_NP_FENOMENO]):
+        while True:
+            t, n = padrao.subn(" ", t, count=1)
+            if not n:
+                break
+            heads += 1
+    t = _SCAFFOLD.sub(" ", _MARCADOR_VISUAL.sub(" ", t))
+    residual = [tok for tok in re.findall(r"\w{3,}", t) if tok not in _CLASSE_FECHADA]
+    return heads, bool(residual)
 
 
 def classificar_requisito(texto: str) -> str:
@@ -200,14 +262,16 @@ def classificar_requisito(texto: str) -> str:
     ("visualmente"/"fotograficamente"/"aparente"/…) são MODALIDADE-NEUTROS —
     nenhum estabelece INSPECAO sem prova POSITIVA NO OBJETO.
 
-    FUNIL DE AUTORIDADE (estrutural, não lexical): INSPECAO só existe por UM
-    funil conjuntivo — prova de objeto observável é CONDIÇÃO NECESSÁRIA em todo
-    ramo: (i) substantivo de fenômeno inequivocamente visual; ou (ii) objeto
-    descritivo-qualitativo combinado com verbo de observação direta ou
-    qualificador de modo. Objeto desconhecido NUNCA vira INSPECAO, qualquer que
-    seja o verbo ou o marcador de modo presente. E ausência de qualquer sinal de
-    medição; senão → INDETERMINADA (o gate trata como MEDICAO estrita). O modo de
-    falha do funil é sobre-bloqueio, nunca falso-verde."""
+    FUNIL DE AUTORIDADE (V11, estrutural, não lexical): INSPECAO exige
+    CONTABILIDADE OBSERVACIONAL INTEGRAL da demanda — PP locativo removido por
+    inteiro (fenômeno INCIDENTAL não absolve: "o cobrimento das armaduras junto
+    às fissuras" é INDETERMINADA), ≥1 NP observacional consumido (fenômeno
+    inequivocamente visual sempre; objeto descritivo-qualitativo só com verbo de
+    observação direta ou qualificador de modo) E ZERO token de conteúdo residual.
+    Objeto desconhecido NUNCA vira INSPECAO, qualquer que seja o verbo, o
+    marcador de modo ou o fenômeno coordenado/locativo. E ausência de qualquer
+    sinal de medição; senão → INDETERMINADA (o gate trata como MEDICAO estrita).
+    O modo de falha do funil é sobre-bloqueio, nunca falso-verde."""
     base = " " + normalizar(texto) + " "
     bruto = " " + str(texto or "").lower().strip() + " "
     mede = bool(_VERBO_MEDICAO.search(base) or _GRANDEZA_DIMENSIONAL.search(base)
@@ -219,12 +283,9 @@ def classificar_requisito(texto: str) -> str:
         return "DOCUMENTO"
     if mede:
         return "MEDICAO"
-    # Prova de objeto observável = condição necessária de INSPECAO. Modo (verbo de
-    # observação / qualificador visual) sozinho NUNCA concede a classe permissiva.
-    prova_objeto = bool(_FENOMENO_OBSERVAVEL.search(base)) or bool(
-        _OBJETO_DESCRITIVO.search(base)
-        and (_VERBO_OBSERVACAO_DIRETA.search(base) or _MARCADOR_VISUAL.search(base)))
-    if prova_objeto:
+    modo_observacional = bool(_VERBO_OBSERVACAO_DIRETA.search(base) or _MARCADOR_VISUAL.search(base))
+    heads, residual = _contabilidade_observacional(base, modo_observacional)
+    if heads and not residual:
         return "INSPECAO"
     return "INDETERMINADA"
 

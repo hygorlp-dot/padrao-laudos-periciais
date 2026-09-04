@@ -21,11 +21,14 @@ def _catalogo_com_inferencias(resultado):
     return [deepcopy(e) for e in resultado.get("catalogo_evidencias",[]) if e.get("classe_probatoria")=="EVIDENCIA_PRIMARIA"]
 
 def _plano_para_recheck(plano):
-    # A autoridade semântica acompanha o recheck da redação (§18): a chave
-    # requisitos_semanticos é preservada quando presente e NUNCA injetada quando
-    # ausente — plano legado permanece fail-closed no recálculo.
+    # A autoridade semântica acompanha o recheck da redação (§18): as chaves
+    # requisitos_semanticos e cobertura são preservadas quando presentes e NUNCA
+    # injetadas quando ausentes — plano legado permanece fail-closed no recálculo.
+    # Sem "cobertura" o recálculo não vê os quesitos e NÃO detecta
+    # requisitos_materiais_nao_mapeados (P2c, PASS B2 contra f0b3249).
     recheck={k:deepcopy(plano.get(k,[])) for k in ("requisitos_cobertura","atividades","fotografias","medicoes","ensaios","documentos_a_solicitar")}
     if "requisitos_semanticos" in plano:recheck["requisitos_semanticos"]=deepcopy(plano["requisitos_semanticos"])
+    if "cobertura" in plano:recheck["cobertura"]=deepcopy(plano["cobertura"])
     return recheck
 
 def _decisoes_trilha(resultado,auditorias):

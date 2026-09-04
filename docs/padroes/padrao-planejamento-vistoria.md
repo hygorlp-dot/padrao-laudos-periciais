@@ -84,49 +84,61 @@ plano nunca é confiada.** O default é **fail-closed**: `INDETERMINADA`.
   de`, `quantidade de`) — independentemente da grandeza que segue, porque pedir o
   *grau/nível/extensão* de algo é um pedido quantificado que o verbo de requisição
   não desambigua. Coberto só por `medicoes` ou `ensaios`.
-- `INSPECAO` — **exige prova positiva de observabilidade NO OBJETO, por UM funil
-  conjuntivo**. São **modalidade-neutros** e **não** classificam sozinhos: o verbo
-  de requisição genérico (`verificar`, `constatar`, `apontar`, `indicar`,
-  `avaliar`, `analisar`, `determinar`, `apurar`, `conferir`, `informar`); o
-  conector existencial (`há`, `existe`, `existência/presença/ausência de`) —
-  `medir se há trinca > 0,3 mm` também usa "há"; o verbo de **observação direta**
-  (`descrever`, `registrar`, `fotografar`, `inspecionar`, `examinar`, `observar`,
-  `vistoriar`, `caracterizar`, `localizar`) — `registrar o assentamento
-  diferencial` exige nivelamento topográfico; **e** o qualificador de **modo**
-  (`visível`, `aparente`, `visualmente`, `a olho nu`, `ocular`, `perceptível`,
-  `fotograficamente`, `inspeção/exame visual`) — modo não é objeto: `fotografar o
-  parâmetro omega` não prova que o objeto seja observável. `verificar se o piso
-  está nivelado` é medição; `verificar se há infiltração aparente` é inspeção —
-  **o objeto decide**. O funil conjuntivo tem prova de objeto como **condição
-  necessária em todo ramo**: (a) substantivo de **fenômeno inequivocamente
+- `INSPECAO` — **exige CONTABILIDADE OBSERVACIONAL INTEGRAL da demanda**, não
+  apenas a ocorrência de um sinal em algum ponto da cláusula. São
+  **modalidade-neutros** e **não** classificam sozinhos: o verbo de requisição
+  genérico (`verificar`, `constatar`, `apontar`, `indicar`, `avaliar`, `analisar`,
+  `determinar`, `apurar`, `conferir`, `informar`); o conector existencial (`há`,
+  `existe`, `existência/presença/ausência de`) — `medir se há trinca > 0,3 mm`
+  também usa "há"; o verbo de **observação direta** (`descrever`, `registrar`,
+  `fotografar`, `inspecionar`, `examinar`, `observar`, `vistoriar`, `caracterizar`,
+  `localizar`) — `registrar o assentamento diferencial` exige nivelamento
+  topográfico; **e** o qualificador de **modo** (`visível`, `aparente`,
+  `visualmente`, `a olho nu`, `ocular`, `perceptível`, `fotograficamente`,
+  `inspeção/exame visual`) — modo não é objeto: `fotografar o parâmetro omega` não
+  prova que o objeto seja observável. `verificar se o piso está nivelado` é
+  medição; `verificar se há infiltração aparente` é inspeção — **o objeto decide**.
+
+  A contabilidade funciona por eliminação, sobre o texto normalizado: (1) o verbo
+  inicial é descartado; (2) todo **PP locativo** (`em/no/na/junto a/próximo a/perto
+  de ...`) é removido **por inteiro** — um fenômeno citado como *local* da
+  observação não é a *demanda*: `"verificar o cobrimento das armaduras **junto às
+  fissuras**"` não deixa o cobrimento (objeto real da frase) virar observável só
+  porque uma fissura foi citada ao lado; (3) ao menos um **NP observacional** é
+  consumido com seu de-complemento — substantivo de **fenômeno inequivocamente
   visual** (`fissura`, `trinca`, `mancha`, `infiltração`, `mofo`/`bolor`,
   `eflorescência`, `destacamento`/`descolamento`/`desplacamento`,
   `bolha`/`empolamento`, `ferrugem`, `vazamento`/`goteira`, `manifestação
   patológica`, `anomalia`, `avaria`, `deterioração`, `desgaste`,
-  `vegetação`/`entulho`/`sujidade`); **ou** (b) objeto descritivo-qualitativo
+  `vegetação`/`entulho`/`sujidade`) sempre, ou objeto descritivo-qualitativo
   (`padrão construtivo/de acabamento/arquitetônico`, `acabamento`, `estado
   geral/de conservação/aparente`, `aspecto geral/visual/estético`,
   `sistema/método/técnica construtiv-`, `tipologia`, `configuração
-  geral/arquitetônica`, `revestimento`, `pintura`, `forro`, `fachada`)
-  **combinado com** verbo de observação direta ou qualificador de modo — **e**
-  ausência de qualquer sinal de `MEDICAO`. Nenhum ramo concede `INSPECAO` sem
-  prova de objeto: objeto técnico desconhecido **nunca** vira `INSPECAO`,
-  qualquer que seja o verbo ou o marcador de modo. Termos cuja avaliação usual é
-  instrumental (`umidade` sem qualificador visual, `corrosão`/`oxidação` sem
-  "aparente"/"ferrugem", `assentamento diferencial`, `deriva`, `flambagem`,
-  `cobrimento`, `resistividade`, `potencial eletroquímico`, `área de
-  infiltração/mancha/fissura` — extensão quantificada…) **não** habilitam nenhum
-  ramo: sem prova de objeto caem em `INDETERMINADA`. As listas de prova de objeto
-  (fenômeno, objeto descritivo) são permissivas e o funil é *fail-closed*: sua
-  incompletude causa **sobre-bloqueio** (o requisito cai em `INDETERMINADA` →
-  medição estrita), **nunca** falso-verde. Coberto por atividade, fotografia,
-  medição, ensaio ou documento.
-- `INDETERMINADA` — nenhum sinal positivo de `INSPECAO` nem de `MEDICAO`/
-  `DOCUMENTO` (ex.: verbo genérico, conector existencial ou verbo de observação
-  direta sem fenômeno visual, sem qualificador visual e sem objeto descritivo —
-  `verificar se está aprumado`, `constatar se o contrapiso está plano`, `verificar
-  se há afundamento de trilha de roda`, `registrar o assentamento diferencial`,
-  `descrever a resistividade elétrica do concreto`; cláusula sem verbo). Tratada
+  geral/arquitetônica`) só combinado com verbo de observação direta ou
+  qualificador de modo; (4) scaffolding (conector existencial, `alegado`) e
+  qualificador de modo são descartados; (5) **qualquer token de conteúdo
+  remanescente derruba a cláusula para `INDETERMINADA`** — coordenação
+  (`"a fissura e o parâmetro omega"`) e adjetivo desconhecido sobre um fenômeno
+  reconhecido também contam como remanescente. E ausência de qualquer sinal de
+  `MEDICAO`. Objeto técnico desconhecido **nunca** vira `INSPECAO`, qualquer que
+  seja o verbo, o marcador de modo, ou um fenômeno citado incidentalmente em
+  outra parte da cláusula. Termos cuja avaliação usual é instrumental (`umidade`
+  sem qualificador visual, `corrosão`/`oxidação` sem "aparente"/"ferrugem",
+  `assentamento diferencial`, `deriva`, `flambagem`, `cobrimento`,
+  `resistividade`, `potencial eletroquímico`, `área de infiltração/mancha/fissura`
+  — extensão quantificada…) **não** habilitam nenhum ramo. As listas de prova de
+  objeto são permissivas e a contabilidade é *fail-closed*: sua incompletude
+  (adjetivo real não reconhecido como qualificador, p.ex.) causa
+  **sobre-bloqueio** (o requisito cai em `INDETERMINADA` → medição estrita),
+  **nunca** falso-verde — débito de precisão registrado, não corrigido às cegas
+  vocabulário-por-vocabulário. Coberto por atividade, fotografia, medição, ensaio
+  ou documento.
+- `INDETERMINADA` — nenhuma demanda observacional sobra íntegra após a
+  contabilidade (ex.: `verificar se está aprumado`, `constatar se o contrapiso
+  está plano`, `verificar se há afundamento de trilha de roda`, `registrar o
+  assentamento diferencial`, `descrever a resistividade elétrica do concreto`,
+  `verificar o cobrimento das armaduras junto às fissuras`; cláusula sem verbo).
+  Tratada
   como `MEDICAO` estrita pelo gate: **na dúvida, exige medição/ensaio.**
 
 O `recalcular_execucao` (superfície de recálculo REQUIRED→EXECUTED consumida pelos
