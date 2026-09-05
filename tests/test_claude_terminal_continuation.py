@@ -68,7 +68,8 @@ class ClaudeTerminalContinuation(unittest.TestCase):
 
     def test_equivalencia_medicao_recalculada_sem_autodeclaracao(self):
         planejada={"id":"MED-PLANO-001","grandeza":"abertura de fissura","local":"Sala","criterio":"resultado em mm","questoes_tecnicas":["QT-001"]}
-        plano={"medicoes":[planejada],"requisitos_cobertura":[{"questao_tecnica":"QT-001","tipo":"MEDICAO","obrigatoriedade":"OBRIGATORIA","item_planejado":"MED-PLANO-001"}]}
+        plano={"medicoes":[planejada],"requisitos_cobertura":[{"questao_tecnica":"QT-001","tipo":"MEDICAO","obrigatoriedade":"OBRIGATORIA","item_planejado":"MED-PLANO-001"}],
+               "requisitos_semanticos":[{"requirement_id":"REQ-001-MED","quesito":"QUE-001","requisito":"Medir a abertura de fissura na Sala.","itens_planejados":["MED-PLANO-001"]}]}
         def vistoria(grandeza="abertura de fissura",unidade="mm",valor=0.2,qt="QT-001",local="Sala",observacoes=None):
             med={"id":"MED-001","medicao_planejada":None,"grandeza":grandeza,"valor":valor,"unidade":unidade,"local":local,"questoes":[qt],"observacoes":["OBS-001"] if observacoes is None else observacoes,"metodo":"paquímetro"}
             return {"medicoes":[med],"cobertura":[{"tipo":"MEDICAO","planejado":"MED-PLANO-001","status":"SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE","executado":[],"evidencia_equivalente":["MED-001"],"equivalencia":{"requisito_original":"MED-PLANO-001","tipo_evidencia":"MEDICAO","capability":"abertura de fissura","metodo_substituto":"paquímetro"},"justificativa_equivalencia":"medição substituta rastreada"}]}

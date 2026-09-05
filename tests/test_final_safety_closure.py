@@ -31,7 +31,7 @@ class FinalSafetyClosure(unittest.TestCase):
         caso_pdf=AuditoriaFinal2();getattr(caso_pdf,next(n for n in dir(caso_pdf) if n.startswith("test_e2e_can")))()
         processo=json.loads(Path("tests/fixtures/schemas/processo-valido.json").read_text(encoding="utf8"))
         self.assertIn("100",dados_sensiveis_processo(processo))
-        plano={"documentos_a_solicitar":[{"id":"DOC-PLANO-001","descricao":"memorial","criterio_satisfacao":"identidade","questoes_tecnicas":["QT-001"]}],"requisitos_cobertura":[{"questao_tecnica":"QT-001","tipo":"DOCUMENTO","obrigatoriedade":"OBRIGATORIA","item_planejado":"DOC-PLANO-001"}]}
+        plano={"documentos_a_solicitar":[{"id":"DOC-PLANO-001","descricao":"memorial","criterio_satisfacao":"identidade","questoes_tecnicas":["QT-001"]}],"requisitos_cobertura":[{"questao_tecnica":"QT-001","tipo":"DOCUMENTO","obrigatoriedade":"OBRIGATORIA","item_planejado":"DOC-PLANO-001"}],"requisitos_semanticos":[{"requirement_id":"REQ-001-DOC","quesito":"QUE-001","requisito":"Solicitar o memorial de cálculo estrutural.","itens_planejados":["DOC-PLANO-001"]}]}
         vistoria={"documentos_obtidos":[{"id":"DOC-VIS-001","documento_planejado":"DOC-PLANO-001","descricao":"memorial","questoes":["QT-001"]}],"cobertura":[{"tipo":"DOCUMENTO","planejado":"DOC-PLANO-001","status":"EXECUTADO","executado":["DOC-VIS-001"],"evidencia_equivalente":[]}]}
         self.assertTrue(recalcular_execucao(plano,vistoria)["apto"])
         doc={"id":"DOC-001","tipo":"DOCUMENTO","questoes":["QT-001"],"sistema":"VEDACOES","manifestacao":None,"atividade":None,"alegacoes":[],"ambiente":None,"elemento":None}
@@ -41,7 +41,7 @@ class FinalSafetyClosure(unittest.TestCase):
         self.assertEqual(avaliar_conformidade_normativa(norma,[{"id":"MED-001","tipo":"MEDICAO","valor":3,"unidade":"mm"}])["resultado"],"INCONCLUSIVO")
 
     def test_documento_required_presente_e_ausente(self):
-        plano={"documentos_a_solicitar":[{"id":"DOC-PLANO-001","descricao":"memorial estrutural","criterio_satisfacao":"identidade","questoes_tecnicas":["QT-001"]}],"requisitos_cobertura":[{"questao_tecnica":"QT-001","tipo":"DOCUMENTO","obrigatoriedade":"OBRIGATORIA","item_planejado":"DOC-PLANO-001"}]}
+        plano={"documentos_a_solicitar":[{"id":"DOC-PLANO-001","descricao":"memorial estrutural","criterio_satisfacao":"identidade","questoes_tecnicas":["QT-001"]}],"requisitos_cobertura":[{"questao_tecnica":"QT-001","tipo":"DOCUMENTO","obrigatoriedade":"OBRIGATORIA","item_planejado":"DOC-PLANO-001"}],"requisitos_semanticos":[{"requirement_id":"REQ-001-DOC","quesito":"QUE-001","requisito":"Solicitar o memorial estrutural.","itens_planejados":["DOC-PLANO-001"]}]}
         presente={"documentos_obtidos":[{"id":"DOC-VIS-001","documento_planejado":"DOC-PLANO-001","descricao":"memorial estrutural","questoes":["QT-001"]}],"cobertura":[{"tipo":"DOCUMENTO","planejado":"DOC-PLANO-001","status":"EXECUTADO","executado":["DOC-VIS-001"],"evidencia_equivalente":[]}]}
         self.assertTrue(recalcular_execucao(plano,presente)["apto"])
         self.assertFalse(recalcular_execucao(plano,{"documentos_obtidos":[],"cobertura":[]})["apto"])
