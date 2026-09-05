@@ -1354,11 +1354,44 @@ def test_perda_na_normalizacao_ignora_diacritico_do_portugues_v133():
     são perda; σ/λ/µ/Ø/× são."""
     from scripts.planejamento_pericial.requisitos_materiais import _perda_na_normalizacao
     for texto in ["edificação", "área construída", "manutenção do imóvel",
-                  "pé-direito", "avaliação técnica", "distribuição dos cômodos"]:
+                  "pé-direito", "avaliação técnica", "distribuição dos cômodos",
+                  "3º pavimento", "1ª laje", "três cômodos", "água pluvial"]:
         assert _perda_na_normalizacao(texto) is False, texto
     for texto in ["tensão σ", "esbeltez λ", "coef. µ",
                   "diâmetro Ø", "3 × 4"]:
         assert _perda_na_normalizacao(texto) is True, texto
+
+
+def test_autoridade_loss_aware_predicado_por_glifo_nao_por_categoria_v134():
+    """P0 (PASS A9+B9 contra e3a8afc, SAME_CLASS_SURVIVED — 7ª rodada): o V13.3
+    keyou a detecção de perda por CATEGORIA Unicode `(L,N,S)` e o piso de
+    resíduo por cardinalidade `\\w` — os dois no eixo errado. Deixavam passar
+    (a) símbolo não-ASCII de categoria `Po`/`Pd`/`Co` (′ ″ ‰ · • – — †, PUA),
+    (b) decomposição de compatibilidade (№→"No", ½→"1⁄2", ²→"2", ③),
+    (c) símbolo letterlike alias de unidade (Å U+212B, Ω U+2126, K U+212A),
+    (d) QUALQUER símbolo ASCII não-`\\w` como objeto único (+ @ # ~ & * = % $
+    ^ | < > /). Predicado correto: um glifo VISÍVEL não-ASCII que não seja
+    acento do português (decomposição != 1 letra ASCII) = perda; e, na
+    autoridade, resíduo `\\S` não-alfanumérico fora da pontuação de sentença
+    = conteúdo não contabilizado. `SILENT LOSS MUST NEVER BECOME CERTAINTY`."""
+    unicode_sym = ["′", "″", "‰", "·", "•", "†",
+                   "§", "–", "—", "½", "²", "③",
+                   "№", "Å", "Ω", "", ""]
+    ascii_sym = ["+", "@", "#", "~", "&", "*", "=", "%", "$", "^", "|", "<", ">", "/"]
+    for tk in unicode_sym + ascii_sym:
+        texto = f"Verificar a fissura do {tk}."
+        assert classificar_requisito(texto) != "INSPECAO" or evidencia_requerida(texto) != "OBSERVACIONAL", texto
+        assert evidencia_requerida(texto) != "OBSERVACIONAL", texto
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["apto"] is False, texto
+    # coordenação e PP também: o glifo perdido/símbolo nunca é absolvido
+    for texto in ["Verificar a mancha e a fissura do ′.",
+                  "Verificar a fissura na parede do ·.",
+                  "Descrever a mancha do — na parede."]:
+        assert evidencia_requerida(texto) != "OBSERVACIONAL", texto
+    # controle: diacrítico do português e rótulo de 1 letra continuam OK
+    assert evidencia_requerida("Verificar a fissura da parede da edificação.") == "OBSERVACIONAL"
+    assert evidencia_requerida("Caracterizar as manifestações patológicas alegadas.") == "OBSERVACIONAL"
 
 
 def test_evidencia_requerida_recheck_motor_preserva_autoridade_v13():

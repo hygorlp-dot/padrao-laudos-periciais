@@ -362,6 +362,14 @@ _CLASSE_FECHADA = frozenset({
 
 _MIN_TERMOS = 1
 
+# Pontuação de SENTENÇA — estrutural, aparece em texto de requisito normal e
+# não carrega conteúdo material (o requisito termina em ".", listas usam ","/
+# ";", apostos entre parênteses/aspas). QUALQUER outro caractere não-espaço
+# não-alfanumérico que sobreviva à contabilidade da AUTORIDADE (`@`, `+`, `~`,
+# `%`, `&`, `=`, `#`, `$`, `^`, `|`, `<`, `>`, `/`, `\`, backtick, `-`) é
+# resíduo material não contabilizado — V13.4, PASS A9+B9 contra e3a8afc.
+_PONTUACAO_SENTENCA = frozenset(".,;:!?()[]{}\"'")
+
 
 def remover_ruido_estrutural(texto: str) -> str:
     limpo = str(texto or "")
@@ -458,8 +466,16 @@ def _contabilidade_observacional(base, permitir_aberto=True):
                     break
                 heads_clausula += 1
         c = _SCAFFOLD.sub(" ", _MARCADOR_VISUAL.sub(" ", c))
-        padrao_residual = r"\w{2,}" if permitir_aberto else r"\w+"
-        residual_clausula = [tok for tok in re.findall(padrao_residual, c) if tok not in _CLASSE_FECHADA]
+        if permitir_aberto:
+            residual_clausula = [tok for tok in re.findall(r"\w{2,}", c) if tok not in _CLASSE_FECHADA]
+        else:
+            # AUTORIDADE: cardinalidade ≥1 para token-palavra E qualquer símbolo
+            # não-espaço não-alfanumérico que não seja pontuação de sentença —
+            # "@"/"+"/"~"/"′" (sobrevive à normalização ou nem chega a ser \w)
+            # não pode desaparecer silenciosamente (V13.4, PASS A9+B9).
+            residual_clausula = [tok for tok in re.findall(r"\w+", c) if tok not in _CLASSE_FECHADA]
+            residual_clausula += [s for s in c if not s.isspace() and not s.isalnum()
+                                  and s not in _PONTUACAO_SENTENCA]
         if not heads_clausula or residual_clausula:
             return heads_total + heads_clausula, True
         heads_total += heads_clausula
@@ -553,26 +569,40 @@ _MAPA_EVIDENCIA_REQUERIDA = {"MEDICAO": "METROLOGICA", "DOCUMENTO": "DOCUMENTAL"
 
 
 def _perda_na_normalizacao(texto: str) -> bool:
-    """True quando `normalizar()` (NFKD + encode('ascii','ignore')) APAGARIA
-    conteúdo materialmente semântico — um caractere-base não-ASCII de categoria
-    letra/número/símbolo (ex.: `σ` tensão, `λ` esbeltez, `φ` diâmetro, `θ`
-    ângulo, `µ` atrito, `Ø` diâmetro — notação técnica corrente em perícia
-    estrutural, e classe de artefato de extração de PDF/OCR que este módulo já
-    trata como modelo de ameaça em _RUIDO).
+    """True quando `normalizar()` (NFKD + encode('ascii','ignore')) APAGARIA um
+    glifo VISÍVEL não-ASCII — qualquer caractere que, após NFKD, não seja ASCII,
+    não seja marca combinante (acento do português: `á→a`, `ç→c`, `ã→a`, `õ→o` —
+    removível sem apagar conteúdo), não seja espaço e não seja formatação
+    invisível (categoria Cf/Cc — zero-width, joiners, bidi). Ex.: `σ` `λ` `µ`
+    `Ø` (letras), `′` `″` `·` `•` `‰` `†` (pontuação/símbolo), `£` `×` `∑`,
+    caractere de área de uso privado (artefato de extração de PDF/OCR — o
+    modelo de ameaça já reconhecido neste módulo em _RUIDO).
 
-    V13.3 (PASS B8 contra 527af78, SAME_CLASS_SURVIVED — 6ª rodada):
+    V13.3→V13.4 (PASS B8 contra 527af78; PASS A9+B9 contra e3a8afc — 7ª rodada):
     `ABSENCE_AFTER_LOSSY_NORMALIZATION != PROOF_OF_SEMANTIC_COMPLETENESS`. A
-    autoridade efetiva NUNCA pode ler "não vejo resíduo" como "provei que não
-    há resíduo" quando a etapa de normalização apagou conteúdo sem registrar a
-    perda. Marcas combinantes (acentos do português: `á→a`, `ç→c`, `ã→a`,
-    `õ→o`) NÃO são perda — são removíveis sem apagar conteúdo. NÃO hardcode os
-    símbolos achados pelos revisores: a detecção é por CATEGORIA Unicode, aberta
-    a qualquer glifo material que o ascii-strip descartaria."""
-    for ch in unicodedata.normalize("NFKD", str(texto or "")):
-        if ord(ch) < 128 or unicodedata.combining(ch):
+    autoridade NUNCA pode ler "não vejo resíduo" como "provei que não há
+    resíduo" quando a normalização apagou/transformou conteúdo sem registrar a
+    perda. O V13.3 keyou a detecção por CATEGORIA `(L,N,S)` — deixava passar
+    `Po`/`Pd`/`Co` (`′ ″ · • – — †`, PUA) e decomposições de compatibilidade
+    (`№→"No"`, `½→"1⁄2"`). O predicado correto NÃO é categoria: um caractere
+    não-ASCII só é INÓCUO quando é acento do português — decompõe (NFKD) para
+    EXATAMENTE uma letra ASCII mais marcas combinantes. Qualquer outro
+    (símbolo, pontuação tipográfica, ligadura, fração, sobrescrito, forma de
+    compatibilidade, PUA) é perda. NÃO hardcode símbolos."""
+    for ch in str(texto or ""):
+        if ord(ch) < 128:
             continue
-        if unicodedata.category(ch)[0] in ("L", "N", "S"):
-            return True
+        if unicodedata.category(ch) in ("Cf", "Cc", "Zs", "Zl", "Zp"):
+            continue  # formatação invisível / espaço (NBSP e afins)
+        deco = unicodedata.decomposition(ch)
+        if deco and "<" not in deco and " " not in deco:
+            return True  # decomposição canônica SINGLETON (Å→Å, Ω→Ω, K→K):
+                         # símbolo letterlike / alias de unidade — não é acento
+        nfkd = unicodedata.normalize("NFKD", ch)
+        nucleo = "".join(c for c in nfkd if not unicodedata.combining(c))
+        if len(nucleo) == 1 and nucleo.isascii() and nucleo.isalpha():
+            continue  # acento do português: á→a, ç→c, ã→a, õ→o, º→o
+        return True
     return False
 
 

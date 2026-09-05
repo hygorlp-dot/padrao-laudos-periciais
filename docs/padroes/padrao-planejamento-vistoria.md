@@ -226,21 +226,28 @@ de falha aceito, nunca o inverso. `_cobertura_semantica`,
 coleções (`atividades`/`medicoes`/`ensaios`/`fotografias`/`documentos`)
 satisfazem um requisito.
 
-**Loss-aware (V13.3):** `ABSENCE_AFTER_LOSSY_NORMALIZATION !=
-PROOF_OF_SEMANTIC_COMPLETENESS`. A promoção a `OBSERVACIONAL` exige, ALÉM da
-prova estrita, que **nenhum conteúdo material tenha sido apagado pela
-normalização**. `normalizar()` faz NFKD + `encode("ascii","ignore")` — um
-símbolo técnico não-ASCII (`σ` tensão, `λ` esbeltez, `φ` diâmetro, `θ`
-ângulo, `µ` atrito, `Ø`) some por inteiro antes da contabilidade; a autoridade
-NÃO pode ler "não vejo resíduo" como "provei que não há resíduo".
-`_perda_na_normalizacao` detecta por **categoria Unicode** (letra/número/
-símbolo não-ASCII que o ascii-strip descartaria — não hardcode dos símbolos)
-qualquer perda material; acento normal do português (`á→a`, `ç→c`, `ã→a`,
-`õ→o` — marca combinante) NÃO é perda. E, no modo ESTRITO da autoridade, o
-piso do token residual é cardinalidade **≥1** (`\w+`, não `\w{2,}`): um token
-desconhecido de 1 caractere (`x`, `5`) ou fragmentado por pontuação (`a-b` →
-`a`,`b`; `x/y` → `x`,`y`) também derruba a promoção. Sobre-bloqueio de
-`"eixo A"` é P2 aceitável; `FALSE_APTO` é P0. A SUGESTÃO
+**Loss-aware (V13.3/V13.4):** `ABSENCE_AFTER_LOSSY_NORMALIZATION !=
+PROOF_OF_SEMANTIC_COMPLETENESS` — `SILENT LOSS MUST NEVER BECOME CERTAINTY`.
+A promoção a `OBSERVACIONAL` exige, ALÉM da prova estrita, que **nenhum
+conteúdo material tenha sido apagado/transformado pela normalização**.
+`normalizar()` faz NFKD + `encode("ascii","ignore")` — um glifo não-ASCII
+some por inteiro antes da contabilidade; a autoridade NÃO pode ler "não vejo
+resíduo" como "provei que não há resíduo". `_perda_na_normalizacao` é keyed
+em **"sumiu um glifo visível"**, não em categoria Unicode (V13.4, PASS A9+B9:
+categoria `(L,N,S)` deixava passar `Po`/`Pd`/`Co` — `′ ″ ‰ · • – — †`, PUA — e
+decomposições de compatibilidade `№→"No"`, `½→"1⁄2"`, `②`). Um caractere
+não-ASCII só é INÓCUO quando é acento do português (decompõe para EXATAMENTE
+uma letra ASCII mais marcas combinantes); qualquer outro — símbolo,
+pontuação tipográfica, ligadura, fração, sobrescrito, forma de
+compatibilidade, símbolo letterlike alias de unidade (`Å` U+212B, `Ω` U+2126,
+`K` U+212A — decomposição canônica singleton), PUA — é perda. E, no modo
+ESTRITO da autoridade, o resíduo também inclui **qualquer caractere `\S`
+não-alfanumérico fora da pontuação de sentença** (`.,;:!?()[]{}"'`): um
+objeto representado só por `@`/`+`/`~`/`%`/`&`/`=`/`#`/`/` (ASCII, sobrevive à
+normalização, invisível ao `\w+`) também derruba a promoção; e o piso do
+token-palavra é cardinalidade **≥1** (`\w+`, não `\w{2,}` — captura `x`, `5`,
+`a-b`→`a`,`b`). Sobre-bloqueio de `"eixo A"` (rótulo de 1 letra) e de texto
+com travessão/aspas tipográficas é P2 aceitável; `FALSE_APTO` é P0. A SUGESTÃO
 (`classificar_requisito`) mantém a normalização e o piso `\w{2,}` atuais.
 
 O `recalcular_execucao` (superfície de recálculo REQUIRED→EXECUTED consumida pelos
