@@ -57,7 +57,8 @@ _RUIDO = [
     re.compile(r"(?im)^\s*[\d\W_]+\s*$"),
 ]
 _VERBO_TECNICO = re.compile(
-    r"(?i)\b(?:verificar|avaliar|analis\w+|estimar|medir|caracterizar|quantificar|"
+    r"(?i)\b(?:verificar|avaliar|analis(?:ar|e|es|a|ou|ando|ad[oa]s?|amos|em|ava(?:m|mos)?)|"
+    r"estimar|medir|caracterizar|quantificar|"
     r"constatar|identificar|localizar|classificar|determinar|apurar|aferir|mensurar|"
     r"dimensionar|calcular|conferir|inspecionar|documentar|descrever|registrar|apontar|"
     r"indicar|ensaiar|testar|examinar|observar|solicitar|juntar|apresentar|requisitar|existir|haver)\b"
@@ -92,7 +93,11 @@ _VERBO_OBSERVACAO_DIRETA = re.compile(
 # seguro" — não é gated por `permitir_aberto`. Bounded fecha a classe inteira
 # sem exigir enumerar os sufixos maliciosos (que são infinitos): só o que
 # está na lista fechada é aceito, o resto vira resíduo.
-_FLEX = r"(?:s|es)?"
+# V13.2 (PASS A7): só "-s" — todo radical que usa _FLEX termina em vogal
+# (plural regular "+s"); os poucos radicais consoante-final (pilar/corredor/
+# bolor) têm "(?:es)?" explícito. `(?:s|es)?` aceitava "paredees" (radical +
+# "es") — over-aceitação limitada, não open-world, mas eliminada.
+_FLEX = r"s?"
 # Objeto de natureza DESCRITIVO-QUALITATIVA (não grandeza, não patologia
 # instrumental). Só habilita INSPECAO junto de um verbo de observação direta.
 # Lista permissiva e gated: sua incompletude causa SOBRE-BLOQUEIO (o requisito cai
@@ -122,7 +127,8 @@ _OBJETO_DESCRITIVO = re.compile(
 # verbo genérico ("medir se HÁ trinca > 0,3 mm" também usa "há").
 _MARCADOR_VISUAL = re.compile(
     r"(?i)(?:\b(?:visivel|visiveis|aparente|aparentes|visualmente|ocular|oculares|"
-    r"perceptivel|perceptiveis|fotograf\w*|inspecao\s+visual|exame\s+visual|"
+    r"perceptivel|perceptiveis|fotograf(?:ar|ad[oa]s?|ic[oa]s?|icamente|ias?)|"
+    r"inspecao\s+visual|exame\s+visual|"
     r"aspecto\s+visual)\b|\ba\s+olho\s+nu\b)"
 )
 # Substantivo de FENÔMENO/anomalia inerentemente avaliável por observação a olho nu
@@ -285,7 +291,8 @@ _DOC_ARTEFATO = re.compile(r"(?i)\b(?:documento|projeto|memorial|planta|art\b|rr
 # Só se ancora APÓS um head consumido — não cria prova de objeto por si só.
 _QUALIFICADOR_NP = (
     r"visivel|visiveis|aparente|aparentes|visualmente|ocular|oculares|perceptivel|perceptiveis|"
-    r"fotograf\w*|superficial|superficiais|pontual|pontuais|localizad\w*|generalizad\w*|alegad\w*")
+    r"fotograf(?:ar|ad[oa]s?|ic[oa]s?|icamente|ias?)|superficial|superficiais|pontual|pontuais|"
+    r"localizad[oa]s?|generalizad[oa]s?|alegad[oa]s?")
 # Complemento SEMPRE seguro (independe de modo_observacional): elemento/local
 # construtivo, ou atribuição de causa cuja manifestação típica já é uma marca
 # visível por definição (umidade→mancha, bolor, sujidade — o head já garante
@@ -312,7 +319,8 @@ _COMPLEMENTO_SEGURO = (
     r"banheiro" + _FLEX + r"|"
     r"cozinha" + _FLEX + r"|varanda" + _FLEX + r"|sacada" + _FLEX + r"|garage(?:m|ns)|terra[cç]o" + _FLEX + r"|"
     r"umidade" + _FLEX + r"|bolor(?:es)?|mofo" + _FLEX + r"|"
-    r"detalhe" + _FLEX + r"|contexto" + _FLEX + r"|aproxima[cç](?:[aã]o|[oõ]es)"
+    r"detalhe" + _FLEX + r"|contexto" + _FLEX + r"|aproxima[cç](?:[aã]o|[oõ]es)|"
+    r"pintura" + _FLEX + r"|benfeitoria" + _FLEX
 )
 _PP_LOCATIVO = re.compile(
     r"(?i)\b(?:em|n[ao]s?|numa?|junto\s+a[s]?|proximo\s+a[s]?|perto\s+d[aeo]s?)"
@@ -332,8 +340,14 @@ _NP_DESCRITIVO_ABERTO = re.compile(_OBJETO_DESCRITIVO.pattern + _CADEIA_NP_ABERT
 # "existe fissura" tem tanto valor scaffold quanto "existência de fissura"; a
 # forma verbal não vira prova de objeto sozinha, mas também não é conteúdo
 # residual que derruba um fenômeno genuíno já contabilizado) e marcador processual.
-_SCAFFOLD = re.compile(r"(?i)\b(?:presenc\w*|ausenc\w*|alegad\w*|"
-                        r"existenc\w*|existe|existem|existir|ha|houve|havia)\b")
+# V13.2 (PASS A7+B7 contra a5626b7, SAME_CLASS_SURVIVED — 5ª rodada): sufixos
+# FECHADOS, nunca `\w*` irrestrito — mesmo reparo que V13.1 aplicou aos três
+# vocabulários de objeto, agora estendido a TODA primitiva que a
+# `_contabilidade_observacional` remove (`.sub`) ou consome antes da checagem de
+# resíduo: "presencaZETA"/"alegadaZETA" eram apagados como scaffold e o token
+# desconhecido nunca virava resíduo.
+_SCAFFOLD = re.compile(r"(?i)\b(?:presen[cç]as?|ausen[cç]ias?|alegad[oa]s?|"
+                        r"exist[eê]nci[ae]s?|existe|existem|existir|ha|houve|havia)\b")
 # Classes fechadas — nunca são demanda material.
 _CLASSE_FECHADA = frozenset({
     "o", "a", "os", "as", "um", "uma", "uns", "umas", "de", "do", "da", "dos", "das",

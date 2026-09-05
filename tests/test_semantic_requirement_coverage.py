@@ -1235,6 +1235,55 @@ def test_residuo_de_token_curto_nao_escapa_da_contabilidade_v131():
         assert evidencia_requerida(texto) != "OBSERVACIONAL", texto
 
 
+def test_primitivas_irmas_da_contabilidade_tambem_tem_sufixo_fechado_v132():
+    """P0 (PASS A7+B7 contra a5626b7, SAME_CLASS_SURVIVED — 5ª rodada): o V13.1
+    fechou o `\\w*` só em _FENOMENO_OBSERVAVEL/_OBJETO_DESCRITIVO/
+    _COMPLEMENTO_SEGURO; o MESMO bug sobreviveu em TODA outra primitiva que a
+    `_contabilidade_observacional` remove ou consome antes da checagem de
+    resíduo — _SCAFFOLD (presenc/ausenc/alegad/existenc), _MARCADOR_VISUAL
+    (fotograf), _QUALIFICADOR_NP (fotograf/localizad/generalizad/alegad) e o
+    verbo-líder _VERBO_TECNICO (analis). Um token desconhecido colado a
+    qualquer um desses radicais era apagado como se fosse flexão e nunca
+    virava resíduo. Sufixos agora FECHADOS em todas."""
+    for texto in [
+        "Verificar a presencazeta de fissura.",          # _SCAFFOLD
+        "Descrever a mancha ausenciazeta.",
+        "Verificar a fissura alegadazeta.",
+        "Verificar a fissura fotografiazeta.",            # _MARCADOR_VISUAL
+        "Verificar a fissura localizadazeta.",            # _QUALIFICADOR_NP
+        "Verificar a fissura generalizadaomega na parede.",
+        "Caracterizar as manifestacoes alegadaszeta.",
+        "Analisezeta a fissura.",                         # _VERBO_TECNICO (analis)
+        "Analisekappa a mancha na parede.",
+    ]:
+        assert classificar_requisito(texto) != "INSPECAO", texto
+        assert evidencia_requerida(texto) != "OBSERVACIONAL", texto
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["apto"] is False, texto
+    # contrapartes positivas: formas legítimas dessas primitivas continuam.
+    for texto in [
+        "Constatar a presenca de mofo no banheiro.",
+        "Constatar a ausencia de fissuras aparentes.",
+        "Verificar a fissura alegada na viga.",
+        "Registrar fotograficamente o estado geral do imovel.",
+        "Registrar a fissura localizada na parede.",
+        "Analisar a fissura da parede.",
+        "Descrever a bolha na pintura.",                  # P2 regressão V13.1 corrigida
+    ]:
+        assert classificar_requisito(texto) == "INSPECAO", texto
+        assert evidencia_requerida(texto) == "OBSERVACIONAL", texto
+
+
+def test_flex_so_admite_s_nao_es_para_radical_terminado_em_vogal_v132():
+    """P2 (PASS A7): `_FLEX = (?:s|es)?` aceitava 'paredees' (radical + 'es');
+    todo radical que usa _FLEX termina em vogal (plural regular só '+s'). _FLEX
+    reduzido para 's?'; os poucos radicais consoante-final têm '(?:es)?'
+    explícito."""
+    assert evidencia_requerida("Verificar a fissura da paredees.") != "OBSERVACIONAL"
+    assert evidencia_requerida("Verificar as fissuras das paredes.") == "OBSERVACIONAL"
+    assert evidencia_requerida("Verificar as trincas dos pilares.") == "OBSERVACIONAL"  # (?:es)? explícito
+
+
 def test_evidencia_requerida_recheck_motor_preserva_autoridade_v13():
     """A autoridade (evidencia_requerida) é a MESMA em Planning e no recheck do
     motor de vícios — nenhuma camada re-classifica com um critério próprio."""
