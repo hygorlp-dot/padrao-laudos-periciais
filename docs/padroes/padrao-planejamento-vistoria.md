@@ -226,7 +226,7 @@ de falha aceito, nunca o inverso. `_cobertura_semantica`,
 coleções (`atividades`/`medicoes`/`ensaios`/`fotografias`/`documentos`)
 satisfazem um requisito.
 
-**Loss-aware (V13.3/V13.4):** `ABSENCE_AFTER_LOSSY_NORMALIZATION !=
+**Loss-aware (V13.3/V13.4/V13.5):** `ABSENCE_AFTER_LOSSY_NORMALIZATION !=
 PROOF_OF_SEMANTIC_COMPLETENESS` — `SILENT LOSS MUST NEVER BECOME CERTAINTY`.
 A promoção a `OBSERVACIONAL` exige, ALÉM da prova estrita, que **nenhum
 conteúdo material tenha sido apagado/transformado pela normalização**.
@@ -236,18 +236,28 @@ resíduo" como "provei que não há resíduo". `_perda_na_normalizacao` é keyed
 em **"sumiu um glifo visível"**, não em categoria Unicode (V13.4, PASS A9+B9:
 categoria `(L,N,S)` deixava passar `Po`/`Pd`/`Co` — `′ ″ ‰ · • – — †`, PUA — e
 decomposições de compatibilidade `№→"No"`, `½→"1⁄2"`, `②`). Um caractere
-não-ASCII só é INÓCUO quando é acento do português (decompõe para EXATAMENTE
-uma letra ASCII mais marcas combinantes); qualquer outro — símbolo,
-pontuação tipográfica, ligadura, fração, sobrescrito, forma de
-compatibilidade, símbolo letterlike alias de unidade (`Å` U+212B, `Ω` U+2126,
-`K` U+212A — decomposição canônica singleton), PUA — é perda. E, no modo
-ESTRITO da autoridade, o resíduo também inclui **qualquer caractere `\S`
-não-alfanumérico fora da pontuação de sentença** (`.,;:!?()[]{}"'`): um
-objeto representado só por `@`/`+`/`~`/`%`/`&`/`=`/`#`/`/` (ASCII, sobrevive à
-normalização, invisível ao `\w+`) também derruba a promoção; e o piso do
-token-palavra é cardinalidade **≥1** (`\w+`, não `\w{2,}` — captura `x`, `5`,
-`a-b`→`a`,`b`). Sobre-bloqueio de `"eixo A"` (rótulo de 1 letra) e de texto
-com travessão/aspas tipográficas é P2 aceitável; `FALSE_APTO` é P0. A SUGESTÃO
+não-ASCII só é INÓCUO quando é (i) marca combinante isolada (texto já em NFD —
+acento sem base ainda é acento), (ii) formatação invisível/espaço (`Cf`/`Cc`/
+`Zs`/`Zl`/`Zp`), (iii) letra latina acentuada (decomposição **canônica** — sem
+tag `<…>` — que reduz a UMA letra ASCII), ou (iv) indicador ordinal do
+português `ª`/`º`. Qualquer outro — símbolo, pontuação tipográfica, ligadura,
+fração, **sobrescrito/subscrito e forma de compatibilidade `<super>`/`<sub>`/
+`<font>`/`<circle>` (`²` `ᵃ` `ℯ` `𝑎` `½` `№` — o glifo carregava significado
+próprio, não é acento)**, símbolo letterlike alias de unidade (`Å` U+212B,
+`Ω` U+2126, `K` U+212A — decomposição canônica singleton), PUA — é perda. E,
+no modo ESTRITO da autoridade, o resíduo também inclui **qualquer caractere
+`\S` não-alfanumérico fora da pontuação de sentença** (`.,;:!?()[]{}"'`): um
+objeto representado só por `@`/`+`/`~`/`%`/`&`/`=`/`#`/`/`/`-` (ASCII,
+sobrevive à normalização, invisível ao `\w+`) também derruba a promoção — `/`
+e `-` **não** são pontuação de sentença aqui (V13.5, PASS A11: um objeto único
+`"do /."` não pode virar `OBSERVACIONAL`); e o piso do token-palavra é
+cardinalidade **≥1** (`\w+`, não `\w{2,}` — captura `x`, `5`, `a-b`→`a`,`b`).
+Um símbolo material **fundido ao verbo-líder** (`"verificar@"`, `"@verificar"`,
+`"veri@ficar"`) também derruba a promoção na autoridade — o token do verbo é
+descartado inteiro de `t`, então o símbolo colado sumiria sem virar resíduo
+(V13.5, PASS B10). Sobre-bloqueio de `"eixo A"` (rótulo de 1 letra), de texto
+com travessão/aspas tipográficas e de `"e/ou"`/radicais hifenizados fora do
+vocabulário fechado é P2 aceitável; `FALSE_APTO` é P0. A SUGESTÃO
 (`classificar_requisito`) mantém a normalização e o piso `\w{2,}` atuais.
 
 O `recalcular_execucao` (superfície de recálculo REQUIRED→EXECUTED consumida pelos

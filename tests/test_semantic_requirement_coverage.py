@@ -1394,6 +1394,65 @@ def test_autoridade_loss_aware_predicado_por_glifo_nao_por_categoria_v134():
     assert evidencia_requerida("Caracterizar as manifestações patológicas alegadas.") == "OBSERVACIONAL"
 
 
+def test_autoridade_loss_aware_verbo_lider_nfd_e_compat_v135():
+    """P0 (PASS B10 contra 9d65973) + P2s (PASS A10) + reconciliação (PASS A11):
+    a 8ª rodada da MESMA classe fail-open + regressões da própria correção.
+      (a) B10/P0 — um símbolo material FUNDIDO ao verbo-líder ("verificar@",
+          "@verificar", "veri@ficar") sumia: `re.sub(\\W+)` o removia só para o
+          match e o token inteiro do verbo era descartado de `t`. Na AUTORIDADE
+          qualquer não-espaço não-alfanumérico colado ao verbo (fora de `.,;:`
+          de lista) derruba a promoção.
+      (b) A10/P2 — texto JÁ em NFD (acento como marca combinante solta) não
+          pode ser lido como perda: `_perda_na_normalizacao` pula `combining()`.
+      (c) A10/P2 — forma de compatibilidade (sobrescrito `²`, letterlike `ℯ`,
+          matemático `𝑎`, fração `½`, `№`) É perda; indicador ordinal PT
+          `ª`/`º` NÃO é.
+      (d) A11 — "/" e "-" isolados como objeto único ("do /.") são resíduo, não
+          pontuação de sentença para a AUTORIDADE. Custo assumido (P2 mesma
+          direção fail-closed): "e/ou" fora do vocabulário fechado → DESCONHECIDA.
+    `SILENT LOSS MUST NEVER BECOME CERTAINTY`; `FALSE_APTO` é P0,
+    `SAFE_OVERBLOCKING` é P2 aceitável."""
+    import unicodedata
+    from scripts.planejamento_pericial.requisitos_materiais import _perda_na_normalizacao
+
+    # (a) símbolo colado ao verbo-líder — não some, não promove
+    for texto in ["Verificar@ a fissura da parede.",
+                  "@Verificar a fissura da parede.",
+                  "veri@ficar a fissura da parede.",
+                  "Verificar# a fissura da parede."]:
+        assert evidencia_requerida(texto) != "OBSERVACIONAL", texto
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["apto"] is False, texto
+    # pontuação de sentença colada ao PRÓPRIO verbo (",", ":") NÃO derruba
+    assert evidencia_requerida("Verificar, a fissura da parede.") == "OBSERVACIONAL"
+    assert evidencia_requerida("Verificar: a fissura da parede.") == "OBSERVACIONAL"
+
+    # (b) mesma frase limpa em NFC e em NFD → ambas OBSERVACIONAL, sem perda
+    frase = "Verificar a fissura da parede da edificação."
+    assert _perda_na_normalizacao(unicodedata.normalize("NFD", frase)) is False
+    assert evidencia_requerida(unicodedata.normalize("NFC", frase)) == "OBSERVACIONAL"
+    assert evidencia_requerida(unicodedata.normalize("NFD", frase)) == "OBSERVACIONAL"
+
+    # (c) compat É perda; ordinal PT NÃO é
+    for glifo in ["²", "ℯ", "𝑎", "½", "№", "ᵃ"]:
+        assert _perda_na_normalizacao(f"Verificar a fissura do {glifo}.") is True, glifo
+    for texto in ["3º pavimento", "1ª laje", "Verificar a fissura do 2º pilar."]:
+        assert _perda_na_normalizacao(texto) is False, texto
+
+    # (d) "/" e "-" isolados = resíduo; "e/ou" fora do vocabulário = P2 aceitável
+    for texto in ["Verificar a fissura do /.",
+                  "Verificar a fissura do -.",
+                  "Verificar a fissura e/ou trinca."]:
+        assert evidencia_requerida(texto) != "OBSERVACIONAL", texto
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["apto"] is False, texto
+    # controles positivos preservados
+    for texto in ["Verificar a fissura da parede.",
+                  "Constatar a presença de mofo no banheiro.",
+                  "Descrever a bolha na pintura."]:
+        assert evidencia_requerida(texto) == "OBSERVACIONAL", texto
+
+
 def test_evidencia_requerida_recheck_motor_preserva_autoridade_v13():
     """A autoridade (evidencia_requerida) é a MESMA em Planning e no recheck do
     motor de vícios — nenhuma camada re-classifica com um critério próprio."""

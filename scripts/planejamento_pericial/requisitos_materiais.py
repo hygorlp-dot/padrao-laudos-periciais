@@ -363,11 +363,17 @@ _CLASSE_FECHADA = frozenset({
 _MIN_TERMOS = 1
 
 # Pontuação de SENTENÇA — estrutural, aparece em texto de requisito normal e
-# não carrega conteúdo material (o requisito termina em ".", listas usam ","/
-# ";", apostos entre parênteses/aspas). QUALQUER outro caractere não-espaço
+# não carrega conteúdo material: o requisito termina em ".", listas usam ","/
+# ";", apostos entre parênteses/aspas. QUALQUER outro caractere não-espaço
 # não-alfanumérico que sobreviva à contabilidade da AUTORIDADE (`@`, `+`, `~`,
-# `%`, `&`, `=`, `#`, `$`, `^`, `|`, `<`, `>`, `/`, `\`, backtick, `-`) é
-# resíduo material não contabilizado — V13.4, PASS A9+B9 contra e3a8afc.
+# `%`, `&`, `=`, `#`, `$`, `^`, `|`, `<`, `>`, `\`, backtick, `*` — e também
+# "/" e "-" isolados) é resíduo material não contabilizado — V13.4, PASS A9+B9
+# contra e3a8afc; V13.5, PASS A11 restaura "/"/"-" fora daqui. "/" e "-" NÃO
+# são pontuação de sentença para a AUTORIDADE: um objeto único "/" ("Verificar
+# a fissura do /.") não pode virar OBSERVACIONAL. Custo assumido (P2, mesma
+# direção fail-closed): "e/ou" idiomático e radicais hifenizados fora do
+# vocabulário fechado caem para DESCONHECIDA — SAFE_OVERBLOCKING aceitável,
+# FALSE_APTO não. Objeto fragmentado ("x/y") já cai pelos fragmentos `\w+`.
 _PONTUACAO_SENTENCA = frozenset(".,;:!?()[]{}\"'")
 
 
@@ -432,15 +438,27 @@ def _contabilidade_observacional(base, permitir_aberto=True):
     `evidencia_requerida`) o piso é \\w+ (cardinalidade ≥1) — um token
     desconhecido de 1 caractere ("x", "5") ou fragmentado por pontuação
     ("a-b" → "a","b"; "x/y" → "x","y") NÃO pode desaparecer silenciosamente da
-    contabilidade e virar prova de completude. SAFE_OVERBLOCKING de "eixo A" é
-    P2 aceitável; FALSE_APTO é P0. `ABSENCE_AFTER_LOSSY_NORMALIZATION !=
-    PROOF_OF_SEMANTIC_COMPLETENESS`."""
+    contabilidade e virar prova de completude; "/" e "-" isolados (objeto único
+    "do /.") também são resíduo — não são pontuação de sentença para a
+    AUTORIDADE (V13.5, PASS A11). SAFE_OVERBLOCKING de "eixo A" ou de "e/ou"
+    fora do vocabulário é P2 aceitável; FALSE_APTO é P0.
+    `ABSENCE_AFTER_LOSSY_NORMALIZATION != PROOF_OF_SEMANTIC_COMPLETENESS`."""
     t = base.strip()
     partes = t.split(None, 1)
     verbo_lider = ""
     if partes and _VERBO_TECNICO.fullmatch(re.sub(r"\W+", "", partes[0])):
         verbo_lider = partes[0]
         t = partes[1] if len(partes) > 1 else ""
+        # V13.5 (PASS B10 contra 9d65973): o token do verbo-líder é descartado
+        # de `t` INTEIRO — um símbolo material FUNDIDO ao verbo ("verificar@"/
+        # "@verificar"/"veri@ficar") sumia sem virar resíduo (`re.sub(\W+)` o
+        # remove só para o match). Na AUTORIDADE, qualquer não-espaço não-
+        # alfanumérico colado ao verbo — exceto pontuação de sentença plausível
+        # (`.,;:` de "Verificar," / "Verificar:") — derruba a promoção.
+        if not permitir_aberto and any(
+                not s.isspace() and not s.isalnum() and s not in ".,;:"
+                for s in verbo_lider):
+            return 0, True
     clausulas = [c.strip() for c in _CONECTOR.split(t) if c and c.strip()]
     if not clausulas:
         clausulas = [t]
@@ -578,30 +596,38 @@ def _perda_na_normalizacao(texto: str) -> bool:
     caractere de área de uso privado (artefato de extração de PDF/OCR — o
     modelo de ameaça já reconhecido neste módulo em _RUIDO).
 
-    V13.3→V13.4 (PASS B8 contra 527af78; PASS A9+B9 contra e3a8afc — 7ª rodada):
+    V13.3→V13.4→V13.5 (PASS B8/527af78; PASS A9+B9/e3a8afc; PASS A10+B10/9d65973):
     `ABSENCE_AFTER_LOSSY_NORMALIZATION != PROOF_OF_SEMANTIC_COMPLETENESS`. A
     autoridade NUNCA pode ler "não vejo resíduo" como "provei que não há
     resíduo" quando a normalização apagou/transformou conteúdo sem registrar a
-    perda. O V13.3 keyou a detecção por CATEGORIA `(L,N,S)` — deixava passar
-    `Po`/`Pd`/`Co` (`′ ″ · • – — †`, PUA) e decomposições de compatibilidade
-    (`№→"No"`, `½→"1⁄2"`). O predicado correto NÃO é categoria: um caractere
-    não-ASCII só é INÓCUO quando é acento do português — decompõe (NFKD) para
-    EXATAMENTE uma letra ASCII mais marcas combinantes. Qualquer outro
-    (símbolo, pontuação tipográfica, ligadura, fração, sobrescrito, forma de
-    compatibilidade, PUA) é perda. NÃO hardcode símbolos."""
+    perda. O V13.3 keyou por CATEGORIA `(L,N,S)` — deixava passar `Po`/`Pd`/`Co`
+    (`′ ″ · • – — †`, PUA). O predicado correto NÃO é categoria: um caractere
+    não-ASCII só é INÓCUO quando é (i) marca combinante isolada (texto já em
+    NFD — acento sem base ainda é acento, não perda, V13.5/PASS A10), ou (ii)
+    formatação invisível/espaço, ou (iii) letra latina acentuada — decomposição
+    CANÔNICA (sem tag `<…>`) que reduz a UMA letra ASCII —, ou (iv) indicador
+    ordinal do português `ª`/`º`. Qualquer outro (símbolo, pontuação
+    tipográfica, ligadura, fração, sobrescrito/subscrito, forma de
+    compatibilidade `<font>`/`<super>`/`<sub>`/`<circle>`/`<wide>`, alias de
+    unidade singleton `Å`/`Ω`/`K`, PUA) é perda. NÃO hardcode símbolos."""
     for ch in str(texto or ""):
-        if ord(ch) < 128:
+        if ord(ch) < 128 or unicodedata.combining(ch):
             continue
         if unicodedata.category(ch) in ("Cf", "Cc", "Zs", "Zl", "Zp"):
             continue  # formatação invisível / espaço (NBSP e afins)
+        if ch in ("ª", "º"):
+            continue  # indicador ordinal PT ("1º andar", "3ª laje")
         deco = unicodedata.decomposition(ch)
-        if deco and "<" not in deco and " " not in deco:
-            return True  # decomposição canônica SINGLETON (Å→Å, Ω→Ω, K→K):
-                         # símbolo letterlike / alias de unidade — não é acento
-        nfkd = unicodedata.normalize("NFKD", ch)
-        nucleo = "".join(c for c in nfkd if not unicodedata.combining(c))
+        if deco and " " not in deco:
+            return True  # SINGLETON: canônico = alias de unidade (Å/Ω/K);
+                         # ou tag `<…>` de compatibilidade sobre 1 codepoint
+        if "<" in deco:
+            return True  # forma de compatibilidade (`ᵃ` `ℯ` `𝑎` `½`→"1 2"): o
+                         # glifo carregava significado próprio, não é acento
+        nucleo = "".join(c for c in unicodedata.normalize("NFKD", ch)
+                         if not unicodedata.combining(c))
         if len(nucleo) == 1 and nucleo.isascii() and nucleo.isalpha():
-            continue  # acento do português: á→a, ç→c, ã→a, õ→o, º→o
+            continue  # letra latina acentuada: á→a, ç→c, ã→a, õ→o
         return True
     return False
 
