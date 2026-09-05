@@ -77,23 +77,41 @@ _VERBO_OBSERVACAO_DIRETA = re.compile(
     r"(?i)\b(?:descrever|registrar|fotografar|inspecionar|examinar|observar|"
     r"vistoriar|caracterizar|localizar)\b"
 )
+# Sufixo flexional PT-BR FECHADO — nunca \w* irrestrito. Cobre pluralização
+# regular (-s/-es); derivações específicas (-ção/-ções, -ico/-ica, -l/-is,
+# -m/-ns) são escritas por extenso em cada entrada que precisa delas.
+# V13.1 (PASS A6 contra ed3e7ee, SAME_CLASS_SURVIVED — 4ª rodada): TODO
+# vocabulário fechado desta contabilidade (_OBJETO_DESCRITIVO,
+# _FENOMENO_OBSERVAVEL, _COMPLEMENTO_SEGURO) terminava em `\w*` — irrestrito,
+# não apenas flexão. "parede"+"\w*" também casa "paredeZETA" por inteiro,
+# absorvendo um sufixo desconhecido colado ao radical reconhecido como se
+# fosse uma variação morfológica legítima — um artefato plausível de extração
+# de PDF/OCR que perde o espaço entre duas palavras reais (mesma classe de
+# _RUIDO já reconhecida neste módulo), e que atinge a AUTORIDADE efetiva por
+# dentro do próprio TIER 1 que `evidencia_requerida` trata como "sempre
+# seguro" — não é gated por `permitir_aberto`. Bounded fecha a classe inteira
+# sem exigir enumerar os sufixos maliciosos (que são infinitos): só o que
+# está na lista fechada é aceito, o resto vira resíduo.
+_FLEX = r"(?:s|es)?"
 # Objeto de natureza DESCRITIVO-QUALITATIVA (não grandeza, não patologia
 # instrumental). Só habilita INSPECAO junto de um verbo de observação direta.
 # Lista permissiva e gated: sua incompletude causa SOBRE-BLOQUEIO (o requisito cai
 # em INDETERMINADA → medição estrita), nunca falso-verde.
 _OBJETO_DESCRITIVO = re.compile(
-    r"(?i)\b(?:padr[aã]o\s+(?:construtiv\w*|de\s+acabamento|arquitet\w*|de\s+ocupa[cç]\w*|de\s+qualidade)|"
-    r"acabament\w*|"
-    r"estado\s+(?:geral|de\s+conserva[cç]\w*|aparente|de\s+uso|construtiv\w*)|"
-    r"estado\s+d[oa]s?\s+(?:revestiment|acabament|im[óo]vel|edifica|constru|benfeitoria|"
-    r"pintura|forro|elemento|componente)\w*|"
-    r"conserva[cç][aã]o\s+(?:geral|d[oa]\s+(?:im[óo]vel|edifica\w*|constru\w*|"
-    r"revestiment\w*|acabament\w*|pintura\w*|fachada\w*|forro\w*|benfeitoria\w*|bem))|"
-    r"aspecto\s+(?:geral|visual|construtiv\w*|est[eé]tic\w*|arquitet\w*)|"
-    r"sistema\s+construtiv\w*|m[eé]todo\s+construtiv\w*|t[eé]cnica\s+construtiv\w*|"
-    r"tipologi\w*|configura[cç]\w*\s+(?:geral|arquitet\w*|espacial)|"
-    r"disposi[cç]\w*\s+d[oe]s?\s+ambientes|"
-    r"caracter[íi]sticas\s+(?:gerais|construtiv\w*|arquitet\w*|f[íi]sicas))\b"
+    r"(?i)\b(?:padr[aã]o\s+(?:construtiv[oa]s?|de\s+acabamento|arquitet[oô]nic[oa]s?|de\s+ocupa[cç](?:[aã]o|[oõ]es)|de\s+qualidade)|"
+    r"acabament[oa]s?|"
+    r"estado\s+(?:geral|de\s+conserva[cç](?:[aã]o|[oõ]es)|aparente|de\s+uso|construtiv[oa]s?)|"
+    r"estado\s+d[oa]s?\s+(?:revestiment[oa]s?|acabament[oa]s?|im[óo]ve(?:l|is)|"
+    r"edifica[cç](?:[aã]o|[oõ]es)|constru[cç](?:[aã]o|[oõ]es)|benfeitoria" + _FLEX + r"|"
+    r"pintura" + _FLEX + r"|forro" + _FLEX + r"|elemento" + _FLEX + r"|componente" + _FLEX + r")|"
+    r"conserva[cç][aã]o\s+(?:geral|d[oa]\s+(?:im[óo]ve(?:l|is)|edifica[cç](?:[aã]o|[oõ]es)|constru[cç](?:[aã]o|[oõ]es)|"
+    r"revestiment[oa]s?|acabament[oa]s?|pintura" + _FLEX + r"|fachada" + _FLEX + r"|forro" + _FLEX + r"|"
+    r"benfeitoria" + _FLEX + r"|be(?:m|ns)))|"
+    r"aspecto\s+(?:geral|visual|construtiv[oa]s?|est[eé]tic[oa]s?|arquitet[oô]nic[oa]s?)|"
+    r"sistema\s+construtiv[oa]s?|m[eé]todo\s+construtiv[oa]s?|t[eé]cnica\s+construtiv[oa]s?|"
+    r"tipologi(?:as?|c[oa]s?)|configura[cç](?:[aã]o|[oõ]es)\s+(?:geral|arquitet[oô]nic[oa]s?|espacial)|"
+    r"disposi[cç](?:[aã]o|[oõ]es)\s+d[oe]s?\s+ambientes|"
+    r"caracter[íi]sticas\s+(?:gerais|construtiv[oa]s?|arquitet[oô]nic[oa]s?|f[íi]sicas))\b"
 )
 # Qualificador de MODO que evidencia constatação VISUAL. NUNCA é prova de objeto:
 # não habilita INSPECAO sozinho (o verbo "fotografar" casa aqui e é tão
@@ -113,14 +131,14 @@ _MARCADOR_VISUAL = re.compile(
 # relativa, corrosão/oxidação — profundidade/potencial/taxa) NÃO entram aqui: sem
 # outro sinal caem em INDETERMINADA → MEDICAO estrita (sobre-bloqueio seguro).
 _FENOMENO_OBSERVAVEL = re.compile(
-    r"(?i)\b(?:fissura\w*|trinca\w*|rachadura\w*|fenda\w*|mancha\w*|"
-    r"infiltra\w*|mofo\w*|bolor\w*|efloresc\w*|"
-    r"destacamento\w*|descolamento\w*|desplacamento\w*|desprendimento\w*|"
-    r"desagrega\w*|pulverul\w*|bolha\w*|empolamento\w*|ferrugem\w*|"
-    r"vazamento\w*|goteira\w*|gotejamento\w*|"
-    r"patologi\w*|manifestac\w*|anomalia\w*|"
-    r"avaria\w*|deterioracao\w*|desgaste\w*|"
-    r"vegetacao\w*|entulho\w*|sujidade\w*)\b"
+    r"(?i)\b(?:fissura" + _FLEX + r"|trinca" + _FLEX + r"|rachadura" + _FLEX + r"|fenda" + _FLEX + r"|mancha" + _FLEX + r"|"
+    r"infiltra(?:[cç](?:[aã]o|[oõ]es)|d[oa]s?)|mofo" + _FLEX + r"|bolor(?:es)?|efloresc[eê]nci[ae]s?|"
+    r"destacamento" + _FLEX + r"|descolamento" + _FLEX + r"|desplacamento" + _FLEX + r"|desprendimento" + _FLEX + r"|"
+    r"desagrega(?:[cç](?:[aã]o|[oõ]es)|d[oa]s?)|pulverul(?:ent[oa]s?)|bolha" + _FLEX + r"|empolamento" + _FLEX + r"|ferruge(?:m|ns)|"
+    r"vazamento" + _FLEX + r"|goteira" + _FLEX + r"|gotejamento" + _FLEX + r"|"
+    r"patologi(?:as?|c[oa]s?)|manifesta[cç](?:[aã]o|[oõ]es)|anomalia" + _FLEX + r"|"
+    r"avaria" + _FLEX + r"|deteriora[cç](?:[aã]o|[oõ]es)|desgaste" + _FLEX + r"|"
+    r"vegeta[cç](?:[aã]o|[oõ]es)|entulho" + _FLEX + r"|sujidade" + _FLEX + r")\b"
 )
 _VERBO_MEDICAO = re.compile(r"(?i)\b(?:medir|medi[cç][aã]o|aferir|mensurar|quantificar|dimensionar|calcular|ensai\w+|testar\s+(?:a\s+)?(?:carga|resist|press|estanqu))\b")
 # Grandezas inerentemente dimensionais — tolerante a plural/flexão (…\w*) para que
@@ -247,8 +265,22 @@ _DOC_ARTEFATO = re.compile(r"(?i)\b(?:documento|projeto|memorial|planta|art\b|rr
 # — nunca mais por uma deleção cega e paralela. Este é o repair mínimo
 # (§13 do LOOP BREAKER): remove do PP locativo o poder de fabricar completude,
 # sem introduzir framework, sem NLP, sem nova entidade de dados.
-_PP_LOCATIVO = re.compile(
-    r"(?i)\b(?:em|n[ao]s?|numa?|junto\s+a[s]?|proximo\s+a[s]?|perto\s+d[aeo]s?)\s+\w+")
+#
+# V13.1 (PASS A6 contra ed3e7ee, SAME_CLASS_SURVIVED — 4ª rodada, mesmo após a
+# separação SUGESTÃO/AUTORIDADE já confirmada genuína pelas duas revisões):
+# o V12.2 limitou o span do PP a UMA palavra, mas ainda a deletava
+# INCONDICIONALMENTE — sem NENHUMA verificação de conteúdo, ao contrário de
+# todo outro ponto de absorção deste módulo. "verificar a fissura NO ZETA"
+# tinha "zeta" inteiramente descartado como "nome do local", nunca alcançando
+# a contabilidade de resíduo — e isso valia tanto para a SUGESTÃO quanto para
+# o modo ESTRITO de `evidencia_requerida` (a deleção acontece ANTES de
+# qualquer split TIER1/TIER2, então nenhum dos dois modos jamais via o
+# conteúdo). O PP locativo agora só remove a preposição quando a palavra
+# seguinte pertence ao MESMO vocabulário fechado já usado para o
+# de-complemento (_COMPLEMENTO_SEGURO, definido abaixo) — um substantivo de
+# local desconhecido não é mais removido "de graça": permanece no texto e
+# vira resíduo, IDÊNTICO ao que já acontecia com um de-complemento
+# desconhecido fora de um PP.
 # Qualificador admitido DENTRO do NP observacional (modo/aspecto, nunca objeto).
 # Só se ancora APÓS um head consumido — não cria prova de objeto por si só.
 _QUALIFICADOR_NP = (
@@ -260,17 +292,31 @@ _QUALIFICADOR_NP = (
 # isso; o complemento só nomeia a causa aparente, não introduz medição). Lista
 # permissiva e DELIBERADAMENTE fechada (mesmo padrão de
 # _FENOMENO_OBSERVAVEL/_OBJETO_DESCRITIVO): sua incompletude causa
-# SOBRE-BLOQUEIO seguro (P2), nunca falso-verde.
+# SOBRE-BLOQUEIO seguro (P2), nunca falso-verde. Sufixos FECHADOS (_FLEX ou
+# alternativa explícita), nunca `\w*` irrestrito (V13.1 — ver nota acima e no
+# topo do módulo sobre _FLEX: "paredeZETA" não pode mais ser absorvido como
+# se fosse uma flexão de "parede").
 _COMPLEMENTO_SEGURO = (
-    r"parede\w*|teto\w*|piso\w*|laje\w*|viga\w*|pilar\w*|muro\w*|telhado\w*|telha\w*|"
-    r"forro\w*|calha\w*|rodap[eé]\w*|esquadria\w*|porta\w*|janela\w*|escada\w*|"
-    r"corredor\w*|ambiente\w*|c[oô]modo\w*|im[óo]vel\w*|edifica[cç][aã]o\w*|edif[íi]cio\w*|"
-    r"estrutura\w*|fachada\w*|alvenaria\w*|revestiment\w*|acabament\w*|cobertura\w*|"
-    r"elemento\w*|componente\w*|"
-    r"contrapiso\w*|funda[cç][aã]o\w*|platibanda\w*|beiral\w*|guarda[- ]?corpo\w*|"
-    r"peitoril\w*|batente\w*|soleira\w*|junta\w*|drywall|gesso\w*|banheiro\w*|"
-    r"cozinha\w*|varanda\w*|sacada\w*|garagem\w*|terra[cç]o\w*|umidade\w*|bolor\w*|mofo\w*"
+    r"parede" + _FLEX + r"|teto" + _FLEX + r"|piso" + _FLEX + r"|laje" + _FLEX + r"|viga" + _FLEX + r"|"
+    r"pilar(?:es)?|muro" + _FLEX + r"|telhado" + _FLEX + r"|telha" + _FLEX + r"|"
+    r"forro" + _FLEX + r"|calha" + _FLEX + r"|rodap[eé]" + _FLEX + r"|esquadria" + _FLEX + r"|porta" + _FLEX + r"|"
+    r"janela" + _FLEX + r"|escada" + _FLEX + r"|"
+    r"corredor(?:es)?|ambiente" + _FLEX + r"|c[oô]modo" + _FLEX + r"|im[óo]ve(?:l|is)|"
+    r"edifica[cç](?:[aã]o|[oõ]es)|edif[íi]cio" + _FLEX + r"|"
+    r"estrutura" + _FLEX + r"|fachada" + _FLEX + r"|alvenaria" + _FLEX + r"|revestiment[oa]s?|"
+    r"acabament[oa]s?|cobertura" + _FLEX + r"|"
+    r"elemento" + _FLEX + r"|componente" + _FLEX + r"|"
+    r"contrapiso" + _FLEX + r"|funda[cç](?:[aã]o|[oõ]es)|platibanda" + _FLEX + r"|beira(?:l|is)|"
+    r"guarda[- ]?corpo" + _FLEX + r"|"
+    r"peitori(?:l|s)?|batente" + _FLEX + r"|soleira" + _FLEX + r"|junta" + _FLEX + r"|drywall|gesso" + _FLEX + r"|"
+    r"banheiro" + _FLEX + r"|"
+    r"cozinha" + _FLEX + r"|varanda" + _FLEX + r"|sacada" + _FLEX + r"|garage(?:m|ns)|terra[cç]o" + _FLEX + r"|"
+    r"umidade" + _FLEX + r"|bolor(?:es)?|mofo" + _FLEX + r"|"
+    r"detalhe" + _FLEX + r"|contexto" + _FLEX + r"|aproxima[cç](?:[aã]o|[oõ]es)"
 )
+_PP_LOCATIVO = re.compile(
+    r"(?i)\b(?:em|n[ao]s?|numa?|junto\s+a[s]?|proximo\s+a[s]?|perto\s+d[aeo]s?)"
+    r"\s+(?:" + _COMPLEMENTO_SEGURO + r")\b")
 _CADEIA_NP_SEGURA = (
     r"(?:\s+(?:(?:" + _QUALIFICADOR_NP + r")\b|d[aeo]s?\s+(?:" + _COMPLEMENTO_SEGURO + r")\b))*")
 # de-complemento ABERTO (substantivo qualquer): só disponível quando a demanda
@@ -352,10 +398,12 @@ def _contabilidade_observacional(base, permitir_aberto=True):
     PASS A4 contra daaceac), NP observacional consumido (head de fenômeno
     sempre; head descritivo só com prova de modo desta cláusula) com
     de-complemento e qualificador de modo, scaffolding descartado. QUALQUER
-    token de conteúdo residual (\\w{3,} fora de classe fechada) OU cláusula sem
-    nenhum head derruba a demanda INTEIRA para INDETERMINADA — coordenar um
-    fenômeno real a uma cláusula não resolvida NUNCA absolve a cláusula não
-    resolvida."""
+    token de conteúdo residual (\\w{2,} fora de classe fechada — V13.1, PASS A6
+    contra ed3e7ee: um token de 1-2 letras nunca contava como resíduo, deixando
+    uma sigla/abreviação técnica curta e nunca vista escapar da contabilidade
+    mesmo sem vocabulário nem marcador algum) OU cláusula sem nenhum head
+    derruba a demanda INTEIRA para INDETERMINADA — coordenar um fenômeno real
+    a uma cláusula não resolvida NUNCA absolve a cláusula não resolvida."""
     t = base.strip()
     partes = t.split(None, 1)
     verbo_lider = ""
@@ -387,7 +435,7 @@ def _contabilidade_observacional(base, permitir_aberto=True):
                     break
                 heads_clausula += 1
         c = _SCAFFOLD.sub(" ", _MARCADOR_VISUAL.sub(" ", c))
-        residual_clausula = [tok for tok in re.findall(r"\w{3,}", c) if tok not in _CLASSE_FECHADA]
+        residual_clausula = [tok for tok in re.findall(r"\w{2,}", c) if tok not in _CLASSE_FECHADA]
         if not heads_clausula or residual_clausula:
             return heads_total + heads_clausula, True
         heads_total += heads_clausula

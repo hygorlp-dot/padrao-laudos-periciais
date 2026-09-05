@@ -1170,6 +1170,71 @@ def test_evidencia_metrologica_com_atividade_generica_nao_cobre_v13():
     assert r["apto"] is False
 
 
+def test_pp_locativo_exige_vocabulario_fechado_v131():
+    """P0 (PASS A6 contra ed3e7ee, SAME_CLASS_SURVIVED — 4ª rodada, mesmo com
+    a separação sugestão/autoridade já confirmada genuína): o PP locativo
+    limitado a uma palavra (V12.2) ainda a deletava incondicionalmente, sem
+    NENHUMA verificação de conteúdo — 'na parede DO ZETA' virava 'local'
+    mesmo sem 'do zeta', e um local desconhecido isolado ('no ZETA') era
+    descartado por inteiro antes de alcançar a contabilidade de resíduo. A
+    deleção acontecia ANTES do split TIER1/TIER2, então nem o modo estrito de
+    evidencia_requerida via o conteúdo. O PP locativo agora só remove a
+    preposição quando a palavra seguinte pertence ao MESMO vocabulário
+    fechado do de-complemento (_COMPLEMENTO_SEGURO)."""
+    for texto in [
+        "Verificar a fissura no zeta.",
+        "Constatar a mancha no teto do dormitorio.",
+        "Verificar a fissura na parede do zeta.",
+        "Verificar a trinca junto a parede do omega.",
+    ]:
+        assert classificar_requisito(texto) != "INSPECAO", texto
+        assert evidencia_requerida(texto) != "OBSERVACIONAL", texto
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["apto"] is False, texto
+    # contraparte positiva: local conhecido continua removido normalmente.
+    assert evidencia_requerida("Verificar a mancha na estrutura.") == "OBSERVACIONAL"
+
+
+def test_vocabulario_fechado_nao_absorve_sufixo_colado_v131():
+    """P0 (PASS A6 contra ed3e7ee, SAME_CLASS_SURVIVED): todo vocabulário
+    fechado desta contabilidade (_FENOMENO_OBSERVAVEL, _OBJETO_DESCRITIVO,
+    _COMPLEMENTO_SEGURO) terminava em `\\w*` — irrestrito, não apenas flexão.
+    'parede'+'\\w*' também casava 'paredeZETA' por inteiro, um artefato
+    plausível de extração de PDF/OCR que perde o espaço entre duas palavras
+    reais. Sufixos agora são fechados (_FLEX ou alternativa explícita): só
+    flexão PT-BR real é absorvida, qualquer sufixo colado sobra como resíduo."""
+    for texto in [
+        "Verificar a fissura do paredezeta.",          # complemento colado
+        "Verificar a fissura da paredezeta.",
+        "Verificar a fissurazeta.",                     # head (fenômeno) colado
+        "Verificar a manchazeta.",
+        "Descrever o padrao construtivozeta do imovel.",  # head (descritivo) colado
+        "Descrever o padrao construtivo do imovelzeta.",  # complemento seguro colado
+    ]:
+        assert classificar_requisito(texto) != "INSPECAO", texto
+        assert evidencia_requerida(texto) != "OBSERVACIONAL", texto
+    # contrapartes positivas: flexão real continua reconhecida normalmente.
+    for texto in [
+        "Verificar a fissura da parede.", "Verificar as fissuras das paredes.",
+        "Descrever o padrao construtivo do imovel.",
+    ]:
+        assert classificar_requisito(texto) == "INSPECAO", texto
+        assert evidencia_requerida(texto) == "OBSERVACIONAL", texto
+
+
+def test_residuo_de_token_curto_nao_escapa_da_contabilidade_v131():
+    """P0 (achado incidental durante a verificação em escala do PASS A6): um
+    token de 1-2 letras nunca contava como resíduo (\\w{3,}) — uma
+    sigla/abreviação técnica curta e nunca vista escapava da contabilidade
+    mesmo sem vocabulário nem marcador algum. Limite reduzido para \\w{2,}."""
+    for texto in [
+        "Verificar a fissura no wz.",
+        "Verificar a mancha na ph.",
+    ]:
+        assert classificar_requisito(texto) != "INSPECAO", texto
+        assert evidencia_requerida(texto) != "OBSERVACIONAL", texto
+
+
 def test_evidencia_requerida_recheck_motor_preserva_autoridade_v13():
     """A autoridade (evidencia_requerida) é a MESMA em Planning e no recheck do
     motor de vícios — nenhuma camada re-classifica com um critério próprio."""

@@ -170,7 +170,14 @@ plano nunca é confiada.** O default é **fail-closed**: `INDETERMINADA`.
   **sobre-bloqueio** (o requisito cai em `INDETERMINADA` → medição estrita),
   **nunca** falso-verde — débito de precisão registrado, não corrigido às cegas
   vocabulário-por-vocabulário. Coberto por atividade, fotografia, medição, ensaio
-  ou documento.
+  ou documento. (V13.1: todo vocabulário fechado desta contabilidade —
+  fenômeno, objeto descritivo, complemento seguro — usa sufixo flexional
+  FECHADO, nunca `\w*` irrestrito: `"parede"` reconhece `"paredes"`, nunca
+  `"paredeZETA"` colado por artefato de extração de PDF/OCR; o PP locativo só
+  remove a preposição quando a palavra seguinte é um local do MESMO
+  vocabulário fechado — um local desconhecido, sozinho, permanece resíduo em
+  vez de ser descartado sem verificação; e um token de 1-2 letras conta como
+  resíduo tanto quanto um mais longo.)
 - `INDETERMINADA` — nenhuma demanda observacional sobra íntegra após a
   contabilidade (ex.: `verificar se está aprumado`, `constatar se o contrapiso
   está plano`, `verificar se há afundamento de trilha de roda`, `registrar o
