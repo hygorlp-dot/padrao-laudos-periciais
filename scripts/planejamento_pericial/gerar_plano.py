@@ -59,20 +59,25 @@ def _perfil(tipo: str) -> dict[str, Any]:
     return {"atividades":[("Caracterizar o objeto e registrar somente fatos observáveis pertinentes ao encargo.","Inspeção genérica controlada"),("Identificar documentos e grandezas indispensáveis sem aplicar método especializado não implementado.","Registro documental")],"medicoes":[],"fotos":["contexto geral do objeto pericial"],"equip": [("câmera","registro geral rastreável")],"seguranca":["Confirmar acesso seguro ao objeto da diligência"]}
 
 
-_COLECOES_POR_CLASSE = {
-    "MEDICAO": (("medicoes", "medicoes"), ("ensaios", "ensaios")),
-    "INDETERMINADA": (("medicoes", "medicoes"), ("ensaios", "ensaios")),
-    "DOCUMENTO": (("documentos_a_solicitar", "documentos"),),
-    "INSPECAO": (("atividades", "atividades"), ("fotografias", "fotografias"), ("medicoes", "medicoes"),
+_COLECOES_POR_EVIDENCIA = {
+    "METROLOGICA": (("medicoes", "medicoes"), ("ensaios", "ensaios")),
+    "DESCONHECIDA": (("medicoes", "medicoes"), ("ensaios", "ensaios")),
+    "DOCUMENTAL": (("documentos_a_solicitar", "documentos"),),
+    "OBSERVACIONAL": (("atividades", "atividades"), ("fotografias", "fotografias"), ("medicoes", "medicoes"),
                 ("ensaios", "ensaios"), ("documentos_a_solicitar", "documentos")),
 }
-_FALTA_POR_CLASSE = {"MEDICAO": "medição/ensaio", "INDETERMINADA": "medição/ensaio", "DOCUMENTO": "documento a solicitar"}
+_FALTA_POR_EVIDENCIA = {"METROLOGICA": "medição/ensaio", "DESCONHECIDA": "medição/ensaio", "DOCUMENTAL": "documento a solicitar"}
+_DESCRICAO_EVIDENCIA = {"METROLOGICA": "metrológico", "DOCUMENTAL": "documental", "OBSERVACIONAL": "observacional",
+                        "DESCONHECIDA": "de modalidade desconhecida (ambígua)"}
 
 
 def _mapear_requisitos_semanticos(quesitos, cobertura, atividades, medicoes, fotografias, ensaios, documentos):
     """Para cada requisito material de cada quesito, vincula a um item planejado JÁ
-    EXISTENTE do tipo apropriado à classe e ligado à cobertura do quesito. O gerador
-    NÃO fabrica destino: sem item do tipo certo, o requisito fica NAO_MAPEADO."""
+    EXISTENTE do tipo apropriado à EVIDÊNCIA REQUERIDA (autoridade efetiva — V13,
+    nunca a classe/sugestão textual isolada) e ligado à cobertura do quesito. O
+    gerador NÃO fabrica destino: sem item do tipo certo, o requisito fica
+    NAO_MAPEADO; sem prova determinística forte de modalidade, a evidência
+    requerida é DESCONHECIDA e o requisito não cobre por atividade genérica."""
     from .requisitos_materiais import extrair_requisitos_materiais
     catalogo = {"atividades": atividades, "medicoes": medicoes, "fotografias": fotografias,
                 "ensaios": ensaios, "documentos_a_solicitar": documentos}
@@ -81,18 +86,20 @@ def _mapear_requisitos_semanticos(quesitos, cobertura, atividades, medicoes, fot
         cobertura_q = next(c for c in cobertura if c["quesito"] == quesito["id"])
         for req in extrair_requisitos_materiais(quesito):
             classe = req.get("classe", "INDETERMINADA")
+            evidencia = req.get("evidencia_requerida", "DESCONHECIDA")
             entrada = {"requirement_id": req["requirement_id"], "quesito": quesito["id"], "requisito": req["requisito"],
-                       "texto_normalizado": req["texto_normalizado"], "classe": classe,
+                       "texto_normalizado": req["texto_normalizado"], "classe": classe, "evidencia_requerida": evidencia,
                        "proveniencia": req.get("proveniencia", []), "status": req["status"], "itens_planejados": []}
             candidatos = []
             if req["status"] != "EXTRACAO_INDETERMINADA":
-                candidatos = [i["id"] for fonte, chave in _COLECOES_POR_CLASSE[classe]
+                candidatos = [i["id"] for fonte, chave in _COLECOES_POR_EVIDENCIA[evidencia]
                               for i in catalogo[fonte] if i["id"] in cobertura_q.get(chave, [])]
             if req["status"] == "EXTRACAO_INDETERMINADA":
                 lacunas.append(f"{quesito['id']}: requisito material não determinável a partir do texto do quesito ({req['requisito'][:80]})")
             elif not candidatos:
-                falta = _FALTA_POR_CLASSE.get(classe, "item de inspeção")
-                lacunas.append(f"{quesito['id']}: requisito {classe.lower()} sem {falta} de plano correspondente ({req['requisito'][:80]})")
+                falta = _FALTA_POR_EVIDENCIA.get(evidencia, "item de inspeção")
+                descricao = _DESCRICAO_EVIDENCIA.get(evidencia, evidencia.lower())
+                lacunas.append(f"{quesito['id']}: requisito {descricao} sem {falta} de plano correspondente ({req['requisito'][:80]})")
                 entrada["status"] = "NAO_MAPEADO"
             entrada["itens_planejados"] = candidatos
             semanticos.append(entrada)

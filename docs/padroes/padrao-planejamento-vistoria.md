@@ -179,11 +179,45 @@ plano nunca é confiada.** O default é **fail-closed**: `INDETERMINADA`.
   Tratada
   como `MEDICAO` estrita pelo gate: **na dúvida, exige medição/ensaio.**
 
+### Autoridade efetiva: sugestão ≠ cobertura (V13)
+
+`classificar_requisito(texto)` (`MEDICAO|DOCUMENTO|INSPECAO|INDETERMINADA`) é
+apenas **SUGESTÃO** — nunca a autoridade de cobertura, mesmo sempre re-derivada
+do texto a cada chamada. Re-derivar fecha *adulteração* (um `classe` persistido
+mentiroso é ignorado); não fecha *ambiguidade* (uma classificação textual
+incorreta, mesmo recalculada do zero toda vez, ainda vira `apto=True` direto
+se a saída do classificador FOR, ela mesma, a autoridade). Esta foi a classe
+causal que atravessou V7-V12.2 (AUTONOMOUS_CAUSAL_REPAIR_LOOP_V1,
+`TEXT_CLASSIFIER_OUTPUT != EFFECTIVE_COVERAGE_AUTHORITY`).
+
+A autoridade efetiva é `evidencia_requerida(texto)` — `METROLOGICA|DOCUMENTAL|
+OBSERVACIONAL|DESCONHECIDA` — SEMPRE re-derivada do texto (nunca de campo
+persistido: `requisitos_semanticos[].evidencia_requerida`, quando presente, é
+só informativo/round-trip, exatamente como `classe` já era). Promoção:
+`MEDICAO→METROLOGICA` e `DOCUMENTO→DOCUMENTAL` diretas (vocabulário fechado,
+nunca a origem de um fail-open nesta issue); `INSPECAO→OBSERVACIONAL` **só**
+quando a MESMA demanda também resolve em modo **ESTRITO** — a contabilidade
+observacional roda de novo com o de-complemento aberto (TIER 2, licenciado por
+marcador visual) **desativado**, exigindo que TODO o conteúdo já pertença a
+vocabulário fechado. Uma sugestão que só resolveu via TIER 2 (`"fotografar a
+fissura de lambda"`, `"registrar a mancha de zeta visível"`) continua
+`INSPECAO` como sugestão, mas vira `DESCONHECIDA` como autoridade — um
+marcador visual é prova textual forte o bastante para *sugerir* observação,
+não para tornar a cobertura *efetiva*, porque o objeto em si permanece fora de
+qualquer vocabulário fechado. `DESCONHECIDA` nunca cobre, nunca fica completa
+— sobre-bloqueio de uma demanda genuinamente observacional é o modo de falha
+aceito, nunca o inverso. `_cobertura_semantica`, `_execucao_semantica_faltante`
+e o gerador (`gerar_plano._mapear_requisitos_semanticos`) consultam
+EXCLUSIVAMENTE `evidencia_requerida` — nunca `classificar_requisito` — para
+decidir quais coleções (`atividades`/`medicoes`/`ensaios`/`fotografias`/
+`documentos`) satisfazem um requisito.
+
 O `recalcular_execucao` (superfície de recálculo REQUIRED→EXECUTED consumida pelos
-pipelines de motor de vícios e de redação) **re-deriva a classe do requisito
-material** pelo mesmo `classificar_requisito`: um plano com requisito de medição
-sem destino de medição/ensaio nunca é `apto` na execução, mesmo com o vínculo
-relacional satisfeito (§18 — uma semântica canônica em todas as superfícies).
+pipelines de motor de vícios e de redação) **re-deriva a evidência requerida do
+requisito material** pela mesma `evidencia_requerida`: um plano com requisito
+metrológico sem destino de medição/ensaio nunca é `apto` na execução, mesmo com
+o vínculo relacional satisfeito (§18 — uma autoridade canônica em todas as
+superfícies).
 A execução efetiva usa **uma única autoridade** (`_item_execucao_satisfeito`) nos
 caminhos relacional e semântico: status persistido nunca é autoridade —
 `EXECUTADO` exige artefato com back-reference ao item planejado e à questão
@@ -194,8 +228,8 @@ Plano legado sem `requisitos_semanticos` tem cobertura semântica **UNKNOWN**:
 
 A cobertura de um requisito material vem **exclusivamente** do vínculo estruturado
 `requisitos_semanticos[].itens_planejados`, validado por: o item existe, está
-vinculado relacionalmente à cobertura do quesito e é do tipo apropriado à classe
-(re-derivada). O vínculo relacional (V12) é lido do **próprio item**, nunca de
+vinculado relacionalmente à cobertura do quesito e é do tipo apropriado à
+evidência requerida (re-derivada). O vínculo relacional (V12) é lido do **próprio item**, nunca de
 `cobertura[quesito]` (lista editável, nunca autoridade): para os tipos cujo
 schema tem campo `quesitos` (`atividade`/`medicao`/`fotografia`), a declaração
 do item é autoridade **única** — presente ou vazia, nunca sobreposta nem

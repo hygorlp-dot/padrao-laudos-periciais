@@ -53,18 +53,21 @@ _STATUS_NAO_COBRIVEL=frozenset({"EXTRACAO_INDETERMINADA","NAO_MAPEADO"})
 # false) — para esses, a interseção de questão técnica é a ÚNICA autoridade de
 # vínculo que o próprio schema disponibiliza, não uma inferência de conveniência.
 _TIPOS_SEM_CAMPO_QUESITOS=frozenset({"ensaios","documentos"})
-# Item planejado de tipo APROPRIADO para satisfazer cada classe de requisito material.
-# MEDICAO exige leitura instrumental/ensaio; DOCUMENTO exige artefato documental;
-# uma atividade genérica NÃO satisfaz um requisito de medição — essa é a autoridade
-# (estrutural, não textual) que impede cobertura fabricada.
-_COLECOES_POR_CLASSE={"MEDICAO":("medicoes","ensaios"),"DOCUMENTO":("documentos",),
-                      "INDETERMINADA":("medicoes","ensaios"),
-                      "INSPECAO":("atividades","fotografias","medicoes","ensaios","documentos")}
+# Item planejado de tipo APROPRIADO para satisfazer cada EVIDÊNCIA REQUERIDA
+# (autoridade efetiva — ver requisitos_materiais.evidencia_requerida, V13).
+# METROLOGICA exige leitura instrumental/ensaio; DOCUMENTAL exige artefato
+# documental; uma atividade genérica NÃO satisfaz uma evidência metrológica —
+# essa é a autoridade (estrutural, não textual) que impede cobertura fabricada.
+# DESCONHECIDA (ambiguidade textual, nunca resolvida com segurança) cai no
+# default mais estrito — nunca no ramo permissivo de OBSERVACIONAL.
+_COLECOES_POR_EVIDENCIA={"METROLOGICA":("medicoes","ensaios"),"DOCUMENTAL":("documentos",),
+                      "DESCONHECIDA":("medicoes","ensaios"),
+                      "OBSERVACIONAL":("atividades","fotografias","medicoes","ensaios","documentos")}
 
 def _cobertura_semantica(dado,por_quesito):
     """Autoridade = requisitos_semanticos[].itens_planejados, validado por, para cada item:
     (existe) E (vinculado relacionalmente à cobertura do quesito) E (é de tipo apropriado
-    à classe do requisito). Sem qualquer comparação textual.
+    à EVIDÊNCIA REQUERIDA do requisito). Sem qualquer comparação textual.
 
     V11 (P1-A2-2): o vínculo NÃO é lido de cobertura[quesito] — lista editável que
     admitia item ESTRANGEIRO ao quesito listado à força.
@@ -83,13 +86,29 @@ def _cobertura_semantica(dado,por_quesito):
     a declaração do item é autoridade ÚNICA (presente ou vazia — nunca
     sobreposta nem complementada por QT); para um tipo SEM esse campo, a
     interseção de questão técnica com a cobertura do quesito é a única
-    autoridade disponível pelo próprio schema."""
+    autoridade disponível pelo próprio schema.
+
+    V13 (reparo ARQUITETURAL — PASS A5+B5 contra 8438104, SAME_CLASS_SURVIVED
+    pela 3ª vez consecutiva na MESMA classe causal, AUTONOMOUS_CAUSAL_REPAIR_-
+    LOOP_V1: "classificar_requisito() decide, e decide errado"): re-derivar a
+    classe do texto a cada chamada fecha ADULTERAÇÃO (um `classe` persistido
+    mentiroso é ignorado), mas NÃO fecha AMBIGUIDADE — uma classificação
+    textual incorreta, mesmo sempre recalculada, ainda vira apto=True direto,
+    porque a saída do classificador ERA a própria autoridade de cobertura.
+    TEXT_CLASSIFIER_OUTPUT != EFFECTIVE_COVERAGE_AUTHORITY: esta função nunca
+    mais chama `classificar_requisito` (a SUGESTÃO) — consulta
+    `evidencia_requerida` (a AUTORIDADE efetiva, sempre re-derivada do texto,
+    nunca de campo persistido — `requisitos_semanticos[].evidencia_requerida`
+    é só informativo/round-trip, exatamente como `classe` já era). Uma
+    sugestão OBSERVACIONAL cuja promoção dependeu de confiar num marcador
+    visual para absolver um objeto desconhecido (TIER 2) não promove a
+    autoridade — vira DESCONHECIDA, e DESCONHECIDA nunca cobre."""
     cobertura_por_id={c.get("quesito"):c for c in dado.get("cobertura",[])}
     itens={chave:{item.get("id"):item for item in dado.get(fonte,[]) if isinstance(item,dict)}
            for chave,fonte in (("atividades","atividades"),("medicoes","medicoes"),("fotografias","fotografias"),
                                ("ensaios","ensaios"),("documentos","documentos_a_solicitar"))}
     colecoes={chave:set(mapa) for chave,mapa in itens.items()}
-    from scripts.planejamento_pericial.requisitos_materiais import classificar_requisito
+    from scripts.planejamento_pericial.requisitos_materiais import evidencia_requerida
     ausente="requisitos_semanticos" not in dado
     por_quesito_sem={qid:False for qid in por_quesito};agrupados={qid:[] for qid in por_quesito}
     for r in dado.get("requisitos_semanticos",[]):
@@ -112,9 +131,9 @@ def _cobertura_semantica(dado,por_quesito):
         for r in grupo:
             total+=1
             planejados=r.get("itens_planejados") or []
-            # classe SEMPRE re-derivada do texto: autoridade author-independent (§18).
-            classe=classificar_requisito(r.get("requisito") or "")
-            apropriadas=_COLECOES_POR_CLASSE.get(classe,("medicoes","ensaios"))
+            # evidência requerida SEMPRE re-derivada do texto: autoridade author-independent (§18).
+            evidencia=evidencia_requerida(r.get("requisito") or "")
+            apropriadas=_COLECOES_POR_EVIDENCIA.get(evidencia,("medicoes","ensaios"))
             mapeado=(r.get("status") not in _STATUS_NAO_COBRIVEL and bool(planejados) and bool(str(r.get("requisito") or "").strip()) and all(
                 vinculado(item_id) and any(item_id in colecoes[c] for c in apropriadas)
                 for item_id in planejados))
@@ -152,10 +171,10 @@ def recalcular_cobertura(dado):
     efetiva={qid:bool(por_quesito.get(qid) and sem["cobertura_requisitos_semanticos"].get(qid)) for qid in por_quesito}
     return {"cobertura":por_quesito,"cobertura_relacional":por_quesito,"cobertura_efetiva":efetiva,"apto":apto,**sem}
 
-_TIPOS_EXEC_POR_CLASSE={"MEDICAO":frozenset({"MEDICAO","ENSAIO"}),
-                        "INDETERMINADA":frozenset({"MEDICAO","ENSAIO"}),
-                        "DOCUMENTO":frozenset({"DOCUMENTO"}),
-                        "INSPECAO":frozenset({"ATIVIDADE","FOTOGRAFIA","MEDICAO","ENSAIO","DOCUMENTO"})}
+_TIPOS_EXEC_POR_EVIDENCIA={"METROLOGICA":frozenset({"MEDICAO","ENSAIO"}),
+                        "DESCONHECIDA":frozenset({"MEDICAO","ENSAIO"}),
+                        "DOCUMENTAL":frozenset({"DOCUMENTO"}),
+                        "OBSERVACIONAL":frozenset({"ATIVIDADE","FOTOGRAFIA","MEDICAO","ENSAIO","DOCUMENTO"})}
 _CAMPOS_PLANO={"ATIVIDADE":"atividade_planejada","FOTOGRAFIA":"fotografia_planejada","MEDICAO":"medicao_planejada","ENSAIO":"ensaio_planejado","DOCUMENTO":"documento_planejado"}
 
 def _item_execucao_satisfeito(tipo,planejado,qt,item_plano,cobertura,catalogos):
@@ -200,17 +219,19 @@ def recalcular_execucao(plano,vistoria):
     return {"apto":bool(plano.get("requisitos_cobertura")) and not faltantes,"faltantes":faltantes}
 
 def _execucao_semantica_faltante(plano,cobertura_exec,catalogos,planejados):
-    """Re-deriva a classe de cada requisito material (via classificar_requisito) e
-    exige que algum item planejado do TIPO apropriado tenha sido EFETIVAMENTE
-    EXECUTADO — artefato com back-reference ou equivalência válida, pelo mesmo
-    critério do caminho relacional (_item_execucao_satisfeito). Status persistido
-    NÃO é autoridade em nenhuma camada. `requisitos_semanticos` ausente →
-    cobertura semântica UNKNOWN → FALTA explícita (fail-closed): plano legado
-    bloqueado no planning não fabrica apto na execução; presente e vazio → o gate
-    já marca GRUPO_SEMANTICO_VAZIO (não apto)."""
+    """Re-deriva a EVIDÊNCIA REQUERIDA de cada requisito material (via
+    evidencia_requerida — autoridade efetiva, V13; nunca classificar_requisito,
+    que é só a sugestão) e exige que algum item planejado do TIPO apropriado
+    tenha sido EFETIVAMENTE EXECUTADO — artefato com back-reference ou
+    equivalência válida, pelo mesmo critério do caminho relacional
+    (_item_execucao_satisfeito). Status persistido NÃO é autoridade em nenhuma
+    camada. `requisitos_semanticos` ausente → cobertura semântica UNKNOWN →
+    FALTA explícita (fail-closed): plano legado bloqueado no planning não
+    fabrica apto na execução; presente e vazio → o gate já marca
+    GRUPO_SEMANTICO_VAZIO (não apto)."""
     if "requisitos_semanticos" not in plano:
         return [{"questao_tecnica":None,"tipo":None,"item_planejado":None,"motivo":"SEM_REQUISITOS_SEMANTICOS"}]
-    from scripts.planejamento_pericial.requisitos_materiais import classificar_requisito
+    from scripts.planejamento_pericial.requisitos_materiais import evidencia_requerida
     id_tipo={x.get("id"):tipo for tipo,chave in CATALOGOS_PLANEJADOS.items()
              for x in plano.get(chave,[]) if isinstance(x,dict)}
     faltas=[]
@@ -220,8 +241,8 @@ def _execucao_semantica_faltante(plano,cobertura_exec,catalogos,planejados):
     for r in plano.get("requisitos_semanticos",[]):
         itens=r.get("itens_planejados") or []
         if not itens:continue  # já coberto por requisitos_materiais_nao_mapeados
-        classe=classificar_requisito(r.get("requisito") or "")
-        tipos_ok=_TIPOS_EXEC_POR_CLASSE.get(classe,_TIPOS_EXEC_POR_CLASSE["MEDICAO"])
+        evidencia=evidencia_requerida(r.get("requisito") or "")
+        tipos_ok=_TIPOS_EXEC_POR_EVIDENCIA.get(evidencia,_TIPOS_EXEC_POR_EVIDENCIA["METROLOGICA"])
         satisfeito=False
         for i in itens:
             tipo=id_tipo.get(i)

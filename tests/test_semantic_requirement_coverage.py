@@ -14,6 +14,7 @@ from pathlib import Path
 from scripts.planejamento_pericial.validar_plano import recalcular_cobertura
 from scripts.planejamento_pericial.requisitos_materiais import (
     classificar_requisito,
+    evidencia_requerida,
     extrair_requisitos_materiais,
     remover_ruido_estrutural,
 )
@@ -1052,3 +1053,129 @@ def test_longitudinal_semantico_bloqueio_e_liberacao_motor_redacao():
         assert "laudo" not in redacao or redacao.get("gate") == "BLOQUEADO_PARA_LAUDO"
     finally:
         td.cleanup()
+
+
+# ============================================================== V13 — autoridade
+# AUTONOMOUS_CAUSAL_REPAIR_LOOP_V1 (PASS A5+B5 contra 8438104, SAME_CLASS_
+# SURVIVED pela 3ª vez consecutiva na MESMA classe causal): re-derivar a classe
+# do texto a cada chamada fecha ADULTERAÇÃO, nunca AMBIGUIDADE — a saída de
+# classificar_requisito ERA, ela mesma, a autoridade efetiva de cobertura.
+# TEXT_CLASSIFIER_OUTPUT != EFFECTIVE_COVERAGE_AUTHORITY: classificar_requisito
+# passa a ser só SUGESTÃO (suggested); evidencia_requerida é a AUTORIDADE
+# (required) — nunca confiada de forma persistida (igual a `classe`, sempre
+# re-derivada), e estritamente mais conservadora quando a sugestão dependeu de
+# confiar num marcador para absolver um objeto desconhecido (TIER 2).
+
+
+def test_pp_locativo_nao_absolve_de_complemento_embutido_no_proprio_span_v13():
+    """P0 (PASS A5+B5 contra 8438104, SAME_CLASS_SURVIVED — 3ª rodada): o PP
+    locativo bounded (até 3 palavras) ainda descartava incondicionalmente um
+    de-complemento embutido no seu PRÓPRIO span ('na parede DO ZETA' inteiro
+    virava 'local', sem nunca alcançar a contabilidade de resíduo) — mesma
+    classe causal, terceiro vetor dentro do próprio mecanismo de reparo. O PP
+    locativo não consome mais nenhuma continuação 'de X': remove só a
+    preposição + o substantivo do local; qualquer 'de X' que viesse a seguir
+    fica adjacente ao head do fenômeno e passa pelo MESMO mecanismo de
+    complemento (_COMPLEMENTO_SEGURO/_MARCADOR_VISUAL) usado em todo o resto."""
+    for texto in [
+        "Verificar a fissura na parede do zeta.",
+        "Constatar a mancha no teto do dormitorio.",
+        "Constatar o mofo na parede do closet.",
+        "Avaliar a mancha na parede do lambda.",
+        "Verificar a trinca junto a parede do omega.",
+        "Verificar a fissura na parede do zeta e a trinca no muro do lambda.",
+    ]:
+        assert classificar_requisito(texto) != "INSPECAO", texto
+        assert evidencia_requerida(texto) != "OBSERVACIONAL", texto
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False, texto
+        assert r["apto"] is False, texto
+
+
+def test_sugestao_inspecao_via_tier2_nao_promove_autoridade_observacional_v13():
+    """RED A/E do LOOP BREAKER: classificar_requisito (sugestão) pode dizer
+    INSPECAO com base em prova de modo (marcador visual) absolvendo um
+    complemento desconhecido — mas essa promoção sozinha NUNCA vira autoridade
+    efetiva. 'suggested_evidence_kind=OBSERVATIONAL' sem uma re-verificação
+    ESTRITA (só vocabulário fechado, sem depender de marcador) não cobre."""
+    for texto in [
+        "Fotografar a fissura de lambda na viga.",
+        "Registrar a mancha de zeta visível na parede.",
+        "Fotografar a mancha do zeta.",
+    ]:
+        assert classificar_requisito(texto) == "INSPECAO", texto  # sugestão preservada
+        assert evidencia_requerida(texto) == "DESCONHECIDA", texto  # autoridade não promove
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False, texto
+        assert r["apto"] is False, texto
+
+
+def test_evidencia_requerida_estrita_promove_quando_tudo_e_vocabulario_fechado_v13():
+    """RED G do LOOP BREAKER: quando a demanda inteira resolve em modo ESTRITO
+    (nenhuma palavra desconhecida absolvida por marcador — só cabeça
+    reconhecida, complemento seguro ou qualificador), a autoridade PROMOVE a
+    OBSERVACIONAL e a cobertura por atividade apropriada funciona normalmente
+    — a separação suggested/required não inutiliza o caminho observacional
+    legítimo, só recusa promovê-lo sob ambiguidade real."""
+    for texto in [
+        "Verificar a fissura da parede.",
+        "Constatar a existência de infiltração aparente.",
+        "Verificar se há goteira visível no forro.",
+        "Caracterizar as manifestações patológicas alegadas.",
+        "Apontar as manchas de umidade na laje.",
+    ]:
+        assert classificar_requisito(texto) == "INSPECAO", texto
+        assert evidencia_requerida(texto) == "OBSERVACIONAL", texto
+    r = recalcular_cobertura(_plan_with([_r("R1", "Verificar a fissura da parede.", ["ATV-001"])]))
+    assert r["cobertura_requisitos_semanticos"]["QUE-001"] is True
+    assert r["apto"] is True
+
+
+def test_evidencia_requerida_persistida_mentirosa_e_ignorada_v13():
+    """RED D/E do LOOP BREAKER: `evidencia_requerida` persistida em
+    requisitos_semanticos[] (informativa, escrita pelo gerador) NUNCA é
+    autoridade — igual a `classe`, sempre re-derivada do texto. Persistir
+    'OBSERVACIONAL' à força sobre um requisito cuja re-derivação estrita dá
+    DESCONHECIDA não fabrica cobertura."""
+    texto = "Fotografar a fissura de lambda na viga."
+    entrada = _r("R1", texto, ["ATV-001"])
+    entrada["evidencia_requerida"] = "OBSERVACIONAL"
+    entrada["classe"] = "INSPECAO"
+    r = recalcular_cobertura(_plan_with([entrada]))
+    assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False
+    assert r["apto"] is False
+
+
+def test_evidencia_requerida_ausente_em_legado_e_desconhecida_v13():
+    """RED C do LOOP BREAKER: campo `evidencia_requerida` ausente (plano
+    legado gerado antes do V13) nunca fabrica valor efetivo — a autoridade é
+    sempre re-derivada do texto do requisito, nunca lida do campo ausente, e
+    o resultado (DESCONHECIDA para uma demanda cuja re-derivação estrita não
+    resolve) é idêntico a uma execução que nunca teve o campo."""
+    texto = "Fotografar a fissura de lambda na viga."
+    entrada = _r("R1", texto, ["ATV-001"])
+    assert "evidencia_requerida" not in entrada
+    r = recalcular_cobertura(_plan_with([entrada]))
+    assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False
+    assert r["apto"] is False
+
+
+def test_evidencia_metrologica_com_atividade_generica_nao_cobre_v13():
+    """RED F do LOOP BREAKER: required_evidence_kind=METROLOGICA (via
+    evidencia_requerida) nunca é satisfeito por uma atividade genérica — só
+    por medição/ensaio, exatamente como MEDICAO já exigia antes do V13."""
+    r = recalcular_cobertura(_plan_with([_r("R1", "Medir a estanqueidade da laje sob pressão.", ["ATV-001"])]))
+    assert evidencia_requerida("Medir a estanqueidade da laje sob pressão.") == "METROLOGICA"
+    assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False
+    assert r["apto"] is False
+
+
+def test_evidencia_requerida_recheck_motor_preserva_autoridade_v13():
+    """A autoridade (evidencia_requerida) é a MESMA em Planning e no recheck do
+    motor de vícios — nenhuma camada re-classifica com um critério próprio."""
+    from scripts.motor_vicios.pipeline import _plano_para_recheck
+    texto = "Fotografar a fissura de lambda na viga."
+    plano = _plan_with([_r("R1", texto, ["ATV-001"])])
+    recheck = _plano_para_recheck(plano)
+    assert recalcular_cobertura(recheck)["apto"] is False
+    assert recalcular_cobertura(plano)["apto"] is False

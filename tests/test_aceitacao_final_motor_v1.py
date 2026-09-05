@@ -116,7 +116,8 @@ class AceitacaoFinalMotorV1Test(unittest.TestCase):
         self.assertEqual(calc["cobertura_requisitos_semanticos"]["QUE-001"],False)
         self.assertTrue(calc["requisitos_materiais_nao_mapeados"])
         self.assertEqual(plano["status"],"BLOQUEADO_PARA_VISTORIA")
-        self.assertTrue(any("medicao" in x and "sem medi" in x for x in plano["pendencias"]))
-        self.assertTrue(any(r["classe"]=="MEDICAO" and r["status"]=="NAO_MAPEADO" for r in plano["requisitos_semanticos"]))
+        self.assertTrue(any("metrol" in x and "sem medi" in x for x in plano["pendencias"]))
+        self.assertTrue(any(r["classe"]=="MEDICAO" and r["evidencia_requerida"]=="METROLOGICA" and r["status"]=="NAO_MAPEADO"
+                             for r in plano["requisitos_semanticos"]))
 
 if __name__=="__main__":unittest.main()

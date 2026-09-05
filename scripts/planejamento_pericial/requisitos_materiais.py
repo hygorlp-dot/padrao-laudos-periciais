@@ -225,9 +225,30 @@ _DOC_ARTEFATO = re.compile(r"(?i)\b(?:documento|projeto|memorial|planta|art\b|rr
 #       prova em lugar nenhum da demanda, o complemento desconhecido permanece
 #       resíduo ("VERIFICAR a fissura DO ZETA", nenhum marcador, →
 #       INDETERMINADA — este é exatamente o P0 confirmado por PASS B3).
+#
+# V12.2 (reparo ESTRUTURAL — PASS A5+B5 contra 8438104, SAME_CLASS_SURVIVED
+# pela 3ª vez consecutiva na mesma classe; AUTONOMOUS_CAUSAL_REPAIR_LOOP_V1):
+# o span capturado pelo PP locativo era uma DELEÇÃO INCONDICIONAL de até 3
+# tokens — nunca confrontada com nenhuma verificação de conteúdo. Isso permitia
+# que um de-complemento "de X" aparecesse DENTRO do próprio span do PP (não
+# coordenado a ele, não em outra cláusula — literalmente as palavras seguintes
+# à preposição) e fosse descartado junto com o substantivo do local, sem NUNCA
+# alcançar a contabilidade de resíduo: "verificar a fissura NA PAREDE DO ZETA"
+# — "parede do zeta" inteiro virava "local", com "zeta" absolvido só por
+# posição sintática, não por prova de conteúdo. Mesma classe causal de sempre
+# (conteúdo desconhecido absolvido por uma regra de consumo sem verificação),
+# agora dentro do próprio mecanismo que V12/V12.1 usaram para reparar as duas
+# classes anteriores. O PP locativo NUNCA MAIS consome uma continuação "de X":
+# ele só remove a preposição + o substantivo do local, ponto — qualquer "de X"
+# que viesse a seguir permanece no texto e, após a remoção do PP, fica
+# diretamente adjacente ao head do fenômeno (o mesmo texto que antes ficava
+# "atrás" do PP), sendo então julgado pelo MESMO mecanismo de complemento já
+# usado em todo o resto da contabilidade (_COMPLEMENTO_SEGURO/_MARCADOR_VISUAL)
+# — nunca mais por uma deleção cega e paralela. Este é o repair mínimo
+# (§13 do LOOP BREAKER): remove do PP locativo o poder de fabricar completude,
+# sem introduzir framework, sem NLP, sem nova entidade de dados.
 _PP_LOCATIVO = re.compile(
-    r"(?i)\b(?:em|n[ao]s?|numa?|junto\s+a[s]?|proximo\s+a[s]?|perto\s+d[aeo]s?)"
-    r"\s+\w+(?:\s+\w+){0,2}")
+    r"(?i)\b(?:em|n[ao]s?|numa?|junto\s+a[s]?|proximo\s+a[s]?|perto\s+d[aeo]s?)\s+\w+")
 # Qualificador admitido DENTRO do NP observacional (modo/aspecto, nunca objeto).
 # Só se ancora APÓS um head consumido — não cria prova de objeto por si só.
 _QUALIFICADOR_NP = (
@@ -288,8 +309,17 @@ def remover_ruido_estrutural(texto: str) -> str:
     return re.sub(r"\s+", " ", limpo).strip()
 
 
-def _contabilidade_observacional(base):
-    """Contabilidade integral da demanda (V11+V12+V12.1). Retorna (heads, residual).
+def _contabilidade_observacional(base, permitir_aberto=True):
+    """Contabilidade integral da demanda (V11+V12+V12.1+V13). Retorna (heads, residual).
+
+    `permitir_aberto=False` desativa o TIER 2 (de-complemento aberto licenciado
+    por marcador visual) em TODA a demanda — usado por `evidencia_requerida`
+    (V13) para calcular a autoridade EFETIVA, mais estrita que a sugestão
+    (`classificar_requisito`, sempre `permitir_aberto=True`): um marcador visual
+    é uma prova textual forte o bastante para a SUGESTÃO, mas o objeto
+    continua, por definição, desconhecido — a autoridade efetiva exige que TODO
+    o conteúdo se reduza a vocabulário fechado, nunca a uma palavra confiada só
+    por causa de um marcador em outro lugar da frase.
 
     A demanda (após o verbo inicial removido) é partida em CLÁUSULAS coordenadas
     pelo mesmo conector canônico de _segmentar (_CONECTOR: ,/;/e/ou/eou) — um PP
@@ -343,7 +373,7 @@ def _contabilidade_observacional(base):
         texto_modo = f"{verbo_lider} {clausula}" if indice == 0 else clausula
         habilita_descritivo = bool(_VERBO_OBSERVACAO_DIRETA.search(texto_modo)
                                     or _MARCADOR_VISUAL.search(texto_modo))
-        habilita_aberto = bool(_MARCADOR_VISUAL.search(texto_modo))
+        habilita_aberto = permitir_aberto and bool(_MARCADOR_VISUAL.search(texto_modo))
         if habilita_aberto:
             padroes = [_NP_DESCRITIVO_ABERTO, _NP_FENOMENO_ABERTO] if habilita_descritivo else [_NP_FENOMENO_ABERTO]
         else:
@@ -416,6 +446,61 @@ def classificar_requisito(texto: str) -> str:
     return "INDETERMINADA"
 
 
+# --- autoridade efetiva de cobertura (V13; AUTONOMOUS_CAUSAL_REPAIR_LOOP_V1) --
+# A classe causal recorrente ao longo de V7-V12.2 nunca foi realmente "o
+# classificador erra"; foi "a saída do classificador É autoridade efetiva de
+# cobertura" — mesmo quando SEMPRE RE-DERIVADA do texto (nunca confiada de
+# forma persistida), uma classificação incorreta ainda vira apto=True direto,
+# porque `classe == "INSPECAO"` e "cobertura por atividade genérica aceita"
+# são a MESMA decisão. Re-derivar fecha adulteração; não fecha ambiguidade
+# textual. TEXT_CLASSIFIER_OUTPUT != EFFECTIVE_COVERAGE_AUTHORITY:
+#   - classificar_requisito(texto) é SUGESTÃO (suggested_evidence_kind) —
+#     inclui o TIER 2 (de-complemento aberto licenciado por marcador visual,
+#     ver _contabilidade_observacional): um marcador é prova textual forte o
+#     bastante para SUGERIR observação, mas não o bastante para tornar a
+#     cobertura efetiva, porque o objeto em si permanece fora de qualquer
+#     vocabulário fechado — a promoção desse caso a autoridade seria, de novo,
+#     confiar cegamente numa palavra nunca vista por causa de um marcador em
+#     outro lugar da frase (a mesma classe de vazamento de sempre, um nível
+#     acima).
+#   - evidencia_requerida(texto) é a AUTORIDADE (required_evidence_kind) — a
+#     única consultada por validar_plano.py (cobertura e execução), pelo motor
+#     de vícios e pela redação. Promove MEDICAO/DOCUMENTO diretamente (sinais
+#     concretos e de vocabulário fechado — nunca foram a origem de um
+#     fail-open nesta issue) e promove INSPECAO a OBSERVACIONAL SOMENTE
+#     quando a MESMA demanda também resolve em modo ESTRITO (permitir_aberto=
+#     False, só TIER 1): ou seja, só quando TODO o conteúdo — sem exceção —
+#     já pertence a vocabulário fechado, nunca quando a promoção dependeu de
+#     confiar num marcador para absolver uma palavra desconhecida. Sem essa
+#     prova determinística, a demanda é DESCONHECIDA — nunca cobre, nunca
+#     fica completa, mesmo que a sugestão diga INSPECAO. Ambiguidade nunca
+#     vira completude; sobre-bloqueio (uma demanda genuinamente observacional
+#     que só resolveu via TIER 2 cair em DESCONHECIDA) é o modo de falha
+#     aceito — nunca o inverso.
+_MAPA_EVIDENCIA_REQUERIDA = {"MEDICAO": "METROLOGICA", "DOCUMENTO": "DOCUMENTAL"}
+
+
+def evidencia_requerida(texto: str) -> str:
+    """METROLOGICA | DOCUMENTAL | OBSERVACIONAL | DESCONHECIDA.
+
+    Autoridade EFETIVA de cobertura — nunca `classificar_requisito` isolado.
+    MEDICAO/DOCUMENTO promovem direto (vocabulário fechado, nunca a origem de
+    um fail-open). INSPECAO só promove a OBSERVACIONAL quando a MESMA demanda
+    também é INSPECAO em modo ESTRITO (sem o de-complemento aberto licenciado
+    por marcador — ver _contabilidade_observacional(permitir_aberto=False));
+    caso contrário, e em qualquer INDETERMINADA, a autoridade é DESCONHECIDA.
+    DESCONHECIDA nunca cobre, nunca fica completa: `na dúvida, DESCONHECIDA`,
+    não `na dúvida, aceitar a sugestão`."""
+    sugerida = classificar_requisito(texto)
+    if sugerida in _MAPA_EVIDENCIA_REQUERIDA:
+        return _MAPA_EVIDENCIA_REQUERIDA[sugerida]
+    if sugerida != "INSPECAO":
+        return "DESCONHECIDA"
+    base = " " + normalizar(texto) + " "
+    heads, residual = _contabilidade_observacional(base, permitir_aberto=False)
+    return "OBSERVACIONAL" if (heads and not residual) else "DESCONHECIDA"
+
+
 def _identidade(quesito_id: str, texto: str) -> str:
     numero = quesito_id.split("-")[-1]
     base = " ".join(sorted(termos(texto))) or normalizar(texto)
@@ -468,9 +553,12 @@ def extrair_requisitos_materiais(quesito: dict) -> list[dict]:
     """Requisitos materiais estruturados de um quesito pertinente.
 
     Cada item: requirement_id, quesito, requisito (cláusula-fonte), texto_normalizado,
-    classe (MEDICAO|DOCUMENTO|INSPECAO|INDETERMINADA), proveniencia,
-    status ∈ {MATERIAL, EXTRACAO_INDETERMINADA}. Fail-closed: quesito pertinente
-    cujo texto não produz cláusula material rende um requisito EXTRACAO_INDETERMINADA.
+    classe (MEDICAO|DOCUMENTO|INSPECAO|INDETERMINADA — SUGESTÃO, ver
+    classificar_requisito), evidencia_requerida (METROLOGICA|DOCUMENTAL|
+    OBSERVACIONAL|DESCONHECIDA — AUTORIDADE efetiva, ver evidencia_requerida,
+    V13), proveniencia, status ∈ {MATERIAL, EXTRACAO_INDETERMINADA}.
+    Fail-closed: quesito pertinente cujo texto não produz cláusula material
+    rende um requisito EXTRACAO_INDETERMINADA (evidencia_requerida DESCONHECIDA).
     """
     quesito_id = quesito["id"]
     proveniencia = quesito.get("proveniencia") or quesito.get("paginas") or []
@@ -489,6 +577,7 @@ def extrair_requisitos_materiais(quesito: dict) -> list[dict]:
             requisitos.append({
                 "requirement_id": rid, "quesito": quesito_id, "requisito": fragmento,
                 "texto_normalizado": _norma_exibicao(fragmento), "classe": classificar_requisito(fragmento),
+                "evidencia_requerida": evidencia_requerida(fragmento),
                 "proveniencia": proveniencia, "status": "MATERIAL",
             })
     if not requisitos:
@@ -496,7 +585,7 @@ def extrair_requisitos_materiais(quesito: dict) -> list[dict]:
         requisitos.append({
             "requirement_id": _identidade(quesito_id, norma or quesito_id),
             "quesito": quesito_id, "requisito": (" ".join(fontes)).strip() or quesito_id,
-            "texto_normalizado": norma, "classe": "INDETERMINADA", "proveniencia": proveniencia,
-            "status": "EXTRACAO_INDETERMINADA",
+            "texto_normalizado": norma, "classe": "INDETERMINADA", "evidencia_requerida": "DESCONHECIDA",
+            "proveniencia": proveniencia, "status": "EXTRACAO_INDETERMINADA",
         })
     return requisitos
