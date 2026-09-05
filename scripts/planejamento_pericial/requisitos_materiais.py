@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 
 from scripts.triagem_pericial.semantica import normalizar, termos
 
@@ -412,12 +413,20 @@ def _contabilidade_observacional(base, permitir_aberto=True):
     PASS A4 contra daaceac), NP observacional consumido (head de fenômeno
     sempre; head descritivo só com prova de modo desta cláusula) com
     de-complemento e qualificador de modo, scaffolding descartado. QUALQUER
-    token de conteúdo residual (\\w{2,} fora de classe fechada — V13.1, PASS A6
-    contra ed3e7ee: um token de 1-2 letras nunca contava como resíduo, deixando
-    uma sigla/abreviação técnica curta e nunca vista escapar da contabilidade
-    mesmo sem vocabulário nem marcador algum) OU cláusula sem nenhum head
-    derruba a demanda INTEIRA para INDETERMINADA — coordenar um fenômeno real
-    a uma cláusula não resolvida NUNCA absolve a cláusula não resolvida."""
+    token de conteúdo residual fora de classe fechada OU cláusula sem nenhum
+    head derruba a demanda INTEIRA para INDETERMINADA — coordenar um fenômeno
+    real a uma cláusula não resolvida NUNCA absolve a cláusula não resolvida.
+
+    O piso de comprimento do token residual depende do MODO (V13.3, PASS B8
+    contra 527af78): na SUGESTÃO (`permitir_aberto=True`) o piso é \\w{2,} —
+    tokens de 1 caractere são ruído de segmentação e não derrubam a sugestão;
+    na AUTORIDADE efetiva (`permitir_aberto=False`, caminho de
+    `evidencia_requerida`) o piso é \\w+ (cardinalidade ≥1) — um token
+    desconhecido de 1 caractere ("x", "5") ou fragmentado por pontuação
+    ("a-b" → "a","b"; "x/y" → "x","y") NÃO pode desaparecer silenciosamente da
+    contabilidade e virar prova de completude. SAFE_OVERBLOCKING de "eixo A" é
+    P2 aceitável; FALSE_APTO é P0. `ABSENCE_AFTER_LOSSY_NORMALIZATION !=
+    PROOF_OF_SEMANTIC_COMPLETENESS`."""
     t = base.strip()
     partes = t.split(None, 1)
     verbo_lider = ""
@@ -449,7 +458,8 @@ def _contabilidade_observacional(base, permitir_aberto=True):
                     break
                 heads_clausula += 1
         c = _SCAFFOLD.sub(" ", _MARCADOR_VISUAL.sub(" ", c))
-        residual_clausula = [tok for tok in re.findall(r"\w{2,}", c) if tok not in _CLASSE_FECHADA]
+        padrao_residual = r"\w{2,}" if permitir_aberto else r"\w+"
+        residual_clausula = [tok for tok in re.findall(padrao_residual, c) if tok not in _CLASSE_FECHADA]
         if not heads_clausula or residual_clausula:
             return heads_total + heads_clausula, True
         heads_total += heads_clausula
@@ -542,21 +552,51 @@ def classificar_requisito(texto: str) -> str:
 _MAPA_EVIDENCIA_REQUERIDA = {"MEDICAO": "METROLOGICA", "DOCUMENTO": "DOCUMENTAL"}
 
 
+def _perda_na_normalizacao(texto: str) -> bool:
+    """True quando `normalizar()` (NFKD + encode('ascii','ignore')) APAGARIA
+    conteúdo materialmente semântico — um caractere-base não-ASCII de categoria
+    letra/número/símbolo (ex.: `σ` tensão, `λ` esbeltez, `φ` diâmetro, `θ`
+    ângulo, `µ` atrito, `Ø` diâmetro — notação técnica corrente em perícia
+    estrutural, e classe de artefato de extração de PDF/OCR que este módulo já
+    trata como modelo de ameaça em _RUIDO).
+
+    V13.3 (PASS B8 contra 527af78, SAME_CLASS_SURVIVED — 6ª rodada):
+    `ABSENCE_AFTER_LOSSY_NORMALIZATION != PROOF_OF_SEMANTIC_COMPLETENESS`. A
+    autoridade efetiva NUNCA pode ler "não vejo resíduo" como "provei que não
+    há resíduo" quando a etapa de normalização apagou conteúdo sem registrar a
+    perda. Marcas combinantes (acentos do português: `á→a`, `ç→c`, `ã→a`,
+    `õ→o`) NÃO são perda — são removíveis sem apagar conteúdo. NÃO hardcode os
+    símbolos achados pelos revisores: a detecção é por CATEGORIA Unicode, aberta
+    a qualquer glifo material que o ascii-strip descartaria."""
+    for ch in unicodedata.normalize("NFKD", str(texto or "")):
+        if ord(ch) < 128 or unicodedata.combining(ch):
+            continue
+        if unicodedata.category(ch)[0] in ("L", "N", "S"):
+            return True
+    return False
+
+
 def evidencia_requerida(texto: str) -> str:
     """METROLOGICA | DOCUMENTAL | OBSERVACIONAL | DESCONHECIDA.
 
     Autoridade EFETIVA de cobertura — nunca `classificar_requisito` isolado.
     MEDICAO/DOCUMENTO promovem direto (vocabulário fechado, nunca a origem de
-    um fail-open). INSPECAO só promove a OBSERVACIONAL quando a MESMA demanda
-    também é INSPECAO em modo ESTRITO (sem o de-complemento aberto licenciado
-    por marcador — ver _contabilidade_observacional(permitir_aberto=False));
-    caso contrário, e em qualquer INDETERMINADA, a autoridade é DESCONHECIDA.
-    DESCONHECIDA nunca cobre, nunca fica completa: `na dúvida, DESCONHECIDA`,
-    não `na dúvida, aceitar a sugestão`."""
+    um fail-open). INSPECAO só promove a OBSERVACIONAL quando (a) NENHUM
+    conteúdo material foi apagado pela normalização (`_perda_na_normalizacao`,
+    V13.3) E (b) a MESMA demanda também é INSPECAO em modo ESTRITO — sem o
+    de-complemento aberto licenciado por marcador (permitir_aberto=False) e com
+    o piso de resíduo em cardinalidade ≥1, de modo que um token desconhecido de
+    1 caractere ou fragmentado por pontuação também derrube a promoção. Sem
+    QUALQUER das duas provas, e em qualquer INDETERMINADA, a autoridade é
+    DESCONHECIDA. DESCONHECIDA nunca cobre, nunca fica completa: `na dúvida,
+    DESCONHECIDA`, não `na dúvida, aceitar a sugestão`. Perda silenciosa nunca
+    vira certeza."""
     sugerida = classificar_requisito(texto)
     if sugerida in _MAPA_EVIDENCIA_REQUERIDA:
         return _MAPA_EVIDENCIA_REQUERIDA[sugerida]
     if sugerida != "INSPECAO":
+        return "DESCONHECIDA"
+    if _perda_na_normalizacao(texto):
         return "DESCONHECIDA"
     base = " " + normalizar(texto) + " "
     heads, residual = _contabilidade_observacional(base, permitir_aberto=False)

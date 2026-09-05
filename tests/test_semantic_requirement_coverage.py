@@ -1284,6 +1284,83 @@ def test_flex_so_admite_s_nao_es_para_radical_terminado_em_vogal_v132():
     assert evidencia_requerida("Verificar as trincas dos pilares.") == "OBSERVACIONAL"  # (?:es)? explícito
 
 
+def test_autoridade_loss_aware_normalizacao_e_residuo_de_1_char_v133():
+    """P0 (PASS B8 contra 527af78, SAME_CLASS_SURVIVED — 6ª rodada): duas
+    perdas estruturais faziam a autoridade ler "não vejo resíduo" como
+    "provei que não há resíduo": (A) normalizar() (NFKD + ascii-ignore)
+    apagava um símbolo técnico não-ASCII (σ/λ/φ/θ/µ/Ø) ANTES da contabilidade;
+    (B) o filtro de resíduo `\\w{2,}` era cego a um token desconhecido de 1
+    caractere ('x'/'5') e a um fragmentado por pontuação ('a-b'→'a','b').
+    `evidencia_requerida` agora exige, além da prova estrita, que NENHUM
+    conteúdo material tenha sido apagado (_perda_na_normalizacao, por
+    CATEGORIA Unicode — não hardcode dos símbolos) e usa piso de resíduo em
+    cardinalidade ≥1 no modo estrito. `ABSENCE_AFTER_LOSSY_NORMALIZATION !=
+    PROOF_OF_SEMANTIC_COMPLETENESS`; SILENT LOSS MUST NEVER BECOME CERTAINTY."""
+    reds = [
+        "Verificar a fissura do σ.",           # sigma (tensão)
+        "Verificar a fissura do λ.",           # lambda (esbeltez)
+        "Descrever a mancha do θ na parede.",   # theta (ângulo)
+        "Verificar a infiltracao do µ.",        # micro (atrito)
+        "Verificar a fissura do Ø.",            # Ø (diâmetro)
+        "Verificar a fissura do x.",                 # 1 letra ASCII
+        "Verificar a fissura do 5.",                 # 1 dígito
+        "Verificar a fissura do a-b.",               # fragmentado por hífen
+        "Verificar a fissura do x/y.",               # fragmentado por barra
+        "Verificar a fissura do p.q.",               # fragmentado por ponto
+    ]
+    for texto in reds:
+        assert evidencia_requerida(texto) != "OBSERVACIONAL", texto
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False, texto
+        assert r["apto"] is False, texto
+    # controles positivos — diacrítico normal do português NÃO é perda.
+    for texto in [
+        "Verificar a fissura da parede.",
+        "Constatar a presenca de mofo no banheiro.",
+        "Descrever a bolha na pintura.",
+        "Caracterizar as manifestacoes patologicas alegadas.",
+        "Registrar fotograficamente o estado geral do imovel.",
+    ]:
+        assert evidencia_requerida(texto) == "OBSERVACIONAL", texto
+
+
+def test_metamorfico_conhecido_mais_desconhecido_nunca_mais_permissivo_v133():
+    """Propriedade metamórfica (§11 do loss-aware repair): um requisito
+    observacional CONHECIDO, ao ganhar CONTEÚDO DESCONHECIDO (em qualquer
+    codificação — ASCII, símbolo Unicode, dígito, hifenizado, barra, ponto,
+    ruído tipo OCR), NUNCA pode ficar MAIS permissivo — só igual (se o
+    desconhecido for absorvido como vocabulário fechado, o que não deve
+    acontecer) ou mais estrito (DESCONHECIDA)."""
+    base = "Verificar a fissura da parede"
+    assert evidencia_requerida(base + ".") == "OBSERVACIONAL"
+    desconhecidos = [
+        "zeta", "xpto", "brixon",                    # ASCII multi-char
+        "σ", "λ", "φ", "∑",       # símbolos Unicode
+        "5", "12", "x9",                              # dígitos
+        "a-b", "p-q",                                 # hífen
+        "x/y", "a/b",                                 # barra
+        "p.q", "x.9",                                 # ponto
+        "l1", "rn",                                   # ruído tipo OCR
+    ]
+    for tk in desconhecidos:
+        for conn in ("do", "da", "no", "com"):
+            texto = f"{base} {conn} {tk}."
+            assert evidencia_requerida(texto) != "OBSERVACIONAL", texto
+
+
+def test_perda_na_normalizacao_ignora_diacritico_do_portugues_v133():
+    """`_perda_na_normalizacao` distingue perda MATERIAL (letra/símbolo
+    não-ASCII apagado) de mera decomposição de acento — á/ç/ã/õ/â/ê/ô/ü NUNCA
+    são perda; σ/λ/µ/Ø/× são."""
+    from scripts.planejamento_pericial.requisitos_materiais import _perda_na_normalizacao
+    for texto in ["edificação", "área construída", "manutenção do imóvel",
+                  "pé-direito", "avaliação técnica", "distribuição dos cômodos"]:
+        assert _perda_na_normalizacao(texto) is False, texto
+    for texto in ["tensão σ", "esbeltez λ", "coef. µ",
+                  "diâmetro Ø", "3 × 4"]:
+        assert _perda_na_normalizacao(texto) is True, texto
+
+
 def test_evidencia_requerida_recheck_motor_preserva_autoridade_v13():
     """A autoridade (evidencia_requerida) é a MESMA em Planning e no recheck do
     motor de vícios — nenhuma camada re-classifica com um critério próprio."""

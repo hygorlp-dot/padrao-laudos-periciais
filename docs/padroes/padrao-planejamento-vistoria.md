@@ -215,13 +215,33 @@ fissura de lambda"`, `"registrar a mancha de zeta visível"`) continua
 `INSPECAO` como sugestão, mas vira `DESCONHECIDA` como autoridade — um
 marcador visual é prova textual forte o bastante para *sugerir* observação,
 não para tornar a cobertura *efetiva*, porque o objeto em si permanece fora de
-qualquer vocabulário fechado. `DESCONHECIDA` nunca cobre, nunca fica completa
-— sobre-bloqueio de uma demanda genuinamente observacional é o modo de falha
-aceito, nunca o inverso. `_cobertura_semantica`, `_execucao_semantica_faltante`
-e o gerador (`gerar_plano._mapear_requisitos_semanticos`) consultam
-EXCLUSIVAMENTE `evidencia_requerida` — nunca `classificar_requisito` — para
-decidir quais coleções (`atividades`/`medicoes`/`ensaios`/`fotografias`/
-`documentos`) satisfazem um requisito.
+qualquer vocabulário fechado. Uma sugestão que só resolveu via TIER 2
+(`"fotografar a fissura de lambda"`) continua `INSPECAO` como sugestão, mas
+vira `DESCONHECIDA` como autoridade. `DESCONHECIDA` nunca cobre, nunca fica
+completa — sobre-bloqueio de uma demanda genuinamente observacional é o modo
+de falha aceito, nunca o inverso. `_cobertura_semantica`,
+`_execucao_semantica_faltante` e o gerador
+(`gerar_plano._mapear_requisitos_semanticos`) consultam EXCLUSIVAMENTE
+`evidencia_requerida` — nunca `classificar_requisito` — para decidir quais
+coleções (`atividades`/`medicoes`/`ensaios`/`fotografias`/`documentos`)
+satisfazem um requisito.
+
+**Loss-aware (V13.3):** `ABSENCE_AFTER_LOSSY_NORMALIZATION !=
+PROOF_OF_SEMANTIC_COMPLETENESS`. A promoção a `OBSERVACIONAL` exige, ALÉM da
+prova estrita, que **nenhum conteúdo material tenha sido apagado pela
+normalização**. `normalizar()` faz NFKD + `encode("ascii","ignore")` — um
+símbolo técnico não-ASCII (`σ` tensão, `λ` esbeltez, `φ` diâmetro, `θ`
+ângulo, `µ` atrito, `Ø`) some por inteiro antes da contabilidade; a autoridade
+NÃO pode ler "não vejo resíduo" como "provei que não há resíduo".
+`_perda_na_normalizacao` detecta por **categoria Unicode** (letra/número/
+símbolo não-ASCII que o ascii-strip descartaria — não hardcode dos símbolos)
+qualquer perda material; acento normal do português (`á→a`, `ç→c`, `ã→a`,
+`õ→o` — marca combinante) NÃO é perda. E, no modo ESTRITO da autoridade, o
+piso do token residual é cardinalidade **≥1** (`\w+`, não `\w{2,}`): um token
+desconhecido de 1 caractere (`x`, `5`) ou fragmentado por pontuação (`a-b` →
+`a`,`b`; `x/y` → `x`,`y`) também derruba a promoção. Sobre-bloqueio de
+`"eixo A"` é P2 aceitável; `FALSE_APTO` é P0. A SUGESTÃO
+(`classificar_requisito`) mantém a normalização e o piso `\w{2,}` atuais.
 
 O `recalcular_execucao` (superfície de recálculo REQUIRED→EXECUTED consumida pelos
 pipelines de motor de vícios e de redação) **re-deriva a evidência requerida do
