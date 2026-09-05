@@ -453,10 +453,12 @@ def _contabilidade_observacional(base, permitir_aberto=True):
         # de `t` INTEIRO — um símbolo material FUNDIDO ao verbo ("verificar@"/
         # "@verificar"/"veri@ficar") sumia sem virar resíduo (`re.sub(\W+)` o
         # remove só para o match). Na AUTORIDADE, qualquer não-espaço não-
-        # alfanumérico colado ao verbo — exceto pontuação de sentença plausível
-        # (`.,;:` de "Verificar," / "Verificar:") — derruba a promoção.
+        # alfanumérico colado ao verbo — exceto pontuação de sentença
+        # (`_PONTUACAO_SENTENCA`: "Verificar," / "Verificar:" / "(Verificar)" /
+        # aspas; V14/PASS B11 alinha ao mesmo conjunto do resíduo, "/" e "-"
+        # continuam derrubando) — derruba a promoção.
         if not permitir_aberto and any(
-                not s.isspace() and not s.isalnum() and s not in ".,;:"
+                not s.isspace() and not s.isalnum() and s not in _PONTUACAO_SENTENCA
                 for s in verbo_lider):
             return 0, True
     clausulas = [c.strip() for c in _CONECTOR.split(t) if c and c.strip()]
@@ -586,50 +588,60 @@ def classificar_requisito(texto: str) -> str:
 _MAPA_EVIDENCIA_REQUERIDA = {"MEDICAO": "METROLOGICA", "DOCUMENTO": "DOCUMENTAL"}
 
 
-def _perda_na_normalizacao(texto: str) -> bool:
-    """True quando `normalizar()` (NFKD + encode('ascii','ignore')) APAGARIA um
-    glifo VISÍVEL não-ASCII — qualquer caractere que, após NFKD, não seja ASCII,
-    não seja marca combinante (acento do português: `á→a`, `ç→c`, `ã→a`, `õ→o` —
-    removível sem apagar conteúdo), não seja espaço e não seja formatação
-    invisível (categoria Cf/Cc — zero-width, joiners, bidi). Ex.: `σ` `λ` `µ`
-    `Ø` (letras), `′` `″` `·` `•` `‰` `†` (pontuação/símbolo), `£` `×` `∑`,
-    caractere de área de uso privado (artefato de extração de PDF/OCR — o
-    modelo de ameaça já reconhecido neste módulo em _RUIDO).
+# Alfabeto acentuado do português — constante ORTOGRÁFICA, fechada e completa
+# (a ortografia do português não ganha letras). É a ÚNICA lista no caminho da
+# autoridade: só estas letras são desacentuadas para casar o vocabulário ASCII.
+# NÃO é uma block-list de símbolos de ataque (essa diverge a cada rodada de
+# revisão — σ, depois ′, depois @, depois Å…): é o COMPLEMENTO dela — a
+# definição do idioma do corpus. Qualquer caractere não-ASCII fora deste
+# conjunto (letra estrangeira Å/Ā/ñ, grego σ/µ, forma de compatibilidade
+# ²/№/½/ᵃ, símbolo ′/•/£, PUA) nunca é apagado: vira sentinela e cai como
+# resíduo.
+_LETRAS_PT_ACENTUADAS = frozenset("áàâãéêíóôõúüçÁÀÂÃÉÊÍÓÔÕÚÜÇ")
+_SENTINELA_PERDA = "�"  # U+FFFD REPLACEMENT CHARACTER — perda observável
 
-    V13.3→V13.4→V13.5 (PASS B8/527af78; PASS A9+B9/e3a8afc; PASS A10+B10/9d65973):
-    `ABSENCE_AFTER_LOSSY_NORMALIZATION != PROOF_OF_SEMANTIC_COMPLETENESS`. A
-    autoridade NUNCA pode ler "não vejo resíduo" como "provei que não há
-    resíduo" quando a normalização apagou/transformou conteúdo sem registrar a
-    perda. O V13.3 keyou por CATEGORIA `(L,N,S)` — deixava passar `Po`/`Pd`/`Co`
-    (`′ ″ · • – — †`, PUA). O predicado correto NÃO é categoria: um caractere
-    não-ASCII só é INÓCUO quando é (i) marca combinante isolada (texto já em
-    NFD — acento sem base ainda é acento, não perda, V13.5/PASS A10), ou (ii)
-    formatação invisível/espaço, ou (iii) letra latina acentuada — decomposição
-    CANÔNICA (sem tag `<…>`) que reduz a UMA letra ASCII —, ou (iv) indicador
-    ordinal do português `ª`/`º`. Qualquer outro (símbolo, pontuação
-    tipográfica, ligadura, fração, sobrescrito/subscrito, forma de
-    compatibilidade `<font>`/`<super>`/`<sub>`/`<circle>`/`<wide>`, alias de
-    unidade singleton `Å`/`Ω`/`K`, PUA) é perda. NÃO hardcode símbolos."""
-    for ch in str(texto or ""):
-        if ord(ch) < 128 or unicodedata.combining(ch):
+
+def _normalizar_autoridade(texto: str) -> str:
+    """Normalização da AUTORIDADE (`evidencia_requerida`). A SUGESTÃO
+    (`classificar_requisito` via `normalizar`) NÃO é tocada.
+
+    V14 (ARCHITECTURE REVIEW, após 8 recorrências da MESMA classe loss-aware
+    entre V13.3 e V13.5): a autoridade parou de PREDIZER o que `normalizar()`
+    (NFKD + `encode('ascii','ignore')`) apagaria — `_perda_na_normalizacao`
+    errava por uma categoria de caractere NOVA a cada rodada e não podia
+    convergir, porque `Å` (U+00C5) e `á` (U+00E1) são ESTRUTURALMENTE idênticos
+    (base ASCII + marca combinante); só a ortografia do português os distingue.
+    Agora a autoridade MEDE a perda: constrói a string de contabilidade SEM
+    apagar nada em silêncio — todo caractere que `normalizar()` descartaria
+    continua PRESENTE como sentinela `\\uFFFD`, e a varredura de resíduo que já
+    existe em `_contabilidade_observacional` (modo estrito) o derruba. Perda
+    deixa de ser palpite e vira observação. `SILENT LOSS MUST NEVER BECOME
+    CERTAINTY`; `ABSENCE_AFTER_LOSSY_NORMALIZATION != PROOF_OF_SEMANTIC_COMPLETENESS`.
+
+    Regra por caractere (sobre NFC do texto):
+      - espaço (qualquer `Zs`/`Zl`/`Zp` e `\\t`/`\\n`) → um espaço;
+      - `Cf`/`Cc` (zero-width, joiners, bidi, controles) → descartado — é
+        formatação invisível, sem conteúdo material;
+      - ASCII → casefold;
+      - letra do alfabeto acentuado do português (`_LETRAS_PT_ACENTUADAS`) →
+        desacentuada (`á→a`, `ç→c`) — idioma do corpus, não perda;
+      - QUALQUER outro não-ASCII → sentinela `\\uFFFD` (sem lista de símbolos:
+        é o complemento do idioma).
+    """
+    saida = []
+    for ch in unicodedata.normalize("NFC", str(texto or "")):
+        if ch.isspace() or unicodedata.category(ch) in ("Zs", "Zl", "Zp"):
+            saida.append(" ")
+        elif unicodedata.category(ch) in ("Cf", "Cc"):
             continue
-        if unicodedata.category(ch) in ("Cf", "Cc", "Zs", "Zl", "Zp"):
-            continue  # formatação invisível / espaço (NBSP e afins)
-        if ch in ("ª", "º"):
-            continue  # indicador ordinal PT ("1º andar", "3ª laje")
-        deco = unicodedata.decomposition(ch)
-        if deco and " " not in deco:
-            return True  # SINGLETON: canônico = alias de unidade (Å/Ω/K);
-                         # ou tag `<…>` de compatibilidade sobre 1 codepoint
-        if "<" in deco:
-            return True  # forma de compatibilidade (`ᵃ` `ℯ` `𝑎` `½`→"1 2"): o
-                         # glifo carregava significado próprio, não é acento
-        nucleo = "".join(c for c in unicodedata.normalize("NFKD", ch)
-                         if not unicodedata.combining(c))
-        if len(nucleo) == 1 and nucleo.isascii() and nucleo.isalpha():
-            continue  # letra latina acentuada: á→a, ç→c, ã→a, õ→o
-        return True
-    return False
+        elif ord(ch) < 128:
+            saida.append(ch.casefold())
+        elif ch in _LETRAS_PT_ACENTUADAS:
+            saida.append("".join(c for c in unicodedata.normalize("NFKD", ch)
+                                 if not unicodedata.combining(c)).casefold())
+        else:
+            saida.append(_SENTINELA_PERDA)
+    return re.sub(r"\s+", " ", "".join(saida)).strip()
 
 
 def evidencia_requerida(texto: str) -> str:
@@ -637,24 +649,22 @@ def evidencia_requerida(texto: str) -> str:
 
     Autoridade EFETIVA de cobertura — nunca `classificar_requisito` isolado.
     MEDICAO/DOCUMENTO promovem direto (vocabulário fechado, nunca a origem de
-    um fail-open). INSPECAO só promove a OBSERVACIONAL quando (a) NENHUM
-    conteúdo material foi apagado pela normalização (`_perda_na_normalizacao`,
-    V13.3) E (b) a MESMA demanda também é INSPECAO em modo ESTRITO — sem o
-    de-complemento aberto licenciado por marcador (permitir_aberto=False) e com
-    o piso de resíduo em cardinalidade ≥1, de modo que um token desconhecido de
-    1 caractere ou fragmentado por pontuação também derrube a promoção. Sem
-    QUALQUER das duas provas, e em qualquer INDETERMINADA, a autoridade é
-    DESCONHECIDA. DESCONHECIDA nunca cobre, nunca fica completa: `na dúvida,
-    DESCONHECIDA`, não `na dúvida, aceitar a sugestão`. Perda silenciosa nunca
-    vira certeza."""
+    um fail-open). INSPECAO só promove a OBSERVACIONAL quando a MESMA demanda
+    também é INSPECAO em modo ESTRITO (`permitir_aberto=False` — sem o
+    de-complemento aberto licenciado por marcador, com o piso de resíduo em
+    cardinalidade ≥1) contabilizada sobre `_normalizar_autoridade`, que NÃO
+    apaga nenhum glifo não-ASCII em silêncio: o que `normalizar()` descartaria
+    fica como sentinela e cai como resíduo (V14 — a autoridade MEDE a perda, não
+    a PREDIZ; ver `_normalizar_autoridade`). Sem essa prova, e em qualquer
+    INDETERMINADA, a autoridade é DESCONHECIDA. DESCONHECIDA nunca cobre, nunca
+    fica completa: `na dúvida, DESCONHECIDA`, não `na dúvida, aceitar a
+    sugestão`. Perda silenciosa nunca vira certeza."""
     sugerida = classificar_requisito(texto)
     if sugerida in _MAPA_EVIDENCIA_REQUERIDA:
         return _MAPA_EVIDENCIA_REQUERIDA[sugerida]
     if sugerida != "INSPECAO":
         return "DESCONHECIDA"
-    if _perda_na_normalizacao(texto):
-        return "DESCONHECIDA"
-    base = " " + normalizar(texto) + " "
+    base = " " + _normalizar_autoridade(texto) + " "
     heads, residual = _contabilidade_observacional(base, permitir_aberto=False)
     return "OBSERVACIONAL" if (heads and not residual) else "DESCONHECIDA"
 

@@ -9,6 +9,7 @@ apto exige as duas em 100% e zero requisitos não mapeados.
 
 import copy
 import json
+import unicodedata
 from pathlib import Path
 
 from scripts.planejamento_pericial.validar_plano import recalcular_cobertura
@@ -1348,18 +1349,30 @@ def test_metamorfico_conhecido_mais_desconhecido_nunca_mais_permissivo_v133():
             assert evidencia_requerida(texto) != "OBSERVACIONAL", texto
 
 
-def test_perda_na_normalizacao_ignora_diacritico_do_portugues_v133():
-    """`_perda_na_normalizacao` distingue perda MATERIAL (letra/símbolo
-    não-ASCII apagado) de mera decomposição de acento — á/ç/ã/õ/â/ê/ô/ü NUNCA
-    são perda; σ/λ/µ/Ø/× são."""
-    from scripts.planejamento_pericial.requisitos_materiais import _perda_na_normalizacao
+def test_normalizar_autoridade_preserva_pt_e_sentinela_o_resto_v14():
+    """V14 (ARCHITECTURE REVIEW): a autoridade MEDE a perda em vez de PREDIZÊ-la.
+    `_normalizar_autoridade` desacentua SÓ o alfabeto do português (idioma do
+    corpus — constante ortográfica fechada) e substitui QUALQUER outro glifo
+    não-ASCII por uma sentinela `\\uFFFD` que a contabilidade estrita já pega
+    como resíduo. Sem block-list de símbolos."""
+    from scripts.planejamento_pericial.requisitos_materiais import (
+        _normalizar_autoridade,
+        _SENTINELA_PERDA,
+    )
+    # diacrítico do português: desacentua, NUNCA vira sentinela
     for texto in ["edificação", "área construída", "manutenção do imóvel",
-                  "pé-direito", "avaliação técnica", "distribuição dos cômodos",
-                  "3º pavimento", "1ª laje", "três cômodos", "água pluvial"]:
-        assert _perda_na_normalizacao(texto) is False, texto
-    for texto in ["tensão σ", "esbeltez λ", "coef. µ",
-                  "diâmetro Ø", "3 × 4"]:
-        assert _perda_na_normalizacao(texto) is True, texto
+                  "avaliação técnica", "distribuição dos cômodos",
+                  "três cômodos", "água pluvial", "pé", "só", "ré"]:
+        out = _normalizar_autoridade(texto)
+        assert _SENTINELA_PERDA not in out, texto
+        assert out.isascii(), (texto, out)
+    # NFD (acento como marca combinante solta) recompõe e desacentua igual
+    assert _normalizar_autoridade(unicodedata.normalize("NFD", "edificação")) == "edificacao"
+    # tudo o mais não-ASCII → sentinela (letra estrangeira, grego, símbolo,
+    # compat, fração, ordinal, PUA) — SEM enumerar
+    for glifo in ["σ", "λ", "µ", "Ø", "×", "Å", "Å", "Ā", "ñ", "ë",
+                  "′", "•", "£", "²", "½", "№", "ª", "º", ""]:
+        assert _SENTINELA_PERDA in _normalizar_autoridade(f"tensao {glifo} medida"), glifo
 
 
 def test_autoridade_loss_aware_predicado_por_glifo_nao_por_categoria_v134():
@@ -1395,49 +1408,46 @@ def test_autoridade_loss_aware_predicado_por_glifo_nao_por_categoria_v134():
 
 
 def test_autoridade_loss_aware_verbo_lider_nfd_e_compat_v135():
-    """P0 (PASS B10 contra 9d65973) + P2s (PASS A10) + reconciliação (PASS A11):
-    a 8ª rodada da MESMA classe fail-open + regressões da própria correção.
-      (a) B10/P0 — um símbolo material FUNDIDO ao verbo-líder ("verificar@",
-          "@verificar", "veri@ficar") sumia: `re.sub(\\W+)` o removia só para o
-          match e o token inteiro do verbo era descartado de `t`. Na AUTORIDADE
-          qualquer não-espaço não-alfanumérico colado ao verbo (fora de `.,;:`
-          de lista) derruba a promoção.
-      (b) A10/P2 — texto JÁ em NFD (acento como marca combinante solta) não
-          pode ser lido como perda: `_perda_na_normalizacao` pula `combining()`.
-      (c) A10/P2 — forma de compatibilidade (sobrescrito `²`, letterlike `ℯ`,
-          matemático `𝑎`, fração `½`, `№`) É perda; indicador ordinal PT
-          `ª`/`º` NÃO é.
-      (d) A11 — "/" e "-" isolados como objeto único ("do /.") são resíduo, não
-          pontuação de sentença para a AUTORIDADE. Custo assumido (P2 mesma
-          direção fail-closed): "e/ou" fora do vocabulário fechado → DESCONHECIDA.
-    `SILENT LOSS MUST NEVER BECOME CERTAINTY`; `FALSE_APTO` é P0,
-    `SAFE_OVERBLOCKING` é P2 aceitável."""
-    import unicodedata
-    from scripts.planejamento_pericial.requisitos_materiais import _perda_na_normalizacao
-
+    """Consolida os vetores das rodadas 8+ (verbo-líder, NFD, compat, "/"-"-",
+    "e/ou") no modelo V14 (a autoridade MEDE a perda: `_normalizar_autoridade`
+    não apaga glifo não-ASCII em silêncio — vira sentinela e cai como resíduo).
+      (a) símbolo FUNDIDO ao verbo-líder ("verificar@") derruba a promoção; a
+          guarda usa `_PONTUACAO_SENTENCA` (V14/PASS B11) — "/" e "-" continuam
+          derrubando, mas "(", aspas, "!" não (requisito parentetizado inteiro).
+      (b) NFC e NFD da mesma frase → ambas OBSERVACIONAL.
+      (c) forma de compatibilidade (`² ℯ 𝑎 ½ №`) e ordinal PT (`ª º`) → resíduo
+          → DESCONHECIDA (nenhum é acento do português).
+      (d) "/" e "-" isolados = resíduo; "e/ou" fora do vocabulário fechado →
+          DESCONHECIDA (SAFE_OVERBLOCKING P2 aceitável; FALSE_APTO é P0).
+    `SILENT LOSS MUST NEVER BECOME CERTAINTY`."""
     # (a) símbolo colado ao verbo-líder — não some, não promove
     for texto in ["Verificar@ a fissura da parede.",
                   "@Verificar a fissura da parede.",
                   "veri@ficar a fissura da parede.",
-                  "Verificar# a fissura da parede."]:
+                  "Verificar# a fissura da parede.",
+                  "Verificar/ a fissura da parede.",
+                  "Verificar- a fissura da parede."]:
         assert evidencia_requerida(texto) != "OBSERVACIONAL", texto
         r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
         assert r["apto"] is False, texto
-    # pontuação de sentença colada ao PRÓPRIO verbo (",", ":") NÃO derruba
-    assert evidencia_requerida("Verificar, a fissura da parede.") == "OBSERVACIONAL"
-    assert evidencia_requerida("Verificar: a fissura da parede.") == "OBSERVACIONAL"
+    # pontuação de sentença colada ao PRÓPRIO verbo NÃO derruba
+    for texto in ["Verificar, a fissura da parede.",
+                  "Verificar: a fissura da parede.",
+                  "(Verificar a fissura da parede).",
+                  '"Verificar a fissura da parede."']:
+        assert evidencia_requerida(texto) == "OBSERVACIONAL", texto
 
-    # (b) mesma frase limpa em NFC e em NFD → ambas OBSERVACIONAL, sem perda
+    # (b) mesma frase limpa em NFC e em NFD → ambas OBSERVACIONAL
     frase = "Verificar a fissura da parede da edificação."
-    assert _perda_na_normalizacao(unicodedata.normalize("NFD", frase)) is False
     assert evidencia_requerida(unicodedata.normalize("NFC", frase)) == "OBSERVACIONAL"
     assert evidencia_requerida(unicodedata.normalize("NFD", frase)) == "OBSERVACIONAL"
 
-    # (c) compat É perda; ordinal PT NÃO é
-    for glifo in ["²", "ℯ", "𝑎", "½", "№", "ᵃ"]:
-        assert _perda_na_normalizacao(f"Verificar a fissura do {glifo}.") is True, glifo
-    for texto in ["3º pavimento", "1ª laje", "Verificar a fissura do 2º pilar."]:
-        assert _perda_na_normalizacao(texto) is False, texto
+    # (c) compat e ordinal PT → resíduo → DESCONHECIDA
+    for glifo in ["²", "ℯ", "𝑎", "½", "№", "ᵃ", "ª", "º"]:
+        texto = f"Verificar a fissura do {glifo}."
+        assert evidencia_requerida(texto) != "OBSERVACIONAL", glifo
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["apto"] is False, glifo
 
     # (d) "/" e "-" isolados = resíduo; "e/ou" fora do vocabulário = P2 aceitável
     for texto in ["Verificar a fissura do /.",
@@ -1450,6 +1460,54 @@ def test_autoridade_loss_aware_verbo_lider_nfd_e_compat_v135():
     for texto in ["Verificar a fissura da parede.",
                   "Constatar a presença de mofo no banheiro.",
                   "Descrever a bolha na pintura."]:
+        assert evidencia_requerida(texto) == "OBSERVACIONAL", texto
+
+
+def test_autoridade_v14_mede_perda_letra_estrangeira_pre_composta():
+    """P0 (PASS A11 contra a56475d, SAME_CLASS_SURVIVED — 8ª/9ª recorrência da
+    classe loss-aware): `_perda_na_normalizacao` tratava como acento INÓCUO
+    QUALQUER letra latina pré-composta cujo núcleo canônico fosse 1 letra ASCII
+    — inclusive diacríticos que NÃO são do português (anel `Å` U+00C5, mácron
+    `Ā`, breve `Ă`, trema sobre `e`). Com base `a`/`e`/`o` (∈ classe fechada) o
+    resíduo era engolido → `OBSERVACIONAL` → `apto=True` com zero medição.
+    `Å` U+00C5 é `NFC(U+212B)` — a forma que o módulo bloqueava — então qualquer
+    `unicodedata.normalize("NFC", …)` a montante derrotava a checagem.
+
+    V14 não PREDIZ mais a perda: `_normalizar_autoridade` desacentua só o
+    alfabeto do português; toda outra letra não-ASCII vira sentinela e cai como
+    resíduo. `Å` e `á` são estruturalmente idênticos (base + marca) — só a
+    ortografia do corpus os separa."""
+    reds = [
+        "Verificar a fissura da parede do Å.",   # Å A-ring (NFC do U+212B)
+        "Verificar a fissura do Å.",              # Å ANGSTROM SIGN
+        "Verificar a fissura da parede do Ā.",   # Ā A-macron
+        "Verificar a fissura da parede do Ă.",   # Ă A-breve
+        "Verificar a mancha do Ë na parede.",    # Ë E-trema (não-PT)
+        "Verificar a fissura do ñ.",              # ñ (espanhol)
+        "Verificar a fissura do š.",              # š (caron)
+        "Verificar a fissura do ǝ.",              # ǝ
+    ]
+    for texto in reds:
+        assert classificar_requisito(texto) == "INSPECAO" or evidencia_requerida(texto) == "DESCONHECIDA", texto
+        assert evidencia_requerida(texto) != "OBSERVACIONAL", texto
+        r = recalcular_cobertura(_plan_with([_r("R1", texto, ["ATV-001"])]))
+        assert r["cobertura_requisitos_semanticos"]["QUE-001"] is False, texto
+        assert r["apto"] is False, texto
+    # metamórfico: observacional CONHECIDO + QUALQUER não-ASCII fora do
+    # alfabeto do português NUNCA fica mais permissivo
+    base = "Verificar a fissura da parede"
+    assert evidencia_requerida(base + ".") == "OBSERVACIONAL"
+    for glifo in ["Å", "Ā", "σ", "µ", "№", "½",
+                  "ª", "′", "", "ñ"]:
+        for conn in ("do", "da", "no", "com"):
+            texto = f"{base} {conn} {glifo}."
+            assert evidencia_requerida(texto) != "OBSERVACIONAL", texto
+    # controles: alfabeto acentuado do português continua desacentuando p/ o
+    # vocabulário — nenhuma regressão de sobre-bloqueio em caso central
+    for texto in ["Verificar a fissura da parede da edificação.",
+                  "Constatar a presença de mofo no banheiro.",
+                  "Caracterizar as manifestações patológicas alegadas.",
+                  "Registrar fotograficamente o estado geral do imóvel."]:
         assert evidencia_requerida(texto) == "OBSERVACIONAL", texto
 
 
