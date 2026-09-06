@@ -189,6 +189,7 @@ class WorkspaceRecoverySessions:
             "staging": staging,
             "summary": summary,
             "promoted": False,
+            "promotion_started": False,
         }
 
     def get(self, recovery_id: str) -> dict:
@@ -303,8 +304,40 @@ class PromoteWorkspaceRecovery:
                 "a autoridade de custo de IA não pode ser promovida neste armazenamento"
             )
 
-        if self.workspaces.get(workspace_id) is not None:
-            raise WorkspaceRecoveryConflict("já existe uma perícia com esta identidade")
+        # RETOMADA de promoção interrompida.
+        #
+        # Não há transação entre o SQLite e o sistema de arquivos, e o
+        # armazenamento é append-only por design (a FK é `ON DELETE RESTRICT`, não
+        # existe remoção de workspace). Uma falha depois das primeiras escrituras
+        # vivas deixava, portanto, uma perícia parcialmente restaurada que
+        # recusava toda retentativa com 409 — sem saída pelo produto.
+        #
+        # A retomada é deliberadamente ESTREITA: só continua quando ESTA MESMA
+        # sessão já havia começado a promover e o que está vivo é comprovadamente
+        # um PREFIXO EXATO do que foi verificado (mesma identidade, mesmo nome,
+        # mesma data, revisões idênticas em ordem e checksum). Qualquer outra
+        # coisa continua sendo conflito: `NO_SILENT_OVERWRITE` segue valendo, e
+        # uma perícia viva alheia nunca é tocada.
+        live_workspace = self.workspaces.get(workspace_id)
+        live_revisions: tuple = ()
+        if live_workspace is not None:
+            if not entry.get("promotion_started"):
+                raise WorkspaceRecoveryConflict("já existe uma perícia com esta identidade")
+            live_revisions = tuple(self.revisions.list_workspace(workspace_id))
+            prefixo_valido = (
+                live_workspace.name == staged_workspace.name
+                and live_workspace.created_at == staged_workspace.created_at
+                and len(live_revisions) <= len(staged_revisions)
+                and all(
+                    vivo.revision_id == staged.revision_id
+                    and vivo.artifact_kind == staged.artifact_kind
+                    and vivo.artifact_id == staged.artifact_id
+                    and vivo.checksum_sha256 == staged.checksum_sha256
+                    for vivo, staged in zip(live_revisions, staged_revisions)
+                )
+            )
+            if not prefixo_valido:
+                raise WorkspaceRecoveryConflict("já existe uma perícia com esta identidade")
 
         staged_private = ()
         if self.private_contents is not None:
@@ -330,10 +363,12 @@ class PromoteWorkspaceRecovery:
         # nada no armazenamento permanente. Permanece a janela em que a falha
         # ocorre DEPOIS das linhas vivas; ela é tratada como restauração
         # incompleta e reportada, nunca silenciada.
-        self.workspaces.create(
-            PericiaWorkspace(workspace_id, staged_workspace.name, staged_workspace.created_at)
-        )
-        for record in staged_revisions:
+        entry["promotion_started"] = True
+        if live_workspace is None:
+            self.workspaces.create(
+                PericiaWorkspace(workspace_id, staged_workspace.name, staged_workspace.created_at)
+            )
+        for record in staged_revisions[len(live_revisions):]:
             if type(record) is not ArtifactRevision:
                 raise RepositoryIntegrityError("revisão restaurada inválida")
             self.revisions.append(
@@ -344,7 +379,12 @@ class PromoteWorkspaceRecovery:
                 created_at=record.created_at,
                 payload=thaw_payload(record.payload),
             )
+        ja_gravados = {
+            item.content_id for item in self.private_contents.list_all(workspace_id)
+        } if self.private_contents is not None else set()
         for metadata in staged_private:
+            if metadata.content_id in ja_gravados:
+                continue
             with staging.private_contents.open_content(workspace_id, metadata.content_id) as opened:
                 content = opened.stream.read()
             self.private_contents.store(metadata, content)

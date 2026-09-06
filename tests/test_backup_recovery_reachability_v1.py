@@ -931,6 +931,84 @@ def test_failed_promotion_leaves_no_private_residue_in_live_storage(tmp_path):
         target.close()
 
 
+def test_interrupted_promotion_is_resumable_by_the_same_session(tmp_path):
+    """Uma promoção interrompida DEPOIS das escritas vivas tem de ser retomável.
+
+    Sem transação entre SQLite e sistema de arquivos, e sem remoção de workspace
+    (append-only por design), a falha deixava perícia parcialmente restaurada que
+    recusava toda retentativa com 409 — sem saída pelo produto. A retomada é
+    estreita: mesma sessão, e o vivo tem de ser prefixo EXATO do verificado.
+    """
+    from scripts.backend_contract.infrastructure.private_filesystem import (
+        LocalPrivateContentStore,
+    )
+
+    source = _runtime(tmp_path, "source")
+    try:
+        workspace_id, material = _workspace_with_material(source, tmp_path)
+        _status, _headers, package = _api(source, "POST", f"/v1/workspaces/{workspace_id}/backup")
+    finally:
+        source.close()
+
+    target = _runtime(tmp_path, "target")
+    original_store = LocalPrivateContentStore.store
+    try:
+        _status, staged = _json(
+            target, "POST", "/v1/recovery/staging", body=package,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        recovery_id = staged["recovery_id"]
+
+        # falha DEPOIS do workspace e das revisões, na fase de conteúdo privado
+        def _store_quebrado(self, *_args, **_kwargs):
+            raise OSError("disco cheio")
+
+        LocalPrivateContentStore.store = _store_quebrado
+        status, _error = _json(
+            target, "POST", f"/v1/recovery/{recovery_id}/promote", value={"confirm": True}
+        )
+        assert status >= 400, "a promoção deveria ter falhado"
+        LocalPrivateContentStore.store = original_store
+
+        # a perícia ficou parcialmente restaurada — e a retentativa COMPLETA
+        status, promoted = _json(
+            target, "POST", f"/v1/recovery/{recovery_id}/promote", value={"confirm": True}
+        )
+        assert status == 200, f"a promoção interrompida não pôde ser retomada: {promoted}"
+        _status, docs = _json(target, "GET", f"/v1/workspaces/{workspace_id}/materials")
+        assert docs["items"][0]["content_id"] == material["content_id"]
+        assert docs["items"][0]["checksum_sha256"] == material["checksum_sha256"]
+    finally:
+        LocalPrivateContentStore.store = original_store
+        target.close()
+
+
+def test_resume_never_touches_a_foreign_workspace(tmp_path):
+    """A retomada não pode virar uma porta para mutar perícia viva alheia.
+
+    Só continua quando ESTA sessão começou a promoção; um pacote cuja identidade
+    colide com uma perícia viva que não veio desta promoção segue em conflito.
+    """
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_id, material = _workspace_with_material(runtime, tmp_path)
+        _status, _headers, package = _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/backup")
+        _status, staged = _json(
+            runtime, "POST", "/v1/recovery/staging", body=package,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        status, error = _json(
+            runtime, "POST", f"/v1/recovery/{staged['recovery_id']}/promote",
+            value={"confirm": True},
+        )
+        assert status == 409
+        assert error["error"]["code"] == "WORKSPACE_CONFLICT"
+        _status, docs = _json(runtime, "GET", f"/v1/workspaces/{workspace_id}/materials")
+        assert docs["items"][0]["content_id"] == material["content_id"]
+    finally:
+        runtime.close()
+
+
 def test_recovery_routes_require_the_local_token(tmp_path):
     runtime = _runtime(tmp_path)
     try:
