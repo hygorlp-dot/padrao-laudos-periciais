@@ -59,6 +59,53 @@ def _perfil(tipo: str) -> dict[str, Any]:
     return {"atividades":[("Caracterizar o objeto e registrar somente fatos observáveis pertinentes ao encargo.","Inspeção genérica controlada"),("Identificar documentos e grandezas indispensáveis sem aplicar método especializado não implementado.","Registro documental")],"medicoes":[],"fotos":["contexto geral do objeto pericial"],"equip": [("câmera","registro geral rastreável")],"seguranca":["Confirmar acesso seguro ao objeto da diligência"]}
 
 
+_COLECOES_POR_EVIDENCIA = {
+    "METROLOGICA": (("medicoes", "medicoes"), ("ensaios", "ensaios")),
+    "DESCONHECIDA": (("medicoes", "medicoes"), ("ensaios", "ensaios")),
+    "DOCUMENTAL": (("documentos_a_solicitar", "documentos"),),
+    "OBSERVACIONAL": (("atividades", "atividades"), ("fotografias", "fotografias"), ("medicoes", "medicoes"),
+                ("ensaios", "ensaios"), ("documentos_a_solicitar", "documentos")),
+}
+_FALTA_POR_EVIDENCIA = {"METROLOGICA": "medição/ensaio", "DESCONHECIDA": "medição/ensaio", "DOCUMENTAL": "documento a solicitar"}
+_DESCRICAO_EVIDENCIA = {"METROLOGICA": "metrológico", "DOCUMENTAL": "documental", "OBSERVACIONAL": "observacional",
+                        "DESCONHECIDA": "de modalidade desconhecida (ambígua)"}
+
+
+def _mapear_requisitos_semanticos(quesitos, cobertura, atividades, medicoes, fotografias, ensaios, documentos):
+    """Para cada requisito material de cada quesito, vincula a um item planejado JÁ
+    EXISTENTE do tipo apropriado à EVIDÊNCIA REQUERIDA (autoridade efetiva — V13,
+    nunca a classe/sugestão textual isolada) e ligado à cobertura do quesito. O
+    gerador NÃO fabrica destino: sem item do tipo certo, o requisito fica
+    NAO_MAPEADO; sem prova determinística forte de modalidade, a evidência
+    requerida é DESCONHECIDA e o requisito não cobre por atividade genérica."""
+    from .requisitos_materiais import extrair_requisitos_materiais
+    catalogo = {"atividades": atividades, "medicoes": medicoes, "fotografias": fotografias,
+                "ensaios": ensaios, "documentos_a_solicitar": documentos}
+    semanticos, lacunas = [], []
+    for quesito in quesitos:
+        cobertura_q = next(c for c in cobertura if c["quesito"] == quesito["id"])
+        for req in extrair_requisitos_materiais(quesito):
+            classe = req.get("classe", "INDETERMINADA")
+            evidencia = req.get("evidencia_requerida", "DESCONHECIDA")
+            entrada = {"requirement_id": req["requirement_id"], "quesito": quesito["id"], "requisito": req["requisito"],
+                       "texto_normalizado": req["texto_normalizado"], "classe": classe, "evidencia_requerida": evidencia,
+                       "proveniencia": req.get("proveniencia", []), "status": req["status"], "itens_planejados": []}
+            candidatos = []
+            if req["status"] != "EXTRACAO_INDETERMINADA":
+                candidatos = [i["id"] for fonte, chave in _COLECOES_POR_EVIDENCIA[evidencia]
+                              for i in catalogo[fonte] if i["id"] in cobertura_q.get(chave, [])]
+            if req["status"] == "EXTRACAO_INDETERMINADA":
+                lacunas.append(f"{quesito['id']}: requisito material não determinável a partir do texto do quesito ({req['requisito'][:80]})")
+            elif not candidatos:
+                falta = _FALTA_POR_EVIDENCIA.get(evidencia, "item de inspeção")
+                descricao = _DESCRICAO_EVIDENCIA.get(evidencia, evidencia.lower())
+                lacunas.append(f"{quesito['id']}: requisito {descricao} sem {falta} de plano correspondente ({req['requisito'][:80]})")
+                entrada["status"] = "NAO_MAPEADO"
+            entrada["itens_planejados"] = candidatos
+            semanticos.append(entrada)
+    return semanticos, lacunas
+
+
 def gerar(diretorio: Path) -> dict[str, Any]:
     processo_path, delimitacao_path = diretorio / "processo.json", diretorio / "delimitacao-pericial.json"
     processo = json.loads(processo_path.read_text(encoding="utf-8")); delimitacao = json.loads(delimitacao_path.read_text(encoding="utf-8"))
@@ -114,8 +161,10 @@ def gerar(diretorio: Path) -> dict[str, Any]:
         cobertura.append({"quesito": q["id"], "questoes_tecnicas": q["questoes_tecnicas_relacionadas"], "alegacoes": sorted(alg_q),
                           "atividades": atvs, "medicoes": [m["id"] for m in medicoes if any(qt in m["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])], "fotografias": [f["id"] for f in fotografias if any(qt in f["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])],
                           "ensaios": [e["id"] for e in ensaios if any(qt in e["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])], "documentos": [d["id"] for d in documentos_planejados if any(qt in d["questoes_tecnicas"] for qt in q["questoes_tecnicas_relacionadas"])], "planejada": False})
-    calculada=recalcular_cobertura({"cobertura":cobertura,"requisitos_cobertura":requisitos_cobertura,"atividades":atividades,"medicoes":medicoes,"fotografias":fotografias,"ensaios":ensaios,"documentos_a_solicitar":documentos_planejados})
-    for item in cobertura:item["planejada"]=calculada["cobertura"].get(item["quesito"],False)
+    requisitos_semanticos,lacunas_semanticas=_mapear_requisitos_semanticos(
+        quesitos,cobertura,atividades,medicoes,fotografias,ensaios,documentos_planejados)
+    calculada=recalcular_cobertura({"cobertura":cobertura,"requisitos_cobertura":requisitos_cobertura,"requisitos_semanticos":requisitos_semanticos,"atividades":atividades,"medicoes":medicoes,"fotografias":fotografias,"ensaios":ensaios,"documentos_a_solicitar":documentos_planejados})
+    for item in cobertura:item["planejada"]=calculada["cobertura_efetiva"].get(item["quesito"],False)
     bloqueante = any(c["classificacao"] == "BLOQUEANTE" and c["status"] == "ABERTO" for c in delimitacao["conflitos"])
     lacuna_cobertura = any(not c["planejada"] for c in cobertura)
     status = "BLOQUEADO_PARA_VISTORIA" if bloqueante or lacuna_cobertura else "APTO_PARA_VISTORIA_COM_RESSALVAS" if delimitacao["ressalvas"] or delimitacao["documentos_ausentes"] else "APTO_PARA_VISTORIA"
@@ -127,7 +176,7 @@ def gerar(diretorio: Path) -> dict[str, Any]:
             "atividades": atividades, "equipamentos": [{"nome": n, "finalidade": f, "questoes_tecnicas": qts} for n, f in perfil["equip"]],
             "medicoes": medicoes, "fotografias": fotografias, "ensaios": ensaios, "documentos_a_solicitar": documentos_planejados,
             "seguranca_e_acesso": perfil["seguranca"], "pontos_criticos": ["Não converter alegação em constatação", "Não concluir origem antes da análise pós-vistoria"],
-            "pendencias": delimitacao["fatores_limitantes"], "cobertura": cobertura,"requisitos_cobertura":requisitos_cobertura,
+            "pendencias": delimitacao["fatores_limitantes"]+lacunas_semanticas, "cobertura": cobertura,"requisitos_cobertura":requisitos_cobertura,"requisitos_semanticos":requisitos_semanticos,
             "autonomia": {"decisoes_autonomas": len(atividades)+len(medicoes)+len(fotografias), "ressalvas_autonomas": len(delimitacao["ressalvas"]),
                           "lacunas_resolvidas_sem_perguntar": len(delimitacao["documentos_ausentes"]),
                           "perguntas_evitadas_autonomamente": ["tipo de perícia", "tema controvertido", "quesitos", "atividades", "fotografias", "medições", "equipamentos"],

@@ -57,7 +57,7 @@ def test_valid_domain_motor_identity_ignores_order_and_irrelevant_text(order, ir
 @given(st.decimals(min_value=Decimal("0.001"), max_value=Decimal("999"), allow_nan=False, allow_infinity=False, places=3))
 def test_valid_domain_measurement_equivalence_is_metamorphic(value):
     planned = {"id":"MED-PLANO-001","grandeza":"abertura de fissura","local":"Sala","criterio":"resultado em mm","questoes_tecnicas":["QT-001"]}
-    plan = {"medicoes":[planned],"requisitos_cobertura":[{"questao_tecnica":"QT-001","tipo":"MEDICAO","obrigatoriedade":"OBRIGATORIA","item_planejado":"MED-PLANO-001"}]}
+    plan = {"medicoes":[planned],"requisitos_cobertura":[{"questao_tecnica":"QT-001","tipo":"MEDICAO","obrigatoriedade":"OBRIGATORIA","item_planejado":"MED-PLANO-001"}],"requisitos_semanticos":[{"requirement_id":"REQ-001-MED","quesito":"QUE-001","requisito":"Medir a abertura de fissura na Sala.","itens_planejados":["MED-PLANO-001"]}]}
     measurement = {"id":"MED-001","grandeza":"abertura de fissura","valor":str(value),"unidade":"mm","local":"Sala","questoes":["QT-001"],"observacoes":["OBS-001"],"metodo":"paquímetro"}
     inspection = {"medicoes":[measurement],"cobertura":[{"tipo":"MEDICAO","planejado":"MED-PLANO-001","status":"SUBSTITUIDO_POR_EVIDENCIA_EQUIVALENTE","executado":[],"evidencia_equivalente":["MED-001"],"equivalencia":{"requisito_original":"MED-PLANO-001","tipo_evidencia":"MEDICAO","capability":"abertura de fissura","metodo_substituto":"paquímetro"},"justificativa_equivalencia":"rastreada"}]}
     assert recalcular_execucao(plan, inspection)["apto"] is True
