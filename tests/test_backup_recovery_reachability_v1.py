@@ -792,68 +792,6 @@ def test_shutdown_collects_pending_staging_roots(tmp_path):
     )
 
 
-def test_failed_promotion_leaves_no_half_restored_workspace(tmp_path):
-    """Falha no meio da promoção não pode envenenar o armazenamento vivo.
-
-    O conteúdo privado é escrito ANTES da linha do workspace justamente para que
-    a falha de I/O mais provável aconteça enquanto nada vivo existe — senão a
-    perícia meio-restaurada aparece íntegra na UI, bloqueia toda retentativa com
-    409 e nem backup aceita mais.
-    """
-    from scripts.backend_contract.infrastructure.private_filesystem import (
-        LocalPrivateContentStore,
-    )
-
-    source = _runtime(tmp_path, "source")
-    try:
-        workspace_id, material = _workspace_with_material(source, tmp_path)
-        _status, _headers, package = _api(source, "POST", f"/v1/workspaces/{workspace_id}/backup")
-    finally:
-        source.close()
-
-    target = _runtime(tmp_path, "target")
-    original_store = LocalPrivateContentStore.store
-    try:
-        # o staging precisa funcionar; a falha é injetada só na PROMOÇÃO
-        _status, staged = _json(
-            target, "POST", "/v1/recovery/staging", body=package,
-            headers={"Content-Type": "application/octet-stream"},
-        )
-
-        def _store_quebrado(self, *_args, **_kwargs):
-            raise OSError("disco cheio")
-
-        LocalPrivateContentStore.store = _store_quebrado
-        status, _error = _json(
-            target, "POST", f"/v1/recovery/{staged['recovery_id']}/promote",
-            value={"confirm": True},
-        )
-        assert status >= 400, "a promoção deveria ter falhado"
-        LocalPrivateContentStore.store = original_store
-
-        # nada meio-escrito: o workspace NÃO existe
-        _status, listing = _json(target, "GET", "/v1/workspaces")
-        assert all(item["workspace_id"] != workspace_id for item in listing["items"]), (
-            "a promoção falha deixou uma perícia meio-restaurada"
-        )
-
-        # e a retentativa, com o armazenamento são, funciona
-        _status, staged = _json(
-            target, "POST", "/v1/recovery/staging", body=package,
-            headers={"Content-Type": "application/octet-stream"},
-        )
-        status, promoted = _json(
-            target, "POST", f"/v1/recovery/{staged['recovery_id']}/promote",
-            value={"confirm": True},
-        )
-        assert status == 200, promoted
-        _status, docs = _json(target, "GET", f"/v1/workspaces/{workspace_id}/materials")
-        assert docs["items"][0]["content_id"] == material["content_id"]
-    finally:
-        LocalPrivateContentStore.store = original_store
-        target.close()
-
-
 def test_backup_route_consults_the_canonical_readiness_authority(tmp_path):
     """A autoridade canônica de prontidão não pode ser um no-op na composição.
 
@@ -899,6 +837,98 @@ def test_backup_route_consults_the_canonical_readiness_authority(tmp_path):
             pendente.close()
     finally:
         DeviceOfflineVaultRegistry.assert_workspace_backup_ready = original
+
+
+def test_backup_survives_offline_device_revocation(tmp_path):
+    """Revogar o dispositivo de campo não pode matar o backup.
+
+    A autoridade de prontidão existe para impedir backup que OMITA trabalho
+    sincronizável. Um dispositivo revogado tem cofre inacessível — não há
+    trabalho recuperável a proteger — e é exatamente a hora em que o perito mais
+    precisa de um backup. Bloquear ali deixaria `NORMAL_USER_REQUIRES_TERMINAL`
+    verdadeiro para o backup.
+    """
+    runtime = _runtime(tmp_path, "revogado")
+    try:
+        workspace_id, _ = _workspace_with_material(runtime, tmp_path)
+        status, _headers, _package = _api(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/backup"
+        )
+        assert status == 200
+
+        status, _revoked = _json(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/offline-device/revoke",
+            value={"confirm": True},
+        )
+        assert status == 200, _revoked
+
+        status, _headers, package = _api(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/backup"
+        )
+        assert status == 200, (
+            "revogar o dispositivo de campo deixou o backup inalcançável"
+        )
+        from scripts.backend_contract.infrastructure.productization import (
+            VerifyWorkspaceBackup,
+        )
+
+        assert str(VerifyWorkspaceBackup().execute(package).workspace.workspace_id) == workspace_id
+    finally:
+        runtime.close()
+
+
+def test_failed_promotion_leaves_no_private_residue_in_live_storage(tmp_path):
+    """Uma promoção que falha não pode depositar material sigiloso no
+    armazenamento VIVO.
+
+    O conteúdo privado é escrito por ÚLTIMO justamente por isso: se viesse
+    primeiro, uma falha posterior deixaria cópia integral e em claro do material
+    da perícia no armazenamento permanente — sem workspace que a referencie, sem
+    rota que a enxergue e sem coleta que a remova (a coleta de staging só alcança
+    a raiz de recuperação).
+    """
+    from scripts.backend_contract.infrastructure.sqlite import (
+        SQLiteWorkspaceRepository,
+    )
+
+    source = _runtime(tmp_path, "source")
+    try:
+        workspace_id, _ = _workspace_with_material(source, tmp_path)
+        _status, _headers, package = _api(source, "POST", f"/v1/workspaces/{workspace_id}/backup")
+    finally:
+        source.close()
+
+    target_private = tmp_path / "target-private"
+    target = _runtime(tmp_path, "target")
+    original_create = SQLiteWorkspaceRepository.create
+    try:
+        antes = sorted(p.name for p in target_private.iterdir())
+        _status, staged = _json(
+            target, "POST", "/v1/recovery/staging", body=package,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+
+        def _create_quebrado(self, *_args, **_kwargs):
+            raise OSError("disco cheio")
+
+        SQLiteWorkspaceRepository.create = _create_quebrado
+        status, _error = _json(
+            target, "POST", f"/v1/recovery/{staged['recovery_id']}/promote",
+            value={"confirm": True},
+        )
+        assert status >= 400, "a promoção deveria ter falhado"
+        SQLiteWorkspaceRepository.create = original_create
+
+        depois = sorted(p.name for p in target_private.iterdir())
+        assert depois == antes, (
+            "a promoção falha deixou resíduo privado no armazenamento vivo: "
+            f"{set(depois) - set(antes)}"
+        )
+        _status, listing = _json(target, "GET", "/v1/workspaces")
+        assert all(item["workspace_id"] != workspace_id for item in listing["items"])
+    finally:
+        SQLiteWorkspaceRepository.create = original_create
+        target.close()
 
 
 def test_recovery_routes_require_the_local_token(tmp_path):

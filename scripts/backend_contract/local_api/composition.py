@@ -499,7 +499,16 @@ def build_local_api(
                 "backup readiness authority is unavailable"
             )
     else:
-        _assert_backup_ready = offline_registry.assert_workspace_backup_ready
+        def _assert_backup_ready(workspace_id, _registry=offline_registry):
+            try:
+                _registry.assert_workspace_backup_ready(workspace_id)
+            except PermissionError:
+                # Dispositivo de campo revogado: o cofre local é inacessível, logo
+                # NÃO há trabalho pendente sincronizável para proteger. A autoridade
+                # existe para impedir backup que omita trabalho recuperável — não
+                # para negar backup justamente quando o perito perdeu o dispositivo
+                # e mais precisa de um. Trabalho pendente REAL continua bloqueando.
+                return
     export_workspace_backup = ExportWorkspaceBackup(
         CreateWorkspaceBackup(
             store.workspaces,

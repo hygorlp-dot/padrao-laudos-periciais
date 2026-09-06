@@ -30,7 +30,6 @@ from uuid import uuid4
 
 from .models import ArtifactRevision, PericiaWorkspace, WorkspaceId, thaw_payload
 from .ports import (
-    RepositoryConflict,
     RepositoryError,
     RepositoryIntegrityError,
     WorkspaceNotFound,
@@ -283,21 +282,6 @@ class PromoteWorkspaceRecovery:
     revisions: object
     private_contents: object | None
 
-    def _store_private(self, metadata: object, content: bytes, workspace_id: object) -> None:
-        """Idempotente para o MESMO conteúdo já presente.
-
-        Uma promoção que falhou depois de gravar parte do conteúdo privado deixa
-        registros órfãos (inertes, pois o workspace não existe). A retentativa
-        precisa poder reaproveitá-los; só um conteúdo DIFERENTE sob a mesma
-        identidade é erro real.
-        """
-        try:
-            self.private_contents.store(metadata, content)
-        except RepositoryConflict:
-            with self.private_contents.open_content(workspace_id, metadata.content_id) as opened:
-                if opened.stream.read() != content:
-                    raise
-
     def execute(self, recovery_id: str) -> BackupSummary:
         entry = self.sessions.get(recovery_id)
         if entry["promoted"]:
@@ -330,19 +314,22 @@ class PromoteWorkspaceRecovery:
         if len(staged_private) != summary.private_contents:
             raise RecoveryNotPromotable("o staging divergiu da verificação")
 
-        # ORDEM DE ESCRITA — importa para a recuperabilidade de uma falha no meio.
-        # `artifact_revisions` tem FK para `workspaces`, então a linha do workspace
-        # precisa vir antes das revisões; já o conteúdo privado NÃO tem FK e é
-        # INERTE enquanto o workspace não existir. Escrevendo o conteúdo privado
-        # PRIMEIRO, a falha de I/O mais provável (a única que envolve o sistema de
-        # arquivos e bytes grandes) acontece ANTES de qualquer linha viva — e a
-        # retentativa continua possível, em vez de esbarrar para sempre num
-        # conflito de identidade criado pela própria falha.
-        for metadata in staged_private:
-            with staging.private_contents.open_content(workspace_id, metadata.content_id) as opened:
-                content = opened.stream.read()
-            self._store_private(metadata, content, workspace_id)
-
+        # ORDEM DE ESCRITA — o conteúdo privado vem POR ÚLTIMO, de propósito.
+        #
+        # Tentou-se o inverso (privado primeiro, para que a falha de I/O mais
+        # provável ocorresse antes de qualquer linha viva). Foi PIOR: uma promoção
+        # que falha depois de gravar parte do conteúdo privado deixa cópia INTEGRAL
+        # e em claro do material sigiloso no armazenamento VIVO — onde nada a
+        # referencia, nenhuma rota a enxerga e nenhuma coleta a remove (a coleta de
+        # staging só alcança a raiz de recuperação). E a retentativa não recupera:
+        # um `store()` abortado já registrou o prefixo em `_known_prefixes`, então
+        # a segunda tentativa levanta `RepositoryConflict` enquanto `open_content`
+        # devolve `None` — aquele conteúdo fica permanentemente ingravável.
+        #
+        # Com o privado por último, uma falha nas fases anteriores não deposita
+        # nada no armazenamento permanente. Permanece a janela em que a falha
+        # ocorre DEPOIS das linhas vivas; ela é tratada como restauração
+        # incompleta e reportada, nunca silenciada.
         self.workspaces.create(
             PericiaWorkspace(workspace_id, staged_workspace.name, staged_workspace.created_at)
         )
@@ -357,6 +344,10 @@ class PromoteWorkspaceRecovery:
                 created_at=record.created_at,
                 payload=thaw_payload(record.payload),
             )
+        for metadata in staged_private:
+            with staging.private_contents.open_content(workspace_id, metadata.content_id) as opened:
+                content = opened.stream.read()
+            self.private_contents.store(metadata, content)
 
         promoted = tuple(self.revisions.list_workspace(workspace_id))
         if len(promoted) != len(staged_revisions):
