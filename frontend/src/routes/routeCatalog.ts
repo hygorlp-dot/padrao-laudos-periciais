@@ -141,6 +141,15 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
     description:
       "Propostas, decisões, despesas e recebimentos terão controle financeiro próprio.",
     kind: "stage",
+    next: { path: "/recuperacao", label: "Recuperação" },
+  },
+  {
+    path: "/recuperacao",
+    index: "13",
+    label: "Recuperação",
+    description:
+      "Gere um backup desta perícia e restaure a partir de um pacote, com promoção explícita.",
+    kind: "stage",
   },
 ];
 

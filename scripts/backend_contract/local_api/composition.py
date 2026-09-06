@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import secrets
 from contextlib import nullcontext
@@ -12,6 +13,20 @@ from threading import Lock
 from uuid import UUID, uuid4
 
 from ..application.ports import Clock, IdGenerator, RepositoryError, RepositoryIntegrityError
+from ..application.workspace_recovery import (
+    DiscardWorkspaceRecovery,
+    ExportWorkspaceBackup,
+    InspectWorkspaceBackup,
+    PromoteWorkspaceRecovery,
+    StageWorkspaceRecovery,
+    WorkspaceRecoverySessions,
+)
+from ..infrastructure.productization import (
+    CreateWorkspaceBackup,
+    RecoveryStaging,
+    RestoreWorkspaceBackup,
+    VerifyWorkspaceBackup,
+)
 from ..application.services import (
     AppendArtifactRevision,
     CreateWorkspace,
@@ -113,6 +128,26 @@ class _UuidGenerator:
         return uuid4()
 
 
+def _sha256_hex(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _provision_recovery_staging(base: Path):
+    """Fábrica de raízes de staging sob uma base IRMÃ da base viva.
+
+    `RecoveryStaging.create` exige que a raiz não exista e que o pai resolva sem
+    redirecionamento; a base é criada sob demanda, com permissão restrita, e o
+    marcador de quarentena fica sempre DENTRO da raiz filha — nunca num ancestral
+    do armazenamento ativo.
+    """
+
+    def create(root: Path):
+        base.mkdir(mode=0o700, parents=True, exist_ok=True)
+        return RecoveryStaging.create(root)
+
+    return create
+
+
 def _path_has_recovery_quarantine(path: Path, *, path_is_file: bool) -> bool:
     absolute = path.absolute()
     start = absolute.parent if path_is_file else absolute
@@ -152,6 +187,7 @@ class LocalApiRuntime:
     token: str = field(repr=False)
     _store: SQLiteApplicationStore = field(repr=False)
     _private_store: LocalPrivateContentStore | None = field(default=None, repr=False)
+    _recovery_sessions: object | None = field(default=None, repr=False)
     _closed: bool = False
     _lifecycle_lock: object = field(
         default_factory=Lock,
@@ -191,10 +227,16 @@ class LocalApiRuntime:
                 self.server.close()
             finally:
                 try:
-                    if self._private_store is not None:
-                        self._private_store.close()
+                    # Sessões de recuperação não sobrevivem ao processo: descartar
+                    # aqui garante que nenhum staging fique com handle aberto.
+                    if self._recovery_sessions is not None:
+                        self._recovery_sessions.close_all()
                 finally:
-                    self._store.close()
+                    try:
+                        if self._private_store is not None:
+                            self._private_store.close()
+                    finally:
+                        self._store.close()
 
     def __enter__(self) -> LocalApiRuntime:
         return self
@@ -441,6 +483,33 @@ def build_local_api(
         )
     get_budget_snapshot = GetBudgetSnapshot(get_latest_artifact)
     save_budget_snapshot = SaveBudgetSnapshot(store.revisions, get_latest_artifact, local_clock, local_ids)
+    # Backup e recuperação alcançáveis pelo produto (#183). A raiz de staging é
+    # IRMÃ da base viva, nunca ancestral: o marcador RECOVERY_NOT_PROMOTABLE de
+    # um staging jamais pode quarentenar o armazenamento ativo.
+    recovery_sessions = WorkspaceRecoverySessions()
+    recovery_staging_root = database_path.parent / f".{database_path.name}.recovery"
+    export_workspace_backup = ExportWorkspaceBackup(
+        CreateWorkspaceBackup(
+            store.workspaces,
+            store.revisions,
+            private_store,
+            local_clock,
+            lambda _workspace_id: None,
+        )
+    )
+    inspect_workspace_backup = InspectWorkspaceBackup(VerifyWorkspaceBackup(), _sha256_hex)
+    stage_workspace_recovery = StageWorkspaceRecovery(
+        VerifyWorkspaceBackup(),
+        _provision_recovery_staging(recovery_staging_root),
+        RestoreWorkspaceBackup,
+        recovery_sessions,
+        recovery_staging_root,
+        _sha256_hex,
+    )
+    promote_workspace_recovery = PromoteWorkspaceRecovery(
+        recovery_sessions, store.workspaces, store.revisions, private_store
+    )
+    discard_workspace_recovery = DiscardWorkspaceRecovery(recovery_sessions)
     services = LocalApiServices(
         create_workspace=CreateWorkspace(store.workspaces, local_clock, local_ids),
         get_workspace=GetWorkspace(store.workspaces),
@@ -570,6 +639,11 @@ def build_local_api(
         list_case_documents=list_case_documents,
         get_pje_intake=get_pje_intake,
         set_pje_document_availability=set_pje_document_availability,
+        export_workspace_backup=export_workspace_backup,
+        inspect_workspace_backup=inspect_workspace_backup,
+        stage_workspace_recovery=stage_workspace_recovery,
+        promote_workspace_recovery=promote_workspace_recovery,
+        discard_workspace_recovery=discard_workspace_recovery,
         read_case_document=read_case_document,
         import_inspection_photo=import_inspection_photo,
     )
@@ -593,4 +667,5 @@ def build_local_api(
         token=local_token,
         _store=store,
         _private_store=private_store,
+        _recovery_sessions=recovery_sessions,
     )
