@@ -100,16 +100,22 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
     }
   }
 
-  async function onDiscard(staged: StagedRecovery) {
-    try {
-      await discardRecovery(staged.recovery_id);
-    } catch {
-      // descartar é best-effort: a cópia isolada nunca fica ativa de qualquer forma
-    }
+  function resetRestore() {
     setConfirmed(false);
     setSelected(null);
     if (fileInput.current) fileInput.current.value = "";
     setRestore({ kind: "idle" });
+  }
+
+  async function onDiscard(staged: StagedRecovery) {
+    try {
+      await discardRecovery(staged.recovery_id);
+    } catch (error) {
+      // A cópia isolada nunca fica ativa, mas não podemos afirmar que sumiu.
+      setRestore({ kind: "error", message: message(error) });
+      return;
+    }
+    resetRestore();
   }
 
   function summaryList(summary: BackupSummary) {
@@ -236,7 +242,15 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
           </div>
         ) : null}
 
-        {restore.kind === "error" ? <p role="alert">{restore.message}</p> : null}
+        {restore.kind === "error" ? (
+          <div>
+            <p role="alert">{restore.message}</p>
+            <p>Nada foi promovido. Nenhuma perícia existente foi alterada.</p>
+            <button type="button" onClick={resetRestore}>
+              Recomeçar
+            </button>
+          </div>
+        ) : null}
       </section>
     </section>
   );

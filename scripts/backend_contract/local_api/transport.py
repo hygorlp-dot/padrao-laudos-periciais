@@ -1368,8 +1368,10 @@ class LocalApi:
                     return _error(503, "RECOVERY_UNAVAILABLE", "recuperação local indisponível")
                 # A promoção é o ato AUTORITATIVO: exige confirmação explícita do
                 # usuário, nunca um POST vazio ou um valor "quase verdadeiro".
+                # `dto != {"confirm": True}` sozinho NÃO basta: em Python
+                # `1 == True` e `1.0 == True`, então um inteiro promoveria.
                 dto = self._request_dto(request_headers, body)
-                if dto != {"confirm": True}:
+                if set(dto) != {"confirm"} or dto["confirm"] is not True:
                     raise ValueError("promoção exige confirmação explícita")
                 summary = self._services.promote_workspace_recovery.execute(recovery_id)
                 return _json_response(200, _backup_summary_dto(summary))

@@ -221,4 +221,30 @@ describe("WorkspaceRecoveryView", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Já existe uma perícia com esta identidade");
   });
+
+  it("oferece saída depois de uma promoção falha, sem deixar o usuário preso", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(SUMMARY))
+      .mockResolvedValueOnce(
+        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true }, 201),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { code: "WORKSPACE_CONFLICT", message: "x" } }, 409),
+      );
+
+    render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
+    selectFile();
+    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
+    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
+    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
+    await screen.findByRole("button", { name: "4. Promover recuperação" });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "4. Promover recuperação" }));
+
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "Recomeçar" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "1. Verificar backup" })).toBeDisabled();
+  });
 });

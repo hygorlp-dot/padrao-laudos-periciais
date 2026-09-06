@@ -574,6 +574,333 @@ def test_normal_user_recovery_needs_no_terminal(tmp_path):
     assert _proxy_target("/app-api/v1/recovery/../workspaces", "POST") is None
 
 
+def _pdf_grande(path, target_bytes):
+    """PDF sintético VÁLIDO do tamanho pedido — mesmas 4 páginas, mais um stream
+    de enchimento. Fica pesado em BYTES (que é o que importa para o pacote) sem
+    ficar pesado em PÁGINAS. Nada de conteúdo real de caso."""
+    from pypdf import PdfWriter
+    from pypdf.generic import DecodedStreamObject
+
+    base = path.parent / f"base-{path.name}"
+    pdf_sintetico(base)
+    writer = PdfWriter(clone_from=str(base))
+    enchimento = DecodedStreamObject()
+    enchimento.set_data(b"0" * max(target_bytes - base.stat().st_size, 1))
+    writer._add_object(enchimento)
+    with open(path, "wb") as handle:
+        writer.write(handle)
+    return path
+
+
+def _slow_request(
+    runtime, method, path, *, body=None, value=None, headers=None, timeout=120, raw=False
+):
+    """Como `http_request`, mas com folga para pacotes de backup reais.
+
+    `raw=True` devolve os bytes crus — obrigatório para o pacote de backup, que é
+    JSON canônico e seria decodificado por engano.
+    """
+    import http.client
+
+    request_headers = {"X-Local-API-Token": TOKEN, **(headers or {})}
+    payload = body
+    if value is not None:
+        payload = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        request_headers.setdefault("Content-Type", "application/json; charset=utf-8")
+    host, port = runtime.server.address
+    connection = http.client.HTTPConnection(host, port, timeout=timeout)
+    try:
+        connection.request(method, path, body=payload, headers=request_headers)
+        response = connection.getresponse()
+        received = response.read()
+        if raw:
+            return response.status, received
+        return response.status, json.loads(received) if received else None
+    finally:
+        connection.close()
+
+
+def test_real_workspace_package_survives_the_whole_chain(tmp_path):
+    """Um backup de perícia REAL passa pela cadeia inteira.
+
+    O pacote embute todo o conteúdo privado em JSON canônico (base64 ≈ 4/3), então
+    qualquer perícia com um PDF de autos já ultrapassa o teto JSON legado. Se o
+    servidor HTTP decidir o teto de body sem consultar `request_body_limit`, o
+    produto gera um backup que ele mesmo não consegue verificar nem restaurar — e
+    a metade "recuperação" de #183 fica inalcançável justamente nos casos reais.
+    """
+    from scripts.backend_contract.local_api.transport import MAX_DOCUMENT_BYTES  # noqa: F401
+
+    source = _runtime(tmp_path, "big-source")
+    try:
+        status, workspace = _json(source, "POST", "/v1/workspaces", value={"name": "Caso real"})
+        assert status == 201, workspace
+        workspace_id = workspace["workspace_id"]
+        pdf = _pdf_grande(tmp_path / "autos-grande.pdf", 900_000)
+        status, material = _slow_request(
+            source, "POST", f"/v1/workspaces/{workspace_id}/materials",
+            body=pdf.read_bytes(),
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos.pdf"},
+        )
+        assert status == 201, material
+        status, package = _slow_request(
+            source, "POST", f"/v1/workspaces/{workspace_id}/backup", raw=True
+        )
+        assert status == 200
+        assert len(package) > 1_048_576, (
+            "o pacote precisa ultrapassar o teto JSON legado para exercer o defeito"
+        )
+    finally:
+        source.close()
+
+    target = _runtime(tmp_path, "big-target")
+    try:
+        status, summary = _slow_request(
+            target, "POST", "/v1/recovery/verify", body=package,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        assert status == 200, summary
+        status, staged = _slow_request(
+            target, "POST", "/v1/recovery/staging", body=package,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        assert status == 201, staged
+        status, promoted = _slow_request(
+            target, "POST", f"/v1/recovery/{staged['recovery_id']}/promote",
+            value={"confirm": True},
+        )
+        assert status == 200, promoted
+        status, docs = _slow_request(target, "GET", f"/v1/workspaces/{workspace_id}/materials")
+        assert status == 200
+        assert docs["items"][0]["checksum_sha256"] == material["checksum_sha256"]
+    finally:
+        target.close()
+
+
+def test_confirmation_rejects_truthy_lookalikes(tmp_path):
+    """`1` e `1.0` são iguais a `True` em Python. O contrato diz booleano EXATO —
+    a promoção é o ato autoritativo e não pode aceitar um "quase verdadeiro"."""
+    source = _runtime(tmp_path, "source")
+    try:
+        workspace_id, _ = _workspace_with_material(source, tmp_path)
+        _status, _headers, package = _api(source, "POST", f"/v1/workspaces/{workspace_id}/backup")
+    finally:
+        source.close()
+
+    target = _runtime(tmp_path, "target")
+    try:
+        _status, staged = _json(
+            target, "POST", "/v1/recovery/staging", body=package,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        recovery_id = staged["recovery_id"]
+        for value in ({"confirm": 1}, {"confirm": 1.0}, {"confirm": True, "extra": 1}):
+            status, _error = _json(
+                target, "POST", f"/v1/recovery/{recovery_id}/promote", value=value
+            )
+            assert status == 400, f"promoveu com confirmação não booleana: {value}"
+        _status, listing = _json(target, "GET", "/v1/workspaces")
+        assert all(item["workspace_id"] != workspace_id for item in listing["items"])
+        # o booleano verdadeiro continua promovendo
+        status, _promoted = _json(
+            target, "POST", f"/v1/recovery/{recovery_id}/promote", value={"confirm": True}
+        )
+        assert status == 200
+    finally:
+        target.close()
+
+
+def test_backup_of_unknown_workspace_is_not_found(tmp_path):
+    runtime = _runtime(tmp_path)
+    try:
+        status, error = _json(
+            runtime, "POST",
+            "/v1/workspaces/00000000-0000-4000-8000-000000000000/backup",
+        )
+        assert status == 404
+        assert error["error"]["code"] == "WORKSPACE_NOT_FOUND"
+    finally:
+        runtime.close()
+
+
+def test_discard_and_promotion_remove_the_staging_root_from_disk(tmp_path):
+    """`Descartar` tem de descartar de verdade.
+
+    `RecoveryStaging.discard()` só fecha handles — a raiz fica. Sem coleta, cada
+    recuperação deixaria no disco uma cópia INTEGRAL e em claro do conteúdo
+    privado da perícia, para sempre, enquanto a UI diz que foi descartada.
+    """
+    source = _runtime(tmp_path, "source")
+    try:
+        workspace_id, _ = _workspace_with_material(source, tmp_path)
+        _status, _headers, package = _api(source, "POST", f"/v1/workspaces/{workspace_id}/backup")
+    finally:
+        source.close()
+
+    target = _runtime(tmp_path, "target")
+    try:
+        # descarte explícito
+        _status, staged = _json(
+            target, "POST", "/v1/recovery/staging", body=package,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        assert list(tmp_path.rglob("RECOVERY_NOT_PROMOTABLE")), "staging não foi criado"
+        status, _ = _json(target, "POST", f"/v1/recovery/{staged['recovery_id']}/discard")
+        assert status == 200
+        assert not list(tmp_path.rglob("RECOVERY_NOT_PROMOTABLE")), (
+            "a raiz de staging descartada continua no disco"
+        )
+
+        # promoção também recolhe
+        _status, staged = _json(
+            target, "POST", "/v1/recovery/staging", body=package,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        status, _ = _json(
+            target, "POST", f"/v1/recovery/{staged['recovery_id']}/promote",
+            value={"confirm": True},
+        )
+        assert status == 200
+        assert not list(tmp_path.rglob("RECOVERY_NOT_PROMOTABLE")), (
+            "a raiz de staging promovida continua no disco"
+        )
+    finally:
+        target.close()
+
+
+def test_shutdown_collects_pending_staging_roots(tmp_path):
+    source = _runtime(tmp_path, "source")
+    try:
+        workspace_id, _ = _workspace_with_material(source, tmp_path)
+        _status, _headers, package = _api(source, "POST", f"/v1/workspaces/{workspace_id}/backup")
+    finally:
+        source.close()
+
+    target = _runtime(tmp_path, "target")
+    try:
+        for _ in range(3):
+            status, _staged = _json(
+                target, "POST", "/v1/recovery/staging", body=package,
+                headers={"Content-Type": "application/octet-stream"},
+            )
+            assert status == 201
+        assert len(list(tmp_path.rglob("RECOVERY_NOT_PROMOTABLE"))) == 3
+    finally:
+        target.close()
+    assert not list(tmp_path.rglob("RECOVERY_NOT_PROMOTABLE")), (
+        "stagings pendentes sobreviveram ao encerramento"
+    )
+
+
+def test_failed_promotion_leaves_no_half_restored_workspace(tmp_path):
+    """Falha no meio da promoção não pode envenenar o armazenamento vivo.
+
+    O conteúdo privado é escrito ANTES da linha do workspace justamente para que
+    a falha de I/O mais provável aconteça enquanto nada vivo existe — senão a
+    perícia meio-restaurada aparece íntegra na UI, bloqueia toda retentativa com
+    409 e nem backup aceita mais.
+    """
+    from scripts.backend_contract.infrastructure.private_filesystem import (
+        LocalPrivateContentStore,
+    )
+
+    source = _runtime(tmp_path, "source")
+    try:
+        workspace_id, material = _workspace_with_material(source, tmp_path)
+        _status, _headers, package = _api(source, "POST", f"/v1/workspaces/{workspace_id}/backup")
+    finally:
+        source.close()
+
+    target = _runtime(tmp_path, "target")
+    original_store = LocalPrivateContentStore.store
+    try:
+        # o staging precisa funcionar; a falha é injetada só na PROMOÇÃO
+        _status, staged = _json(
+            target, "POST", "/v1/recovery/staging", body=package,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+
+        def _store_quebrado(self, *_args, **_kwargs):
+            raise OSError("disco cheio")
+
+        LocalPrivateContentStore.store = _store_quebrado
+        status, _error = _json(
+            target, "POST", f"/v1/recovery/{staged['recovery_id']}/promote",
+            value={"confirm": True},
+        )
+        assert status >= 400, "a promoção deveria ter falhado"
+        LocalPrivateContentStore.store = original_store
+
+        # nada meio-escrito: o workspace NÃO existe
+        _status, listing = _json(target, "GET", "/v1/workspaces")
+        assert all(item["workspace_id"] != workspace_id for item in listing["items"]), (
+            "a promoção falha deixou uma perícia meio-restaurada"
+        )
+
+        # e a retentativa, com o armazenamento são, funciona
+        _status, staged = _json(
+            target, "POST", "/v1/recovery/staging", body=package,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        status, promoted = _json(
+            target, "POST", f"/v1/recovery/{staged['recovery_id']}/promote",
+            value={"confirm": True},
+        )
+        assert status == 200, promoted
+        _status, docs = _json(target, "GET", f"/v1/workspaces/{workspace_id}/materials")
+        assert docs["items"][0]["content_id"] == material["content_id"]
+    finally:
+        LocalPrivateContentStore.store = original_store
+        target.close()
+
+
+def test_backup_route_consults_the_canonical_readiness_authority(tmp_path):
+    """A autoridade canônica de prontidão não pode ser um no-op na composição.
+
+    `CreateWorkspaceBackup` exige `assert_backup_ready` justamente para recusar o
+    backup enquanto houver vistoria offline pendente. Se a composição do produto
+    ligar um `lambda: None` ali, o pacote sai em silêncio SEM o trabalho de campo
+    e o perito acredita estar protegido. Este teste fica vermelho nesse caso: ele
+    faz a autoridade canônica recusar e exige que a rota recuse junto.
+    """
+    from scripts.backend_contract.infrastructure.field_mobile import (
+        DeviceOfflineVaultRegistry,
+    )
+
+    # controle: com o campo sincronizado, o backup funciona
+    saudavel = _runtime(tmp_path, "readiness-ok")
+    try:
+        workspace_id, _ = _workspace_with_material(saudavel, tmp_path)
+        status, _headers, _package = _api(
+            saudavel, "POST", f"/v1/workspaces/{workspace_id}/backup"
+        )
+        assert status == 200, "o backup deveria funcionar com o campo sincronizado"
+    finally:
+        saudavel.close()
+
+    # a composição liga a autoridade no build, então a recusa precisa existir ANTES
+    original = DeviceOfflineVaultRegistry.assert_workspace_backup_ready
+    try:
+        def _recusa(self, _workspace_id):
+            raise ValueError("pending offline field work must be synchronized before backup")
+
+        DeviceOfflineVaultRegistry.assert_workspace_backup_ready = _recusa
+        pendente = _runtime(tmp_path, "readiness-pendente")
+        try:
+            workspace_id, _ = _workspace_with_material(pendente, tmp_path)
+            status, _headers, _body = _api(
+                pendente, "POST", f"/v1/workspaces/{workspace_id}/backup"
+            )
+            assert status >= 400, (
+                "a rota de backup ignorou a autoridade canônica de prontidão "
+                "(assert_backup_ready provavelmente está ligado a um no-op)"
+            )
+        finally:
+            pendente.close()
+    finally:
+        DeviceOfflineVaultRegistry.assert_workspace_backup_ready = original
+
+
 def test_recovery_routes_require_the_local_token(tmp_path):
     runtime = _runtime(tmp_path)
     try:

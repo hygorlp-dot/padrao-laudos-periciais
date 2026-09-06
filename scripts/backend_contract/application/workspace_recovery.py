@@ -23,12 +23,18 @@ apenas para criar um workspace que ainda não existe.
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
 from .models import ArtifactRevision, PericiaWorkspace, WorkspaceId, thaw_payload
-from .ports import RepositoryError, RepositoryIntegrityError
+from .ports import (
+    RepositoryConflict,
+    RepositoryError,
+    RepositoryIntegrityError,
+    WorkspaceNotFound,
+)
 
 _AI_COST_LEDGER_KIND = "AI_COST_LEDGER_V1"
 
@@ -85,6 +91,33 @@ class RecoverySession:
     summary: BackupSummary
 
 
+def _encerrar_staging(staging: object) -> None:
+    """Fecha os handles E REMOVE a raiz do disco.
+
+    `RecoveryStaging.discard()` só fecha handles — a raiz permanece. Sem esta
+    coleta, cada tentativa de recuperação deixaria no disco uma cópia INTEGRAL e
+    em claro do conteúdo privado da perícia, para sempre, enquanto a UI afirma ao
+    usuário que a descartou.
+
+    A remoção só acontece sobre um diretório que se PROVA ser uma raiz de
+    recuperação nossa: precisa conter o marcador de quarentena com o conteúdo
+    canônico. Sem essa prova, nada é apagado.
+    """
+    try:
+        raiz = Path(staging.root)
+    except Exception:
+        staging.discard()
+        return
+    staging.discard()
+    marcador = raiz / "RECOVERY_NOT_PROMOTABLE"
+    try:
+        if marcador.read_bytes() != b"RECOVERY_STAGING_V1\n":
+            return
+    except OSError:
+        return
+    shutil.rmtree(raiz, ignore_errors=True)
+
+
 def _summary(backup: object, digest: str) -> BackupSummary:
     workspace = backup.workspace
     return BackupSummary(
@@ -104,10 +137,13 @@ class ExportWorkspaceBackup:
     """UI → Local API → aplicação → `CreateWorkspaceBackup`."""
 
     create_backup: object
+    workspaces: object
 
     def execute(self, workspace_id: WorkspaceId) -> bytes:
         if type(workspace_id) is not WorkspaceId:
             raise TypeError("workspace_id inválido")
+        if self.workspaces.get(workspace_id) is None:
+            raise WorkspaceNotFound("workspace não encontrado")
         payload = self.create_backup.execute(workspace_id)
         if type(payload) is not bytes or not payload:
             raise RepositoryIntegrityError("pacote de backup inválido")
@@ -167,9 +203,8 @@ class WorkspaceRecoverySessions:
 
     def close_all(self) -> None:
         for entry in tuple(self._sessions.values()):
-            staging = entry["staging"]
             try:
-                staging.discard()
+                _encerrar_staging(entry["staging"])
             except Exception:
                 pass
         self._sessions.clear()
@@ -210,12 +245,12 @@ class StageWorkspaceRecovery:
             self.restore_backup(staging).execute(payload)
         except BaseException as exc:
             try:
-                staging.discard()
+                _encerrar_staging(staging)
             except Exception:
                 pass
             raise RecoveryStageFailed("a restauração isolada falhou") from exc
         if not (root / "RECOVERY_NOT_PROMOTABLE").exists():
-            staging.discard()
+            _encerrar_staging(staging)
             raise RepositoryIntegrityError("a quarentena de recuperação desapareceu")
         summary = _summary(backup, self.hash_payload(payload))
         self.sessions.register(recovery_id, staging, summary)
@@ -228,7 +263,7 @@ class DiscardWorkspaceRecovery:
 
     def execute(self, recovery_id: str) -> str:
         entry = self.sessions.get(recovery_id)
-        entry["staging"].discard()
+        _encerrar_staging(entry["staging"])
         self.sessions.drop(recovery_id)
         return recovery_id
 
@@ -247,6 +282,21 @@ class PromoteWorkspaceRecovery:
     workspaces: object
     revisions: object
     private_contents: object | None
+
+    def _store_private(self, metadata: object, content: bytes, workspace_id: object) -> None:
+        """Idempotente para o MESMO conteúdo já presente.
+
+        Uma promoção que falhou depois de gravar parte do conteúdo privado deixa
+        registros órfãos (inertes, pois o workspace não existe). A retentativa
+        precisa poder reaproveitá-los; só um conteúdo DIFERENTE sob a mesma
+        identidade é erro real.
+        """
+        try:
+            self.private_contents.store(metadata, content)
+        except RepositoryConflict:
+            with self.private_contents.open_content(workspace_id, metadata.content_id) as opened:
+                if opened.stream.read() != content:
+                    raise
 
     def execute(self, recovery_id: str) -> BackupSummary:
         entry = self.sessions.get(recovery_id)
@@ -280,6 +330,19 @@ class PromoteWorkspaceRecovery:
         if len(staged_private) != summary.private_contents:
             raise RecoveryNotPromotable("o staging divergiu da verificação")
 
+        # ORDEM DE ESCRITA — importa para a recuperabilidade de uma falha no meio.
+        # `artifact_revisions` tem FK para `workspaces`, então a linha do workspace
+        # precisa vir antes das revisões; já o conteúdo privado NÃO tem FK e é
+        # INERTE enquanto o workspace não existir. Escrevendo o conteúdo privado
+        # PRIMEIRO, a falha de I/O mais provável (a única que envolve o sistema de
+        # arquivos e bytes grandes) acontece ANTES de qualquer linha viva — e a
+        # retentativa continua possível, em vez de esbarrar para sempre num
+        # conflito de identidade criado pela própria falha.
+        for metadata in staged_private:
+            with staging.private_contents.open_content(workspace_id, metadata.content_id) as opened:
+                content = opened.stream.read()
+            self._store_private(metadata, content, workspace_id)
+
         self.workspaces.create(
             PericiaWorkspace(workspace_id, staged_workspace.name, staged_workspace.created_at)
         )
@@ -294,10 +357,6 @@ class PromoteWorkspaceRecovery:
                 created_at=record.created_at,
                 payload=thaw_payload(record.payload),
             )
-        for metadata in staged_private:
-            with staging.private_contents.open_content(workspace_id, metadata.content_id) as opened:
-                content = opened.stream.read()
-            self.private_contents.store(metadata, content)
 
         promoted = tuple(self.revisions.list_workspace(workspace_id))
         if len(promoted) != len(staged_revisions):
@@ -313,6 +372,6 @@ class PromoteWorkspaceRecovery:
                 raise RepositoryIntegrityError("a reabertura do workspace promovido divergiu")
 
         entry["promoted"] = True
-        staging.discard()
+        _encerrar_staging(staging)
         self.sessions.drop(recovery_id)
         return summary

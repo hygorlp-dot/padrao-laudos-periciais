@@ -488,14 +488,27 @@ def build_local_api(
     # um staging jamais pode quarentenar o armazenamento ativo.
     recovery_sessions = WorkspaceRecoverySessions()
     recovery_staging_root = database_path.parent / f".{database_path.name}.recovery"
+    # `assert_backup_ready` é a autoridade canônica de prontidão: recusa o backup
+    # enquanto houver vistoria offline pendente de sincronização. Ligar um no-op
+    # aqui faria o produto entregar, em silêncio, um pacote sem o trabalho de
+    # campo — exatamente o que essa autoridade existe para impedir. Sem registry
+    # offline não há como PROVAR prontidão, então falha fechada.
+    if offline_registry is None:
+        def _assert_backup_ready(_workspace_id):
+            raise RepositoryIntegrityError(
+                "backup readiness authority is unavailable"
+            )
+    else:
+        _assert_backup_ready = offline_registry.assert_workspace_backup_ready
     export_workspace_backup = ExportWorkspaceBackup(
         CreateWorkspaceBackup(
             store.workspaces,
             store.revisions,
             private_store,
             local_clock,
-            lambda _workspace_id: None,
-        )
+            _assert_backup_ready,
+        ),
+        store.workspaces,
     )
     inspect_workspace_backup = InspectWorkspaceBackup(VerifyWorkspaceBackup(), _sha256_hex)
     stage_workspace_recovery = StageWorkspaceRecovery(

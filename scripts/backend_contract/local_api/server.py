@@ -193,11 +193,11 @@ def _handler_for(
                     length = _parse_content_length(raw_length)
                 except (TypeError, ValueError):
                     length = -1
-                body_limit = (
-                    max_document_body_bytes
-                    if api.is_document_upload(self.command, self.path)
-                    else max_body_bytes
-                )
+                # O teto vem da MESMA autoridade que `LocalApi.handle` usa. Derivar
+                # de `is_document_upload` aqui deixava qualquer rota de teto ampliado
+                # (recuperação) presa no teto JSON legado sobre HTTP real, embora
+                # passasse nos testes in-process.
+                body_limit = api.request_body_limit(self.command, self.path)
                 if length < 0 or length > body_limit:
                     self.close_connection = True
                     response = _error(400, "INVALID_REQUEST")
