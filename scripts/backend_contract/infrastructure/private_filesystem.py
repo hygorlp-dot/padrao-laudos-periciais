@@ -82,6 +82,14 @@ _ABORTED_NAME = re.compile(r"^\.aborted\.(?P<nonce>[0-9a-f]{32})$")
 #: Tentativa abortada SUPERADA por continuação exata de recuperação. Não apaga
 #: história: convive com `.aborted.<nonce>` sobre o mesmo intent.
 _CONTINUED_NAME = re.compile(r"^\.continued\.(?P<nonce>[0-9a-f]{32})$")
+#: Membro canônico APOSENTADO que uma continuação exata autorizada ADOTOU. O
+#: marcador é hard link para o inode EXATO do objeto aposentado, então prova a
+#: adoção por identidade. A aposentadoria continua registrada: os dois fatos
+#: coexistem — a tentativa anterior publicou e abortou, e uma continuação exata
+#: posterior adotou aquele mesmo objeto físico.
+_REACTIVATED_NAME = re.compile(
+    rf"^\.reactivated\.(?P<nonce>[0-9a-f]{{32}})\.(?P<member>{'|'.join(_MEMBERS)}|commit)$"
+)
 _RETIRED_NAME = re.compile(r"^\.retired\.(?P<nonce>[0-9a-f]{32})$")
 _REPARSE_ATTRIBUTE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
@@ -163,8 +171,18 @@ def _validate_regular(
 
 
 def _validate_retired(details: os.stat_result) -> None:
+    """Um marcador de aposentadoria precisa apontar para um objeto REAL.
+
+    O teto de vínculos não é fixado aqui de propósito. O antigo `<= 4` era uma
+    aproximação de "canônico + staging + duas aposentadorias"; com adoção por
+    continuação exata — que pode repetir — o número legítimo cresce com o estado
+    durável. A contagem EXATA é feita em `_validate_namespace_provenance`, que
+    compara `st_nlink` com o número de nomes na raiz que compartilham o inode e
+    rejeita qualquer hard link externo. Essa checagem derivada é estritamente
+    mais forte que um teto mágico.
+    """
     _validate_regular(details, expected_links=None)
-    if details.st_nlink < 2 or details.st_nlink > 4:
+    if details.st_nlink < 2:
         raise RepositoryIntegrityError("marcador privado aposentado sem vínculo exato")
 
 
@@ -516,6 +534,54 @@ def _retire_if_owned(
         expected_links=retired_details.st_nlink,
         root_fd=root_fd,
     )
+    if root_fd is not None:
+        os.fsync(root_fd)
+
+
+def _mark_member_reactivated(
+    canonical: Path,
+    expected: os.stat_result,
+    nonce: str,
+    member: str,
+    *,
+    root_fd: int | None,
+) -> None:
+    """Adota, para ESTA continuação, um membro canônico já publicado e aposentado.
+
+    `RETIRED` não significa `INUTILIZÁVEL PARA SEMPRE`. Quando a tentativa
+    anterior já publicou o objeto no caminho canônico e depois abortou, o objeto
+    permanece — byte-exato — e o marcador `.retired` registra a aposentadoria.
+    Republicar por cima é impossível sem romper esse vínculo, e reescrever o
+    conteúdo seria jogar fora dado byte-exato.
+
+    A adoção é um hard link para o inode EXATO do objeto: prova por identidade,
+    não por nome. A aposentadoria continua registrada — os dois fatos coexistem e
+    juntos contam a história completa.
+
+    `REACTIVATED != TRANSACTION COMMITTED`: quem prova conclusão segue sendo o
+    anchor.
+    """
+    observed = _lstat(canonical, root_fd=root_fd)
+    if not _same_identity(expected, observed):
+        raise RepositoryIntegrityError("identidade do membro privado diverge da adoção")
+    vinculos = observed.st_nlink
+    reactivated = canonical.parent / f".reactivated.{nonce}.{member}"
+    if root_fd is None:
+        os.link(canonical, reactivated, follow_symlinks=False)
+        details = os.lstat(reactivated)
+    else:
+        os.link(
+            _entry_name(canonical),
+            _entry_name(reactivated),
+            src_dir_fd=root_fd,
+            dst_dir_fd=root_fd,
+            follow_symlinks=False,
+        )
+        details = _lstat(reactivated, root_fd=root_fd)
+    _validate_regular(details, expected_links=vinculos + 1)
+    if not _same_identity(expected, details):
+        raise RepositoryIntegrityError("membro privado adotado sem identidade exata")
+    _flush_link_identity(reactivated, details, expected_links=vinculos + 1, root_fd=root_fd)
     if root_fd is not None:
         os.fsync(root_fd)
 
@@ -1254,8 +1320,12 @@ class LocalPrivateContentStore:
         finals,
         retired_markers,
         continued=None,
-    ) -> tuple[set[tuple[int, int, int]], set[str], set[str], set[str]]:
+        reactivated=None,
+    ) -> tuple[
+        set[tuple[int, int, int]], set[str], set[str], set[str], set[tuple[int, int, int]]
+    ]:
         continued = continued or {}
+        reactivated = reactivated or {}
         intents_by_nonce = {}
         for prefix, (nonce, _, details) in intents.items():
             if nonce in intents_by_nonce:
@@ -1315,7 +1385,13 @@ class LocalPrivateContentStore:
             identity = _identity_key(details)
             root_link_counts[identity] = root_link_counts.get(identity, 0) + 1
             marker_details[identity] = details
+        # O marcador de adoção é mais um vínculo do MESMO inode: entra na conta,
+        # senão o objeto adotado pareceria ter hard link externo.
+        for _, details in reactivated.values():
+            identity = _identity_key(details)
+            root_link_counts[identity] = root_link_counts.get(identity, 0) + 1
 
+        retired_identities_esperadas = set(marker_details)
         retired_prefixes = set()
         for identity, details in marker_details.items():
             exact_bindings = bindings.get(identity, set())
@@ -1327,7 +1403,34 @@ class LocalPrivateContentStore:
             if details.st_nlink != root_link_counts[identity]:
                 raise RepositoryIntegrityError("objeto privado aposentado possui hard link externo")
             retired_prefixes.add(prefix)
-        return set(marker_details), aborted_prefixes, retired_prefixes, continued_prefixes
+
+        # ADOÇÃO: cada marcador tem de apontar, por IDENTIDADE, para um membro
+        # canônico do prefixo cuja continuação o autorizou. Nome não é prova.
+        finais_por_identidade = {
+            _identity_key(details): (prefix, member)
+            for prefix, member, _, details in finals
+        }
+        reactivated_by_prefix: dict[str, set[tuple[int, int, int]]] = {}
+        for (nonce, member), (_, details) in reactivated.items():
+            identidade = _identity_key(details)
+            alvo = finais_por_identidade.get(identidade)
+            if alvo is None:
+                raise RepositoryIntegrityError("adoção privada sem membro canônico exato")
+            prefix_alvo, member_alvo = alvo
+            if member_alvo != member:
+                raise RepositoryIntegrityError("adoção privada aponta para membro errado")
+            if nonce not in continued_nonces.get(prefix_alvo, ()):
+                raise RepositoryIntegrityError("adoção privada sem continuação autorizada")
+            if identidade not in retired_identities_esperadas:
+                raise RepositoryIntegrityError("adoção privada de objeto não aposentado")
+            reactivated_by_prefix.setdefault(prefix_alvo, set()).add(identidade)
+        return (
+            set(marker_details),
+            aborted_prefixes,
+            retired_prefixes,
+            continued_prefixes,
+            reactivated_by_prefix,
+        )
 
     def _all_prefix_paths_retired(self, prefixes: set[str]) -> bool:
         retired_identities = set()
@@ -1384,6 +1487,7 @@ class LocalPrivateContentStore:
         intents = {}
         aborted = {}
         continued = {}
+        reactivated = {}
         stages = []
         finals = []
         retired_markers = []
@@ -1418,6 +1522,14 @@ class LocalPrivateContentStore:
                 path = self._root / name
                 continued[nonce] = (path, _lstat(path, root_fd=self._root_fd))
                 continue
+            reactivated_match = _REACTIVATED_NAME.fullmatch(name)
+            if reactivated_match:
+                chave = (reactivated_match["nonce"], reactivated_match["member"])
+                if chave in reactivated:
+                    raise RepositoryIntegrityError("adoção privada duplicada")
+                path = self._root / name
+                reactivated[chave] = (path, _lstat(path, root_fd=self._root_fd))
+                continue
             if _RETIRED_NAME.fullmatch(name):
                 path = self._root / name
                 details = _lstat(path, root_fd=self._root_fd)
@@ -1448,21 +1560,38 @@ class LocalPrivateContentStore:
             _validate_regular(details, expected_links=None)
             finals.append((prefix, final["member"], path, details))
 
-        retired_identities, aborted_prefixes, retired_prefixes, continued_prefixes = self._validate_namespace_provenance(
+        (retired_identities, aborted_prefixes, retired_prefixes, continued_prefixes,
+         reactivated_by_prefix) = self._validate_namespace_provenance(
             intents,
             aborted,
             stages,
             finals,
             retired_markers,
             continued,
+            reactivated,
         )
         if not retired_prefixes.issubset(aborted_prefixes):
             raise RepositoryIntegrityError("aposentadoria privada sem intent abortado")
         if set(intents) != self._known_prefixes or self._known_prefixes != (self._committed | aborted_prefixes):
             raise RepositoryIntegrityError("inventário de intents privados diverge")
 
+        # REACTIVATED != COMMITTED. Um objeto adotado só volta ao inventário
+        # ativo quando a continuação daquele prefixo REALMENTE concluiu (anchor).
+        # Sem essa condição, uma adoção interrompida faria o `_recover` aposentar
+        # o mesmo objeto a cada passagem, recursivamente, até estourar o limite
+        # de hard links do sistema de arquivos.
+        confirmados_previa, _, _ = self._ledger_entries(self._anchor_fd, label="anchor")
+        confirmados_previa = set(confirmados_previa)
+        adotados_confirmados = {
+            identidade
+            for prefixo, identidades in reactivated_by_prefix.items()
+            if prefixo in confirmados_previa
+            for identidade in identidades
+        }
+
         def is_retired(details: os.stat_result) -> bool:
-            return _identity_key(details) in retired_identities
+            identidade = _identity_key(details)
+            return identidade in retired_identities and identidade not in adotados_confirmados
 
         stages = [item for item in stages if not is_retired(item[4])]
         finals = [item for item in finals if not is_retired(item[3])]
@@ -1478,12 +1607,23 @@ class LocalPrivateContentStore:
             or any(members != _COMMITTED_MEMBERS for members in stage_groups.values())
         ):
             raise RepositoryIntegrityError("inventário privado diverge do estado confirmado")
+        # Mesma derivação do `_recover`: staging + final, mais um vínculo por
+        # marcador reconhecido (`.retired` de cada aposentadoria, `.reactivated`
+        # de cada adoção) daquele inode. Vínculo desconhecido continua fatal.
+        marcadores_por_identidade: dict[tuple[int, int, int], int] = {}
+        for _, detalhes_marcador in retired_markers:
+            chave = _identity_key(detalhes_marcador)
+            marcadores_por_identidade[chave] = marcadores_por_identidade.get(chave, 0) + 1
+        for _, detalhes_marcador in reactivated.values():
+            chave = _identity_key(detalhes_marcador)
+            marcadores_por_identidade[chave] = marcadores_por_identidade.get(chave, 0) + 1
         for prefix, member, _, _, stage_details in stages:
             final_details = finals_by_key.get((prefix, member))
             if final_details is None or not _same_identity(stage_details, final_details):
                 raise RepositoryIntegrityError("staging privado confirmado sem destino exato")
-            _validate_regular(stage_details, expected_links=2)
-            _validate_regular(final_details, expected_links=2)
+            esperado = 2 + marcadores_por_identidade.get(_identity_key(stage_details), 0)
+            _validate_regular(stage_details, expected_links=esperado)
+            _validate_regular(final_details, expected_links=esperado)
         journal, _, journal_tail = self._ledger_entries(self._journal_fd, label="journal")
         anchor, _, anchor_tail = self._ledger_entries(self._anchor_fd, label="anchor")
         # `CONTINUATION_AUTHORIZED != CONTINUATION_COMMITTED`.
@@ -1526,6 +1666,7 @@ class LocalPrivateContentStore:
         intents = {}
         aborted = {}
         continued = {}
+        reactivated = {}
         stages: list[tuple[str, str, str, Path, os.stat_result]] = []
         final_objects: list[tuple[str, str, Path, os.stat_result]] = []
         retired_markers = []
@@ -1559,6 +1700,14 @@ class LocalPrivateContentStore:
                     raise RepositoryIntegrityError("continuação privada duplicada")
                 path = self._root / name
                 continued[nonce] = (path, _lstat(path, root_fd=self._root_fd))
+                continue
+            reactivated_match = _REACTIVATED_NAME.fullmatch(name)
+            if reactivated_match:
+                chave = (reactivated_match["nonce"], reactivated_match["member"])
+                if chave in reactivated:
+                    raise RepositoryIntegrityError("adoção privada duplicada")
+                path = self._root / name
+                reactivated[chave] = (path, _lstat(path, root_fd=self._root_fd))
                 continue
             if _RETIRED_NAME.fullmatch(name):
                 retired_path = self._root / name
@@ -1596,17 +1745,34 @@ class LocalPrivateContentStore:
                 )
             )
 
-        retired_identities, aborted_prefixes, retired_prefixes, continued_prefixes = self._validate_namespace_provenance(
+        (retired_identities, aborted_prefixes, retired_prefixes, continued_prefixes,
+         reactivated_by_prefix) = self._validate_namespace_provenance(
             intents,
             aborted,
             stages,
             final_objects,
             retired_markers,
             continued,
+            reactivated,
         )
 
+        # REACTIVATED != COMMITTED. Um objeto adotado só volta ao inventário
+        # ativo quando a continuação daquele prefixo REALMENTE concluiu (anchor).
+        # Sem essa condição, uma adoção interrompida faria o `_recover` aposentar
+        # o mesmo objeto a cada passagem, recursivamente, até estourar o limite
+        # de hard links do sistema de arquivos.
+        confirmados_previa, _, _ = self._ledger_entries(self._anchor_fd, label="anchor")
+        confirmados_previa = set(confirmados_previa)
+        adotados_confirmados = {
+            identidade
+            for prefixo, identidades in reactivated_by_prefix.items()
+            if prefixo in confirmados_previa
+            for identidade in identidades
+        }
+
         def is_retired(details: os.stat_result) -> bool:
-            return _identity_key(details) in retired_identities
+            identidade = _identity_key(details)
+            return identidade in retired_identities and identidade not in adotados_confirmados
 
         stages = [item for item in stages if not is_retired(item[4])]
         final_objects = [item for item in final_objects if not is_retired(item[3])]
@@ -1700,6 +1866,18 @@ class LocalPrivateContentStore:
         if not retired_prefixes.issubset(cleanup_prefixes | continuados_confirmados):
             raise RepositoryIntegrityError("aposentadoria privada sem intent abortado")
 
+        # A contagem legal de vínculos é DERIVADA do estado durável reconhecido:
+        # staging + final, mais um vínculo por marcador (`.retired` de cada
+        # aposentadoria, `.reactivated` de cada adoção) daquele inode exato.
+        # Vínculo extra desconhecido segue sendo fatal.
+        marcadores_por_identidade: dict[tuple[int, int, int], int] = {}
+        for _, detalhes_marcador in retired_markers:
+            chave = _identity_key(detalhes_marcador)
+            marcadores_por_identidade[chave] = marcadores_por_identidade.get(chave, 0) + 1
+        for _, detalhes_marcador in reactivated.values():
+            chave = _identity_key(detalhes_marcador)
+            marcadores_por_identidade[chave] = marcadores_por_identidade.get(chave, 0) + 1
+
         linked_members: dict[str, set[str]] = {}
         for stage_prefix, stage_member, _, stage_path, stage_details in stages:
             if stage_prefix in cleanup_prefixes:
@@ -1708,7 +1886,8 @@ class LocalPrivateContentStore:
                 raise RepositoryIntegrityError("staging privado sem proveniência durável")
             if stage_details.st_nlink == 1:
                 raise RepositoryIntegrityError("staging privado confirmado sem destino exato")
-            if stage_details.st_nlink != 2:
+            esperado = 2 + marcadores_por_identidade.get(_identity_key(stage_details), 0)
+            if stage_details.st_nlink != esperado:
                 raise RepositoryIntegrityError("staging privado possui hard link inesperado")
             matching = finals_by_key.get((stage_prefix, stage_member))
             if matching is None:
@@ -1723,7 +1902,11 @@ class LocalPrivateContentStore:
             raise RepositoryIntegrityError("registro privado confirmado sem staging de identidade completo")
 
         for prefix, member, final_path, details in final_objects:
-            expected_links = None if prefix in cleanup_prefixes else 2 if member in linked_members.get(prefix, set()) else 1
+            if prefix in cleanup_prefixes:
+                expected_links = None
+            else:
+                base = 2 if member in linked_members.get(prefix, set()) else 1
+                expected_links = base + marcadores_por_identidade.get(_identity_key(details), 0)
             _validate_regular(details, expected_links=expected_links)
 
         committed = set()
@@ -1813,20 +1996,29 @@ class LocalPrivateContentStore:
         load_content: bool,
         require_commit: bool = True,
         recovery_link_members: frozenset[str] = _COMMITTED_MEMBERS,
+        marker_links: dict[str, int] | None = None,
     ) -> PrivateContent | PrivateContentMetadata:
+        # `marker_links` é o número de vínculos de MARCADOR legítimos por membro
+        # (`.retired` de cada aposentadoria, `.reactivated` de cada adoção). É
+        # derivado do disco contando SÓ nomes de marcador reconhecidos que
+        # compartilham o inode — então um hard link desconhecido continua fatal.
         paths = _record_paths(self._root, workspace_id, content_id)
+        if marker_links is None:
+            marker_links = self._marcadores_por_membro(paths)
         metadata_bytes = _read_regular(
             paths["metadata"],
             root_fd=self._root_fd,
             maximum_bytes=_MAX_MANIFEST_BYTES,
-            expected_links=2 if "metadata" in recovery_link_members else 1,
+            expected_links=(2 if "metadata" in recovery_link_members else 1)
+            + marker_links.get("metadata", 0),
         )
         checksum_bytes = _read_regular(
             paths["metadata-sha256"],
             root_fd=self._root_fd,
             maximum_bytes=64,
             expected_size=64,
-            expected_links=(2 if "metadata-sha256" in recovery_link_members else 1),
+            expected_links=(2 if "metadata-sha256" in recovery_link_members else 1)
+            + marker_links.get("metadata-sha256", 0),
         )
         commit_bytes = None
         if require_commit:
@@ -1835,7 +2027,8 @@ class LocalPrivateContentStore:
                 root_fd=self._root_fd,
                 maximum_bytes=64,
                 expected_size=64,
-                expected_links=2 if "commit" in recovery_link_members else 1,
+                expected_links=(2 if "commit" in recovery_link_members else 1)
+                + marker_links.get("commit", 0),
             )
         try:
             declared_metadata_checksum = checksum_bytes.decode("ascii")
@@ -1872,7 +2065,8 @@ class LocalPrivateContentStore:
             maximum_bytes=self._max_content_bytes,
             expected_size=metadata.byte_size,
             load_content=load_content,
-            expected_links=2 if "content" in recovery_link_members else 1,
+            expected_links=(2 if "content" in recovery_link_members else 1)
+            + marker_links.get("content", 0),
         )
         if checksum != metadata.checksum_sha256:
             raise RepositoryIntegrityError("conteúdo privado diverge do checksum")
@@ -2031,6 +2225,27 @@ class LocalPrivateContentStore:
                         except (OSError, RepositoryIntegrityError):
                             pass
 
+    def _marcadores_por_membro(self, paths: dict) -> dict[str, int]:
+        """Vínculos de MARCADOR (`.retired`/`.reactivated`) por membro canônico.
+
+        Derivado do disco por identidade de inode — é o que torna legal a
+        contagem de vínculos de um membro adotado sem afrouxar a checagem: um
+        vínculo que não corresponda a marcador reconhecido continua fatal.
+        """
+        marcadores: dict[tuple[int, int, int], int] = {}
+        for name in self._root_names():
+            if not (_RETIRED_NAME.fullmatch(name) or _REACTIVATED_NAME.fullmatch(name)):
+                continue
+            chave = _identity_key(_lstat(self._root / name, root_fd=self._root_fd))
+            marcadores[chave] = marcadores.get(chave, 0) + 1
+        por_membro: dict[str, int] = {}
+        for member, caminho in paths.items():
+            if not _entry_exists(caminho, root_fd=self._root_fd):
+                continue
+            chave = _identity_key(_lstat(caminho, root_fd=self._root_fd))
+            por_membro[member] = marcadores.get(chave, 0)
+        return por_membro
+
     def _intent_durablemente_abortado(self, prefix: str):
         """`(caminho, identidade, nonce)` do intent DESTE prefixo quando ele existe
         e está durávelmente marcado como abortado; senão `None`.
@@ -2164,18 +2379,47 @@ class LocalPrivateContentStore:
                     nonce,
                     root_fd=self._root_fd,
                 )
-                if type(content) is bytes:
-                    _write_fsynced(stages["content"], content, root_fd=self._root_fd)
-                else:
-                    _write_source_fsynced(stages["content"], source, root_fd=self._root_fd)
-                stage_identities[stages["content"]] = _lstat(stages["content"], root_fd=self._root_fd)
-                _write_fsynced(stages["metadata"], manifest, root_fd=self._root_fd)
-                stage_identities[stages["metadata"]] = _lstat(stages["metadata"], root_fd=self._root_fd)
-                _write_fsynced(stages["metadata-sha256"], metadata_checksum, root_fd=self._root_fd)
-                stage_identities[stages["metadata-sha256"]] = _lstat(
-                    stages["metadata-sha256"], root_fd=self._root_fd
-                )
+                # ADOÇÃO antes de republicação: quando a tentativa anterior já
+                # publicou o membro canônico e ele está byte-exato, reescrevê-lo
+                # seria jogar fora dado correto — e republicar por cima é
+                # impossível sem romper o vínculo do `.retired`. Adota-se o
+                # próprio inode, e a aposentadoria dele continua registrada.
+                esperado_por_membro = {
+                    "content": content if type(content) is bytes else None,
+                    "metadata": manifest,
+                    "metadata-sha256": metadata_checksum,
+                }
                 for member in _MEMBERS:
+                    if not _entry_exists(paths[member], root_fd=self._root_fd):
+                        continue
+                    esperado = esperado_por_membro[member]
+                    if esperado is None or paths[member].read_bytes() != esperado:
+                        raise RepositoryConflict(
+                            "membro canônico ocupado por conteúdo divergente"
+                        )
+                    _mark_member_reactivated(
+                        paths[member],
+                        _lstat(paths[member], root_fd=self._root_fd),
+                        nonce,
+                        member,
+                        root_fd=self._root_fd,
+                    )
+                pendentes = [m for m in _MEMBERS if not _entry_exists(paths[m], root_fd=self._root_fd)]
+                if "content" in pendentes:
+                    if type(content) is bytes:
+                        _write_fsynced(stages["content"], content, root_fd=self._root_fd)
+                    else:
+                        _write_source_fsynced(stages["content"], source, root_fd=self._root_fd)
+                    stage_identities[stages["content"]] = _lstat(stages["content"], root_fd=self._root_fd)
+                if "metadata" in pendentes:
+                    _write_fsynced(stages["metadata"], manifest, root_fd=self._root_fd)
+                    stage_identities[stages["metadata"]] = _lstat(stages["metadata"], root_fd=self._root_fd)
+                if "metadata-sha256" in pendentes:
+                    _write_fsynced(stages["metadata-sha256"], metadata_checksum, root_fd=self._root_fd)
+                    stage_identities[stages["metadata-sha256"]] = _lstat(
+                        stages["metadata-sha256"], root_fd=self._root_fd
+                    )
+                for member in pendentes:
                     _publish_durable(
                         stages[member],
                         paths[member],
@@ -2189,17 +2433,33 @@ class LocalPrivateContentStore:
                     load_content=False,
                     require_commit=False,
                     recovery_link_members=frozenset(_MEMBERS),
+                    marker_links=self._marcadores_por_membro(paths),
                 )
                 if verified != metadata:
-                    raise RepositoryIntegrityError("verificação final do conteúdo privado diverge")
-                _write_fsynced(stages["commit"], metadata_checksum, root_fd=self._root_fd)
-                stage_identities[stages["commit"]] = _lstat(stages["commit"], root_fd=self._root_fd)
-                _publish_durable(
-                    stages["commit"],
-                    paths["commit"],
-                    expected_source=stage_identities[stages["commit"]],
-                    root_fd=self._root_fd,
-                )
+                    raise RepositoryIntegrityError("verificação final do conteúdo privado diverge (continuação)")
+                # A janela mais barata: o commit já foi publicado e só faltou a
+                # confirmação durável. Adota-se, sem reescrever.
+                if _entry_exists(paths["commit"], root_fd=self._root_fd):
+                    if paths["commit"].read_bytes() != metadata_checksum:
+                        raise RepositoryConflict(
+                            "commit canônico ocupado por conteúdo divergente"
+                        )
+                    _mark_member_reactivated(
+                        paths["commit"],
+                        _lstat(paths["commit"], root_fd=self._root_fd),
+                        nonce,
+                        "commit",
+                        root_fd=self._root_fd,
+                    )
+                else:
+                    _write_fsynced(stages["commit"], metadata_checksum, root_fd=self._root_fd)
+                    stage_identities[stages["commit"]] = _lstat(stages["commit"], root_fd=self._root_fd)
+                    _publish_durable(
+                        stages["commit"],
+                        paths["commit"],
+                        expected_source=stage_identities[stages["commit"]],
+                        root_fd=self._root_fd,
+                    )
                 commit_created = True
                 self._confirm_intent(prefix)
                 self._committed.add(prefix)
@@ -2264,11 +2524,12 @@ class LocalPrivateContentStore:
             metadata = self._read_record(workspace_id, content_id, load_content=False)
             if type(metadata) is not PrivateContentMetadata:
                 raise RepositoryIntegrityError("metadados privados inválidos")
-            path = _record_paths(self._root, workspace_id, content_id)["content"]
+            caminhos = _record_paths(self._root, workspace_id, content_id)
+            path = caminhos["content"]
             descriptor, opened = _open_existing_regular(
                 path,
                 root_fd=self._root_fd,
-                expected_links=2,
+                expected_links=2 + self._marcadores_por_membro(caminhos).get("content", 0),
             )
             snapshot = None
             try:
@@ -2288,7 +2549,7 @@ class LocalPrivateContentStore:
                 if os.read(descriptor, 1) or digest.hexdigest() != metadata.checksum_sha256:
                     raise RepositoryIntegrityError("conteúdo privado diverge do checksum")
                 after = os.fstat(descriptor)
-                _validate_regular(after, expected_links=2)
+                _validate_regular(after, expected_links=opened.st_nlink)
                 if not _same_identity(opened, after) or after.st_size != opened.st_size:
                     raise RepositoryIntegrityError("conteúdo privado mudou durante a leitura")
                 snapshot.flush()
