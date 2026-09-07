@@ -23,6 +23,7 @@ apenas para criar um workspace que ainda não existe.
 
 from __future__ import annotations
 
+import json
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,6 +64,28 @@ class RecoveryNotPromotable(RepositoryError):
     """O staging existe mas não satisfaz as condições de promoção."""
 
 
+class BackupTooLarge(RepositoryError):
+    """O pacote produzido excede o que ESTA instalação consegue reingerir.
+
+    `SELF_PRODUCED_BACKUP MUST_BE REINGESTIBLE`. Entregar 200 num arquivo que a
+    própria recuperação recusaria depois é vender segurança falsa: o usuário só
+    descobriria no dia em que precisasse restaurar. O formato atual do pacote
+    (JSON com conteúdo em base64) é materializado por inteiro para verificar, e
+    é essa materialização que fixa o teto — levantar o número sem trocar o
+    formato apenas move a falha para exaustão de memória.
+    """
+
+
+class RecoveryPromotionIncomplete(RepositoryError):
+    """A promoção já mutou o armazenamento vivo e NÃO chegou ao fim.
+
+    Estado distinto de `STAGED`: existe prefixo vivo E existe journal. A única
+    saída honesta é RETOMAR. Descartar aqui apagaria a autoridade durável de
+    retomada e travaria a perícia viva incompleta para sempre, num
+    armazenamento append-only sem remoção de workspace.
+    """
+
+
 class RecoveryStageFailed(RepositoryError):
     """A restauração para staging isolado falhou; nada foi promovido."""
 
@@ -97,6 +120,9 @@ class RecoverySession:
     not_promotable_reason: str | None = None
 
 
+#: Teto de ingestão da recuperação; ver `BackupTooLarge`.
+MAX_BACKUP_PACKAGE_BYTES = 134_217_728
+
 _QUARENTENA = "RECOVERY_NOT_PROMOTABLE"
 _QUARENTENA_PAYLOAD = b"RECOVERY_STAGING_V1\n"
 
@@ -105,16 +131,57 @@ class RecoveryRetained(RepositoryError):
     """O descarte não removeu tudo; a quarentena foi mantida sobre o resíduo."""
 
 
+_JOURNAL = "PROMOTION_TRANSACTION_V1"
+_IDENTIDADE = "STAGING_IDENTITY_V1"
+
+
 def _material_remanescente(raiz: Path) -> list[Path]:
-    """Tudo o que não é o marcador de quarentena da própria raiz."""
+    """Tudo o que não é marcador de quarentena nem journal da própria raiz.
+
+    O journal é AUTORIDADE, não material: sai depois de provado que o conteúdo
+    privado sumiu, na mesma ordem da quarentena. Apagá-lo junto com o material
+    permitia perder a prova de retomada e preservar o sigiloso — exatamente a
+    prioridade invertida.
+    """
     restante = []
     for caminho in raiz.rglob("*"):
         if caminho.is_dir():
             continue
-        if caminho.parent == raiz and caminho.name == _QUARENTENA:
+        if caminho.parent == raiz and caminho.name in (_QUARENTENA, _JOURNAL, _IDENTIDADE):
             continue
         restante.append(caminho)
     return restante
+
+
+_JOURNAL_ILEGIVEL = object()
+
+
+def _journal_bruto(raiz: Path):
+    """Lê o journal SEM abrir o staging. `None` = não há; sentinela = ilegível."""
+    try:
+        bruto = (raiz / _JOURNAL).read_bytes()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return _JOURNAL_ILEGIVEL
+    try:
+        registro = json.loads(bruto.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _JOURNAL_ILEGIVEL
+    return registro if type(registro) is dict else _JOURNAL_ILEGIVEL
+
+
+def _tem_journal(staging: object) -> bool:
+    """Há autoridade durável de promoção nesta raiz?
+
+    FAIL-CLOSED: journal ilegível conta como PRESENTE. Tratar erro de leitura
+    como ausência autorizaria justamente a destruição que este predicado existe
+    para impedir.
+    """
+    try:
+        return staging.ler_transacao() is not None
+    except Exception:
+        return True
 
 
 def _encerrar_staging(staging: object, *, exigir_remocao: bool = False) -> None:
@@ -140,6 +207,17 @@ def _encerrar_staging(staging: object, *, exigir_remocao: bool = False) -> None:
         staging.discard()
         return
     staging.discard()
+    _remover_raiz_quarentenada(raiz, exigir_remocao=exigir_remocao)
+
+
+def _remover_raiz_quarentenada(raiz: Path, *, exigir_remocao: bool = False) -> None:
+    """Remoção da raiz em si, sem exigir posse de handle.
+
+    Um staging órfão de queda muitas vezes NÃO reabre (o namespace privado ficou
+    a meio caminho), e era exatamente ele que precisava ser recolhido. Exigir o
+    objeto de staging para remover deixava esse caso sem saída. O que protege
+    aqui é o marcador canônico, não a posse do handle.
+    """
     marcador = raiz / _QUARENTENA
     try:
         if marcador.read_bytes() != _QUARENTENA_PAYLOAD:
@@ -168,6 +246,8 @@ def _encerrar_staging(staging: object, *, exigir_remocao: bool = False) -> None:
             raise RecoveryRetained("a recuperação preparada não pôde ser removida por completo")
         return
     try:
+        (raiz / _JOURNAL).unlink(missing_ok=True)
+        (raiz / _IDENTIDADE).unlink(missing_ok=True)
         marcador.unlink()
         raiz.rmdir()
     except OSError:
@@ -211,6 +291,10 @@ class ExportWorkspaceBackup:
         payload = self.create_backup.execute(workspace_id)
         if type(payload) is not bytes or not payload:
             raise RepositoryIntegrityError("pacote de backup inválido")
+        if len(payload) > MAX_BACKUP_PACKAGE_BYTES:
+            raise BackupTooLarge(
+                "o pacote desta perícia excede o que a recuperação consegue reingerir"
+            )
         return payload
 
 
@@ -302,6 +386,15 @@ class WorkspaceRecoverySessions:
             entry = self._sessions.get(recovery_id)
             if entry is not None:
                 entry["state"] = destino
+
+    def snapshot(self) -> tuple[tuple[str, dict], ...]:
+        """Cópia rasa do registro, para varredura FORA do lock.
+
+        Ler journal é I/O de disco e não pode acontecer sob o mutex que
+        serializa `claim`.
+        """
+        with self._mutex:
+            return tuple(self._sessions.items())
 
     def drop(self, recovery_id: str) -> None:
         with self._mutex:
@@ -415,31 +508,67 @@ class StageWorkspaceRecovery:
         NUNCA promove sozinha: apenas volta a expor a recuperação como retomável;
         a promoção segue sendo ato humano explícito.
         """
+        workspace_id = str(backup.workspace.workspace_id)
+
+        # 1) SESSÃO VIVA PRIMEIRO. Reabrir do disco uma raiz que este mesmo
+        # processo ainda mantém aberta falha na aquisição do namespace privado.
+        # Engolir esse erro e seguir fabricava um SEGUNDO staging — outra cópia
+        # integral e em claro do material sigiloso — para então responder um
+        # motivo falso ("já existe perícia com esta identidade"). Quem recarrega
+        # a tela e reenvia o mesmo pacote precisa cair na RETOMADA.
+        for recovery_id, entry in self.sessions.snapshot():
+            if entry.get("state") not in (STAGED, FAILED_RECOVERABLE):
+                continue
+            staging = entry["staging"]
+            if not self._journal_desta_promocao(staging, digest, workspace_id):
+                continue
+            self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
+            summary = _summary(backup, digest)
+            entry["summary"] = summary
+            promovivel, motivo = self._promovibilidade(backup, staging)
+            return RecoverySession(recovery_id, summary, promovivel, motivo)
+
         if self.open_staging is None:
             return None
         base = Path(self.staging_root)
-        workspace_id = str(backup.workspace.workspace_id)
         try:
             candidatas = sorted(p for p in base.iterdir() if p.is_dir())
         except OSError:
             return None
         for raiz in candidatas:
-            marcador = raiz / "RECOVERY_NOT_PROMOTABLE"
+            marcador = raiz / _QUARENTENA
             try:
-                if marcador.read_bytes() != b"RECOVERY_STAGING_V1\n":
+                if marcador.read_bytes() != _QUARENTENA_PAYLOAD:
                     continue
             except OSError:
                 continue
+            # 2) O journal é lido do disco ANTES de abrir a raiz: só assim dá
+            # para saber se esta raiz nos interessa, e só o que interessa pode
+            # falhar fechado.
+            registro = _journal_bruto(raiz)
+            if registro is None:
+                continue
+            if registro is _JOURNAL_ILEGIVEL:
+                raise RecoveryStageFailed(
+                    "há uma promoção interrompida com journal ilegível nesta instalação"
+                )
+            if (
+                registro.get("backup_sha256") != digest
+                or registro.get("workspace_id") != workspace_id
+            ):
+                continue
             try:
                 staging = self.open_staging(raiz)
-            except (RepositoryError, RepositoryIntegrityError, OSError):
-                continue
+            except (RepositoryError, RepositoryIntegrityError, OSError) as exc:
+                # É a raiz CERTA e não abre. Fabricar um staging novo aqui
+                # levaria ao beco sem saída; falha fechada com motivo honesto.
+                raise RecoveryStageFailed(
+                    "uma promoção interrompida deste backup não pôde ser reaberta"
+                ) from exc
             try:
                 transacao = staging.ler_transacao()
                 if (
                     type(transacao) is not dict
-                    or transacao.get("backup_sha256") != digest
-                    or transacao.get("workspace_id") != workspace_id
                     or transacao.get("staging_identity") != staging.identidade
                 ):
                     staging.close()
@@ -458,6 +587,63 @@ class StageWorkspaceRecovery:
             return RecoverySession(recovery_id, summary, promovivel, motivo)
         return None
 
+    @staticmethod
+    def _journal_desta_promocao(staging, digest: str, workspace_id: str) -> bool:
+        try:
+            transacao = staging.ler_transacao()
+        except Exception:
+            return False
+        return (
+            type(transacao) is dict
+            and transacao.get("backup_sha256") == digest
+            and transacao.get("workspace_id") == workspace_id
+        )
+
+def recolher_stagings_orfaos(base) -> tuple[str, ...]:
+    """Recolhe, na REABERTURA do produto, raízes de staging sem retomada pendente.
+
+    Uma queda durante a preparação — ou uma remoção que falhou no sucesso da
+    promoção — deixava uma cópia integral e em claro do material sigiloso em
+    disco, quarentenada e SEM nenhuma rota de produto para removê-la. Cada queda
+    somava outra. Reter material sigiloso indefinidamente sem saída é o defeito;
+    a cópia em si é reconstruível a partir do arquivo de backup do usuário.
+
+    FAIL-CLOSED quanto à retomada: só recolhe o que PROVA não ter promoção
+    pendente — sem journal, ou journal já em `PROMOTED`. Journal ilegível ou em
+    `PROMOTING` é preservado, porque é (ou pode ser) a única autoridade que
+    permite concluir uma perícia meio-gravada.
+
+    Roda antes de existir qualquer sessão, então não há corrida com o usuário.
+    """
+    raiz_base = Path(base)
+    try:
+        candidatas = sorted(p for p in raiz_base.iterdir() if p.is_dir())
+    except OSError:
+        return ()
+    recolhidas = []
+    for raiz in candidatas:
+        try:
+            if (raiz / _QUARENTENA).read_bytes() != _QUARENTENA_PAYLOAD:
+                continue
+        except OSError:
+            continue
+        registro = _journal_bruto(raiz)
+        if registro is _JOURNAL_ILEGIVEL:
+            continue
+        if registro is not None and registro.get("phase") != PROMOTED:
+            continue
+        # NÃO reabre o staging para recolhê-lo: reabrir reprovisiona o
+        # armazenamento privado e o SQLite da raiz, e os handles recém-criados
+        # impedem a própria remoção. A autoridade que autoriza remover é o
+        # marcador canônico de quarentena, não a posse de um handle.
+        try:
+            _remover_raiz_quarentenada(raiz)
+        except Exception:
+            continue
+        if not raiz.exists():
+            recolhidas.append(raiz.name)
+    return tuple(recolhidas)
+
 
 @dataclass(frozen=True, slots=True)
 class DiscardWorkspaceRecovery:
@@ -468,6 +654,13 @@ class DiscardWorkspaceRecovery:
         # promoção em voo, quem perde a corrida recebe erro honesto em vez de
         # fechar o staging sob os pés dela.
         entry = self.sessions.claim(recovery_id, (STAGED, FAILED_RECOVERABLE), DISCARDING)
+        # `FAILED_RECOVERABLE` COM journal NÃO é descartável: o journal é a única
+        # prova durável que permite concluir uma promoção já iniciada no vivo.
+        if _tem_journal(entry["staging"]):
+            self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
+            raise RecoveryPromotionIncomplete(
+                "esta promoção já começou a gravar e precisa ser retomada"
+            )
         try:
             _encerrar_staging(entry["staging"], exigir_remocao=True)
         except BaseException:
@@ -502,8 +695,15 @@ class PromoteWorkspaceRecovery:
         entry = self.sessions.claim(recovery_id, (STAGED, FAILED_RECOVERABLE), PROMOTING)
         try:
             return self._promover(recovery_id, entry)
-        except BaseException:
+        except BaseException as exc:
             self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
+            # Journal presente = a primeira mutação viva JÁ aconteceu. Reportar
+            # isso como "armazenamento indisponível" faria o produto dizer "nada
+            # mudou" no exato instante em que gravou uma perícia parcial.
+            if isinstance(exc, Exception) and _tem_journal(entry["staging"]):
+                raise RecoveryPromotionIncomplete(
+                    "a promoção foi interrompida depois de começar a gravar"
+                ) from exc
             raise
 
     @staticmethod
@@ -672,6 +872,14 @@ class PromoteWorkspaceRecovery:
                 raise RepositoryIntegrityError("a reabertura do workspace promovido divergiu")
 
         entry["promoted"] = True
+        # Marca a fase antes de recolher: se a remoção falhar, a varredura de
+        # reabertura precisa saber que aqui não há mais nada a retomar.
+        try:
+            transacao = staging.ler_transacao()
+            if type(transacao) is dict:
+                staging.gravar_transacao({**transacao, "phase": PROMOTED})
+        except Exception:
+            pass
         _encerrar_staging(staging)
         self.sessions.drop(recovery_id)
         return summary

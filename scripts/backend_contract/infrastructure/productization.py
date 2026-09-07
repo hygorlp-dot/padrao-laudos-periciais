@@ -1058,6 +1058,7 @@ class RecoveryStaging:
     # descreve, e some junto quando a recuperação é descartada.
 
     _JOURNAL = "PROMOTION_TRANSACTION_V1"
+    _IDENTITY = "STAGING_IDENTITY_V1"
 
     def ler_transacao(self) -> dict | None:
         alvo = self._root / self._JOURNAL
@@ -1103,8 +1104,42 @@ class RecoveryStaging:
 
     @property
     def identidade(self) -> str:
-        """Identidade da raiz (dispositivo+inode) — prova de que é ESTA raiz."""
-        return f"{self._identity.st_dev}:{self._identity.st_ino}"
+        """Identidade DURÁVEL desta raiz — prova de que o journal é dela.
+
+        Não usa dispositivo+inode: a pasta de dados do produto vive em OneDrive
+        no Windows, onde re-hidratação de placeholder, restauração de pasta ou
+        troca de volume mudam o inode sem que nada de relevante tenha mudado. A
+        identidade viraria "não confere" e a retomada seria recusada justamente
+        no cenário em que ela existe para servir.
+
+        Token aleatório gravado uma única vez na própria raiz, com O_EXCL: é
+        único por raiz, sobrevive a cópia de pasta e não depende do sistema de
+        arquivos. Corrida entre dois processos é resolvida relendo.
+        """
+        alvo = self._root / self._IDENTITY
+        try:
+            return alvo.read_text(encoding="ascii").strip()
+        except FileNotFoundError:
+            pass
+        token = uuid4().hex
+        temporario = self._root / f".{self._IDENTITY}.{uuid4().hex}"
+        descritor = os.open(temporario, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN_BINARY, 0o600)
+        try:
+            os.write(descritor, token.encode("ascii"))
+            os.fsync(descritor)
+        finally:
+            os.close(descritor)
+        try:
+            os.link(temporario, alvo)
+        except FileExistsError:
+            # Outro processo chegou primeiro: a identidade dele é a verdadeira.
+            token = alvo.read_text(encoding="ascii").strip()
+        finally:
+            try:
+                temporario.unlink()
+            except OSError:
+                pass
+        return token
 
 
 def abrir_staging_quarentenado(raiz: str | Path) -> "RecoveryStaging":

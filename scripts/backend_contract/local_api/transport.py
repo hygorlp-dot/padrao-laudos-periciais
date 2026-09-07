@@ -50,6 +50,8 @@ from ..application.workspace_recovery import (
     RecoveryNotFound,
     RecoveryRetained,
     RecoveryNotPromotable,
+    RecoveryPromotionIncomplete,
+    BackupTooLarge,
     RecoveryStageFailed,
     WorkspaceRecoveryConflict,
 )
@@ -1449,6 +1451,21 @@ class LocalApi:
             return _error(400, "INVALID_BACKUP", "pacote de backup inválido")
         except (RecoveryNotFound, RecoveryDiscarded, RecoveryAlreadyPromoted):
             return _error(404, "RECOVERY_NOT_FOUND", "recuperação não encontrada")
+        except BackupTooLarge:
+            return _error(
+                413,
+                "BACKUP_TOO_LARGE",
+                "o backup desta perícia excede o limite de restauração desta versão",
+            )
+        except RecoveryPromotionIncomplete:
+            # A primeira mutação viva JÁ aconteceu. Dizer "indisponível" aqui
+            # afirmaria que nada mudou justamente quando uma perícia parcial foi
+            # gravada. A única saída honesta é retomar a promoção.
+            return _error(
+                409,
+                "RECOVERY_PROMOTION_INCOMPLETE",
+                "a promoção foi interrompida e precisa ser retomada",
+            )
         except RecoveryNotPromotable:
             return _error(409, "RECOVERY_NOT_PROMOTABLE", "recuperação não pode ser promovida")
         except RecoveryStageFailed:

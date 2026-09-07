@@ -236,6 +236,26 @@ autoridade. Sem framework de lock distribuído.
 
 ---
 
+### E.1 Descarte NÃO é saída depois da primeira mutação viva
+
+`PREPARADO != MEIO-ESCRITO NO VIVO`. Os dois estados foram colapsados em
+`FAILED_RECOVERABLE`, e o descarte era legal a partir dele — apagando a raiz inteira,
+journal incluído. Como o armazenamento é append-only e não há remoção de workspace, a
+perícia parcial ficava visível e insanável.
+
+Regra: enquanto existir journal na raiz, a recuperação **não é descartável**. A única
+saída é retomar (`RecoveryPromotionIncomplete` → `409`). O journal é AUTORIDADE, não
+material: sai por último, depois de provado que o conteúdo privado sumiu, junto do
+marcador de quarentena.
+
+A fase gravada no journal passa a ser LIDA: `PROMOTING` significa retomável e é
+preservada; `PROMOTED` significa que não há mais nada a concluir. Na reabertura do
+produto, raízes sem journal ou com journal `PROMOTED` são recolhidas — uma queda
+durante a preparação deixava cópia integral e em claro do material sigiloso sem
+nenhuma rota de produto para removê-la, e cada queda somava outra.
+
+---
+
 ## H. Ciclo de vida do descarte
 
 Propriedade nova: **`QUARANTINE_OUTLIVES_PRIVATE_MATERIAL`**.
@@ -266,8 +286,19 @@ Uma **única** política de corpo por rota, descrevendo em conjunto: tamanho má
 binário vs JSON, se exige streaming/spool, e media type permitido.
 
 Hoje há duas autoridades divergentes (`request_body_limit` diz "binário grande";
-`is_document_upload` diz "spool só para documentos"). Passam a ser uma só: pacotes de
-recuperação são **spooled/streamados**, não materializados inteiros por não serem PDF.
+`is_document_upload` diz "spool só para documentos"). Passam a ser uma só.
+
+**O que foi entregue, com honestidade sobre o limite** — o transporte passou a ter
+autoridade única (`is_large_binary_upload`) e o corpo é spoolado para disco em vez de
+ser acumulado na memória do handler. Mas o pacote **continua sendo materializado por
+inteiro** depois disso: o formato é um JSON com o conteúdo privado em base64, e
+verificar a integridade exige tê-lo completo. Chamar isso de "streaming" seria
+descrever a intenção, não o código. Streaming real exige trocar o FORMATO do pacote
+(container com quadros e digests por membro), não o transporte — e essa troca fica
+para depois do teste humano.
+
+Consequência aceita e declarada: existe teto finito de reingestão
+(`MAX_BACKUP_PACKAGE_BYTES`), e é ele que a exportação verifica.
 
 Provar também:
 
@@ -275,10 +306,9 @@ Provar também:
 SELF_PRODUCED_BACKUP  MUST_BE  REINGESTIBLE_BY_RECOVERY
 ```
 
-Se um backup válido puder exceder o teto de recuperação, ou se estabelece contrato
-correto de limite/streaming do pacote, ou a exportação **falha explicitamente antes**
-de afirmar que a perícia está protegida. Não produzir em silêncio backup que o
-produto não restaura.
+Resolvido pela segunda via: a exportação **falha explicitamente antes** de afirmar que
+a perícia está protegida (`BackupTooLarge` → `413 BACKUP_TOO_LARGE`). Não produzir em
+silêncio backup que o produto não restaura.
 
 ---
 

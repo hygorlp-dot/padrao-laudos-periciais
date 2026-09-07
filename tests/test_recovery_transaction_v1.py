@@ -586,3 +586,221 @@ def test_falha_em_qualquer_fase_nunca_deixa_estado_fantasma_permanente(tmp_path)
             }
         finally:
             alvo2.close()
+
+# ------------------------------------------------------------------ K + L + M
+# Achados da revisão terminal A4 sobre a classe causal reaberta pelo caminho que
+# a INTERFACE oferece: a promoção parcial era retomável, mas a única saída que o
+# produto expunha era a que destruía a autoridade de retomada.
+
+
+def test_descarte_recusa_apagar_a_autoridade_de_retomada(tmp_path):
+    """RED K — `FAILED_RECOVERABLE` COM journal NÃO é descartável.
+
+    Uma promoção que já mutou o armazenamento vivo deixa journal na raiz
+    quarentenada; esse journal é a ÚNICA prova durável que permite retomá-la.
+    Descartar apaga a raiz inteira e trava a perícia viva incompleta para sempre
+    — o armazenamento é append-only e não há remoção de workspace.
+    """
+    _origem, _ids, package = _origem_com_dois_privados(tmp_path, "k-origem")
+    destino = _runtime(tmp_path, "k-destino")
+    try:
+        status, staged = _stage(destino, package)
+        assert status == 201, staged
+        recovery_id = staged["recovery_id"]
+
+        with _FalhaAposIntent(falhar_na_chamada=2) as falha:
+            status, corpo = _promote(destino, recovery_id)
+        assert falha.disparou
+        assert status >= 400, corpo
+
+        # O produto DEVE recusar o descarte e dizer que a promoção está
+        # incompleta, em vez de destruir a única rota de conclusão.
+        status, corpo = _json(destino, "POST", f"/v1/recovery/{recovery_id}/discard")
+        assert status == 409, corpo
+        assert corpo["error"]["code"] == "RECOVERY_PROMOTION_INCOMPLETE"
+
+        # E a retomada precisa continuar funcionando depois da recusa.
+        status, corpo = _promote(destino, recovery_id)
+        assert status == 200, corpo
+        assert len(_materiais(destino, _origem)) == 2
+    finally:
+        destino.close()
+
+
+def test_promocao_interrompida_apos_mutacao_viva_nao_se_diz_indisponivel(tmp_path):
+    """RED L — falha DEPOIS da primeira mutação viva tem código próprio.
+
+    Mapeá-la para `503 REPOSITORY_UNAVAILABLE` faz o produto dizer "armazenamento
+    local indisponível, nada mudou" no exato instante em que uma perícia parcial
+    foi gravada. Mentira de contrato é defeito, não texto.
+    """
+    _origem, _ids, package = _origem_com_dois_privados(tmp_path, "l-origem")
+    destino = _runtime(tmp_path, "l-destino")
+    try:
+        status, staged = _stage(destino, package)
+        assert status == 201, staged
+
+        with _FalhaAposIntent(falhar_na_chamada=2) as falha:
+            status, corpo = _promote(destino, staged["recovery_id"])
+        assert falha.disparou
+        assert status == 409, corpo
+        assert corpo["error"]["code"] == "RECOVERY_PROMOTION_INCOMPLETE"
+    finally:
+        destino.close()
+
+
+def test_reenviar_o_mesmo_pacote_reencontra_a_promocao_interrompida(tmp_path):
+    """RED M — recarregar a tela e reenviar o pacote NÃO cria segundo staging.
+
+    A redescoberta lia a raiz do disco com `open_or_provision`, que falha
+    enquanto a sessão viva ainda mantém o store aberto; a exceção era engolida e
+    o produto fabricava uma SEGUNDA cópia integral do material privado em claro,
+    para então dizer "não promovível".
+    """
+    _origem, _ids, package = _origem_com_dois_privados(tmp_path, "m-origem")
+    destino = _runtime(tmp_path, "m-destino")
+    try:
+        status, staged = _stage(destino, package)
+        assert status == 201, staged
+        primeiro = staged["recovery_id"]
+
+        with _FalhaAposIntent(falhar_na_chamada=2) as falha:
+            _promote(destino, primeiro)
+        assert falha.disparou
+
+        status, retomada = _stage(destino, package)
+        assert status == 201, retomada
+        assert retomada["recovery_id"] == primeiro
+        assert retomada["promotable"] is True
+
+        status, corpo = _promote(destino, retomada["recovery_id"])
+        assert status == 200, corpo
+        assert len(_materiais(destino, _origem)) == 2
+    finally:
+        destino.close()
+
+# ------------------------------------------------------------------ N + O
+# Raiz de staging órfã: material sigiloso em claro, quarentenado, e SEM nenhuma
+# rota de produto para removê-lo. A quarentena deve sobreviver ao material —
+# não o material sobreviver ao produto.
+
+
+def _raizes(tmp_path, nome):
+    base = tmp_path / f".{nome}.sqlite3.recovery"
+    if not base.exists():
+        return []
+    return sorted(p.name for p in base.iterdir() if p.is_dir())
+
+
+def test_staging_orfao_sem_journal_e_recolhido_na_reabertura(tmp_path):
+    """RED N — queda durante a preparação não pode acumular cópias eternas.
+
+    Sem journal, nada há para retomar: a cópia é reconstruível a partir do
+    arquivo de backup que o usuário guardou. Mantê-la é reter material sigiloso
+    sem saída pelo produto.
+    """
+    _origem, _ids, package = _origem_com_dois_privados(tmp_path, "n-origem")
+    destino = _runtime(tmp_path, "n-destino")
+    try:
+        status, staged = _stage(destino, package)
+        assert status == 201, staged
+        # Simula a QUEDA do processo: os handles do sistema operacional somem
+        # (é o que a morte do processo faz) e a raiz permanece no disco, sem
+        # sessão. Só limpar o registro em memória deixaria os arquivos abertos
+        # neste mesmo processo — artefato do harness, não do produto.
+        for entrada in destino._recovery_sessions._sessions.values():
+            entrada["staging"].close()
+        destino._recovery_sessions._sessions.clear()
+    finally:
+        destino.close()
+    assert _raizes(tmp_path, "n-destino"), "a raiz órfã precisa existir para o teste valer"
+
+    reaberto = _runtime(tmp_path, "n-destino")
+    try:
+        assert _raizes(tmp_path, "n-destino") == []
+    finally:
+        reaberto.close()
+
+
+def test_residuo_de_promocao_concluida_e_recolhido_na_reabertura(tmp_path):
+    """RED O — journal de promoção CONCLUÍDA não é autoridade de retomada.
+
+    Se a remoção do staging falhou no sucesso da promoção, o resíduo ficava sem
+    sessão e sem rota. Só `PROMOTING` merece ser preservado.
+    """
+    origem, _ids, package = _origem_com_dois_privados(tmp_path, "o-origem")
+    destino = _runtime(tmp_path, "o-destino")
+    try:
+        status, staged = _stage(destino, package)
+        assert status == 201, staged
+        status, corpo = _promote(destino, staged["recovery_id"])
+        assert status == 200, corpo
+        assert len(_materiais(destino, origem)) == 2
+    finally:
+        destino.close()
+
+    reaberto = _runtime(tmp_path, "o-destino")
+    try:
+        assert _raizes(tmp_path, "o-destino") == []
+        assert len(_materiais(reaberto, origem)) == 2
+    finally:
+        reaberto.close()
+
+
+def test_promocao_interrompida_sobrevive_a_varredura_de_orfaos(tmp_path):
+    """RED O' — a varredura NUNCA pode recolher o que ainda é retomável."""
+    origem, _ids, package = _origem_com_dois_privados(tmp_path, "p-origem")
+    destino = _runtime(tmp_path, "p-destino")
+    try:
+        status, staged = _stage(destino, package)
+        assert status == 201, staged
+        with _FalhaAposIntent(falhar_na_chamada=2) as falha:
+            _promote(destino, staged["recovery_id"])
+        assert falha.disparou
+    finally:
+        destino.close()
+
+    reaberto = _runtime(tmp_path, "p-destino")
+    try:
+        assert _raizes(tmp_path, "p-destino"), "a promoção interrompida foi destruída"
+        status, retomada = _stage(reaberto, package)
+        assert status == 201, retomada
+        status, corpo = _promote(reaberto, retomada["recovery_id"])
+        assert status == 200, corpo
+        assert len(_materiais(reaberto, origem)) == 2
+    finally:
+        reaberto.close()
+
+# ------------------------------------------------------------------ Q
+# SELF_PRODUCED_BACKUP MUST_BE REINGESTIBLE
+
+
+def test_backup_grande_demais_e_recusado_em_vez_de_prometer_seguranca_falsa(tmp_path):
+    """RED Q — o produto não pode entregar 200 num pacote que ele não restaura.
+
+    O teto de ingestão da recuperação é finito. Um pacote acima dele é um
+    arquivo que dá sensação de segurança e falha no dia em que for preciso. É
+    melhor recusar dizendo por quê do que prometer o que não se sustenta.
+    """
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    runtime = _runtime(tmp_path, "q-origem")
+    try:
+        workspace_id, _material = _workspace_with_material(runtime, tmp_path, name="Caso enorme")
+        original = wr.ExportWorkspaceBackup.execute
+
+        def _gigante(self, ws):  # o pacote real é pequeno; o teto é que baixa
+            return original(self, ws)
+
+        # Baixa o teto para a fronteira ficar alcançável no teste, sem fabricar
+        # centenas de MB em disco.
+        anterior = wr.MAX_BACKUP_PACKAGE_BYTES
+        wr.MAX_BACKUP_PACKAGE_BYTES = 128
+        try:
+            status, corpo = _json(runtime, "POST", f"/v1/workspaces/{workspace_id}/backup")
+        finally:
+            wr.MAX_BACKUP_PACKAGE_BYTES = anterior
+        assert status == 413, corpo
+        assert corpo["error"]["code"] == "BACKUP_TOO_LARGE"
+    finally:
+        runtime.close()

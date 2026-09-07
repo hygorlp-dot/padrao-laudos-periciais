@@ -148,6 +148,15 @@ export function WorkspaceDirectory() {
                 <div>
                   <h2 id="workspace-directory-title">Nenhuma perícia cadastrada</h2>
                   <p>Crie uma perícia para iniciar um workspace técnico local.</p>
+                  {/* Base vazia é exatamente o cenário da restauração: máquina
+                      nova, disco trocado, banco perdido. Sem esta saída, o
+                      backup guardado não teria como voltar. */}
+                  <p>
+                    Já tem um backup?{" "}
+                    <a className="text-action" href="/recuperacao" onClick={navigate}>
+                      Restaurar de um backup
+                    </a>
+                  </p>
                 </div>
               </div>
             ) : (

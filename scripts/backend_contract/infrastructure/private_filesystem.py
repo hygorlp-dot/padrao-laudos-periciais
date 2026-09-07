@@ -2325,7 +2325,7 @@ class LocalPrivateContentStore:
             abortado = self._intent_durablemente_abortado(prefix)
             if abortado is None:
                 raise RepositoryConflict("identidade privada não tem tentativa abortada própria")
-            # TODO objeto da(s) tentativa(s) anterior(es) precisa estar aposentado.
+            # Cada objeto das tentativas anteriores precisa estar aposentado.
             # Objetos aposentados PERMANECEM em disco por proveniência — apagá-los
             # romperia o vínculo do marcador `.retired`. Por isso a continuação
             # nunca reaproveita caminho: ela usa um nonce próprio.

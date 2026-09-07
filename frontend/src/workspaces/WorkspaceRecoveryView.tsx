@@ -12,7 +12,8 @@ import {
   type StagedRecovery,
 } from "../data/workspaceRecovery";
 
-type WorkspaceRecoveryViewProps = { workspaceId: string };
+/** Sem `workspaceId` a tela é SÓ restauração: é o caso da base vazia. */
+type WorkspaceRecoveryViewProps = { workspaceId?: string };
 
 type BackupState =
   | { kind: "idle" }
@@ -39,12 +40,17 @@ type RestoreState =
   | { kind: "promoted"; summary: BackupSummary }
   // A falha PRESERVA a recuperação preparada quando ela existe: a cópia isolada
   // continua no disco e precisa continuar alcançável para descarte.
-  | { kind: "error"; message: string; staged?: StagedRecovery };
+  | { kind: "error"; message: string; staged?: StagedRecovery; incomplete?: boolean };
 
 function message(error: unknown) {
   return error instanceof RecoveryApiError
     ? error.message
     : "Não foi possível concluir a operação local";
+}
+
+/** A promoção já tocou o armazenamento vivo? Só o backend sabe; ele diz. */
+function isIncomplete(error: unknown) {
+  return error instanceof RecoveryApiError && error.kind === "promotion-incomplete";
 }
 
 export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProps) {
@@ -55,6 +61,7 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
   const fileInput = useRef<HTMLInputElement | null>(null);
 
   async function onExport() {
+    if (!workspaceId) return;
     setBackup({ kind: "working" });
     try {
       const { blob, filename } = await exportWorkspaceBackup(workspaceId);
@@ -65,7 +72,9 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
-      URL.revokeObjectURL(url);
+      // Revogar no mesmo tick aborta o download em alguns motores: o navegador
+      // ainda não leu o blob. Solta na próxima volta do laço de eventos.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
       setBackup({ kind: "done", filename });
     } catch (error) {
       setBackup({ kind: "error", message: message(error) });
@@ -100,7 +109,29 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
       setConfirmed(false);
       setRestore({ kind: "promoted", summary });
     } catch (error) {
-      setRestore({ kind: "error", message: message(error), staged });
+      setRestore({
+        kind: "error",
+        message: message(error),
+        staged,
+        incomplete: isIncomplete(error),
+      });
+    }
+  }
+
+  /** Retomada: a confirmação explícita já foi dada quando a promoção começou. */
+  async function onResume(staged: StagedRecovery) {
+    setRestore({ kind: "promoting", staged });
+    try {
+      const summary = await promoteRecovery(staged.recovery_id, { confirm: true });
+      setConfirmed(false);
+      setRestore({ kind: "promoted", summary });
+    } catch (error) {
+      setRestore({
+        kind: "error",
+        message: message(error),
+        staged,
+        incomplete: isIncomplete(error),
+      });
     }
   }
 
@@ -149,6 +180,7 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
     <section className="workspace-stage" aria-labelledby="recuperacao-titulo">
       <h2 id="recuperacao-titulo">Backup e recuperação</h2>
 
+      {workspaceId ? (
       <section aria-labelledby="backup-titulo">
         <h3 id="backup-titulo">Criar backup</h3>
         <p>
@@ -163,6 +195,7 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
         ) : null}
         {backup.kind === "error" ? <p role="alert">{backup.message}</p> : null}
       </section>
+      ) : null}
 
       <section aria-labelledby="restaurar-titulo">
         <h3 id="restaurar-titulo">Restaurar de um backup</h3>
@@ -275,9 +308,25 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
         {restore.kind === "error" ? (
           <div>
             <p role="alert">{restore.message}</p>
-            <p>Nada foi promovido. Nenhuma perícia existente foi alterada.</p>
-            {restore.staged ? (
+            {/* "Nada foi promovido" só pode ser dito quando é verdade. Depois
+                que a promoção começou a gravar, a perícia viva EXISTE, ainda
+                que parcial — e a única saída honesta é concluí-la. */}
+            {restore.incomplete && restore.staged ? (
               <>
+                <p>
+                  Parte da perícia já foi gravada nesta instalação. A cópia
+                  recuperada segue <strong>isolada</strong> e guarda o que falta:
+                  retome a promoção para concluir. <strong>Não</strong> descarte
+                  esta recuperação — ela é o que permite terminar.
+                </p>
+                {summaryList(restore.staged.summary)}
+                <button type="button" onClick={() => onResume(restore.staged!)}>
+                  Retomar promoção
+                </button>
+              </>
+            ) : restore.staged ? (
+              <>
+                <p>Nada foi promovido. Nenhuma perícia existente foi alterada.</p>
                 <p>
                   A cópia recuperada preparada continua <strong>isolada</strong> nesta
                   máquina. Enquanto ela existir, a saída é descartá-la explicitamente.
@@ -286,9 +335,12 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
                 {discardButton(restore.staged)}
               </>
             ) : (
-              <button type="button" onClick={resetRestore}>
-                Recomeçar
-              </button>
+              <>
+                <p>Nada foi promovido. Nenhuma perícia existente foi alterada.</p>
+                <button type="button" onClick={resetRestore}>
+                  Recomeçar
+                </button>
+              </>
             )}
           </div>
         ) : null}

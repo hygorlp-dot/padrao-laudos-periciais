@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 
 from ..application.ports import Clock, IdGenerator, RepositoryError, RepositoryIntegrityError
 from ..application.workspace_recovery import (
+    recolher_stagings_orfaos,
     DiscardWorkspaceRecovery,
     ExportWorkspaceBackup,
     InspectWorkspaceBackup,
@@ -489,6 +490,9 @@ def build_local_api(
     # um staging jamais pode quarentenar o armazenamento ativo.
     recovery_sessions = WorkspaceRecoverySessions()
     recovery_staging_root = database_path.parent / f".{database_path.name}.recovery"
+    # Reabertura do produto: recolhe stagings órfãos ANTES de servir. Preserva
+    # tudo que ainda for retomável — ver `recolher_stagings_orfaos`.
+    recolher_stagings_orfaos(recovery_staging_root)
     # `assert_backup_ready` é a autoridade canônica de prontidão: recusa o backup
     # enquanto houver vistoria offline pendente de sincronização. Ligar um no-op
     # aqui faria o produto entregar, em silêncio, um pacote sem o trabalho de

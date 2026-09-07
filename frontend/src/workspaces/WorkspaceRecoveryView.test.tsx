@@ -349,4 +349,75 @@ describe("WorkspaceRecoveryView", () => {
     );
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
   });
+  it("promoção incompleta oferece RETOMAR e não oferece descartar", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(SUMMARY))
+      .mockResolvedValueOnce(
+        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true }, 201),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { error: { code: "RECOVERY_PROMOTION_INCOMPLETE", message: "x" } },
+          409,
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse(SUMMARY));
+
+    render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
+    selectFile();
+    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
+    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
+    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
+    await screen.findByRole("button", { name: "4. Promover recuperação" });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "4. Promover recuperação" }));
+
+    const alerta = await screen.findByRole("alert");
+    expect(alerta.textContent).toContain("retomada");
+    // Descartar aqui apagaria a autoridade de retomada: não pode ser oferecido.
+    expect(
+      screen.queryByRole("button", { name: "Descartar recuperação preparada" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Recomeçar" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retomar promoção" }));
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain("Recuperação promovida"),
+    );
+    expect(fetchMock.mock.calls[3][0]).toBe(`/app-api/v1/recovery/${RECOVERY}/promote`);
+  });
+
+  it("nunca afirma que nada foi promovido quando a promoção ficou incompleta", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(SUMMARY))
+      .mockResolvedValueOnce(
+        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true }, 201),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { error: { code: "RECOVERY_PROMOTION_INCOMPLETE", message: "x" } },
+          409,
+        ),
+      );
+
+    render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
+    selectFile();
+    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
+    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
+    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
+    await screen.findByRole("button", { name: "4. Promover recuperação" });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "4. Promover recuperação" }));
+
+    await screen.findByRole("alert");
+    expect(document.body.textContent).not.toContain("Nada foi promovido");
+    expect(document.body.textContent).not.toContain("Nenhuma perícia existente foi alterada");
+  });
+  it("sem perícia, a tela é só restauração: não oferece criar backup", () => {
+    render(<WorkspaceRecoveryView />);
+    expect(screen.queryByRole("button", { name: "Criar backup" })).toBeNull();
+    expect(screen.getByLabelText("Arquivo de backup")).toBeTruthy();
+  });
 });

@@ -13,6 +13,8 @@ export type ShellRoute = {
 export type ResolvedRoute =
   | { kind: "directory"; pathname: "/"; workspaceId?: undefined; route: ShellRoute }
   | { kind: "workspace"; pathname: string; workspaceId: string; route: ShellRoute }
+  // A recuperação existe FORA de qualquer perícia: base vazia é o cenário dela.
+  | { kind: "recovery"; pathname: "/recuperacao"; workspaceId?: undefined; route: ShellRoute }
   | { kind: "missing"; pathname: string };
 
 const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -173,7 +175,27 @@ export function workspacePath(workspaceId: string, stage?: string) {
   return `/pericias/${workspaceId}/${stage}`;
 }
 
+export const RECOVERY_ROUTE: ShellRoute = {
+  path: "/recuperacao",
+  index: "00",
+  label: "Recuperação",
+  description:
+    "Restaure uma perícia a partir de um pacote de backup, com promoção explícita.",
+  kind: "home",
+};
+
 export function resolveRoute(pathname: string): ResolvedRoute {
+  if (pathname === "/recuperacao") {
+    // Máquina nova, disco trocado, banco perdido: não há perícia de onde
+    // partir. Amarrar a restauração a uma perícia existente a tornaria
+    // inalcançável exatamente quando ela é necessária.
+    return {
+      kind: "recovery",
+      pathname: "/recuperacao",
+      workspaceId: undefined,
+      route: RECOVERY_ROUTE,
+    };
+  }
   if (pathname === "/") {
     return {
       kind: "directory",

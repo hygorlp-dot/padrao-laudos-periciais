@@ -48,6 +48,7 @@ export type RecoveryApiErrorKind =
   | "not-found"
   | "conflict"
   | "not-promotable"
+  | "promotion-incomplete"
   | "retained"
   | "stage-failed"
   | "too-large"
@@ -114,6 +115,20 @@ function mappedError(status: number, code?: string): RecoveryApiError {
   }
   if (code === "RECOVERY_NOT_PROMOTABLE") {
     return new RecoveryApiError("not-promotable", "Esta recuperação não pode ser promovida");
+  }
+  if (code === "BACKUP_TOO_LARGE") {
+    return new RecoveryApiError(
+      "too-large",
+      "Esta perícia é grande demais para o backup desta versão. O produto prefere avisar agora a entregar um pacote que não conseguiria restaurar depois.",
+    );
+  }
+  if (code === "RECOVERY_PROMOTION_INCOMPLETE") {
+    // A primeira gravação viva JÁ aconteceu. Descartar aqui apagaria a única
+    // autoridade de retomada e travaria a perícia incompleta para sempre.
+    return new RecoveryApiError(
+      "promotion-incomplete",
+      "A promoção começou a gravar e foi interrompida. Ela precisa ser retomada para concluir — não descarte esta recuperação.",
+    );
   }
   if (code === "WORKSPACE_CONFLICT") {
     return new RecoveryApiError("conflict", "Já existe uma perícia com esta identidade");
