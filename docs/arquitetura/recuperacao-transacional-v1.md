@@ -1,0 +1,336 @@
+# Recuperação transacional de perícia — nota de arquitetura (#183)
+
+Status: **nota de arquitetura**, escrita antes de qualquer edição de produção, após
+`AUTONOMOUS_CAUSAL_REPAIR_LOOP_V1` ser acionado. `251bf29` está permanentemente
+invalidado como candidato a merge.
+
+A classe causal `PARTIAL_PROMOTION_NOT_RECOVERABLE` sobreviveu a três estratégias de
+reparo local — ordem privado-primeiro (`8d611a3`), reversão para privado-último
+(`994cf41`) e retomada em memória (`251bf29`). O problema deixou de ser ordem de
+escrita. Esta nota descreve o alvo antes de implementar.
+
+Princípio que governa o desenho:
+
+> Um sistema de recuperação não é seguro porque seu caminho feliz é correto. Ele é
+> seguro apenas se **toda transição autoritativa interrompida for atômica ou
+> duravelmente retomável**.
+
+---
+
+## A. Grafo de autoridade atual
+
+A promoção cria UMA perícia autoritativa atravessando DUAS autoridades de
+persistência independentes, sem transação que as abranja.
+
+```
+                    PromoteWorkspaceRecovery            (aplicação)
+                              │
+              ┌───────────────┴────────────────┐
+              ▼                                ▼
+   SQLiteApplicationStore              LocalPrivateContentStore
+   ─────────────────────               ────────────────────────
+   workspaces                          conteúdo privado (bytes)
+   artifact_revisions                  journal / intent / âncora
+   FK ON DELETE RESTRICT               _committed      (universo 1)
+   PRAGMA foreign_keys = ON            _known_prefixes (universo 2)
+   BEGIN IMMEDIATE por chamada         .aborted.<nonce> duráveis
+   (sem transação multi-statement      retired markers
+    exposta)
+```
+
+Estado de sessão hoje (`application/workspace_recovery.py`):
+
+- `WorkspaceRecoverySessions._sessions` — **dict em memória**;
+- `entry["promotion_started"]` — **booleano em memória**;
+- `_AUTHORIZED_RECOVERY_STAGING` — `WeakKeyDictionary` em memória
+  (`infrastructure/productization.py`).
+
+Duas assimetrias documentadas no próprio código privado
+(`infrastructure/private_filesystem.py`):
+
+- invariante explícita na linha 1377:
+  `_known_prefixes == _committed | aborted_prefixes`;
+- `open_content` (linha ~1917) consulta **`_committed`** e devolve `None` fora dele;
+- `store` (linha 1764) recusa por **`_known_prefixes`**, e adiciona o prefixo na
+  linha 1786 **antes** de gravar o conteúdo.
+
+`list_all()` expõe `_committed`. Logo:
+
+```
+PRIVATE list_all()  ≠  PRIVATE _known_prefixes
+```
+
+Transporte (`local_api/server.py`):
+
+- teto de corpo: `api.request_body_limit(...)` (linha ~200) — correto e único;
+- **spool para arquivo**: condicionado a `api.is_document_upload(...)` (linha 207),
+  que exclui `/v1/recovery/*`. Corpo lido inteiro por `self.rfile.read(length)`.
+  Duas autoridades distintas descrevendo a mesma decisão.
+
+---
+
+## B. Grafo de falha confirmado (reprodução executável, PASS A3/B3)
+
+```
+(1) CORRIDA PROMOTE × DISCARD                        — sem injeção de falha
+    STAGED ──promote──▶ cria workspace vivo
+           ──discard──▶ fecha/apaga staging por baixo
+    promote morre 503 ▶ perícia fantasma 0/N materiais
+                      ▶ re-staging diz promotable=True
+                      ▶ nova promoção 409 WORKSPACE_CONFLICT (permanente)
+                      ▶ DELETE workspace → 405 (não existe rota)
+
+(2) FALHA TRANSITÓRIA NA PERNA PRIVADA               — uma única OSError
+    store() registra prefixo em _known_prefixes (1786)
+      ▶ grava conteúdo → falha
+      ▶ prefixo fica em _known_prefixes, ausente de _committed
+    retomada: ja_gravados vem de list_all() (=_committed) → não vê o abortado
+      ▶ chama store() de novo → RepositoryConflict (1764)
+      ▶ aquele content_id é PERMANENTEMENTE ingravável
+    reinício: promotion_started some → 409 WORKSPACE_CONFLICT (permanente)
+
+    Contraprova: falha na perna de REVISÕES retoma e converge (200, N/N).
+    O defeito é específico da fronteira privada.
+
+(3) DISCARD MENTIROSO
+    rmtree(ignore_errors=True) remove o marcador de quarentena ANTES do
+    conteúdo privado; handle preso (antivírus/indexador) deixa PDF em claro
+      ▶ API responde 200 "descartado"
+      ▶ quarentena apagada, material sigiloso retido, sem retentativa
+```
+
+Causa-raiz comum: **memória de processo usada como autoridade de uma transição que
+atravessa duas autoridades duráveis.**
+
+```
+PROCESS MEMORY            ≠  DURABLE PROMOTION AUTHORITY
+SQLITE PREFIX COMPLETE    ≠  PRIVATE STORE COMMIT COMPLETE
+IN_MEMORY_RESUMABILITY    ≠  RECOVERY TRANSACTIONALITY
+```
+
+---
+
+## C. Grafo de autoridade alvo
+
+Introduzir **uma** autoridade durável de transação de recuperação, que passa a ser a
+única fonte de verdade sobre a fase da promoção. Ela não substitui nem duplica as
+autoridades de armazenamento — ela as **ordena**.
+
+```
+            RecoveryTransactionJournal          (durável, primeira classe)
+            ── fase + progresso + identidades ──
+                          │  serializa e torna idempotente
+              ┌───────────┴───────────┐
+              ▼                       ▼
+    SQLiteApplicationStore    LocalPrivateContentStore
+    (inalterado)              (+ continuação exata de intent abortado,
+                                 dentro da própria fronteira)
+```
+
+Regras de fronteira:
+
+- a aplicação **orquestra**; não manipula journal/ledger privado por dentro;
+- a continuação de conteúdo privado é uma operação **da camada de armazenamento
+  privado**, não da aplicação;
+- nenhum segundo motor de backup, nenhum coordenador genérico, nenhum plano de
+  controle, nenhum serviço novo.
+
+---
+
+## D. Estado durável mínimo
+
+A transação liga, no mínimo:
+
+| campo | por quê |
+|---|---|
+| `recovery_id` | identidade da transação |
+| `backup_sha256` | prova de que a retomada é do MESMO pacote |
+| `workspace_id` | alvo vivo |
+| identidade da raiz de staging | `os.lstat` — impede adotar raiz alheia |
+| identidade esperada do workspace | nome + `created_at` |
+| revisões: id, kind, artifact_id, checksum, **ordem** | prefixo verificável |
+| conteúdos privados: `content_id` + hash | progresso verificável |
+| fase atual | serialização |
+| progresso para continuação idempotente | retomada exata |
+| estado terminal | `PROMOTED` / `DISCARDED` / `FAILED_RECOVERABLE` |
+
+Onde vive: ao lado da base viva, fora da trilha append-only de perícia (não é
+artefato de perícia; é estado operacional de recuperação). Fail-closed: journal
+ilegível ⇒ nenhuma promoção.
+
+---
+
+## E. Máquina de estados e reinício
+
+```
+VERIFIED_STAGING
+      │ prepare (grava journal ANTES da 1ª mutação viva)
+      ▼
+PROMOTION_PREPARED ──────────────┐
+      │ claim                    │ discard
+      ▼                          ▼
+  PROMOTING                  DISCARDING
+      │ escrituras                │ remoção provada
+      ▼                          ▼
+ VERIFYING_LIVE              DISCARDED
+      │ conferência
+      ▼
+  PROMOTED
+```
+
+Falha em `PROMOTING`/`VERIFYING_LIVE` ⇒ **não** apaga o journal: fica
+`FAILED_RECOVERABLE`, com o progresso registrado.
+
+Na reabertura do produto, a aplicação reconstrói sessões a partir do journal +
+raízes quarentenadas e classifica cada uma como:
+
+- **retomável** — journal íntegro, digest do pacote confere, identidade da raiz de
+  staging confere, vivo é prefixo exato do registrado;
+- **estrangeira/obsoleta/corrompida** — qualquer divergência ⇒ fail-closed, sem
+  promoção, com motivo honesto.
+
+Nunca promove sozinho no startup. **Promoção explícita humana continua obrigatória.**
+Isso torna `promotion_started` desnecessário: a autoridade deixa de ser um booleano de
+processo e passa a ser o journal.
+
+---
+
+## F. Intent abortado no armazenamento privado
+
+O store **já** distingue durávelmente `committed`, `aborted` (`.aborted.<nonce>`) e
+`retired`. Não falta modelo — falta **operação de continuação exata exposta**.
+
+Propriedade exigida, dentro da fronteira do armazenamento privado:
+
+```
+importação de recuperação para o conteúdo X falha após registrar intent
+   │
+   ├─ A. X já está committed byte-a-byte  ─────▶ tratar como completo
+   ├─ B. X é intent ABORTADO desta MESMA
+   │     transação de recuperação        ─────▶ continuar/finalizar por
+   │                                            mecanismo explícito
+   └─ C. identidade pertence a outra coisa ────▶ conflito / fail-closed
+```
+
+Proibido, e não faremos: apagar `_known_prefixes`, resetar journal, reaproveitar
+identidade às cegas, ou enfraquecer a proveniência de crash/replay.
+`ABORTED_INTENT ≠ COMMITTED_CONTENT` — mas
+`ABORTED_INTENT_OWNED_BY_EXACT_RECOVERY` não pode tornar a perícia inteira
+irrecuperável.
+
+---
+
+## G. Concorrência
+
+Autoridade no **backend**, não na UI.
+
+- transição de estado por `recovery_id` é **atômica** (compare-and-set sob lock
+  estreito por sessão) — `STAGED → PROMOTING` **ou** `STAGED → DISCARDING`, nunca
+  ambas;
+- quem perde a transição recebe erro honesto, não um segundo `200`;
+- `discard` não pode fechar o staging sob uma promoção em curso;
+- `runtime.close` não invalida um commit ativo de forma insegura.
+
+A UI desabilita ações incompatíveis como **defesa em profundidade**, nunca como
+autoridade. Sem framework de lock distribuído.
+
+---
+
+## H. Ciclo de vida do descarte
+
+Propriedade nova: **`QUARANTINE_OUTLIVES_PRIVATE_MATERIAL`**.
+
+```
+entra em DISCARDING (atômico)
+  → fecha handles com segurança
+  → remove payload privado
+  → VERIFICA ausência do payload privado
+  → remove marcador de quarentena aninhado só quando seguro
+  → remove payload SQLite/recuperação
+  → VERIFICA que a raiz não contém material
+  → remove RECOVERY_NOT_PROMOTABLE da raiz POR ÚLTIMO
+  → remove a raiz
+  → só então reporta DISCARDED
+```
+
+Falha em qualquer ponto: mantém/reestabelece quarentena, mantém identidade durável,
+retorna estado explícito `RETAINED` / `DISCARD_FAILED`, e **permite retentativa**.
+`ignore_errors=True` deixa de ser autoridade de sucesso. Nunca `200` com material
+privado presente.
+
+---
+
+## I. Transporte de binário grande
+
+Uma **única** política de corpo por rota, descrevendo em conjunto: tamanho máximo,
+binário vs JSON, se exige streaming/spool, e media type permitido.
+
+Hoje há duas autoridades divergentes (`request_body_limit` diz "binário grande";
+`is_document_upload` diz "spool só para documentos"). Passam a ser uma só: pacotes de
+recuperação são **spooled/streamados**, não materializados inteiros por não serem PDF.
+
+Provar também:
+
+```
+SELF_PRODUCED_BACKUP  MUST_BE  REINGESTIBLE_BY_RECOVERY
+```
+
+Se um backup válido puder exceder o teto de recuperação, ou se estabelece contrato
+correto de limite/streaming do pacote, ou a exportação **falha explicitamente antes**
+de afirmar que a perícia está protegida. Não produzir em silêncio backup que o
+produto não restaura.
+
+---
+
+## J. Autoridade de custo de IA
+
+Defeito de contrato semântico já provado: pacote com `AI_COST_LEDGER_V1` responde
+`VERIFY=200`, `STAGING=201 promotable=True` e depois `PROMOTE=409`.
+
+```
+VERIFIED  ≠  PROMOTABLE
+```
+
+`promotable` nunca deve ser literal: só é `True` depois de checadas as restrições
+canônicas de promoção conhecidas no staging (colisão de identidade, kind não
+promovível). Caso contrário, motivo honesto de não-promovibilidade.
+
+Sobre a autoridade de custo em si: reutilizar o mecanismo de recuperação de custo já
+existente no Stage 10. Não apagar autoridade de custo, não confiar em ledger portátil
+obsoleto, não resetar acumulado, não contornar o ledger vivo. Se workspaces tocados
+por IA já forem alcançáveis ao usuário normal, sua recuperação é P1 bloqueante de
+#183; se ainda não forem, retornar razão honesta e levar a prova final de
+alcançabilidade para `FULL_PRODUCT_REACHABILITY_MATRIX_V1`.
+
+---
+
+## Invariantes que o reparo deve preservar
+
+```
+RESTORE_MODEL = VERIFIED_STAGING_THEN_EXPLICIT_HUMAN_PROMOTION
+RECOVERY_NOT_PROMOTABLE                            enforced
+NO_SILENT_OVERWRITE
+FAILED_RESTORE_PRESERVES_EXISTING_WORK
+FAILED_PROMOTION_MUST_NOT_LEAVE_UNRECOVERABLE_LIVE_PREFIX   (novo)
+QUARANTINE_OUTLIVES_PRIVATE_MATERIAL                        (novo)
+PARTIAL_PROMOTION_MUST_BE_RECOVERABLE_OR_ATOMIC
+CONCURRENT_COMMANDS_CANNOT_CREATE_DOUBLE_AUTHORITY
+PRIVATE_EGRESS = FALSE
+NORMAL_USER_REQUIRES_TERMINAL = FALSE
+AI_COST_AUTHORITY_CANNOT_DECAY
+PROCESS_NAMESPACE_ACQUISITION                      inalterado
+```
+
+Uma promoção falha pode deixar o armazenamento vivo **inalterado**, ou deixar uma
+transação durável **precisamente identificada e continuável pelo produto normal**.
+Nunca: workspace visível + revisões/privado parciais + nenhuma sessão válida +
+nenhuma rota de continuação ou remoção.
+
+---
+
+## Escopo do reparo
+
+Construir apenas a capacidade de transação de recuperação exigida por #183. Sem
+framework genérico de transação, coordenador distribuído, plano de controle, sistema
+de confiança novo, banco externo, serviço novo ou daemon de fundo. Sem sacrificar
+correção para manter o diff pequeno — este é um reparo arquitetural.
