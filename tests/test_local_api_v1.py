@@ -2476,3 +2476,21 @@ def test_two_concurrent_http_appends_are_monotonic_and_workspace_isolated(tmp_pa
     assert [item["revision"] for item in json.loads(list_body.decode("utf-8"))["items"]] == [1, 2]
     assert other_status == 200
     assert json.loads(other_body.decode("utf-8")) == {"items": []}
+
+def test_real_http_server_refuses_oversized_body_without_destroying_the_answer():
+    """Mesmo defeito do bridge: recusar sem drenar fecha o socket com bytes
+    pendentes, e o RST apaga a resposta 400 já escrita."""
+    server = LocalApiServer(LocalApi(services(), token=TOKEN), LocalServerConfig(port=0))
+    server.start()
+    try:
+        status, _headers, _body = http_request(
+            server,
+            "POST",
+            "/v1/workspaces",
+            raw_body=b'{"name":"' + b"x" * 40_000_000 + b'"}',
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+    finally:
+        server.close()
+
+    assert status == 400

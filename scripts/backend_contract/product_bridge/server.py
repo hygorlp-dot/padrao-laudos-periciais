@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import socket
 import tempfile
+import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Event, Lock, Thread, Timer
@@ -16,6 +17,14 @@ from .transport import (
     SeekableContent,
     _error,
 )
+
+
+# Recusar um body sem drená-lo fecha o socket com bytes pendentes; no Windows
+# isso vira RST e o RST apaga a resposta já enviada. O dreno é limitado nas duas
+# dimensões: nunca lê mais que o maior body admissível nem por mais que o prazo.
+_LINGER_MAX_BYTES = 134_217_728
+_LINGER_MAX_SECONDS = 1.0
+_LINGER_CHUNK_BYTES = 65_536
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,7 +157,42 @@ class _ProductRequestHandler(BaseHTTPRequestHandler):
                 pass
         self.close_connection = True
 
+    def _drain_refused_body(self):
+        """Fechar com bytes ainda na fila força RST, e o RST DESCARTA a
+        resposta já escrita — o cliente vê "conexão perdida" em vez da recusa
+        honesta. Drenamos o que o par ainda envia, limitado em bytes E em
+        tempo, para que a resposta chegue de fato.
+        """
+        pendente = getattr(self, "_unread_body_bytes", 0)
+        if pendente <= 0:
+            return
+        restante = min(pendente, _LINGER_MAX_BYTES)
+        prazo = time.monotonic() + _LINGER_MAX_SECONDS
+        try:
+            anterior = self.connection.gettimeout()
+        except OSError:
+            return
+        try:
+            while restante > 0:
+                folga = prazo - time.monotonic()
+                if folga <= 0:
+                    break
+                self.connection.settimeout(folga)
+                bloco = self.connection.recv(min(_LINGER_CHUNK_BYTES, restante))
+                if not bloco:
+                    break
+                restante -= len(bloco)
+        except OSError:
+            pass
+        finally:
+            self._unread_body_bytes = 0
+            try:
+                self.connection.settimeout(anterior)
+            except OSError:
+                pass
+
     def _handle_request(self):
+        self._unread_body_bytes = 0
         duplicate = any(
             len(self.headers.get_all(name, [])) != 1 for name in ("Host",)
         ) or any(
@@ -162,10 +206,16 @@ class _ProductRequestHandler(BaseHTTPRequestHandler):
                 "X-Document-Filename",
             )
         )
+        raw_length = self.headers.get("Content-Length", "0")
+        declarado = (
+            int(raw_length)
+            if raw_length.isascii() and raw_length.isdecimal() and len(raw_length) <= 20
+            else 0
+        )
         if duplicate or "Transfer-Encoding" in self.headers:
+            self._unread_body_bytes = declarado
             response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
         else:
-            raw_length = self.headers.get("Content-Length", "0")
             if not raw_length.isascii() or not raw_length.isdecimal():
                 response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
             else:
@@ -174,6 +224,8 @@ class _ProductRequestHandler(BaseHTTPRequestHandler):
                 if bridge is None:
                     response = _error(503, "PRODUCT_BRIDGE_UNAVAILABLE", "serviço local indisponível")
                 elif length > bridge.request_body_limit(self.command, self.path):
+                    self._unread_body_bytes = length
+                    self.close_connection = True
                     response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
                 else:
                     spool = None
@@ -230,6 +282,7 @@ class _ProductRequestHandler(BaseHTTPRequestHandler):
             self._write_response(response)
         except OSError:
             self.close_connection = True
+        self._drain_refused_body()
 
     def send_error(self, code, _message=None, _explain=None):
         self._finish_request_acquisition()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import socket
 import tempfile
+import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Event, Lock, Thread, Timer
@@ -17,6 +18,13 @@ from .transport import (
     _error,
     _parse_content_length,
 )
+
+# Recusar um body sem drená-lo fecha o socket com bytes pendentes; no Windows
+# isso vira RST e o RST apaga a resposta já enviada. O dreno é limitado nas duas
+# dimensões: nunca lê mais que o maior body admissível nem por mais que o prazo.
+_LINGER_MAX_BYTES = 134_217_728
+_LINGER_MAX_SECONDS = 1.0
+_LINGER_CHUNK_BYTES = 65_536
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +177,7 @@ def _handler_for(
             self.close_connection = True
 
         def _handle_request(self):
+            self._unread_body_bytes = 0
             if self.request_version != self.protocol_version:
                 return _error(400, "INVALID_REQUEST")
             duplicate_sensitive_header = any(
@@ -185,20 +194,22 @@ def _handler_for(
                     "X-Local-API-Token",
                 )
             )
+            raw_length = self.headers.get("Content-Length", "0")
+            try:
+                length = _parse_content_length(raw_length)
+            except (TypeError, ValueError):
+                length = -1
             if duplicate_sensitive_header:
+                self._unread_body_bytes = max(length, 0)
                 response = _error(400, "INVALID_REQUEST")
             else:
-                raw_length = self.headers.get("Content-Length", "0")
-                try:
-                    length = _parse_content_length(raw_length)
-                except (TypeError, ValueError):
-                    length = -1
                 # O teto vem da MESMA autoridade que `LocalApi.handle` usa. Derivar
                 # de `is_document_upload` aqui deixava qualquer rota de teto ampliado
                 # (recuperação) presa no teto JSON legado sobre HTTP real, embora
                 # passasse nos testes in-process.
                 body_limit = api.request_body_limit(self.command, self.path)
                 if length < 0 or length > body_limit:
+                    self._unread_body_bytes = max(length, 0)
                     self.close_connection = True
                     response = _error(400, "INVALID_REQUEST")
                 else:
@@ -231,6 +242,41 @@ def _handler_for(
                             spool.close()
             return response
 
+
+        def _drain_refused_body(self):
+            """Fechar com bytes ainda na fila força RST, e o RST DESCARTA a
+            resposta já escrita — o cliente vê "conexão perdida" em vez da
+            recusa honesta. Drenamos o que o par ainda envia, limitado em
+            bytes E em tempo, para que a resposta chegue de fato.
+            """
+            pendente = getattr(self, "_unread_body_bytes", 0)
+            if pendente <= 0:
+                return
+            restante = min(pendente, _LINGER_MAX_BYTES)
+            prazo = time.monotonic() + _LINGER_MAX_SECONDS
+            try:
+                anterior = self.connection.gettimeout()
+            except OSError:
+                return
+            try:
+                while restante > 0:
+                    folga = prazo - time.monotonic()
+                    if folga <= 0:
+                        break
+                    self.connection.settimeout(folga)
+                    bloco = self.connection.recv(min(_LINGER_CHUNK_BYTES, restante))
+                    if not bloco:
+                        break
+                    restante -= len(bloco)
+            except OSError:
+                pass
+            finally:
+                self._unread_body_bytes = 0
+                try:
+                    self.connection.settimeout(anterior)
+                except OSError:
+                    pass
+
         def _dispatch(self):
             try:
                 response = self._handle_request()
@@ -247,6 +293,7 @@ def _handler_for(
                 self._write_response(response)
             except ConnectionError:
                 self.close_connection = True
+            self._drain_refused_body()
 
         def send_error(self, code, _message=None, _explain=None):
             self._finish_request_acquisition()

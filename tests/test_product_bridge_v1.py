@@ -692,3 +692,28 @@ def test_unsupported_method_uses_sanitized_bridge_response(tmp_path):
     assert "Date" not in headers
     assert headers["Content-Security-Policy"].startswith("default-src 'self'")
     assert json.loads(body)["error"]["code"] == "METHOD_NOT_ALLOWED"
+
+def test_oversized_body_is_refused_honestly_instead_of_resetting_the_connection(tmp_path):
+    """Recusar sem drenar fecha o socket com bytes pendentes e o RST do Windows
+    APAGA a resposta 400 já escrita. O usuário vê "serviço indisponível" — mentira:
+    o serviço está no ar e recusou por tamanho."""
+    runtime = build_product_runtime(
+        tmp_path / "case.db",
+        frontend_build(tmp_path),
+        private_root=tmp_path / "private",
+        token=TOKEN,
+    )
+    runtime.start()
+    try:
+        excedente = b'{"name":"' + b"x" * 40_000_000 + b'"}'
+        status, _headers, _body = request(
+            runtime,
+            "POST",
+            "/app-api/v1/workspaces",
+            raw_body=excedente,
+            headers={**browser_mutation_headers(runtime), "Content-Type": "application/json"},
+        )
+    finally:
+        runtime.close()
+
+    assert status == 400
