@@ -224,25 +224,55 @@ class _CleanupNode:
 
 
 def _fechar_anchor_windows(descriptor: int, anchor_path: Path) -> None:
-    os.close(descriptor)
+    failure = None
     try:
-        anchor_path.unlink()
-    except FileNotFoundError:
-        pass
+        os.close(descriptor)
+    except OSError as exc:
+        failure = exc
+    try:
+        try:
+            anchor_path.unlink()
+        except FileNotFoundError:
+            pass
+    except OSError as exc:
+        if failure is None:
+            failure = exc
+    if failure is not None:
+        raise failure
 
 
 def _fechar_custodia_cleanup(node: _CleanupNode) -> None:
+    failure = None
     for child in node.children:
-        _fechar_custodia_cleanup(child)
+        try:
+            _fechar_custodia_cleanup(child)
+        except OSError as exc:
+            if failure is None:
+                failure = exc
     if node.descriptor is not None:
         descriptor = node.descriptor
         node.descriptor = None
         anchor_path = node.anchor_path
-        node.anchor_path = None
-        if anchor_path is None:
-            os.close(descriptor)
-        else:
-            _fechar_anchor_windows(descriptor, anchor_path)
+        try:
+            if anchor_path is None:
+                os.close(descriptor)
+            else:
+                _fechar_anchor_windows(descriptor, anchor_path)
+                node.anchor_path = None
+        except OSError as exc:
+            if failure is None:
+                failure = exc
+    elif node.anchor_path is not None:
+        try:
+            node.anchor_path.unlink()
+            node.anchor_path = None
+        except FileNotFoundError:
+            node.anchor_path = None
+        except OSError as exc:
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise failure
 
 
 def _adquirir_custodia_cleanup(
@@ -449,6 +479,40 @@ def _gravar_controle_ancorado(node: _CleanupNode, name: str, payload: bytes) -> 
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _restaurar_controles_cleanup_windows(
+    raiz: Path,
+    expected_identity: tuple[int, int, int],
+    controls: dict[str, bytes],
+) -> None:
+    """Reestabelece a decisão e a quarentena após falha terminal de cleanup."""
+
+    try:
+        restored = _adquirir_custodia_cleanup(raiz)
+    except (OSError, RecoveryRetained):
+        return
+    try:
+        if restored.identity != expected_identity:
+            return
+        for name, payload in controls.items():
+            try:
+                _gravar_controle_ancorado(restored, name, payload)
+            except FileExistsError:
+                pass
+        try:
+            _gravar_controle_ancorado(
+                restored,
+                _QUARENTENA,
+                _QUARENTENA_PAYLOAD,
+            )
+        except FileExistsError:
+            pass
+    finally:
+        try:
+            _fechar_custodia_cleanup(restored)
+        except OSError:
+            pass
 
 
 def _inventario_seguro(raiz: Path) -> tuple[list[Path], list[Path]]:
@@ -946,34 +1010,19 @@ def _remover_raiz_quarentenada(raiz: Path, *, exigir_remocao: bool = False) -> N
 
         if os.name == "nt":
             expected_identity = custody.identity
-            _fechar_custodia_cleanup(custody)
-            custody = None
             try:
+                try:
+                    _fechar_custodia_cleanup(custody)
+                finally:
+                    custody = None
                 raiz.rmdir()
                 return
             except OSError:
-                try:
-                    restored = _adquirir_custodia_cleanup(raiz)
-                except (OSError, RecoveryRetained):
-                    restored = None
-                if restored is not None:
-                    try:
-                        if restored.identity == expected_identity:
-                            for name, payload in controls.items():
-                                try:
-                                    _gravar_controle_ancorado(restored, name, payload)
-                                except FileExistsError:
-                                    pass
-                            try:
-                                _gravar_controle_ancorado(
-                                    restored,
-                                    _QUARENTENA,
-                                    _QUARENTENA_PAYLOAD,
-                                )
-                            except FileExistsError:
-                                pass
-                    finally:
-                        _fechar_custodia_cleanup(restored)
+                _restaurar_controles_cleanup_windows(
+                    raiz,
+                    expected_identity,
+                    controls,
+                )
                 raise RecoveryRetained(
                     "a recuperação preparada não pôde ser removida por completo"
                 )
@@ -1734,16 +1783,53 @@ def _gravar_disposition(entry: dict, recovery_id: str, mode: str) -> None:
         raiz = Path(entry["staging"].root)
     if raiz is None:
         raise RepositoryIntegrityError("raiz da recuperação indisponível")
-    _gravar_sidecar_imutavel(
-        Path(raiz),
-        _DISPOSITION,
-        {
+    custody = _adquirir_custodia_cleanup(Path(raiz))
+    try:
+        record = {
             "version": _DISPOSITION_VERSION,
             "recovery_id": recovery_id,
             "mode": mode,
-        },
-    )
-    entry["disposition"] = mode
+        }
+        body = _json_canonico(record)
+        try:
+            current = _ler_controle_ancorado(custody, _DISPOSITION)
+        except FileNotFoundError:
+            current = None
+        if current is not None:
+            if current != body:
+                raise RepositoryIntegrityError(f"{_DISPOSITION} divergente")
+        else:
+            temporary = f".{_DISPOSITION}.{uuid4().hex}"
+            _gravar_controle_ancorado(custody, temporary, body)
+            try:
+                if os.name == "posix":
+                    if custody.descriptor is None:
+                        raise OSError("custódia da recuperação foi encerrada")
+                    os.link(
+                        temporary,
+                        _DISPOSITION,
+                        src_dir_fd=custody.descriptor,
+                        dst_dir_fd=custody.descriptor,
+                        follow_symlinks=False,
+                    )
+                    os.fsync(custody.descriptor)
+                else:
+                    os.link(
+                        custody.path / temporary,
+                        custody.path / _DISPOSITION,
+                        follow_symlinks=False,
+                    )
+            except FileExistsError:
+                if _ler_controle_ancorado(custody, _DISPOSITION) != body:
+                    raise RepositoryIntegrityError(f"{_DISPOSITION} divergente")
+            finally:
+                try:
+                    _unlink_na_custodia(custody, temporary)
+                except FileNotFoundError:
+                    pass
+        entry["disposition"] = mode
+    finally:
+        _fechar_custodia_cleanup(custody)
 
 
 def _remover_entry(entry: dict) -> None:

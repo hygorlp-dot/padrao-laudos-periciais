@@ -22,6 +22,7 @@ import json
 import os
 import subprocess
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -1066,6 +1067,139 @@ def test_custodia_cleanup_fecha_anchor_quando_validacao_pos_abertura_falha(
     assert not (anchor_flags[0] & os.O_TEMPORARY)
     assert list(root.iterdir()) == []
     root.rmdir()
+
+
+def test_falha_ao_soltar_anchor_raiz_preserva_disposition_para_restart(
+    tmp_path, monkeypatch
+):
+    """RED B10 — falha terminal de anchor não pode apagar a decisão durável."""
+    _workspace_id, _materials, package = _origem_com_dois_privados(
+        tmp_path, "b10-anchor-source"
+    )
+    target = _runtime(tmp_path, "b10-anchor-target")
+    status, staged = _stage(target, package)
+    assert status == 201, staged
+    recovery_id = staged["recovery_id"]
+    root = (
+        tmp_path
+        / ".b10-anchor-target.sqlite3.recovery"
+        / f"recovery-{recovery_id}"
+    )
+
+    original_unlink = Path.unlink
+    injected = False
+
+    def fail_after_controls_were_removed(path, *args, **kwargs):
+        nonlocal injected
+        is_root_anchor = (
+            path.parent == root
+            and path.name.startswith(".recovery-cleanup-custody.")
+        )
+        if is_root_anchor and not (root / "RECOVERY_DISPOSITION_V1").exists():
+            injected = True
+            raise PermissionError(13, "synthetic root anchor release failure")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_after_controls_were_removed)
+    status, body = _json(
+        target, "POST", f"/v1/recovery/{recovery_id}/discard"
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "RECOVERY_RETAINED"
+    assert injected is True
+    monkeypatch.setattr(Path, "unlink", original_unlink)
+
+    assert (root / "RECOVERY_DISPOSITION_V1").exists()
+    assert (root / "RECOVERY_NOT_PROMOTABLE").exists()
+    target.close()
+
+    reopened = _runtime(tmp_path, "b10-anchor-target")
+    try:
+        status, listing = _json(reopened, "GET", "/v1/recovery")
+        assert status == 200, listing
+        item = next(
+            recovery
+            for recovery in listing["recoveries"]
+            if recovery["recovery_id"] == recovery_id
+        )
+        assert item["state"] == "RECOVERY_RETAINED"
+        assert item["allowed_actions"] == ["RETRY_DISCARD"]
+    finally:
+        reopened.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows cleanup custody handles")
+def test_falha_ao_remover_anchor_filho_nao_vaza_handle_pai(tmp_path, monkeypatch):
+    """RED A10 — erro num filho não interrompe o fechamento da árvore."""
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    root = tmp_path / "recovery-00000000-0000-4000-8000-000000000096"
+    child = root / "child"
+    child.mkdir(parents=True)
+    custody = wr._adquirir_custodia_cleanup(root)
+    descriptors = [custody.descriptor, custody.children[0].descriptor]
+    assert all(descriptor is not None for descriptor in descriptors)
+
+    original_unlink = Path.unlink
+
+    def fail_child_anchor(path, *args, **kwargs):
+        if (
+            path.parent == child
+            and path.name.startswith(".recovery-cleanup-custody.")
+        ):
+            raise PermissionError(13, "synthetic child anchor release failure")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_child_anchor)
+    with pytest.raises(PermissionError, match="synthetic child anchor"):
+        wr._fechar_custodia_cleanup(custody)
+
+    for descriptor in descriptors:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+
+
+@pytest.mark.parametrize("reparse_location", ["root", "nested"])
+def test_abandono_de_raiz_reparse_nao_escreve_no_alvo_externo(
+    tmp_path, reparse_location
+):
+    """RED B10 — decisão local não pode atravessar uma raiz reparse."""
+    recovery_id = "00000000-0000-4000-8000-000000000097"
+    external = tmp_path / "b10-unsafe-external"
+    external.mkdir()
+    (external / "sentinel.bin").write_bytes(b"EXTERNAL-MUST-NOT-CHANGE")
+
+    base = tmp_path / ".b10-unsafe.sqlite3.recovery"
+    base.mkdir()
+    root = base / f"recovery-{recovery_id}"
+    if reparse_location == "root":
+        (external / "RECOVERY_NOT_PROMOTABLE").write_bytes(
+            b"RECOVERY_STAGING_V1\n"
+        )
+        _directory_reparse(root, external)
+    else:
+        root.mkdir()
+        (root / "RECOVERY_NOT_PROMOTABLE").write_bytes(b"RECOVERY_STAGING_V1\n")
+        _directory_reparse(root / "nested-reparse", external)
+    before = {path.name: path.read_bytes() for path in external.iterdir()}
+
+    runtime = _runtime(tmp_path, "b10-unsafe")
+    try:
+        status, listing = _json(runtime, "GET", "/v1/recovery")
+        assert status == 200, listing
+        assert listing["recoveries"][0]["allowed_actions"] == ["ABANDON"]
+
+        status, body = _json(
+            runtime,
+            "POST",
+            f"/v1/recovery/{recovery_id}/abandon",
+            value={"confirm_abandon": True},
+        )
+        assert status == 409, body
+        assert body["error"]["code"] == "RECOVERY_RETAINED"
+        assert {path.name: path.read_bytes() for path in external.iterdir()} == before
+    finally:
+        runtime.close()
 
 
 def test_staging_orfao_sem_journal_e_recolhido_na_reabertura(tmp_path):

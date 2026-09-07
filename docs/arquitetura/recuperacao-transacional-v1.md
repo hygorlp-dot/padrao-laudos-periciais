@@ -312,6 +312,13 @@ rename no Windows. `O_TEMPORARY` não é usado como trava, pois pode admitir
 rename em hosts com semântica POSIX. Qualquer dúvida retém a árvore inteira
 sem atravessar o namespace.
 
+A disposition também é publicada sob essa custódia, antes de qualquer cleanup:
+uma raiz ou membro reparse é recusado sem escrita no alvo externo. Se a liberação
+de um anchor falhar depois da remoção dos controles, a decisão e a quarentena são
+reestabelecidas na mesma identidade antes de retornar `RECOVERY_RETAINED`. O
+fechamento percorre a árvore inteira mesmo quando um filho falha, para que o
+primeiro erro nunca deixe handles de irmãos ou ancestrais vazados.
+
 Preservar sem publicar também é falha: uma raiz canônica que contenha reparse é
 exposta de forma sanitizada como `RECOVERY_UNRESUMABLE`, sem percorrer o membro
 inseguro, e oferece abandono explícito. Enquanto a contaminação persistir, o
