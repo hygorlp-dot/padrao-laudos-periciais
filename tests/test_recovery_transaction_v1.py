@@ -353,6 +353,58 @@ def test_mesmo_backup_em_staging_concorrente_publica_uma_unica_sessao(tmp_path):
         alvo.close()
 
 
+def test_restage_concorrente_com_descarte_nunca_retorna_sessao_removida(
+    tmp_path, monkeypatch
+):
+    """RED A8 — `201` precisa nomear uma sessão viva ao linearizar a resposta."""
+    from scripts.backend_contract.application.workspace_recovery import (
+        StageWorkspaceRecovery,
+    )
+
+    _workspace_id, _m, package = _origem_com_dois_privados(
+        tmp_path, "origem-stage-discard"
+    )
+    alvo = _runtime(tmp_path, "alvo-stage-discard")
+    release = threading.Event()
+    try:
+        status, primeiro = _stage(alvo, package)
+        assert status == 201, primeiro
+        recovery_id = primeiro["recovery_id"]
+        entered = threading.Event()
+        original = StageWorkspaceRecovery._promovibilidade
+
+        def gated(self, backup, staging):
+            entered.set()
+            assert release.wait(timeout=20)
+            return original(self, backup, staging)
+
+        monkeypatch.setattr(StageWorkspaceRecovery, "_promovibilidade", gated)
+        resultados = []
+        fio = threading.Thread(target=lambda: resultados.append(_stage(alvo, package)))
+        fio.start()
+        assert entered.wait(timeout=20)
+
+        discard_status, discard_body = _json(
+            alvo, "POST", f"/v1/recovery/{recovery_id}/discard"
+        )
+        assert discard_status == 200, discard_body
+        release.set()
+        fio.join(timeout=60)
+        assert not fio.is_alive()
+
+        stage_status, stage_body = resultados[0]
+        assert stage_status == 201, stage_body
+        list_status, listing = _json(alvo, "GET", "/v1/recovery")
+        assert list_status == 200, listing
+        assert stage_body["recovery_id"] in {
+            item["recovery_id"] for item in listing["recoveries"]
+        }
+        assert stage_body["recovery_id"] != recovery_id
+    finally:
+        release.set()
+        alvo.close()
+
+
 # ------------------------------------------------------------------ E
 
 def test_descarte_com_handle_preso_nao_mente_e_permite_retentativa(tmp_path):
@@ -810,6 +862,72 @@ def _assinatura_viva(runtime, workspace_id):
     return workspace, revisions, private
 
 
+def test_startup_nunca_percorre_link_disfarcado_de_raiz_de_recuperacao(tmp_path):
+    """RED B8 — coleta órfã não pode apagar bytes fora do namespace."""
+    externo = tmp_path / "b8-reparse-externo"
+    externo.mkdir()
+    (externo / "RECOVERY_NOT_PROMOTABLE").write_bytes(b"RECOVERY_STAGING_V1\n")
+    sentinel = externo / "sentinel.bin"
+    sentinel.write_bytes(b"PRESERVE")
+    base = tmp_path / ".b8-reparse.sqlite3.recovery"
+    base.mkdir()
+    raiz = base / "recovery-00000000-0000-4000-8000-000000000001"
+    try:
+        raiz.symlink_to(externo, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink de diretório indisponível neste host: {exc}")
+
+    runtime = _runtime(tmp_path, "b8-reparse")
+    try:
+        assert raiz.is_symlink()
+        assert sentinel.read_bytes() == b"PRESERVE"
+        assert (externo / "RECOVERY_NOT_PROMOTABLE").read_bytes() == (
+            b"RECOVERY_STAGING_V1\n"
+        )
+    finally:
+        runtime.close()
+
+
+def test_startup_nunca_percorre_link_aninhado_na_raiz_de_recuperacao(tmp_path):
+    """Sibling B8 — o preflight cobre a árvore inteira antes de qualquer unlink."""
+    externo = tmp_path / "b8-reparse-aninhado-externo"
+    externo.mkdir()
+    sentinel_externo = externo / "sentinel-externo.bin"
+    sentinel_externo.write_bytes(b"PRESERVE-EXTERNO")
+    base = tmp_path / ".b8-reparse-aninhado.sqlite3.recovery"
+    raiz = base / "recovery-00000000-0000-4000-8000-000000000002"
+    raiz.mkdir(parents=True)
+    (raiz / "RECOVERY_NOT_PROMOTABLE").write_bytes(b"RECOVERY_STAGING_V1\n")
+    sentinel_local = raiz / "sentinel-local.bin"
+    sentinel_local.write_bytes(b"PRESERVE-LOCAL")
+    try:
+        (raiz / "subdir-reparse").symlink_to(externo, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink de diretório indisponível neste host: {exc}")
+
+    runtime = _runtime(tmp_path, "b8-reparse-aninhado")
+    try:
+        assert sentinel_externo.read_bytes() == b"PRESERVE-EXTERNO"
+        assert sentinel_local.read_bytes() == b"PRESERVE-LOCAL"
+        assert raiz.exists()
+    finally:
+        runtime.close()
+
+
+def test_atributo_windows_reparse_e_reconhecido_sem_percorrer_o_alvo():
+    """O detector não depende de `Path.is_symlink()` para junctions Windows."""
+    import stat as stat_module
+    from types import SimpleNamespace
+
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    details = SimpleNamespace(
+        st_mode=stat_module.S_IFDIR,
+        st_file_attributes=wr._REPARSE_ATTRIBUTE,
+    )
+    assert wr._detalhes_sao_link_ou_reparse(details)
+
+
 def test_staging_orfao_sem_journal_e_recolhido_na_reabertura(tmp_path):
     """RED N — queda durante a preparação não pode acumular cópias eternas.
 
@@ -1067,6 +1185,58 @@ def test_restart_nunca_recolhe_journal_corrompido_sem_decisao_humana(tmp_path):
         reaberto.close()
 
 
+@pytest.mark.parametrize(
+    "adulteracao",
+    [
+        "phase_nao_escalar",
+        "phase_desconhecida",
+        "version_booleana",
+        "revision_id_divergente",
+        "private_id_divergente",
+    ],
+)
+def test_restart_preserva_journal_sem_prova_terminal_exata(tmp_path, adulteracao):
+    """RED B8 — journal parseável não basta para autorizar coleta terminal."""
+    _workspace_id, _package, destino, recovery_id = _interromper_promocao(
+        tmp_path, f"b8-{adulteracao}"
+    )
+    journal = _journal_da_unica_raiz(tmp_path, f"b8-{adulteracao}")
+    registro = json.loads(journal.read_text(encoding="utf-8"))
+    if adulteracao == "phase_nao_escalar":
+        registro["phase"] = []
+    elif adulteracao == "phase_desconhecida":
+        registro["phase"] = "FUTURE"
+    elif adulteracao == "version_booleana":
+        registro["version"] = True
+    elif adulteracao == "revision_id_divergente":
+        original = registro["revisions"][0][0]
+        registro["revisions"][0][0] = ("0" if original[0] != "0" else "1") + original[1:]
+        registro["phase"] = "PROMOTED"
+    else:
+        original = registro["private_contents"][0][0]
+        registro["private_contents"][0][0] = (
+            ("0" if original[0] != "0" else "1") + original[1:]
+        )
+        registro["phase"] = "PROMOTED"
+    journal.write_text(json.dumps(registro), encoding="utf-8")
+    raiz = journal.parent
+    destino.close()
+
+    reaberto = _runtime(tmp_path, f"b8-{adulteracao}")
+    try:
+        assert raiz.exists(), "journal sem vínculo exato autorizou coleta"
+        status, corpo = _json(reaberto, "GET", "/v1/recovery")
+        assert status == 200, corpo
+        assert corpo["recoveries"][0]["recovery_id"] == recovery_id
+        assert corpo["recoveries"][0]["state"] == "RECOVERY_UNRESUMABLE"
+        assert corpo["recoveries"][0]["reason"] == (
+            "promotion_journal_unreadable_or_unsupported"
+        )
+        assert corpo["recoveries"][0]["allowed_actions"] == ["ABANDON"]
+    finally:
+        reaberto.close()
+
+
 def test_restart_nunca_recolhe_versao_desconhecida_sem_decisao_humana(tmp_path):
     """RED R2c — versão futura é quarentena irretomável, não órfão descartável."""
     _origem, _pkg, destino, recovery_id = _interromper_promocao(tmp_path, "r2c")
@@ -1122,6 +1292,33 @@ def test_promoted_sem_identidade_nao_autoriza_coleta_automatica(tmp_path):
                 "allowed_actions": ["ABANDON"],
             }
         ]
+    finally:
+        reaberto.close()
+
+
+def test_descriptor_com_version_booleana_falha_fechado(tmp_path):
+    """Sibling B8 — `True == 1` não transforma tipo inválido em versão válida."""
+    _origem, _ids, package = _origem_com_dois_privados(tmp_path, "b8s-origem")
+    destino = _runtime(tmp_path, "b8s-destino")
+    status, staged = _stage(destino, package)
+    assert status == 201, staged
+    raiz = (
+        tmp_path
+        / ".b8s-destino.sqlite3.recovery"
+        / f"recovery-{staged['recovery_id']}"
+    )
+    descriptor = raiz / "RECOVERY_SESSION_V1"
+    registro = json.loads(descriptor.read_text(encoding="utf-8"))
+    descriptor.write_text(json.dumps({**registro, "version": True}), encoding="utf-8")
+    destino.close()
+
+    reaberto = _runtime(tmp_path, "b8s-destino")
+    try:
+        status, corpo = _json(reaberto, "GET", "/v1/recovery")
+        assert status == 200, corpo
+        assert corpo["recoveries"][0]["state"] == "RECOVERY_UNRESUMABLE"
+        assert corpo["recoveries"][0]["reason"] == "session_descriptor_unreadable"
+        assert corpo["recoveries"][0]["allowed_actions"] == ["ABANDON"]
     finally:
         reaberto.close()
 
@@ -1189,8 +1386,12 @@ def test_marcador_corrompido_reaparece_e_permite_abandono_explicito(tmp_path):
 
 
 @pytest.mark.parametrize("corromper_marcador", [False, True])
+@pytest.mark.parametrize(
+    "adulteracao_disposition",
+    ["json_invalido", "mode_nao_escalar", "version_booleana"],
+)
 def test_disposition_corrompida_permite_novo_abandono_explicito(
-    tmp_path, corromper_marcador
+    tmp_path, corromper_marcador, adulteracao_disposition
 ):
     """RED A7 — `RETRY_ABANDON` precisa executar a ação que anuncia."""
     _origem, _ids, package = _origem_com_dois_privados(tmp_path, "a7d-origem")
@@ -1202,7 +1403,26 @@ def test_disposition_corrompida_permite_novo_abandono_explicito(
         / ".a7d-destino.sqlite3.recovery"
         / f"recovery-{staged['recovery_id']}"
     )
-    (raiz / "RECOVERY_DISPOSITION_V1").write_bytes(b"CORRUPTED\n")
+    disposition = raiz / "RECOVERY_DISPOSITION_V1"
+    if adulteracao_disposition != "json_invalido":
+        disposition.write_text(
+            json.dumps(
+                {
+                    "version": (
+                        True if adulteracao_disposition == "version_booleana" else 1
+                    ),
+                    "recovery_id": staged["recovery_id"],
+                    "mode": (
+                        []
+                        if adulteracao_disposition == "mode_nao_escalar"
+                        else "ABANDON"
+                    ),
+                }
+            ),
+            encoding="utf-8",
+        )
+    else:
+        disposition.write_bytes(b"CORRUPTED\n")
     if corromper_marcador:
         (raiz / "RECOVERY_NOT_PROMOTABLE").write_bytes(b"CORRUPTED\n")
     destino.close()

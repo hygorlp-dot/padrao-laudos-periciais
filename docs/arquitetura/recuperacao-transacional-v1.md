@@ -7,13 +7,16 @@ invalidado como candidato a merge.
 Implementação atual (#183): além do journal exclusivo da promoção, cada
 staging publicado possui `RECOVERY_SESSION_V1` imutável. Esse descriptor liga
 `recovery_id`, identidade da raiz, resumo verificado e hash do pacote antes da
-resposta `201`. Ele permite reconstruir `STAGED` depois de fechar/reabrir o
+resposta `201`. Ele também fixa `promotion_plan_sha256`, derivado do workspace,
+das revisões ordenadas e dos conteúdos privados verificados. Isso permite
+reconstruir `STAGED` depois de fechar/reabrir o
 produto, mas **não autoriza mutação viva**. `PROMOTION_TRANSACTION_V1` continua
 sendo a única autoridade de promoção. Descarte/abandono publicam antes um
 `RECOVERY_DISPOSITION_V1` imutável, para que falha de limpeza seja retomada com
 a mesma decisão humana. Uma fase `PROMOTED` só é terminal quando o journal
-completo está ligado campo a campo ao descriptor publicado; fase isolada ou
-journal parcial nunca autoriza coleta automática.
+completo produz o mesmo hash de plano fixado no descriptor publicado; fase
+isolada, tipo não escalar, identidade adulterada ou journal parcial nunca
+autoriza coleta automática nem derruba o startup.
 
 A classe causal `PARTIAL_PROMOTION_NOT_RECOVERABLE` sobreviveu a três estratégias de
 reparo local — ordem privado-primeiro (`8d611a3`), reversão para privado-último
@@ -247,6 +250,9 @@ Autoridade no **backend**, não na UI.
 - `discard` não pode fechar o staging sob uma promoção em curso;
 - dois stagings concorrentes do mesmo pacote são serializados na publicação e
   convergem para uma única sessão/raiz;
+- depois de qualquer I/O fora do mutex, a sessão observada é revalidada sob lock;
+  re-stage concorrente com descarte cria/retorna uma sessão atual, nunca um ID já
+  removido;
 - `runtime.close` não invalida um commit ativo de forma insegura.
 
 A UI desabilita ações incompatíveis como **defesa em profundidade**, nunca como
@@ -298,7 +304,9 @@ retorna estado explícito `RETAINED` / `DISCARD_FAILED`, e **permite retentativa
 `ignore_errors=True` deixa de ser autoridade de sucesso. Nunca `200` com material
 privado presente. Se marcador ou disposition estiverem corrompidos, a coleta de
 startup continua proibida; somente um novo abandono humano confirmado pode remover
-a raiz canônica dedicada, e links/reparse points permanecem negados.
+a raiz canônica dedicada. Antes do primeiro `unlink`, um inventário completo com
+`lstat` prova que nem a raiz nem qualquer entrada aninhada é link/reparse point;
+qualquer dúvida retém a árvore inteira sem atravessar o namespace.
 
 A rota global `/recuperacao` permanece alcançável também quando já existem
 workspaces vivos. Assim uma promoção parcial não esconde sua sessão pendente atrás
