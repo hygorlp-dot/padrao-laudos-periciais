@@ -11,7 +11,9 @@ resposta `201`. Ele permite reconstruir `STAGED` depois de fechar/reabrir o
 produto, mas **não autoriza mutação viva**. `PROMOTION_TRANSACTION_V1` continua
 sendo a única autoridade de promoção. Descarte/abandono publicam antes um
 `RECOVERY_DISPOSITION_V1` imutável, para que falha de limpeza seja retomada com
-a mesma decisão humana.
+a mesma decisão humana. Uma fase `PROMOTED` só é terminal quando o journal
+completo está ligado campo a campo ao descriptor publicado; fase isolada ou
+journal parcial nunca autoriza coleta automática.
 
 A classe causal `PARTIAL_PROMOTION_NOT_RECOVERABLE` sobreviveu a três estratégias de
 reparo local — ordem privado-primeiro (`8d611a3`), reversão para privado-último
@@ -200,7 +202,8 @@ raízes quarentenadas e classifica cada uma como:
 - **irretomável** — descriptor/journal desconhecido, ilegível ou divergente ⇒
   fail-closed, sem promoção e com abandono explícito disponível;
 - **limpeza retida** — disposition durável presente ⇒ somente retentar a mesma
-  decisão (`DISCARD` ou `ABANDON`).
+  decisão (`DISCARD` ou `ABANDON`); disposition ilegível nunca infere descarte e
+  oferece apenas um novo `ABANDON` explicitamente confirmado.
 
 Nunca promove sozinho no startup. **Promoção explícita humana continua obrigatória.**
 Isso torna `promotion_started` desnecessário: a autoridade deixa de ser um booleano de
@@ -242,6 +245,8 @@ Autoridade no **backend**, não na UI.
   ambas;
 - quem perde a transição recebe erro honesto, não um segundo `200`;
 - `discard` não pode fechar o staging sob uma promoção em curso;
+- dois stagings concorrentes do mesmo pacote são serializados na publicação e
+  convergem para uma única sessão/raiz;
 - `runtime.close` não invalida um commit ativo de forma insegura.
 
 A UI desabilita ações incompatíveis como **defesa em profundidade**, nunca como
@@ -291,7 +296,13 @@ entra em DISCARDING (atômico)
 Falha em qualquer ponto: mantém/reestabelece quarentena, mantém identidade durável,
 retorna estado explícito `RETAINED` / `DISCARD_FAILED`, e **permite retentativa**.
 `ignore_errors=True` deixa de ser autoridade de sucesso. Nunca `200` com material
-privado presente.
+privado presente. Se marcador ou disposition estiverem corrompidos, a coleta de
+startup continua proibida; somente um novo abandono humano confirmado pode remover
+a raiz canônica dedicada, e links/reparse points permanecem negados.
+
+A rota global `/recuperacao` permanece alcançável também quando já existem
+workspaces vivos. Assim uma promoção parcial não esconde sua sessão pendente atrás
+do diretório não vazio.
 
 ---
 

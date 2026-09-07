@@ -328,6 +328,31 @@ def test_duas_promocoes_simultaneas_nao_mutam_concorrentemente(tmp_path):
         alvo.close()
 
 
+def test_mesmo_backup_em_staging_concorrente_publica_uma_unica_sessao(tmp_path):
+    """RED A7 — idempotência também vale na janela anterior ao register."""
+    _workspace_id, _m, package = _origem_com_dois_privados(tmp_path, "origem-d2")
+    alvo = _runtime(tmp_path, "alvo-d2")
+    try:
+        pronto = threading.Barrier(2)
+        resultados = []
+
+        def preparar():
+            pronto.wait()
+            resultados.append(_stage(alvo, package))
+
+        fios = [threading.Thread(target=preparar) for _ in range(2)]
+        for fio in fios:
+            fio.start()
+        for fio in fios:
+            fio.join(timeout=60)
+        assert all(not fio.is_alive() for fio in fios)
+        assert [status for status, _body in resultados] == [201, 201]
+        assert len({body["recovery_id"] for _status, body in resultados}) == 1
+        assert len(_raizes(tmp_path, "alvo-d2")) == 1
+    finally:
+        alvo.close()
+
+
 # ------------------------------------------------------------------ E
 
 def test_descarte_com_handle_preso_nao_mente_e_permite_retentativa(tmp_path):
@@ -1058,6 +1083,157 @@ def test_restart_nunca_recolhe_versao_desconhecida_sem_decisao_humana(tmp_path):
         assert corpo["recoveries"][0]["recovery_id"] == recovery_id
         assert corpo["recoveries"][0]["state"] == "RECOVERY_UNRESUMABLE"
         assert corpo["recoveries"][0]["allowed_actions"] == ["ABANDON"]
+    finally:
+        reaberto.close()
+
+
+def test_promoted_sem_identidade_nao_autoriza_coleta_automatica(tmp_path):
+    """RED B7 — nome da fase sozinho não prova uma promoção terminal.
+
+    `PROMOTED` só autoriza apagar a raiz quando o journal completo está ligado
+    ao descriptor publicado. Um dict de versão/fase é autoridade corrompida,
+    não prova positiva de conclusão.
+    """
+    _origem, _ids, package = _origem_com_dois_privados(tmp_path, "b7-origem")
+    destino = _runtime(tmp_path, "b7-destino")
+    status, staged = _stage(destino, package)
+    assert status == 201, staged
+    raiz = (
+        tmp_path
+        / ".b7-destino.sqlite3.recovery"
+        / f"recovery-{staged['recovery_id']}"
+    )
+    (raiz / "PROMOTION_TRANSACTION_V1").write_text(
+        '{"version":1,"phase":"PROMOTED"}', encoding="utf-8"
+    )
+    destino.close()
+
+    reaberto = _runtime(tmp_path, "b7-destino")
+    try:
+        assert raiz.exists(), "fase sem identidade apagou uma sessão publicada"
+        status, corpo = _json(reaberto, "GET", "/v1/recovery")
+        assert status == 200, corpo
+        assert corpo["recoveries"] == [
+            {
+                "recovery_id": staged["recovery_id"],
+                "state": "RECOVERY_UNRESUMABLE",
+                "summary": staged["summary"],
+                "reason": "promotion_journal_unreadable_or_unsupported",
+                "allowed_actions": ["ABANDON"],
+            }
+        ]
+    finally:
+        reaberto.close()
+
+
+def test_marcador_corrompido_nunca_produz_descarte_falso_positivo(tmp_path):
+    """RED B7 — `200` de descarte implica raiz realmente ausente."""
+    _origem, _ids, package = _origem_com_dois_privados(tmp_path, "b7m-origem")
+    destino = _runtime(tmp_path, "b7m-destino")
+    try:
+        status, staged = _stage(destino, package)
+        assert status == 201, staged
+        raiz = (
+            tmp_path
+            / ".b7m-destino.sqlite3.recovery"
+            / f"recovery-{staged['recovery_id']}"
+        )
+        (raiz / "RECOVERY_NOT_PROMOTABLE").write_bytes(b"CORRUPTED\n")
+
+        status, corpo = _json(
+            destino, "POST", f"/v1/recovery/{staged['recovery_id']}/discard"
+        )
+        assert status == 200, corpo
+        assert not raiz.exists(), "descarte afirmou sucesso mas reteve a raiz"
+    finally:
+        destino.close()
+
+
+def test_marcador_corrompido_reaparece_e_permite_abandono_explicito(tmp_path):
+    """Sibling B7 — corrupção da quarentena não cria raiz invisível."""
+    _origem, _ids, package = _origem_com_dois_privados(tmp_path, "b7r-origem")
+    destino = _runtime(tmp_path, "b7r-destino")
+    status, staged = _stage(destino, package)
+    assert status == 201, staged
+    raiz = (
+        tmp_path
+        / ".b7r-destino.sqlite3.recovery"
+        / f"recovery-{staged['recovery_id']}"
+    )
+    (raiz / "RECOVERY_NOT_PROMOTABLE").write_bytes(b"CORRUPTED\n")
+    destino.close()
+
+    reaberto = _runtime(tmp_path, "b7r-destino")
+    try:
+        status, corpo = _json(reaberto, "GET", "/v1/recovery")
+        assert status == 200, corpo
+        assert corpo["recoveries"] == [
+            {
+                "recovery_id": staged["recovery_id"],
+                "state": "RECOVERY_UNRESUMABLE",
+                "summary": staged["summary"],
+                "reason": "quarantine_marker_unreadable",
+                "allowed_actions": ["ABANDON"],
+            }
+        ]
+        status, corpo = _json(
+            reaberto,
+            "POST",
+            f"/v1/recovery/{staged['recovery_id']}/abandon",
+            value={"confirm_abandon": True},
+        )
+        assert status == 200, corpo
+        assert not raiz.exists()
+    finally:
+        reaberto.close()
+
+
+@pytest.mark.parametrize("corromper_marcador", [False, True])
+def test_disposition_corrompida_permite_novo_abandono_explicito(
+    tmp_path, corromper_marcador
+):
+    """RED A7 — `RETRY_ABANDON` precisa executar a ação que anuncia."""
+    _origem, _ids, package = _origem_com_dois_privados(tmp_path, "a7d-origem")
+    destino = _runtime(tmp_path, "a7d-destino")
+    status, staged = _stage(destino, package)
+    assert status == 201, staged
+    raiz = (
+        tmp_path
+        / ".a7d-destino.sqlite3.recovery"
+        / f"recovery-{staged['recovery_id']}"
+    )
+    (raiz / "RECOVERY_DISPOSITION_V1").write_bytes(b"CORRUPTED\n")
+    if corromper_marcador:
+        (raiz / "RECOVERY_NOT_PROMOTABLE").write_bytes(b"CORRUPTED\n")
+    destino.close()
+
+    reaberto = _runtime(tmp_path, "a7d-destino")
+    try:
+        status, corpo = _json(reaberto, "GET", "/v1/recovery")
+        assert status == 200, corpo
+        assert corpo["recoveries"] == [
+            {
+                "recovery_id": staged["recovery_id"],
+                "state": "RECOVERY_RETAINED",
+                "summary": staged["summary"],
+                "reason": "disposition_unreadable",
+                "allowed_actions": ["RETRY_ABANDON"],
+            }
+        ]
+        status, corpo = _json(
+            reaberto,
+            "POST",
+            f"/v1/recovery/{staged['recovery_id']}/discard",
+        )
+        assert status == 409, corpo
+        status, corpo = _json(
+            reaberto,
+            "POST",
+            f"/v1/recovery/{staged['recovery_id']}/abandon",
+            value={"confirm_abandon": True},
+        )
+        assert status == 200, corpo
+        assert not raiz.exists()
     finally:
         reaberto.close()
 

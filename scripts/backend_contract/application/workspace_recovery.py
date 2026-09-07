@@ -356,6 +356,71 @@ def _descriptor_da_raiz(raiz: Path):
     return registro, summary
 
 
+_JOURNAL_FIELDS = {
+    "recovery_id",
+    "backup_sha256",
+    "workspace_id",
+    "staging_identity",
+    "workspace_name",
+    "workspace_created_at",
+    "revisions",
+    "private_contents",
+    "phase",
+    "version",
+}
+
+
+def _journal_compativel_com_descriptor(journal: object, descriptor: object) -> bool:
+    """Valida a prova terminal inteira; o nome da fase nunca basta."""
+    if type(journal) is not dict or not isinstance(descriptor, tuple):
+        return False
+    session, summary = descriptor
+    if set(journal) != _JOURNAL_FIELDS:
+        return False
+    if type(journal["version"]) is not int or journal["version"] != JOURNAL_VERSION:
+        return False
+    if journal["phase"] not in {PROMOTING, PROMOTED, UNRESUMABLE}:
+        return False
+    expected_strings = {
+        "recovery_id": session["recovery_id"],
+        "backup_sha256": summary.backup_sha256,
+        "workspace_id": summary.workspace_id,
+        "staging_identity": session["staging_identity"],
+        "workspace_name": summary.workspace_name,
+        "workspace_created_at": summary.workspace_created_at,
+    }
+    if any(
+        type(journal[key]) is not str or journal[key] != expected
+        for key, expected in expected_strings.items()
+    ):
+        return False
+    revisions = journal["revisions"]
+    private_contents = journal["private_contents"]
+    if type(revisions) is not list or len(revisions) != summary.artifact_revisions:
+        return False
+    if type(private_contents) is not list or len(private_contents) != summary.private_contents:
+        return False
+    if any(
+        type(item) is not list
+        or len(item) != 4
+        or any(type(field) is not str or not field for field in item)
+        or len(item[3]) != 64
+        or any(char not in "0123456789abcdef" for char in item[3])
+        for item in revisions
+    ):
+        return False
+    if any(
+        type(item) is not list
+        or len(item) != 2
+        or any(type(field) is not str or not field for field in item)
+        or len(item[1]) != 64
+        or any(char not in "0123456789abcdef" for char in item[1])
+        for item in private_contents
+    ):
+        return False
+    return True
+
+
 def _journal_bruto(raiz: Path):
     """Lê o journal SEM abrir o staging.
 
@@ -464,11 +529,30 @@ def _remover_raiz_quarentenada(raiz: Path, *, exigir_remocao: bool = False) -> N
     aqui é o marcador canônico, não a posse do handle.
     """
     marcador = raiz / _QUARENTENA
+    marcador_valido = False
     try:
-        if marcador.read_bytes() != _QUARENTENA_PAYLOAD:
-            return
+        marcador_valido = marcador.read_bytes() == _QUARENTENA_PAYLOAD
     except OSError:
-        return
+        pass
+    if not marcador_valido:
+        # Um novo comando humano explícito pode remover a raiz DEDICADA mesmo
+        # quando seus controles estão ilegíveis. A coleta automática continua
+        # exigindo o marcador canônico e falha fechada. Links/reparse points
+        # nunca ganham autoridade destrutiva apenas pelo nome.
+        is_junction = getattr(raiz, "is_junction", lambda: False)
+        explicitamente_autorizada = (
+            exigir_remocao
+            and _recovery_id_da_raiz(raiz) is not None
+            and raiz.is_dir()
+            and not raiz.is_symlink()
+            and not is_junction()
+        )
+        if not explicitamente_autorizada:
+            if exigir_remocao:
+                raise RecoveryRetained(
+                    "a quarentena da recuperação não pôde ser validada"
+                )
+            return
 
     for caminho in _material_remanescente(raiz):
         try:
@@ -505,7 +589,7 @@ def _remover_raiz_quarentenada(raiz: Path, *, exigir_remocao: bool = False) -> N
     try:
         for nome in controles:
             (raiz / nome).unlink(missing_ok=True)
-        marcador.unlink()
+        marcador.unlink(missing_ok=True)
         raiz.rmdir()
     except OSError:
         # Não conseguiu fechar a raiz: restabelece a quarentena para que ela
@@ -604,11 +688,19 @@ class WorkspaceRecoverySessions:
     a fronteira estreita de estado que a autoridade exige.
     """
 
-    __slots__ = ("_sessions", "_mutex")
+    __slots__ = ("_sessions", "_mutex", "_staging_mutex")
 
     def __init__(self) -> None:
         self._sessions: dict[str, dict] = {}
         self._mutex = threading.Lock()
+        # Evita a janela `scan -> create -> register` duplicada para uploads
+        # simultâneos do mesmo pacote. Staging é uma operação rara e local;
+        # serializá-la aqui é preferível a publicar duas cópias privadas.
+        self._staging_mutex = threading.Lock()
+
+    @property
+    def staging_lock(self):
+        return self._staging_mutex
 
     def register(
         self,
@@ -755,6 +847,10 @@ class StageWorkspaceRecovery:
         except (TypeError, ValueError) as exc:
             raise BackupInvalid("pacote de backup inválido") from exc
         digest = self.hash_payload(payload)
+        with self.sessions.staging_lock:
+            return self._stage_verified(payload, backup, digest)
+
+    def _stage_verified(self, payload: bytes, backup: object, digest: str) -> RecoverySession:
         retomada = self._promocao_interrompida(backup, digest)
         if retomada is not None:
             return retomada
@@ -973,20 +1069,14 @@ def recolher_stagings_orfaos(base) -> tuple[str, ...]:
             # publicada. A coleta nunca decide abandoná-la pelo usuário. A
             # única exceção é uma promoção comprovadamente concluída, cuja
             # raiz é apenas resíduo terminal.
-            if descriptor is _SIDECAR_CORROMPIDO:
+            if not _journal_compativel_com_descriptor(registro, descriptor):
                 continue
-            if registro is _JOURNAL_CORROMPIDO:
+            if registro["phase"] != PROMOTED:
                 continue
-            if registro is None:
-                continue
-            if registro.get("phase") != PROMOTED:
-                continue
-        if registro is _JOURNAL_CORROMPIDO:
-            # CANNOT_PARSE_AUTHORITY != AUTHORITY_NEVER_EXISTED.
+        elif registro is not None:
+            # Journal legado sem descriptor publicado não prova terminalidade.
+            # Só a dupla ausência comprova queda anterior à publicação.
             continue
-        if registro is not None:
-            if registro.get("phase") != PROMOTED:
-                continue
         # NÃO reabre o staging para recolhê-lo: reabrir reprovisiona o
         # armazenamento privado e o SQLite da raiz, e os handles recém-criados
         # impedem a própria remoção. A autoridade que autoriza remover é o
@@ -1024,14 +1114,14 @@ def reconstruir_sessoes_recuperacao(base, sessions, open_staging) -> tuple[str, 
         return ()
     reconstruidas = []
     for raiz in candidatas:
-        try:
-            if (raiz / _QUARENTENA).read_bytes() != _QUARENTENA_PAYLOAD:
-                continue
-        except OSError:
-            continue
         recovery_id = _recovery_id_da_raiz(raiz)
         if recovery_id is None:
             continue
+        marcador_valido = False
+        try:
+            marcador_valido = (raiz / _QUARENTENA).read_bytes() == _QUARENTENA_PAYLOAD
+        except OSError:
+            pass
         descriptor = _descriptor_da_raiz(raiz)
         journal = _journal_bruto(raiz)
         disposition = _disposition_da_raiz(raiz)
@@ -1047,6 +1137,10 @@ def reconstruir_sessoes_recuperacao(base, sessions, open_staging) -> tuple[str, 
             state = RECOVERY_RETAINED
             reason = "disposition_unreadable"
             mode = None
+        elif not marcador_valido:
+            state = RECOVERY_UNRESUMABLE
+            reason = "quarantine_marker_unreadable"
+            mode = None
         elif descriptor in (_SIDECAR_TRAVADO, _SIDECAR_CORROMPIDO, None):
             state = RECOVERY_UNRESUMABLE
             reason = "session_descriptor_unreadable"
@@ -1061,6 +1155,10 @@ def reconstruir_sessoes_recuperacao(base, sessions, open_staging) -> tuple[str, 
             mode = None
         elif journal is None:
             state = STAGED
+            mode = None
+        elif not _journal_compativel_com_descriptor(journal, descriptor):
+            state = RECOVERY_UNRESUMABLE
+            reason = "promotion_journal_unreadable_or_unsupported"
             mode = None
         else:
             phase = journal.get("phase")
@@ -1201,12 +1299,21 @@ class DiscardWorkspaceRecovery:
         entry = self.sessions.claim(recovery_id, permitidos, DISCARDING)
         anterior = entry.get("claimed_from")
         disposition = entry.get("disposition")
+        disposition_irrecuperavel = anterior == RECOVERY_RETAINED and disposition is None
         if anterior == RECOVERY_RETAINED:
             esperado = "ABANDON" if aceitar_incompleta else "DISCARD"
             if disposition not in (None, esperado):
                 self.sessions.settle(recovery_id, RECOVERY_RETAINED)
                 raise WorkspaceRecoveryConflict(
                     "a limpeza retida pertence a outra decisão do usuário"
+                )
+            if disposition_irrecuperavel and not aceitar_incompleta:
+                # Sem uma disposition legível não podemos inferir que o usuário
+                # havia escolhido DISCARD. A única saída anunciada é um novo
+                # ABANDON confirmado explicitamente pelo transporte.
+                self.sessions.settle(recovery_id, RECOVERY_RETAINED)
+                raise WorkspaceRecoveryConflict(
+                    "a decisão anterior está ilegível; confirme o abandono"
                 )
         staging = entry.get("staging")
         estado = (
@@ -1230,7 +1337,8 @@ class DiscardWorkspaceRecovery:
             )
         mode = "ABANDON" if aceitar_incompleta else "DISCARD"
         try:
-            _gravar_disposition(entry, recovery_id, mode)
+            if not disposition_irrecuperavel:
+                _gravar_disposition(entry, recovery_id, mode)
             _remover_entry(entry)
         except BaseException:
             # A sessão CONTINUA existindo: o usuário precisa poder tentar de novo

@@ -182,6 +182,12 @@ export function WorkspaceDirectory() {
                     </li>
                   ))}
                 </ul>
+                <p>
+                  Precisa recuperar trabalho interrompido?{" "}
+                  <a className="text-action" href="/recuperacao" onClick={navigate}>
+                    Restaurar ou retomar um backup
+                  </a>
+                </p>
               </div>
             )}
 
