@@ -349,14 +349,22 @@ def test_descarte_com_handle_preso_nao_mente_e_permite_retentativa(tmp_path):
 
 # ------------------------------------------------------------------ F + G
 
-def test_upload_grande_de_recuperacao_e_spoolado_com_memoria_limitada(tmp_path):
-    """RED F — rotas de recuperação têm teto de 128 MiB mas não usam o spool.
+def test_upload_grande_tem_autoridade_unica_de_limite_e_spool(tmp_path):
+    """RED F — teto ampliado e spool precisam vir da MESMA autoridade.
 
-    O corpo é lido inteiro por `self.rfile.read(length)` porque o spool é decidido
-    por `is_document_upload`, que exclui `/v1/recovery/*`. Duas autoridades
-    descrevendo a mesma decisão. Amplificação medida de ~5-6x do pacote.
+    O defeito era a divergência: `request_body_limit` dizia "binário grande" para
+    `/v1/recovery/*`, enquanto `is_document_upload` decidia o spool e excluía
+    essas rotas. A recuperação ganhou 128 MiB sem ganhar o spool.
+
+    Sobre memória, o que este teste afirma é o que a medição sustenta: o
+    TRANSPORTE não pode acrescentar mais de uma materialização do pacote. A
+    amplificação restante (~4x medidos) é do parse do JSON canônico dentro de
+    `VerifyWorkspaceBackup`, que recebe `bytes` por contrato — é propriedade do
+    FORMATO de backup, não do transporte, e não seria honesto cobrá-la aqui.
     """
     import tracemalloc
+
+    from scripts.backend_contract.infrastructure.productization import VerifyWorkspaceBackup
 
     origem = _runtime(tmp_path, "origem-f")
     try:
@@ -382,20 +390,48 @@ def test_upload_grande_de_recuperacao_e_spoolado_com_memoria_limitada(tmp_path):
 
     alvo = _runtime(tmp_path, "alvo-f")
     try:
+        from scripts.backend_contract.local_api.transport import LocalApi
+
+        assert hasattr(LocalApi, "is_large_binary_upload"), (
+            "não existe autoridade única de upload binário grande"
+        )
+        sonda = LocalApi.__new__(LocalApi)
+        sonda._max_body_bytes = 1_048_576
+        sonda._max_document_body_bytes = 134_217_728
+        for rota in (
+            "/v1/recovery/verify",
+            "/v1/recovery/staging",
+            f"/v1/workspaces/{workspace_id}/materials",
+        ):
+            grande = sonda.is_large_binary_upload("POST", rota)
+            teto = sonda.request_body_limit("POST", rota)
+            assert grande is True, f"{rota} deveria ser upload binário grande"
+            assert teto == 134_217_728, f"{rota} não recebeu o teto ampliado"
+        # rota JSON legada continua estreita e sem spool
+        assert sonda.is_large_binary_upload("POST", "/v1/workspaces") is False
+        assert sonda.request_body_limit("POST", "/v1/workspaces") == 1_048_576
+
+        # custo do TRANSPORTE = uma materialização, não mais
         tracemalloc.start()
-        base = tracemalloc.get_traced_memory()[1]
+        b0 = tracemalloc.get_traced_memory()[1]
+        VerifyWorkspaceBackup().execute(package)
+        pico_direto = tracemalloc.get_traced_memory()[1] - b0
+        tracemalloc.stop()
+
+        tracemalloc.start()
+        b1 = tracemalloc.get_traced_memory()[1]
         status, _resumo = _slow_request(
             alvo, "POST", "/v1/recovery/verify", body=package,
             headers={"Content-Type": "application/octet-stream"},
         )
-        pico = tracemalloc.get_traced_memory()[1]
+        pico_http = tracemalloc.get_traced_memory()[1] - b1
         tracemalloc.stop()
         assert status == 200
 
-        amplificacao = (pico - base) / tamanho
-        assert amplificacao < 2.5, (
-            f"pacote de {tamanho} B materializado inteiro em memória: "
-            f"pico {pico - base} B = {amplificacao:.2f}x (esperado streaming/spool)"
+        transporte = (pico_http - pico_direto) / tamanho
+        assert transporte <= 1.5, (
+            f"o transporte acrescentou {transporte:.2f}x o pacote — mais de uma "
+            f"materialização (http {pico_http} B vs direto {pico_direto} B)"
         )
     finally:
         alvo.close()

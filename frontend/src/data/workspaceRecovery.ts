@@ -13,11 +13,28 @@ export type BackupSummary = {
   backup_sha256: string;
 };
 
+export type NotPromotableReason =
+  | "ja_existe_pericia_com_esta_identidade"
+  | "autoridade_de_custo_de_ia_nao_promovivel";
+
 export type StagedRecovery = {
   recovery_id: string;
   summary: BackupSummary;
   promotable: boolean;
+  /** Só existe quando `promotable` é falso. Motivo canônico, não texto de UI. */
+  not_promotable_reason?: string;
 };
+
+/** Texto honesto para cada motivo canônico de recusa de promoção. */
+export function notPromotableMessage(reason?: string): string {
+  if (reason === "ja_existe_pericia_com_esta_identidade") {
+    return "Já existe uma perícia com esta identidade nesta instalação. A cópia recuperada segue isolada e nada foi sobrescrito.";
+  }
+  if (reason === "autoridade_de_custo_de_ia_nao_promovivel") {
+    return "Este backup carrega histórico de custo de IA, que não pode ser promovido. A cópia recuperada segue isolada.";
+  }
+  return "Esta recuperação não pode ser promovida. A cópia recuperada segue isolada.";
+}
 
 export type BackupPackage = {
   blob: Blob;
@@ -31,6 +48,7 @@ export type RecoveryApiErrorKind =
   | "not-found"
   | "conflict"
   | "not-promotable"
+  | "retained"
   | "stage-failed"
   | "too-large"
   | "unavailable"
@@ -99,6 +117,14 @@ function mappedError(status: number, code?: string): RecoveryApiError {
   }
   if (code === "WORKSPACE_CONFLICT") {
     return new RecoveryApiError("conflict", "Já existe uma perícia com esta identidade");
+  }
+  if (code === "RECOVERY_RETAINED") {
+    // Honestidade: o descarte NÃO concluiu e a cópia isolada continua no disco,
+    // sob quarentena. Nunca afirmar remoção que não aconteceu.
+    return new RecoveryApiError(
+      "retained",
+      "A cópia preparada não pôde ser removida agora e segue isolada. Feche programas que possam estar usando o arquivo e tente descartar novamente.",
+    );
   }
   if (code === "RECOVERY_STAGE_FAILED") {
     return new RecoveryApiError("stage-failed", "Não foi possível preparar a cópia recuperada");
@@ -199,20 +225,37 @@ export async function stageRecovery(file: File, signal?: AbortSignal): Promise<S
     throw new RecoveryApiError("invalid-response", "Resposta local inválida");
   }
   const record = value as Record<string, unknown>;
-  if (Object.keys(record).sort().join("|") !== ["promotable", "recovery_id", "summary"].join("|")) {
+  // `VERIFIED != PROMOTABLE`: o backend agora deriva a promovibilidade das
+  // condições canônicas já conhecidas no staging e, quando nega, diz o motivo.
+  const chaves = Object.keys(record).sort().join("|");
+  const esperado = ["promotable", "recovery_id", "summary"].join("|");
+  const esperadoComMotivo = ["not_promotable_reason", "promotable", "recovery_id", "summary"].join("|");
+  if (chaves !== esperado && chaves !== esperadoComMotivo) {
     throw new RecoveryApiError("invalid-response", "Resposta local inválida");
   }
   if (typeof record.recovery_id !== "string" || !CANONICAL_UUID.test(record.recovery_id)) {
     throw new RecoveryApiError("invalid-response", "Resposta local inválida");
   }
-  if (record.promotable !== true) {
-    throw new RecoveryApiError("not-promotable", "Esta recuperação não pode ser promovida");
+  if (typeof record.promotable !== "boolean") {
+    throw new RecoveryApiError("invalid-response", "Resposta local inválida");
   }
-  return {
+  if (record.promotable && "not_promotable_reason" in record) {
+    throw new RecoveryApiError("invalid-response", "Resposta local inválida");
+  }
+  if (!record.promotable && typeof record.not_promotable_reason !== "string") {
+    throw new RecoveryApiError("invalid-response", "Resposta local inválida");
+  }
+  // NÃO promovível NÃO é ausência de recurso: a cópia isolada EXISTE em disco,
+  // sob quarentena. Perder aqui o `recovery_id` deixaria material privado
+  // quarentenado impossível de descartar pelo produto.
+  const staged: StagedRecovery = {
     recovery_id: record.recovery_id,
     summary: parseSummary(record.summary),
-    promotable: true,
+    promotable: record.promotable,
   };
+  return record.promotable
+    ? staged
+    : { ...staged, not_promotable_reason: record.not_promotable_reason as string };
 }
 
 /**

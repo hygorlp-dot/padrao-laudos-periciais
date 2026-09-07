@@ -529,6 +529,7 @@ def build_local_api(
         recovery_staging_root,
         _sha256_hex,
         abrir_staging_quarentenado,
+        store.workspaces,
     )
     promote_workspace_recovery = PromoteWorkspaceRecovery(
         recovery_sessions, store.workspaces, store.revisions, private_store

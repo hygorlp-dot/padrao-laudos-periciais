@@ -23,7 +23,6 @@ apenas para criar um workspace que ainda não existe.
 
 from __future__ import annotations
 
-import shutil
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -90,19 +89,50 @@ class BackupSummary:
 class RecoverySession:
     recovery_id: str
     summary: BackupSummary
+    #: `VERIFIED != PROMOTABLE`. Verificar prova que o pacote é íntegro; promover
+    #: depende de condições canônicas que já são conhecidas AGORA (identidade
+    #: viva colidente, artefato não promovível). Afirmar `True` e negar segundos
+    #: depois é mentira de contrato.
+    promotable: bool = True
+    not_promotable_reason: str | None = None
 
 
-def _encerrar_staging(staging: object) -> None:
-    """Fecha os handles E REMOVE a raiz do disco.
+_QUARENTENA = "RECOVERY_NOT_PROMOTABLE"
+_QUARENTENA_PAYLOAD = b"RECOVERY_STAGING_V1\n"
 
-    `RecoveryStaging.discard()` só fecha handles — a raiz permanece. Sem esta
-    coleta, cada tentativa de recuperação deixaria no disco uma cópia INTEGRAL e
-    em claro do conteúdo privado da perícia, para sempre, enquanto a UI afirma ao
-    usuário que a descartou.
 
-    A remoção só acontece sobre um diretório que se PROVA ser uma raiz de
-    recuperação nossa: precisa conter o marcador de quarentena com o conteúdo
-    canônico. Sem essa prova, nada é apagado.
+class RecoveryRetained(RepositoryError):
+    """O descarte não removeu tudo; a quarentena foi mantida sobre o resíduo."""
+
+
+def _material_remanescente(raiz: Path) -> list[Path]:
+    """Tudo o que não é o marcador de quarentena da própria raiz."""
+    restante = []
+    for caminho in raiz.rglob("*"):
+        if caminho.is_dir():
+            continue
+        if caminho.parent == raiz and caminho.name == _QUARENTENA:
+            continue
+        restante.append(caminho)
+    return restante
+
+
+def _encerrar_staging(staging: object, *, exigir_remocao: bool = False) -> None:
+    """Fecha os handles E REMOVE a raiz, com a QUARENTENA SAINDO POR ÚLTIMO.
+
+    `QUARANTINE_OUTLIVES_PRIVATE_MATERIAL`. `RecoveryStaging.discard()` só fecha
+    handles; a raiz permanece. E um `rmtree(ignore_errors=True)` cego apagava o
+    marcador de quarentena ANTES do conteúdo privado e ainda reportava sucesso —
+    invertendo exatamente a prioridade que a quarentena existe para garantir.
+
+    Ordem: fecha handles -> remove o material -> VERIFICA que sumiu -> só então
+    remove o marcador -> remove a raiz. Se sobrar material, a quarentena é
+    mantida (ou restabelecida) e, com `exigir_remocao`, o chamador recebe
+    `RecoveryRetained` para poder dizer a verdade ao usuário e permitir
+    retentativa.
+
+    A remoção só ocorre sobre diretório que se PROVA ser raiz de recuperação
+    nossa: precisa do marcador com o conteúdo canônico.
     """
     try:
         raiz = Path(staging.root)
@@ -110,13 +140,46 @@ def _encerrar_staging(staging: object) -> None:
         staging.discard()
         return
     staging.discard()
-    marcador = raiz / "RECOVERY_NOT_PROMOTABLE"
+    marcador = raiz / _QUARENTENA
     try:
-        if marcador.read_bytes() != b"RECOVERY_STAGING_V1\n":
+        if marcador.read_bytes() != _QUARENTENA_PAYLOAD:
             return
     except OSError:
         return
-    shutil.rmtree(raiz, ignore_errors=True)
+
+    for caminho in _material_remanescente(raiz):
+        try:
+            caminho.unlink()
+        except OSError:
+            pass
+    for diretorio in sorted(
+        (p for p in raiz.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True
+    ):
+        try:
+            diretorio.rmdir()
+        except OSError:
+            pass
+
+    residuo = _material_remanescente(raiz)
+    if residuo:
+        # Quarentena PRESERVADA sobre o resíduo: nunca reportar sucesso com
+        # material sigiloso ainda em disco.
+        if exigir_remocao:
+            raise RecoveryRetained("a recuperação preparada não pôde ser removida por completo")
+        return
+    try:
+        marcador.unlink()
+        raiz.rmdir()
+    except OSError:
+        # Não conseguiu fechar a raiz: restabelece a quarentena para que ela
+        # jamais possa ser confundida com armazenamento ativo.
+        try:
+            if not marcador.exists():
+                marcador.write_bytes(_QUARENTENA_PAYLOAD)
+        except OSError:
+            pass
+        if exigir_remocao:
+            raise RecoveryRetained("a recuperação preparada não pôde ser removida por completo")
 
 
 def _summary(backup: object, digest: str) -> BackupSummary:
@@ -280,7 +343,31 @@ class StageWorkspaceRecovery:
     staging_root: Path
     hash_payload: object
     open_staging: object = None
+    workspaces: object = None
     new_recovery_id: object = uuid4
+
+    def _promovibilidade(self, backup, staging) -> tuple[bool, str | None]:
+        """Condições canônicas de promoção JÁ conhecidas no staging.
+
+        `VERIFIED != PROMOTABLE`: dizer `promotable: True` e recusar segundos
+        depois é mentira de contrato. Só afirma o que consegue sustentar.
+        """
+        workspace_id = WorkspaceId.parse(str(backup.workspace.workspace_id))
+        if self.workspaces is not None and self.workspaces.get(workspace_id) is not None:
+            transacao = None
+            try:
+                transacao = staging.ler_transacao()
+            except Exception:
+                transacao = None
+            if type(transacao) is not dict:
+                return False, "ja_existe_pericia_com_esta_identidade"
+        if any(
+            item.get("artifact_kind") == _AI_COST_LEDGER_KIND
+            for item in backup.artifact_revisions
+            if isinstance(item, dict)
+        ):
+            return False, "autoridade_de_custo_de_ia_nao_promovivel"
+        return True, None
 
     def execute(self, payload: bytes) -> RecoverySession:
         if type(payload) is not bytes or not payload:
@@ -314,7 +401,8 @@ class StageWorkspaceRecovery:
             raise RepositoryIntegrityError("a quarentena de recuperação desapareceu")
         summary = _summary(backup, digest)
         self.sessions.register(recovery_id, staging, summary)
-        return RecoverySession(recovery_id, summary)
+        promovivel, motivo = self._promovibilidade(backup, staging)
+        return RecoverySession(recovery_id, summary, promovivel, motivo)
 
     def _promocao_interrompida(self, backup, digest: str) -> RecoverySession | None:
         """Descobre no disco uma promoção DESTE pacote interrompida por crash.
@@ -366,7 +454,8 @@ class StageWorkspaceRecovery:
             summary = _summary(backup, digest)
             self.sessions.register(recovery_id, staging, summary)
             self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
-            return RecoverySession(recovery_id, summary)
+            promovivel, motivo = self._promovibilidade(backup, staging)
+            return RecoverySession(recovery_id, summary, promovivel, motivo)
         return None
 
 
@@ -380,8 +469,10 @@ class DiscardWorkspaceRecovery:
         # fechar o staging sob os pés dela.
         entry = self.sessions.claim(recovery_id, (STAGED, FAILED_RECOVERABLE), DISCARDING)
         try:
-            _encerrar_staging(entry["staging"])
+            _encerrar_staging(entry["staging"], exigir_remocao=True)
         except BaseException:
+            # A sessão CONTINUA existindo: o usuário precisa poder tentar de novo
+            # depois de liberar o que segurava o arquivo (antivírus, indexador).
             self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
             raise
         self.sessions.settle(recovery_id, DISCARDED)

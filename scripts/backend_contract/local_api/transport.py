@@ -48,6 +48,7 @@ from ..application.workspace_recovery import (
     RecoveryAlreadyPromoted,
     RecoveryDiscarded,
     RecoveryNotFound,
+    RecoveryRetained,
     RecoveryNotPromotable,
     RecoveryStageFailed,
     WorkspaceRecoveryConflict,
@@ -535,9 +536,19 @@ class LocalApi:
     def request_body_limit(self, method: str, target: str) -> int:
         """Retorna o teto de aquisição sem ampliar rotas JSON legadas."""
 
-        if self.is_document_upload(method, target) or self.is_recovery_upload(method, target):
+        if self.is_large_binary_upload(method, target):
             return self._max_document_body_bytes
         return self._max_body_bytes
+
+    def is_large_binary_upload(self, method: str, target: str) -> bool:
+        """AUTORIDADE ÚNICA de "upload binário grande".
+
+        Teto ampliado e necessidade de spool são a MESMA propriedade da rota e
+        precisam vir da mesma fonte. Mantê-las em predicados separados foi o que
+        deu à recuperação o teto de 128 MiB sem lhe dar o spool: o corpo inteiro
+        entrava por `rfile.read(length)`.
+        """
+        return self.is_document_upload(method, target) or self.is_recovery_upload(method, target)
 
     def _request_dto(self, headers: dict[str, str], body: bytes) -> dict:
         if type(body) is not bytes or len(body) > self._max_body_bytes:
@@ -1335,6 +1346,11 @@ class LocalApi:
             if len(raw_segments) == 3 and raw_segments[:2] == ("v1", "recovery") and raw_segments[2] in {"verify", "staging"}:
                 if normalized_method != "POST":
                     return _error(405, "METHOD_NOT_ALLOWED")
+                # O corpo chega SPOOLADO em disco (política única de binário
+                # grande). O pacote é materializado uma única vez, aqui.
+                if isinstance(body, SeekableContent):
+                    body.stream.seek(0)
+                    body = body.stream.read()
                 if type(body) is not bytes or not body:
                     raise BackupInvalid("pacote de backup ausente")
                 if raw_segments[2] == "verify":
@@ -1347,11 +1363,14 @@ class LocalApi:
                 if self._services.stage_workspace_recovery is None:
                     return _error(503, "RECOVERY_UNAVAILABLE", "recuperação local indisponível")
                 session = self._services.stage_workspace_recovery.execute(body)
-                return _json_response(201, {
+                corpo = {
                     "recovery_id": session.recovery_id,
                     "summary": _backup_summary_dto(session.summary),
-                    "promotable": True,
-                })
+                    "promotable": bool(session.promotable),
+                }
+                if session.not_promotable_reason:
+                    corpo["not_promotable_reason"] = session.not_promotable_reason
+                return _json_response(201, corpo)
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "recovery") and raw_segments[3] in {"promote", "discard"}:
                 if normalized_method != "POST":
@@ -1434,6 +1453,14 @@ class LocalApi:
             return _error(409, "RECOVERY_NOT_PROMOTABLE", "recuperação não pode ser promovida")
         except RecoveryStageFailed:
             return _error(500, "RECOVERY_STAGE_FAILED", "a restauração isolada falhou")
+        except RecoveryRetained:
+            # Estado HONESTO: o descarte não concluiu e a cópia isolada continua
+            # em disco, sob quarentena. Nunca 200 com material sigiloso presente.
+            return _error(
+                409,
+                "RECOVERY_RETAINED",
+                "a recuperação preparada não pôde ser removida; tente novamente",
+            )
         except WorkspaceRecoveryConflict:
             return _error(409, "WORKSPACE_CONFLICT", "já existe uma perícia com esta identidade")
         except ArtifactRevisionNotFound:

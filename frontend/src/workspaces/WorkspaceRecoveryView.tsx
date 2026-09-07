@@ -4,6 +4,7 @@ import {
   discardRecovery,
   exportWorkspaceBackup,
   promoteRecovery,
+  notPromotableMessage,
   RecoveryApiError,
   stageRecovery,
   verifyBackup,
@@ -34,8 +35,11 @@ type RestoreState =
   | { kind: "staging"; summary: BackupSummary }
   | { kind: "staged"; staged: StagedRecovery }
   | { kind: "promoting"; staged: StagedRecovery }
+  | { kind: "discarding"; staged: StagedRecovery }
   | { kind: "promoted"; summary: BackupSummary }
-  | { kind: "error"; message: string };
+  // A falha PRESERVA a recuperação preparada quando ela existe: a cópia isolada
+  // continua no disco e precisa continuar alcançável para descarte.
+  | { kind: "error"; message: string; staged?: StagedRecovery };
 
 function message(error: unknown) {
   return error instanceof RecoveryApiError
@@ -96,7 +100,7 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
       setConfirmed(false);
       setRestore({ kind: "promoted", summary });
     } catch (error) {
-      setRestore({ kind: "error", message: message(error) });
+      setRestore({ kind: "error", message: message(error), staged });
     }
   }
 
@@ -108,14 +112,24 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
   }
 
   async function onDiscard(staged: StagedRecovery) {
+    setRestore({ kind: "discarding", staged });
     try {
       await discardRecovery(staged.recovery_id);
     } catch (error) {
-      // A cópia isolada nunca fica ativa, mas não podemos afirmar que sumiu.
-      setRestore({ kind: "error", message: message(error) });
+      // A cópia isolada nunca fica ativa, mas também não podemos afirmar que
+      // sumiu. Mantemos a recuperação para que o descarte possa ser repetido.
+      setRestore({ kind: "error", message: message(error), staged });
       return;
     }
     resetRestore();
+  }
+
+  function discardButton(staged: StagedRecovery, disabled = false) {
+    return (
+      <button type="button" onClick={() => onDiscard(staged)} disabled={disabled}>
+        Descartar recuperação preparada
+      </button>
+    );
   }
 
   function summaryList(summary: BackupSummary) {
@@ -205,31 +219,47 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
           </div>
         ) : null}
 
-        {restore.kind === "staged" || restore.kind === "promoting" ? (
+        {restore.kind === "staged" ||
+        restore.kind === "promoting" ||
+        restore.kind === "discarding" ? (
           <div>
-            <p role="status">
-              Cópia recuperada preparada em área <strong>isolada</strong>. Ela não é a
-              perícia ativa e não substituiu nada. Confira antes de promover.
-            </p>
-            {summaryList(restore.staged.summary)}
-            <label>
-              <input
-                type="checkbox"
-                checked={confirmed}
-                onChange={(event) => setConfirmed(event.target.checked)}
-              />
-              Confirmo que quero promover esta recuperação e torná-la a perícia ativa.
-            </label>
-            <button
-              type="button"
-              onClick={() => onPromote(restore.staged)}
-              disabled={!confirmed || restore.kind === "promoting"}
-            >
-              {restore.kind === "promoting" ? "Promovendo…" : "4. Promover recuperação"}
-            </button>
-            <button type="button" onClick={() => onDiscard(restore.staged)}>
-              Descartar recuperação preparada
-            </button>
+            {restore.staged.promotable ? (
+              <>
+                <p role="status">
+                  Cópia recuperada preparada em área <strong>isolada</strong>. Ela não é
+                  a perícia ativa e não substituiu nada. Confira antes de promover.
+                </p>
+                {summaryList(restore.staged.summary)}
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={confirmed}
+                    onChange={(event) => setConfirmed(event.target.checked)}
+                  />
+                  Confirmo que quero promover esta recuperação e torná-la a perícia
+                  ativa.
+                </label>
+                <button
+                  type="button"
+                  onClick={() => onPromote(restore.staged)}
+                  disabled={!confirmed || restore.kind !== "staged"}
+                >
+                  {restore.kind === "promoting"
+                    ? "Promovendo…"
+                    : "4. Promover recuperação"}
+                </button>
+              </>
+            ) : (
+              <>
+                {/* PREPARADO != PROMOVÍVEL. O produto diz o motivo agora, em vez
+                    de prometer uma promoção que recusaria depois. */}
+                <p role="alert">
+                  {notPromotableMessage(restore.staged.not_promotable_reason)}
+                </p>
+                {summaryList(restore.staged.summary)}
+              </>
+            )}
+            {discardButton(restore.staged, restore.kind !== "staged")}
           </div>
         ) : null}
 
@@ -246,9 +276,20 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
           <div>
             <p role="alert">{restore.message}</p>
             <p>Nada foi promovido. Nenhuma perícia existente foi alterada.</p>
-            <button type="button" onClick={resetRestore}>
-              Recomeçar
-            </button>
+            {restore.staged ? (
+              <>
+                <p>
+                  A cópia recuperada preparada continua <strong>isolada</strong> nesta
+                  máquina. Enquanto ela existir, a saída é descartá-la explicitamente.
+                </p>
+                {summaryList(restore.staged.summary)}
+                {discardButton(restore.staged)}
+              </>
+            ) : (
+              <button type="button" onClick={resetRestore}>
+                Recomeçar
+              </button>
+            )}
           </div>
         ) : null}
       </section>

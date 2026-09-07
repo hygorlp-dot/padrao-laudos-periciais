@@ -231,7 +231,75 @@ describe("WorkspaceRecoveryView", () => {
       )
       .mockResolvedValueOnce(
         jsonResponse({ error: { code: "WORKSPACE_CONFLICT", message: "x" } }, 409),
-      );
+      )
+      .mockResolvedValueOnce(jsonResponse({ recovery_id: RECOVERY }));
+
+    render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
+    selectFile();
+    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
+    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
+    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
+    await screen.findByRole("button", { name: "4. Promover recuperação" });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "4. Promover recuperação" }));
+
+    // A saída existe, mas passa pelo descarte EXPLÍCITO: enquanto a cópia
+    // isolada estiver no disco, "recomeçar" seria abandoná-la em silêncio.
+    await screen.findByRole("alert");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Descartar recuperação preparada" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(screen.getByRole("button", { name: "1. Verificar backup" })).toBeDisabled();
+  });
+  it("staging não promovível continua descartável: a cópia isolada existe em disco", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(SUMMARY))
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            recovery_id: RECOVERY,
+            summary: SUMMARY,
+            promotable: false,
+            not_promotable_reason: "ja_existe_pericia_com_esta_identidade",
+          },
+          201,
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse({ recovery_id: RECOVERY }));
+
+    render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
+    selectFile();
+    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
+    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
+    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
+
+    const alerta = await screen.findByRole("alert");
+    expect(alerta.textContent).toContain("Já existe uma perícia com esta identidade");
+    expect(
+      screen.queryByRole("button", { name: "4. Promover recuperação" }),
+    ).toBeNull();
+
+    const descartar = screen.getByRole("button", {
+      name: "Descartar recuperação preparada",
+    });
+    fireEvent.click(descartar);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(fetchMock.mock.calls[2][0]).toBe(`/app-api/v1/recovery/${RECOVERY}/discard`);
+  });
+
+  it("promoção falha não abandona a cópia isolada: ela segue descartável", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(SUMMARY))
+      .mockResolvedValueOnce(
+        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true }, 201),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { code: "WORKSPACE_CONFLICT", message: "x" } }, 409),
+      )
+      .mockResolvedValueOnce(jsonResponse({ recovery_id: RECOVERY }));
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
@@ -243,8 +311,42 @@ describe("WorkspaceRecoveryView", () => {
     fireEvent.click(screen.getByRole("button", { name: "4. Promover recuperação" }));
 
     await screen.findByRole("alert");
-    fireEvent.click(screen.getByRole("button", { name: "Recomeçar" }));
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.getByRole("button", { name: "1. Verificar backup" })).toBeDisabled();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Descartar recuperação preparada" }),
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    expect(fetchMock.mock.calls[3][0]).toBe(`/app-api/v1/recovery/${RECOVERY}/discard`);
+  });
+
+  it("descarte retido é dito com honestidade e pode ser tentado de novo", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(SUMMARY))
+      .mockResolvedValueOnce(
+        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true }, 201),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { code: "RECOVERY_RETAINED", message: "x" } }, 409),
+      )
+      .mockResolvedValueOnce(jsonResponse({ recovery_id: RECOVERY }));
+
+    render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
+    selectFile();
+    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
+    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
+    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
+    await screen.findByRole("button", { name: "4. Promover recuperação" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Descartar recuperação preparada" }),
+    );
+
+    const alerta = await screen.findByRole("alert");
+    expect(alerta.textContent).toContain("segue isolada");
+    expect(screen.queryByRole("button", { name: "Recomeçar" })).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Descartar recuperação preparada" }),
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
   });
 });

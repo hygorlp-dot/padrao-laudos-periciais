@@ -204,7 +204,7 @@ def _handler_for(
                 else:
                     spool = None
                     try:
-                        if length and api.is_document_upload(self.command, self.path):
+                        if length and api.is_large_binary_upload(self.command, self.path):
                             spool = tempfile.SpooledTemporaryFile(max_size=1_048_576, mode="w+b")
                             remaining = length
                             while remaining:
