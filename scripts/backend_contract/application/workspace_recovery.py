@@ -31,6 +31,7 @@ from uuid import uuid4
 
 from .models import ArtifactRevision, PericiaWorkspace, WorkspaceId, thaw_payload
 from .ports import (
+    RepositoryConflict,
     RepositoryError,
     RepositoryIntegrityError,
     WorkspaceNotFound,
@@ -245,8 +246,20 @@ class WorkspaceRecoverySessions:
 
     def close_all(self) -> None:
         for entry in tuple(self._sessions.values()):
+            staging = entry["staging"]
             try:
-                _encerrar_staging(entry["staging"])
+                # Uma promoção INTERROMPIDA não pode ser recolhida no
+                # encerramento: a raiz quarentenada mais o journal SÃO a
+                # autoridade durável que permite retomá-la depois. Recolher aqui
+                # destruiria a evidência do crash e deixaria a perícia
+                # meio-restaurada sem saída. Só fecha os handles.
+                if staging.ler_transacao() is not None:
+                    staging.close()
+                    continue
+            except Exception:
+                pass
+            try:
+                _encerrar_staging(staging)
             except Exception:
                 pass
         self._sessions.clear()
@@ -266,6 +279,7 @@ class StageWorkspaceRecovery:
     sessions: WorkspaceRecoverySessions
     staging_root: Path
     hash_payload: object
+    open_staging: object = None
     new_recovery_id: object = uuid4
 
     def execute(self, payload: bytes) -> RecoverySession:
@@ -277,6 +291,10 @@ class StageWorkspaceRecovery:
             raise BackupInvalid("pacote de backup inválido") from exc
         except (TypeError, ValueError) as exc:
             raise BackupInvalid("pacote de backup inválido") from exc
+        digest = self.hash_payload(payload)
+        retomada = self._promocao_interrompida(backup, digest)
+        if retomada is not None:
+            return retomada
         recovery_id = str(self.new_recovery_id())
         root = Path(self.staging_root) / f"recovery-{recovery_id}"
         try:
@@ -294,9 +312,62 @@ class StageWorkspaceRecovery:
         if not (root / "RECOVERY_NOT_PROMOTABLE").exists():
             _encerrar_staging(staging)
             raise RepositoryIntegrityError("a quarentena de recuperação desapareceu")
-        summary = _summary(backup, self.hash_payload(payload))
+        summary = _summary(backup, digest)
         self.sessions.register(recovery_id, staging, summary)
         return RecoverySession(recovery_id, summary)
+
+    def _promocao_interrompida(self, backup, digest: str) -> RecoverySession | None:
+        """Descobre no disco uma promoção DESTE pacote interrompida por crash.
+
+        Autoridade durável = raiz quarentenada + journal de promoção. A sessão em
+        memória é só cache: some no crash, e é justamente aí que a recuperação
+        precisa continuar existindo. Reabrir a raiz interrompida é o que evita a
+        perícia meio-restaurada permanente, sem exigir terminal.
+
+        NUNCA promove sozinha: apenas volta a expor a recuperação como retomável;
+        a promoção segue sendo ato humano explícito.
+        """
+        if self.open_staging is None:
+            return None
+        base = Path(self.staging_root)
+        workspace_id = str(backup.workspace.workspace_id)
+        try:
+            candidatas = sorted(p for p in base.iterdir() if p.is_dir())
+        except OSError:
+            return None
+        for raiz in candidatas:
+            marcador = raiz / "RECOVERY_NOT_PROMOTABLE"
+            try:
+                if marcador.read_bytes() != b"RECOVERY_STAGING_V1\n":
+                    continue
+            except OSError:
+                continue
+            try:
+                staging = self.open_staging(raiz)
+            except (RepositoryError, RepositoryIntegrityError, OSError):
+                continue
+            try:
+                transacao = staging.ler_transacao()
+                if (
+                    type(transacao) is not dict
+                    or transacao.get("backup_sha256") != digest
+                    or transacao.get("workspace_id") != workspace_id
+                    or transacao.get("staging_identity") != staging.identidade
+                ):
+                    staging.close()
+                    continue
+            except Exception:
+                try:
+                    staging.close()
+                except Exception:
+                    pass
+                continue
+            recovery_id = str(transacao.get("recovery_id") or self.new_recovery_id())
+            summary = _summary(backup, digest)
+            self.sessions.register(recovery_id, staging, summary)
+            self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
+            return RecoverySession(recovery_id, summary)
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,6 +415,22 @@ class PromoteWorkspaceRecovery:
             self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
             raise
 
+    @staticmethod
+    def _transacao_autoriza(transacao, staging, summary: BackupSummary) -> bool:
+        """A perícia viva só pode ser tocada se ELA veio desta mesma promoção.
+
+        Prova durável e exata: mesmo pacote, mesma identidade de workspace e
+        mesma raiz de staging. Sem isso, uma perícia viva alheia poderia ser
+        mutada por um backup de linhagem parecida — `NO_SILENT_OVERWRITE`.
+        """
+        if type(transacao) is not dict:
+            return False
+        return (
+            transacao.get("backup_sha256") == summary.backup_sha256
+            and transacao.get("workspace_id") == summary.workspace_id
+            and transacao.get("staging_identity") == staging.identidade
+        )
+
     def _promover(self, recovery_id: str, entry: dict) -> BackupSummary:
         staging = entry["staging"]
         if staging.discarded:
@@ -376,10 +463,14 @@ class PromoteWorkspaceRecovery:
         # mesma data, revisões idênticas em ordem e checksum). Qualquer outra
         # coisa continua sendo conflito: `NO_SILENT_OVERWRITE` segue valendo, e
         # uma perícia viva alheia nunca é tocada.
+        # A autoridade da retomada é DURÁVEL: mora no journal de promoção, dentro
+        # da raiz de staging quarentenada. Um booleano em memória não sobrevive ao
+        # crash — que é justamente quando a promoção precisa ser retomável.
+        transacao = staging.ler_transacao()
         live_workspace = self.workspaces.get(workspace_id)
         live_revisions: tuple = ()
         if live_workspace is not None:
-            if not entry.get("promotion_started"):
+            if not self._transacao_autoriza(transacao, staging, summary):
                 raise WorkspaceRecoveryConflict("já existe uma perícia com esta identidade")
             live_revisions = tuple(self.revisions.list_workspace(workspace_id))
             prefixo_valido = (
@@ -421,7 +512,26 @@ class PromoteWorkspaceRecovery:
         # nada no armazenamento permanente. Permanece a janela em que a falha
         # ocorre DEPOIS das linhas vivas; ela é tratada como restauração
         # incompleta e reportada, nunca silenciada.
-        entry["promotion_started"] = True
+        # Journal ANTES da primeira mutação viva: se o processo morrer daqui em
+        # diante, a reabertura reconhece a promoção interrompida e a retoma.
+        staging.gravar_transacao(
+            {
+                "recovery_id": recovery_id,
+                "backup_sha256": summary.backup_sha256,
+                "workspace_id": summary.workspace_id,
+                "staging_identity": staging.identidade,
+                "workspace_name": staged_workspace.name,
+                "workspace_created_at": staged_workspace.created_at,
+                "revisions": [
+                    [r.revision_id, r.artifact_kind, r.artifact_id, r.checksum_sha256]
+                    for r in staged_revisions
+                ],
+                "private_contents": sorted(
+                    [str(m.content_id), m.checksum_sha256] for m in staged_private
+                ),
+                "phase": PROMOTING,
+            }
+        )
         if live_workspace is None:
             self.workspaces.create(
                 PericiaWorkspace(workspace_id, staged_workspace.name, staged_workspace.created_at)
@@ -445,7 +555,17 @@ class PromoteWorkspaceRecovery:
                 continue
             with staging.private_contents.open_content(workspace_id, metadata.content_id) as opened:
                 content = opened.stream.read()
-            self.private_contents.store(metadata, content)
+            try:
+                self.private_contents.store(metadata, content)
+            except RepositoryConflict:
+                # A identidade tem uma importação abortada desta mesma
+                # recuperação: `store()` a recusa para sempre, mas a continuação
+                # exata converge. O digest esperado é o do pacote VERIFICADO —
+                # essa é a autoridade que impede reuso de identidade com
+                # conteúdo diferente.
+                self.private_contents.continue_exact_recovery_write(
+                    metadata, content, expected_sha256=metadata.checksum_sha256
+                )
 
         promoted = tuple(self.revisions.list_workspace(workspace_id))
         if len(promoted) != len(staged_revisions):

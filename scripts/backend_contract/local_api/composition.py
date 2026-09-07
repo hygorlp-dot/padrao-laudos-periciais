@@ -22,6 +22,7 @@ from ..application.workspace_recovery import (
     WorkspaceRecoverySessions,
 )
 from ..infrastructure.productization import (
+    abrir_staging_quarentenado,
     CreateWorkspaceBackup,
     RecoveryStaging,
     RestoreWorkspaceBackup,
@@ -527,6 +528,7 @@ def build_local_api(
         recovery_sessions,
         recovery_staging_root,
         _sha256_hex,
+        abrir_staging_quarentenado,
     )
     promote_workspace_recovery = PromoteWorkspaceRecovery(
         recovery_sessions, store.workspaces, store.revisions, private_store
