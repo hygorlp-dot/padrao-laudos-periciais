@@ -530,15 +530,20 @@ def _mark_intent_continued(
     """Registra que a tentativa ABORTADA foi superada por uma continuação exata.
 
     A história permanece: o intent e o `.aborted` continuam no lugar. O marcador
-    `.continued` é um TERCEIRO hard link para o mesmo inode do intent, então a
-    proveniência segue verificável por identidade — e é ele que autoriza o
-    prefixo a voltar ao conjunto ativo do journal. Sem ele, um aborto tornaria a
-    identidade privada inutilizável para sempre.
+    `.continued.<nonce_da_tentativa>` é mais um hard link para o MESMO inode do
+    intent — a proveniência é verificada por identidade, não por nome — e ele
+    cumpre dois papéis: autoriza o prefixo a voltar ao conjunto ativo e nomeia o
+    espaço de staging DAQUELA tentativa. Cada continuação tem seu próprio nonce,
+    para que os restos aposentados de uma tentativa morta nunca colidam com os
+    caminhos da seguinte.
+
+    `CONTINUATION_AUTHORIZED != CONTINUATION_COMMITTED`: quem prova conclusão é o
+    anchor, nunca este marcador.
     """
     observed = _lstat(intent, root_fd=root_fd)
-    _validate_regular(observed, expected_links=2)
     if observed.st_size != 0 or not _same_identity(expected, observed):
         raise RepositoryIntegrityError("identidade do intent privado diverge")
+    vinculos = observed.st_nlink
     continued = intent.parent / f".continued.{nonce}"
     if root_fd is None:
         os.link(intent, continued, follow_symlinks=False)
@@ -552,13 +557,13 @@ def _mark_intent_continued(
             follow_symlinks=False,
         )
         continued_details = _lstat(continued, root_fd=root_fd)
-    _validate_regular(continued_details, expected_links=3)
+    _validate_regular(continued_details, expected_links=vinculos + 1)
     if not _same_identity(expected, continued_details):
         raise RepositoryIntegrityError("intent privado continuado sem identidade exata")
     _flush_link_identity(
         continued,
         continued_details,
-        expected_links=3,
+        expected_links=vinculos + 1,
         root_fd=root_fd,
     )
     if root_fd is not None:
@@ -1261,29 +1266,34 @@ class LocalPrivateContentStore:
             intents_by_nonce[nonce] = (prefix, details)
 
         # Uma continuação exata só existe SOBRE um aborto: ela o supera, não o
-        # apaga. O intent passa a ter três vínculos — ele mesmo, `.aborted` e
-        # `.continued` — e a identidade é verificada em todos.
+        # apaga. Cada tentativa de continuação tem seu PRÓPRIO nonce, então o
+        # vínculo com o intent é provado por IDENTIDADE de inode, não por nome.
         continued_prefixes = set()
+        continued_nonces: dict[str, set[str]] = {}
+        identidade_do_intent = {
+            _identity_key(details): prefix for prefix, (_, _, details) in intents.items()
+        }
         for nonce, (_, details) in continued.items():
-            intent = intents_by_nonce.get(nonce)
-            if intent is None or not _same_identity(intent[1], details):
+            prefix = identidade_do_intent.get(_identity_key(details))
+            if prefix is None:
                 raise RepositoryIntegrityError("intent privado continuado sem proveniência")
-            if nonce not in aborted:
-                raise RepositoryIntegrityError("continuação privada sem aborto anterior")
-            _validate_regular(details, expected_links=3)
-            continued_prefixes.add(intent[0])
+            continued_prefixes.add(prefix)
+            continued_nonces.setdefault(prefix, set()).add(nonce)
 
         aborted_prefixes = set()
         for nonce, (_, details) in aborted.items():
             intent = intents_by_nonce.get(nonce)
             if intent is None or not _same_identity(intent[1], details):
                 raise RepositoryIntegrityError("intent privado abortado sem proveniência")
-            vinculos = 3 if intent[0] in continued_prefixes else 2
-            _validate_regular(details, expected_links=vinculos)
-            _validate_regular(intent[1], expected_links=vinculos)
             aborted_prefixes.add(intent[0])
+        if not continued_prefixes.issubset(aborted_prefixes):
+            raise RepositoryIntegrityError("continuação privada sem aborto anterior")
         for prefix, (_, _, details) in intents.items():
-            if prefix not in aborted_prefixes:
+            if prefix in aborted_prefixes:
+                # intent + `.aborted` + um `.continued` por tentativa
+                esperado = 2 + len(continued_nonces.get(prefix, ()))
+                _validate_regular(details, expected_links=esperado)
+            else:
                 _validate_regular(details, expected_links=1)
 
         objects = [(prefix, member, nonce, details) for prefix, member, nonce, _, details in stages] + [(prefix, member, None, details) for prefix, member, _, details in finals]
@@ -1291,7 +1301,7 @@ class LocalPrivateContentStore:
             intent = intents.get(prefix)
             if intent is None:
                 raise RepositoryIntegrityError("inventário privado sem intent durável ou proveniência")
-            if nonce is not None and nonce != intent[0]:
+            if nonce is not None and nonce != intent[0] and nonce not in continued_nonces.get(prefix, ()):
                 raise RepositoryIntegrityError("staging privado diverge do intent")
 
         root_link_counts: dict[tuple[int, int, int], int] = {}
@@ -1476,16 +1486,39 @@ class LocalPrivateContentStore:
             _validate_regular(final_details, expected_links=2)
         journal, _, journal_tail = self._ledger_entries(self._journal_fd, label="journal")
         anchor, _, anchor_tail = self._ledger_entries(self._anchor_fd, label="anchor")
-        # Um prefixo abortado sai do conjunto ativo — EXCETO quando foi superado
-        # por uma continuação exata autorizada. Sem essa exceção, uma única falha
-        # de I/O tornava a identidade privada inutilizável para sempre e a perícia
-        # inteira irrecuperável pelo produto. A história do aborto continua ali.
-        active_journal = tuple(
+        # `CONTINUATION_AUTHORIZED != CONTINUATION_COMMITTED`.
+        #
+        # `.continued` autoriza a progressão; quem PROVA conclusão é o anchor. Um
+        # prefixo continuado mas ainda não confirmado é uma tentativa em voo — sai
+        # do conjunto ativo, exatamente como o aborto de que veio.
+        #
+        # A ORDEM também difere por construção: o intent do prefixo continuado
+        # está na posição original do journal, mas o `_confirm_intent` da
+        # continuação anexa ao anchor depois de tudo o que commitou no meio-tempo.
+        # A invariante de ordem existe para detectar escrita perdida/rasgada no
+        # caminho sequencial normal; uma continuação é, por definição, fora de
+        # ordem, e sua integridade é garantida pela proveniência de hard link
+        # exata. Por isso a ordem é exigida só dos prefixos NÃO continuados.
+        continuados_confirmados = continued_prefixes & set(anchor)
+        ordem_journal = tuple(
             prefix
             for prefix in journal
-            if prefix not in aborted_prefixes or prefix in continued_prefixes
+            if prefix not in aborted_prefixes and prefix not in continued_prefixes
         )
-        if journal_tail is not None or anchor_tail is not None or not set(journal).issubset(self._known_prefixes) or active_journal != anchor or set(active_journal) != self._committed:
+        ordem_anchor = tuple(prefix for prefix in anchor if prefix not in continued_prefixes)
+        ativos = {
+            prefix
+            for prefix in journal
+            if prefix not in aborted_prefixes or prefix in continuados_confirmados
+        }
+        if (
+            journal_tail is not None
+            or anchor_tail is not None
+            or not set(journal).issubset(self._known_prefixes)
+            or ordem_journal != ordem_anchor
+            or ativos != self._committed
+            or set(anchor) != self._committed
+        ):
             raise RepositoryIntegrityError("journal privado diverge do estado confirmado")
 
     def _recover(self) -> tuple[set[str], set[str]]:
@@ -1590,30 +1623,36 @@ class LocalPrivateContentStore:
         # corrupção. A história do aborto permanece registrada nos dois casos.
         if set(anchor) & (aborted_prefixes - continued_prefixes):
             raise RepositoryIntegrityError("anchor privado confirma intent abortado")
+        # A análise de ORDEM (que detecta escrita perdida/rasgada e identifica a
+        # única transação em voo) cobre apenas os prefixos NÃO continuados: uma
+        # continuação confirma no anchor muito depois de seu intent entrar no
+        # journal, então sua posição diverge por construção. A integridade dela
+        # vem da proveniência de hard link exata, não da ordem.
         journal = tuple(
             prefix
             for prefix in raw_journal
-            if prefix not in aborted_prefixes or prefix in continued_prefixes
+            if prefix not in aborted_prefixes and prefix not in continued_prefixes
         )
+        anchor_ordenado = tuple(prefix for prefix in anchor if prefix not in continued_prefixes)
 
         common_length = 0
-        for journal_entry, anchor_entry in zip(journal, anchor):
+        for journal_entry, anchor_entry in zip(journal, anchor_ordenado):
             if journal_entry != anchor_entry:
                 break
             common_length += 1
-        if common_length != min(len(journal), len(anchor)):
+        if common_length != min(len(journal), len(anchor_ordenado)):
             raise RepositoryIntegrityError("journal e anchor privados divergem")
-        if len(anchor) > len(journal):
+        if len(anchor_ordenado) > len(journal):
             raise RepositoryIntegrityError("journal privado perdeu proveniência")
         common = list(anchor)
-        journal_extra = journal[len(anchor) :]
+        journal_extra = journal[len(anchor_ordenado) :]
         if len(journal_extra) > 1 or (journal_extra and journal_tail):
             raise RepositoryIntegrityError("journal privado perdeu proveniência")
         committed_groups = {
             prefix
             for prefix, members in groups.items()
             if "commit" in members
-            and (prefix not in aborted_prefixes or prefix in continued_prefixes)
+            and (prefix not in aborted_prefixes or prefix in set(anchor))
         }
         unmarked_intents = set(intents) - aborted_prefixes - set(common)
         pending_prefix = journal_extra[0] if journal_extra else None
@@ -1649,13 +1688,16 @@ class LocalPrivateContentStore:
             raise RepositoryIntegrityError("journal privado diverge de commits confirmados")
 
         pending_is_committed = pending_prefix in committed_groups
-        # Um prefixo CONTINUADO não é lixo a recolher: ele tem objetos vivos e
-        # confirmados, que precisam passar pela validação normal. Os objetos
-        # aposentados da tentativa anterior seguem legítimos.
-        cleanup_prefixes = set(aborted_prefixes) - continued_prefixes
+        # Três estados distintos, e só o terceiro tem objetos vivos legítimos:
+        #   ABORTED_UNCONTINUED          -> recolher
+        #   ABORTED_CONTINUATION_PENDING -> recolher (tentativa em voo que morreu)
+        #   COMMITTED_AFTER_CONTINUATION -> NÃO recolher, validar como confirmado
+        # `.continued` autoriza a progressão; quem prova conclusão é o anchor.
+        continuados_confirmados = continued_prefixes & set(anchor)
+        cleanup_prefixes = set(aborted_prefixes) - continuados_confirmados
         if pending_prefix is not None and not pending_is_committed:
             cleanup_prefixes.add(pending_prefix)
-        if not retired_prefixes.issubset(cleanup_prefixes | continued_prefixes):
+        if not retired_prefixes.issubset(cleanup_prefixes | continuados_confirmados):
             raise RepositoryIntegrityError("aposentadoria privada sem intent abortado")
 
         linked_members: dict[str, set[str]] = {}
@@ -2068,10 +2110,12 @@ class LocalPrivateContentStore:
             abortado = self._intent_durablemente_abortado(prefix)
             if abortado is None:
                 raise RepositoryConflict("identidade privada não tem tentativa abortada própria")
+            # TODO objeto da(s) tentativa(s) anterior(es) precisa estar aposentado.
+            # Objetos aposentados PERMANECEM em disco por proveniência — apagá-los
+            # romperia o vínculo do marcador `.retired`. Por isso a continuação
+            # nunca reaproveita caminho: ela usa um nonce próprio.
             if not self._all_prefix_paths_retired({prefix}):
                 raise RepositoryIntegrityError("tentativa anterior tem objeto não aposentado")
-            if any(_entry_exists(path, root_fd=self._root_fd) for path in paths.values()):
-                raise RepositoryConflict("identidade privada tem caminho canônico ocupado")
             if len(self._root_names()) + _MAX_TRANSACTION_ROOT_ENTRIES > _MAX_ROOT_ENTRIES:
                 raise RepositoryError("armazenamento privado atingiu limite físico")
 
@@ -2092,11 +2136,11 @@ class LocalPrivateContentStore:
                     "conteúdo da continuação diverge do digest verificado"
                 )
 
-            # O staging DEVE carregar o nonce do intent: a auditoria de
-            # proveniência exige que todo objeto do prefixo aponte para o intent
-            # durável dele. Como a continuação só é elegível quando nada daquela
-            # tentativa sobrou vivo, o caminho está livre — mas confirmamos.
-            nonce = abortado[2]
+            # Nonce PRÓPRIO desta tentativa: os restos aposentados da anterior
+            # continuam em disco por proveniência, então reusar o nonce colidiria.
+            # O marcador `.continued.<nonce>` é quem liga este espaço de staging
+            # ao intent durável — por identidade de inode.
+            nonce = uuid4().hex
             stages = {
                 member: self._root / f".staging.{prefix}.{nonce}.{member}"
                 for member in (*_MEMBERS, "commit")
