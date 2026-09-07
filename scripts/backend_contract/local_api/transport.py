@@ -51,6 +51,7 @@ from ..application.workspace_recovery import (
     RecoveryRetained,
     RecoveryNotPromotable,
     RecoveryPromotionIncomplete,
+    RecoverySessionStatus,
     RecoveryUnresumable,
     BackupTooLarge,
     RecoveryStageFailed,
@@ -193,8 +194,10 @@ class LocalApiServices:
     export_workspace_backup: object | None = None
     inspect_workspace_backup: object | None = None
     stage_workspace_recovery: object | None = None
+    list_workspace_recoveries: object | None = None
     promote_workspace_recovery: object | None = None
     discard_workspace_recovery: object | None = None
+    abandon_workspace_recovery: object | None = None
 
 
 def _workspace_dto(record: PericiaWorkspace) -> dict:
@@ -345,6 +348,22 @@ def _backup_summary_dto(summary: BackupSummary) -> dict:
         "artifact_revisions": summary.artifact_revisions,
         "private_contents": summary.private_contents,
         "backup_sha256": summary.backup_sha256,
+    }
+
+
+def _recovery_status_dto(status: RecoverySessionStatus) -> dict:
+    if type(status) is not RecoverySessionStatus:
+        raise RepositoryIntegrityError("estado de recuperação inválido")
+    return {
+        "recovery_id": status.recovery_id,
+        "state": status.state,
+        "summary": (
+            _backup_summary_dto(status.summary)
+            if status.summary is not None
+            else None
+        ),
+        "reason": status.reason,
+        "allowed_actions": list(status.allowed_actions),
     }
 
 
@@ -1346,6 +1365,21 @@ class LocalApi:
                 package = self._services.export_workspace_backup.execute(workspace_id)
                 return _backup_package_response(package, workspace_id)
 
+            if len(raw_segments) == 2 and raw_segments == ("v1", "recovery"):
+                if normalized_method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.list_workspace_recoveries is None:
+                    return _error(503, "RECOVERY_UNAVAILABLE", "recuperação local indisponível")
+                return _json_response(
+                    200,
+                    {
+                        "recoveries": [
+                            _recovery_status_dto(item)
+                            for item in self._services.list_workspace_recoveries.execute()
+                        ]
+                    },
+                )
+
             if len(raw_segments) == 3 and raw_segments[:2] == ("v1", "recovery") and raw_segments[2] in {"verify", "staging"}:
                 if normalized_method != "POST":
                     return _error(405, "METHOD_NOT_ALLOWED")
@@ -1378,10 +1412,24 @@ class LocalApi:
                     corpo["not_promotable_reason"] = session.not_promotable_reason
                 return _json_response(201, corpo)
 
-            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "recovery") and raw_segments[3] in {"promote", "discard"}:
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "recovery") and raw_segments[3] in {"promote", "discard", "abandon"}:
                 if normalized_method != "POST":
                     return _error(405, "METHOD_NOT_ALLOWED")
                 recovery_id = _decode_segment(raw_segments[2])
+                if raw_segments[3] == "abandon":
+                    if self._services.abandon_workspace_recovery is None:
+                        return _error(503, "RECOVERY_UNAVAILABLE", "recuperação local indisponível")
+                    dto = self._request_dto(request_headers, body)
+                    if set(dto) != {"confirm_abandon"} or dto["confirm_abandon"] is not True:
+                        raise ValueError("abandono exige confirmação explícita")
+                    return _json_response(
+                        200,
+                        {
+                            "recovery_id": self._services.abandon_workspace_recovery.execute(
+                                recovery_id
+                            )
+                        },
+                    )
                 if raw_segments[3] == "discard":
                     if self._services.discard_workspace_recovery is None:
                         return _error(503, "RECOVERY_UNAVAILABLE", "recuperação local indisponível")

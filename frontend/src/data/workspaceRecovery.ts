@@ -15,7 +15,9 @@ export type BackupSummary = {
 
 export type NotPromotableReason =
   | "ja_existe_pericia_com_esta_identidade"
-  | "autoridade_de_custo_de_ia_nao_promovivel";
+  | "autoridade_de_custo_de_ia_nao_promovivel"
+  | "promocao_interrompida_irretomavel"
+  | "estado_da_promocao_ilegivel";
 
 export type StagedRecovery = {
   recovery_id: string;
@@ -27,6 +29,27 @@ export type StagedRecovery = {
   not_promotable_reason?: string;
 };
 
+export type RecoveryState =
+  | "STAGED"
+  | "FAILED_RECOVERABLE"
+  | "RECOVERY_UNRESUMABLE"
+  | "RECOVERY_RETAINED";
+
+export type RecoveryAction =
+  | "PROMOTE"
+  | "DISCARD"
+  | "ABANDON"
+  | "RETRY_DISCARD"
+  | "RETRY_ABANDON";
+
+export type PendingRecovery = {
+  recovery_id: string;
+  state: RecoveryState;
+  summary: BackupSummary | null;
+  reason: string | null;
+  allowed_actions: RecoveryAction[];
+};
+
 /** Texto honesto para cada motivo canônico de recusa de promoção. */
 export function notPromotableMessage(reason?: string): string {
   if (reason === "ja_existe_pericia_com_esta_identidade") {
@@ -34,6 +57,12 @@ export function notPromotableMessage(reason?: string): string {
   }
   if (reason === "autoridade_de_custo_de_ia_nao_promovivel") {
     return "Este backup carrega histórico de custo de IA, que não pode ser promovido. A cópia recuperada segue isolada.";
+  }
+  if (reason === "promocao_interrompida_irretomavel") {
+    return "Esta promoção interrompida não pode mais ser concluída. A cópia isolada pode ser abandonada sem alterar o que já existe na perícia ativa.";
+  }
+  if (reason === "estado_da_promocao_ilegivel") {
+    return "O estado da promoção não pôde ser lido agora. A cópia segue isolada; tente novamente antes de decidir abandoná-la.";
   }
   return "Esta recuperação não pode ser promovida. A cópia recuperada segue isolada.";
 }
@@ -104,6 +133,41 @@ function parseSummary(value: unknown): BackupSummary {
     throw new RecoveryApiError("invalid-response", "Resposta local inválida");
   }
   return record as BackupSummary;
+}
+
+function parsePendingRecovery(value: unknown): PendingRecovery {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new RecoveryApiError("invalid-response", "Resposta local inválida");
+  }
+  const record = value as Record<string, unknown>;
+  const expected = ["allowed_actions", "reason", "recovery_id", "state", "summary"];
+  if (Object.keys(record).sort().join("|") !== expected.join("|")) {
+    throw new RecoveryApiError("invalid-response", "Resposta local inválida");
+  }
+  const states: RecoveryState[] = [
+    "STAGED", "FAILED_RECOVERABLE", "RECOVERY_UNRESUMABLE", "RECOVERY_RETAINED",
+  ];
+  const actions: RecoveryAction[] = [
+    "PROMOTE", "DISCARD", "ABANDON", "RETRY_DISCARD", "RETRY_ABANDON",
+  ];
+  if (
+    typeof record.recovery_id !== "string" || !CANONICAL_UUID.test(record.recovery_id) ||
+    typeof record.state !== "string" || !states.includes(record.state as RecoveryState) ||
+    !(record.reason === null || typeof record.reason === "string") ||
+    !Array.isArray(record.allowed_actions) ||
+    record.allowed_actions.some((item) => typeof item !== "string" || !actions.includes(item as RecoveryAction)) ||
+    new Set(record.allowed_actions).size !== record.allowed_actions.length
+  ) {
+    throw new RecoveryApiError("invalid-response", "Resposta local inválida");
+  }
+  const summary = record.summary === null ? null : parseSummary(record.summary);
+  return {
+    recovery_id: record.recovery_id,
+    state: record.state as RecoveryState,
+    summary,
+    reason: record.reason as string | null,
+    allowed_actions: record.allowed_actions as RecoveryAction[],
+  };
 }
 
 function mappedError(status: number, code?: string): RecoveryApiError {
@@ -288,6 +352,22 @@ export async function stageRecovery(file: File, signal?: AbortSignal): Promise<S
     : { ...staged, not_promotable_reason: record.not_promotable_reason as string };
 }
 
+/** Redescobre trabalho de recuperação preservado por fechamento ou queda. */
+export async function listPendingRecoveries(signal?: AbortSignal): Promise<PendingRecovery[]> {
+  const value = await jsonResponse(await localFetch(
+    "/app-api/v1/recovery",
+    { method: "GET", signal },
+  ));
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new RecoveryApiError("invalid-response", "Resposta local inválida");
+  }
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).join("|") !== "recoveries" || !Array.isArray(record.recoveries)) {
+    throw new RecoveryApiError("invalid-response", "Resposta local inválida");
+  }
+  return record.recoveries.map(parsePendingRecovery);
+}
+
 /**
  * PROMOÇÃO EXPLÍCITA — único passo que torna a cópia recuperada ativa.
  * Exige confirmação declarada; nunca é disparada por um clique acidental.
@@ -341,6 +421,35 @@ export async function discardRecovery(
   }
   const record = value as Record<string, unknown>;
   if (typeof record.recovery_id !== "string" || !CANONICAL_UUID.test(record.recovery_id)) {
+    throw new RecoveryApiError("invalid-response", "Resposta local inválida");
+  }
+  return record.recovery_id;
+}
+
+/** Abandona só a cópia quarentenada; nunca afirma rollback do workspace vivo. */
+export async function abandonRecovery(
+  recoveryId: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  requireRecovery(recoveryId);
+  const value = await jsonResponse(await localFetch(
+    `/app-api/v1/recovery/${recoveryId}/abandon`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm_abandon: true }),
+      signal,
+    },
+  ));
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new RecoveryApiError("invalid-response", "Resposta local inválida");
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    Object.keys(record).join("|") !== "recovery_id" ||
+    typeof record.recovery_id !== "string" ||
+    !CANONICAL_UUID.test(record.recovery_id)
+  ) {
     throw new RecoveryApiError("invalid-response", "Resposta local inválida");
   }
   return record.recovery_id;

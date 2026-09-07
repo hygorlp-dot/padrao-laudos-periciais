@@ -24,12 +24,13 @@ apenas para criar um workspace que ainda não existe.
 from __future__ import annotations
 
 import json
+import os
 import threading
 
 from ..streaming import MAX_DOCUMENT_BYTES
 from dataclasses import dataclass
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from .models import ArtifactRevision, PericiaWorkspace, WorkspaceId, thaw_payload
 from .ports import (
@@ -140,11 +141,24 @@ class RecoverySession:
     resuming: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class RecoverySessionStatus:
+    """Estado sanitizado e alcançável de uma recuperação durável."""
+
+    recovery_id: str
+    state: str
+    summary: BackupSummary | None
+    reason: str | None
+    allowed_actions: tuple[str, ...]
+
+
 #: Versão do journal. Uma versão desconhecida (produto mais novo gravou, produto
 #: mais velho leu) é IRRETOMÁVEL, não "ilegível que bloqueia tudo".
 JOURNAL_VERSION = 1
 
 UNRESUMABLE = "UNRESUMABLE"
+RECOVERY_UNRESUMABLE = "RECOVERY_UNRESUMABLE"
+RECOVERY_RETAINED = "RECOVERY_RETAINED"
 
 _JOURNAL_AUSENTE = "ausente"
 _JOURNAL_RETOMAVEL = "retomavel"
@@ -160,6 +174,10 @@ MAX_BACKUP_PACKAGE_BYTES = MAX_DOCUMENT_BYTES
 
 _QUARENTENA = "RECOVERY_NOT_PROMOTABLE"
 _QUARENTENA_PAYLOAD = b"RECOVERY_STAGING_V1\n"
+_SESSION = "RECOVERY_SESSION_V1"
+_SESSION_VERSION = 1
+_DISPOSITION = "RECOVERY_DISPOSITION_V1"
+_DISPOSITION_VERSION = 1
 
 
 class RecoveryRetained(RepositoryError):
@@ -182,7 +200,13 @@ def _material_remanescente(raiz: Path) -> list[Path]:
     for caminho in raiz.rglob("*"):
         if caminho.is_dir():
             continue
-        if caminho.parent == raiz and caminho.name in (_QUARENTENA, _JOURNAL, _IDENTIDADE):
+        if caminho.parent == raiz and caminho.name in (
+            _QUARENTENA,
+            _JOURNAL,
+            _IDENTIDADE,
+            _SESSION,
+            _DISPOSITION,
+        ):
             continue
         restante.append(caminho)
     return restante
@@ -190,6 +214,146 @@ def _material_remanescente(raiz: Path) -> list[Path]:
 
 _JOURNAL_CORROMPIDO = object()
 _JOURNAL_TRAVADO = object()
+_SIDECAR_CORROMPIDO = object()
+_SIDECAR_TRAVADO = object()
+
+
+def _json_canonico(registro: dict) -> bytes:
+    return json.dumps(
+        registro,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _gravar_sidecar_imutavel(raiz: Path, nome: str, registro: dict) -> None:
+    """Publica um controle durável sem substituir uma autoridade já existente."""
+    corpo = _json_canonico(registro)
+    alvo = raiz / nome
+    if alvo.exists():
+        if alvo.read_bytes() != corpo:
+            raise RepositoryIntegrityError(f"{nome} divergente")
+        return
+    temporario = raiz / f".{nome}.{uuid4().hex}"
+    with temporario.open("xb") as stream:
+        stream.write(corpo)
+        stream.flush()
+        os.fsync(stream.fileno())
+    try:
+        os.link(temporario, alvo)
+    except FileExistsError:
+        if alvo.read_bytes() != corpo:
+            raise RepositoryIntegrityError(f"{nome} divergente")
+    finally:
+        temporario.unlink(missing_ok=True)
+    if os.name == "posix":
+        descriptor = os.open(raiz, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+def _ler_sidecar(raiz: Path, nome: str):
+    try:
+        bruto = (raiz / nome).read_bytes()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return _SIDECAR_TRAVADO
+    try:
+        registro = json.loads(bruto.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _SIDECAR_CORROMPIDO
+    return registro if type(registro) is dict else _SIDECAR_CORROMPIDO
+
+
+def _summary_payload(summary: BackupSummary) -> dict:
+    return {
+        "workspace_id": summary.workspace_id,
+        "workspace_name": summary.workspace_name,
+        "workspace_created_at": summary.workspace_created_at,
+        "product_release": summary.product_release,
+        "storage_schema_version": summary.storage_schema_version,
+        "artifact_revisions": summary.artifact_revisions,
+        "private_contents": summary.private_contents,
+        "backup_sha256": summary.backup_sha256,
+    }
+
+
+def _summary_from_payload(value: object) -> BackupSummary | None:
+    if type(value) is not dict or set(value) != {
+        "workspace_id",
+        "workspace_name",
+        "workspace_created_at",
+        "product_release",
+        "storage_schema_version",
+        "artifact_revisions",
+        "private_contents",
+        "backup_sha256",
+    }:
+        return None
+    if not all(type(value[key]) is str for key in (
+        "workspace_id", "workspace_name", "workspace_created_at", "product_release", "backup_sha256"
+    )):
+        return None
+    if not all(type(value[key]) is int and value[key] >= 0 for key in (
+        "storage_schema_version", "artifact_revisions", "private_contents"
+    )):
+        return None
+    try:
+        WorkspaceId.parse(value["workspace_id"])
+    except (TypeError, ValueError):
+        return None
+    digest = value["backup_sha256"]
+    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+        return None
+    return BackupSummary(**value)
+
+
+def _recovery_id_da_raiz(raiz: Path) -> str | None:
+    prefixo = "recovery-"
+    if not raiz.name.startswith(prefixo):
+        return None
+    candidato = raiz.name[len(prefixo):]
+    try:
+        parsed = UUID(candidato)
+    except (ValueError, AttributeError):
+        return None
+    return candidato if str(parsed) == candidato else None
+
+
+def _gravar_session_descriptor(staging: object, recovery_id: str, summary: BackupSummary) -> None:
+    _gravar_sidecar_imutavel(
+        Path(staging.root),
+        _SESSION,
+        {
+            "version": _SESSION_VERSION,
+            "recovery_id": recovery_id,
+            "staging_identity": staging.identidade,
+            "summary": _summary_payload(summary),
+        },
+    )
+
+
+def _descriptor_da_raiz(raiz: Path):
+    registro = _ler_sidecar(raiz, _SESSION)
+    if registro in (None, _SIDECAR_TRAVADO, _SIDECAR_CORROMPIDO):
+        return registro
+    if set(registro) != {"version", "recovery_id", "staging_identity", "summary"}:
+        return _SIDECAR_CORROMPIDO
+    if registro["version"] != _SESSION_VERSION:
+        return _SIDECAR_CORROMPIDO
+    recovery_id = _recovery_id_da_raiz(raiz)
+    if recovery_id is None or registro["recovery_id"] != recovery_id:
+        return _SIDECAR_CORROMPIDO
+    if type(registro["staging_identity"]) is not str or not registro["staging_identity"]:
+        return _SIDECAR_CORROMPIDO
+    summary = _summary_from_payload(registro["summary"])
+    if summary is None:
+        return _SIDECAR_CORROMPIDO
+    return registro, summary
 
 
 def _journal_bruto(raiz: Path):
@@ -256,13 +420,13 @@ def _classificar_journal(staging: object) -> str:
 
 
 def _marcar_irretomavel(staging: object) -> None:
-    """Grava no disco que esta promoção não converge mais. Best-effort."""
-    try:
-        registro = staging.ler_transacao()
-        if type(registro) is dict:
-            staging.gravar_transacao({**registro, "phase": UNRESUMABLE})
-    except Exception:
-        pass
+    """Persiste a classificação antes de afirmá-la ao usuário."""
+    registro = staging.ler_transacao()
+    if type(registro) is not dict:
+        raise RepositoryIntegrityError(
+            "não foi possível persistir a classificação irretomável"
+        )
+    staging.gravar_transacao({**registro, "phase": UNRESUMABLE})
 
 
 def _encerrar_staging(staging: object, *, exigir_remocao: bool = False) -> None:
@@ -326,9 +490,21 @@ def _remover_raiz_quarentenada(raiz: Path, *, exigir_remocao: bool = False) -> N
         if exigir_remocao:
             raise RecoveryRetained("a recuperação preparada não pôde ser removida por completo")
         return
+    controles = {}
+    for nome in (_JOURNAL, _IDENTIDADE, _SESSION, _DISPOSITION):
+        try:
+            controles[nome] = (raiz / nome).read_bytes()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            if exigir_remocao:
+                raise RecoveryRetained(
+                    "a recuperação preparada não pôde ser removida por completo"
+                )
+            return
     try:
-        (raiz / _JOURNAL).unlink(missing_ok=True)
-        (raiz / _IDENTIDADE).unlink(missing_ok=True)
+        for nome in controles:
+            (raiz / nome).unlink(missing_ok=True)
         marcador.unlink()
         raiz.rmdir()
     except OSError:
@@ -337,6 +513,10 @@ def _remover_raiz_quarentenada(raiz: Path, *, exigir_remocao: bool = False) -> N
         try:
             if not marcador.exists():
                 marcador.write_bytes(_QUARENTENA_PAYLOAD)
+            for nome, corpo in controles.items():
+                caminho = raiz / nome
+                if not caminho.exists():
+                    caminho.write_bytes(corpo)
         except OSError:
             pass
         if exigir_remocao:
@@ -430,12 +610,25 @@ class WorkspaceRecoverySessions:
         self._sessions: dict[str, dict] = {}
         self._mutex = threading.Lock()
 
-    def register(self, recovery_id: str, staging: object, summary: BackupSummary) -> None:
+    def register(
+        self,
+        recovery_id: str,
+        staging: object | None,
+        summary: BackupSummary | None,
+        *,
+        state: str = STAGED,
+        root: Path | None = None,
+        reason: str | None = None,
+        disposition: str | None = None,
+    ) -> None:
         with self._mutex:
             self._sessions[recovery_id] = {
                 "staging": staging,
                 "summary": summary,
-                "state": STAGED,
+                "state": state,
+                "root": Path(staging.root) if staging is not None else root,
+                "reason": reason,
+                "disposition": disposition,
             }
 
     def get(self, recovery_id: str) -> dict:
@@ -457,6 +650,10 @@ class WorkspaceRecoverySessions:
                     raise RecoveryAlreadyPromoted("esta recuperação já foi promovida")
                 if atual == DISCARDED:
                     raise RecoveryDiscarded("esta recuperação foi descartada")
+                if atual == RECOVERY_UNRESUMABLE:
+                    raise RecoveryUnresumable(
+                        "esta promoção interrompida não pode mais ser concluída"
+                    )
                 if atual == DISCARDING:
                     # EM ANDAMENTO != DESCARTADA. Responder "não encontrada" a
                     # quem cai nesta janela afirma um fim que ainda não houve.
@@ -466,6 +663,7 @@ class WorkspaceRecoverySessions:
                 raise WorkspaceRecoveryConflict(
                     "esta recuperação já tem uma operação em andamento"
                 )
+            entry["claimed_from"] = atual
             entry["state"] = destino
             return entry
 
@@ -491,19 +689,13 @@ class WorkspaceRecoverySessions:
     def close_all(self) -> None:
         for entry in tuple(self._sessions.values()):
             staging = entry["staging"]
-            # Uma promoção INTERROMPIDA não pode ser recolhida no encerramento:
-            # a raiz quarentenada mais o journal SÃO a autoridade durável que
-            # permite retomá-la depois. Só recolhe o que PROVA nada ter — a
-            # versão anterior inlinava a pergunta e falhava ABERTA, então um
-            # erro de leitura no shutdown apagava exatamente o que devia salvar.
-            if _classificar_journal(staging) != _JOURNAL_AUSENTE:
-                try:
-                    staging.close()
-                except Exception:
-                    pass
+            # RUNTIME_CLOSE != DISCARD_RECOVERY. STAGED também é trabalho já
+            # verificado do usuário; o descriptor durável permite reconstruí-lo
+            # no próximo processo. O fechamento só libera handles.
+            if staging is None:
                 continue
             try:
-                _encerrar_staging(staging)
+                staging.close()
             except Exception:
                 pass
         self._sessions.clear()
@@ -584,6 +776,19 @@ class StageWorkspaceRecovery:
             _encerrar_staging(staging)
             raise RepositoryIntegrityError("a quarentena de recuperação desapareceu")
         summary = _summary(backup, digest)
+        try:
+            # A sessão existe antes do journal de promoção. Sem esta identidade
+            # durável, fechar o app apagava STAGED e journal corrompido virava
+            # uma raiz sem recovery_id/resumo/ação normal de usuário.
+            _gravar_session_descriptor(staging, recovery_id, summary)
+        except BaseException as exc:
+            try:
+                _encerrar_staging(staging)
+            except Exception:
+                pass
+            raise RecoveryStageFailed(
+                "não foi possível tornar a recuperação preparada durável"
+            ) from exc
         self.sessions.register(recovery_id, staging, summary)
         promovivel, motivo = self._promovibilidade(backup, staging)
         return RecoverySession(recovery_id, summary, promovivel, motivo)
@@ -608,9 +813,45 @@ class StageWorkspaceRecovery:
         # motivo falso ("já existe perícia com esta identidade"). Quem recarrega
         # a tela e reenvia o mesmo pacote precisa cair na RETOMADA.
         for recovery_id, entry in self.sessions.snapshot():
-            if entry.get("state") not in (STAGED, FAILED_RECOVERABLE):
+            state = entry.get("state")
+            existing_summary = entry.get("summary")
+            mesmo_pacote = (
+                type(existing_summary) is BackupSummary
+                and existing_summary.backup_sha256 == digest
+                and existing_summary.workspace_id == workspace_id
+            )
+            if mesmo_pacote and state == RECOVERY_UNRESUMABLE:
+                return RecoverySession(
+                    recovery_id,
+                    existing_summary,
+                    False,
+                    entry.get("reason") or "promocao_interrompida_irretomavel",
+                    True,
+                )
+            if mesmo_pacote and state == RECOVERY_RETAINED:
+                return RecoverySession(
+                    recovery_id,
+                    existing_summary,
+                    False,
+                    "limpeza_de_recuperacao_pendente",
+                    bool(entry.get("disposition") == "ABANDON"),
+                )
+            if state not in (STAGED, FAILED_RECOVERABLE):
                 continue
             staging = entry["staging"]
+            if mesmo_pacote and state == STAGED:
+                promovivel, motivo = self._promovibilidade(backup, staging)
+                return RecoverySession(recovery_id, existing_summary, promovivel, motivo)
+            if mesmo_pacote and _classificar_journal(staging) == _JOURNAL_IRRETOMAVEL:
+                self.sessions.settle(recovery_id, RECOVERY_UNRESUMABLE)
+                entry["reason"] = "promotion_journal_unreadable_or_unsupported"
+                return RecoverySession(
+                    recovery_id,
+                    existing_summary,
+                    False,
+                    entry["reason"],
+                    True,
+                )
             if not self._journal_desta_promocao(staging, digest, workspace_id):
                 continue
             self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
@@ -692,10 +933,6 @@ class StageWorkspaceRecovery:
             and transacao.get("workspace_id") == workspace_id
         )
 
-def _tem_material_privado(raiz: Path) -> bool:
-    return any(p.suffix == ".content" for p in raiz.rglob("*"))
-
-
 def recolher_stagings_orfaos(base) -> tuple[str, ...]:
     """Recolhe, na REABERTURA do produto, raízes de staging sem retomada pendente.
 
@@ -728,11 +965,27 @@ def recolher_stagings_orfaos(base) -> tuple[str, ...]:
         if registro is _JOURNAL_TRAVADO:
             # Transitório: não decide nada agora, tenta na próxima reabertura.
             continue
-        if registro is not _JOURNAL_CORROMPIDO and registro is not None:
-            if registro.get("phase") not in (PROMOTED, UNRESUMABLE):
+        descriptor = _descriptor_da_raiz(raiz)
+        if descriptor is _SIDECAR_TRAVADO:
+            continue
+        if descriptor is not None:
+            # Descriptor válido OU inválido prova que uma sessão chegou a ser
+            # publicada. A coleta nunca decide abandoná-la pelo usuário. A
+            # única exceção é uma promoção comprovadamente concluída, cuja
+            # raiz é apenas resíduo terminal.
+            if descriptor is _SIDECAR_CORROMPIDO:
                 continue
-            if registro.get("phase") == UNRESUMABLE and _tem_material_privado(raiz):
-                # Irretomável ainda visível ao usuário: só sai por decisão dele.
+            if registro is _JOURNAL_CORROMPIDO:
+                continue
+            if registro is None:
+                continue
+            if registro.get("phase") != PROMOTED:
+                continue
+        if registro is _JOURNAL_CORROMPIDO:
+            # CANNOT_PARSE_AUTHORITY != AUTHORITY_NEVER_EXISTED.
+            continue
+        if registro is not None:
+            if registro.get("phase") != PROMOTED:
                 continue
         # NÃO reabre o staging para recolhê-lo: reabrir reprovisiona o
         # armazenamento privado e o SQLite da raiz, e os handles recém-criados
@@ -745,6 +998,184 @@ def recolher_stagings_orfaos(base) -> tuple[str, ...]:
         if not raiz.exists():
             recolhidas.append(raiz.name)
     return tuple(recolhidas)
+
+
+def _disposition_da_raiz(raiz: Path):
+    registro = _ler_sidecar(raiz, _DISPOSITION)
+    if registro in (None, _SIDECAR_TRAVADO, _SIDECAR_CORROMPIDO):
+        return registro
+    if set(registro) != {"version", "recovery_id", "mode"}:
+        return _SIDECAR_CORROMPIDO
+    if registro["version"] != _DISPOSITION_VERSION:
+        return _SIDECAR_CORROMPIDO
+    if registro["recovery_id"] != _recovery_id_da_raiz(raiz):
+        return _SIDECAR_CORROMPIDO
+    if registro["mode"] not in {"DISCARD", "ABANDON"}:
+        return _SIDECAR_CORROMPIDO
+    return registro
+
+
+def reconstruir_sessoes_recuperacao(base, sessions, open_staging) -> tuple[str, ...]:
+    """Reconstrói sessões sem promover nem tocar no armazenamento vivo."""
+    raiz_base = Path(base)
+    try:
+        candidatas = sorted(p for p in raiz_base.iterdir() if p.is_dir())
+    except OSError:
+        return ()
+    reconstruidas = []
+    for raiz in candidatas:
+        try:
+            if (raiz / _QUARENTENA).read_bytes() != _QUARENTENA_PAYLOAD:
+                continue
+        except OSError:
+            continue
+        recovery_id = _recovery_id_da_raiz(raiz)
+        if recovery_id is None:
+            continue
+        descriptor = _descriptor_da_raiz(raiz)
+        journal = _journal_bruto(raiz)
+        disposition = _disposition_da_raiz(raiz)
+        summary = descriptor[1] if isinstance(descriptor, tuple) else None
+        reason = None
+        staging = None
+
+        if disposition not in (None, _SIDECAR_TRAVADO, _SIDECAR_CORROMPIDO):
+            state = RECOVERY_RETAINED
+            reason = "cleanup_incomplete"
+            mode = disposition["mode"]
+        elif disposition in (_SIDECAR_TRAVADO, _SIDECAR_CORROMPIDO):
+            state = RECOVERY_RETAINED
+            reason = "disposition_unreadable"
+            mode = None
+        elif descriptor in (_SIDECAR_TRAVADO, _SIDECAR_CORROMPIDO, None):
+            state = RECOVERY_UNRESUMABLE
+            reason = "session_descriptor_unreadable"
+            mode = None
+        elif journal is _JOURNAL_TRAVADO:
+            state = FAILED_RECOVERABLE
+            reason = "promotion_journal_temporarily_unreadable"
+            mode = None
+        elif journal is _JOURNAL_CORROMPIDO:
+            state = RECOVERY_UNRESUMABLE
+            reason = "promotion_journal_unreadable_or_unsupported"
+            mode = None
+        elif journal is None:
+            state = STAGED
+            mode = None
+        else:
+            phase = journal.get("phase")
+            identity = descriptor[0]["staging_identity"]
+            if journal.get("staging_identity") != identity:
+                state = RECOVERY_UNRESUMABLE
+                reason = "staging_identity_mismatch"
+            elif phase == PROMOTING:
+                state = FAILED_RECOVERABLE
+            elif phase == UNRESUMABLE:
+                state = RECOVERY_UNRESUMABLE
+                reason = "promotion_cannot_converge"
+            elif phase == PROMOTED:
+                # Estado terminal positivamente provado: a coleta é segura.
+                try:
+                    _remover_raiz_quarentenada(raiz)
+                except Exception:
+                    pass
+                continue
+            else:
+                state = RECOVERY_UNRESUMABLE
+                reason = "promotion_journal_unreadable_or_unsupported"
+            mode = None
+
+        if state in (STAGED, FAILED_RECOVERABLE) and reason is None:
+            try:
+                staging = open_staging(raiz)
+                if staging.identidade_registrada != descriptor[0]["staging_identity"]:
+                    staging.close()
+                    staging = None
+                    state = RECOVERY_UNRESUMABLE
+                    reason = "staging_identity_mismatch"
+            except Exception:
+                staging = None
+                state = RECOVERY_UNRESUMABLE
+                reason = "staging_cannot_be_reopened"
+
+        sessions.register(
+            recovery_id,
+            staging,
+            summary,
+            state=state,
+            root=raiz,
+            reason=reason,
+            disposition=mode,
+        )
+        reconstruidas.append(recovery_id)
+    return tuple(reconstruidas)
+
+
+def _allowed_actions(entry: dict) -> tuple[str, ...]:
+    state = entry["state"]
+    if state == STAGED:
+        return ("PROMOTE", "DISCARD")
+    if state == FAILED_RECOVERABLE:
+        if entry.get("staging") is not None and entry.get("reason") is None:
+            return ("PROMOTE", "ABANDON")
+        return ("ABANDON",)
+    if state == RECOVERY_UNRESUMABLE:
+        return ("ABANDON",)
+    if state == RECOVERY_RETAINED:
+        mode = entry.get("disposition")
+        return (("RETRY_DISCARD",) if mode == "DISCARD" else ("RETRY_ABANDON",))
+    return ()
+
+
+@dataclass(frozen=True, slots=True)
+class ListWorkspaceRecoveries:
+    sessions: WorkspaceRecoverySessions
+
+    def execute(self) -> tuple[RecoverySessionStatus, ...]:
+        result = []
+        for recovery_id, entry in self.sessions.snapshot():
+            state = entry["state"]
+            if state in (PROMOTED, DISCARDED):
+                continue
+            result.append(
+                RecoverySessionStatus(
+                    recovery_id=recovery_id,
+                    state=state,
+                    summary=entry.get("summary"),
+                    reason=entry.get("reason"),
+                    allowed_actions=_allowed_actions(entry),
+                )
+            )
+        return tuple(sorted(result, key=lambda item: item.recovery_id))
+
+
+def _gravar_disposition(entry: dict, recovery_id: str, mode: str) -> None:
+    raiz = entry.get("root")
+    if raiz is None and entry.get("staging") is not None:
+        raiz = Path(entry["staging"].root)
+    if raiz is None:
+        raise RepositoryIntegrityError("raiz da recuperação indisponível")
+    _gravar_sidecar_imutavel(
+        Path(raiz),
+        _DISPOSITION,
+        {
+            "version": _DISPOSITION_VERSION,
+            "recovery_id": recovery_id,
+            "mode": mode,
+        },
+    )
+    entry["disposition"] = mode
+
+
+def _remover_entry(entry: dict) -> None:
+    staging = entry.get("staging")
+    if staging is not None:
+        _encerrar_staging(staging, exigir_remocao=True)
+        return
+    raiz = entry.get("root")
+    if raiz is None:
+        raise RepositoryIntegrityError("raiz da recuperação indisponível")
+    _remover_raiz_quarentenada(Path(raiz), exigir_remocao=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -762,8 +1193,27 @@ class DiscardWorkspaceRecovery:
         # Reivindica DISCARDING antes de tocar em qualquer coisa: se houver uma
         # promoção em voo, quem perde a corrida recebe erro honesto em vez de
         # fechar o staging sob os pés dela.
-        entry = self.sessions.claim(recovery_id, (STAGED, FAILED_RECOVERABLE), DISCARDING)
-        estado = _classificar_journal(entry["staging"])
+        permitidos = (
+            (FAILED_RECOVERABLE, RECOVERY_UNRESUMABLE, RECOVERY_RETAINED)
+            if aceitar_incompleta
+            else (STAGED, FAILED_RECOVERABLE, RECOVERY_RETAINED)
+        )
+        entry = self.sessions.claim(recovery_id, permitidos, DISCARDING)
+        anterior = entry.get("claimed_from")
+        disposition = entry.get("disposition")
+        if anterior == RECOVERY_RETAINED:
+            esperado = "ABANDON" if aceitar_incompleta else "DISCARD"
+            if disposition not in (None, esperado):
+                self.sessions.settle(recovery_id, RECOVERY_RETAINED)
+                raise WorkspaceRecoveryConflict(
+                    "a limpeza retida pertence a outra decisão do usuário"
+                )
+        staging = entry.get("staging")
+        estado = (
+            _classificar_journal(staging)
+            if staging is not None
+            else _JOURNAL_IRRETOMAVEL
+        )
         # Só o RETOMÁVEL é protegido: aí o journal é a única prova durável que
         # permite concluir uma promoção já iniciada no vivo. Irretomável não é
         # autoridade de nada alcançável, e inacessível pode voltar a ser lido —
@@ -778,16 +1228,26 @@ class DiscardWorkspaceRecovery:
             raise RecoveryPromotionIncomplete(
                 "não foi possível ler o estado desta promoção agora"
             )
+        mode = "ABANDON" if aceitar_incompleta else "DISCARD"
         try:
-            _encerrar_staging(entry["staging"], exigir_remocao=True)
+            _gravar_disposition(entry, recovery_id, mode)
+            _remover_entry(entry)
         except BaseException:
             # A sessão CONTINUA existindo: o usuário precisa poder tentar de novo
             # depois de liberar o que segurava o arquivo (antivírus, indexador).
-            self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
+            self.sessions.settle(recovery_id, RECOVERY_RETAINED)
             raise
         self.sessions.settle(recovery_id, DISCARDED)
         self.sessions.drop(recovery_id)
         return recovery_id
+
+
+@dataclass(frozen=True, slots=True)
+class AbandonWorkspaceRecovery:
+    discard: DiscardWorkspaceRecovery
+
+    def execute(self, recovery_id: str) -> str:
+        return self.discard.execute(recovery_id, aceitar_incompleta=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -811,7 +1271,8 @@ class PromoteWorkspaceRecovery:
         # porque uma promoção interrompida TEM de ser retomável.
         entry = self.sessions.claim(recovery_id, (STAGED, FAILED_RECOVERABLE), PROMOTING)
         if _classificar_journal(entry["staging"]) == _JOURNAL_IRRETOMAVEL:
-            self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
+            self.sessions.settle(recovery_id, RECOVERY_UNRESUMABLE)
+            entry["reason"] = "promotion_journal_unreadable_or_unsupported"
             raise RecoveryUnresumable(
                 "esta promoção interrompida não pode mais ser concluída"
             )
@@ -829,7 +1290,13 @@ class PromoteWorkspaceRecovery:
             # "retome" mandaria o usuário repetir para sempre uma operação
             # impossível, com o descarte recusado do outro lado.
             if isinstance(exc, (WorkspaceRecoveryConflict, RecoveryNotPromotable)):
-                _marcar_irretomavel(entry["staging"])
+                try:
+                    _marcar_irretomavel(entry["staging"])
+                except Exception as persist_error:
+                    raise RecoveryPromotionIncomplete(
+                        "a promoção divergiu, mas a classificação não pôde ser persistida"
+                    ) from persist_error
+                self.sessions.settle(recovery_id, RECOVERY_UNRESUMABLE)
                 raise RecoveryUnresumable(
                     "a perícia viva divergiu deste pacote; a promoção não converge mais"
                 ) from exc

@@ -93,6 +93,8 @@ _RECOVERY_UPLOAD_TARGETS = frozenset({"/v1/recovery/verify", "/v1/recovery/stagi
 def _proxy_target(path: str, method: str) -> str | None:
     if path == "/app-api/v1/workspaces" and method in {"GET", "POST"}:
         return "/v1/workspaces"
+    if path == "/app-api/v1/recovery" and method == "GET":
+        return "/v1/recovery"
     # Recuperação (#183): sem estas rotas, proteger ou restaurar uma perícia
     # continuaria exigindo terminal — bloqueador de produto.
     recovery_prefix = "/app-api/v1/recovery/"
@@ -103,7 +105,7 @@ def _proxy_target(path: str, method: str) -> str | None:
         if (
             len(remainder) == 2
             and _CANONICAL_UUID.fullmatch(remainder[0])
-            and remainder[1] in {"promote", "discard"}
+            and remainder[1] in {"promote", "discard", "abandon"}
             and method == "POST"
         ):
             return f"/v1/recovery/{remainder[0]}/{remainder[1]}"

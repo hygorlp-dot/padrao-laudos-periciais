@@ -14,10 +14,13 @@ from uuid import UUID, uuid4
 
 from ..application.ports import Clock, IdGenerator, RepositoryError, RepositoryIntegrityError
 from ..application.workspace_recovery import (
+    AbandonWorkspaceRecovery,
     recolher_stagings_orfaos,
+    reconstruir_sessoes_recuperacao,
     DiscardWorkspaceRecovery,
     ExportWorkspaceBackup,
     InspectWorkspaceBackup,
+    ListWorkspaceRecoveries,
     PromoteWorkspaceRecovery,
     StageWorkspaceRecovery,
     WorkspaceRecoverySessions,
@@ -501,6 +504,11 @@ def build_local_api(
     # Reabertura do produto: recolhe stagings órfãos ANTES de servir. Preserva
     # tudo que ainda for retomável — ver `recolher_stagings_orfaos`.
     recolher_stagings_orfaos(recovery_staging_root)
+    reconstruir_sessoes_recuperacao(
+        recovery_staging_root,
+        recovery_sessions,
+        abrir_staging_quarentenado,
+    )
     # `assert_backup_ready` é a autoridade canônica de prontidão: recusa o backup
     # enquanto houver vistoria offline pendente de sincronização. Ligar um no-op
     # aqui faria o produto entregar, em silêncio, um pacote sem o trabalho de
@@ -548,6 +556,7 @@ def build_local_api(
         recovery_sessions, store.workspaces, store.revisions, private_store
     )
     discard_workspace_recovery = DiscardWorkspaceRecovery(recovery_sessions)
+    abandon_workspace_recovery = AbandonWorkspaceRecovery(discard_workspace_recovery)
     services = LocalApiServices(
         create_workspace=CreateWorkspace(store.workspaces, local_clock, local_ids),
         get_workspace=GetWorkspace(store.workspaces),
@@ -680,8 +689,10 @@ def build_local_api(
         export_workspace_backup=export_workspace_backup,
         inspect_workspace_backup=inspect_workspace_backup,
         stage_workspace_recovery=stage_workspace_recovery,
+        list_workspace_recoveries=ListWorkspaceRecoveries(recovery_sessions),
         promote_workspace_recovery=promote_workspace_recovery,
         discard_workspace_recovery=discard_workspace_recovery,
+        abandon_workspace_recovery=abandon_workspace_recovery,
         read_case_document=read_case_document,
         import_inspection_photo=import_inspection_photo,
     )

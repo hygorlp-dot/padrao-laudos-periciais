@@ -1,14 +1,17 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
+  abandonRecovery,
   discardRecovery,
   exportWorkspaceBackup,
+  listPendingRecoveries,
   promoteRecovery,
   notPromotableMessage,
   RecoveryApiError,
   stageRecovery,
   verifyBackup,
   type BackupSummary,
+  type PendingRecovery,
   type StagedRecovery,
 } from "../data/workspaceRecovery";
 
@@ -69,7 +72,24 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
   const [restore, setRestore] = useState<RestoreState>({ kind: "idle" });
   const [selected, setSelected] = useState<File | null>(null);
   const [confirmed, setConfirmed] = useState(false);
+  const [pending, setPending] = useState<PendingRecovery[]>([]);
+  const [pendingError, setPendingError] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (workspaceId) return;
+    const controller = new AbortController();
+    listPendingRecoveries(controller.signal)
+      .then((items) => {
+        setPending(items);
+        setPendingError(null);
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) setPendingError(message(error));
+      });
+    return () => controller.abort();
+  }, [workspaceId]);
 
   async function onExport() {
     if (!workspaceId) return;
@@ -179,6 +199,66 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
     resetRestore();
   }
 
+  async function onAbandon(staged: StagedRecovery) {
+    setRestore({ kind: "discarding", staged });
+    try {
+      await abandonRecovery(staged.recovery_id);
+    } catch (error) {
+      setRestore({
+        kind: "error",
+        message: message(error),
+        staged,
+        unresumable: true,
+      });
+      return;
+    }
+    resetRestore();
+  }
+
+  async function actOnPending(item: PendingRecovery, action: "DISCARD" | "ABANDON") {
+    setPendingAction(item.recovery_id);
+    setPendingError(null);
+    try {
+      if (action === "ABANDON") await abandonRecovery(item.recovery_id);
+      else await discardRecovery(item.recovery_id);
+      setPending((current) => current.filter((entry) => entry.recovery_id !== item.recovery_id));
+    } catch (error) {
+      setPendingError(message(error));
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  function pendingMessage(item: PendingRecovery) {
+    if (item.reason === "promotion_journal_unreadable_or_unsupported") {
+      return "O estado da promoção não pôde ser lido ou pertence a outra versão. A cópia continua em quarentena e só será removida se você a abandonar explicitamente.";
+    }
+    if (item.reason === "promotion_cannot_converge" || item.reason === "staging_identity_mismatch") {
+      return "Esta promoção não pode mais convergir. Abandonar remove somente a cópia preparada; a perícia ativa permanece como está.";
+    }
+    if (item.state === "FAILED_RECOVERABLE") {
+      return "Uma promoção foi interrompida. A cópia preservada permite retomar o que falta.";
+    }
+    if (item.state === "RECOVERY_RETAINED") {
+      return "Uma limpeza anterior não terminou. A cópia segue em quarentena e a mesma ação pode ser repetida.";
+    }
+    return "Cópia verificada e preparada, ainda isolada da perícia ativa.";
+  }
+
+  function openPending(item: PendingRecovery) {
+    if (item.summary === null) return;
+    setRestore({
+      kind: "staged",
+      staged: {
+        recovery_id: item.recovery_id,
+        summary: item.summary,
+        promotable: item.allowed_actions.includes("PROMOTE"),
+        resuming: item.state === "FAILED_RECOVERABLE",
+        ...(item.reason ? { not_promotable_reason: item.reason } : {}),
+      },
+    });
+  }
+
   function discardButton(staged: StagedRecovery, disabled = false) {
     return (
       <button type="button" onClick={() => onDiscard(staged)} disabled={disabled}>
@@ -203,6 +283,49 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
   return (
     <section className="workspace-stage" aria-labelledby="recuperacao-titulo">
       <h2 id="recuperacao-titulo">Backup e recuperação</h2>
+
+      {!workspaceId && pending.length > 0 ? (
+        <section aria-labelledby="recuperacoes-pendentes-titulo">
+          <h3 id="recuperacoes-pendentes-titulo">Recuperações pendentes</h3>
+          <p>Estas cópias sobreviveram ao fechamento ou a uma interrupção e continuam isoladas.</p>
+          <ul>
+            {pending.map((item) => (
+              <li key={item.recovery_id}>
+                <p>{pendingMessage(item)}</p>
+                {item.summary ? summaryList(item.summary) : (
+                  <p><code>{item.recovery_id}</code> — resumo indisponível</p>
+                )}
+                {item.allowed_actions.includes("PROMOTE") && item.summary ? (
+                  <button type="button" onClick={() => openPending(item)}>
+                    {item.state === "STAGED"
+                      ? "Conferir recuperação preparada"
+                      : "Retomar promoção"}
+                  </button>
+                ) : null}
+                {(item.allowed_actions.includes("DISCARD") || item.allowed_actions.includes("RETRY_DISCARD")) ? (
+                  <button
+                    type="button"
+                    disabled={pendingAction === item.recovery_id}
+                    onClick={() => actOnPending(item, "DISCARD")}
+                  >
+                    Descartar recuperação preparada
+                  </button>
+                ) : null}
+                {(item.allowed_actions.includes("ABANDON") || item.allowed_actions.includes("RETRY_ABANDON")) ? (
+                  <button
+                    type="button"
+                    disabled={pendingAction === item.recovery_id}
+                    onClick={() => actOnPending(item, "ABANDON")}
+                  >
+                    Abandonar cópia de recuperação
+                  </button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {pendingError ? <p role="alert">{pendingError}</p> : null}
 
       {workspaceId ? (
       <section aria-labelledby="backup-titulo">
@@ -317,7 +440,11 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
                 {summaryList(restore.staged.summary)}
               </>
             )}
-            {restore.staged.resuming
+            {!restore.staged.promotable && restore.staged.resuming ? (
+              <button type="button" onClick={() => onAbandon(restore.staged)}>
+                Abandonar cópia de recuperação
+              </button>
+            ) : restore.staged.resuming
               ? null
               : discardButton(restore.staged, restore.kind !== "staged")}
           </div>
@@ -365,7 +492,9 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
                   será alterado. A cópia preparada pode ser descartada.
                 </p>
                 {summaryList(restore.staged.summary)}
-                {discardButton(restore.staged)}
+                <button type="button" onClick={() => onAbandon(restore.staged!)}>
+                  Abandonar cópia de recuperação
+                </button>
               </>
             ) : restore.staged ? (
               <>

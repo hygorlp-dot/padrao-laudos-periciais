@@ -416,10 +416,12 @@ describe("WorkspaceRecoveryView", () => {
     expect(document.body.textContent).not.toContain("Nada foi promovido");
     expect(document.body.textContent).not.toContain("Nenhuma perícia existente foi alterada");
   });
-  it("sem perícia, a tela é só restauração: não oferece criar backup", () => {
+  it("sem perícia, a tela é só restauração: não oferece criar backup", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ recoveries: [] }));
     render(<WorkspaceRecoveryView />);
     expect(screen.queryByRole("button", { name: "Criar backup" })).toBeNull();
     expect(screen.getByLabelText("Arquivo de backup")).toBeTruthy();
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
   });
   it("descarte que falha preserva o motivo: a tela não volta a mentir", async () => {
     const fetchMock = vi.mocked(fetch);
@@ -479,7 +481,7 @@ describe("WorkspaceRecoveryView", () => {
     ).toBeNull();
   });
 
-  it("promoção irretomável devolve a saída: descartar volta a ser legítimo", async () => {
+  it("promoção irretomável devolve a saída: abandono explícito fica disponível", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock
       .mockResolvedValueOnce(jsonResponse(SUMMARY))
@@ -507,8 +509,87 @@ describe("WorkspaceRecoveryView", () => {
     expect(alerta.textContent).toContain("não pode mais ser concluída");
     expect(screen.queryByRole("button", { name: "Retomar promoção" })).toBeNull();
     fireEvent.click(
-      screen.getByRole("button", { name: "Descartar recuperação preparada" }),
+      screen.getByRole("button", { name: "Abandonar cópia de recuperação" }),
     );
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    expect(fetchMock.mock.calls[3][0]).toBe(`/app-api/v1/recovery/${RECOVERY}/abandon`);
+  });
+
+  it("redescobre staging após reinício sem exigir reenvio do backup", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({
+      recoveries: [{
+        recovery_id: RECOVERY,
+        state: "STAGED",
+        summary: SUMMARY,
+        reason: null,
+        allowed_actions: ["PROMOTE", "DISCARD"],
+      }],
+    }));
+
+    render(<WorkspaceRecoveryView />);
+
+    expect(await screen.findByRole("heading", { name: "Recuperações pendentes" })).toBeTruthy();
+    expect(screen.getByText("Caso 42")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Conferir recuperação preparada" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Descartar recuperação preparada" })).toBeTruthy();
+    expect(fetch).toHaveBeenCalledWith(
+      "/app-api/v1/recovery",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("journal corrompido reaparece com abandono explícito e motivo honesto", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({
+        recoveries: [{
+          recovery_id: RECOVERY,
+          state: "RECOVERY_UNRESUMABLE",
+          summary: SUMMARY,
+          reason: "promotion_journal_unreadable_or_unsupported",
+          allowed_actions: ["ABANDON"],
+        }],
+      }))
+      .mockResolvedValueOnce(jsonResponse({ recovery_id: RECOVERY }));
+
+    render(<WorkspaceRecoveryView />);
+
+    const abandon = await screen.findByRole("button", {
+      name: "Abandonar cópia de recuperação",
+    });
+    expect(document.body.textContent).toContain("estado da promoção não pôde ser lido");
+    fireEvent.click(abandon);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(fetchMock.mock.calls[1][0]).toBe(`/app-api/v1/recovery/${RECOVERY}/abandon`);
+    expect(JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)).toEqual({
+      confirm_abandon: true,
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Recuperações pendentes" })).toBeNull(),
+    );
+  });
+
+  it("reenvio de recuperação irretomável nunca oculta a ação de abandono", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(SUMMARY))
+      .mockResolvedValueOnce(jsonResponse({
+        recovery_id: RECOVERY,
+        summary: SUMMARY,
+        promotable: false,
+        resuming: true,
+        not_promotable_reason: "promotion_journal_unreadable_or_unsupported",
+      }, 201));
+
+    render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
+    selectFile();
+    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
+    fireEvent.click(await screen.findByRole("button", { name: "2. Preparar cópia recuperada" }));
+
+    expect(await screen.findByRole("button", {
+      name: "Abandonar cópia de recuperação",
+    })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retomar promoção" })).toBeNull();
   });
 });

@@ -554,6 +554,7 @@ def test_normal_user_recovery_needs_no_terminal(tmp_path):
     """
     from scripts.backend_contract.product_bridge.transport import _proxy_target
 
+    assert _proxy_target("/app-api/v1/recovery", "GET") == "/v1/recovery"
     assert _proxy_target("/app-api/v1/recovery/verify", "POST") == "/v1/recovery/verify"
     assert _proxy_target("/app-api/v1/recovery/staging", "POST") == "/v1/recovery/staging"
     recovery_id = "00000000-0000-4000-8000-000000000000"
@@ -562,6 +563,9 @@ def test_normal_user_recovery_needs_no_terminal(tmp_path):
     )
     assert _proxy_target(f"/app-api/v1/recovery/{recovery_id}/discard", "POST") == (
         f"/v1/recovery/{recovery_id}/discard"
+    )
+    assert _proxy_target(f"/app-api/v1/recovery/{recovery_id}/abandon", "POST") == (
+        f"/v1/recovery/{recovery_id}/abandon"
     )
     workspace_id = "11111111-1111-4111-8111-111111111111"
     assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/backup", "POST") == (
@@ -768,17 +772,22 @@ def test_discard_and_promotion_remove_the_staging_root_from_disk(tmp_path):
         target.close()
 
 
-def test_shutdown_collects_pending_staging_roots(tmp_path):
-    source = _runtime(tmp_path, "source")
-    try:
-        workspace_id, _ = _workspace_with_material(source, tmp_path)
-        _status, _headers, package = _api(source, "POST", f"/v1/workspaces/{workspace_id}/backup")
-    finally:
-        source.close()
+def test_shutdown_preserves_pending_staging_roots_and_restart_discovers_them(tmp_path):
+    packages = []
+    for index in range(3):
+        source = _runtime(tmp_path, f"source-{index}")
+        try:
+            workspace_id, _ = _workspace_with_material(source, tmp_path, f"Caso {index}")
+            _status, _headers, package = _api(
+                source, "POST", f"/v1/workspaces/{workspace_id}/backup"
+            )
+            packages.append(package)
+        finally:
+            source.close()
 
     target = _runtime(tmp_path, "target")
     try:
-        for _ in range(3):
+        for package in packages:
             status, _staged = _json(
                 target, "POST", "/v1/recovery/staging", body=package,
                 headers={"Content-Type": "application/octet-stream"},
@@ -787,9 +796,20 @@ def test_shutdown_collects_pending_staging_roots(tmp_path):
         assert len(list(tmp_path.rglob("RECOVERY_NOT_PROMOTABLE"))) == 3
     finally:
         target.close()
-    assert not list(tmp_path.rglob("RECOVERY_NOT_PROMOTABLE")), (
-        "stagings pendentes sobreviveram ao encerramento"
-    )
+    assert len(list(tmp_path.rglob("RECOVERY_NOT_PROMOTABLE"))) == 3
+
+    reopened = _runtime(tmp_path, "target")
+    try:
+        status, body = _json(reopened, "GET", "/v1/recovery")
+        assert status == 200, body
+        assert len(body["recoveries"]) == 3
+        assert {item["state"] for item in body["recoveries"]} == {"STAGED"}
+        assert all(
+            item["allowed_actions"] == ["PROMOTE", "DISCARD"]
+            for item in body["recoveries"]
+        )
+    finally:
+        reopened.close()
 
 
 def test_backup_route_consults_the_canonical_readiness_authority(tmp_path):

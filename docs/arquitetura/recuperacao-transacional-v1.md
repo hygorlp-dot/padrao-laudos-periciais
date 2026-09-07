@@ -4,6 +4,15 @@ Status: **nota de arquitetura**, escrita antes de qualquer edição de produçã
 `AUTONOMOUS_CAUSAL_REPAIR_LOOP_V1` ser acionado. `251bf29` está permanentemente
 invalidado como candidato a merge.
 
+Implementação atual (#183): além do journal exclusivo da promoção, cada
+staging publicado possui `RECOVERY_SESSION_V1` imutável. Esse descriptor liga
+`recovery_id`, identidade da raiz, resumo verificado e hash do pacote antes da
+resposta `201`. Ele permite reconstruir `STAGED` depois de fechar/reabrir o
+produto, mas **não autoriza mutação viva**. `PROMOTION_TRANSACTION_V1` continua
+sendo a única autoridade de promoção. Descarte/abandono publicam antes um
+`RECOVERY_DISPOSITION_V1` imutável, para que falha de limpeza seja retomada com
+a mesma decisão humana.
+
 A classe causal `PARTIAL_PROMOTION_NOT_RECOVERABLE` sobreviveu a três estratégias de
 reparo local — ordem privado-primeiro (`8d611a3`), reversão para privado-último
 (`994cf41`) e retomada em memória (`251bf29`). O problema deixou de ser ordem de
@@ -184,10 +193,14 @@ Falha em `PROMOTING`/`VERIFYING_LIVE` ⇒ **não** apaga o journal: fica
 Na reabertura do produto, a aplicação reconstrói sessões a partir do journal +
 raízes quarentenadas e classifica cada uma como:
 
+- **preparada** — descriptor íntegro e ausência de journal; continua `STAGED`,
+  visível e promovível/descartável pelo caminho normal;
 - **retomável** — journal íntegro, digest do pacote confere, identidade da raiz de
   staging confere, vivo é prefixo exato do registrado;
-- **estrangeira/obsoleta/corrompida** — qualquer divergência ⇒ fail-closed, sem
-  promoção, com motivo honesto.
+- **irretomável** — descriptor/journal desconhecido, ilegível ou divergente ⇒
+  fail-closed, sem promoção e com abandono explícito disponível;
+- **limpeza retida** — disposition durável presente ⇒ somente retentar a mesma
+  decisão (`DISCARD` ou `ABANDON`).
 
 Nunca promove sozinho no startup. **Promoção explícita humana continua obrigatória.**
 Isso torna `promotion_started` desnecessário: a autoridade deixa de ser um booleano de
@@ -250,9 +263,11 @@ marcador de quarentena.
 
 A fase gravada no journal passa a ser LIDA: `PROMOTING` significa retomável e é
 preservada; `PROMOTED` significa que não há mais nada a concluir. Na reabertura do
-produto, raízes sem journal ou com journal `PROMOTED` são recolhidas — uma queda
-durante a preparação deixava cópia integral e em claro do material sigiloso sem
-nenhuma rota de produto para removê-la, e cada queda somava outra.
+produto, raiz **sem descriptor e sem journal** é queda anterior à publicação e
+pode ser recolhida; raiz publicada (`RECOVERY_SESSION_V1`) nunca é abandonada por
+inferência. Ela reaparece na UI e só sai por promoção terminal ou comando humano
+explícito. Journal/descriptor corrompido ou de versão desconhecida também é
+preservado e exposto como irretomável, nunca tratado como autoridade ausente.
 
 ---
 

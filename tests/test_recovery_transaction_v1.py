@@ -18,7 +18,10 @@ revisões/privado parciais + nenhuma sessão válida + nenhuma rota de continua�
 
 from __future__ import annotations
 
+import json
 import threading
+
+import pytest
 
 from tests.test_backup_recovery_reachability_v1 import (
     _api,
@@ -34,6 +37,46 @@ def _pacote(runtime, workspace_id):
     status, _headers, package = _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/backup")
     assert status == 200
     return package
+
+
+@pytest.mark.parametrize(
+    ("state", "disposition", "discoverable", "allowed"),
+    (
+        ("STAGED", None, True, ("PROMOTE", "DISCARD")),
+        ("PROMOTING", None, True, ()),
+        ("FAILED_RECOVERABLE", None, True, ("ABANDON",)),
+        ("RECOVERY_UNRESUMABLE", None, True, ("ABANDON",)),
+        ("PROMOTED", None, False, ()),
+        ("DISCARDING", None, True, ()),
+        ("DISCARDED", None, False, ()),
+        ("RECOVERY_RETAINED", "DISCARD", True, ("RETRY_DISCARD",)),
+        ("RECOVERY_RETAINED", "ABANDON", True, ("RETRY_ABANDON",)),
+    ),
+)
+def test_matriz_estado_comando_expoe_somente_acoes_seguras(
+    tmp_path, state, disposition, discoverable, allowed
+):
+    """Cada estado tem saída explícita ou é terminal/em-voo sem comando concorrente."""
+    from scripts.backend_contract.application.workspace_recovery import (
+        ListWorkspaceRecoveries,
+        WorkspaceRecoverySessions,
+    )
+
+    recovery_id = "00000000-0000-4000-8000-000000000001"
+    sessions = WorkspaceRecoverySessions()
+    sessions.register(
+        recovery_id,
+        None,
+        None,
+        state=state,
+        root=tmp_path / f"recovery-{recovery_id}",
+        disposition=disposition,
+    )
+    listed = ListWorkspaceRecoveries(sessions).execute()
+    assert bool(listed) is discoverable
+    if discoverable:
+        assert listed[0].state == state
+        assert listed[0].allowed_actions == allowed
 
 
 def _origem_com_dois_privados(tmp_path, nome="origem"):
@@ -345,6 +388,45 @@ def test_descarte_com_handle_preso_nao_mente_e_permite_retentativa(tmp_path):
         if preso is not None:
             preso.close()
         alvo.close()
+
+
+def test_descarte_retido_sobrevive_ao_reinicio_e_repete_a_mesma_decisao(
+    tmp_path, monkeypatch
+):
+    """Falha após disposition não perde a ação nem muda DISCARD para ABANDON."""
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    _workspace_id, _m, package = _origem_com_dois_privados(tmp_path, "origem-e2")
+    alvo = _runtime(tmp_path, "alvo-e2")
+    status, staged = _stage(alvo, package)
+    assert status == 201, staged
+    recovery_id = staged["recovery_id"]
+
+    original = wr._remover_raiz_quarentenada
+
+    def _retida(*_args, **_kwargs):
+        raise wr.RecoveryRetained("falha injetada depois da decisão")
+
+    monkeypatch.setattr(wr, "_remover_raiz_quarentenada", _retida)
+    status, corpo = _json(alvo, "POST", f"/v1/recovery/{recovery_id}/discard")
+    assert status == 409, corpo
+    assert corpo["error"]["code"] == "RECOVERY_RETAINED"
+    alvo.close()
+    monkeypatch.setattr(wr, "_remover_raiz_quarentenada", original)
+
+    reaberto = _runtime(tmp_path, "alvo-e2")
+    try:
+        status, corpo = _json(reaberto, "GET", "/v1/recovery")
+        assert status == 200, corpo
+        assert corpo["recoveries"][0]["state"] == "RECOVERY_RETAINED"
+        assert corpo["recoveries"][0]["allowed_actions"] == ["RETRY_DISCARD"]
+        status, corpo = _json(
+            reaberto, "POST", f"/v1/recovery/{recovery_id}/discard"
+        )
+        assert status == 200, corpo
+        assert _raizes(tmp_path, "alvo-e2") == []
+    finally:
+        reaberto.close()
 
 
 # ------------------------------------------------------------------ F + G
@@ -692,6 +774,17 @@ def _raizes(tmp_path, nome):
     return sorted(p.name for p in base.iterdir() if p.is_dir())
 
 
+def _assinatura_viva(runtime, workspace_id):
+    """Estado autoritativo vivo que abandono de staging nunca pode tocar."""
+    from scripts.backend_contract.application.models import WorkspaceId
+
+    parsed = WorkspaceId.parse(str(workspace_id))
+    workspace = runtime._store.workspaces.get(parsed)
+    revisions = tuple(runtime._store.revisions.list_workspace(parsed))
+    private = tuple(runtime._private_store.list_all(parsed))
+    return workspace, revisions, private
+
+
 def test_staging_orfao_sem_journal_e_recolhido_na_reabertura(tmp_path):
     """RED N — queda durante a preparação não pode acumular cópias eternas.
 
@@ -704,11 +797,10 @@ def test_staging_orfao_sem_journal_e_recolhido_na_reabertura(tmp_path):
     try:
         status, staged = _stage(destino, package)
         assert status == 201, staged
-        # Simula a QUEDA do processo: os handles do sistema operacional somem
-        # (é o que a morte do processo faz) e a raiz permanece no disco, sem
-        # sessão. Só limpar o registro em memória deixaria os arquivos abertos
-        # neste mesmo processo — artefato do harness, não do produto.
+        # Simula a QUEDA ANTES de publicar RECOVERY_SESSION_V1. Depois desse
+        # descriptor, a raiz não é órfã: é trabalho preparado do usuário.
         for entrada in destino._recovery_sessions._sessions.values():
+            (entrada["staging"].root / "RECOVERY_SESSION_V1").unlink()
             entrada["staging"].close()
         destino._recovery_sessions._sessions.clear()
     finally:
@@ -763,13 +855,55 @@ def test_promocao_interrompida_sobrevive_a_varredura_de_orfaos(tmp_path):
     reaberto = _runtime(tmp_path, "p-destino")
     try:
         assert _raizes(tmp_path, "p-destino"), "a promoção interrompida foi destruída"
-        status, retomada = _stage(reaberto, package)
-        assert status == 201, retomada
+        status, retomadas = _json(reaberto, "GET", "/v1/recovery")
+        assert status == 200, retomadas
+        assert len(retomadas["recoveries"]) == 1
+        retomada = retomadas["recoveries"][0]
+        assert retomada["state"] == "FAILED_RECOVERABLE"
+        assert retomada["allowed_actions"] == ["PROMOTE", "ABANDON"]
         status, corpo = _promote(reaberto, retomada["recovery_id"])
         assert status == 200, corpo
         assert len(_materiais(reaberto, origem)) == 2
     finally:
         reaberto.close()
+
+def test_recuperacao_preparada_sobrevive_ao_fechamento_e_reinicio(tmp_path):
+    """RED O'' — fechar o aplicativo não é descartar um staging válido.
+
+    Uma recuperação já verificada e preparada é trabalho recuperável do usuário.
+    `runtime.close()` deve apenas fechar handles; a inicialização seguinte deve
+    preservar a raiz para que a ação normal possa ser reconstruída.
+    """
+    _origem, _ids, package = _origem_com_dois_privados(tmp_path, "o2-origem")
+    destino = _runtime(tmp_path, "o2-destino")
+    status, staged = _stage(destino, package)
+    assert status == 201, staged
+    assert _raizes(tmp_path, "o2-destino")
+
+    destino.close()
+    assert _raizes(tmp_path, "o2-destino"), "close descartou a recuperação preparada"
+
+    reaberto = _runtime(tmp_path, "o2-destino")
+    try:
+        assert _raizes(tmp_path, "o2-destino"), "restart recolheu um staging válido"
+        status, corpo = _json(reaberto, "GET", "/v1/recovery")
+        assert status == 200, corpo
+        assert corpo == {
+            "recoveries": [
+                {
+                    "recovery_id": staged["recovery_id"],
+                    "state": "STAGED",
+                    "summary": staged["summary"],
+                    "reason": None,
+                    "allowed_actions": ["PROMOTE", "DISCARD"],
+                }
+            ]
+        }
+        status, corpo = _promote(reaberto, staged["recovery_id"])
+        assert status == 200, corpo
+    finally:
+        reaberto.close()
+
 
 # ------------------------------------------------------------------ Q
 # SELF_PRODUCED_BACKUP MUST_BE REINGESTIBLE
@@ -861,6 +995,102 @@ def test_journal_ilegivel_de_outra_raiz_nao_mata_toda_restauracao(tmp_path):
         reaberto.close()
 
 
+def test_restart_nunca_recolhe_journal_corrompido_sem_decisao_humana(tmp_path):
+    """RED R2b — não compreender autoridade nunca prova que ela não existiu."""
+    workspace_id, package, destino, recovery_id = _interromper_promocao(tmp_path, "r2b")
+    journal = _journal_da_unica_raiz(tmp_path, "r2b")
+    journal.write_bytes(b"{trunc")
+    destino.close()
+    assert _raizes(tmp_path, "r2b")
+
+    reaberto = _runtime(tmp_path, "r2b")
+    try:
+        assert _raizes(tmp_path, "r2b"), "restart abandonou journal corrompido"
+        status, corpo = _json(reaberto, "GET", "/v1/recovery")
+        assert status == 200, corpo
+        assert corpo["recoveries"][0]["recovery_id"] == recovery_id
+        assert corpo["recoveries"][0]["state"] == "RECOVERY_UNRESUMABLE"
+        assert corpo["recoveries"][0]["allowed_actions"] == ["ABANDON"]
+
+        status, restaged = _stage(reaberto, package)
+        assert status == 201, restaged
+        assert restaged["recovery_id"] == recovery_id
+        assert restaged["promotable"] is False
+        assert len(_raizes(tmp_path, "r2b")) == 1, "reenvio fabricou segunda cópia privada"
+
+        antes = _assinatura_viva(reaberto, workspace_id)
+        status, corpo = _json(
+            reaberto,
+            "POST",
+            f"/v1/recovery/{recovery_id}/abandon",
+            value={"confirm_abandon": 1},
+        )
+        assert status == 400, corpo
+        assert _assinatura_viva(reaberto, workspace_id) == antes
+        assert _raizes(tmp_path, "r2b")
+
+        status, corpo = _json(
+            reaberto,
+            "POST",
+            f"/v1/recovery/{recovery_id}/abandon",
+            value={"confirm_abandon": True},
+        )
+        assert status == 200, corpo
+        assert _assinatura_viva(reaberto, workspace_id) == antes
+        assert _raizes(tmp_path, "r2b") == []
+    finally:
+        reaberto.close()
+
+
+def test_restart_nunca_recolhe_versao_desconhecida_sem_decisao_humana(tmp_path):
+    """RED R2c — versão futura é quarentena irretomável, não órfão descartável."""
+    _origem, _pkg, destino, recovery_id = _interromper_promocao(tmp_path, "r2c")
+    journal = _journal_da_unica_raiz(tmp_path, "r2c")
+    journal.write_text('{"version":999,"phase":"PROMOTING"}', encoding="utf-8")
+    destino.close()
+    assert _raizes(tmp_path, "r2c")
+
+    reaberto = _runtime(tmp_path, "r2c")
+    try:
+        assert _raizes(tmp_path, "r2c"), "restart abandonou versão desconhecida"
+        status, corpo = _json(reaberto, "GET", "/v1/recovery")
+        assert status == 200, corpo
+        assert corpo["recoveries"][0]["recovery_id"] == recovery_id
+        assert corpo["recoveries"][0]["state"] == "RECOVERY_UNRESUMABLE"
+        assert corpo["recoveries"][0]["allowed_actions"] == ["ABANDON"]
+    finally:
+        reaberto.close()
+
+
+def test_restart_preserva_irretomavel_mesmo_sem_arquivo_privado(tmp_path):
+    """A autoridade publicada exige abandono explícito mesmo sem `.content`.
+
+    A raiz também contém o banco staged e a trilha da operação. Inferir
+    abandono pela ausência de um tipo de arquivo apagaria histórico sem a
+    decisão do usuário.
+    """
+    _origem, _pkg, destino, recovery_id = _interromper_promocao(tmp_path, "r2d")
+    journal = _journal_da_unica_raiz(tmp_path, "r2d")
+    registro = json.loads(journal.read_text(encoding="utf-8"))
+    journal.write_text(
+        json.dumps({**registro, "phase": "UNRESUMABLE"}), encoding="utf-8"
+    )
+    for material in journal.parent.rglob("*.content"):
+        material.unlink()
+    destino.close()
+
+    reaberto = _runtime(tmp_path, "r2d")
+    try:
+        assert _raizes(tmp_path, "r2d"), "restart inferiu abandono sem autoridade"
+        status, corpo = _json(reaberto, "GET", "/v1/recovery")
+        assert status == 200, corpo
+        assert corpo["recoveries"][0]["recovery_id"] == recovery_id
+        assert corpo["recoveries"][0]["state"] == "RECOVERY_UNRESUMABLE"
+        assert corpo["recoveries"][0]["allowed_actions"] == ["ABANDON"]
+    finally:
+        reaberto.close()
+
+
 def test_pericia_parcial_editada_torna_a_recuperacao_irretomavel_e_descartavel(tmp_path):
     """RED R3 — retomar virou impossível, então prender o usuário é indefensável.
 
@@ -880,7 +1110,12 @@ def test_pericia_parcial_editada_torna_a_recuperacao_irretomavel_e_descartavel(t
         assert status == 409, corpo
         assert corpo["error"]["code"] == "RECOVERY_UNRESUMABLE"
 
-        status, corpo = _json(destino, "POST", f"/v1/recovery/{recovery_id}/discard")
+        status, corpo = _json(
+            destino,
+            "POST",
+            f"/v1/recovery/{recovery_id}/abandon",
+            value={"confirm_abandon": True},
+        )
         assert status == 200, corpo
     finally:
         destino.close()
@@ -899,7 +1134,12 @@ def test_identidade_perdida_com_journal_torna_irretomavel_sem_segunda_copia(tmp_
 
         # E não pode nascer uma SEGUNDA raiz com o material privado em claro.
         base = tmp_path / ".r4.sqlite3.recovery"
-        status, corpo = _json(destino, "POST", f"/v1/recovery/{recovery_id}/discard")
+        status, corpo = _json(
+            destino,
+            "POST",
+            f"/v1/recovery/{recovery_id}/abandon",
+            value={"confirm_abandon": True},
+        )
         assert status == 200, corpo
         assert [p for p in base.iterdir() if p.is_dir()] == []
     finally:
