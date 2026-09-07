@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from threading import Lock
 
@@ -92,6 +93,12 @@ def build_product_runtime(
             request_timeout_seconds=bridge_config.request_timeout_seconds,
         ),
     )
+    if bridge_config.spool_dir is None:
+        # O bridge derrama o MESMO material sigiloso; reusa o diretório de spool
+        # que a Local API já criou dentro dos dados do produto, em vez de %TEMP%.
+        bridge_config = replace(
+            bridge_config, spool_dir=local_api.server._config.spool_dir
+        )
     try:
         bridge = ProductBridgeServer(
             frontend_root=root,

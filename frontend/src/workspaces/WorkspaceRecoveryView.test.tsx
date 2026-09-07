@@ -94,7 +94,7 @@ describe("WorkspaceRecoveryView", () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(SUMMARY))
       .mockResolvedValueOnce(
-        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true }, 201),
+        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true, resuming: false }, 201),
       );
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
@@ -115,7 +115,7 @@ describe("WorkspaceRecoveryView", () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(SUMMARY))
       .mockResolvedValueOnce(
-        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true }, 201),
+        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true, resuming: false }, 201),
       );
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
@@ -136,7 +136,7 @@ describe("WorkspaceRecoveryView", () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(SUMMARY))
       .mockResolvedValueOnce(
-        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true }, 201),
+        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true, resuming: false }, 201),
       )
       .mockResolvedValueOnce(jsonResponse(SUMMARY));
 
@@ -163,7 +163,7 @@ describe("WorkspaceRecoveryView", () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(SUMMARY))
       .mockResolvedValueOnce(
-        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true }, 201),
+        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true, resuming: false }, 201),
       )
       .mockResolvedValueOnce(jsonResponse({ recovery_id: RECOVERY }));
 
@@ -203,7 +203,7 @@ describe("WorkspaceRecoveryView", () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(SUMMARY))
       .mockResolvedValueOnce(
-        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true }, 201),
+        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true, resuming: false }, 201),
       )
       .mockResolvedValueOnce(
         jsonResponse({ error: { code: "WORKSPACE_CONFLICT", message: "x" } }, 409),
@@ -227,7 +227,7 @@ describe("WorkspaceRecoveryView", () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(SUMMARY))
       .mockResolvedValueOnce(
-        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true }, 201),
+        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true, resuming: false }, 201),
       )
       .mockResolvedValueOnce(
         jsonResponse({ error: { code: "WORKSPACE_CONFLICT", message: "x" } }, 409),
@@ -262,6 +262,7 @@ describe("WorkspaceRecoveryView", () => {
             recovery_id: RECOVERY,
             summary: SUMMARY,
             promotable: false,
+            resuming: false,
             not_promotable_reason: "ja_existe_pericia_com_esta_identidade",
           },
           201,
@@ -294,7 +295,7 @@ describe("WorkspaceRecoveryView", () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(SUMMARY))
       .mockResolvedValueOnce(
-        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true }, 201),
+        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true, resuming: false }, 201),
       )
       .mockResolvedValueOnce(
         jsonResponse({ error: { code: "WORKSPACE_CONFLICT", message: "x" } }, 409),
@@ -323,7 +324,7 @@ describe("WorkspaceRecoveryView", () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(SUMMARY))
       .mockResolvedValueOnce(
-        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true }, 201),
+        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true, resuming: false }, 201),
       )
       .mockResolvedValueOnce(
         jsonResponse({ error: { code: "RECOVERY_RETAINED", message: "x" } }, 409),
@@ -354,7 +355,7 @@ describe("WorkspaceRecoveryView", () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(SUMMARY))
       .mockResolvedValueOnce(
-        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true }, 201),
+        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true, resuming: false }, 201),
       )
       .mockResolvedValueOnce(
         jsonResponse(
@@ -393,7 +394,7 @@ describe("WorkspaceRecoveryView", () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(SUMMARY))
       .mockResolvedValueOnce(
-        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true }, 201),
+        jsonResponse({ recovery_id: RECOVERY, summary: SUMMARY, promotable: true, resuming: false }, 201),
       )
       .mockResolvedValueOnce(
         jsonResponse(
@@ -419,5 +420,95 @@ describe("WorkspaceRecoveryView", () => {
     render(<WorkspaceRecoveryView />);
     expect(screen.queryByRole("button", { name: "Criar backup" })).toBeNull();
     expect(screen.getByLabelText("Arquivo de backup")).toBeTruthy();
+  });
+  it("descarte que falha preserva o motivo: a tela não volta a mentir", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(SUMMARY))
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { recovery_id: RECOVERY, summary: SUMMARY, promotable: true, resuming: false },
+          201,
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { error: { code: "RECOVERY_PROMOTION_INCOMPLETE", message: "x" } },
+          409,
+        ),
+      );
+
+    render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
+    selectFile();
+    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
+    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
+    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
+    await screen.findByRole("button", { name: "4. Promover recuperação" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Descartar recuperação preparada" }),
+    );
+
+    await screen.findByRole("alert");
+    expect(document.body.textContent).not.toContain("Nada foi promovido");
+    expect(screen.getByRole("button", { name: "Retomar promoção" })).toBeTruthy();
+  });
+
+  it("retomada nunca afirma que não substituiu nada", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(SUMMARY))
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { recovery_id: RECOVERY, summary: SUMMARY, promotable: true, resuming: true },
+          201,
+        ),
+      );
+
+    render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
+    selectFile();
+    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
+    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
+    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
+
+    await screen.findByRole("button", { name: "4. Promover recuperação" });
+    expect(document.body.textContent).not.toContain("não substituiu nada");
+    expect(document.body.textContent).toContain("RETOMADA");
+    // Descartar uma retomada apagaria a autoridade: não é oferecido aqui.
+    expect(
+      screen.queryByRole("button", { name: "Descartar recuperação preparada" }),
+    ).toBeNull();
+  });
+
+  it("promoção irretomável devolve a saída: descartar volta a ser legítimo", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(SUMMARY))
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { recovery_id: RECOVERY, summary: SUMMARY, promotable: true, resuming: false },
+          201,
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { code: "RECOVERY_UNRESUMABLE", message: "x" } }, 409),
+      )
+      .mockResolvedValueOnce(jsonResponse({ recovery_id: RECOVERY }));
+
+    render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
+    selectFile();
+    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
+    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
+    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
+    await screen.findByRole("button", { name: "4. Promover recuperação" });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "4. Promover recuperação" }));
+
+    const alerta = await screen.findByRole("alert");
+    expect(alerta.textContent).toContain("não pode mais ser concluída");
+    expect(screen.queryByRole("button", { name: "Retomar promoção" })).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Descartar recuperação preparada" }),
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
   });
 });

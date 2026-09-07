@@ -6,6 +6,7 @@ import math
 import socket
 import tempfile
 import time
+from pathlib import Path
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Event, Lock, Thread, Timer
@@ -34,6 +35,11 @@ class LocalServerConfig:
     max_body_bytes: int = 1_048_576
     max_document_body_bytes: int = MAX_DOCUMENT_BYTES
     request_timeout_seconds: float = 5.0
+    #: Onde o corpo grande é derramado. `None` = temporário do sistema, que é
+    #: varrido e sincronizado por ferramentas de terceiros; material sigiloso
+    #: em claro não deve morar lá. A composição aponta para o diretório de
+    #: dados do próprio produto.
+    spool_dir: str | None = None
 
     def __post_init__(self):
         if self.host != "127.0.0.1":
@@ -60,6 +66,9 @@ class LocalServerConfig:
             or self.request_timeout_seconds > 30
         ):
             raise ValueError("timeout local inválido")
+        if self.spool_dir is not None:
+            if type(self.spool_dir) is not str or not Path(self.spool_dir).is_dir():
+                raise ValueError("diretório de spool inválido")
 
 
 class _ThreadingLocalServer(ThreadingHTTPServer):
@@ -88,6 +97,7 @@ def _handler_for(
     max_body_bytes: int,
     max_document_body_bytes: int,
     request_timeout_seconds: float,
+    spool_dir: str | None = None,
 ):
     class LocalRequestHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -216,7 +226,7 @@ def _handler_for(
                     spool = None
                     try:
                         if length and api.is_large_binary_upload(self.command, self.path):
-                            spool = tempfile.SpooledTemporaryFile(max_size=1_048_576, mode="w+b")
+                            spool = tempfile.SpooledTemporaryFile(max_size=1_048_576, mode="w+b", dir=spool_dir)
                             remaining = length
                             while remaining:
                                 block = self.rfile.read(min(DOCUMENT_IO_CHUNK_BYTES, remaining))
@@ -342,6 +352,7 @@ class LocalApiServer:
                 self._config.max_body_bytes,
                 self._config.max_document_body_bytes,
                 self._config.request_timeout_seconds,
+                self._config.spool_dir,
             ),
         )
         self._thread: Thread | None = None

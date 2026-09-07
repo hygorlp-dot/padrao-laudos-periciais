@@ -1103,6 +1103,24 @@ class RecoveryStaging:
                 os.close(diretorio)
 
     @property
+    def identidade_registrada(self) -> str | None:
+        """Token JÁ gravado, sem criar nenhum. `None` = não há prova nesta raiz.
+
+        Quem classifica um journal precisa comparar identidades SEM cunhar uma
+        nova: cunhar aqui faria toda raiz cuja prova sumiu parecer "de outra
+        promoção", em vez de "sem prova".
+        """
+        try:
+            bruto = (self._root / self._IDENTITY).read_bytes()
+        except OSError:
+            return None
+        try:
+            token = bruto.decode("ascii").strip()
+        except UnicodeDecodeError:
+            return None
+        return token or None
+
+    @property
     def identidade(self) -> str:
         """Identidade DURÁVEL desta raiz — prova de que o journal é dela.
 
@@ -1116,11 +1134,10 @@ class RecoveryStaging:
         único por raiz, sobrevive a cópia de pasta e não depende do sistema de
         arquivos. Corrida entre dois processos é resolvida relendo.
         """
+        registrada = self.identidade_registrada
+        if registrada is not None:
+            return registrada
         alvo = self._root / self._IDENTITY
-        try:
-            return alvo.read_text(encoding="ascii").strip()
-        except FileNotFoundError:
-            pass
         token = uuid4().hex
         temporario = self._root / f".{self._IDENTITY}.{uuid4().hex}"
         descritor = os.open(temporario, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN_BINARY, 0o600)

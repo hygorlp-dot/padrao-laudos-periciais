@@ -21,6 +21,8 @@ export type StagedRecovery = {
   recovery_id: string;
   summary: BackupSummary;
   promotable: boolean;
+  /** Retoma uma promoção que JÁ gravou no armazenamento vivo. */
+  resuming: boolean;
   /** Só existe quando `promotable` é falso. Motivo canônico, não texto de UI. */
   not_promotable_reason?: string;
 };
@@ -49,6 +51,7 @@ export type RecoveryApiErrorKind =
   | "conflict"
   | "not-promotable"
   | "promotion-incomplete"
+  | "unresumable"
   | "retained"
   | "stage-failed"
   | "too-large"
@@ -120,6 +123,12 @@ function mappedError(status: number, code?: string): RecoveryApiError {
     return new RecoveryApiError(
       "too-large",
       "Esta perícia é grande demais para o backup desta versão. O produto prefere avisar agora a entregar um pacote que não conseguiria restaurar depois.",
+    );
+  }
+  if (code === "RECOVERY_UNRESUMABLE") {
+    return new RecoveryApiError(
+      "unresumable",
+      "Esta promoção interrompida não pode mais ser concluída: a perícia desta instalação divergiu do pacote. A cópia preparada pode ser descartada.",
     );
   }
   if (code === "RECOVERY_PROMOTION_INCOMPLETE") {
@@ -243,12 +252,17 @@ export async function stageRecovery(file: File, signal?: AbortSignal): Promise<S
   // `VERIFIED != PROMOTABLE`: o backend agora deriva a promovibilidade das
   // condições canônicas já conhecidas no staging e, quando nega, diz o motivo.
   const chaves = Object.keys(record).sort().join("|");
-  const esperado = ["promotable", "recovery_id", "summary"].join("|");
-  const esperadoComMotivo = ["not_promotable_reason", "promotable", "recovery_id", "summary"].join("|");
+  const esperado = ["promotable", "recovery_id", "resuming", "summary"].join("|");
+  const esperadoComMotivo = [
+    "not_promotable_reason", "promotable", "recovery_id", "resuming", "summary",
+  ].join("|");
   if (chaves !== esperado && chaves !== esperadoComMotivo) {
     throw new RecoveryApiError("invalid-response", "Resposta local inválida");
   }
   if (typeof record.recovery_id !== "string" || !CANONICAL_UUID.test(record.recovery_id)) {
+    throw new RecoveryApiError("invalid-response", "Resposta local inválida");
+  }
+  if (typeof record.resuming !== "boolean") {
     throw new RecoveryApiError("invalid-response", "Resposta local inválida");
   }
   if (typeof record.promotable !== "boolean") {
@@ -267,6 +281,7 @@ export async function stageRecovery(file: File, signal?: AbortSignal): Promise<S
     recovery_id: record.recovery_id,
     summary: parseSummary(record.summary),
     promotable: record.promotable,
+    resuming: record.resuming,
   };
   return record.promotable
     ? staged
@@ -297,12 +312,29 @@ export async function promoteRecovery(
   )));
 }
 
-/** Abandona uma recuperação preparada sem promover nada. */
-export async function discardRecovery(recoveryId: string, signal?: AbortSignal): Promise<string> {
+/**
+ * Abandona uma recuperação preparada sem promover nada.
+ *
+ * `acceptIncomplete` é a saída CONSCIENTE: só para quando a retomada é possível
+ * em tese e inviável na prática. O usuário declara que aceita a perícia ficar
+ * incompleta — o produto nunca decide isso por ele.
+ */
+export async function discardRecovery(
+  recoveryId: string,
+  options?: { acceptIncomplete?: true },
+  signal?: AbortSignal,
+): Promise<string> {
   requireRecovery(recoveryId);
   const value = await jsonResponse(await localFetch(
     `/app-api/v1/recovery/${recoveryId}/discard`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, signal },
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: options?.acceptIncomplete === true
+        ? JSON.stringify({ accept_incomplete: true })
+        : undefined,
+      signal,
+    },
   ));
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new RecoveryApiError("invalid-response", "Resposta local inválida");

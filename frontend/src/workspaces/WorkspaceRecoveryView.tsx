@@ -40,7 +40,13 @@ type RestoreState =
   | { kind: "promoted"; summary: BackupSummary }
   // A falha PRESERVA a recuperação preparada quando ela existe: a cópia isolada
   // continua no disco e precisa continuar alcançável para descarte.
-  | { kind: "error"; message: string; staged?: StagedRecovery; incomplete?: boolean };
+  | {
+      kind: "error";
+      message: string;
+      staged?: StagedRecovery;
+      incomplete?: boolean;
+      unresumable?: boolean;
+    };
 
 function message(error: unknown) {
   return error instanceof RecoveryApiError
@@ -51,6 +57,11 @@ function message(error: unknown) {
 /** A promoção já tocou o armazenamento vivo? Só o backend sabe; ele diz. */
 function isIncomplete(error: unknown) {
   return error instanceof RecoveryApiError && error.kind === "promotion-incomplete";
+}
+
+/** Retomar virou impossível: descartar volta a ser a saída legítima. */
+function isUnresumable(error: unknown) {
+  return error instanceof RecoveryApiError && error.kind === "unresumable";
 }
 
 export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProps) {
@@ -114,6 +125,7 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
         message: message(error),
         staged,
         incomplete: isIncomplete(error),
+        unresumable: isUnresumable(error),
       });
     }
   }
@@ -131,6 +143,7 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
         message: message(error),
         staged,
         incomplete: isIncomplete(error),
+        unresumable: isUnresumable(error),
       });
     }
   }
@@ -142,14 +155,25 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
     setRestore({ kind: "idle" });
   }
 
-  async function onDiscard(staged: StagedRecovery) {
+  async function onDiscard(staged: StagedRecovery, acceptIncomplete?: true) {
     setRestore({ kind: "discarding", staged });
     try {
-      await discardRecovery(staged.recovery_id);
+      await discardRecovery(
+        staged.recovery_id,
+        acceptIncomplete ? { acceptIncomplete } : undefined,
+      );
     } catch (error) {
       // A cópia isolada nunca fica ativa, mas também não podemos afirmar que
-      // sumiu. Mantemos a recuperação para que o descarte possa ser repetido.
-      setRestore({ kind: "error", message: message(error), staged });
+      // sumiu. Mantemos a recuperação para que o descarte possa ser repetido —
+      // e o motivo tem de sobreviver, senão a tela volta a mentir e some com a
+      // retomada.
+      setRestore({
+        kind: "error",
+        message: message(error),
+        staged,
+        incomplete: isIncomplete(error),
+        unresumable: isUnresumable(error),
+      });
       return;
     }
     resetRestore();
@@ -259,8 +283,9 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
             {restore.staged.promotable ? (
               <>
                 <p role="status">
-                  Cópia recuperada preparada em área <strong>isolada</strong>. Ela não é
-                  a perícia ativa e não substituiu nada. Confira antes de promover.
+                  {restore.staged.resuming
+                    ? "Esta é a RETOMADA de uma promoção interrompida: parte da perícia já foi gravada nesta instalação. A cópia isolada guarda o que falta."
+                    : "Cópia recuperada preparada em área isolada. Ela não é a perícia ativa e não substituiu nada. Confira antes de promover."}
                 </p>
                 {summaryList(restore.staged.summary)}
                 <label>
@@ -292,7 +317,9 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
                 {summaryList(restore.staged.summary)}
               </>
             )}
-            {discardButton(restore.staged, restore.kind !== "staged")}
+            {restore.staged.resuming
+              ? null
+              : discardButton(restore.staged, restore.kind !== "staged")}
           </div>
         ) : null}
 
@@ -323,6 +350,22 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
                 <button type="button" onClick={() => onResume(restore.staged!)}>
                   Retomar promoção
                 </button>
+                {/* Saída CONSCIENTE: existe para quando a retomada é possível
+                    em tese e inviável na prática (disco cheio, e é a própria
+                    cópia que ocupa o espaço). Nunca é o caminho sugerido. */}
+                <button type="button" onClick={() => onDiscard(restore.staged!, true)}>
+                  Descartar mesmo assim, aceitando a perícia incompleta
+                </button>
+              </>
+            ) : restore.unresumable && restore.staged ? (
+              <>
+                <p>
+                  A perícia desta instalação divergiu do pacote, então esta
+                  promoção não converge mais. Nada além do que já foi gravado
+                  será alterado. A cópia preparada pode ser descartada.
+                </p>
+                {summaryList(restore.staged.summary)}
+                {discardButton(restore.staged)}
               </>
             ) : restore.staged ? (
               <>

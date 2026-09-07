@@ -6,7 +6,7 @@ import hashlib
 import os
 import secrets
 from contextlib import nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
@@ -489,6 +489,14 @@ def build_local_api(
     # IRMÃ da base viva, nunca ancestral: o marcador RECOVERY_NOT_PROMOTABLE de
     # um staging jamais pode quarentenar o armazenamento ativo.
     recovery_sessions = WorkspaceRecoverySessions()
+    # Corpo grande é derramado AQUI, não no temporário do sistema: o pacote de
+    # recuperação carrega todo o conteúdo privado em claro, e %TEMP% é varrido,
+    # indexado e sincronizado por ferramentas de terceiros.
+    spool_root = database_path.parent / f".{database_path.name}.spool"
+    spool_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if server_config.spool_dir is None:
+        server_config = replace(server_config, spool_dir=str(spool_root))
+
     recovery_staging_root = database_path.parent / f".{database_path.name}.recovery"
     # Reabertura do produto: recolhe stagings órfãos ANTES de servir. Preserva
     # tudo que ainda for retomável — ver `recolher_stagings_orfaos`.
@@ -523,6 +531,7 @@ def build_local_api(
             _assert_backup_ready,
         ),
         store.workspaces,
+        server_config.max_document_body_bytes,
     )
     inspect_workspace_backup = InspectWorkspaceBackup(VerifyWorkspaceBackup(), _sha256_hex)
     stage_workspace_recovery = StageWorkspaceRecovery(

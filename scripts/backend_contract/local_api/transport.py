@@ -51,6 +51,7 @@ from ..application.workspace_recovery import (
     RecoveryRetained,
     RecoveryNotPromotable,
     RecoveryPromotionIncomplete,
+    RecoveryUnresumable,
     BackupTooLarge,
     RecoveryStageFailed,
     WorkspaceRecoveryConflict,
@@ -1369,6 +1370,9 @@ class LocalApi:
                     "recovery_id": session.recovery_id,
                     "summary": _backup_summary_dto(session.summary),
                     "promotable": bool(session.promotable),
+                    # RETOMADA != PREPARO NOVO. Sem este sinal a tela afirmava
+                    # "não substituiu nada" sobre uma promoção que já gravou.
+                    "resuming": bool(session.resuming),
                 }
                 if session.not_promotable_reason:
                     corpo["not_promotable_reason"] = session.not_promotable_reason
@@ -1381,9 +1385,23 @@ class LocalApi:
                 if raw_segments[3] == "discard":
                     if self._services.discard_workspace_recovery is None:
                         return _error(503, "RECOVERY_UNAVAILABLE", "recuperação local indisponível")
+                    # Corpo opcional. `accept_incomplete` é a saída CONSCIENTE
+                    # quando a retomada é possível em tese e inviável na prática
+                    # (disco cheio). Precisa ser o booleano exato: em Python
+                    # `1 == True`, e um inteiro não declara intenção nenhuma.
+                    aceitar = False
+                    if body:
+                        dto = self._request_dto(request_headers, body)
+                        if set(dto) != {"accept_incomplete"} or dto["accept_incomplete"] is not True:
+                            raise ValueError("descarte consciente exige declaração explícita")
+                        aceitar = True
                     return _json_response(
                         200,
-                        {"recovery_id": self._services.discard_workspace_recovery.execute(recovery_id)},
+                        {
+                            "recovery_id": self._services.discard_workspace_recovery.execute(
+                                recovery_id, aceitar_incompleta=aceitar
+                            )
+                        },
                     )
                 if self._services.promote_workspace_recovery is None:
                     return _error(503, "RECOVERY_UNAVAILABLE", "recuperação local indisponível")
@@ -1456,6 +1474,15 @@ class LocalApi:
                 413,
                 "BACKUP_TOO_LARGE",
                 "o backup desta perícia excede o limite de restauração desta versão",
+            )
+        except RecoveryUnresumable:
+            # A retomada é IMPOSSÍVEL, não "ainda não aconteceu". Mandar retomar
+            # aqui seria pedir ao usuário que repita para sempre uma operação
+            # que não converge — com o descarte recusado do outro lado.
+            return _error(
+                409,
+                "RECOVERY_UNRESUMABLE",
+                "esta promoção interrompida não pode mais ser concluída",
             )
         except RecoveryPromotionIncomplete:
             # A primeira mutação viva JÁ aconteceu. Dizer "indisponível" aqui

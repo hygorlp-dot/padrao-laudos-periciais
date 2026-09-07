@@ -778,29 +778,129 @@ def test_promocao_interrompida_sobrevive_a_varredura_de_orfaos(tmp_path):
 def test_backup_grande_demais_e_recusado_em_vez_de_prometer_seguranca_falsa(tmp_path):
     """RED Q — o produto não pode entregar 200 num pacote que ele não restaura.
 
-    O teto de ingestão da recuperação é finito. Um pacote acima dele é um
-    arquivo que dá sensação de segurança e falha no dia em que for preciso. É
-    melhor recusar dizendo por quê do que prometer o que não se sustenta.
+    E o teto tem de ser UM só: a instalação que configura um corpo menor não
+    pode continuar exportando pacotes que a própria ingestão recusaria. Aqui o
+    teto efetivo vem da configuração, não de um literal paralelo.
     """
-    from scripts.backend_contract.application import workspace_recovery as wr
+    from scripts.backend_contract.local_api.server import LocalServerConfig
+    from scripts.planejamento_pericial.app_composition import build_pericial_local_api
+    from tests.test_backup_recovery_reachability_v1 import TOKEN
+    from tests.test_document_intake_v1 import provision_private_root
 
-    runtime = _runtime(tmp_path, "q-origem")
+    private = tmp_path / "q-private"
+    provision_private_root(private)
+    runtime = build_pericial_local_api(
+        tmp_path / "q.sqlite3",
+        private_root=private,
+        token=TOKEN,
+        config=LocalServerConfig(max_document_body_bytes=4_096),
+    )
+    runtime.start()
     try:
         workspace_id, _material = _workspace_with_material(runtime, tmp_path, name="Caso enorme")
-        original = wr.ExportWorkspaceBackup.execute
-
-        def _gigante(self, ws):  # o pacote real é pequeno; o teto é que baixa
-            return original(self, ws)
-
-        # Baixa o teto para a fronteira ficar alcançável no teste, sem fabricar
-        # centenas de MB em disco.
-        anterior = wr.MAX_BACKUP_PACKAGE_BYTES
-        wr.MAX_BACKUP_PACKAGE_BYTES = 128
-        try:
-            status, corpo = _json(runtime, "POST", f"/v1/workspaces/{workspace_id}/backup")
-        finally:
-            wr.MAX_BACKUP_PACKAGE_BYTES = anterior
+        status, corpo = _json(runtime, "POST", f"/v1/workspaces/{workspace_id}/backup")
         assert status == 413, corpo
         assert corpo["error"]["code"] == "BACKUP_TOO_LARGE"
     finally:
         runtime.close()
+
+
+
+def _journal_da_unica_raiz(tmp_path, nome):
+    base = tmp_path / f".{nome}.sqlite3.recovery"
+    raizes = [p for p in base.iterdir() if p.is_dir()]
+    assert len(raizes) == 1, raizes
+    return raizes[0] / "PROMOTION_TRANSACTION_V1"
+
+
+def _interromper_promocao(tmp_path, nome):
+    origem, _ids, package = _origem_com_dois_privados(tmp_path, f"{nome}-origem")
+    destino = _runtime(tmp_path, nome)
+    status, staged = _stage(destino, package)
+    assert status == 201, staged
+    with _FalhaAposIntent(falhar_na_chamada=2) as falha:
+        status, corpo = _promote(destino, staged["recovery_id"])
+    assert falha.disparou
+    assert status == 409, corpo
+    return origem, package, destino, staged["recovery_id"]
+
+
+def test_fechar_o_app_nunca_apaga_journal_ilegivel(tmp_path):
+    """RED R1 — `close_all` falhava ABERTA: erro de leitura virava "não há".
+
+    É a mesma classe do P0 anterior, movida do descarte para o fechamento
+    normal do produto. Qualquer OSError no shutdown (antivírus, indexador,
+    placeholder do OneDrive) apagava a autoridade de retomada.
+    """
+    _origem, _pkg, destino, _rid = _interromper_promocao(tmp_path, "r1")
+    journal = _journal_da_unica_raiz(tmp_path, "r1")
+    try:
+        journal.write_bytes(b"{trunc")
+    finally:
+        destino.close()
+    base = tmp_path / ".r1.sqlite3.recovery"
+    assert [p.name for p in base.iterdir() if p.is_dir()], "o journal ilegível foi destruído"
+
+
+def test_journal_ilegivel_de_outra_raiz_nao_mata_toda_restauracao(tmp_path):
+    """RED R2 — uma raiz corrompida bricava a restauração de QUALQUER backup."""
+    _origem, _pkg, destino, _rid = _interromper_promocao(tmp_path, "r2")
+    journal = _journal_da_unica_raiz(tmp_path, "r2")
+    journal.write_bytes(b"{trunc")
+    destino.close()
+
+    outra, _ids2, outro_pacote = _origem_com_dois_privados(tmp_path, "r2-outra")
+    reaberto = _runtime(tmp_path, "r2")
+    try:
+        status, corpo = _stage(reaberto, outro_pacote)
+        assert status == 201, corpo
+        status, corpo = _promote(reaberto, corpo["recovery_id"])
+        assert status == 200, corpo
+        assert len(_materiais(reaberto, outra)) == 2
+    finally:
+        reaberto.close()
+
+
+def test_pericia_parcial_editada_torna_a_recuperacao_irretomavel_e_descartavel(tmp_path):
+    """RED R3 — retomar virou impossível, então prender o usuário é indefensável.
+
+    A perícia meio-restaurada aparece na lista e é editável. Uma revisão nova
+    quebra o prefixo, e nenhuma retomada futura pode convergir. O produto
+    precisa DIZER isso e devolver a saída.
+    """
+    origem, _pkg, destino, recovery_id = _interromper_promocao(tmp_path, "r3")
+    try:
+        status, corpo = _json(
+            destino, "POST", f"/v1/workspaces/{origem}/artifacts/LAUDO/laudo/revisions",
+            value={"payload": {"texto": "trabalho novo do perito"}},
+        )
+        assert status == 201, corpo
+
+        status, corpo = _promote(destino, recovery_id)
+        assert status == 409, corpo
+        assert corpo["error"]["code"] == "RECOVERY_UNRESUMABLE"
+
+        status, corpo = _json(destino, "POST", f"/v1/recovery/{recovery_id}/discard")
+        assert status == 200, corpo
+    finally:
+        destino.close()
+
+
+def test_identidade_perdida_com_journal_torna_irretomavel_sem_segunda_copia(tmp_path):
+    """RED R4 — sem a identidade não dá para provar retomada; nem fabricar cópia."""
+    _origem, package, destino, recovery_id = _interromper_promocao(tmp_path, "r4")
+    try:
+        journal = _journal_da_unica_raiz(tmp_path, "r4")
+        (journal.parent / "STAGING_IDENTITY_V1").unlink()
+
+        status, corpo = _promote(destino, recovery_id)
+        assert status == 409, corpo
+        assert corpo["error"]["code"] == "RECOVERY_UNRESUMABLE"
+
+        # E não pode nascer uma SEGUNDA raiz com o material privado em claro.
+        base = tmp_path / ".r4.sqlite3.recovery"
+        status, corpo = _json(destino, "POST", f"/v1/recovery/{recovery_id}/discard")
+        assert status == 200, corpo
+        assert [p for p in base.iterdir() if p.is_dir()] == []
+    finally:
+        destino.close()

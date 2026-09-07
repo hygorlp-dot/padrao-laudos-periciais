@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import json
 import threading
+
+from ..streaming import MAX_DOCUMENT_BYTES
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -76,6 +78,21 @@ class BackupTooLarge(RepositoryError):
     """
 
 
+class RecoveryUnresumable(RepositoryError):
+    """A promoção interrompida NÃO pode mais ser concluída — nunca.
+
+    Estado que faltava na máquina. Sem ele, uma promoção impossível de retomar
+    (prefixo vivo divergente porque o perito editou a perícia parcial, prova de
+    identidade perdida, journal corrompido, versão desconhecida) ficava presa:
+    promover recusava "retome", descartar recusava "não destrua a retomada", e
+    não há remoção de workspace. Preso é melhor que destruído, mas continua
+    sendo um beco.
+
+    Aqui o journal deixou de ser autoridade de qualquer coisa alcançável, então
+    descartar volta a ser legítimo — e é dito com o motivo verdadeiro.
+    """
+
+
 class RecoveryPromotionIncomplete(RepositoryError):
     """A promoção já mutou o armazenamento vivo e NÃO chegou ao fim.
 
@@ -118,10 +135,28 @@ class RecoverySession:
     #: depois é mentira de contrato.
     promotable: bool = True
     not_promotable_reason: str | None = None
+    #: Esta sessão RETOMA uma promoção que já gravou no armazenamento vivo.
+    #: Sem isto a tela dizia "não substituiu nada" sobre uma promoção em curso.
+    resuming: bool = False
 
 
-#: Teto de ingestão da recuperação; ver `BackupTooLarge`.
-MAX_BACKUP_PACKAGE_BYTES = 134_217_728
+#: Versão do journal. Uma versão desconhecida (produto mais novo gravou, produto
+#: mais velho leu) é IRRETOMÁVEL, não "ilegível que bloqueia tudo".
+JOURNAL_VERSION = 1
+
+UNRESUMABLE = "UNRESUMABLE"
+
+_JOURNAL_AUSENTE = "ausente"
+_JOURNAL_RETOMAVEL = "retomavel"
+_JOURNAL_IRRETOMAVEL = "irretomavel"
+_JOURNAL_INACESSIVEL = "inacessivel"
+
+#: Teto de ingestão da recuperação; ver `BackupTooLarge`. Vem da MESMA constante
+#: que o transporte usa como teto de corpo. Quando a instalação configura um
+#: teto menor, a composição injeta o valor efetivo em `ExportWorkspaceBackup`:
+#: dois literais iguais hoje viram dois limites divergentes na primeira
+#: configuração menor, e aí o produto exporta o que não consegue reingerir.
+MAX_BACKUP_PACKAGE_BYTES = MAX_DOCUMENT_BYTES
 
 _QUARENTENA = "RECOVERY_NOT_PROMOTABLE"
 _QUARENTENA_PAYLOAD = b"RECOVERY_STAGING_V1\n"
@@ -153,35 +188,81 @@ def _material_remanescente(raiz: Path) -> list[Path]:
     return restante
 
 
-_JOURNAL_ILEGIVEL = object()
+_JOURNAL_CORROMPIDO = object()
+_JOURNAL_TRAVADO = object()
 
 
 def _journal_bruto(raiz: Path):
-    """Lê o journal SEM abrir o staging. `None` = não há; sentinela = ilegível."""
+    """Lê o journal SEM abrir o staging.
+
+    `None` = não há. `_JOURNAL_CORROMPIDO` = existe e nunca vai ser entendido.
+    `_JOURNAL_TRAVADO` = não deu para ler AGORA (transitório).
+    """
     try:
         bruto = (raiz / _JOURNAL).read_bytes()
     except FileNotFoundError:
         return None
     except OSError:
-        return _JOURNAL_ILEGIVEL
+        return _JOURNAL_TRAVADO
     try:
         registro = json.loads(bruto.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
-        return _JOURNAL_ILEGIVEL
-    return registro if type(registro) is dict else _JOURNAL_ILEGIVEL
+        return _JOURNAL_CORROMPIDO
+    if type(registro) is not dict or registro.get("version") != JOURNAL_VERSION:
+        return _JOURNAL_CORROMPIDO
+    return registro
 
 
-def _tem_journal(staging: object) -> bool:
-    """Há autoridade durável de promoção nesta raiz?
+def _classificar_journal(staging: object) -> str:
+    """AUTORIDADE ÚNICA sobre "o que há nesta raiz?".
 
-    FAIL-CLOSED: journal ilegível conta como PRESENTE. Tratar erro de leitura
-    como ausência autorizaria justamente a destruição que este predicado existe
-    para impedir.
+    O mesmo fato era decidido em cinco lugares com polaridades diferentes, e o
+    único que falhava ABERTO era justamente o que apagava. Aqui há quatro
+    respostas, e cada chamador reage a elas — ninguém mais inlina a pergunta.
+
+    - `ausente`      não há promoção iniciada; nada a preservar.
+    - `retomavel`    journal íntegro, versão conhecida, identidade conferida.
+    - `irretomavel`  corrompido, versão desconhecida, prova de identidade
+                     ausente ou fase já marcada — nunca vai convergir.
+    - `inacessivel`  não deu para LER agora (arquivo travado, placeholder do
+                     OneDrive não hidratado). Transitório: preserva, não decide.
     """
+    caminho = None
     try:
-        return staging.ler_transacao() is not None
+        caminho = Path(staging.root) / _JOURNAL
     except Exception:
-        return True
+        return _JOURNAL_INACESSIVEL
+    try:
+        bruto = caminho.read_bytes()
+    except FileNotFoundError:
+        return _JOURNAL_AUSENTE
+    except OSError:
+        return _JOURNAL_INACESSIVEL
+    try:
+        registro = json.loads(bruto.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _JOURNAL_IRRETOMAVEL
+    if type(registro) is not dict or registro.get("version") != JOURNAL_VERSION:
+        return _JOURNAL_IRRETOMAVEL
+    if registro.get("phase") == UNRESUMABLE:
+        return _JOURNAL_IRRETOMAVEL
+    try:
+        registrada = staging.identidade_registrada
+    except Exception:
+        return _JOURNAL_INACESSIVEL
+    if registrada is None or registro.get("staging_identity") != registrada:
+        return _JOURNAL_IRRETOMAVEL
+    return _JOURNAL_RETOMAVEL
+
+
+def _marcar_irretomavel(staging: object) -> None:
+    """Grava no disco que esta promoção não converge mais. Best-effort."""
+    try:
+        registro = staging.ler_transacao()
+        if type(registro) is dict:
+            staging.gravar_transacao({**registro, "phase": UNRESUMABLE})
+    except Exception:
+        pass
 
 
 def _encerrar_staging(staging: object, *, exigir_remocao: bool = False) -> None:
@@ -282,6 +363,7 @@ class ExportWorkspaceBackup:
 
     create_backup: object
     workspaces: object
+    max_package_bytes: int = MAX_BACKUP_PACKAGE_BYTES
 
     def execute(self, workspace_id: WorkspaceId) -> bytes:
         if type(workspace_id) is not WorkspaceId:
@@ -291,7 +373,7 @@ class ExportWorkspaceBackup:
         payload = self.create_backup.execute(workspace_id)
         if type(payload) is not bytes or not payload:
             raise RepositoryIntegrityError("pacote de backup inválido")
-        if len(payload) > MAX_BACKUP_PACKAGE_BYTES:
+        if len(payload) > self.max_package_bytes:
             raise BackupTooLarge(
                 "o pacote desta perícia excede o que a recuperação consegue reingerir"
             )
@@ -373,8 +455,14 @@ class WorkspaceRecoverySessions:
             if atual not in permitidos:
                 if atual == PROMOTED:
                     raise RecoveryAlreadyPromoted("esta recuperação já foi promovida")
-                if atual in (DISCARDING, DISCARDED):
+                if atual == DISCARDED:
                     raise RecoveryDiscarded("esta recuperação foi descartada")
+                if atual == DISCARDING:
+                    # EM ANDAMENTO != DESCARTADA. Responder "não encontrada" a
+                    # quem cai nesta janela afirma um fim que ainda não houve.
+                    raise WorkspaceRecoveryConflict(
+                        "esta recuperação já tem uma operação em andamento"
+                    )
                 raise WorkspaceRecoveryConflict(
                     "esta recuperação já tem uma operação em andamento"
                 )
@@ -403,17 +491,17 @@ class WorkspaceRecoverySessions:
     def close_all(self) -> None:
         for entry in tuple(self._sessions.values()):
             staging = entry["staging"]
-            try:
-                # Uma promoção INTERROMPIDA não pode ser recolhida no
-                # encerramento: a raiz quarentenada mais o journal SÃO a
-                # autoridade durável que permite retomá-la depois. Recolher aqui
-                # destruiria a evidência do crash e deixaria a perícia
-                # meio-restaurada sem saída. Só fecha os handles.
-                if staging.ler_transacao() is not None:
+            # Uma promoção INTERROMPIDA não pode ser recolhida no encerramento:
+            # a raiz quarentenada mais o journal SÃO a autoridade durável que
+            # permite retomá-la depois. Só recolhe o que PROVA nada ter — a
+            # versão anterior inlinava a pergunta e falhava ABERTA, então um
+            # erro de leitura no shutdown apagava exatamente o que devia salvar.
+            if _classificar_journal(staging) != _JOURNAL_AUSENTE:
+                try:
                     staging.close()
-                    continue
-            except Exception:
-                pass
+                except Exception:
+                    pass
+                continue
             try:
                 _encerrar_staging(staging)
             except Exception:
@@ -447,13 +535,16 @@ class StageWorkspaceRecovery:
         """
         workspace_id = WorkspaceId.parse(str(backup.workspace.workspace_id))
         if self.workspaces is not None and self.workspaces.get(workspace_id) is not None:
-            transacao = None
-            try:
-                transacao = staging.ler_transacao()
-            except Exception:
-                transacao = None
-            if type(transacao) is not dict:
+            # Perícia viva com esta identidade só é tocável se ELA veio desta
+            # promoção. Cada motivo abaixo é o motivo REAL — dizer "já existe
+            # perícia" quando o que houve foi journal ilegível é mentira.
+            estado = _classificar_journal(staging)
+            if estado == _JOURNAL_AUSENTE:
                 return False, "ja_existe_pericia_com_esta_identidade"
+            if estado == _JOURNAL_IRRETOMAVEL:
+                return False, "promocao_interrompida_irretomavel"
+            if estado == _JOURNAL_INACESSIVEL:
+                return False, "estado_da_promocao_ilegivel"
         if any(
             item.get("artifact_kind") == _AI_COST_LEDGER_KIND
             for item in backup.artifact_revisions
@@ -526,7 +617,7 @@ class StageWorkspaceRecovery:
             summary = _summary(backup, digest)
             entry["summary"] = summary
             promovivel, motivo = self._promovibilidade(backup, staging)
-            return RecoverySession(recovery_id, summary, promovivel, motivo)
+            return RecoverySession(recovery_id, summary, promovivel, motivo, True)
 
         if self.open_staging is None:
             return None
@@ -546,12 +637,14 @@ class StageWorkspaceRecovery:
             # para saber se esta raiz nos interessa, e só o que interessa pode
             # falhar fechado.
             registro = _journal_bruto(raiz)
-            if registro is None:
+            if registro is None or registro is _JOURNAL_TRAVADO:
                 continue
-            if registro is _JOURNAL_ILEGIVEL:
-                raise RecoveryStageFailed(
-                    "há uma promoção interrompida com journal ilegível nesta instalação"
-                )
+            if registro is _JOURNAL_CORROMPIDO:
+                # Corrompido não pode ser ligado a pacote nenhum, então também
+                # não pode BLOQUEAR pacote nenhum. Bloquear aqui matava toda
+                # restauração da instalação por causa de uma raiz alheia — e a
+                # restauração é o último recurso do produto.
+                continue
             if (
                 registro.get("backup_sha256") != digest
                 or registro.get("workspace_id") != workspace_id
@@ -584,7 +677,7 @@ class StageWorkspaceRecovery:
             self.sessions.register(recovery_id, staging, summary)
             self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
             promovivel, motivo = self._promovibilidade(backup, staging)
-            return RecoverySession(recovery_id, summary, promovivel, motivo)
+            return RecoverySession(recovery_id, summary, promovivel, motivo, True)
         return None
 
     @staticmethod
@@ -598,6 +691,10 @@ class StageWorkspaceRecovery:
             and transacao.get("backup_sha256") == digest
             and transacao.get("workspace_id") == workspace_id
         )
+
+def _tem_material_privado(raiz: Path) -> bool:
+    return any(p.suffix == ".content" for p in raiz.rglob("*"))
+
 
 def recolher_stagings_orfaos(base) -> tuple[str, ...]:
     """Recolhe, na REABERTURA do produto, raízes de staging sem retomada pendente.
@@ -628,10 +725,15 @@ def recolher_stagings_orfaos(base) -> tuple[str, ...]:
         except OSError:
             continue
         registro = _journal_bruto(raiz)
-        if registro is _JOURNAL_ILEGIVEL:
+        if registro is _JOURNAL_TRAVADO:
+            # Transitório: não decide nada agora, tenta na próxima reabertura.
             continue
-        if registro is not None and registro.get("phase") != PROMOTED:
-            continue
+        if registro is not _JOURNAL_CORROMPIDO and registro is not None:
+            if registro.get("phase") not in (PROMOTED, UNRESUMABLE):
+                continue
+            if registro.get("phase") == UNRESUMABLE and _tem_material_privado(raiz):
+                # Irretomável ainda visível ao usuário: só sai por decisão dele.
+                continue
         # NÃO reabre o staging para recolhê-lo: reabrir reprovisiona o
         # armazenamento privado e o SQLite da raiz, e os handles recém-criados
         # impedem a própria remoção. A autoridade que autoriza remover é o
@@ -649,17 +751,32 @@ def recolher_stagings_orfaos(base) -> tuple[str, ...]:
 class DiscardWorkspaceRecovery:
     sessions: WorkspaceRecoverySessions
 
-    def execute(self, recovery_id: str) -> str:
+    def execute(self, recovery_id: str, *, aceitar_incompleta: bool = False) -> str:
+        """`aceitar_incompleta` é a saída CONSCIENTE, nunca o caminho normal.
+
+        Existe para o caso em que a retomada é possível em tese mas impossível
+        na prática (disco cheio — e é a própria cópia preparada que ocupa o
+        espaço). O usuário declara que aceita a perícia ficar incompleta; o
+        produto não decide isso por ele nem faz em silêncio.
+        """
         # Reivindica DISCARDING antes de tocar em qualquer coisa: se houver uma
         # promoção em voo, quem perde a corrida recebe erro honesto em vez de
         # fechar o staging sob os pés dela.
         entry = self.sessions.claim(recovery_id, (STAGED, FAILED_RECOVERABLE), DISCARDING)
-        # `FAILED_RECOVERABLE` COM journal NÃO é descartável: o journal é a única
-        # prova durável que permite concluir uma promoção já iniciada no vivo.
-        if _tem_journal(entry["staging"]):
+        estado = _classificar_journal(entry["staging"])
+        # Só o RETOMÁVEL é protegido: aí o journal é a única prova durável que
+        # permite concluir uma promoção já iniciada no vivo. Irretomável não é
+        # autoridade de nada alcançável, e inacessível pode voltar a ser lido —
+        # nenhum dos dois justifica prender o usuário para sempre.
+        if estado == _JOURNAL_RETOMAVEL and not aceitar_incompleta:
             self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
             raise RecoveryPromotionIncomplete(
                 "esta promoção já começou a gravar e precisa ser retomada"
+            )
+        if estado == _JOURNAL_INACESSIVEL and not aceitar_incompleta:
+            self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
+            raise RecoveryPromotionIncomplete(
+                "não foi possível ler o estado desta promoção agora"
             )
         try:
             _encerrar_staging(entry["staging"], exigir_remocao=True)
@@ -693,18 +810,39 @@ class PromoteWorkspaceRecovery:
         # nenhuma segunda promoção entra. `FAILED_RECOVERABLE` é reivindicável
         # porque uma promoção interrompida TEM de ser retomável.
         entry = self.sessions.claim(recovery_id, (STAGED, FAILED_RECOVERABLE), PROMOTING)
+        if _classificar_journal(entry["staging"]) == _JOURNAL_IRRETOMAVEL:
+            self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
+            raise RecoveryUnresumable(
+                "esta promoção interrompida não pode mais ser concluída"
+            )
         try:
             return self._promover(recovery_id, entry)
         except BaseException as exc:
             self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
+            if not isinstance(exc, Exception):
+                raise
+            estado = _classificar_journal(entry["staging"])
+            if estado == _JOURNAL_AUSENTE:
+                raise
+            # Conflito de prefixo/identidade NÃO é transitório: a perícia viva
+            # divergiu do pacote e nenhuma retomada converge. Chamar isso de
+            # "retome" mandaria o usuário repetir para sempre uma operação
+            # impossível, com o descarte recusado do outro lado.
+            if isinstance(exc, (WorkspaceRecoveryConflict, RecoveryNotPromotable)):
+                _marcar_irretomavel(entry["staging"])
+                raise RecoveryUnresumable(
+                    "a perícia viva divergiu deste pacote; a promoção não converge mais"
+                ) from exc
+            if estado == _JOURNAL_IRRETOMAVEL:
+                raise RecoveryUnresumable(
+                    "esta promoção interrompida não pode mais ser concluída"
+                ) from exc
             # Journal presente = a primeira mutação viva JÁ aconteceu. Reportar
             # isso como "armazenamento indisponível" faria o produto dizer "nada
             # mudou" no exato instante em que gravou uma perícia parcial.
-            if isinstance(exc, Exception) and _tem_journal(entry["staging"]):
-                raise RecoveryPromotionIncomplete(
-                    "a promoção foi interrompida depois de começar a gravar"
-                ) from exc
-            raise
+            raise RecoveryPromotionIncomplete(
+                "a promoção foi interrompida depois de começar a gravar"
+            ) from exc
 
     @staticmethod
     def _transacao_autoriza(transacao, staging, summary: BackupSummary) -> bool:
@@ -821,6 +959,7 @@ class PromoteWorkspaceRecovery:
                     [str(m.content_id), m.checksum_sha256] for m in staged_private
                 ),
                 "phase": PROMOTING,
+                "version": JOURNAL_VERSION,
             }
         )
         if live_workspace is None:

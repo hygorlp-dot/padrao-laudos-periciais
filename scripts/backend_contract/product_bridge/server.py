@@ -6,6 +6,7 @@ import math
 import socket
 import tempfile
 import time
+from pathlib import Path
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Event, Lock, Thread, Timer
@@ -34,6 +35,11 @@ class ProductBridgeConfig:
     max_body_bytes: int = 1_048_576
     max_document_body_bytes: int = MAX_DOCUMENT_BYTES
     request_timeout_seconds: float = 5.0
+    #: Onde o corpo grande é derramado. `None` = temporário do sistema, que é
+    #: varrido e sincronizado por ferramentas de terceiros; material sigiloso
+    #: em claro não deve morar lá. A composição aponta para o diretório de
+    #: dados do próprio produto.
+    spool_dir: str | None = None
     upstream_timeout_seconds: float = 30.0
 
     def __post_init__(self):
@@ -67,6 +73,9 @@ class ProductBridgeConfig:
             or not 0 < self.upstream_timeout_seconds <= 30
         ):
             raise ValueError("timeout upstream local inválido")
+        if self.spool_dir is not None:
+            if type(self.spool_dir) is not str or not Path(self.spool_dir).is_dir():
+                raise ValueError("diretório de spool de bridge inválido")
 
 
 class _ProductHttpServer(ThreadingHTTPServer):
@@ -236,7 +245,7 @@ class _ProductRequestHandler(BaseHTTPRequestHandler):
                             and self.path.endswith(("/materials", "/inspection-photos", "/delivery-templates", "/delivery-supporting-files"))
                         )
                         if length and document_upload:
-                            spool = tempfile.SpooledTemporaryFile(max_size=1_048_576, mode="w+b")
+                            spool = tempfile.SpooledTemporaryFile(max_size=1_048_576, mode="w+b", dir=self.server.spool_dir)
                             remaining = length
                             while remaining:
                                 block = self.rfile.read(min(DOCUMENT_IO_CHUNK_BYTES, remaining))
@@ -324,6 +333,7 @@ class ProductBridgeServer:
             _ProductRequestHandler,
         )
         self._server.request_timeout_seconds = self._config.request_timeout_seconds
+        self._server.spool_dir = self._config.spool_dir
         host, port = self.address
         self._server.bridge = ProductBridge(
             frontend_root=frontend_root,
