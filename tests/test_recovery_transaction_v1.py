@@ -1032,13 +1032,22 @@ def test_recuperacao_publicada_com_reparse_permanece_visivel_apos_restart(tmp_pa
 def test_custodia_cleanup_fecha_anchor_quando_validacao_pos_abertura_falha(
     tmp_path, monkeypatch
 ):
-    """Sibling A9 — falha de identidade não pode vazar o handle transitório."""
+    """Sibling A9 — o anchor fecha sem conceder compartilhamento de remoção."""
     from scripts.backend_contract.application import workspace_recovery as wr
 
     root = tmp_path / "recovery-00000000-0000-4000-8000-000000000098"
     root.mkdir()
     real_lstat = wr.os.lstat
+    real_open = wr.os.open
     root_calls = 0
+    anchor_flags = []
+
+    def record_anchor_flags(path, flags, mode=0o777, *, dir_fd=None):
+        if ".recovery-cleanup-custody." in str(path):
+            anchor_flags.append(flags)
+        if dir_fd is None:
+            return real_open(path, flags, mode)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
 
     def fail_second_root_lstat(path):
         nonlocal root_calls
@@ -1049,9 +1058,12 @@ def test_custodia_cleanup_fecha_anchor_quando_validacao_pos_abertura_falha(
         return real_lstat(path)
 
     monkeypatch.setattr(wr.os, "lstat", fail_second_root_lstat)
+    monkeypatch.setattr(wr.os, "open", record_anchor_flags)
     with pytest.raises(OSError, match="synthetic identity"):
         wr._adquirir_custodia_cleanup(root)
 
+    assert len(anchor_flags) == 1
+    assert not (anchor_flags[0] & os.O_TEMPORARY)
     assert list(root.iterdir()) == []
     root.rmdir()
 

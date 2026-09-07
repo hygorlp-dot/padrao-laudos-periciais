@@ -307,8 +307,10 @@ startup continua proibida; somente um novo abandono humano confirmado pode remov
 a raiz canônica dedicada. Um inventário desacompanhado de custódia não autoriza
 remoção: a árvore pode ser religada entre `lstat` e `unlink`. Antes do primeiro
 `unlink`, cada diretório fica ancorado até sua última operação destrutiva — por
-`dir_fd` + `O_NOFOLLOW` no POSIX e por handle `O_TEMPORARY` que impede rename no
-Windows. Qualquer dúvida retém a árvore inteira sem atravessar o namespace.
+`dir_fd` + `O_NOFOLLOW` no POSIX e por handle sem delete-sharing que impede
+rename no Windows. `O_TEMPORARY` não é usado como trava, pois pode admitir
+rename em hosts com semântica POSIX. Qualquer dúvida retém a árvore inteira
+sem atravessar o namespace.
 
 Preservar sem publicar também é falha: uma raiz canônica que contenha reparse é
 exposta de forma sanitizada como `RECOVERY_UNRESUMABLE`, sem percorrer o membro

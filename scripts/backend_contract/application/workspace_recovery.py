@@ -223,13 +223,26 @@ class _CleanupNode:
     children: list["_CleanupNode"]
 
 
+def _fechar_anchor_windows(descriptor: int, anchor_path: Path) -> None:
+    os.close(descriptor)
+    try:
+        anchor_path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def _fechar_custodia_cleanup(node: _CleanupNode) -> None:
     for child in node.children:
         _fechar_custodia_cleanup(child)
     if node.descriptor is not None:
         descriptor = node.descriptor
         node.descriptor = None
-        os.close(descriptor)
+        anchor_path = node.anchor_path
+        node.anchor_path = None
+        if anchor_path is None:
+            os.close(descriptor)
+        else:
+            _fechar_anchor_windows(descriptor, anchor_path)
 
 
 def _adquirir_custodia_cleanup(
@@ -240,10 +253,12 @@ def _adquirir_custodia_cleanup(
     """Ancora cada diretório antes de devolver nomes que serão removidos.
 
     No POSIX, todas as operações posteriores usam ``dir_fd`` + ``O_NOFOLLOW``.
-    No Windows, um arquivo ``O_TEMPORARY`` aberto em cada diretório impede que
-    ele seja renomeado/substituído enquanto qualquer unlink ainda depende do
-    caminho. Os anchors somem ao fechar o último handle e nunca são material do
-    backup.
+    No Windows, um arquivo sem compartilhamento de remoção aberto em cada
+    diretório impede que ele seja renomeado/substituído enquanto qualquer
+    unlink de material ainda depende do caminho. ``O_TEMPORARY`` é
+    deliberadamente proibido: sua semântica concede delete-sharing em versões
+    do Windows que aceitam rename POSIX. Os anchors são removidos explicitamente
+    ao fechar o handle e nunca são material do backup.
     """
 
     if parent is None:
@@ -282,21 +297,21 @@ def _adquirir_custodia_cleanup(
         anchor_path = path / f".recovery-cleanup-custody.{uuid4().hex}.tmp"
         descriptor = os.open(
             anchor_path,
-            os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_BINARY | os.O_TEMPORARY,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_BINARY,
             0o600,
         )
         try:
             opened = os.fstat(descriptor)
             after = os.lstat(path)
         except Exception:
-            os.close(descriptor)
+            _fechar_anchor_windows(descriptor, anchor_path)
             raise
         if (
             not stat.S_ISREG(opened.st_mode)
             or opened.st_nlink != 1
             or _chave_identidade(before) != _chave_identidade(after)
         ):
-            os.close(descriptor)
+            _fechar_anchor_windows(descriptor, anchor_path)
             raise RecoveryRetained("a identidade da recuperação mudou")
     else:  # pragma: no cover - contrato de plataforma fechado
         raise RecoveryRetained("plataforma sem remoção de recuperação ancorada")
