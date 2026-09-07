@@ -207,7 +207,7 @@ _IDENTIDADE = "STAGING_IDENTITY_V1"
 
 
 def _inventario_seguro(raiz: Path) -> tuple[list[Path], list[Path]]:
-    """Enumera sem seguir links; qualquer reparse aborta antes da primeira remoÃ§Ã£o."""
+    """Enumera sem seguir links; qualquer reparse aborta antes da primeira remoção."""
     arquivos: list[Path] = []
     diretorios: list[Path] = []
 
@@ -217,7 +217,7 @@ def _inventario_seguro(raiz: Path) -> tuple[list[Path], list[Path]]:
                 details = entrada.stat(follow_symlinks=False)
                 if _detalhes_sao_link_ou_reparse(details):
                     raise RecoveryRetained(
-                        "a recuperaÃ§Ã£o contÃ©m link ou reparse point"
+                        "a recuperação contém link ou reparse point"
                     )
                 caminho = Path(entrada.path)
                 if stat.S_ISDIR(details.st_mode):
@@ -227,7 +227,7 @@ def _inventario_seguro(raiz: Path) -> tuple[list[Path], list[Path]]:
                     arquivos.append(caminho)
                 else:
                     raise RecoveryRetained(
-                        "a recuperaÃ§Ã£o contÃ©m objeto de filesystem inesperado"
+                        "a recuperação contém objeto de filesystem inesperado"
                     )
 
     visitar(raiz)
