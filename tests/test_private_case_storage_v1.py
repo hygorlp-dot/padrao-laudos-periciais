@@ -602,6 +602,43 @@ def test_singleton_blocks_a_second_store_and_releases_after_close(tmp_path):
         assert reopened.list_all(WORKSPACE_A) == ()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows releases byte locks asynchronously")
+def test_singleton_tolera_bounded_transient_read_after_process_death(
+    tmp_path, monkeypatch
+):
+    """RED: handle aberto + primeira leitura negada é liberação transitória."""
+    root = tmp_path / "private"
+    private_filesystem.provision_private_content_root(root)
+    real_fdopen = private_filesystem.os.fdopen
+    wrapped = False
+
+    class TransientlyLockedStream:
+        def __init__(self, stream):
+            self._stream = stream
+            self._first_read = True
+
+        def read(self, size=-1):
+            if self._first_read:
+                self._first_read = False
+                raise PermissionError(13, "synthetic stale byte lock")
+            return self._stream.read(size)
+
+        def __getattr__(self, name):
+            return getattr(self._stream, name)
+
+    def fdopen_with_transient_lock(descriptor, *args, **kwargs):
+        nonlocal wrapped
+        stream = real_fdopen(descriptor, *args, **kwargs)
+        if wrapped:
+            return stream
+        wrapped = True
+        return TransientlyLockedStream(stream)
+
+    monkeypatch.setattr(private_filesystem.os, "fdopen", fdopen_with_transient_lock)
+    with LocalPrivateContentStore(root) as reopened:
+        assert reopened.list_all(WORKSPACE_A) == ()
+
+
 def test_open_anchor_prevents_namespace_swap_or_keeps_posix_dirfd_stable(tmp_path):
     root = tmp_path / "private"
     moved = tmp_path / "moved-private"

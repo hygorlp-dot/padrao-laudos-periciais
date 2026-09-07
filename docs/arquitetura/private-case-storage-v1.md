@@ -131,8 +131,11 @@ grafia canônica; `true` não equivale à versão inteira `1`. A contagem exata 
 hardlinks é revalidada depois do último byte lido, fechando a janela entre a
 validação inicial e a conclusão da leitura.
 
-Após morte abrupta, o lock do kernel é liberado. A próxima abertura exclusiva
-primeiro analisa de forma limitada journal, anchor, staging e todos os registros
+Após morte abrupta, o lock do kernel é liberado. No Windows, a leitura inicial
+do byte já ancorado admite somente uma graça curta e limitada para a liberação
+assíncrona do lock; escritor ainda vivo esgota o limite e continua recusado. A
+próxima abertura exclusiva primeiro analisa de forma limitada journal, anchor,
+staging e todos os registros
 sem qualquer mutação. Somente depois de tudo ser válido, reconcilia aliases
 staging→final que correspondem à única intenção durável pendente e aposenta
 componentes ainda não visíveis por marcadores hardlink, sem `unlink`. Um crash

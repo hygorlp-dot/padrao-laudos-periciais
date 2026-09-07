@@ -10,6 +10,7 @@ import stat
 import sys
 import tempfile
 import threading
+import time
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
@@ -62,6 +63,8 @@ _JOURNAL_NAME = ".commit-log"
 _ANCHOR_NAME = ".commit-anchor"
 _RECOVERY_QUARANTINE_NAME = ".recovery-not-promotable"
 _RECOVERY_QUARANTINE_PAYLOAD = b"RECOVERY_PRIVATE_V1\n"
+_WINDOWS_LOCK_RELEASE_ATTEMPTS = 50
+_WINDOWS_LOCK_RELEASE_DELAY_SECONDS = 0.01
 _MEMBERS = ("content", "metadata", "metadata-sha256")
 _COMMITTED_MEMBERS = frozenset((*_MEMBERS, "commit"))
 _UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -273,6 +276,28 @@ def _open_control_regular(
         raise
     except (FileNotFoundError, OSError) as exc:
         raise RepositoryIntegrityError("controle privado ausente ou inacessível") from exc
+
+
+def _read_singleton_marker(stream) -> bytes:
+    """Tolera apenas a curta liberação assíncrona do byte-lock no Windows.
+
+    Depois de ``TerminateProcess`` o processo já pode estar sinalizado enquanto
+    um filtro de filesystem ainda devolve ``EACCES`` para o byte anteriormente
+    travado. O descriptor e a identidade do controle já foram validados; uma
+    graça pequena e limitada não amplia autoridade. Se houver outro escritor
+    vivo, todas as tentativas falham e o singleton continua fechado.
+    """
+
+    attempts = _WINDOWS_LOCK_RELEASE_ATTEMPTS if os.name == "nt" else 1
+    for attempt in range(attempts):
+        try:
+            stream.seek(0)
+            return stream.read(1)
+        except PermissionError:
+            if attempt + 1 == attempts:
+                raise
+            time.sleep(_WINDOWS_LOCK_RELEASE_DELAY_SECONDS)
+    raise AssertionError("tentativas de leitura do singleton esgotadas")
 
 
 def _write_all(descriptor: int, payload: bytes) -> None:
@@ -1136,8 +1161,7 @@ class LocalPrivateContentStore:
         try:
             if os.fstat(descriptor).st_size != 1:
                 raise RepositoryIntegrityError("trust anchor privado inválido")
-            stream.seek(0)
-            if stream.read(1) != b"0":
+            if _read_singleton_marker(stream) != b"0":
                 raise RepositoryIntegrityError("trust anchor privado inválido")
             stream.seek(0)
             if os.name == "nt":
