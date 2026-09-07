@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import re
 from typing import Any
-from uuid import UUID, NAMESPACE_URL, uuid5
+from uuid import UUID, NAMESPACE_URL, uuid4, uuid5
 from weakref import WeakKeyDictionary
 
 from ..application.models import (
@@ -1045,6 +1045,99 @@ class RecoveryStaging:
     @property
     def private_contents(self) -> LocalPrivateContentStore:
         return self._private_contents
+
+    # -- transação durável de promoção -------------------------------------
+    #
+    # A promoção atravessa DUAS autoridades de persistência (SQLite e
+    # armazenamento privado) sem transação que as abranja. Emular atomicidade com
+    # memória de processo não funciona: um crash entre a primeira escrita viva e o
+    # fim da promoção deixava perícia fantasma, permanentemente irrecuperável.
+    #
+    # O journal mora DENTRO da raiz de staging — que já é durável, quarentenada e
+    # ligada à identidade — então sobrevive ao crash junto com o material que
+    # descreve, e some junto quando a recuperação é descartada.
+
+    _JOURNAL = "PROMOTION_TRANSACTION_V1"
+
+    def ler_transacao(self) -> dict | None:
+        alvo = self._root / self._JOURNAL
+        try:
+            bruto = alvo.read_bytes()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise RepositoryIntegrityError("journal de promoção ilegível") from exc
+        try:
+            registro = json.loads(bruto.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RepositoryIntegrityError("journal de promoção corrompido") from exc
+        if type(registro) is not dict:
+            raise RepositoryIntegrityError("journal de promoção corrompido")
+        return registro
+
+    def gravar_transacao(self, registro: dict) -> None:
+        """Grava o journal de forma durável ANTES de qualquer mutação viva."""
+        if type(registro) is not dict:
+            raise TypeError("registro de transação inválido")
+        corpo = _canonical(registro)
+        alvo = self._root / self._JOURNAL
+        temporario = self._root / f".{self._JOURNAL}.{uuid4().hex}"
+        descritor = os.open(temporario, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN_BINARY, 0o600)
+        try:
+            restante = memoryview(corpo)
+            while restante:
+                escrito = os.write(descritor, restante)
+                if escrito <= 0:
+                    raise RepositoryIntegrityError("escrita do journal de promoção falhou")
+                restante = restante[escrito:]
+            os.fsync(descritor)
+        finally:
+            os.close(descritor)
+        os.replace(temporario, alvo)
+        if os.name == "posix":
+            diretorio = os.open(self._root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(diretorio)
+            finally:
+                os.close(diretorio)
+
+    @property
+    def identidade(self) -> str:
+        """Identidade da raiz (dispositivo+inode) — prova de que é ESTA raiz."""
+        return f"{self._identity.st_dev}:{self._identity.st_ino}"
+
+
+def abrir_staging_quarentenado(raiz: str | Path) -> "RecoveryStaging":
+    """Reabre uma raiz de staging JÁ existente, preservando a quarentena.
+
+    Usado na reabertura do produto para reconstruir sessões de recuperação a
+    partir do disco. Falha fechada: sem marcador canônico, não é nossa raiz.
+    """
+    alvo = Path(raiz)
+    marcador = alvo / "RECOVERY_NOT_PROMOTABLE"
+    if marcador.read_bytes() != b"RECOVERY_STAGING_V1\n":
+        raise RepositoryIntegrityError("raiz de recuperação sem quarentena canônica")
+    identity = os.lstat(alvo)
+    database = None
+    private = None
+    try:
+        database = SQLiteApplicationStore(alvo / "workspace.sqlite3")
+        private = LocalPrivateContentStore.open_or_provision(alvo / "private")
+        staging = object.__new__(RecoveryStaging)
+        staging._root = alvo.resolve(strict=True)
+        staging._database = database
+        staging._private_contents = private
+        staging._identity = identity
+        staging._closed = False
+        staging._discarded = False
+        _AUTHORIZED_RECOVERY_STAGING[staging] = (staging._root, database, private, identity)
+        return staging
+    except BaseException:
+        if private is not None:
+            private.close()
+        if database is not None:
+            database.close()
+        raise
 
 
 @dataclass(frozen=True, slots=True)

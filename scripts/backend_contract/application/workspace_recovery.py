@@ -24,6 +24,7 @@ apenas para criar um workspace que ainda não existe.
 from __future__ import annotations
 
 import shutil
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -168,38 +169,79 @@ class InspectWorkspaceBackup:
         return _summary(backup, self.hash_payload(payload))
 
 
+#: Transições legais da sessão. `PROMOTING` e `DISCARDING` são MUTUAMENTE
+#: EXCLUSIVAS: enquanto uma promoção está em voo, o descarte não pode fechar o
+#: staging por baixo dela — era assim que dois cliques na UI produziam perícia
+#: fantasma (workspace vivo criado, staging apagado, promoção morta em 503).
+STAGED = "STAGED"
+PROMOTING = "PROMOTING"
+PROMOTED = "PROMOTED"
+DISCARDING = "DISCARDING"
+DISCARDED = "DISCARDED"
+FAILED_RECOVERABLE = "FAILED_RECOVERABLE"
+
+
 class WorkspaceRecoverySessions:
-    """Registro em processo das sessões de recuperação.
+    """Registro em processo das sessões de recuperação, com transição atômica.
 
     A autoridade de `RecoveryStaging` vive num `WeakKeyDictionary` na
     infraestrutura: o objeto precisa de referência FORTE para sobreviver entre
-    requisições HTTP distintas. Este registro é essa referência — e nada mais.
-    Não é um novo armazenamento nem um plano de controle: se o processo cair, a
-    sessão some e a raiz continua quarentenada, portanto NÃO promovível. Falha
-    fechada por construção; o usuário simplesmente prepara a recuperação de novo.
+    requisições HTTP distintas. Este registro é essa referência.
+
+    O servidor é `ThreadingHTTPServer`, então duas requisições sobre o MESMO
+    `recovery_id` correm de verdade. `claim` é o ponto de serialização: um
+    compare-and-set sob lock por sessão. Não é framework de lock distribuído — é
+    a fronteira estreita de estado que a autoridade exige.
     """
 
-    __slots__ = ("_sessions",)
+    __slots__ = ("_sessions", "_mutex")
 
     def __init__(self) -> None:
         self._sessions: dict[str, dict] = {}
+        self._mutex = threading.Lock()
 
     def register(self, recovery_id: str, staging: object, summary: BackupSummary) -> None:
-        self._sessions[recovery_id] = {
-            "staging": staging,
-            "summary": summary,
-            "promoted": False,
-            "promotion_started": False,
-        }
+        with self._mutex:
+            self._sessions[recovery_id] = {
+                "staging": staging,
+                "summary": summary,
+                "state": STAGED,
+            }
 
     def get(self, recovery_id: str) -> dict:
-        entry = self._sessions.get(recovery_id)
+        with self._mutex:
+            entry = self._sessions.get(recovery_id)
         if entry is None:
             raise RecoveryNotFound("sessão de recuperação não encontrada")
         return entry
 
+    def claim(self, recovery_id: str, permitidos: tuple[str, ...], destino: str) -> dict:
+        """Transição ATÔMICA de estado. Quem perde a corrida recebe erro honesto."""
+        with self._mutex:
+            entry = self._sessions.get(recovery_id)
+            if entry is None:
+                raise RecoveryNotFound("sessão de recuperação não encontrada")
+            atual = entry["state"]
+            if atual not in permitidos:
+                if atual == PROMOTED:
+                    raise RecoveryAlreadyPromoted("esta recuperação já foi promovida")
+                if atual in (DISCARDING, DISCARDED):
+                    raise RecoveryDiscarded("esta recuperação foi descartada")
+                raise WorkspaceRecoveryConflict(
+                    "esta recuperação já tem uma operação em andamento"
+                )
+            entry["state"] = destino
+            return entry
+
+    def settle(self, recovery_id: str, destino: str) -> None:
+        with self._mutex:
+            entry = self._sessions.get(recovery_id)
+            if entry is not None:
+                entry["state"] = destino
+
     def drop(self, recovery_id: str) -> None:
-        self._sessions.pop(recovery_id, None)
+        with self._mutex:
+            self._sessions.pop(recovery_id, None)
 
     def close_all(self) -> None:
         for entry in tuple(self._sessions.values()):
@@ -262,8 +304,16 @@ class DiscardWorkspaceRecovery:
     sessions: WorkspaceRecoverySessions
 
     def execute(self, recovery_id: str) -> str:
-        entry = self.sessions.get(recovery_id)
-        _encerrar_staging(entry["staging"])
+        # Reivindica DISCARDING antes de tocar em qualquer coisa: se houver uma
+        # promoção em voo, quem perde a corrida recebe erro honesto em vez de
+        # fechar o staging sob os pés dela.
+        entry = self.sessions.claim(recovery_id, (STAGED, FAILED_RECOVERABLE), DISCARDING)
+        try:
+            _encerrar_staging(entry["staging"])
+        except BaseException:
+            self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
+            raise
+        self.sessions.settle(recovery_id, DISCARDED)
         self.sessions.drop(recovery_id)
         return recovery_id
 
@@ -284,9 +334,17 @@ class PromoteWorkspaceRecovery:
     private_contents: object | None
 
     def execute(self, recovery_id: str) -> BackupSummary:
-        entry = self.sessions.get(recovery_id)
-        if entry["promoted"]:
-            raise RecoveryAlreadyPromoted("esta recuperação já foi promovida")
+        # Reivindica PROMOTING: enquanto durar, nenhum descarte fecha o staging e
+        # nenhuma segunda promoção entra. `FAILED_RECOVERABLE` é reivindicável
+        # porque uma promoção interrompida TEM de ser retomável.
+        entry = self.sessions.claim(recovery_id, (STAGED, FAILED_RECOVERABLE), PROMOTING)
+        try:
+            return self._promover(recovery_id, entry)
+        except BaseException:
+            self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
+            raise
+
+    def _promover(self, recovery_id: str, entry: dict) -> BackupSummary:
         staging = entry["staging"]
         if staging.discarded:
             raise RecoveryDiscarded("esta recuperação foi descartada")
