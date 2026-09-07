@@ -1109,11 +1109,22 @@ class RecoveryStaging:
         Quem classifica um journal precisa comparar identidades SEM cunhar uma
         nova: cunhar aqui faria toda raiz cuja prova sumiu parecer "de outra
         promoção", em vez de "sem prova".
+
+        ILEGÍVEL AGORA != AUSENTE PARA SEMPRE. Engolir qualquer `OSError` como
+        "sem prova" fazia um bloqueio transitório — antivírus, indexador,
+        placeholder do OneDrive não hidratado — virar veredito permanente de
+        raiz irretomável, e o irretomável AUTORIZA apagar a autoridade de
+        retomada. A mesma condição que o journal trata como transitória precisa
+        ser transitória aqui: só a ausência do arquivo é resposta definitiva.
         """
         try:
             bruto = (self._root / self._IDENTITY).read_bytes()
-        except OSError:
+        except FileNotFoundError:
             return None
+        except OSError as exc:
+            raise RepositoryIntegrityError(
+                "prova de identidade da recuperação ilegível"
+            ) from exc
         try:
             token = bruto.decode("ascii").strip()
         except UnicodeDecodeError:

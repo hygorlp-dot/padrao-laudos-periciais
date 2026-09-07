@@ -1155,8 +1155,17 @@ class StageWorkspaceRecovery:
             # para saber se esta raiz nos interessa, e só o que interessa pode
             # falhar fechado.
             registro = _journal_bruto(raiz)
-            if registro is None or registro is _JOURNAL_TRAVADO:
+            if registro is None:
                 continue
+            if registro is _JOURNAL_TRAVADO:
+                # TRANSITÓRIO, e por isso mesmo não pode ser ignorado: pular a
+                # raiz faz o produto seguir em frente e FABRICAR outra cópia
+                # integral e em claro do material sigiloso, para então mentir o
+                # motivo. Falhar fechado aqui é honesto e se cura sozinho na
+                # próxima tentativa, quando o arquivo voltar a ser legível.
+                raise RecoveryStageFailed(
+                    "o estado de uma promoção interrompida não pôde ser lido agora"
+                )
             if registro is _JOURNAL_CORROMPIDO:
                 # Corrompido não pode ser ligado a pacote nenhum, então também
                 # não pode BLOQUEAR pacote nenhum. Bloquear aqui matava toda
@@ -1471,9 +1480,35 @@ def _remover_entry(entry: dict) -> None:
     _remover_raiz_quarentenada(Path(raiz), exigir_remocao=True)
 
 
+def _mutacao_viva_ocorreu(workspaces: object | None, staging: object) -> bool:
+    """A promoção chegou a tocar o armazenamento vivo?
+
+    O journal prova INTENÇÃO, não gravação — ele é escrito antes da primeira
+    mutação exatamente para sobreviver à queda no meio dela. Quem sabe se algo
+    foi gravado é o armazenamento vivo. FAIL-CLOSED: sem como conferir, assume
+    que gravou, porque o erro caro é destruir a retomada de uma perícia parcial.
+    """
+    if workspaces is None:
+        return True
+    try:
+        registro = staging.ler_transacao()
+    except Exception:
+        return True
+    if type(registro) is not dict:
+        return True
+    try:
+        return workspaces.get(WorkspaceId.parse(str(registro.get("workspace_id")))) is not None
+    except Exception:
+        return True
+
+
 @dataclass(frozen=True, slots=True)
 class DiscardWorkspaceRecovery:
     sessions: WorkspaceRecoverySessions
+    #: Autoridade REAL sobre "algo já foi gravado no vivo?". O journal é escrito
+    #: ANTES da primeira mutação, de propósito; usá-lo como prova de gravação
+    #: faz o produto afirmar perícia parcial onde não há nenhuma.
+    workspaces: object | None = None
 
     def execute(
         self, recovery_id: str, *, aceitar_incompleta: bool = False
@@ -1522,7 +1557,11 @@ class DiscardWorkspaceRecovery:
         # permite concluir uma promoção já iniciada no vivo. Irretomável não é
         # autoridade de nada alcançável, e inacessível pode voltar a ser lido —
         # nenhum dos dois justifica prender o usuário para sempre.
-        if estado == _JOURNAL_RETOMAVEL and not aceitar_incompleta:
+        if (
+            estado == _JOURNAL_RETOMAVEL
+            and not aceitar_incompleta
+            and _mutacao_viva_ocorreu(self.workspaces, staging)
+        ):
             self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
             raise RecoveryPromotionIncomplete(
                 "esta promoção já começou a gravar e precisa ser retomada"
@@ -1612,6 +1651,11 @@ class PromoteWorkspaceRecovery:
             # Journal presente = a primeira mutação viva JÁ aconteceu. Reportar
             # isso como "armazenamento indisponível" faria o produto dizer "nada
             # mudou" no exato instante em que gravou uma perícia parcial.
+            if not _mutacao_viva_ocorreu(self.workspaces, entry["staging"]):
+                # Journal presente sem nada gravado: a falha é o que ela é, não
+                # uma promoção meio-feita. Afirmar o contrário empurraria o
+                # usuário para o descarte consciente de uma perícia inexistente.
+                raise
             raise RecoveryPromotionIncomplete(
                 "a promoção foi interrompida depois de começar a gravar"
             ) from exc

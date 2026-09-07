@@ -1540,3 +1540,140 @@ def test_identidade_perdida_com_journal_torna_irretomavel_sem_segunda_copia(tmp_
         assert [p for p in base.iterdir() if p.is_dir()] == []
     finally:
         destino.close()
+
+# ------------------------------------------------------------------ S
+# Terceira rodada terminal (A6/B6). A mesma classe causal reaparece sempre que
+# uma condição TRANSITÓRIA é lida como veredito PERMANENTE.
+
+
+def test_identidade_travada_nao_autoriza_destruir_a_retomada(tmp_path):
+    """RED S1 — prova ilegível AGORA não é prova ausente PARA SEMPRE.
+
+    O código nomeia a mesma condição como transitória para o journal (antivírus,
+    indexador, placeholder do OneDrive) e a tratava como permanente para a
+    identidade: `except OSError: return None`. Como `None` classifica a raiz
+    como IRRETOMÁVEL, o descarte passava a ser autorizado e apagava a autoridade
+    de retomada — sem sequer exigir a declaração consciente.
+    """
+    import pathlib as _pathlib
+
+    import scripts.backend_contract.application.workspace_recovery as wr
+    from scripts.backend_contract.infrastructure.productization import (
+        abrir_staging_quarentenado,
+    )
+
+    _origem, _pkg, destino, _rid = _interromper_promocao(tmp_path, "s1")
+    destino.close()
+    journal = _journal_da_unica_raiz(tmp_path, "s1")
+    alvo = journal.parent / "STAGING_IDENTITY_V1"
+    assert alvo.exists()
+
+    staging = abrir_staging_quarentenado(journal.parent)
+    original = _pathlib.Path.read_bytes
+    try:
+        def _travado(self, *args, **kwargs):
+            if _pathlib.Path(self) == alvo:
+                raise PermissionError(13, "arquivo em uso")
+            return original(self, *args, **kwargs)
+
+        _pathlib.Path.read_bytes = _travado
+        try:
+            estado = wr._classificar_journal(staging)
+        finally:
+            _pathlib.Path.read_bytes = original
+        assert estado == wr._JOURNAL_INACESSIVEL, estado
+    finally:
+        staging.close()
+
+
+
+def test_journal_travado_nao_fabrica_segunda_copia_do_material(tmp_path):
+    """RED S2 — pular a raiz certa por leitura travada duplicava o sigiloso.
+
+    Era a regressão exata do RED M, redisparada pelo estado "travado". Falhar
+    fechado com motivo transitório é honesto; fabricar outra cópia integral em
+    claro do material privado, não.
+    """
+    import scripts.backend_contract.application.workspace_recovery as wr
+
+    _origem, package, destino, _rid = _interromper_promocao(tmp_path, "s2")
+    try:
+        base = tmp_path / ".s2.sqlite3.recovery"
+        antes = [p for p in base.iterdir() if p.is_dir()]
+        assert len(antes) == 1
+
+        original = wr._journal_bruto
+        wr._journal_bruto = lambda raiz: wr._JOURNAL_TRAVADO
+        try:
+            # Sem sessão viva na frente, a redescoberta cai na varredura do disco.
+            destino._recovery_sessions._sessions.clear()
+            status, corpo = _stage(destino, package)
+        finally:
+            wr._journal_bruto = original
+
+        assert status >= 400, corpo
+        depois = [p for p in base.iterdir() if p.is_dir()]
+        assert depois == antes, "uma segunda cópia do material privado foi criada"
+    finally:
+        destino.close()
+
+
+def test_journal_corrompido_sobrevive_a_reabertura_como_sobrevive_ao_fechamento(tmp_path):
+    """RED S3 — `close_all` preservava e a varredura apagava a MESMA raiz.
+
+    Duas polaridades para o mesmo fato. Inclui o caso de um build anterior
+    encontrar journal de versão futura: apagar ali destrói o que o build novo
+    saberia retomar.
+    """
+    _origem, _pkg, destino, _rid = _interromper_promocao(tmp_path, "s3")
+    journal = _journal_da_unica_raiz(tmp_path, "s3")
+    journal.write_bytes(b'{"version": 999, "phase": "PROMOTING"}')
+    destino.close()
+
+    base = tmp_path / ".s3.sqlite3.recovery"
+    assert [p for p in base.iterdir() if p.is_dir()], "fechamento já destruiu"
+
+    reaberto = _runtime(tmp_path, "s3")
+    try:
+        assert [p for p in base.iterdir() if p.is_dir()], "a reabertura destruiu"
+    finally:
+        reaberto.close()
+
+def test_falha_antes_da_primeira_gravacao_viva_nao_afirma_pericia_parcial(tmp_path):
+    """RED S4 — journal gravado != armazenamento vivo mutado.
+
+    O journal é escrito ANTES da primeira mutação viva, de propósito. Tratar sua
+    existência como prova de que algo já foi gravado faz o produto dizer "parte
+    da perícia já foi gravada — NÃO descarte" quando nada foi, e força o usuário
+    a declarar que aceita uma perícia incompleta que não existe.
+    """
+    origem, _ids, package = _origem_com_dois_privados(tmp_path, "s4-origem")
+    destino = _runtime(tmp_path, "s4")
+    try:
+        status, staged = _stage(destino, package)
+        assert status == 201, staged
+        recovery_id = staged["recovery_id"]
+
+        repositorio = destino._store.workspaces
+        original = type(repositorio).create
+
+        def _falha(self, *args, **kwargs):
+            raise OSError(5, "falha de I/O antes de qualquer gravação viva")
+
+        type(repositorio).create = _falha
+        try:
+            status, corpo = _promote(destino, recovery_id)
+        finally:
+            type(repositorio).create = original
+        assert status >= 400, corpo
+
+        # Nada vivo foi criado...
+        status_lista, lista = _json(destino, "GET", "/v1/workspaces")
+        assert status_lista == 200
+        assert all(w["workspace_id"] != origem for w in lista["items"]), lista
+
+        # ...logo o descarte comum precisa funcionar, sem declaração consciente.
+        status, corpo = _json(destino, "POST", f"/v1/recovery/{recovery_id}/discard")
+        assert status == 200, corpo
+    finally:
+        destino.close()

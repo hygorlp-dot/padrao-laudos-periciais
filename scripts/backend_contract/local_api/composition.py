@@ -495,8 +495,23 @@ def build_local_api(
     # Corpo grande é derramado AQUI, não no temporário do sistema: o pacote de
     # recuperação carrega todo o conteúdo privado em claro, e %TEMP% é varrido,
     # indexado e sincronizado por ferramentas de terceiros.
+    # Corpo grande é derramado AQUI, não no temporário do sistema. O pacote de
+    # recuperação carrega todo o conteúdo privado em claro, e %TEMP% fica FORA
+    # da área que o usuário escolheu para os dados do caso — é varrido,
+    # indexado e limpo por ferramentas de terceiros. Esta pasta não é um
+    # esconderijo melhor: é a MESMA pasta onde o banco e o armazenamento
+    # privado já vivem, então não acrescenta classe de exposição nenhuma.
     spool_root = database_path.parent / f".{database_path.name}.spool"
     spool_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Queda dura (BSOD, falta de energia) pode deixar derramamento para trás:
+    # no Windows o `O_TEMPORARY` só some com o processo. Recolhe na reabertura,
+    # antes de servir — nada aqui é autoridade de coisa alguma.
+    for residuo in spool_root.iterdir():
+        try:
+            if residuo.is_file():
+                residuo.unlink()
+        except OSError:
+            pass
     if server_config.spool_dir is None:
         server_config = replace(server_config, spool_dir=str(spool_root))
 
@@ -555,7 +570,7 @@ def build_local_api(
     promote_workspace_recovery = PromoteWorkspaceRecovery(
         recovery_sessions, store.workspaces, store.revisions, private_store
     )
-    discard_workspace_recovery = DiscardWorkspaceRecovery(recovery_sessions)
+    discard_workspace_recovery = DiscardWorkspaceRecovery(recovery_sessions, store.workspaces)
     abandon_workspace_recovery = AbandonWorkspaceRecovery(discard_workspace_recovery)
     services = LocalApiServices(
         create_workspace=CreateWorkspace(store.workspaces, local_clock, local_ids),
