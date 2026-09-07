@@ -79,6 +79,9 @@ _INTENT_NAME = re.compile(
     r"(?P<nonce>[0-9a-f]{32})$"
 )
 _ABORTED_NAME = re.compile(r"^\.aborted\.(?P<nonce>[0-9a-f]{32})$")
+#: Tentativa abortada SUPERADA por continuação exata de recuperação. Não apaga
+#: história: convive com `.aborted.<nonce>` sobre o mesmo intent.
+_CONTINUED_NAME = re.compile(r"^\.continued\.(?P<nonce>[0-9a-f]{32})$")
 _RETIRED_NAME = re.compile(r"^\.retired\.(?P<nonce>[0-9a-f]{32})$")
 _REPARSE_ATTRIBUTE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
@@ -511,6 +514,51 @@ def _retire_if_owned(
         retired,
         retired_details,
         expected_links=retired_details.st_nlink,
+        root_fd=root_fd,
+    )
+    if root_fd is not None:
+        os.fsync(root_fd)
+
+
+def _mark_intent_continued(
+    intent: Path,
+    expected: os.stat_result,
+    nonce: str,
+    *,
+    root_fd: int | None,
+) -> None:
+    """Registra que a tentativa ABORTADA foi superada por uma continuação exata.
+
+    A história permanece: o intent e o `.aborted` continuam no lugar. O marcador
+    `.continued` é um TERCEIRO hard link para o mesmo inode do intent, então a
+    proveniência segue verificável por identidade — e é ele que autoriza o
+    prefixo a voltar ao conjunto ativo do journal. Sem ele, um aborto tornaria a
+    identidade privada inutilizável para sempre.
+    """
+    observed = _lstat(intent, root_fd=root_fd)
+    _validate_regular(observed, expected_links=2)
+    if observed.st_size != 0 or not _same_identity(expected, observed):
+        raise RepositoryIntegrityError("identidade do intent privado diverge")
+    continued = intent.parent / f".continued.{nonce}"
+    if root_fd is None:
+        os.link(intent, continued, follow_symlinks=False)
+        continued_details = os.lstat(continued)
+    else:
+        os.link(
+            _entry_name(intent),
+            _entry_name(continued),
+            src_dir_fd=root_fd,
+            dst_dir_fd=root_fd,
+            follow_symlinks=False,
+        )
+        continued_details = _lstat(continued, root_fd=root_fd)
+    _validate_regular(continued_details, expected_links=3)
+    if not _same_identity(expected, continued_details):
+        raise RepositoryIntegrityError("intent privado continuado sem identidade exata")
+    _flush_link_identity(
+        continued,
+        continued_details,
+        expected_links=3,
         root_fd=root_fd,
     )
     if root_fd is not None:
@@ -1200,7 +1248,9 @@ class LocalPrivateContentStore:
         stages,
         finals,
         retired_markers,
-    ) -> tuple[set[tuple[int, int, int]], set[str], set[str]]:
+        continued=None,
+    ) -> tuple[set[tuple[int, int, int]], set[str], set[str], set[str]]:
+        continued = continued or {}
         intents_by_nonce = {}
         for prefix, (nonce, _, details) in intents.items():
             if nonce in intents_by_nonce:
@@ -1210,13 +1260,27 @@ class LocalPrivateContentStore:
                 raise RepositoryIntegrityError("intent privado inválido")
             intents_by_nonce[nonce] = (prefix, details)
 
+        # Uma continuação exata só existe SOBRE um aborto: ela o supera, não o
+        # apaga. O intent passa a ter três vínculos — ele mesmo, `.aborted` e
+        # `.continued` — e a identidade é verificada em todos.
+        continued_prefixes = set()
+        for nonce, (_, details) in continued.items():
+            intent = intents_by_nonce.get(nonce)
+            if intent is None or not _same_identity(intent[1], details):
+                raise RepositoryIntegrityError("intent privado continuado sem proveniência")
+            if nonce not in aborted:
+                raise RepositoryIntegrityError("continuação privada sem aborto anterior")
+            _validate_regular(details, expected_links=3)
+            continued_prefixes.add(intent[0])
+
         aborted_prefixes = set()
         for nonce, (_, details) in aborted.items():
             intent = intents_by_nonce.get(nonce)
             if intent is None or not _same_identity(intent[1], details):
                 raise RepositoryIntegrityError("intent privado abortado sem proveniência")
-            _validate_regular(details, expected_links=2)
-            _validate_regular(intent[1], expected_links=2)
+            vinculos = 3 if intent[0] in continued_prefixes else 2
+            _validate_regular(details, expected_links=vinculos)
+            _validate_regular(intent[1], expected_links=vinculos)
             aborted_prefixes.add(intent[0])
         for prefix, (_, _, details) in intents.items():
             if prefix not in aborted_prefixes:
@@ -1253,7 +1317,7 @@ class LocalPrivateContentStore:
             if details.st_nlink != root_link_counts[identity]:
                 raise RepositoryIntegrityError("objeto privado aposentado possui hard link externo")
             retired_prefixes.add(prefix)
-        return set(marker_details), aborted_prefixes, retired_prefixes
+        return set(marker_details), aborted_prefixes, retired_prefixes, continued_prefixes
 
     def _all_prefix_paths_retired(self, prefixes: set[str]) -> bool:
         retired_identities = set()
@@ -1309,6 +1373,7 @@ class LocalPrivateContentStore:
         stage_groups: dict[str, set[str]] = {}
         intents = {}
         aborted = {}
+        continued = {}
         stages = []
         finals = []
         retired_markers = []
@@ -1334,6 +1399,14 @@ class LocalPrivateContentStore:
                     raise RepositoryIntegrityError("intent abortado duplicado")
                 path = self._root / name
                 aborted[nonce] = (path, _lstat(path, root_fd=self._root_fd))
+                continue
+            continued_match = _CONTINUED_NAME.fullmatch(name)
+            if continued_match:
+                nonce = continued_match["nonce"]
+                if nonce in continued:
+                    raise RepositoryIntegrityError("continuação privada duplicada")
+                path = self._root / name
+                continued[nonce] = (path, _lstat(path, root_fd=self._root_fd))
                 continue
             if _RETIRED_NAME.fullmatch(name):
                 path = self._root / name
@@ -1365,12 +1438,13 @@ class LocalPrivateContentStore:
             _validate_regular(details, expected_links=None)
             finals.append((prefix, final["member"], path, details))
 
-        retired_identities, aborted_prefixes, retired_prefixes = self._validate_namespace_provenance(
+        retired_identities, aborted_prefixes, retired_prefixes, continued_prefixes = self._validate_namespace_provenance(
             intents,
             aborted,
             stages,
             finals,
             retired_markers,
+            continued,
         )
         if not retired_prefixes.issubset(aborted_prefixes):
             raise RepositoryIntegrityError("aposentadoria privada sem intent abortado")
@@ -1402,7 +1476,15 @@ class LocalPrivateContentStore:
             _validate_regular(final_details, expected_links=2)
         journal, _, journal_tail = self._ledger_entries(self._journal_fd, label="journal")
         anchor, _, anchor_tail = self._ledger_entries(self._anchor_fd, label="anchor")
-        active_journal = tuple(prefix for prefix in journal if prefix not in aborted_prefixes)
+        # Um prefixo abortado sai do conjunto ativo — EXCETO quando foi superado
+        # por uma continuação exata autorizada. Sem essa exceção, uma única falha
+        # de I/O tornava a identidade privada inutilizável para sempre e a perícia
+        # inteira irrecuperável pelo produto. A história do aborto continua ali.
+        active_journal = tuple(
+            prefix
+            for prefix in journal
+            if prefix not in aborted_prefixes or prefix in continued_prefixes
+        )
         if journal_tail is not None or anchor_tail is not None or not set(journal).issubset(self._known_prefixes) or active_journal != anchor or set(active_journal) != self._committed:
             raise RepositoryIntegrityError("journal privado diverge do estado confirmado")
 
@@ -1410,6 +1492,7 @@ class LocalPrivateContentStore:
         groups: dict[str, set[str]] = {}
         intents = {}
         aborted = {}
+        continued = {}
         stages: list[tuple[str, str, str, Path, os.stat_result]] = []
         final_objects: list[tuple[str, str, Path, os.stat_result]] = []
         retired_markers = []
@@ -1435,6 +1518,14 @@ class LocalPrivateContentStore:
                     raise RepositoryIntegrityError("intent abortado duplicado")
                 path = self._root / name
                 aborted[nonce] = (path, _lstat(path, root_fd=self._root_fd))
+                continue
+            continued_match = _CONTINUED_NAME.fullmatch(name)
+            if continued_match:
+                nonce = continued_match["nonce"]
+                if nonce in continued:
+                    raise RepositoryIntegrityError("continuação privada duplicada")
+                path = self._root / name
+                continued[nonce] = (path, _lstat(path, root_fd=self._root_fd))
                 continue
             if _RETIRED_NAME.fullmatch(name):
                 retired_path = self._root / name
@@ -1472,12 +1563,13 @@ class LocalPrivateContentStore:
                 )
             )
 
-        retired_identities, aborted_prefixes, retired_prefixes = self._validate_namespace_provenance(
+        retired_identities, aborted_prefixes, retired_prefixes, continued_prefixes = self._validate_namespace_provenance(
             intents,
             aborted,
             stages,
             final_objects,
             retired_markers,
+            continued,
         )
 
         def is_retired(details: os.stat_result) -> bool:
@@ -1493,9 +1585,16 @@ class LocalPrivateContentStore:
         anchor, _, anchor_tail = self._ledger_entries(self._anchor_fd, label="anchor")
         if not (set(raw_journal) | set(anchor)).issubset(intents):
             raise RepositoryIntegrityError("ledger privado sem intent durável")
-        if set(anchor) & aborted_prefixes:
+        # Um aborto confirmado no anchor só é legítimo quando houve continuação
+        # exata autorizada — o marcador `.continued`. Sem ela, segue sendo
+        # corrupção. A história do aborto permanece registrada nos dois casos.
+        if set(anchor) & (aborted_prefixes - continued_prefixes):
             raise RepositoryIntegrityError("anchor privado confirma intent abortado")
-        journal = tuple(prefix for prefix in raw_journal if prefix not in aborted_prefixes)
+        journal = tuple(
+            prefix
+            for prefix in raw_journal
+            if prefix not in aborted_prefixes or prefix in continued_prefixes
+        )
 
         common_length = 0
         for journal_entry, anchor_entry in zip(journal, anchor):
@@ -1510,7 +1609,12 @@ class LocalPrivateContentStore:
         journal_extra = journal[len(anchor) :]
         if len(journal_extra) > 1 or (journal_extra and journal_tail):
             raise RepositoryIntegrityError("journal privado perdeu proveniência")
-        committed_groups = {prefix for prefix, members in groups.items() if "commit" in members and prefix not in aborted_prefixes}
+        committed_groups = {
+            prefix
+            for prefix, members in groups.items()
+            if "commit" in members
+            and (prefix not in aborted_prefixes or prefix in continued_prefixes)
+        }
         unmarked_intents = set(intents) - aborted_prefixes - set(common)
         pending_prefix = journal_extra[0] if journal_extra else None
         pending_without_wal = False
@@ -1545,10 +1649,13 @@ class LocalPrivateContentStore:
             raise RepositoryIntegrityError("journal privado diverge de commits confirmados")
 
         pending_is_committed = pending_prefix in committed_groups
-        cleanup_prefixes = set(aborted_prefixes)
+        # Um prefixo CONTINUADO não é lixo a recolher: ele tem objetos vivos e
+        # confirmados, que precisam passar pela validação normal. Os objetos
+        # aposentados da tentativa anterior seguem legítimos.
+        cleanup_prefixes = set(aborted_prefixes) - continued_prefixes
         if pending_prefix is not None and not pending_is_committed:
             cleanup_prefixes.add(pending_prefix)
-        if not retired_prefixes.issubset(cleanup_prefixes):
+        if not retired_prefixes.issubset(cleanup_prefixes | continued_prefixes):
             raise RepositoryIntegrityError("aposentadoria privada sem intent abortado")
 
         linked_members: dict[str, set[str]] = {}
@@ -1879,6 +1986,201 @@ class LocalPrivateContentStore:
                                 nonce,
                                 root_fd=self._root_fd,
                             )
+                        except (OSError, RepositoryIntegrityError):
+                            pass
+
+    def _intent_durablemente_abortado(self, prefix: str):
+        """`(caminho, identidade, nonce)` do intent DESTE prefixo quando ele existe
+        e está durávelmente marcado como abortado; senão `None`.
+
+        A prova é o hard link: `.aborted.<nonce>` e `.intent.<prefix>.<nonce>`
+        precisam ser o MESMO inode. Nada aqui apaga nem reescreve história.
+        """
+        intent_path = None
+        intent_nonce = None
+        abortados = set()
+        for name in self._root_names():
+            intent = _INTENT_NAME.fullmatch(name)
+            if intent is not None:
+                if f"{intent['workspace']}.{intent['content']}" == prefix:
+                    intent_path = self._root / name
+                    intent_nonce = intent["nonce"]
+                continue
+            abortado = _ABORTED_NAME.fullmatch(name)
+            if abortado is not None:
+                abortados.add(abortado["nonce"])
+        if intent_path is None or intent_nonce not in abortados:
+            return None
+        detalhes = _lstat(intent_path, root_fd=self._root_fd)
+        marcador = _lstat(self._root / f".aborted.{intent_nonce}", root_fd=self._root_fd)
+        if not _same_identity(detalhes, marcador):
+            raise RepositoryIntegrityError("marcador de aborto sem vínculo exato com o intent")
+        return intent_path, detalhes, intent_nonce
+
+    @_controlled_filesystem_errors("falha ao continuar importação privada")
+    def continue_exact_recovery_write(
+        self,
+        metadata: PrivateContentMetadata,
+        content: bytes | SeekableContent,
+        *,
+        expected_sha256: str,
+    ) -> PrivateContentMetadata:
+        """Continuação EXATA de uma importação de recuperação abortada.
+
+        `ABORTED_INTENT != COMMITTED_CONTENT` — mas um intent abortado não pode
+        destruir PARA SEMPRE a capacidade de a transação de recuperação exata
+        concluir. Uma única falha de I/O durante a gravação do conteúdo deixava a
+        identidade privada permanentemente ingravável (`store()` recusa por
+        `_known_prefixes`, enquanto `list_all`/`open_content` só enxergam
+        `_committed` — universos distintos), e a perícia inteira ficava
+        irrecuperável pelo produto.
+
+        A história permanece OBSERVÁVEL: o intent e o marcador `.aborted` não são
+        tocados, o journal não é reescrito, nenhum objeto aposentado é apagado. O
+        que esta operação faz é autorizar uma NOVA tentativa sob a mesma
+        identidade, e só quando o próprio armazenamento prova:
+
+          A. o prefixo NÃO está comprometido;
+          B. a tentativa anterior está durávelmente ABORTADA (hard link exato);
+          C. todos os objetos daquela tentativa estão aposentados;
+          D. nenhum caminho canônico da identidade está fisicamente ocupado;
+          E. o conteúdo oferecido bate byte a byte com o digest verificado.
+
+        Qualquer outra situação: FALHA FECHADA. Em particular, esta operação NUNCA
+        aceita conteúdo diferente sob uma identidade reusada.
+        """
+        self._ensure_open()
+        source = as_seekable_content(content)
+        if source.byte_size > self._max_content_bytes:
+            raise RepositoryError("conteúdo privado excede limite operacional")
+        if type(metadata) is not PrivateContentMetadata or metadata.byte_size != source.byte_size:
+            raise RepositoryIntegrityError("tamanho do conteúdo privado diverge")
+        if type(expected_sha256) is not str or len(expected_sha256) != 64:
+            raise RepositoryIntegrityError("digest esperado inválido")
+        self._validate_keys(metadata.workspace_id, metadata.content_id)
+        prefix = _prefix(metadata.workspace_id, metadata.content_id)
+        paths = _record_paths(self._root, metadata.workspace_id, metadata.content_id)
+        with self._mutex:
+            self._ensure_open()
+            self._audit_runtime_inventory()
+            if prefix in self._committed:
+                raise RepositoryConflict("identidade de conteúdo privado já comprometida")
+            abortado = self._intent_durablemente_abortado(prefix)
+            if abortado is None:
+                raise RepositoryConflict("identidade privada não tem tentativa abortada própria")
+            if not self._all_prefix_paths_retired({prefix}):
+                raise RepositoryIntegrityError("tentativa anterior tem objeto não aposentado")
+            if any(_entry_exists(path, root_fd=self._root_fd) for path in paths.values()):
+                raise RepositoryConflict("identidade privada tem caminho canônico ocupado")
+            if len(self._root_names()) + _MAX_TRANSACTION_ROOT_ENTRIES > _MAX_ROOT_ENTRIES:
+                raise RepositoryError("armazenamento privado atingiu limite físico")
+
+            if type(content) is bytes:
+                digest = hashlib.sha256(content).hexdigest()
+            else:
+                source.stream.seek(0)
+                resumo = hashlib.sha256()
+                while True:
+                    bloco = source.stream.read(1024 * 1024)
+                    if not bloco:
+                        break
+                    resumo.update(bloco)
+                digest = resumo.hexdigest()
+                source.stream.seek(0)
+            if digest != expected_sha256:
+                raise RepositoryIntegrityError(
+                    "conteúdo da continuação diverge do digest verificado"
+                )
+
+            # O staging DEVE carregar o nonce do intent: a auditoria de
+            # proveniência exige que todo objeto do prefixo aponte para o intent
+            # durável dele. Como a continuação só é elegível quando nada daquela
+            # tentativa sobrou vivo, o caminho está livre — mas confirmamos.
+            nonce = abortado[2]
+            stages = {
+                member: self._root / f".staging.{prefix}.{nonce}.{member}"
+                for member in (*_MEMBERS, "commit")
+            }
+            if any(_entry_exists(stage, root_fd=self._root_fd) for stage in stages.values()):
+                raise RepositoryConflict("identidade privada tem staging remanescente")
+            manifest = _canonical_manifest(_manifest_for(metadata))
+            metadata_checksum = hashlib.sha256(manifest).hexdigest().encode("ascii")
+            published: list[tuple[Path, os.stat_result]] = []
+            stage_identities: dict[Path, os.stat_result] = {}
+            commit_created = False
+            try:
+                # O intent e o journal JÁ registram esta identidade: não se cria um
+                # segundo intent (`_recover` recusa intent duplicado por prefixo)
+                # nem se reescreve o journal. O que se acrescenta é o marcador de
+                # CONTINUAÇÃO — o vínculo durável que autoriza este prefixo a
+                # voltar ao conjunto ativo, sem apagar o aborto.
+                _mark_intent_continued(
+                    abortado[0],
+                    abortado[1],
+                    nonce,
+                    root_fd=self._root_fd,
+                )
+                if type(content) is bytes:
+                    _write_fsynced(stages["content"], content, root_fd=self._root_fd)
+                else:
+                    _write_source_fsynced(stages["content"], source, root_fd=self._root_fd)
+                stage_identities[stages["content"]] = _lstat(stages["content"], root_fd=self._root_fd)
+                _write_fsynced(stages["metadata"], manifest, root_fd=self._root_fd)
+                stage_identities[stages["metadata"]] = _lstat(stages["metadata"], root_fd=self._root_fd)
+                _write_fsynced(stages["metadata-sha256"], metadata_checksum, root_fd=self._root_fd)
+                stage_identities[stages["metadata-sha256"]] = _lstat(
+                    stages["metadata-sha256"], root_fd=self._root_fd
+                )
+                for member in _MEMBERS:
+                    _publish_durable(
+                        stages[member],
+                        paths[member],
+                        expected_source=stage_identities[stages[member]],
+                        root_fd=self._root_fd,
+                    )
+                    published.append((paths[member], _lstat(paths[member], root_fd=self._root_fd)))
+                verified = self._read_record(
+                    metadata.workspace_id,
+                    metadata.content_id,
+                    load_content=False,
+                    require_commit=False,
+                    recovery_link_members=frozenset(_MEMBERS),
+                )
+                if verified != metadata:
+                    raise RepositoryIntegrityError("verificação final do conteúdo privado diverge")
+                _write_fsynced(stages["commit"], metadata_checksum, root_fd=self._root_fd)
+                stage_identities[stages["commit"]] = _lstat(stages["commit"], root_fd=self._root_fd)
+                _publish_durable(
+                    stages["commit"],
+                    paths["commit"],
+                    expected_source=stage_identities[stages["commit"]],
+                    root_fd=self._root_fd,
+                )
+                commit_created = True
+                self._confirm_intent(prefix)
+                self._committed.add(prefix)
+                return metadata
+            except FileExistsError as exc:
+                raise RepositoryConflict("identidade de conteúdo privado já existe") from exc
+            except (RepositoryConflict, RepositoryIntegrityError):
+                raise
+            except OSError as exc:
+                raise RepositoryError("falha ao armazenar conteúdo privado") from exc
+            finally:
+                if not commit_created:
+                    # Aposenta o que ESTA tentativa produziu. O intent e o
+                    # `.aborted` originais permanecem intactos: a identidade segue
+                    # elegível a uma próxima continuação exata.
+                    for path, identity in published:
+                        try:
+                            if _entry_exists(path, root_fd=self._root_fd):
+                                self._retire_internal(path, expected=identity)
+                        except (OSError, RepositoryIntegrityError):
+                            pass
+                    for stage in stages.values():
+                        try:
+                            if stage in stage_identities and _entry_exists(stage, root_fd=self._root_fd):
+                                self._retire_internal(stage, expected=stage_identities[stage])
                         except (OSError, RepositoryIntegrityError):
                             pass
 
