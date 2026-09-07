@@ -304,9 +304,17 @@ retorna estado explícito `RETAINED` / `DISCARD_FAILED`, e **permite retentativa
 `ignore_errors=True` deixa de ser autoridade de sucesso. Nunca `200` com material
 privado presente. Se marcador ou disposition estiverem corrompidos, a coleta de
 startup continua proibida; somente um novo abandono humano confirmado pode remover
-a raiz canônica dedicada. Antes do primeiro `unlink`, um inventário completo com
-`lstat` prova que nem a raiz nem qualquer entrada aninhada é link/reparse point;
-qualquer dúvida retém a árvore inteira sem atravessar o namespace.
+a raiz canônica dedicada. Um inventário desacompanhado de custódia não autoriza
+remoção: a árvore pode ser religada entre `lstat` e `unlink`. Antes do primeiro
+`unlink`, cada diretório fica ancorado até sua última operação destrutiva — por
+`dir_fd` + `O_NOFOLLOW` no POSIX e por handle `O_TEMPORARY` que impede rename no
+Windows. Qualquer dúvida retém a árvore inteira sem atravessar o namespace.
+
+Preservar sem publicar também é falha: uma raiz canônica que contenha reparse é
+exposta de forma sanitizada como `RECOVERY_UNRESUMABLE`, sem percorrer o membro
+inseguro, e oferece abandono explícito. Enquanto a contaminação persistir, o
+cleanup responde `RECOVERY_RETAINED`; nunca apaga fora da raiz nem torna a sessão
+invisível.
 
 A rota global `/recuperacao` permanece alcançável também quando já existem
 workspaces vivos. Assim uma promoção parcial não esconde sua sessão pendente atrás

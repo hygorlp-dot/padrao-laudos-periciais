@@ -206,6 +206,236 @@ _JOURNAL = "PROMOTION_TRANSACTION_V1"
 _IDENTIDADE = "STAGING_IDENTITY_V1"
 
 
+def _chave_identidade(details: os.stat_result) -> tuple[int, int, int]:
+    return (details.st_dev, details.st_ino, stat.S_IFMT(details.st_mode))
+
+
+@dataclass(slots=True)
+class _CleanupNode:
+    """Custódia transitória de um diretório da quarentena a remover."""
+
+    path: Path
+    name: str | None
+    identity: tuple[int, int, int]
+    descriptor: int | None
+    anchor_path: Path | None
+    files: list[str]
+    children: list["_CleanupNode"]
+
+
+def _fechar_custodia_cleanup(node: _CleanupNode) -> None:
+    for child in node.children:
+        _fechar_custodia_cleanup(child)
+    if node.descriptor is not None:
+        descriptor = node.descriptor
+        node.descriptor = None
+        os.close(descriptor)
+
+
+def _adquirir_custodia_cleanup(
+    path: Path,
+    *,
+    parent: _CleanupNode | None = None,
+) -> _CleanupNode:
+    """Ancora cada diretório antes de devolver nomes que serão removidos.
+
+    No POSIX, todas as operações posteriores usam ``dir_fd`` + ``O_NOFOLLOW``.
+    No Windows, um arquivo ``O_TEMPORARY`` aberto em cada diretório impede que
+    ele seja renomeado/substituído enquanto qualquer unlink ainda depende do
+    caminho. Os anchors somem ao fechar o último handle e nunca são material do
+    backup.
+    """
+
+    if parent is None:
+        before = os.lstat(path)
+    elif os.name == "posix":
+        if parent.descriptor is None or path.name in {"", ".", ".."}:
+            raise RecoveryRetained("custódia da recuperação indisponível")
+        before = os.stat(
+            path.name,
+            dir_fd=parent.descriptor,
+            follow_symlinks=False,
+        )
+    else:
+        before = os.lstat(path)
+    if _detalhes_sao_link_ou_reparse(before) or not stat.S_ISDIR(before.st_mode):
+        raise RecoveryRetained("a recuperação contém link ou reparse point")
+
+    descriptor = None
+    anchor_path = None
+    if os.name == "posix":
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        descriptor = (
+            os.open(path, flags)
+            if parent is None
+            else os.open(path.name, flags, dir_fd=parent.descriptor)
+        )
+        try:
+            opened = os.fstat(descriptor)
+        except Exception:
+            os.close(descriptor)
+            raise
+        if _chave_identidade(before) != _chave_identidade(opened):
+            os.close(descriptor)
+            raise RecoveryRetained("a identidade da recuperação mudou")
+    elif os.name == "nt":
+        anchor_path = path / f".recovery-cleanup-custody.{uuid4().hex}.tmp"
+        descriptor = os.open(
+            anchor_path,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_BINARY | os.O_TEMPORARY,
+            0o600,
+        )
+        try:
+            opened = os.fstat(descriptor)
+            after = os.lstat(path)
+        except Exception:
+            os.close(descriptor)
+            raise
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or _chave_identidade(before) != _chave_identidade(after)
+        ):
+            os.close(descriptor)
+            raise RecoveryRetained("a identidade da recuperação mudou")
+    else:  # pragma: no cover - contrato de plataforma fechado
+        raise RecoveryRetained("plataforma sem remoção de recuperação ancorada")
+
+    node = _CleanupNode(
+        path,
+        path.name if parent is not None else None,
+        _chave_identidade(before),
+        descriptor,
+        anchor_path,
+        [],
+        [],
+    )
+    try:
+        scan_target = descriptor if os.name == "posix" else path
+        with os.scandir(scan_target) as entries:
+            for entry in entries:
+                if anchor_path is not None and entry.name == anchor_path.name:
+                    continue
+                details = entry.stat(follow_symlinks=False)
+                if _detalhes_sao_link_ou_reparse(details):
+                    raise RecoveryRetained(
+                        "a recuperação contém link ou reparse point"
+                    )
+                child_path = path / entry.name
+                if stat.S_ISDIR(details.st_mode):
+                    node.children.append(
+                        _adquirir_custodia_cleanup(child_path, parent=node)
+                    )
+                elif stat.S_ISREG(details.st_mode):
+                    node.files.append(entry.name)
+                else:
+                    raise RecoveryRetained(
+                        "a recuperação contém objeto de filesystem inesperado"
+                    )
+        return node
+    except Exception:
+        _fechar_custodia_cleanup(node)
+        raise
+
+
+def _paths_da_custodia(node: _CleanupNode) -> list[Path]:
+    paths = [node.path / name for name in node.files]
+    for child in node.children:
+        paths.extend(_paths_da_custodia(child))
+    return paths
+
+
+def _unlink_na_custodia(node: _CleanupNode, name: str) -> None:
+    if os.name == "posix":
+        if node.descriptor is None:
+            raise OSError("custódia da recuperação foi encerrada")
+        os.unlink(name, dir_fd=node.descriptor)
+    else:
+        (node.path / name).unlink()
+
+
+def _remover_material_ancorado(
+    node: _CleanupNode,
+    material: set[Path],
+) -> None:
+    for name in node.files:
+        if node.path / name not in material:
+            continue
+        try:
+            _unlink_na_custodia(node, name)
+        except OSError:
+            pass
+    for child in node.children:
+        _remover_material_ancorado(child, material)
+        if os.name == "nt":
+            _fechar_custodia_cleanup(child)
+        try:
+            if os.name == "posix":
+                if node.descriptor is None:
+                    raise OSError("custódia da recuperação foi encerrada")
+                os.rmdir(child.name, dir_fd=node.descriptor)
+            else:
+                child.path.rmdir()
+        except OSError:
+            pass
+        if os.name == "posix":
+            _fechar_custodia_cleanup(child)
+
+
+def _residuo_na_raiz_ancorada(node: _CleanupNode) -> list[str]:
+    scan_target = node.descriptor if os.name == "posix" else node.path
+    if scan_target is None:
+        raise OSError("custódia da recuperação foi encerrada")
+    allowed = {_QUARENTENA, _JOURNAL, _IDENTIDADE, _SESSION, _DISPOSITION}
+    if node.anchor_path is not None:
+        allowed.add(node.anchor_path.name)
+    with os.scandir(scan_target) as entries:
+        return [entry.name for entry in entries if entry.name not in allowed]
+
+
+def _ler_controle_ancorado(node: _CleanupNode, name: str) -> bytes:
+    flags = os.O_RDONLY | (os.O_NOFOLLOW if os.name == "posix" else os.O_BINARY)
+    if os.name == "posix":
+        if node.descriptor is None:
+            raise OSError("custódia da recuperação foi encerrada")
+        descriptor = os.open(name, flags, dir_fd=node.descriptor)
+    else:
+        descriptor = os.open(node.path / name, flags)
+    try:
+        details = os.fstat(descriptor)
+        if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
+            raise OSError("controle da recuperação não é arquivo regular exclusivo")
+        chunks = []
+        while True:
+            chunk = os.read(descriptor, 64 * 1024)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    finally:
+        os.close(descriptor)
+
+
+def _gravar_controle_ancorado(node: _CleanupNode, name: str, payload: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= os.O_NOFOLLOW if os.name == "posix" else os.O_BINARY
+    if os.name == "posix":
+        if node.descriptor is None:
+            raise OSError("custódia da recuperação foi encerrada")
+        descriptor = os.open(name, flags, 0o600, dir_fd=node.descriptor)
+    else:
+        descriptor = os.open(node.path / name, flags, 0o600)
+    try:
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise OSError("escrita do controle não avançou")
+            offset += written
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _inventario_seguro(raiz: Path) -> tuple[list[Path], list[Path]]:
     """Enumera sem seguir links; qualquer reparse aborta antes da primeira remoção."""
     arquivos: list[Path] = []
@@ -651,100 +881,120 @@ def _remover_raiz_quarentenada(raiz: Path, *, exigir_remocao: bool = False) -> N
     objeto de staging para remover deixava esse caso sem saída. O que protege
     aqui é o marcador canônico, não a posse do handle.
     """
-    if _raiz_eh_link_ou_reparse(raiz):
-        if exigir_remocao:
-            raise RecoveryRetained(
-                "a raiz da recuperação é link ou reparse point e não pode ser removida"
+    custody = None
+    try:
+        custody = _adquirir_custodia_cleanup(raiz)
+        marker_valid = False
+        try:
+            marker_valid = (
+                _ler_controle_ancorado(custody, _QUARENTENA)
+                == _QUARENTENA_PAYLOAD
             )
-        return
-    try:
-        arquivos, diretorios = _inventario_seguro(raiz)
-    except (OSError, RecoveryRetained) as exc:
-        if exigir_remocao:
-            raise RecoveryRetained(
-                "a árvore da recuperação não pôde ser validada com segurança"
-            ) from exc
-        return
-    marcador = raiz / _QUARENTENA
-    marcador_valido = False
-    try:
-        marcador_valido = marcador.read_bytes() == _QUARENTENA_PAYLOAD
-    except OSError:
-        pass
-    if not marcador_valido:
-        # Um novo comando humano explícito pode remover a raiz DEDICADA mesmo
-        # quando seus controles estão ilegíveis. A coleta automática continua
-        # exigindo o marcador canônico e falha fechada. Links/reparse points
-        # nunca ganham autoridade destrutiva apenas pelo nome.
-        explicitamente_autorizada = (
-            exigir_remocao
-            and _recovery_id_da_raiz(raiz) is not None
-            and raiz.is_dir()
-        )
-        if not explicitamente_autorizada:
-            if exigir_remocao:
+        except OSError:
+            pass
+        if not marker_valid:
+            # Um comando humano explícito pode remover a raiz dedicada mesmo
+            # com controles ilegíveis. A coleta automática continua exigindo
+            # o marcador canônico; a custódia impede rebind durante a decisão.
+            explicitly_authorized = (
+                exigir_remocao and _recovery_id_da_raiz(raiz) is not None
+            )
+            if not explicitly_authorized:
                 raise RecoveryRetained(
                     "a quarentena da recuperação não pôde ser validada"
                 )
-            return
 
-    for caminho in _material_remanescente(raiz, arquivos):
-        try:
-            caminho.unlink()
-        except OSError:
-            pass
-    for diretorio in diretorios:
-        try:
-            diretorio.rmdir()
-        except OSError:
-            pass
-
-    try:
-        arquivos_restantes, _diretorios_restantes = _inventario_seguro(raiz)
-    except (OSError, RecoveryRetained) as exc:
-        if exigir_remocao:
+        paths = _paths_da_custodia(custody)
+        material = set(_material_remanescente(raiz, paths))
+        _remover_material_ancorado(custody, material)
+        if _residuo_na_raiz_ancorada(custody):
             raise RecoveryRetained(
-                "a árvore da recuperação não pôde ser validada com segurança"
-            ) from exc
-        return
-    residuo = _material_remanescente(raiz, arquivos_restantes)
-    if residuo:
-        # Quarentena PRESERVADA sobre o resíduo: nunca reportar sucesso com
-        # material sigiloso ainda em disco.
-        if exigir_remocao:
-            raise RecoveryRetained("a recuperação preparada não pôde ser removida por completo")
-        return
-    controles = {}
-    for nome in (_JOURNAL, _IDENTIDADE, _SESSION, _DISPOSITION):
+                "a recuperação preparada não pôde ser removida por completo"
+            )
+
+        controls = {}
+        for name in (_JOURNAL, _IDENTIDADE, _SESSION, _DISPOSITION):
+            try:
+                controls[name] = _ler_controle_ancorado(custody, name)
+            except FileNotFoundError:
+                continue
+
+        for name in controls:
+            try:
+                _unlink_na_custodia(custody, name)
+            except FileNotFoundError:
+                pass
         try:
-            controles[nome] = (raiz / nome).read_bytes()
+            _unlink_na_custodia(custody, _QUARENTENA)
         except FileNotFoundError:
-            continue
-        except OSError:
-            if exigir_remocao:
+            pass
+
+        if os.name == "nt":
+            expected_identity = custody.identity
+            _fechar_custodia_cleanup(custody)
+            custody = None
+            try:
+                raiz.rmdir()
+                return
+            except OSError:
+                try:
+                    restored = _adquirir_custodia_cleanup(raiz)
+                except (OSError, RecoveryRetained):
+                    restored = None
+                if restored is not None:
+                    try:
+                        if restored.identity == expected_identity:
+                            for name, payload in controls.items():
+                                try:
+                                    _gravar_controle_ancorado(restored, name, payload)
+                                except FileExistsError:
+                                    pass
+                            try:
+                                _gravar_controle_ancorado(
+                                    restored,
+                                    _QUARENTENA,
+                                    _QUARENTENA_PAYLOAD,
+                                )
+                            except FileExistsError:
+                                pass
+                    finally:
+                        _fechar_custodia_cleanup(restored)
                 raise RecoveryRetained(
                     "a recuperação preparada não pôde ser removida por completo"
                 )
-            return
-    try:
-        for nome in controles:
-            (raiz / nome).unlink(missing_ok=True)
-        marcador.unlink(missing_ok=True)
-        raiz.rmdir()
-    except OSError:
-        # Não conseguiu fechar a raiz: restabelece a quarentena para que ela
-        # jamais possa ser confundida com armazenamento ativo.
+
         try:
-            if not marcador.exists():
-                marcador.write_bytes(_QUARENTENA_PAYLOAD)
-            for nome, corpo in controles.items():
-                caminho = raiz / nome
-                if not caminho.exists():
-                    caminho.write_bytes(corpo)
+            raiz.rmdir()
+            return
         except OSError:
-            pass
+            # O dir_fd ainda nomeia a raiz originalmente validada, mesmo que
+            # seu pathname tenha sido trocado. Restaura a autoridade ali.
+            for name, payload in controls.items():
+                try:
+                    _gravar_controle_ancorado(custody, name, payload)
+                except FileExistsError:
+                    pass
+            try:
+                _gravar_controle_ancorado(
+                    custody,
+                    _QUARENTENA,
+                    _QUARENTENA_PAYLOAD,
+                )
+            except FileExistsError:
+                pass
+            raise RecoveryRetained(
+                "a recuperação preparada não pôde ser removida por completo"
+            )
+    except (OSError, RecoveryRetained) as exc:
         if exigir_remocao:
-            raise RecoveryRetained("a recuperação preparada não pôde ser removida por completo")
+            if isinstance(exc, RecoveryRetained):
+                raise
+            raise RecoveryRetained(
+                "a árvore da recuperação não pôde ser validada com segurança"
+            ) from exc
+    finally:
+        if custody is not None:
+            _fechar_custodia_cleanup(custody)
 
 
 def _summary(backup: object, digest: str) -> BackupSummary:
@@ -1316,10 +1566,22 @@ def reconstruir_sessoes_recuperacao(base, sessions, open_staging) -> tuple[str, 
         return ()
     reconstruidas = []
     for raiz in candidatas:
-        if not _arvore_de_recuperacao_eh_segura(raiz):
-            continue
         recovery_id = _recovery_id_da_raiz(raiz)
         if recovery_id is None:
+            continue
+        if not _arvore_de_recuperacao_eh_segura(raiz):
+            # Preservar a árvore sem publicá-la cria uma recuperação invisível
+            # e sem saída pelo produto. O nome canônico basta para expor o
+            # estado sanitizado; nenhum membro inseguro é lido ou percorrido.
+            sessions.register(
+                recovery_id,
+                None,
+                None,
+                state=RECOVERY_UNRESUMABLE,
+                root=raiz,
+                reason="unsafe_recovery_tree",
+            )
+            reconstruidas.append(recovery_id)
             continue
         marcador_valido = False
         try:

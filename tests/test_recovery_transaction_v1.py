@@ -19,6 +19,8 @@ revisões/privado parciais + nenhuma sessão válida + nenhuma rota de continua�
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import threading
 
 import pytest
@@ -37,6 +39,19 @@ def _pacote(runtime, workspace_id):
     status, _headers, package = _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/backup")
     assert status == 200
     return package
+
+
+def _directory_reparse(link, target):
+    if os.name != "nt":
+        link.symlink_to(target, target_is_directory=True)
+        return
+    created = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert created.returncode == 0, (created.stdout, created.stderr)
 
 
 @pytest.mark.parametrize(
@@ -926,6 +941,119 @@ def test_atributo_windows_reparse_e_reconhecido_sem_percorrer_o_alvo():
         st_file_attributes=wr._REPARSE_ATTRIBUTE,
     )
     assert wr._detalhes_sao_link_ou_reparse(details)
+
+
+@pytest.mark.parametrize("swap_target", ["root", "nested"])
+def test_cleanup_mantem_custodia_ate_o_ultimo_unlink(
+    tmp_path, monkeypatch, swap_target
+):
+    """RED A9/B9 — preflight não autoriza paths que possam ser religados."""
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    root = tmp_path / "recovery-00000000-0000-4000-8000-000000000099"
+    local = root if swap_target == "root" else root / "subdir"
+    local.mkdir(parents=True)
+    (root / "RECOVERY_NOT_PROMOTABLE").write_bytes(b"RECOVERY_STAGING_V1\n")
+    (local / "payload.bin").write_bytes(b"LOCAL")
+
+    outside = tmp_path / f"outside-{swap_target}-swap"
+    outside.mkdir()
+    sentinel = outside / "payload.bin"
+    sentinel.write_bytes(b"EXTERNAL-MUST-SURVIVE")
+    saved = tmp_path / f"saved-{swap_target}-root"
+
+    original = wr._material_remanescente
+    attempted = False
+    swap_blocked = False
+
+    def swap_after_inventory(root_arg, files):
+        nonlocal attempted, swap_blocked
+        if not attempted:
+            attempted = True
+            try:
+                (root if swap_target == "root" else local).rename(saved)
+                _directory_reparse(root if swap_target == "root" else local, outside)
+            except OSError:
+                swap_blocked = True
+        return original(root_arg, files)
+
+    monkeypatch.setattr(wr, "_material_remanescente", swap_after_inventory)
+    try:
+        wr._remover_raiz_quarentenada(root, exigir_remocao=True)
+    except wr.RecoveryRetained:
+        pass
+
+    assert attempted is True
+    if os.name == "nt":
+        assert swap_blocked is True
+    assert sentinel.read_bytes() == b"EXTERNAL-MUST-SURVIVE"
+
+
+def test_recuperacao_publicada_com_reparse_permanece_visivel_apos_restart(tmp_path):
+    """RED B9 — preservar no disco não pode ocultar a recuperação do produto."""
+    _workspace_id, _materials, package = _origem_com_dois_privados(
+        tmp_path, "b9-visible-source"
+    )
+    target = _runtime(tmp_path, "b9-visible-target")
+    status, staged = _stage(target, package)
+    assert status == 201, staged
+    recovery_id = staged["recovery_id"]
+    root = (
+        tmp_path
+        / ".b9-visible-target.sqlite3.recovery"
+        / f"recovery-{recovery_id}"
+    )
+    target.close()
+
+    outside = tmp_path / "b9-visible-outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.bin"
+    sentinel.write_bytes(b"EXTERNAL-MUST-SURVIVE")
+    _directory_reparse(root / "nested-reparse", outside)
+
+    reopened = _runtime(tmp_path, "b9-visible-target")
+    try:
+        status, listing = _json(reopened, "GET", "/v1/recovery")
+        assert status == 200, listing
+        item = next(
+            recovery
+            for recovery in listing["recoveries"]
+            if recovery["recovery_id"] == recovery_id
+        )
+        assert item["state"] == "RECOVERY_UNRESUMABLE"
+        assert item["allowed_actions"] == ["ABANDON"]
+        assert sentinel.read_bytes() == b"EXTERNAL-MUST-SURVIVE"
+        assert root.exists()
+    finally:
+        reopened.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows cleanup custody handle")
+def test_custodia_cleanup_fecha_anchor_quando_validacao_pos_abertura_falha(
+    tmp_path, monkeypatch
+):
+    """Sibling A9 — falha de identidade não pode vazar o handle transitório."""
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    root = tmp_path / "recovery-00000000-0000-4000-8000-000000000098"
+    root.mkdir()
+    real_lstat = wr.os.lstat
+    root_calls = 0
+
+    def fail_second_root_lstat(path):
+        nonlocal root_calls
+        if path == root:
+            root_calls += 1
+            if root_calls == 2:
+                raise OSError("synthetic identity read failure")
+        return real_lstat(path)
+
+    monkeypatch.setattr(wr.os, "lstat", fail_second_root_lstat)
+    with pytest.raises(OSError, match="synthetic identity"):
+        wr._adquirir_custodia_cleanup(root)
+
+    assert list(root.iterdir()) == []
+    root.rmdir()
 
 
 def test_staging_orfao_sem_journal_e_recolhido_na_reabertura(tmp_path):
