@@ -239,12 +239,17 @@ class _ProductRequestHandler(BaseHTTPRequestHandler):
                 else:
                     spool = None
                     try:
-                        document_upload = (
-                            self.command == "POST"
-                            and self.path.startswith("/app-api/v1/workspaces/")
-                            and self.path.endswith(("/materials", "/inspection-photos", "/delivery-templates", "/delivery-supporting-files"))
+                        large_body_upload = self.command == "POST" and (
+                            (
+                                self.path.startswith("/app-api/v1/workspaces/")
+                                and self.path.endswith(("/materials", "/inspection-photos", "/delivery-templates", "/delivery-supporting-files"))
+                            )
+                            or self.path in {
+                                "/app-api/v1/recovery/verify",
+                                "/app-api/v1/recovery/staging",
+                            }
                         )
-                        if length and document_upload:
+                        if length and large_body_upload:
                             spool = tempfile.SpooledTemporaryFile(max_size=1_048_576, mode="w+b", dir=self.server.spool_dir)
                             remaining = length
                             while remaining:

@@ -3,11 +3,13 @@ import json
 import socket
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from threading import Event, Thread
 
 import pytest
 
+from scripts.backend_contract.product_bridge import server as product_bridge_server
 from scripts.backend_contract.product_bridge.transport import ProductBridge, _proxy_target
 
 from scripts.backend_contract.product_bridge.composition import build_product_runtime
@@ -78,6 +80,116 @@ def test_product_bridge_config_requires_literal_loopback():
         ProductBridgeConfig(host="localhost")
     with pytest.raises(ValueError, match="porta"):
         ProductBridgeConfig(port=80)
+
+
+@pytest.mark.parametrize("recovery_action", ("verify", "staging"))
+def test_recovery_upload_spools_large_body_at_product_http_boundary(
+    monkeypatch, tmp_path, recovery_action
+):
+    spool_dir = tmp_path / "product-data-spool"
+    spool_dir.mkdir()
+    created_spools = []
+    spool_calls = []
+    real_spooled_temporary_file = tempfile.SpooledTemporaryFile
+
+    def tracked_spooled_temporary_file(*, max_size, mode, dir):
+        spool_calls.append((max_size, mode, dir))
+        spool = real_spooled_temporary_file(max_size=max_size, mode=mode, dir=dir)
+        created_spools.append(spool)
+        return spool
+
+    monkeypatch.setattr(
+        product_bridge_server.tempfile,
+        "SpooledTemporaryFile",
+        tracked_spooled_temporary_file,
+    )
+    bridge = ProductBridgeServer(
+        frontend_root=frontend_build(tmp_path),
+        upstream_address=("127.0.0.1", 9),
+        token=TOKEN,
+        config=ProductBridgeConfig(
+            max_body_bytes=1_048_576,
+            max_document_body_bytes=3 * 1_048_576,
+            spool_dir=str(spool_dir),
+            upstream_timeout_seconds=0.1,
+        ),
+    )
+    bridge.start()
+    try:
+        status, _headers, _body = request(
+            bridge,
+            "POST",
+            f"/app-api/v1/recovery/{recovery_action}",
+            headers={
+                **browser_mutation_headers(bridge),
+                "Content-Type": "application/octet-stream",
+            },
+            raw_body=b"x" * (2 * 1_048_576),
+        )
+    finally:
+        bridge.close()
+
+    assert status == 503
+    assert spool_calls == [(1_048_576, "w+b", str(spool_dir))]
+    assert created_spools[0]._rolled is True
+
+
+@pytest.mark.parametrize(
+    ("method", "target"),
+    (
+        ("PUT", "/app-api/v1/recovery/verify"),
+        ("POST", "/app-api/v1/recovery/verify/extra"),
+        (
+            "POST",
+            "/app-api/v1/recovery/11111111-1111-4111-8111-111111111111/promote",
+        ),
+    ),
+)
+def test_recovery_spool_authority_stays_limited_to_exact_upload_routes(
+    monkeypatch, tmp_path, method, target
+):
+    spool_dir = tmp_path / "product-data-spool"
+    spool_dir.mkdir()
+    spool_calls = []
+    real_spooled_temporary_file = tempfile.SpooledTemporaryFile
+
+    def tracked_spooled_temporary_file(*, max_size, mode, dir):
+        spool_calls.append((max_size, mode, dir))
+        return real_spooled_temporary_file(max_size=max_size, mode=mode, dir=dir)
+
+    monkeypatch.setattr(
+        product_bridge_server.tempfile,
+        "SpooledTemporaryFile",
+        tracked_spooled_temporary_file,
+    )
+    bridge = ProductBridgeServer(
+        frontend_root=frontend_build(tmp_path),
+        upstream_address=("127.0.0.1", 9),
+        token=TOKEN,
+        config=ProductBridgeConfig(
+            max_body_bytes=1_048_576,
+            max_document_body_bytes=3 * 1_048_576,
+            spool_dir=str(spool_dir),
+            upstream_timeout_seconds=0.1,
+        ),
+    )
+    bridge.start()
+    try:
+        status, _headers, _body = request(
+            bridge,
+            method,
+            target,
+            headers={
+                **browser_mutation_headers(bridge),
+                "Content-Type": "application/octet-stream",
+            },
+            raw_body=b"x" * (2 * 1_048_576),
+        )
+    finally:
+        bridge.close()
+
+    assert status == 400
+    assert spool_calls == []
 
 
 @pytest.mark.parametrize(
