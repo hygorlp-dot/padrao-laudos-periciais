@@ -491,6 +491,9 @@ primitiva Win32 estreita para recovery:
 
 - `CreateFileW(..., OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS |
   FILE_FLAG_OPEN_REPARSE_POINT)` abre o diretório ou o próprio reparse;
+- `desired_access=0` foi rejeitado por prova executável: nessa modalidade o
+  rename Windows com semântica POSIX ainda conseguiu religar a base. A custódia
+  solicita `FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE`;
 - o share mode admite leitura/escrita, mas **não** `FILE_SHARE_DELETE`, mantendo
   o componente resistente a rename/delete/rebind, inclusive tentativas com
   semântica POSIX;
