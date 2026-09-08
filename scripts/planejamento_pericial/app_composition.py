@@ -21,6 +21,9 @@ from scripts.backend_contract.local_api.composition import build_local_api
 from scripts.backend_contract.product_bridge.composition import build_product_runtime
 from scripts.backend_contract.product_bridge.server import ProductBridgeConfig
 from scripts.triagem_pericial.pje_intake_adapter import PjeIntakeAdapter
+from scripts.planejamento_pericial.construction_defect_analysis_adapter import (
+    ConstructionDefectAnalysisAdapter,
+)
 
 
 def build_pericial_local_api(
@@ -41,6 +44,7 @@ def build_pericial_local_api(
         token=token,
         config=config,
         pje_intake=PjeIntakeAdapter(),
+        construction_defect_analysis=ConstructionDefectAnalysisAdapter(),
     )
 
 
@@ -60,6 +64,7 @@ def build_pericial_application(
         config=config,
         token=token,
         pje_intake=PjeIntakeAdapter(),
+        construction_defect_analysis=ConstructionDefectAnalysisAdapter(),
     )
 
 

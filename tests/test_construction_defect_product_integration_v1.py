@@ -1,24 +1,55 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import nullcontext
+from datetime import UTC, datetime
+import base64
+import hashlib
 import json
+import os
 from pathlib import Path
+from types import SimpleNamespace
 from types import MappingProxyType
+from uuid import UUID
 
 from jsonschema import Draft202012Validator
 import pytest
 
 from scripts.backend_contract.construction_defect_analysis import (
+    CONSTRUCTION_DEFECT_ANALYSIS_ARTIFACT_ID,
+    CONSTRUCTION_DEFECT_ANALYSIS_ARTIFACT_KIND,
     ConstructionDefectAnalysisSnapshot,
+    ConstructionDefectSourceSnapshot,
     ObservationContext,
     ObservationOutcome,
+    PathologyReview,
+    PathologyReviewAction,
     construction_defect_analysis_from_mapping,
     construction_defect_analysis_to_mapping,
+    freeze_json_payload,
 )
-from scripts.backend_contract.application.models import ProcessCaseData
+from scripts.backend_contract.application.construction_defect_analysis import (
+    GetConstructionDefectAnalysis,
+    ReviewPathology,
+    SaveConstructionDefectAnalysis,
+    StartConstructionDefectAnalysis,
+    validated_construction_defect_analysis_from_mapping,
+)
+from scripts.backend_contract.application.ports import RepositoryConflict
+from scripts.backend_contract.application.models import (
+    ProcessCaseData,
+    WorkspaceId,
+    thaw_payload,
+)
 from scripts.backend_contract.case_analysis import case_analysis_from_mapping
 from scripts.backend_contract.pericial_planning import pericial_planning_from_mapping
 from scripts.backend_contract.vistoria import inspection_session_from_mapping
+from scripts.backend_contract.infrastructure.productization import (
+    PRODUCT_RELEASE_VERSION,
+    RecoveryStaging,
+    RestoreWorkspaceBackup,
+    VerifyWorkspaceBackup,
+)
 from scripts.planejamento_pericial.construction_defect_analysis_adapter import (
     ConstructionDefectAnalysisAdapter,
 )
@@ -33,19 +64,8 @@ def _json_fixture(name: str) -> dict[str, object]:
 
 
 def _canonical_inputs():
-    inspection_payload = _json_fixture("inspection-session-v1.json")
-    inspection_payload["items"][0]["measurement_ids"] = ["MEASUREMENT-001"]
-    inspection_payload["items"][0]["photo_ids"] = ["PHOTO-001"]
-    inspection_payload["items"][1]["measurement_ids"] = []
-    inspection_payload["items"][2]["photo_ids"] = []
-    inspection_payload["measurements"][0]["inspection_item_id"] = (
-        "INSPECTION-ITEM-001"
-    )
-    inspection_payload["photos"][0]["inspection_item_id"] = "INSPECTION-ITEM-001"
-    inspection_payload["evidence_candidates"][0].update(
-        inspection_item_id="INSPECTION-ITEM-001",
-        source_record_ids=["OBS-001", "MEASUREMENT-001", "PHOTO-001"],
-    )
+    inspection_payload = _adjusted_inspection_payload()
+
     return (
         ProcessCaseData(
             numero_processo="0000001-00.2026.4.00.0001",
@@ -67,6 +87,166 @@ def _canonical_inputs():
     )
 
 
+def _adjusted_inspection_payload() -> dict[str, object]:
+    inspection_payload = _json_fixture("inspection-session-v1.json")
+    inspection_payload["items"][0]["measurement_ids"] = ["MEASUREMENT-001"]
+    inspection_payload["items"][0]["photo_ids"] = ["PHOTO-001"]
+    inspection_payload["items"][1]["measurement_ids"] = []
+    inspection_payload["items"][2]["photo_ids"] = []
+    inspection_payload["measurements"][0]["inspection_item_id"] = (
+        "INSPECTION-ITEM-001"
+    )
+    inspection_payload["photos"][0]["inspection_item_id"] = "INSPECTION-ITEM-001"
+    inspection_payload["evidence_candidates"][0].update(
+        inspection_item_id="INSPECTION-ITEM-001",
+        source_record_ids=["OBS-001", "MEASUREMENT-001", "PHOTO-001"],
+    )
+    return inspection_payload
+
+
+class _FixedClock:
+    def now(self):
+        return datetime(2026, 9, 8, 14, 0, tzinfo=UTC)
+
+
+class _SequenceIds:
+    def __init__(self):
+        self.value = 100
+
+    def new_uuid(self):
+        self.value += 1
+        return UUID(int=self.value)
+
+
+def _record(kind: str, artifact_id: str, revision: int, payload: object):
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode()
+    return SimpleNamespace(
+        artifact_kind=kind,
+        artifact_id=artifact_id,
+        revision=revision,
+        revision_id=str(UUID(int=revision)),
+        created_at="2026-09-08T12:00:00+00:00",
+        checksum_sha256=hashlib.sha256(encoded).hexdigest(),
+        payload=freeze_json_payload(deepcopy(payload)),
+    )
+
+
+class _PairGetter:
+    def __init__(self, record, value):
+        self.record = record
+        self.value = value
+
+    def execute(self, _workspace_id):
+        return self.record, self.value
+
+
+class _ProcessGetter:
+    def __init__(self, record, value):
+        self.record = record
+        self.value = value
+
+    def execute(self, workspace_id):
+        return SimpleNamespace(
+            workspace_id=workspace_id,
+            revision=self.record.revision,
+            updated_at=self.record.created_at,
+            data=self.value,
+        )
+
+
+class _ConstructionStore:
+    def __init__(self, process_record):
+        self.process_record = process_record
+        self.history = []
+
+    def execute(self, _workspace_id, artifact_kind, artifact_id):
+        if artifact_kind == "PROCESS_CASE" and artifact_id == "PROCESS_CASE":
+            return self.process_record
+        if (
+            artifact_kind == "CONSTRUCTION_DEFECT_ANALYSIS_V1"
+            and artifact_id == "CONSTRUCTION-DEFECT-ANALYSIS"
+            and self.history
+        ):
+            return self.history[-1]
+        raise LookupError((artifact_kind, artifact_id))
+
+    def append_if_latest(self, **kwargs):
+        expected = kwargs["expected_revision"]
+        actual = self.history[-1].revision if self.history else None
+        if expected != actual:
+            raise RepositoryConflict("expected construction-defect revision is not latest")
+        record = _record(
+            kwargs["artifact_kind"],
+            kwargs["artifact_id"],
+            1 if actual is None else actual + 1,
+            kwargs["payload"],
+        )
+        record.expected_dependencies = kwargs["expected_dependencies"]
+        self.history.append(record)
+        return record
+
+
+def _application_services():
+    process_case, case_analysis, planning, inspection = _canonical_inputs()
+    process_record = _record("PROCESS_CASE", "PROCESS_CASE", 2, process_case.as_dict())
+    case_record = _record(
+        "CASE_ANALYSIS_SNAPSHOT_V1", "CASE-ANALYSIS", 3, _json_fixture("case-analysis-snapshot-v1.json")
+    )
+    planning_record = _record(
+        "PERICIAL_PLANNING_SNAPSHOT_V1",
+        "PERICIAL-PLANNING",
+        4,
+        _json_fixture("pericial-planning-snapshot-v1.json"),
+    )
+    inspection_record = _record(
+        "INSPECTION_SESSION_V1",
+        "INSPECTION-SESSION",
+        5,
+        _json_fixture("inspection-session-v1.json"),
+    )
+    store = _ConstructionStore(process_record)
+    process_getter = _ProcessGetter(process_record, process_case)
+    case_getter = _PairGetter(case_record, case_analysis)
+    planning_getter = _PairGetter(planning_record, planning)
+    inspection_getter = _PairGetter(inspection_record, inspection)
+    get_snapshot = GetConstructionDefectAnalysis(
+        store, process_getter, case_getter, planning_getter, inspection_getter
+    )
+    save_snapshot = SaveConstructionDefectAnalysis(
+        store,
+        store,
+        process_getter,
+        case_getter,
+        planning_getter,
+        inspection_getter,
+        nullcontext,
+        _FixedClock(),
+        _SequenceIds(),
+    )
+    start = StartConstructionDefectAnalysis(
+        store,
+        process_getter,
+        case_getter,
+        planning_getter,
+        inspection_getter,
+        ConstructionDefectAnalysisAdapter(),
+        save_snapshot,
+        _SequenceIds(),
+    )
+    review = ReviewPathology(
+        get_snapshot, save_snapshot, inspection_getter, _FixedClock(), _SequenceIds()
+    )
+    return SimpleNamespace(
+        store=store,
+        get=get_snapshot,
+        save=save_snapshot,
+        start=start,
+        review=review,
+        process=process_getter,
+        case=case_getter,
+        planning=planning_getter,
+        inspection=inspection_getter,
+    )
 def _snapshot_payload() -> dict[str, object]:
     return {
         "schema_version": "1.0.0",
@@ -385,3 +565,321 @@ def test_adapter_rejects_cross_item_measurement_or_photo_links():
             inspection=foreign_inspection,
             observation_contexts=(context,),
         )
+
+
+def _application_context() -> ObservationContext:
+    return ObservationContext(
+        observation_id="OBS-001",
+        manifestation="Condicao superficial observada",
+        system="VEDACOES",
+        element="Parede",
+        outcome=ObservationOutcome.CONFORMING,
+        methods=("INSPECAO_VISUAL",),
+        measurement_ids=("MEASUREMENT-001",),
+        photo_ids=("PHOTO-001",),
+        claim_ids=("CLAIM-001",),
+        question_ids=("QUESTION-001",),
+    )
+
+
+def test_application_binds_pat_to_exact_four_upstreams_and_reviews_append_only():
+    services = _application_services()
+
+    first_record, proposal = services.start.execute(
+        WORKSPACE_ID, observation_contexts=(_application_context(),)
+    )
+    reviewed_record, reviewed = services.review.execute(
+        WORKSPACE_ID,
+        pat_id="PAT-001",
+        action="APPROVE",
+        professional_id="PROFESSIONAL-001",
+        reason="Revisao profissional do PAT sintetico.",
+        expected_revision=first_record.revision,
+    )
+
+    assert first_record.revision == 1
+    assert proposal.effective_pat_ids == ()
+    assert reviewed_record.revision == 2
+    assert reviewed.effective_pat_ids == ("PAT-001",)
+    assert reviewed.reviews[0].reviewed_at == "2026-09-08T14:00:00+00:00"
+    assert [item["artifact_kind"] for item in first_record.expected_dependencies] == [
+        "PROCESS_CASE",
+        "CASE_ANALYSIS_SNAPSHOT_V1",
+        "PERICIAL_PLANNING_SNAPSHOT_V1",
+        "INSPECTION_SESSION_V1",
+    ]
+    reopened_record, reopened = services.get.execute(WORKSPACE_ID)
+    assert reopened_record.revision == 2
+    assert construction_defect_analysis_to_mapping(reopened) == (
+        construction_defect_analysis_to_mapping(reviewed)
+    )
+
+
+def test_application_rejects_wrong_professional_and_stale_upstream_review():
+    services = _application_services()
+    record, _snapshot = services.start.execute(
+        WORKSPACE_ID, observation_contexts=(_application_context(),)
+    )
+
+    with pytest.raises(ValueError, match="inspection authority"):
+        services.review.execute(
+            WORKSPACE_ID,
+            pat_id="PAT-001",
+            action="APPROVE",
+            professional_id="OTHER-PROFESSIONAL",
+            reason="Autoridade incorreta.",
+            expected_revision=record.revision,
+        )
+
+    current = services.inspection.record
+    services.inspection.record = _record(
+        current.artifact_kind,
+        current.artifact_id,
+        current.revision + 1,
+        _json_fixture("inspection-session-v1.json"),
+    )
+    _stale_record, stale = services.get.execute(WORKSPACE_ID)
+    assert stale.upstream_stale is True
+    assert stale.effective_pat_ids == ()
+    with pytest.raises(RepositoryConflict, match="upstream is stale"):
+        services.review.execute(
+            WORKSPACE_ID,
+            pat_id="PAT-001",
+            action="APPROVE",
+            professional_id="PROFESSIONAL-001",
+            reason="Revisao tardia.",
+            expected_revision=record.revision,
+        )
+
+
+def test_application_rejects_rewriting_pathology_review_history():
+    from dataclasses import replace
+
+    services = _application_services()
+    first_record, _snapshot = services.start.execute(
+        WORKSPACE_ID, observation_contexts=(_application_context(),)
+    )
+    reviewed_record, reviewed = services.review.execute(
+        WORKSPACE_ID,
+        pat_id="PAT-001",
+        action="APPROVE",
+        professional_id="PROFESSIONAL-001",
+        reason="Revisao original.",
+        expected_revision=first_record.revision,
+    )
+    rewritten = replace(reviewed, reviews=())
+
+    with pytest.raises(ValueError, match="review history cannot be rewritten"):
+        services.save.execute(
+            WORKSPACE_ID,
+            rewritten,
+            reviewed_record.revision,
+            mutation_authority="PROFESSIONAL",
+        )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="mutable recovery is Windows-only")
+def test_backup_restore_reopens_exact_approved_pat_graph(tmp_path):
+    def canonical(value: object) -> bytes:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+
+    def revision(kind: str, artifact_id: str, payload: dict, sequence: int) -> dict:
+        return {
+            "workspace_id": WORKSPACE_ID,
+            "artifact_kind": kind,
+            "artifact_id": artifact_id,
+            "revision_id": str(UUID(int=sequence)),
+            "revision": 1,
+            "created_at": "2026-09-08T12:00:00+00:00",
+            "checksum_sha256": hashlib.sha256(canonical(payload)).hexdigest(),
+            "payload": payload,
+        }
+
+    process_case, _case, _planning, _inspection = _canonical_inputs()
+    process_revision = revision("PROCESS_CASE", "PROCESS_CASE", process_case.as_dict(), 1)
+
+    def replace_text(value: object, replacements: dict[str, str]) -> object:
+        if type(value) is dict:
+            return {key: replace_text(item, replacements) for key, item in value.items()}
+        if type(value) is list:
+            return [replace_text(item, replacements) for item in value]
+        return replacements.get(value, value) if type(value) is str else value
+
+    case_payload = _json_fixture("case-analysis-snapshot-v1.json")
+    source_private_payloads = []
+    source_replacements = {}
+    for index, document in enumerate(case_payload["documents"], 1):
+        content = f"synthetic-case-source-{index}".encode()
+        digest = hashlib.sha256(content).hexdigest()
+        source_replacements[document["source_sha256"]] = digest
+        source_private_payloads.append(
+            {
+                "workspace_id": WORKSPACE_ID,
+                "content_id": document["storage_content_id"],
+                "original_filename": f"synthetic-source-{index}.pdf",
+                "byte_size": len(content),
+                "checksum_sha256": digest,
+                "media_type": "application/pdf",
+                "imported_at": "2026-09-08T10:30:00+00:00",
+                "origin": "USER_IMPORT",
+                "content_base64": base64.b64encode(content).decode("ascii"),
+            }
+        )
+    case_payload = replace_text(case_payload, source_replacements)
+    case_revision = revision("CASE_ANALYSIS_SNAPSHOT_V1", "CASE-ANALYSIS", case_payload, 2)
+    planning_payload = replace_text(
+        _json_fixture("pericial-planning-snapshot-v1.json"), source_replacements
+    )
+    planning_payload["plan"]["case_analysis_revision"] = 1
+    planning_payload["plan"]["case_analysis_digest"] = case_revision["checksum_sha256"]
+    planning_revision = revision(
+        "PERICIAL_PLANNING_SNAPSHOT_V1", "PERICIAL-PLANNING", planning_payload, 3
+    )
+    inspection_payload = replace_text(_adjusted_inspection_payload(), source_replacements)
+    inspection_payload["plan_snapshot"]["planning_revision"] = 1
+    inspection_payload["plan_snapshot"]["planning_digest"] = planning_revision[
+        "checksum_sha256"
+    ]
+    media_private_payloads = []
+    for collection, media_type in (
+        ("photos", "image/jpeg"),
+        ("videos", "video/mp4"),
+        ("sketches", "image/png"),
+    ):
+        for index, item in enumerate(inspection_payload[collection], 1):
+            content = f"synthetic-{collection}-{index}".encode()
+            digest = hashlib.sha256(content).hexdigest()
+            item["original_sha256"] = digest
+            media_private_payloads.append(
+                {
+                    "workspace_id": WORKSPACE_ID,
+                    "content_id": item["private_content_id"],
+                    "original_filename": f"synthetic-{collection}-{index}.bin",
+                    "byte_size": len(content),
+                    "checksum_sha256": digest,
+                    "media_type": media_type,
+                    "imported_at": "2026-09-08T11:00:00+00:00",
+                    "origin": "USER_IMPORT",
+                    "content_base64": base64.b64encode(content).decode("ascii"),
+                }
+            )
+    inspection_revision = revision(
+        "INSPECTION_SESSION_V1", "INSPECTION-SESSION", inspection_payload, 4
+    )
+    case = case_analysis_from_mapping(case_payload)
+    planning = pericial_planning_from_mapping(planning_payload)
+    inspection = inspection_session_from_mapping(inspection_payload)
+    proposal = ConstructionDefectAnalysisAdapter().execute(
+        process_case=process_case,
+        case_analysis=case,
+        planning=planning,
+        inspection=inspection,
+        observation_contexts=(_application_context(),),
+    )
+    snapshot = ConstructionDefectAnalysisSnapshot(
+        schema_version="1.0.0",
+        snapshot_id="CONSTRUCTION-DEFECT-ANALYSIS-PORTABLE-001",
+        workspace_id=WORKSPACE_ID,
+        source_snapshot=ConstructionDefectSourceSnapshot(
+            workspace_id=WORKSPACE_ID,
+            process_case_revision=1,
+            process_case_digest=process_revision["checksum_sha256"],
+            case_analysis_snapshot_id=case.snapshot_id,
+            case_analysis_revision=1,
+            case_analysis_digest=case_revision["checksum_sha256"],
+            planning_snapshot_id=planning.snapshot_id,
+            planning_revision=1,
+            planning_digest=planning_revision["checksum_sha256"],
+            inspection_session_id=inspection.session_id,
+            inspection_revision=1,
+            inspection_digest=inspection_revision["checksum_sha256"],
+            source_revision=inspection.source_revision,
+        ),
+        observation_contexts=proposal.observation_contexts,
+        identity_links=proposal.identity_links,
+        analysis_final=proposal.analysis_final,
+        gate=proposal.gate,
+        reviews=(
+            PathologyReview(
+                "PAT-REVIEW-PORTABLE-001",
+                "PAT-001",
+                PathologyReviewAction.APPROVE,
+                "PROFESSIONAL-001",
+                "Revisao profissional sintetica antes do backup.",
+                "2026-09-08T14:00:00+00:00",
+                None,
+            ),
+        ),
+        upstream_stale=False,
+        upstream_stale_reasons=(),
+    )
+    pathology_revision = revision(
+        CONSTRUCTION_DEFECT_ANALYSIS_ARTIFACT_KIND,
+        CONSTRUCTION_DEFECT_ANALYSIS_ARTIFACT_ID,
+        construction_defect_analysis_to_mapping(snapshot),
+        5,
+    )
+    backup = {
+        "schema_version": "1.0.0",
+        "format_version": 1,
+        "product_release": PRODUCT_RELEASE_VERSION,
+        "storage_schema_version": 1,
+        "workspace": {
+            "workspace_id": WORKSPACE_ID,
+            "name": "Pericia PAT sintetica",
+            "created_at": "2026-09-08T10:00:00+00:00",
+        },
+        "artifact_revisions": [
+            process_revision,
+            case_revision,
+            planning_revision,
+            inspection_revision,
+            pathology_revision,
+        ],
+        "private_contents": [*source_private_payloads, *media_private_payloads],
+        "member_hashes": {},
+        "manifest_sha256": "0" * 64,
+        "created_at": "2026-09-08T15:00:00+00:00",
+    }
+    backup["artifact_revisions"].sort(
+        key=lambda item: (item["artifact_kind"], item["artifact_id"], item["revision"])
+    )
+    backup["private_contents"].sort(key=lambda item: item["content_id"])
+    backup["member_hashes"] = {
+        "artifact_revisions": hashlib.sha256(
+            canonical(backup["artifact_revisions"])
+        ).hexdigest(),
+        "private_contents": hashlib.sha256(
+            canonical(backup["private_contents"])
+        ).hexdigest(),
+    }
+    backup["manifest_sha256"] = hashlib.sha256(
+        canonical({key: value for key, value in backup.items() if key != "manifest_sha256"})
+    ).hexdigest()
+    package = canonical(backup)
+
+    assert VerifyWorkspaceBackup().execute(package).workspace.workspace_id == WORKSPACE_ID
+    staging = RecoveryStaging.create(tmp_path / "pat-restored")
+    try:
+        RestoreWorkspaceBackup(staging).execute(package)
+        restored_record = staging.revisions.latest(
+            WorkspaceId.parse(WORKSPACE_ID),
+            CONSTRUCTION_DEFECT_ANALYSIS_ARTIFACT_KIND,
+            CONSTRUCTION_DEFECT_ANALYSIS_ARTIFACT_ID,
+        )
+        assert restored_record is not None
+        restored = validated_construction_defect_analysis_from_mapping(
+            thaw_payload(restored_record.payload)
+        )
+        assert construction_defect_analysis_to_mapping(restored) == (
+            construction_defect_analysis_to_mapping(snapshot)
+        )
+        assert restored.effective_pat_ids == ("PAT-001",)
+    finally:
+        staging.discard()

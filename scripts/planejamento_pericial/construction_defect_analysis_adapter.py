@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 from pathlib import Path
-from types import MappingProxyType
 from uuid import NAMESPACE_URL, uuid5
 
 from jsonschema import FormatChecker
@@ -17,6 +15,7 @@ from scripts.backend_contract.application.models import ProcessCaseData
 from scripts.backend_contract.case_analysis import CaseAnalysisSnapshot
 from scripts.backend_contract.construction_defect_analysis import (
     CanonicalIdentityLink,
+    ConstructionDefectAnalysisProposal,
     ObservationContext,
     ObservationOutcome,
     freeze_json_payload,
@@ -56,28 +55,6 @@ def _engine_validator():
 
 
 _ENGINE_VALIDATOR = _engine_validator()
-
-
-@dataclass(frozen=True, slots=True)
-class ConstructionDefectAnalysisProposal:
-    observation_contexts: tuple[ObservationContext, ...]
-    identity_links: tuple[CanonicalIdentityLink, ...]
-    analysis_final: MappingProxyType
-    gate: str
-
-    def __post_init__(self) -> None:
-        if not self.observation_contexts or not self.identity_links:
-            raise ValueError("construction-defect proposal provenance is incomplete")
-        if not isinstance(self.analysis_final, MappingProxyType):
-            raise TypeError("construction-defect proposal must be immutable")
-        if self.analysis_final.get("estado_analise") != "PAT_FINAL":
-            raise ValueError("construction-defect proposal is not PAT_FINAL")
-        if self.gate not in {
-            "APTO_PARA_REDACAO",
-            "APTO_PARA_REDACAO_COM_RESSALVAS",
-            "BLOQUEADO_PARA_REDACAO",
-        }:
-            raise ValueError("construction-defect proposal gate is invalid")
 
 
 def _aliases(values: set[str], prefix: str) -> dict[str, str]:

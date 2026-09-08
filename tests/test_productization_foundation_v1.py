@@ -231,6 +231,7 @@ def test_every_portable_material_artifact_has_an_explicit_finite_strategy() -> N
     expected = {
         "BUDGET_SNAPSHOT_V1",
         "CASE_ANALYSIS_SNAPSHOT_V1",
+        "CONSTRUCTION_DEFECT_ANALYSIS_V1",
         "DELIVERY_SNAPSHOT_V1",
         "EXPERT_MASTER_PROFILE_V1",
         "INSPECTION_SESSION_V1",

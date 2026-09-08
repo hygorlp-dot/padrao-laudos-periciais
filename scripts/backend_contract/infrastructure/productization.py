@@ -35,6 +35,9 @@ from ..application.artifact_ownership import (
 )
 from ..application.ocr_cache import _page_from_payload
 from ..application.process_metadata import document_metadata_from_payload
+from ..application.construction_defect_analysis import (
+    validated_construction_defect_analysis_from_mapping,
+)
 from ..application.services import validate_pje_intake_payload
 from ..application.workspace_recovery import (
     RecoveryFilesystemCustody,
@@ -310,6 +313,7 @@ def _validate_ai_envelope(value: object, kind: str) -> _ValidatedAIArtifact:
 _ARTIFACT_VALIDATORS = {
     "BUDGET_SNAPSHOT_V1": budget_snapshot_from_mapping,
     "CASE_ANALYSIS_SNAPSHOT_V1": case_analysis_from_mapping,
+    "CONSTRUCTION_DEFECT_ANALYSIS_V1": validated_construction_defect_analysis_from_mapping,
     "DELIVERY_SNAPSHOT_V1": delivery_snapshot_from_mapping,
     "EXPERT_MASTER_PROFILE_V1": expert_profile_from_mapping,
     "INSPECTION_SESSION_V1": inspection_session_from_mapping,
@@ -427,6 +431,7 @@ _USER_ARTIFACT_VALIDATORS = {kind: _validate_user_artifact for kind in USER_DEFI
 _CANONICAL_PRODUCT_ARTIFACT_IDS = {
     "BUDGET_SNAPSHOT_V1": "BUDGET-SNAPSHOT",
     "CASE_ANALYSIS_SNAPSHOT_V1": "CASE-ANALYSIS",
+    "CONSTRUCTION_DEFECT_ANALYSIS_V1": "CONSTRUCTION-DEFECT-ANALYSIS",
     "DELIVERY_SNAPSHOT_V1": "DELIVERY-SNAPSHOT",
     "EXPERT_MASTER_PROFILE_V1": "EXPERT-PROFILE",
     "INSPECTION_SESSION_V1": "INSPECTION-SESSION",
@@ -582,6 +587,12 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
             raise RepositoryIntegrityError("backup dependency identity diverges")
         return record
 
+    def require_record(kind: str, revision: int, digest: str) -> ArtifactRevision:
+        record = by_kind_revision.get((kind, revision))
+        if record is None or record.checksum_sha256 != digest:
+            raise RepositoryIntegrityError("backup dependency closure is incomplete")
+        return record
+
     for record in revisions:
         payload = thaw_payload(record.payload)
         if record.artifact_kind == "PERICIAL_PLANNING_SNAPSHOT_V1":
@@ -594,6 +605,12 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
             binding = payload["source_snapshot"]
             require("CASE_ANALYSIS_SNAPSHOT_V1", binding["case_analysis_revision"], binding["case_analysis_digest"], "snapshot_id", binding["case_analysis_snapshot_id"])
             require("INSPECTION_SESSION_V1", binding["inspection_session_revision"], binding["inspection_session_digest"], "session_id", binding["inspection_session_id"])
+        elif record.artifact_kind == "CONSTRUCTION_DEFECT_ANALYSIS_V1":
+            binding = payload["source_snapshot"]
+            require_record("PROCESS_CASE", binding["process_case_revision"], binding["process_case_digest"])
+            require("CASE_ANALYSIS_SNAPSHOT_V1", binding["case_analysis_revision"], binding["case_analysis_digest"], "snapshot_id", binding["case_analysis_snapshot_id"])
+            require("PERICIAL_PLANNING_SNAPSHOT_V1", binding["planning_revision"], binding["planning_digest"], "snapshot_id", binding["planning_snapshot_id"])
+            require("INSPECTION_SESSION_V1", binding["inspection_revision"], binding["inspection_digest"], "session_id", binding["inspection_session_id"])
         elif record.artifact_kind == "REPORT_SNAPSHOT_V1":
             binding = payload["source_snapshot"]
             require("CASE_ANALYSIS_SNAPSHOT_V1", binding["case_analysis_revision"], binding["case_analysis_digest"], "snapshot_id", binding["case_analysis_snapshot_id"])

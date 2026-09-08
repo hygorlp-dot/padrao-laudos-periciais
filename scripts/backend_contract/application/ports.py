@@ -65,6 +65,20 @@ class IdGenerator(Protocol):
     def new_uuid(self) -> UUID: ...
 
 
+class ConstructionDefectAnalysisRunner(Protocol):
+    """Purpose-specific local motor port injected by the Planning composition."""
+
+    def execute(
+        self,
+        *,
+        process_case: object,
+        case_analysis: object,
+        planning: object,
+        inspection: object,
+        observation_contexts: tuple[object, ...],
+    ) -> object: ...
+
+
 class WorkspaceRepository(Protocol):
     def create(self, workspace: PericiaWorkspace) -> PericiaWorkspace: ...
 

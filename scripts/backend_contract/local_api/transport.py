@@ -152,6 +152,9 @@ class LocalApiServices:
     select_technical_method: object | None = None
     propose_technical_finding: object | None = None
     review_technical_finding: object | None = None
+    get_construction_defect_analysis: object | None = None
+    start_construction_defect_analysis: object | None = None
+    review_pathology: object | None = None
     save_expert_profile: object | None = None
     get_expert_profile: object | None = None
     save_report_snapshot: object | None = None

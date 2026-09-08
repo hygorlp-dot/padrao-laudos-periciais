@@ -17,6 +17,7 @@ APPLICATION_ARTIFACT_OWNERSHIP = {
     for item in (
         ArtifactOwnership("BUDGET_SNAPSHOT_V1", "Budget Application Service", True),
         ArtifactOwnership("CASE_ANALYSIS_SNAPSHOT_V1", "Case Analysis Application Service", True),
+        ArtifactOwnership("CONSTRUCTION_DEFECT_ANALYSIS_V1", "Construction Defect Analysis Application Service", True),
         ArtifactOwnership("DELIVERY_SNAPSHOT_V1", "Delivery Application Service", True),
         ArtifactOwnership("EXPERT_MASTER_PROFILE_V1", "Expert Profile Application Service", True),
         ArtifactOwnership("INSPECTION_SESSION_V1", "Inspection Application Service", True),
