@@ -1,0 +1,107 @@
+{
+  "schema_version": "1.0.0",
+  "snapshot_id": "CONSTRUCTION-DEFECT-ANALYSIS-001",
+  "workspace_id": "11111111-1111-4111-8111-111111111111",
+  "source_snapshot": {
+    "workspace_id": "11111111-1111-4111-8111-111111111111",
+    "process_case_revision": 2,
+    "process_case_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "case_analysis_snapshot_id": "CASE-ANALYSIS-001",
+    "case_analysis_revision": 3,
+    "case_analysis_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "planning_snapshot_id": "PLANNING-001",
+    "planning_revision": 4,
+    "planning_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "inspection_session_id": "INSPECTION-001",
+    "inspection_revision": 5,
+    "inspection_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "source_revision": 2
+  },
+  "observation_contexts": [
+    {
+      "observation_id": "OBSERVATION-CANONICAL-001",
+      "manifestation": "Umidade visível na interface.",
+      "system": "IMPERMEABILIZACAO",
+      "element": "Parede",
+      "outcome": "OBSERVED",
+      "methods": ["INSPECAO_VISUAL"],
+      "measurement_ids": ["MEASUREMENT-CANONICAL-001"],
+      "photo_ids": ["PHOTO-CANONICAL-001"],
+      "claim_ids": ["CLAIM-CANONICAL-001"],
+      "question_ids": ["QUESTION-CANONICAL-001"]
+    }
+  ],
+  "identity_links": [
+    {
+      "canonical_kind": "FIELD_OBSERVATION",
+      "canonical_id": "OBSERVATION-CANONICAL-001",
+      "legacy_kind": "OBSERVATION",
+      "legacy_id": "OBS-001"
+    },
+    {
+      "canonical_kind": "MEASUREMENT",
+      "canonical_id": "MEASUREMENT-CANONICAL-001",
+      "legacy_kind": "MEASUREMENT",
+      "legacy_id": "MED-001"
+    },
+    {
+      "canonical_kind": "PHOTO_RECORD",
+      "canonical_id": "PHOTO-CANONICAL-001",
+      "legacy_kind": "PHOTO",
+      "legacy_id": "FOT-001"
+    },
+    {
+      "canonical_kind": "CASE_CLAIM",
+      "canonical_id": "CLAIM-CANONICAL-001",
+      "legacy_kind": "ALLEGATION",
+      "legacy_id": "ALG-001"
+    },
+    {
+      "canonical_kind": "CASE_QUESTION",
+      "canonical_id": "QUESTION-CANONICAL-001",
+      "legacy_kind": "QUESTION",
+      "legacy_id": "QUE-001"
+    },
+    {
+      "canonical_kind": "TECHNICAL_QUESTION",
+      "canonical_id": "QUESTION-CANONICAL-001",
+      "legacy_kind": "TECHNICAL_QUESTION",
+      "legacy_id": "QT-001"
+    },
+    {
+      "canonical_kind": "PATHOLOGY",
+      "canonical_id": "PAT-001",
+      "legacy_kind": "PATHOLOGY",
+      "legacy_id": "PAT-001"
+    }
+  ],
+  "analysis_final": {
+    "schema_version": "1.0.0",
+    "estado_analise": "PAT_FINAL",
+    "patologias": [
+      {
+        "id": "PAT-001",
+        "manifestacao": "Umidade visível na interface.",
+        "constatacoes": ["OBS-001"],
+        "medicoes": ["MED-001"],
+        "evidencias": ["OBS-001", "MED-001", "FOT-001"],
+        "conclusao_tecnica": "Análise sintética inconclusiva.",
+        "status_validacao": "RASCUNHO"
+      }
+    ]
+  },
+  "gate": "APTO_PARA_REDACAO_COM_RESSALVAS",
+  "reviews": [
+    {
+      "review_id": "PAT-REVIEW-001",
+      "pat_id": "PAT-001",
+      "action": "APPROVE",
+      "professional_id": "PROFESSIONAL-001",
+      "reason": "Revisão profissional sintética.",
+      "reviewed_at": "2026-09-08T12:00:00+00:00",
+      "supersedes_review_id": null
+    }
+  ],
+  "upstream_stale": false,
+  "upstream_stale_reasons": []
+}

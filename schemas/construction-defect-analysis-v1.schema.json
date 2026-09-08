@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "construction-defect-analysis-v1.schema.json",
+  "title": "Construction Defect Analysis Snapshot V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "snapshot_id",
+    "workspace_id",
+    "source_snapshot",
+    "observation_contexts",
+    "identity_links",
+    "analysis_final",
+    "gate",
+    "reviews",
+    "upstream_stale",
+    "upstream_stale_reasons"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "snapshot_id": {"$ref": "#/$defs/text"},
+    "workspace_id": {"type": "string", "format": "uuid"},
+    "source_snapshot": {"$ref": "#/$defs/sourceSnapshot"},
+    "observation_contexts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/observationContext"}
+    },
+    "identity_links": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/identityLink"}
+    },
+    "analysis_final": {
+      "type": "object",
+      "required": ["schema_version", "estado_analise", "patologias"],
+      "properties": {
+        "schema_version": {"type": "string"},
+        "estado_analise": {"const": "PAT_FINAL"},
+        "patologias": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+              "id": {"type": "string", "pattern": "^PAT-[0-9]{3,}$"}
+            }
+          }
+        }
+      }
+    },
+    "gate": {
+      "enum": [
+        "APTO_PARA_REDACAO",
+        "APTO_PARA_REDACAO_COM_RESSALVAS",
+        "BLOQUEADO_PARA_REDACAO"
+      ]
+    },
+    "reviews": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/review"}
+    },
+    "upstream_stale": {"type": "boolean"},
+    "upstream_stale_reasons": {"$ref": "#/$defs/texts"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"upstream_stale": {"const": true}}},
+      "then": {"properties": {"upstream_stale_reasons": {"minItems": 1}}},
+      "else": {"properties": {"upstream_stale_reasons": {"maxItems": 0}}}
+    }
+  ],
+  "$defs": {
+    "text": {"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+    "nullableText": {
+      "anyOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]
+    },
+    "texts": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/text"}
+    },
+    "revision": {"type": "integer", "minimum": 1},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "sourceSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace_id",
+        "process_case_revision",
+        "process_case_digest",
+        "case_analysis_snapshot_id",
+        "case_analysis_revision",
+        "case_analysis_digest",
+        "planning_snapshot_id",
+        "planning_revision",
+        "planning_digest",
+        "inspection_session_id",
+        "inspection_revision",
+        "inspection_digest",
+        "source_revision"
+      ],
+      "properties": {
+        "workspace_id": {"type": "string", "format": "uuid"},
+        "process_case_revision": {"$ref": "#/$defs/revision"},
+        "process_case_digest": {"$ref": "#/$defs/sha256"},
+        "case_analysis_snapshot_id": {"$ref": "#/$defs/text"},
+        "case_analysis_revision": {"$ref": "#/$defs/revision"},
+        "case_analysis_digest": {"$ref": "#/$defs/sha256"},
+        "planning_snapshot_id": {"$ref": "#/$defs/text"},
+        "planning_revision": {"$ref": "#/$defs/revision"},
+        "planning_digest": {"$ref": "#/$defs/sha256"},
+        "inspection_session_id": {"$ref": "#/$defs/text"},
+        "inspection_revision": {"$ref": "#/$defs/revision"},
+        "inspection_digest": {"$ref": "#/$defs/sha256"},
+        "source_revision": {"$ref": "#/$defs/revision"}
+      }
+    },
+    "observationContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observation_id",
+        "manifestation",
+        "system",
+        "element",
+        "outcome",
+        "methods",
+        "measurement_ids",
+        "photo_ids",
+        "claim_ids",
+        "question_ids"
+      ],
+      "properties": {
+        "observation_id": {"$ref": "#/$defs/text"},
+        "manifestation": {"$ref": "#/$defs/text"},
+        "system": {"$ref": "#/$defs/nullableText"},
+        "element": {"$ref": "#/$defs/nullableText"},
+        "outcome": {
+          "enum": ["OBSERVED", "NOT_OBSERVED", "CONFORMING", "INCONCLUSIVE"]
+        },
+        "methods": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/text"}
+        },
+        "measurement_ids": {"$ref": "#/$defs/texts"},
+        "photo_ids": {"$ref": "#/$defs/texts"},
+        "claim_ids": {"$ref": "#/$defs/texts"},
+        "question_ids": {"$ref": "#/$defs/texts"}
+      }
+    },
+    "identityLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonical_kind", "canonical_id", "legacy_kind", "legacy_id"],
+      "properties": {
+        "canonical_kind": {"$ref": "#/$defs/text"},
+        "canonical_id": {"$ref": "#/$defs/text"},
+        "legacy_kind": {"$ref": "#/$defs/text"},
+        "legacy_id": {"$ref": "#/$defs/text"}
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "review_id",
+        "pat_id",
+        "action",
+        "professional_id",
+        "reason",
+        "reviewed_at",
+        "supersedes_review_id"
+      ],
+      "properties": {
+        "review_id": {"$ref": "#/$defs/text"},
+        "pat_id": {"type": "string", "pattern": "^PAT-[0-9]{3,}$"},
+        "action": {"enum": ["APPROVE", "REJECT"]},
+        "professional_id": {"$ref": "#/$defs/text"},
+        "reason": {"$ref": "#/$defs/text"},
+        "reviewed_at": {"type": "string", "format": "date-time"},
+        "supersedes_review_id": {"$ref": "#/$defs/nullableText"}
+      }
+    }
+  }
+}
