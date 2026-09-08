@@ -336,6 +336,132 @@ do diretório não vazio.
 
 ---
 
+## H.1 Reconciliação do protocolo de cleanup (A12/B12)
+
+Status: **modelo normativo anterior à próxima edição de produção**. O candidato
+`52c565a` está invalidado. As correções sucessivas provaram que restauração de
+controles depois da remoção não fecha o protocolo: a própria restauração pode
+falhar, criar arquivo parcial ou observar `FileExists` divergente. Também provaram
+que erro de `close(fd)` é ambíguo; repetir o mesmo inteiro pode fechar um arquivo
+alheio que reutilizou o número.
+
+### Autoridades únicas
+
+| fato | autoridade | não é autoridade |
+|---|---|---|
+| identidade da recuperação | UUID no nome canônico `recovery-<uuid>` e no descriptor de sessão | endereço de objeto ou dict em memória |
+| identidade do staging | token imutável `STAGING_IDENTITY_V1` | inode como identidade longitudinal |
+| quarentena | `RECOVERY_NOT_PROMOTABLE` na raiz e marcadores próprios dos stores internos | estado da UI |
+| plano/fase de promoção | `PROMOTION_TRANSACTION_V1`, validado integralmente contra a sessão | mera presença do journal ou nome da fase isolado |
+| sessão publicada | `RECOVERY_SESSION_V1` imutável | referência forte em `WorkspaceRecoverySessions` |
+| decisão `DISCARD`/`ABANDON` | **um único intent externo imutável**, `.recovery-cleanup-intent-<uuid>`, irmão da raiz-alvo | controle dentro da raiz, estado em memória ou inferência pela ausência de material |
+| custódia de filesystem | árvore `_CleanupNode` desta chamada, com `dir_fd` no POSIX ou anchor sem delete-sharing no Windows | inventário anterior, pathname desacompanhado ou preflight concluído |
+| ownership de descriptor | slot ainda não consumido antes da única chamada de `close` | o mesmo inteiro depois de qualquer retorno com erro |
+| existência da raiz | observação estrutural do filho canônico direto sob a base de recovery | presença/ausência de controles internos isolados |
+| cleanup committed | raiz-alvo comprovadamente ausente | ausência de material, `close` sem erro ou tentativa de `rmdir` |
+| reconstrução no restart | intent externo primeiro; depois controles internos da raiz para estados sem cleanup iniciado | cache de processo |
+
+O intent externo pertence ao **mesmo namespace local de recovery**, não a SQLite,
+outro banco ou outro serviço. Ele não cria segunda autoridade: substitui
+`RECOVERY_DISPOSITION_V1` interno como autoridade única da decisão de cleanup.
+Seu registro canônico contém somente versão, `recovery_id`, modo e nome exato da
+raiz. Publicação é create-only + fsync + link no-replace. `FileExists` equivale a
+sucesso apenas quando o arquivo existente é regular, exclusivo e byte a byte
+idêntico; conteúdo parcial, ilegível, link/reparse ou divergente falha fechado.
+
+### Decisão entre as três alternativas
+
+| alternativa | resultado | razão |
+|---|---|---|
+| A — intent/sidecar fora da raiz | **ESCOLHIDA** | preserva a decisão enquanto a raiz existir; root ausente permite concluir e coletar o sidecar |
+| B — intenção no rename da raiz | rejeitada | no Windows, handles precisam ser liberados antes; pathname pode mudar nessa janela e não há no-replace ancorado portátil para diretórios |
+| C — somente controles internos | rejeitada por prova | sempre há uma janela entre remover a última autoridade interna e provar `rmdir`; A12/B12 reproduziram perda de decisão nessa janela |
+
+SQLite foi rejeitado como local do intent: recriaria uma transação distribuída
+entre banco e filesystem justamente no protocolo que precisa remover uma raiz de
+filesystem. O sidecar é o menor WAL local capaz de ordenar a única transição.
+
+### Máquina de estados reconciliada
+
+| estado | autoridade de entrada | ação permitida | ação proibida | transição durável |
+|---|---|---|---|---|
+| `STAGED` | sessão + quarentena válidas, journal ausente | `PROMOTE`, `DISCARD` | promoção automática | `DISCARD` publica intent externo antes de remover qualquer byte |
+| `PROMOTING` | claim em processo + journal `PROMOTING` | nenhuma concorrente | `DISCARD` concorrente | falha/restart reconcilia journal + estado vivo |
+| `FAILED_RECOVERABLE` | journal íntegro e estado vivo ainda prefixo exato | `PROMOTE`; `ABANDON` somente explícito | descarte implícito | divergência persistida no journal antes de virar irretomável |
+| `RECOVERY_UNRESUMABLE` | journal/identidade não convergente, sem cleanup intent | `ABANDON` explícito | `PROMOTE` | `ABANDON` publica intent externo antes do cleanup |
+| `DISCARDING` | claim em processo, antes do commit do intent | nenhuma concorrente | segundo cleanup | crash antes do intent volta ao estado anterior; depois do intent reconstrói `RECOVERY_RETAINED` |
+| `RECOVERY_RETAINED` | intent externo válido + raiz presente | somente retry do mesmo modo | trocar `DISCARD` por `ABANDON` ou vice-versa por inferência | nova tentativa usa o mesmo intent; nunca o sobrescreve |
+| `DISCARDED` | raiz ausente depois de intent válido | nenhuma | reabrir/promover | sidecar pode ser removido/garbage-collected somente agora |
+| `PROMOTED` | vivo integral verificado + journal terminal | nenhuma | novo cleanup concorrente | resíduo de staging é coleta terminal, sem alterar o vivo |
+
+Falha antes de publicar o intent não iniciou cleanup: nenhum material pode ter sido
+removido e o estado anterior continua reconstruível. Falha depois da publicação
+jamais volta a `STAGED`, mesmo se todos os controles internos já tiverem sumido.
+
+### Mapa de crash/restart
+
+| ponto de queda | fato durável | reconstrução obrigatória |
+|---|---|---|
+| antes do intent externo | raiz e controles originais | estado anterior (`STAGED`, recuperável ou irretomável) |
+| depois do intent, antes do primeiro unlink | sidecar + raiz intacta | `RECOVERY_RETAINED`, retry do mesmo modo |
+| durante remoção de material | sidecar + raiz + quarentena | `RECOVERY_RETAINED`; nunca sucesso com resíduo privado |
+| depois do último material, antes dos controles | sidecar + raiz | `RECOVERY_RETAINED`; decisão humana preservada |
+| depois dos controles/quarentena, antes de `rmdir` | sidecar + raiz possivelmente vazia | `RECOVERY_RETAINED`; sidecar substitui a autoridade já removida |
+| depois de `rmdir`, antes de remover sidecar | sidecar + raiz ausente | cleanup committed; coletar sidecar sem recriar sessão |
+| depois de remover sidecar | raiz ausente | terminal `DISCARDED` |
+
+### Semântica de descriptors
+
+```
+CLOSE_SUCCESS => DESCRIPTOR_NO_LONGER_OWNED
+CLOSE_ERROR => DESCRIPTOR_STATE_UNKNOWN
+CLOSE_ERROR != DESCRIPTOR_STILL_OPEN
+CLOSE_ERROR != DESCRIPTOR_CLOSED
+AMBIGUOUS_FD_NUMBER_MUST_NEVER_BE_CLOSED_AGAIN
+```
+
+O slot é consumido **antes** da única chamada de `close`. Um erro nunca autoriza
+segunda chamada com o mesmo inteiro. Todos os irmãos e ancestrais ainda são
+processados. No Windows, remover o anchor depois do erro é uma prova separada e
+segura: se o handle original continuou aberto sem delete-sharing, o unlink falha e
+a raiz fica retida; se ele fechou de fato, o anchor pode sair. A decisão final não
+é o retorno de `close`, mas a prova `root absent`. Handle ambíguo que permaneceu
+aberto é liberado pelo encerramento do processo; o restart reencontra o intent e
+converge sem reutilizar o fd.
+
+### Invariantes fechadas
+
+```
+FILE_EXISTS != VALID_CONTROL_EXISTS
+VALID_CONTROL_EXISTS <=> REGULAR_EXCLUSIVE_AND_EXACT_BYTES
+DURABLE_DISPOSITION_OUTLIVES_DESTRUCTIVE_CLEANUP
+QUARANTINE_OUTLIVES_PRIVATE_MATERIAL
+ROOT_EXISTS_AFTER_INTENT => CLEANUP_INTENT_RECONSTRUCTIBLE
+ROOT_ABSENT => CLEANUP_MAY_BE_COMMITTED
+PRIVATE_RESIDUE + SUCCESS = PROHIBITED
+FALSE_SUCCESS = PROHIBITED
+NO_DOUBLE_CLOSE
+NO_FOREIGN_FD_CLOSE
+```
+
+### Matriz mínima de fault injection
+
+| grupo | cenários determinísticos | oráculo comum |
+|---|---|---|
+| aquisição/custódia | criar anchor falha; identidade muda; root/nested reparse; sharing violation | nenhuma mutação externa, nenhuma autoridade falsa |
+| fechamento | erro antes de fechar; fecha e retorna erro; inteiro reutilizado; unlink do anchor falha | nunca fechar fd alheio, processar toda a árvore, root presente nunca vira sucesso |
+| material | unlink parcial; resíduo privado; segunda operação concorrente | quarentena sobrevive ao material, sem `200` falso |
+| controles internos | falha removendo identidade, sessão, journal ou quarentena | intent externo continua exato e restart oferece somente o retry original |
+| intent externo | create falha; write parcial; `FileExists` exato/divergente; ilegível/link/reparse | nenhum unlink antes do commit; equivalência somente por bytes exatos |
+| raiz | `rmdir` transitório/persistente; morte antes/depois de cada fase | raiz presente retém intent; raiz ausente permite commit/GC |
+| lifecycle | restart em cada fase; retry sem terminal; `DISCARD` e `ABANDON`; cleanup concorrente | ação válida, intenção preservada, vivo inalterado |
+
+Cada linha exige conjuntamente `NO_FALSE_SUCCESS`, `NO_LOST_AUTHORITY`,
+`NO_DOUBLE_CLOSE`, `NO_FOREIGN_FD_CLOSE`, `NO_PRIVATE_RESIDUE_WITH_SUCCESS`,
+`RESTART_HAS_VALID_NEXT_ACTION` e `HUMAN_INTENT_PRESERVED`.
+
+---
+
 ## I. Transporte de binário grande
 
 Uma **única** política de corpo por rota, descrevendo em conjunto: tamanho máximo,
