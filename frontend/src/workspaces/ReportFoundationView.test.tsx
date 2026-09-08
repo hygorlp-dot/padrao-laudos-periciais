@@ -23,6 +23,7 @@ describe("report foundation workbench", () => {
     expect(screen.getByText(/QUESTION-1 → FINDING-1/)).toBeInTheDocument();
     expect(screen.getByText(/PAT-SNAPSHOT-001 · revisão 5/)).toBeInTheDocument();
     expect(screen.getByText(/a{64}/)).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "PATHOLOGY" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /entregar|protocolar|enviar/i })).not.toBeInTheDocument();
   });
 
