@@ -36,7 +36,10 @@ from ..application.artifact_ownership import (
 from ..application.ocr_cache import _page_from_payload
 from ..application.process_metadata import document_metadata_from_payload
 from ..application.services import validate_pje_intake_payload
-from ..application.workspace_recovery import RecoveryFilesystemCustody
+from ..application.workspace_recovery import (
+    RecoveryFilesystemCustody,
+    _require_recovery_mutation_supported,
+)
 from ..budget_foundation import budget_snapshot_from_mapping
 from ..ai_gateway import AIRun, AIProposal, EgressClass, SourceRevisionRef, UsageRecord
 from ..ai_eval_productization import (
@@ -946,6 +949,7 @@ class RecoveryStaging:
 
     @classmethod
     def create(cls, root: str | Path) -> "RecoveryStaging":
+        _require_recovery_mutation_supported()
         if not isinstance(root, (str, Path)):
             raise TypeError("recovery staging root is invalid")
         raw = str(root)
@@ -1094,6 +1098,7 @@ class RecoveryStaging:
         return payload
 
     def gravar_controle_imutavel(self, name: str, payload: bytes) -> None:
+        _require_recovery_mutation_supported()
         self._custody.assert_namespace_binding()
         self._custody.publish_immutable_file(name, payload)
         self._custody.assert_namespace_binding()
@@ -1109,6 +1114,7 @@ class RecoveryStaging:
 
     def gravar_transacao(self, registro: dict) -> None:
         """Grava o journal de forma durável ANTES de qualquer mutação viva."""
+        _require_recovery_mutation_supported()
         if type(registro) is not dict:
             raise TypeError("registro de transação inválido")
         self._custody.assert_namespace_binding()
@@ -1169,6 +1175,7 @@ class RecoveryStaging:
         registrada = self.identidade_registrada
         if registrada is not None:
             return registrada
+        _require_recovery_mutation_supported()
         token = uuid4().hex
         try:
             persisted = self._custody.publish_immutable_file(
@@ -1195,6 +1202,7 @@ def abrir_staging_quarentenado(
     Usado na reabertura do produto para reconstruir sessões de recuperação a
     partir do disco. Falha fechada: sem marcador canônico, não é nossa raiz.
     """
+    _require_recovery_mutation_supported()
     alvo = Path(raiz).absolute()
     if _recovery_custody is not None:
         if _recovery_custody.path != alvo:
@@ -1254,6 +1262,7 @@ class RestoreWorkspaceBackup:
     staging: RecoveryStaging
 
     def execute(self, payload: bytes) -> RestoreReceipt:
+        _require_recovery_mutation_supported()
         authority = _AUTHORIZED_RECOVERY_STAGING.get(self.staging) if type(self.staging) is RecoveryStaging else None
         if authority is None or self.staging._closed:
             raise TypeError("restore requires first-party recovery staging")

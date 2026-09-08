@@ -107,6 +107,7 @@ def test_recovery_upload_spools_large_body_at_product_http_boundary(
         frontend_root=frontend_build(tmp_path),
         upstream_address=("127.0.0.1", 9),
         token=TOKEN,
+        recovery_mutation_supported=True,
         config=ProductBridgeConfig(
             max_body_bytes=1_048_576,
             max_document_body_bytes=3 * 1_048_576,
@@ -166,6 +167,7 @@ def test_recovery_spool_authority_stays_limited_to_exact_upload_routes(
         frontend_root=frontend_build(tmp_path),
         upstream_address=("127.0.0.1", 9),
         token=TOKEN,
+        recovery_mutation_supported=True,
         config=ProductBridgeConfig(
             max_body_bytes=1_048_576,
             max_document_body_bytes=3 * 1_048_576,
@@ -265,6 +267,7 @@ def test_delivery_image_response_streams_through_product_bridge(monkeypatch, tmp
         frontend_root=frontend_build(tmp_path), public_origin="http://127.0.0.1:49152",
         upstream_address=("127.0.0.1", 49153), token=TOKEN, max_body_bytes=1024,
         max_document_body_bytes=1024, request_timeout_seconds=5,
+        recovery_mutation_supported=True,
     )
     workspace = "11111111-1111-4111-8111-111111111111"
     content_id = "22222222-2222-4222-8222-222222222222"
@@ -616,6 +619,7 @@ def test_upstream_failure_is_sanitized_and_token_never_reaches_public_bytes(tmp_
         frontend_root=root,
         upstream_address=("127.0.0.1", 9),
         token=TOKEN,
+        recovery_mutation_supported=True,
     )
     bridge.start()
     try:
@@ -738,7 +742,8 @@ def test_thread_start_failure_closes_product_bridge_listener(tmp_path):
             "from scripts.backend_contract.product_bridge.server import "
             "ProductBridgeServer, ProductBridgeServerStartError\n"
             f"server = ProductBridgeServer(frontend_root={str(root)!r}, "
-            f"upstream_address=('127.0.0.1', 9), token={TOKEN!r})\n"
+            f"upstream_address=('127.0.0.1', 9), token={TOKEN!r}, "
+            "recovery_mutation_supported=True)\n"
             "address = server.address\n"
             "def fail_start(_self):\n"
             "    raise RuntimeError('private thread failure')\n"
@@ -767,6 +772,7 @@ def test_serve_loop_failure_before_ready_fails_closed(tmp_path):
         frontend_root=frontend_build(tmp_path),
         upstream_address=("127.0.0.1", 9),
         token=TOKEN,
+        recovery_mutation_supported=True,
     )
 
     def stop_before_ready():

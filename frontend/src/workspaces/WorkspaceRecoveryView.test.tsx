@@ -592,4 +592,31 @@ describe("WorkspaceRecoveryView", () => {
     })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Retomar promoção" })).toBeNull();
   });
+
+  it("explica a recusa de plataforma sem oferecer falso sucesso", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(SUMMARY))
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: {
+              code: "RECOVERY_PLATFORM_UNSUPPORTED",
+              message: "x",
+            },
+          },
+          501,
+        ),
+      );
+
+    render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
+    selectFile();
+    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
+    fireEvent.click(await screen.findByRole("button", { name: "2. Preparar cópia recuperada" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Windows");
+    expect(document.body.textContent).not.toContain("Cópia recuperada preparada");
+    expect(screen.queryByRole("button", { name: "4. Promover recuperação" })).toBeNull();
+  });
 });

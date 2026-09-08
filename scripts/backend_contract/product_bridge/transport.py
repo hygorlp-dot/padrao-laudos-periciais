@@ -208,6 +208,7 @@ class ProductBridge:
         max_body_bytes: int,
         max_document_body_bytes: int,
         request_timeout_seconds: float,
+        recovery_mutation_supported: bool,
     ):
         root = Path(frontend_root).resolve()
         if not root.is_dir() or not (root / "index.html").is_file():
@@ -222,6 +223,8 @@ class ProductBridge:
             raise ValueError("limite de body inválido")
         if type(max_document_body_bytes) is not int or not 1 <= max_document_body_bytes <= MAX_DOCUMENT_BYTES:
             raise ValueError("limite de documento inválido")
+        if type(recovery_mutation_supported) is not bool:
+            raise TypeError("autoridade de recuperação inválida")
         self._frontend_root = root
         self._public_origin = public_origin
         self._public_host = public_origin.removeprefix("http://")
@@ -230,6 +233,29 @@ class ProductBridge:
         self._max_body_bytes = max_body_bytes
         self._max_document_body_bytes = max_document_body_bytes
         self._request_timeout_seconds = request_timeout_seconds
+        self._recovery_mutation_supported = recovery_mutation_supported
+
+    def is_unsupported_recovery_mutation(self, method: str, target: str) -> bool:
+        """Consult the application authority before acquiring a recovery body."""
+
+        if self._recovery_mutation_supported:
+            return False
+        try:
+            normalized_method = method.upper()
+            path = _canonical_path(target)
+        except (AttributeError, TypeError, ValueError):
+            return False
+        upstream_target = _proxy_target(path, normalized_method)
+        return normalized_method == "POST" and (
+            upstream_target == "/v1/recovery/staging"
+            or bool(
+                upstream_target
+                and re.fullmatch(
+                    rf"/v1/recovery/{_CANONICAL_UUID.pattern}/(promote|discard|abandon)",
+                    upstream_target,
+                )
+            )
+        )
 
     def request_body_limit(self, method: str, target: str) -> int:
         """Mantém JSON no teto legado e amplia somente o POST documental exato."""
@@ -416,6 +442,12 @@ class ProductBridge:
                 if upstream_target is None:
                     status = 405 if path == "/app-api/v1/workspaces" else 404
                     return _error(status, "NOT_FOUND", "rota local não disponível")
+                if self.is_unsupported_recovery_mutation(normalized_method, target):
+                    return _error(
+                        501,
+                        "RECOVERY_PLATFORM_UNSUPPORTED",
+                        "a recuperacao mutavel de workspace e suportada somente no Windows",
+                    )
                 return self._forward(
                     normalized_method,
                     upstream_target,

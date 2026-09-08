@@ -104,6 +104,7 @@ def build_product_runtime(
             frontend_root=root,
             upstream_address=local_api.address,
             token=local_api.token,
+            recovery_mutation_supported=local_api.recovery_mutation_supported,
             config=bridge_config,
         )
     except Exception:

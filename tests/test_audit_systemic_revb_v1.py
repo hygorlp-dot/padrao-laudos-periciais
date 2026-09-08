@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from urllib.parse import quote
 
+import pytest
 
 from tests.test_document_intake_v1 import (
     frontend_build,
@@ -620,6 +622,10 @@ def test_A12_unparsed_party_lines_are_diagnosed_not_silently_dropped():
 
 
 # --- A13: backup -> restore -> reopen identity exactness for a real PJe workspace
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="mutable Recovery V1 is supported only on Windows",
+)
 def test_A13_restored_staging_remains_non_effective_until_explicit_promotion(tmp_path):
     """AUDITOR_TEST_CHANGED = TRUE / CLASSIFICATION = INVALID_PREMISE
 

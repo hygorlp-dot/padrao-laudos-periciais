@@ -40,6 +40,12 @@ from tests.test_backup_recovery_reachability_v1 import (
 )
 
 
+pytestmark = pytest.mark.skipif(
+    os.name != "nt",
+    reason="the positive mutable Recovery V1 matrix is Windows-only",
+)
+
+
 def _pacote(runtime, workspace_id):
     status, _headers, package = _api(runtime, "POST", f"/v1/workspaces/{workspace_id}/backup")
     assert status == 200
@@ -3371,8 +3377,8 @@ def test_identity_continuity_removal_normal_control(tmp_path):
     assert not (base / f".recovery-cleanup-intent-{recovery_id}").exists()
 
 
-def test_posix_create_child_transfers_openat_descriptor_without_global_reacquire(monkeypatch):
-    """RED POSIX: mkdirat -> openat -> fstat, sem acquire(path) intermediario."""
+def test_posix_create_child_attack_path_is_unreachable(monkeypatch):
+    """POSIX mutable recovery rejects before mkdirat/openat acquisition."""
 
     from scripts.backend_contract.application import workspace_recovery as wr
 
@@ -3411,26 +3417,16 @@ def test_posix_create_child_transfers_openat_descriptor_without_global_reacquire
     monkeypatch.setattr(wr.RecoveryFilesystemCustody, "acquire", classmethod(forbidden_acquire))
 
     parent = wr.RecoveryFilesystemCustody(Path("C:/trusted/recovery"), [41], [(7, 10, stat.S_IFDIR)])
-    child = parent.create_child("recovery-00000000-0000-4000-8000-000000000301")
-    try:
-        assert opened == [
-            (
-                "recovery-00000000-0000-4000-8000-000000000301",
-                os.O_RDONLY | o_directory | o_nofollow,
-                41,
-            )
-        ]
-        assert duplicated == [41]
-        assert child.directory_fd == 42
-        assert child.identity == (7, 11, stat.S_IFDIR)
-    finally:
-        child.close()
-        parent.close()
-    assert closed == [42, 43, 41]
+    with pytest.raises(wr.RecoveryPlatformUnsupported):
+        parent.create_child("recovery-00000000-0000-4000-8000-000000000301")
+    assert opened == []
+    assert duplicated == []
+    parent.close()
+    assert closed == [41]
 
 
-def test_posix_cleanup_root_acquisition_is_relative_to_live_base_fd(monkeypatch):
-    """RED POSIX: a raiz do cleanup nasce do base_fd, nunca de path global."""
+def test_posix_cleanup_root_acquisition_attack_path_is_unreachable(monkeypatch):
+    """POSIX cleanup rejects before statat/openat root acquisition."""
 
     from scripts.backend_contract.application import workspace_recovery as wr
 
@@ -3464,29 +3460,19 @@ def test_posix_cleanup_root_acquisition_is_relative_to_live_base_fd(monkeypatch)
     )
     monkeypatch.setattr(wr, "os", fake_os)
 
-    node = wr._adquirir_custodia_cleanup(
-        Path("C:/trusted/recovery/recovery-00000000-0000-4000-8000-000000000302"),
-        parent_posix_fd=51,
-        expected_filesystem_identity=(8, 21, stat.S_IFDIR),
-    )
-    try:
-        assert stat_calls == [
-            ("recovery-00000000-0000-4000-8000-000000000302", 51, False)
-        ]
-        assert open_calls == [
-            (
-                "recovery-00000000-0000-4000-8000-000000000302",
-                os.O_RDONLY | o_directory | o_nofollow,
-                51,
-            )
-        ]
-    finally:
-        wr._fechar_custodia_cleanup(node)
-    assert closed == [52]
+    with pytest.raises(wr.RecoveryPlatformUnsupported):
+        wr._adquirir_custodia_cleanup(
+            Path("C:/trusted/recovery/recovery-00000000-0000-4000-8000-000000000302"),
+            parent_posix_fd=51,
+            expected_filesystem_identity=(8, 21, stat.S_IFDIR),
+        )
+    assert stat_calls == []
+    assert open_calls == []
+    assert closed == []
 
 
-def test_posix_child_rmdir_rejects_name_not_bound_to_open_descriptor(monkeypatch):
-    """RED POSIX: um substituto tardio nao pode ser consumido por ``rmdir``."""
+def test_posix_child_rmdir_attack_path_is_unreachable(monkeypatch):
+    """POSIX cleanup rejects before statat/fstat/rmdirat on a child."""
 
     from scripts.backend_contract.application import workspace_recovery as wr
 
@@ -3510,7 +3496,7 @@ def test_posix_child_rmdir_rejects_name_not_bound_to_open_descriptor(monkeypatch
     )
     monkeypatch.setattr(wr, "os", fake_os)
 
-    with pytest.raises(wr.RecoveryRetained):
+    with pytest.raises(wr.RecoveryPlatformUnsupported):
         wr._remover_diretorio_posix_ancorado(
             51,
             node,

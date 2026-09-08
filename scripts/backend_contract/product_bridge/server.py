@@ -232,6 +232,20 @@ class _ProductRequestHandler(BaseHTTPRequestHandler):
                 bridge = self.server.bridge
                 if bridge is None:
                     response = _error(503, "PRODUCT_BRIDGE_UNAVAILABLE", "serviço local indisponível")
+                elif (
+                    length <= bridge.request_body_limit(self.command, self.path)
+                    and bridge.is_unsupported_recovery_mutation(self.command, self.path)
+                ):
+                    # Preserve browser authorization while rejecting before any
+                    # temporary file or upstream acquisition exists.
+                    self._unread_body_bytes = length
+                    self.close_connection = True
+                    response = bridge.handle(
+                        self.command,
+                        self.path,
+                        dict(self.headers.items()),
+                        b"",
+                    )
                 elif length > bridge.request_body_limit(self.command, self.path):
                     self._unread_body_bytes = length
                     self.close_connection = True
@@ -328,6 +342,7 @@ class ProductBridgeServer:
         frontend_root,
         upstream_address: tuple[str, int],
         token: str,
+        recovery_mutation_supported: bool,
         config: ProductBridgeConfig | None = None,
     ):
         self._config = ProductBridgeConfig() if config is None else config
@@ -348,6 +363,7 @@ class ProductBridgeServer:
             max_body_bytes=self._config.max_body_bytes,
             max_document_body_bytes=self._config.max_document_body_bytes,
             request_timeout_seconds=self._config.upstream_timeout_seconds,
+            recovery_mutation_supported=recovery_mutation_supported,
         )
         self._thread: Thread | None = None
         self._serve_stopped = Event()

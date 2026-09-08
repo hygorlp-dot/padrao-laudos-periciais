@@ -74,6 +74,7 @@ export type BackupPackage = {
 
 export type RecoveryApiErrorKind =
   | "invalid-request"
+  | "platform-unsupported"
   | "invalid-backup"
   | "incompatible-backup"
   | "not-found"
@@ -171,6 +172,12 @@ function parsePendingRecovery(value: unknown): PendingRecovery {
 }
 
 function mappedError(status: number, code?: string): RecoveryApiError {
+  if (code === "RECOVERY_PLATFORM_UNSUPPORTED") {
+    return new RecoveryApiError(
+      "platform-unsupported",
+      "A recuperação mutável de workspace está disponível somente no Windows. Neste sistema, o backup pode ser verificado, mas não preparado nem promovido.",
+    );
+  }
   if (code === "INVALID_BACKUP") {
     return new RecoveryApiError("invalid-backup", "O arquivo não é um backup íntegro deste produto");
   }

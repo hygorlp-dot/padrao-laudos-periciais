@@ -16,10 +16,19 @@ Modelo: `VERIFIED_STAGING_THEN_EXPLICIT_HUMAN_PROMOTION`.
 from __future__ import annotations
 
 import json
+import os
+
+import pytest
 
 from tests.test_document_intake_v1 import provision_private_root
 from tests.test_final_closure_r7 import pdf_sintetico
 from tests.test_local_api_v1 import TOKEN, http_request
+
+
+pytestmark = pytest.mark.skipif(
+    os.name != "nt",
+    reason="the complete mutable recovery product journey is Windows-only",
+)
 
 
 def _api(runtime, method, path, *, value=None, body=None, headers=None):

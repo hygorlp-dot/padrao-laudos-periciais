@@ -928,6 +928,61 @@ confiavel permanecem cumulativas.
 
 ---
 
+### H.5 Matriz de plataforma do Recovery V1 (decisao humana pos-A16/B16)
+
+Status: **contrato normativo reconciliado antes dos REDs e antes da mutacao de
+producao**. O candidato `846c9a5519955260e165f7367f89d3fad542815a` esta
+invalidado. A16 demonstrou a janela `statat -> rmdirat`; B16 demonstrou a janela
+`mkdirat -> openat`. A decisao de produto nao autoriza outra primitiva de trust
+POSIX nesta Issue: Recovery V1 mutavel passa a ser suportado somente no Windows.
+
+```text
+WINDOWS_RECOVERY_V1 = SUPPORTED
+POSIX_MUTABLE_RECOVERY_V1 = UNSUPPORTED_FAIL_CLOSED
+RECOVERY_PLATFORM_UNSUPPORTED = BEFORE_FIRST_MUTATION
+```
+
+#### RECOVERY_V1_PLATFORM_MATRIX
+
+| Capability | Windows | POSIX |
+|---|---|---|
+| Export backup | supported | supported quando independente da namespace mutavel de recovery |
+| Verify backup | supported | supported; leitura estrutural sem efeito colateral |
+| Stage restore | supported | unsupported fail-closed |
+| Promote restore | supported | unsupported fail-closed |
+| Discard / abandon | supported | unsupported fail-closed |
+| Retry discard / abandon | supported | unsupported fail-closed |
+| Startup reconstruction | supported | disabled; preserva material existente sem traversal mutavel |
+| Orphan collection | supported | disabled; zero delete e zero intent publication |
+| Recovery intent GC | supported | disabled; zero mutation |
+
+O predicado de suporte pertence a application/backend. O transporte pode
+consultar essa mesma autoridade para recusar um upload de staging antes de criar
+spool, mas nao cria uma segunda regra de plataforma. A UI apenas traduz o erro
+canonico; ela nao decide a capability.
+
+No POSIX, qualquer entrada que possa criar staging, publicar controle ou intent,
+promover, descartar, abandonar, repetir cleanup, recolher orphan ou executar GC
+termina em `RecoveryPlatformUnsupported` / `RECOVERY_PLATFORM_UNSUPPORTED` antes
+de abrir um caminho destrutivo ou criar arquivo. Exportacao, verificacao do pacote
+e leitura estrutural independente permanecem disponiveis.
+
+Os ataques A16/B16 continuam como regressao executavel, mas o oracle deixa de
+pretender equivalencia POSIX e passa a exigir que suas primeiras primitivas
+mutaveis sejam inalcancaveis pelo produto:
+
+```text
+B16_MKDIRAT_TO_OPENAT = NEVER_REACHED
+A16_STATAT_TO_RMDIRAT = NEVER_REACHED
+POSIX_EXTERNAL_MUTATION = 0
+POSIX_FALSE_SUCCESS = 0
+```
+
+`POSIX_SUPPORT_MAY_BE_REOPENED_ONLY_BY_SEPARATE_PRODUCT_REQUIREMENT`. Uma futura
+implementacao Linux/POSIX exige Issue propria; nao e continuacao da #183.
+
+---
+
 ## I. Transporte de binário grande
 
 Uma **única** política de corpo por rota, descrevendo em conjunto: tamanho máximo,

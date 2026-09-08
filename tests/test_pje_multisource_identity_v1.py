@@ -13,11 +13,20 @@ outra sessao -- e decisoes profissionais ficam penduradas nessa identidade.
 from __future__ import annotations
 
 import json
+import os
+
+import pytest
 
 from scripts.planejamento_pericial.app_composition import build_pericial_local_api
 from tests.test_document_intake_v1 import provision_private_root
 from tests.test_final_closure_r7 import pdf_sintetico
 from tests.test_local_api_v1 import TOKEN, http_request
+
+
+WINDOWS_MUTABLE_RECOVERY = pytest.mark.skipif(
+    os.name != "nt",
+    reason="mutable Recovery V1 is supported only on Windows",
+)
 
 
 def _request(runtime, method, path, *, value=None, body=None, headers=None):
@@ -236,6 +245,7 @@ def test_S05_identity_is_derived_from_the_source_not_from_its_position(tmp_path)
         runtime.close()
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_B_backup_restore_reopen_preserves_source_and_logical_identities(tmp_path):
     """Identidade e decisao profissional atravessam a fronteira de portabilidade."""
     from scripts.backend_contract.infrastructure.productization import (

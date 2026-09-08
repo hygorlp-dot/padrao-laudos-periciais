@@ -46,6 +46,11 @@ from scripts.backend_contract.infrastructure.productization import (
 
 WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
 
+WINDOWS_MUTABLE_RECOVERY = pytest.mark.skipif(
+    os.name != "nt",
+    reason="mutable Recovery V1 is supported only on Windows",
+)
+
 
 def backup_mapping(version: int = 1) -> dict:
     value = {
@@ -93,6 +98,7 @@ def portable_revision(kind: str, artifact_id: str, payload: dict, revision: int 
     }
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_backup_restore_preserves_workspace_ai_cost_authority(tmp_path) -> None:
     source = SQLiteApplicationStore(tmp_path / "source.sqlite3")
     workspace_id = WorkspaceId.parse(WORKSPACE_ID)
@@ -422,6 +428,7 @@ def seed_synced_inspection_media(store: SQLiteApplicationStore, private: Private
     return originals
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_backup_restore_reopen_preserves_exact_history_private_bytes_and_provenance(tmp_path) -> None:
     source_private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", source_private)
@@ -439,6 +446,7 @@ def test_backup_restore_reopen_preserves_exact_history_private_bytes_and_provena
     staging.close()
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_synced_inspection_backup_restore_requires_every_referenced_original_media(tmp_path) -> None:
     private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", private)
@@ -468,6 +476,7 @@ def test_synced_inspection_backup_restore_requires_every_referenced_original_med
     source.close()
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_restore_without_private_members_uses_same_owned_recovery_boundary(tmp_path) -> None:
     source_private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", source_private)
@@ -479,6 +488,7 @@ def test_restore_without_private_members_uses_same_owned_recovery_boundary(tmp_p
     staging.close()
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_corruption_and_foreign_workspace_fail_closed_before_restore_mutation(tmp_path) -> None:
     private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", private)
@@ -523,6 +533,7 @@ def test_resealed_inner_corruption_still_fails_domain_and_private_validation(tmp
     source.close()
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_duplicate_private_identity_and_failed_store_discard_owned_staging(tmp_path, monkeypatch) -> None:
     private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", private)
@@ -552,6 +563,7 @@ def test_duplicate_private_identity_and_failed_store_discard_owned_staging(tmp_p
     source.close()
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_restore_refuses_nonempty_target_as_rollback_boundary(tmp_path) -> None:
     private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", private)
@@ -574,6 +586,7 @@ def test_recovery_staging_cannot_be_composed_around_active_storage(tmp_path) -> 
     active.close()
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_recovery_staging_repositories_cannot_be_redirected(tmp_path) -> None:
     staging = RecoveryStaging.create(tmp_path / "staging")
     unrelated = SQLiteApplicationStore(tmp_path / "unrelated.db")
@@ -586,6 +599,7 @@ def test_recovery_staging_repositories_cannot_be_redirected(tmp_path) -> None:
     unrelated.close()
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_recovery_staging_authority_rejects_internal_resource_substitution(tmp_path) -> None:
     source_private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", source_private)
@@ -608,6 +622,7 @@ def test_recovery_staging_authority_rejects_internal_resource_substitution(tmp_p
     source.close()
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_recovery_staging_is_restrictive_and_durably_not_promotable(tmp_path) -> None:
     root = tmp_path / "staging"
     staging = RecoveryStaging.create(root)
@@ -620,6 +635,7 @@ def test_recovery_staging_is_restrictive_and_durably_not_promotable(tmp_path) ->
     assert marker.read_bytes() == b"RECOVERY_STAGING_V1\n"
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_recovery_quarantine_marker_handles_partial_writes(tmp_path, monkeypatch) -> None:
     original_write = os.write
 
@@ -632,6 +648,7 @@ def test_recovery_quarantine_marker_handles_partial_writes(tmp_path, monkeypatch
     staging.close()
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_active_local_api_rejects_recovery_quarantine(tmp_path) -> None:
     staging = RecoveryStaging.create(tmp_path / "staging")
     staging.close()
@@ -639,6 +656,7 @@ def test_active_local_api_rejects_recovery_quarantine(tmp_path) -> None:
         build_local_api(staging.root / "workspace.sqlite3", private_root=staging.root / "private", token="a" * 32)
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_active_local_api_rejects_quarantine_in_higher_ancestor(tmp_path) -> None:
     staging = RecoveryStaging.create(tmp_path / "staging")
     staging.close()
@@ -648,6 +666,7 @@ def test_active_local_api_rejects_quarantine_in_higher_ancestor(tmp_path) -> Non
         build_local_api(nested / "active.sqlite3", private_root=nested / "private", token="a" * 32)
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_active_local_api_rejects_hardlink_alias_to_quarantined_database(tmp_path) -> None:
     staging = RecoveryStaging.create(tmp_path / "staging")
     staging.close()
@@ -661,6 +680,7 @@ def test_active_local_api_rejects_hardlink_alias_to_quarantined_database(tmp_pat
         build_local_api(alias, token="a" * 32)
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_embedded_quarantine_survives_database_rename(tmp_path) -> None:
     staging = RecoveryStaging.create(tmp_path / "staging")
     staging.close()
@@ -670,6 +690,7 @@ def test_embedded_quarantine_survives_database_rename(tmp_path) -> None:
         build_local_api(renamed, token="a" * 32)
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_embedded_quarantine_survives_sqlite_snapshot_restore(tmp_path) -> None:
     normal = SQLiteApplicationStore(tmp_path / "normal.sqlite3")
     normal_snapshot = normal.snapshot()
@@ -684,6 +705,7 @@ def test_embedded_quarantine_survives_sqlite_snapshot_restore(tmp_path) -> None:
         build_local_api(escaped, token="a" * 32)
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_embedded_private_quarantine_survives_root_rename(tmp_path) -> None:
     staging = RecoveryStaging.create(tmp_path / "staging")
     staging.close()
@@ -693,6 +715,7 @@ def test_embedded_private_quarantine_survives_root_rename(tmp_path) -> None:
         build_local_api(tmp_path / "normal.sqlite3", private_root=renamed_private, token="a" * 32)
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_corrupt_embedded_private_quarantine_fails_closed(tmp_path) -> None:
     staging = RecoveryStaging.create(tmp_path / "staging")
     staging.close()
@@ -719,11 +742,13 @@ def test_active_local_api_rejects_nonlocal_database_before_filesystem_access(dat
 
 
 @pytest.mark.parametrize("root", ("relative-staging", r"\\server\share\staging", r"\\?\C:\staging"))
+@WINDOWS_MUTABLE_RECOVERY
 def test_recovery_staging_rejects_nonlocal_or_unanchored_root(root) -> None:
     with pytest.raises(RepositoryIntegrityError, match="root"):
         RecoveryStaging.create(root)
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_restore_requires_globally_empty_staging_not_only_absent_source_id(tmp_path) -> None:
     private = PrivateStore()
     source, workspace_id = seeded_store(tmp_path / "source.db", private)

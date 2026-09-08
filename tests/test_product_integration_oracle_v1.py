@@ -5,9 +5,12 @@ import base64
 from copy import deepcopy
 from dataclasses import replace
 import hashlib
+import os
 from io import BytesIO
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
+
+import pytest
 
 from scripts.backend_contract.application.delivery_foundation import reconcile_delivery
 from scripts.backend_contract.application.ports import RepositoryIntegrityError
@@ -28,6 +31,11 @@ from tests.test_local_api_v1 import FixedClock, TOKEN, http_request
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
 
+WINDOWS_MUTABLE_RECOVERY = pytest.mark.skipif(
+    os.name != "nt",
+    reason="mutable Recovery V1 is supported only on Windows",
+)
+
 
 def _http(runtime, method: str, path: str, value: object | None = None, raw_body: bytes | None = None, headers: dict | None = None):
     supplied = {"X-Local-API-Token": TOKEN, **(headers or {})}
@@ -35,6 +43,7 @@ def _http(runtime, method: str, path: str, value: object | None = None, raw_body
     return status, (json.loads(body) if body else None)
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_d1_d11_normal_composed_product_path_delivers_closes_and_recovers_without_ai(tmp_path: Path) -> None:
     runtime = build_local_api(tmp_path / "product.db", token=TOKEN, private_root=tmp_path / "private")
     runtime.start()
@@ -574,6 +583,7 @@ def _longitudinal_backup() -> tuple[bytes, dict[str, dict]]:
     return _canonical(mapping), payloads
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_d1_to_d7_longitudinal_authority_delivery_budget_and_recovery(tmp_path: Path) -> None:
     package, payloads = _longitudinal_backup()
     verified = VerifyWorkspaceBackup().execute(package)
@@ -709,6 +719,7 @@ def test_d6_final_word_and_template_bytes_are_revalidated_after_recovery() -> No
             raise AssertionError(f"invalid Delivery {expected_error} bytes were accepted")
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_d6_canonical_ocr_cache_survives_backup_validation_and_runtime_reopen(tmp_path: Path) -> None:
     package, _ = _longitudinal_backup()
     mapping = json.loads(package)

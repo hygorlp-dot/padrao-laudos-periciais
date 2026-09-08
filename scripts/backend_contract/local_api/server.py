@@ -222,6 +222,17 @@ def _handler_for(
                     self._unread_body_bytes = max(length, 0)
                     self.close_connection = True
                     response = _error(400, "INVALID_REQUEST")
+                elif api.is_unsupported_recovery_mutation(self.command, self.path):
+                    # Authorize and reject before creating a spool or reading the
+                    # package. The connection is closed after a bounded drain.
+                    self._unread_body_bytes = length
+                    self.close_connection = True
+                    response = api.handle(
+                        self.command,
+                        self.path,
+                        dict(self.headers.items()),
+                        b"",
+                    )
                 else:
                     spool = None
                     try:
@@ -345,6 +356,7 @@ class LocalApiServer:
             self._config.max_document_body_bytes,
         ):
             raise ValueError("limites do servidor e transporte divergem")
+        self._recovery_mutation_supported = api.recovery_mutation_supported
         self._server = _ThreadingLocalServer(
             (self._config.host, self._config.port),
             _handler_for(
@@ -365,6 +377,10 @@ class LocalApiServer:
     def address(self) -> tuple[str, int]:
         host, port = self._server.server_address
         return str(host), int(port)
+
+    @property
+    def recovery_mutation_supported(self) -> bool:
+        return self._recovery_mutation_supported
 
     def start(self) -> tuple[str, int]:
         with self._lifecycle_lock:

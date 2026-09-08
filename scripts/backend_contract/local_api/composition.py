@@ -204,6 +204,10 @@ class LocalApiRuntime:
     def address(self) -> tuple[str, int]:
         return self.server.address
 
+    @property
+    def recovery_mutation_supported(self) -> bool:
+        return self.server.recovery_mutation_supported
+
     def start(self) -> tuple[str, int]:
         with self._lifecycle_lock:
             if self._closed:

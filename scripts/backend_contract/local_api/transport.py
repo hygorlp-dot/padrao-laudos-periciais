@@ -48,6 +48,7 @@ from ..application.workspace_recovery import (
     RecoveryAlreadyPromoted,
     RecoveryDiscarded,
     RecoveryNotFound,
+    RecoveryPlatformUnsupported,
     RecoveryRetained,
     RecoveryNotPromotable,
     RecoveryPromotionIncomplete,
@@ -56,6 +57,7 @@ from ..application.workspace_recovery import (
     BackupTooLarge,
     RecoveryStageFailed,
     WorkspaceRecoveryConflict,
+    recovery_mutation_supported,
 )
 from ..application.case_analysis import (
     CASE_ANALYSIS_ARTIFACT_KIND,
@@ -512,6 +514,12 @@ class LocalApi:
     def body_limits(self) -> tuple[int, int]:
         return self._max_body_bytes, self._max_document_body_bytes
 
+    @property
+    def recovery_mutation_supported(self) -> bool:
+        """Expose the application-owned platform decision to composition."""
+
+        return recovery_mutation_supported()
+
     def _current_offline_device_id(self) -> str | None:
         authority = self._services.offline_device_authority
         if authority is not None:
@@ -554,6 +562,29 @@ class LocalApi:
             and raw_segments[:2] == ("v1", "recovery")
             and raw_segments[2] in {"verify", "staging"}
         )
+
+    def is_unsupported_recovery_mutation(self, method: str, target: str) -> bool:
+        """Recognize only canonical mutable Recovery V1 routes on POSIX."""
+
+        if recovery_mutation_supported() or type(method) is not str or method.upper() != "POST":
+            return False
+        try:
+            raw_segments, _segments = _target_segments(target)
+        except (TypeError, ValueError):
+            return False
+        if raw_segments == ("v1", "recovery", "staging"):
+            return True
+        if not (
+            len(raw_segments) == 4
+            and raw_segments[:2] == ("v1", "recovery")
+            and raw_segments[3] in {"promote", "discard", "abandon"}
+        ):
+            return False
+        try:
+            self._workspace_id(raw_segments[2])
+        except (TypeError, ValueError):
+            return False
+        return True
 
     def request_body_limit(self, method: str, target: str) -> int:
         """Retorna o teto de aquisição sem ampliar rotas JSON legadas."""
@@ -644,6 +675,13 @@ class LocalApi:
                 )
             if "transfer-encoding" in request_headers:
                 raise ValueError("Transfer-Encoding não suportado")
+
+            if self.is_unsupported_recovery_mutation(normalized_method, target):
+                return _error(
+                    501,
+                    "RECOVERY_PLATFORM_UNSUPPORTED",
+                    "a recuperacao mutavel de workspace e suportada somente no Windows",
+                )
 
             if raw_segments == ("v1", "workspaces"):
                 if normalized_method == "GET":
@@ -1513,6 +1551,12 @@ class LocalApi:
             return _error(404, "WORKSPACE_NOT_FOUND", "workspace não encontrado")
         except BackupIncompatible:
             return _error(409, "INCOMPATIBLE_BACKUP", "backup de versão não suportada")
+        except RecoveryPlatformUnsupported:
+            return _error(
+                501,
+                "RECOVERY_PLATFORM_UNSUPPORTED",
+                "a recuperacao mutavel de workspace e suportada somente no Windows",
+            )
         except BackupInvalid:
             return _error(400, "INVALID_BACKUP", "pacote de backup inválido")
         except (RecoveryNotFound, RecoveryDiscarded, RecoveryAlreadyPromoted):

@@ -378,6 +378,23 @@ def _duplicar_handle_windows(handle: int) -> int:
     return int(duplicate.value)
 
 
+class RecoveryPlatformUnsupported(RepositoryError):
+    """Mutable Recovery V1 is unavailable on this operating system."""
+
+
+def recovery_mutation_supported() -> bool:
+    """Single application authority for the mutable Recovery V1 platform."""
+
+    return os.name == "nt"
+
+
+def _require_recovery_mutation_supported() -> None:
+    if not recovery_mutation_supported():
+        raise RecoveryPlatformUnsupported(
+            "a recuperacao mutavel de workspace e suportada somente no Windows"
+        )
+
+
 class RecoveryFilesystemCustody:
     """Custódia estreita do volume até uma base/raiz de recovery.
 
@@ -402,6 +419,8 @@ class RecoveryFilesystemCustody:
         create: bool = False,
         missing_ok: bool = False,
     ) -> "RecoveryFilesystemCustody | None":
+        if create:
+            _require_recovery_mutation_supported()
         target = _recovery_path_local_absoluto(path)
         if os.name == "nt":
             return cls._acquire_windows(target, create=create, missing_ok=missing_ok)
@@ -643,6 +662,7 @@ class RecoveryFilesystemCustody:
         return type(self).acquire(self.path / name, create=create)
 
     def create_child(self, name: str):
+        _require_recovery_mutation_supported()
         name = self._validate_entry_name(name)
         if os.name == "nt":
             try:
@@ -711,6 +731,9 @@ class RecoveryFilesystemCustody:
     def open_file(self, name: str, flags: int, mode: int = 0o600) -> int:
         """Abre um membro direto sem abandonar a autoridade da custody POSIX."""
 
+        write_flags = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
+        if flags & write_flags:
+            _require_recovery_mutation_supported()
         name = self._validate_entry_name(name)
         if os.name == "posix":
             return os.open(name, flags | os.O_NOFOLLOW, mode, dir_fd=self.directory_fd)
@@ -745,6 +768,7 @@ class RecoveryFilesystemCustody:
             os.close(descriptor)
 
     def write_new_file(self, name: str, payload: bytes) -> None:
+        _require_recovery_mutation_supported()
         if type(payload) is not bytes:
             raise TypeError("payload de controle de recovery inválido")
         descriptor = self.open_file(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
@@ -762,6 +786,7 @@ class RecoveryFilesystemCustody:
     def publish_immutable_file(self, name: str, payload: bytes) -> bytes:
         """Publica bytes exatos com link exclusivo dentro da custody."""
 
+        _require_recovery_mutation_supported()
         name = self._validate_entry_name(name)
         try:
             existing = self.read_file(name)
@@ -789,6 +814,7 @@ class RecoveryFilesystemCustody:
         return published
 
     def replace_file(self, temporary_name: str, target_name: str) -> None:
+        _require_recovery_mutation_supported()
         temporary_name = self._validate_entry_name(temporary_name)
         target_name = self._validate_entry_name(target_name)
         if os.name == "posix":
@@ -802,6 +828,7 @@ class RecoveryFilesystemCustody:
             os.replace(self.path / temporary_name, self.path / target_name)
 
     def link_file(self, source_name: str, target_name: str) -> None:
+        _require_recovery_mutation_supported()
         source_name = self._validate_entry_name(source_name)
         target_name = self._validate_entry_name(target_name)
         if os.name == "posix":
@@ -816,6 +843,7 @@ class RecoveryFilesystemCustody:
             os.link(self.path / source_name, self.path / target_name)
 
     def rename_file(self, source_name: str, target_name: str) -> None:
+        _require_recovery_mutation_supported()
         source_name = self._validate_entry_name(source_name)
         target_name = self._validate_entry_name(target_name)
         if os.name == "posix":
@@ -829,6 +857,7 @@ class RecoveryFilesystemCustody:
             os.rename(self.path / source_name, self.path / target_name)
 
     def unlink_file(self, name: str, *, missing_ok: bool = False) -> None:
+        _require_recovery_mutation_supported()
         name = self._validate_entry_name(name)
         try:
             if os.name == "posix":
@@ -1139,6 +1168,7 @@ def _fechar_custodia_cleanup(node: _CleanupNode) -> None:
 def _remover_diretorio_windows_ancorado(node: _CleanupNode) -> None:
     """Marca e consome uma vez o handle do diretório físico selecionado."""
 
+    _require_recovery_mutation_supported()
     if os.name != "nt" or node.descriptor is None:
         raise RecoveryRetained("custódia Windows da recuperação indisponível")
     descriptor = node.descriptor
@@ -1157,6 +1187,7 @@ def _remover_diretorio_posix_ancorado(
 ) -> None:
     """Remove o nome somente se ainda selecionar o diretório aberto esperado."""
 
+    _require_recovery_mutation_supported()
     if os.name != "posix" or node.descriptor is None:
         raise RecoveryRetained("custódia POSIX da recuperação indisponível")
     observed_name = os.stat(
@@ -1199,6 +1230,7 @@ def _adquirir_custodia_cleanup(
     ao fechar o handle e nunca são material do backup.
     """
 
+    _require_recovery_mutation_supported()
     descriptor = None
     if os.name == "posix" and parent is None and existing_posix_custody is not None:
         if existing_posix_custody.path != path:
@@ -1304,6 +1336,7 @@ def _paths_da_custodia(node: _CleanupNode) -> list[Path]:
 
 
 def _unlink_na_custodia(node: _CleanupNode, name: str) -> None:
+    _require_recovery_mutation_supported()
     if os.name == "posix":
         if node.descriptor is None:
             raise OSError("custódia da recuperação foi encerrada")
@@ -1316,6 +1349,7 @@ def _remover_material_ancorado(
     node: _CleanupNode,
     material: set[Path],
 ) -> None:
+    _require_recovery_mutation_supported()
     for name in node.files:
         if node.path / name not in material:
             continue
@@ -1378,6 +1412,7 @@ def _ler_controle_ancorado(node: _CleanupNode, name: str) -> bytes:
 
 
 def _gravar_controle_ancorado(node: _CleanupNode, name: str, payload: bytes) -> None:
+    _require_recovery_mutation_supported()
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     flags |= os.O_NOFOLLOW if os.name == "posix" else os.O_BINARY
     if os.name == "posix":
@@ -1539,6 +1574,7 @@ def _gravar_sidecar_imutavel(
     custody: RecoveryFilesystemCustody | None = None,
 ) -> None:
     """Publica um controle durável sem substituir uma autoridade já existente."""
+    _require_recovery_mutation_supported()
     corpo = _json_canonico(registro)
     if os.name == "posix":
         if custody is None or custody.path != raiz:
@@ -1701,6 +1737,7 @@ def _persistir_cleanup_intent_custodiado(
     mode: str,
     expected_filesystem_identity: object,
 ) -> Path:
+    _require_recovery_mutation_supported()
     if base_custody.path != raiz.parent:
         raise RepositoryIntegrityError("custódia e base do cleanup divergem")
     # Também prova que a custody continua viva durante create+fsync+readback.
@@ -1772,6 +1809,7 @@ def _coletar_cleanup_intent_apos_raiz_ausente(
     # Um restart que encontre só o sidecar o preserva; apenas o processo que
     # observou delete-pending no handle exato e consumiu esse handle pode fazer
     # o commit/GC. O resíduo é pequeno, não privado e falha fechado.
+    _require_recovery_mutation_supported()
     if not expected_identity_removed or expected_filesystem_identity is None:
         return
     acquired_custody = None
@@ -2092,6 +2130,7 @@ def _encerrar_staging(staging: object, *, exigir_remocao: bool = False) -> None:
     A remoção só ocorre sobre diretório que se PROVA ser raiz de recuperação
     nossa: precisa do marcador com o conteúdo canônico.
     """
+    _require_recovery_mutation_supported()
     root_custody = None
     base_custody = None
     try:
@@ -2140,6 +2179,7 @@ def _remover_raiz_quarentenada(
     ``DELETE`` até o fim e marca esse mesmo objeto para remoção. Não existe
     fallback destrutivo por pathname.
     """
+    _require_recovery_mutation_supported()
     recovery_id = _recovery_id_da_raiz(raiz)
     if recovery_id is None:
         if exigir_remocao:
@@ -2502,6 +2542,7 @@ class StageWorkspaceRecovery:
         return True, None
 
     def execute(self, payload: bytes) -> RecoverySession:
+        _require_recovery_mutation_supported()
         if type(payload) is not bytes or not payload:
             raise BackupInvalid("pacote de backup ausente")
         try:
@@ -2729,6 +2770,8 @@ class StageWorkspaceRecovery:
 
 
 def recolher_stagings_orfaos(base) -> tuple[str, ...]:
+    if not recovery_mutation_supported():
+        return ()
     raiz_base = Path(base)
     try:
         custody = RecoveryFilesystemCustody.acquire(raiz_base, missing_ok=True)
@@ -2761,6 +2804,7 @@ def _recolher_stagings_orfaos_custodiado(raiz_base: Path, custody: RecoveryFiles
     Roda antes de existir qualquer sessão, então não há corrida com o usuário.
     """
     try:
+        _require_recovery_mutation_supported()
         entries = tuple(raiz_base / name for name in custody.entries())
     except OSError:
         return ()
@@ -2840,6 +2884,7 @@ def _candidata_orfa_autoriza_cleanup(
         return False
     if not _arvore_de_recuperacao_eh_segura(raiz, root_custody):
         return False
+    _require_recovery_mutation_supported()
     try:
         if root_custody.read_file(_QUARENTENA) != _QUARENTENA_PAYLOAD:
             return False
@@ -2857,6 +2902,8 @@ def _candidata_orfa_autoriza_cleanup(
 
 
 def reconstruir_sessoes_recuperacao(base, sessions, open_staging) -> tuple[str, ...]:
+    if not recovery_mutation_supported():
+        return ()
     raiz_base = Path(base)
     try:
         custody = RecoveryFilesystemCustody.acquire(raiz_base, missing_ok=True)
@@ -2880,6 +2927,7 @@ def _reconstruir_sessoes_recuperacao_custodiado(
 ) -> tuple[str, ...]:
     """Reconstrói sessões sem promover nem tocar no armazenamento vivo."""
     try:
+        _require_recovery_mutation_supported()
         candidatas = sorted(raiz_base / name for name in custody.entries() if name.startswith("recovery-"))
     except OSError:
         return ()
@@ -3079,6 +3127,7 @@ def _gravar_disposition(entry: dict, recovery_id: str, mode: str) -> None:
     raiz = Path(raiz)
     base_custody = None
     root_custody = None
+    _require_recovery_mutation_supported()
     try:
         if staging is not None:
             root_custody = staging.duplicar_custodia_filesystem()
@@ -3120,6 +3169,7 @@ def _gravar_disposition(entry: dict, recovery_id: str, mode: str) -> None:
 
 
 def _remover_entry(entry: dict, mode: str) -> None:
+    _require_recovery_mutation_supported()
     staging = entry.get("staging")
     expected_identity = entry.get("expected_filesystem_identity")
     if staging is not None:
@@ -3199,6 +3249,7 @@ class DiscardWorkspaceRecovery:
         espaço). O usuário declara que aceita a perícia ficar incompleta; o
         produto não decide isso por ele nem faz em silêncio.
         """
+        _require_recovery_mutation_supported()
         # Reivindica DISCARDING antes de tocar em qualquer coisa: se houver uma
         # promoção em voo, quem perde a corrida recebe erro honesto em vez de
         # fechar o staging sob os pés dela.
@@ -3260,6 +3311,7 @@ class AbandonWorkspaceRecovery:
     discard: DiscardWorkspaceRecovery
 
     def execute(self, recovery_id: str) -> str:
+        _require_recovery_mutation_supported()
         return self.discard.execute(recovery_id, aceitar_incompleta=True)
 
 
@@ -3279,6 +3331,7 @@ class PromoteWorkspaceRecovery:
     private_contents: object | None
 
     def execute(self, recovery_id: str) -> BackupSummary:
+        _require_recovery_mutation_supported()
         # Reivindica PROMOTING: enquanto durar, nenhum descarte fecha o staging e
         # nenhuma segunda promoção entra. `FAILED_RECOVERABLE` é reivindicável
         # porque uma promoção interrompida TEM de ser retomável.
