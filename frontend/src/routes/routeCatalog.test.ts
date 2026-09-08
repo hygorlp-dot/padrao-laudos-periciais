@@ -36,4 +36,12 @@ describe("workspace route catalog", () => {
     expect(workspacePath(ID, "vistoria")).toBe(`/pericias/${ID}/vistoria`);
     expect(() => workspacePath("NOT-A-UUID", "vistoria")).toThrow(/workspace/i);
   });
+  test("resolve a recuperação SEM perícia: é o cenário para o qual ela existe", () => {
+    // Máquina nova, disco trocado, banco perdido — a base está vazia. Exigir
+    // uma perícia existente para restaurar torna a restauração inalcançável
+    // justamente quando ela é necessária.
+    const resolved = resolveRoute("/recuperacao");
+    expect(resolved.kind).toBe("recovery");
+    expect(resolved.pathname).toBe("/recuperacao");
+  });
 });

@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 import socket
 import tempfile
+import time
+from pathlib import Path
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Event, Lock, Thread, Timer
@@ -18,6 +20,13 @@ from .transport import (
     _parse_content_length,
 )
 
+# Recusar um body sem drená-lo fecha o socket com bytes pendentes; no Windows
+# isso vira RST e o RST apaga a resposta já enviada. O dreno é limitado nas duas
+# dimensões: nunca lê mais que o maior body admissível nem por mais que o prazo.
+_LINGER_MAX_BYTES = 134_217_728
+_LINGER_MAX_SECONDS = 1.0
+_LINGER_CHUNK_BYTES = 65_536
+
 
 @dataclass(frozen=True, slots=True)
 class LocalServerConfig:
@@ -26,6 +35,11 @@ class LocalServerConfig:
     max_body_bytes: int = 1_048_576
     max_document_body_bytes: int = MAX_DOCUMENT_BYTES
     request_timeout_seconds: float = 5.0
+    #: Onde o corpo grande é derramado. `None` = temporário do sistema, que é
+    #: varrido e sincronizado por ferramentas de terceiros; material sigiloso
+    #: em claro não deve morar lá. A composição aponta para o diretório de
+    #: dados do próprio produto.
+    spool_dir: str | None = None
 
     def __post_init__(self):
         if self.host != "127.0.0.1":
@@ -52,6 +66,9 @@ class LocalServerConfig:
             or self.request_timeout_seconds > 30
         ):
             raise ValueError("timeout local inválido")
+        if self.spool_dir is not None:
+            if type(self.spool_dir) is not str or not Path(self.spool_dir).is_dir():
+                raise ValueError("diretório de spool inválido")
 
 
 class _ThreadingLocalServer(ThreadingHTTPServer):
@@ -80,6 +97,7 @@ def _handler_for(
     max_body_bytes: int,
     max_document_body_bytes: int,
     request_timeout_seconds: float,
+    spool_dir: str | None = None,
 ):
     class LocalRequestHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -169,6 +187,7 @@ def _handler_for(
             self.close_connection = True
 
         def _handle_request(self):
+            self._unread_body_bytes = 0
             if self.request_version != self.protocol_version:
                 return _error(400, "INVALID_REQUEST")
             duplicate_sensitive_header = any(
@@ -185,27 +204,40 @@ def _handler_for(
                     "X-Local-API-Token",
                 )
             )
+            raw_length = self.headers.get("Content-Length", "0")
+            try:
+                length = _parse_content_length(raw_length)
+            except (TypeError, ValueError):
+                length = -1
             if duplicate_sensitive_header:
+                self._unread_body_bytes = max(length, 0)
                 response = _error(400, "INVALID_REQUEST")
             else:
-                raw_length = self.headers.get("Content-Length", "0")
-                try:
-                    length = _parse_content_length(raw_length)
-                except (TypeError, ValueError):
-                    length = -1
-                body_limit = (
-                    max_document_body_bytes
-                    if api.is_document_upload(self.command, self.path)
-                    else max_body_bytes
-                )
+                # O teto vem da MESMA autoridade que `LocalApi.handle` usa. Derivar
+                # de `is_document_upload` aqui deixava qualquer rota de teto ampliado
+                # (recuperação) presa no teto JSON legado sobre HTTP real, embora
+                # passasse nos testes in-process.
+                body_limit = api.request_body_limit(self.command, self.path)
                 if length < 0 or length > body_limit:
+                    self._unread_body_bytes = max(length, 0)
                     self.close_connection = True
                     response = _error(400, "INVALID_REQUEST")
+                elif api.is_unsupported_recovery_mutation(self.command, self.path):
+                    # Authorize and reject before creating a spool or reading the
+                    # package. The connection is closed after a bounded drain.
+                    self._unread_body_bytes = length
+                    self.close_connection = True
+                    response = api.handle(
+                        self.command,
+                        self.path,
+                        dict(self.headers.items()),
+                        b"",
+                    )
                 else:
                     spool = None
                     try:
-                        if length and api.is_document_upload(self.command, self.path):
-                            spool = tempfile.SpooledTemporaryFile(max_size=1_048_576, mode="w+b")
+                        if length and api.is_large_binary_upload(self.command, self.path):
+                            spool = tempfile.SpooledTemporaryFile(max_size=1_048_576, mode="w+b", dir=spool_dir)
                             remaining = length
                             while remaining:
                                 block = self.rfile.read(min(DOCUMENT_IO_CHUNK_BYTES, remaining))
@@ -231,6 +263,41 @@ def _handler_for(
                             spool.close()
             return response
 
+
+        def _drain_refused_body(self):
+            """Fechar com bytes ainda na fila força RST, e o RST DESCARTA a
+            resposta já escrita — o cliente vê "conexão perdida" em vez da
+            recusa honesta. Drenamos o que o par ainda envia, limitado em
+            bytes E em tempo, para que a resposta chegue de fato.
+            """
+            pendente = getattr(self, "_unread_body_bytes", 0)
+            if pendente <= 0:
+                return
+            restante = min(pendente, _LINGER_MAX_BYTES)
+            prazo = time.monotonic() + _LINGER_MAX_SECONDS
+            try:
+                anterior = self.connection.gettimeout()
+            except OSError:
+                return
+            try:
+                while restante > 0:
+                    folga = prazo - time.monotonic()
+                    if folga <= 0:
+                        break
+                    self.connection.settimeout(folga)
+                    bloco = self.connection.recv(min(_LINGER_CHUNK_BYTES, restante))
+                    if not bloco:
+                        break
+                    restante -= len(bloco)
+            except OSError:
+                pass
+            finally:
+                self._unread_body_bytes = 0
+                try:
+                    self.connection.settimeout(anterior)
+                except OSError:
+                    pass
+
         def _dispatch(self):
             try:
                 response = self._handle_request()
@@ -247,6 +314,7 @@ def _handler_for(
                 self._write_response(response)
             except ConnectionError:
                 self.close_connection = True
+            self._drain_refused_body()
 
         def send_error(self, code, _message=None, _explain=None):
             self._finish_request_acquisition()
@@ -288,6 +356,7 @@ class LocalApiServer:
             self._config.max_document_body_bytes,
         ):
             raise ValueError("limites do servidor e transporte divergem")
+        self._recovery_mutation_supported = api.recovery_mutation_supported
         self._server = _ThreadingLocalServer(
             (self._config.host, self._config.port),
             _handler_for(
@@ -295,6 +364,7 @@ class LocalApiServer:
                 self._config.max_body_bytes,
                 self._config.max_document_body_bytes,
                 self._config.request_timeout_seconds,
+                self._config.spool_dir,
             ),
         )
         self._thread: Thread | None = None
@@ -307,6 +377,10 @@ class LocalApiServer:
     def address(self) -> tuple[str, int]:
         host, port = self._server.server_address
         return str(host), int(port)
+
+    @property
+    def recovery_mutation_supported(self) -> bool:
+        return self._recovery_mutation_supported
 
     def start(self) -> tuple[str, int]:
         with self._lifecycle_lock:

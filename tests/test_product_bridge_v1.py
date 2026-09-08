@@ -3,11 +3,13 @@ import json
 import socket
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from threading import Event, Thread
 
 import pytest
 
+from scripts.backend_contract.product_bridge import server as product_bridge_server
 from scripts.backend_contract.product_bridge.transport import ProductBridge, _proxy_target
 
 from scripts.backend_contract.product_bridge.composition import build_product_runtime
@@ -78,6 +80,118 @@ def test_product_bridge_config_requires_literal_loopback():
         ProductBridgeConfig(host="localhost")
     with pytest.raises(ValueError, match="porta"):
         ProductBridgeConfig(port=80)
+
+
+@pytest.mark.parametrize("recovery_action", ("verify", "staging"))
+def test_recovery_upload_spools_large_body_at_product_http_boundary(
+    monkeypatch, tmp_path, recovery_action
+):
+    spool_dir = tmp_path / "product-data-spool"
+    spool_dir.mkdir()
+    created_spools = []
+    spool_calls = []
+    real_spooled_temporary_file = tempfile.SpooledTemporaryFile
+
+    def tracked_spooled_temporary_file(*, max_size, mode, dir):
+        spool_calls.append((max_size, mode, dir))
+        spool = real_spooled_temporary_file(max_size=max_size, mode=mode, dir=dir)
+        created_spools.append(spool)
+        return spool
+
+    monkeypatch.setattr(
+        product_bridge_server.tempfile,
+        "SpooledTemporaryFile",
+        tracked_spooled_temporary_file,
+    )
+    bridge = ProductBridgeServer(
+        frontend_root=frontend_build(tmp_path),
+        upstream_address=("127.0.0.1", 9),
+        token=TOKEN,
+        recovery_mutation_supported=True,
+        config=ProductBridgeConfig(
+            max_body_bytes=1_048_576,
+            max_document_body_bytes=3 * 1_048_576,
+            spool_dir=str(spool_dir),
+            upstream_timeout_seconds=0.1,
+        ),
+    )
+    bridge.start()
+    try:
+        status, _headers, _body = request(
+            bridge,
+            "POST",
+            f"/app-api/v1/recovery/{recovery_action}",
+            headers={
+                **browser_mutation_headers(bridge),
+                "Content-Type": "application/octet-stream",
+            },
+            raw_body=b"x" * (2 * 1_048_576),
+        )
+    finally:
+        bridge.close()
+
+    assert status == 503
+    assert spool_calls == [(1_048_576, "w+b", str(spool_dir))]
+    assert created_spools[0]._rolled is True
+
+
+@pytest.mark.parametrize(
+    ("method", "target"),
+    (
+        ("PUT", "/app-api/v1/recovery/verify"),
+        ("POST", "/app-api/v1/recovery/verify/extra"),
+        (
+            "POST",
+            "/app-api/v1/recovery/11111111-1111-4111-8111-111111111111/promote",
+        ),
+    ),
+)
+def test_recovery_spool_authority_stays_limited_to_exact_upload_routes(
+    monkeypatch, tmp_path, method, target
+):
+    spool_dir = tmp_path / "product-data-spool"
+    spool_dir.mkdir()
+    spool_calls = []
+    real_spooled_temporary_file = tempfile.SpooledTemporaryFile
+
+    def tracked_spooled_temporary_file(*, max_size, mode, dir):
+        spool_calls.append((max_size, mode, dir))
+        return real_spooled_temporary_file(max_size=max_size, mode=mode, dir=dir)
+
+    monkeypatch.setattr(
+        product_bridge_server.tempfile,
+        "SpooledTemporaryFile",
+        tracked_spooled_temporary_file,
+    )
+    bridge = ProductBridgeServer(
+        frontend_root=frontend_build(tmp_path),
+        upstream_address=("127.0.0.1", 9),
+        token=TOKEN,
+        recovery_mutation_supported=True,
+        config=ProductBridgeConfig(
+            max_body_bytes=1_048_576,
+            max_document_body_bytes=3 * 1_048_576,
+            spool_dir=str(spool_dir),
+            upstream_timeout_seconds=0.1,
+        ),
+    )
+    bridge.start()
+    try:
+        status, _headers, _body = request(
+            bridge,
+            method,
+            target,
+            headers={
+                **browser_mutation_headers(bridge),
+                "Content-Type": "application/octet-stream",
+            },
+            raw_body=b"x" * (2 * 1_048_576),
+        )
+    finally:
+        bridge.close()
+
+    assert status == 400
+    assert spool_calls == []
 
 
 @pytest.mark.parametrize(
@@ -153,6 +267,7 @@ def test_delivery_image_response_streams_through_product_bridge(monkeypatch, tmp
         frontend_root=frontend_build(tmp_path), public_origin="http://127.0.0.1:49152",
         upstream_address=("127.0.0.1", 49153), token=TOKEN, max_body_bytes=1024,
         max_document_body_bytes=1024, request_timeout_seconds=5,
+        recovery_mutation_supported=True,
     )
     workspace = "11111111-1111-4111-8111-111111111111"
     content_id = "22222222-2222-4222-8222-222222222222"
@@ -504,6 +619,7 @@ def test_upstream_failure_is_sanitized_and_token_never_reaches_public_bytes(tmp_
         frontend_root=root,
         upstream_address=("127.0.0.1", 9),
         token=TOKEN,
+        recovery_mutation_supported=True,
     )
     bridge.start()
     try:
@@ -626,7 +742,8 @@ def test_thread_start_failure_closes_product_bridge_listener(tmp_path):
             "from scripts.backend_contract.product_bridge.server import "
             "ProductBridgeServer, ProductBridgeServerStartError\n"
             f"server = ProductBridgeServer(frontend_root={str(root)!r}, "
-            f"upstream_address=('127.0.0.1', 9), token={TOKEN!r})\n"
+            f"upstream_address=('127.0.0.1', 9), token={TOKEN!r}, "
+            "recovery_mutation_supported=True)\n"
             "address = server.address\n"
             "def fail_start(_self):\n"
             "    raise RuntimeError('private thread failure')\n"
@@ -655,6 +772,7 @@ def test_serve_loop_failure_before_ready_fails_closed(tmp_path):
         frontend_root=frontend_build(tmp_path),
         upstream_address=("127.0.0.1", 9),
         token=TOKEN,
+        recovery_mutation_supported=True,
     )
 
     def stop_before_ready():
@@ -692,3 +810,28 @@ def test_unsupported_method_uses_sanitized_bridge_response(tmp_path):
     assert "Date" not in headers
     assert headers["Content-Security-Policy"].startswith("default-src 'self'")
     assert json.loads(body)["error"]["code"] == "METHOD_NOT_ALLOWED"
+
+def test_oversized_body_is_refused_honestly_instead_of_resetting_the_connection(tmp_path):
+    """Recusar sem drenar fecha o socket com bytes pendentes e o RST do Windows
+    APAGA a resposta 400 já escrita. O usuário vê "serviço indisponível" — mentira:
+    o serviço está no ar e recusou por tamanho."""
+    runtime = build_product_runtime(
+        tmp_path / "case.db",
+        frontend_build(tmp_path),
+        private_root=tmp_path / "private",
+        token=TOKEN,
+    )
+    runtime.start()
+    try:
+        excedente = b'{"name":"' + b"x" * 40_000_000 + b'"}'
+        status, _headers, _body = request(
+            runtime,
+            "POST",
+            "/app-api/v1/workspaces",
+            raw_body=excedente,
+            headers={**browser_mutation_headers(runtime), "Content-Type": "application/json"},
+        )
+    finally:
+        runtime.close()
+
+    assert status == 400

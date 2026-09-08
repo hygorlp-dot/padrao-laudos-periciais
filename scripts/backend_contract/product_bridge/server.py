@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 import socket
 import tempfile
+import time
+from pathlib import Path
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Event, Lock, Thread, Timer
@@ -18,6 +20,14 @@ from .transport import (
 )
 
 
+# Recusar um body sem drená-lo fecha o socket com bytes pendentes; no Windows
+# isso vira RST e o RST apaga a resposta já enviada. O dreno é limitado nas duas
+# dimensões: nunca lê mais que o maior body admissível nem por mais que o prazo.
+_LINGER_MAX_BYTES = 134_217_728
+_LINGER_MAX_SECONDS = 1.0
+_LINGER_CHUNK_BYTES = 65_536
+
+
 @dataclass(frozen=True, slots=True)
 class ProductBridgeConfig:
     host: str = "127.0.0.1"
@@ -25,6 +35,11 @@ class ProductBridgeConfig:
     max_body_bytes: int = 1_048_576
     max_document_body_bytes: int = MAX_DOCUMENT_BYTES
     request_timeout_seconds: float = 5.0
+    #: Onde o corpo grande é derramado. `None` = temporário do sistema, que é
+    #: varrido e sincronizado por ferramentas de terceiros; material sigiloso
+    #: em claro não deve morar lá. A composição aponta para o diretório de
+    #: dados do próprio produto.
+    spool_dir: str | None = None
     upstream_timeout_seconds: float = 30.0
 
     def __post_init__(self):
@@ -58,6 +73,9 @@ class ProductBridgeConfig:
             or not 0 < self.upstream_timeout_seconds <= 30
         ):
             raise ValueError("timeout upstream local inválido")
+        if self.spool_dir is not None:
+            if type(self.spool_dir) is not str or not Path(self.spool_dir).is_dir():
+                raise ValueError("diretório de spool de bridge inválido")
 
 
 class _ProductHttpServer(ThreadingHTTPServer):
@@ -148,7 +166,42 @@ class _ProductRequestHandler(BaseHTTPRequestHandler):
                 pass
         self.close_connection = True
 
+    def _drain_refused_body(self):
+        """Fechar com bytes ainda na fila força RST, e o RST DESCARTA a
+        resposta já escrita — o cliente vê "conexão perdida" em vez da recusa
+        honesta. Drenamos o que o par ainda envia, limitado em bytes E em
+        tempo, para que a resposta chegue de fato.
+        """
+        pendente = getattr(self, "_unread_body_bytes", 0)
+        if pendente <= 0:
+            return
+        restante = min(pendente, _LINGER_MAX_BYTES)
+        prazo = time.monotonic() + _LINGER_MAX_SECONDS
+        try:
+            anterior = self.connection.gettimeout()
+        except OSError:
+            return
+        try:
+            while restante > 0:
+                folga = prazo - time.monotonic()
+                if folga <= 0:
+                    break
+                self.connection.settimeout(folga)
+                bloco = self.connection.recv(min(_LINGER_CHUNK_BYTES, restante))
+                if not bloco:
+                    break
+                restante -= len(bloco)
+        except OSError:
+            pass
+        finally:
+            self._unread_body_bytes = 0
+            try:
+                self.connection.settimeout(anterior)
+            except OSError:
+                pass
+
     def _handle_request(self):
+        self._unread_body_bytes = 0
         duplicate = any(
             len(self.headers.get_all(name, [])) != 1 for name in ("Host",)
         ) or any(
@@ -162,10 +215,16 @@ class _ProductRequestHandler(BaseHTTPRequestHandler):
                 "X-Document-Filename",
             )
         )
+        raw_length = self.headers.get("Content-Length", "0")
+        declarado = (
+            int(raw_length)
+            if raw_length.isascii() and raw_length.isdecimal() and len(raw_length) <= 20
+            else 0
+        )
         if duplicate or "Transfer-Encoding" in self.headers:
+            self._unread_body_bytes = declarado
             response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
         else:
-            raw_length = self.headers.get("Content-Length", "0")
             if not raw_length.isascii() or not raw_length.isdecimal():
                 response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
             else:
@@ -173,18 +232,39 @@ class _ProductRequestHandler(BaseHTTPRequestHandler):
                 bridge = self.server.bridge
                 if bridge is None:
                     response = _error(503, "PRODUCT_BRIDGE_UNAVAILABLE", "serviço local indisponível")
+                elif (
+                    length <= bridge.request_body_limit(self.command, self.path)
+                    and bridge.is_unsupported_recovery_mutation(self.command, self.path)
+                ):
+                    # Preserve browser authorization while rejecting before any
+                    # temporary file or upstream acquisition exists.
+                    self._unread_body_bytes = length
+                    self.close_connection = True
+                    response = bridge.handle(
+                        self.command,
+                        self.path,
+                        dict(self.headers.items()),
+                        b"",
+                    )
                 elif length > bridge.request_body_limit(self.command, self.path):
+                    self._unread_body_bytes = length
+                    self.close_connection = True
                     response = _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
                 else:
                     spool = None
                     try:
-                        document_upload = (
-                            self.command == "POST"
-                            and self.path.startswith("/app-api/v1/workspaces/")
-                            and self.path.endswith(("/materials", "/inspection-photos", "/delivery-templates", "/delivery-supporting-files"))
+                        large_body_upload = self.command == "POST" and (
+                            (
+                                self.path.startswith("/app-api/v1/workspaces/")
+                                and self.path.endswith(("/materials", "/inspection-photos", "/delivery-templates", "/delivery-supporting-files"))
+                            )
+                            or self.path in {
+                                "/app-api/v1/recovery/verify",
+                                "/app-api/v1/recovery/staging",
+                            }
                         )
-                        if length and document_upload:
-                            spool = tempfile.SpooledTemporaryFile(max_size=1_048_576, mode="w+b")
+                        if length and large_body_upload:
+                            spool = tempfile.SpooledTemporaryFile(max_size=1_048_576, mode="w+b", dir=self.server.spool_dir)
                             remaining = length
                             while remaining:
                                 block = self.rfile.read(min(DOCUMENT_IO_CHUNK_BYTES, remaining))
@@ -230,6 +310,7 @@ class _ProductRequestHandler(BaseHTTPRequestHandler):
             self._write_response(response)
         except OSError:
             self.close_connection = True
+        self._drain_refused_body()
 
     def send_error(self, code, _message=None, _explain=None):
         self._finish_request_acquisition()
@@ -261,6 +342,7 @@ class ProductBridgeServer:
         frontend_root,
         upstream_address: tuple[str, int],
         token: str,
+        recovery_mutation_supported: bool,
         config: ProductBridgeConfig | None = None,
     ):
         self._config = ProductBridgeConfig() if config is None else config
@@ -271,6 +353,7 @@ class ProductBridgeServer:
             _ProductRequestHandler,
         )
         self._server.request_timeout_seconds = self._config.request_timeout_seconds
+        self._server.spool_dir = self._config.spool_dir
         host, port = self.address
         self._server.bridge = ProductBridge(
             frontend_root=frontend_root,
@@ -280,6 +363,7 @@ class ProductBridgeServer:
             max_body_bytes=self._config.max_body_bytes,
             max_document_body_bytes=self._config.max_document_body_bytes,
             request_timeout_seconds=self._config.upstream_timeout_seconds,
+            recovery_mutation_supported=recovery_mutation_supported,
         )
         self._thread: Thread | None = None
         self._serve_stopped = Event()

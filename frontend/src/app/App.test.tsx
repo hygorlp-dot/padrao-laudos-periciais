@@ -71,6 +71,9 @@ describe("pericia directory", () => {
     expect(await screen.findByText(WORKSPACE.name)).toBeInTheDocument();
     expect(screen.getByRole("time")).toHaveAttribute("dateTime", WORKSPACE.created_at);
     expect(screen.queryByText(ID)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Restaurar ou retomar um backup" }),
+    ).toHaveAttribute("href", "/recuperacao");
 
     await user.click(screen.getByRole("link", { name: `Abrir ${WORKSPACE.name}` }));
 

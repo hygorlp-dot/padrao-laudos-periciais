@@ -87,14 +87,36 @@ def _is_spa_path(path: str) -> bool:
     return all(segment not in {"", ".", ".."} for segment in segments)
 
 
+_RECOVERY_UPLOAD_TARGETS = frozenset({"/v1/recovery/verify", "/v1/recovery/staging"})
+
+
 def _proxy_target(path: str, method: str) -> str | None:
     if path == "/app-api/v1/workspaces" and method in {"GET", "POST"}:
         return "/v1/workspaces"
+    if path == "/app-api/v1/recovery" and method == "GET":
+        return "/v1/recovery"
+    # Recuperação (#183): sem estas rotas, proteger ou restaurar uma perícia
+    # continuaria exigindo terminal — bloqueador de produto.
+    recovery_prefix = "/app-api/v1/recovery/"
+    if path.startswith(recovery_prefix):
+        remainder = path[len(recovery_prefix) :].split("/")
+        if len(remainder) == 1 and remainder[0] in {"verify", "staging"} and method == "POST":
+            return f"/v1/recovery/{remainder[0]}"
+        if (
+            len(remainder) == 2
+            and _CANONICAL_UUID.fullmatch(remainder[0])
+            and remainder[1] in {"promote", "discard", "abandon"}
+            and method == "POST"
+        ):
+            return f"/v1/recovery/{remainder[0]}/{remainder[1]}"
+        return None
     prefix = "/app-api/v1/workspaces/"
     if path.startswith(prefix):
         remainder = path[len(prefix) :].split("/")
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "materials" and method in {"GET", "POST"}:
             return f"/v1/workspaces/{remainder[0]}/materials"
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "backup" and method == "POST":
+            return f"/v1/workspaces/{remainder[0]}/backup"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "case-analysis" and method in {"GET", "POST"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "pje-intake" and method == "GET":
@@ -186,6 +208,7 @@ class ProductBridge:
         max_body_bytes: int,
         max_document_body_bytes: int,
         request_timeout_seconds: float,
+        recovery_mutation_supported: bool,
     ):
         root = Path(frontend_root).resolve()
         if not root.is_dir() or not (root / "index.html").is_file():
@@ -200,6 +223,8 @@ class ProductBridge:
             raise ValueError("limite de body inválido")
         if type(max_document_body_bytes) is not int or not 1 <= max_document_body_bytes <= MAX_DOCUMENT_BYTES:
             raise ValueError("limite de documento inválido")
+        if type(recovery_mutation_supported) is not bool:
+            raise TypeError("autoridade de recuperação inválida")
         self._frontend_root = root
         self._public_origin = public_origin
         self._public_host = public_origin.removeprefix("http://")
@@ -208,6 +233,29 @@ class ProductBridge:
         self._max_body_bytes = max_body_bytes
         self._max_document_body_bytes = max_document_body_bytes
         self._request_timeout_seconds = request_timeout_seconds
+        self._recovery_mutation_supported = recovery_mutation_supported
+
+    def is_unsupported_recovery_mutation(self, method: str, target: str) -> bool:
+        """Consult the application authority before acquiring a recovery body."""
+
+        if self._recovery_mutation_supported:
+            return False
+        try:
+            normalized_method = method.upper()
+            path = _canonical_path(target)
+        except (AttributeError, TypeError, ValueError):
+            return False
+        upstream_target = _proxy_target(path, normalized_method)
+        return normalized_method == "POST" and (
+            upstream_target == "/v1/recovery/staging"
+            or bool(
+                upstream_target
+                and re.fullmatch(
+                    rf"/v1/recovery/{_CANONICAL_UUID.pattern}/(promote|discard|abandon)",
+                    upstream_target,
+                )
+            )
+        )
 
     def request_body_limit(self, method: str, target: str) -> int:
         """Mantém JSON no teto legado e amplia somente o POST documental exato."""
@@ -220,9 +268,17 @@ class ProductBridge:
         upstream_target = _proxy_target(path, normalized_method)
         if normalized_method == "POST" and upstream_target is not None and upstream_target.endswith(("/materials", "/inspection-photos", "/delivery-templates", "/delivery-supporting-files")):
             return self._max_document_body_bytes
+        if normalized_method == "POST" and upstream_target in _RECOVERY_UPLOAD_TARGETS:
+            return self._max_document_body_bytes
         return self._max_body_bytes
 
     def _response_body_limit(self, method: str, upstream_target: str) -> int:
+        # O pacote de backup embute todo o conteúdo privado do workspace: sem o
+        # teto documental a resposta seria truncada e a exportação, inalcançável.
+        if method == "POST" and re.fullmatch(
+            rf"/v1/workspaces/{_CANONICAL_UUID.pattern}/backup", upstream_target
+        ):
+            return self._max_document_body_bytes
         if method == "GET" and re.fullmatch(
             rf"/v1/workspaces/{_CANONICAL_UUID.pattern}/materials/"
             rf"{_CANONICAL_UUID.pattern}",
@@ -282,7 +338,8 @@ class ProductBridge:
         headers: dict[str, str],
         body: bytes | SeekableContent,
     ) -> BridgeResponse:
-        request_limit = self._max_document_body_bytes if method == "POST" and upstream_target.endswith(("/materials", "/inspection-photos", "/delivery-templates", "/delivery-supporting-files")) else self._max_body_bytes
+        recovery_upload = method == "POST" and upstream_target in _RECOVERY_UPLOAD_TARGETS
+        request_limit = self._max_document_body_bytes if (method == "POST" and upstream_target.endswith(("/materials", "/inspection-photos", "/delivery-templates", "/delivery-supporting-files"))) or recovery_upload else self._max_body_bytes
         body_size = len(body) if type(body) is bytes else as_seekable_content(body).byte_size
         if body_size > request_limit:
             return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
@@ -298,7 +355,7 @@ class ProductBridge:
             is_supporting = upstream_target.endswith("/delivery-supporting-files")
             template_types = {"application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.ms-word.document.macroenabled.12"}
             supporting_types = {"application/pdf", "image/jpeg", "image/png", *template_types}
-            if content_type not in ({"application/pdf"} if is_document else {"image/jpeg", "image/png"} if is_photo else template_types if is_template else supporting_types if is_supporting else {"application/json"}):
+            if content_type not in ({"application/pdf"} if is_document else {"image/jpeg", "image/png"} if is_photo else template_types if is_template else supporting_types if is_supporting else {"application/octet-stream"} if recovery_upload else {"application/json"}):
                 return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
             if is_document or is_photo or is_template or is_supporting:
                 filename = headers.get("x-document-filename", "")
@@ -385,6 +442,12 @@ class ProductBridge:
                 if upstream_target is None:
                     status = 405 if path == "/app-api/v1/workspaces" else 404
                     return _error(status, "NOT_FOUND", "rota local não disponível")
+                if self.is_unsupported_recovery_mutation(normalized_method, target):
+                    return _error(
+                        501,
+                        "RECOVERY_PLATFORM_UNSUPPORTED",
+                        "a recuperacao mutavel de workspace e suportada somente no Windows",
+                    )
                 return self._forward(
                     normalized_method,
                     upstream_target,

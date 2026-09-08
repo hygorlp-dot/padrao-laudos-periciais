@@ -41,6 +41,24 @@ from ..application.ports import (
     WorkspaceNotFound,
     UnsupportedCaseDocument,
 )
+from ..application.workspace_recovery import (
+    BackupIncompatible,
+    BackupInvalid,
+    BackupSummary,
+    RecoveryAlreadyPromoted,
+    RecoveryDiscarded,
+    RecoveryNotFound,
+    RecoveryPlatformUnsupported,
+    RecoveryRetained,
+    RecoveryNotPromotable,
+    RecoveryPromotionIncomplete,
+    RecoverySessionStatus,
+    RecoveryUnresumable,
+    BackupTooLarge,
+    RecoveryStageFailed,
+    WorkspaceRecoveryConflict,
+    recovery_mutation_supported,
+)
 from ..application.case_analysis import (
     CASE_ANALYSIS_ARTIFACT_KIND,
     CaseAnalysisSnapshot,
@@ -175,6 +193,13 @@ class LocalApiServices:
     import_inspection_photo: object | None = None
     get_pje_intake: object | None = None
     set_pje_document_availability: object | None = None
+    export_workspace_backup: object | None = None
+    inspect_workspace_backup: object | None = None
+    stage_workspace_recovery: object | None = None
+    list_workspace_recoveries: object | None = None
+    promote_workspace_recovery: object | None = None
+    discard_workspace_recovery: object | None = None
+    abandon_workspace_recovery: object | None = None
 
 
 def _workspace_dto(record: PericiaWorkspace) -> dict:
@@ -289,6 +314,59 @@ def _delivery_binary_response(record: PrivateContent) -> HttpResponse:
         }),
         body=record.content,
     )
+
+
+def _backup_package_response(payload: bytes, workspace_id: WorkspaceId) -> HttpResponse:
+    """Pacote de backup como download real, sem revelar caminho interno.
+
+    O nome do arquivo é derivado somente da identidade canônica do workspace —
+    nunca do caminho de armazenamento local.
+    """
+    if type(payload) is not bytes or not payload:
+        raise RepositoryIntegrityError("pacote de backup inválido")
+    filename = f"pericia-{workspace_id}.backup"
+    return HttpResponse(
+        status=200,
+        headers=MappingProxyType({
+            "Content-Type": "application/octet-stream",
+            "Content-Length": str(len(payload)),
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        }),
+        body=payload,
+    )
+
+
+def _backup_summary_dto(summary: BackupSummary) -> dict:
+    if type(summary) is not BackupSummary:
+        raise RepositoryIntegrityError("resumo de backup inválido")
+    return {
+        "workspace_id": summary.workspace_id,
+        "workspace_name": summary.workspace_name,
+        "workspace_created_at": summary.workspace_created_at,
+        "product_release": summary.product_release,
+        "storage_schema_version": summary.storage_schema_version,
+        "artifact_revisions": summary.artifact_revisions,
+        "private_contents": summary.private_contents,
+        "backup_sha256": summary.backup_sha256,
+    }
+
+
+def _recovery_status_dto(status: RecoverySessionStatus) -> dict:
+    if type(status) is not RecoverySessionStatus:
+        raise RepositoryIntegrityError("estado de recuperação inválido")
+    return {
+        "recovery_id": status.recovery_id,
+        "state": status.state,
+        "summary": (
+            _backup_summary_dto(status.summary)
+            if status.summary is not None
+            else None
+        ),
+        "reason": status.reason,
+        "allowed_actions": list(status.allowed_actions),
+    }
 
 
 def _error(status: int, code: str, message: str = "requisição local inválida") -> HttpResponse:
@@ -436,6 +514,12 @@ class LocalApi:
     def body_limits(self) -> tuple[int, int]:
         return self._max_body_bytes, self._max_document_body_bytes
 
+    @property
+    def recovery_mutation_supported(self) -> bool:
+        """Expose the application-owned platform decision to composition."""
+
+        return recovery_mutation_supported()
+
     def _current_offline_device_id(self) -> str | None:
         authority = self._services.offline_device_authority
         if authority is not None:
@@ -460,12 +544,64 @@ class LocalApi:
             return False
         return True
 
+    def is_recovery_upload(self, method: str, target: str) -> bool:
+        """Reconhece somente o POST que carrega um PACOTE DE BACKUP.
+
+        Um backup embute todo o conteúdo privado do workspace, então precisa do
+        mesmo teto do upload documental — e de nenhum outro alargamento.
+        """
+
+        try:
+            raw_segments, _segments = _target_segments(target)
+        except (TypeError, ValueError):
+            return False
+        return (
+            type(method) is str
+            and method.upper() == "POST"
+            and len(raw_segments) == 3
+            and raw_segments[:2] == ("v1", "recovery")
+            and raw_segments[2] in {"verify", "staging"}
+        )
+
+    def is_unsupported_recovery_mutation(self, method: str, target: str) -> bool:
+        """Recognize only canonical mutable Recovery V1 routes on POSIX."""
+
+        if recovery_mutation_supported() or type(method) is not str or method.upper() != "POST":
+            return False
+        try:
+            raw_segments, _segments = _target_segments(target)
+        except (TypeError, ValueError):
+            return False
+        if raw_segments == ("v1", "recovery", "staging"):
+            return True
+        if not (
+            len(raw_segments) == 4
+            and raw_segments[:2] == ("v1", "recovery")
+            and raw_segments[3] in {"promote", "discard", "abandon"}
+        ):
+            return False
+        try:
+            self._workspace_id(raw_segments[2])
+        except (TypeError, ValueError):
+            return False
+        return True
+
     def request_body_limit(self, method: str, target: str) -> int:
         """Retorna o teto de aquisição sem ampliar rotas JSON legadas."""
 
-        if self.is_document_upload(method, target):
+        if self.is_large_binary_upload(method, target):
             return self._max_document_body_bytes
         return self._max_body_bytes
+
+    def is_large_binary_upload(self, method: str, target: str) -> bool:
+        """AUTORIDADE ÚNICA de "upload binário grande".
+
+        Teto ampliado e necessidade de spool são a MESMA propriedade da rota e
+        precisam vir da mesma fonte. Mantê-las em predicados separados foi o que
+        deu à recuperação o teto de 128 MiB sem lhe dar o spool: o corpo inteiro
+        entrava por `rfile.read(length)`.
+        """
+        return self.is_document_upload(method, target) or self.is_recovery_upload(method, target)
 
     def _request_dto(self, headers: dict[str, str], body: bytes) -> dict:
         if type(body) is not bytes or len(body) > self._max_body_bytes:
@@ -539,6 +675,13 @@ class LocalApi:
                 )
             if "transfer-encoding" in request_headers:
                 raise ValueError("Transfer-Encoding não suportado")
+
+            if self.is_unsupported_recovery_mutation(normalized_method, target):
+                return _error(
+                    501,
+                    "RECOVERY_PLATFORM_UNSUPPORTED",
+                    "a recuperacao mutavel de workspace e suportada somente no Windows",
+                )
 
             if raw_segments == ("v1", "workspaces"):
                 if normalized_method == "GET":
@@ -1251,6 +1394,113 @@ class LocalApi:
                     raise RepositoryIntegrityError("revisão de metadados processuais divergente")
                 return _json_response(200, review_dto(review))
 
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "backup":
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.export_workspace_backup is None:
+                    return _error(503, "BACKUP_UNAVAILABLE", "backup local indisponível")
+                workspace_id = self._workspace_id(raw_segments[2])
+                package = self._services.export_workspace_backup.execute(workspace_id)
+                return _backup_package_response(package, workspace_id)
+
+            if len(raw_segments) == 2 and raw_segments == ("v1", "recovery"):
+                if normalized_method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.list_workspace_recoveries is None:
+                    return _error(503, "RECOVERY_UNAVAILABLE", "recuperação local indisponível")
+                return _json_response(
+                    200,
+                    {
+                        "recoveries": [
+                            _recovery_status_dto(item)
+                            for item in self._services.list_workspace_recoveries.execute()
+                        ]
+                    },
+                )
+
+            if len(raw_segments) == 3 and raw_segments[:2] == ("v1", "recovery") and raw_segments[2] in {"verify", "staging"}:
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                # O corpo chega SPOOLADO em disco (política única de binário
+                # grande). O pacote é materializado uma única vez, aqui.
+                if isinstance(body, SeekableContent):
+                    body.stream.seek(0)
+                    body = body.stream.read()
+                if type(body) is not bytes or not body:
+                    raise BackupInvalid("pacote de backup ausente")
+                if raw_segments[2] == "verify":
+                    if self._services.inspect_workspace_backup is None:
+                        return _error(503, "RECOVERY_UNAVAILABLE", "recuperação local indisponível")
+                    return _json_response(
+                        200,
+                        _backup_summary_dto(self._services.inspect_workspace_backup.execute(body)),
+                    )
+                if self._services.stage_workspace_recovery is None:
+                    return _error(503, "RECOVERY_UNAVAILABLE", "recuperação local indisponível")
+                session = self._services.stage_workspace_recovery.execute(body)
+                corpo = {
+                    "recovery_id": session.recovery_id,
+                    "summary": _backup_summary_dto(session.summary),
+                    "promotable": bool(session.promotable),
+                    # RETOMADA != PREPARO NOVO. Sem este sinal a tela afirmava
+                    # "não substituiu nada" sobre uma promoção que já gravou.
+                    "resuming": bool(session.resuming),
+                }
+                if session.not_promotable_reason:
+                    corpo["not_promotable_reason"] = session.not_promotable_reason
+                return _json_response(201, corpo)
+
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "recovery") and raw_segments[3] in {"promote", "discard", "abandon"}:
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                recovery_id = _decode_segment(raw_segments[2])
+                if raw_segments[3] == "abandon":
+                    if self._services.abandon_workspace_recovery is None:
+                        return _error(503, "RECOVERY_UNAVAILABLE", "recuperação local indisponível")
+                    dto = self._request_dto(request_headers, body)
+                    if set(dto) != {"confirm_abandon"} or dto["confirm_abandon"] is not True:
+                        raise ValueError("abandono exige confirmação explícita")
+                    return _json_response(
+                        200,
+                        {
+                            "recovery_id": self._services.abandon_workspace_recovery.execute(
+                                recovery_id
+                            )
+                        },
+                    )
+                if raw_segments[3] == "discard":
+                    if self._services.discard_workspace_recovery is None:
+                        return _error(503, "RECOVERY_UNAVAILABLE", "recuperação local indisponível")
+                    # Corpo opcional. `accept_incomplete` é a saída CONSCIENTE
+                    # quando a retomada é possível em tese e inviável na prática
+                    # (disco cheio). Precisa ser o booleano exato: em Python
+                    # `1 == True`, e um inteiro não declara intenção nenhuma.
+                    aceitar = False
+                    if body:
+                        dto = self._request_dto(request_headers, body)
+                        if set(dto) != {"accept_incomplete"} or dto["accept_incomplete"] is not True:
+                            raise ValueError("descarte consciente exige declaração explícita")
+                        aceitar = True
+                    return _json_response(
+                        200,
+                        {
+                            "recovery_id": self._services.discard_workspace_recovery.execute(
+                                recovery_id, aceitar_incompleta=aceitar
+                            )
+                        },
+                    )
+                if self._services.promote_workspace_recovery is None:
+                    return _error(503, "RECOVERY_UNAVAILABLE", "recuperação local indisponível")
+                # A promoção é o ato AUTORITATIVO: exige confirmação explícita do
+                # usuário, nunca um POST vazio ou um valor "quase verdadeiro".
+                # `dto != {"confirm": True}` sozinho NÃO basta: em Python
+                # `1 == True` e `1.0 == True`, então um inteiro promoveria.
+                dto = self._request_dto(request_headers, body)
+                if set(dto) != {"confirm"} or dto["confirm"] is not True:
+                    raise ValueError("promoção exige confirmação explícita")
+                summary = self._services.promote_workspace_recovery.execute(recovery_id)
+                return _json_response(200, _backup_summary_dto(summary))
+
             artifact_route = len(raw_segments) in {7, 8} and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "artifacts" and raw_segments[6] == "revisions"
             if artifact_route:
                 if segments[4] in {CASE_ANALYSIS_ARTIFACT_KIND, PERICIAL_PLANNING_ARTIFACT_KIND}:
@@ -1299,6 +1549,56 @@ class LocalApi:
             )
         except WorkspaceNotFound:
             return _error(404, "WORKSPACE_NOT_FOUND", "workspace não encontrado")
+        except BackupIncompatible:
+            return _error(409, "INCOMPATIBLE_BACKUP", "backup de versão não suportada")
+        except RecoveryPlatformUnsupported:
+            return _error(
+                501,
+                "RECOVERY_PLATFORM_UNSUPPORTED",
+                "a recuperacao mutavel de workspace e suportada somente no Windows",
+            )
+        except BackupInvalid:
+            return _error(400, "INVALID_BACKUP", "pacote de backup inválido")
+        except (RecoveryNotFound, RecoveryDiscarded, RecoveryAlreadyPromoted):
+            return _error(404, "RECOVERY_NOT_FOUND", "recuperação não encontrada")
+        except BackupTooLarge:
+            return _error(
+                413,
+                "BACKUP_TOO_LARGE",
+                "o backup desta perícia excede o limite de restauração desta versão",
+            )
+        except RecoveryUnresumable:
+            # A retomada é IMPOSSÍVEL, não "ainda não aconteceu". Mandar retomar
+            # aqui seria pedir ao usuário que repita para sempre uma operação
+            # que não converge — com o descarte recusado do outro lado.
+            return _error(
+                409,
+                "RECOVERY_UNRESUMABLE",
+                "esta promoção interrompida não pode mais ser concluída",
+            )
+        except RecoveryPromotionIncomplete:
+            # A primeira mutação viva JÁ aconteceu. Dizer "indisponível" aqui
+            # afirmaria que nada mudou justamente quando uma perícia parcial foi
+            # gravada. A única saída honesta é retomar a promoção.
+            return _error(
+                409,
+                "RECOVERY_PROMOTION_INCOMPLETE",
+                "a promoção foi interrompida e precisa ser retomada",
+            )
+        except RecoveryNotPromotable:
+            return _error(409, "RECOVERY_NOT_PROMOTABLE", "recuperação não pode ser promovida")
+        except RecoveryStageFailed:
+            return _error(500, "RECOVERY_STAGE_FAILED", "a restauração isolada falhou")
+        except RecoveryRetained:
+            # Estado HONESTO: o descarte não concluiu e a cópia isolada continua
+            # em disco, sob quarentena. Nunca 200 com material sigiloso presente.
+            return _error(
+                409,
+                "RECOVERY_RETAINED",
+                "a recuperação preparada não pôde ser removida; tente novamente",
+            )
+        except WorkspaceRecoveryConflict:
+            return _error(409, "WORKSPACE_CONFLICT", "já existe uma perícia com esta identidade")
         except ArtifactRevisionNotFound:
             return _error(
                 404,

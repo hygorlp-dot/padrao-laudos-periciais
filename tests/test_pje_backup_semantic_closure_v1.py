@@ -9,6 +9,7 @@ identidade nao podem mudar.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -28,8 +29,16 @@ from scripts.backend_contract.infrastructure.sqlite import SQLiteApplicationStor
 from scripts.planejamento_pericial.app_composition import build_pericial_local_api
 from tests.test_document_intake_v1 import provision_private_root
 from tests.test_local_api_v1 import TOKEN, http_request
+
+
 from tests.test_pje_coverage_closure_v1 import _blocked_pje_pdf
 from tests.test_pje_multisource_identity_v1 import _distinct_pje_pdf
+
+
+WINDOWS_MUTABLE_RECOVERY = pytest.mark.skipif(
+    os.name != "nt",
+    reason="mutable Recovery V1 is supported only on Windows",
+)
 
 
 class _Clock:
@@ -139,6 +148,7 @@ def _package(database, private, workspace_id):
         store.close()
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_S10_semantic_authority_closure_survives_backup_restore(tmp_path):
     database, private, workspace_id, before, source_a, _source_b = _build_rich_workspace(tmp_path)
 
@@ -183,6 +193,8 @@ def test_S10_semantic_authority_closure_survives_backup_restore(tmp_path):
 
 @pytest.mark.parametrize("damage", ["missing_source", "missing_intake", "foreign_source_binding"])
 def test_S10_negative_backup_cases_fail_closed(tmp_path, damage):
+    if damage == "missing_intake" and os.name != "nt":
+        pytest.skip("this valid-package restore branch is Windows-only")
     database, private, workspace_id, _before, source_a, _source_b = _build_rich_workspace(tmp_path)
     package = _package(database, private, workspace_id)
     raw = json.loads(package.decode("utf-8"))

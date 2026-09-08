@@ -2,16 +2,36 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import secrets
 from contextlib import nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
 from uuid import UUID, uuid4
 
 from ..application.ports import Clock, IdGenerator, RepositoryError, RepositoryIntegrityError
+from ..application.workspace_recovery import (
+    AbandonWorkspaceRecovery,
+    recolher_stagings_orfaos,
+    reconstruir_sessoes_recuperacao,
+    DiscardWorkspaceRecovery,
+    ExportWorkspaceBackup,
+    InspectWorkspaceBackup,
+    ListWorkspaceRecoveries,
+    PromoteWorkspaceRecovery,
+    StageWorkspaceRecovery,
+    WorkspaceRecoverySessions,
+)
+from ..infrastructure.productization import (
+    abrir_staging_quarentenado,
+    CreateWorkspaceBackup,
+    RecoveryStaging,
+    RestoreWorkspaceBackup,
+    VerifyWorkspaceBackup,
+)
 from ..application.services import (
     AppendArtifactRevision,
     CreateWorkspace,
@@ -113,6 +133,25 @@ class _UuidGenerator:
         return uuid4()
 
 
+def _sha256_hex(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _provision_recovery_staging(base: Path):
+    """Fábrica de raízes de staging sob uma base IRMÃ da base viva.
+
+    `RecoveryStaging.create` exige que a raiz não exista e que o pai resolva sem
+    redirecionamento; a base é criada sob demanda, com permissão restrita, e o
+    marcador de quarentena fica sempre DENTRO da raiz filha — nunca num ancestral
+    do armazenamento ativo.
+    """
+
+    def create(root: Path):
+        return RecoveryStaging.create(root)
+
+    return create
+
+
 def _path_has_recovery_quarantine(path: Path, *, path_is_file: bool) -> bool:
     absolute = path.absolute()
     start = absolute.parent if path_is_file else absolute
@@ -152,6 +191,7 @@ class LocalApiRuntime:
     token: str = field(repr=False)
     _store: SQLiteApplicationStore = field(repr=False)
     _private_store: LocalPrivateContentStore | None = field(default=None, repr=False)
+    _recovery_sessions: object | None = field(default=None, repr=False)
     _closed: bool = False
     _lifecycle_lock: object = field(
         default_factory=Lock,
@@ -163,6 +203,10 @@ class LocalApiRuntime:
     @property
     def address(self) -> tuple[str, int]:
         return self.server.address
+
+    @property
+    def recovery_mutation_supported(self) -> bool:
+        return self.server.recovery_mutation_supported
 
     def start(self) -> tuple[str, int]:
         with self._lifecycle_lock:
@@ -191,10 +235,16 @@ class LocalApiRuntime:
                 self.server.close()
             finally:
                 try:
-                    if self._private_store is not None:
-                        self._private_store.close()
+                    # Sessões de recuperação não sobrevivem ao processo: descartar
+                    # aqui garante que nenhum staging fique com handle aberto.
+                    if self._recovery_sessions is not None:
+                        self._recovery_sessions.close_all()
                 finally:
-                    self._store.close()
+                    try:
+                        if self._private_store is not None:
+                            self._private_store.close()
+                    finally:
+                        self._store.close()
 
     def __enter__(self) -> LocalApiRuntime:
         return self
@@ -441,6 +491,90 @@ def build_local_api(
         )
     get_budget_snapshot = GetBudgetSnapshot(get_latest_artifact)
     save_budget_snapshot = SaveBudgetSnapshot(store.revisions, get_latest_artifact, local_clock, local_ids)
+    # Backup e recuperação alcançáveis pelo produto (#183). A raiz de staging é
+    # IRMÃ da base viva, nunca ancestral: o marcador RECOVERY_NOT_PROMOTABLE de
+    # um staging jamais pode quarentenar o armazenamento ativo.
+    recovery_sessions = WorkspaceRecoverySessions()
+    # Corpo grande é derramado AQUI, não no temporário do sistema: o pacote de
+    # recuperação carrega todo o conteúdo privado em claro, e %TEMP% é varrido,
+    # indexado e sincronizado por ferramentas de terceiros.
+    # Corpo grande é derramado AQUI, não no temporário do sistema. O pacote de
+    # recuperação carrega todo o conteúdo privado em claro, e %TEMP% fica FORA
+    # da área que o usuário escolheu para os dados do caso — é varrido,
+    # indexado e limpo por ferramentas de terceiros. Esta pasta não é um
+    # esconderijo melhor: é a MESMA pasta onde o banco e o armazenamento
+    # privado já vivem, então não acrescenta classe de exposição nenhuma.
+    spool_root = database_path.parent / f".{database_path.name}.spool"
+    spool_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Queda dura (BSOD, falta de energia) pode deixar derramamento para trás:
+    # no Windows o `O_TEMPORARY` só some com o processo. Recolhe na reabertura,
+    # antes de servir — nada aqui é autoridade de coisa alguma.
+    for residuo in spool_root.iterdir():
+        try:
+            if residuo.is_file():
+                residuo.unlink()
+        except OSError:
+            pass
+    if server_config.spool_dir is None:
+        server_config = replace(server_config, spool_dir=str(spool_root))
+
+    recovery_staging_root = database_path.parent / f".{database_path.name}.recovery"
+    # Reabertura do produto: recolhe stagings órfãos ANTES de servir. Preserva
+    # tudo que ainda for retomável — ver `recolher_stagings_orfaos`.
+    recolher_stagings_orfaos(recovery_staging_root)
+    reconstruir_sessoes_recuperacao(
+        recovery_staging_root,
+        recovery_sessions,
+        abrir_staging_quarentenado,
+    )
+    # `assert_backup_ready` é a autoridade canônica de prontidão: recusa o backup
+    # enquanto houver vistoria offline pendente de sincronização. Ligar um no-op
+    # aqui faria o produto entregar, em silêncio, um pacote sem o trabalho de
+    # campo — exatamente o que essa autoridade existe para impedir. Sem registry
+    # offline não há como PROVAR prontidão, então falha fechada.
+    if offline_registry is None:
+        def _assert_backup_ready(_workspace_id):
+            raise RepositoryIntegrityError(
+                "backup readiness authority is unavailable"
+            )
+    else:
+        def _assert_backup_ready(workspace_id, _registry=offline_registry):
+            try:
+                _registry.assert_workspace_backup_ready(workspace_id)
+            except PermissionError:
+                # Dispositivo de campo revogado: o cofre local é inacessível, logo
+                # NÃO há trabalho pendente sincronizável para proteger. A autoridade
+                # existe para impedir backup que omita trabalho recuperável — não
+                # para negar backup justamente quando o perito perdeu o dispositivo
+                # e mais precisa de um. Trabalho pendente REAL continua bloqueando.
+                return
+    export_workspace_backup = ExportWorkspaceBackup(
+        CreateWorkspaceBackup(
+            store.workspaces,
+            store.revisions,
+            private_store,
+            local_clock,
+            _assert_backup_ready,
+        ),
+        store.workspaces,
+        server_config.max_document_body_bytes,
+    )
+    inspect_workspace_backup = InspectWorkspaceBackup(VerifyWorkspaceBackup(), _sha256_hex)
+    stage_workspace_recovery = StageWorkspaceRecovery(
+        VerifyWorkspaceBackup(),
+        _provision_recovery_staging(recovery_staging_root),
+        RestoreWorkspaceBackup,
+        recovery_sessions,
+        recovery_staging_root,
+        _sha256_hex,
+        abrir_staging_quarentenado,
+        store.workspaces,
+    )
+    promote_workspace_recovery = PromoteWorkspaceRecovery(
+        recovery_sessions, store.workspaces, store.revisions, private_store
+    )
+    discard_workspace_recovery = DiscardWorkspaceRecovery(recovery_sessions, store.workspaces)
+    abandon_workspace_recovery = AbandonWorkspaceRecovery(discard_workspace_recovery)
     services = LocalApiServices(
         create_workspace=CreateWorkspace(store.workspaces, local_clock, local_ids),
         get_workspace=GetWorkspace(store.workspaces),
@@ -570,6 +704,13 @@ def build_local_api(
         list_case_documents=list_case_documents,
         get_pje_intake=get_pje_intake,
         set_pje_document_availability=set_pje_document_availability,
+        export_workspace_backup=export_workspace_backup,
+        inspect_workspace_backup=inspect_workspace_backup,
+        stage_workspace_recovery=stage_workspace_recovery,
+        list_workspace_recoveries=ListWorkspaceRecoveries(recovery_sessions),
+        promote_workspace_recovery=promote_workspace_recovery,
+        discard_workspace_recovery=discard_workspace_recovery,
+        abandon_workspace_recovery=abandon_workspace_recovery,
         read_case_document=read_case_document,
         import_inspection_photo=import_inspection_photo,
     )
@@ -593,4 +734,5 @@ def build_local_api(
         token=local_token,
         _store=store,
         _private_store=private_store,
+        _recovery_sessions=recovery_sessions,
     )
