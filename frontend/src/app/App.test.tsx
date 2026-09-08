@@ -194,6 +194,22 @@ describe("pericia directory", () => {
 });
 
 describe("workspace-aware routing", () => {
+  test("deep-links to the real construction-defect analysis workbench", async () => {
+    window.history.replaceState(null, "", `/pericias/${ID}/analise-tecnica`);
+    const pending = new Promise<Response>(() => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(jsonResponse(200, WORKSPACE)).mockReturnValue(pending),
+    );
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Carregando análise técnica" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/disponível para integração/i)).not.toBeInTheDocument();
+  });
+
   test("deep-links to the real pericial planning workspace", async () => {
     window.history.replaceState(null, "", `/pericias/${ID}/planejamento`);
     const fetchSpy = vi

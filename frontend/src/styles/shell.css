@@ -1033,6 +1033,17 @@ button.text-action {
 .technical-authority input, .technical-authority select, .technical-authority textarea { width: 100%; padding: 0.72rem 0.78rem; border: 1px solid var(--color-rule); background: white; color: var(--color-graphite); font: inherit; }
 .technical-authority textarea { min-height: 4.5rem; resize: vertical; }
 .technical-audit { margin-top: var(--space-4); }
+.technical-audit code { overflow-wrap: anywhere; }
+.pathology-workbench { display: grid; gap: var(--space-5); }
+.pathology-list { display: grid; gap: var(--space-4); margin: 0; padding: 0; list-style: none; }
+.pathology-list article { display: grid; gap: var(--space-3); padding: var(--space-5); border: 1px solid var(--color-rule); background: var(--color-paper); }
+.pathology-list article > header { display: flex; align-items: start; justify-content: space-between; gap: var(--space-4); }
+.pathology-list h3, .pathology-list p { margin: 0; }
+.pathology-list small { overflow-wrap: anywhere; color: var(--color-slate); }
+.pathology-status { padding: .4rem .6rem; border: 1px solid currentColor; font-size: .75rem; font-weight: 720; }
+.pathology-status--approve { color: var(--color-focus); }
+.pathology-status--reject { color: var(--color-error); }
+.pathology-status--pending { color: var(--color-slate); }
 
 @media (min-width: 72rem) {
   .technical-chain { grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: start; }
@@ -1041,6 +1052,7 @@ button.text-action {
 @media (max-width: 840px) {
   .planning-overview { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
   .planning-card__heading { align-items: stretch; flex-direction: column; }
+  .pathology-list article > header { align-items: stretch; flex-direction: column; }
 }
 
 @media (prefers-reduced-motion: reduce) {

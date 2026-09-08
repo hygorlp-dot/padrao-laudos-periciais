@@ -560,6 +560,18 @@ def test_technical_snapshot_bridge_allowlist_is_exact():
     assert _proxy_target(path, "DELETE") is None
 
 
+def test_construction_defect_bridge_allowlist_is_purpose_specific():
+    workspace_id = "11111111-1111-4111-8111-111111111111"
+    path = f"/app-api/v1/workspaces/{workspace_id}/construction-defect-analysis"
+    reviews = f"{path}/pathology-reviews"
+    assert _proxy_target(path, "GET") == f"/v1/workspaces/{workspace_id}/construction-defect-analysis"
+    assert _proxy_target(path, "POST") == f"/v1/workspaces/{workspace_id}/construction-defect-analysis"
+    assert _proxy_target(reviews, "POST") == f"/v1/workspaces/{workspace_id}/construction-defect-analysis/pathology-reviews"
+    assert _proxy_target(path, "PUT") is None
+    assert _proxy_target(reviews, "PUT") is None
+    assert _proxy_target(f"{path}/execute", "POST") is None
+
+
 @pytest.mark.parametrize(
     "duplicate_headers",
     (

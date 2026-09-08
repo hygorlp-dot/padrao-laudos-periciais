@@ -78,6 +78,10 @@ from ..application.field_mobile import offline_package_to_mapping
 from ..application.technical_findings import (
     technical_snapshot_to_validated_mapping,
 )
+from ..application.construction_defect_analysis import (
+    construction_defect_analysis_to_validated_mapping,
+)
+from ..construction_defect_analysis import observation_context_from_mapping
 from ..application.report_foundation import (
     expert_profile_to_validated_mapping,
     report_snapshot_to_validated_mapping,
@@ -669,7 +673,7 @@ class LocalApi:
                 )
             raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
-            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "pje-intake", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "expert-profile", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
+            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "pje-intake", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "construction-defect-analysis", "expert-profile", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
             if (normalized_method == "POST" or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
                 return _error(
                     403,
@@ -734,6 +738,79 @@ class LocalApi:
                     record, snapshot = self._services.start_report_snapshot.execute(workspace_id)
                     return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_validated_mapping(snapshot)})
                 return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "construction-defect-analysis":
+                workspace_id = self._workspace_id(raw_segments[2])
+                if normalized_method == "GET":
+                    service = self._services.get_construction_defect_analysis
+                    if service is None:
+                        return _error(503, "CONSTRUCTION_DEFECT_ANALYSIS_UNAVAILABLE")
+                    record, snapshot = service.execute(workspace_id)
+                    return _json_response(
+                        200,
+                        {
+                            "revision": record.revision,
+                            "updated_at": record.created_at,
+                            "snapshot": construction_defect_analysis_to_validated_mapping(
+                                snapshot
+                            ),
+                        },
+                    )
+                if normalized_method == "POST":
+                    service = self._services.start_construction_defect_analysis
+                    if service is None:
+                        return _error(503, "CONSTRUCTION_DEFECT_ANALYSIS_UNAVAILABLE")
+                    dto = self._request_dto(request_headers, body)
+                    if set(dto) != {"observation_contexts"} or type(
+                        dto["observation_contexts"]
+                    ) is not list or not dto["observation_contexts"]:
+                        raise ValueError("Construction Defect Analysis start request is invalid")
+                    contexts = tuple(
+                        observation_context_from_mapping(item)
+                        for item in dto["observation_contexts"]
+                    )
+                    record, snapshot = service.execute(
+                        workspace_id, observation_contexts=contexts
+                    )
+                    return _json_response(
+                        201,
+                        {
+                            "revision": record.revision,
+                            "updated_at": record.created_at,
+                            "snapshot": construction_defect_analysis_to_validated_mapping(
+                                snapshot
+                            ),
+                        },
+                    )
+                return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("construction-defect-analysis", "pathology-reviews"):
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                service = self._services.review_pathology
+                if service is None:
+                    return _error(503, "CONSTRUCTION_DEFECT_ANALYSIS_UNAVAILABLE")
+                workspace_id = self._workspace_id(raw_segments[2])
+                dto = self._request_dto(request_headers, body)
+                if set(dto) != {
+                    "expected_revision",
+                    "pat_id",
+                    "action",
+                    "professional_id",
+                    "reason",
+                }:
+                    raise ValueError("Pathology review request is invalid")
+                record, snapshot = service.execute(workspace_id, **dto)
+                return _json_response(
+                    200,
+                    {
+                        "revision": record.revision,
+                        "updated_at": record.created_at,
+                        "snapshot": construction_defect_analysis_to_validated_mapping(
+                            snapshot
+                        ),
+                    },
+                )
 
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("report-snapshot", "reviews"):
                 workspace_id = self._workspace_id(raw_segments[2])

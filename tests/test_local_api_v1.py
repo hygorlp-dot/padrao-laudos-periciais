@@ -152,6 +152,15 @@ def technical_snapshot_payload():
     return json.loads((Path(__file__).parent / "fixtures/technical-snapshot-v1.json").read_text(encoding="utf-8"))
 
 
+def construction_defect_analysis_payload():
+    return json.loads(
+        (
+            Path(__file__).parent
+            / "fixtures/construction-defect-analysis-v1.json"
+        ).read_text(encoding="utf-8")
+    )
+
+
 def report_snapshot_payload():
     return json.loads((Path(__file__).parent / "fixtures/report-snapshot-v1.json").read_text(encoding="utf-8"))
 
@@ -279,6 +288,124 @@ def test_technical_snapshot_route_denies_full_save_and_exposes_command_boundary(
     reopened = request(api, "GET", f"/v1/workspaces/{WORKSPACE_UUID}/technical-snapshot", headers={"X-Local-API-Token": TOKEN})
     assert reopened.status == 200
     assert decoded(reopened)["snapshot"] == payload
+
+
+def test_construction_defect_routes_are_private_purpose_specific_and_append_review():
+    from dataclasses import replace
+
+    from scripts.backend_contract.application.construction_defect_analysis import (
+        construction_defect_analysis_to_validated_mapping,
+    )
+    from scripts.backend_contract.application.models import ProcessCaseData
+    from scripts.backend_contract.construction_defect_analysis import (
+        ObservationContext,
+        ObservationOutcome,
+        construction_defect_analysis_from_mapping,
+    )
+    from scripts.backend_contract.case_analysis import case_analysis_from_mapping
+    from scripts.backend_contract.pericial_planning import pericial_planning_from_mapping
+    from scripts.backend_contract.vistoria import inspection_session_from_mapping
+    from scripts.planejamento_pericial.construction_defect_analysis_adapter import (
+        ConstructionDefectAnalysisAdapter,
+    )
+
+    seed = construction_defect_analysis_from_mapping(construction_defect_analysis_payload())
+    inspection_payload = inspection_session_payload()
+    inspection_payload["items"][0]["measurement_ids"] = ["MEASUREMENT-001"]
+    inspection_payload["items"][0]["photo_ids"] = ["PHOTO-001"]
+    inspection_payload["items"][1]["measurement_ids"] = []
+    inspection_payload["items"][2]["photo_ids"] = []
+    inspection_payload["measurements"][0]["inspection_item_id"] = "INSPECTION-ITEM-001"
+    inspection_payload["photos"][0]["inspection_item_id"] = "INSPECTION-ITEM-001"
+    inspection_payload["evidence_candidates"][0].update(
+        inspection_item_id="INSPECTION-ITEM-001",
+        source_record_ids=["OBS-001", "MEASUREMENT-001", "PHOTO-001"],
+    )
+    context = ObservationContext(
+        observation_id="OBS-001",
+        manifestation="Condição superficial observada",
+        system="VEDACOES",
+        element="Parede",
+        outcome=ObservationOutcome.CONFORMING,
+        methods=("INSPECAO_VISUAL",),
+        measurement_ids=("MEASUREMENT-001",),
+        photo_ids=("PHOTO-001",),
+        claim_ids=("CLAIM-001",),
+        question_ids=("QUESTION-001",),
+    )
+    proposal = ConstructionDefectAnalysisAdapter().execute(
+        process_case=ProcessCaseData(
+            numero_processo="0000001-00.2026.4.00.0001",
+            ramo_justica="JUSTICA_FEDERAL",
+            tribunal="TRF5",
+            vara="Vara sintética",
+            municipio_sede="Recife",
+            subsecao_judiciaria="Recife",
+            comarca_municipio="Recife",
+            uf="PE",
+            parte_requerente="Parte requerente sintética",
+            parte_requerida="Parte requerida sintética",
+        ),
+        case_analysis=case_analysis_from_mapping(case_analysis_payload()),
+        planning=pericial_planning_from_mapping(pericial_planning_payload()),
+        inspection=inspection_session_from_mapping(inspection_payload),
+        observation_contexts=(context,),
+    )
+    snapshot = replace(
+        seed,
+        observation_contexts=proposal.observation_contexts,
+        identity_links=proposal.identity_links,
+        analysis_final=proposal.analysis_final,
+        gate=proposal.gate,
+        reviews=(),
+    )
+    payload = construction_defect_analysis_to_validated_mapping(snapshot)
+    get = RecordingService((revision(payload=payload), snapshot))
+    start = RecordingService((revision(payload=payload), snapshot))
+    review = RecordingService((revision(payload=payload), snapshot))
+    api = LocalApi(
+        services(
+            get_construction_defect_analysis=get,
+            start_construction_defect_analysis=start,
+            review_pathology=review,
+        ),
+        token=TOKEN,
+    )
+    endpoint = f"/v1/workspaces/{WORKSPACE_UUID}/construction-defect-analysis"
+
+    assert request(api, "GET", endpoint).status == 403
+    started = request(
+        api,
+        "POST",
+        endpoint,
+        body={"observation_contexts": payload["observation_contexts"]},
+    )
+    assert started.status == 201
+    assert start.calls[0][1]["observation_contexts"][0].observation_id == (
+        "OBS-001"
+    )
+    reopened = request(
+        api,
+        "GET",
+        endpoint,
+        headers={"X-Local-API-Token": TOKEN},
+    )
+    assert reopened.status == 200
+    reviewed = request(
+        api,
+        "POST",
+        f"{endpoint}/pathology-reviews",
+        body={
+            "expected_revision": 5,
+            "pat_id": "PAT-001",
+            "action": "APPROVE",
+            "professional_id": "PROFESSIONAL-001",
+            "reason": "Revisão profissional explícita.",
+        },
+    )
+    assert reviewed.status == 200
+    assert review.calls[0][1]["pat_id"] == "PAT-001"
+    assert request(api, "PUT", endpoint, body={}).status == 405
 
 
 def test_technical_snapshot_is_private_and_rejects_silent_professional_promotion():

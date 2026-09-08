@@ -433,27 +433,33 @@ def _array(value: object, name: str) -> list[object]:
     return value
 
 
+def observation_context_from_mapping(value: object) -> ObservationContext:
+    row = _object(value, _CONTEXT_FIELDS, "observation context")
+    return ObservationContext(
+        **{
+            **row,
+            "outcome": ObservationOutcome(row["outcome"]),
+            "methods": tuple(_array(row["methods"], "observation methods")),
+            "measurement_ids": tuple(
+                _array(row["measurement_ids"], "observation measurements")
+            ),
+            "photo_ids": tuple(_array(row["photo_ids"], "observation photos")),
+            "claim_ids": tuple(_array(row["claim_ids"], "observation claims")),
+            "question_ids": tuple(
+                _array(row["question_ids"], "observation questions")
+            ),
+        }
+    )
+
+
 def construction_defect_analysis_from_mapping(value: object) -> ConstructionDefectAnalysisSnapshot:
     root = _object(value, _SNAPSHOT_FIELDS, "construction-defect snapshot")
     source = ConstructionDefectSourceSnapshot(
         **_object(root["source_snapshot"], _SOURCE_FIELDS, "construction-defect source")
     )
     contexts = tuple(
-        ObservationContext(
-            **{
-                **row,
-                "outcome": ObservationOutcome(row["outcome"]),
-                "methods": tuple(_array(row["methods"], "observation methods")),
-                "measurement_ids": tuple(
-                    _array(row["measurement_ids"], "observation measurements")
-                ),
-                "photo_ids": tuple(_array(row["photo_ids"], "observation photos")),
-                "claim_ids": tuple(_array(row["claim_ids"], "observation claims")),
-                "question_ids": tuple(_array(row["question_ids"], "observation questions")),
-            }
-        )
+        observation_context_from_mapping(item)
         for item in _array(root["observation_contexts"], "observation contexts")
-        for row in [_object(item, _CONTEXT_FIELDS, "observation context")]
     )
     links = tuple(
         CanonicalIdentityLink(**_object(item, _LINK_FIELDS, "canonical identity link"))

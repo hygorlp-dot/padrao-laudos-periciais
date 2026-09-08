@@ -382,6 +382,20 @@ def test_construction_defect_snapshot_schema_is_strict_and_matches_contract():
     assert list(Draft202012Validator(schema).iter_errors(poisoned))
 
 
+def test_openapi_exposes_only_purpose_specific_pat_start_get_and_review():
+    contract = json.loads(Path("contracts/openapi-v1.json").read_text(encoding="utf-8"))
+    base = "/v1/workspaces/{workspace_id}/construction-defect-analysis"
+    assert set(contract["paths"][base]) == {"get", "post"}
+    assert set(contract["paths"][f"{base}/pathology-reviews"]) == {"post"}
+    assert contract["components"]["schemas"]["ConstructionDefectAnalysis"] == {
+        "$ref": "../schemas/construction-defect-analysis-v1.schema.json"
+    }
+    assert all(
+        "subprocess" not in json.dumps(operation).lower()
+        for operation in contract["paths"][base].values()
+    )
+
+
 def test_construction_defect_snapshot_rejects_ambiguous_identity_mapping():
     payload = _snapshot_payload()
     duplicate = deepcopy(payload["identity_links"][0])
