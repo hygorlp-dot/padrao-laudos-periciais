@@ -444,6 +444,116 @@ NO_DOUBLE_CLOSE
 NO_FOREIGN_FD_CLOSE
 ```
 
+### H.2 Âncora de confiança do namespace de recovery (A13/B13)
+
+Status: **modelo normativo reconciliado antes da implementação**. O candidato
+`e5993c0f` está invalidado. A13 e B13 provaram independentemente que custodiar
+somente `recovery-<uuid>` não protege a base `.sqlite3.recovery`: se a própria
+base for uma junction, o startup enumera e remove uma árvore externa.
+
+```text
+SAFE_CHILD_ROOT != SAFE_RECOVERY_BASE_NAMESPACE
+PATH_VALIDATED != PATH_CUSTODIED
+CHECK_THEN_USE_BY_PATH = INSUFFICIENT_FOR_DESTRUCTIVE_RECOVERY
+TRUSTED_CHILD_REQUIRES_TRUSTED_ANCESTRY
+```
+
+#### Primeira autoridade e cadeia física
+
+O primeiro diretório confiável é a **raiz local do volume** que contém o banco
+ativo. Caminhos UNC, device paths e volumes remotos continuam recusados. A raiz
+do volume não autoriza seus descendentes por inferência: cada componente lexical
+é aberto sem seguir reparse, validado como diretório local não-reparse e mantido
+aberto até a última operação que depende dele.
+
+```text
+volume-root (trust anchor, handle H0)
+  -> component-1 (H1)
+  -> ...
+  -> database-parent (Hn)
+  -> .<database>.sqlite3.recovery (Hbase)
+  -> recovery-<uuid> (Hchild)
+  -> descendants necessários ao cleanup (Hdesc...)
+```
+
+Uma base ausente pode ser criada somente enquanto a cadeia até seu pai está
+custodiada. Depois de `mkdir`, a base recém-observada é aberta sem seguir reparse
+antes de qualquer enumeração ou escrita. Se outro ator ganhar a corrida e criar
+uma junction, a aquisição abre o próprio reparse e o rejeita; nenhum byte é
+criado no alvo.
+
+#### Semântica por plataforma
+
+No POSIX, a cadeia usa `open(..., O_DIRECTORY | O_NOFOLLOW)` e operações de
+namespace relativas ao `dir_fd` custodiado. No Windows, a biblioteca padrão não
+oferece `dir_fd` para essa fronteira. A implementação pode usar somente uma
+primitiva Win32 estreita para recovery:
+
+- `CreateFileW(..., OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS |
+  FILE_FLAG_OPEN_REPARSE_POINT)` abre o diretório ou o próprio reparse;
+- o share mode admite leitura/escrita, mas **não** `FILE_SHARE_DELETE`, mantendo
+  o componente resistente a rename/delete/rebind, inclusive tentativas com
+  semântica POSIX;
+- `GetFileInformationByHandle` prova diretório, ausência de
+  `FILE_ATTRIBUTE_REPARSE_POINT` e identidade estável de volume/arquivo;
+- todos os handles da ancestry permanecem vivos durante enumeração, abertura,
+  publicação/leitura/GC de intent e remoção;
+- cada slot é consumido antes de uma única chamada a `CloseHandle`; erro de
+  fechamento é ambíguo e nunca autoriza retry do mesmo valor.
+
+Pathnames ainda podem ser usados no Windows **somente enquanto todos os seus
+componentes estão presos por handles sem delete-sharing**. Eles não constituem
+autoridade; os handles constituem. No POSIX, operações materiais usam o descritor
+relativo sempre que a API o suporta. SQLite e o armazenamento privado continuam
+com suas autoridades first-party, mas a raiz que recebem permanece presa pela
+custódia da sessão inteira.
+
+#### TOCTOU e operações abrangidas
+
+Validação e uso compartilham a mesma custódia em:
+
+- criação da base e de `recovery-<uuid>`;
+- coleta de órfãos e reconstrução no startup;
+- abertura/listagem de sessões;
+- leitura, publicação, substituição controlada e GC do cleanup intent;
+- `DISCARD`, `ABANDON` e suas retentativas;
+- aquisição recursiva e cleanup de descendentes.
+
+Junction existente, junction tardia, rename da base/raiz, rename Windows com
+semântica POSIX e reparse descendente resultam em aquisição recusada ou sharing
+violation antes da mutação. Uma ancestry não provada não é tratada como base
+vazia e não produz sessão, intent ou coleta.
+
+```text
+RECOVERY_BASE_REPARSE = FAIL_CLOSED
+RECOVERY_ANCESTOR_REPARSE = FAIL_CLOSED
+REPARSE_ANCESTOR => NO_ENUMERATION + NO_INTENT_PUBLICATION + NO_OPEN
+REPARSE_ANCESTOR => NO_DELETE + NO_GC
+EXTERNAL_FILESYSTEM_MUTATION = 0
+EXTERNAL_SENTINEL_BEFORE == EXTERNAL_SENTINEL_AFTER
+EXTERNAL_TREE_HASH_BEFORE == EXTERNAL_TREE_HASH_AFTER
+```
+
+#### Alternativas
+
+| alternativa | decisão | fundamento |
+|---|---|---|
+| somente `lstat`/`resolve` da ancestry | rejeitada | separa check e use; a base pode ser religada depois da validação |
+| custodiar apenas o filho | rejeitada por A13/B13 | alcançar o filho já atravessou uma base potencialmente externa |
+| arquivo-anchor criado dentro do diretório | rejeitada para aquisição Windows | a criação do anchor pode ser a primeira escrita no alvo externo |
+| handles relativos puros via Python no Windows | indisponível | `dir_fd` não é suportado de forma suficiente nessa plataforma |
+| fail-closed + custódia contínua híbrida | **escolhida** | usa `dir_fd` no POSIX e handles Win32 mínimos para impedir rebind sem novo framework |
+
+#### Matriz adicional de falha
+
+Cada combinação de base/parent junction com árvore vazia, marcador, descriptor,
+journal, intent e sentinel precisa provar zero traversal autoritativo e zero
+mutação. A matriz atravessa startup, list, stage, discard, abandon, retries e GC,
+além de swaps entre validação/enumeração, rename concorrente, junction tardia e
+reparse filho. Um namespace normal é o controle positivo. Hash da árvore externa,
+bytes do sentinel, eventos de abertura para escrita, publicação de intent e
+remoção são oráculos independentes.
+
 ### Matriz mínima de fault injection
 
 | grupo | cenários determinísticos | oráculo comum |
