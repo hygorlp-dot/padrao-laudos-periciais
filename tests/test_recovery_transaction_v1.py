@@ -19,6 +19,7 @@ revisões/privado parciais + nenhuma sessão válida + nenhuma rota de continua�
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -54,6 +55,34 @@ def _directory_reparse(link, target):
         text=True,
     )
     assert created.returncode == 0, (created.stdout, created.stderr)
+
+
+def _remove_directory_reparse(link: Path) -> None:
+    """Remove somente o link/junction sintético, nunca percorre seu target."""
+
+    if not os.path.lexists(link):
+        return
+    if link.is_symlink():
+        link.unlink()
+    else:
+        os.rmdir(link)
+
+
+def _external_tree_sha256(root: Path) -> str:
+    """Oracle independente: nomes, tipos e bytes do alvo externo."""
+
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative)
+        details = os.lstat(path)
+        digest.update(details.st_mode.to_bytes(8, "big", signed=False))
+        if path.is_file():
+            payload = path.read_bytes()
+            digest.update(len(payload).to_bytes(8, "big"))
+            digest.update(payload)
+    return digest.hexdigest()
 
 
 @pytest.mark.parametrize(
@@ -2712,5 +2741,236 @@ def test_falha_antes_da_primeira_gravacao_viva_nao_afirma_pericia_parcial(tmp_pa
         # ...logo o descarte comum precisa funcionar, sem declaração consciente.
         status, corpo = _json(destino, "POST", f"/v1/recovery/{recovery_id}/discard")
         assert status == 200, corpo
+    finally:
+        destino.close()
+
+
+# --------------------------------------------------------------- A13 / B13
+# A base de recovery também é autoridade. Custodiar apenas o filho já atravessou
+# um namespace potencialmente externo e, portanto, chegou tarde demais.
+
+
+@pytest.mark.parametrize(
+    "external_layout",
+    ("empty", "sentinel", "quarantine", "session", "journal", "cleanup-intent"),
+)
+def test_recovery_base_reparse_falha_antes_de_enumerar_ou_mutar_alvo_externo(
+    tmp_path, monkeypatch, request, external_layout
+):
+    """RED A13/B13 — ancestry não confiável implica zero traversal e zero mutação."""
+
+    from scripts.backend_contract.application.ports import RepositoryIntegrityError
+
+    name = f"trust-anchor-{external_layout}"
+    recovery_id = "00000000-0000-4000-8000-000000000183"
+    external = tmp_path / f"external-{external_layout}"
+    external.mkdir()
+    if external_layout != "empty":
+        (external / "sentinel.bin").write_bytes(b"EXTERNAL-BYTES-MUST-NOT-CHANGE")
+    if external_layout in {"quarantine", "session", "journal"}:
+        child = external / f"recovery-{recovery_id}"
+        child.mkdir()
+        (child / "RECOVERY_NOT_PROMOTABLE").write_bytes(b"RECOVERY_STAGING_V1\n")
+        if external_layout == "session":
+            (child / "RECOVERY_SESSION_V1").write_text(
+                json.dumps({"synthetic": "descriptor"}), encoding="utf-8"
+            )
+        if external_layout == "journal":
+            (child / "PROMOTION_TRANSACTION_V1").write_text(
+                json.dumps({"version": 1, "phase": "PROMOTING"}), encoding="utf-8"
+            )
+    if external_layout == "cleanup-intent":
+        (external / f".recovery-cleanup-intent-{recovery_id}").write_bytes(
+            _cleanup_intent_payload(recovery_id, "COLLECT")
+        )
+
+    base = tmp_path / f".{name}.sqlite3.recovery"
+    _directory_reparse(base, external)
+    request.addfinalizer(lambda: _remove_directory_reparse(base))
+    before_hash = _external_tree_sha256(external)
+    before_sentinel = (
+        (external / "sentinel.bin").read_bytes()
+        if (external / "sentinel.bin").exists()
+        else None
+    )
+    original_iterdir = Path.iterdir
+    enumerations = []
+
+    def reject_path_enumeration(candidate):
+        if candidate == base:
+            enumerations.append(candidate)
+            raise AssertionError("recovery base reparse was enumerated")
+        return original_iterdir(candidate)
+
+    monkeypatch.setattr(Path, "iterdir", reject_path_enumeration)
+    runtime = None
+    try:
+        with pytest.raises(RepositoryIntegrityError):
+            runtime = _runtime(tmp_path, name)
+    finally:
+        if runtime is not None:
+            runtime.close()
+
+    assert enumerations == []
+    assert _external_tree_sha256(external) == before_hash
+    if before_sentinel is not None:
+        assert (external / "sentinel.bin").read_bytes() == before_sentinel
+
+
+def test_parent_da_base_reparse_falha_antes_de_abrir_storage_ou_recovery(
+    tmp_path, request
+):
+    """A cadeia começa na raiz do volume, não no pai aparente do banco."""
+
+    from scripts.backend_contract.application.ports import RepositoryIntegrityError
+
+    external = tmp_path / "external-parent"
+    external.mkdir()
+    sentinel = external / "sentinel.bin"
+    sentinel.write_bytes(b"PARENT-SENTINEL")
+    parent = tmp_path / "redirected-parent"
+    _directory_reparse(parent, external)
+    request.addfinalizer(lambda: _remove_directory_reparse(parent))
+    before = _external_tree_sha256(external)
+    runtime = None
+    try:
+        with pytest.raises(RepositoryIntegrityError):
+            runtime = _runtime(parent, "parent-reparse")
+    finally:
+        if runtime is not None:
+            runtime.close()
+    assert sentinel.read_bytes() == b"PARENT-SENTINEL"
+    assert _external_tree_sha256(external) == before
+
+
+@pytest.mark.parametrize("mode", ("COLLECT", "DISCARD", "ABANDON"))
+@pytest.mark.parametrize("attempt", (1, 2), ids=("first-attempt", "retry"))
+def test_cleanup_e_retentativa_sob_base_reparse_nao_publicam_intent_nem_removem(
+    tmp_path, request, mode, attempt
+):
+    """Startup/discard/abandon/retries compartilham o mesmo trust anchor."""
+
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    recovery_id = "00000000-0000-4000-8000-000000000184"
+    external = tmp_path / f"external-cleanup-{mode}-{attempt}"
+    child = external / f"recovery-{recovery_id}"
+    child.mkdir(parents=True)
+    (child / "RECOVERY_NOT_PROMOTABLE").write_bytes(b"RECOVERY_STAGING_V1\n")
+    sentinel = child / "sentinel.bin"
+    sentinel.write_bytes(b"CLEANUP-MUST-NOT-CROSS-NAMESPACE")
+    base = tmp_path / f".cleanup-{mode}-{attempt}.sqlite3.recovery"
+    _directory_reparse(base, external)
+    request.addfinalizer(lambda: _remove_directory_reparse(base))
+    root = base / child.name
+    before = _external_tree_sha256(external)
+
+    for _ in range(attempt):
+        with pytest.raises(wr.RecoveryRetained):
+            wr._remover_raiz_quarentenada(
+                root,
+                exigir_remocao=True,
+                cleanup_mode=mode,
+            )
+        assert _external_tree_sha256(external) == before
+        assert not (external / f".recovery-cleanup-intent-{recovery_id}").exists()
+        assert sentinel.read_bytes() == b"CLEANUP-MUST-NOT-CROSS-NAMESPACE"
+
+
+def test_cleanup_intent_gc_sob_base_reparse_nao_remove_sidecar_externo(
+    tmp_path, request
+):
+    """Root ausente só autoriza GC dentro de uma base continuamente custodiada."""
+
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    recovery_id = "00000000-0000-4000-8000-000000000185"
+    external = tmp_path / "external-intent-gc"
+    external.mkdir()
+    intent = external / f".recovery-cleanup-intent-{recovery_id}"
+    intent.write_bytes(_cleanup_intent_payload(recovery_id, "COLLECT"))
+    sentinel = external / "sentinel.bin"
+    sentinel.write_bytes(b"GC-MUST-NOT-CROSS-NAMESPACE")
+    base = tmp_path / ".intent-gc.sqlite3.recovery"
+    _directory_reparse(base, external)
+    request.addfinalizer(lambda: _remove_directory_reparse(base))
+    before = _external_tree_sha256(external)
+
+    with pytest.raises(wr.RecoveryRetained):
+        wr._coletar_cleanup_intent_apos_raiz_ausente(
+            base / f"recovery-{recovery_id}", recovery_id
+        )
+
+    assert intent.exists()
+    assert sentinel.read_bytes() == b"GC-MUST-NOT-CROSS-NAMESPACE"
+    assert _external_tree_sha256(external) == before
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction/rename custody")
+@pytest.mark.parametrize("swap", ("late-junction", "base-rename"))
+def test_staging_rejeita_troca_da_base_entre_validacao_e_criacao(
+    tmp_path, monkeypatch, request, swap
+):
+    """RED TOCTOU — validation e use precisam compartilhar os mesmos handles."""
+
+    from scripts.backend_contract.application.ports import RepositoryIntegrityError
+    from scripts.backend_contract.infrastructure.productization import RecoveryStaging
+
+    base = tmp_path / f".{swap}.sqlite3.recovery"
+    base.mkdir()
+    parked = tmp_path / f"parked-{swap}"
+    external = tmp_path / f"external-{swap}"
+    external.mkdir()
+    sentinel = external / "sentinel.bin"
+    sentinel.write_bytes(b"TOCTOU-SENTINEL")
+    root = base / "recovery-00000000-0000-4000-8000-000000000186"
+    before = _external_tree_sha256(external)
+    original_mkdir = os.mkdir
+    injected = False
+
+    def cleanup_swap():
+        _remove_directory_reparse(base)
+        if parked.exists() and not base.exists():
+            parked.rename(base)
+
+    request.addfinalizer(cleanup_swap)
+
+    def swap_before_child_create(path, mode=0o777, *, dir_fd=None):
+        nonlocal injected
+        candidate = Path(path) if dir_fd is None else None
+        if not injected and candidate == root:
+            injected = True
+            base.rename(parked)
+            _directory_reparse(base, external)
+        return original_mkdir(path, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "mkdir", swap_before_child_create)
+    try:
+        with pytest.raises((RepositoryIntegrityError, OSError)):
+            RecoveryStaging.create(root)
+    finally:
+        monkeypatch.setattr(os, "mkdir", original_mkdir)
+    assert injected
+    assert sentinel.read_bytes() == b"TOCTOU-SENTINEL"
+    assert _external_tree_sha256(external) == before
+
+
+def test_namespace_recovery_normal_continua_criando_listando_e_descartando(tmp_path):
+    """Controle positivo: a defesa não torna o recovery local legítimo inutilizável."""
+
+    origem, _ids, package = _origem_com_dois_privados(tmp_path, "anchor-normal-source")
+    destino = _runtime(tmp_path, "anchor-normal-target")
+    try:
+        status, staged = _stage(destino, package)
+        assert status == 201, staged
+        status, listing = _json(destino, "GET", "/v1/recovery")
+        assert status == 200, listing
+        assert [item["recovery_id"] for item in listing["recoveries"]] == [
+            staged["recovery_id"]
+        ]
+        status, body = _json(
+            destino, "POST", f"/v1/recovery/{staged['recovery_id']}/discard"
+        )
+        assert status == 200, body
     finally:
         destino.close()
