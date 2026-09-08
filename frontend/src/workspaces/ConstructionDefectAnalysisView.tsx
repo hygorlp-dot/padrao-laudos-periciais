@@ -8,6 +8,7 @@ import {
   reviewPathology,
   startConstructionDefectAnalysis,
   type ConstructionDefectAnalysisEnvelope,
+  type ObservationContext,
   type ObservationOutcome,
 } from "../data/constructionDefectAnalysis";
 import { getInspectionSession, type InspectionEnvelope } from "../data/inspectionSession";
@@ -22,6 +23,27 @@ type State = { kind: "loading" } | { kind: "error" } | ReadyState;
 
 function toggle(items: string[], value: string, checked: boolean) {
   return checked ? [...items, value] : items.filter((item) => item !== value);
+}
+
+function sameStrings(left: string[], right: string[]) {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
+function hasObservationContext(
+  envelope: ConstructionDefectAnalysisEnvelope,
+  expected: ObservationContext,
+) {
+  return envelope.snapshot.observation_contexts.some((item) =>
+    item.observation_id === expected.observation_id &&
+    item.manifestation === expected.manifestation &&
+    item.system === expected.system &&
+    item.element === expected.element &&
+    item.outcome === expected.outcome &&
+    sameStrings(item.methods, expected.methods) &&
+    sameStrings(item.measurement_ids, expected.measurement_ids) &&
+    sameStrings(item.photo_ids, expected.photo_ids) &&
+    sameStrings(item.claim_ids, expected.claim_ids) &&
+    sameStrings(item.question_ids, expected.question_ids));
 }
 
 export function ConstructionDefectAnalysisView({ workspaceId }: { workspaceId: string }) {
@@ -84,7 +106,10 @@ export function ConstructionDefectAnalysisView({ workspaceId }: { workspaceId: s
     );
   }, [state]);
 
-  const run = async (operation: () => Promise<ConstructionDefectAnalysisEnvelope>) => {
+  const run = async (
+    operation: () => Promise<ConstructionDefectAnalysisEnvelope>,
+    confirmsRecoveredCommand: (candidate: ConstructionDefectAnalysisEnvelope) => boolean,
+  ) => {
     const previousRevision = state.kind === "ready" ? state.analysis?.revision ?? null : null;
     setBusy(true);
     setOperationError(false);
@@ -97,7 +122,8 @@ export function ConstructionDefectAnalysisView({ workspaceId }: { workspaceId: s
         const recovered = await getConstructionDefectAnalysis(workspaceId);
         if (
           state.kind === "ready" &&
-          (previousRevision === null || recovered.revision > previousRevision)
+          (previousRevision === null || recovered.revision > previousRevision) &&
+          confirmsRecoveredCommand(recovered)
         ) {
           setState({ ...state, analysis: recovered });
           if (recovered.snapshot.analysis_final.patologias[0]) {
@@ -120,7 +146,7 @@ export function ConstructionDefectAnalysisView({ workspaceId }: { workspaceId: s
       setOperationError(true);
       return;
     }
-    void run(() => startConstructionDefectAnalysis(workspaceId, [{
+    const context: ObservationContext = {
       observation_id: selectedObservation.observation_id,
       manifestation: selectedObservation.raw_observation,
       system: system.trim() || null,
@@ -131,7 +157,11 @@ export function ConstructionDefectAnalysisView({ workspaceId }: { workspaceId: s
       photo_ids: photoIds,
       claim_ids: claimId ? [claimId] : [],
       question_ids: questionId ? [questionId] : [],
-    }]));
+    };
+    void run(
+      () => startConstructionDefectAnalysis(workspaceId, [context]),
+      (candidate) => hasObservationContext(candidate, context),
+    );
   };
 
   const review = (event: FormEvent) => {
@@ -140,12 +170,20 @@ export function ConstructionDefectAnalysisView({ workspaceId }: { workspaceId: s
       setOperationError(true);
       return;
     }
-    void run(() => reviewPathology(workspaceId, state.analysis!, {
+    const expectedReview = {
       pat_id: reviewPatId,
       action: reviewAction,
       professional_id: state.inspection.snapshot.responsible_professional,
       reason: reviewReason.trim(),
-    }));
+    };
+    void run(
+      () => reviewPathology(workspaceId, state.analysis!, expectedReview),
+      (candidate) => candidate.snapshot.reviews.some((item) =>
+        item.pat_id === expectedReview.pat_id &&
+        item.action === expectedReview.action &&
+        item.professional_id === expectedReview.professional_id &&
+        item.reason === expectedReview.reason),
+    );
   };
 
   if (state.kind === "loading") return <section className="status-state status-state--loading" role="status"><span className="state-rule" aria-hidden="true"/><div><h2>Carregando análise técnica</h2><p>Reconciliando vistoria, fontes e histórico profissional.</p></div></section>;

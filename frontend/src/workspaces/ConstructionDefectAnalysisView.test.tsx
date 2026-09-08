@@ -164,12 +164,30 @@ describe("construction defect analysis workbench", () => {
   });
 
   test("reconciles an ambiguous successful start before inviting a duplicate action", async () => {
+    const committedStartEnvelope = {
+      ...envelope,
+      snapshot: {
+        ...envelope.snapshot,
+        observation_contexts: [{
+          observation_id: "OBS-001",
+          manifestation: "Umidade observada na parede.",
+          system: null,
+          element: null,
+          outcome: "INCONCLUSIVE" as const,
+          methods: ["METHOD-001"],
+          measurement_ids: [],
+          photo_ids: [],
+          claim_ids: [],
+          question_ids: [],
+        }],
+      },
+    };
     const fetchMock = fetchByUrl(response(404, {}));
     fetchMock.mockImplementationOnce(() => Promise.resolve(response(404, {})));
     fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, inspectEnvelope)));
     fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, caseEnvelope)));
     fetchMock.mockImplementationOnce(() => Promise.reject(new TypeError("response lost after commit")));
-    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, envelope)));
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, committedStartEnvelope)));
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     render(<ConstructionDefectAnalysisView workspaceId={ID} />);
@@ -195,6 +213,43 @@ describe("construction defect analysis workbench", () => {
 
     await screen.findByRole("heading", { name: "PAT-001" });
     fireEvent.change(screen.getByLabelText("Fundamentação da revisão"), { target: { value: "Revisão sintética." } });
+    fireEvent.click(screen.getByRole("button", { name: "Registrar revisão" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("operação foi recusada");
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  test("does not mistake an unrelated concurrent review for this user's command", async () => {
+    const unrelatedConcurrentEnvelope = {
+      ...envelope,
+      revision: 6,
+      snapshot: {
+        ...envelope.snapshot,
+        reviews: [
+          ...envelope.snapshot.reviews,
+          {
+            review_id: "PAT-REVIEW-OTHER",
+            pat_id: "PAT-001",
+            action: "APPROVE" as const,
+            professional_id: "PROFESSIONAL-001",
+            reason: "Outra decisão concorrente.",
+            reviewed_at: "2026-09-08T12:01:00Z",
+            supersedes_review_id: "PAT-REVIEW-001",
+          },
+        ],
+      },
+    };
+    const fetchMock = fetchByUrl();
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, envelope)));
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, inspectEnvelope)));
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, caseEnvelope)));
+    fetchMock.mockImplementationOnce(() => Promise.reject(new TypeError("request outcome unknown")));
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, unrelatedConcurrentEnvelope)));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ConstructionDefectAnalysisView workspaceId={ID} />);
+
+    await screen.findByRole("heading", { name: "PAT-001" });
+    fireEvent.change(screen.getByLabelText("Fundamentação da revisão"), { target: { value: "Minha decisão esperada." } });
     fireEvent.click(screen.getByRole("button", { name: "Registrar revisão" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("operação foi recusada");
