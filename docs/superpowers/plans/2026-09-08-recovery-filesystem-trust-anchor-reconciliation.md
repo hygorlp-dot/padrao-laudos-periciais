@@ -98,4 +98,3 @@ review lanes start only after the stable HEAD is frozen.
    checkouts with explicit BASE/HEAD.
 6. If either finds P0/P1 in ancestry/reparse/custody/path identity/namespace,
    stop without A15/B15 and return to architecture.
-
