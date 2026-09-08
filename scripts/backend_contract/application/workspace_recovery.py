@@ -178,8 +178,8 @@ _QUARENTENA = "RECOVERY_NOT_PROMOTABLE"
 _QUARENTENA_PAYLOAD = b"RECOVERY_STAGING_V1\n"
 _SESSION = "RECOVERY_SESSION_V1"
 _SESSION_VERSION = 1
-_DISPOSITION = "RECOVERY_DISPOSITION_V1"
 _DISPOSITION_VERSION = 1
+_CLEANUP_INTENT_PREFIX = ".recovery-cleanup-intent-"
 _REPARSE_ATTRIBUTE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
 
@@ -241,34 +241,40 @@ def _fechar_anchor_windows(descriptor: int, anchor_path: Path) -> None:
         raise failure
 
 
-def _fechar_custodia_cleanup_once(node: _CleanupNode) -> None:
+def _fechar_custodia_cleanup(node: _CleanupNode) -> None:
+    """Consome cada fd uma vez; erro de close torna o inteiro não reutilizável."""
+
     failure = None
     for child in node.children:
         try:
-            _fechar_custodia_cleanup_once(child)
+            _fechar_custodia_cleanup(child)
         except OSError as exc:
             if failure is None:
                 failure = exc
     if node.descriptor is not None:
         descriptor = node.descriptor
+        node.descriptor = None
         anchor_path = node.anchor_path
+        close_failure = None
         try:
             os.close(descriptor)
         except OSError as exc:
-            if failure is None:
-                failure = exc
+            close_failure = exc
+        if anchor_path is None:
+            if close_failure is not None and failure is None:
+                failure = close_failure
         else:
-            node.descriptor = None
-            if anchor_path is not None:
-                try:
-                    anchor_path.unlink()
-                except FileNotFoundError:
-                    node.anchor_path = None
-                except OSError as exc:
-                    if failure is None:
-                        failure = exc
-                else:
-                    node.anchor_path = None
+            try:
+                anchor_path.unlink()
+            except FileNotFoundError:
+                node.anchor_path = None
+            except OSError as exc:
+                if failure is None:
+                    failure = close_failure or exc
+            else:
+                # O anchor foi aberto sem delete-sharing. Sua remoção prova que
+                # o handle original saiu, mesmo se close retornou erro depois.
+                node.anchor_path = None
     elif node.anchor_path is not None:
         try:
             node.anchor_path.unlink()
@@ -280,18 +286,6 @@ def _fechar_custodia_cleanup_once(node: _CleanupNode) -> None:
                 failure = exc
     if failure is not None:
         raise failure
-
-
-def _fechar_custodia_cleanup(node: _CleanupNode) -> None:
-    """Fecha toda a árvore e absorve uma falha transitória sem perder ownership."""
-
-    try:
-        _fechar_custodia_cleanup_once(node)
-    except OSError as first_failure:
-        try:
-            _fechar_custodia_cleanup_once(node)
-        except OSError:
-            raise first_failure
 
 
 def _adquirir_custodia_cleanup(
@@ -432,7 +426,10 @@ def _remover_material_ancorado(
     for child in node.children:
         _remover_material_ancorado(child, material)
         if os.name == "nt":
-            _fechar_custodia_cleanup(child)
+            try:
+                _fechar_custodia_cleanup(child)
+            except OSError:
+                pass
         try:
             if os.name == "posix":
                 if node.descriptor is None:
@@ -450,7 +447,7 @@ def _residuo_na_raiz_ancorada(node: _CleanupNode) -> list[str]:
     scan_target = node.descriptor if os.name == "posix" else node.path
     if scan_target is None:
         raise OSError("custódia da recuperação foi encerrada")
-    allowed = {_QUARENTENA, _JOURNAL, _IDENTIDADE, _SESSION, _DISPOSITION}
+    allowed = {_QUARENTENA, _JOURNAL, _IDENTIDADE, _SESSION}
     if node.anchor_path is not None:
         allowed.add(node.anchor_path.name)
     with os.scandir(scan_target) as entries:
@@ -498,51 +495,6 @@ def _gravar_controle_ancorado(node: _CleanupNode, name: str, payload: bytes) -> 
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-
-
-def _restaurar_controles_cleanup_windows(
-    raiz: Path,
-    expected_identity: tuple[int, int, int],
-    controls: dict[str, bytes],
-) -> None:
-    """Reestabelece a decisão e a quarentena após falha terminal de cleanup."""
-
-    try:
-        restored = _adquirir_custodia_cleanup(raiz)
-    except (OSError, RecoveryRetained):
-        return
-    try:
-        if restored.identity != expected_identity:
-            return
-        ordered_controls = []
-        disposition = controls.get(_DISPOSITION)
-        if disposition is not None:
-            ordered_controls.append((_DISPOSITION, disposition))
-        ordered_controls.append((_QUARENTENA, _QUARENTENA_PAYLOAD))
-        ordered_controls.extend(
-            (name, payload)
-            for name, payload in controls.items()
-            if name != _DISPOSITION
-        )
-
-        pending = ordered_controls
-        for _attempt in range(2):
-            failed = []
-            for name, payload in pending:
-                try:
-                    _gravar_controle_ancorado(restored, name, payload)
-                except FileExistsError:
-                    pass
-                except OSError:
-                    failed.append((name, payload))
-            if not failed:
-                break
-            pending = failed
-    finally:
-        try:
-            _fechar_custodia_cleanup(restored)
-        except OSError:
-            pass
 
 
 def _inventario_seguro(raiz: Path) -> tuple[list[Path], list[Path]]:
@@ -598,7 +550,6 @@ def _material_remanescente(raiz: Path, arquivos: list[Path]) -> list[Path]:
             _JOURNAL,
             _IDENTIDADE,
             _SESSION,
-            _DISPOSITION,
         ):
             continue
         restante.append(caminho)
@@ -620,26 +571,85 @@ def _json_canonico(registro: dict) -> bytes:
     ).encode("utf-8")
 
 
+def _ler_arquivo_regular_exclusivo(path: Path):
+    """Lê sidecar sem seguir links e sem aceitar hardlink como autoridade."""
+
+    try:
+        before = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return _SIDECAR_TRAVADO
+    if (
+        _detalhes_sao_link_ou_reparse(before)
+        or not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+    ):
+        return _SIDECAR_CORROMPIDO
+    flags = os.O_RDONLY | (os.O_NOFOLLOW if os.name == "posix" else os.O_BINARY)
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        return _SIDECAR_TRAVADO
+    except OSError:
+        return _SIDECAR_TRAVADO
+    try:
+        opened = os.fstat(descriptor)
+        after = os.lstat(path)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or _chave_identidade(before) != _chave_identidade(opened)
+            or _chave_identidade(opened) != _chave_identidade(after)
+        ):
+            return _SIDECAR_CORROMPIDO
+        chunks = []
+        while True:
+            chunk = os.read(descriptor, 64 * 1024)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    except OSError:
+        return _SIDECAR_TRAVADO
+    finally:
+        os.close(descriptor)
+
+
 def _gravar_sidecar_imutavel(raiz: Path, nome: str, registro: dict) -> None:
     """Publica um controle durável sem substituir uma autoridade já existente."""
     corpo = _json_canonico(registro)
     alvo = raiz / nome
-    if alvo.exists():
-        if alvo.read_bytes() != corpo:
+    existente = _ler_arquivo_regular_exclusivo(alvo)
+    if existente is not None:
+        if not isinstance(existente, bytes) or existente != corpo:
             raise RepositoryIntegrityError(f"{nome} divergente")
         return
     temporario = raiz / f".{nome}.{uuid4().hex}"
-    with temporario.open("xb") as stream:
-        stream.write(corpo)
-        stream.flush()
-        os.fsync(stream.fileno())
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= os.O_NOFOLLOW if os.name == "posix" else os.O_BINARY
+    descriptor = os.open(temporario, flags, 0o600)
     try:
-        os.link(temporario, alvo)
-    except FileExistsError:
-        if alvo.read_bytes() != corpo:
-            raise RepositoryIntegrityError(f"{nome} divergente")
+        offset = 0
+        while offset < len(corpo):
+            written = os.write(descriptor, corpo[offset:])
+            if written <= 0:
+                raise OSError("escrita do sidecar não avançou")
+            offset += written
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    try:
+        try:
+            os.link(temporario, alvo, follow_symlinks=False)
+        except FileExistsError:
+            existente = _ler_arquivo_regular_exclusivo(alvo)
+            if not isinstance(existente, bytes) or existente != corpo:
+                raise RepositoryIntegrityError(f"{nome} divergente")
     finally:
         temporario.unlink(missing_ok=True)
+    publicado = _ler_arquivo_regular_exclusivo(alvo)
+    if not isinstance(publicado, bytes) or publicado != corpo:
+        raise RepositoryIntegrityError(f"{nome} não foi publicado integralmente")
     if os.name == "posix":
         descriptor = os.open(raiz, os.O_RDONLY | os.O_DIRECTORY)
         try:
@@ -649,17 +659,120 @@ def _gravar_sidecar_imutavel(raiz: Path, nome: str, registro: dict) -> None:
 
 
 def _ler_sidecar(raiz: Path, nome: str):
-    try:
-        bruto = (raiz / nome).read_bytes()
-    except FileNotFoundError:
+    bruto = _ler_arquivo_regular_exclusivo(raiz / nome)
+    if bruto is None:
         return None
-    except OSError:
+    if bruto is _SIDECAR_TRAVADO:
         return _SIDECAR_TRAVADO
+    if bruto is _SIDECAR_CORROMPIDO:
+        return _SIDECAR_CORROMPIDO
     try:
         registro = json.loads(bruto.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return _SIDECAR_CORROMPIDO
     return registro if type(registro) is dict else _SIDECAR_CORROMPIDO
+
+
+def _cleanup_intent_name(recovery_id: str) -> str:
+    try:
+        parsed = UUID(recovery_id)
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise RepositoryIntegrityError("recovery_id do cleanup inválido") from exc
+    if str(parsed) != recovery_id:
+        raise RepositoryIntegrityError("recovery_id do cleanup inválido")
+    return f"{_CLEANUP_INTENT_PREFIX}{recovery_id}"
+
+
+def _cleanup_intent_record(recovery_id: str, mode: str) -> dict:
+    if mode not in {"DISCARD", "ABANDON", "COLLECT"}:
+        raise RepositoryIntegrityError("modo de cleanup inválido")
+    return {
+        "version": _DISPOSITION_VERSION,
+        "recovery_id": recovery_id,
+        "root_name": f"recovery-{recovery_id}",
+        "mode": mode,
+    }
+
+
+def _cleanup_intent_da_base(base: Path, recovery_id: str):
+    try:
+        name = _cleanup_intent_name(recovery_id)
+    except RepositoryIntegrityError:
+        return _SIDECAR_CORROMPIDO
+    registro = _ler_sidecar(base, name)
+    if registro in (None, _SIDECAR_TRAVADO, _SIDECAR_CORROMPIDO):
+        return registro
+    if set(registro) != {"version", "recovery_id", "root_name", "mode"}:
+        return _SIDECAR_CORROMPIDO
+    if (
+        type(registro["version"]) is not int
+        or registro["version"] != _DISPOSITION_VERSION
+        or type(registro["mode"]) is not str
+        or type(registro["recovery_id"]) is not str
+        or type(registro["root_name"]) is not str
+    ):
+        return _SIDECAR_CORROMPIDO
+    try:
+        esperado = _cleanup_intent_record(recovery_id, registro["mode"])
+    except RepositoryIntegrityError:
+        return _SIDECAR_CORROMPIDO
+    if registro != esperado:
+        return _SIDECAR_CORROMPIDO
+    return registro
+
+
+def _persistir_cleanup_intent(raiz: Path, recovery_id: str, mode: str) -> Path:
+    if raiz.name != f"recovery-{recovery_id}":
+        raise RepositoryIntegrityError("raiz e recovery_id do cleanup divergem")
+    try:
+        os.lstat(raiz)
+    except OSError as exc:
+        raise RepositoryIntegrityError("raiz do cleanup indisponível") from exc
+    name = _cleanup_intent_name(recovery_id)
+    record = _cleanup_intent_record(recovery_id, mode)
+    _gravar_sidecar_imutavel(raiz.parent, name, record)
+    if _cleanup_intent_da_base(raiz.parent, recovery_id) != record:
+        raise RepositoryIntegrityError("intent de cleanup não foi persistido")
+    return raiz.parent / name
+
+
+def _substituir_intent_ilegivel_por_abandono(
+    raiz: Path, recovery_id: str
+) -> None:
+    """Novo ABANDON humano preserva a autoridade ilegível antes de substituí-la."""
+
+    name = _cleanup_intent_name(recovery_id)
+    current = _cleanup_intent_da_base(raiz.parent, recovery_id)
+    if current is _SIDECAR_TRAVADO:
+        raise RepositoryIntegrityError("intent de cleanup temporariamente ilegível")
+    if current is _SIDECAR_CORROMPIDO:
+        source = raiz.parent / name
+        evidence = raiz.parent / f"{name}.invalid.{uuid4().hex}"
+        try:
+            source.rename(evidence)
+        except OSError as exc:
+            raise RepositoryIntegrityError(
+                "intent de cleanup ilegível não pôde ser preservado"
+            ) from exc
+    elif current is not None:
+        raise RepositoryIntegrityError("intent de cleanup válido não pode ser substituído")
+    _persistir_cleanup_intent(raiz, recovery_id, "ABANDON")
+
+
+def _coletar_cleanup_intent_apos_raiz_ausente(
+    raiz: Path, recovery_id: str
+) -> None:
+    if os.path.lexists(raiz):
+        return
+    intent = raiz.parent / _cleanup_intent_name(recovery_id)
+    try:
+        intent.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        # A raiz ausente é a prova de commit. O sidecar não contém material
+        # privado e pode ser recolhido idempotentemente no próximo startup.
+        pass
 
 
 def _summary_payload(summary: BackupSummary) -> dict:
@@ -982,7 +1095,12 @@ def _encerrar_staging(staging: object, *, exigir_remocao: bool = False) -> None:
     _remover_raiz_quarentenada(raiz, exigir_remocao=exigir_remocao)
 
 
-def _remover_raiz_quarentenada(raiz: Path, *, exigir_remocao: bool = False) -> None:
+def _remover_raiz_quarentenada(
+    raiz: Path,
+    *,
+    exigir_remocao: bool = False,
+    cleanup_mode: str = "COLLECT",
+) -> None:
     """Remoção da raiz em si, sem exigir posse de handle.
 
     Um staging órfão de queda muitas vezes NÃO reabre (o namespace privado ficou
@@ -990,6 +1108,12 @@ def _remover_raiz_quarentenada(raiz: Path, *, exigir_remocao: bool = False) -> N
     objeto de staging para remover deixava esse caso sem saída. O que protege
     aqui é o marcador canônico, não a posse do handle.
     """
+    recovery_id = _recovery_id_da_raiz(raiz)
+    if recovery_id is None:
+        if exigir_remocao:
+            raise RecoveryRetained("raiz da recuperação não é canônica")
+        return
+    _persistir_cleanup_intent(raiz, recovery_id, cleanup_mode)
     custody = None
     try:
         custody = _adquirir_custodia_cleanup(raiz)
@@ -1022,7 +1146,7 @@ def _remover_raiz_quarentenada(raiz: Path, *, exigir_remocao: bool = False) -> N
             )
 
         controls = {}
-        for name in (_JOURNAL, _IDENTIDADE, _SESSION, _DISPOSITION):
+        for name in (_JOURNAL, _IDENTIDADE, _SESSION):
             try:
                 controls[name] = _ler_controle_ancorado(custody, name)
             except FileNotFoundError:
@@ -1039,43 +1163,25 @@ def _remover_raiz_quarentenada(raiz: Path, *, exigir_remocao: bool = False) -> N
             pass
 
         if os.name == "nt":
-            expected_identity = custody.identity
             try:
-                try:
-                    _fechar_custodia_cleanup(custody)
-                finally:
-                    custody = None
-                raiz.rmdir()
-                return
+                _fechar_custodia_cleanup(custody)
             except OSError:
-                _restaurar_controles_cleanup_windows(
-                    raiz,
-                    expected_identity,
-                    controls,
-                )
+                pass
+            custody = None
+            try:
+                raiz.rmdir()
+            except OSError:
                 raise RecoveryRetained(
                     "a recuperação preparada não pôde ser removida por completo"
                 )
+            _coletar_cleanup_intent_apos_raiz_ausente(raiz, recovery_id)
+            return
 
         try:
             raiz.rmdir()
+            _coletar_cleanup_intent_apos_raiz_ausente(raiz, recovery_id)
             return
         except OSError:
-            # O dir_fd ainda nomeia a raiz originalmente validada, mesmo que
-            # seu pathname tenha sido trocado. Restaura a autoridade ali.
-            for name, payload in controls.items():
-                try:
-                    _gravar_controle_ancorado(custody, name, payload)
-                except FileExistsError:
-                    pass
-            try:
-                _gravar_controle_ancorado(
-                    custody,
-                    _QUARENTENA,
-                    _QUARENTENA_PAYLOAD,
-                )
-            except FileExistsError:
-                pass
             raise RecoveryRetained(
                 "a recuperação preparada não pôde ser removida por completo"
             )
@@ -1585,11 +1691,40 @@ def recolher_stagings_orfaos(base) -> tuple[str, ...]:
     """
     raiz_base = Path(base)
     try:
-        candidatas = sorted(p for p in raiz_base.iterdir() if p.is_dir())
+        entries = tuple(raiz_base.iterdir())
     except OSError:
         return ()
     recolhidas = []
+    for path in entries:
+        if not path.name.startswith(_CLEANUP_INTENT_PREFIX):
+            continue
+        recovery_id = path.name[len(_CLEANUP_INTENT_PREFIX) :]
+        intent = _cleanup_intent_da_base(raiz_base, recovery_id)
+        if not isinstance(intent, dict):
+            continue
+        raiz = raiz_base / intent["root_name"]
+        if not os.path.lexists(raiz):
+            _coletar_cleanup_intent_apos_raiz_ausente(raiz, recovery_id)
+            continue
+        if intent["mode"] != "COLLECT":
+            continue
+        try:
+            _remover_raiz_quarentenada(raiz, cleanup_mode="COLLECT")
+        except Exception:
+            continue
+        if not os.path.lexists(raiz):
+            recolhidas.append(raiz.name)
+
+    try:
+        candidatas = sorted(p for p in raiz_base.iterdir() if p.is_dir())
+    except OSError:
+        return ()
     for raiz in candidatas:
+        recovery_id = _recovery_id_da_raiz(raiz)
+        if recovery_id is None:
+            continue
+        if _cleanup_intent_da_base(raiz_base, recovery_id) is not None:
+            continue
         if not _arvore_de_recuperacao_eh_segura(raiz):
             continue
         try:
@@ -1630,27 +1765,6 @@ def recolher_stagings_orfaos(base) -> tuple[str, ...]:
     return tuple(recolhidas)
 
 
-def _disposition_da_raiz(raiz: Path):
-    registro = _ler_sidecar(raiz, _DISPOSITION)
-    if registro in (None, _SIDECAR_TRAVADO, _SIDECAR_CORROMPIDO):
-        return registro
-    if set(registro) != {"version", "recovery_id", "mode"}:
-        return _SIDECAR_CORROMPIDO
-    if (
-        type(registro["version"]) is not int
-        or registro["version"] != _DISPOSITION_VERSION
-    ):
-        return _SIDECAR_CORROMPIDO
-    if registro["recovery_id"] != _recovery_id_da_raiz(raiz):
-        return _SIDECAR_CORROMPIDO
-    if type(registro["mode"]) is not str or registro["mode"] not in {
-        "DISCARD",
-        "ABANDON",
-    }:
-        return _SIDECAR_CORROMPIDO
-    return registro
-
-
 def reconstruir_sessoes_recuperacao(base, sessions, open_staging) -> tuple[str, ...]:
     """Reconstrói sessões sem promover nem tocar no armazenamento vivo."""
     raiz_base = Path(base)
@@ -1663,6 +1777,7 @@ def reconstruir_sessoes_recuperacao(base, sessions, open_staging) -> tuple[str, 
         recovery_id = _recovery_id_da_raiz(raiz)
         if recovery_id is None:
             continue
+        disposition = _cleanup_intent_da_base(raiz_base, recovery_id)
         if not _arvore_de_recuperacao_eh_segura(raiz):
             # Preservar a árvore sem publicá-la cria uma recuperação invisível
             # e sem saída pelo produto. O nome canônico basta para expor o
@@ -1671,9 +1786,24 @@ def reconstruir_sessoes_recuperacao(base, sessions, open_staging) -> tuple[str, 
                 recovery_id,
                 None,
                 None,
-                state=RECOVERY_UNRESUMABLE,
+                state=(
+                    RECOVERY_RETAINED
+                    if disposition is not None
+                    else RECOVERY_UNRESUMABLE
+                ),
                 root=raiz,
-                reason="unsafe_recovery_tree",
+                reason=(
+                    "cleanup_incomplete"
+                    if isinstance(disposition, dict)
+                    else (
+                        "disposition_unreadable"
+                        if disposition is not None
+                        else "unsafe_recovery_tree"
+                    )
+                ),
+                disposition=(
+                    disposition["mode"] if isinstance(disposition, dict) else None
+                ),
             )
             reconstruidas.append(recovery_id)
             continue
@@ -1684,7 +1814,6 @@ def reconstruir_sessoes_recuperacao(base, sessions, open_staging) -> tuple[str, 
             pass
         descriptor = _descriptor_da_raiz(raiz)
         journal = _journal_bruto(raiz)
-        disposition = _disposition_da_raiz(raiz)
         summary = descriptor[1] if isinstance(descriptor, tuple) else None
         reason = None
         staging = None
@@ -1813,64 +1942,31 @@ def _gravar_disposition(entry: dict, recovery_id: str, mode: str) -> None:
         raiz = Path(entry["staging"].root)
     if raiz is None:
         raise RepositoryIntegrityError("raiz da recuperação indisponível")
-    custody = _adquirir_custodia_cleanup(Path(raiz))
-    try:
-        record = {
-            "version": _DISPOSITION_VERSION,
-            "recovery_id": recovery_id,
-            "mode": mode,
-        }
-        body = _json_canonico(record)
-        try:
-            current = _ler_controle_ancorado(custody, _DISPOSITION)
-        except FileNotFoundError:
-            current = None
-        if current is not None:
-            if current != body:
-                raise RepositoryIntegrityError(f"{_DISPOSITION} divergente")
-        else:
-            temporary = f".{_DISPOSITION}.{uuid4().hex}"
-            _gravar_controle_ancorado(custody, temporary, body)
-            try:
-                if os.name == "posix":
-                    if custody.descriptor is None:
-                        raise OSError("custódia da recuperação foi encerrada")
-                    os.link(
-                        temporary,
-                        _DISPOSITION,
-                        src_dir_fd=custody.descriptor,
-                        dst_dir_fd=custody.descriptor,
-                        follow_symlinks=False,
-                    )
-                    os.fsync(custody.descriptor)
-                else:
-                    os.link(
-                        custody.path / temporary,
-                        custody.path / _DISPOSITION,
-                        follow_symlinks=False,
-                    )
-            except FileExistsError:
-                if _ler_controle_ancorado(custody, _DISPOSITION) != body:
-                    raise RepositoryIntegrityError(f"{_DISPOSITION} divergente")
-            finally:
-                try:
-                    _unlink_na_custodia(custody, temporary)
-                except FileNotFoundError:
-                    pass
-        entry["disposition"] = mode
-    finally:
-        _fechar_custodia_cleanup(custody)
+    _persistir_cleanup_intent(Path(raiz), recovery_id, mode)
+    entry["disposition"] = mode
 
 
-def _remover_entry(entry: dict) -> None:
+def _remover_entry(entry: dict, mode: str) -> None:
     staging = entry.get("staging")
     if staging is not None:
-        _encerrar_staging(staging, exigir_remocao=True)
+        raiz = Path(staging.root)
+        staging.discard()
+        entry["staging"] = None
+        entry["root"] = raiz
+        _remover_raiz_quarentenada(
+            raiz,
+            exigir_remocao=True,
+            cleanup_mode=mode,
+        )
         return
     raiz = entry.get("root")
     if raiz is None:
         raise RepositoryIntegrityError("raiz da recuperação indisponível")
-    _remover_raiz_quarentenada(Path(raiz), exigir_remocao=True)
+    _remover_raiz_quarentenada(
+        Path(raiz),
+        exigir_remocao=True,
+        cleanup_mode=mode,
+    )
 
 
 def _mutacao_viva_ocorreu(workspaces: object | None, staging: object) -> bool:
@@ -1925,9 +2021,12 @@ class DiscardWorkspaceRecovery:
         anterior = entry.get("claimed_from")
         disposition = entry.get("disposition")
         disposition_irrecuperavel = anterior == RECOVERY_RETAINED and disposition is None
+        cleanup_mode = "ABANDON" if aceitar_incompleta else "DISCARD"
         if anterior == RECOVERY_RETAINED:
-            esperado = "ABANDON" if aceitar_incompleta else "DISCARD"
-            if disposition not in (None, esperado):
+            modo_compativel = disposition == cleanup_mode or (
+                disposition == "COLLECT" and aceitar_incompleta
+            )
+            if disposition is not None and not modo_compativel:
                 self.sessions.settle(recovery_id, RECOVERY_RETAINED)
                 raise WorkspaceRecoveryConflict(
                     "a limpeza retida pertence a outra decisão do usuário"
@@ -1964,11 +2063,24 @@ class DiscardWorkspaceRecovery:
             raise RecoveryPromotionIncomplete(
                 "não foi possível ler o estado desta promoção agora"
             )
-        mode = "ABANDON" if aceitar_incompleta else "DISCARD"
+        mode = "COLLECT" if disposition == "COLLECT" else cleanup_mode
         try:
-            if not disposition_irrecuperavel:
+            if disposition_irrecuperavel:
+                raiz = entry.get("root")
+                if raiz is None and entry.get("staging") is not None:
+                    raiz = Path(entry["staging"].root)
+                if raiz is None:
+                    raise RepositoryIntegrityError(
+                        "raiz da recuperação indisponível"
+                    )
+                _substituir_intent_ilegivel_por_abandono(
+                    Path(raiz), recovery_id
+                )
+                entry["disposition"] = "ABANDON"
+                mode = "ABANDON"
+            else:
                 _gravar_disposition(entry, recovery_id, mode)
-            _remover_entry(entry)
+            _remover_entry(entry, mode)
         except BaseException:
             # A sessão CONTINUA existindo: o usuário precisa poder tentar de novo
             # depois de liberar o que segurava o arquivo (antivírus, indexador).

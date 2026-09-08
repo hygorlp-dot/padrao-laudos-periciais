@@ -12,8 +12,9 @@ das revisões ordenadas e dos conteúdos privados verificados. Isso permite
 reconstruir `STAGED` depois de fechar/reabrir o
 produto, mas **não autoriza mutação viva**. `PROMOTION_TRANSACTION_V1` continua
 sendo a única autoridade de promoção. Descarte/abandono publicam antes um
-`RECOVERY_DISPOSITION_V1` imutável, para que falha de limpeza seja retomada com
-a mesma decisão humana. Uma fase `PROMOTED` só é terminal quando o journal
+intent externo imutável `.recovery-cleanup-intent-<uuid>`, irmão da raiz-alvo,
+para que falha de limpeza seja retomada com a mesma decisão humana. Uma fase
+`PROMOTED` só é terminal quando o journal
 completo produz o mesmo hash de plano fixado no descriptor publicado; fase
 isolada, tipo não escalar, identidade adulterada ou journal parcial nunca
 autoriza coleta automática nem derruba o startup.
@@ -312,17 +313,16 @@ rename no Windows. `O_TEMPORARY` não é usado como trava, pois pode admitir
 rename em hosts com semântica POSIX. Qualquer dúvida retém a árvore inteira
 sem atravessar o namespace.
 
-A disposition também é publicada sob essa custódia, antes de qualquer cleanup:
-uma raiz ou membro reparse é recusado sem escrita no alvo externo. Se a liberação
-de um anchor falhar depois da remoção dos controles, a decisão e a quarentena são
-reestabelecidas na mesma identidade antes de retornar `RECOVERY_RETAINED`. O
-fechamento percorre a árvore inteira mesmo quando um filho falha, para que o
-primeiro erro nunca deixe handles de irmãos ou ancestrais vazados. Um descritor
-só deixa de pertencer à custódia depois de `close` confirmado; se o fechamento
-falhar antes de liberar o handle, sua referência permanece disponível para a
-retentativa local. A restauração escreve primeiro disposition e quarentena,
-tenta cada controle de forma independente e repete uma vez apenas os writes que
-falharam, impedindo que uma falha transitória auxiliar apague a decisão durável.
+Antes de adquirir custódia ou iniciar qualquer remoção, o cleanup publica um
+intent externo imutável no diretório-base já validado. Uma raiz ou membro reparse
+continua recusado sem escrita no alvo externo. Se anchor, controle interno ou
+`rmdir` falhar, o intent permanece fora da raiz e o restart reconstrói
+`RECOVERY_RETAINED` com a mesma decisão. O fechamento percorre a árvore inteira
+mesmo quando um filho falha, para que o primeiro erro não interrompa irmãos ou
+ancestrais. Cada slot de descritor é consumido antes da única chamada de `close`:
+um erro torna o estado do inteiro ambíguo e proíbe retry local, porque o número
+pode já ter sido reutilizado por arquivo alheio. A prova terminal é a ausência da
+raiz; só então o intent externo pode ser coletado.
 
 Preservar sem publicar também é falha: uma raiz canônica que contenha reparse é
 exposta de forma sanitizada como `RECOVERY_UNRESUMABLE`, sem percorrer o membro
@@ -338,7 +338,7 @@ do diretório não vazio.
 
 ## H.1 Reconciliação do protocolo de cleanup (A12/B12)
 
-Status: **modelo normativo anterior à próxima edição de produção**. O candidato
+Status: **modelo normativo reconciliado**. O candidato
 `52c565a` está invalidado. As correções sucessivas provaram que restauração de
 controles depois da remoção não fecha o protocolo: a própria restauração pode
 falhar, criar arquivo parcial ou observar `FileExists` divergente. Também provaram
