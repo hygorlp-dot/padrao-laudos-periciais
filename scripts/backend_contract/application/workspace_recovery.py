@@ -241,27 +241,34 @@ def _fechar_anchor_windows(descriptor: int, anchor_path: Path) -> None:
         raise failure
 
 
-def _fechar_custodia_cleanup(node: _CleanupNode) -> None:
+def _fechar_custodia_cleanup_once(node: _CleanupNode) -> None:
     failure = None
     for child in node.children:
         try:
-            _fechar_custodia_cleanup(child)
+            _fechar_custodia_cleanup_once(child)
         except OSError as exc:
             if failure is None:
                 failure = exc
     if node.descriptor is not None:
         descriptor = node.descriptor
-        node.descriptor = None
         anchor_path = node.anchor_path
         try:
-            if anchor_path is None:
-                os.close(descriptor)
-            else:
-                _fechar_anchor_windows(descriptor, anchor_path)
-                node.anchor_path = None
+            os.close(descriptor)
         except OSError as exc:
             if failure is None:
                 failure = exc
+        else:
+            node.descriptor = None
+            if anchor_path is not None:
+                try:
+                    anchor_path.unlink()
+                except FileNotFoundError:
+                    node.anchor_path = None
+                except OSError as exc:
+                    if failure is None:
+                        failure = exc
+                else:
+                    node.anchor_path = None
     elif node.anchor_path is not None:
         try:
             node.anchor_path.unlink()
@@ -273,6 +280,18 @@ def _fechar_custodia_cleanup(node: _CleanupNode) -> None:
                 failure = exc
     if failure is not None:
         raise failure
+
+
+def _fechar_custodia_cleanup(node: _CleanupNode) -> None:
+    """Fecha toda a árvore e absorve uma falha transitória sem perder ownership."""
+
+    try:
+        _fechar_custodia_cleanup_once(node)
+    except OSError as first_failure:
+        try:
+            _fechar_custodia_cleanup_once(node)
+        except OSError:
+            raise first_failure
 
 
 def _adquirir_custodia_cleanup(
@@ -495,19 +514,30 @@ def _restaurar_controles_cleanup_windows(
     try:
         if restored.identity != expected_identity:
             return
-        for name, payload in controls.items():
-            try:
-                _gravar_controle_ancorado(restored, name, payload)
-            except FileExistsError:
-                pass
-        try:
-            _gravar_controle_ancorado(
-                restored,
-                _QUARENTENA,
-                _QUARENTENA_PAYLOAD,
-            )
-        except FileExistsError:
-            pass
+        ordered_controls = []
+        disposition = controls.get(_DISPOSITION)
+        if disposition is not None:
+            ordered_controls.append((_DISPOSITION, disposition))
+        ordered_controls.append((_QUARENTENA, _QUARENTENA_PAYLOAD))
+        ordered_controls.extend(
+            (name, payload)
+            for name, payload in controls.items()
+            if name != _DISPOSITION
+        )
+
+        pending = ordered_controls
+        for _attempt in range(2):
+            failed = []
+            for name, payload in pending:
+                try:
+                    _gravar_controle_ancorado(restored, name, payload)
+                except FileExistsError:
+                    pass
+                except OSError:
+                    failed.append((name, payload))
+            if not failed:
+                break
+            pending = failed
     finally:
         try:
             _fechar_custodia_cleanup(restored)

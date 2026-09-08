@@ -1128,6 +1128,88 @@ def test_falha_ao_soltar_anchor_raiz_preserva_disposition_para_restart(
         reopened.close()
 
 
+@pytest.mark.parametrize(
+    "failed_control",
+    [
+        "STAGING_IDENTITY_V1",
+        "RECOVERY_SESSION_V1",
+        "RECOVERY_DISPOSITION_V1",
+        "RECOVERY_NOT_PROMOTABLE",
+    ],
+)
+def test_falha_transitoria_na_restauracao_nao_apaga_decisao_de_discard(
+    tmp_path, monkeypatch, failed_control
+):
+    """RED B11 + sibling sweep — controles são restaurados sem cascata."""
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    _workspace_id, _materials, package = _origem_com_dois_privados(
+        tmp_path, "b11-control-source"
+    )
+    target = _runtime(tmp_path, "b11-control-target")
+    status, staged = _stage(target, package)
+    assert status == 201, staged
+    recovery_id = staged["recovery_id"]
+    root = (
+        tmp_path
+        / ".b11-control-target.sqlite3.recovery"
+        / f"recovery-{recovery_id}"
+    )
+
+    original_unlink = Path.unlink
+    original_write = wr._gravar_controle_ancorado
+    anchor_failure = False
+    control_failure = False
+
+    def fail_root_anchor_after_controls(path, *args, **kwargs):
+        nonlocal anchor_failure
+        is_root_anchor = (
+            path.parent == root
+            and path.name.startswith(".recovery-cleanup-custody.")
+        )
+        if is_root_anchor and not (root / "RECOVERY_DISPOSITION_V1").exists():
+            anchor_failure = True
+            raise PermissionError(13, "synthetic root anchor release failure")
+        return original_unlink(path, *args, **kwargs)
+
+    def fail_control_restore_once(node, name, payload):
+        nonlocal control_failure
+        if name == failed_control and not control_failure:
+            control_failure = True
+            raise PermissionError(13, "synthetic control restore failure")
+        return original_write(node, name, payload)
+
+    monkeypatch.setattr(Path, "unlink", fail_root_anchor_after_controls)
+    monkeypatch.setattr(wr, "_gravar_controle_ancorado", fail_control_restore_once)
+    status, body = _json(
+        target, "POST", f"/v1/recovery/{recovery_id}/discard"
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "RECOVERY_RETAINED"
+    assert anchor_failure is True
+    assert control_failure is True
+    monkeypatch.setattr(Path, "unlink", original_unlink)
+    monkeypatch.setattr(wr, "_gravar_controle_ancorado", original_write)
+
+    assert (root / "RECOVERY_DISPOSITION_V1").exists()
+    assert (root / "RECOVERY_NOT_PROMOTABLE").exists()
+    target.close()
+
+    reopened = _runtime(tmp_path, "b11-control-target")
+    try:
+        status, listing = _json(reopened, "GET", "/v1/recovery")
+        assert status == 200, listing
+        item = next(
+            recovery
+            for recovery in listing["recoveries"]
+            if recovery["recovery_id"] == recovery_id
+        )
+        assert item["state"] == "RECOVERY_RETAINED"
+        assert item["allowed_actions"] == ["RETRY_DISCARD"]
+    finally:
+        reopened.close()
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows cleanup custody handles")
 def test_falha_ao_remover_anchor_filho_nao_vaza_handle_pai(tmp_path, monkeypatch):
     """RED A10 — erro num filho não interrompe o fechamento da árvore."""
@@ -1157,6 +1239,80 @@ def test_falha_ao_remover_anchor_filho_nao_vaza_handle_pai(tmp_path, monkeypatch
     for descriptor in descriptors:
         with pytest.raises(OSError):
             os.fstat(descriptor)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows cleanup custody handles")
+def test_falha_transitoria_ao_fechar_descritor_converge_sem_vazamento(
+    tmp_path, monkeypatch
+):
+    """B11 — o segundo passe fecha o handle após uma falha transitória."""
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    root = tmp_path / "recovery-00000000-0000-4000-8000-000000000094"
+    (root / "child").mkdir(parents=True)
+    custody = wr._adquirir_custodia_cleanup(root)
+    descriptors = [custody.descriptor, custody.children[0].descriptor]
+    child_descriptor = custody.children[0].descriptor
+    assert child_descriptor is not None
+    original_close = wr.os.close
+    injected = False
+
+    def fail_child_close_once(descriptor):
+        nonlocal injected
+        if descriptor == child_descriptor and not injected:
+            injected = True
+            raise OSError("synthetic transient close failure")
+        return original_close(descriptor)
+
+    monkeypatch.setattr(wr.os, "close", fail_child_close_once)
+    wr._fechar_custodia_cleanup(custody)
+
+    assert injected is True
+    assert custody.children[0].descriptor is None
+    assert custody.children[0].anchor_path is None
+    for descriptor in descriptors:
+        assert descriptor is not None
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows cleanup custody handles")
+def test_falha_ao_fechar_descritor_preserva_ownership_para_retry(
+    tmp_path, monkeypatch
+):
+    """RED B11 — close falho não pode perder a referência ao handle vivo."""
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    root = tmp_path / "recovery-00000000-0000-4000-8000-000000000095"
+    (root / "child").mkdir(parents=True)
+    custody = wr._adquirir_custodia_cleanup(root)
+    child = custody.children[0]
+    child_descriptor = child.descriptor
+    assert child_descriptor is not None
+    original_close = wr.os.close
+    injected = 0
+
+    def fail_child_close_twice(descriptor):
+        nonlocal injected
+        if descriptor == child_descriptor and injected < 2:
+            injected += 1
+            raise OSError("synthetic close failure before release")
+        return original_close(descriptor)
+
+    monkeypatch.setattr(wr.os, "close", fail_child_close_twice)
+    with pytest.raises(OSError, match="synthetic close failure"):
+        wr._fechar_custodia_cleanup(custody)
+
+    assert injected == 2
+    assert child.descriptor == child_descriptor
+    os.fstat(child_descriptor)
+
+    monkeypatch.setattr(wr.os, "close", original_close)
+    wr._fechar_custodia_cleanup(custody)
+    assert child.descriptor is None
+    assert child.anchor_path is None
+    with pytest.raises(OSError):
+        os.fstat(child_descriptor)
 
 
 @pytest.mark.parametrize("reparse_location", ["root", "nested"])

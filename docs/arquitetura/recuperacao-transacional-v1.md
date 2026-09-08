@@ -317,7 +317,12 @@ uma raiz ou membro reparse é recusado sem escrita no alvo externo. Se a libera�
 de um anchor falhar depois da remoção dos controles, a decisão e a quarentena são
 reestabelecidas na mesma identidade antes de retornar `RECOVERY_RETAINED`. O
 fechamento percorre a árvore inteira mesmo quando um filho falha, para que o
-primeiro erro nunca deixe handles de irmãos ou ancestrais vazados.
+primeiro erro nunca deixe handles de irmãos ou ancestrais vazados. Um descritor
+só deixa de pertencer à custódia depois de `close` confirmado; se o fechamento
+falhar antes de liberar o handle, sua referência permanece disponível para a
+retentativa local. A restauração escreve primeiro disposition e quarentena,
+tenta cada controle de forma independente e repete uma vez apenas os writes que
+falharam, impedindo que uma falha transitória auxiliar apague a decisão durável.
 
 Preservar sem publicar também é falha: uma raiz canônica que contenha reparse é
 exposta de forma sanitizada como `RECOVERY_UNRESUMABLE`, sem percorrer o membro
