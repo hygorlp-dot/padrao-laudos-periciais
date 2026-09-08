@@ -255,4 +255,42 @@ describe("construction defect analysis workbench", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("operação foi recusada");
     expect(fetchMock).toHaveBeenCalledTimes(5);
   });
+
+  test("recovers an exact professional review committed before its response was lost", async () => {
+    const recoveredEnvelope = {
+      ...envelope,
+      revision: 6,
+      snapshot: {
+        ...envelope.snapshot,
+        reviews: [
+          ...envelope.snapshot.reviews,
+          {
+            review_id: "PAT-REVIEW-RECOVERED",
+            pat_id: "PAT-001",
+            action: "REJECT" as const,
+            professional_id: "PROFESSIONAL-001",
+            reason: "Minha revisão recuperada.",
+            reviewed_at: "2026-09-08T12:01:00Z",
+            supersedes_review_id: "PAT-REVIEW-001",
+          },
+        ],
+      },
+    };
+    const fetchMock = fetchByUrl();
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, envelope)));
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, inspectEnvelope)));
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, caseEnvelope)));
+    fetchMock.mockImplementationOnce(() => Promise.reject(new TypeError("response lost after commit")));
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, recoveredEnvelope)));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ConstructionDefectAnalysisView workspaceId={ID} />);
+
+    await screen.findByRole("heading", { name: "PAT-001" });
+    fireEvent.change(screen.getByLabelText("Fundamentação da revisão"), { target: { value: "Minha revisão recuperada." } });
+    fireEvent.click(screen.getByRole("button", { name: "Registrar revisão" }));
+
+    expect(await screen.findByText("Rejeitada pelo profissional")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
 });
