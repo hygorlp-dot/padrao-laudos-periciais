@@ -867,6 +867,28 @@ def _raizes(tmp_path, nome):
     return sorted(p.name for p in base.iterdir() if p.is_dir())
 
 
+def _cleanup_intent_path(tmp_path, nome, recovery_id):
+    return (
+        tmp_path
+        / f".{nome}.sqlite3.recovery"
+        / f".recovery-cleanup-intent-{recovery_id}"
+    )
+
+
+def _cleanup_intent_payload(recovery_id, mode):
+    return json.dumps(
+        {
+            "mode": mode,
+            "recovery_id": recovery_id,
+            "root_name": f"recovery-{recovery_id}",
+            "version": 1,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
 def _assinatura_viva(runtime, workspace_id):
     """Estado autoritativo vivo que abandono de staging nunca pode tocar."""
     from scripts.backend_contract.application.models import WorkspaceId
@@ -1128,6 +1150,372 @@ def test_falha_ao_soltar_anchor_raiz_preserva_disposition_para_restart(
         reopened.close()
 
 
+def test_intent_externo_sobrevive_falha_persistente_de_cleanup(
+    tmp_path, monkeypatch
+):
+    """RED A12/B12 — a autoridade não pode morar na raiz destruída."""
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    _workspace_id, _materials, package = _origem_com_dois_privados(
+        tmp_path, "protocol-discard-source"
+    )
+    target = _runtime(tmp_path, "protocol-discard-target")
+    status, staged = _stage(target, package)
+    assert status == 201, staged
+    recovery_id = staged["recovery_id"]
+    root = (
+        tmp_path
+        / ".protocol-discard-target.sqlite3.recovery"
+        / f"recovery-{recovery_id}"
+    )
+    intent = _cleanup_intent_path(
+        tmp_path, "protocol-discard-target", recovery_id
+    )
+
+    original_rmdir = Path.rmdir
+    original_write = wr._gravar_controle_ancorado
+
+    def fail_root_rmdir(path, *args, **kwargs):
+        if path == root:
+            raise PermissionError(13, "synthetic persistent root rmdir failure")
+        return original_rmdir(path, *args, **kwargs)
+
+    def fail_internal_disposition_restore(node, name, payload):
+        if name == "RECOVERY_DISPOSITION_V1":
+            raise PermissionError(13, "synthetic persistent disposition failure")
+        return original_write(node, name, payload)
+
+    monkeypatch.setattr(Path, "rmdir", fail_root_rmdir)
+    monkeypatch.setattr(
+        wr, "_gravar_controle_ancorado", fail_internal_disposition_restore
+    )
+    status, body = _json(
+        target, "POST", f"/v1/recovery/{recovery_id}/discard"
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "RECOVERY_RETAINED"
+    monkeypatch.setattr(Path, "rmdir", original_rmdir)
+    monkeypatch.setattr(wr, "_gravar_controle_ancorado", original_write)
+
+    assert root.exists()
+    assert intent.read_bytes() == _cleanup_intent_payload(recovery_id, "DISCARD")
+    target.close()
+
+    reopened = _runtime(tmp_path, "protocol-discard-target")
+    try:
+        status, listing = _json(reopened, "GET", "/v1/recovery")
+        assert status == 200, listing
+        item = next(
+            recovery
+            for recovery in listing["recoveries"]
+            if recovery["recovery_id"] == recovery_id
+        )
+        assert item["state"] == "RECOVERY_RETAINED"
+        assert item["allowed_actions"] == ["RETRY_DISCARD"]
+    finally:
+        reopened.close()
+
+
+def test_intent_externo_preserva_abandono_apos_restart(tmp_path, monkeypatch):
+    """RED protocolo — ABANDON persiste fora da raiz antes do primeiro unlink."""
+    _workspace_id, _materials, package = _origem_com_dois_privados(
+        tmp_path, "protocol-abandon-source"
+    )
+    target = _runtime(tmp_path, "protocol-abandon-target")
+    status, staged = _stage(target, package)
+    assert status == 201, staged
+    recovery_id = staged["recovery_id"]
+    root = (
+        tmp_path
+        / ".protocol-abandon-target.sqlite3.recovery"
+        / f"recovery-{recovery_id}"
+    )
+    target.close()
+    (root / "RECOVERY_NOT_PROMOTABLE").write_bytes(b"CORRUPTED")
+
+    reopened = _runtime(tmp_path, "protocol-abandon-target")
+    original_rmdir = Path.rmdir
+
+    def fail_root_rmdir(path, *args, **kwargs):
+        if path == root:
+            raise PermissionError(13, "synthetic persistent root rmdir failure")
+        return original_rmdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "rmdir", fail_root_rmdir)
+    status, body = _json(
+        reopened,
+        "POST",
+        f"/v1/recovery/{recovery_id}/abandon",
+        value={"confirm_abandon": True},
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "RECOVERY_RETAINED"
+    monkeypatch.setattr(Path, "rmdir", original_rmdir)
+    intent = _cleanup_intent_path(
+        tmp_path, "protocol-abandon-target", recovery_id
+    )
+    assert intent.read_bytes() == _cleanup_intent_payload(recovery_id, "ABANDON")
+    reopened.close()
+
+    restarted = _runtime(tmp_path, "protocol-abandon-target")
+    try:
+        status, listing = _json(restarted, "GET", "/v1/recovery")
+        assert status == 200, listing
+        item = next(
+            recovery
+            for recovery in listing["recoveries"]
+            if recovery["recovery_id"] == recovery_id
+        )
+        assert item["state"] == "RECOVERY_RETAINED"
+        assert item["allowed_actions"] == ["RETRY_ABANDON"]
+    finally:
+        restarted.close()
+
+
+@pytest.mark.parametrize("existing", ["exact", "divergent", "hardlink"])
+def test_intent_externo_file_exists_exige_controle_regular_exato(
+    tmp_path, existing
+):
+    """RED protocolo — FileExists só equivale a bytes canônicos exclusivos."""
+    _workspace_id, _materials, package = _origem_com_dois_privados(
+        tmp_path, f"intent-{existing}-source"
+    )
+    target_name = f"intent-{existing}-target"
+    target = _runtime(tmp_path, target_name)
+    status, staged = _stage(target, package)
+    assert status == 201, staged
+    recovery_id = staged["recovery_id"]
+    root = (
+        tmp_path
+        / f".{target_name}.sqlite3.recovery"
+        / f"recovery-{recovery_id}"
+    )
+    intent = _cleanup_intent_path(tmp_path, target_name, recovery_id)
+    expected = _cleanup_intent_payload(recovery_id, "DISCARD")
+    if existing == "exact":
+        intent.write_bytes(expected)
+    elif existing == "divergent":
+        intent.write_bytes(b"{")
+    else:
+        outside = tmp_path / "foreign-intent.bin"
+        outside.write_bytes(expected)
+        os.link(outside, intent)
+
+    status, body = _json(
+        target, "POST", f"/v1/recovery/{recovery_id}/discard"
+    )
+    if existing == "exact":
+        assert status == 200, body
+        assert not root.exists()
+        assert not intent.exists()
+    else:
+        assert status != 200, body
+        assert root.exists()
+        assert intent.read_bytes() == (b"{" if existing == "divergent" else expected)
+    target.close()
+
+
+def test_falha_na_publicacao_do_intent_nao_inicia_cleanup(tmp_path, monkeypatch):
+    """RED protocolo — sem commit do WAL externo, nenhum byte é removido."""
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    _workspace_id, _materials, package = _origem_com_dois_privados(
+        tmp_path, "intent-create-source"
+    )
+    target = _runtime(tmp_path, "intent-create-target")
+    status, staged = _stage(target, package)
+    assert status == 201, staged
+    recovery_id = staged["recovery_id"]
+    root = (
+        tmp_path
+        / ".intent-create-target.sqlite3.recovery"
+        / f"recovery-{recovery_id}"
+    )
+    before = sorted(path.relative_to(root) for path in root.rglob("*"))
+    original_publish = wr._gravar_sidecar_imutavel
+    injected = False
+
+    def fail_cleanup_intent(base, name, record):
+        nonlocal injected
+        if name.startswith(".recovery-cleanup-intent-"):
+            injected = True
+            raise OSError("synthetic intent create failure")
+        return original_publish(base, name, record)
+
+    monkeypatch.setattr(wr, "_gravar_sidecar_imutavel", fail_cleanup_intent)
+    status, body = _json(
+        target, "POST", f"/v1/recovery/{recovery_id}/discard"
+    )
+    assert status != 200, body
+    assert injected is True
+    assert sorted(path.relative_to(root) for path in root.rglob("*")) == before
+    target.close()
+
+
+def test_escrita_parcial_do_intent_falha_antes_do_cleanup(tmp_path, monkeypatch):
+    """RED protocolo — intent parcial não vira autoridade nem libera unlink."""
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    _workspace_id, _materials, package = _origem_com_dois_privados(
+        tmp_path, "intent-partial-source"
+    )
+    target = _runtime(tmp_path, "intent-partial-target")
+    status, staged = _stage(target, package)
+    assert status == 201, staged
+    recovery_id = staged["recovery_id"]
+    root = (
+        tmp_path
+        / ".intent-partial-target.sqlite3.recovery"
+        / f"recovery-{recovery_id}"
+    )
+    intent = _cleanup_intent_path(tmp_path, "intent-partial-target", recovery_id)
+    before = sorted(path.relative_to(root) for path in root.rglob("*"))
+    original_publish = wr._gravar_sidecar_imutavel
+    injected = False
+
+    def leave_partial_cleanup_intent(base, name, record):
+        nonlocal injected
+        if name.startswith(".recovery-cleanup-intent-"):
+            injected = True
+            (Path(base) / name).write_bytes(b"{")
+            raise OSError("synthetic partial intent write")
+        return original_publish(base, name, record)
+
+    monkeypatch.setattr(
+        wr, "_gravar_sidecar_imutavel", leave_partial_cleanup_intent
+    )
+    status, body = _json(
+        target, "POST", f"/v1/recovery/{recovery_id}/discard"
+    )
+    assert status != 200, body
+    assert injected is True
+    assert intent.read_bytes() == b"{"
+    assert sorted(path.relative_to(root) for path in root.rglob("*")) == before
+    target.close()
+
+    reopened = _runtime(tmp_path, "intent-partial-target")
+    try:
+        status, listing = _json(reopened, "GET", "/v1/recovery")
+        assert status == 200, listing
+        item = next(
+            recovery
+            for recovery in listing["recoveries"]
+            if recovery["recovery_id"] == recovery_id
+        )
+        assert item["state"] == "RECOVERY_RETAINED"
+        assert item["allowed_actions"] == ["RETRY_ABANDON"]
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize(
+    "failed_control",
+    ["STAGING_IDENTITY_V1", "RECOVERY_SESSION_V1", "RECOVERY_NOT_PROMOTABLE"],
+)
+def test_intent_externo_sobrevive_falha_removendo_controle_interno(
+    tmp_path, monkeypatch, failed_control
+):
+    """RED matriz — falha em controle interno não perde a decisão humana."""
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    _workspace_id, _materials, package = _origem_com_dois_privados(
+        tmp_path, f"control-{failed_control}-source"
+    )
+    target_name = f"control-{failed_control}-target"
+    target = _runtime(tmp_path, target_name)
+    status, staged = _stage(target, package)
+    assert status == 201, staged
+    recovery_id = staged["recovery_id"]
+    root = (
+        tmp_path
+        / f".{target_name}.sqlite3.recovery"
+        / f"recovery-{recovery_id}"
+    )
+    original_unlink = wr._unlink_na_custodia
+
+    def fail_selected_control(node, name):
+        if name == failed_control:
+            raise PermissionError(13, "synthetic control unlink failure")
+        return original_unlink(node, name)
+
+    monkeypatch.setattr(wr, "_unlink_na_custodia", fail_selected_control)
+    status, body = _json(
+        target, "POST", f"/v1/recovery/{recovery_id}/discard"
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "RECOVERY_RETAINED"
+    monkeypatch.setattr(wr, "_unlink_na_custodia", original_unlink)
+    intent = _cleanup_intent_path(tmp_path, target_name, recovery_id)
+    assert intent.read_bytes() == _cleanup_intent_payload(recovery_id, "DISCARD")
+    assert root.exists()
+    target.close()
+
+    reopened = _runtime(tmp_path, target_name)
+    try:
+        status, listing = _json(reopened, "GET", "/v1/recovery")
+        assert status == 200, listing
+        item = next(
+            recovery
+            for recovery in listing["recoveries"]
+            if recovery["recovery_id"] == recovery_id
+        )
+        assert item["state"] == "RECOVERY_RETAINED"
+        assert item["allowed_actions"] == ["RETRY_DISCARD"]
+    finally:
+        reopened.close()
+
+
+def test_root_ausente_permite_commit_com_gc_posterior_do_intent(
+    tmp_path, monkeypatch
+):
+    """RED matriz — sidecar retido após rmdir não recria recovery fantasma."""
+    _workspace_id, _materials, package = _origem_com_dois_privados(
+        tmp_path, "intent-gc-source"
+    )
+    target = _runtime(tmp_path, "intent-gc-target")
+    status, staged = _stage(target, package)
+    assert status == 201, staged
+    recovery_id = staged["recovery_id"]
+    root = (
+        tmp_path
+        / ".intent-gc-target.sqlite3.recovery"
+        / f"recovery-{recovery_id}"
+    )
+    intent = _cleanup_intent_path(tmp_path, "intent-gc-target", recovery_id)
+    original_unlink = Path.unlink
+    injected = False
+
+    def fail_intent_gc_once(path, *args, **kwargs):
+        nonlocal injected
+        if path == intent and not injected:
+            injected = True
+            raise PermissionError(13, "synthetic cleanup intent gc failure")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_intent_gc_once)
+    status, body = _json(
+        target, "POST", f"/v1/recovery/{recovery_id}/discard"
+    )
+    assert status == 200, body
+    assert injected is True
+    assert not root.exists()
+    assert intent.exists()
+    monkeypatch.setattr(Path, "unlink", original_unlink)
+    target.close()
+
+    reopened = _runtime(tmp_path, "intent-gc-target")
+    try:
+        status, listing = _json(reopened, "GET", "/v1/recovery")
+        assert status == 200, listing
+        assert all(
+            item["recovery_id"] != recovery_id
+            for item in listing["recoveries"]
+        )
+        assert not intent.exists()
+    finally:
+        reopened.close()
+
+
 @pytest.mark.parametrize(
     "failed_control",
     [
@@ -1277,10 +1665,10 @@ def test_falha_transitoria_ao_fechar_descritor_converge_sem_vazamento(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows cleanup custody handles")
-def test_falha_ao_fechar_descritor_preserva_ownership_para_retry(
+def test_close_ambiguo_nunca_fecha_descriptor_reutilizado(
     tmp_path, monkeypatch
 ):
-    """RED B11 — close falho não pode perder a referência ao handle vivo."""
+    """RED A12 — erro depois do close consome o fd e nunca o fecha de novo."""
     from scripts.backend_contract.application import workspace_recovery as wr
 
     root = tmp_path / "recovery-00000000-0000-4000-8000-000000000095"
@@ -1290,29 +1678,67 @@ def test_falha_ao_fechar_descritor_preserva_ownership_para_retry(
     child_descriptor = child.descriptor
     assert child_descriptor is not None
     original_close = wr.os.close
-    injected = 0
+    foreign = tmp_path / "foreign-descriptor.bin"
+    foreign.write_bytes(b"FOREIGN")
+    probes = []
+    injected = False
 
-    def fail_child_close_twice(descriptor):
+    def close_then_reuse_and_fail(descriptor):
         nonlocal injected
-        if descriptor == child_descriptor and injected < 2:
-            injected += 1
-            raise OSError("synthetic close failure before release")
+        if descriptor == child_descriptor and not injected:
+            injected = True
+            original_close(descriptor)
+            while child_descriptor not in probes:
+                probes.append(os.open(foreign, os.O_RDONLY))
+            raise OSError("synthetic ambiguous close failure")
         return original_close(descriptor)
 
-    monkeypatch.setattr(wr.os, "close", fail_child_close_twice)
+    monkeypatch.setattr(wr.os, "close", close_then_reuse_and_fail)
+    try:
+        wr._fechar_custodia_cleanup(custody)
+        assert injected is True
+        os.fstat(child_descriptor)
+    finally:
+        monkeypatch.setattr(wr.os, "close", original_close)
+        for descriptor in probes:
+            try:
+                original_close(descriptor)
+            except OSError:
+                pass
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows cleanup custody handles")
+def test_close_ambiguo_antes_da_liberacao_nunca_repete_o_fd(tmp_path, monkeypatch):
+    """RED protocolo — fd desconhecido não é ownership reutilizável."""
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    root = tmp_path / "recovery-00000000-0000-4000-8000-000000000093"
+    root.mkdir()
+    custody = wr._adquirir_custodia_cleanup(root)
+    descriptor = custody.descriptor
+    anchor = custody.anchor_path
+    assert descriptor is not None and anchor is not None
+    original_close = wr.os.close
+    calls = 0
+
+    def fail_before_release(candidate):
+        nonlocal calls
+        if candidate == descriptor:
+            calls += 1
+            raise OSError("synthetic close failure before release")
+        return original_close(candidate)
+
+    monkeypatch.setattr(wr.os, "close", fail_before_release)
     with pytest.raises(OSError, match="synthetic close failure"):
         wr._fechar_custodia_cleanup(custody)
-
-    assert injected == 2
-    assert child.descriptor == child_descriptor
-    os.fstat(child_descriptor)
+    assert calls == 1
+    assert custody.descriptor is None
+    assert anchor.exists()
+    os.fstat(descriptor)
 
     monkeypatch.setattr(wr.os, "close", original_close)
-    wr._fechar_custodia_cleanup(custody)
-    assert child.descriptor is None
-    assert child.anchor_path is None
-    with pytest.raises(OSError):
-        os.fstat(child_descriptor)
+    original_close(descriptor)
+    anchor.unlink()
 
 
 @pytest.mark.parametrize("reparse_location", ["root", "nested"])
