@@ -573,6 +573,231 @@ Cada linha exige conjuntamente `NO_FALSE_SUCCESS`, `NO_LOST_AUTHORITY`,
 `NO_DOUBLE_CLOSE`, `NO_FOREIGN_FD_CLOSE`, `NO_PRIVATE_RESIDUE_WITH_SUCCESS`,
 `RESTART_HAS_VALID_NEXT_ACTION` e `HUMAN_INTENT_PRESERVED`.
 
+### H.3 Continuidade de identidade do namespace (A14/B14)
+
+Status: **modelo normativo reconciliado antes do novo RED e antes de qualquer
+mutacao de producao**. O candidato
+`36dcfe9550ccb902bf1b5dd5dae37dca48fd11c2` esta invalidado. H.3 corrige duas
+afirmacoes fortes demais de H.2: `mkdir` seguido de `open` nao e criacao
+vinculada, e fechar o ultimo handle antes de `rmdir(path)` nao e remocao
+vinculada.
+
+```text
+CHILD_CREATED != CHILD_IDENTITY_BOUND
+IDENTITY_VALIDATED_BEFORE_DELETE != IDENTITY_BOUND_THROUGH_DELETE
+PATH_ABSENT != EXPECTED_IDENTITY_REMOVED
+LOGICAL_CONTROL_EQUALITY != PHYSICAL_FILESYSTEM_IDENTITY
+```
+
+#### DAG causal e caminho critico
+
+```text
+A14 post-create rebind + A14/B14 post-close rebind
+  -> contrato de autoridade H.3
+  -> REDs nos dois pontos de coordenacao
+  -> primitivas Windows estreitas create/open/delete por handle
+  -> identidade fisica no handoff e no cleanup intent duravel
+  -> cleanup terminal vinculado ao mesmo handle
+  -> matriz focada + sibling sweep
+  -> unico HEAD terminal + CI protegida
+  -> A15 e B15 independentes em paralelo
+```
+
+O caminho critico e `criacao vinculada -> primeiro write` e `identidade esperada
+-> remocao terminal -> prova de commit`. Pesquisa oficial e modelagem dos REDs
+podem ocorrer em lane somente leitura; existe um unico mutation owner para
+`workspace_recovery.py`, `productization.py`, arquitetura e testes. A15/B15 nao
+iniciam antes do HEAD terminal congelado.
+
+#### Mapa das operacoes materiais
+
+| boundary | cria/adquire/valida | primeira ou ultima mutacao | autoridade exigida |
+|---|---|---|---|
+| `RecoveryFilesystemCustody._acquire_*` | cria a base final ausente e adquire a cadeia | torna a base enumeravel | parent ja custodiado; criacao Windows devolve o primeiro handle |
+| `RecoveryFilesystemCustody.create_child` | cria `recovery-<uuid>` | entrega a raiz a `RecoveryStaging` | parent custodiado; child handle nasce na mesma operacao de criacao |
+| `RecoveryStaging.create` | recebe custody e valida identidade | grava quarentena, SQLite e private store | nenhum write antes da identidade fisica vinculada |
+| `abrir_staging_quarentenado` | readquire a raiz e confere quarentena | abre SQLite/private para retomada | ancestry e child continuamente custodiados |
+| journal/identity/descriptor | abre, grava, fsync, link/replace e le controles | publica autoridade duravel interna | custody da sessao permanece viva; bytes exatos continuam obrigatorios |
+| `_persistir_cleanup_intent` | cria sidecar exclusivo na base e o rele | publica decisao antes de unlink | base custodiada + identidade fisica esperada no proprio registro |
+| `_adquirir_custodia_cleanup` | abre e inventaria raiz/descendentes | prepara remocao | handle da raiz tem `DELETE`, nega delete-sharing e coincide com a identidade esperada |
+| `_remover_material_ancorado` | remove arquivos e diretorios filhos | cleanup destrutivo | parent/child handles vivos; diretorio filho sai por seu proprio handle no Windows |
+| `_remover_raiz_quarentenada` | remove controles por ultimo | remove o namespace raiz e libera GC | o mesmo handle esperado fica vivo ate disposition, prova e close consumido |
+| `_encerrar_staging` / `_remover_entry` | captura a identidade antes de `discard/close` | transfere sessao para cleanup | identidade nao pode ser readquirida ou inferida pelo pathname |
+| `recolher_stagings_orfaos` | enumera base e classifica roots/intents | coleta somente terminal/orfao provado | intent existente fixa modo e identidade para todo retry |
+| `reconstruir_sessoes_recuperacao` | enumera/readquire/le controles | reabre staging, sem remover | base e child custodiados durante cada leitura |
+| composition root | calcula `.sqlite3.recovery` e chama coleta/reconstrucao/stage | nenhuma autoridade propria | apenas encadeia as autoridades acima |
+
+Pathnames reconstruidos por `Path(parent) / name` sao localizadores, nunca prova
+de identidade. No Windows eles so podem ser usados enquanto a ancestry
+correspondente esta presa sem delete-sharing. No POSIX, as operacoes de namespace
+continuam relativas a `dir_fd` e recusam follow com `O_NOFOLLOW`.
+
+#### Contrato de criacao
+
+```text
+TRUSTED_PARENT_CUSTODY
+  -> CREATE CHILD AND RETURN ITS HANDLE
+  -> READ/BIND PHYSICAL IDENTITY FROM THAT HANDLE
+  -> KEEP CONTINUOUS CUSTODY
+  -> FIRST WRITE
+```
+
+```text
+CREATE_CHILD_WITHOUT_PARENT_CUSTODY = PROHIBITED
+CHILD_CREATED => CHILD_IDENTITY_BOUND_BEFORE_ANY_WRITE
+FIRST_WRITE_REQUIRES_BOUND_CHILD_IDENTITY
+MKDIR_THEN_GLOBAL_PATH_REOPEN = PROHIBITED_ON_WINDOWS
+```
+
+No Windows, a primitiva escolhida e `NtCreateFile` documentada para user mode,
+com nome de um unico componente relativo ao `OBJECT_ATTRIBUTES.RootDirectory`
+do parent custodiado, `FILE_CREATE`, `FILE_DIRECTORY_FILE`, acesso minimo de
+diretorio e nenhum `FILE_SHARE_DELETE`. A chamada cria e devolve o handle do
+mesmo objeto; sua identidade `FILE_ID_INFO` (`volume serial`, `file id` de 128
+bits) e lida antes de qualquer
+write. Para transferir a ancestry a nova custody sem reabrir o filho por
+pathname, `DuplicateHandle(..., DUPLICATE_SAME_ACCESS)` duplica os handles-pai
+no mesmo processo; o handle-filho devolvido pela criacao e transferido sem
+substituicao. Falha parcial fecha cada duplicata ja criada e o handle-filho sem
+fazer rollback por pathname. Falha, simbolo indisponivel, status inesperado ou
+objeto nao-diretorio falham fechados. As novas funcoes sao privadas e especificas
+de recovery; nao expoem API generica de filesystem, processo, shell ou argv.
+
+O handle de criacao nao solicita `DELETE`: a ausencia de `FILE_SHARE_DELETE` ja
+bloqueia rename/delete por terceiros, enquanto pedir esse acesso faria aberturas
+legitimas posteriores precisarem compartilhar delete. `DELETE` e adquirido
+somente no cleanup, depois do fechamento da sessao, para o objeto cuja identidade
+o intent fixou. Se a transferencia da custody falhar, os handles sao consumidos
+e o diretorio vazio fica retido; nao existe rollback destrutivo por pathname.
+
+No POSIX permanece `mkdirat(parent_fd, name)` seguido de
+`openat(parent_fd, name, O_DIRECTORY | O_NOFOLLOW)` e toda operacao de namespace
+subsequente permanece ancorada no descritor. H.3 nao introduz pathname global
+como autoridade nessa plataforma.
+
+#### Contrato de remocao e commit
+
+```text
+EXPECTED_CHILD_IDENTITY
+  -> OPEN EXACT CHILD FOR DELETE UNDER TRUSTED PARENT
+  -> DESTRUCTIVE CLEANUP WHILE HANDLE REMAINS OPEN
+  -> HANDLE-BOUND FINAL DISPOSITION
+  -> PROVE THAT HANDLE IS DELETE-PENDING
+  -> CONSUME/CLOSE HANDLE ONCE
+  -> PROVE THE EXPECTED NAME IS ABSENT (OR RETAIN ON REPLACEMENT/UNCERTAINTY)
+  -> COMMIT / INTENT GC
+```
+
+```text
+EXPECTED_FILESYSTEM_IDENTITY_MUST_SURVIVE_UNTIL_NAMESPACE_REMOVAL_COMMITTED
+CLOSE_CUSTODY_BEFORE_FINAL_REMOVAL = PROHIBITED
+PATHNAME_RMDIR_WITHOUT_EXPECTED_IDENTITY = PROHIBITED
+EXPECTED_IDENTITY_MUST_NOT_BE_REINFERRED_FROM_PATH_ON_RETRY
+```
+
+O cleanup intent externo passa a carregar a identidade fisica esperada junto
+de `mode`, `recovery_id` e `root_name`. Ele nao cria segunda autoridade: apenas
+durabiliza qual objeto a decisao existente escolheu. `DISCARD`/`ABANDON` capturam
+essa identidade antes de `staging.discard()`. Startup e retry devem comparar o
+root aberto com o valor do intent; divergencia preserva o intent e nao toca o
+substituto.
+Se uma tentativa `COLLECT` ja consumiu os controles internos antes de falhar na
+remocao terminal, o intent preexistente substitui essa autoridade no restart e
+permite somente a mesma coleta da mesma identidade. Um intent criado na tentativa
+corrente nao autoriza, sozinho, uma raiz que ja chegou com quarentena invalida.
+
+No Windows, a raiz e cada diretorio filho a remover sao abertos com `DELETE` e
+sem delete-sharing. A remocao terminal usa
+`SetFileInformationByHandle(FileDispositionInfo)` no proprio handle, confirma
+`FILE_STANDARD_INFO.DeletePending`, consome o slot antes da unica tentativa de
+`CloseHandle` e entao verifica o namespace sob o parent ainda custodiado. Um
+nome religado depois do delete exato e tratado como `RECOVERY_RETAINED`; nunca e
+apagado para fazer o retry convergir.
+
+O commit nao decorre apenas de `path.exists() == false`. Ele requer conjuntamente:
+
+```text
+OPEN_HANDLE_IDENTITY == EXPECTED_FILESYSTEM_IDENTITY
+HANDLE_BOUND_DELETE_ACCEPTED = TRUE
+HANDLE_DELETE_PENDING = TRUE
+EXPECTED_NAMESPACE_ENTRY_ABSENT = TRUE
+EXTERNAL_MUTATION = 0
+ORIGINAL_RECOVERY_PARKED_WITH_SUCCESS = 0
+DURABLE_INTENT_GC_ALLOWED = TRUE
+```
+
+Se qualquer prova estiver ausente, ambigua ou divergente, o estado terminal e
+`RECOVERY_RETAINED` (ou falha fechada equivalente) e o intent nao sofre GC.
+Se o processo morrer depois da remocao exata e antes do GC, o restart observa
+somente pathname ausente, portanto preserva o sidecar nao privado e nao tenta
+reconstruir a prova perdida. Esse residuo de controle e preferivel a converter
+ausencia de nome em uma falsa prova de identidade.
+
+#### Decisao de primitiva Windows
+
+Fontes primarias: a documentacao Microsoft de
+[`NtCreateFile`](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile)
+define criacao de diretorio e nome relativo a `RootDirectory`; a de
+[`SetFileInformationByHandle`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle)
+vincula a disposition ao handle e exige `DELETE`; e
+[`FILE_STANDARD_INFO`](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_standard_info)
+expoe `DeletePending`; e
+[`DuplicateHandle`](https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-duplicatehandle)
+documenta que a duplicata referencia o mesmo objeto e, com
+`DUPLICATE_SAME_ACCESS`, conserva o acesso da origem. `CreateDirectory2W`/`RemoveDirectory2W` tambem fecham
+redirects, mas exigem Windows 11 24H2 e `RemoveDirectory2W` ainda recebe pathname,
+nao handle/identidade.
+
+A pesquisa independente de 24 criterios que antecedeu a implementacao ficou
+registrada em
+`%TEMP%/issue-183-windows-directory-handle-ranking-20260908.md`, SHA-256
+`442DC35E5275F12C1DDE66C4F4633C1DFCD742B256A573D16772DCF3CD00E281`, com 14
+fontes primarias oficiais Microsoft. O unico candidato elegivel obteve `78.95`;
+os outros dois foram excluidos por gates de correctness/security/compatibility,
+nao apenas por score.
+
+| candidata | elegibilidade | decisao repository-specifica |
+|---|---|---|
+| `NtCreateFile` relativo + `SetFileInformationByHandle` | elegivel; API oficial user-mode, sem dependencia e compatibilidade Windows anterior a 24H2 | **escolhida** no menor wrapper ctypes privado |
+| `CreateDirectory2W` + `RemoveDirectory2W` | create retorna handle, mas remove relê pathname; ambas exigem Windows 11 24H2 | inelegivel por correctness/security e compatibilidade |
+| `mkdir/CreateDirectory` + reopen e `rmdir(path)` | reproduziu escrita e delecao externas, mais falso sucesso | inelegivel por correctness/security |
+
+`FILE_DISPOSITION_INFO_EX` e um framework filesystem novo nao sao necessarios:
+a classe classica por handle, mais `DeletePending` e verificacao parent-custodiada,
+fecha o boundary reproduzido com menor superficie.
+
+#### Matriz TOCTOU obrigatoria
+
+| momento adversarial | resultado permitido |
+|---|---|
+| swap logo apos create ou antes do primeiro handle | rename bloqueado pelo handle retornado pela criacao; zero write externo |
+| rename do child criado / replacement externo ou logico byte-identico | nenhuma adocao por pathname; identidade fisica continua a criada |
+| race antes da quarentena/SQLite/private | first write somente depois do binding; replacement nunca recebe controle/material |
+| swap apos ultimo unlink interno ou antes da remocao final | handle ainda vivo impede rename/rebind; delete mira esse handle |
+| recovery verdadeira estacionada e substituto no nome | mismatch com intent; `RECOVERY_RETAINED`; sentinel e substituto intactos |
+| substituto com mesmos controles/estrutura | igualdade logica nao vence identidade fisica divergente |
+| intent existente + retry concorrente | claim serial existente + intent fixa modo/identidade; nenhum reselect por pathname |
+| replacement depois do close exato, antes do GC | nome presente bloqueia commit/GC; replacement intacto; intent esperado permanece |
+| close/disposition/prova ambigua | slot consumido uma vez; sem GC; restart/retry retidos |
+
+Regra comum: `PATH_REBOUND => ZERO_EXTERNAL_MUTATION + ZERO_FALSE_SUCCESS`.
+
+#### Invariantes preservadas
+
+H.3 e aditiva ao modelo de disposition/quarentena; nao altera seu significado:
+
+```text
+DURABLE_DISPOSITION_OUTLIVES_DESTRUCTIVE_CLEANUP
+QUARANTINE_OUTLIVES_PRIVATE_MATERIAL
+ROOT_EXISTS => CLEANUP_INTENT_RECONSTRUCTIBLE
+AMBIGUOUS_FD_NUMBER_MUST_NEVER_BE_CLOSED_AGAIN
+FILE_EXISTS != VALID_CONTROL_EXISTS
+EXISTING_CONTROL_BYTES == EXPECTED_CONTROL_BYTES
+TRUSTED_CHILD_REQUIRES_TRUSTED_ANCESTRY
+REPARSE_ANCESTOR => NO_TRAVERSAL
+EXTERNAL_FILESYSTEM_MUTATION = 0
+```
+
 ---
 
 ## I. Transporte de binário grande
