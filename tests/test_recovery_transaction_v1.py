@@ -26,6 +26,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -67,6 +68,16 @@ def _remove_directory_reparse(link: Path) -> None:
         link.unlink()
     elif getattr(link, "is_junction", lambda: False)():
         os.rmdir(link)
+
+
+class _EmptyScandir:
+    """Context manager minimo para REDs POSIX sem depender do host Windows."""
+
+    def __enter__(self):
+        return iter(())
+
+    def __exit__(self, _exc_type, _exc_value, _traceback):
+        return False
 
 
 def _external_tree_sha256(root: Path) -> str:
@@ -1338,12 +1349,12 @@ def test_falha_na_publicacao_do_intent_nao_inicia_cleanup(tmp_path, monkeypatch)
     original_publish = wr._gravar_sidecar_imutavel
     injected = False
 
-    def fail_cleanup_intent(base, name, record):
+    def fail_cleanup_intent(base, name, record, custody=None):
         nonlocal injected
         if name.startswith(".recovery-cleanup-intent-"):
             injected = True
             raise OSError("synthetic intent create failure")
-        return original_publish(base, name, record)
+        return original_publish(base, name, record, custody)
 
     monkeypatch.setattr(wr, "_gravar_sidecar_imutavel", fail_cleanup_intent)
     status, body = _json(target, "POST", f"/v1/recovery/{recovery_id}/discard")
@@ -1368,13 +1379,13 @@ def test_escrita_parcial_do_intent_falha_antes_do_cleanup(tmp_path, monkeypatch)
     original_publish = wr._gravar_sidecar_imutavel
     injected = False
 
-    def leave_partial_cleanup_intent(base, name, record):
+    def leave_partial_cleanup_intent(base, name, record, custody=None):
         nonlocal injected
         if name.startswith(".recovery-cleanup-intent-"):
             injected = True
             (Path(base) / name).write_bytes(b"{")
             raise OSError("synthetic partial intent write")
-        return original_publish(base, name, record)
+        return original_publish(base, name, record, custody)
 
     monkeypatch.setattr(wr, "_gravar_sidecar_imutavel", leave_partial_cleanup_intent)
     status, body = _json(target, "POST", f"/v1/recovery/{recovery_id}/discard")
@@ -2459,7 +2470,7 @@ def test_identidade_perdida_com_journal_torna_irretomavel_sem_segunda_copia(tmp_
 # uma condição TRANSITÓRIA é lida como veredito PERMANENTE.
 
 
-def test_identidade_travada_nao_autoriza_destruir_a_retomada(tmp_path):
+def test_identidade_travada_nao_autoriza_destruir_a_retomada(tmp_path, monkeypatch):
     """RED S1 — prova ilegível AGORA não é prova ausente PARA SEMPRE.
 
     O código nomeia a mesma condição como transitória para o journal (antivírus,
@@ -2468,8 +2479,6 @@ def test_identidade_travada_nao_autoriza_destruir_a_retomada(tmp_path):
     como IRRETOMÁVEL, o descarte passava a ser autorizado e apagava a autoridade
     de retomada — sem sequer exigir a declaração consciente.
     """
-    import pathlib as _pathlib
-
     import scripts.backend_contract.application.workspace_recovery as wr
     from scripts.backend_contract.infrastructure.productization import (
         abrir_staging_quarentenado,
@@ -2478,23 +2487,19 @@ def test_identidade_travada_nao_autoriza_destruir_a_retomada(tmp_path):
     _origem, _pkg, destino, _rid = _interromper_promocao(tmp_path, "s1")
     destino.close()
     journal = _journal_da_unica_raiz(tmp_path, "s1")
-    alvo = journal.parent / "STAGING_IDENTITY_V1"
-    assert alvo.exists()
+    assert (journal.parent / "STAGING_IDENTITY_V1").exists()
 
     staging = abrir_staging_quarentenado(journal.parent)
-    original = _pathlib.Path.read_bytes
+    original = wr.RecoveryFilesystemCustody.read_file
     try:
 
-        def _travado(self, *args, **kwargs):
-            if _pathlib.Path(self) == alvo:
+        def _travado(self, name):
+            if self.path == journal.parent and name == "STAGING_IDENTITY_V1":
                 raise PermissionError(13, "arquivo em uso")
-            return original(self, *args, **kwargs)
+            return original(self, name)
 
-        _pathlib.Path.read_bytes = _travado
-        try:
-            estado = wr._classificar_journal(staging)
-        finally:
-            _pathlib.Path.read_bytes = original
+        monkeypatch.setattr(wr.RecoveryFilesystemCustody, "read_file", _travado)
+        estado = wr._classificar_journal(staging)
         assert estado == wr._JOURNAL_INACESSIVEL, estado
     finally:
         staging.close()
@@ -2845,9 +2850,9 @@ def test_reconstrucao_nao_le_alvo_externo_se_raiz_troca_apos_preflight(tmp_path,
 
     request.addfinalizer(cleanup_swap)
 
-    def swap_after_preflight(candidate):
+    def swap_after_preflight(candidate, custody=None):
         nonlocal swapped
-        result = original_preflight(candidate)
+        result = original_preflight(candidate, custody)
         if candidate == root and result and not swapped:
             swapped = True
             root.rename(parked)
@@ -3029,6 +3034,9 @@ class _SwapRecoveryAfterRealClose:
     @property
     def filesystem_identity(self):
         return self._staging.filesystem_identity
+
+    def duplicar_custodia_filesystem(self):
+        return self._staging.duplicar_custodia_filesystem()
 
     def discard(self):
         self._staging.discard()
@@ -3361,3 +3369,418 @@ def test_identity_continuity_removal_normal_control(tmp_path):
     )
     assert not root.exists()
     assert not (base / f".recovery-cleanup-intent-{recovery_id}").exists()
+
+
+def test_posix_create_child_transfers_openat_descriptor_without_global_reacquire(monkeypatch):
+    """RED POSIX: mkdirat -> openat -> fstat, sem acquire(path) intermediario."""
+
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    directory = SimpleNamespace(st_dev=7, st_ino=11, st_mode=stat.S_IFDIR | 0o700)
+    o_directory = 0x10000
+    o_nofollow = 0x20000
+    opened = []
+    duplicated = []
+    closed = []
+
+    def fake_open(name, flags, mode=0o777, *, dir_fd=None):
+        opened.append((name, flags, dir_fd))
+        assert name == "recovery-00000000-0000-4000-8000-000000000301"
+        assert dir_fd == 41
+        return 42
+
+    def fake_dup(descriptor):
+        duplicated.append(descriptor)
+        return 43
+
+    def forbidden_acquire(cls, *_args, **_kwargs):
+        raise AssertionError("global pathname reacquisition after parent dir_fd")
+
+    fake_os = SimpleNamespace(
+        name="posix",
+        O_RDONLY=os.O_RDONLY,
+        O_DIRECTORY=o_directory,
+        O_NOFOLLOW=o_nofollow,
+        mkdir=lambda name, mode, *, dir_fd: None,
+        open=fake_open,
+        fstat=lambda descriptor: directory,
+        dup=fake_dup,
+        close=closed.append,
+    )
+    monkeypatch.setattr(wr, "os", fake_os)
+    monkeypatch.setattr(wr.RecoveryFilesystemCustody, "acquire", classmethod(forbidden_acquire))
+
+    parent = wr.RecoveryFilesystemCustody(Path("C:/trusted/recovery"), [41], [(7, 10, stat.S_IFDIR)])
+    child = parent.create_child("recovery-00000000-0000-4000-8000-000000000301")
+    try:
+        assert opened == [
+            (
+                "recovery-00000000-0000-4000-8000-000000000301",
+                os.O_RDONLY | o_directory | o_nofollow,
+                41,
+            )
+        ]
+        assert duplicated == [41]
+        assert child.directory_fd == 42
+        assert child.identity == (7, 11, stat.S_IFDIR)
+    finally:
+        child.close()
+        parent.close()
+    assert closed == [42, 43, 41]
+
+
+def test_posix_cleanup_root_acquisition_is_relative_to_live_base_fd(monkeypatch):
+    """RED POSIX: a raiz do cleanup nasce do base_fd, nunca de path global."""
+
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    directory = SimpleNamespace(st_dev=8, st_ino=21, st_mode=stat.S_IFDIR | 0o700)
+    o_directory = 0x10000
+    o_nofollow = 0x20000
+    stat_calls = []
+    open_calls = []
+    closed = []
+    def fake_stat(name, *, dir_fd, follow_symlinks):
+        stat_calls.append((name, dir_fd, follow_symlinks))
+        return directory
+
+    def fake_open(name, flags, *, dir_fd):
+        open_calls.append((name, flags, dir_fd))
+        return 52
+
+    fake_os = SimpleNamespace(
+        name="posix",
+        O_RDONLY=os.O_RDONLY,
+        O_DIRECTORY=o_directory,
+        O_NOFOLLOW=o_nofollow,
+        stat=fake_stat,
+        open=fake_open,
+        fstat=lambda descriptor: directory,
+        scandir=lambda descriptor: _EmptyScandir(),
+        close=closed.append,
+        lstat=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("global pathname reacquisition in POSIX cleanup")
+        ),
+    )
+    monkeypatch.setattr(wr, "os", fake_os)
+
+    node = wr._adquirir_custodia_cleanup(
+        Path("C:/trusted/recovery/recovery-00000000-0000-4000-8000-000000000302"),
+        parent_posix_fd=51,
+        expected_filesystem_identity=(8, 21, stat.S_IFDIR),
+    )
+    try:
+        assert stat_calls == [
+            ("recovery-00000000-0000-4000-8000-000000000302", 51, False)
+        ]
+        assert open_calls == [
+            (
+                "recovery-00000000-0000-4000-8000-000000000302",
+                os.O_RDONLY | o_directory | o_nofollow,
+                51,
+            )
+        ]
+    finally:
+        wr._fechar_custodia_cleanup(node)
+    assert closed == [52]
+
+
+def test_posix_child_rmdir_rejects_name_not_bound_to_open_descriptor(monkeypatch):
+    """RED POSIX: um substituto tardio nao pode ser consumido por ``rmdir``."""
+
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    rmdir_calls = []
+    expected = SimpleNamespace(st_dev=8, st_ino=21, st_mode=stat.S_IFDIR, st_nlink=2)
+    substitute = SimpleNamespace(st_dev=8, st_ino=22, st_mode=stat.S_IFDIR, st_nlink=2)
+    node = wr._CleanupNode(
+        Path("/trusted/recovery/private"),
+        "private",
+        (8, 21, stat.S_IFDIR),
+        52,
+        None,
+        [],
+        [],
+    )
+    fake_os = SimpleNamespace(
+        name="posix",
+        stat=lambda name, *, dir_fd, follow_symlinks: substitute,
+        fstat=lambda descriptor: expected,
+        rmdir=lambda name, *, dir_fd: rmdir_calls.append((name, dir_fd)),
+    )
+    monkeypatch.setattr(wr, "os", fake_os)
+
+    with pytest.raises(wr.RecoveryRetained):
+        wr._remover_diretorio_posix_ancorado(
+            51,
+            node,
+            "private",
+            (8, 21, stat.S_IFDIR),
+        )
+
+    assert rmdir_calls == []
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX dir_fd namespace semantics")
+def test_posix_first_writes_follow_child_fd_after_global_name_rebind(tmp_path, monkeypatch):
+    """RED POSIX: quarentena/SQLite/private devem atingir o child_fd estacionado."""
+
+    from scripts.backend_contract.application import workspace_recovery as wr
+    from scripts.backend_contract.infrastructure.productization import RecoveryStaging
+
+    base = tmp_path / ".posix-create-rebind.sqlite3.recovery"
+    root = base / "recovery-00000000-0000-4000-8000-000000000303"
+    parked = base / "parked-original"
+    original = wr.RecoveryFilesystemCustody.create_child
+
+    def create_then_rebind(self, name):
+        custody = original(self, name)
+        root.rename(parked)
+        root.mkdir(mode=0o700)
+        return custody
+
+    monkeypatch.setattr(wr.RecoveryFilesystemCustody, "create_child", create_then_rebind)
+    with pytest.raises(wr.RecoveryRetained):
+        RecoveryStaging.create(root)
+
+    assert tuple(root.iterdir()) == ()
+    assert (parked / "RECOVERY_NOT_PROMOTABLE").read_bytes() == b"RECOVERY_STAGING_V1\n"
+    assert not (parked / "workspace.sqlite3").exists()
+    assert not (parked / "private").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX dir_fd namespace semantics")
+def test_posix_sqlite_and_private_bootstrap_follow_child_fd_after_late_rebind(tmp_path, monkeypatch):
+    """RED POSIX: SQLite/private nao podem atingir o substituto apos o bind."""
+
+    from scripts.backend_contract.application import workspace_recovery as wr
+    from scripts.backend_contract.infrastructure.productization import RecoveryStaging
+
+    base = tmp_path / ".posix-bootstrap-rebind.sqlite3.recovery"
+    root = base / "recovery-00000000-0000-4000-8000-000000000307"
+    parked = base / "parked-original"
+    original = wr.RecoveryFilesystemCustody.descriptor_relative_path
+    rebound = False
+
+    def descriptor_path_then_rebind(self, name):
+        nonlocal rebound
+        result = original(self, name)
+        if self.path == root and name == "workspace.sqlite3" and not rebound:
+            rebound = True
+            root.rename(parked)
+            root.mkdir(mode=0o700)
+        return result
+
+    monkeypatch.setattr(
+        wr.RecoveryFilesystemCustody,
+        "descriptor_relative_path",
+        descriptor_path_then_rebind,
+    )
+    with pytest.raises(wr.RecoveryRetained):
+        RecoveryStaging.create(root)
+
+    assert rebound is True
+    assert tuple(root.iterdir()) == ()
+    assert (parked / "workspace.sqlite3").is_file()
+    assert (parked / "private" / ".recovery-not-promotable").is_file()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX dir_fd namespace semantics")
+def test_posix_session_identity_and_journal_follow_child_fd_after_rebind(tmp_path, monkeypatch):
+    """RED POSIX: controles tardios nao podem voltar ao pathname de recovery."""
+
+    from scripts.backend_contract.application import workspace_recovery as wr
+    from scripts.backend_contract.infrastructure.productization import RecoveryStaging
+
+    base = tmp_path / ".posix-controls-rebind.sqlite3.recovery"
+    recovery_id = "00000000-0000-4000-8000-000000000304"
+    root = base / f"recovery-{recovery_id}"
+    staging = RecoveryStaging.create(root)
+    summary = wr.BackupSummary(
+        workspace_id="00000000-0000-4000-8000-000000000401",
+        workspace_name="Synthetic",
+        workspace_created_at="2026-09-08T00:00:00+00:00",
+        product_release="0.11.0",
+        storage_schema_version=1,
+        artifact_revisions=0,
+        private_contents=0,
+        backup_sha256="a" * 64,
+    )
+    original_publish = wr.RecoveryFilesystemCustody.publish_immutable_file
+
+    def exercise_immutable_control(control_name, operation, parked_name):
+        parked = base / parked_name
+        swapped = False
+
+        def publish_after_rebind(self, name, payload):
+            nonlocal swapped
+            if self.path == root and name == control_name and not swapped:
+                swapped = True
+                root.rename(parked)
+                root.mkdir(mode=0o700)
+            return original_publish(self, name, payload)
+
+        monkeypatch.setattr(
+            wr.RecoveryFilesystemCustody,
+            "publish_immutable_file",
+            publish_after_rebind,
+        )
+        with pytest.raises(wr.RecoveryRetained):
+            operation()
+        assert swapped is True
+        assert not (root / control_name).exists()
+        assert (parked / control_name).is_file()
+        monkeypatch.setattr(
+            wr.RecoveryFilesystemCustody,
+            "publish_immutable_file",
+            original_publish,
+        )
+        root.rmdir()
+        parked.rename(root)
+
+    exercise_immutable_control(
+        "STAGING_IDENTITY_V1",
+        lambda: staging.identidade,
+        "parked-identity",
+    )
+    identity = staging.identidade
+    exercise_immutable_control(
+        "RECOVERY_SESSION_V1",
+        lambda: wr._gravar_session_descriptor(staging, recovery_id, summary, "b" * 64),
+        "parked-session",
+    )
+
+    parked_journal = base / "parked-journal"
+    original_write = wr.RecoveryFilesystemCustody.write_new_file
+    swapped_journal = False
+
+    def write_journal_after_rebind(self, name, payload):
+        nonlocal swapped_journal
+        if self.path == root and name.startswith(".PROMOTION_TRANSACTION_V1.") and not swapped_journal:
+            swapped_journal = True
+            root.rename(parked_journal)
+            root.mkdir(mode=0o700)
+        return original_write(self, name, payload)
+
+    monkeypatch.setattr(wr.RecoveryFilesystemCustody, "write_new_file", write_journal_after_rebind)
+    with pytest.raises(wr.RecoveryRetained):
+        staging.gravar_transacao(
+            {
+                "version": wr.JOURNAL_VERSION,
+                "phase": wr.PROMOTING,
+                "staging_identity": identity,
+            }
+        )
+    staging.close()
+
+    assert swapped_journal is True
+    assert not (root / "PROMOTION_TRANSACTION_V1").exists()
+    assert (parked_journal / "PROMOTION_TRANSACTION_V1").is_file()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX dir_fd namespace semantics")
+def test_posix_final_rmdir_preserves_rebound_substitute_and_cleanup_intent(tmp_path, monkeypatch):
+    """RED POSIX: swap pre-rmdirat retem substituto, original e intent."""
+
+    from scripts.backend_contract.application import workspace_recovery as wr
+    from scripts.backend_contract.infrastructure.productization import RecoveryStaging
+
+    recovery_id = "00000000-0000-4000-8000-000000000305"
+    base = tmp_path / ".posix-cleanup-rebind.sqlite3.recovery"
+    root = base / f"recovery-{recovery_id}"
+    parked = base / "parked-original"
+    staging = RecoveryStaging.create(root)
+    expected_identity = staging.filesystem_identity
+    staging.close()
+    original = wr._adquirir_custodia_cleanup
+    rebound = False
+
+    def acquire_then_rebind(path, **kwargs):
+        nonlocal rebound
+        node = original(path, **kwargs)
+        if not rebound and Path(path) == root:
+            rebound = True
+            root.rename(parked)
+            root.mkdir(mode=0o700)
+        return node
+
+    monkeypatch.setattr(wr, "_adquirir_custodia_cleanup", acquire_then_rebind)
+    with pytest.raises(wr.RecoveryRetained):
+        wr._remover_raiz_quarentenada(
+            root,
+            exigir_remocao=True,
+            cleanup_mode="DISCARD",
+            expected_filesystem_identity=expected_identity,
+        )
+
+    assert rebound is True
+    assert root.is_dir()
+    assert parked.is_dir()
+    assert (base / f".recovery-cleanup-intent-{recovery_id}").is_file()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX dir_fd namespace semantics")
+def test_posix_child_rmdir_preserves_rebound_substitute_and_cleanup_intent(tmp_path, monkeypatch):
+    """RED POSIX: swap do filho pre-rmdirat nao pode consumir o substituto."""
+
+    from scripts.backend_contract.application import workspace_recovery as wr
+    from scripts.backend_contract.infrastructure.productization import RecoveryStaging
+
+    recovery_id = "00000000-0000-4000-8000-000000000306"
+    base = tmp_path / ".posix-child-cleanup-rebind.sqlite3.recovery"
+    root = base / f"recovery-{recovery_id}"
+    parked = base / "parked-private"
+    staging = RecoveryStaging.create(root)
+    expected_identity = staging.filesystem_identity
+    staging.close()
+    original = wr._remover_diretorio_posix_ancorado
+    rebound = False
+
+    def remove_after_rebind(parent_directory_fd, node, name, expected):
+        nonlocal rebound
+        if not rebound and name == "private":
+            rebound = True
+            (root / "private").rename(parked)
+            (root / "private").mkdir(mode=0o700)
+        return original(parent_directory_fd, node, name, expected)
+
+    monkeypatch.setattr(wr, "_remover_diretorio_posix_ancorado", remove_after_rebind)
+    with pytest.raises(wr.RecoveryRetained):
+        wr._remover_raiz_quarentenada(
+            root,
+            exigir_remocao=True,
+            cleanup_mode="DISCARD",
+            expected_filesystem_identity=expected_identity,
+        )
+
+    assert rebound is True
+    assert (root / "private").is_dir()
+    assert parked.is_dir()
+    assert (base / f".recovery-cleanup-intent-{recovery_id}").is_file()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX dir_fd namespace semantics")
+def test_posix_discard_keeps_child_fd_authoritative_through_cleanup(tmp_path):
+    """RED POSIX: fechar stores não pode encerrar a custody antes do cleanup."""
+
+    from scripts.backend_contract.application import workspace_recovery as wr
+    from scripts.backend_contract.infrastructure.productization import RecoveryStaging
+
+    recovery_id = "00000000-0000-4000-8000-000000000306"
+    base = tmp_path / ".posix-lifecycle-rebind.sqlite3.recovery"
+    root = base / f"recovery-{recovery_id}"
+    parked = base / "parked-original"
+    replacement = tmp_path / "external-substitute"
+    replacement.mkdir(mode=0o700)
+    (replacement / "external-sentinel.bin").write_bytes(b"DO-NOT-MUTATE")
+    staging = RecoveryStaging.create(root)
+    wrapper = _SwapRecoveryAfterRealClose(staging, parked, replacement)
+    entry = {"staging": wrapper, "root": root, "disposition": None}
+    wr._gravar_disposition(entry, recovery_id, "DISCARD")
+
+    with pytest.raises(wr.RecoveryRetained):
+        wr._remover_entry(entry, "DISCARD")
+
+    assert (root / "external-sentinel.bin").read_bytes() == b"DO-NOT-MUTATE"
+    assert parked.is_dir()
+    assert (base / f".recovery-cleanup-intent-{recovery_id}").is_file()

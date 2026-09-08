@@ -798,6 +798,134 @@ REPARSE_ANCESTOR => NO_TRAVERSAL
 EXTERNAL_FILESYSTEM_MUTATION = 0
 ```
 
+### H.4 Continuidade POSIX por `dir_fd` (A15/B15)
+
+Status: **modelo normativo reconciliado antes dos REDs e antes da mutacao de
+producao**. O candidato `f0ab793f63bb2db47ee4468c983f6b098b422a10` esta
+invalidado. A15 demonstrou que `create_child` fazia `mkdirat` sob o parent
+custodiado e, em seguida, readquiria o filho pelo pathname absoluto antes da
+primeira escrita. B15 encontrou a mesma familia causal na aquisicao da raiz de
+cleanup. Portanto, a frase de H.3 que dizia que toda operacao POSIX posterior
+ja permanecia ancorada estava incorreta.
+
+```text
+DIR_FD_ACQUIRED => PATHNAME_AUTHORITY_ENDED
+HANDLE_RELATIVE_CREATE -> GLOBAL_PATH_REACQUISITION = PROHIBITED
+PATH_REBOUND => ZERO_EXTERNAL_MUTATION + ZERO_FALSE_SUCCESS
+```
+
+O pathname absoluto continua permitido apenas como identificador auxiliar para
+mensagem sanitizada, UI e correlacao de sessao. Ele nao seleciona, valida,
+enumera, escreve nem remove objetos depois que a cadeia de descritores foi
+adquirida.
+
+#### DAG causal e caminho critico POSIX
+
+```text
+A15 create rebind + B15 cleanup-root rebind
+  -> contrato H.4
+  -> RED de primeira escrita e RED de remocao terminal
+  -> mkdirat + openat + fstat + child_fd transferido
+  -> controles iniciais/SQLite/private relativos ao child_fd
+  -> retomada e classificacao relativas ao child_fd
+  -> cleanup interno relativo ao child_fd
+  -> identidade esperada validada sob base_fd
+  -> rmdirat relativo ao base_fd
+  -> intent somente coletado apos prova do objeto esperado removido
+  -> matriz focada + sibling sweep
+  -> unico HEAD terminal + CI protegida
+  -> A16/B16 independentes e concorrentes
+```
+
+O caminho critico e a continuidade de autoridade de `mkdirat` ate a primeira
+escrita e, depois, da identidade duravel ate o commit da remocao. Ha um unico
+mutation owner para `workspace_recovery.py`, `productization.py`, infraestrutura
+SQLite/private, esta arquitetura e os testes. A16/B16 so iniciam no SHA exato
+aprovado pela CI protegida.
+
+#### Cadeia de autoridade e lifetime
+
+| fase | nascimento/manutencao do descritor | operacoes autoritativas |
+|---|---|---|
+| base | abre cada componente a partir de `/`, sempre com `openat` e `O_NOFOLLOW` | `listdir/scandir(base_fd)`, sidecar por `openat/linkat/unlinkat`, filhos por `openat` |
+| criacao | `mkdirat(parent_fd, child_name)`; imediatamente `openat(parent_fd, child_name, O_DIRECTORY|O_NOFOLLOW)` e `fstat(child_fd)` | nenhuma reconstrucao `/base/recovery-*` entre create, bind e primeiro write |
+| staging | duplica a ancestry e transfere o `child_fd` ja aberto | quarentena, identidade, sessao e journal por nomes relativos; `fsync(child_fd)` |
+| SQLite | conserva duplicata do `child_fd` durante toda a conexao | alvo e arquivos auxiliares derivados somente do alias de descritor validado; nunca do pathname global de recovery |
+| privado | `mkdirat(child_fd, "private")`, `openat`, `fstat` e handoff do fd | controles e conteudo permanecem relativos ao `private_fd` |
+| retomada | `openat(base_fd, child_name, O_DIRECTORY|O_NOFOLLOW)` e `fstat` | inventario, controles, SQLite e privado sob o fd adquirido |
+| cleanup | abre a raiz relativamente ao `base_fd` e descendentes relativamente ao parent fd | `scandir(fd)`, `openat`, `unlinkat`; antes de cada `rmdirat`, `statat(parent_fd, name)` deve coincidir com `fstat(child_fd)` e com a identidade vinculada |
+| remocao final | `base_fd` e `child_fd` permanecem vivos, e a identidade do nome sob a base deve coincidir com a esperada | `rmdir(child_name, dir_fd=base_fd)`; divergencia ou ambiguidade retem raiz e intent |
+
+O adaptador SQLite da biblioteca padrao nao aceita um fd como filename. No
+POSIX, a integracao de recovery usa somente um alias de namespace do proprio
+descritor (por exemplo `/proc/self/fd/N`), valida que esse alias resolve para a
+mesma identidade de `fstat(N)` e mantem uma duplicata viva ate fechar a conexao.
+Esse alias e autoridade derivada do handle, nao uma reconstrucao do pathname
+global. Plataforma sem alias validavel falha fechada; nao ha fallback para
+`/base/recovery-*/workspace.sqlite3`.
+
+#### Criacao, primeira escrita e crash
+
+```text
+TRUSTED_PARENT_FD
+  -> mkdirat(parent_fd, child_name)
+  -> openat(parent_fd, child_name, O_DIRECTORY | O_NOFOLLOW)
+  -> fstat(child_fd)
+  -> bind da identidade fisica
+  -> transferir child_fd para RecoveryStaging
+  -> publicar quarentena relativamente ao child_fd
+  -> abrir SQLite relativamente ao child_fd
+  -> provisionar private relativamente ao child_fd
+```
+
+Falha depois de `mkdirat` e antes do bind nunca autoriza rollback por pathname;
+a raiz e retida para coleta posterior. Falha depois do bind usa apenas o fd
+transferido. Em restart, a base e readquirida uma vez e cada candidata nasce por
+`openat(base_fd, name)`: controles byte-identicos em um substituto nao vencem a
+identidade fisica fixada pelo intent.
+
+#### Cleanup e commit
+
+```text
+BASE_FD + EXPECTED_CHILD_IDENTITY
+  -> openat(BASE_FD, child_name) + fstat(CHILD_FD)
+  -> identidade exata ou RETAIN
+  -> inventario e cleanup relativos a CHILD_FD
+  -> controles saem por ultimo
+  -> validar entrada child_name relativamente a BASE_FD
+  -> rmdir(child_name, dir_fd=BASE_FD)
+  -> fstat(CHILD_FD) prova nlink == 0 e identidade esperada
+  -> somente entao GC do intent relativamente a BASE_FD
+```
+
+Se a raiz verdadeira for estacionada e um substituto ocupar o nome, a
+identidade observada sob `base_fd` diverge antes da remocao: o substituto
+sobrevive, a raiz original nao e falsamente declarada removida e o intent
+permanece. Ausencia de nome em restart, sozinha, continua insuficiente para GC.
+
+#### REDs e invariantes executaveis
+
+Os REDs coordenam swaps deterministas depois da criacao e antes da primeira
+escrita; antes do cleanup; depois do cleanup interno e antes do `rmdirat`; e
+antes do GC. Cobrem quarentena, sessao, identidade, SQLite, private, substituto
+com controles byte-identicos, estrutura equivalente e original estacionado.
+
+```text
+POSIX_RECOVERY_OPERATIONS_ARE_DIRFD_RELATIVE = TRUE
+GLOBAL_PATH_REACQUISITION_AFTER_DIRFD = PROHIBITED
+MKDIRAT_TO_FIRST_WRITE_HAS_NO_GLOBAL_PATH_WINDOW
+CHILD_FD_IDENTITY_BINDS_FIRST_WRITE
+CLEANUP_CHILD_FD_REMAINS_AUTHORITATIVE
+FINAL_RMDIR_IS_BASE_FD_RELATIVE
+EXPECTED_IDENTITY_SURVIVES_UNTIL_REMOVAL_COMMIT
+PATH_REBOUND => ZERO_EXTERNAL_MUTATION
+```
+
+H.4 nao altera o branch Windows nem reduz seus handles, `FILE_ID_INFO`,
+disposition por handle ou protecao contra reparse. As invariantes de intent
+duravel, quarentena por ultimo, fechamento unico, bytes exatos e ancestry
+confiavel permanecem cumulativas.
+
 ---
 
 ## I. Transporte de binário grande

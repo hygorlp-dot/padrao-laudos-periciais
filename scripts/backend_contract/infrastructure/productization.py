@@ -74,7 +74,6 @@ SUPPORTED_BACKUP_VERSIONS = frozenset({0, 1})
 SUPPORTED_BACKUP_PORTABILITY_RELEASES = frozenset({"0.10.0", "0.11.0"})
 SUPPORTED_PRODUCT_RELEASES = SUPPORTED_BACKUP_PORTABILITY_RELEASES
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_OPEN_BINARY = 0x8000 if os.name == "nt" else 0
 
 
 def _canonical(value: object) -> bytes:
@@ -963,37 +962,31 @@ class RecoveryStaging:
             base_custody.close()
         assert custody is not None
         try:
-            marker_fd = os.open(target / "RECOVERY_NOT_PROMOTABLE", os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN_BINARY, 0o600)
-            try:
-                remaining = memoryview(b"RECOVERY_STAGING_V1\n")
-                while remaining:
-                    written = os.write(marker_fd, remaining)
-                    if written <= 0:
-                        raise RepositoryIntegrityError("recovery quarantine marker write failed")
-                    remaining = remaining[written:]
-                os.fsync(marker_fd)
-            finally:
-                os.close(marker_fd)
-            marker = target / "RECOVERY_NOT_PROMOTABLE"
-            if marker.read_bytes() != b"RECOVERY_STAGING_V1\n":
+            custody.write_new_file("RECOVERY_NOT_PROMOTABLE", b"RECOVERY_STAGING_V1\n")
+            if custody.read_file("RECOVERY_NOT_PROMOTABLE") != b"RECOVERY_STAGING_V1\n":
                 raise RepositoryIntegrityError("recovery quarantine marker is incomplete")
-            if os.name == "posix":
-                directory_fd = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
-            identity = os.lstat(target)
+            custody.fsync_directory()
+            custody.assert_namespace_binding()
+            identity = custody.identity
         except BaseException:
             custody.close()
             raise
         database = None
         private = None
         try:
-            database = SQLiteApplicationStore(target / "workspace.sqlite3")
+            database = SQLiteApplicationStore(custody.descriptor_relative_path("workspace.sqlite3"))
             database.mark_recovery_quarantine()
-            private = LocalPrivateContentStore.open_or_provision(target / "private")
+            if os.name == "posix":
+                assert custody.directory_fd is not None
+                private = LocalPrivateContentStore.open_or_provision_at(
+                    custody.directory_fd,
+                    "private",
+                    target / "private",
+                )
+            else:
+                private = LocalPrivateContentStore.open_or_provision(target / "private")
             private.mark_recovery_quarantine()
+            custody.assert_namespace_binding()
             staging = object.__new__(cls)
             staging._root = target.absolute()
             staging._database = database
@@ -1077,10 +1070,11 @@ class RecoveryStaging:
     _IDENTITY = "STAGING_IDENTITY_V1"
 
     def ler_transacao(self) -> dict | None:
-        alvo = self._root / self._JOURNAL
+        self._custody.assert_namespace_binding()
         try:
-            bruto = alvo.read_bytes()
+            bruto = self._custody.read_file(self._JOURNAL)
         except FileNotFoundError:
+            self._custody.assert_namespace_binding()
             return None
         except OSError as exc:
             raise RepositoryIntegrityError("journal de promoção ilegível") from exc
@@ -1090,33 +1084,40 @@ class RecoveryStaging:
             raise RepositoryIntegrityError("journal de promoção corrompido") from exc
         if type(registro) is not dict:
             raise RepositoryIntegrityError("journal de promoção corrompido")
+        self._custody.assert_namespace_binding()
         return registro
+
+    def ler_controle(self, name: str) -> bytes:
+        self._custody.assert_namespace_binding()
+        payload = self._custody.read_file(name)
+        self._custody.assert_namespace_binding()
+        return payload
+
+    def gravar_controle_imutavel(self, name: str, payload: bytes) -> None:
+        self._custody.assert_namespace_binding()
+        self._custody.publish_immutable_file(name, payload)
+        self._custody.assert_namespace_binding()
+
+    def caminho_relativo_ao_descritor(self, name: str) -> Path:
+        return self._custody.descriptor_relative_path(name)
+
+    def duplicar_custodia_filesystem(self) -> RecoveryFilesystemCustody:
+        return self._custody.duplicate()
+
+    def validar_binding_namespace(self) -> None:
+        self._custody.assert_namespace_binding()
 
     def gravar_transacao(self, registro: dict) -> None:
         """Grava o journal de forma durável ANTES de qualquer mutação viva."""
         if type(registro) is not dict:
             raise TypeError("registro de transação inválido")
+        self._custody.assert_namespace_binding()
         corpo = _canonical(registro)
-        alvo = self._root / self._JOURNAL
-        temporario = self._root / f".{self._JOURNAL}.{uuid4().hex}"
-        descritor = os.open(temporario, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN_BINARY, 0o600)
-        try:
-            restante = memoryview(corpo)
-            while restante:
-                escrito = os.write(descritor, restante)
-                if escrito <= 0:
-                    raise RepositoryIntegrityError("escrita do journal de promoção falhou")
-                restante = restante[escrito:]
-            os.fsync(descritor)
-        finally:
-            os.close(descritor)
-        os.replace(temporario, alvo)
-        if os.name == "posix":
-            diretorio = os.open(self._root, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(diretorio)
-            finally:
-                os.close(diretorio)
+        temporario = f".{self._JOURNAL}.{uuid4().hex}"
+        self._custody.write_new_file(temporario, corpo)
+        self._custody.replace_file(temporario, self._JOURNAL)
+        self._custody.fsync_directory()
+        self._custody.assert_namespace_binding()
 
     @property
     def identidade_registrada(self) -> str | None:
@@ -1133,9 +1134,11 @@ class RecoveryStaging:
         retomada. A mesma condição que o journal trata como transitória precisa
         ser transitória aqui: só a ausência do arquivo é resposta definitiva.
         """
+        self._custody.assert_namespace_binding()
         try:
-            bruto = (self._root / self._IDENTITY).read_bytes()
+            bruto = self._custody.read_file(self._IDENTITY)
         except FileNotFoundError:
+            self._custody.assert_namespace_binding()
             return None
         except OSError as exc:
             raise RepositoryIntegrityError(
@@ -1144,7 +1147,9 @@ class RecoveryStaging:
         try:
             token = bruto.decode("ascii").strip()
         except UnicodeDecodeError:
+            self._custody.assert_namespace_binding()
             return None
+        self._custody.assert_namespace_binding()
         return token or None
 
     @property
@@ -1164,57 +1169,69 @@ class RecoveryStaging:
         registrada = self.identidade_registrada
         if registrada is not None:
             return registrada
-        alvo = self._root / self._IDENTITY
         token = uuid4().hex
-        temporario = self._root / f".{self._IDENTITY}.{uuid4().hex}"
-        descritor = os.open(temporario, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN_BINARY, 0o600)
         try:
-            os.write(descritor, token.encode("ascii"))
-            os.fsync(descritor)
-        finally:
-            os.close(descritor)
+            persisted = self._custody.publish_immutable_file(
+                self._IDENTITY,
+                token.encode("ascii"),
+            )
+        except RepositoryIntegrityError:
+            persisted = self._custody.read_file(self._IDENTITY)
         try:
-            os.link(temporario, alvo)
-        except FileExistsError:
-            # Outro processo chegou primeiro: a identidade dele é a verdadeira.
-            token = alvo.read_text(encoding="ascii").strip()
-        finally:
-            try:
-                temporario.unlink()
-            except OSError:
-                pass
-        return token
+            result = persisted.decode("ascii").strip()
+        except UnicodeDecodeError as exc:
+            raise RepositoryIntegrityError("prova de identidade da recuperação inválida") from exc
+        self._custody.assert_namespace_binding()
+        return result
 
 
-def abrir_staging_quarentenado(raiz: str | Path) -> "RecoveryStaging":
+def abrir_staging_quarentenado(
+    raiz: str | Path,
+    *,
+    _recovery_custody: RecoveryFilesystemCustody | None = None,
+) -> "RecoveryStaging":
     """Reabre uma raiz de staging JÁ existente, preservando a quarentena.
 
     Usado na reabertura do produto para reconstruir sessões de recuperação a
     partir do disco. Falha fechada: sem marcador canônico, não é nossa raiz.
     """
     alvo = Path(raiz).absolute()
-    base_custody = RecoveryFilesystemCustody.acquire(alvo.parent)
-    assert base_custody is not None
-    try:
-        custody = base_custody.child(alvo.name)
-    finally:
-        base_custody.close()
+    if _recovery_custody is not None:
+        if _recovery_custody.path != alvo:
+            raise RepositoryIntegrityError("custódia e staging de recovery divergem")
+        custody = _recovery_custody.duplicate()
+    else:
+        base_custody = RecoveryFilesystemCustody.acquire(alvo.parent)
+        assert base_custody is not None
+        try:
+            custody = base_custody.child(alvo.name)
+        finally:
+            base_custody.close()
     assert custody is not None
     try:
-        marcador = alvo / "RECOVERY_NOT_PROMOTABLE"
-        if marcador.read_bytes() != b"RECOVERY_STAGING_V1\n":
+        custody.assert_namespace_binding()
+        if custody.read_file("RECOVERY_NOT_PROMOTABLE") != b"RECOVERY_STAGING_V1\n":
             raise RepositoryIntegrityError("raiz de recuperação sem quarentena canônica")
-        identity = os.lstat(alvo)
+        identity = custody.identity
     except BaseException:
         custody.close()
         raise
     database = None
     private = None
     try:
-        database = SQLiteApplicationStore(alvo / "workspace.sqlite3")
-        private = LocalPrivateContentStore.open_or_provision(alvo / "private")
+        database = SQLiteApplicationStore(custody.descriptor_relative_path("workspace.sqlite3"))
+        if os.name == "posix":
+            assert custody.directory_fd is not None
+            private = LocalPrivateContentStore.open_or_provision_at(
+                custody.directory_fd,
+                "private",
+                alvo / "private",
+            )
+        else:
+            private = LocalPrivateContentStore.open_or_provision(alvo / "private")
+        custody.assert_namespace_binding()
         staging = object.__new__(RecoveryStaging)
-        staging._root = alvo.resolve(strict=True)
+        staging._root = alvo.absolute()
         staging._database = database
         staging._private_contents = private
         staging._identity = identity
@@ -1244,6 +1261,7 @@ class RestoreWorkspaceBackup:
         workspaces = database.workspaces
         revisions = database.revisions
         try:
+            self.staging.validar_binding_namespace()
             backup = VerifyWorkspaceBackup().execute(payload)
             workspace_id = WorkspaceId.parse(backup.workspace.workspace_id)
             if workspaces.list_all() != ():
@@ -1268,7 +1286,8 @@ class RestoreWorkspaceBackup:
             if cost_records:
                 cost_payload = thaw_payload(cost_records[0].payload)
                 ledger = SQLiteAICostLedger(
-                    AICostLimits(1, 1, 1, 1), self.staging.root / AI_COST_LEDGER_FILENAME
+                    AICostLimits(1, 1, 1, 1),
+                    self.staging.caminho_relativo_ao_descritor(AI_COST_LEDGER_FILENAME),
                 )
                 ledger.import_workspace(str(workspace_id), cost_payload["reservations"])
             reopened = revisions.list_workspace(workspace_id)
@@ -1278,6 +1297,7 @@ class RestoreWorkspaceBackup:
                 with private_contents.open_content(workspace_id, item.metadata.content_id) as opened:
                     if opened.stream.read() != item.content:
                         raise RepositoryIntegrityError("restored private content diverges")
+            self.staging.validar_binding_namespace()
             return RestoreReceipt(str(workspace_id), hashlib.sha256(payload).hexdigest(), len(revision_records), len(private_records), backup.product_release, backup.storage_schema_version)
         except BaseException:
             self.staging.discard()

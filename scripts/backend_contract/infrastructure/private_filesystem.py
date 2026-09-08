@@ -825,11 +825,13 @@ class _ProvisionedRootHandoff:
         identity: os.stat_result,
         root_fd: int | None,
         windows_anchor_fd: int | None,
+        descriptor_authority: bool = False,
     ):
         self.path = path
         self.identity = identity
         self._root_fd = root_fd
         self._windows_anchor_fd = windows_anchor_fd
+        self.descriptor_authority = descriptor_authority
         self._taken = False
 
     def take(self) -> tuple[os.stat_result, int | None, int | None]:
@@ -1056,41 +1058,56 @@ class LocalPrivateContentStore:
         handoff_root_fd = None
         handoff_windows_anchor_fd = None
         expected_root_identity = None
+        descriptor_authority = False
         try:
             if _provisioning_handoff is not None:
+                descriptor_authority = _provisioning_handoff.descriptor_authority
                 (
                     expected_root_identity,
                     handoff_root_fd,
                     handoff_windows_anchor_fd,
                 ) = _provisioning_handoff.take()
-            if not os.path.lexists(root):
-                raise RepositoryError("private root deve ser provisionado antes da abertura")
-            _validate_plain_ancestry(root.absolute())
-            root_identity = os.lstat(root)
-            if not stat.S_ISDIR(root_identity.st_mode):
-                raise RepositoryIntegrityError("private root inválido")
-            if expected_root_identity is not None and not _same_identity(expected_root_identity, root_identity):
-                raise RepositoryIntegrityError("identidade do private root mudou durante o handoff")
-            _validate_trusted_local_device(root_identity)
-            configured_root = root.absolute()
-            self._root = root.resolve(strict=True)
-            observed_root = os.lstat(configured_root)
-            resolved_root = os.lstat(self._root)
-            if _path_is_link_or_reparse(configured_root) or not _same_identity(root_identity, observed_root) or not _same_identity(observed_root, resolved_root):
-                raise RepositoryIntegrityError("identidade do private root mudou durante a abertura")
-            self._configured_root = configured_root
-            self._root_identity = root_identity
-            if os.name == "posix":
-                if handoff_root_fd is not None:
-                    self._root_fd = handoff_root_fd
-                    handoff_root_fd = None
-                else:
-                    self._root_fd = os.open(
-                        self._root,
-                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                    )
-                if not _same_identity(root_identity, os.fstat(self._root_fd)):
+            if descriptor_authority:
+                if os.name != "posix" or handoff_root_fd is None or expected_root_identity is None:
+                    raise RepositoryIntegrityError("handoff privado por descritor inválido")
+                root_identity = os.fstat(handoff_root_fd)
+                if not stat.S_ISDIR(root_identity.st_mode) or not _same_identity(expected_root_identity, root_identity):
+                    raise RepositoryIntegrityError("identidade do private root mudou durante o handoff")
+                _validate_trusted_local_device(root_identity)
+                self._root = root.absolute()
+                self._configured_root = self._root
+                self._root_identity = root_identity
+                self._root_fd = handoff_root_fd
+                handoff_root_fd = None
+            else:
+                if not os.path.lexists(root):
+                    raise RepositoryError("private root deve ser provisionado antes da abertura")
+                _validate_plain_ancestry(root.absolute())
+                root_identity = os.lstat(root)
+                if not stat.S_ISDIR(root_identity.st_mode):
+                    raise RepositoryIntegrityError("private root inválido")
+                if expected_root_identity is not None and not _same_identity(expected_root_identity, root_identity):
+                    raise RepositoryIntegrityError("identidade do private root mudou durante o handoff")
+                _validate_trusted_local_device(root_identity)
+                configured_root = root.absolute()
+                self._root = root.resolve(strict=True)
+                observed_root = os.lstat(configured_root)
+                resolved_root = os.lstat(self._root)
+                if _path_is_link_or_reparse(configured_root) or not _same_identity(root_identity, observed_root) or not _same_identity(observed_root, resolved_root):
                     raise RepositoryIntegrityError("identidade do private root mudou durante a abertura")
+                self._configured_root = configured_root
+                self._root_identity = root_identity
+                if os.name == "posix":
+                    if handoff_root_fd is not None:
+                        self._root_fd = handoff_root_fd
+                        handoff_root_fd = None
+                    else:
+                        self._root_fd = os.open(
+                            self._root,
+                            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        )
+                    if not _same_identity(root_identity, os.fstat(self._root_fd)):
+                        raise RepositoryIntegrityError("identidade do private root mudou durante a abertura")
             self._acquire_singleton()
             if handoff_windows_anchor_fd is not None:
                 descriptor = handoff_windows_anchor_fd
@@ -1137,6 +1154,89 @@ class LocalPrivateContentStore:
         finally:
             provisioned.close()
 
+    @classmethod
+    @_controlled_filesystem_errors("falha ao abrir armazenamento privado relativo ao recovery")
+    def open_or_provision_at(
+        cls,
+        parent_fd: int,
+        name: str,
+        display_root: str | Path,
+        *,
+        max_content_bytes: int = DEFAULT_PRIVATE_CONTENT_LIMIT_BYTES,
+    ) -> LocalPrivateContentStore:
+        """Provisiona/abre somente por ``openat`` sob um recovery já custodiado."""
+
+        if os.name != "posix" or type(parent_fd) is not int or parent_fd < 0:
+            raise RepositoryIntegrityError("parent fd do private recovery inválido")
+        if type(name) is not str or not name or name in {".", ".."} or Path(name).name != name:
+            raise RepositoryIntegrityError("nome do private recovery inválido")
+        display = Path(display_root)
+        if not display.is_absolute():
+            raise RepositoryIntegrityError("private recovery auxiliar deve ser absoluto")
+
+        root_fd = None
+        handoff = None
+        try:
+            try:
+                before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                created = False
+            except FileNotFoundError:
+                os.mkdir(name, 0o700, dir_fd=parent_fd)
+                before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                created = True
+            if stat.S_ISLNK(before.st_mode):
+                raise RepositoryIntegrityError("private recovery não pode ser link")
+            if not stat.S_ISDIR(before.st_mode):
+                raise RepositoryIntegrityError("private recovery inválido")
+            root_fd = os.open(
+                name,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=parent_fd,
+            )
+            opened = os.fstat(root_fd)
+            if not _same_identity(before, opened):
+                raise RepositoryIntegrityError("identidade do private recovery mudou durante o handoff")
+            _validate_trusted_local_device(opened)
+
+            if created:
+                _provision_control(display, _LOCK_NAME, b"0", root_fd=root_fd)
+                _provision_control(display, _JOURNAL_NAME, b"", root_fd=root_fd)
+                _provision_control(display, _ANCHOR_NAME, b"", root_fd=root_fd)
+                os.fsync(parent_fd)
+            else:
+                for control_name in (_LOCK_NAME, _JOURNAL_NAME, _ANCHOR_NAME):
+                    descriptor, details = _open_existing_regular(
+                        display / control_name,
+                        root_fd=root_fd,
+                        expected_links=1,
+                    )
+                    try:
+                        if control_name == _LOCK_NAME and (
+                            details.st_size != 1 or _read_exact(descriptor, 2) != b"0"
+                        ):
+                            raise RepositoryIntegrityError("private recovery possui controle inválido")
+                    finally:
+                        os.close(descriptor)
+
+            handoff = _ProvisionedRootHandoff(
+                display,
+                opened,
+                root_fd,
+                None,
+                descriptor_authority=True,
+            )
+            root_fd = None
+            return cls(
+                display,
+                max_content_bytes=max_content_bytes,
+                _provisioning_handoff=handoff,
+            )
+        finally:
+            if handoff is not None:
+                handoff.close()
+            if root_fd is not None:
+                os.close(root_fd)
+
     def _root_names(self) -> tuple[str, ...]:
         target = self._root if self._root_fd is None else self._root_fd
         names = []
@@ -1168,9 +1268,13 @@ class LocalPrivateContentStore:
                 msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
             else:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            observed_root = os.lstat(self._configured_root)
-            if _path_is_link_or_reparse(self._configured_root) or not _same_identity(self._root_identity, observed_root) or not _same_identity(observed_root, os.lstat(self._root)):
-                raise RepositoryIntegrityError("private root mudou durante a abertura")
+            if self._root_fd is not None:
+                if not _same_identity(self._root_identity, os.fstat(self._root_fd)):
+                    raise RepositoryIntegrityError("private root mudou durante a abertura")
+            else:
+                observed_root = os.lstat(self._configured_root)
+                if _path_is_link_or_reparse(self._configured_root) or not _same_identity(self._root_identity, observed_root) or not _same_identity(observed_root, os.lstat(self._root)):
+                    raise RepositoryIntegrityError("private root mudou durante a abertura")
         except (OSError, RepositoryIntegrityError) as exc:
             stream.close()
             if isinstance(exc, RepositoryIntegrityError):
@@ -2620,7 +2724,7 @@ class LocalPrivateContentStore:
                 _RECOVERY_QUARANTINE_NAME,
                 _RECOVERY_QUARANTINE_PAYLOAD,
                 root_fd=self._root_fd,
-                expected_root=self._root_identity,
+                expected_root=self._root_identity if self._root_fd is None else None,
             )
             if not self.is_recovery_quarantined():
                 raise RepositoryIntegrityError("quarentena privada não foi persistida")
@@ -2630,7 +2734,7 @@ class LocalPrivateContentStore:
         with self._mutex:
             self._ensure_open()
             path = self._root / _RECOVERY_QUARANTINE_NAME
-            if not os.path.lexists(path):
+            if not _entry_exists(path, root_fd=self._root_fd):
                 return False
             descriptor, details = _open_existing_regular(
                 path,

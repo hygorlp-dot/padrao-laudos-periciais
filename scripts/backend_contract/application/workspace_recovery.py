@@ -511,14 +511,139 @@ class RecoveryFilesystemCustody:
             raise RecoveryRetained("custódia do namespace de recovery foi encerrada")
         return self._identities[-1]
 
-    def child(self, name: str, *, create: bool = False):
+    @staticmethod
+    def _validate_entry_name(name: str) -> str:
         if type(name) is not str or not name or name in {".", ".."} or Path(name).name != name:
             raise RepositoryIntegrityError("filho do namespace de recovery inválido")
+        return name
+
+    def _posix_child_from_open_descriptor(
+        self,
+        name: str,
+        descriptor: int,
+        identity: object,
+    ) -> "RecoveryFilesystemCustody":
+        duplicated_ancestry: list[int] = []
+        try:
+            for resource in self._resources:
+                duplicated_ancestry.append(os.dup(resource))
+            return type(self)(
+                self.path / name,
+                [*duplicated_ancestry, descriptor],
+                [*self._identities, identity],
+            )
+        except BaseException:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+            while duplicated_ancestry:
+                duplicate = duplicated_ancestry.pop()
+                try:
+                    os.close(duplicate)
+                except OSError:
+                    pass
+            raise
+
+    def duplicate(self) -> "RecoveryFilesystemCustody":
+        """Duplica a autoridade atual sem resolver novamente nenhum pathname."""
+
+        _ = self.identity
+        resources: list[int] = []
+        try:
+            for resource in self._resources:
+                resources.append(
+                    os.dup(resource)
+                    if os.name == "posix"
+                    else _duplicar_handle_windows(resource)
+                )
+            return type(self)(self.path, resources, list(self._identities))
+        except BaseException:
+            while resources:
+                duplicate = resources.pop()
+                try:
+                    if os.name == "posix":
+                        os.close(duplicate)
+                    else:
+                        _fechar_handle_windows_unica_vez(duplicate)
+                except OSError:
+                    pass
+            raise
+
+    def parent_custody(self) -> "RecoveryFilesystemCustody":
+        if self._closed or len(self._resources) < 2:
+            raise RecoveryRetained("custódia pai do namespace de recovery indisponível")
+        resources: list[int] = []
+        try:
+            for resource in self._resources[:-1]:
+                resources.append(
+                    os.dup(resource)
+                    if os.name == "posix"
+                    else _duplicar_handle_windows(resource)
+                )
+            return type(self)(
+                self.path.parent,
+                resources,
+                list(self._identities[:-1]),
+            )
+        except BaseException:
+            while resources:
+                duplicate = resources.pop()
+                try:
+                    if os.name == "posix":
+                        os.close(duplicate)
+                    else:
+                        _fechar_handle_windows_unica_vez(duplicate)
+                except OSError:
+                    pass
+            raise
+
+    def assert_namespace_binding(self) -> None:
+        """Prova que o nome sob a ancestry custodiada ainda aponta para este objeto."""
+
+        if os.name != "posix":
+            return
+        parent = self.parent_custody()
+        try:
+            observed = parent.stat_entry(self.path.name)
+            if (
+                _detalhes_sao_link_ou_reparse(observed)
+                or not stat.S_ISDIR(observed.st_mode)
+                or _chave_identidade(observed) != self.identity
+            ):
+                raise RecoveryRetained("o nome da recuperação não aponta para a identidade custodiada")
+        finally:
+            parent.close()
+
+    def child(self, name: str, *, create: bool = False):
+        name = self._validate_entry_name(name)
+        if os.name == "posix":
+            if create:
+                return self.create_child(name)
+            descriptor = os.open(
+                name,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=self.directory_fd,
+            )
+            try:
+                details = os.fstat(descriptor)
+                if not stat.S_ISDIR(details.st_mode):
+                    raise RecoveryRetained("filho do namespace de recovery não é diretório")
+            except BaseException:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+                raise
+            return self._posix_child_from_open_descriptor(
+                name,
+                descriptor,
+                _chave_identidade(details),
+            )
         return type(self).acquire(self.path / name, create=create)
 
     def create_child(self, name: str):
-        if type(name) is not str or not name or name in {".", ".."} or Path(name).name != name:
-            raise RepositoryIntegrityError("filho do namespace de recovery inválido")
+        name = self._validate_entry_name(name)
         if os.name == "nt":
             try:
                 assert self.directory_handle is not None
@@ -562,7 +687,179 @@ class RecoveryFilesystemCustody:
             os.mkdir(name, 0o700, dir_fd=self.directory_fd)
         except FileExistsError as exc:
             raise RepositoryConflict("recovery staging root must not exist") from exc
-        return type(self).acquire(self.path / name)
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=self.directory_fd,
+        )
+        try:
+            details = os.fstat(descriptor)
+            if not stat.S_ISDIR(details.st_mode):
+                raise RecoveryRetained("recovery staging criado não é diretório")
+        except BaseException:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+            raise
+        return self._posix_child_from_open_descriptor(
+            name,
+            descriptor,
+            _chave_identidade(details),
+        )
+
+    def open_file(self, name: str, flags: int, mode: int = 0o600) -> int:
+        """Abre um membro direto sem abandonar a autoridade da custody POSIX."""
+
+        name = self._validate_entry_name(name)
+        if os.name == "posix":
+            return os.open(name, flags | os.O_NOFOLLOW, mode, dir_fd=self.directory_fd)
+        return os.open(self.path / name, flags | os.O_BINARY, mode)
+
+    def stat_entry(self, name: str) -> os.stat_result:
+        name = self._validate_entry_name(name)
+        if os.name == "posix":
+            return os.stat(name, dir_fd=self.directory_fd, follow_symlinks=False)
+        return os.lstat(self.path / name)
+
+    def entry_exists(self, name: str) -> bool:
+        try:
+            self.stat_entry(name)
+        except FileNotFoundError:
+            return False
+        return True
+
+    def read_file(self, name: str) -> bytes:
+        descriptor = self.open_file(name, os.O_RDONLY)
+        try:
+            details = os.fstat(descriptor)
+            if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
+                raise RepositoryIntegrityError("controle de recovery não é arquivo regular exclusivo")
+            chunks = []
+            while True:
+                chunk = os.read(descriptor, 64 * 1024)
+                if not chunk:
+                    return b"".join(chunks)
+                chunks.append(chunk)
+        finally:
+            os.close(descriptor)
+
+    def write_new_file(self, name: str, payload: bytes) -> None:
+        if type(payload) is not bytes:
+            raise TypeError("payload de controle de recovery inválido")
+        descriptor = self.open_file(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        try:
+            remaining = memoryview(payload)
+            while remaining:
+                written = os.write(descriptor, remaining)
+                if written <= 0:
+                    raise RepositoryIntegrityError("escrita de controle de recovery não avançou")
+                remaining = remaining[written:]
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def publish_immutable_file(self, name: str, payload: bytes) -> bytes:
+        """Publica bytes exatos com link exclusivo dentro da custody."""
+
+        name = self._validate_entry_name(name)
+        try:
+            existing = self.read_file(name)
+        except FileNotFoundError:
+            existing = None
+        if existing is not None:
+            if existing != payload:
+                raise RepositoryIntegrityError(f"{name} divergente")
+            return existing
+        temporary_name = f".{name}.{uuid4().hex}"
+        self.write_new_file(temporary_name, payload)
+        try:
+            try:
+                self.link_file(temporary_name, name)
+            except FileExistsError:
+                existing = self.read_file(name)
+                if existing != payload:
+                    raise RepositoryIntegrityError(f"{name} divergente")
+        finally:
+            self.unlink_file(temporary_name, missing_ok=True)
+        published = self.read_file(name)
+        if published != payload:
+            raise RepositoryIntegrityError(f"{name} não foi publicado integralmente")
+        self.fsync_directory()
+        return published
+
+    def replace_file(self, temporary_name: str, target_name: str) -> None:
+        temporary_name = self._validate_entry_name(temporary_name)
+        target_name = self._validate_entry_name(target_name)
+        if os.name == "posix":
+            os.replace(
+                temporary_name,
+                target_name,
+                src_dir_fd=self.directory_fd,
+                dst_dir_fd=self.directory_fd,
+            )
+        else:
+            os.replace(self.path / temporary_name, self.path / target_name)
+
+    def link_file(self, source_name: str, target_name: str) -> None:
+        source_name = self._validate_entry_name(source_name)
+        target_name = self._validate_entry_name(target_name)
+        if os.name == "posix":
+            os.link(
+                source_name,
+                target_name,
+                src_dir_fd=self.directory_fd,
+                dst_dir_fd=self.directory_fd,
+                follow_symlinks=False,
+            )
+        else:
+            os.link(self.path / source_name, self.path / target_name)
+
+    def rename_file(self, source_name: str, target_name: str) -> None:
+        source_name = self._validate_entry_name(source_name)
+        target_name = self._validate_entry_name(target_name)
+        if os.name == "posix":
+            os.rename(
+                source_name,
+                target_name,
+                src_dir_fd=self.directory_fd,
+                dst_dir_fd=self.directory_fd,
+            )
+        else:
+            os.rename(self.path / source_name, self.path / target_name)
+
+    def unlink_file(self, name: str, *, missing_ok: bool = False) -> None:
+        name = self._validate_entry_name(name)
+        try:
+            if os.name == "posix":
+                os.unlink(name, dir_fd=self.directory_fd)
+            else:
+                (self.path / name).unlink()
+        except FileNotFoundError:
+            if not missing_ok:
+                raise
+
+    def fsync_directory(self) -> None:
+        if os.name == "posix":
+            os.fsync(self.directory_fd)
+
+    def descriptor_relative_path(self, name: str) -> Path:
+        """Nome derivado do fd para APIs POSIX que não aceitam ``dir_fd``."""
+
+        name = self._validate_entry_name(name)
+        if os.name != "posix":
+            return self.path / name
+        descriptor = self.directory_fd
+        expected = self.identity
+        for namespace in (Path("/proc/self/fd"), Path("/dev/fd")):
+            alias = namespace / str(descriptor)
+            try:
+                observed = _chave_identidade(os.stat(alias))
+            except OSError:
+                continue
+            if observed == expected:
+                return alias / name
+        raise RecoveryRetained("plataforma POSIX sem alias validável para o dir_fd de recovery")
 
     def entries(self) -> tuple[str, ...]:
         if self._closed:
@@ -852,10 +1149,42 @@ def _remover_diretorio_windows_ancorado(node: _CleanupNode) -> None:
     _fechar_handle_windows_unica_vez(descriptor)
 
 
+def _remover_diretorio_posix_ancorado(
+    parent_directory_fd: int,
+    node: _CleanupNode,
+    name: str,
+    expected_filesystem_identity: object,
+) -> None:
+    """Remove o nome somente se ainda selecionar o diretório aberto esperado."""
+
+    if os.name != "posix" or node.descriptor is None:
+        raise RecoveryRetained("custódia POSIX da recuperação indisponível")
+    observed_name = os.stat(
+        name,
+        dir_fd=parent_directory_fd,
+        follow_symlinks=False,
+    )
+    if (
+        _detalhes_sao_link_ou_reparse(observed_name)
+        or not stat.S_ISDIR(observed_name.st_mode)
+        or _chave_identidade(observed_name) != expected_filesystem_identity
+    ):
+        raise RecoveryRetained("a identidade removida foi substituída no namespace")
+    opened_before = os.fstat(node.descriptor)
+    if _chave_identidade(opened_before) != expected_filesystem_identity:
+        raise RecoveryRetained("a identidade filesystem da recuperação mudou")
+    os.rmdir(name, dir_fd=parent_directory_fd)
+    opened_after = os.fstat(node.descriptor)
+    if _chave_identidade(opened_after) != expected_filesystem_identity or opened_after.st_nlink != 0:
+        raise RecoveryRetained("a identidade esperada não foi removida do namespace")
+
+
 def _adquirir_custodia_cleanup(
     path: Path,
     *,
     parent: _CleanupNode | None = None,
+    existing_posix_custody: RecoveryFilesystemCustody | None = None,
+    parent_posix_fd: int | None = None,
     parent_windows_handle: int | None = None,
     expected_filesystem_identity: object | None = None,
 ) -> _CleanupNode:
@@ -870,26 +1199,36 @@ def _adquirir_custodia_cleanup(
     ao fechar o handle e nunca são material do backup.
     """
 
-    if parent is None:
-        before = os.lstat(path)
+    descriptor = None
+    if os.name == "posix" and parent is None and existing_posix_custody is not None:
+        if existing_posix_custody.path != path:
+            raise RecoveryRetained("custódia POSIX e raiz da recuperação divergem")
+        descriptor = os.dup(existing_posix_custody.directory_fd)
+        before = os.fstat(descriptor)
     elif os.name == "posix":
-        if parent.descriptor is None or path.name in {"", ".", ".."}:
+        relative_parent = parent.descriptor if parent is not None else parent_posix_fd
+        if relative_parent is None or path.name in {"", ".", ".."}:
             raise RecoveryRetained("custódia da recuperação indisponível")
         before = os.stat(
             path.name,
-            dir_fd=parent.descriptor,
+            dir_fd=relative_parent,
             follow_symlinks=False,
         )
     else:
         before = os.lstat(path)
     if _detalhes_sao_link_ou_reparse(before) or not stat.S_ISDIR(before.st_mode):
+        if descriptor is not None:
+            os.close(descriptor)
         raise RecoveryRetained("a recuperação contém link ou reparse point")
 
-    descriptor = None
     anchor_path = None
     if os.name == "posix":
-        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-        descriptor = os.open(path, flags) if parent is None else os.open(path.name, flags, dir_fd=parent.descriptor)
+        if descriptor is None:
+            flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            relative_parent = parent.descriptor if parent is not None else parent_posix_fd
+            if relative_parent is None:
+                raise RecoveryRetained("custódia da recuperação indisponível")
+            descriptor = os.open(path.name, flags, dir_fd=relative_parent)
         try:
             opened = os.fstat(descriptor)
         except Exception:
@@ -994,7 +1333,12 @@ def _remover_material_ancorado(
         try:
             if node.descriptor is None:
                 raise OSError("custódia da recuperação foi encerrada")
-            os.rmdir(child.name, dir_fd=node.descriptor)
+            _remover_diretorio_posix_ancorado(
+                node.descriptor,
+                child,
+                child.name,
+                child.identity,
+            )
         except OSError:
             pass
         _fechar_custodia_cleanup(child)
@@ -1078,7 +1422,33 @@ def _inventario_seguro(raiz: Path) -> tuple[list[Path], list[Path]]:
     return arquivos, diretorios
 
 
-def _arvore_de_recuperacao_eh_segura(raiz: Path) -> bool:
+def _arvore_de_recuperacao_eh_segura(
+    raiz: Path,
+    custody: RecoveryFilesystemCustody | None = None,
+) -> bool:
+    if os.name == "posix":
+        if custody is None or custody.path != raiz:
+            return False
+
+        def visitar_ancorado(current: RecoveryFilesystemCustody) -> None:
+            with os.scandir(current.directory_fd) as entradas:
+                for entrada in entradas:
+                    details = entrada.stat(follow_symlinks=False)
+                    if _detalhes_sao_link_ou_reparse(details):
+                        raise RecoveryRetained("a recuperação contém link ou reparse point")
+                    if stat.S_ISDIR(details.st_mode):
+                        child = current.child(entrada.name)
+                        assert child is not None
+                        with child:
+                            visitar_ancorado(child)
+                    elif not stat.S_ISREG(details.st_mode):
+                        raise RecoveryRetained("a recuperação contém objeto de filesystem inesperado")
+
+        try:
+            visitar_ancorado(custody)
+        except (OSError, RecoveryRetained):
+            return False
+        return True
     if _raiz_eh_link_ou_reparse(raiz):
         return False
     try:
@@ -1124,11 +1494,14 @@ def _json_canonico(registro: dict) -> bytes:
     ).encode("utf-8")
 
 
-def _ler_arquivo_regular_exclusivo(path: Path):
+def _ler_arquivo_regular_exclusivo(
+    path: Path,
+    custody: RecoveryFilesystemCustody | None = None,
+):
     """Lê sidecar sem seguir links e sem aceitar hardlink como autoridade."""
 
     try:
-        before = os.lstat(path)
+        before = custody.stat_entry(path.name) if os.name == "posix" and custody is not None else os.lstat(path)
     except FileNotFoundError:
         return None
     except OSError:
@@ -1137,14 +1510,14 @@ def _ler_arquivo_regular_exclusivo(path: Path):
         return _SIDECAR_CORROMPIDO
     flags = os.O_RDONLY | (os.O_NOFOLLOW if os.name == "posix" else os.O_BINARY)
     try:
-        descriptor = os.open(path, flags)
+        descriptor = custody.open_file(path.name, os.O_RDONLY) if os.name == "posix" and custody is not None else os.open(path, flags)
     except FileNotFoundError:
         return _SIDECAR_TRAVADO
     except OSError:
         return _SIDECAR_TRAVADO
     try:
         opened = os.fstat(descriptor)
-        after = os.lstat(path)
+        after = custody.stat_entry(path.name) if os.name == "posix" and custody is not None else os.lstat(path)
         if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or _chave_identidade(before) != _chave_identidade(opened) or _chave_identidade(opened) != _chave_identidade(after):
             return _SIDECAR_CORROMPIDO
         chunks = []
@@ -1159,9 +1532,19 @@ def _ler_arquivo_regular_exclusivo(path: Path):
         os.close(descriptor)
 
 
-def _gravar_sidecar_imutavel(raiz: Path, nome: str, registro: dict) -> None:
+def _gravar_sidecar_imutavel(
+    raiz: Path,
+    nome: str,
+    registro: dict,
+    custody: RecoveryFilesystemCustody | None = None,
+) -> None:
     """Publica um controle durável sem substituir uma autoridade já existente."""
     corpo = _json_canonico(registro)
+    if os.name == "posix":
+        if custody is None or custody.path != raiz:
+            raise RepositoryIntegrityError("sidecar POSIX requer custody da base")
+        custody.publish_immutable_file(nome, corpo)
+        return
     alvo = raiz / nome
     existente = _ler_arquivo_regular_exclusivo(alvo)
     if existente is not None:
@@ -1202,8 +1585,14 @@ def _gravar_sidecar_imutavel(raiz: Path, nome: str, registro: dict) -> None:
             os.close(descriptor)
 
 
-def _ler_sidecar(raiz: Path, nome: str):
-    bruto = _ler_arquivo_regular_exclusivo(raiz / nome)
+def _ler_sidecar(
+    raiz: Path,
+    nome: str,
+    custody: RecoveryFilesystemCustody | None = None,
+):
+    if os.name == "posix" and (custody is None or custody.path != raiz):
+        raise RepositoryIntegrityError("leitura de sidecar POSIX requer custody da base")
+    bruto = _ler_arquivo_regular_exclusivo(raiz / nome, custody)
     if bruto is None:
         return None
     if bruto is _SIDECAR_TRAVADO:
@@ -1264,25 +1653,15 @@ def _cleanup_intent_record(
     }
 
 
-def _cleanup_intent_da_base(base: Path, recovery_id: str):
-    try:
-        custody = RecoveryFilesystemCustody.acquire(base, missing_ok=True)
-    except (OSError, RepositoryError):
-        return _SIDECAR_CORROMPIDO
-    if custody is None:
-        return None
-    try:
-        return _cleanup_intent_da_base_custodiada(base, recovery_id)
-    finally:
-        custody.close()
-
-
-def _cleanup_intent_da_base_custodiada(base: Path, recovery_id: str):
+def _cleanup_intent_da_base_custodiada(
+    base_custody: RecoveryFilesystemCustody,
+    recovery_id: str,
+):
     try:
         name = _cleanup_intent_name(recovery_id)
     except RepositoryIntegrityError:
         return _SIDECAR_CORROMPIDO
-    registro = _ler_sidecar(base, name)
+    registro = _ler_sidecar(base_custody.path, name, base_custody)
     if registro in (None, _SIDECAR_TRAVADO, _SIDECAR_CORROMPIDO):
         return registro
     if set(registro) != {
@@ -1332,46 +1711,10 @@ def _persistir_cleanup_intent_custodiado(
         mode,
         expected_filesystem_identity,
     )
-    _gravar_sidecar_imutavel(raiz.parent, name, record)
-    if _cleanup_intent_da_base_custodiada(raiz.parent, recovery_id) != record:
+    _gravar_sidecar_imutavel(raiz.parent, name, record, base_custody)
+    if _cleanup_intent_da_base_custodiada(base_custody, recovery_id) != record:
         raise RepositoryIntegrityError("intent de cleanup não foi persistido")
     return raiz.parent / name
-
-
-def _persistir_cleanup_intent(
-    raiz: Path,
-    recovery_id: str,
-    mode: str,
-    expected_filesystem_identity: object,
-) -> Path:
-    if raiz.name != f"recovery-{recovery_id}":
-        raise RepositoryIntegrityError("raiz e recovery_id do cleanup divergem")
-    base_custody = None
-    root_custody = None
-    try:
-        base_custody = RecoveryFilesystemCustody.acquire(raiz.parent)
-        assert base_custody is not None
-        root_custody = base_custody.child(raiz.name)
-        assert root_custody is not None
-        if root_custody.identity != expected_filesystem_identity:
-            raise RecoveryRetained("a identidade filesystem da recuperação mudou")
-    except (OSError, RepositoryError) as exc:
-        if root_custody is not None:
-            root_custody.close()
-        if base_custody is not None:
-            base_custody.close()
-        raise RecoveryRetained("namespace do cleanup sem custódia segura") from exc
-    try:
-        return _persistir_cleanup_intent_custodiado(
-            base_custody,
-            raiz,
-            recovery_id,
-            mode,
-            expected_filesystem_identity,
-        )
-    finally:
-        root_custody.close()
-        base_custody.close()
 
 
 def _substituir_intent_ilegivel_por_abandono(raiz: Path, recovery_id: str) -> None:
@@ -1385,14 +1728,16 @@ def _substituir_intent_ilegivel_por_abandono(raiz: Path, recovery_id: str) -> No
         root_custody = base_custody.child(raiz.name)
         assert root_custody is not None
         name = _cleanup_intent_name(recovery_id)
-        current = _cleanup_intent_da_base_custodiada(raiz.parent, recovery_id)
+        current = _cleanup_intent_da_base_custodiada(base_custody, recovery_id)
         if current is _SIDECAR_TRAVADO:
             raise RepositoryIntegrityError("intent de cleanup temporariamente ilegível")
         if current is _SIDECAR_CORROMPIDO:
-            source = raiz.parent / name
             evidence = raiz.parent / f"{name}.invalid.{uuid4().hex}"
             try:
-                source.rename(evidence)
+                if os.name == "posix":
+                    base_custody.rename_file(name, evidence.name)
+                else:
+                    (raiz.parent / name).rename(evidence)
             except OSError as exc:
                 raise RepositoryIntegrityError("intent de cleanup ilegível não pôde ser preservado") from exc
         elif current is not None:
@@ -1421,6 +1766,7 @@ def _coletar_cleanup_intent_apos_raiz_ausente(
     *,
     expected_filesystem_identity: object | None = None,
     expected_identity_removed: bool = False,
+    base_custody: RecoveryFilesystemCustody | None = None,
 ) -> None:
     # Ausência de pathname, isoladamente, não identifica o objeto removido.
     # Um restart que encontre só o sidecar o preserva; apenas o processo que
@@ -1428,14 +1774,17 @@ def _coletar_cleanup_intent_apos_raiz_ausente(
     # o commit/GC. O resíduo é pequeno, não privado e falha fechado.
     if not expected_identity_removed or expected_filesystem_identity is None:
         return
+    acquired_custody = None
+    if base_custody is None:
+        try:
+            acquired_custody = RecoveryFilesystemCustody.acquire(raiz.parent)
+        except (OSError, RepositoryIntegrityError) as exc:
+            raise RecoveryRetained("base da recuperação sem custódia segura") from exc
+        assert acquired_custody is not None
+        base_custody = acquired_custody
     try:
-        base_custody = RecoveryFilesystemCustody.acquire(raiz.parent)
-    except (OSError, RepositoryIntegrityError) as exc:
-        raise RecoveryRetained("base da recuperação sem custódia segura") from exc
-    assert base_custody is not None
-    with base_custody:
         intent_record = _cleanup_intent_da_base_custodiada(
-            raiz.parent,
+            base_custody,
             recovery_id,
         )
         if not isinstance(intent_record, dict):
@@ -1446,7 +1795,7 @@ def _coletar_cleanup_intent_apos_raiz_ausente(
             raise RecoveryRetained("intent do cleanup não prova a identidade removida") from exc
         if recorded_identity != expected_filesystem_identity:
             raise RecoveryRetained("a identidade removida diverge do intent")
-        if os.path.lexists(raiz):
+        if base_custody.entry_exists(raiz.name):
             raise RecoveryRetained("a identidade removida foi substituída no namespace")
         intent = raiz.parent / _cleanup_intent_name(recovery_id)
         try:
@@ -1460,6 +1809,9 @@ def _coletar_cleanup_intent_apos_raiz_ausente(
             # A remoção exata já foi provada neste processo. A falha de GC
             # retém apenas metadata não privada; restart não recria essa prova.
             pass
+    finally:
+        if acquired_custody is not None:
+            acquired_custody.close()
 
 
 def _summary_payload(summary: BackupSummary) -> dict:
@@ -1542,21 +1894,23 @@ def _gravar_session_descriptor(
     summary: BackupSummary,
     promotion_plan_sha256: str,
 ) -> None:
-    _gravar_sidecar_imutavel(
-        Path(staging.root),
+    staging.gravar_controle_imutavel(
         _SESSION,
-        {
+        _json_canonico({
             "version": _SESSION_VERSION,
             "recovery_id": recovery_id,
             "staging_identity": staging.identidade,
             "promotion_plan_sha256": promotion_plan_sha256,
             "summary": _summary_payload(summary),
-        },
+        }),
     )
 
 
-def _descriptor_da_raiz(raiz: Path):
-    registro = _ler_sidecar(raiz, _SESSION)
+def _descriptor_da_raiz(
+    raiz: Path,
+    custody: RecoveryFilesystemCustody | None = None,
+):
+    registro = _ler_sidecar(raiz, _SESSION, custody)
     if registro in (None, _SIDECAR_TRAVADO, _SIDECAR_CORROMPIDO):
         return registro
     if set(registro) != {
@@ -1644,14 +1998,22 @@ def _journal_compativel_com_descriptor(journal: object, descriptor: object) -> b
     return _hash_plano_promocao(plano) == session["promotion_plan_sha256"]
 
 
-def _journal_bruto(raiz: Path):
+def _journal_bruto(
+    raiz: Path,
+    custody: RecoveryFilesystemCustody | None = None,
+):
     """Lê o journal SEM abrir o staging.
 
     `None` = não há. `_JOURNAL_CORROMPIDO` = existe e nunca vai ser entendido.
     `_JOURNAL_TRAVADO` = não deu para ler AGORA (transitório).
     """
     try:
-        bruto = (raiz / _JOURNAL).read_bytes()
+        if os.name == "posix":
+            if custody is None or custody.path != raiz:
+                return _JOURNAL_TRAVADO
+            bruto = custody.read_file(_JOURNAL)
+        else:
+            bruto = (raiz / _JOURNAL).read_bytes()
     except FileNotFoundError:
         return None
     except OSError:
@@ -1679,13 +2041,8 @@ def _classificar_journal(staging: object) -> str:
     - `inacessivel`  não deu para LER agora (arquivo travado, placeholder do
                      OneDrive não hidratado). Transitório: preserva, não decide.
     """
-    caminho = None
     try:
-        caminho = Path(staging.root) / _JOURNAL
-    except Exception:
-        return _JOURNAL_INACESSIVEL
-    try:
-        bruto = caminho.read_bytes()
+        bruto = staging.ler_controle(_JOURNAL)
     except FileNotFoundError:
         return _JOURNAL_AUSENTE
     except OSError:
@@ -1735,18 +2092,35 @@ def _encerrar_staging(staging: object, *, exigir_remocao: bool = False) -> None:
     A remoção só ocorre sobre diretório que se PROVA ser raiz de recuperação
     nossa: precisa do marcador com o conteúdo canônico.
     """
+    root_custody = None
+    base_custody = None
     try:
         raiz = Path(staging.root)
         expected_filesystem_identity = staging.filesystem_identity
+        if os.name == "posix":
+            root_custody = staging.duplicar_custodia_filesystem()
+            base_custody = root_custody.parent_custody()
     except Exception:
+        if root_custody is not None:
+            root_custody.close()
+        if base_custody is not None:
+            base_custody.close()
         staging.discard()
         return
     staging.discard()
-    _remover_raiz_quarentenada(
-        raiz,
-        exigir_remocao=exigir_remocao,
-        expected_filesystem_identity=expected_filesystem_identity,
-    )
+    try:
+        _remover_raiz_quarentenada(
+            raiz,
+            exigir_remocao=exigir_remocao,
+            expected_filesystem_identity=expected_filesystem_identity,
+            base_custody=base_custody,
+            root_custody=root_custody,
+        )
+    finally:
+        if root_custody is not None:
+            root_custody.close()
+        if base_custody is not None:
+            base_custody.close()
 
 
 def _remover_raiz_quarentenada(
@@ -1755,6 +2129,8 @@ def _remover_raiz_quarentenada(
     exigir_remocao: bool = False,
     cleanup_mode: str = "COLLECT",
     expected_filesystem_identity: object | None = None,
+    base_custody: RecoveryFilesystemCustody | None = None,
+    root_custody: RecoveryFilesystemCustody | None = None,
 ) -> None:
     """Remove somente a identidade física autorizada pelo intent durável.
 
@@ -1769,17 +2145,24 @@ def _remover_raiz_quarentenada(
         if exigir_remocao:
             raise RecoveryRetained("raiz da recuperação não é canônica")
         return
-    try:
-        base_custody = RecoveryFilesystemCustody.acquire(raiz.parent)
-    except (OSError, RepositoryIntegrityError) as exc:
-        if exigir_remocao:
-            raise RecoveryRetained("base da recuperação sem custódia segura") from exc
-        return
+    acquired_base_custody = None
+    if base_custody is None:
+        try:
+            acquired_base_custody = RecoveryFilesystemCustody.acquire(raiz.parent)
+        except (OSError, RepositoryIntegrityError) as exc:
+            if exigir_remocao:
+                raise RecoveryRetained("base da recuperação sem custódia segura") from exc
+            return
+        base_custody = acquired_base_custody
+    elif base_custody.path != raiz.parent:
+        raise RecoveryRetained("custódia e base da recuperação divergem")
+    if root_custody is not None and root_custody.path != raiz:
+        raise RecoveryRetained("custódia e raiz da recuperação divergem")
     assert base_custody is not None
     custody = None
     try:
         intent_record = _cleanup_intent_da_base_custodiada(
-            raiz.parent,
+            base_custody,
             recovery_id,
         )
         if intent_record in (_SIDECAR_TRAVADO, _SIDECAR_CORROMPIDO):
@@ -1795,6 +2178,8 @@ def _remover_raiz_quarentenada(
 
         custody = _adquirir_custodia_cleanup(
             raiz,
+            existing_posix_custody=root_custody if os.name == "posix" else None,
+            parent_posix_fd=base_custody.directory_fd,
             parent_windows_handle=base_custody.directory_handle,
             expected_filesystem_identity=expected_filesystem_identity,
         )
@@ -1857,19 +2242,23 @@ def _remover_raiz_quarentenada(
                 recovery_id,
                 expected_filesystem_identity=expected_filesystem_identity,
                 expected_identity_removed=True,
+                base_custody=base_custody,
             )
             return
 
         try:
-            os.rmdir(raiz.name, dir_fd=base_custody.directory_fd)
-            opened_after_removal = os.fstat(custody.descriptor)
-            if _chave_identidade(opened_after_removal) != expected_filesystem_identity or opened_after_removal.st_nlink != 0:
-                raise RecoveryRetained("a identidade esperada não foi removida do namespace")
+            _remover_diretorio_posix_ancorado(
+                base_custody.directory_fd,
+                custody,
+                raiz.name,
+                expected_filesystem_identity,
+            )
             _coletar_cleanup_intent_apos_raiz_ausente(
                 raiz,
                 recovery_id,
                 expected_filesystem_identity=expected_filesystem_identity,
                 expected_identity_removed=True,
+                base_custody=base_custody,
             )
             return
         except OSError:
@@ -1882,7 +2271,8 @@ def _remover_raiz_quarentenada(
     finally:
         if custody is not None:
             _fechar_custodia_cleanup(custody)
-        base_custody.close()
+        if acquired_base_custody is not None:
+            acquired_base_custody.close()
 
 
 def _summary(backup: object, digest: str) -> BackupSummary:
@@ -2142,7 +2532,11 @@ class StageWorkspaceRecovery:
             except Exception:
                 pass
             raise RecoveryStageFailed("a restauração isolada falhou") from exc
-        if not (root / "RECOVERY_NOT_PROMOTABLE").exists():
+        try:
+            quarantine_present = staging.ler_controle(_QUARENTENA) == _QUARENTENA_PAYLOAD
+        except (OSError, RepositoryError):
+            quarantine_present = False
+        if not quarantine_present:
             _encerrar_staging(staging)
             raise RepositoryIntegrityError("a quarentena de recuperação desapareceu")
         summary = _summary(backup, digest)
@@ -2284,15 +2678,14 @@ class StageWorkspaceRecovery:
             return None
         assert root_guard is not None
         with root_guard:
-            if not _arvore_de_recuperacao_eh_segura(raiz):
+            if not _arvore_de_recuperacao_eh_segura(raiz, root_guard):
                 return None
-            marcador = raiz / _QUARENTENA
             try:
-                if marcador.read_bytes() != _QUARENTENA_PAYLOAD:
+                if root_guard.read_file(_QUARENTENA) != _QUARENTENA_PAYLOAD:
                     return None
             except OSError:
                 return None
-            registro = _journal_bruto(raiz)
+            registro = _journal_bruto(raiz, root_guard)
             if registro is None:
                 return None
             if registro is _JOURNAL_TRAVADO:
@@ -2302,7 +2695,7 @@ class StageWorkspaceRecovery:
             if registro.get("backup_sha256") != digest or registro.get("workspace_id") != workspace_id:
                 return None
             try:
-                staging = self.open_staging(raiz)
+                staging = self.open_staging(raiz, _recovery_custody=root_guard)
             except (RepositoryError, RepositoryIntegrityError, OSError) as exc:
                 raise RecoveryStageFailed("uma promoção interrompida deste backup não pôde ser reaberta") from exc
             try:
@@ -2376,20 +2769,24 @@ def _recolher_stagings_orfaos_custodiado(raiz_base: Path, custody: RecoveryFiles
         if not path.name.startswith(_CLEANUP_INTENT_PREFIX):
             continue
         recovery_id = path.name[len(_CLEANUP_INTENT_PREFIX) :]
-        intent = _cleanup_intent_da_base(raiz_base, recovery_id)
+        intent = _cleanup_intent_da_base_custodiada(custody, recovery_id)
         if not isinstance(intent, dict):
             continue
         raiz = raiz_base / intent["root_name"]
-        if not os.path.lexists(raiz):
+        if not custody.entry_exists(raiz.name):
             _coletar_cleanup_intent_apos_raiz_ausente(raiz, recovery_id)
             continue
         if intent["mode"] != "COLLECT":
             continue
         try:
-            _remover_raiz_quarentenada(raiz, cleanup_mode="COLLECT")
+            _remover_raiz_quarentenada(
+                raiz,
+                cleanup_mode="COLLECT",
+                base_custody=custody,
+            )
         except Exception:
             continue
-        if not os.path.lexists(raiz):
+        if not custody.entry_exists(raiz.name):
             recolhidas.append(raiz.name)
 
     try:
@@ -2404,37 +2801,54 @@ def _recolher_stagings_orfaos_custodiado(raiz_base: Path, custody: RecoveryFiles
         assert root_guard is not None
         expected_identity = root_guard.identity
         try:
-            authorized = _candidata_orfa_autoriza_cleanup(raiz, raiz_base)
+            authorized = _candidata_orfa_autoriza_cleanup(
+                raiz,
+                custody,
+                root_guard,
+            )
+            if not authorized:
+                continue
+            if os.name == "nt":
+                root_guard.close()
+                root_guard = None
+            try:
+                _remover_raiz_quarentenada(
+                    raiz,
+                    expected_filesystem_identity=expected_identity,
+                    base_custody=custody,
+                    root_custody=root_guard,
+                )
+            except Exception:
+                continue
+            if not custody.entry_exists(raiz.name):
+                recolhidas.append(raiz.name)
         finally:
-            root_guard.close()
-        if not authorized:
-            continue
-        try:
-            _remover_raiz_quarentenada(raiz, expected_filesystem_identity=expected_identity)
-        except Exception:
-            continue
-        if not raiz.exists():
-            recolhidas.append(raiz.name)
+            if root_guard is not None:
+                root_guard.close()
     return tuple(recolhidas)
 
 
-def _candidata_orfa_autoriza_cleanup(raiz: Path, raiz_base: Path) -> bool:
+def _candidata_orfa_autoriza_cleanup(
+    raiz: Path,
+    base_custody: RecoveryFilesystemCustody,
+    root_custody: RecoveryFilesystemCustody,
+) -> bool:
     recovery_id = _recovery_id_da_raiz(raiz)
     if recovery_id is None:
         return False
-    if _cleanup_intent_da_base(raiz_base, recovery_id) is not None:
+    if _cleanup_intent_da_base_custodiada(base_custody, recovery_id) is not None:
         return False
-    if not _arvore_de_recuperacao_eh_segura(raiz):
+    if not _arvore_de_recuperacao_eh_segura(raiz, root_custody):
         return False
     try:
-        if (raiz / _QUARENTENA).read_bytes() != _QUARENTENA_PAYLOAD:
+        if root_custody.read_file(_QUARENTENA) != _QUARENTENA_PAYLOAD:
             return False
     except OSError:
         return False
-    registro = _journal_bruto(raiz)
+    registro = _journal_bruto(raiz, root_custody)
     if registro is _JOURNAL_TRAVADO:
         return False
-    descriptor = _descriptor_da_raiz(raiz)
+    descriptor = _descriptor_da_raiz(raiz, root_custody)
     if descriptor is _SIDECAR_TRAVADO:
         return False
     if descriptor is not None:
@@ -2500,7 +2914,7 @@ def _reconstruir_candidata_custodiada(
     recovery_id = _recovery_id_da_raiz(raiz)
     if recovery_id is None:
         return None
-    disposition = _cleanup_intent_da_base(raiz_base, recovery_id)
+    disposition = _cleanup_intent_da_base_custodiada(base_custody, recovery_id)
     root_guard = None
     try:
         try:
@@ -2508,18 +2922,18 @@ def _reconstruir_candidata_custodiada(
         except (OSError, RepositoryError):
             return _registrar_recuperacao_insegura(sessions, raiz, recovery_id, disposition)
         assert root_guard is not None
-        if not _arvore_de_recuperacao_eh_segura(raiz):
+        if not _arvore_de_recuperacao_eh_segura(raiz, root_guard):
             # Preservar a árvore sem publicá-la cria uma recuperação invisível
             # e sem saída pelo produto. O nome canônico basta para expor o
             # estado sanitizado; nenhum membro inseguro é lido ou percorrido.
             return _registrar_recuperacao_insegura(sessions, raiz, recovery_id, disposition)
         marcador_valido = False
         try:
-            marcador_valido = (raiz / _QUARENTENA).read_bytes() == _QUARENTENA_PAYLOAD
+            marcador_valido = root_guard.read_file(_QUARENTENA) == _QUARENTENA_PAYLOAD
         except OSError:
             pass
-        descriptor = _descriptor_da_raiz(raiz)
-        journal = _journal_bruto(raiz)
+        descriptor = _descriptor_da_raiz(raiz, root_guard)
+        journal = _journal_bruto(raiz, root_guard)
         summary = descriptor[1] if isinstance(descriptor, tuple) else None
         reason = None
         staging = None
@@ -2569,12 +2983,17 @@ def _reconstruir_candidata_custodiada(
             elif phase == PROMOTED:
                 # Estado terminal positivamente provado: a coleta é segura.
                 expected_identity = root_guard.identity
-                root_guard.close()
-                root_guard = None
+                cleanup_root_custody = root_guard
+                if os.name == "nt":
+                    root_guard.close()
+                    root_guard = None
+                    cleanup_root_custody = None
                 try:
                     _remover_raiz_quarentenada(
                         raiz,
                         expected_filesystem_identity=expected_identity,
+                        base_custody=base_custody,
+                        root_custody=cleanup_root_custody,
                     )
                 except Exception:
                     pass
@@ -2586,7 +3005,7 @@ def _reconstruir_candidata_custodiada(
 
         if state in (STAGED, FAILED_RECOVERABLE) and reason is None:
             try:
-                staging = open_staging(raiz)
+                staging = open_staging(raiz, _recovery_custody=root_guard)
                 if staging.identidade_registrada != descriptor[0]["staging_identity"]:
                     staging.close()
                     staging = None
@@ -2657,30 +3076,45 @@ def _gravar_disposition(entry: dict, recovery_id: str, mode: str) -> None:
         raiz = Path(staging.root)
     if raiz is None:
         raise RepositoryIntegrityError("raiz da recuperação indisponível")
-    existing_intent = _cleanup_intent_da_base(Path(raiz).parent, recovery_id)
-    if existing_intent in (_SIDECAR_TRAVADO, _SIDECAR_CORROMPIDO):
-        raise RecoveryRetained("intent de cleanup ilegível ou inacessível")
-    if isinstance(existing_intent, dict):
-        if existing_intent["mode"] != mode:
-            raise RecoveryRetained("modo do cleanup diverge da decisão persistida")
-        expected_identity = _filesystem_identity_from_record(existing_intent["filesystem_identity"])
-    else:
-        expected_identity = entry.get("expected_filesystem_identity")
+    raiz = Path(raiz)
+    base_custody = None
+    root_custody = None
+    try:
         if staging is not None:
-            expected_identity = staging.filesystem_identity
-    if existing_intent is None and expected_identity is None:
-        root_custody = RecoveryFilesystemCustody.acquire(Path(raiz))
+            root_custody = staging.duplicar_custodia_filesystem()
+            base_custody = root_custody.parent_custody()
+        else:
+            base_custody = RecoveryFilesystemCustody.acquire(raiz.parent)
+            assert base_custody is not None
+            root_custody = base_custody.child(raiz.name)
         assert root_custody is not None
-        try:
+        existing_intent = _cleanup_intent_da_base_custodiada(base_custody, recovery_id)
+        if existing_intent in (_SIDECAR_TRAVADO, _SIDECAR_CORROMPIDO):
+            raise RecoveryRetained("intent de cleanup ilegível ou inacessível")
+        if isinstance(existing_intent, dict):
+            if existing_intent["mode"] != mode:
+                raise RecoveryRetained("modo do cleanup diverge da decisão persistida")
+            expected_identity = _filesystem_identity_from_record(existing_intent["filesystem_identity"])
+        else:
+            expected_identity = entry.get("expected_filesystem_identity")
+            if staging is not None:
+                expected_identity = staging.filesystem_identity
+        if expected_identity is None:
             expected_identity = root_custody.identity
-        finally:
+        if root_custody.identity != expected_identity:
+            raise RecoveryRetained("a identidade filesystem da recuperação mudou")
+        _persistir_cleanup_intent_custodiado(
+            base_custody,
+            raiz,
+            recovery_id,
+            mode,
+            expected_identity,
+        )
+    finally:
+        if root_custody is not None:
             root_custody.close()
-    _persistir_cleanup_intent(
-        Path(raiz),
-        recovery_id,
-        mode,
-        expected_identity,
-    )
+        if base_custody is not None:
+            base_custody.close()
     entry["disposition"] = mode
     entry["expected_filesystem_identity"] = expected_identity
 
@@ -2690,18 +3124,31 @@ def _remover_entry(entry: dict, mode: str) -> None:
     expected_identity = entry.get("expected_filesystem_identity")
     if staging is not None:
         raiz = Path(staging.root)
+        root_custody = None
+        base_custody = None
         if expected_identity is None:
             expected_identity = staging.filesystem_identity
             entry["expected_filesystem_identity"] = expected_identity
-        staging.discard()
-        entry["staging"] = None
-        entry["root"] = raiz
-        _remover_raiz_quarentenada(
-            raiz,
-            exigir_remocao=True,
-            cleanup_mode=mode,
-            expected_filesystem_identity=expected_identity,
-        )
+        try:
+            if os.name == "posix":
+                root_custody = staging.duplicar_custodia_filesystem()
+                base_custody = root_custody.parent_custody()
+            staging.discard()
+            entry["staging"] = None
+            entry["root"] = raiz
+            _remover_raiz_quarentenada(
+                raiz,
+                exigir_remocao=True,
+                cleanup_mode=mode,
+                expected_filesystem_identity=expected_identity,
+                base_custody=base_custody,
+                root_custody=root_custody,
+            )
+        finally:
+            if root_custody is not None:
+                root_custody.close()
+            if base_custody is not None:
+                base_custody.close()
         return
     raiz = entry.get("root")
     if raiz is None:
