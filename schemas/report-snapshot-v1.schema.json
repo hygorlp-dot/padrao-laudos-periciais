@@ -22,12 +22,16 @@
     "nonnegative":{"type":"integer","minimum":0},
     "digest":{"type":"string","pattern":"^[0-9a-f]{64}$"},
     "texts":{"type":"array","uniqueItems":true,"items":{"$ref":"#/$defs/text"}},
-    "source":{"type":"object","additionalProperties":false,"required":["workspace_id","case_analysis_snapshot_id","case_analysis_revision","case_analysis_digest","inspection_session_id","inspection_session_revision","inspection_session_digest","technical_snapshot_id","technical_snapshot_revision","technical_snapshot_digest","expert_profile_id","expert_profile_revision","expert_profile_digest"],"properties":{
+    "source":{"type":"object","additionalProperties":false,"required":["workspace_id","case_analysis_snapshot_id","case_analysis_revision","case_analysis_digest","inspection_session_id","inspection_session_revision","inspection_session_digest","technical_snapshot_id","technical_snapshot_revision","technical_snapshot_digest","construction_defect_analysis_snapshot_id","construction_defect_analysis_revision","construction_defect_analysis_digest","expert_profile_id","expert_profile_revision","expert_profile_digest"],"properties":{
       "workspace_id":{"$ref":"#/$defs/text"},"case_analysis_snapshot_id":{"$ref":"#/$defs/text"},"case_analysis_revision":{"$ref":"#/$defs/positive"},"case_analysis_digest":{"$ref":"#/$defs/digest"},
       "inspection_session_id":{"$ref":"#/$defs/text"},"inspection_session_revision":{"$ref":"#/$defs/positive"},"inspection_session_digest":{"$ref":"#/$defs/digest"},
       "technical_snapshot_id":{"$ref":"#/$defs/text"},"technical_snapshot_revision":{"$ref":"#/$defs/positive"},"technical_snapshot_digest":{"$ref":"#/$defs/digest"},
+      "construction_defect_analysis_snapshot_id":{"anyOf":[{"$ref":"#/$defs/text"},{"type":"null"}]},"construction_defect_analysis_revision":{"anyOf":[{"$ref":"#/$defs/positive"},{"type":"null"}]},"construction_defect_analysis_digest":{"anyOf":[{"$ref":"#/$defs/digest"},{"type":"null"}]},
       "expert_profile_id":{"$ref":"#/$defs/text"},"expert_profile_revision":{"$ref":"#/$defs/positive"},"expert_profile_digest":{"$ref":"#/$defs/digest"}
-    }},
+    },"oneOf":[
+      {"properties":{"construction_defect_analysis_snapshot_id":{"type":"null"},"construction_defect_analysis_revision":{"type":"null"},"construction_defect_analysis_digest":{"type":"null"}}},
+      {"properties":{"construction_defect_analysis_snapshot_id":{"$ref":"#/$defs/text"},"construction_defect_analysis_revision":{"$ref":"#/$defs/positive"},"construction_defect_analysis_digest":{"$ref":"#/$defs/digest"}}}
+    ]},
     "expert":{"type":"object","additionalProperties":false,"required":["profile_id","revision","full_name","professional_title","registration","court_registration","contact_line"],"properties":{
       "profile_id":{"$ref":"#/$defs/text"},"revision":{"$ref":"#/$defs/positive"},"full_name":{"$ref":"#/$defs/text"},"professional_title":{"$ref":"#/$defs/text"},"registration":{"$ref":"#/$defs/text"},"court_registration":{"$ref":"#/$defs/text"},"contact_line":{"$ref":"#/$defs/text"}
     }},
@@ -39,7 +43,7 @@
       "section_id":{"$ref":"#/$defs/text"},"kind":{"enum":["IDENTIFICATION","PROCEDURAL_CONTEXT","PURPOSE_OBJECT","SCOPE","DOCUMENTS_EVIDENCE","METHODOLOGY","INSPECTION","TECHNICAL_ANALYSIS","TECHNICAL_FINDINGS","ANSWERS_TO_QUESTIONS","CONCLUSIONS","LIMITATIONS_RESERVATIONS","REFERENCES","ATTACHMENTS"]},"title":{"$ref":"#/$defs/text"},"order":{"$ref":"#/$defs/positive"},"required_by_cpc473":{"type":"boolean"}
     }},
     "provenance":{"type":"object","additionalProperties":false,"required":["provenance_id","source_kind","source_id","source_revision"],"properties":{
-      "provenance_id":{"$ref":"#/$defs/text"},"source_kind":{"enum":["ALLEGATION","COURT_DECISION","CASE_DOCUMENT","FIELD_OBSERVATION","MEASUREMENT","TECHNICAL_FINDING","PROFESSIONAL_DECISION"]},"source_id":{"$ref":"#/$defs/text"},"source_revision":{"$ref":"#/$defs/positive"}
+      "provenance_id":{"$ref":"#/$defs/text"},"source_kind":{"enum":["ALLEGATION","COURT_DECISION","CASE_DOCUMENT","FIELD_OBSERVATION","MEASUREMENT","PATHOLOGY","TECHNICAL_FINDING","PROFESSIONAL_DECISION"]},"source_id":{"$ref":"#/$defs/text"},"source_revision":{"$ref":"#/$defs/positive"}
     }},
     "claim":{"type":"object","additionalProperties":false,"required":["claim_id","section_id","text","authority","provenance"],"properties":{
       "claim_id":{"$ref":"#/$defs/text"},"section_id":{"$ref":"#/$defs/text"},"text":{"$ref":"#/$defs/text"},"authority":{"enum":["ALLEGED","DECIDED_BY_COURT","DOCUMENTED","OBSERVED","MEASURED","TECHNICALLY_FOUND","PROFESSIONALLY_CONCLUDED"]},"provenance":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/provenance"}}

@@ -36,6 +36,7 @@ from scripts.backend_contract.delivery_renderer import (
 )
 from scripts.backend_contract.report_template import template_binding_manifest_from_mapping
 from scripts.backend_contract.application.delivery_foundation import (
+    GetDeliverySnapshot,
     RenderDeliveryPackage,
     ReviewDeliverySnapshot,
     build_delivery_binding,
@@ -43,6 +44,7 @@ from scripts.backend_contract.application.delivery_foundation import (
     reconcile_delivery,
 )
 from scripts.backend_contract.case_analysis import case_analysis_from_mapping
+from scripts.backend_contract.construction_defect_analysis import freeze_json_payload
 from scripts.backend_contract.pericial_planning import pericial_planning_from_mapping
 from scripts.backend_contract.report_foundation import report_snapshot_from_mapping, report_snapshot_to_mapping
 from scripts.backend_contract.technical_findings import technical_snapshot_from_mapping
@@ -204,6 +206,33 @@ def test_unavailable_current_authority_reopens_as_stale_instead_of_hiding_delive
     assert stale.state is DeliveryState.STALE
     assert stale.stale_origin_state is DeliveryState.DELIVERED
     assert stale.stale_reasons == ("UPSTREAM_AUTHORITY_UNAVAILABLE",)
+
+
+def test_changed_pathology_authority_propagates_through_report_to_delivery_stale() -> None:
+    current = snapshot()
+    stored = SimpleNamespace(
+        revision=7,
+        payload=freeze_json_payload(delivery_snapshot_to_mapping(current)),
+    )
+    inert = SimpleNamespace(execute=lambda _workspace: (None, None))
+    changed_report = SimpleNamespace(
+        execute=lambda _workspace: (_ for _ in ()).throw(
+            ValueError("report pathology snapshot revision changed")
+        )
+    )
+    service = GetDeliverySnapshot(
+        SimpleNamespace(execute=lambda *_args: stored),
+        inert,
+        inert,
+        inert,
+        inert,
+        changed_report,
+    )
+
+    _, reopened = service.execute(current.workspace_id)
+
+    assert reopened.state is DeliveryState.STALE
+    assert reopened.stale_reasons == ("UPSTREAM_AUTHORITY_UNAVAILABLE",)
 
 
 def test_artifact_filename_and_content_identity_are_unique() -> None:

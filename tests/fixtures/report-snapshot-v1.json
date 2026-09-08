@@ -13,6 +13,9 @@
     "technical_snapshot_id": "TECHNICAL-SNAPSHOT-001",
     "technical_snapshot_revision": 4,
     "technical_snapshot_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "construction_defect_analysis_snapshot_id": null,
+    "construction_defect_analysis_revision": null,
+    "construction_defect_analysis_digest": null,
     "expert_profile_id": "EXPERT-PROFILE-001",
     "expert_profile_revision": 1,
     "expert_profile_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"

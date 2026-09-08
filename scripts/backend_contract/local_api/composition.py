@@ -479,7 +479,14 @@ def build_local_api(
         local_clock,
         local_ids,
     )
-    get_report_snapshot = GetReportSnapshot(get_latest_artifact, get_case_analysis, get_inspection_session, get_technical_snapshot, get_expert_profile)
+    get_report_snapshot = GetReportSnapshot(
+        get_latest_artifact,
+        get_case_analysis,
+        get_inspection_session,
+        get_technical_snapshot,
+        get_expert_profile,
+        get_construction_defect_analysis,
+    )
     save_report_snapshot = SaveReportSnapshot(
         store.revisions,
         get_case_analysis,
@@ -490,6 +497,7 @@ def build_local_api(
         private_store.authority_guard if private_store is not None else nullcontext,
         local_clock,
         local_ids,
+        get_construction_defect_analysis,
     )
     get_delivery_snapshot = None
     get_delivery_history = None
@@ -718,6 +726,7 @@ def build_local_api(
             get_expert_profile,
             save_report_snapshot,
             local_ids,
+            get_construction_defect_analysis,
         ),
         review_report_snapshot=ReviewReportSnapshot(get_report_snapshot, save_report_snapshot, local_clock, local_ids),
         amend_report_draft=AmendReportDraft(get_report_snapshot, save_report_snapshot, local_ids),

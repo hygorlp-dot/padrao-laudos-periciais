@@ -617,6 +617,35 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
             require("INSPECTION_SESSION_V1", binding["inspection_session_revision"], binding["inspection_session_digest"], "session_id", binding["inspection_session_id"])
             require("TECHNICAL_SNAPSHOT_V1", binding["technical_snapshot_revision"], binding["technical_snapshot_digest"], "snapshot_id", binding["technical_snapshot_id"])
             require("EXPERT_MASTER_PROFILE_V1", binding["expert_profile_revision"], binding["expert_profile_digest"], "profile_id", binding["expert_profile_id"])
+            pathology_record = None
+            if binding["construction_defect_analysis_snapshot_id"] is not None:
+                pathology_record = require(
+                    "CONSTRUCTION_DEFECT_ANALYSIS_V1",
+                    binding["construction_defect_analysis_revision"],
+                    binding["construction_defect_analysis_digest"],
+                    "snapshot_id",
+                    binding["construction_defect_analysis_snapshot_id"],
+                )
+            pathology = (
+                validated_construction_defect_analysis_from_mapping(
+                    thaw_payload(pathology_record.payload)
+                )
+                if pathology_record is not None
+                else None
+            )
+            effective_pat_ids = set(pathology.effective_pat_ids) if pathology else set()
+            for claim in payload["claims"]:
+                for provenance in claim["provenance"]:
+                    if provenance["source_kind"] != "PATHOLOGY":
+                        continue
+                    if (
+                        pathology is None
+                        or provenance["source_id"] not in effective_pat_ids
+                        or provenance["source_revision"] != pathology_record.revision
+                    ):
+                        raise RepositoryIntegrityError(
+                            "backup report pathology authority diverges"
+                        )
         elif record.artifact_kind == "DELIVERY_SNAPSHOT_V1":
             binding = payload["binding"]
             require("CASE_ANALYSIS_SNAPSHOT_V1", binding["case_analysis_revision"], binding["case_analysis_digest"], "snapshot_id", binding["case_analysis_snapshot_id"])
