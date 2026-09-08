@@ -95,6 +95,22 @@ describe("construction defect analysis workbench", () => {
     expect(screen.queryByText(/responsabilidade civil|culpa jurídica/i)).not.toBeInTheDocument();
   });
 
+  test("surfaces stale authority and disables further professional review", async () => {
+    const staleEnvelope = {
+      ...envelope,
+      snapshot: {
+        ...envelope.snapshot,
+        upstream_stale: true,
+        upstream_stale_reasons: ["Inspection Session content changed"],
+      },
+    };
+    vi.stubGlobal("fetch", fetchByUrl(response(200, staleEnvelope)));
+    render(<ConstructionDefectAnalysisView workspaceId={ID} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("análise bloqueada");
+    expect(screen.getByRole("button", { name: "Registrar revisão" })).toBeDisabled();
+  });
+
   test("starts from one explicit same-item observation context", async () => {
     const fetchMock = fetchByUrl(response(404, {}));
     fetchMock.mockImplementationOnce(() => Promise.resolve(response(404, {})));

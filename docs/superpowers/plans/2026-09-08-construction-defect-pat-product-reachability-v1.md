@@ -71,13 +71,13 @@ Critical path: explicit identity-preserving adapter → persisted authority/revi
 - Backend produces strict `ConstructionDefectSourceSnapshot`, `ObservationContext`, `CanonicalIdentityLink`, `PathologyReview`, `ConstructionDefectAnalysisSnapshot` and mapping helpers.
 - Adapter exposes one purpose-specific `execute(...)` operation and imports the existing `executar_pipeline_motor`; it performs no persistence.
 
-- [ ] Write a RED that imports the missing contract and proves a hand-authored snapshot preserves a full existing PAT payload and canonical identity links.
-- [ ] Run focused pytest and verify failure is the missing production contract.
-- [ ] Implement the minimum immutable contract, derived effective PAT IDs and strict mapping/schema parity.
-- [ ] Write RED adapter tests from real canonical Case Analysis/Planning/Inspection objects with one direct observation, measurement and synthetic photo reference. Require exact aliases and raw provenance preservation.
-- [ ] Implement deterministic mapping and call the existing motor with `conhecimento={}` only. Validate the existing engine output against `analise-motor-vicios.schema.json`; reject non-`PAT_FINAL`. Preserve an honestly blocked gate as diagnostic state, but never expose it as professionally effective or Report-eligible.
-- [ ] Add REDs for missing/foreign contexts, invented links, duplicate aliases and egress-provider injection; implement fail-closed validation.
-- [ ] Run focused GREEN, schema validator, Ruff and `git diff --check`; commit the causal slice.
+- [x] Write a RED that imports the missing contract and proves a hand-authored snapshot preserves a full existing PAT payload and canonical identity links.
+- [x] Run focused pytest and verify failure is the missing production contract.
+- [x] Implement the minimum immutable contract, derived effective PAT IDs and strict mapping/schema parity.
+- [x] Write RED adapter tests from real canonical Case Analysis/Planning/Inspection objects with one direct observation, measurement and synthetic photo reference. Require exact aliases and raw provenance preservation.
+- [x] Implement deterministic mapping and call the existing motor with `conhecimento={}` only. Validate the existing engine output against `analise-motor-vicios.schema.json`; reject non-`PAT_FINAL`. Preserve an honestly blocked gate as diagnostic state, but never expose it as professionally effective or Report-eligible.
+- [x] Add REDs for missing/foreign contexts, invented links, duplicate aliases and egress-provider injection; implement fail-closed validation.
+- [x] Run focused GREEN, schema validator, Ruff and `git diff --check`; commit the causal slice.
 
 ### Task 2: Application authority, persistence, review, staleness and recovery portability
 
@@ -96,12 +96,12 @@ Critical path: explicit identity-preserving adapter → persisted authority/revi
 - `StartConstructionDefectAnalysis.execute(...)`, `GetConstructionDefectAnalysis.execute(workspace_id)` and `ReviewPathology.execute(...)`.
 - Artifact kind `CONSTRUCTION_DEFECT_ANALYSIS_V1`, canonical singleton artifact ID, explicit dependencies and productization validator.
 
-- [ ] Write REDs for exact four-upstream binding, injected-adapter requirement, optimistic revision authority, append-only professional review and reopen.
-- [ ] Implement start/get/save/review with the shared authority guard; adapter output remains proposal-only and professional identity resolves from current Inspection.
-- [ ] Write REDs for changed Process Case, Case Analysis, Planning or Inspection; require honest stale reconciliation and prohibit further approval.
-- [ ] Implement staleness and dependency records without mutating historical PAT bytes.
-- [ ] Write RED backup/verify/restore/reopen tests requiring exact schema, revisions, checksums, identity manifest and reviews.
-- [ ] Register the portable artifact and strict compatibility validator; run focused GREEN and commit.
+- [x] Write REDs for exact four-upstream binding, injected-adapter requirement, optimistic revision authority, append-only professional review and reopen.
+- [x] Implement start/get/save/review with the shared authority guard; adapter output remains proposal-only and professional identity resolves from current Inspection.
+- [x] Write REDs for changed Process Case, Case Analysis, Planning or Inspection; require honest stale reconciliation and prohibit further approval.
+- [x] Implement staleness and dependency records without mutating historical PAT bytes.
+- [x] Write RED backup/verify/restore/reopen tests requiring exact schema, revisions, checksums, identity manifest and reviews.
+- [x] Register the portable artifact and strict compatibility validator; run focused GREEN and commit.
 
 ### Task 3: PAT-grounded Report authority without semantic flattening
 
@@ -116,11 +116,11 @@ Critical path: explicit identity-preserving adapter → persisted authority/revi
 - Optional exact PAT snapshot binding in `ReportSourceSnapshot`.
 - `ReportProvenance(source_kind="PATHOLOGY", source_id="PAT-NNN", ...)` accepted only for an effective current PAT and assigned no authority beyond the explicit professional PAT review.
 
-- [ ] Write REDs: approved PAT may ground a Report claim; proposed/rejected/stale/foreign PAT must fail.
-- [ ] Extend Report start/save/reopen to bind the optional current PAT artifact, validate effective PAT provenance and add the dependency atomically.
-- [ ] Write RED for a later PAT/upstream revision demoting approved Report and downstream Delivery to stale; implement through existing read-time reconciliation.
-- [ ] Add a longitudinal RED proving `observation + measurement + photo -> PAT_FINAL -> professional review -> Report claim` with all IDs traceable.
-- [ ] Run focused Report/Delivery GREEN and commit.
+- [x] Write REDs: approved PAT may ground a Report claim; proposed/rejected/stale/foreign PAT must fail.
+- [x] Extend Report start/save/reopen to bind the optional current PAT artifact, validate effective PAT provenance and add the dependency atomically.
+- [x] Write RED for a later PAT/upstream revision demoting approved Report and downstream Delivery to stale; implement through existing read-time reconciliation.
+- [x] Add a longitudinal RED proving `observation + measurement + photo -> PAT_FINAL -> professional review -> Report claim` with all IDs traceable.
+- [x] Run focused Report/Delivery GREEN and commit.
 
 ### Task 4: Purpose-specific Local API, ProductBridge and React workbench
 
@@ -142,15 +142,15 @@ Critical path: explicit identity-preserving adapter → persisted authority/revi
 - Same-origin `GET/POST /app-api/v1/workspaces/{workspace_id}/construction-defect-analysis` and purpose-specific `POST .../pathology-reviews`.
 - UI collects explicit structured observation context, displays engine proposal/gate, exposes PAT review and audit identities, and never auto-approves.
 
-- [ ] Write route/parser/component REDs for absent/start/loading/error/stale, explicit context, proposal versus effective state, retry and backend-failure messaging.
-- [ ] Implement strict Local API/OpenAPI/bridge routes; reject unknown suffixes/verbs and never expose a generic engine runner.
-- [ ] Implement frontend data parsing and the smallest workbench. Keep all material validation server-side and add no motion to form/review operations.
-- [ ] Add Report source selection for effective PAT IDs without copying PAT conclusions silently into prose.
-- [ ] Run focused Vitest, typecheck, lint, build and Python API/bridge suites; perform the UI/motion self-check and commit.
+- [x] Write route/parser/component REDs for absent/start/loading/error/stale, explicit context, proposal versus effective state, retry and backend-failure messaging.
+- [x] Implement strict Local API/OpenAPI/bridge routes; reject unknown suffixes/verbs and never expose a generic engine runner.
+- [x] Implement frontend data parsing and the smallest workbench. Keep all material validation server-side and add no motion to form/review operations.
+- [x] Add Report source selection for effective PAT IDs without copying PAT conclusions silently into prose.
+- [x] Run focused Vitest, typecheck, lint, build and Python API/bridge suites; perform the UI/motion self-check and commit.
 
 ### Task 5: Causal closure and return to #187
 
-- [ ] Execute `SIBLING_DEFECT_SWEEP_V2` across optional-specialization bindings, professional-review histories, portable artifact validators and Report provenance kinds.
+- [x] Execute `SIBLING_DEFECT_SWEEP_V2` across optional-specialization bindings, professional-review histories, portable artifact validators and Report provenance kinds.
 - [ ] Execute the pre-terminal adversarial matrix and a read-only `SHADOW_SYSTEMIC_REVIEW_V2`; repair each P0/P1 through a new RED/GREEN cycle.
 - [ ] Run change-impact suites, schema/fixture validation, Ruff, py_compile, frontend test/typecheck/lint/build, mojibake/config checks and `git diff --check`.
 - [ ] Freeze one exact HEAD. Run one full regression and one `python -m scripts.quality.verify_core --full` on that SHA only.
