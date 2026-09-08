@@ -64,7 +64,7 @@ def _remove_directory_reparse(link: Path) -> None:
         return
     if link.is_symlink():
         link.unlink()
-    else:
+    elif getattr(link, "is_junction", lambda: False)():
         os.rmdir(link)
 
 
@@ -2961,3 +2961,62 @@ def test_namespace_recovery_normal_continua_criando_listando_e_descartando(tmp_p
         assert status == 200, body
     finally:
         destino.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows late root rebind custody")
+def test_reconstrucao_nao_le_alvo_externo_se_raiz_troca_apos_preflight(
+    tmp_path, monkeypatch, request
+):
+    """Sibling TOCTOU — o guard da raiz deve sobreviver ao preflight."""
+
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    recovery_id = "00000000-0000-4000-8000-000000000187"
+    base = tmp_path / ".late-root.sqlite3.recovery"
+    root = base / f"recovery-{recovery_id}"
+    root.mkdir(parents=True)
+    (root / "RECOVERY_NOT_PROMOTABLE").write_bytes(b"RECOVERY_STAGING_V1\n")
+    parked = base / f"parked-{recovery_id}"
+    external = tmp_path / "late-root-external"
+    external.mkdir()
+    (external / "RECOVERY_NOT_PROMOTABLE").write_bytes(b"RECOVERY_STAGING_V1\n")
+    sentinel = external / "sentinel.bin"
+    sentinel.write_bytes(b"LATE-ROOT-SENTINEL")
+    before = _external_tree_sha256(external)
+    original_preflight = wr._arvore_de_recuperacao_eh_segura
+    original_read_bytes = Path.read_bytes
+    external_reads = []
+    swapped = False
+
+    def cleanup_swap():
+        _remove_directory_reparse(root)
+        if parked.exists() and not root.exists():
+            parked.rename(root)
+
+    request.addfinalizer(cleanup_swap)
+
+    def swap_after_preflight(candidate):
+        nonlocal swapped
+        result = original_preflight(candidate)
+        if candidate == root and result and not swapped:
+            swapped = True
+            root.rename(parked)
+            _directory_reparse(root, external)
+        return result
+
+    def record_external_read(path):
+        if path.parent == root and swapped:
+            external_reads.append(path.name)
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(wr, "_arvore_de_recuperacao_eh_segura", swap_after_preflight)
+    monkeypatch.setattr(Path, "read_bytes", record_external_read)
+    sessions = wr.WorkspaceRecoverySessions()
+    try:
+        wr.reconstruir_sessoes_recuperacao(base, sessions, lambda _root: None)
+    except (OSError, wr.RecoveryRetained, wr.RepositoryIntegrityError):
+        pass
+
+    assert external_reads == []
+    assert sentinel.read_bytes() == b"LATE-ROOT-SENTINEL"
+    assert _external_tree_sha256(external) == before

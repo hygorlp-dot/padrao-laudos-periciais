@@ -1976,65 +1976,86 @@ class StageWorkspaceRecovery:
                 if name.startswith("recovery-")
             )
             for raiz in candidatas:
-                if not _arvore_de_recuperacao_eh_segura(raiz):
-                    continue
-                marcador = raiz / _QUARENTENA
-                try:
-                    if marcador.read_bytes() != _QUARENTENA_PAYLOAD:
-                        continue
-                except OSError:
-                    continue
-                # 2) O journal é lido do disco ANTES de abrir a raiz: só assim dá
-                # para saber se esta raiz nos interessa, e só o que interessa pode
-                # falhar fechado.
-                registro = _journal_bruto(raiz)
-                if registro is None:
-                    continue
-                if registro is _JOURNAL_TRAVADO:
-                    # Transitório: criar outra cópia esconderia a promoção original.
-                    raise RecoveryStageFailed(
-                        "o estado de uma promoção interrompida não pôde ser lido agora"
-                    )
-                if registro is _JOURNAL_CORROMPIDO:
-                    continue
-                if (
-                    registro.get("backup_sha256") != digest
-                    or registro.get("workspace_id") != workspace_id
-                ):
-                    continue
-                try:
-                    staging = self.open_staging(raiz)
-                except (RepositoryError, RepositoryIntegrityError, OSError) as exc:
-                    raise RecoveryStageFailed(
-                        "uma promoção interrompida deste backup não pôde ser reaberta"
-                    ) from exc
-                try:
-                    transacao = staging.ler_transacao()
-                    if (
-                        type(transacao) is not dict
-                        or transacao.get("staging_identity") != staging.identidade
-                    ):
-                        staging.close()
-                        continue
-                except Exception:
-                    try:
-                        staging.close()
-                    except Exception:
-                        pass
-                    continue
-                recovery_id = str(transacao.get("recovery_id") or self.new_recovery_id())
-                summary = _summary(backup, digest)
-                entry = self.sessions.register(recovery_id, staging, summary)
-                self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
-                promovivel, motivo = self._promovibilidade(backup, staging)
-                result = RecoverySession(recovery_id, summary, promovivel, motivo, True)
-                if self.sessions.is_current(
-                    recovery_id, entry, (FAILED_RECOVERABLE,)
-                ):
+                result = self._retomar_candidata_custodiada(
+                    raiz,
+                    backup,
+                    digest,
+                    workspace_id,
+                    base_custody,
+                )
+                if result is not None:
                     return result
             return None
         finally:
             base_custody.close()
+
+    def _retomar_candidata_custodiada(
+        self,
+        raiz: Path,
+        backup: object,
+        digest: str,
+        workspace_id: str,
+        base_custody: RecoveryFilesystemCustody,
+    ) -> RecoverySession | None:
+        try:
+            root_guard = base_custody.child(raiz.name)
+        except (OSError, RepositoryError):
+            return None
+        assert root_guard is not None
+        with root_guard:
+            if not _arvore_de_recuperacao_eh_segura(raiz):
+                return None
+            marcador = raiz / _QUARENTENA
+            try:
+                if marcador.read_bytes() != _QUARENTENA_PAYLOAD:
+                    return None
+            except OSError:
+                return None
+            registro = _journal_bruto(raiz)
+            if registro is None:
+                return None
+            if registro is _JOURNAL_TRAVADO:
+                raise RecoveryStageFailed(
+                    "o estado de uma promoção interrompida não pôde ser lido agora"
+                )
+            if registro is _JOURNAL_CORROMPIDO:
+                return None
+            if (
+                registro.get("backup_sha256") != digest
+                or registro.get("workspace_id") != workspace_id
+            ):
+                return None
+            try:
+                staging = self.open_staging(raiz)
+            except (RepositoryError, RepositoryIntegrityError, OSError) as exc:
+                raise RecoveryStageFailed(
+                    "uma promoção interrompida deste backup não pôde ser reaberta"
+                ) from exc
+            try:
+                transacao = staging.ler_transacao()
+                if (
+                    type(transacao) is not dict
+                    or transacao.get("staging_identity") != staging.identidade
+                ):
+                    staging.close()
+                    return None
+            except Exception:
+                try:
+                    staging.close()
+                except Exception:
+                    pass
+                return None
+            recovery_id = str(transacao.get("recovery_id") or self.new_recovery_id())
+            summary = _summary(backup, digest)
+            entry = self.sessions.register(recovery_id, staging, summary)
+            self.sessions.settle(recovery_id, FAILED_RECOVERABLE)
+            promovivel, motivo = self._promovibilidade(backup, staging)
+            result = RecoverySession(recovery_id, summary, promovivel, motivo, True)
+            if self.sessions.is_current(
+                recovery_id, entry, (FAILED_RECOVERABLE,)
+            ):
+                return result
+            return None
 
     @staticmethod
     def _journal_desta_promocao(staging, digest: str, workspace_id: str) -> bool:
@@ -2205,39 +2226,70 @@ def _reconstruir_sessoes_recuperacao_custodiado(
         return ()
     reconstruidas = []
     for raiz in candidatas:
-        recovery_id = _recovery_id_da_raiz(raiz)
-        if recovery_id is None:
-            continue
-        disposition = _cleanup_intent_da_base(raiz_base, recovery_id)
+        recovery_id = _reconstruir_candidata_custodiada(
+            raiz_base, raiz, sessions, open_staging, custody
+        )
+        if recovery_id is not None:
+            reconstruidas.append(recovery_id)
+    return tuple(reconstruidas)
+
+
+def _registrar_recuperacao_insegura(
+    sessions, raiz: Path, recovery_id: str, disposition: object
+) -> str:
+    sessions.register(
+        recovery_id,
+        None,
+        None,
+        state=(
+            RECOVERY_RETAINED
+            if disposition is not None
+            else RECOVERY_UNRESUMABLE
+        ),
+        root=raiz,
+        reason=(
+            "cleanup_incomplete"
+            if isinstance(disposition, dict)
+            else (
+                "disposition_unreadable"
+                if disposition is not None
+                else "unsafe_recovery_tree"
+            )
+        ),
+        disposition=(
+            disposition["mode"] if isinstance(disposition, dict) else None
+        ),
+    )
+    return recovery_id
+
+
+def _reconstruir_candidata_custodiada(
+    raiz_base: Path,
+    raiz: Path,
+    sessions,
+    open_staging,
+    base_custody: RecoveryFilesystemCustody,
+) -> str | None:
+    recovery_id = _recovery_id_da_raiz(raiz)
+    if recovery_id is None:
+        return None
+    disposition = _cleanup_intent_da_base(raiz_base, recovery_id)
+    root_guard = None
+    try:
+        try:
+            root_guard = base_custody.child(raiz.name)
+        except (OSError, RepositoryError):
+            return _registrar_recuperacao_insegura(
+                sessions, raiz, recovery_id, disposition
+            )
+        assert root_guard is not None
         if not _arvore_de_recuperacao_eh_segura(raiz):
             # Preservar a árvore sem publicá-la cria uma recuperação invisível
             # e sem saída pelo produto. O nome canônico basta para expor o
             # estado sanitizado; nenhum membro inseguro é lido ou percorrido.
-            sessions.register(
-                recovery_id,
-                None,
-                None,
-                state=(
-                    RECOVERY_RETAINED
-                    if disposition is not None
-                    else RECOVERY_UNRESUMABLE
-                ),
-                root=raiz,
-                reason=(
-                    "cleanup_incomplete"
-                    if isinstance(disposition, dict)
-                    else (
-                        "disposition_unreadable"
-                        if disposition is not None
-                        else "unsafe_recovery_tree"
-                    )
-                ),
-                disposition=(
-                    disposition["mode"] if isinstance(disposition, dict) else None
-                ),
+            return _registrar_recuperacao_insegura(
+                sessions, raiz, recovery_id, disposition
             )
-            reconstruidas.append(recovery_id)
-            continue
         marcador_valido = False
         try:
             marcador_valido = (raiz / _QUARENTENA).read_bytes() == _QUARENTENA_PAYLOAD
@@ -2293,11 +2345,17 @@ def _reconstruir_sessoes_recuperacao_custodiado(
                 reason = "promotion_cannot_converge"
             elif phase == PROMOTED:
                 # Estado terminal positivamente provado: a coleta é segura.
+                expected_identity = root_guard.identity
+                root_guard.close()
+                root_guard = None
                 try:
-                    _remover_raiz_quarentenada(raiz)
+                    _remover_raiz_quarentenada(
+                        raiz,
+                        expected_filesystem_identity=expected_identity,
+                    )
                 except Exception:
                     pass
-                continue
+                return None
             else:
                 state = RECOVERY_UNRESUMABLE
                 reason = "promotion_journal_unreadable_or_unsupported"
@@ -2325,8 +2383,10 @@ def _reconstruir_sessoes_recuperacao_custodiado(
             reason=reason,
             disposition=mode,
         )
-        reconstruidas.append(recovery_id)
-    return tuple(reconstruidas)
+        return recovery_id
+    finally:
+        if root_guard is not None:
+            root_guard.close()
 
 
 def _allowed_actions(entry: dict) -> tuple[str, ...]:
