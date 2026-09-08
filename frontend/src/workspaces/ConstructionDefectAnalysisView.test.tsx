@@ -133,4 +133,55 @@ describe("construction defect analysis workbench", () => {
     const body = JSON.parse(String(fetchMock.mock.calls[3][1]?.body));
     expect(body).toEqual({ expected_revision: 5, pat_id: "PAT-001", action: "REJECT", professional_id: "PROFESSIONAL-001", reason: "Confirmação humana sintética." });
   });
+
+  test("retries an initial partial load without leaving the product surface", async () => {
+    const fetchMock = fetchByUrl();
+    fetchMock.mockImplementationOnce(() => Promise.reject(new TypeError("local transport interrupted")));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<ConstructionDefectAnalysisView workspaceId={ID} />);
+
+    await user.click(await screen.findByRole("button", { name: "Tentar novamente" }));
+
+    expect(await screen.findByRole("heading", { name: "PAT-001" })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+  });
+
+  test("reconciles an ambiguous successful start before inviting a duplicate action", async () => {
+    const fetchMock = fetchByUrl(response(404, {}));
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(404, {})));
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, inspectEnvelope)));
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, caseEnvelope)));
+    fetchMock.mockImplementationOnce(() => Promise.reject(new TypeError("response lost after commit")));
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, envelope)));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<ConstructionDefectAnalysisView workspaceId={ID} />);
+
+    await user.selectOptions(await screen.findByLabelText("Observação direta"), "OBS-001");
+    await user.selectOptions(screen.getByLabelText("Método registrado"), "METHOD-001");
+    await user.click(screen.getByRole("button", { name: "Gerar proposta PAT" }));
+
+    expect(await screen.findByRole("heading", { name: "PAT-001" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  test("keeps backend failure visible when reconciliation finds no newer review", async () => {
+    const fetchMock = fetchByUrl();
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, envelope)));
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, inspectEnvelope)));
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, caseEnvelope)));
+    fetchMock.mockImplementationOnce(() => Promise.reject(new TypeError("request failed before commit")));
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, envelope)));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ConstructionDefectAnalysisView workspaceId={ID} />);
+
+    await screen.findByRole("heading", { name: "PAT-001" });
+    fireEvent.change(screen.getByLabelText("Fundamentação da revisão"), { target: { value: "Revisão sintética." } });
+    fireEvent.click(screen.getByRole("button", { name: "Registrar revisão" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("operação foi recusada");
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
 });

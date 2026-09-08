@@ -27,6 +27,7 @@ function toggle(items: string[], value: string, checked: boolean) {
 export function ConstructionDefectAnalysisView({ workspaceId }: { workspaceId: string }) {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [busy, setBusy] = useState(false);
+  const [reloadVersion, setReloadVersion] = useState(0);
   const [operationError, setOperationError] = useState(false);
   const [observationId, setObservationId] = useState("");
   const [methodId, setMethodId] = useState("");
@@ -63,7 +64,7 @@ export function ConstructionDefectAnalysisView({ workspaceId }: { workspaceId: s
       },
     );
     return () => controller.abort();
-  }, [workspaceId]);
+  }, [workspaceId, reloadVersion]);
 
   const selectedObservation = state.kind === "ready"
     ? state.inspection.snapshot.observations.find((item) => item.observation_id === observationId)
@@ -84,6 +85,7 @@ export function ConstructionDefectAnalysisView({ workspaceId }: { workspaceId: s
   }, [state]);
 
   const run = async (operation: () => Promise<ConstructionDefectAnalysisEnvelope>) => {
+    const previousRevision = state.kind === "ready" ? state.analysis?.revision ?? null : null;
     setBusy(true);
     setOperationError(false);
     try {
@@ -91,6 +93,21 @@ export function ConstructionDefectAnalysisView({ workspaceId }: { workspaceId: s
       setState((current) => current.kind === "ready" ? { ...current, analysis } : current);
       if (analysis.snapshot.analysis_final.patologias[0]) setReviewPatId(analysis.snapshot.analysis_final.patologias[0].id);
     } catch {
+      try {
+        const recovered = await getConstructionDefectAnalysis(workspaceId);
+        if (
+          state.kind === "ready" &&
+          (previousRevision === null || recovered.revision > previousRevision)
+        ) {
+          setState({ ...state, analysis: recovered });
+          if (recovered.snapshot.analysis_final.patologias[0]) {
+            setReviewPatId(recovered.snapshot.analysis_final.patologias[0].id);
+          }
+          return;
+        }
+      } catch {
+        // The original operation remains failed; the user sees one sanitized error.
+      }
       setOperationError(true);
     } finally {
       setBusy(false);
@@ -132,7 +149,7 @@ export function ConstructionDefectAnalysisView({ workspaceId }: { workspaceId: s
   };
 
   if (state.kind === "loading") return <section className="status-state status-state--loading" role="status"><span className="state-rule" aria-hidden="true"/><div><h2>Carregando análise técnica</h2><p>Reconciliando vistoria, fontes e histórico profissional.</p></div></section>;
-  if (state.kind === "error") return <section className="status-state status-state--error" role="alert"><span className="state-mark" aria-hidden="true">!</span><div><h2>Não foi possível carregar a análise</h2><p>As autoridades locais necessárias não estão disponíveis ou não passaram pela validação canônica.</p></div></section>;
+  if (state.kind === "error") return <section className="status-state status-state--error" role="alert"><span className="state-mark" aria-hidden="true">!</span><div><h2>Não foi possível carregar a análise</h2><p>As autoridades locais necessárias não estão disponíveis ou não passaram pela validação canônica.</p><button className="text-action" type="button" onClick={() => { setState({ kind: "loading" }); setReloadVersion((current) => current + 1); }}>Tentar novamente</button></div></section>;
 
   const snapshot = state.analysis?.snapshot;
   const blocked = busy || snapshot?.upstream_stale || snapshot?.gate === "BLOQUEADO_PARA_REDACAO";
