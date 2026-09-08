@@ -36,6 +36,7 @@ from ..application.artifact_ownership import (
 from ..application.ocr_cache import _page_from_payload
 from ..application.process_metadata import document_metadata_from_payload
 from ..application.services import validate_pje_intake_payload
+from ..application.workspace_recovery import RecoveryFilesystemCustody
 from ..budget_foundation import budget_snapshot_from_mapping
 from ..ai_gateway import AIRun, AIProposal, EgressClass, SourceRevisionRef, UsageRecord
 from ..ai_eval_productization import (
@@ -933,13 +934,13 @@ class RestoreReceipt:
     storage_schema_version: int
 
 
-_AUTHORIZED_RECOVERY_STAGING: WeakKeyDictionary["RecoveryStaging", tuple[Path, SQLiteApplicationStore, LocalPrivateContentStore, os.stat_result]] = WeakKeyDictionary()
+_AUTHORIZED_RECOVERY_STAGING: WeakKeyDictionary["RecoveryStaging", tuple[Path, SQLiteApplicationStore, LocalPrivateContentStore, os.stat_result, RecoveryFilesystemCustody]] = WeakKeyDictionary()
 
 
 class RecoveryStaging:
     """Owns a new disposable storage root until external promotion."""
 
-    __slots__ = ("_root", "_database", "_private_contents", "_identity", "_closed", "_discarded", "__weakref__")
+    __slots__ = ("_root", "_database", "_private_contents", "_identity", "_custody", "_closed", "_discarded", "__weakref__")
 
     def __init__(self, *_args: object, **_kwargs: object) -> None:
         raise TypeError("recovery staging must be created by RecoveryStaging.create")
@@ -954,33 +955,38 @@ class RecoveryStaging:
         target = Path(root)
         if not target.is_absolute():
             raise RepositoryIntegrityError("recovery staging root must be absolute")
-        parent = target.parent.resolve(strict=True)
-        if parent != target.parent.absolute():
-            raise RepositoryIntegrityError("recovery staging parent must not redirect")
-        if target.exists() or target.is_symlink():
-            raise RepositoryConflict("recovery staging root must not exist")
-        os.mkdir(target, 0o700)
-        marker_fd = os.open(target / "RECOVERY_NOT_PROMOTABLE", os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN_BINARY, 0o600)
+        base_custody = RecoveryFilesystemCustody.acquire(target.parent, create=True)
+        assert base_custody is not None
         try:
-            remaining = memoryview(b"RECOVERY_STAGING_V1\n")
-            while remaining:
-                written = os.write(marker_fd, remaining)
-                if written <= 0:
-                    raise RepositoryIntegrityError("recovery quarantine marker write failed")
-                remaining = remaining[written:]
-            os.fsync(marker_fd)
+            custody = base_custody.create_child(target.name)
         finally:
-            os.close(marker_fd)
-        marker = target / "RECOVERY_NOT_PROMOTABLE"
-        if marker.read_bytes() != b"RECOVERY_STAGING_V1\n":
-            raise RepositoryIntegrityError("recovery quarantine marker is incomplete")
-        if os.name == "posix":
-            directory_fd = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+            base_custody.close()
+        assert custody is not None
+        try:
+            marker_fd = os.open(target / "RECOVERY_NOT_PROMOTABLE", os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN_BINARY, 0o600)
             try:
-                os.fsync(directory_fd)
+                remaining = memoryview(b"RECOVERY_STAGING_V1\n")
+                while remaining:
+                    written = os.write(marker_fd, remaining)
+                    if written <= 0:
+                        raise RepositoryIntegrityError("recovery quarantine marker write failed")
+                    remaining = remaining[written:]
+                os.fsync(marker_fd)
             finally:
-                os.close(directory_fd)
-        identity = os.lstat(target)
+                os.close(marker_fd)
+            marker = target / "RECOVERY_NOT_PROMOTABLE"
+            if marker.read_bytes() != b"RECOVERY_STAGING_V1\n":
+                raise RepositoryIntegrityError("recovery quarantine marker is incomplete")
+            if os.name == "posix":
+                directory_fd = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            identity = os.lstat(target)
+        except BaseException:
+            custody.close()
+            raise
         database = None
         private = None
         try:
@@ -989,19 +995,21 @@ class RecoveryStaging:
             private = LocalPrivateContentStore.open_or_provision(target / "private")
             private.mark_recovery_quarantine()
             staging = object.__new__(cls)
-            staging._root = target.resolve(strict=True)
+            staging._root = target.absolute()
             staging._database = database
             staging._private_contents = private
             staging._identity = identity
+            staging._custody = custody
             staging._closed = False
             staging._discarded = False
-            _AUTHORIZED_RECOVERY_STAGING[staging] = (staging._root, database, private, identity)
+            _AUTHORIZED_RECOVERY_STAGING[staging] = (staging._root, database, private, identity, custody)
             return staging
         except BaseException:
             if private is not None:
                 private.close()
             if database is not None:
                 database.close()
+            custody.close()
             raise
 
     def close(self) -> None:
@@ -1011,10 +1019,14 @@ class RecoveryStaging:
         authority = _AUTHORIZED_RECOVERY_STAGING.pop(self, None)
         database = authority[1] if authority is not None else self._database
         private_contents = authority[2] if authority is not None else self._private_contents
+        custody = authority[4] if authority is not None else self._custody
         try:
             private_contents.close()
         finally:
-            database.close()
+            try:
+                database.close()
+            finally:
+                custody.close()
 
     def discard(self) -> None:
         if self._discarded:
@@ -1029,6 +1041,10 @@ class RecoveryStaging:
     @property
     def root(self) -> Path:
         return self._root
+
+    @property
+    def filesystem_identity(self) -> object:
+        return self._custody.identity
 
     @property
     def database(self) -> SQLiteApplicationStore:
@@ -1176,11 +1192,22 @@ def abrir_staging_quarentenado(raiz: str | Path) -> "RecoveryStaging":
     Usado na reabertura do produto para reconstruir sessões de recuperação a
     partir do disco. Falha fechada: sem marcador canônico, não é nossa raiz.
     """
-    alvo = Path(raiz)
-    marcador = alvo / "RECOVERY_NOT_PROMOTABLE"
-    if marcador.read_bytes() != b"RECOVERY_STAGING_V1\n":
-        raise RepositoryIntegrityError("raiz de recuperação sem quarentena canônica")
-    identity = os.lstat(alvo)
+    alvo = Path(raiz).absolute()
+    base_custody = RecoveryFilesystemCustody.acquire(alvo.parent)
+    assert base_custody is not None
+    try:
+        custody = base_custody.child(alvo.name)
+    finally:
+        base_custody.close()
+    assert custody is not None
+    try:
+        marcador = alvo / "RECOVERY_NOT_PROMOTABLE"
+        if marcador.read_bytes() != b"RECOVERY_STAGING_V1\n":
+            raise RepositoryIntegrityError("raiz de recuperação sem quarentena canônica")
+        identity = os.lstat(alvo)
+    except BaseException:
+        custody.close()
+        raise
     database = None
     private = None
     try:
@@ -1191,15 +1218,17 @@ def abrir_staging_quarentenado(raiz: str | Path) -> "RecoveryStaging":
         staging._database = database
         staging._private_contents = private
         staging._identity = identity
+        staging._custody = custody
         staging._closed = False
         staging._discarded = False
-        _AUTHORIZED_RECOVERY_STAGING[staging] = (staging._root, database, private, identity)
+        _AUTHORIZED_RECOVERY_STAGING[staging] = (staging._root, database, private, identity, custody)
         return staging
     except BaseException:
         if private is not None:
             private.close()
         if database is not None:
             database.close()
+        custody.close()
         raise
 
 
@@ -1211,7 +1240,7 @@ class RestoreWorkspaceBackup:
         authority = _AUTHORIZED_RECOVERY_STAGING.get(self.staging) if type(self.staging) is RecoveryStaging else None
         if authority is None or self.staging._closed:
             raise TypeError("restore requires first-party recovery staging")
-        _root, database, private_contents, _identity = authority
+        _root, database, private_contents, _identity, _custody = authority
         workspaces = database.workspaces
         revisions = database.revisions
         try:

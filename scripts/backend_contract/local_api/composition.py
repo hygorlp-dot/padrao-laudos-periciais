@@ -147,7 +147,6 @@ def _provision_recovery_staging(base: Path):
     """
 
     def create(root: Path):
-        base.mkdir(mode=0o700, parents=True, exist_ok=True)
         return RecoveryStaging.create(root)
 
     return create

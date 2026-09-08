@@ -1141,22 +1141,26 @@ def test_recuperacao_publicada_com_reparse_permanece_visivel_apos_restart(tmp_pa
 def test_custodia_cleanup_fecha_anchor_quando_validacao_pos_abertura_falha(
     tmp_path, monkeypatch
 ):
-    """Sibling A9 — o anchor fecha sem conceder compartilhamento de remoção."""
+    """Sibling A9 — handle no-follow é fechado se a identidade pós-open falha."""
     from scripts.backend_contract.application import workspace_recovery as wr
 
     root = tmp_path / "recovery-00000000-0000-4000-8000-000000000098"
     root.mkdir()
     real_lstat = wr.os.lstat
-    real_open = wr.os.open
+    real_open_directory = wr._abrir_diretorio_windows_sem_reparse
+    real_close_handle = wr._fechar_handle_windows_unica_vez
     root_calls = 0
-    anchor_flags = []
+    opened = []
+    closed = []
 
-    def record_anchor_flags(path, flags, mode=0o777, *, dir_fd=None):
-        if ".recovery-cleanup-custody." in str(path):
-            anchor_flags.append(flags)
-        if dir_fd is None:
-            return real_open(path, flags, mode)
-        return real_open(path, flags, mode, dir_fd=dir_fd)
+    def record_open(path):
+        result = real_open_directory(path)
+        opened.append(result[0])
+        return result
+
+    def record_close(handle):
+        closed.append(handle)
+        return real_close_handle(handle)
 
     def fail_second_root_lstat(path):
         nonlocal root_calls
@@ -1167,12 +1171,13 @@ def test_custodia_cleanup_fecha_anchor_quando_validacao_pos_abertura_falha(
         return real_lstat(path)
 
     monkeypatch.setattr(wr.os, "lstat", fail_second_root_lstat)
-    monkeypatch.setattr(wr.os, "open", record_anchor_flags)
+    monkeypatch.setattr(wr, "_abrir_diretorio_windows_sem_reparse", record_open)
+    monkeypatch.setattr(wr, "_fechar_handle_windows_unica_vez", record_close)
     with pytest.raises(OSError, match="synthetic identity"):
         wr._adquirir_custodia_cleanup(root)
 
-    assert len(anchor_flags) == 1
-    assert not (anchor_flags[0] & os.O_TEMPORARY)
+    assert len(opened) == 1
+    assert closed == opened
     assert list(root.iterdir()) == []
     root.rmdir()
 
@@ -1194,28 +1199,26 @@ def test_falha_ao_soltar_anchor_raiz_preserva_disposition_para_restart(
         / f"recovery-{recovery_id}"
     )
 
-    original_unlink = Path.unlink
+    from scripts.backend_contract.application import workspace_recovery as wr
+
+    original_close_custody = wr._fechar_custodia_cleanup
     injected = False
 
-    def fail_after_controls_were_removed(path, *args, **kwargs):
+    def fail_after_controls_were_removed(node):
         nonlocal injected
-        is_root_anchor = (
-            path.parent == root
-            and path.name.startswith(".recovery-cleanup-custody.")
-        )
-        if is_root_anchor and not (root / "RECOVERY_NOT_PROMOTABLE").exists():
+        if node.path == root and not injected and not (root / "RECOVERY_NOT_PROMOTABLE").exists():
             injected = True
-            raise PermissionError(13, "synthetic root anchor release failure")
-        return original_unlink(path, *args, **kwargs)
+            raise PermissionError(13, "synthetic root custody release failure")
+        return original_close_custody(node)
 
-    monkeypatch.setattr(Path, "unlink", fail_after_controls_were_removed)
+    monkeypatch.setattr(wr, "_fechar_custodia_cleanup", fail_after_controls_were_removed)
     status, body = _json(
         target, "POST", f"/v1/recovery/{recovery_id}/discard"
     )
     assert status == 409, body
     assert body["error"]["code"] == "RECOVERY_RETAINED"
     assert injected is True
-    monkeypatch.setattr(Path, "unlink", original_unlink)
+    monkeypatch.setattr(wr, "_fechar_custodia_cleanup", original_close_custody)
 
     intent = _cleanup_intent_path(tmp_path, "b10-anchor-target", recovery_id)
     assert intent.read_bytes() == _cleanup_intent_payload(recovery_id, "DISCARD")
@@ -1815,25 +1818,22 @@ raise AssertionError("fault injection did not terminate the process")
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows cleanup custody handles")
 def test_falha_ao_criar_anchor_nao_muta_a_raiz(tmp_path, monkeypatch):
-    """Falha antes da custódia não inicia qualquer remoção privada."""
+    """Falha ao abrir o diretório não inicia qualquer remoção privada."""
     from scripts.backend_contract.application import workspace_recovery as wr
 
     root = tmp_path / "recovery-00000000-0000-4000-8000-000000000097"
     root.mkdir()
     sentinel = root / "private.bin"
     sentinel.write_bytes(b"PRIVATE-SENTINEL")
-    original_open = wr.os.open
+    original_open = wr._abrir_diretorio_windows_sem_reparse
 
-    def fail_anchor_open(path, flags, *args, **kwargs):
-        if (
-            Path(path).parent == root
-            and Path(path).name.startswith(".recovery-cleanup-custody.")
-        ):
-            raise PermissionError(13, "synthetic anchor creation failure")
-        return original_open(path, flags, *args, **kwargs)
+    def fail_directory_open(path):
+        if path == root:
+            raise PermissionError(13, "synthetic directory custody failure")
+        return original_open(path)
 
-    monkeypatch.setattr(wr.os, "open", fail_anchor_open)
-    with pytest.raises(PermissionError, match="synthetic anchor creation"):
+    monkeypatch.setattr(wr, "_abrir_diretorio_windows_sem_reparse", fail_directory_open)
+    with pytest.raises(PermissionError, match="synthetic directory custody"):
         wr._adquirir_custodia_cleanup(root)
 
     assert sentinel.read_bytes() == b"PRIVATE-SENTINEL"
@@ -1842,7 +1842,7 @@ def test_falha_ao_criar_anchor_nao_muta_a_raiz(tmp_path, monkeypatch):
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows cleanup custody handles")
 def test_falha_ao_remover_anchor_filho_nao_vaza_handle_pai(tmp_path, monkeypatch):
-    """RED A10 — erro num filho não interrompe o fechamento da árvore."""
+    """RED A10 — erro num handle filho não interrompe o fechamento da árvore."""
     from scripts.backend_contract.application import workspace_recovery as wr
 
     root = tmp_path / "recovery-00000000-0000-4000-8000-000000000096"
@@ -1852,23 +1852,22 @@ def test_falha_ao_remover_anchor_filho_nao_vaza_handle_pai(tmp_path, monkeypatch
     descriptors = [custody.descriptor, custody.children[0].descriptor]
     assert all(descriptor is not None for descriptor in descriptors)
 
-    original_unlink = Path.unlink
+    original_close = wr._fechar_handle_windows_unica_vez
+    calls = []
 
-    def fail_child_anchor(path, *args, **kwargs):
-        if (
-            path.parent == child
-            and path.name.startswith(".recovery-cleanup-custody.")
-        ):
-            raise PermissionError(13, "synthetic child anchor release failure")
-        return original_unlink(path, *args, **kwargs)
+    def fail_child_handle(handle):
+        calls.append(handle)
+        original_close(handle)
+        if handle == descriptors[1]:
+            raise PermissionError(13, "synthetic child handle release failure")
 
-    monkeypatch.setattr(Path, "unlink", fail_child_anchor)
-    with pytest.raises(PermissionError, match="synthetic child anchor"):
+    monkeypatch.setattr(wr, "_fechar_handle_windows_unica_vez", fail_child_handle)
+    with pytest.raises(PermissionError, match="synthetic child handle"):
         wr._fechar_custodia_cleanup(custody)
 
-    for descriptor in descriptors:
-        with pytest.raises(OSError):
-            os.fstat(descriptor)
+    assert calls == [descriptors[1], descriptors[0]]
+    assert custody.descriptor is None
+    assert custody.children[0].descriptor is None
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows cleanup custody handles")
@@ -1884,48 +1883,38 @@ def test_close_ambiguo_nunca_fecha_descriptor_reutilizado(
     child = custody.children[0]
     child_descriptor = child.descriptor
     assert child_descriptor is not None
-    original_close = wr.os.close
-    foreign = tmp_path / "foreign-descriptor.bin"
-    foreign.write_bytes(b"FOREIGN")
-    probes = []
+    original_close = wr._fechar_handle_windows_unica_vez
+    calls = []
     injected = False
 
-    def close_then_reuse_and_fail(descriptor):
+    def close_then_fail(descriptor):
         nonlocal injected
+        calls.append(descriptor)
         if descriptor == child_descriptor and not injected:
             injected = True
             original_close(descriptor)
-            while child_descriptor not in probes:
-                probes.append(os.open(foreign, os.O_RDONLY))
             raise OSError("synthetic ambiguous close failure")
         return original_close(descriptor)
 
-    monkeypatch.setattr(wr.os, "close", close_then_reuse_and_fail)
-    try:
+    monkeypatch.setattr(wr, "_fechar_handle_windows_unica_vez", close_then_fail)
+    with pytest.raises(OSError, match="synthetic ambiguous close failure"):
         wr._fechar_custodia_cleanup(custody)
-        assert injected is True
-        os.fstat(child_descriptor)
-    finally:
-        monkeypatch.setattr(wr.os, "close", original_close)
-        for descriptor in probes:
-            try:
-                original_close(descriptor)
-            except OSError:
-                pass
+    assert injected is True
+    assert calls.count(child_descriptor) == 1
+    assert child.descriptor is None
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows cleanup custody handles")
 def test_close_ambiguo_antes_da_liberacao_nunca_repete_o_fd(tmp_path, monkeypatch):
-    """RED protocolo — fd desconhecido não é ownership reutilizável."""
+    """RED protocolo — HANDLE desconhecido não é ownership reutilizável."""
     from scripts.backend_contract.application import workspace_recovery as wr
 
     root = tmp_path / "recovery-00000000-0000-4000-8000-000000000093"
     root.mkdir()
     custody = wr._adquirir_custodia_cleanup(root)
     descriptor = custody.descriptor
-    anchor = custody.anchor_path
-    assert descriptor is not None and anchor is not None
-    original_close = wr.os.close
+    assert descriptor is not None and custody.anchor_path is None
+    original_close = wr._fechar_handle_windows_unica_vez
     calls = 0
 
     def fail_before_release(candidate):
@@ -1935,17 +1924,13 @@ def test_close_ambiguo_antes_da_liberacao_nunca_repete_o_fd(tmp_path, monkeypatc
             raise OSError("synthetic close failure before release")
         return original_close(candidate)
 
-    monkeypatch.setattr(wr.os, "close", fail_before_release)
+    monkeypatch.setattr(wr, "_fechar_handle_windows_unica_vez", fail_before_release)
     with pytest.raises(OSError, match="synthetic close failure"):
         wr._fechar_custodia_cleanup(custody)
     assert calls == 1
     assert custody.descriptor is None
-    assert anchor.exists()
-    os.fstat(descriptor)
-
-    monkeypatch.setattr(wr.os, "close", original_close)
+    monkeypatch.setattr(wr, "_fechar_handle_windows_unica_vez", original_close)
     original_close(descriptor)
-    anchor.unlink()
 
 
 @pytest.mark.parametrize("reparse_location", ["root", "nested"])
@@ -2914,6 +2899,7 @@ def test_staging_rejeita_troca_da_base_entre_validacao_e_criacao(
     """RED TOCTOU — validation e use precisam compartilhar os mesmos handles."""
 
     from scripts.backend_contract.application.ports import RepositoryIntegrityError
+    from scripts.backend_contract.application.workspace_recovery import RecoveryRetained
     from scripts.backend_contract.infrastructure.productization import RecoveryStaging
 
     base = tmp_path / f".{swap}.sqlite3.recovery"
@@ -2946,11 +2932,12 @@ def test_staging_rejeita_troca_da_base_entre_validacao_e_criacao(
 
     monkeypatch.setattr(os, "mkdir", swap_before_child_create)
     try:
-        with pytest.raises((RepositoryIntegrityError, OSError)):
+        with pytest.raises((RepositoryIntegrityError, RecoveryRetained, OSError)) as failure:
             RecoveryStaging.create(root)
     finally:
         monkeypatch.setattr(os, "mkdir", original_mkdir)
     assert injected
+    assert failure.value is not None
     assert sentinel.read_bytes() == b"TOCTOU-SENTINEL"
     assert _external_tree_sha256(external) == before
 
