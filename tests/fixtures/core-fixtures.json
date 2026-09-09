@@ -452,6 +452,15 @@
                          "provenance":  "SYNTHETIC"
                      },
                      {
+                         "arquivo":  "tests/fixtures/construction-defect-analysis-v1.json",
+                         "dominio":  "CONSTRUCTION_DEFECT_ANALYSIS_V1",
+                         "schema":  "construction-defect-analysis-v1.schema.json",
+                         "consumer":  "tests/test_construction_defect_product_integration_v1.py::test_construction_defect_snapshot_round_trip_preserves_pat_and_canonical_identities",
+                         "finalidade":  "Análise PAT sintética vinculada a autoridades canônicas e revisão profissional Stage 6",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
                          "arquivo":  "tests/fixtures/technical-snapshot-v1.json",
                          "dominio":  "TECHNICAL_SNAPSHOT_V1",
                          "schema":  "technical-snapshot-v1.schema.json",
