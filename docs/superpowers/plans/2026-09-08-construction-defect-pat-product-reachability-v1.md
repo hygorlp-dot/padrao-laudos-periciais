@@ -171,5 +171,5 @@ Critical path: explicit identity-preserving adapter → persisted authority/revi
 - Candidate `242d0bd1f9a2ac9ad324b2a35d27d0d1499ccc02` is invalidated. The independent reviewer reproduced a Process Case TOCTOU: the engine consumed one Process Case snapshot, while the proposal could be labeled with a later Process Case revision sampled after execution.
 - New model: acquire one coherent `_Authorities` sample before engine execution; pass those exact domain snapshots to the engine; build `ConstructionDefectSourceSnapshot` from those exact records; let the existing guarded save resample current authorities and reject any intervening change before append.
 - [x] Add a deterministic RED that changes Process Case inside the injected engine runner and requires fail-closed persistence with no proposal revision appended.
-- [ ] Apply the minimum start-command repair without changing the engine, schema, trust plane or public surface.
-- [ ] Run the focused causal test and sibling authority-change suite before forming a new candidate.
+- [x] Apply the minimum start-command repair without changing the engine, schema, trust plane or public surface.
+- [x] Run the focused causal test and sibling authority-change suite before forming a new candidate: four concurrent-authority variants, 79 PAT/Report/Delivery tests and two API/bridge surface tests passed.

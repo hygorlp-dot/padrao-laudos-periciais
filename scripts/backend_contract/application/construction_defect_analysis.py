@@ -383,41 +383,31 @@ class StartConstructionDefectAnalysis:
             raise RepositoryIntegrityError(
                 "Construction Defect Analysis runner is unavailable"
             )
-        process_snapshot = self.get_process_case.execute(workspace_id)
-        case_record, case_analysis = self.get_case_analysis.execute(workspace_id)
-        planning_record, planning = self.get_planning.execute(workspace_id)
-        inspection_record, inspection = self.get_inspection.execute(workspace_id)
+        authorities = _authorities(
+            workspace_id,
+            get_latest_revision=self.get_latest_revision,
+            get_process_case=self.get_process_case,
+            get_case_analysis=self.get_case_analysis,
+            get_planning=self.get_planning,
+            get_inspection=self.get_inspection,
+        )
         if (
-            process_snapshot.revision is None
-            or case_analysis.source_inventory_stale
-            or planning.upstream_stale
-            or inspection.upstream_stale
+            authorities.case_analysis.source_inventory_stale
+            or authorities.planning.upstream_stale
+            or authorities.inspection.upstream_stale
         ):
             raise ValueError("stale upstream cannot start construction-defect analysis")
         proposal = self.runner.execute(
-            process_case=process_snapshot.data,
-            case_analysis=case_analysis,
-            planning=planning,
-            inspection=inspection,
+            process_case=authorities.process_case,
+            case_analysis=authorities.case_analysis,
+            planning=authorities.planning,
+            inspection=authorities.inspection,
             observation_contexts=observation_contexts,
         )
         if type(proposal) is not ConstructionDefectAnalysisProposal:
             raise RepositoryIntegrityError(
                 "Construction Defect Analysis runner returned an invalid proposal"
             )
-        process_record = self.get_latest_revision.execute(
-            workspace_id, "PROCESS_CASE", "PROCESS_CASE"
-        )
-        authorities = _Authorities(
-            process_record,
-            process_snapshot.data,
-            case_record,
-            case_analysis,
-            planning_record,
-            planning,
-            inspection_record,
-            inspection,
-        )
         snapshot = ConstructionDefectAnalysisSnapshot(
             schema_version="1.0.0",
             snapshot_id=(

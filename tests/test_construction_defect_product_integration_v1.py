@@ -629,29 +629,42 @@ def test_application_binds_pat_to_exact_four_upstreams_and_reviews_append_only()
     )
 
 
-def test_application_rejects_process_case_change_during_engine_execution():
+@pytest.mark.parametrize("changed_authority", ["process", "case", "planning", "inspection"])
+def test_application_rejects_upstream_change_during_engine_execution(
+    changed_authority,
+):
     services = _application_services()
     consumed_process_numbers = []
+    target = getattr(services, changed_authority)
+    original_revision = target.record.revision
 
     class ProcessChangingRunner:
         def execute(self, **kwargs):
             consumed_process_numbers.append(kwargs["process_case"].numero_processo)
             proposal = ConstructionDefectAnalysisAdapter().execute(**kwargs)
-            changed_process = ProcessCaseData.from_mapping(
-                {
-                    **services.process.value.as_dict(),
-                    "numero_processo": "9999999-99.2026.4.00.9999",
-                }
-            )
-            changed_record = _record(
-                "PROCESS_CASE",
-                "PROCESS_CASE",
-                services.process.record.revision + 1,
-                changed_process.as_dict(),
-            )
-            services.process.record = changed_record
-            services.process.value = changed_process
-            services.store.process_record = changed_record
+            if changed_authority == "process":
+                changed_process = ProcessCaseData.from_mapping(
+                    {
+                        **services.process.value.as_dict(),
+                        "numero_processo": "9999999-99.2026.4.00.9999",
+                    }
+                )
+                changed_record = _record(
+                    "PROCESS_CASE",
+                    "PROCESS_CASE",
+                    services.process.record.revision + 1,
+                    changed_process.as_dict(),
+                )
+                services.process.record = changed_record
+                services.process.value = changed_process
+                services.store.process_record = changed_record
+            else:
+                target.record = _record(
+                    target.record.artifact_kind,
+                    target.record.artifact_id,
+                    target.record.revision + 1,
+                    thaw_payload(target.record.payload),
+                )
             return proposal
 
     start = StartConstructionDefectAnalysis(
@@ -669,7 +682,7 @@ def test_application_rejects_process_case_change_during_engine_execution():
         start.execute(WORKSPACE_ID, observation_contexts=(_application_context(),))
 
     assert consumed_process_numbers == ["0000001-00.2026.4.00.0001"]
-    assert services.process.value.numero_processo == "9999999-99.2026.4.00.9999"
+    assert target.record.revision == original_revision + 1
     assert services.store.history == []
 
 
