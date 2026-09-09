@@ -151,9 +151,17 @@ Critical path: explicit identity-preserving adapter → persisted authority/revi
 ### Task 5: Causal closure and return to #187
 
 - [x] Execute `SIBLING_DEFECT_SWEEP_V2` across optional-specialization bindings, professional-review histories, portable artifact validators and Report provenance kinds.
-- [ ] Execute the pre-terminal adversarial matrix and a read-only `SHADOW_SYSTEMIC_REVIEW_V2`; repair each P0/P1 through a new RED/GREEN cycle.
-- [ ] Run change-impact suites, schema/fixture validation, Ruff, py_compile, frontend test/typecheck/lint/build, mojibake/config checks and `git diff --check`.
+- [x] Execute the pre-terminal adversarial matrix and a read-only `SHADOW_SYSTEMIC_REVIEW_V2`; repair each P0/P1 through a new RED/GREEN cycle.
+- [x] Run change-impact suites, schema/fixture validation, Ruff, py_compile, frontend test/typecheck/lint/build, mojibake/config checks and `git diff --check`.
 - [ ] Freeze one exact HEAD. Run one full regression and one `python -m scripts.quality.verify_core --full` on that SHA only.
 - [ ] Push and open a protected PR with `Closes #188` and `Parent #187`; require protected CI on the exact SHA.
 - [ ] Run independent reviewer and systemic auditor concurrently in isolated read-only checkouts on the terminal SHA; P0/P1 block merge.
 - [ ] Merge normally without bypass, run focused post-main PAT reachability/recovery proof, close #188 and resume #187 automatically.
+
+#### Terminal execution checkpoint
+
+- Backend regression on `9fb9ecfc06eff5dfef8c220349e6bc7937b80955`: 2844 passed, 14 skipped and 104 subtests passed.
+- Frontend regression on the same SHA: 20 files and 163 tests passed; typecheck, lint and build passed.
+- Static/configuration gates passed: Ruff, compileall, 20 schemas, 34 fixtures, configuration, fixture registry, mojibake, change impact and diff check.
+- The first `verify_core --full` invocation on that SHA is invalid assurance evidence. A single shared `PYTEST_ADDOPTS=--basetemp=...` was applied to the gate, while `verify_core` runs historical mutation and regression subprocesses concurrently. The shared destructive basetemp lifecycle caused cross-process pytest interference in quality, capability and regression collections. This is an execution-model failure, not a product verdict; the command is not to be rerun on that SHA.
+- Form a new evidence-only candidate with production blobs unchanged. Carry forward the completed semantic regression by exact blob ancestry, then run `verify_core --full` once with an isolated fresh `TEMP`/`TMP` root and without a shared `--basetemp` override. A timing-only finding remains classified under the existing canonical duration debt.
