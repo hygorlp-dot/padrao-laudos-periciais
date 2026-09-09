@@ -1756,6 +1756,9 @@ def http_request(server, method, target, *, value=None, raw_body=None, headers=N
     connection = http.client.HTTPConnection(host, port, timeout=5)
     started = monotonic()
     client_phase = "CLIENT_SEND"
+    request_seq = suite_conftest._begin_local_api_request()
+    request_headers["X-First-Party-Test-Request-Seq"] = request_seq
+    timed_out = False
     try:
         connection.request(method, target, body=body, headers=request_headers)
         client_phase = "CLIENT_GETRESPONSE"
@@ -1763,6 +1766,7 @@ def http_request(server, method, target, *, value=None, raw_body=None, headers=N
         client_phase = "CLIENT_READ"
         return response.status, dict(response.getheaders()), response.read()
     except TimeoutError:
+        timed_out = True
         if client_phase == "CLIENT_SEND" and getattr(connection, "sock", None) is None:
             client_phase = "CLIENT_CONNECT"
         suite_conftest._record_local_api_timeout(
@@ -1770,10 +1774,12 @@ def http_request(server, method, target, *, value=None, raw_body=None, headers=N
             target=target,
             client_phase=client_phase,
             elapsed_seconds=monotonic() - started,
+            request_seq=request_seq,
         )
         raise
     finally:
         connection.close()
+        suite_conftest._finish_local_api_request(request_seq, retain=timed_out)
 
 
 def test_real_http_server_accepts_local_get_and_exactly_authorized_post():
@@ -1799,6 +1805,34 @@ def test_real_http_server_accepts_local_get_and_exactly_authorized_post():
     for headers, body in ((get_headers, get_body), (post_headers, post_body)):
         assert "Access-Control-Allow-Origin" not in headers
         assert TOKEN.encode("utf-8") not in body
+    assert suite_conftest._REQUEST_SERVER_PHASES == {}
+
+
+def test_real_http_server_observer_correlates_safe_server_phases(monkeypatch):
+    """The test-only observer records phases without retaining request data."""
+    monkeypatch.setattr(suite_conftest, "_REQUEST_SERVER_PHASES", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_SEQUENCE", 0)
+    monkeypatch.setattr(
+        suite_conftest,
+        "_finish_local_api_request",
+        lambda *_args, **_kwargs: None,
+    )
+    server = LocalApiServer(LocalApi(services(), token=TOKEN), LocalServerConfig(port=0))
+    server.start()
+    try:
+        status, _headers, _body = http_request(server, "GET", "/v1/workspaces")
+    finally:
+        server.close()
+
+    assert status == 200
+    assert suite_conftest._REQUEST_SERVER_PHASES == {
+        "1": [
+            "LOCAL_API_HANDLE_STARTED",
+            "LOCAL_API_HANDLE_COMPLETED",
+            "RESPONSE_HEADERS_STARTED",
+            "RESPONSE_COMPLETED",
+        ]
+    }
 
 
 def test_real_http_server_blocks_cross_origin_mutation_even_with_valid_token():
