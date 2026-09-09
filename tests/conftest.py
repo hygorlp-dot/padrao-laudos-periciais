@@ -15,6 +15,8 @@ import json
 from pathlib import Path
 import re
 import sys
+from contextvars import ContextVar
+from threading import Lock
 
 from hypothesis import HealthCheck, settings
 import pytest
@@ -36,6 +38,112 @@ _DIAGNOSTIC_LIMIT_RECORD = {
     "nodeid": "<diagnostic-limit-reached>",
     "phase": "unknown",
 }
+_REQUEST_TIMEOUT_OBSERVATIONS: dict[str, list[dict[str, str]]] = {}
+_REQUEST_TIMEOUT_NODE_LIMIT = 128
+_REQUEST_SEQUENCE = 0
+_REQUEST_TRACE_LOCK = Lock()
+_CURRENT_NODEID: ContextVar[str | None] = ContextVar(
+    "current_pytest_nodeid", default=None,
+)
+_ACTIVE_NODEID: str | None = None
+_SAFE_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+_SAFE_CLIENT_PHASES = {
+    "CLIENT_CONNECT",
+    "CLIENT_SEND",
+    "CLIENT_GETRESPONSE",
+    "CLIENT_READ",
+}
+
+
+def _safe_method(raw_method: object) -> str:
+    method = raw_method.upper() if isinstance(raw_method, str) else ""
+    return method if method in _SAFE_METHODS else "OTHER"
+
+
+def _safe_route_family(raw_method: object, raw_target: object) -> str:
+    method = _safe_method(raw_method)
+    if not isinstance(raw_target, str):
+        return "LOCAL_API_OTHER"
+    path = raw_target.split("?", 1)[0].split("#", 1)[0]
+    parts = tuple(part for part in path.split("/") if part)
+    if not parts or parts[0] != "v1":
+        return "LOCAL_API_OTHER"
+    if parts == ("v1", "recovery") and method == "GET":
+        return "RECOVERY_LIST"
+    if parts == ("v1", "recovery", "staging") and method == "POST":
+        return "RECOVERY_STAGE"
+    if parts == ("v1", "recovery", "verify") and method == "POST":
+        return "RECOVERY_VERIFY"
+    if len(parts) == 4 and parts[:2] == ("v1", "recovery") and method == "POST":
+        return {
+            "promote": "RECOVERY_PROMOTE",
+            "discard": "RECOVERY_DISCARD",
+            "abandon": "RECOVERY_ABANDON",
+        }.get(parts[3], "RECOVERY_OTHER")
+    if parts == ("v1", "workspaces"):
+        return "WORKSPACE_LIST" if method == "GET" else "WORKSPACE_CREATE" if method == "POST" else "WORKSPACE_OTHER"
+    if len(parts) == 3 and parts[:2] == ("v1", "workspaces"):
+        return "WORKSPACE_REOPEN" if method == "GET" else "WORKSPACE_OTHER"
+    if len(parts) == 4 and parts[:2] == ("v1", "workspaces"):
+        return {
+            "materials": "WORKSPACE_MATERIALS",
+            "backup": "BACKUP_CREATE",
+        }.get(parts[3], "WORKSPACE_OTHER")
+    return "LOCAL_API_OTHER"
+
+
+def _elapsed_bucket(elapsed_seconds: object) -> str:
+    try:
+        elapsed = float(elapsed_seconds)
+    except (TypeError, ValueError):
+        return "UNKNOWN"
+    if elapsed <= 1:
+        return "<=1s"
+    if elapsed <= 5:
+        return ">1s"
+    if elapsed <= 30:
+        return ">5s"
+    return ">30s"
+
+
+def _record_local_api_timeout(
+    *,
+    nodeid: str | None = None,
+    method: object,
+    target: object,
+    client_phase: object,
+    elapsed_seconds: object,
+) -> None:
+    """Retain bounded, sanitized metadata for one local API timeout."""
+
+    global _REQUEST_SEQUENCE
+    raw_nodeid = nodeid or _CURRENT_NODEID.get() or _ACTIVE_NODEID or "<unknown>"
+    phase = client_phase if client_phase in _SAFE_CLIENT_PHASES else "CLIENT_UNKNOWN"
+    with _REQUEST_TRACE_LOCK:
+        _REQUEST_SEQUENCE += 1
+        observation = {
+            "request_seq": str(_REQUEST_SEQUENCE),
+            "method": _safe_method(method),
+            "route_family": _safe_route_family(method, target),
+            "client_phase": phase,
+            "elapsed_bucket": _elapsed_bucket(elapsed_seconds),
+            "timeout_boundary": "CLIENT_TRANSPORT_DEADLINE",
+        }
+        if (
+            raw_nodeid not in _REQUEST_TIMEOUT_OBSERVATIONS
+            and len(_REQUEST_TIMEOUT_OBSERVATIONS) >= _REQUEST_TIMEOUT_NODE_LIMIT
+        ):
+            return
+        observations = _REQUEST_TIMEOUT_OBSERVATIONS.setdefault(raw_nodeid, [])
+        if len(observations) < 8:
+            observations.append(observation)
+
+
+def _request_timeout_observation(nodeid: object) -> dict[str, str] | None:
+    if not isinstance(nodeid, str):
+        return None
+    observations = _REQUEST_TIMEOUT_OBSERVATIONS.get(nodeid)
+    return observations[-1] if observations else None
 
 
 def _repository_owned_file(
@@ -162,6 +270,9 @@ def _record_failure(report: object, raw_exception_type: object = None) -> None:
     phase = getattr(report, "when", None)
     safe_phase = phase if phase in {"setup", "call", "teardown"} else "unknown"
     diagnostic = _failure_diagnostic(report, raw_exception_type)
+    timeout_observation = _request_timeout_observation(raw_nodeid)
+    if timeout_observation is not None and diagnostic["exception_type"] == "TimeoutError":
+        diagnostic.update(timeout_observation)
     fingerprint = sha256(
         raw_nodeid.encode("utf-8", errors="surrogatepass")
     ).hexdigest()
@@ -219,6 +330,24 @@ def pytest_runtest_makereport(item: object, call: object):
     excinfo = getattr(call, "excinfo", None)
     exception_class = getattr(excinfo, "type", None)
     _record_failure(report, getattr(exception_class, "__name__", None))
+
+
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_protocol(item: object, nextitem: object):
+    """Associate local API observations with the running test node."""
+
+    global _ACTIVE_NODEID
+    current_nodeid = getattr(item, "nodeid", None)
+    token = _CURRENT_NODEID.set(current_nodeid)
+    with _REQUEST_TRACE_LOCK:
+        previous_nodeid = _ACTIVE_NODEID
+        _ACTIVE_NODEID = current_nodeid
+    try:
+        yield
+    finally:
+        with _REQUEST_TRACE_LOCK:
+            _ACTIVE_NODEID = previous_nodeid
+        _CURRENT_NODEID.reset(token)
 
 
 def _emit_failure_diagnostics() -> None:

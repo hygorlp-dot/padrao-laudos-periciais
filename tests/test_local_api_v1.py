@@ -8,9 +8,14 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Event, Lock, Thread
+from time import monotonic
 from uuid import UUID
 
 import pytest
+try:
+    import conftest as suite_conftest
+except ModuleNotFoundError:  # subprocess probes run from the repository root
+    from tests import conftest as suite_conftest
 
 from scripts.backend_contract.application.models import (
     ArtifactRevision,
@@ -1749,10 +1754,24 @@ def http_request(server, method, target, *, value=None, raw_body=None, headers=N
         body = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         request_headers.setdefault("Content-Type", "application/json; charset=utf-8")
     connection = http.client.HTTPConnection(host, port, timeout=5)
+    started = monotonic()
+    client_phase = "CLIENT_SEND"
     try:
         connection.request(method, target, body=body, headers=request_headers)
+        client_phase = "CLIENT_GETRESPONSE"
         response = connection.getresponse()
+        client_phase = "CLIENT_READ"
         return response.status, dict(response.getheaders()), response.read()
+    except TimeoutError:
+        if client_phase == "CLIENT_SEND" and getattr(connection, "sock", None) is None:
+            client_phase = "CLIENT_CONNECT"
+        suite_conftest._record_local_api_timeout(
+            method=method,
+            target=target,
+            client_phase=client_phase,
+            elapsed_seconds=monotonic() - started,
+        )
+        raise
     finally:
         connection.close()
 

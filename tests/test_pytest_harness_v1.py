@@ -4,11 +4,13 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from threading import Thread
 from types import SimpleNamespace
 
 import pytest
 
 import conftest as suite_conftest
+from tests import test_local_api_v1 as local_api_tests
 
 
 def test_failed_nodeids_are_sanitized_deduplicated_and_emitted_last(
@@ -104,6 +106,231 @@ def test_clean_session_emits_no_failure_diagnostic(monkeypatch, capsys) -> None:
     suite_conftest._emit_failure_diagnostics()
 
     assert capsys.readouterr().err == ""
+
+
+def test_timeout_diagnostic_identifies_safe_local_api_operation(
+    monkeypatch,
+    capsys,
+) -> None:
+    """A timeout must identify the bounded operation without private data."""
+    monkeypatch.setattr(suite_conftest, "_FAILURE_DIAGNOSTICS", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_TIMEOUT_OBSERVATIONS", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_SEQUENCE", 0)
+    nodeid = "tests/test_recovery_transaction_v1.py::test_probe[SECRET-parameter]"
+
+    suite_conftest._record_local_api_timeout(
+        nodeid=nodeid,
+        method="POST",
+        target=(
+            "/v1/recovery/00000000-0000-4000-8000-000000000001/discard"
+            "?token=PRIVATE"
+        ),
+        client_phase="CLIENT_GETRESPONSE",
+        elapsed_seconds=5.2,
+    )
+    suite_conftest._record_failure(
+        SimpleNamespace(
+            failed=True,
+            nodeid=nodeid,
+            when="call",
+            longrepr=SimpleNamespace(
+                reprcrash=SimpleNamespace(
+                    path="C:/outside/private.py",
+                    lineno=723,
+                    message="TimeoutError: private response body",
+                )
+            ),
+        ),
+        "TimeoutError",
+    )
+
+    suite_conftest._emit_failure_diagnostics()
+    diagnostic = capsys.readouterr().err.splitlines()[-1]
+
+    assert '"request_seq":"1"' in diagnostic
+    assert '"method":"POST"' in diagnostic
+    assert '"route_family":"RECOVERY_DISCARD"' in diagnostic
+    assert '"client_phase":"CLIENT_GETRESPONSE"' in diagnostic
+    assert '"elapsed_bucket":">5s"' in diagnostic
+    assert '"timeout_boundary":"CLIENT_TRANSPORT_DEADLINE"' in diagnostic
+    assert "00000000-0000-4000-8000-000000000001" not in diagnostic
+    assert "PRIVATE" not in diagnostic
+    assert "private response body" not in diagnostic
+
+
+@pytest.mark.parametrize(
+    ("failure_point", "expected_phase"),
+    (
+        ("connect", "CLIENT_CONNECT"),
+        ("getresponse", "CLIENT_GETRESPONSE"),
+        ("read", "CLIENT_READ"),
+    ),
+)
+def test_http_request_timeout_records_observable_client_phase(
+    monkeypatch,
+    capsys,
+    failure_point,
+    expected_phase,
+) -> None:
+    """The first-party HTTP helper records only the phase that timed out."""
+    monkeypatch.setattr(suite_conftest, "_FAILURE_DIAGNOSTICS", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_TIMEOUT_OBSERVATIONS", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_SEQUENCE", 0)
+
+    class Response:
+        status = 200
+
+        def getheaders(self):
+            return (("Content-Length", "0"),)
+
+        def read(self):
+            if failure_point == "read":
+                raise TimeoutError("PRIVATE response body")
+            return b""
+
+    class Connection:
+        def __init__(self, _host, _port, timeout):
+            self.sock = None
+            self.timeout = timeout
+
+        def request(self, *_args, **_kwargs):
+            if failure_point == "connect":
+                raise TimeoutError("PRIVATE connect detail")
+            self.sock = object()
+
+        def getresponse(self):
+            if failure_point == "getresponse":
+                raise TimeoutError("PRIVATE response detail")
+            return Response()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(local_api_tests.http.client, "HTTPConnection", Connection)
+    server = SimpleNamespace(address=("127.0.0.1", 1))
+    with pytest.raises(TimeoutError):
+        local_api_tests.http_request(
+            server,
+            "POST",
+            "/v1/recovery/00000000-0000-4000-8000-000000000001/promote?secret=PRIVATE",
+            value={"payload": "PRIVATE"},
+        )
+
+    nodeid = suite_conftest._CURRENT_NODEID.get()
+    assert nodeid is not None
+    suite_conftest._record_failure(
+        SimpleNamespace(
+            failed=True,
+            nodeid=nodeid,
+            when="call",
+            longrepr=SimpleNamespace(
+                reprcrash=SimpleNamespace(
+                    path="C:/outside/private.py",
+                    lineno=723,
+                    message="TimeoutError: PRIVATE detail",
+                )
+            ),
+        ),
+        "TimeoutError",
+    )
+    suite_conftest._emit_failure_diagnostics()
+    diagnostic = capsys.readouterr().err.splitlines()[-1]
+    assert f'"client_phase":"{expected_phase}"' in diagnostic
+    assert '"route_family":"RECOVERY_PROMOTE"' in diagnostic
+    assert '"method":"POST"' in diagnostic
+    assert "00000000-0000-4000-8000-000000000001" not in diagnostic
+    assert "PRIVATE" not in diagnostic
+
+
+def test_timeout_observability_bounds_cascade_and_rejects_untrusted_target(
+    monkeypatch,
+) -> None:
+    """Hostile paths and cascades remain bounded and sanitized."""
+    monkeypatch.setattr(suite_conftest, "_REQUEST_TIMEOUT_OBSERVATIONS", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_SEQUENCE", 0)
+    nodeid = "tests/test_pytest_harness_v1.py::test_timeout_cascade"
+    hostile_target = (
+        "C:/private/secret.pdf?token=PRIVATE&payload="
+        + ("x" * 100_000)
+    )
+    for _ in range(20):
+        suite_conftest._record_local_api_timeout(
+            nodeid=nodeid,
+            method="TRACE PRIVATE",
+            target=hostile_target,
+            client_phase="not-a-phase",
+            elapsed_seconds=999,
+        )
+
+    observations = suite_conftest._REQUEST_TIMEOUT_OBSERVATIONS[nodeid]
+    assert len(observations) == 8
+    assert all(item["method"] == "OTHER" for item in observations)
+    assert all(item["route_family"] == "LOCAL_API_OTHER" for item in observations)
+    assert all(item["client_phase"] == "CLIENT_UNKNOWN" for item in observations)
+    assert all(item["elapsed_bucket"] == ">30s" for item in observations)
+    assert all("PRIVATE" not in str(item) for item in observations)
+
+    for index in range(200):
+        suite_conftest._record_local_api_timeout(
+            nodeid=f"tests/test_pytest_harness_v1.py::test_timeout_{index}",
+            method="GET",
+            target="/v1/recovery",
+            client_phase="CLIENT_GETRESPONSE",
+            elapsed_seconds=6,
+        )
+    assert len(suite_conftest._REQUEST_TIMEOUT_OBSERVATIONS) <= 128
+
+
+def test_non_timeout_and_success_do_not_add_request_timeout_fields(
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(suite_conftest, "_FAILURE_DIAGNOSTICS", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_TIMEOUT_OBSERVATIONS", {})
+    nodeid = "tests/test_pytest_harness_v1.py::test_non_timeout"
+    suite_conftest._record_failure(
+        SimpleNamespace(
+            failed=True,
+            nodeid=nodeid,
+            when="call",
+            longrepr=SimpleNamespace(
+                reprcrash=SimpleNamespace(
+                    path="C:/outside/private.py",
+                    lineno=1,
+                    message="RuntimeError: private detail",
+                )
+            ),
+        ),
+        "RuntimeError",
+    )
+    suite_conftest._emit_failure_diagnostics()
+    diagnostic = capsys.readouterr().err.splitlines()[-1]
+    assert "request_seq" not in diagnostic
+    assert suite_conftest._REQUEST_TIMEOUT_OBSERVATIONS == {}
+
+
+def test_worker_thread_timeout_uses_active_test_node(monkeypatch) -> None:
+    monkeypatch.setattr(suite_conftest, "_REQUEST_TIMEOUT_OBSERVATIONS", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_SEQUENCE", 0)
+    nodeid = "tests/test_pytest_harness_v1.py::test_worker_timeout"
+    monkeypatch.setattr(suite_conftest, "_ACTIVE_NODEID", nodeid)
+
+    worker = Thread(
+        target=suite_conftest._record_local_api_timeout,
+        kwargs={
+            "method": "GET",
+            "target": "/v1/recovery",
+            "client_phase": "CLIENT_READ",
+            "elapsed_seconds": 5.5,
+        },
+    )
+    worker.start()
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert suite_conftest._REQUEST_TIMEOUT_OBSERVATIONS[nodeid][0]["route_family"] == (
+        "RECOVERY_LIST"
+    )
 
 
 def test_real_pytest_process_leaves_failed_nodeids_as_last_stderr_line(tmp_path) -> None:
