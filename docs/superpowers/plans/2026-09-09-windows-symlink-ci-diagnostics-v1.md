@@ -59,3 +59,22 @@ phase, exception class obtained from `call.excinfo`, repository-relative
 location, and a categorical message (assertion, numeric OS error, or redacted).
 It never emits the raw exception message or an absolute path and does not
 change test selection, assertions, timeout, workflow, or `verify_core`.
+
+## Owner-authorized observability promotion adjudication
+
+The later owner directive for Human RC readiness supersedes only the
+diagnostic-only merge restriction above. It authorizes promotion to permanent
+`FIRST_PARTY_TEST_FAILURE_OBSERVABILITY` when the harness remains product- and
+selection-neutral, private-safe, bounded, and green on the exact protected
+HEAD with independent review.
+
+Independent review of `14deb4a54be70b21a8769c3f067e1c665dc83bd5`
+correctly blocked promotion: raw parameter payloads could escape through
+`report.nodeid`, the diagnostic collection was unbounded, and a later
+`pytest_unconfigure` hook could displace the marker from the final stderr
+line. The causal repair redacts all parameter values, accepts only real
+repository-owned test identities and non-private repository locations, caps
+fields and failure count, and emits after all non-wrapper unconfigure hooks.
+Promotion still requires fresh exact-HEAD protected CI, reviewer, and systemic
+audit evidence with P0/P1 equal to zero. It does not establish a recovery
+defect or a root cause for Issue #192.
