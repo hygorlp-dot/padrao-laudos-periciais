@@ -42,8 +42,13 @@ _REQUEST_TIMEOUT_OBSERVATIONS: dict[str, list[dict[str, str]]] = {}
 _REQUEST_TIMEOUT_NODE_LIMIT = 128
 _REQUEST_SERVER_PHASES: dict[str, list[str]] = {}
 _REQUEST_SERVER_PHASE_LIMIT = 128
+_REQUEST_INTERNAL_PHASES: dict[str, list[str]] = {}
+_REQUEST_INTERNAL_PHASE_LIMIT = 128
 _REQUEST_SEQUENCE = 0
 _REQUEST_TRACE_LOCK = Lock()
+_ACTIVE_REQUEST_SEQUENCE: ContextVar[str | None] = ContextVar(
+    "first_party_active_request_sequence", default=None
+)
 _CURRENT_NODEID: ContextVar[str | None] = ContextVar(
     "current_pytest_nodeid", default=None,
 )
@@ -60,6 +65,12 @@ _SAFE_SERVER_PHASES = {
     "LOCAL_API_HANDLE_COMPLETED",
     "RESPONSE_HEADERS_STARTED",
     "RESPONSE_COMPLETED",
+}
+_SAFE_INTERNAL_PHASES = {
+    "ROUTE_DISPATCH_STARTED",
+    "APPLICATION_COMMAND_STARTED",
+    "APPLICATION_COMMAND_COMPLETED",
+    "ROUTE_HANDLER_COMPLETED",
 }
 _SAFE_REQUEST_SEQUENCE = re.compile(r"^[1-9][0-9]{0,7}$")
 
@@ -145,6 +156,23 @@ def _finish_local_api_request(request_seq: object, *, retain: bool) -> None:
         return
     with _REQUEST_TRACE_LOCK:
         _REQUEST_SERVER_PHASES.pop(request_seq, None)
+        _REQUEST_INTERNAL_PHASES.pop(request_seq, None)
+
+
+def _record_internal_phase(*, request_seq: object, phase: object) -> None:
+    if not isinstance(request_seq, str) or _SAFE_REQUEST_SEQUENCE.fullmatch(request_seq) is None:
+        return
+    if phase not in _SAFE_INTERNAL_PHASES:
+        return
+    with _REQUEST_TRACE_LOCK:
+        if (
+            request_seq not in _REQUEST_INTERNAL_PHASES
+            and len(_REQUEST_INTERNAL_PHASES) >= _REQUEST_INTERNAL_PHASE_LIMIT
+        ):
+            return
+        phases = _REQUEST_INTERNAL_PHASES.setdefault(request_seq, [])
+        if phase not in phases and len(phases) < len(_SAFE_INTERNAL_PHASES):
+            phases.append(phase)
 
 
 def _record_local_api_timeout(
@@ -195,18 +223,29 @@ def _request_timeout_observation(nodeid: object) -> dict[str, str] | None:
     observation = dict(observations[-1])
     phases = _REQUEST_SERVER_PHASES.get(observation["request_seq"], [])
     observation["server_last_phase"] = phases[-1] if phases else "UNKNOWN"
+    internal_phases = _REQUEST_INTERNAL_PHASES.get(observation["request_seq"], [])
+    observation["internal_last_phase"] = (
+        internal_phases[-1] if internal_phases else "UNKNOWN"
+    )
     return observation
 
 
-def _server_request_sequence(handler: object) -> str | None:
-    headers = getattr(handler, "headers", None)
-    raw_sequence = headers.get("X-First-Party-Test-Request-Seq") if headers else None
+def _headers_request_sequence(headers: object) -> str | None:
+    raw_sequence = (
+        headers.get("X-First-Party-Test-Request-Seq")
+        if hasattr(headers, "get")
+        else None
+    )
     if (
         not isinstance(raw_sequence, str)
         or _SAFE_REQUEST_SEQUENCE.fullmatch(raw_sequence) is None
     ):
         return None
     return raw_sequence
+
+
+def _server_request_sequence(handler: object) -> str | None:
+    return _headers_request_sequence(getattr(handler, "headers", None))
 
 
 def _record_handler_phase(handler: object, phase: str) -> None:
@@ -233,6 +272,9 @@ def _install_server_phase_observer() -> None:
 
     def observed_factory(*args: object, **kwargs: object):
         base_handler = original_factory(*args, **kwargs)
+        api = args[0] if args else None
+        if api is not None:
+            _install_internal_phase_observer(api)
 
         class ObservedHandler(base_handler):
             def _handle_request(self):
@@ -257,6 +299,73 @@ def _install_server_phase_observer() -> None:
 
     observed_factory._first_party_phase_observer = True
     local_api_server._handler_for = observed_factory
+
+
+def _install_internal_phase_observer(api: object) -> None:
+    """Observe stable dispatch/command boundaries on test-created API objects."""
+
+    if getattr(api, "_first_party_internal_phase_observer", False):
+        return
+    original_handle = getattr(api, "handle", None)
+    services = getattr(api, "_services", None)
+    if not callable(original_handle) or services is None:
+        return
+
+    def observed_handle(method, target, headers, body):
+        request_seq = _headers_request_sequence(headers)
+        token = _ACTIVE_REQUEST_SEQUENCE.set(request_seq)
+        if request_seq is not None:
+            _record_internal_phase(
+                request_seq=request_seq,
+                phase="ROUTE_DISPATCH_STARTED",
+            )
+        try:
+            response = original_handle(method, target, headers, body)
+            if request_seq is not None:
+                _record_internal_phase(
+                    request_seq=request_seq,
+                    phase="ROUTE_HANDLER_COMPLETED",
+                )
+            return response
+        finally:
+            _ACTIVE_REQUEST_SEQUENCE.reset(token)
+
+    try:
+        setattr(api, "handle", observed_handle)
+        setattr(api, "_first_party_internal_phase_observer", True)
+    except (AttributeError, TypeError):
+        return
+
+    for field_name in getattr(services, "__dataclass_fields__", {}):
+        service = getattr(services, field_name, None)
+        execute = getattr(service, "execute", None)
+        if not callable(execute) or getattr(service, "_first_party_phase_observer", False):
+            continue
+
+        def observed_execute(*args, _execute=execute, **kwargs):
+            request_seq = _ACTIVE_REQUEST_SEQUENCE.get()
+            should_record = request_seq is not None and not (
+                request_seq in _REQUEST_INTERNAL_PHASES
+                and "APPLICATION_COMMAND_STARTED" in _REQUEST_INTERNAL_PHASES[request_seq]
+            )
+            if should_record:
+                _record_internal_phase(
+                    request_seq=request_seq,
+                    phase="APPLICATION_COMMAND_STARTED",
+                )
+            result = _execute(*args, **kwargs)
+            if should_record:
+                _record_internal_phase(
+                    request_seq=request_seq,
+                    phase="APPLICATION_COMMAND_COMPLETED",
+                )
+            return result
+
+        try:
+            setattr(service, "execute", observed_execute)
+            setattr(service, "_first_party_phase_observer", True)
+        except (AttributeError, TypeError):
+            continue
 
 
 _install_server_phase_observer()

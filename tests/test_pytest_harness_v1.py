@@ -202,6 +202,51 @@ def test_timeout_diagnostic_identifies_last_observable_server_phase(
     assert '"route_family":"WORKSPACE_MATERIALS"' in diagnostic
 
 
+def test_timeout_diagnostic_identifies_last_observable_internal_phase(
+    monkeypatch,
+    capsys,
+) -> None:
+    """A handler timeout must expose its last bounded internal phase."""
+    monkeypatch.setattr(suite_conftest, "_FAILURE_DIAGNOSTICS", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_TIMEOUT_OBSERVATIONS", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_SERVER_PHASES", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_INTERNAL_PHASES", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_SEQUENCE", 0)
+    nodeid = "tests/test_recovery_transaction_v1.py::test_internal_phase_probe"
+
+    suite_conftest._record_local_api_timeout(
+        nodeid=nodeid,
+        method="POST",
+        target="/v1/recovery/staging",
+        client_phase="CLIENT_GETRESPONSE",
+        elapsed_seconds=5.2,
+    )
+    suite_conftest._record_internal_phase(
+        request_seq="1",
+        phase="APPLICATION_COMMAND_STARTED",
+    )
+    suite_conftest._record_failure(
+        SimpleNamespace(
+            failed=True,
+            nodeid=nodeid,
+            when="call",
+            longrepr=SimpleNamespace(
+                reprcrash=SimpleNamespace(
+                    path="C:/outside/private.py",
+                    lineno=723,
+                    message="TimeoutError: hidden",
+                )
+            ),
+        ),
+        "TimeoutError",
+    )
+    suite_conftest._emit_failure_diagnostics()
+    diagnostic = capsys.readouterr().err.splitlines()[-1]
+
+    assert '"internal_last_phase":"APPLICATION_COMMAND_STARTED"' in diagnostic
+    assert '"route_family":"RECOVERY_STAGE"' in diagnostic
+
+
 @pytest.mark.parametrize(
     ("failure_point", "expected_phase"),
     (
@@ -290,6 +335,7 @@ def test_http_request_timeout_records_observable_client_phase(
 def test_server_phase_correlation_is_bounded_and_request_scoped(monkeypatch) -> None:
     """Only bounded synthetic sequences can contribute a server phase."""
     monkeypatch.setattr(suite_conftest, "_REQUEST_SERVER_PHASES", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_INTERNAL_PHASES", {})
     monkeypatch.setattr(suite_conftest, "_REQUEST_TIMEOUT_OBSERVATIONS", {})
     monkeypatch.setattr(suite_conftest, "_REQUEST_SEQUENCE", 0)
 
@@ -306,10 +352,23 @@ def test_server_phase_correlation_is_bounded_and_request_scoped(monkeypatch) -> 
     suite_conftest._record_server_phase(
         request_seq="2", phase="RESPONSE_COMPLETED"
     )
+    suite_conftest._record_internal_phase(
+        request_seq="1", phase="ROUTE_DISPATCH_STARTED"
+    )
+    suite_conftest._record_internal_phase(
+        request_seq="1", phase="APPLICATION_COMMAND_STARTED"
+    )
+    suite_conftest._record_internal_phase(
+        request_seq="1", phase="APPLICATION_COMMAND_STARTED"
+    )
+    suite_conftest._record_internal_phase(request_seq="1", phase="PRIVATE_PHASE")
 
     assert suite_conftest._REQUEST_SERVER_PHASES == {
         "1": ["LOCAL_API_HANDLE_STARTED", "RESPONSE_HEADERS_STARTED"],
         "2": ["RESPONSE_COMPLETED"],
+    }
+    assert suite_conftest._REQUEST_INTERNAL_PHASES == {
+        "1": ["ROUTE_DISPATCH_STARTED", "APPLICATION_COMMAND_STARTED"]
     }
 
     suite_conftest._record_local_api_timeout(
@@ -333,8 +392,15 @@ def test_server_phase_correlation_is_bounded_and_request_scoped(monkeypatch) -> 
         )
     assert len(suite_conftest._REQUEST_SERVER_PHASES) <= 128
 
+    for index in range(200):
+        suite_conftest._record_internal_phase(
+            request_seq=str(index + 3), phase="ROUTE_DISPATCH_STARTED"
+        )
+    assert len(suite_conftest._REQUEST_INTERNAL_PHASES) <= 128
+
     suite_conftest._finish_local_api_request("2", retain=False)
     assert "2" not in suite_conftest._REQUEST_SERVER_PHASES
+    assert "2" not in suite_conftest._REQUEST_INTERNAL_PHASES
 
 
 def test_timeout_observability_bounds_cascade_and_rejects_untrusted_target(
