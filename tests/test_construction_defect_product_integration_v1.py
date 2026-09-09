@@ -629,6 +629,50 @@ def test_application_binds_pat_to_exact_four_upstreams_and_reviews_append_only()
     )
 
 
+def test_application_rejects_process_case_change_during_engine_execution():
+    services = _application_services()
+    consumed_process_numbers = []
+
+    class ProcessChangingRunner:
+        def execute(self, **kwargs):
+            consumed_process_numbers.append(kwargs["process_case"].numero_processo)
+            proposal = ConstructionDefectAnalysisAdapter().execute(**kwargs)
+            changed_process = ProcessCaseData.from_mapping(
+                {
+                    **services.process.value.as_dict(),
+                    "numero_processo": "9999999-99.2026.4.00.9999",
+                }
+            )
+            changed_record = _record(
+                "PROCESS_CASE",
+                "PROCESS_CASE",
+                services.process.record.revision + 1,
+                changed_process.as_dict(),
+            )
+            services.process.record = changed_record
+            services.process.value = changed_process
+            services.store.process_record = changed_record
+            return proposal
+
+    start = StartConstructionDefectAnalysis(
+        services.store,
+        services.process,
+        services.case,
+        services.planning,
+        services.inspection,
+        ProcessChangingRunner(),
+        services.save,
+        _SequenceIds(),
+    )
+
+    with pytest.raises(ValueError, match="upstream authority is stale"):
+        start.execute(WORKSPACE_ID, observation_contexts=(_application_context(),))
+
+    assert consumed_process_numbers == ["0000001-00.2026.4.00.0001"]
+    assert services.process.value.numero_processo == "9999999-99.2026.4.00.9999"
+    assert services.store.history == []
+
+
 def test_application_rejects_wrong_professional_and_stale_upstream_review():
     services = _application_services()
     record, _snapshot = services.start.execute(
