@@ -86,3 +86,10 @@ The repair keeps a bounded digest only as a transient internal key and exposes
 safe ordinal instances, preserving failure cardinality without publishing any
 parameter-derived bytes. It also rejects adversarially oversized line numbers
 before formatting.
+
+Terminal review of `566f637` reproduced Windows trailing-dot aliases bypassing
+the private-prefix exclusion. Diagnostic locations now allow only the literal
+source roots `tests` and `scripts`, rejecting noncanonical trailing spaces/dots
+before filesystem probes. Synthetic alias tests cover both private components
+and short-name/non-source rejection without probing real private data. Public
+field limits also cover the complete fallback and line-number suffix.

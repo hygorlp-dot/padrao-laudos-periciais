@@ -55,8 +55,9 @@ def _repository_owned_file(
     normalized_parts = tuple(part.casefold() for part in relative.parts)
     if (
         not normalized_parts
+        or normalized_parts[0] not in {"tests", "scripts"}
         or ".." in normalized_parts
-        or normalized_parts[:2] == ("referencias", "privadas")
+        or any(part != part.rstrip(" .") for part in normalized_parts)
         or (require_tests and normalized_parts[0] != "tests")
     ):
         return None
@@ -80,13 +81,13 @@ def _repository_location(raw_path: object, raw_line: object) -> str:
     relative = _repository_owned_file(raw_path)
     if relative is not None:
         location = relative.as_posix()
-    if len(location) > _MAX_DIAGNOSTIC_FIELD_LENGTH:
-        location = "<repository-path-redacted>"
     if (
         type(raw_line) is int
         and 0 < raw_line <= _MAX_DIAGNOSTIC_LINE_NUMBER
     ):
-        return f"{location}:{raw_line}"
+        location = f"{location}:{raw_line}"
+    if len(location) > _MAX_DIAGNOSTIC_FIELD_LENGTH:
+        return "<repository-path-redacted>"
     return location
 
 
@@ -115,7 +116,7 @@ def _sanitized_nodeid(raw_nodeid: object) -> str:
     if has_parameters:
         nodeid += "[parameters-redacted]"
     if len(nodeid) > _MAX_DIAGNOSTIC_FIELD_LENGTH:
-        return f"{relative.as_posix()}::<node-scope-redacted>"
+        return "<repository-node-redacted>"
     return nodeid
 
 

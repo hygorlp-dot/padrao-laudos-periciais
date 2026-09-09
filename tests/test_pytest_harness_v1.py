@@ -6,6 +6,8 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 import conftest as suite_conftest
 
 
@@ -313,3 +315,60 @@ def test_failure_diagnostic_caps_failure_cascade(monkeypatch) -> None:
     )
     assert len(suite_conftest._FAILURE_DIAGNOSTICS) == 129
     assert '"nodeid":"<diagnostic-limit-reached>"' in diagnostic
+
+
+@pytest.mark.parametrize("alias", ("referencias./privadas", "referencias/privadas."))
+def test_private_windows_alias_is_redacted_before_filesystem_access(
+    monkeypatch, tmp_path, alias,
+) -> None:
+    # Entirely synthetic root: never access the repository's private directory.
+    private = tmp_path / "referencias" / "privadas"
+    private.mkdir(parents=True)
+    (private / "SYNTHETIC.py").write_text("# synthetic\n", encoding="utf-8")
+    monkeypatch.setattr(suite_conftest, "_REPOSITORY_ROOT", tmp_path)
+
+    assert suite_conftest._repository_location(
+        f"{alias}/SYNTHETIC.py", 1,
+    ) == "<outside-repository>:1"
+
+
+def test_diagnostic_path_gate_does_not_probe_non_source_roots(
+    monkeypatch, tmp_path,
+) -> None:
+    monkeypatch.setattr(suite_conftest, "_REPOSITORY_ROOT", tmp_path)
+
+    def forbidden_probe(_path):
+        raise AssertionError("non-source path must be rejected before filesystem access")
+
+    with monkeypatch.context() as scoped_patch:
+        scoped_patch.setattr(Path, "is_symlink", forbidden_probe)
+        for path in (
+            "referencias/privadas/SYNTHETIC.py",
+            "REFER~1/PRIVAD~1/SYNTHETIC.py",
+            "referencias./privadas/SYNTHETIC.py",
+            ".git/SYNTHETIC.py",
+        ):
+            assert suite_conftest._repository_location(path, 1) == "<outside-repository>:1"
+
+
+def test_diagnostic_field_bounds_include_path_fallback_and_line_suffix(monkeypatch):
+    with monkeypatch.context() as scoped_patch:
+        scoped_patch.setattr(
+            suite_conftest, "_repository_owned_file",
+            lambda *_args, **_kwargs: Path("tests/" + "a" * 510 + ".py"),
+        )
+        assert len(suite_conftest._sanitized_nodeid("tests/test.py::test_probe")) <= 512
+        scoped_patch.setattr(
+            suite_conftest, "_repository_owned_file",
+            lambda *_args, **_kwargs: Path("tests/" + "a" * 500 + ".py"),
+        )
+        assert len(suite_conftest._repository_location("unused", 10_000_000)) <= 512
+
+
+def test_diagnostic_path_gate_preserves_source_locations_and_rejects_aliases():
+    assert suite_conftest._repository_location(
+        "scripts/quality/verify_core.py", 1,
+    ) == "scripts/quality/verify_core.py:1"
+    assert suite_conftest._repository_location(
+        "scripts./quality/verify_core.py", 1,
+    ) == "<outside-repository>:1"
