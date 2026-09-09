@@ -78,3 +78,11 @@ fields and failure count, and emits after all non-wrapper unconfigure hooks.
 Promotion still requires fresh exact-HEAD protected CI, reviewer, and systemic
 audit evidence with P0/P1 equal to zero. It does not establish a recovery
 defect or a root cause for Issue #192.
+
+The first fresh systemic audit of the hardened candidate then found one
+sibling identity defect: distinct parametrized failures collapsed after
+redaction because the public redacted node ID was also the deduplication key.
+The repair keeps a bounded digest only as a transient internal key and exposes
+safe ordinal instances, preserving failure cardinality without publishing any
+parameter-derived bytes. It also rejects adversarially oversized line numbers
+before formatting.

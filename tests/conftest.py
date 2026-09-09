@@ -10,6 +10,7 @@ padrão: nada de cobertura é abdicado.
 
 from __future__ import annotations
 
+from hashlib import sha256
 import json
 from pathlib import Path
 import re
@@ -19,14 +20,15 @@ from hypothesis import HealthCheck, settings
 import pytest
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-_FAILURE_DIAGNOSTICS: dict[tuple[str, str], dict[str, str]] = {}
+_FAILURE_DIAGNOSTICS: dict[tuple[str, str, str], dict[str, str]] = {}
 _FAILURE_DIAGNOSTIC_LIMIT = 128
 _MAX_DIAGNOSTIC_FIELD_LENGTH = 512
+_MAX_DIAGNOSTIC_LINE_NUMBER = 10_000_000
 _SAFE_EXCEPTION_TYPE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,79}$")
 _SAFE_NODE_SCOPE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _WINDOWS_ERROR_CODE = re.compile(r"\[WinError ([0-9]{1,10})\]")
 _POSIX_ERROR_CODE = re.compile(r"\[Errno ([0-9]{1,10})\]")
-_DIAGNOSTIC_LIMIT_KEY = ("<diagnostic-limit-reached>", "unknown")
+_DIAGNOSTIC_LIMIT_KEY = ("<diagnostic-limit-reached>", "unknown", "limit")
 _DIAGNOSTIC_LIMIT_RECORD = {
     "exception_type": "DiagnosticLimit",
     "location": "<not-applicable>",
@@ -80,7 +82,10 @@ def _repository_location(raw_path: object, raw_line: object) -> str:
         location = relative.as_posix()
     if len(location) > _MAX_DIAGNOSTIC_FIELD_LENGTH:
         location = "<repository-path-redacted>"
-    if type(raw_line) is int and raw_line > 0:
+    if (
+        type(raw_line) is int
+        and 0 < raw_line <= _MAX_DIAGNOSTIC_LINE_NUMBER
+    ):
         return f"{location}:{raw_line}"
     return location
 
@@ -156,7 +161,10 @@ def _record_failure(report: object, raw_exception_type: object = None) -> None:
     phase = getattr(report, "when", None)
     safe_phase = phase if phase in {"setup", "call", "teardown"} else "unknown"
     diagnostic = _failure_diagnostic(report, raw_exception_type)
-    key = (diagnostic["nodeid"], safe_phase)
+    fingerprint = sha256(
+        raw_nodeid.encode("utf-8", errors="surrogatepass")
+    ).hexdigest()
+    key = (diagnostic["nodeid"], safe_phase, fingerprint)
     if key in _FAILURE_DIAGNOSTICS:
         return
     if len(_FAILURE_DIAGNOSTICS) >= _FAILURE_DIAGNOSTIC_LIMIT:
@@ -165,11 +173,23 @@ def _record_failure(report: object, raw_exception_type: object = None) -> None:
             dict(_DIAGNOSTIC_LIMIT_RECORD),
         )
         return
+    raw_scope = raw_nodeid.split("::", 1)[1] if "::" in raw_nodeid else ""
+    if "[" in raw_scope:
+        diagnostic["redacted_instance"] = str(
+            1
+            + sum(
+                stored_nodeid == diagnostic["nodeid"]
+                and stored_phase == safe_phase
+                for stored_nodeid, stored_phase, _stored_fingerprint in (
+                    _FAILURE_DIAGNOSTICS
+                )
+            )
+        )
     _FAILURE_DIAGNOSTICS[key] = diagnostic
 
 
 def _failure_diagnostic_line(
-    diagnostics: dict[tuple[str, str], dict[str, str]],
+    diagnostics: dict[tuple[str, str, str], dict[str, str]],
 ) -> str:
     payload = json.dumps(
         sorted(diagnostics.values(), key=lambda item: (item["nodeid"], item["phase"])),

@@ -84,7 +84,7 @@ def test_failed_nodeids_are_sanitized_deduplicated_and_emitted_last(
         '"location":"tests/test_pytest_harness_v1.py:17",'
         '"message":"assertion_failed",'
         '"nodeid":"tests/test_pytest_harness_v1.py::test_z_line[parameters-redacted]",'
-        '"phase":"call"}]'
+        '"phase":"call","redacted_instance":"1"}]'
     )
 
 
@@ -247,6 +247,43 @@ def test_failure_diagnostic_bounds_hostile_parameterized_nodeid(monkeypatch) -> 
     )
     assert hostile_parameter not in diagnostic
     assert len(diagnostic.encode("utf-8")) < 2_048
+    assert suite_conftest._repository_location(
+        str(Path(__file__).resolve()),
+        10**5_000,
+    ) == "tests/test_pytest_harness_v1.py"
+
+
+def test_failure_diagnostic_preserves_redacted_parameter_cardinality(monkeypatch) -> None:
+    monkeypatch.setattr(suite_conftest, "_FAILURE_DIAGNOSTICS", {})
+    secret_parameters = ("SYNTHETIC-SECRET-ALPHA", "SYNTHETIC-SECRET-BETA")
+
+    for parameter in secret_parameters:
+        report = SimpleNamespace(
+            failed=True,
+            nodeid=(
+                "tests/test_pytest_harness_v1.py::"
+                f"test_parameter_case[{parameter}]"
+            ),
+            when="call",
+            longrepr=SimpleNamespace(
+                reprcrash=SimpleNamespace(
+                    path=str(Path(__file__).resolve()),
+                    lineno=1,
+                    message="AssertionError: hidden",
+                )
+            ),
+        )
+        suite_conftest.pytest_runtest_logreport(report)
+        suite_conftest.pytest_runtest_logreport(report)
+
+    diagnostic = suite_conftest._failure_diagnostic_line(
+        suite_conftest._FAILURE_DIAGNOSTICS
+    )
+    assert len(suite_conftest._FAILURE_DIAGNOSTICS) == 2
+    assert diagnostic.count("test_parameter_case[parameters-redacted]") == 2
+    assert '"redacted_instance":"1"' in diagnostic
+    assert '"redacted_instance":"2"' in diagnostic
+    assert all(parameter not in diagnostic for parameter in secret_parameters)
 
 
 def test_failure_diagnostic_caps_failure_cascade(monkeypatch) -> None:
