@@ -1,8 +1,8 @@
 # ProductBridge Mutation Route Reachability V1 — Implementation Plan
 
-**Issue:** #190  
-**Parent:** #187  
-**Branch:** `fix/190-product-bridge-mutation-routes`  
+**Issue:** #190
+**Parent:** #187
+**Branch:** `fix/190-product-bridge-mutation-routes`
 **Base:** protected `main` at `d6d0cd1e69a09d59c2200b9e689319bb8c17f926`
 
 ## Root cause and boundary

@@ -119,11 +119,13 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/backup"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "case-analysis" and method in {"GET", "POST"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "case-analysis" and remainder[2] in {"items", "reviews"} and method == "POST":
+            return f"/v1/workspaces/{remainder[0]}/case-analysis/{remainder[2]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "pje-intake" and method == "GET":
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["pje-intake", "availability"] and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/pje-intake/availability"
-        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "pericial-planning" and method in {"GET", "PUT"}:
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "pericial-planning" and method in {"GET", "POST", "PUT"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "inspection-session" and method in {"GET", "POST", "PUT"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
@@ -133,8 +135,14 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/offline-inspection/{remainder[2]}"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["offline-device", "revoke"] and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/offline-device/revoke"
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "offline-device" and method == "GET":
+            return f"/v1/workspaces/{remainder[0]}/offline-device"
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["offline-device", "replace"] and method == "POST":
+            return f"/v1/workspaces/{remainder[0]}/offline-device/replace"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "technical-snapshot" and method in {"GET", "POST", "PUT"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "technical-snapshot" and remainder[2] in {"evidence-proposals", "evidence-reviews", "method-selections", "finding-proposals", "finding-reviews"} and method == "POST":
+            return f"/v1/workspaces/{remainder[0]}/technical-snapshot/{remainder[2]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "construction-defect-analysis" and method in {"GET", "POST"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "expert-profile" and method in {"GET", "PUT"}:
@@ -165,7 +173,7 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/delivery-snapshot/history"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["budget-snapshot", "history"] and method == "GET":
             return f"/v1/workspaces/{remainder[0]}/budget-snapshot/history"
-        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "budget-snapshot" and remainder[2] in {"proposals", "court-approvals", "expenses", "payments", "close"} and method == "POST":
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "budget-snapshot" and remainder[2] in {"items", "effort-estimates", "travel-estimates", "third-party-estimates", "proposals", "court-approvals", "expenses", "payments", "close"} and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/budget-snapshot/{remainder[2]}"
         if len(remainder) == 4 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:3] == ["delivery-snapshot", "artifacts"] and _CANONICAL_UUID.fullmatch(remainder[3]) and method == "GET":
             return f"/v1/workspaces/{remainder[0]}/delivery-snapshot/artifacts/{remainder[3]}"

@@ -538,6 +538,259 @@ def test_case_analysis_bridge_allowlists_only_existing_mutation_commands():
         assert _proxy_target(f"{path}/extra", "POST") is None
 
 
+def test_existing_frontend_stage_commands_reach_domain_state_through_real_bridge(tmp_path):
+    runtime = build_product_runtime(
+        tmp_path / "stage-commands.db",
+        frontend_build(tmp_path),
+        token=TOKEN,
+        private_root=tmp_path / "private",
+    )
+
+    def json_request(method, target, body=None):
+        status, _headers, raw = request(
+            runtime,
+            method,
+            target,
+            headers=browser_mutation_headers(runtime),
+            body=body,
+        )
+        return status, json.loads(raw) if raw else None
+
+    runtime.start()
+    try:
+        status, workspace = json_request(
+            "POST", "/app-api/v1/workspaces", {"name": "Fluxo de comandos sintético"}
+        )
+        assert status == 201, workspace
+        workspace_id = workspace["workspace_id"]
+        root = f"/app-api/v1/workspaces/{workspace_id}"
+        status, _, raw = request(
+            runtime,
+            "POST",
+            f"{root}/materials",
+            headers={
+                **browser_mutation_headers(runtime),
+                "Content-Type": "application/pdf",
+                "X-Document-Filename": "fonte-sintetica.pdf",
+            },
+            raw_body=b"%PDF-1.7\nsynthetic ProductBridge stage source\n%%EOF\n",
+        )
+        assert status == 201, raw
+
+        status, analysis = json_request("POST", f"{root}/case-analysis", {})
+        assert status == 201, analysis
+        document_id = analysis["snapshot"]["documents"][0]["document_id"]
+        case_items = (
+            ("PERICIAL_OBJECT", "Objeto técnico sintético."),
+            ("PERICIAL_QUESTION", "Qual condição foi observada?"),
+        )
+        question_id = None
+        for item_kind, text in case_items:
+            status, analysis = json_request(
+                "POST",
+                f"{root}/case-analysis/items",
+                {
+                    "expected_revision": analysis["revision"],
+                    "item_kind": item_kind,
+                    "text": text,
+                    "source_document_id": document_id,
+                    "page_or_span": "p. 1",
+                    "technical_subjects": ["tema sintético"],
+                    "values": {},
+                },
+            )
+            assert status == 200, analysis
+            collection = {
+                "PERICIAL_OBJECT": "pericial_objects",
+                "PERICIAL_QUESTION": "questions",
+            }[item_kind]
+            item_id = analysis["snapshot"][collection][-1]["item_id"]
+            if item_kind == "PERICIAL_QUESTION":
+                question_id = item_id
+            status, analysis = json_request(
+                "POST",
+                f"{root}/case-analysis/reviews",
+                {
+                    "expected_revision": analysis["revision"],
+                    "target_item_id": item_id,
+                    "action": "CONFIRM",
+                    "corrected_value": None,
+                    "reviewer": "PROFESSIONAL-001",
+                    "reason": "Revisão humana sintética.",
+                },
+            )
+            assert status == 200, analysis
+
+        status, planning = json_request(
+            "POST", f"{root}/pericial-planning", {"title": "Plano sintético"}
+        )
+        assert status == 201, planning
+        planned_item = planning["snapshot"]["inspection_requirements"][0]
+        status, planning = json_request(
+            "POST",
+            f"{root}/pericial-planning/decisions",
+            {
+                "expected_revision": planning["revision"],
+                "target_item_id": planned_item["item_id"],
+                "action": "APPROVE",
+                "reviewer": "PROFESSIONAL-001",
+                "reason": "Plano sintético aprovado.",
+                "decided_value": None,
+            },
+        )
+        assert status == 200, planning
+        status, inspection = json_request(
+            "POST",
+            f"{root}/inspection-session",
+            {
+                "responsible_professional": "PROFESSIONAL-001",
+                "location_context": "Local sintético",
+                "participant_references": [],
+            },
+        )
+        assert status == 201, inspection
+
+        status, technical = json_request("POST", f"{root}/technical-snapshot", {})
+        assert status == 201, technical
+        status, technical = json_request(
+            "POST",
+            f"{root}/technical-snapshot/evidence-proposals",
+            {
+                "source_kind": "CASE_QUESTION",
+                "source_id": question_id,
+                "proposition": "O quesito integra a cadeia técnica sintética.",
+                "why_relevant": "Autoridade processual sintética.",
+                "expected_revision": technical["revision"],
+            },
+        )
+        assert status == 200, technical
+        evidence_id = technical["snapshot"]["evidence_items"][-1]["evidence_id"]
+        status, technical = json_request(
+            "POST",
+            f"{root}/technical-snapshot/evidence-reviews",
+            {
+                "evidence_id": evidence_id,
+                "action": "APPROVE",
+                "professional_id": "PROFESSIONAL-001",
+                "reason": "Evidência sintética conferida.",
+                "expected_revision": technical["revision"],
+            },
+        )
+        assert status == 200, technical
+        status, technical = json_request(
+            "POST",
+            f"{root}/technical-snapshot/method-selections",
+            {
+                "evidence_id": evidence_id,
+                "method_identity": "Método sintético",
+                "procedure": "Conferência da fonte vinculada.",
+                "output": "Fonte confirmada.",
+                "professional_id": "PROFESSIONAL-001",
+                "expected_revision": technical["revision"],
+            },
+        )
+        assert status == 200, technical
+        method_id = technical["snapshot"]["method_applications"][-1][
+            "method_application_id"
+        ]
+        status, technical = json_request(
+            "POST",
+            f"{root}/technical-snapshot/finding-proposals",
+            {
+                "method_application_id": method_id,
+                "technical_proposition": "A fonte sintética foi vinculada.",
+                "scope": "Teste de reachability.",
+                "limitation": "Somente dados sintéticos.",
+                "uncertainty": "Fixture controlada.",
+                "uncertainty_impact": "Não afeta o teste.",
+                "contrary_evidence_ids": [],
+                "expected_revision": technical["revision"],
+            },
+        )
+        assert status == 200, technical
+        proposal_id = technical["snapshot"]["finding_proposals"][-1]["proposal_id"]
+        status, technical = json_request(
+            "POST",
+            f"{root}/technical-snapshot/finding-reviews",
+            {
+                "proposal_id": proposal_id,
+                "action": "APPROVE",
+                "professional_id": "PROFESSIONAL-001",
+                "reason": "Achado sintético aprovado.",
+                "modified_proposition": None,
+                "resolve_conflicts": False,
+                "expected_revision": technical["revision"],
+            },
+        )
+        assert status == 200, technical
+        assert technical["snapshot"]["coverage"]["effective_findings"] == 1
+
+        status, budget = json_request(
+            "POST",
+            f"{root}/budget-snapshot",
+            {"process_id": None, "appointment_id": None},
+        )
+        assert status == 201, budget
+        budget_commands = (
+            (
+                "items",
+                {
+                    "category": "PROFESSIONAL_HOURS",
+                    "description": "Horas sintéticas",
+                    "quantity": "2.00",
+                    "unit_amount": "100.00",
+                },
+            ),
+            (
+                "effort-estimates",
+                {
+                    "professional_id": "PROFESSIONAL-001",
+                    "estimated_hours": "2.00",
+                    "hourly_amount": "100.00",
+                },
+            ),
+            (
+                "travel-estimates",
+                {
+                    "distance_km": "10.00",
+                    "amount_per_km": "2.00",
+                    "description": "Deslocamento sintético",
+                },
+            ),
+            (
+                "third-party-estimates",
+                {
+                    "provider_description": "Laboratório sintético",
+                    "amount": "50.00",
+                    "currency": "BRL",
+                },
+            ),
+        )
+        for action, values in budget_commands:
+            status, budget = json_request(
+                "POST",
+                f"{root}/budget-snapshot/{action}",
+                {"expected_revision": budget["revision"], **values},
+            )
+            assert status == 200, (action, budget)
+
+        status, device = json_request("GET", f"{root}/offline-device")
+        assert status == 200, device
+        status, revoked = json_request(
+            "POST", f"{root}/offline-device/revoke", {"confirm": True}
+        )
+        assert status == 200 and revoked == {"revoked": True}
+        status, replacement = json_request(
+            "POST",
+            f"{root}/offline-device/replace",
+            {"expected_device_id": device["device_id"], "confirm": True},
+        )
+        assert status == 200, replacement
+        assert replacement["device_id"] != device["device_id"]
+    finally:
+        runtime.close()
+
+
 def test_pericial_planning_bridge_allowlist_is_exact():
     workspace_id = "11111111-1111-4111-8111-111111111111"
 
