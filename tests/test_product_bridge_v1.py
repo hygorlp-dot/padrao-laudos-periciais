@@ -237,7 +237,17 @@ def test_product_bridge_allowlists_only_budget_snapshot_and_history() -> None:
     assert _proxy_target(snapshot, "PUT") is None
     assert _proxy_target(history, "GET") == f"/v1/workspaces/{workspace}/budget-snapshot/history"
     assert _proxy_target(history, "POST") is None
-    for action in ("proposals", "court-approvals", "expenses", "payments", "close"):
+    for action in (
+        "items",
+        "effort-estimates",
+        "travel-estimates",
+        "third-party-estimates",
+        "proposals",
+        "court-approvals",
+        "expenses",
+        "payments",
+        "close",
+    ):
         path = f"{snapshot}/{action}"
         assert _proxy_target(path, "POST") == f"/v1/workspaces/{workspace}/budget-snapshot/{action}"
         assert _proxy_target(path, "PUT") is None
@@ -517,12 +527,23 @@ def test_case_analysis_bridge_saves_and_reopens_canonical_snapshot(tmp_path):
     assert TOKEN.encode() not in saved_body + get_body
 
 
+def test_case_analysis_bridge_allowlists_only_existing_mutation_commands():
+    workspace_id = "11111111-1111-4111-8111-111111111111"
+    base = f"/app-api/v1/workspaces/{workspace_id}/case-analysis"
+
+    for action in ("items", "reviews"):
+        path = f"{base}/{action}"
+        assert _proxy_target(path, "POST") == f"/v1/workspaces/{workspace_id}/case-analysis/{action}"
+        assert _proxy_target(path, "PUT") is None
+        assert _proxy_target(f"{path}/extra", "POST") is None
+
+
 def test_pericial_planning_bridge_allowlist_is_exact():
     workspace_id = "11111111-1111-4111-8111-111111111111"
 
     assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning", "GET") == f"/v1/workspaces/{workspace_id}/pericial-planning"
     assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning", "PUT") == f"/v1/workspaces/{workspace_id}/pericial-planning"
-    assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning", "POST") is None
+    assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning", "POST") == f"/v1/workspaces/{workspace_id}/pericial-planning"
     assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning/decisions", "POST") == f"/v1/workspaces/{workspace_id}/pericial-planning/decisions"
     assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning/decisions", "GET") is None
     assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning", "DELETE") is None
@@ -548,6 +569,12 @@ def test_inspection_session_bridge_allowlist_is_exact():
     assert _proxy_target(f"{offline_path}/OFFLINE-PACKAGE-001", "GET") == f"/v1/workspaces/{workspace_id}/offline-inspection/OFFLINE-PACKAGE-001"
     revoke_path = f"/app-api/v1/workspaces/{workspace_id}/offline-device/revoke"
     assert _proxy_target(revoke_path, "POST") == f"/v1/workspaces/{workspace_id}/offline-device/revoke"
+    device_path = f"/app-api/v1/workspaces/{workspace_id}/offline-device"
+    replace_path = f"{device_path}/replace"
+    assert _proxy_target(device_path, "GET") == f"/v1/workspaces/{workspace_id}/offline-device"
+    assert _proxy_target(replace_path, "POST") == f"/v1/workspaces/{workspace_id}/offline-device/replace"
+    assert _proxy_target(device_path, "POST") is None
+    assert _proxy_target(replace_path, "PUT") is None
 
 
 def test_technical_snapshot_bridge_allowlist_is_exact():
@@ -558,6 +585,17 @@ def test_technical_snapshot_bridge_allowlist_is_exact():
     assert _proxy_target(path, "POST") == f"/v1/workspaces/{workspace_id}/technical-snapshot"
     assert _proxy_target(path + "/auto-final-answer", "POST") is None
     assert _proxy_target(path, "DELETE") is None
+    for action in (
+        "evidence-proposals",
+        "evidence-reviews",
+        "method-selections",
+        "finding-proposals",
+        "finding-reviews",
+    ):
+        command = f"{path}/{action}"
+        assert _proxy_target(command, "POST") == f"/v1/workspaces/{workspace_id}/technical-snapshot/{action}"
+        assert _proxy_target(command, "PUT") is None
+        assert _proxy_target(f"{command}/extra", "POST") is None
 
 
 def test_construction_defect_bridge_allowlist_is_purpose_specific():
