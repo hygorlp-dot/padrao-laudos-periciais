@@ -80,8 +80,8 @@ from ..application.technical_findings import (
 )
 from ..application.construction_defect_analysis import (
     construction_defect_analysis_to_validated_mapping,
+    validated_observation_contexts_from_mapping,
 )
-from ..construction_defect_analysis import observation_context_from_mapping
 from ..application.report_foundation import (
     expert_profile_to_validated_mapping,
     report_snapshot_to_validated_mapping,
@@ -765,9 +765,8 @@ class LocalApi:
                         dto["observation_contexts"]
                     ) is not list or not dto["observation_contexts"]:
                         raise ValueError("Construction Defect Analysis start request is invalid")
-                    contexts = tuple(
-                        observation_context_from_mapping(item)
-                        for item in dto["observation_contexts"]
+                    contexts = validated_observation_contexts_from_mapping(
+                        dto["observation_contexts"]
                     )
                     record, snapshot = service.execute(
                         workspace_id, observation_contexts=contexts

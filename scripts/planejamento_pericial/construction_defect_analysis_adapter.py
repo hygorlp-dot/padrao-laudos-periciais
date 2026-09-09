@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
 from jsonschema import FormatChecker
@@ -11,7 +12,6 @@ from jsonschema.exceptions import ValidationError
 from jsonschema.validators import validator_for
 from referencing import Registry, Resource
 
-from scripts.backend_contract.application.models import ProcessCaseData
 from scripts.backend_contract.case_analysis import CaseAnalysisSnapshot
 from scripts.backend_contract.construction_defect_analysis import (
     CanonicalIdentityLink,
@@ -37,6 +37,10 @@ _OUTCOME = {
     ObservationOutcome.CONFORMING: "CONFORME",
     ObservationOutcome.INCONCLUSIVE: "INCONCLUSIVO",
 }
+
+
+class _ProcessCaseAuthority(Protocol):
+    numero_processo: str
 
 
 def _engine_validator():
@@ -79,7 +83,7 @@ class ConstructionDefectAnalysisAdapter:
     def execute(
         self,
         *,
-        process_case: ProcessCaseData,
+        process_case: _ProcessCaseAuthority,
         case_analysis: CaseAnalysisSnapshot,
         planning: PlanningSnapshot,
         inspection: InspectionSession,
@@ -138,13 +142,17 @@ class ConstructionDefectAnalysisAdapter:
 
     @staticmethod
     def _validate_sources(
-        process_case: ProcessCaseData,
+        process_case: _ProcessCaseAuthority,
         case_analysis: CaseAnalysisSnapshot,
         planning: PlanningSnapshot,
         inspection: InspectionSession,
         observation_contexts: tuple[ObservationContext, ...],
     ) -> None:
-        if type(process_case) is not ProcessCaseData:
+        if (
+            not hasattr(process_case, "numero_processo")
+            or type(process_case.numero_processo) is not str
+            or not process_case.numero_processo.strip()
+        ):
             raise TypeError("process case is invalid")
         if type(case_analysis) is not CaseAnalysisSnapshot:
             raise TypeError("case analysis is invalid")

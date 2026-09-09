@@ -17,10 +17,12 @@ from ..construction_defect_analysis import (
     ConstructionDefectAnalysisProposal,
     ConstructionDefectAnalysisSnapshot,
     ConstructionDefectSourceSnapshot,
+    ObservationContext,
     PathologyReview,
     PathologyReviewAction,
     construction_defect_analysis_from_mapping,
     construction_defect_analysis_to_mapping,
+    observation_context_from_mapping,
     thaw_json_payload,
 )
 from ..pericial_planning import PlanningSnapshot
@@ -84,6 +86,19 @@ def construction_defect_analysis_to_validated_mapping(
             "Construction Defect Analysis persisted state is invalid"
         ) from exc
     return mapping
+
+
+def validated_observation_contexts_from_mapping(
+    value: object,
+) -> tuple[ObservationContext, ...]:
+    if type(value) is not list or not value:
+        raise ValueError("invalid Construction Defect Analysis observation contexts")
+    try:
+        return tuple(observation_context_from_mapping(item) for item in value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "invalid Construction Defect Analysis observation contexts"
+        ) from exc
 
 
 @dataclass(frozen=True, slots=True)
