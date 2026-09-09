@@ -447,6 +447,32 @@ def test_timeout_observability_bounds_cascade_and_rejects_untrusted_target(
     assert len(suite_conftest._REQUEST_TIMEOUT_OBSERVATIONS) <= 128
 
 
+def test_timeout_observability_retains_latest_failure_when_node_bound_is_full(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(suite_conftest, "_REQUEST_TIMEOUT_OBSERVATIONS", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_SEQUENCE", 0)
+    nodeid = "tests/test_pytest_harness_v1.py::test_latest_timeout"
+
+    for index in range(9):
+        suite_conftest._record_local_api_timeout(
+            nodeid=nodeid,
+            method="POST",
+            target=(
+                "/v1/recovery/staging"
+                if index == 8
+                else "/v1/workspaces"
+            ),
+            client_phase=("CLIENT_READ" if index == 8 else "CLIENT_GETRESPONSE"),
+            elapsed_seconds=6,
+        )
+
+    observations = suite_conftest._REQUEST_TIMEOUT_OBSERVATIONS[nodeid]
+    assert len(observations) == 8
+    assert observations[-1]["route_family"] == "RECOVERY_STAGE"
+    assert observations[-1]["client_phase"] == "CLIENT_READ"
+
+
 def test_non_timeout_and_success_do_not_add_request_timeout_fields(
     monkeypatch,
     capsys,

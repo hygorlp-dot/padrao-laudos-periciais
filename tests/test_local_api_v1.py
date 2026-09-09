@@ -6,6 +6,7 @@ import http.client
 import json
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Event, Lock, Thread
 from time import monotonic
@@ -1810,6 +1811,11 @@ def test_real_http_server_accepts_local_get_and_exactly_authorized_post():
 
 def test_real_http_server_observer_correlates_safe_server_phases(monkeypatch):
     """The test-only observer records phases without retaining request data."""
+    @dataclass(frozen=True, slots=True)
+    class FrozenListCommand:
+        def execute(self):
+            return ()
+
     monkeypatch.setattr(suite_conftest, "_REQUEST_SERVER_PHASES", {})
     monkeypatch.setattr(suite_conftest, "_REQUEST_SEQUENCE", 0)
     monkeypatch.setattr(
@@ -1817,7 +1823,10 @@ def test_real_http_server_observer_correlates_safe_server_phases(monkeypatch):
         "_finish_local_api_request",
         lambda *_args, **_kwargs: None,
     )
-    server = LocalApiServer(LocalApi(services(), token=TOKEN), LocalServerConfig(port=0))
+    server = LocalApiServer(
+        LocalApi(services(list_workspaces=FrozenListCommand()), token=TOKEN),
+        LocalServerConfig(port=0),
+    )
     server.start()
     try:
         status, _headers, _body = http_request(server, "GET", "/v1/workspaces")

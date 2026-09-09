@@ -135,10 +135,15 @@ def _begin_local_api_request() -> str:
     with _REQUEST_TRACE_LOCK:
         _REQUEST_SEQUENCE += 1
         request_seq = str(_REQUEST_SEQUENCE)
+        _activate_request_sequence(request_seq)
+        return request_seq
+
+
+def _activate_request_sequence(request_seq: str) -> None:
+    if request_seq not in _ACTIVE_REQUEST_SEQUENCES:
         if len(_ACTIVE_REQUEST_SEQUENCES) >= _ACTIVE_REQUEST_SEQUENCE_LIMIT:
             _ACTIVE_REQUEST_SEQUENCES.pop()
         _ACTIVE_REQUEST_SEQUENCES.add(request_seq)
-        return request_seq
 
 
 def _record_server_phase(*, request_seq: object, phase: object) -> None:
@@ -208,7 +213,7 @@ def _record_local_api_timeout(
             global _REQUEST_SEQUENCE
             _REQUEST_SEQUENCE += 1
             request_seq = str(_REQUEST_SEQUENCE)
-        _ACTIVE_REQUEST_SEQUENCES.add(request_seq)
+        _activate_request_sequence(request_seq)
         observation = {
             "request_seq": request_seq,
             "method": _safe_method(method),
@@ -223,8 +228,9 @@ def _record_local_api_timeout(
         ):
             return
         observations = _REQUEST_TIMEOUT_OBSERVATIONS.setdefault(raw_nodeid, [])
-        if len(observations) < 8:
-            observations.append(observation)
+        if len(observations) >= 8:
+            observations.pop(0)
+        observations.append(observation)
 
 
 def _request_timeout_observation(nodeid: object) -> dict[str, str] | None:
@@ -351,11 +357,14 @@ def _install_internal_phase_observer(api: object) -> None:
 
     for field_name in getattr(services, "__dataclass_fields__", {}):
         service = getattr(services, field_name, None)
-        execute = getattr(service, "execute", None)
-        if not callable(execute) or getattr(service, "_first_party_phase_observer", False):
+        service_type = type(service) if service is not None else None
+        type_execute = getattr(service_type, "execute", None)
+        if not callable(type_execute) or getattr(
+            service_type, "_first_party_phase_observer", False
+        ):
             continue
 
-        def observed_execute(*args, _execute=execute, **kwargs):
+        def observed_execute(self, *args, _execute=type_execute, **kwargs):
             request_seq = _ACTIVE_REQUEST_SEQUENCE.get()
             should_record = request_seq is not None and not (
                 request_seq in _REQUEST_INTERNAL_PHASES
@@ -366,7 +375,7 @@ def _install_internal_phase_observer(api: object) -> None:
                     request_seq=request_seq,
                     phase="APPLICATION_COMMAND_STARTED",
                 )
-            result = _execute(*args, **kwargs)
+            result = _execute(self, *args, **kwargs)
             if should_record:
                 _record_internal_phase(
                     request_seq=request_seq,
@@ -375,8 +384,8 @@ def _install_internal_phase_observer(api: object) -> None:
             return result
 
         try:
-            setattr(service, "execute", observed_execute)
-            setattr(service, "_first_party_phase_observer", True)
+            setattr(service_type, "execute", observed_execute)
+            setattr(service_type, "_first_party_phase_observer", True)
         except (AttributeError, TypeError):
             continue
 
