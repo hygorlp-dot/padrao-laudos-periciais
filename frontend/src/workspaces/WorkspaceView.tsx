@@ -12,12 +12,13 @@ import { CaseAnalysisView } from "./CaseAnalysisView";
 import { PericialPlanningView } from "./PericialPlanningView";
 import { InspectionSessionView } from "./InspectionSessionView";
 import { TechnicalFindingsView } from "./TechnicalFindingsView";
+import { ConstructionDefectAnalysisView } from "./ConstructionDefectAnalysisView";
 import { ReportFoundationView } from "./ReportFoundationView";
 import { DeliveryFoundationView } from "./DeliveryFoundationView";
 import { BudgetFoundationView } from "./BudgetFoundationView";
 import { WorkspaceRecoveryView } from "./WorkspaceRecoveryView";
 
-const IMPLEMENTED_STAGE_PATHS = ["/processo", "/materiais", "/analise", "/planejamento", "/vistoria", "/evidencias", "/laudo", "/exportar", "/orcamento", "/recuperacao"];
+const IMPLEMENTED_STAGE_PATHS = ["/processo", "/materiais", "/analise", "/planejamento", "/vistoria", "/evidencias", "/analise-tecnica", "/laudo", "/exportar", "/orcamento", "/recuperacao"];
 
 type WorkspaceViewProps = {
   currentPath: string;
@@ -172,6 +173,9 @@ export function WorkspaceView({ currentPath, workspaceId, route }: WorkspaceView
         ) : null}
         {state.kind === "ready" && route.path === "/evidencias" ? (
           <TechnicalFindingsView workspaceId={workspaceId} />
+        ) : null}
+        {state.kind === "ready" && route.path === "/analise-tecnica" ? (
+          <ConstructionDefectAnalysisView workspaceId={workspaceId} />
         ) : null}
         {state.kind === "ready" && route.path === "/laudo" ? (
           <ReportFoundationView workspaceId={workspaceId} />

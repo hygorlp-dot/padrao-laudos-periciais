@@ -30,6 +30,7 @@ from scripts.backend_contract.report_foundation import (
     report_snapshot_to_mapping,
     expert_profile_from_mapping,
     expert_profile_to_mapping,
+    report_claim_for_source,
 )
 from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
 from scripts.backend_contract.application.report_foundation import (
@@ -45,6 +46,9 @@ from scripts.backend_contract.application.report_foundation import (
 from scripts.backend_contract.case_analysis import case_analysis_from_mapping
 from scripts.backend_contract.technical_findings import technical_snapshot_from_mapping
 from scripts.backend_contract.vistoria import inspection_session_from_mapping
+from scripts.backend_contract.construction_defect_analysis import (
+    construction_defect_analysis_from_mapping,
+)
 from scripts.backend_contract.report_template import (
     TemplateBindingManifest,
     bind_report_template,
@@ -73,6 +77,23 @@ def upstreams():
     return records, case, inspection, technical, report_snapshot_from_mapping(payload()).expert_profile
 
 
+def pathology_upstream():
+    pathology = construction_defect_analysis_from_mapping(
+        json.loads(
+            (ROOT / "tests/fixtures/construction-defect-analysis-v1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    )
+    record = SimpleNamespace(
+        revision=5,
+        artifact_kind="CONSTRUCTION_DEFECT_ANALYSIS_V1",
+        artifact_id="CONSTRUCTION-DEFECT-ANALYSIS",
+        checksum_sha256="f" * 64,
+    )
+    return record, pathology
+
+
 def bound_report():
     records, case, inspection, technical, profile = upstreams()
     snapshot = report_snapshot_from_mapping(payload())
@@ -83,6 +104,20 @@ def bound_report():
         technical_snapshot_id=technical.snapshot_id, technical_snapshot_revision=records[2].revision, technical_snapshot_digest=report_upstream_digest(technical),
         expert_profile_id=profile.profile_id, expert_profile_revision=records[3].revision, expert_profile_digest=report_upstream_digest(profile),
     ))
+
+
+def bound_report_with_pathology():
+    snapshot = bound_report()
+    pathology_record, pathology = pathology_upstream()
+    return replace(
+        snapshot,
+        source_snapshot=replace(
+            snapshot.source_snapshot,
+            construction_defect_analysis_snapshot_id=pathology.snapshot_id,
+            construction_defect_analysis_revision=pathology_record.revision,
+            construction_defect_analysis_digest=report_upstream_digest(pathology),
+        ),
+    )
 
 
 def test_canonical_report_fixture_round_trips_every_required_entity():
@@ -134,6 +169,19 @@ def test_material_claim_requires_exact_machine_provenance():
     claims[0] = replace(claims[0], section_id="SECTION-UNKNOWN")
     with pytest.raises(ValueError, match="section"):
         replace(snapshot, claims=tuple(claims))
+
+
+def test_pathology_claim_has_technical_authority_without_promotion():
+    claim = report_claim_for_source(
+        claim_id="CLAIM-PAT-001",
+        provenance_id="PROVENANCE-PAT-001",
+        section_id="SECTION-009",
+        text="Patologia sintética aprovada.",
+        source_kind="PATHOLOGY",
+        source_id="PAT-001",
+        source_revision=5,
+    )
+    assert claim.authority is AuthorityClass.TECHNICALLY_FOUND
 
 
 def test_answer_requires_full_question_to_professional_decision_chain():
@@ -233,6 +281,38 @@ def test_start_creates_an_empty_draft_bound_to_all_four_authorities():
     assert report_snapshot_from_mapping(report_snapshot_to_mapping(started)) == started
 
 
+def test_start_binds_an_available_effective_pathology_snapshot_exactly():
+    records, case, inspection, technical, profile = upstreams()
+    pathology_record, pathology = pathology_upstream()
+    captured = {}
+    save = SimpleNamespace(
+        execute=lambda _workspace, snapshot, expected, **_kwargs: captured.update(
+            snapshot=snapshot, expected=expected
+        )
+        or SimpleNamespace(revision=1)
+    )
+    service = StartReportSnapshot(
+        SimpleNamespace(execute=lambda _workspace: (records[0], case)),
+        SimpleNamespace(execute=lambda _workspace: (records[1], inspection)),
+        SimpleNamespace(execute=lambda _workspace: (records[2], technical)),
+        SimpleNamespace(execute=lambda _workspace: (records[3], profile)),
+        save,
+        SimpleNamespace(
+            new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")
+        ),
+        get_construction_defect_analysis=SimpleNamespace(
+            execute=lambda _workspace: (pathology_record, pathology)
+        ),
+    )
+
+    service.execute(WorkspaceId.parse(case.workspace_id))
+
+    source = captured["snapshot"].source_snapshot
+    assert source.construction_defect_analysis_snapshot_id == pathology.snapshot_id
+    assert source.construction_defect_analysis_revision == pathology_record.revision
+    assert source.construction_defect_analysis_digest == report_upstream_digest(pathology)
+
+
 def test_empty_draft_can_add_canonical_claim_context_and_answer_commands():
     snapshot = replace(bound_report(), claims=(), answers=(), review_decisions=(), state=ReportState.DRAFT, context_matrix=tuple(replace(item, status=ContextStatus.MISSING, source_id=None, note="Missing") for item in bound_report().context_matrix), coverage=ReportCoverage(14, 0, 0, 0, 0, 8, 0, 6, 0, False, ("Draft",)))
     current = {"snapshot": snapshot, "revision": 4}
@@ -266,6 +346,66 @@ def test_save_rejects_question_chain_that_does_not_match_bound_technical_authori
     snapshot = bound_report()
     with pytest.raises(ValueError, match="answer traceability"):
         service.execute(WorkspaceId.parse(snapshot.workspace_id), replace(snapshot, answers=(replace(snapshot.answers[0], finding_id="FINDING-UNKNOWN"),)), 4)
+
+
+def test_save_accepts_only_effective_pathology_from_the_exact_bound_revision():
+    records, case, inspection, technical, profile = upstreams()
+    pathology_record, pathology = pathology_upstream()
+    approved = bound_report_with_pathology()
+    pathology_claim = report_claim_for_source(
+        claim_id="CLAIM-PAT-001",
+        provenance_id="PROVENANCE-PAT-001",
+        section_id="SECTION-009",
+        text="Patologia sintética aprovada.",
+        source_kind="PATHOLOGY",
+        source_id="PAT-001",
+        source_revision=pathology_record.revision,
+    )
+    draft = replace(
+        approved,
+        claims=(*approved.claims, pathology_claim),
+        review_decisions=(),
+        state=ReportState.DRAFT,
+        coverage=replace(
+            approved.coverage,
+            material_claims=approved.coverage.material_claims + 1,
+            traceable_claims=approved.coverage.traceable_claims + 1,
+            complete=False,
+            reasons=("Draft awaiting review.",),
+        ),
+    )
+    predecessor_record = ArtifactRevision(
+        WorkspaceId.parse(draft.workspace_id),
+        "REPORT_SNAPSHOT_V1",
+        "REPORT-SNAPSHOT",
+        "77777777-7777-4777-8777-777777777777",
+        4,
+        "2026-08-31T11:02:00+00:00",
+        "e" * 64,
+        report_snapshot_to_mapping(draft),
+    )
+    service = SaveReportSnapshot(
+        SimpleNamespace(append_if_latest=lambda **_kwargs: SimpleNamespace(revision=5)),
+        SimpleNamespace(execute=lambda _workspace: (records[0], case)),
+        SimpleNamespace(execute=lambda _workspace: (records[1], inspection)),
+        SimpleNamespace(execute=lambda _workspace: (records[2], technical)),
+        SimpleNamespace(execute=lambda _workspace: (records[3], profile)),
+        SimpleNamespace(execute=lambda *_args: predecessor_record),
+        nullcontext,
+        SimpleNamespace(now=lambda: datetime.now(UTC)),
+        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
+        SimpleNamespace(execute=lambda _workspace: (pathology_record, pathology)),
+    )
+
+    assert service.execute(WorkspaceId.parse(draft.workspace_id), draft, 4).revision == 5
+
+    forged = replace(pathology_claim, provenance=(replace(pathology_claim.provenance[0], source_id="PAT-UNKNOWN"),))
+    with pytest.raises(ValueError, match="bound upstream authority"):
+        service.execute(
+            WorkspaceId.parse(draft.workspace_id),
+            replace(draft, claims=(*draft.claims[:-1], forged)),
+            4,
+        )
 
 
 def test_save_rejects_missing_upstream_provenance_and_post_review_material_edit():
@@ -332,6 +472,41 @@ def test_get_marks_upstream_change_stale_and_reopen_cannot_preserve_approval():
     assert reopened.upstream_stale is True
     assert reopened.state is ReportState.DRAFT
     assert reopened.coverage.complete is False
+
+
+def test_get_marks_report_stale_when_bound_pathology_revision_changes():
+    records, case, inspection, technical, profile = upstreams()
+    pathology_record, pathology = pathology_upstream()
+    snapshot = bound_report_with_pathology()
+    stored = ArtifactRevision(
+        workspace_id=WorkspaceId.parse(snapshot.workspace_id),
+        artifact_kind="REPORT_SNAPSHOT_V1",
+        artifact_id="REPORT-SNAPSHOT",
+        revision_id="77777777-7777-4777-8777-777777777777",
+        revision=4,
+        created_at="2026-08-31T11:02:00+00:00",
+        checksum_sha256="e" * 64,
+        payload=report_snapshot_to_mapping(snapshot),
+    )
+    changed_pathology_record = SimpleNamespace(
+        **{**vars(pathology_record), "revision": pathology_record.revision + 1}
+    )
+    service = GetReportSnapshot(
+        SimpleNamespace(execute=lambda *_args: stored),
+        SimpleNamespace(execute=lambda _workspace: (records[0], case)),
+        SimpleNamespace(execute=lambda _workspace: (records[1], inspection)),
+        SimpleNamespace(execute=lambda _workspace: (records[2], technical)),
+        SimpleNamespace(execute=lambda _workspace: (records[3], profile)),
+        SimpleNamespace(
+            execute=lambda _workspace: (changed_pathology_record, pathology)
+        ),
+    )
+
+    _, reopened = service.execute(WorkspaceId.parse(snapshot.workspace_id))
+
+    assert reopened.upstream_stale is True
+    assert reopened.state is ReportState.DRAFT
+    assert "pathology snapshot revision changed" in reopened.upstream_stale_reasons
 
 
 def test_superseded_review_lifecycle_is_terminal_and_approval_requires_reviewed_state():

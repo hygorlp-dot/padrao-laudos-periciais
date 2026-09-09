@@ -1,6 +1,11 @@
 export type ExpertProfile = { profile_id: string; revision: number; full_name: string; professional_title: string; registration: string; court_registration: string; contact_line: string };
 export type ReportSnapshot = {
-  schema_version: "1.0.0"; report_id: string; workspace_id: string; source_snapshot: { workspace_id: string };
+  schema_version: "1.0.0"; report_id: string; workspace_id: string; source_snapshot: {
+    workspace_id: string;
+    construction_defect_analysis_snapshot_id: string | null;
+    construction_defect_analysis_revision: number | null;
+    construction_defect_analysis_digest: string | null;
+  };
   expert_profile: ExpertProfile; editorial_profile: { profile_id: string; font_family: string; body_font_pt: number };
   context_matrix: Array<{ context_id: string; field: string; required: boolean; status: string; source_id: string | null; note: string }>;
   sections: Array<{ section_id: string; kind: string; title: string; order: number; required_by_cpc473: boolean }>;
@@ -16,7 +21,7 @@ export class ReportApiError extends Error { constructor(readonly kind: "not-foun
 const base = (workspaceId: string) => `/app-api/v1/workspaces/${encodeURIComponent(workspaceId)}`;
 async function decode(response: Response) { if (response.status === 404) throw new ReportApiError("not-found"); if (!response.ok) throw new ReportApiError("unavailable"); return response.json(); }
 function profileEnvelope(value: unknown): ProfileEnvelope { const item = value as ProfileEnvelope; if (!item || !Number.isInteger(item.revision) || item.revision < 1 || !item.profile?.profile_id) throw new ReportApiError("invalid"); return item; }
-function reportEnvelope(value: unknown, workspaceId: string): ReportEnvelope { const item = value as ReportEnvelope; const report = item?.snapshot; if (!Number.isInteger(item?.revision) || item.revision < 1 || report?.schema_version !== "1.0.0" || report.workspace_id !== workspaceId || report.source_snapshot?.workspace_id !== workspaceId || !Array.isArray(report.sections) || !Array.isArray(report.claims) || !Array.isArray(report.answers)) throw new ReportApiError("invalid"); return item; }
+function reportEnvelope(value: unknown, workspaceId: string): ReportEnvelope { const item = value as ReportEnvelope; const report = item?.snapshot; const source = report?.source_snapshot; const pathologyBinding = source && [source.construction_defect_analysis_snapshot_id, source.construction_defect_analysis_revision, source.construction_defect_analysis_digest]; const pathologyAbsent = pathologyBinding?.every((part) => part === null); const pathologyPresent = typeof source?.construction_defect_analysis_snapshot_id === "string" && source.construction_defect_analysis_snapshot_id.length > 0 && Number.isSafeInteger(source.construction_defect_analysis_revision) && Number(source.construction_defect_analysis_revision) > 0 && typeof source.construction_defect_analysis_digest === "string" && /^[0-9a-f]{64}$/.test(source.construction_defect_analysis_digest); if (!Number.isInteger(item?.revision) || item.revision < 1 || report?.schema_version !== "1.0.0" || report.workspace_id !== workspaceId || source?.workspace_id !== workspaceId || (!pathologyAbsent && !pathologyPresent) || !Array.isArray(report.sections) || !Array.isArray(report.claims) || !Array.isArray(report.answers)) throw new ReportApiError("invalid"); return item; }
 export async function getExpertProfile(workspaceId: string, signal?: AbortSignal) { return profileEnvelope(await decode(await fetch(`${base(workspaceId)}/expert-profile`, { method: "GET", credentials: "same-origin", cache: "no-store", signal }))); }
 export async function saveExpertProfile(workspaceId: string, profile: ExpertProfile) { return profileEnvelope(await decode(await fetch(`${base(workspaceId)}/expert-profile`, { method: "PUT", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: null, profile }) }))); }
 export async function getReportSnapshot(workspaceId: string, signal?: AbortSignal) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot`, { method: "GET", credentials: "same-origin", cache: "no-store", signal })), workspaceId); }

@@ -52,6 +52,7 @@ _SOURCE_AUTHORITY = {
     "CASE_DOCUMENT": AuthorityClass.DOCUMENTED,
     "FIELD_OBSERVATION": AuthorityClass.OBSERVED,
     "MEASUREMENT": AuthorityClass.MEASURED,
+    "PATHOLOGY": AuthorityClass.TECHNICALLY_FOUND,
     "TECHNICAL_FINDING": AuthorityClass.TECHNICALLY_FOUND,
     "PROFESSIONAL_DECISION": AuthorityClass.PROFESSIONALLY_CONCLUDED,
 }
@@ -108,6 +109,9 @@ class ReportSourceSnapshot:
     technical_snapshot_id: str
     technical_snapshot_revision: int
     technical_snapshot_digest: str
+    construction_defect_analysis_snapshot_id: str | None
+    construction_defect_analysis_revision: int | None
+    construction_defect_analysis_digest: str | None
     expert_profile_id: str
     expert_profile_revision: int
     expert_profile_digest: str
@@ -120,6 +124,22 @@ class ReportSourceSnapshot:
         digests = (self.case_analysis_digest, self.inspection_session_digest, self.technical_snapshot_digest, self.expert_profile_digest)
         if any(type(value) is not str or _SHA256.fullmatch(value) is None for value in digests):
             raise ValueError("report source digest is invalid")
+        pathology_binding = (
+            self.construction_defect_analysis_snapshot_id,
+            self.construction_defect_analysis_revision,
+            self.construction_defect_analysis_digest,
+        )
+        if any(value is None for value in pathology_binding):
+            if any(value is not None for value in pathology_binding):
+                raise ValueError("report pathology binding is incomplete")
+        elif (
+            not _text(self.construction_defect_analysis_snapshot_id)
+            or type(self.construction_defect_analysis_revision) is not int
+            or self.construction_defect_analysis_revision < 1
+            or type(self.construction_defect_analysis_digest) is not str
+            or _SHA256.fullmatch(self.construction_defect_analysis_digest) is None
+        ):
+            raise ValueError("report pathology binding is invalid")
 
 
 @dataclass(frozen=True, slots=True)

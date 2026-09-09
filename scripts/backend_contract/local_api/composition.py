@@ -80,6 +80,12 @@ from ..application.technical_findings import (
     SelectTechnicalMethod,
     StartTechnicalSnapshot,
 )
+from ..application.construction_defect_analysis import (
+    GetConstructionDefectAnalysis,
+    ReviewPathology,
+    SaveConstructionDefectAnalysis,
+    StartConstructionDefectAnalysis,
+)
 from ..application.report_foundation import (
     GetExpertProfile,
     GetReportSnapshot,
@@ -268,6 +274,7 @@ def build_local_api(
     ids: IdGenerator | None = None,
     private_root: str | Path | None = None,
     pje_intake: object | None = None,
+    construction_defect_analysis: object | None = None,
 ) -> LocalApiRuntime:
     """Compõe serviços, SQLite e listener sem esconder suas dependências."""
 
@@ -425,6 +432,45 @@ def build_local_api(
         local_ids,
     )
     resolve_technical_professional = ResolveTechnicalProfessional(get_inspection_session)
+    get_construction_defect_analysis = GetConstructionDefectAnalysis(
+        get_latest_artifact,
+        get_process_case,
+        get_case_analysis,
+        get_pericial_planning,
+        get_inspection_session,
+    )
+    save_construction_defect_analysis = SaveConstructionDefectAnalysis(
+        store.revisions,
+        get_latest_artifact,
+        get_process_case,
+        get_case_analysis,
+        get_pericial_planning,
+        get_inspection_session,
+        private_store.authority_guard if private_store is not None else nullcontext,
+        local_clock,
+        local_ids,
+    )
+    start_construction_defect_analysis = (
+        StartConstructionDefectAnalysis(
+            get_latest_artifact,
+            get_process_case,
+            get_case_analysis,
+            get_pericial_planning,
+            get_inspection_session,
+            construction_defect_analysis,
+            save_construction_defect_analysis,
+            local_ids,
+        )
+        if construction_defect_analysis is not None
+        else None
+    )
+    review_pathology = ReviewPathology(
+        get_construction_defect_analysis,
+        save_construction_defect_analysis,
+        get_inspection_session,
+        local_clock,
+        local_ids,
+    )
     get_expert_profile = GetExpertProfile(get_latest_artifact)
     save_expert_profile = SaveExpertProfile(
         store.revisions,
@@ -433,7 +479,14 @@ def build_local_api(
         local_clock,
         local_ids,
     )
-    get_report_snapshot = GetReportSnapshot(get_latest_artifact, get_case_analysis, get_inspection_session, get_technical_snapshot, get_expert_profile)
+    get_report_snapshot = GetReportSnapshot(
+        get_latest_artifact,
+        get_case_analysis,
+        get_inspection_session,
+        get_technical_snapshot,
+        get_expert_profile,
+        get_construction_defect_analysis,
+    )
     save_report_snapshot = SaveReportSnapshot(
         store.revisions,
         get_case_analysis,
@@ -444,6 +497,7 @@ def build_local_api(
         private_store.authority_guard if private_store is not None else nullcontext,
         local_clock,
         local_ids,
+        get_construction_defect_analysis,
     )
     get_delivery_snapshot = None
     get_delivery_history = None
@@ -658,6 +712,9 @@ def build_local_api(
         select_technical_method=SelectTechnicalMethod(get_technical_snapshot, save_technical_snapshot, local_ids, resolve_technical_professional),
         propose_technical_finding=ProposeTechnicalFinding(get_technical_snapshot, save_technical_snapshot, local_ids),
         review_technical_finding=ReviewTechnicalFinding(get_technical_snapshot, save_technical_snapshot, local_clock, local_ids, resolve_technical_professional),
+        get_construction_defect_analysis=get_construction_defect_analysis,
+        start_construction_defect_analysis=start_construction_defect_analysis,
+        review_pathology=review_pathology,
         save_expert_profile=save_expert_profile,
         get_expert_profile=get_expert_profile,
         save_report_snapshot=save_report_snapshot,
@@ -669,6 +726,7 @@ def build_local_api(
             get_expert_profile,
             save_report_snapshot,
             local_ids,
+            get_construction_defect_analysis,
         ),
         review_report_snapshot=ReviewReportSnapshot(get_report_snapshot, save_report_snapshot, local_clock, local_ids),
         amend_report_draft=AmendReportDraft(get_report_snapshot, save_report_snapshot, local_ids),

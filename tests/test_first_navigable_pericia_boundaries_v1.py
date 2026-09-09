@@ -74,6 +74,7 @@ def test_frontend_network_access_is_narrow_and_never_contains_local_api_token():
     assert sorted(network_sources) == [
         "frontend/src/data/budgetSnapshot.ts",
         "frontend/src/data/caseAnalysis.ts",
+            "frontend/src/data/constructionDefectAnalysis.ts",
             "frontend/src/data/deliverySnapshot.ts",
             "frontend/src/data/fieldMobile.ts",
             "frontend/src/data/inspectionSession.ts",

@@ -8,6 +8,10 @@ from pathlib import Path
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 
 from ..case_analysis import CaseAnalysisSnapshot, case_analysis_to_mapping
+from ..construction_defect_analysis import (
+    ConstructionDefectAnalysisSnapshot,
+    construction_defect_analysis_to_mapping,
+)
 from ..report_foundation import (
     ContextCompletenessItem,
     ContextStatus,
@@ -34,7 +38,7 @@ from ..report_foundation import (
 from ..technical_findings import TechnicalSnapshot, technical_snapshot_to_mapping
 from ..vistoria import InspectionSession, inspection_session_to_mapping
 from .models import thaw_payload
-from .ports import RepositoryConflict, RepositoryIntegrityError
+from .ports import ArtifactRevisionNotFound, RepositoryConflict, RepositoryIntegrityError
 
 
 SERVER_EXPERT_PROFILE_ID = "EXPERT-PROFILE-001"
@@ -62,6 +66,8 @@ def report_upstream_digest(value: object) -> str:
         mapping = inspection_session_to_mapping(value)
     elif type(value) is TechnicalSnapshot:
         mapping = technical_snapshot_to_mapping(value)
+    elif type(value) is ConstructionDefectAnalysisSnapshot:
+        mapping = construction_defect_analysis_to_mapping(value)
     elif type(value) is ExpertMasterProfile:
         mapping = asdict(value)
     else:
@@ -92,17 +98,56 @@ def expert_profile_to_validated_mapping(profile: ExpertMasterProfile) -> dict:
     return expert_profile_to_mapping(profile)
 
 
-def _binding(*, workspace_id, case_record, case, inspection_record, inspection, technical_record, technical, profile_record, profile) -> ReportSourceSnapshot:
+def _binding(
+    *,
+    workspace_id,
+    case_record,
+    case,
+    inspection_record,
+    inspection,
+    technical_record,
+    technical,
+    profile_record,
+    profile,
+    pathology_record=None,
+    pathology=None,
+) -> ReportSourceSnapshot:
     if any((type(case) is not CaseAnalysisSnapshot, type(inspection) is not InspectionSession, type(technical) is not TechnicalSnapshot, type(profile) is not ExpertMasterProfile)):
         raise ValueError("Report Snapshot upstream authority type mismatch")
     if case.workspace_id != str(workspace_id) or inspection.workspace_id != str(workspace_id) or technical.workspace_id != str(workspace_id):
         raise ValueError("Report Snapshot upstream workspace mismatch")
+    if (pathology_record is None) != (pathology is None):
+        raise ValueError("Report Snapshot pathology authority is incomplete")
+    if pathology is not None and (
+        type(pathology) is not ConstructionDefectAnalysisSnapshot
+        or pathology.workspace_id != str(workspace_id)
+    ):
+        raise ValueError("Report Snapshot pathology authority mismatch")
+    effective_pathology = (
+        pathology
+        if pathology is not None
+        and not pathology.upstream_stale
+        and bool(pathology.effective_pat_ids)
+        else None
+    )
     return ReportSourceSnapshot(
         workspace_id=str(workspace_id), case_analysis_snapshot_id=case.snapshot_id, case_analysis_revision=case_record.revision,
         case_analysis_digest=report_upstream_digest(case), inspection_session_id=inspection.session_id,
         inspection_session_revision=inspection_record.revision, inspection_session_digest=report_upstream_digest(inspection),
         technical_snapshot_id=technical.snapshot_id, technical_snapshot_revision=technical_record.revision,
-        technical_snapshot_digest=report_upstream_digest(technical), expert_profile_id=profile.profile_id,
+        technical_snapshot_digest=report_upstream_digest(technical),
+        construction_defect_analysis_snapshot_id=(
+            effective_pathology.snapshot_id if effective_pathology is not None else None
+        ),
+        construction_defect_analysis_revision=(
+            pathology_record.revision if effective_pathology is not None else None
+        ),
+        construction_defect_analysis_digest=(
+            report_upstream_digest(effective_pathology)
+            if effective_pathology is not None
+            else None
+        ),
+        expert_profile_id=profile.profile_id,
         expert_profile_revision=profile_record.revision, expert_profile_digest=report_upstream_digest(profile),
     )
 
@@ -114,7 +159,11 @@ def _reconcile(snapshot: ReportSnapshot, current: ReportSourceSnapshot) -> Repor
         ("case_analysis_digest", "case analysis content changed"), ("inspection_session_id", "inspection identity changed"),
         ("inspection_session_revision", "inspection revision changed"), ("inspection_session_digest", "inspection content changed"),
         ("technical_snapshot_id", "technical snapshot identity changed"), ("technical_snapshot_revision", "technical snapshot revision changed"),
-        ("technical_snapshot_digest", "technical snapshot content changed"), ("expert_profile_id", "expert profile identity changed"),
+        ("technical_snapshot_digest", "technical snapshot content changed"),
+        ("construction_defect_analysis_snapshot_id", "pathology snapshot identity changed"),
+        ("construction_defect_analysis_revision", "pathology snapshot revision changed"),
+        ("construction_defect_analysis_digest", "pathology snapshot content changed"),
+        ("expert_profile_id", "expert profile identity changed"),
         ("expert_profile_revision", "expert profile revision changed"), ("expert_profile_digest", "expert profile content changed"),
     ):
         if getattr(snapshot.source_snapshot, name) != getattr(current, name):
@@ -156,13 +205,24 @@ def _validate_answer_chains(snapshot: ReportSnapshot, technical: TechnicalSnapsh
             raise ValueError("Report Snapshot answer claim traceability is invalid")
 
 
-def _validate_claim_provenance(snapshot: ReportSnapshot, case: CaseAnalysisSnapshot, inspection: InspectionSession, technical: TechnicalSnapshot) -> None:
+def _validate_claim_provenance(
+    snapshot: ReportSnapshot,
+    case: CaseAnalysisSnapshot,
+    inspection: InspectionSession,
+    technical: TechnicalSnapshot,
+    pathology: ConstructionDefectAnalysisSnapshot | None,
+) -> None:
+    pathology_ids = set(pathology.effective_pat_ids) if pathology is not None else set()
     sources = {
         "ALLEGATION": ({item.item_id for item in case.claims}, snapshot.source_snapshot.case_analysis_revision),
         "COURT_DECISION": ({item.item_id for item in case.decisions}, snapshot.source_snapshot.case_analysis_revision),
         "CASE_DOCUMENT": ({item.document_id for item in case.documents}, snapshot.source_snapshot.case_analysis_revision),
         "FIELD_OBSERVATION": ({item.observation_id for item in inspection.observations}, snapshot.source_snapshot.inspection_session_revision),
         "MEASUREMENT": ({item.measurement_id for item in inspection.measurements}, snapshot.source_snapshot.inspection_session_revision),
+        "PATHOLOGY": (
+            pathology_ids,
+            snapshot.source_snapshot.construction_defect_analysis_revision,
+        ),
         "TECHNICAL_FINDING": ({item.finding_id for item in technical.findings}, snapshot.source_snapshot.technical_snapshot_revision),
         "PROFESSIONAL_DECISION": ({item.decision_id for item in technical.decisions}, snapshot.source_snapshot.technical_snapshot_revision),
     }
@@ -191,17 +251,42 @@ def _validate_claim_provenance(snapshot: ReportSnapshot, case: CaseAnalysisSnaps
         raise ValueError("approved Report Snapshot must answer every bound technical question")
 
 
-def _current(workspace_id, services):
+def _optional_pathology(workspace_id, service):
+    if service is None:
+        return None, None
+    try:
+        return service.execute(workspace_id)
+    except ArtifactRevisionNotFound:
+        return None, None
+
+
+def _current(workspace_id, services, get_construction_defect_analysis=None):
     case_record, case = services[0].execute(workspace_id)
     inspection_record, inspection = services[1].execute(workspace_id)
     technical_record, technical = services[2].execute(workspace_id)
     profile_record, profile = services[3].execute(workspace_id)
+    pathology_record, pathology = _optional_pathology(
+        workspace_id, get_construction_defect_analysis
+    )
     binding = _binding(
         workspace_id=workspace_id, case_record=case_record, case=case, inspection_record=inspection_record,
         inspection=inspection, technical_record=technical_record, technical=technical,
         profile_record=profile_record, profile=profile,
+        pathology_record=pathology_record, pathology=pathology,
     )
-    return (case_record, case, inspection_record, inspection, technical_record, technical, profile_record, profile, binding)
+    return (
+        case_record,
+        case,
+        inspection_record,
+        inspection,
+        technical_record,
+        technical,
+        profile_record,
+        profile,
+        pathology_record,
+        pathology,
+        binding,
+    )
 
 
 def _draft_coverage(snapshot: ReportSnapshot, *, claims=None, answers=None, context=None) -> ReportCoverage:
@@ -226,6 +311,7 @@ class SaveReportSnapshot:
     authority_guard: object
     clock: object
     ids: object
+    get_construction_defect_analysis: object | None = None
 
     def execute(self, workspace_id, snapshot: ReportSnapshot, expected_revision: int | None, *, allow_review_transition: bool = False, allow_initial_create: bool = False):
         if type(snapshot) is not ReportSnapshot or snapshot.workspace_id != str(workspace_id) or snapshot.upstream_stale:
@@ -237,11 +323,22 @@ class SaveReportSnapshot:
         if not callable(self.authority_guard):
             raise RepositoryIntegrityError("Report Snapshot authority guard is unavailable")
         with self.authority_guard():
-            current = _current(workspace_id, (self.get_case_analysis, self.get_inspection_session, self.get_technical_snapshot, self.get_expert_profile))
+            current = _current(
+                workspace_id,
+                (
+                    self.get_case_analysis,
+                    self.get_inspection_session,
+                    self.get_technical_snapshot,
+                    self.get_expert_profile,
+                ),
+                self.get_construction_defect_analysis,
+            )
             if _reconcile(snapshot, current[-1]).upstream_stale:
                 raise ValueError("Report Snapshot upstream authority is stale")
             _validate_answer_chains(snapshot, current[5])
-            _validate_claim_provenance(snapshot, current[1], current[3], current[5])
+            _validate_claim_provenance(
+                snapshot, current[1], current[3], current[5], current[9]
+            )
             if expected_revision is not None:
                 predecessor_record = self.get_latest_revision.execute(workspace_id, REPORT_SNAPSHOT_ARTIFACT_KIND, REPORT_SNAPSHOT_ARTIFACT_ID)
                 predecessor = validated_report_snapshot_from_mapping(thaw_payload(predecessor_record.payload))
@@ -253,7 +350,12 @@ class SaveReportSnapshot:
             created_at = self.clock.now()
             if created_at.tzinfo is None or created_at.utcoffset() is None:
                 raise ValueError("Report Snapshot clock requires timezone")
-            records = (current[0], current[2], current[4], current[6])
+            records = [current[0], current[2], current[4], current[6]]
+            if (
+                current[-1].construction_defect_analysis_snapshot_id is not None
+                and current[8] is not None
+            ):
+                records.append(current[8])
             dependencies = tuple({"artifact_kind": item.artifact_kind, "artifact_id": item.artifact_id, "revision": item.revision, "checksum_sha256": item.checksum_sha256} for item in records)
             return self.revisions.append_if_latest(
                 workspace_id=workspace_id, artifact_kind=REPORT_SNAPSHOT_ARTIFACT_KIND, artifact_id=REPORT_SNAPSHOT_ARTIFACT_ID,
@@ -269,11 +371,21 @@ class GetReportSnapshot:
     get_inspection_session: object
     get_technical_snapshot: object
     get_expert_profile: object
+    get_construction_defect_analysis: object | None = None
 
     def execute(self, workspace_id):
         record = self.get_latest_revision.execute(workspace_id, REPORT_SNAPSHOT_ARTIFACT_KIND, REPORT_SNAPSHOT_ARTIFACT_ID)
         snapshot = validated_report_snapshot_from_mapping(thaw_payload(record.payload))
-        current = _current(workspace_id, (self.get_case_analysis, self.get_inspection_session, self.get_technical_snapshot, self.get_expert_profile))
+        current = _current(
+            workspace_id,
+            (
+                self.get_case_analysis,
+                self.get_inspection_session,
+                self.get_technical_snapshot,
+                self.get_expert_profile,
+            ),
+            self.get_construction_defect_analysis,
+        )
         return record, _reconcile(snapshot, current[-1])
 
 
@@ -325,7 +437,12 @@ class AmendReportDraft:
             if set(values) != {"section_id", "text", "source_kind", "source_id"}:
                 raise ValueError("Report claim amendment is invalid")
             source_kind = values["source_kind"]
-            revision = snapshot.source_snapshot.technical_snapshot_revision if source_kind in {"TECHNICAL_FINDING", "PROFESSIONAL_DECISION"} else (snapshot.source_snapshot.inspection_session_revision if source_kind in {"FIELD_OBSERVATION", "MEASUREMENT"} else snapshot.source_snapshot.case_analysis_revision)
+            if source_kind == "PATHOLOGY":
+                revision = snapshot.source_snapshot.construction_defect_analysis_revision
+                if revision is None:
+                    raise ValueError("Report claim has no bound pathology authority")
+            else:
+                revision = snapshot.source_snapshot.technical_snapshot_revision if source_kind in {"TECHNICAL_FINDING", "PROFESSIONAL_DECISION"} else (snapshot.source_snapshot.inspection_session_revision if source_kind in {"FIELD_OBSERVATION", "MEASUREMENT"} else snapshot.source_snapshot.case_analysis_revision)
             token = str(self.ids.new_uuid()).upper()
             claim = report_claim_for_source(claim_id=f"CLAIM-{token}", provenance_id=f"PROVENANCE-{token}", section_id=values["section_id"], text=values["text"], source_kind=source_kind, source_id=values["source_id"], source_revision=revision)
             claims = (*snapshot.claims, claim)
@@ -362,9 +479,19 @@ class StartReportSnapshot:
     get_expert_profile: object
     save_snapshot: object
     ids: object
+    get_construction_defect_analysis: object | None = None
 
     def execute(self, workspace_id):
-        current = _current(workspace_id, (self.get_case_analysis, self.get_inspection_session, self.get_technical_snapshot, self.get_expert_profile))
+        current = _current(
+            workspace_id,
+            (
+                self.get_case_analysis,
+                self.get_inspection_session,
+                self.get_technical_snapshot,
+                self.get_expert_profile,
+            ),
+            self.get_construction_defect_analysis,
+        )
         case, inspection, technical, profile = current[1], current[3], current[5], current[7]
         if case.source_inventory_stale or inspection.upstream_stale or technical.upstream_stale:
             raise ValueError("stale upstream cannot start a Report Snapshot")

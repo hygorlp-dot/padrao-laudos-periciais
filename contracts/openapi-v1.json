@@ -173,6 +173,13 @@
     "/v1/workspaces/{workspace_id}/technical-snapshot/finding-reviews": {
       "post": {"summary":"Registra decisão profissional e deriva o achado efetivo no servidor","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/TechnicalFindingReviewRequest"}}}},"responses":{"200":{"description":"Decisão profissional persistida","content":{"application/json":{"schema":{"$ref":"#/components/schemas/TechnicalSnapshotEnvelope"}}}}}}
     },
+    "/v1/workspaces/{workspace_id}/construction-defect-analysis": {
+      "get": {"summary":"Reabre o PAT canônico reconciliado","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"responses":{"200":{"description":"PAT reconciliado","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ConstructionDefectAnalysisEnvelope"}}}},"404":{"description":"PAT ausente"}}},
+      "post": {"summary":"Executa o motor purpose-specific sobre vínculos explícitos da vistoria","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/StartConstructionDefectAnalysisRequest"}}}},"responses":{"201":{"description":"PAT proposto e persistido sem aprovação implícita","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ConstructionDefectAnalysisEnvelope"}}}},"409":{"description":"Upstream ausente ou stale"}}}
+    },
+    "/v1/workspaces/{workspace_id}/construction-defect-analysis/pathology-reviews": {
+      "post": {"summary":"Registra revisão profissional append-only de uma patologia","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/PathologyReviewRequest"}}}},"responses":{"200":{"description":"Revisão profissional persistida","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ConstructionDefectAnalysisEnvelope"}}}},"409":{"description":"Revisão ou autoridade stale"}}}
+    },
     "/v1/workspaces/{workspace_id}/expert-profile": {
       "get": {"summary":"Reabre o perfil mestre do perito","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"responses":{"200":{"description":"Perfil mestre atual","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ExpertProfileEnvelope"}}}},"404":{"description":"Perfil ausente"}}},
       "put": {"summary":"Salva uma revisão explícita do perfil mestre","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/SaveExpertProfileRequest"}}}},"responses":{"200":{"description":"Perfil persistido","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ExpertProfileEnvelope"}}}},"409":{"description":"Conflito de revisão"}}}
@@ -248,6 +255,7 @@
       "OfflinePackageEnvelope": {"type":"object","required":["device_id","package"],"properties":{"device_id":{"type":"string","minLength":1},"package":{"$ref":"#/components/schemas/OfflineInspectionPackage"}},"additionalProperties":false},
       "OfflineSyncResult": {"type":"object","required":["accepted","conflicts","revision"],"properties":{"accepted":{"type":"boolean"},"revision":{"type":["integer","null"],"minimum":1},"conflicts":{"type":"array","items":{"type":"object","required":["code","message","record_ids","requires_explicit_review"],"properties":{"code":{"type":"string","minLength":1},"message":{"type":"string","minLength":1},"record_ids":{"type":"array","items":{"type":"string"}},"requires_explicit_review":{"const":true}},"additionalProperties":false}}},"additionalProperties":false},
       "TechnicalSnapshot": {"$ref": "../schemas/technical-snapshot-v1.schema.json"},
+      "ConstructionDefectAnalysis": {"$ref": "../schemas/construction-defect-analysis-v1.schema.json"},
       "ReportSnapshot": {"$ref": "../schemas/report-snapshot-v1.schema.json"},
       "DeliverySnapshot": {"$ref": "../schemas/delivery-snapshot-v1.schema.json"},
       "BudgetSnapshot": {"$ref": "../schemas/budget-snapshot-v1.schema.json"},
@@ -286,6 +294,9 @@
         "type":"object","additionalProperties":false,"required":["revision","updated_at","snapshot"],
         "properties":{"revision":{"type":"integer","minimum":1},"updated_at":{"type":"string","format":"date-time"},"snapshot":{"$ref":"#/components/schemas/TechnicalSnapshot"}}
       },
+      "StartConstructionDefectAnalysisRequest": {"type":"object","additionalProperties":false,"required":["observation_contexts"],"properties":{"observation_contexts":{"type":"array","minItems":1,"items":{"$ref":"../schemas/construction-defect-analysis-v1.schema.json#/$defs/observationContext"}}}},
+      "PathologyReviewRequest": {"type":"object","additionalProperties":false,"required":["expected_revision","pat_id","action","professional_id","reason"],"properties":{"expected_revision":{"type":"integer","minimum":1},"pat_id":{"type":"string","pattern":"^PAT-[0-9]{3,}$"},"action":{"enum":["APPROVE","REJECT"]},"professional_id":{"type":"string","minLength":1},"reason":{"type":"string","minLength":1}}},
+      "ConstructionDefectAnalysisEnvelope": {"type":"object","additionalProperties":false,"required":["revision","updated_at","snapshot"],"properties":{"revision":{"type":"integer","minimum":1},"updated_at":{"type":"string","format":"date-time"},"snapshot":{"$ref":"#/components/schemas/ConstructionDefectAnalysis"}}},
       "PrivatePhotoMetadata": {"type":"object","additionalProperties":false,"required":["workspace_id","content_id","original_filename","byte_size","checksum_sha256","media_type","imported_at","origin"],"properties":{"workspace_id":{"type":"string","format":"uuid"},"content_id":{"type":"string","format":"uuid"},"original_filename":{"type":"string"},"byte_size":{"type":"integer","minimum":1},"checksum_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"media_type":{"enum":["image/jpeg","image/png"]},"imported_at":{"type":"string","format":"date-time"},"origin":{"const":"USER_IMPORT"}}},
       "SaveInspectionSessionRequest": {
         "type": "object", "required": ["expected_revision", "snapshot"],

@@ -75,6 +75,7 @@ def build_product_runtime(
     token: str | None = None,
     private_root: str | Path | None = None,
     pje_intake: object | None = None,
+    construction_defect_analysis: object | None = None,
 ) -> ProductRuntime:
     root = Path(frontend_root)
     if not root.is_dir() or not (root / "index.html").is_file():
@@ -87,6 +88,7 @@ def build_product_runtime(
         token=token,
         private_root=private_root,
         pje_intake=pje_intake,
+        construction_defect_analysis=construction_defect_analysis,
         config=LocalServerConfig(
             max_body_bytes=bridge_config.max_body_bytes,
             max_document_body_bytes=bridge_config.max_document_body_bytes,

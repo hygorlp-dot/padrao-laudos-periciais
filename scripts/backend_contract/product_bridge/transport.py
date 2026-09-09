@@ -135,6 +135,8 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/offline-device/revoke"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "technical-snapshot" and method in {"GET", "POST", "PUT"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "construction-defect-analysis" and method in {"GET", "POST"}:
+            return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "expert-profile" and method in {"GET", "PUT"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "report-snapshot" and method in {"GET", "POST", "PUT"}:
@@ -153,6 +155,8 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/pericial-planning/decisions"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["report-snapshot", "reviews"] and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/report-snapshot/reviews"
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["construction-defect-analysis", "pathology-reviews"] and method == "POST":
+            return f"/v1/workspaces/{remainder[0]}/construction-defect-analysis/pathology-reviews"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["report-snapshot", "draft-amendments"] and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/report-snapshot/draft-amendments"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "delivery-snapshot" and remainder[2] in {"render", "package-artifacts", "reviews", "finalize", "deliver", "reissue"} and method == "POST":
