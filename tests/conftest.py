@@ -44,6 +44,8 @@ _REQUEST_SERVER_PHASES: dict[str, list[str]] = {}
 _REQUEST_SERVER_PHASE_LIMIT = 128
 _REQUEST_INTERNAL_PHASES: dict[str, list[str]] = {}
 _REQUEST_INTERNAL_PHASE_LIMIT = 128
+_ACTIVE_REQUEST_SEQUENCES: set[str] = set()
+_ACTIVE_REQUEST_SEQUENCE_LIMIT = 128
 _REQUEST_SEQUENCE = 0
 _REQUEST_TRACE_LOCK = Lock()
 _ACTIVE_REQUEST_SEQUENCE: ContextVar[str | None] = ContextVar(
@@ -132,7 +134,11 @@ def _begin_local_api_request() -> str:
     global _REQUEST_SEQUENCE
     with _REQUEST_TRACE_LOCK:
         _REQUEST_SEQUENCE += 1
-        return str(_REQUEST_SEQUENCE)
+        request_seq = str(_REQUEST_SEQUENCE)
+        if len(_ACTIVE_REQUEST_SEQUENCES) >= _ACTIVE_REQUEST_SEQUENCE_LIMIT:
+            _ACTIVE_REQUEST_SEQUENCES.pop()
+        _ACTIVE_REQUEST_SEQUENCES.add(request_seq)
+        return request_seq
 
 
 def _record_server_phase(*, request_seq: object, phase: object) -> None:
@@ -141,6 +147,8 @@ def _record_server_phase(*, request_seq: object, phase: object) -> None:
     if phase not in _SAFE_SERVER_PHASES:
         return
     with _REQUEST_TRACE_LOCK:
+        if request_seq not in _ACTIVE_REQUEST_SEQUENCES:
+            return
         if (
             request_seq not in _REQUEST_SERVER_PHASES
             and len(_REQUEST_SERVER_PHASES) >= _REQUEST_SERVER_PHASE_LIMIT
@@ -157,6 +165,8 @@ def _finish_local_api_request(request_seq: object, *, retain: bool) -> None:
     with _REQUEST_TRACE_LOCK:
         _REQUEST_SERVER_PHASES.pop(request_seq, None)
         _REQUEST_INTERNAL_PHASES.pop(request_seq, None)
+        if not retain:
+            _ACTIVE_REQUEST_SEQUENCES.discard(request_seq)
 
 
 def _record_internal_phase(*, request_seq: object, phase: object) -> None:
@@ -165,6 +175,8 @@ def _record_internal_phase(*, request_seq: object, phase: object) -> None:
     if phase not in _SAFE_INTERNAL_PHASES:
         return
     with _REQUEST_TRACE_LOCK:
+        if request_seq not in _ACTIVE_REQUEST_SEQUENCES:
+            return
         if (
             request_seq not in _REQUEST_INTERNAL_PHASES
             and len(_REQUEST_INTERNAL_PHASES) >= _REQUEST_INTERNAL_PHASE_LIMIT
@@ -196,6 +208,7 @@ def _record_local_api_timeout(
             global _REQUEST_SEQUENCE
             _REQUEST_SEQUENCE += 1
             request_seq = str(_REQUEST_SEQUENCE)
+        _ACTIVE_REQUEST_SEQUENCES.add(request_seq)
         observation = {
             "request_seq": request_seq,
             "method": _safe_method(method),

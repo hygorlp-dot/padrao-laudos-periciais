@@ -338,6 +338,9 @@ def test_server_phase_correlation_is_bounded_and_request_scoped(monkeypatch) -> 
     monkeypatch.setattr(suite_conftest, "_REQUEST_INTERNAL_PHASES", {})
     monkeypatch.setattr(suite_conftest, "_REQUEST_TIMEOUT_OBSERVATIONS", {})
     monkeypatch.setattr(suite_conftest, "_REQUEST_SEQUENCE", 0)
+    monkeypatch.setattr(suite_conftest, "_ACTIVE_REQUEST_SEQUENCES", set())
+    assert suite_conftest._begin_local_api_request() == "1"
+    assert suite_conftest._begin_local_api_request() == "2"
 
     suite_conftest._record_server_phase(
         request_seq="not-a-sequence", phase="LOCAL_API_HANDLE_STARTED"
@@ -383,18 +386,20 @@ def test_server_phase_correlation_is_bounded_and_request_scoped(monkeypatch) -> 
         suite_conftest._REQUEST_TIMEOUT_OBSERVATIONS[
             "tests/test_pytest_harness_v1.py::test_untrusted_sequence"
         ][0]["request_seq"]
-        == "1"
+        == "3"
     )
 
     for index in range(200):
+        request_seq = suite_conftest._begin_local_api_request()
         suite_conftest._record_server_phase(
-            request_seq=str(index + 3), phase="LOCAL_API_HANDLE_STARTED"
+            request_seq=request_seq, phase="LOCAL_API_HANDLE_STARTED"
         )
     assert len(suite_conftest._REQUEST_SERVER_PHASES) <= 128
 
     for index in range(200):
+        request_seq = suite_conftest._begin_local_api_request()
         suite_conftest._record_internal_phase(
-            request_seq=str(index + 3), phase="ROUTE_DISPATCH_STARTED"
+            request_seq=request_seq, phase="ROUTE_DISPATCH_STARTED"
         )
     assert len(suite_conftest._REQUEST_INTERNAL_PHASES) <= 128
 
