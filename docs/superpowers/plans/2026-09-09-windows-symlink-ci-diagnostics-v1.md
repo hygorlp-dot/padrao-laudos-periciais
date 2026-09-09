@@ -41,3 +41,21 @@ cause -> deterministic repair`. PR #191 remains frozen throughout.
 4. Push a diagnostic PR. Its first hosted `core-safety` run is expected to
    expose exact failing node IDs if nondeterminism recurs; it is not a merge
    candidate until the underlying failure is causally repaired.
+
+## Post-reboot evidence and bounded diagnostic increment
+
+The first hosted run at `5e6162e1f72a51386be73fd3f09838c30138645f`
+identified this non-symlink node:
+
+`tests/test_recovery_transaction_v1.py::test_journal_corrompido_sobrevive_a_reabertura_como_sobrevive_ao_fechamento`
+
+Therefore `SYMLINK_ONLY_HYPOTHESIS` is invalidated or incomplete. Fresh local
+executions on Windows with Python 3.13.15 passed for the exact node, for the
+exact node under coverage, and for its two immediate journal neighbors under
+coverage. No product repair is authorized from that evidence.
+
+The single additional diagnostic increment is limited to: node ID, pytest
+phase, exception class obtained from `call.excinfo`, repository-relative
+location, and a categorical message (assertion, numeric OS error, or redacted).
+It never emits the raw exception message or an absolute path and does not
+change test selection, assertions, timeout, workflow, or `verify_core`.
