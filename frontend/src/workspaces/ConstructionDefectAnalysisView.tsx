@@ -10,6 +10,7 @@ import {
   type ConstructionDefectAnalysisEnvelope,
   type ObservationContext,
   type ObservationOutcome,
+  type PathologyReview,
 } from "../data/constructionDefectAnalysis";
 import { getInspectionSession, type InspectionEnvelope } from "../data/inspectionSession";
 
@@ -46,12 +47,43 @@ function hasObservationContext(
     sameStrings(item.question_ids, expected.question_ids));
 }
 
+function samePathologyReview(left: PathologyReview, right: PathologyReview) {
+  return left.review_id === right.review_id &&
+    left.pat_id === right.pat_id &&
+    left.action === right.action &&
+    left.professional_id === right.professional_id &&
+    left.reason === right.reason &&
+    left.reviewed_at === right.reviewed_at &&
+    left.supersedes_review_id === right.supersedes_review_id;
+}
+
+function hasExpectedReviewAppend(
+  envelope: ConstructionDefectAnalysisEnvelope,
+  previousReviews: PathologyReview[],
+  expected: Pick<PathologyReview, "pat_id" | "action" | "professional_id" | "reason">,
+) {
+  const reviews = envelope.snapshot.reviews;
+  if (reviews.length <= previousReviews.length) return false;
+  if (!previousReviews.every((item, index) => samePathologyReview(item, reviews[index]))) return false;
+
+  const expectedSupersedes = [...previousReviews]
+    .reverse()
+    .find((item) => item.pat_id === expected.pat_id)?.review_id ?? null;
+  const appended = reviews[previousReviews.length];
+  return appended.pat_id === expected.pat_id &&
+    appended.action === expected.action &&
+    appended.professional_id === expected.professional_id &&
+    appended.reason === expected.reason &&
+    appended.supersedes_review_id === expectedSupersedes;
+}
+
 export function ConstructionDefectAnalysisView({ workspaceId }: { workspaceId: string }) {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [busy, setBusy] = useState(false);
   const [reloadVersion, setReloadVersion] = useState(0);
   const [operationError, setOperationError] = useState(false);
   const [observationId, setObservationId] = useState("");
+  const [manifestation, setManifestation] = useState("");
   const [methodId, setMethodId] = useState("");
   const [outcome, setOutcome] = useState<ObservationOutcome>("INCONCLUSIVE");
   const [system, setSystem] = useState("");
@@ -142,13 +174,13 @@ export function ConstructionDefectAnalysisView({ workspaceId }: { workspaceId: s
 
   const start = (event: FormEvent) => {
     event.preventDefault();
-    if (!selectedObservation || !methodId) {
+    if (!selectedObservation || !methodId || !manifestation.trim()) {
       setOperationError(true);
       return;
     }
     const context: ObservationContext = {
       observation_id: selectedObservation.observation_id,
-      manifestation: selectedObservation.raw_observation,
+      manifestation: manifestation.trim(),
       system: system.trim() || null,
       element: element.trim() || null,
       outcome,
@@ -176,13 +208,10 @@ export function ConstructionDefectAnalysisView({ workspaceId }: { workspaceId: s
       professional_id: state.inspection.snapshot.responsible_professional,
       reason: reviewReason.trim(),
     };
+    const previousReviews = state.analysis.snapshot.reviews;
     void run(
       () => reviewPathology(workspaceId, state.analysis!, expectedReview),
-      (candidate) => candidate.snapshot.reviews.some((item) =>
-        item.pat_id === expectedReview.pat_id &&
-        item.action === expectedReview.action &&
-        item.professional_id === expectedReview.professional_id &&
-        item.reason === expectedReview.reason),
+      (candidate) => hasExpectedReviewAppend(candidate, previousReviews, expectedReview),
     );
   };
 
@@ -195,8 +224,9 @@ export function ConstructionDefectAnalysisView({ workspaceId }: { workspaceId: s
     <header className="planning-overview"><div><h2 id="pathology-title">Análise de manifestações construtivas</h2><p>Vistoria vinculada → proposta PAT → revisão profissional explícita. Alegação, evidência e conclusão permanecem distintas.</p></div><div className="planning-readiness"><strong>{snapshot ? snapshot.gate.replaceAll("_", " ") : "Ainda não iniciada"}</strong><span>{snapshot ? `revisão ${state.analysis?.revision}` : "selecione os vínculos observados"}</span></div></header>
     {snapshot?.upstream_stale && <section className="analysis-inventory-warning" role="alert"><strong>Autoridade anterior alterada — análise bloqueada</strong><ul>{snapshot.upstream_stale_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul></section>}
 
-    {!snapshot && <section className="technical-authority"><h3>Gerar proposta PAT</h3><p>Escolha somente registros do mesmo item de vistoria. Nenhuma patologia será aprovada automaticamente.</p><form onSubmit={start}>
-      <label>Observação direta<select value={observationId} onChange={(event) => { setObservationId(event.target.value); setMeasurementIds([]); setPhotoIds([]); }}><option value="">Selecione</option>{state.inspection.snapshot.observations.map((item) => <option key={item.observation_id} value={item.observation_id}>{item.observation_id} — {item.raw_observation}</option>)}</select></label>
+    {!snapshot && <section className="technical-authority"><h3>Gerar proposta PAT</h3><p>Escolha somente registros do mesmo item de vistoria. Nenhuma patologia será aprovada automaticamente.</p><form onSubmit={start} noValidate>
+      <label>Observação direta<select value={observationId} onChange={(event) => { setObservationId(event.target.value); setManifestation(""); setMeasurementIds([]); setPhotoIds([]); }}><option value="">Selecione</option>{state.inspection.snapshot.observations.map((item) => <option key={item.observation_id} value={item.observation_id}>{item.observation_id} — {item.raw_observation}</option>)}</select></label>
+      <label>Manifestação classificada<input value={manifestation} onChange={(event) => setManifestation(event.target.value)} required/></label><small>Classificação profissional explícita; não é preenchida a partir do texto da observação.</small>
       <label>Resultado observado<select value={outcome} onChange={(event) => setOutcome(event.target.value as ObservationOutcome)}><option value="INCONCLUSIVE">Inconclusivo</option><option value="OBSERVED">Observado</option><option value="NOT_OBSERVED">Não observado</option><option value="CONFORMING">Conforme</option></select></label>
       <label>Método registrado<select value={methodId} onChange={(event) => setMethodId(event.target.value)}><option value="">Selecione</option>{methodOptions.map((item) => <option key={item.method_id} value={item.method_id}>{item.method_id}{item.name ? ` — ${item.name}` : ""}</option>)}</select></label>
       <label>Sistema construtivo, se identificado<input value={system} onChange={(event) => setSystem(event.target.value)}/></label><label>Elemento, se identificado<input value={element} onChange={(event) => setElement(event.target.value)}/></label>

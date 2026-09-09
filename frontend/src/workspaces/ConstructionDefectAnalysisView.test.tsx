@@ -123,6 +123,10 @@ describe("construction defect analysis workbench", () => {
 
     await user.selectOptions(await screen.findByLabelText("Observação direta"), "OBS-001");
     await user.selectOptions(screen.getByLabelText("Método registrado"), "METHOD-001");
+    await user.click(screen.getByRole("button", { name: "Gerar proposta PAT" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("operação foi recusada");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    await user.type(screen.getByLabelText("Manifestação classificada"), "Mancha de umidade aparente.");
     await user.click(screen.getByLabelText("MED-001 — 1250 mm"));
     await user.click(screen.getByLabelText("PHOTO-001 — Parede inspecionada."));
     await user.selectOptions(screen.getByLabelText("Alegação relacionada"), "CLAIM-001");
@@ -131,7 +135,7 @@ describe("construction defect analysis workbench", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
     const body = JSON.parse(String(fetchMock.mock.calls[3][1]?.body));
-    expect(body.observation_contexts).toEqual([{ observation_id: "OBS-001", manifestation: "Umidade observada na parede.", system: null, element: null, outcome: "INCONCLUSIVE", methods: ["METHOD-001"], measurement_ids: ["MED-001"], photo_ids: ["PHOTO-001"], claim_ids: ["CLAIM-001"], question_ids: ["QUESTION-001"] }]);
+    expect(body.observation_contexts).toEqual([{ observation_id: "OBS-001", manifestation: "Mancha de umidade aparente.", system: null, element: null, outcome: "INCONCLUSIVE", methods: ["METHOD-001"], measurement_ids: ["MED-001"], photo_ids: ["PHOTO-001"], claim_ids: ["CLAIM-001"], question_ids: ["QUESTION-001"] }]);
   });
 
   test("review remains an explicit fail-closed professional command", async () => {
@@ -170,7 +174,7 @@ describe("construction defect analysis workbench", () => {
         ...envelope.snapshot,
         observation_contexts: [{
           observation_id: "OBS-001",
-          manifestation: "Umidade observada na parede.",
+          manifestation: "Mancha de umidade aparente.",
           system: null,
           element: null,
           outcome: "INCONCLUSIVE" as const,
@@ -194,6 +198,7 @@ describe("construction defect analysis workbench", () => {
 
     await user.selectOptions(await screen.findByLabelText("Observação direta"), "OBS-001");
     await user.selectOptions(screen.getByLabelText("Método registrado"), "METHOD-001");
+    await user.type(screen.getByLabelText("Manifestação classificada"), "Mancha de umidade aparente.");
     await user.click(screen.getByRole("button", { name: "Gerar proposta PAT" }));
 
     expect(await screen.findByRole("heading", { name: "PAT-001" })).toBeInTheDocument();
@@ -250,6 +255,44 @@ describe("construction defect analysis workbench", () => {
 
     await screen.findByRole("heading", { name: "PAT-001" });
     fireEvent.change(screen.getByLabelText("Fundamentação da revisão"), { target: { value: "Minha decisão esperada." } });
+    fireEvent.click(screen.getByRole("button", { name: "Registrar revisão" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("operação foi recusada");
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  test("does not reuse an old identical review to confirm a failed append", async () => {
+    const concurrentEnvelope = {
+      ...envelope,
+      revision: 6,
+      snapshot: {
+        ...envelope.snapshot,
+        reviews: [
+          ...envelope.snapshot.reviews,
+          {
+            review_id: "PAT-REVIEW-OTHER",
+            pat_id: "PAT-001",
+            action: "REJECT" as const,
+            professional_id: "PROFESSIONAL-001",
+            reason: "Outra decisão posterior.",
+            reviewed_at: "2026-09-08T12:01:00Z",
+            supersedes_review_id: "PAT-REVIEW-001",
+          },
+        ],
+      },
+    };
+    const fetchMock = fetchByUrl();
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, envelope)));
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, inspectEnvelope)));
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, caseEnvelope)));
+    fetchMock.mockImplementationOnce(() => Promise.reject(new TypeError("request failed before append")));
+    fetchMock.mockImplementationOnce(() => Promise.resolve(response(200, concurrentEnvelope)));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ConstructionDefectAnalysisView workspaceId={ID} />);
+
+    await screen.findByRole("heading", { name: "PAT-001" });
+    fireEvent.change(screen.getByLabelText("Ação profissional"), { target: { value: "APPROVE" } });
+    fireEvent.change(screen.getByLabelText("Fundamentação da revisão"), { target: { value: "Revisão explícita." } });
     fireEvent.click(screen.getByRole("button", { name: "Registrar revisão" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("operação foi recusada");
