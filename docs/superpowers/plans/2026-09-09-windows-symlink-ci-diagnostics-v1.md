@@ -41,4 +41,3 @@ cause -> deterministic repair`. PR #191 remains frozen throughout.
 4. Push a diagnostic PR. Its first hosted `core-safety` run is expected to
    expose exact failing node IDs if nondeterminism recurs; it is not a merge
    candidate until the underlying failure is causally repaired.
-
