@@ -3,7 +3,7 @@
 ## Stable checkpoint
 
 - Branch: `issue-187-longitudinal-oracle`
-- HEAD: `563b684`
+- HEAD: `98191d3`
 - PR: #196 (draft)
 - Production changes: none
 - Synthetic/private data only: yes
