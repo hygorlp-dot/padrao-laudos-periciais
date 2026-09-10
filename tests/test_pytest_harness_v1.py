@@ -247,6 +247,109 @@ def test_timeout_diagnostic_identifies_last_observable_internal_phase(
     assert '"route_family":"RECOVERY_STAGE"' in diagnostic
 
 
+def test_timeout_snapshot_is_immutable_when_server_advances_after_timeout(
+    monkeypatch,
+) -> None:
+    """Timeout diagnostics must capture phases at timeout, not report time."""
+    monkeypatch.setattr(suite_conftest, "_REQUEST_TIMEOUT_OBSERVATIONS", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_SERVER_PHASES", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_INTERNAL_PHASES", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_SEQUENCE", 0)
+    monkeypatch.setattr(suite_conftest, "_ACTIVE_REQUEST_SEQUENCES", set())
+    request_seq = suite_conftest._begin_local_api_request()
+    nodeid = "tests/test_pytest_harness_v1.py::test_atomic_timeout_snapshot"
+
+    suite_conftest._record_server_phase(
+        request_seq=request_seq, phase="LOCAL_API_HANDLE_STARTED"
+    )
+    suite_conftest._record_internal_phase(
+        request_seq=request_seq, phase="APPLICATION_COMMAND_STARTED"
+    )
+    suite_conftest._record_local_api_timeout(
+        nodeid=nodeid,
+        method="POST",
+        target="/v1/recovery/staging",
+        client_phase="CLIENT_GETRESPONSE",
+        elapsed_seconds=5.2,
+        request_seq=request_seq,
+    )
+
+    suite_conftest._record_internal_phase(
+        request_seq=request_seq, phase="APPLICATION_COMMAND_COMPLETED"
+    )
+    suite_conftest._record_internal_phase(
+        request_seq=request_seq, phase="ROUTE_HANDLER_COMPLETED"
+    )
+    suite_conftest._record_server_phase(
+        request_seq=request_seq, phase="RESPONSE_COMPLETED"
+    )
+
+    observation = suite_conftest._request_timeout_observation(nodeid)
+    assert observation is not None
+    assert observation["server_last_phase_at_timeout"] == "LOCAL_API_HANDLE_STARTED"
+    assert observation["internal_last_phase_at_timeout"] == "APPLICATION_COMMAND_STARTED"
+    assert observation["server_last_phase"] == "RESPONSE_COMPLETED"
+    assert observation["internal_last_phase"] == "ROUTE_HANDLER_COMPLETED"
+
+
+def test_timeout_snapshots_are_request_scoped_under_multiple_failures(monkeypatch) -> None:
+    monkeypatch.setattr(suite_conftest, "_REQUEST_TIMEOUT_OBSERVATIONS", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_SERVER_PHASES", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_INTERNAL_PHASES", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_SEQUENCE", 0)
+    monkeypatch.setattr(suite_conftest, "_ACTIVE_REQUEST_SEQUENCES", set())
+    first = suite_conftest._begin_local_api_request()
+    second = suite_conftest._begin_local_api_request()
+    first_node = "tests/test_pytest_harness_v1.py::test_snapshot_first"
+    second_node = "tests/test_pytest_harness_v1.py::test_snapshot_second"
+
+    suite_conftest._record_server_phase(
+        request_seq=first, phase="LOCAL_API_HANDLE_STARTED"
+    )
+    suite_conftest._record_internal_phase(
+        request_seq=first, phase="APPLICATION_COMMAND_STARTED"
+    )
+    suite_conftest._record_local_api_timeout(
+        nodeid=first_node,
+        method="POST",
+        target="/v1/recovery/staging",
+        client_phase="CLIENT_GETRESPONSE",
+        elapsed_seconds=5.2,
+        request_seq=first,
+    )
+    suite_conftest._record_server_phase(
+        request_seq=second, phase="RESPONSE_HEADERS_STARTED"
+    )
+    suite_conftest._record_internal_phase(
+        request_seq=second, phase="ROUTE_HANDLER_COMPLETED"
+    )
+    suite_conftest._record_local_api_timeout(
+        nodeid=second_node,
+        method="GET",
+        target="/v1/workspaces",
+        client_phase="CLIENT_READ",
+        elapsed_seconds=2.2,
+        request_seq=second,
+    )
+
+    first_observation = suite_conftest._request_timeout_observation(first_node)
+    second_observation = suite_conftest._request_timeout_observation(second_node)
+    assert first_observation is not None
+    assert second_observation is not None
+    assert first_observation["server_last_phase_at_timeout"] == (
+        "LOCAL_API_HANDLE_STARTED"
+    )
+    assert first_observation["internal_last_phase_at_timeout"] == (
+        "APPLICATION_COMMAND_STARTED"
+    )
+    assert second_observation["server_last_phase_at_timeout"] == (
+        "RESPONSE_HEADERS_STARTED"
+    )
+    assert second_observation["internal_last_phase_at_timeout"] == (
+        "ROUTE_HANDLER_COMPLETED"
+    )
+
+
 @pytest.mark.parametrize(
     ("failure_point", "expected_phase"),
     (

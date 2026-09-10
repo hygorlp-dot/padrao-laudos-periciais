@@ -1901,6 +1901,8 @@ def test_synthetic_handler_stall_exposes_application_command_boundary(monkeypatc
                 "client_phase": "CLIENT_GETRESPONSE",
                 "elapsed_bucket": ">5s",
                 "timeout_boundary": "CLIENT_TRANSPORT_DEADLINE",
+                "server_last_phase_at_timeout": "LOCAL_API_HANDLE_STARTED",
+                "internal_last_phase_at_timeout": "APPLICATION_COMMAND_STARTED",
             }
         ]
         assert suite_conftest._REQUEST_SERVER_PHASES["1"] == [

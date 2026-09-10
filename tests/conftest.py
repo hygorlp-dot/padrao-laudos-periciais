@@ -221,6 +221,16 @@ def _record_local_api_timeout(
             "client_phase": phase,
             "elapsed_bucket": _elapsed_bucket(elapsed_seconds),
             "timeout_boundary": "CLIENT_TRANSPORT_DEADLINE",
+            "server_last_phase_at_timeout": (
+                _REQUEST_SERVER_PHASES.get(request_seq, [])[-1]
+                if _REQUEST_SERVER_PHASES.get(request_seq)
+                else "UNKNOWN"
+            ),
+            "internal_last_phase_at_timeout": (
+                _REQUEST_INTERNAL_PHASES.get(request_seq, [])[-1]
+                if _REQUEST_INTERNAL_PHASES.get(request_seq)
+                else "UNKNOWN"
+            ),
         }
         if (
             raw_nodeid not in _REQUEST_TIMEOUT_OBSERVATIONS
@@ -241,11 +251,17 @@ def _request_timeout_observation(nodeid: object) -> dict[str, str] | None:
         return None
     observation = dict(observations[-1])
     phases = _REQUEST_SERVER_PHASES.get(observation["request_seq"], [])
-    observation["server_last_phase"] = phases[-1] if phases else "UNKNOWN"
+    observation["server_last_phase_observed_later"] = (
+        phases[-1] if phases else "UNKNOWN"
+    )
+    observation["server_last_phase"] = observation["server_last_phase_observed_later"]
     internal_phases = _REQUEST_INTERNAL_PHASES.get(observation["request_seq"], [])
-    observation["internal_last_phase"] = (
+    observation["internal_last_phase_observed_later"] = (
         internal_phases[-1] if internal_phases else "UNKNOWN"
     )
+    observation["internal_last_phase"] = observation[
+        "internal_last_phase_observed_later"
+    ]
     return observation
 
 
