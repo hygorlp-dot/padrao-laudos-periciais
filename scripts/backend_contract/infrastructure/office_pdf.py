@@ -97,7 +97,6 @@ class LocalOfficePdfConverter:
                         Range=0,
                         Item=0,
                         IncludeDocProps=True,
-                        KeepIRMSettings=True,
                         CreateBookmarks=0,
                         DocStructureTags=True,
                         BitmapMissingFonts=True,
