@@ -350,6 +350,30 @@ def test_timeout_snapshots_are_request_scoped_under_multiple_failures(monkeypatc
     )
 
 
+def test_internal_observer_wraps_subclass_execute_even_when_base_is_marked() -> None:
+    class BaseCommand:
+        def execute(self, *_args, **_kwargs):
+            return None
+
+    class DerivedCommand(BaseCommand):
+        def execute(self, *_args, **_kwargs):
+            return None
+
+    def api_for(command):
+        services = SimpleNamespace(command=command)
+        services.__dataclass_fields__ = {"command": object()}
+        return SimpleNamespace(
+            _services=services,
+            handle=lambda *_args, **_kwargs: None,
+        )
+
+    suite_conftest._install_internal_phase_observer(api_for(BaseCommand()))
+    assert BaseCommand.__dict__["_first_party_phase_observer"] is True
+
+    suite_conftest._install_internal_phase_observer(api_for(DerivedCommand()))
+    assert DerivedCommand.__dict__["_first_party_phase_observer"] is True
+
+
 @pytest.mark.parametrize(
     ("failure_point", "expected_phase"),
     (

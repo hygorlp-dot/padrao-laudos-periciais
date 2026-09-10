@@ -375,8 +375,9 @@ def _install_internal_phase_observer(api: object) -> None:
         service = getattr(services, field_name, None)
         service_type = type(service) if service is not None else None
         type_execute = getattr(service_type, "execute", None)
-        if not callable(type_execute) or getattr(
-            service_type, "_first_party_phase_observer", False
+        type_markers = getattr(service_type, "__dict__", {})
+        if not callable(type_execute) or type_markers.get(
+            "_first_party_phase_observer", False
         ):
             continue
 
