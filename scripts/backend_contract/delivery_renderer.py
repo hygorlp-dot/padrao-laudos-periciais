@@ -482,11 +482,12 @@ def _validate_pdf_raster_visibility(pdf_content: bytes, visual_extents: list[tup
                 if not character or character.isspace():
                     continue
                 min_x, min_y, max_x, max_y = textpage.get_charbox(index, loose=False)
-                if max_x > min_x and max_y > min_y:
-                    # PDFium character boxes track each painted glyph. A
-                    # whole text-object box can hide one required glyph while
-                    # neighboring glyphs supply enough contrast to pass.
-                    page_extents.append((page_number, float(min_x), float(min_y), float(max_x), float(max_y)))
+                if max_x <= min_x or max_y <= min_y:
+                    raise RendererUnavailable("local PDF raster glyph geometry is invalid")
+                # PDFium character boxes track each painted glyph. A whole
+                # text-object box can hide one required glyph while neighboring
+                # glyphs supply enough contrast to pass.
+                page_extents.append((page_number, float(min_x), float(min_y), float(max_x), float(max_y)))
             if not page_extents:
                 if any(item[0] == page_number for item in visual_extents):
                     raise RendererUnavailable("local PDF raster glyph geometry is unavailable")
@@ -498,8 +499,20 @@ def _validate_pdf_raster_visibility(pdf_content: bytes, visual_extents: list[tup
                 crop = image.crop((left, top, right, bottom))
                 pixels = list(crop.getdata())
                 background = Counter(pixels).most_common(1)[0][0] if pixels else 0
-                contrast_fraction = sum(abs(pixel - background) > 8 for pixel in pixels) / max(len(pixels), 1)
-                if right <= left or bottom <= top or contrast_fraction < 0.01:
+                width, height = right - left, bottom - top
+                contrast_mask = [abs(pixel - background) > 8 for pixel in pixels]
+                contrast_fraction = sum(contrast_mask) / max(len(contrast_mask), 1)
+                row_coverage = sum(any(contrast_mask[row * width:(row + 1) * width]) for row in range(height))
+                column_coverage = sum(any(contrast_mask[column::width]) for column in range(width))
+                min_rows = max(2, (height + 4) // 5)
+                min_columns = max(2, (width + 4) // 5)
+                if (
+                    width <= 0
+                    or height <= 0
+                    or contrast_fraction < 0.01
+                    or row_coverage < min_rows
+                    or column_coverage < min_columns
+                ):
                     raise ValueError("final PDF raster contains no visible contrast")
     except RendererUnavailable:
         raise
