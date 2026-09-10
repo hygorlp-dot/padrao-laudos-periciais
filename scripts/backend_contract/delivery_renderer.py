@@ -508,6 +508,8 @@ def _validate_pdf_raster_visibility(pdf_content: bytes, visual_extents: list[tup
         mask_document = _pdfium.PdfDocument(_text_only_pdf(pdf_content))
         for page_number, page in enumerate(document):
             mask_page = mask_document[page_number]
+            if page.get_rotation() % 360:
+                raise RendererUnavailable("local PDF raster rotated-page geometry is unsupported")
             image = page.render(scale=2).to_pil().convert("L")
             mask_image = mask_page.render(scale=2).to_pil().convert("L")
             crop_left, crop_bottom, crop_right, crop_top = page.get_cropbox()
