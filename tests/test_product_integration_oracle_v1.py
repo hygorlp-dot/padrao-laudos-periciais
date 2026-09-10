@@ -9,6 +9,8 @@ import os
 from io import BytesIO
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
+from pypdf import PdfWriter
+from pypdf.generic import DictionaryObject, NameObject, StreamObject
 
 import pytest
 
@@ -51,6 +53,37 @@ def _bridge_http(runtime, method: str, path: str, value: object | None = None, r
     supplied = {**browser_mutation_headers(runtime), **(headers or {})}
     status, _response_headers, body = bridge_request(runtime, method, path, body=value, raw_body=raw_body, headers=supplied)
     return status, (json.loads(body) if body else None)
+
+
+def _bridge_raw(runtime, method: str, path: str, value: object | None = None, raw_body: bytes | None = None, headers: dict | None = None):
+    supplied = {**browser_mutation_headers(runtime), **(headers or {})}
+    return bridge_request(runtime, method, path, body=value, raw_body=raw_body, headers=supplied)
+
+
+def _pdf_sintetico_com_jdm(path: Path) -> None:
+    """Synthetic PJe export with plural principals and representatives only."""
+    base = path.with_name(f"base-{path.name}")
+    pdf_sintetico(base)
+    writer = PdfWriter(clone_from=str(base))
+    page = writer.add_blank_page(width=612, height=792)
+    font = DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"),
+        NameObject("/Subtype"): NameObject("/Type1"),
+        NameObject("/BaseFont"): NameObject("/Helvetica"),
+    })
+    page[NameObject("/Resources")] = DictionaryObject({
+        NameObject("/Font"): DictionaryObject({NameObject("/F1"): writer._add_object(font)})
+    })
+    stream = StreamObject()
+    stream.set_data((
+        "BT /F1 10 Tf 40 730 Td (PARTES PROCURADOR TERCEIRO VINCULADO) Tj "
+        "0 -20 Td (MARIA DA SILVA (AUTORA) JOAO ADVOGADO (ADVOGADO)) Tj "
+        "0 -20 Td (CARLOS DE SOUZA (AUTOR) ANA PROCURADORA (PROCURADOR)) Tj "
+        "0 -20 Td (BANCO EXEMPLO (REU) BRUNO ADVOGADO (ADVOGADO)) Tj ET"
+    ).encode("ascii"))
+    page[NameObject("/Contents")] = writer._add_object(stream)
+    with path.open("wb") as handle:
+        writer.write(handle)
 
 
 @WINDOWS_MUTABLE_RECOVERY
@@ -359,7 +392,7 @@ def test_d1_d11_normal_composed_product_path_delivers_closes_and_recovers_withou
 
 def test_longitudinal_oracle_starts_with_synthetic_pje_through_product_bridge(tmp_path: Path) -> None:
     pdf = tmp_path / "autos-longitudinais-sinteticos.pdf"
-    pdf_sintetico(pdf)
+    _pdf_sintetico_com_jdm(pdf)
     private = tmp_path / "private"
     provision_private_root(private)
     runtime = build_pericial_application(
@@ -389,6 +422,368 @@ def test_longitudinal_oracle_starts_with_synthetic_pje_through_product_bridge(tm
         assert status == 201
         assert analysis["snapshot"]["documents"]
         assert all(item["storage_content_id"] == material["content_id"] for item in analysis["snapshot"]["documents"])
+        context = analysis["snapshot"]["judicial_context"]
+        assert len(context["participants"]) == 3
+        assert len(context["representation_links"]) == 3
+        assert {item["raw_name"] for item in context["entities"]} >= {
+            "MARIA DA SILVA", "CARLOS DE SOUZA", "BANCO EXEMPLO",
+            "JOAO ADVOGADO", "ANA PROCURADORA", "BRUNO ADVOGADO",
+        }
+        assert all(
+            item["representative_entity_id"] not in {participant["entity_id"] for participant in context["participants"]}
+            for item in context["representation_links"]
+        )
+
+        document_id = analysis["snapshot"]["documents"][0]["document_id"]
+        item_ids = {}
+        for kind, text in (
+            ("CLAIM", "A parte autora alega infiltração sintética."),
+            ("PERICIAL_OBJECT", "Objeto técnico sintético do imóvel."),
+            ("PERICIAL_QUESTION", "Qual é a condição observável no local?"),
+        ):
+            status, analysis = _bridge_http(runtime, "POST", f"{root}/case-analysis/items", {
+                "expected_revision": analysis["revision"], "item_kind": kind, "text": text,
+                "source_document_id": document_id, "page_or_span": "p. 2",
+                "technical_subjects": ["tema sintético"], "values": {},
+            })
+            assert status == 200, analysis
+            collection = {"CLAIM": "claims", "PERICIAL_OBJECT": "pericial_objects", "PERICIAL_QUESTION": "questions"}[kind]
+            item_ids[kind] = analysis["snapshot"][collection][-1]["item_id"]
+            status, analysis = _bridge_http(runtime, "POST", f"{root}/case-analysis/reviews", {
+                "expected_revision": analysis["revision"], "target_item_id": item_ids[kind],
+                "action": "CONFIRM", "corrected_value": None, "reviewer": "PROFESSIONAL-001",
+                "reason": "Revisão humana sintética efetiva.",
+            })
+            assert status == 200, analysis
+        assert len(analysis["snapshot"]["human_reviews"]) == 3
+        question_id = item_ids["PERICIAL_QUESTION"]
+        claim_id = item_ids["CLAIM"]
+
+        status, process_case = _bridge_http(runtime, "POST", f"{root}/process-case", {
+            "expected_revision": None,
+            "data": {
+                "numero_processo": "0000001-00.2026.4.00.0001", "ramo_justica": "Justiça Federal",
+                "tribunal": "Tribunal sintético", "vara": "Vara sintética", "municipio_sede": "Salvador",
+                "subsecao_judiciaria": "Salvador", "comarca_municipio": "Salvador", "uf": "BA",
+                "parte_requerente": "MARIA DA SILVA", "parte_requerida": "BANCO EXEMPLO",
+            },
+        })
+        assert status == 200, process_case
+
+        status, planning = _bridge_http(runtime, "POST", f"{root}/pericial-planning", {"title": "Plano longitudinal sintético"})
+        assert status == 201, planning
+        planned_item = planning["snapshot"]["inspection_requirements"][0]
+        status, planning = _bridge_http(runtime, "POST", f"{root}/pericial-planning/decisions", {
+            "expected_revision": planning["revision"], "target_item_id": planned_item["item_id"],
+            "action": "APPROVE", "reviewer": "PROFESSIONAL-001",
+            "reason": "Plano aprovado para captura sintética.", "decided_value": None,
+        })
+        assert status == 200, planning
+        status, inspection = _bridge_http(runtime, "POST", f"{root}/inspection-session", {
+            "responsible_professional": "PROFESSIONAL-001", "location_context": "Local sintético",
+            "participant_references": [context["participants"][0]["participant_id"]],
+        })
+        assert status == 201, inspection
+        status, offline = _bridge_http(runtime, "POST", f"{root}/offline-inspection", {"device_session_id": "SESSION-SYNTHETIC-001"})
+        assert status == 201, offline
+        package = offline["package"]
+        photo_bytes = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+        status, photo = _bridge_http(runtime, "POST", f"{root}/inspection-photos", raw_body=photo_bytes,
+                                     headers={"Content-Type": "image/png", "X-Document-Filename": "campo.png"})
+        assert status == 201, photo
+        field = package["inspection_snapshot"]
+        field_item = field["items"][0]
+        location_id = field["locations"][0]["location_id"]
+        field_item.update(
+            state="COMPLETED", observation_ids=["OBS-LONGITUDINAL-001"],
+            measurement_ids=["MEASUREMENT-LONGITUDINAL-001"], photo_ids=["PHOTO-LONGITUDINAL-001"],
+            note="Execução offline sintética registrada pelo profissional.",
+        )
+        # Preserve the canonical location created with the inspection session.
+        field["methods"] = [{"method_id": "METHOD-LONGITUDINAL-001", "name": "Medição sintética", "procedure": "Leitura direta.", "provenance": "Plano aprovado."}]
+        field["instruments"] = [{"instrument_id": "INSTRUMENT-LONGITUDINAL-001", "identity": "Instrumento sintético", "model": "MODEL-001", "serial_number": "SERIAL-001", "capability": "0-2000 mm", "calibration_claimed": True, "certificate_reference": "CERT-001"}]
+        field["instrument_statuses"] = [{"status_id": "STATUS-LONGITUDINAL-001", "instrument_id": "INSTRUMENT-LONGITUDINAL-001", "status": "CALIBRATION_VALID", "checked_at": "2026-09-01T12:00:00+00:00", "evidence_reference": "CERT-001"}]
+        field["observations"] = [{
+            "observation_id": "OBS-LONGITUDINAL-001", "inspection_item_id": field_item["item_id"],
+            "observation_type": "DIRECT_OBSERVATION", "raw_observation": "Condição superficial observada em campo.",
+            "location_id": location_id, "timestamp": "2026-09-01T12:05:00+00:00",
+            "operator": "PROFESSIONAL-001", "provenance": "Captura offline local sintética.",
+        }]
+        field["measurements"] = [{
+            "measurement_id": "MEASUREMENT-LONGITUDINAL-001", "inspection_item_id": field_item["item_id"],
+            "quantity": "abertura", "raw_value": "0.20", "raw_unit": "mm", "normalized_value": "0.20",
+            "normalized_unit": "mm", "instrument_id": "INSTRUMENT-LONGITUDINAL-001", "method_id": "METHOD-LONGITUDINAL-001",
+            "location_id": location_id, "timestamp": "2026-09-01T12:06:00+00:00",
+            "operator": "PROFESSIONAL-001", "uncertainty": "±0.01 mm", "raw_observation": "Leitura direta sintética.",
+            "provenance": "Registro de medição sintético.",
+        }]
+        field["measurement_series"] = [{"series_id": "SERIES-LONGITUDINAL-001", "measurement_ids": ["MEASUREMENT-LONGITUDINAL-001"], "purpose": "Preservar a leitura bruta."}]
+        field["photos"] = [{
+            "photo_id": "PHOTO-LONGITUDINAL-001", "inspection_item_id": field_item["item_id"],
+            "private_content_id": photo["content_id"], "original_sha256": photo["checksum_sha256"],
+            "reliable_capture_timestamp": "2026-09-01T12:07:00+00:00", "capture_timestamp_reliability": "RELIABLE",
+            "location_id": location_id, "caption": "Foto de campo sintética.",
+            "device": "DEVICE-SYNTHETIC", "provenance": "Bytes originais preservados localmente.",
+        }]
+        field["evidence_candidates"] = [{
+            "candidate_id": "EVIDENCE-CANDIDATE-LONGITUDINAL-001", "inspection_item_id": field_item["item_id"],
+            "source_record_ids": ["OBS-LONGITUDINAL-001", "MEASUREMENT-LONGITUDINAL-001", "PHOTO-LONGITUDINAL-001"],
+            "description": "Registros de campo candidatos à análise.", "provenance": "Captura offline sincronizada.",
+        }]
+        field["coverage"] = {"total_items": 1, "pending_items": 0, "completed_items": 1, "partial_items": 0,
+                              "not_executed_items": 0, "not_applicable_items": 0, "blocked_items": 0,
+                              "complete": True, "limitation_ids": [], "reasons": []}
+        status, offline = _bridge_http(runtime, "PUT", f"{root}/offline-inspection", {
+            "package_id": package["package_id"], "expected_package_revision": package["package_revision"], "snapshot": field,
+        })
+        assert status == 201, offline
+        package = offline["package"]
+        assert package["package_revision"] == 2
+        status, sync = _bridge_http(runtime, "POST", f"{root}/offline-sync", {"package_id": package["package_id"]}, headers={"Content-Type": "application/json"})
+        assert status == 200 and sync["accepted"] is True and sync["conflicts"] == [], sync
+
+        status, inspection = _bridge_http(runtime, "GET", f"{root}/inspection-session")
+        assert status == 200
+        observation_id = inspection["snapshot"]["observations"][0]["observation_id"]
+        measurement_id = inspection["snapshot"]["measurements"][0]["measurement_id"]
+        photo_id = inspection["snapshot"]["photos"][0]["photo_id"]
+        status, pat = _bridge_http(runtime, "POST", f"{root}/construction-defect-analysis", {
+            "observation_contexts": [{
+                "observation_id": observation_id,
+                "manifestation": "Condição superficial observada em campo.",
+                "system": "VEDACOES", "element": "Parede", "outcome": "OBSERVED",
+                "methods": ["INSPECAO_VISUAL"], "measurement_ids": [measurement_id],
+                "photo_ids": [photo_id], "claim_ids": [claim_id], "question_ids": [question_id],
+            }],
+        })
+        assert status == 201, pat
+        pat_id = pat["snapshot"]["analysis_final"]["patologias"][0]["id"]
+        status, pat = _bridge_http(runtime, "POST", f"{root}/construction-defect-analysis/pathology-reviews", {
+            "expected_revision": pat["revision"], "pat_id": pat_id, "action": "APPROVE",
+            "professional_id": "PROFESSIONAL-001", "reason": "PAT sintético revisado pelo profissional.",
+        })
+        assert status == 200, pat
+        assert pat["snapshot"]["reviews"][-1]["action"] == "APPROVE"
+
+        status, technical = _bridge_http(runtime, "POST", f"{root}/technical-snapshot", {})
+        assert status == 201, technical
+        status, technical = _bridge_http(runtime, "POST", f"{root}/technical-snapshot/evidence-proposals", {
+            "source_kind": "CASE_QUESTION", "source_id": question_id,
+            "proposition": "O quesito sintético requer resposta técnica independente do PAT.",
+            "why_relevant": "Autoridade processual do quesito.", "expected_revision": technical["revision"],
+        })
+        assert status == 200, technical
+        technical_evidence_id = technical["snapshot"]["evidence_items"][-1]["evidence_id"]
+        status, technical = _bridge_http(runtime, "POST", f"{root}/technical-snapshot/evidence-reviews", {
+            "evidence_id": technical_evidence_id, "action": "APPROVE", "professional_id": "PROFESSIONAL-001",
+            "reason": "Evidência técnica sintética conferida.", "expected_revision": technical["revision"],
+        })
+        assert status == 200, technical
+        status, technical = _bridge_http(runtime, "POST", f"{root}/technical-snapshot/method-selections", {
+            "evidence_id": technical_evidence_id, "method_identity": "Análise técnica sintética",
+            "procedure": "Conferência independente do quesito.", "output": "Base técnica confirmada.",
+            "professional_id": "PROFESSIONAL-001", "expected_revision": technical["revision"],
+        })
+        assert status == 200, technical
+        method_id = technical["snapshot"]["method_applications"][-1]["method_application_id"]
+        status, technical = _bridge_http(runtime, "POST", f"{root}/technical-snapshot/finding-proposals", {
+            "method_application_id": method_id, "technical_proposition": "A resposta técnica sintética permanece separada do PAT.",
+            "scope": "Caso longitudinal sintético.", "limitation": "Fixture controlada.",
+            "uncertainty": "Sem dados reais.", "uncertainty_impact": "Não altera o teste de autoridade.",
+            "contrary_evidence_ids": [], "expected_revision": technical["revision"],
+        })
+        assert status == 200, technical
+        finding_proposal_id = technical["snapshot"]["finding_proposals"][-1]["proposal_id"]
+        status, technical = _bridge_http(runtime, "POST", f"{root}/technical-snapshot/finding-reviews", {
+            "proposal_id": finding_proposal_id, "action": "APPROVE", "professional_id": "PROFESSIONAL-001",
+            "reason": "Achado técnico separado aprovado.", "modified_proposition": None,
+            "resolve_conflicts": False, "expected_revision": technical["revision"],
+        })
+        assert status == 200, technical
+        assert technical["snapshot"]["coverage"]["effective_findings"] == 1
+        technical_finding_id = technical["snapshot"]["findings"][0]["finding_id"]
+        decision_id = technical["snapshot"]["decisions"][-1]["decision_id"]
+
+        profile = _fixture("report-snapshot-v1.json")["expert_profile"]
+        status, profile_response = _bridge_http(runtime, "PUT", f"{root}/expert-profile", {
+            "expected_revision": None, "profile": profile,
+        })
+        assert status == 200, profile_response
+        status, report = _bridge_http(runtime, "POST", f"{root}/report-snapshot", {})
+        assert status == 201, report
+        for context_item in report["snapshot"]["context_matrix"]:
+            status, report = _bridge_http(runtime, "POST", f"{root}/report-snapshot/draft-amendments", {
+                "expected_revision": report["revision"], "action": "UPDATE_CONTEXT",
+                "values": {"field": context_item["field"], "status": "PRESENT", "source_id": document_id, "note": "Fonte sintética vinculada."},
+            })
+            assert status == 200, report
+        for section in report["snapshot"]["sections"]:
+            if not section["required_by_cpc473"]:
+                continue
+            status, report = _bridge_http(runtime, "POST", f"{root}/report-snapshot/draft-amendments", {
+                "expected_revision": report["revision"], "action": "ADD_CLAIM",
+                "values": {"section_id": section["section_id"], "text": "Conteúdo profissional sintético.", "source_kind": "CASE_DOCUMENT", "source_id": document_id},
+            })
+            assert status == 200, report
+        answer_section = report["snapshot"]["sections"][0]["section_id"]
+        status, report = _bridge_http(runtime, "POST", f"{root}/report-snapshot/draft-amendments", {
+            "expected_revision": report["revision"], "action": "ADD_CLAIM",
+            "values": {"section_id": answer_section, "text": "Patologia observada e aprovada para análise.", "source_kind": "PATHOLOGY", "source_id": pat_id},
+        })
+        assert status == 200, report
+        assert any(
+            provenance["source_kind"] == "PATHOLOGY" and provenance["source_id"] == pat_id
+            for claim in report["snapshot"]["claims"]
+            for provenance in claim["provenance"]
+        )
+        status, report = _bridge_http(runtime, "POST", f"{root}/report-snapshot/draft-amendments", {
+            "expected_revision": report["revision"], "action": "ADD_CLAIM",
+            "values": {"section_id": answer_section, "text": "Achado técnico efetivo sintético.", "source_kind": "TECHNICAL_FINDING", "source_id": technical_finding_id},
+        })
+        assert status == 200, report
+        technical_claim_id = report["snapshot"]["claims"][-1]["claim_id"]
+        report_revision_before_answer = report["revision"]
+        status, report = _bridge_http(runtime, "POST", f"{root}/report-snapshot/draft-amendments", {
+            "expected_revision": report_revision_before_answer, "action": "ADD_ANSWER",
+            "values": {"section_id": answer_section, "question_id": question_id, "text": "Resposta sintética rastreável.",
+                        "finding_id": technical_finding_id, "evidence_ids": [technical_evidence_id], "method_ids": [method_id],
+                                "decision_id": decision_id, "claim_ids": [technical_claim_id]},
+        })
+        assert status == 200, report
+        for action in ("MARK_REVIEWED", "APPROVE"):
+            status, report = _bridge_http(runtime, "POST", f"{root}/report-snapshot/reviews", {
+                "expected_revision": report["revision"], "action": action, "professional_id": profile["profile_id"],
+                "reason": "Revisão profissional sintética do relatório.",
+            })
+            assert status == 200, report
+        assert report["snapshot"]["state"] == "APPROVED"
+        report_digest = _digest(report["snapshot"])
+
+        manifest = _fixture("report-template-manifest-v1.json")
+        template_bytes = _bound_template_docm(manifest["template_id"])
+        status, template = _bridge_http(runtime, "POST", f"{root}/delivery-templates", raw_body=template_bytes,
+                                        headers={"Content-Type": "application/vnd.ms-word.document.macroenabled.12", "X-Document-Filename": "modelo.docm"})
+        assert status == 201, template
+        status, delivery = _bridge_http(runtime, "POST", f"{root}/delivery-snapshot", {
+            "template_content_id": template["content_id"], "manifest": manifest,
+        })
+        assert status == 201, delivery
+        status, delivery = _bridge_http(runtime, "POST", f"{root}/delivery-snapshot/render", {
+            "expected_revision": delivery["revision"], "manifest": manifest,
+        })
+        assert status == 200, delivery
+        for action in ("MARK_READY_FOR_REVIEW", "APPROVE"):
+            status, delivery = _bridge_http(runtime, "POST", f"{root}/delivery-snapshot/reviews", {
+                "expected_revision": delivery["revision"], "action": action, "professional_id": profile["profile_id"],
+                "reason": "Entrega Word sintética revisada.",
+            })
+            assert status == 200, delivery
+        for action in ("finalize", "deliver"):
+            status, delivery = _bridge_http(runtime, "POST", f"{root}/delivery-snapshot/{action}", {
+                "expected_revision": delivery["revision"], "professional_id": profile["profile_id"],
+                "reason": "Integridade do artefato Word sintético verificada.",
+            })
+            assert status == 200, delivery
+        assert delivery["snapshot"]["state"] == "DELIVERED"
+        assert delivery["snapshot"]["artifacts"][0]["format"] in {"DOCX", "DOCM"}
+        delivery_digest = _digest(delivery["snapshot"])
+
+        status, budget = _bridge_http(runtime, "POST", f"{root}/budget-snapshot", {"process_id": None, "appointment_id": None})
+        assert status == 201, budget
+        for action, values in (
+            ("items", {"category": "PROFESSIONAL_HOURS", "description": "Horas sintéticas", "quantity": "2.00", "unit_amount": "100.00"}),
+            ("effort-estimates", {"professional_id": "PROFESSIONAL-001", "estimated_hours": "2.00", "hourly_amount": "100.00"}),
+            ("travel-estimates", {"distance_km": "10.00", "amount_per_km": "2.00", "description": "Deslocamento sintético"}),
+            ("third-party-estimates", {"provider_description": "Laboratório sintético", "amount": "50.00", "currency": "BRL"}),
+            ("proposals", {"amount": "3000.00", "currency": "BRL", "rationale": "Proposta sintética."}),
+            ("court-approvals", {"external_court_decision_reference": "Mov. 42, decisão sintética.", "amount": "2500.00", "currency": "BRL", "decided_on": "2026-09-01"}),
+            ("expenses", {"category": "TRAVEL", "amount": "100.00", "currency": "BRL", "incurred_on": "2026-09-01", "description": "Deslocamento sintético."}),
+            ("payments", {"amount": "2500.00", "currency": "BRL", "received_on": "2026-09-02", "reference": "Depósito sintético."}),
+        ):
+            status, budget = _bridge_http(runtime, "POST", f"{root}/budget-snapshot/{action}", {
+                "expected_revision": budget["revision"], **values,
+            })
+            assert status == 200, (action, budget)
+        status, budget = _bridge_http(runtime, "POST", f"{root}/budget-snapshot/close", {"expected_revision": budget["revision"]})
+        assert status == 200, budget
+        assert budget["snapshot"]["status"] == "CLOSED"
+        budget_digest = _digest(budget["snapshot"])
+
+        status, process_case_final = _bridge_http(runtime, "GET", f"{root}/process-case")
+        assert status == 200, process_case_final
+        status, pje_final = _bridge_http(runtime, "GET", f"{root}/pje-intake")
+        assert status == 200, pje_final
+        pre_recovery = {
+            "process_case": process_case_final,
+            "pje": pje_final,
+            "case_analysis": {"revision": analysis["revision"], "snapshot": analysis["snapshot"], "digest": _digest(analysis["snapshot"])},
+            "planning": {"revision": planning["revision"], "snapshot": planning["snapshot"], "digest": _digest(planning["snapshot"])},
+            "inspection": {"revision": inspection["revision"], "snapshot": inspection["snapshot"], "digest": _digest(inspection["snapshot"])},
+            "pat": {"revision": pat["revision"], "snapshot": pat["snapshot"], "digest": _digest(pat["snapshot"])},
+            "technical": {"revision": technical["revision"], "snapshot": technical["snapshot"], "digest": _digest(technical["snapshot"])},
+            "report": {"revision": report["revision"], "snapshot": report["snapshot"], "digest": report_digest},
+            "delivery": {"revision": delivery["revision"], "snapshot": delivery["snapshot"], "digest": delivery_digest},
+            "budget": {"revision": budget["revision"], "snapshot": budget["snapshot"], "digest": budget_digest},
+        }
+        status, backup_headers, backup = _bridge_raw(runtime, "POST", f"{root}/backup", headers={"Content-Type": "application/json"})
+        assert status == 200 and backup_headers["Content-Type"] == "application/octet-stream" and isinstance(backup, bytes) and backup
+        status, backup_summary = _bridge_http(runtime, "POST", "/app-api/v1/recovery/verify", raw_body=backup,
+                                              headers={"Content-Type": "application/octet-stream"})
+        assert status == 200, backup_summary
+        assert backup_summary["workspace_id"] == workspace_id
+        runtime.close()
+
+        recovered_private = tmp_path / "recovered-private"
+        provision_private_root(recovered_private)
+        recovered = build_pericial_application(
+            tmp_path / "recovered.db", frontend_build(tmp_path / "recovered-frontend"),
+            token=TOKEN, private_root=recovered_private,
+        )
+        recovered.start()
+        try:
+            status, staged = _bridge_http(recovered, "POST", "/app-api/v1/recovery/staging", raw_body=backup,
+                                          headers={"Content-Type": "application/octet-stream"})
+            assert status == 201, staged
+            recovery_id = staged["recovery_id"]
+            status, promoted = _bridge_http(recovered, "POST", f"/app-api/v1/recovery/{recovery_id}/promote", {"confirm": True})
+            assert status == 200, promoted
+            assert promoted["workspace_id"] == workspace_id
+            recovered_root = f"/app-api/v1/workspaces/{workspace_id}"
+            status, recovered_case = _bridge_http(recovered, "GET", f"{recovered_root}/case-analysis")
+            assert status == 200
+            status, recovered_planning = _bridge_http(recovered, "GET", f"{recovered_root}/pericial-planning")
+            assert status == 200
+            status, recovered_inspection = _bridge_http(recovered, "GET", f"{recovered_root}/inspection-session")
+            assert status == 200
+            status, recovered_pat = _bridge_http(recovered, "GET", f"{recovered_root}/construction-defect-analysis")
+            assert status == 200
+            status, recovered_technical = _bridge_http(recovered, "GET", f"{recovered_root}/technical-snapshot")
+            assert status == 200
+            status, recovered_report = _bridge_http(recovered, "GET", f"{recovered_root}/report-snapshot")
+            assert status == 200
+            status, recovered_delivery = _bridge_http(recovered, "GET", f"{recovered_root}/delivery-snapshot")
+            assert status == 200
+            status, recovered_budget = _bridge_http(recovered, "GET", f"{recovered_root}/budget-snapshot")
+            assert status == 200
+            status, recovered_process_case = _bridge_http(recovered, "GET", f"{recovered_root}/process-case")
+            assert status == 200
+            status, recovered_pje = _bridge_http(recovered, "GET", f"{recovered_root}/pje-intake")
+            assert status == 200
+            recovered_values = {
+                "case_analysis": recovered_case, "planning": recovered_planning, "inspection": recovered_inspection,
+                "pat": recovered_pat, "technical": recovered_technical, "report": recovered_report,
+                "delivery": recovered_delivery, "budget": recovered_budget,
+            }
+            for name, value in recovered_values.items():
+                assert value["revision"] == pre_recovery[name]["revision"]
+                assert value["snapshot"] == pre_recovery[name]["snapshot"]
+                assert _digest(value["snapshot"]) == pre_recovery[name]["digest"]
+            assert recovered_process_case == pre_recovery["process_case"]
+            assert recovered_pje == pre_recovery["pje"]
+            assert recovered_delivery["snapshot"]["artifacts"][0]["format"] in {"DOCX", "DOCM"}
+            assert recovered_budget["snapshot"]["status"] == "CLOSED"
+        finally:
+            recovered.close()
     finally:
         runtime.close()
 
