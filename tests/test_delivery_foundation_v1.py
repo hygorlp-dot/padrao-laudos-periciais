@@ -827,7 +827,7 @@ def test_visual_raster_accepts_nonzero_cropbox_origin() -> None:
         requires_visual_raster = True
 
         def convert(self, _content: bytes, _source_format: str) -> bytes:
-            return _parseable_text_pdf("BOUND", crop_box=(10, 10, 605, 852))
+            return _parseable_text_pdf("BOUND", crop_box=(10, 10, 585, 832))
 
     if delivery_renderer._pdfium is None:
         pytest.skip("pypdfium2 is unavailable in this runtime")
