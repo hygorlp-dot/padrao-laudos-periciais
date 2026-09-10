@@ -524,17 +524,18 @@ def test_final_pdf_rejects_a_table_flattened_into_unrelated_lines() -> None:
 
 
 def test_final_pdf_rejects_text_positioned_outside_page_geometry() -> None:
+    source_text = "B" * 100
     word = BytesIO()
     with ZipFile(word, "w", ZIP_DEFLATED) as package:
         package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
         package.writestr(
             "word/document.xml",
-            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+            f'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>{source_text}</w:t></w:r></w:p></w:body></w:document>',
         )
 
     class OffPageConverter:
         def convert(self, _content: bytes, _source_format: str) -> bytes:
-            return _parseable_text_pdf("BOUND", x=700)
+            return _parseable_text_pdf(source_text, x=590)
 
     with pytest.raises(ValueError, match="visual geometry"):
         delivery_renderer.render_final_pdf_candidate(

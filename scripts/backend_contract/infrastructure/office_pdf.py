@@ -9,7 +9,6 @@ dependency is installed on Windows.
 
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 import sys
 import tempfile
@@ -17,16 +16,19 @@ from typing import Callable
 
 from ..delivery_renderer import RendererUnavailable
 
+try:
+    import win32com.client as _win32_client
+except ModuleNotFoundError:  # Optional local Windows dependency; fail closed at use time.
+    _win32_client = None
+
 
 def _default_word_factory() -> object:
     if sys.platform != "win32":
         raise RendererUnavailable("Microsoft Word Desktop COM requires Windows")
+    if _win32_client is None:
+        raise RendererUnavailable("Microsoft Word COM automation dependency is unavailable")
     try:
-        client = importlib.import_module("win32com.client")
-    except ModuleNotFoundError as exc:
-        raise RendererUnavailable("Microsoft Word COM automation dependency is unavailable") from exc
-    try:
-        return client.DispatchEx("Word.Application")
+        return _win32_client.DispatchEx("Word.Application")
     except Exception as exc:  # COM providers expose platform-specific errors.
         raise RendererUnavailable("Microsoft Word Desktop COM is unavailable") from exc
 
@@ -72,37 +74,51 @@ class LocalOfficePdfConverter:
                 target = root / "output.pdf"
                 source.write_bytes(word_bytes)
 
-                app = self._word_factory()
-                self._renderer_version = str(getattr(app, "Version", "UNKNOWN"))
-                app.Visible = False
-                app.DisplayAlerts = 0
-                documents = getattr(app, "Documents")
-                document = documents.Open(
-                    FileName=str(source),
-                    ConfirmConversions=False,
-                    ReadOnly=True,
-                    AddToRecentFiles=False,
-                    OpenAndRepair=False,
-                    NoEncodingDialog=True,
-                )
-                document.ExportAsFixedFormat(
-                    OutputFileName=str(target),
-                    ExportFormat=17,
-                    OpenAfterExport=False,
-                    OptimizeFor=0,
-                    Range=0,
-                    Item=0,
-                    IncludeDocProps=True,
-                    KeepIRMSettings=True,
-                    CreateBookmarks=0,
-                    DocStructureTags=True,
-                    BitmapMissingFonts=True,
-                    UseISO19005_1=False,
-                )
-                output = target.read_bytes()
-                if not output.startswith(b"%PDF-") or not output.rstrip().endswith(b"%%EOF"):
-                    raise RendererUnavailable("Microsoft Word returned invalid PDF bytes")
-                return output
+                try:
+                    app = self._word_factory()
+                    self._renderer_version = str(getattr(app, "Version", "UNKNOWN"))
+                    app.Visible = False
+                    app.DisplayAlerts = 0
+                    documents = getattr(app, "Documents")
+                    document = documents.Open(
+                        FileName=str(source),
+                        ConfirmConversions=False,
+                        ReadOnly=True,
+                        AddToRecentFiles=False,
+                        OpenAndRepair=False,
+                        NoEncodingDialog=True,
+                    )
+                    document.ExportAsFixedFormat(
+                        OutputFileName=str(target),
+                        ExportFormat=17,
+                        OpenAfterExport=False,
+                        OptimizeFor=0,
+                        Range=0,
+                        Item=0,
+                        IncludeDocProps=True,
+                        KeepIRMSettings=True,
+                        CreateBookmarks=0,
+                        DocStructureTags=True,
+                        BitmapMissingFonts=True,
+                        UseISO19005_1=False,
+                    )
+                    output = target.read_bytes()
+                    if not output.startswith(b"%PDF-") or not output.rstrip().endswith(b"%%EOF"):
+                        raise RendererUnavailable("Microsoft Word returned invalid PDF bytes")
+                    return output
+                finally:
+                    if document is not None:
+                        try:
+                            document.Close(SaveChanges=0)
+                        except Exception:
+                            pass
+                        document = None
+                    if app is not None:
+                        try:
+                            app.Quit(SaveChanges=0)
+                        except Exception:
+                            pass
+                        app = None
         except RendererUnavailable:
             raise
         except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
@@ -110,6 +126,8 @@ class LocalOfficePdfConverter:
         except Exception as exc:
             raise RendererUnavailable("local Microsoft Word PDF conversion failed") from exc
         finally:
+            # The inner finally performs cleanup before TemporaryDirectory exits.
+            # Keep this guard for failures before the temporary context opens.
             if document is not None:
                 try:
                     document.Close(SaveChanges=0)
