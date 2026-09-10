@@ -746,6 +746,27 @@ def test_final_pdf_rejects_unmodeled_visual_state(operator: bytes) -> None:
         )
 
 
+def test_final_pdf_rejects_post_text_opaque_occlusion() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class OccludingConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND").replace(
+                b"Tj ET", b"Tj ET 1 1 1 rg 0 0 595 842 re f", 1,
+            )
+
+    with pytest.raises(ValueError, match="(?:occlusion|invalid)"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=OccludingConverter(),
+        )
+
+
 def test_image_fidelity_signature_distinguishes_uniform_opposites() -> None:
     black = Image.new("RGB", (64, 64), "black")
     white = Image.new("RGB", (64, 64), "white")

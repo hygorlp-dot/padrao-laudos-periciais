@@ -431,11 +431,16 @@ def _reject_explicitly_invisible_text(reader: PdfReader) -> None:
 def _reject_unmodeled_visual_state(reader: PdfReader) -> None:
     """Fail closed for PDF state that can hide or alter glyph painting."""
     for page in reader.pages:
+        text_seen = False
         for _operands, operator in ContentStream(page.get_contents(), reader).operations:
             if operator in {b"gs", b"W", b"W*"}:
                 raise ValueError("final PDF uses unsupported visual state")
             if operator == b"Tr":
                 raise ValueError("final PDF uses unsupported text rendering mode")
+            if operator in {b"Tj", b"TJ", b"'", b'"'}:
+                text_seen = True
+            elif text_seen and operator in {b"f", b"F", b"B", b"b", b"B*", b"b*", b"S", b"s", b"Do"}:
+                raise ValueError("final PDF has unsupported post-text occlusion")
 
 
 def _inject_canonical_report(content: bytes, report: ReportSnapshot) -> bytes:
