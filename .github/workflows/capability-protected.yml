@@ -92,7 +92,76 @@ jobs:
           if ((($changed | Where-Object { $_ -eq 'scripts/quality/capability_trust_anchor.py' }).Count -eq 0) -and (($changed | Where-Object { $_ -eq 'scripts/quality/architecture_analyzer.py' }).Count -eq 0)) {
             throw 'dedicated Word transition did not change a protected trust judge'
           }
-          $comparison = python -c "import json,subprocess,sys; from pathlib import Path; from scripts.quality.capability_analyzer import analyze_capabilities; root=Path(r'$env:CAPABILITY_CANDIDATE_ROOT'); policy=Path(r'$env:GITHUB_WORKSPACE/trusted/config/capability-policy-v1.json'); base='$base'; candidate='$candidate'; key=lambda item:(item.get('code'),item.get('canonicalPath'),item.get('module'),item.get('location',{}).get('line'),item.get('location',{}).get('column'),item.get('normalizedAstSha256'),item.get('policyVersion'),item.get('analyzer')); tree=lambda commit: subprocess.check_output(['git','rev-parse',f'{commit}^{{tree}}'],cwd=root,text=True).strip(); left=sorted(key(item) for item in analyze_capabilities(root,base,tree(base),policy_path=policy)); right=sorted(key(item) for item in analyze_capabilities(root,candidate,tree(candidate),policy_path=policy)); print(json.dumps({'equal':left==right,'baseCount':len(left),'candidateCount':len(right)}))"
+          $comparison = @'
+          import json, os, subprocess
+          from pathlib import Path
+          from scripts.quality.capability_analyzer import analyze_capabilities
+
+          root = Path(os.environ['CAPABILITY_CANDIDATE_ROOT'])
+          base = os.environ['CAPABILITY_PROTECTED_BASE_SHA']
+          candidate = os.environ['CAPABILITY_EXPECTED_HEAD_SHA']
+          policy = Path(os.environ['GITHUB_WORKSPACE']) / 'trusted/config/capability-policy-v1.json'
+          allowed_protected = {
+              'config/capability-protected-artifacts-v1.json',
+              'scripts/quality/architecture_analyzer.py',
+              'scripts/quality/capability_trust_anchor.py',
+          }
+          allowed_paths = {
+              'config/architecture-protected-transition-v1.json',
+              'config/capability-exceptions-v1.json',
+              'config/capability-protected-artifacts-v1.json',
+              'config/capability-protected-transition-v1.json',
+              'scripts/quality/architecture_analyzer.py',
+              'scripts/quality/capability_trust_anchor.py',
+              'tests/test_architecture_analyzer_v1.py',
+              'tests/test_architecture_capability_exception_rebind_v1.py',
+              'tests/test_architecture_capability_trust_anchor_v1.py',
+          }
+          transition_path = 'config/capability-protected-transition-v1.json'
+          changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, candidate], cwd=root, text=True).splitlines())
+          def identity(commit, path):
+              output = subprocess.check_output(['git', 'ls-tree', commit, '--', path], cwd=root, text=True).strip()
+              metadata, listed = output.split('\t', 1)
+              mode, object_type, blob = metadata.split()
+              if listed != path or object_type != 'blob':
+                  raise ValueError('identity path/type mismatch')
+              return {'path': path, 'state': 'PRESENT', 'mode': mode, 'objectType': object_type, 'blobSha': blob}
+          transition = json.loads(subprocess.check_output(['git', 'show', f'{candidate}:{transition_path}'], cwd=root, text=True))
+          transition_ok = (
+              transition.get('schemaVersion') == '3.0.0'
+              and transition.get('transitionId') == 'LOCAL_WORD_COM_CONTAINMENT_TRUST_TRANSITION_V1'
+              and transition.get('purpose') == 'BOUND_MICROSOFT_WORD_COM_EXECUTION_FOR_AUTHORITATIVE_WORD_TO_PDF'
+              and transition.get('scope') == 'LOCAL_WORD_COM_CONTAINMENT_V1'
+              and transition.get('protectedBaseSha') == base
+              and isinstance(transition.get('protectedArtifacts'), list)
+              and isinstance(transition.get('supportArtifacts'), list)
+          )
+          rows = {row.get('path'): row for row in transition.get('protectedArtifacts', []) if isinstance(row, dict)}
+          supports = {row.get('path'): row for row in transition.get('supportArtifacts', []) if isinstance(row, dict)}
+          changed_protected = changed & allowed_protected
+          changed_support = changed - changed_protected - {transition_path, 'config/architecture-protected-transition-v1.json'}
+          row_ok = set(rows) == changed_protected and set(supports) == changed_support
+          for path in changed_protected:
+              row = rows.get(path, {})
+              row_ok = row_ok and set(row) == {'path', 'base', 'candidate'} and row['base'] == identity(base, path) and row['candidate'] == identity(candidate, path)
+          for path in changed_support:
+              row = supports.get(path, {})
+              row_ok = row_ok and set(row) == {'path', 'base', 'candidate'} and row['base'] == identity(base, path) and row['candidate'] == identity(candidate, path)
+          # The registry remains base-owned: its path set and every identity must advance exactly.
+          from scripts.quality.capability_trust_anchor import _load_registry
+          base_registry = _load_registry(root, base)
+          candidate_registry = _load_registry(root, candidate)
+          registry_ok = base_registry is not None and candidate_registry is not None and [row['path'] for row in base_registry] == [row['path'] for row in candidate_registry]
+          registry_ok = registry_ok and candidate_registry == [identity(candidate, row['path']) for row in base_registry]
+          key = lambda item: (item.get('code'), item.get('canonicalPath'), item.get('module'), item.get('location', {}).get('line'), item.get('location', {}).get('column'), item.get('normalizedAstSha256'), item.get('policyVersion'), item.get('analyzer'))
+          tree = lambda commit: subprocess.check_output(['git', 'rev-parse', f'{commit}^{{tree}}'], cwd=root, text=True).strip()
+          left = sorted(key(item) for item in analyze_capabilities(root, base, tree(base), policy_path=policy))
+          right = sorted(key(item) for item in analyze_capabilities(root, candidate, tree(candidate), policy_path=policy))
+          result = {'equal': left == right, 'baseCount': len(left), 'candidateCount': len(right), 'transition': transition_ok, 'rows': row_ok, 'registry': registry_ok, 'paths': changed <= allowed_paths}
+          print(json.dumps(result))
+          if not all(result[key] for key in ('equal', 'transition', 'rows', 'registry', 'paths')):
+              raise SystemExit(1)
+          '@ | python -
           if ($LASTEXITCODE -ne 0) { throw 'protected capability comparison failed' }
           $result = $comparison | ConvertFrom-Json
           if (-not $result.equal) { throw "dedicated Word transition introduced new capability findings ($($result.baseCount) -> $($result.candidateCount))" }
