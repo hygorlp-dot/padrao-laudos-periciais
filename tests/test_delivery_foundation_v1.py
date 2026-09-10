@@ -66,7 +66,7 @@ def test_production_delivery_render_uses_local_word_com_without_generic_process(
     assert "Popen" not in source
 
 
-def _parseable_text_pdf(text: str, *, x: int = 50, y: int = 780, crop_top: int | None = None, transform: tuple[int, int, int, int, int, int] | None = None, color: tuple[int, ...] | None = None, color_scope: bool = False, background: bool = False, pre_text_graphics: str = "") -> bytes:
+def _parseable_text_pdf(text: str, *, x: int = 50, y: int = 780, crop_top: int | None = None, crop_box: tuple[int, int, int, int] | None = None, transform: tuple[int, int, int, int, int, int] | None = None, color: tuple[int, ...] | None = None, color_scope: bool = False, background: bool = False, pre_text_graphics: str = "") -> bytes:
     encoded_lines = [line.encode("cp1252").replace(b"\\", b"\\\\").replace(b"(", b"\\(").replace(b")", b"\\)") for line in text.splitlines()]
     prefix = ""
     suffix = ""
@@ -77,11 +77,12 @@ def _parseable_text_pdf(text: str, *, x: int = 50, y: int = 780, crop_top: int |
     color_suffix = " Q" if color_scope else ""
     background_command = "0 0 595 842 re f " if background else ""
     stream = (prefix + background_command + pre_text_graphics + f"BT /F1 10 Tf {color_command}{x} {y} Td 12 TL ").encode("ascii") + b" Tj T* ".join(b"(" + line + b")" for line in encoded_lines) + (b" Tj ET" + color_suffix.encode("ascii") + suffix.encode("ascii"))
-    crop_box = f" /CropBox [0 0 595 {crop_top}]" if crop_top is not None else ""
+    crop_values = crop_box or ((0, 0, 595, crop_top) if crop_top is not None else None)
+    crop_box_value = f" /CropBox [{' '.join(str(item) for item in crop_values)}]" if crop_values is not None else ""
     objects = (
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
         b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
-        f"<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842]{crop_box} /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>".encode("ascii"),
+        f"<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842]{crop_box_value} /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>".encode("ascii"),
         b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
         b"<< /Type /Catalog /Pages 4 0 R >>",
     )
@@ -810,6 +811,28 @@ def test_visual_raster_accepts_fully_visible_glyphs() -> None:
         pytest.skip("pypdfium2 is unavailable in this runtime")
     assert delivery_renderer.render_final_pdf_candidate(
         word_content=word.getvalue(), word_format="DOCX", converter=VisibleConverter(),
+    ).startswith(b"%PDF-")
+
+
+def test_visual_raster_accepts_nonzero_cropbox_origin() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class OffsetCropConverter:
+        requires_visual_raster = True
+
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", crop_box=(10, 10, 605, 852))
+
+    if delivery_renderer._pdfium is None:
+        pytest.skip("pypdfium2 is unavailable in this runtime")
+    assert delivery_renderer.render_final_pdf_candidate(
+        word_content=word.getvalue(), word_format="DOCX", converter=OffsetCropConverter(),
     ).startswith(b"%PDF-")
 
 

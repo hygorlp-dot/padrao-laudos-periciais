@@ -510,7 +510,10 @@ def _validate_pdf_raster_visibility(pdf_content: bytes, visual_extents: list[tup
             mask_page = mask_document[page_number]
             image = page.render(scale=2).to_pil().convert("L")
             mask_image = mask_page.render(scale=2).to_pil().convert("L")
-            page_width, page_height = page.get_size()
+            crop_left, crop_bottom, crop_right, crop_top = page.get_cropbox()
+            page_width, page_height = crop_right - crop_left, crop_top - crop_bottom
+            media_top = float(page.get_mediabox()[3])
+            render_top = min(float(crop_top), media_top)
             page_extents: list[tuple[int, float, float, float, float]] = []
             textpage = mask_page.get_textpage()
             source_textpage = page.get_textpage()
@@ -531,10 +534,10 @@ def _validate_pdf_raster_visibility(pdf_content: bytes, visual_extents: list[tup
                 if any(item[0] == page_number for item in visual_extents):
                     raise RendererUnavailable("local PDF raster glyph geometry is unavailable")
             for _page, min_x, min_y, max_x, max_y in page_extents:
-                left = max(0, int(min_x / page_width * image.width))
-                right = min(image.width, int(max_x / page_width * image.width) + 1)
-                top = max(0, int((page_height - max_y) / page_height * image.height))
-                bottom = min(image.height, int((page_height - min_y) / page_height * image.height) + 1)
+                left = max(0, int((min_x - crop_left) / page_width * image.width))
+                right = min(image.width, int((max_x - crop_left) / page_width * image.width) + 1)
+                top = max(0, int((render_top - max_y) / page_height * image.height))
+                bottom = min(image.height, int((render_top - min_y) / page_height * image.height) + 1)
                 crop = image.crop((left, top, right, bottom))
                 mask_crop = mask_image.crop((left, top, right, bottom))
                 pixels = _raster_pixels(crop)
