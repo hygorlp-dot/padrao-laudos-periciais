@@ -439,7 +439,7 @@ def _reject_unmodeled_visual_state(reader: PdfReader) -> None:
                 raise ValueError("final PDF uses unsupported text rendering mode")
             if operator in {b"Tj", b"TJ", b"'", b'"'}:
                 text_seen = True
-            elif text_seen and operator in {b"f", b"F", b"B", b"b", b"B*", b"b*", b"S", b"s", b"Do"}:
+            elif text_seen and operator in {b"f", b"F", b"f*", b"B", b"b", b"B*", b"b*", b"S", b"s", b"Do"}:
                 raise ValueError("final PDF has unsupported post-text occlusion")
 
 
