@@ -756,6 +756,17 @@ def test_final_pdf_rejects_post_text_opaque_occlusion() -> None:
             '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
         )
 
+    class OccludingConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND").replace(
+                b"Tj ET", b"Tj ET 1 1 1 rg 0 0 595 842 re f", 1,
+            )
+
+    with pytest.raises(ValueError, match="(?:occlusion|invalid)"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=OccludingConverter(),
+        )
+
 
 def test_visual_raster_red_rejects_black_text_on_opaque_black_background() -> None:
     word = BytesIO()
@@ -778,18 +789,6 @@ def test_visual_raster_red_rejects_black_text_on_opaque_black_background() -> No
         delivery_renderer.render_final_pdf_candidate(
             word_content=word.getvalue(), word_format="DOCX", converter=RasterConverter(),
         )
-
-    class OccludingConverter:
-        def convert(self, _content: bytes, _source_format: str) -> bytes:
-            return _parseable_text_pdf("BOUND").replace(
-                b"Tj ET", b"Tj ET 1 1 1 rg 0 0 595 842 re f", 1,
-            )
-
-    with pytest.raises(ValueError, match="(?:occlusion|invalid)"):
-        delivery_renderer.render_final_pdf_candidate(
-            word_content=word.getvalue(), word_format="DOCX", converter=OccludingConverter(),
-        )
-
 
 def test_final_pdf_rejects_even_odd_post_text_occlusion() -> None:
     word = BytesIO()

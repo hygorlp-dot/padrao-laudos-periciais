@@ -153,9 +153,9 @@ def render_final_pdf_candidate(*, word_content: bytes, word_format: str, convert
     if b"/DiagnosticOnly true" in output:
         raise ValueError("diagnostic PDF cannot be finalized")
     validate_final_artifact(output, "PDF")
-    _validate_pdf_fidelity(conversion_copy, output)
+    visual_extents = _validate_pdf_fidelity(conversion_copy, output)
     if getattr(converter, "requires_visual_raster", False):
-        _validate_pdf_raster_visibility(output)
+        _validate_pdf_raster_visibility(output, visual_extents)
     return output
 
 
@@ -236,7 +236,7 @@ def _ordered_pdf_image_signatures(page: object, reader: PdfReader) -> list[tuple
     return ordered
 
 
-def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
+def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> list[tuple[int, float, float, float, float]]:
     """Reject converter output that is not observably derived from the bound Word."""
     try:
         with ZipFile(BytesIO(word_content)) as package:
@@ -331,6 +331,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         raise ValueError("final PDF does not faithfully represent the bound Word artifact")
 
     _validate_pdf_visual_geometry(reader, positioned, visual_extents)
+    return visual_extents
 
 
 _HELVETICA_WIDTHS = dict(zip(
@@ -450,16 +451,23 @@ def _reject_unmodeled_visual_state(reader: PdfReader) -> None:
                 raise ValueError("final PDF has unsupported post-text occlusion")
 
 
-def _validate_pdf_raster_visibility(pdf_content: bytes) -> None:
-    """Rasterize locally and reject pages whose material content is invisible."""
+def _validate_pdf_raster_visibility(pdf_content: bytes, visual_extents: list[tuple[int, float, float, float, float]]) -> None:
+    """Rasterize locally and reject material text regions with no contrast."""
     if _pdfium is None:
         raise RendererUnavailable("local PDF rasterizer is unavailable")
     try:
         document = _pdfium.PdfDocument(pdf_content)
-        for page in document:
+        for page_number, page in enumerate(document):
             image = page.render(scale=2).to_pil().convert("L")
-            if ImageStat.Stat(image).var[0] < 1.0:
-                raise ValueError("final PDF raster contains no visible contrast")
+            page_width, page_height = page.get_size()
+            page_extents = [item for item in visual_extents if item[0] == page_number]
+            for _page, min_x, min_y, max_x, max_y in page_extents:
+                left = max(0, int(min_x / page_width * image.width) - 2)
+                right = min(image.width, int(max_x / page_width * image.width) + 3)
+                top = max(0, int((page_height - max_y) / page_height * image.height) - 2)
+                bottom = min(image.height, int((page_height - min_y) / page_height * image.height) + 3)
+                if right <= left or bottom <= top or ImageStat.Stat(image.crop((left, top, right, bottom))).var[0] < 1.0:
+                    raise ValueError("final PDF raster contains no visible contrast")
     except RendererUnavailable:
         raise
     except (OSError, RuntimeError, ValueError) as exc:
