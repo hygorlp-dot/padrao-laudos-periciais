@@ -462,11 +462,15 @@ def _validate_pdf_raster_visibility(pdf_content: bytes, visual_extents: list[tup
             page_width, page_height = page.get_size()
             page_extents = [item for item in visual_extents if item[0] == page_number]
             for _page, min_x, min_y, max_x, max_y in page_extents:
-                left = max(0, int(min_x / page_width * image.width) - 2)
-                right = min(image.width, int(max_x / page_width * image.width) + 3)
-                top = max(0, int((page_height - max_y) / page_height * image.height) - 2)
-                bottom = min(image.height, int((page_height - min_y) / page_height * image.height) + 3)
-                if right <= left or bottom <= top or ImageStat.Stat(image.crop((left, top, right, bottom))).var[0] < 1.0:
+                left = max(0, int(min_x / page_width * image.width))
+                right = min(image.width, int(max_x / page_width * image.width) + 1)
+                top = max(0, int((page_height - max_y) / page_height * image.height))
+                bottom = min(image.height, int((page_height - min_y) / page_height * image.height) + 1)
+                crop = image.crop((left, top, right, bottom))
+                pixels = list(crop.getdata())
+                background = Counter(pixels).most_common(1)[0][0] if pixels else 0
+                contrast_fraction = sum(abs(pixel - background) > 8 for pixel in pixels) / max(len(pixels), 1)
+                if right <= left or bottom <= top or contrast_fraction < 0.01:
                     raise ValueError("final PDF raster contains no visible contrast")
     except RendererUnavailable:
         raise
