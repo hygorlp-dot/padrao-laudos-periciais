@@ -330,6 +330,10 @@ _HELVETICA_WIDTHS = dict(zip(
      556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500,
      556, 556, 556, 556, 556, 556, 556, 556, 556, 556),
 ))
+_HELVETICA_WIDTHS.update(dict(zip(
+    " !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+    (278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 278, 584, 278, 584, 584, 556, 1015, 278, 278, 278, 469, 556, 333, 334, 260, 334, 584),
+)))
 
 
 def _estimate_text_advance(text: str, size: float, font: object) -> float:
@@ -344,8 +348,10 @@ def _estimate_text_advance(text: str, size: float, font: object) -> float:
             raise ValueError("final PDF font metrics do not cover visible text")
         return sum(values[index] for index in indices) * size
     base_font = str(getattr(font, "get", lambda *_args: "")("/BaseFont")).casefold() if font is not None else ""
-    if "helvetica" in base_font:
-        return sum(_HELVETICA_WIDTHS.get(char, 600) for char in longest) / 1000.0 * size
+    if base_font.strip("/") == "helvetica":
+        if any(char not in _HELVETICA_WIDTHS for char in longest):
+            raise ValueError("final PDF standard font metrics do not cover visible text")
+        return sum(_HELVETICA_WIDTHS[char] for char in longest) / 1000.0 * size
     raise ValueError("final PDF font metrics are unavailable")
 
 

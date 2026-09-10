@@ -653,6 +653,26 @@ def test_final_pdf_uses_standard_helvetica_widths_for_clipping() -> None:
         )
 
 
+def test_final_pdf_uses_standard_helvetica_at_width_for_clipping() -> None:
+    source_text = "@" * 10
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            f'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>{source_text}</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class ClippedConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf(source_text, x=520)
+
+    with pytest.raises(ValueError, match="visual geometry"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=ClippedConverter(),
+        )
+
+
 def test_image_fidelity_signature_distinguishes_uniform_opposites() -> None:
     black = Image.new("RGB", (64, 64), "black")
     white = Image.new("RGB", (64, 64), "white")
