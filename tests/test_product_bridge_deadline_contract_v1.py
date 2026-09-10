@@ -51,6 +51,11 @@ def _require_explicit_deadline_contract() -> None:
         pytest.fail("request must expose an explicit bounded operation deadline")
 
 
+def test_default_bridge_operation_deadline_is_the_bounded_contract() -> None:
+    parameter = inspect.signature(request).parameters["timeout"]
+    assert parameter.default == 30.0
+
+
 def test_valid_slow_bridge_response_uses_explicit_operation_deadline(tmp_path) -> None:
     _require_explicit_deadline_contract()
     entered = Event()
