@@ -66,13 +66,14 @@ def test_production_delivery_render_uses_local_word_com_without_generic_process(
     assert "Popen" not in source
 
 
-def _parseable_text_pdf(text: str, *, x: int = 50, y: int = 780) -> bytes:
+def _parseable_text_pdf(text: str, *, x: int = 50, y: int = 780, crop_top: int | None = None) -> bytes:
     encoded_lines = [line.encode("cp1252").replace(b"\\", b"\\\\").replace(b"(", b"\\(").replace(b")", b"\\)") for line in text.splitlines()]
     stream = f"BT /F1 10 Tf {x} {y} Td 12 TL ".encode("ascii") + b" Tj T* ".join(b"(" + line + b")" for line in encoded_lines) + b" Tj ET"
+    crop_box = f" /CropBox [0 0 595 {crop_top}]" if crop_top is not None else ""
     objects = (
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
         b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
-        b"<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>",
+        f"<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842]{crop_box} /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>".encode("ascii"),
         b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
         b"<< /Type /Catalog /Pages 4 0 R >>",
     )
@@ -540,6 +541,25 @@ def test_final_pdf_rejects_text_positioned_outside_page_geometry() -> None:
     with pytest.raises(ValueError, match="visual geometry"):
         delivery_renderer.render_final_pdf_candidate(
             word_content=word.getvalue(), word_format="DOCX", converter=OffPageConverter(),
+        )
+
+
+def test_final_pdf_rejects_text_outside_visible_crop_box() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class CropBoxConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", y=780, crop_top=100)
+
+    with pytest.raises(ValueError, match="visual geometry"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=CropBoxConverter(),
         )
 
 

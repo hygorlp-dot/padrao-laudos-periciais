@@ -336,7 +336,9 @@ def _validate_pdf_visual_geometry(
         raise ValueError("final PDF has no pages")
     boxes: list[tuple[float, float, float, float]] = []
     for page in reader.pages:
-        box = page.mediabox
+        # CropBox is the viewer-visible canvas; MediaBox alone can include
+        # non-visible bleed and would allow text outside the rendered page.
+        box = page.cropbox
         left, bottom = float(box.left), float(box.bottom)
         right, top = float(box.right), float(box.top)
         if right <= left or top <= bottom:
