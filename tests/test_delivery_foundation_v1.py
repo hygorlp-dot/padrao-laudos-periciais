@@ -673,6 +673,11 @@ def test_final_pdf_uses_standard_helvetica_at_width_for_clipping() -> None:
         )
 
 
+def test_standard_helvetica_punctuation_metrics_are_not_swapped() -> None:
+    assert delivery_renderer._HELVETICA_WIDTHS[";"] == 278
+    assert delivery_renderer._HELVETICA_WIDTHS["<"] == 584
+
+
 def test_image_fidelity_signature_distinguishes_uniform_opposites() -> None:
     black = Image.new("RGB", (64, 64), "black")
     white = Image.new("RGB", (64, 64), "white")
