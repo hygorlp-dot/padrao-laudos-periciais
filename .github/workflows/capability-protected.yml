@@ -76,7 +76,6 @@ jobs:
           }
           $allowed = @(
             'config/architecture-protected-transition-v1.json',
-            'config/capability-exceptions-v1.json',
             'config/capability-protected-artifacts-v1.json',
             'config/capability-protected-transition-v1.json',
             'scripts/quality/architecture_analyzer.py',
@@ -108,7 +107,6 @@ jobs:
           }
           allowed_paths = {
               'config/architecture-protected-transition-v1.json',
-              'config/capability-exceptions-v1.json',
               'config/capability-protected-artifacts-v1.json',
               'config/capability-protected-transition-v1.json',
               'scripts/quality/architecture_analyzer.py',
@@ -128,6 +126,8 @@ jobs:
               return {'path': path, 'state': 'PRESENT', 'mode': mode, 'objectType': object_type, 'blobSha': blob}
           transition = json.loads(subprocess.check_output(['git', 'show', f'{candidate}:{transition_path}'], cwd=root, text=True))
           transition_ok = (
+              set(transition) == {'schemaVersion', 'transitionId', 'purpose', 'scope', 'protectedBaseSha', 'protectedArtifacts', 'supportArtifacts'}
+              and
               transition.get('schemaVersion') == '3.0.0'
               and transition.get('transitionId') == 'LOCAL_WORD_COM_CONTAINMENT_TRUST_TRANSITION_V1'
               and transition.get('purpose') == 'BOUND_MICROSOFT_WORD_COM_EXECUTION_FOR_AUTHORITATIVE_WORD_TO_PDF'
@@ -140,7 +140,7 @@ jobs:
           supports = {row.get('path'): row for row in transition.get('supportArtifacts', []) if isinstance(row, dict)}
           changed_protected = changed & allowed_protected
           changed_support = changed - changed_protected - {transition_path, 'config/architecture-protected-transition-v1.json'}
-          row_ok = set(rows) == changed_protected and set(supports) == changed_support
+          row_ok = len(rows) == len(transition.get('protectedArtifacts', [])) and len(supports) == len(transition.get('supportArtifacts', [])) and set(rows) == changed_protected and set(supports) == changed_support
           for path in changed_protected:
               row = rows.get(path, {})
               row_ok = row_ok and set(row) == {'path', 'base', 'candidate'} and row['base'] == identity(base, path) and row['candidate'] == identity(candidate, path)
