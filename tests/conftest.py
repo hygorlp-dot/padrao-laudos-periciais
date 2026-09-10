@@ -15,6 +15,8 @@ import json
 from pathlib import Path
 import re
 import sys
+from contextvars import ContextVar
+from threading import Lock
 
 from hypothesis import HealthCheck, settings
 import pytest
@@ -36,6 +38,376 @@ _DIAGNOSTIC_LIMIT_RECORD = {
     "nodeid": "<diagnostic-limit-reached>",
     "phase": "unknown",
 }
+_REQUEST_TIMEOUT_OBSERVATIONS: dict[str, list[dict[str, str]]] = {}
+_REQUEST_TIMEOUT_NODE_LIMIT = 128
+_REQUEST_SERVER_PHASES: dict[str, list[str]] = {}
+_REQUEST_SERVER_PHASE_LIMIT = 128
+_REQUEST_INTERNAL_PHASES: dict[str, list[str]] = {}
+_REQUEST_INTERNAL_PHASE_LIMIT = 128
+_ACTIVE_REQUEST_SEQUENCES: set[str] = set()
+_ACTIVE_REQUEST_SEQUENCE_LIMIT = 128
+_REQUEST_SEQUENCE = 0
+_REQUEST_TRACE_LOCK = Lock()
+_ACTIVE_REQUEST_SEQUENCE: ContextVar[str | None] = ContextVar(
+    "first_party_active_request_sequence", default=None
+)
+_CURRENT_NODEID: ContextVar[str | None] = ContextVar(
+    "current_pytest_nodeid", default=None,
+)
+_ACTIVE_NODEID: str | None = None
+_SAFE_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+_SAFE_CLIENT_PHASES = {
+    "CLIENT_CONNECT",
+    "CLIENT_SEND",
+    "CLIENT_GETRESPONSE",
+    "CLIENT_READ",
+}
+_SAFE_SERVER_PHASES = {
+    "LOCAL_API_HANDLE_STARTED",
+    "LOCAL_API_HANDLE_COMPLETED",
+    "RESPONSE_HEADERS_STARTED",
+    "RESPONSE_COMPLETED",
+}
+_SAFE_INTERNAL_PHASES = {
+    "ROUTE_DISPATCH_STARTED",
+    "APPLICATION_COMMAND_STARTED",
+    "APPLICATION_COMMAND_COMPLETED",
+    "ROUTE_HANDLER_COMPLETED",
+}
+_SAFE_REQUEST_SEQUENCE = re.compile(r"^[1-9][0-9]{0,7}$")
+
+
+def _safe_method(raw_method: object) -> str:
+    method = raw_method.upper() if isinstance(raw_method, str) else ""
+    return method if method in _SAFE_METHODS else "OTHER"
+
+
+def _safe_route_family(raw_method: object, raw_target: object) -> str:
+    method = _safe_method(raw_method)
+    if not isinstance(raw_target, str):
+        return "LOCAL_API_OTHER"
+    path = raw_target.split("?", 1)[0].split("#", 1)[0]
+    parts = tuple(part for part in path.split("/") if part)
+    if not parts or parts[0] != "v1":
+        return "LOCAL_API_OTHER"
+    if parts == ("v1", "recovery") and method == "GET":
+        return "RECOVERY_LIST"
+    if parts == ("v1", "recovery", "staging") and method == "POST":
+        return "RECOVERY_STAGE"
+    if parts == ("v1", "recovery", "verify") and method == "POST":
+        return "RECOVERY_VERIFY"
+    if len(parts) == 4 and parts[:2] == ("v1", "recovery") and method == "POST":
+        return {
+            "promote": "RECOVERY_PROMOTE",
+            "discard": "RECOVERY_DISCARD",
+            "abandon": "RECOVERY_ABANDON",
+        }.get(parts[3], "RECOVERY_OTHER")
+    if parts == ("v1", "workspaces"):
+        return "WORKSPACE_LIST" if method == "GET" else "WORKSPACE_CREATE" if method == "POST" else "WORKSPACE_OTHER"
+    if len(parts) == 3 and parts[:2] == ("v1", "workspaces"):
+        return "WORKSPACE_REOPEN" if method == "GET" else "WORKSPACE_OTHER"
+    if len(parts) == 4 and parts[:2] == ("v1", "workspaces"):
+        return {
+            "materials": "WORKSPACE_MATERIALS",
+            "backup": "BACKUP_CREATE",
+        }.get(parts[3], "WORKSPACE_OTHER")
+    return "LOCAL_API_OTHER"
+
+
+def _elapsed_bucket(elapsed_seconds: object) -> str:
+    try:
+        elapsed = float(elapsed_seconds)
+    except (TypeError, ValueError):
+        return "UNKNOWN"
+    if elapsed <= 1:
+        return "<=1s"
+    if elapsed <= 5:
+        return ">1s"
+    if elapsed <= 30:
+        return ">5s"
+    return ">30s"
+
+
+def _begin_local_api_request() -> str:
+    """Allocate one bounded synthetic sequence for client/server correlation."""
+
+    global _REQUEST_SEQUENCE
+    with _REQUEST_TRACE_LOCK:
+        _REQUEST_SEQUENCE += 1
+        request_seq = str(_REQUEST_SEQUENCE)
+        _activate_request_sequence(request_seq)
+        return request_seq
+
+
+def _activate_request_sequence(request_seq: str) -> None:
+    if request_seq not in _ACTIVE_REQUEST_SEQUENCES:
+        if len(_ACTIVE_REQUEST_SEQUENCES) >= _ACTIVE_REQUEST_SEQUENCE_LIMIT:
+            _ACTIVE_REQUEST_SEQUENCES.pop()
+        _ACTIVE_REQUEST_SEQUENCES.add(request_seq)
+
+
+def _record_server_phase(*, request_seq: object, phase: object) -> None:
+    if not isinstance(request_seq, str) or _SAFE_REQUEST_SEQUENCE.fullmatch(request_seq) is None:
+        return
+    if phase not in _SAFE_SERVER_PHASES:
+        return
+    with _REQUEST_TRACE_LOCK:
+        if request_seq not in _ACTIVE_REQUEST_SEQUENCES:
+            return
+        if (
+            request_seq not in _REQUEST_SERVER_PHASES
+            and len(_REQUEST_SERVER_PHASES) >= _REQUEST_SERVER_PHASE_LIMIT
+        ):
+            return
+        phases = _REQUEST_SERVER_PHASES.setdefault(request_seq, [])
+        if len(phases) < len(_SAFE_SERVER_PHASES):
+            phases.append(phase)
+
+
+def _finish_local_api_request(request_seq: object, *, retain: bool) -> None:
+    if retain or not isinstance(request_seq, str):
+        return
+    with _REQUEST_TRACE_LOCK:
+        _REQUEST_SERVER_PHASES.pop(request_seq, None)
+        _REQUEST_INTERNAL_PHASES.pop(request_seq, None)
+        if not retain:
+            _ACTIVE_REQUEST_SEQUENCES.discard(request_seq)
+
+
+def _record_internal_phase(*, request_seq: object, phase: object) -> None:
+    if not isinstance(request_seq, str) or _SAFE_REQUEST_SEQUENCE.fullmatch(request_seq) is None:
+        return
+    if phase not in _SAFE_INTERNAL_PHASES:
+        return
+    with _REQUEST_TRACE_LOCK:
+        if request_seq not in _ACTIVE_REQUEST_SEQUENCES:
+            return
+        if (
+            request_seq not in _REQUEST_INTERNAL_PHASES
+            and len(_REQUEST_INTERNAL_PHASES) >= _REQUEST_INTERNAL_PHASE_LIMIT
+        ):
+            return
+        phases = _REQUEST_INTERNAL_PHASES.setdefault(request_seq, [])
+        if phase not in phases and len(phases) < len(_SAFE_INTERNAL_PHASES):
+            phases.append(phase)
+
+
+def _record_local_api_timeout(
+    *,
+    nodeid: str | None = None,
+    method: object,
+    target: object,
+    client_phase: object,
+    elapsed_seconds: object,
+    request_seq: str | None = None,
+) -> None:
+    """Retain bounded, sanitized metadata for one local API timeout."""
+
+    raw_nodeid = nodeid or _CURRENT_NODEID.get() or _ACTIVE_NODEID or "<unknown>"
+    phase = client_phase if client_phase in _SAFE_CLIENT_PHASES else "CLIENT_UNKNOWN"
+    with _REQUEST_TRACE_LOCK:
+        if (
+            not isinstance(request_seq, str)
+            or _SAFE_REQUEST_SEQUENCE.fullmatch(request_seq) is None
+        ):
+            global _REQUEST_SEQUENCE
+            _REQUEST_SEQUENCE += 1
+            request_seq = str(_REQUEST_SEQUENCE)
+        _activate_request_sequence(request_seq)
+        observation = {
+            "request_seq": request_seq,
+            "method": _safe_method(method),
+            "route_family": _safe_route_family(method, target),
+            "client_phase": phase,
+            "elapsed_bucket": _elapsed_bucket(elapsed_seconds),
+            "timeout_boundary": "CLIENT_TRANSPORT_DEADLINE",
+            "server_last_phase_at_timeout": (
+                _REQUEST_SERVER_PHASES.get(request_seq, [])[-1]
+                if _REQUEST_SERVER_PHASES.get(request_seq)
+                else "UNKNOWN"
+            ),
+            "internal_last_phase_at_timeout": (
+                _REQUEST_INTERNAL_PHASES.get(request_seq, [])[-1]
+                if _REQUEST_INTERNAL_PHASES.get(request_seq)
+                else "UNKNOWN"
+            ),
+        }
+        if (
+            raw_nodeid not in _REQUEST_TIMEOUT_OBSERVATIONS
+            and len(_REQUEST_TIMEOUT_OBSERVATIONS) >= _REQUEST_TIMEOUT_NODE_LIMIT
+        ):
+            return
+        observations = _REQUEST_TIMEOUT_OBSERVATIONS.setdefault(raw_nodeid, [])
+        if len(observations) >= 8:
+            observations.pop(0)
+        observations.append(observation)
+
+
+def _request_timeout_observation(nodeid: object) -> dict[str, str] | None:
+    if not isinstance(nodeid, str):
+        return None
+    observations = _REQUEST_TIMEOUT_OBSERVATIONS.get(nodeid)
+    if not observations:
+        return None
+    observation = dict(observations[-1])
+    phases = _REQUEST_SERVER_PHASES.get(observation["request_seq"], [])
+    observation["server_last_phase_observed_later"] = (
+        phases[-1] if phases else "UNKNOWN"
+    )
+    observation["server_last_phase"] = observation["server_last_phase_observed_later"]
+    internal_phases = _REQUEST_INTERNAL_PHASES.get(observation["request_seq"], [])
+    observation["internal_last_phase_observed_later"] = (
+        internal_phases[-1] if internal_phases else "UNKNOWN"
+    )
+    observation["internal_last_phase"] = observation[
+        "internal_last_phase_observed_later"
+    ]
+    return observation
+
+
+def _headers_request_sequence(headers: object) -> str | None:
+    raw_sequence = (
+        headers.get("X-First-Party-Test-Request-Seq")
+        if hasattr(headers, "get")
+        else None
+    )
+    if (
+        not isinstance(raw_sequence, str)
+        or _SAFE_REQUEST_SEQUENCE.fullmatch(raw_sequence) is None
+    ):
+        return None
+    return raw_sequence
+
+
+def _server_request_sequence(handler: object) -> str | None:
+    return _headers_request_sequence(getattr(handler, "headers", None))
+
+
+def _record_handler_phase(handler: object, phase: str) -> None:
+    request_seq = _server_request_sequence(handler)
+    if request_seq is not None:
+        _record_server_phase(request_seq=request_seq, phase=phase)
+
+
+def _install_server_phase_observer() -> None:
+    """Wrap only test-created Local API handlers; production code is untouched."""
+
+    try:
+        from scripts.backend_contract.local_api import server as local_api_server
+    except ModuleNotFoundError:
+        # Isolated subprocess probes load this plugin with only the test
+        # directory on PYTHONPATH. Client diagnostics remain useful there;
+        # server-phase observation is optional when production modules are not
+        # importable.
+        return
+
+    original_factory = local_api_server._handler_for
+    if getattr(original_factory, "_first_party_phase_observer", False):
+        return
+
+    def observed_factory(*args: object, **kwargs: object):
+        base_handler = original_factory(*args, **kwargs)
+        api = args[0] if args else None
+        if api is not None:
+            _install_internal_phase_observer(api)
+
+        class ObservedHandler(base_handler):
+            def _handle_request(self):
+                _record_handler_phase(self, "LOCAL_API_HANDLE_STARTED")
+                response = super()._handle_request()
+                _record_handler_phase(self, "LOCAL_API_HANDLE_COMPLETED")
+                return response
+
+            def send_response_only(self, *response_args, **response_kwargs):
+                result = super().send_response_only(*response_args, **response_kwargs)
+                _record_handler_phase(self, "RESPONSE_HEADERS_STARTED")
+                return result
+
+            def _write_response(self, response):
+                result = super()._write_response(response)
+                _record_handler_phase(self, "RESPONSE_COMPLETED")
+                return result
+
+        for method in ("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
+            setattr(ObservedHandler, f"do_{method}", ObservedHandler._dispatch)
+        return ObservedHandler
+
+    observed_factory._first_party_phase_observer = True
+    local_api_server._handler_for = observed_factory
+
+
+def _install_internal_phase_observer(api: object) -> None:
+    """Observe stable dispatch/command boundaries on test-created API objects."""
+
+    if getattr(api, "_first_party_internal_phase_observer", False):
+        return
+    original_handle = getattr(api, "handle", None)
+    services = getattr(api, "_services", None)
+    if not callable(original_handle) or services is None:
+        return
+
+    def observed_handle(method, target, headers, body):
+        request_seq = _headers_request_sequence(headers)
+        token = _ACTIVE_REQUEST_SEQUENCE.set(request_seq)
+        if request_seq is not None:
+            _record_internal_phase(
+                request_seq=request_seq,
+                phase="ROUTE_DISPATCH_STARTED",
+            )
+        try:
+            response = original_handle(method, target, headers, body)
+            if request_seq is not None:
+                _record_internal_phase(
+                    request_seq=request_seq,
+                    phase="ROUTE_HANDLER_COMPLETED",
+                )
+            return response
+        finally:
+            _ACTIVE_REQUEST_SEQUENCE.reset(token)
+
+    try:
+        setattr(api, "handle", observed_handle)
+        setattr(api, "_first_party_internal_phase_observer", True)
+    except (AttributeError, TypeError):
+        return
+
+    for field_name in getattr(services, "__dataclass_fields__", {}):
+        service = getattr(services, field_name, None)
+        service_type = type(service) if service is not None else None
+        type_execute = getattr(service_type, "execute", None)
+        type_markers = getattr(service_type, "__dict__", {})
+        if not callable(type_execute) or type_markers.get(
+            "_first_party_phase_observer", False
+        ):
+            continue
+
+        def observed_execute(self, *args, _execute=type_execute, **kwargs):
+            request_seq = _ACTIVE_REQUEST_SEQUENCE.get()
+            should_record = request_seq is not None and not (
+                request_seq in _REQUEST_INTERNAL_PHASES
+                and "APPLICATION_COMMAND_STARTED" in _REQUEST_INTERNAL_PHASES[request_seq]
+            )
+            if should_record:
+                _record_internal_phase(
+                    request_seq=request_seq,
+                    phase="APPLICATION_COMMAND_STARTED",
+                )
+            result = _execute(self, *args, **kwargs)
+            if should_record:
+                _record_internal_phase(
+                    request_seq=request_seq,
+                    phase="APPLICATION_COMMAND_COMPLETED",
+                )
+            return result
+
+        try:
+            setattr(service_type, "execute", observed_execute)
+            setattr(service_type, "_first_party_phase_observer", True)
+        except (AttributeError, TypeError):
+            continue
+
+
+_install_server_phase_observer()
 
 
 def _repository_owned_file(
@@ -162,6 +534,9 @@ def _record_failure(report: object, raw_exception_type: object = None) -> None:
     phase = getattr(report, "when", None)
     safe_phase = phase if phase in {"setup", "call", "teardown"} else "unknown"
     diagnostic = _failure_diagnostic(report, raw_exception_type)
+    timeout_observation = _request_timeout_observation(raw_nodeid)
+    if timeout_observation is not None and diagnostic["exception_type"] == "TimeoutError":
+        diagnostic.update(timeout_observation)
     fingerprint = sha256(
         raw_nodeid.encode("utf-8", errors="surrogatepass")
     ).hexdigest()
@@ -219,6 +594,24 @@ def pytest_runtest_makereport(item: object, call: object):
     excinfo = getattr(call, "excinfo", None)
     exception_class = getattr(excinfo, "type", None)
     _record_failure(report, getattr(exception_class, "__name__", None))
+
+
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_protocol(item: object, nextitem: object):
+    """Associate local API observations with the running test node."""
+
+    global _ACTIVE_NODEID
+    current_nodeid = getattr(item, "nodeid", None)
+    token = _CURRENT_NODEID.set(current_nodeid)
+    with _REQUEST_TRACE_LOCK:
+        previous_nodeid = _ACTIVE_NODEID
+        _ACTIVE_NODEID = current_nodeid
+    try:
+        yield
+    finally:
+        with _REQUEST_TRACE_LOCK:
+            _ACTIVE_NODEID = previous_nodeid
+        _CURRENT_NODEID.reset(token)
 
 
 def _emit_failure_diagnostics() -> None:

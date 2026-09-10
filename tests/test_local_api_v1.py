@@ -6,11 +6,17 @@ import http.client
 import json
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Event, Lock, Thread
+from time import monotonic
 from uuid import UUID
 
 import pytest
+try:
+    import conftest as suite_conftest
+except ModuleNotFoundError:  # subprocess probes run from the repository root
+    from tests import conftest as suite_conftest
 
 from scripts.backend_contract.application.models import (
     ArtifactRevision,
@@ -1749,12 +1755,32 @@ def http_request(server, method, target, *, value=None, raw_body=None, headers=N
         body = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         request_headers.setdefault("Content-Type", "application/json; charset=utf-8")
     connection = http.client.HTTPConnection(host, port, timeout=5)
+    started = monotonic()
+    client_phase = "CLIENT_SEND"
+    request_seq = suite_conftest._begin_local_api_request()
+    request_headers["X-First-Party-Test-Request-Seq"] = request_seq
+    timed_out = False
     try:
         connection.request(method, target, body=body, headers=request_headers)
+        client_phase = "CLIENT_GETRESPONSE"
         response = connection.getresponse()
+        client_phase = "CLIENT_READ"
         return response.status, dict(response.getheaders()), response.read()
+    except TimeoutError:
+        timed_out = True
+        if client_phase == "CLIENT_SEND" and getattr(connection, "sock", None) is None:
+            client_phase = "CLIENT_CONNECT"
+        suite_conftest._record_local_api_timeout(
+            method=method,
+            target=target,
+            client_phase=client_phase,
+            elapsed_seconds=monotonic() - started,
+            request_seq=request_seq,
+        )
+        raise
     finally:
         connection.close()
+        suite_conftest._finish_local_api_request(request_seq, retain=timed_out)
 
 
 def test_real_http_server_accepts_local_get_and_exactly_authorized_post():
@@ -1780,6 +1806,115 @@ def test_real_http_server_accepts_local_get_and_exactly_authorized_post():
     for headers, body in ((get_headers, get_body), (post_headers, post_body)):
         assert "Access-Control-Allow-Origin" not in headers
         assert TOKEN.encode("utf-8") not in body
+    assert suite_conftest._REQUEST_SERVER_PHASES == {}
+
+
+def test_real_http_server_observer_correlates_safe_server_phases(monkeypatch):
+    """The test-only observer records phases without retaining request data."""
+    @dataclass(frozen=True, slots=True)
+    class FrozenListCommand:
+        def execute(self):
+            return ()
+
+    monkeypatch.setattr(suite_conftest, "_REQUEST_SERVER_PHASES", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_SEQUENCE", 0)
+    monkeypatch.setattr(
+        suite_conftest,
+        "_finish_local_api_request",
+        lambda *_args, **_kwargs: None,
+    )
+    server = LocalApiServer(
+        LocalApi(services(list_workspaces=FrozenListCommand()), token=TOKEN),
+        LocalServerConfig(port=0),
+    )
+    server.start()
+    try:
+        status, _headers, _body = http_request(server, "GET", "/v1/workspaces")
+    finally:
+        server.close()
+
+    assert status == 200
+    assert suite_conftest._REQUEST_SERVER_PHASES == {
+        "1": [
+            "LOCAL_API_HANDLE_STARTED",
+            "LOCAL_API_HANDLE_COMPLETED",
+            "RESPONSE_HEADERS_STARTED",
+            "RESPONSE_COMPLETED",
+        ]
+    }
+    assert suite_conftest._REQUEST_INTERNAL_PHASES == {
+        "1": [
+            "ROUTE_DISPATCH_STARTED",
+            "APPLICATION_COMMAND_STARTED",
+            "APPLICATION_COMMAND_COMPLETED",
+            "ROUTE_HANDLER_COMPLETED",
+        ]
+    }
+
+
+def test_synthetic_handler_stall_exposes_application_command_boundary(monkeypatch):
+    """A bounded synthetic stall identifies the command boundary without data."""
+    entered = Event()
+    release = Event()
+
+    class BlockingCommand:
+        def execute(self, *_args, **_kwargs):
+            entered.set()
+            release.wait(timeout=10)
+            raise RuntimeError("synthetic command release")
+
+    monkeypatch.setattr(suite_conftest, "_REQUEST_TIMEOUT_OBSERVATIONS", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_SERVER_PHASES", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_INTERNAL_PHASES", {})
+    monkeypatch.setattr(suite_conftest, "_REQUEST_SEQUENCE", 0)
+    server = LocalApiServer(
+        LocalApi(
+            services(stage_workspace_recovery=BlockingCommand()),
+            token=TOKEN,
+        ),
+        LocalServerConfig(port=0, request_timeout_seconds=30),
+    )
+    server.start()
+    try:
+        with pytest.raises(TimeoutError):
+            http_request(
+                server,
+                "POST",
+                "/v1/recovery/staging",
+                raw_body=b"synthetic-package",
+                headers={
+                    "Content-Type": "application/octet-stream",
+                    "X-Local-API-Token": TOKEN,
+                },
+            )
+        assert entered.is_set()
+        observations = [
+            item
+            for records in suite_conftest._REQUEST_TIMEOUT_OBSERVATIONS.values()
+            for item in records
+        ]
+        assert observations == [
+            {
+                "request_seq": "1",
+                "method": "POST",
+                "route_family": "RECOVERY_STAGE",
+                "client_phase": "CLIENT_GETRESPONSE",
+                "elapsed_bucket": ">5s",
+                "timeout_boundary": "CLIENT_TRANSPORT_DEADLINE",
+                "server_last_phase_at_timeout": "LOCAL_API_HANDLE_STARTED",
+                "internal_last_phase_at_timeout": "APPLICATION_COMMAND_STARTED",
+            }
+        ]
+        assert suite_conftest._REQUEST_SERVER_PHASES["1"] == [
+            "LOCAL_API_HANDLE_STARTED"
+        ]
+        assert suite_conftest._REQUEST_INTERNAL_PHASES["1"] == [
+            "ROUTE_DISPATCH_STARTED",
+            "APPLICATION_COMMAND_STARTED",
+        ]
+    finally:
+        release.set()
+        server.close()
 
 
 def test_real_http_server_blocks_cross_origin_mutation_even_with_valid_token():
