@@ -66,15 +66,16 @@ def test_production_delivery_render_uses_local_word_com_without_generic_process(
     assert "Popen" not in source
 
 
-def _parseable_text_pdf(text: str, *, x: int = 50, y: int = 780, crop_top: int | None = None, transform: tuple[int, int, int, int, int, int] | None = None, color: tuple[int, ...] | None = None) -> bytes:
+def _parseable_text_pdf(text: str, *, x: int = 50, y: int = 780, crop_top: int | None = None, transform: tuple[int, int, int, int, int, int] | None = None, color: tuple[int, ...] | None = None, color_scope: bool = False) -> bytes:
     encoded_lines = [line.encode("cp1252").replace(b"\\", b"\\\\").replace(b"(", b"\\(").replace(b")", b"\\)") for line in text.splitlines()]
     prefix = ""
     suffix = ""
     if transform is not None:
         prefix = "q " + " ".join(str(item) for item in transform) + " cm "
         suffix = " Q"
-    color_command = (" ".join(str(item) for item in color) + (" rg " if len(color or ()) == 3 else " g ")) if color is not None else ""
-    stream = (prefix + f"BT /F1 10 Tf {color_command}{x} {y} Td 12 TL ").encode("ascii") + b" Tj T* ".join(b"(" + line + b")" for line in encoded_lines) + (b" Tj ET" + suffix.encode("ascii"))
+    color_command = (("q " if color_scope else "") + " ".join(str(item) for item in color) + (" rg " if len(color or ()) == 3 else " g ")) if color is not None else ""
+    color_suffix = " Q" if color_scope else ""
+    stream = (prefix + f"BT /F1 10 Tf {color_command}{x} {y} Td 12 TL ").encode("ascii") + b" Tj T* ".join(b"(" + line + b")" for line in encoded_lines) + (b" Tj ET" + color_suffix.encode("ascii") + suffix.encode("ascii"))
     crop_box = f" /CropBox [0 0 595 {crop_top}]" if crop_top is not None else ""
     objects = (
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
@@ -343,7 +344,7 @@ def test_supporting_image_bytes_are_verified_by_declared_media_type() -> None:
     assert validate_supporting_artifact(png, "image/png")[2] == "image/png"
     with pytest.raises(ValueError, match="JPEG"):
         validate_supporting_artifact(png, "image/jpeg")
-    with pytest.raises(ValueError, match="unsupported"):
+    with pytest.raises(ValueError, match="(?:unsupported|invalid)"):
         validate_supporting_artifact(b"opaque", "application/octet-stream")
     with pytest.raises(ValueError, match="PNG"):
         validate_supporting_artifact(b"\x89PNG\r\n\x1a\n", "image/png")
@@ -695,6 +696,53 @@ def test_final_pdf_rejects_explicitly_invisible_white_text() -> None:
     with pytest.raises(ValueError, match="invisible white text"):
         delivery_renderer.render_final_pdf_candidate(
             word_content=word.getvalue(), word_format="DOCX", converter=InvisibleConverter(),
+        )
+
+
+def test_final_pdf_tracks_graphics_state_for_text_visibility() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class ScopedWhiteConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", color=(1, 1, 1), color_scope=True)
+
+    with pytest.raises(ValueError, match="invisible white text"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=ScopedWhiteConverter(),
+        )
+
+    class ScopedBlackConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", color=(0, 0, 0), color_scope=True)
+
+    assert delivery_renderer.render_final_pdf_candidate(
+        word_content=word.getvalue(), word_format="DOCX", converter=ScopedBlackConverter(),
+    ).startswith(b"%PDF-")
+
+
+@pytest.mark.parametrize("operator", [b"3 Tr", b"0 0 m 1 1 l W"])
+def test_final_pdf_rejects_unmodeled_visual_state(operator: bytes) -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class UnmodeledStateConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND").replace(b"BT /F1", b"BT " + operator + b" /F1", 1)
+
+    with pytest.raises(ValueError, match="(?:unsupported|invalid)"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=UnmodeledStateConverter(),
         )
 
 

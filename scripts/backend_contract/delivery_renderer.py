@@ -281,6 +281,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     except (BadZipFile, KeyError, ElementTree.ParseError, PdfReadError, OSError, ValueError) as exc:
         raise ValueError("final PDF fidelity cannot be verified") from exc
     _reject_explicitly_invisible_text(reader)
+    _reject_unmodeled_visual_state(reader)
     required = {_normalized_visible_text(item) for item in word_fragments if _normalized_visible_text(item)}
     source_tokens = _lexical_tokens(" ".join(word_fragments))
     pdf_tokens = _lexical_tokens(pdf_text)
@@ -406,8 +407,16 @@ def _reject_explicitly_invisible_text(reader: PdfReader) -> None:
     """Fail closed when a text operator explicitly selects white ink."""
     for page in reader.pages:
         color = (0.0, 0.0, 0.0)
+        stack: list[tuple[float, float, float]] = []
         for operands, operator in ContentStream(page.get_contents(), reader).operations:
-            if operator == b"rg" and len(operands) >= 3:
+            if operator == b"q":
+                stack.append(color)
+            elif operator == b"Q":
+                if stack:
+                    color = stack.pop()
+                else:
+                    raise ValueError("final PDF graphics state underflow")
+            elif operator == b"rg" and len(operands) >= 3:
                 color = tuple(float(value) for value in operands[:3])
             elif operator == b"g" and operands:
                 gray = float(operands[0])
@@ -417,6 +426,16 @@ def _reject_explicitly_invisible_text(reader: PdfReader) -> None:
                 color = (1 - min(1, c + k), 1 - min(1, m + k), 1 - min(1, y + k))
             elif operator in {b"Tj", b"TJ", b"'", b'"'} and color[0] >= 0.99 and color[1] >= 0.99 and color[2] >= 0.99:
                 raise ValueError("final PDF contains explicitly invisible white text")
+
+
+def _reject_unmodeled_visual_state(reader: PdfReader) -> None:
+    """Fail closed for PDF state that can hide or alter glyph painting."""
+    for page in reader.pages:
+        for _operands, operator in ContentStream(page.get_contents(), reader).operations:
+            if operator in {b"gs", b"W", b"W*"}:
+                raise ValueError("final PDF uses unsupported visual state")
+            if operator == b"Tr":
+                raise ValueError("final PDF uses unsupported text rendering mode")
 
 
 def _inject_canonical_report(content: bytes, report: ReportSnapshot) -> bytes:
