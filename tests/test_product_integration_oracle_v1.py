@@ -25,7 +25,7 @@ from scripts.backend_contract.report_foundation import report_snapshot_from_mapp
 from scripts.backend_contract.technical_findings import technical_snapshot_from_mapping
 from scripts.backend_contract.vistoria import inspection_session_from_mapping
 from scripts.backend_contract.local_api.composition import build_local_api
-from scripts.backend_contract.product_bridge.composition import build_product_runtime
+from scripts.planejamento_pericial.app_composition import build_pericial_application
 from tests.test_local_api_v1 import FixedClock, TOKEN, http_request
 from tests.test_document_intake_v1 import provision_private_root
 from tests.test_final_closure_r7 import pdf_sintetico
@@ -362,7 +362,7 @@ def test_longitudinal_oracle_starts_with_synthetic_pje_through_product_bridge(tm
     pdf_sintetico(pdf)
     private = tmp_path / "private"
     provision_private_root(private)
-    runtime = build_product_runtime(
+    runtime = build_pericial_application(
         tmp_path / "bridge-longitudinal.db",
         frontend_build(tmp_path),
         token=TOKEN,
