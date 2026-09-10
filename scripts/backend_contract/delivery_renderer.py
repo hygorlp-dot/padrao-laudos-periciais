@@ -260,12 +260,17 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         reader = PdfReader(BytesIO(pdf_content), strict=True)
         extracted_pages: list[str] = []
         positioned: list[tuple[int, str, float, float]] = []
+        visual_extents: list[tuple[int, float, float, float, float]] = []
         pdf_images: list[tuple[float, tuple[float, ...], tuple[float, ...], tuple[bool, ...]]] = []
         for page_number, page in enumerate(reader.pages):
-            def visitor(text: str, _cm: object, tm: list[float], _font: object, _size: float) -> None:
+            def visitor(text: str, _cm: object, tm: list[float], _font: object, size: float) -> None:
                 normalized = _normalized_visible_text(text)
                 if normalized:
-                    positioned.append((page_number, normalized, float(tm[4]), float(tm[5])))
+                    x, y = float(tm[4]), float(tm[5])
+                    positioned.append((page_number, normalized, x, y))
+                    longest_line = max((len(line) for line in text.splitlines()), default=0)
+                    scale = max(abs(float(tm[0])), abs(float(tm[3])), 1.0)
+                    visual_extents.append((page_number, x, y, longest_line * float(size) * scale * 1.2, float(size) * scale))
             extracted_pages.append(page.extract_text(visitor_text=visitor) or "")
             pdf_images.extend(_ordered_pdf_image_signatures(page, reader))
         pdf_text = _normalized_visible_text("\n".join(extracted_pages))
@@ -312,10 +317,14 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     ):
         raise ValueError("final PDF does not faithfully represent the bound Word artifact")
 
-    _validate_pdf_visual_geometry(reader, positioned)
+    _validate_pdf_visual_geometry(reader, positioned, visual_extents)
 
 
-def _validate_pdf_visual_geometry(reader: PdfReader, positioned: list[tuple[int, str, float, float]]) -> None:
+def _validate_pdf_visual_geometry(
+    reader: PdfReader,
+    positioned: list[tuple[int, str, float, float]],
+    visual_extents: list[tuple[int, float, float, float, float]],
+) -> None:
     """Apply conservative page/position checks before a PDF can be final.
 
     This is intentionally a deterministic visual-fidelity boundary: every page
@@ -339,6 +348,10 @@ def _validate_pdf_visual_geometry(reader: PdfReader, positioned: list[tuple[int,
         # without permitting content to be rendered on a different page.
         if x < left - 2 or x > right + 2 or y < bottom - 12 or y > top + 12:
             raise ValueError("final PDF visual geometry is outside the page")
+    for page_number, x, _y, advance, _size in visual_extents:
+        left, _bottom, right, _top = boxes[page_number]
+        if x < left - 2 or x + advance > right + 2:
+            raise ValueError("final PDF visual geometry exceeds the page")
 
 
 def _inject_canonical_report(content: bytes, report: ReportSnapshot) -> bytes:

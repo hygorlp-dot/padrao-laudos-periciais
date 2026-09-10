@@ -20,7 +20,7 @@ class _FakeDocument:
         Path(kwargs["OutputFileName"]).write_bytes(b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF")
 
     def Close(self, **kwargs) -> None:
-        self.calls.append(("close", kwargs))
+        self.calls.append(("close", kwargs, self.output.exists()))
 
 
 class _FakeWord:
@@ -53,7 +53,8 @@ def test_word_com_converter_uses_private_copy_and_returns_local_pdf(tmp_path: Pa
     assert opened["ReadOnly"] is True
     assert opened["AddToRecentFiles"] is False
     assert next(item for item in calls if item[0] == "export")[2] == 17
-    assert any(item[0] == "close" for item in calls)
+    close = next(item for item in calls if item[0] == "close")
+    assert close[2] is True
     assert any(item[0] == "quit" for item in calls)
     assert converter.renderer_version == "16.0-test"
 
