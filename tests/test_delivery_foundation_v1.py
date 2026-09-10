@@ -791,6 +791,28 @@ def test_visual_raster_red_rejects_black_text_on_opaque_black_background() -> No
         )
 
 
+def test_visual_raster_accepts_fully_visible_glyphs() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class VisibleConverter:
+        requires_visual_raster = True
+
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND")
+
+    if delivery_renderer._pdfium is None:
+        pytest.skip("pypdfium2 is unavailable in this runtime")
+    assert delivery_renderer.render_final_pdf_candidate(
+        word_content=word.getvalue(), word_format="DOCX", converter=VisibleConverter(),
+    ).startswith(b"%PDF-")
+
+
 def test_visual_raster_rejects_contrast_marker_without_visible_glyphs() -> None:
     word = BytesIO()
     with ZipFile(word, "w", ZIP_DEFLATED) as package:
@@ -880,6 +902,29 @@ def test_visual_raster_rejects_horizontal_contrast_stripe_without_glyphs() -> No
     with pytest.raises(ValueError, match="visible contrast"):
         delivery_renderer.render_final_pdf_candidate(
             word_content=word.getvalue(), word_format="DOCX", converter=StripeConverter(),
+        )
+
+
+def test_visual_raster_rejects_partial_horizontal_glyph_visibility() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class PartialStripeConverter:
+        requires_visual_raster = True
+
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", pre_text_graphics="0 g 45 778 70 11 re f 1 g 45 782 70 3 re f 0 g ")
+
+    if delivery_renderer._pdfium is None:
+        pytest.skip("pypdfium2 is unavailable in this runtime")
+    with pytest.raises(ValueError, match="visible contrast"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=PartialStripeConverter(),
         )
 
 def test_final_pdf_rejects_even_odd_post_text_occlusion() -> None:

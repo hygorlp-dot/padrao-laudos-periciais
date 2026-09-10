@@ -14,8 +14,8 @@ from xml.etree import ElementTree
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 from PIL import Image, ImageStat, UnidentifiedImageError
-from pypdf import PdfReader
-from pypdf.generic import BooleanObject
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import BooleanObject, DecodedStreamObject, NameObject
 from pypdf.errors import PdfReadError
 from pypdf.generic import ContentStream
 
@@ -466,17 +466,53 @@ def _reject_unmodeled_visual_state(reader: PdfReader) -> None:
                 raise ValueError("final PDF has unsupported post-text occlusion")
 
 
+_TEXT_MASK_OPERATORS = {
+    b"q", b"Q", b"cm", b"BT", b"ET", b"Tf", b"Td", b"TD", b"Tm", b"T*", b"Tj", b"TJ",
+    b"'", b'"', b"Tw", b"Tc", b"TL", b"Tz", b"Ts",
+}
+
+
+def _text_only_pdf(pdf_content: bytes) -> bytes:
+    """Build a local white-background glyph mask using the PDF's own fonts."""
+    reader = PdfReader(BytesIO(pdf_content), strict=True)
+    writer = PdfWriter()
+    for source_page in reader.pages:
+        page = writer.add_page(source_page)
+        output = BytesIO(b"0 g\n")
+        for operands, operator in ContentStream(source_page.get_contents(), reader).operations:
+            if operator not in _TEXT_MASK_OPERATORS:
+                continue
+            for operand in operands:
+                operand.write_to_stream(output, None)
+                output.write(b" ")
+            output.write(operator + b"\n")
+        stream = DecodedStreamObject()
+        stream.set_data(output.getvalue())
+        page[NameObject("/Contents")] = writer._add_object(stream)
+    result = BytesIO()
+    writer.write(result)
+    return result.getvalue()
+
+
+def _raster_pixels(image: Image.Image) -> list[int]:
+    getter = getattr(image, "get_flattened_data", None)
+    return list(getter() if getter is not None else image.getdata())
+
+
 def _validate_pdf_raster_visibility(pdf_content: bytes, visual_extents: list[tuple[int, float, float, float, float]]) -> None:
     """Rasterize locally and reject material text regions with no contrast."""
     if _pdfium is None:
         raise RendererUnavailable("local PDF rasterizer is unavailable")
     try:
         document = _pdfium.PdfDocument(pdf_content)
+        mask_document = _pdfium.PdfDocument(_text_only_pdf(pdf_content))
         for page_number, page in enumerate(document):
+            mask_page = mask_document[page_number]
             image = page.render(scale=2).to_pil().convert("L")
+            mask_image = mask_page.render(scale=2).to_pil().convert("L")
             page_width, page_height = page.get_size()
             page_extents: list[tuple[int, float, float, float, float]] = []
-            textpage = page.get_textpage()
+            textpage = mask_page.get_textpage()
             for index in range(textpage.count_chars()):
                 character = textpage.get_text_range(index, 1)
                 if not character or character.isspace():
@@ -497,8 +533,23 @@ def _validate_pdf_raster_visibility(pdf_content: bytes, visual_extents: list[tup
                 top = max(0, int((page_height - max_y) / page_height * image.height))
                 bottom = min(image.height, int((page_height - min_y) / page_height * image.height) + 1)
                 crop = image.crop((left, top, right, bottom))
-                pixels = list(crop.getdata())
-                background = Counter(pixels).most_common(1)[0][0] if pixels else 0
+                mask_crop = mask_image.crop((left, top, right, bottom))
+                pixels = _raster_pixels(crop)
+                expected_ink = [pixel < 250 for pixel in _raster_pixels(mask_crop)]
+                if not any(expected_ink):
+                    raise RendererUnavailable("local PDF raster glyph mask is empty")
+                pad = 2
+                outer = image.crop((max(0, left - pad), max(0, top - pad), min(image.width, right + pad), min(image.height, bottom + pad)))
+                outer_pixels = _raster_pixels(outer)
+                outer_width, outer_height = outer.size
+                ring = [
+                    pixel
+                    for row in range(outer_height)
+                    for column in range(outer_width)
+                    if not (left - max(0, left - pad) <= column < right - max(0, left - pad) and top - max(0, top - pad) <= row < bottom - max(0, top - pad))
+                    for pixel in [outer_pixels[row * outer_width + column]]
+                ]
+                background = Counter(ring or pixels).most_common(1)[0][0] if (ring or pixels) else 0
                 width, height = right - left, bottom - top
                 contrast_mask = [abs(pixel - background) > 8 for pixel in pixels]
                 contrast_fraction = sum(contrast_mask) / max(len(contrast_mask), 1)
@@ -512,6 +563,7 @@ def _validate_pdf_raster_visibility(pdf_content: bytes, visual_extents: list[tup
                     or contrast_fraction < 0.01
                     or row_coverage < min_rows
                     or column_coverage < min_columns
+                    or sum(visible for visible, expected in zip(contrast_mask, expected_ink) if expected) / sum(expected_ink) < 0.5
                 ):
                     raise ValueError("final PDF raster contains no visible contrast")
     except RendererUnavailable:
