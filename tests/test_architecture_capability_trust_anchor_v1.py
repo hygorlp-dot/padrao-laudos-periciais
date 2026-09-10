@@ -462,7 +462,10 @@ def test_protected_workflow_runs_only_inert_base_owned_verifier():
     assert "github.event.pull_request.head.sha" in workflow
     assert "persist-credentials: false" in workflow
     assert "validate_inert_trust_anchor" in workflow
-    assert "capability_analyzer" not in workflow
+    assert "Validate dedicated Word trust transition" in workflow
+    assert "LOCAL_WORD_COM_CONTAINMENT_TRUST_TRANSITION_V1" in workflow
+    assert "CAPABILITY_TRUST_TRANSITION_APPROVED" in workflow
+    assert "dedicated Word transition changed an out-of-scope path" in workflow
     assert "secrets." not in workflow
 
 
