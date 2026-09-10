@@ -25,7 +25,7 @@ from ..delivery_foundation import (
     delivery_snapshot_from_mapping,
     delivery_snapshot_to_mapping,
 )
-from ..delivery_renderer import DELIVERY_RENDERING_VERSION, render_word_candidate, validate_delivery_artifact, validate_final_artifact, validate_supporting_artifact, verify_reopened_artifact
+from ..delivery_renderer import DELIVERY_RENDERING_VERSION, RendererUnavailable, render_final_pdf_candidate, render_word_candidate, validate_delivery_artifact, validate_final_artifact, validate_supporting_artifact, verify_reopened_artifact
 from ..report_template import TemplateBindingManifest, template_binding_manifest_from_mapping
 from ..pericial_planning import PlanningSnapshot, pericial_planning_to_mapping
 from ..report_foundation import ReportSnapshot, ReportState, report_snapshot_to_mapping
@@ -342,12 +342,13 @@ class RenderDeliveryPackage:
     store_private_content: object
     save_snapshot: object
     ids: object
+    pdf_converter: object | None = None
 
     def execute(self, workspace_id, *, manifest: TemplateBindingManifest, expected_revision: int):
         record, snapshot = self.get_snapshot.execute(workspace_id)
         if record.revision != expected_revision or snapshot.state is not DeliveryState.DRAFT:
             raise RepositoryConflict("Delivery render requires the latest draft revision")
-        if snapshot.rendering_version != DELIVERY_RENDERING_VERSION:
+        if not snapshot.rendering_version.startswith(DELIVERY_RENDERING_VERSION):
             raise ValueError("Delivery renderer provenance mismatch")
         if type(manifest) is not TemplateBindingManifest or manifest.template_id != snapshot.template_id:
             raise ValueError("Delivery template manifest identity mismatch")
@@ -359,6 +360,24 @@ class RenderDeliveryPackage:
             raise ValueError("Delivery report bytes diverge from bound authority")
         word = render_word_candidate(template_bytes=template.content, report=report, manifest=manifest).output_bytes
         word_digest, word_size, word_media = validate_final_artifact(word, manifest.output_kind)
+        pdf = None
+        pdf_digest = pdf_size = pdf_media = None
+        rendering_version = snapshot.rendering_version
+        if self.pdf_converter is not None:
+            try:
+                pdf = render_final_pdf_candidate(
+                    word_content=word, word_format=manifest.output_kind, converter=self.pdf_converter,
+                )
+            except RendererUnavailable:
+                # Word remains deliverable; PDF is explicitly unavailable and
+                # never enters the manifest unless conversion and fidelity pass.
+                pdf = None
+            if pdf is not None:
+                pdf_digest, pdf_size, pdf_media = validate_delivery_artifact(pdf, "PDF")
+                renderer_type = str(getattr(self.pdf_converter, "renderer_type", "MICROSOFT_WORD_DESKTOP_COM")).replace("|", "_")
+                renderer_version = str(getattr(self.pdf_converter, "renderer_version", "UNKNOWN")).replace("|", "_")
+                renderer_platform = str(getattr(self.pdf_converter, "platform", "UNKNOWN")).replace("|", "_")
+                rendering_version = f"{DELIVERY_RENDERING_VERSION}|type={renderer_type}|version={renderer_version}|platform={renderer_platform}"
         stem = f"laudo-{snapshot.delivery_id.lower()}-r{snapshot.revision + 1}"
         word_name = f"{stem}.{manifest.output_kind.lower()}"
         word_metadata = self.store_private_content.execute(
@@ -367,6 +386,15 @@ class RenderDeliveryPackage:
         )
         if (word_metadata.byte_size, word_metadata.checksum_sha256) != (word_size, word_digest):
             raise RepositoryIntegrityError("private delivery storage changed rendered bytes")
+        pdf_metadata = None
+        pdf_name = f"{stem}.pdf"
+        if pdf is not None:
+            pdf_metadata = self.store_private_content.execute(
+                workspace_id=workspace_id, original_filename=pdf_name, content=pdf,
+                media_type=pdf_media, origin=PrivateContentOrigin.LOCAL_IMPORT,
+            )
+            if (pdf_metadata.byte_size, pdf_metadata.checksum_sha256) != (pdf_size, pdf_digest):
+                raise RepositoryIntegrityError("private delivery storage changed converted PDF bytes")
         artifacts = (
             DeliveryArtifact(
                 artifact_id=f"ARTIFACT-{str(self.ids.new_uuid()).upper()}", role=DeliveryRole.MAIN_REPORT,
@@ -374,10 +402,15 @@ class RenderDeliveryPackage:
                 content_id=str(word_metadata.content_id), media_type=word_media,
                 byte_size=word_size, checksum_sha256=word_digest,
             ),
-            *(item for item in snapshot.artifacts if item.role is not DeliveryRole.MAIN_REPORT),
+            *((DeliveryArtifact(
+                artifact_id=f"ARTIFACT-{str(self.ids.new_uuid()).upper()}", role=DeliveryRole.DERIVED_PDF,
+                format=DeliveryFormat.PDF, filename=pdf_name, content_id=str(pdf_metadata.content_id),
+                media_type=pdf_media, byte_size=pdf_size, checksum_sha256=pdf_digest,
+            ),) if pdf_metadata is not None else ()),
+            *(item for item in snapshot.artifacts if item.role not in {DeliveryRole.MAIN_REPORT, DeliveryRole.DERIVED_PDF}),
         )
         rendered = replace(
-            snapshot, revision=snapshot.revision + 1, artifacts=artifacts,
+            snapshot, revision=snapshot.revision + 1, rendering_version=rendering_version, artifacts=artifacts,
             package=DeliveryPackage("1.0.0", tuple(item.artifact_id for item in artifacts)),
         )
         saved = self.save_snapshot.execute(workspace_id, rendered, expected_revision, allow_artifacts=True)
@@ -399,7 +432,7 @@ class AttachDeliveryPackageArtifact:
             package_role = DeliveryRole(role)
         except ValueError as exc:
             raise ValueError("Delivery package role is invalid") from exc
-        if package_role is DeliveryRole.MAIN_REPORT:
+        if package_role in {DeliveryRole.MAIN_REPORT, DeliveryRole.DERIVED_PDF}:
             raise ValueError("main report artifacts require protected rendering")
         content = self.get_private_content.execute(workspace_id, content_id)
         media = content.metadata.media_type or "application/octet-stream"
