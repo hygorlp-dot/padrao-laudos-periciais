@@ -390,6 +390,7 @@ def test_d1_d11_normal_composed_product_path_delivers_closes_and_recovers_withou
         runtime.close()
 
 
+@WINDOWS_MUTABLE_RECOVERY
 def test_longitudinal_oracle_starts_with_synthetic_pje_through_product_bridge(tmp_path: Path) -> None:
     pdf = tmp_path / "autos-longitudinais-sinteticos.pdf"
     _pdf_sintetico_com_jdm(pdf)
