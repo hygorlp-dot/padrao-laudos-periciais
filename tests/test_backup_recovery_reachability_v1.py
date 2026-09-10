@@ -31,16 +31,18 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _api(runtime, method, path, *, value=None, body=None, headers=None):
+def _api(runtime, method, path, *, value=None, body=None, headers=None, timeout=5.0):
     status, response_headers, raw = http_request(
         runtime.server, method, path, value=value, raw_body=body,
-        headers={"X-Local-API-Token": TOKEN, **(headers or {})},
+        headers={"X-Local-API-Token": TOKEN, **(headers or {})}, timeout=timeout,
     )
     return status, response_headers, raw
 
 
-def _json(runtime, method, path, *, value=None, body=None, headers=None):
-    status, _headers, raw = _api(runtime, method, path, value=value, body=body, headers=headers)
+def _json(runtime, method, path, *, value=None, body=None, headers=None, timeout=5.0):
+    status, _headers, raw = _api(
+        runtime, method, path, value=value, body=body, headers=headers, timeout=timeout,
+    )
     return status, json.loads(raw) if raw else None
 
 
