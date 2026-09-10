@@ -263,14 +263,12 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         visual_extents: list[tuple[int, float, float, float, float]] = []
         pdf_images: list[tuple[float, tuple[float, ...], tuple[float, ...], tuple[bool, ...]]] = []
         for page_number, page in enumerate(reader.pages):
-            def visitor(text: str, _cm: object, tm: list[float], _font: object, size: float) -> None:
+            def visitor(text: str, cm: object, tm: list[float], font: object, size: float) -> None:
                 normalized = _normalized_visible_text(text)
                 if normalized:
-                    x, y = float(tm[4]), float(tm[5])
+                    x, y, scale = _effective_text_origin(cm, tm)
                     positioned.append((page_number, normalized, x, y))
-                    longest_line = max((len(line) for line in text.splitlines()), default=0)
-                    scale = max(abs(float(tm[0])), abs(float(tm[3])), 1.0)
-                    visual_extents.append((page_number, x, y, longest_line * float(size) * scale * 1.2, float(size) * scale))
+                    visual_extents.append((page_number, x, y, _estimate_text_advance(text, float(size), scale, font), float(size) * scale))
             extracted_pages.append(page.extract_text(visitor_text=visitor) or "")
             pdf_images.extend(_ordered_pdf_image_signatures(page, reader))
         pdf_text = _normalized_visible_text("\n".join(extracted_pages))
@@ -320,6 +318,35 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     _validate_pdf_visual_geometry(reader, positioned, visual_extents)
 
 
+def _estimate_text_advance(text: str, size: float, scale: float, font: object) -> float:
+    """Estimate a conservative horizontal text extent from PDF font metrics."""
+    longest = max((line for line in text.splitlines()), key=len, default="")
+    widths = getattr(font, "get", lambda *_args: None)("/Widths") if font is not None else None
+    first_char = getattr(font, "get", lambda *_args: 0)("/FirstChar") if font is not None else 0
+    if widths is not None and isinstance(first_char, int):
+        values = [float(value) / 1000.0 for value in widths]
+        return sum(values[ord(char) - first_char] if 0 <= ord(char) - first_char < len(values) else 0.75 for char in longest) * size * scale
+    base_font = str(getattr(font, "get", lambda *_args: "")("/BaseFont")).casefold() if font is not None else ""
+    if "helvetica" in base_font:
+        narrow = set("ijlrtf")
+        wide = set("mw@%&QGO")
+        units = sum(0.28 if char in narrow else 0.25 if char == " " else 0.94 if char in wide else 0.62 for char in longest)
+    else:
+        units = len(longest) * 0.75
+    return units * size * scale
+
+
+def _effective_text_origin(cm: object, tm: list[float]) -> tuple[float, float, float]:
+    """Compose the text matrix with the current transformation matrix."""
+    if not isinstance(cm, (list, tuple)) or len(cm) != 6 or len(tm) < 6:
+        return float(tm[4]), float(tm[5]), max(abs(float(tm[0])), abs(float(tm[3])), 1.0)
+    a, b, c, d, e, f = (float(value) for value in cm)
+    tx, ty = float(tm[4]), float(tm[5])
+    x, y = a * tx + c * ty + e, b * tx + d * ty + f
+    scale = max(abs(a * float(tm[0])) + abs(c * float(tm[1])), abs(b * float(tm[0])) + abs(d * float(tm[1])), 1.0)
+    return x, y, scale
+
+
 def _validate_pdf_visual_geometry(
     reader: PdfReader,
     positioned: list[tuple[int, str, float, float]],
@@ -350,9 +377,9 @@ def _validate_pdf_visual_geometry(
         # without permitting content to be rendered on a different page.
         if x < left - 2 or x > right + 2 or y < bottom - 12 or y > top + 12:
             raise ValueError("final PDF visual geometry is outside the page")
-    for page_number, x, _y, advance, _size in visual_extents:
-        left, _bottom, right, _top = boxes[page_number]
-        if x < left - 2 or x + advance > right + 2:
+    for page_number, x, y, advance, size in visual_extents:
+        left, bottom, right, top = boxes[page_number]
+        if x < left - 2 or x + advance > right + 2 or y - size * 0.3 < bottom - 2 or y + size * 1.2 > top + 2:
             raise ValueError("final PDF visual geometry exceeds the page")
 
 
