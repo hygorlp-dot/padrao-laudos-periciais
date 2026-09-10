@@ -25,7 +25,11 @@ from scripts.backend_contract.report_foundation import report_snapshot_from_mapp
 from scripts.backend_contract.technical_findings import technical_snapshot_from_mapping
 from scripts.backend_contract.vistoria import inspection_session_from_mapping
 from scripts.backend_contract.local_api.composition import build_local_api
+from scripts.backend_contract.product_bridge.composition import build_product_runtime
 from tests.test_local_api_v1 import FixedClock, TOKEN, http_request
+from tests.test_document_intake_v1 import provision_private_root
+from tests.test_final_closure_r7 import pdf_sintetico
+from tests.test_product_bridge_v1 import browser_mutation_headers, frontend_build, request as bridge_request
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,6 +44,12 @@ WINDOWS_MUTABLE_RECOVERY = pytest.mark.skipif(
 def _http(runtime, method: str, path: str, value: object | None = None, raw_body: bytes | None = None, headers: dict | None = None):
     supplied = {"X-Local-API-Token": TOKEN, **(headers or {})}
     status, _response_headers, body = http_request(runtime.server, method, path, value=value, raw_body=raw_body, headers=supplied)
+    return status, (json.loads(body) if body else None)
+
+
+def _bridge_http(runtime, method: str, path: str, value: object | None = None, raw_body: bytes | None = None, headers: dict | None = None):
+    supplied = {**browser_mutation_headers(runtime), **(headers or {})}
+    status, _response_headers, body = bridge_request(runtime, method, path, body=value, raw_body=raw_body, headers=supplied)
     return status, (json.loads(body) if body else None)
 
 
@@ -343,6 +353,42 @@ def test_d1_d11_normal_composed_product_path_delivers_closes_and_recovers_withou
             assert len(reopened) == len(verified.artifact_revisions)
         finally:
             staging.close()
+    finally:
+        runtime.close()
+
+
+def test_longitudinal_oracle_starts_with_synthetic_pje_through_product_bridge(tmp_path: Path) -> None:
+    pdf = tmp_path / "autos-longitudinais-sinteticos.pdf"
+    pdf_sintetico(pdf)
+    private = tmp_path / "private"
+    provision_private_root(private)
+    runtime = build_product_runtime(
+        tmp_path / "bridge-longitudinal.db",
+        frontend_build(tmp_path),
+        token=TOKEN,
+        private_root=private,
+    )
+    runtime.start()
+    try:
+        status, workspace = _bridge_http(runtime, "POST", "/app-api/v1/workspaces", {"name": "Caso PJe longitudinal sintético"})
+        assert status == 201
+        workspace_id = workspace["workspace_id"]
+        root = f"/app-api/v1/workspaces/{workspace_id}"
+        status, material = _bridge_http(
+            runtime,
+            "POST",
+            f"{root}/materials",
+            raw_body=pdf.read_bytes(),
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": pdf.name},
+        )
+        assert status == 201
+        status, intake = _bridge_http(runtime, "GET", f"{root}/pje-intake")
+        assert status == 200, intake
+        assert intake["intakes"] and intake["intakes"][0]["inventory"]["storage_content_id"] == material["content_id"]
+        status, analysis = _bridge_http(runtime, "POST", f"{root}/case-analysis", {})
+        assert status == 201
+        assert analysis["snapshot"]["documents"]
+        assert all(item["storage_content_id"] == material["content_id"] for item in analysis["snapshot"]["documents"])
     finally:
         runtime.close()
 
