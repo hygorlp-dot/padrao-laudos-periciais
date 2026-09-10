@@ -1299,7 +1299,7 @@ def test_d5_pending_offline_authority_blocks_backup_before_workspace_read() -> N
         raise AssertionError("pending offline work did not block backup")
 
 
-def test_d9_d10_maturity_truth_is_derived_and_stage_10_remains_closed() -> None:
+def test_d9_d10_maturity_truth_is_derived_and_stage_10_is_proposal_only() -> None:
     maturity = json.loads((ROOT / "config" / "product-maturity-v1.json").read_text(encoding="utf-8"))
     stages = maturity["stages"]
     assert [item["stage"] for item in stages] == list(range(13))
@@ -1307,12 +1307,12 @@ def test_d9_d10_maturity_truth_is_derived_and_stage_10_remains_closed() -> None:
     assert stage_10 == {
         "stage": 10,
         "name": "AI_AUTOMATION_FOUNDATION",
-        "status": "NOT_IMPLEMENTED_OR_NOT_PROVEN",
+        "status": "IMPLEMENTED_PROPOSAL_ONLY",
     }
     derived_complete = all(item["status"] == "COMPLETE" for item in stages)
     assert maturity["product_roadmap_stage_0_to_12_complete"] is derived_complete is False
-    assert maturity["stage_10_authorized"] is False
+    assert maturity["stage_10_authorized"] is True
 
     report = (ROOT / "docs" / "PRODUCT_MATURITY_REPORT_V1.md").read_text(encoding="utf-8")
-    assert "Stage 10 is `NOT_IMPLEMENTED_OR_NOT_PROVEN`" in report
+    assert "Stage 10 is `IMPLEMENTED_PROPOSAL_ONLY`" in report
     assert "PRODUCT_ROADMAP_STAGE_0_TO_12_COMPLETE = FALSE" in report
