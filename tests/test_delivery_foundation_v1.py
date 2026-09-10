@@ -66,7 +66,7 @@ def test_production_delivery_render_uses_local_word_com_without_generic_process(
     assert "Popen" not in source
 
 
-def _parseable_text_pdf(text: str, *, x: int = 50, y: int = 780, crop_top: int | None = None, transform: tuple[int, int, int, int, int, int] | None = None, color: tuple[int, ...] | None = None, color_scope: bool = False) -> bytes:
+def _parseable_text_pdf(text: str, *, x: int = 50, y: int = 780, crop_top: int | None = None, transform: tuple[int, int, int, int, int, int] | None = None, color: tuple[int, ...] | None = None, color_scope: bool = False, background: bool = False) -> bytes:
     encoded_lines = [line.encode("cp1252").replace(b"\\", b"\\\\").replace(b"(", b"\\(").replace(b")", b"\\)") for line in text.splitlines()]
     prefix = ""
     suffix = ""
@@ -75,7 +75,8 @@ def _parseable_text_pdf(text: str, *, x: int = 50, y: int = 780, crop_top: int |
         suffix = " Q"
     color_command = (("q " if color_scope else "") + " ".join(str(item) for item in color) + (" rg " if len(color or ()) == 3 else " g ")) if color is not None else ""
     color_suffix = " Q" if color_scope else ""
-    stream = (prefix + f"BT /F1 10 Tf {color_command}{x} {y} Td 12 TL ").encode("ascii") + b" Tj T* ".join(b"(" + line + b")" for line in encoded_lines) + (b" Tj ET" + color_suffix.encode("ascii") + suffix.encode("ascii"))
+    background_command = "0 0 595 842 re f " if background else ""
+    stream = (prefix + background_command + f"BT /F1 10 Tf {color_command}{x} {y} Td 12 TL ").encode("ascii") + b" Tj T* ".join(b"(" + line + b")" for line in encoded_lines) + (b" Tj ET" + color_suffix.encode("ascii") + suffix.encode("ascii"))
     crop_box = f" /CropBox [0 0 595 {crop_top}]" if crop_top is not None else ""
     objects = (
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
@@ -753,6 +754,29 @@ def test_final_pdf_rejects_post_text_opaque_occlusion() -> None:
         package.writestr(
             "word/document.xml",
             '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+
+def test_visual_raster_red_rejects_black_text_on_opaque_black_background() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class RasterConverter:
+        requires_visual_raster = True
+
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", background=True)
+
+    if delivery_renderer._pdfium is None:
+        pytest.skip("pypdfium2 is unavailable in this runtime")
+    with pytest.raises(ValueError, match="visible contrast"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=RasterConverter(),
         )
 
     class OccludingConverter:
