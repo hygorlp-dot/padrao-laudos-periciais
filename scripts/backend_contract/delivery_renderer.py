@@ -41,6 +41,10 @@ _V = "{urn:schemas-microsoft-com:vml}"
 ElementTree.register_namespace("w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main")
 
 
+class RendererUnavailable(ValueError):
+    """The local Word renderer is unavailable or failed closed."""
+
+
 def render_word_candidate(
     *, template_bytes: bytes, report: ReportSnapshot, manifest: TemplateBindingManifest,
 ) -> DocumentBindingResult:
@@ -307,6 +311,34 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         or not tables_match
     ):
         raise ValueError("final PDF does not faithfully represent the bound Word artifact")
+
+    _validate_pdf_visual_geometry(reader, positioned)
+
+
+def _validate_pdf_visual_geometry(reader: PdfReader, positioned: list[tuple[int, str, float, float]]) -> None:
+    """Apply conservative page/position checks before a PDF can be final.
+
+    This is intentionally a deterministic visual-fidelity boundary: every page
+    must have a valid canvas and extracted text must remain on that canvas. It
+    does not claim pixel equivalence; Word remains authoritative and a future
+    raster oracle can strengthen this check without changing the trust model.
+    """
+    if not reader.pages:
+        raise ValueError("final PDF has no pages")
+    boxes: list[tuple[float, float, float, float]] = []
+    for page in reader.pages:
+        box = page.mediabox
+        left, bottom = float(box.left), float(box.bottom)
+        right, top = float(box.right), float(box.top)
+        if right <= left or top <= bottom:
+            raise ValueError("final PDF has invalid page geometry")
+        boxes.append((left, bottom, right, top))
+    for page_number, _text, x, y in positioned:
+        left, bottom, right, top = boxes[page_number]
+        # Text extraction reports the baseline. Allow a small glyph overhang
+        # without permitting content to be rendered on a different page.
+        if x < left - 2 or x > right + 2 or y < bottom - 12 or y > top + 12:
+            raise ValueError("final PDF visual geometry is outside the page")
 
 
 def _inject_canonical_report(content: bytes, report: ReportSnapshot) -> bytes:

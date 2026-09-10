@@ -36,6 +36,7 @@ class DeliveryAction(StrEnum):
 
 class DeliveryRole(StrEnum):
     MAIN_REPORT = "MAIN_REPORT"
+    DERIVED_PDF = "DERIVED_PDF"
     ANNEX = "ANNEX"
     PHOTO_APPENDIX = "PHOTO_APPENDIX"
     TECHNICAL_APPENDIX = "TECHNICAL_APPENDIX"

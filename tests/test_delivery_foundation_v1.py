@@ -55,17 +55,20 @@ SHA_A = "a" * 64
 SHA_B = "b" * 64
 
 
-def test_production_delivery_render_has_no_local_process_or_pdf_authority() -> None:
+def test_production_delivery_render_uses_local_word_com_without_generic_process() -> None:
     root = Path(__file__).parents[1]
-    assert not (root / "scripts/backend_contract/infrastructure/office_pdf.py").exists()
-    assert "pdf_converter" not in {item.name for item in fields(RenderDeliveryPackage)}
+    assert (root / "scripts/backend_contract/infrastructure/office_pdf.py").exists()
+    assert "pdf_converter" in {item.name for item in fields(RenderDeliveryPackage)}
     composition = (root / "scripts/backend_contract/local_api/composition.py").read_text(encoding="utf-8")
-    assert "LocalOfficePdfConverter" not in composition
+    assert "LocalOfficePdfConverter" in composition
+    source = (root / "scripts/backend_contract/infrastructure/office_pdf.py").read_text(encoding="utf-8")
+    assert "import subprocess" not in source
+    assert "Popen" not in source
 
 
-def _parseable_text_pdf(text: str) -> bytes:
+def _parseable_text_pdf(text: str, *, x: int = 50, y: int = 780) -> bytes:
     encoded_lines = [line.encode("cp1252").replace(b"\\", b"\\\\").replace(b"(", b"\\(").replace(b")", b"\\)") for line in text.splitlines()]
-    stream = b"BT /F1 10 Tf 50 780 Td 12 TL " + b" Tj T* ".join(b"(" + line + b")" for line in encoded_lines) + b" Tj ET"
+    stream = f"BT /F1 10 Tf {x} {y} Td 12 TL ".encode("ascii") + b" Tj T* ".join(b"(" + line + b")" for line in encoded_lines) + b" Tj ET"
     objects = (
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
         b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
@@ -517,6 +520,25 @@ def test_final_pdf_rejects_a_table_flattened_into_unrelated_lines() -> None:
     with pytest.raises(ValueError, match="does not faithfully represent"):
         delivery_renderer.render_final_pdf_candidate(
             word_content=word.getvalue(), word_format="DOCX", converter=FlatteningConverter(),
+        )
+
+
+def test_final_pdf_rejects_text_positioned_outside_page_geometry() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class OffPageConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", x=700)
+
+    with pytest.raises(ValueError, match="visual geometry"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=OffPageConverter(),
         )
 
 
