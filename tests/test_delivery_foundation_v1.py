@@ -66,14 +66,15 @@ def test_production_delivery_render_uses_local_word_com_without_generic_process(
     assert "Popen" not in source
 
 
-def _parseable_text_pdf(text: str, *, x: int = 50, y: int = 780, crop_top: int | None = None, transform: tuple[int, int, int, int, int, int] | None = None) -> bytes:
+def _parseable_text_pdf(text: str, *, x: int = 50, y: int = 780, crop_top: int | None = None, transform: tuple[int, int, int, int, int, int] | None = None, color: tuple[int, ...] | None = None) -> bytes:
     encoded_lines = [line.encode("cp1252").replace(b"\\", b"\\\\").replace(b"(", b"\\(").replace(b")", b"\\)") for line in text.splitlines()]
     prefix = ""
     suffix = ""
     if transform is not None:
         prefix = "q " + " ".join(str(item) for item in transform) + " cm "
         suffix = " Q"
-    stream = (prefix + f"BT /F1 10 Tf {x} {y} Td 12 TL ").encode("ascii") + b" Tj T* ".join(b"(" + line + b")" for line in encoded_lines) + (b" Tj ET" + suffix.encode("ascii"))
+    color_command = (" ".join(str(item) for item in color) + (" rg " if len(color or ()) == 3 else " g ")) if color is not None else ""
+    stream = (prefix + f"BT /F1 10 Tf {color_command}{x} {y} Td 12 TL ").encode("ascii") + b" Tj T* ".join(b"(" + line + b")" for line in encoded_lines) + (b" Tj ET" + suffix.encode("ascii"))
     crop_box = f" /CropBox [0 0 595 {crop_top}]" if crop_top is not None else ""
     objects = (
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
@@ -676,6 +677,25 @@ def test_final_pdf_uses_standard_helvetica_at_width_for_clipping() -> None:
 def test_standard_helvetica_punctuation_metrics_are_not_swapped() -> None:
     assert delivery_renderer._HELVETICA_WIDTHS[";"] == 278
     assert delivery_renderer._HELVETICA_WIDTHS["<"] == 584
+
+
+def test_final_pdf_rejects_explicitly_invisible_white_text() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class InvisibleConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", color=(1, 1, 1))
+
+    with pytest.raises(ValueError, match="invisible white text"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=InvisibleConverter(),
+        )
 
 
 def test_image_fidelity_signature_distinguishes_uniform_opposites() -> None:
