@@ -1756,6 +1756,12 @@ def http_request(
     headers=None,
     timeout=5.0,
 ):
+    """Issue a test-only request with a bounded socket-I/O timeout.
+
+    ``HTTPConnection`` applies this bound to each blocking socket operation;
+    it is not a wall-clock deadline for the complete request lifecycle.
+    """
+
     if (
         isinstance(timeout, bool)
         or not isinstance(timeout, (int, float))

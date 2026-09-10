@@ -21,6 +21,10 @@ The harness now distinguishes these bounded layers:
 - scenario/suite deadlines: still supplied by pytest and the existing test
   harness.
 
+The client bound is the `HTTPConnection` socket-I/O timeout. It limits each
+blocking connect/send/read operation; it is deliberately not described as a
+wall-clock deadline for the complete request lifecycle.
+
 Recovery transaction helpers use an explicit 30-second client operation
   bound. This is a bounded test-client contract, not a production timeout or
   a retry.
