@@ -93,8 +93,10 @@ jobs:
           }
           $comparison = @'
           import json, os, subprocess
+          from datetime import date
           from pathlib import Path
           from scripts.quality.capability_analyzer import analyze_capabilities
+          from scripts.quality.capability_gate_adapter import apply_exact_exceptions
 
           root = Path(os.environ['CAPABILITY_CANDIDATE_ROOT'])
           base = os.environ['CAPABILITY_PROTECTED_BASE_SHA']
@@ -157,9 +159,11 @@ jobs:
           tree = lambda commit: subprocess.check_output(['git', 'rev-parse', f'{commit}^{{tree}}'], cwd=root, text=True).strip()
           left = sorted(key(item) for item in analyze_capabilities(root, base, tree(base), policy_path=policy))
           right = sorted(key(item) for item in analyze_capabilities(root, candidate, tree(candidate), policy_path=policy))
-          result = {'equal': left == right, 'baseCount': len(left), 'candidateCount': len(right), 'transition': transition_ok, 'rows': row_ok, 'registry': registry_ok, 'paths': changed <= allowed_paths}
+          base_findings = analyze_capabilities(root, base, tree(base), policy_path=policy)
+          exceptions_ok = not apply_exact_exceptions(root, base_findings, base, base, registry_path='config/capability-exceptions-v1.json', schema_path=Path(os.environ['GITHUB_WORKSPACE']) / 'trusted/schemas/capability-exception-v1.schema.json', now=date.today())
+          result = {'equal': left == right, 'baseCount': len(left), 'candidateCount': len(right), 'transition': transition_ok, 'rows': row_ok, 'registry': registry_ok, 'exceptions': exceptions_ok, 'paths': changed <= allowed_paths}
           print(json.dumps(result))
-          if not all(result[key] for key in ('equal', 'transition', 'rows', 'registry', 'paths')):
+          if not all(result[key] for key in ('equal', 'transition', 'rows', 'registry', 'exceptions', 'paths')):
               raise SystemExit(1)
           '@ | python -
           if ($LASTEXITCODE -ne 0) { throw 'protected capability comparison failed' }

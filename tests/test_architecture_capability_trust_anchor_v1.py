@@ -467,7 +467,7 @@ def test_protected_workflow_runs_only_inert_base_owned_verifier():
     assert "CAPABILITY_TRUST_TRANSITION_APPROVED" in workflow
     assert "dedicated Word transition changed an out-of-scope path" in workflow
     assert "set(transition) == {'schemaVersion', 'transitionId', 'purpose', 'scope', 'protectedBaseSha', 'protectedArtifacts', 'supportArtifacts'}" in workflow
-    assert "config/capability-exceptions-v1.json" not in workflow
+    assert "apply_exact_exceptions" in workflow
     assert "secrets." not in workflow
 
 
