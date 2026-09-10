@@ -1,5 +1,6 @@
 import http.client
 import json
+import math
 import socket
 import subprocess
 import sys
@@ -35,7 +36,33 @@ def frontend_build(tmp_path: Path) -> Path:
     return root
 
 
-def request(runtime, method, target, *, headers=None, body=None, raw_body=None):
+PRODUCT_BRIDGE_CLIENT_TIMEOUT_SECONDS = 30.0
+
+
+def request(
+    runtime,
+    method,
+    target,
+    *,
+    headers=None,
+    body=None,
+    raw_body=None,
+    timeout=PRODUCT_BRIDGE_CLIENT_TIMEOUT_SECONDS,
+):
+    """Issue a test-only request with a bounded socket-I/O timeout.
+
+    ``HTTPConnection`` applies this bound to each blocking socket operation;
+    it is not a wall-clock deadline for the complete request lifecycle.
+    """
+
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not math.isfinite(timeout)
+        or timeout <= 0
+        or timeout > 30
+    ):
+        raise ValueError("client operation timeout invalid")
     if body is not None and raw_body is not None:
         raise ValueError("request body is ambiguous")
     encoded = raw_body if raw_body is not None else (None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8"))
@@ -43,7 +70,7 @@ def request(runtime, method, target, *, headers=None, body=None, raw_body=None):
     if encoded is not None:
         request_headers.setdefault("Content-Type", "application/octet-stream" if raw_body is not None else "application/json")
         request_headers.setdefault("Content-Length", str(len(encoded)))
-    connection = http.client.HTTPConnection(*runtime.address, timeout=5)
+    connection = http.client.HTTPConnection(*runtime.address, timeout=timeout)
     try:
         connection.request(method, target, body=encoded, headers=request_headers)
         response = connection.getresponse()
