@@ -37,6 +37,7 @@ class LocalOfficePdfConverter:
     """Convert an exact Word copy through local Microsoft Word Desktop COM."""
 
     renderer_type = "MICROSOFT_WORD_DESKTOP_COM"
+    requires_visual_raster = True
 
     def __init__(
         self,

@@ -19,6 +19,11 @@ from pypdf.generic import BooleanObject
 from pypdf.errors import PdfReadError
 from pypdf.generic import ContentStream
 
+try:
+    import pypdfium2 as _pdfium
+except ModuleNotFoundError:  # Optional local rasterizer; PDF finalization fails closed without it.
+    _pdfium = None
+
 from .report_foundation import ReportSnapshot
 from .report_foundation import report_snapshot_to_mapping
 from .report_template import (
@@ -149,6 +154,8 @@ def render_final_pdf_candidate(*, word_content: bytes, word_format: str, convert
         raise ValueError("diagnostic PDF cannot be finalized")
     validate_final_artifact(output, "PDF")
     _validate_pdf_fidelity(conversion_copy, output)
+    if getattr(converter, "requires_visual_raster", False):
+        _validate_pdf_raster_visibility(output)
     return output
 
 
@@ -441,6 +448,24 @@ def _reject_unmodeled_visual_state(reader: PdfReader) -> None:
                 text_seen = True
             elif text_seen and operator in {b"f", b"F", b"f*", b"B", b"b", b"B*", b"b*", b"S", b"s", b"Do"}:
                 raise ValueError("final PDF has unsupported post-text occlusion")
+
+
+def _validate_pdf_raster_visibility(pdf_content: bytes) -> None:
+    """Rasterize locally and reject pages whose material content is invisible."""
+    if _pdfium is None:
+        raise RendererUnavailable("local PDF rasterizer is unavailable")
+    try:
+        document = _pdfium.PdfDocument(pdf_content)
+        for page in document:
+            image = page.render(scale=2).to_pil().convert("L")
+            if ImageStat.Stat(image).var[0] < 1.0:
+                raise ValueError("final PDF raster contains no visible contrast")
+    except RendererUnavailable:
+        raise
+    except (OSError, RuntimeError, ValueError) as exc:
+        if isinstance(exc, ValueError) and "visible contrast" in str(exc):
+            raise
+        raise RendererUnavailable("local PDF rasterization failed") from exc
 
 
 def _inject_canonical_report(content: bytes, report: ReportSnapshot) -> bytes:
