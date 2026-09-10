@@ -477,18 +477,19 @@ def _validate_pdf_raster_visibility(pdf_content: bytes, visual_extents: list[tup
             page_width, page_height = page.get_size()
             page_extents: list[tuple[int, float, float, float, float]] = []
             textpage = page.get_textpage()
-            for page_object in page.get_objects(textpage=textpage):
-                # PDFium's text-object bounds are the painted glyph bounds,
-                # unlike the conservative visitor text-run rectangle. This
-                # keeps panel edges and nearby decorations out of the proof.
-                if getattr(page_object, "type", None) != 1:
+            for index in range(textpage.count_chars()):
+                character = textpage.get_text_range(index, 1)
+                if not character or character.isspace():
                     continue
-                if not page_object.extract().strip():
-                    continue
-                min_x, min_y, max_x, max_y = page_object.get_bounds()
-                page_extents.append((page_number, float(min_x), float(min_y), float(max_x), float(max_y)))
+                min_x, min_y, max_x, max_y = textpage.get_charbox(index, loose=False)
+                if max_x > min_x and max_y > min_y:
+                    # PDFium character boxes track each painted glyph. A
+                    # whole text-object box can hide one required glyph while
+                    # neighboring glyphs supply enough contrast to pass.
+                    page_extents.append((page_number, float(min_x), float(min_y), float(max_x), float(max_y)))
             if not page_extents:
-                page_extents = [item for item in visual_extents if item[0] == page_number]
+                if any(item[0] == page_number for item in visual_extents):
+                    raise RendererUnavailable("local PDF raster glyph geometry is unavailable")
             for _page, min_x, min_y, max_x, max_y in page_extents:
                 left = max(0, int(min_x / page_width * image.width))
                 right = min(image.width, int(max_x / page_width * image.width) + 1)
