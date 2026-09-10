@@ -513,6 +513,9 @@ def _validate_pdf_raster_visibility(pdf_content: bytes, visual_extents: list[tup
             page_width, page_height = page.get_size()
             page_extents: list[tuple[int, float, float, float, float]] = []
             textpage = mask_page.get_textpage()
+            source_textpage = page.get_textpage()
+            if _normalized_visible_text(source_textpage.get_text_range()) != _normalized_visible_text(textpage.get_text_range()):
+                raise RendererUnavailable("local PDF raster text mask is incomplete")
             for index in range(textpage.count_chars()):
                 character = textpage.get_text_range(index, 1)
                 if not character or character.isspace():
@@ -557,13 +560,18 @@ def _validate_pdf_raster_visibility(pdf_content: bytes, visual_extents: list[tup
                 column_coverage = sum(any(contrast_mask[column::width]) for column in range(width))
                 min_rows = max(2, (height + 4) // 5)
                 min_columns = max(2, (width + 4) // 5)
+                expected_count = sum(expected_ink)
+                overlap = sum(visible and expected for visible, expected in zip(contrast_mask, expected_ink))
+                recall = overlap / expected_count
+                precision = overlap / max(sum(contrast_mask), 1)
                 if (
                     width <= 0
                     or height <= 0
                     or contrast_fraction < 0.01
                     or row_coverage < min_rows
                     or column_coverage < min_columns
-                    or sum(visible for visible, expected in zip(contrast_mask, expected_ink) if expected) / sum(expected_ink) < 0.5
+                    or recall < 0.5
+                    or precision < 0.85
                 ):
                     raise ValueError("final PDF raster contains no visible contrast")
     except RendererUnavailable:
