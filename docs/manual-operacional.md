@@ -2,108 +2,67 @@
 
 ## Finalidade
 
-Este manual registra o fluxo macro aprovado e distingue o que já está
-implementado do que permanece previsto.
+Este manual registra o fluxo efetivo verificável, suas fronteiras de
+autoridade e o que ainda depende de aceitação profissional humana.
 
-## Fluxo macro
+## Fluxo longitudinal sintético
 
-1. **Recebimento dos autos** — receber e organizar os elementos autorizados do
-   processo de trabalho.
-2. **Extração estruturada** — identificar dados, documentos, alegações,
-   quesitos e lacunas, sem inventar conteúdo.
-3. **Contratos PJe** — representar o PDF consolidado em `manifesto-pje.json`
-   e cada peça reconciliada em `documento-pje.json`.
+1. Receber materiais autorizados e preservar a proveniência.
+2. Extrair manifesto/documentos PJe sem inventar conteúdo.
+3. Criar o Workspace e reconciliar o domínio judicial canônico plural.
+4. Executar Case Analysis revisável e distinguir alegação, documento e decisão.
+5. Criar e aprovar o Planning de vistoria.
+6. Registrar Inspection, observações, medições, fotos originais e limitações.
+7. Construir Evidence, PAT e Technical Findings com método e provenance.
+8. Redigir e revisar o Report; texto não cria verdade técnica.
+9. Finalizar o Word/DOCM autoritativo com binding e hash.
+10. Controlar Budget separadamente do mérito técnico.
+11. Fechar o Workspace, criar Backup e executar Verify → Stage → promoção humana
+    explícita → Recovery/Reopen.
 
-O contrato `manifesto-pje.json` está na versão `1.1.0`. Cada item do índice
-registra página de origem, método, candidatos, destino escolhido e confiança.
-Itens de versões anteriores devem ser reextraídos: não se presume associação
-de link nem se promove fallback posicional a confiança alta.
-4. **Triagem e delimitação pericial** — leitura semântica pelo Codex, com tipo
-   de perícia, tema controvertido, objeto, objetivo, questões técnicas,
-   quesitos, ressalvas, conflitos e plano preliminar em
-   `delimitacao-pericial.json`.
-5. **`processo.json`** — consolidação semântica rastreável do que consta nos
-   autos.
-6. **Conhecimento pertinente** — inventariar e recuperar normas e modelos
-   privados sem convertê-los em fatos do caso.
-7. **Plano e ficha pré-vistoria** — definir atividades, medições, fotografias,
-   equipamentos, documentos e cobertura dos quesitos.
-8. **Vistoria** — realizar constatações, medições e registros sob condução do
-   perito.
-9. **`vistoria.json`** — consolidação estruturada dos dados de campo, sem
-   converter declaração, fotografia ou anotação em causa.
-10. **Motor técnico de vícios** — organizar manifestações, testar hipóteses,
-    auditar causalidade e aplicar o gate de redação.
-11. **Análise por `PAT-NNN`** — analisar cada manifestação como unidade
-   rastreável conforme os padrões canônicos.
-12. **Redação técnica** — redigir análise, consequências, classificação e
-   conclusão específica.
-13. **`laudo.json`** — futura fonte estruturada única do laudo.
-14. **Conclusão** — consolidar somente resultados já fundamentados e aprovados
-    pelo perito.
-15. **Quesitos** — responder integralmente os conjuntos identificados.
-16. **Orçamento** — incluir somente itens que atendam aos requisitos técnicos
-    canônicos.
-17. **Revisão** — auditar integridade, coerência, rastreabilidade e completude.
-18. **Preenchimento do modelo Word** — preencher futuramente o DOCM preservando
-    o padrão visual aprovado.
-19. **Revisão final do DOCM/PDF** — conferir conteúdo, campos, paginação e
-    resultado visual.
-20. **Validação e liberação pelo perito** — etapa final e indelegável.
+O percurso acima foi provado por oracle longitudinal sintética pós-main na
+superfície HTTP `/app-api`, sem chamadas diretas aos serviços. Isso não prova a
+UI/Data Layer nem a aceitação Human RC. Foram 11 testes no main
+`27175535933a`; o terminal não faz parte do fluxo normal exercitado pelo oracle.
+
+## Autoridade e segurança
+
+- `REPRESENTATIVE != PARTY` e `ACCESS != PARTICIPATION`.
+- `AI_PROPOSAL != EFFECTIVE_VALUE`.
+- A cadeia de IA é `SOURCE_VALUE → AI_PROPOSAL → ENGINE_DECISION →
+  PROFESSIONAL_OVERRIDE`.
+- Provider, contexto/source, saída estruturada, revalidação, auditoria
+  append-only e limites de tokens/custo são obrigatórios.
+- Dados privados permanecem em `referencias/privadas/`; `PRIVATE_EGRESS = FALSE`.
+- Recovery não promove automaticamente e não trata estado verificado como
+  promovível sem decisão explícita.
+
+## Delivery
+
+O Word/DOCM aprovado é o artefato profissional autoritativo. A conversão PDF
+local final ainda está diferida por fronteira de confiança: PDF diagnóstico ou
+texto extraído não prova fidelidade visual e não pode ser finalizado como PDF
+profissional.
 
 ## Estado de implementação
 
-### Disponível atualmente
+Implementados: foundations das Stages 0–7, Budget, Productization/Recovery,
+Field/Mobile, AI Gateway/proposals e o oracle longitudinal sintético.
 
-- padrões documentais canônicos;
-- checklists iniciais;
-- skills de redação e revisão;
-- contratos JSON Schema iniciais para PJe, processo, vistoria, patologia e
-  laudo;
-- fixtures fictícias e validador local dos contratos;
-- parser estrutural determinístico de PDF PJe para `manifesto-pje.json`, sem
-  OCR nem extração semântica;
-- geração determinística de `documento-pje.json` a partir dos intervalos
-  reconciliados do manifesto, com texto digital e catálogo estrutural;
-- contrato, padrão, Skill e validador relacional da triagem e delimitação;
-- geração de `processo.json`, inventário incremental de conhecimento privado,
-  recuperação pertinente, plano-vistoria e ficha pré-vistoria;
-- inventário de campo, `vistoria.json`, motor inicial de vícios, hipóteses,
-  PAT, autoauditoria e gate de redação;
-- planejamento semântico da redação, `CLAIM-RED-NNN`, quatro blocos de PAT,
-  auditoria de grounding/fidelidade/linguagem, autocorreção editorial e gate
-  autônomo do laudo;
-- referências privadas locais para comparação;
-- arquitetura preparada para evolução futura.
-- Backend Contract V1 em monólito modular: identidade estável, estados,
-  revisões, autoridade de valores, dependências e `STALE`, invariantes, Unit of
-  Work, portas, capabilities, jobs, erros e migrações em memória.
+Pendentes: PDF local fiel, Human RC no Windows, execução de caso real e
+release/packaging distribuível. A dívida histórica de duração do `verify_core`
+permanece registrada no Issue #192 e não é alterada por este manual.
 
-### Ainda não implementado
+## Histórico
 
-- serviço autônomo de extração semântica sem intervenção do Codex;
-- motores especializados para outras famílias periciais;
-- motor completo de preços, composições e memória de cálculo orçamentária;
-- preenchimento automático do DOCM;
-- atualização automática de campos Word;
-- automação de revisão do DOCM/PDF;
-- demais scripts e integrações operacionais.
+As versões anteriores descreviam um fluxo inicial baseado em
+`manifesto-pje.json → documento-pje.json → processo.json → vistoria.json →
+PAT-NNN`, com Word/PDF como etapas futuras. Esse registro histórico é
+preservado; o fluxo longitudinal acima é o estado efetivo atual.
 
-## Auditoria integrada
+## Auditoria
 
-Antes do gate de redação, executar detector rápido, auditoria de grounding das
-claims materiais, deep forensic audit e registro da trilha profissional. A
-auditoria externa é local, seletiva e subordinada aos padrões canônicos; hooks
-automáticos permanecem desativados até confirmação oficial da interface.
-
-## Documentos de apoio
-
-- [Regras periciais](./padroes/regras-periciais.md).
-- [Backend Contract V1](./padroes/padrao-backend-contract.md).
-- [Estrutura do laudo](./padroes/padrao-estrutura-laudo.md).
-- [Padrão de patologia](./padroes/padrao-patologia.md).
-- [Padrão de quesitos](./padroes/padrao-quesitos.md).
-- [Padrão de orçamento](./padroes/padrao-orcamento.md).
-- [Padrão de delimitação pericial](./padroes/padrao-delimitacao-pericial.md).
-- [Padrão de planejamento e pré-vistoria](./padroes/padrao-planejamento-vistoria.md).
-- [Padrão de vistoria e motor de vícios](./padroes/padrao-vistoria-motor-vicios.md).
+Antes de qualquer conclusão profissional, executar grounding, auditoria de
+claims, verificação de provenance, revisão independente aplicável e registro
+na trilha profissional. Conclusão e assinatura permanecem responsabilidade
+indelegável do perito.

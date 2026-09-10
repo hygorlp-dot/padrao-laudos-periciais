@@ -4,18 +4,26 @@ This report is derived from `config/product-maturity-v1.json` and the
 first-party longitudinal product-integrity oracle. It records implementation
 truth; it is not authorization to begin a later stage.
 
-## Current result
+## Current-effective result
 
-- Protected foundation SHA: `67f074b2ca37d9ed998736b9c86dc90af325b89d`.
-- PR-D longitudinal implementation SHA: `479db33b194d478033516e1b235e37ad0e01d5aa`.
+- Protected main SHA: `27175535933a2ff2185ffbd02819796274cdbeff`.
+- PR #196 longitudinal oracle is merged and has an independent post-main proof: `11 passed` using synthetic data only.
   The final report-only/assurance SHA is recorded by the protected CI/review
   package after stable freeze; no moving branch name substitutes for either.
 - Stages 0–9, 11 and 12 have implemented foundations covered by first-party
   boundary tests.
 - Stage 8 supports the authoritative bound Word artifact. Local final PDF
   fidelity remains deferred by the protected trust boundary and is not claimed.
-- Stage 10 is `NOT_IMPLEMENTED_OR_NOT_PROVEN`.
-- Therefore `PRODUCT_ROADMAP_STAGE_0_TO_12_COMPLETE = FALSE`.
+- Roadmap V6 Item 2, full product longitudinal reachability, is complete.
+- Stage 10 is `IMPLEMENTED_PROPOSAL_ONLY`; it is not autonomous authority and does not make Human RC ready.
+- `HUMAN_RC_READY = FALSE` and `PRODUCT_ROADMAP_STAGE_0_TO_12_COMPLETE = FALSE` because PDF fidelity and human acceptance remain outstanding.
+
+## Historical status
+
+Earlier reports recorded stale protected/PR SHAs and Stage 10 as
+`NOT_IMPLEMENTED_OR_NOT_PROVEN`. Those statements remain historical records;
+the current-effective state above is derived from merged main and the fresh
+post-main oracle.
 
 ## Longitudinal assurance boundary
 
@@ -26,8 +34,13 @@ separate Budget, and verified backup/restore/reopen chain. It also asserts
 workspace isolation, append-only history, monotonic stale propagation and
 absence of user-visible or persisted mojibake in the governed product roots.
 
-Stage 10 remains outside this report's implementation scope and must not start
-without a new human product-direction decision.
+Stage 10 is within the implemented foundation but remains proposal-only:
+
+`SOURCE_VALUE → AI_PROPOSAL → ENGINE_DECISION → PROFESSIONAL_OVERRIDE`
+
+AI output never becomes effective authority by itself. Explicit provider,
+context/source binding, structured output, application revalidation,
+append-only audit and token/cost ceilings are covered by first-party tests.
 
 ## Verified outcomes
 
@@ -58,6 +71,9 @@ without a new human product-direction decision.
   Stage 10 readiness.
 - Historical timing debt: the prior stable-main `verify_core --full` recorded
   `FULL_GATE_DURATION_REGRESSION` at 159.755 seconds against the historical
-  60-second threshold; semantic gates passed and the timing debt remains
-  explicitly visible rather than being hidden by retries.
-- Stage 10 readiness: `NOT_IMPLEMENTED_OR_NOT_PROVEN`; human decision required.
+  60-second threshold; the post-main run observed 345.693 seconds. Semantic
+  gates passed and the timing debt remains explicitly visible rather than being
+  hidden by retries.
+- Human RC readiness: `FALSE`; professional acceptance is still required.
+- Historical timing debt remains nonblocking and tracked in Issue #192; this
+  reconciliation does not alter the 60-second threshold or hide the debt.

@@ -1,6 +1,16 @@
 {
   "schema_version": "1.0.0",
-  "generated_from": "LONGITUDINAL_PRODUCT_INTEGRITY_ORACLE_V1",
+  "generated_from": "POST_MAIN_LONGITUDINAL_PRODUCT_INTEGRITY_ORACLE_V1",
+  "current_main_sha": "27175535933a2ff2185ffbd02819796274cdbeff",
+  "roadmap_v6_item_2": "COMPLETE",
+  "human_rc_ready": false,
+  "private_egress": false,
+  "timing_debt": {
+    "status": "NONBLOCKING_ASSURANCE_DEBT",
+    "threshold_seconds": 60,
+    "observed_seconds": 345.693,
+    "tracked_issue": 192
+  },
   "stages": [
     {"stage": 0, "name": "CORE_FOUNDATION", "status": "COMPLETE"},
     {"stage": 1, "name": "SOURCE_FOUNDATION", "status": "COMPLETE"},
@@ -12,10 +22,10 @@
     {"stage": 7, "name": "REPORT_FOUNDATION", "status": "COMPLETE"},
     {"stage": 8, "name": "DELIVERY_FOUNDATION", "status": "COMPLETE_WITH_LOCAL_FINAL_PDF_DEFERRED"},
     {"stage": 9, "name": "BUDGET_FOUNDATION", "status": "COMPLETE"},
-    {"stage": 10, "name": "AI_AUTOMATION_FOUNDATION", "status": "NOT_IMPLEMENTED_OR_NOT_PROVEN"},
+    {"stage": 10, "name": "AI_AUTOMATION_FOUNDATION", "status": "IMPLEMENTED_PROPOSAL_ONLY"},
     {"stage": 11, "name": "PRODUCTIZATION_FOUNDATION", "status": "COMPLETE"},
     {"stage": 12, "name": "FIELD_MOBILE_FOUNDATION", "status": "COMPLETE"}
   ],
   "product_roadmap_stage_0_to_12_complete": false,
-  "stage_10_authorized": false
+  "stage_10_authorized": true
 }
