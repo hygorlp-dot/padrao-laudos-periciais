@@ -153,8 +153,13 @@ def render_final_pdf_candidate(*, word_content: bytes, word_format: str, convert
     if b"/DiagnosticOnly true" in output:
         raise ValueError("diagnostic PDF cannot be finalized")
     validate_final_artifact(output, "PDF")
-    visual_extents = _validate_pdf_fidelity(conversion_copy, output)
-    if getattr(converter, "requires_visual_raster", False):
+    requires_visual_raster = bool(getattr(converter, "requires_visual_raster", False))
+    visual_extents = _validate_pdf_fidelity(
+        conversion_copy,
+        output,
+        allow_word_visual_state=requires_visual_raster,
+    )
+    if requires_visual_raster:
         _validate_pdf_raster_visibility(output, visual_extents)
     return output
 
@@ -236,7 +241,12 @@ def _ordered_pdf_image_signatures(page: object, reader: PdfReader) -> list[tuple
     return ordered
 
 
-def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> list[tuple[int, float, float, float, float]]:
+def _validate_pdf_fidelity(
+    word_content: bytes,
+    pdf_content: bytes,
+    *,
+    allow_word_visual_state: bool = False,
+) -> list[tuple[int, float, float, float, float]]:
     """Reject converter output that is not observably derived from the bound Word."""
     try:
         with ZipFile(BytesIO(word_content)) as package:
@@ -303,7 +313,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> list[tupl
     except (BadZipFile, KeyError, ElementTree.ParseError, PdfReadError, OSError, ValueError) as exc:
         raise ValueError("final PDF fidelity cannot be verified") from exc
     _reject_explicitly_invisible_text(reader)
-    _reject_unmodeled_visual_state(reader)
+    _reject_unmodeled_visual_state(reader, allow_word_visual_state=allow_word_visual_state)
     required = {_normalized_visible_text(item) for item in word_fragments if _normalized_visible_text(item)}
     source_tokens = _lexical_tokens(" ".join(word_fragments))
     pdf_tokens = _lexical_tokens(pdf_text)
@@ -451,12 +461,16 @@ def _reject_explicitly_invisible_text(reader: PdfReader) -> None:
                 raise ValueError("final PDF contains explicitly invisible white text")
 
 
-def _reject_unmodeled_visual_state(reader: PdfReader) -> None:
+def _reject_unmodeled_visual_state(reader: PdfReader, *, allow_word_visual_state: bool = False) -> None:
     """Fail closed for PDF state that can hide or alter glyph painting."""
     for page in reader.pages:
         text_seen = False
         for _operands, operator in ContentStream(page.get_contents(), reader).operations:
-            if operator in {b"gs", b"W", b"W*"}:
+            # Word Desktop emits ExtGState and even-odd clipping for page
+            # layout.  These are admitted only when the converter also opts
+            # into the PDFium glyph-level raster oracle below; generic
+            # converters retain the stricter structural boundary.
+            if operator == b"W" or (operator in {b"gs", b"W*"} and not allow_word_visual_state):
                 raise ValueError("final PDF uses unsupported visual state")
             if operator == b"Tr":
                 raise ValueError("final PDF uses unsupported text rendering mode")

@@ -52,7 +52,11 @@ def test_word_com_converter_uses_private_copy_and_returns_local_pdf(tmp_path: Pa
     assert opened["_source_bytes"] == source
     assert opened["ReadOnly"] is True
     assert opened["AddToRecentFiles"] is False
-    assert next(item for item in calls if item[0] == "export")[2] == 17
+    export = next(item for item in calls if item[0] == "export")
+    assert export[2] == 17
+    # Word Desktop 16.0's late-bound COM wrapper rejects this optional name;
+    # the production adapter must remain compatible with the native runtime.
+    assert "KeepIRMSettings" not in export[3]
     close = next(item for item in calls if item[0] == "close")
     assert close[2] is True
     assert any(item[0] == "quit" for item in calls)
