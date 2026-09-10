@@ -813,6 +813,29 @@ def test_visual_raster_rejects_contrast_marker_without_visible_glyphs() -> None:
             word_content=word.getvalue(), word_format="DOCX", converter=MarkerConverter(),
         )
 
+
+def test_visual_raster_rejects_tight_panel_around_invisible_text() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class TightPanelConverter:
+        requires_visual_raster = True
+
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", pre_text_graphics="0 g 45 778 70 11 re f ")
+
+    if delivery_renderer._pdfium is None:
+        pytest.skip("pypdfium2 is unavailable in this runtime")
+    with pytest.raises(ValueError, match="visible contrast"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=TightPanelConverter(),
+        )
+
 def test_final_pdf_rejects_even_odd_post_text_occlusion() -> None:
     word = BytesIO()
     with ZipFile(word, "w", ZIP_DEFLATED) as package:

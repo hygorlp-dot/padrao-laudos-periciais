@@ -275,13 +275,28 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> list[tupl
                 if normalized:
                     x, y, x_axis, y_axis = _effective_text_geometry(cm, tm)
                     positioned.append((page_number, normalized, x, y))
-                    advance = _estimate_text_advance(text, float(size), font)
-                    corners = tuple(
-                        (x + x_axis[0] * horizontal + y_axis[0] * vertical,
-                         y + x_axis[1] * horizontal + y_axis[1] * vertical)
-                        for horizontal, vertical in ((0.0, -float(size) * 0.3), (advance, -float(size) * 0.3), (0.0, float(size) * 1.2), (advance, float(size) * 1.2))
-                    )
-                    visual_extents.append((page_number, min(item[0] for item in corners), min(item[1] for item in corners), max(item[0] for item in corners), max(item[1] for item in corners)))
+                    cursor = 0.0
+                    for character in text:
+                        if character in "\r\n":
+                            cursor = 0.0
+                            continue
+                        advance = _estimate_text_advance(character, float(size), font)
+                        if not character.isspace():
+                            # Keep each non-space glyph in its own raster region. A
+                            # whole text-run box can contain contrast from a panel
+                            # edge while every required glyph remains invisible.
+                            corners = tuple(
+                                (x + x_axis[0] * horizontal + y_axis[0] * vertical,
+                                 y + x_axis[1] * horizontal + y_axis[1] * vertical)
+                                for horizontal, vertical in (
+                                    (cursor, -float(size) * 0.15),
+                                    (cursor + advance, -float(size) * 0.15),
+                                    (cursor, float(size) * 0.85),
+                                    (cursor + advance, float(size) * 0.85),
+                                )
+                            )
+                            visual_extents.append((page_number, min(item[0] for item in corners), min(item[1] for item in corners), max(item[0] for item in corners), max(item[1] for item in corners)))
+                        cursor += advance
             extracted_pages.append(page.extract_text(visitor_text=visitor) or "")
             pdf_images.extend(_ordered_pdf_image_signatures(page, reader))
         pdf_text = _normalized_visible_text("\n".join(extracted_pages))
@@ -460,7 +475,20 @@ def _validate_pdf_raster_visibility(pdf_content: bytes, visual_extents: list[tup
         for page_number, page in enumerate(document):
             image = page.render(scale=2).to_pil().convert("L")
             page_width, page_height = page.get_size()
-            page_extents = [item for item in visual_extents if item[0] == page_number]
+            page_extents: list[tuple[int, float, float, float, float]] = []
+            textpage = page.get_textpage()
+            for page_object in page.get_objects(textpage=textpage):
+                # PDFium's text-object bounds are the painted glyph bounds,
+                # unlike the conservative visitor text-run rectangle. This
+                # keeps panel edges and nearby decorations out of the proof.
+                if getattr(page_object, "type", None) != 1:
+                    continue
+                if not page_object.extract().strip():
+                    continue
+                min_x, min_y, max_x, max_y = page_object.get_bounds()
+                page_extents.append((page_number, float(min_x), float(min_y), float(max_x), float(max_y)))
+            if not page_extents:
+                page_extents = [item for item in visual_extents if item[0] == page_number]
             for _page, min_x, min_y, max_x, max_y in page_extents:
                 left = max(0, int(min_x / page_width * image.width))
                 right = min(image.width, int(max_x / page_width * image.width) + 1)
