@@ -4,6 +4,7 @@ import subprocess
 import sys
 import http.client
 import json
+import math
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -1745,7 +1746,24 @@ def test_transfer_encoding_is_rejected_instead_of_interpreted():
     assert decoded(response)["error"]["code"] == "INVALID_REQUEST"
 
 
-def http_request(server, method, target, *, value=None, raw_body=None, headers=None):
+def http_request(
+    server,
+    method,
+    target,
+    *,
+    value=None,
+    raw_body=None,
+    headers=None,
+    timeout=5.0,
+):
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not math.isfinite(timeout)
+        or timeout <= 0
+        or timeout > 30
+    ):
+        raise ValueError("client operation timeout invalid")
     host, port = server.address
     body = raw_body
     request_headers = dict(headers or {})
@@ -1754,7 +1772,7 @@ def http_request(server, method, target, *, value=None, raw_body=None, headers=N
             raise ValueError("request body is ambiguous")
         body = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         request_headers.setdefault("Content-Type", "application/json; charset=utf-8")
-    connection = http.client.HTTPConnection(host, port, timeout=5)
+    connection = http.client.HTTPConnection(host, port, timeout=timeout)
     started = monotonic()
     client_phase = "CLIENT_SEND"
     request_seq = suite_conftest._begin_local_api_request()

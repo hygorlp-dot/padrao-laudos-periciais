@@ -32,7 +32,7 @@ import pytest
 
 from tests.test_backup_recovery_reachability_v1 import (
     _api,
-    _json,
+    _json as _local_json,
     _pdf_grande,
     _runtime,
     _slow_request,
@@ -44,6 +44,22 @@ pytestmark = pytest.mark.skipif(
     os.name != "nt",
     reason="the positive mutable Recovery V1 matrix is Windows-only",
 )
+
+RECOVERY_OPERATION_TIMEOUT_SECONDS = 30.0
+
+
+def _json(runtime, method, path, *, value=None, body=None, headers=None, timeout=RECOVERY_OPERATION_TIMEOUT_SECONDS):
+    """Use a bounded operation deadline for fsync-heavy Recovery commands."""
+
+    return _local_json(
+        runtime,
+        method,
+        path,
+        value=value,
+        body=body,
+        headers=headers,
+        timeout=timeout,
+    )
 
 
 def _pacote(runtime, workspace_id):
