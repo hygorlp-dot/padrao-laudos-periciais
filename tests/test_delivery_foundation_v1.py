@@ -606,6 +606,53 @@ def test_final_pdf_rejects_transformed_text_outside_visible_page() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("transform", "x", "y"),
+    [
+        ((1, 0, 0, 20, 0, 0), 50, 40),
+        ((0, 1, -1, 0, 500, 820), 50, 780),
+        ((-1, 0, 0, 1, 600, 0), 590, 780),
+    ],
+)
+def test_final_pdf_rejects_transformed_glyph_extents(transform: tuple[int, int, int, int, int, int], x: int, y: int) -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class TransformedConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", x=x, y=y, transform=transform)
+
+    with pytest.raises(ValueError, match="visual geometry"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=TransformedConverter(),
+        )
+
+
+def test_final_pdf_uses_standard_helvetica_widths_for_clipping() -> None:
+    source_text = "W" * 10
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            f'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>{source_text}</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class ClippedConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf(source_text, x=530)
+
+    with pytest.raises(ValueError, match="visual geometry"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=ClippedConverter(),
+        )
+
+
 def test_image_fidelity_signature_distinguishes_uniform_opposites() -> None:
     black = Image.new("RGB", (64, 64), "black")
     white = Image.new("RGB", (64, 64), "white")

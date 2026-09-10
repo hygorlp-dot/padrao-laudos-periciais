@@ -266,9 +266,15 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
             def visitor(text: str, cm: object, tm: list[float], font: object, size: float) -> None:
                 normalized = _normalized_visible_text(text)
                 if normalized:
-                    x, y, scale = _effective_text_origin(cm, tm)
+                    x, y, x_axis, y_axis = _effective_text_geometry(cm, tm)
                     positioned.append((page_number, normalized, x, y))
-                    visual_extents.append((page_number, x, y, _estimate_text_advance(text, float(size), scale, font), float(size) * scale))
+                    advance = _estimate_text_advance(text, float(size), font)
+                    corners = tuple(
+                        (x + x_axis[0] * horizontal + y_axis[0] * vertical,
+                         y + x_axis[1] * horizontal + y_axis[1] * vertical)
+                        for horizontal, vertical in ((0.0, -float(size) * 0.3), (advance, -float(size) * 0.3), (0.0, float(size) * 1.2), (advance, float(size) * 1.2))
+                    )
+                    visual_extents.append((page_number, min(item[0] for item in corners), min(item[1] for item in corners), max(item[0] for item in corners), max(item[1] for item in corners)))
             extracted_pages.append(page.extract_text(visitor_text=visitor) or "")
             pdf_images.extend(_ordered_pdf_image_signatures(page, reader))
         pdf_text = _normalized_visible_text("\n".join(extracted_pages))
@@ -318,33 +324,39 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     _validate_pdf_visual_geometry(reader, positioned, visual_extents)
 
 
-def _estimate_text_advance(text: str, size: float, scale: float, font: object) -> float:
-    """Estimate a conservative horizontal text extent from PDF font metrics."""
+_HELVETICA_WIDTHS = dict(zip(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+    (667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611,
+     556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500,
+     556, 556, 556, 556, 556, 556, 556, 556, 556, 556),
+))
+
+
+def _estimate_text_advance(text: str, size: float, font: object) -> float:
+    """Calculate a conservative horizontal extent from actual or standard metrics."""
     longest = max((line for line in text.splitlines()), key=len, default="")
     widths = getattr(font, "get", lambda *_args: None)("/Widths") if font is not None else None
     first_char = getattr(font, "get", lambda *_args: 0)("/FirstChar") if font is not None else 0
     if widths is not None and isinstance(first_char, int):
         values = [float(value) / 1000.0 for value in widths]
-        return sum(values[ord(char) - first_char] if 0 <= ord(char) - first_char < len(values) else 0.75 for char in longest) * size * scale
+        indices = [ord(char) - first_char for char in longest]
+        if any(index < 0 or index >= len(values) for index in indices):
+            raise ValueError("final PDF font metrics do not cover visible text")
+        return sum(values[index] for index in indices) * size
     base_font = str(getattr(font, "get", lambda *_args: "")("/BaseFont")).casefold() if font is not None else ""
     if "helvetica" in base_font:
-        narrow = set("ijlrtf")
-        wide = set("mw@%&QGO")
-        units = sum(0.28 if char in narrow else 0.25 if char == " " else 0.94 if char in wide else 0.62 for char in longest)
-    else:
-        units = len(longest) * 0.75
-    return units * size * scale
+        return sum(_HELVETICA_WIDTHS.get(char, 600) for char in longest) / 1000.0 * size
+    raise ValueError("final PDF font metrics are unavailable")
 
 
-def _effective_text_origin(cm: object, tm: list[float]) -> tuple[float, float, float]:
-    """Compose the text matrix with the current transformation matrix."""
+def _effective_text_geometry(cm: object, tm: list[float]) -> tuple[float, float, tuple[float, float], tuple[float, float]]:
+    """Compose text and current transformation matrices for a glyph box."""
     if not isinstance(cm, (list, tuple)) or len(cm) != 6 or len(tm) < 6:
-        return float(tm[4]), float(tm[5]), max(abs(float(tm[0])), abs(float(tm[3])), 1.0)
+        return float(tm[4]), float(tm[5]), (float(tm[0]), float(tm[1])), (float(tm[2]), float(tm[3]))
     a, b, c, d, e, f = (float(value) for value in cm)
     tx, ty = float(tm[4]), float(tm[5])
     x, y = a * tx + c * ty + e, b * tx + d * ty + f
-    scale = max(abs(a * float(tm[0])) + abs(c * float(tm[1])), abs(b * float(tm[0])) + abs(d * float(tm[1])), 1.0)
-    return x, y, scale
+    return x, y, (a * float(tm[0]) + c * float(tm[1]), b * float(tm[0]) + d * float(tm[1])), (a * float(tm[2]) + c * float(tm[3]), b * float(tm[2]) + d * float(tm[3]))
 
 
 def _validate_pdf_visual_geometry(
@@ -377,9 +389,9 @@ def _validate_pdf_visual_geometry(
         # without permitting content to be rendered on a different page.
         if x < left - 2 or x > right + 2 or y < bottom - 12 or y > top + 12:
             raise ValueError("final PDF visual geometry is outside the page")
-    for page_number, x, y, advance, size in visual_extents:
+    for page_number, min_x, min_y, max_x, max_y in visual_extents:
         left, bottom, right, top = boxes[page_number]
-        if x < left - 2 or x + advance > right + 2 or y - size * 0.3 < bottom - 2 or y + size * 1.2 > top + 2:
+        if min_x < left - 2 or max_x > right + 2 or min_y < bottom - 2 or max_y > top + 2:
             raise ValueError("final PDF visual geometry exceeds the page")
 
 
