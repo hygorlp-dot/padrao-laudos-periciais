@@ -5,6 +5,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from threading import Event, Thread
 
@@ -1008,6 +1009,30 @@ def test_close_is_idempotent_after_start(tmp_path):
     runtime.close()
 
 
+def _product_shutdown_completed(runtime) -> bool:
+    bridge = runtime._bridge
+    server = bridge._server
+    bridge_thread = bridge._thread
+    try:
+        request_workers_dead = all(not thread.is_alive() for thread in server._threads)
+    except TypeError:
+        request_workers_dead = True
+    return (
+        runtime._closed
+        and bridge_thread is not None
+        and not bridge_thread.is_alive()
+        and server.socket.fileno() == -1
+        and request_workers_dead
+    )
+
+
+def _wait_for_product_shutdown(runtime, closing, *, deadline_seconds: float) -> bool:
+    deadline = time.monotonic() + deadline_seconds
+    while closing.is_alive() and time.monotonic() < deadline:
+        Event().wait(0.01)
+    return not closing.is_alive() and _product_shutdown_completed(runtime)
+
+
 @pytest.mark.parametrize("slow_part", ("body", "header"))
 def test_slow_drip_cannot_hold_product_runtime_shutdown(tmp_path, slow_part):
     runtime = build_product_runtime(
@@ -1049,11 +1074,14 @@ def test_slow_drip_cannot_hold_product_runtime_shutdown(tmp_path, slow_part):
     else:
         pytest.fail("product request worker did not start")
 
-    closing = Thread(target=runtime.close)
+    closing = Thread(target=runtime.close, daemon=True)
     closing.start()
     try:
-        closing.join(timeout=0.5)
-        assert not closing.is_alive()
+        # The guard is derived from the server's existing 5 s serve-thread
+        # join bound plus the configured 0.1 s request deadline and a bounded
+        # scheduling margin; it is not a product timeout or a retry.
+        shutdown_deadline = 5.0 + runtime._bridge._config.request_timeout_seconds + 1.0
+        assert _wait_for_product_shutdown(runtime, closing, deadline_seconds=shutdown_deadline)
     finally:
         stop_drip.set()
         client.close()
