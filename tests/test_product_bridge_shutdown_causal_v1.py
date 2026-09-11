@@ -8,7 +8,7 @@ import pytest
 from scripts.backend_contract.product_bridge.composition import build_product_runtime
 from scripts.backend_contract.product_bridge.server import ProductBridgeConfig
 
-from test_product_bridge_v1 import TOKEN, frontend_build
+from test_product_bridge_v1 import TOKEN, _wait_for_product_shutdown, frontend_build
 
 
 @pytest.mark.parametrize("slow_part", ("body", "header"))
@@ -115,10 +115,9 @@ def test_watchdog_detects_stalled_shutdown_without_false_success(tmp_path, monke
     closing.start()
     try:
         assert entered.wait(timeout=2)
-        closing.join(timeout=0.5)
-        true_hang_detected = closing.is_alive()
-        assert true_hang_detected
+        assert not _wait_for_product_shutdown(runtime, closing, deadline_seconds=0.5)
     finally:
         release.set()
         closing.join(timeout=2)
+        assert _wait_for_product_shutdown(runtime, closing, deadline_seconds=6.1)
         runtime.close()

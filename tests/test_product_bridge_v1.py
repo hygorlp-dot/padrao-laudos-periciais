@@ -1074,7 +1074,7 @@ def test_slow_drip_cannot_hold_product_runtime_shutdown(tmp_path, slow_part):
     else:
         pytest.fail("product request worker did not start")
 
-    closing = Thread(target=runtime.close)
+    closing = Thread(target=runtime.close, daemon=True)
     closing.start()
     try:
         # The guard is derived from the server's existing 5 s serve-thread
