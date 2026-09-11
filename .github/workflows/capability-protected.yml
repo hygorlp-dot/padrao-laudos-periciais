@@ -103,15 +103,15 @@ jobs:
           base = os.environ['CAPABILITY_PROTECTED_BASE_SHA']
           candidate = os.environ['CAPABILITY_EXPECTED_HEAD_SHA']
           policy = Path(os.environ['GITHUB_WORKSPACE']) / 'trusted/config/capability-policy-v1.json'
-           allowed_protected = {
-               '.github/workflows/capability-protected.yml',
-               'config/capability-protected-artifacts-v1.json',
+          allowed_protected = {
+              '.github/workflows/capability-protected.yml',
+              'config/capability-protected-artifacts-v1.json',
               'scripts/quality/architecture_analyzer.py',
               'scripts/quality/capability_trust_anchor.py',
           }
-           allowed_paths = {
-               '.github/workflows/capability-protected.yml',
-               'config/architecture-protected-transition-v1.json',
+          allowed_paths = {
+              '.github/workflows/capability-protected.yml',
+              'config/architecture-protected-transition-v1.json',
               'config/capability-protected-artifacts-v1.json',
               'config/capability-protected-transition-v1.json',
               'scripts/quality/architecture_analyzer.py',
