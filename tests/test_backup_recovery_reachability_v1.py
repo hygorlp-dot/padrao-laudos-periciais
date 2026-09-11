@@ -31,7 +31,11 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _api(runtime, method, path, *, value=None, body=None, headers=None, timeout=5.0):
+def _api(runtime, method, path, *, value=None, body=None, headers=None, timeout=30.0):
+    # Recovery commands may legitimately outlive the 5 s socket-I/O budget
+    # used by lightweight API tests.  Thirty seconds is the existing bounded
+    # LocalServerConfig ceiling; this is test transport only and does not
+    # change the product's request or shutdown deadlines.
     status, response_headers, raw = http_request(
         runtime.server, method, path, value=value, raw_body=body,
         headers={"X-Local-API-Token": TOKEN, **(headers or {})}, timeout=timeout,
@@ -39,7 +43,7 @@ def _api(runtime, method, path, *, value=None, body=None, headers=None, timeout=
     return status, response_headers, raw
 
 
-def _json(runtime, method, path, *, value=None, body=None, headers=None, timeout=5.0):
+def _json(runtime, method, path, *, value=None, body=None, headers=None, timeout=30.0):
     status, _headers, raw = _api(
         runtime, method, path, value=value, body=body, headers=headers, timeout=timeout,
     )
