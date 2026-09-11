@@ -45,13 +45,13 @@ describe("delivery foundation workbench", () => {
     expect(screen.getByRole("button", { name: "Preservar template e iniciar" })).toBeDisabled();
   });
 
-  test("offers only the final Word artifact and never promises local final PDF", async () => {
+  test("offers bound Word and derived PDF rendering without false success", async () => {
     const draft = { ...snapshot, state: "DRAFT", artifacts: [] };
     const item = { revision: 6, updated_at: "2026-08-31T12:00:00Z", snapshot: draft };
     vi.stubGlobal("fetch", vi.fn((input) => Promise.resolve(String(input).endsWith("/history") ? response(200, { items: [item] }) : response(200, item))));
     render(<DeliveryFoundationView workspaceId={ID} />);
-    expect(await screen.findByRole("button", { name: "Renderizar Word final" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /pdf/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/PDF final local indisponível/i)).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Renderizar Word e PDF" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /exportar PDF/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/Word Desktop local comprova a fidelidade/i)).toBeInTheDocument();
   });
 });

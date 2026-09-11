@@ -14,10 +14,15 @@ from xml.etree import ElementTree
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 from PIL import Image, ImageStat, UnidentifiedImageError
-from pypdf import PdfReader
-from pypdf.generic import BooleanObject
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import BooleanObject, DecodedStreamObject, NameObject
 from pypdf.errors import PdfReadError
 from pypdf.generic import ContentStream
+
+try:
+    import pypdfium2 as _pdfium
+except ModuleNotFoundError:  # Optional local rasterizer; PDF finalization fails closed without it.
+    _pdfium = None
 
 from .report_foundation import ReportSnapshot
 from .report_foundation import report_snapshot_to_mapping
@@ -39,6 +44,10 @@ _A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 _R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 _V = "{urn:schemas-microsoft-com:vml}"
 ElementTree.register_namespace("w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main")
+
+
+class RendererUnavailable(ValueError):
+    """The local Word renderer is unavailable or failed closed."""
 
 
 def render_word_candidate(
@@ -144,7 +153,14 @@ def render_final_pdf_candidate(*, word_content: bytes, word_format: str, convert
     if b"/DiagnosticOnly true" in output:
         raise ValueError("diagnostic PDF cannot be finalized")
     validate_final_artifact(output, "PDF")
-    _validate_pdf_fidelity(conversion_copy, output)
+    requires_visual_raster = bool(getattr(converter, "requires_visual_raster", False))
+    visual_extents = _validate_pdf_fidelity(
+        conversion_copy,
+        output,
+        allow_word_visual_state=requires_visual_raster,
+    )
+    if requires_visual_raster:
+        _validate_pdf_raster_visibility(output, visual_extents)
     return output
 
 
@@ -225,7 +241,12 @@ def _ordered_pdf_image_signatures(page: object, reader: PdfReader) -> list[tuple
     return ordered
 
 
-def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
+def _validate_pdf_fidelity(
+    word_content: bytes,
+    pdf_content: bytes,
+    *,
+    allow_word_visual_state: bool = False,
+) -> list[tuple[int, float, float, float, float]]:
     """Reject converter output that is not observably derived from the bound Word."""
     try:
         with ZipFile(BytesIO(word_content)) as package:
@@ -256,17 +277,43 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         reader = PdfReader(BytesIO(pdf_content), strict=True)
         extracted_pages: list[str] = []
         positioned: list[tuple[int, str, float, float]] = []
+        visual_extents: list[tuple[int, float, float, float, float]] = []
         pdf_images: list[tuple[float, tuple[float, ...], tuple[float, ...], tuple[bool, ...]]] = []
         for page_number, page in enumerate(reader.pages):
-            def visitor(text: str, _cm: object, tm: list[float], _font: object, _size: float) -> None:
+            def visitor(text: str, cm: object, tm: list[float], font: object, size: float) -> None:
                 normalized = _normalized_visible_text(text)
                 if normalized:
-                    positioned.append((page_number, normalized, float(tm[4]), float(tm[5])))
+                    x, y, x_axis, y_axis = _effective_text_geometry(cm, tm)
+                    positioned.append((page_number, normalized, x, y))
+                    cursor = 0.0
+                    for character in text:
+                        if character in "\r\n":
+                            cursor = 0.0
+                            continue
+                        advance = _estimate_text_advance(character, float(size), font)
+                        if not character.isspace():
+                            # Keep each non-space glyph in its own raster region. A
+                            # whole text-run box can contain contrast from a panel
+                            # edge while every required glyph remains invisible.
+                            corners = tuple(
+                                (x + x_axis[0] * horizontal + y_axis[0] * vertical,
+                                 y + x_axis[1] * horizontal + y_axis[1] * vertical)
+                                for horizontal, vertical in (
+                                    (cursor, -float(size) * 0.15),
+                                    (cursor + advance, -float(size) * 0.15),
+                                    (cursor, float(size) * 0.85),
+                                    (cursor + advance, float(size) * 0.85),
+                                )
+                            )
+                            visual_extents.append((page_number, min(item[0] for item in corners), min(item[1] for item in corners), max(item[0] for item in corners), max(item[1] for item in corners)))
+                        cursor += advance
             extracted_pages.append(page.extract_text(visitor_text=visitor) or "")
             pdf_images.extend(_ordered_pdf_image_signatures(page, reader))
         pdf_text = _normalized_visible_text("\n".join(extracted_pages))
     except (BadZipFile, KeyError, ElementTree.ParseError, PdfReadError, OSError, ValueError) as exc:
         raise ValueError("final PDF fidelity cannot be verified") from exc
+    _reject_explicitly_invisible_text(reader)
+    _reject_unmodeled_visual_state(reader, allow_word_visual_state=allow_word_visual_state)
     required = {_normalized_visible_text(item) for item in word_fragments if _normalized_visible_text(item)}
     source_tokens = _lexical_tokens(" ".join(word_fragments))
     pdf_tokens = _lexical_tokens(pdf_text)
@@ -307,6 +354,251 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         or not tables_match
     ):
         raise ValueError("final PDF does not faithfully represent the bound Word artifact")
+
+    _validate_pdf_visual_geometry(reader, positioned, visual_extents)
+    return visual_extents
+
+
+_HELVETICA_WIDTHS = dict(zip(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+    (667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611,
+     556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500,
+     556, 556, 556, 556, 556, 556, 556, 556, 556, 556),
+))
+_HELVETICA_WIDTHS.update(dict(zip(
+    " !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+    (278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 278, 278, 584, 584, 584, 556, 1015, 278, 278, 278, 469, 556, 333, 334, 260, 334, 584),
+)))
+
+
+def _estimate_text_advance(text: str, size: float, font: object) -> float:
+    """Calculate a conservative horizontal extent from actual or standard metrics."""
+    longest = max((line for line in text.splitlines()), key=len, default="")
+    widths = getattr(font, "get", lambda *_args: None)("/Widths") if font is not None else None
+    first_char = getattr(font, "get", lambda *_args: 0)("/FirstChar") if font is not None else 0
+    if widths is not None and isinstance(first_char, int):
+        values = [float(value) / 1000.0 for value in widths]
+        indices = [ord(char) - first_char for char in longest]
+        if any(index < 0 or index >= len(values) for index in indices):
+            raise ValueError("final PDF font metrics do not cover visible text")
+        return sum(values[index] for index in indices) * size
+    base_font = str(getattr(font, "get", lambda *_args: "")("/BaseFont")).casefold() if font is not None else ""
+    if base_font.strip("/") == "helvetica":
+        if any(char not in _HELVETICA_WIDTHS for char in longest):
+            raise ValueError("final PDF standard font metrics do not cover visible text")
+        return sum(_HELVETICA_WIDTHS[char] for char in longest) / 1000.0 * size
+    raise ValueError("final PDF font metrics are unavailable")
+
+
+def _effective_text_geometry(cm: object, tm: list[float]) -> tuple[float, float, tuple[float, float], tuple[float, float]]:
+    """Compose text and current transformation matrices for a glyph box."""
+    if not isinstance(cm, (list, tuple)) or len(cm) != 6 or len(tm) < 6:
+        return float(tm[4]), float(tm[5]), (float(tm[0]), float(tm[1])), (float(tm[2]), float(tm[3]))
+    a, b, c, d, e, f = (float(value) for value in cm)
+    tx, ty = float(tm[4]), float(tm[5])
+    x, y = a * tx + c * ty + e, b * tx + d * ty + f
+    return x, y, (a * float(tm[0]) + c * float(tm[1]), b * float(tm[0]) + d * float(tm[1])), (a * float(tm[2]) + c * float(tm[3]), b * float(tm[2]) + d * float(tm[3]))
+
+
+def _validate_pdf_visual_geometry(
+    reader: PdfReader,
+    positioned: list[tuple[int, str, float, float]],
+    visual_extents: list[tuple[int, float, float, float, float]],
+) -> None:
+    """Apply conservative page/position checks before a PDF can be final.
+
+    This is intentionally a deterministic visual-fidelity boundary: every page
+    must have a valid canvas and extracted text must remain on that canvas. It
+    does not claim pixel equivalence; Word remains authoritative and a future
+    raster oracle can strengthen this check without changing the trust model.
+    """
+    if not reader.pages:
+        raise ValueError("final PDF has no pages")
+    boxes: list[tuple[float, float, float, float]] = []
+    for page in reader.pages:
+        # CropBox is the viewer-visible canvas; MediaBox alone can include
+        # non-visible bleed and would allow text outside the rendered page.
+        box = page.cropbox
+        left, bottom = float(box.left), float(box.bottom)
+        right, top = float(box.right), float(box.top)
+        if right <= left or top <= bottom:
+            raise ValueError("final PDF has invalid page geometry")
+        boxes.append((left, bottom, right, top))
+    for page_number, _text, x, y in positioned:
+        left, bottom, right, top = boxes[page_number]
+        # Text extraction reports the baseline. Allow a small glyph overhang
+        # without permitting content to be rendered on a different page.
+        if x < left - 2 or x > right + 2 or y < bottom - 12 or y > top + 12:
+            raise ValueError("final PDF visual geometry is outside the page")
+    for page_number, min_x, min_y, max_x, max_y in visual_extents:
+        left, bottom, right, top = boxes[page_number]
+        if min_x < left - 2 or max_x > right + 2 or min_y < bottom - 2 or max_y > top + 2:
+            raise ValueError("final PDF visual geometry exceeds the page")
+
+
+def _reject_explicitly_invisible_text(reader: PdfReader) -> None:
+    """Fail closed when a text operator explicitly selects white ink."""
+    for page in reader.pages:
+        color = (0.0, 0.0, 0.0)
+        stack: list[tuple[float, float, float]] = []
+        for operands, operator in ContentStream(page.get_contents(), reader).operations:
+            if operator == b"q":
+                stack.append(color)
+            elif operator == b"Q":
+                if stack:
+                    color = stack.pop()
+                else:
+                    raise ValueError("final PDF graphics state underflow")
+            elif operator == b"rg" and len(operands) >= 3:
+                color = tuple(float(value) for value in operands[:3])
+            elif operator == b"g" and operands:
+                gray = float(operands[0])
+                color = (gray, gray, gray)
+            elif operator == b"k" and len(operands) >= 4:
+                c, m, y, k = (float(value) for value in operands[:4])
+                color = (1 - min(1, c + k), 1 - min(1, m + k), 1 - min(1, y + k))
+            elif operator in {b"Tj", b"TJ", b"'", b'"'} and color[0] >= 0.99 and color[1] >= 0.99 and color[2] >= 0.99:
+                raise ValueError("final PDF contains explicitly invisible white text")
+
+
+def _reject_unmodeled_visual_state(reader: PdfReader, *, allow_word_visual_state: bool = False) -> None:
+    """Fail closed for PDF state that can hide or alter glyph painting."""
+    for page in reader.pages:
+        text_seen = False
+        for _operands, operator in ContentStream(page.get_contents(), reader).operations:
+            # Word Desktop emits ExtGState and even-odd clipping for page
+            # layout.  These are admitted only when the converter also opts
+            # into the PDFium glyph-level raster oracle below; generic
+            # converters retain the stricter structural boundary.
+            if operator == b"W" or (operator in {b"gs", b"W*"} and not allow_word_visual_state):
+                raise ValueError("final PDF uses unsupported visual state")
+            if operator == b"Tr":
+                raise ValueError("final PDF uses unsupported text rendering mode")
+            if operator in {b"Tj", b"TJ", b"'", b'"'}:
+                text_seen = True
+            elif text_seen and operator in {b"f", b"F", b"f*", b"B", b"b", b"B*", b"b*", b"S", b"s", b"Do"}:
+                raise ValueError("final PDF has unsupported post-text occlusion")
+
+
+_TEXT_MASK_OPERATORS = {
+    b"q", b"Q", b"cm", b"BT", b"ET", b"Tf", b"Td", b"TD", b"Tm", b"T*", b"Tj", b"TJ",
+    b"'", b'"', b"Tw", b"Tc", b"TL", b"Tz", b"Ts",
+}
+
+
+def _text_only_pdf(pdf_content: bytes) -> bytes:
+    """Build a local white-background glyph mask using the PDF's own fonts."""
+    reader = PdfReader(BytesIO(pdf_content), strict=True)
+    writer = PdfWriter()
+    for source_page in reader.pages:
+        page = writer.add_page(source_page)
+        output = BytesIO(b"0 g\n")
+        for operands, operator in ContentStream(source_page.get_contents(), reader).operations:
+            if operator not in _TEXT_MASK_OPERATORS:
+                continue
+            for operand in operands:
+                operand.write_to_stream(output, None)
+                output.write(b" ")
+            output.write(operator + b"\n")
+        stream = DecodedStreamObject()
+        stream.set_data(output.getvalue())
+        page[NameObject("/Contents")] = writer._add_object(stream)
+    result = BytesIO()
+    writer.write(result)
+    return result.getvalue()
+
+
+def _raster_pixels(image: Image.Image) -> list[int]:
+    getter = getattr(image, "get_flattened_data", None)
+    return list(getter() if getter is not None else image.getdata())
+
+
+def _validate_pdf_raster_visibility(pdf_content: bytes, visual_extents: list[tuple[int, float, float, float, float]]) -> None:
+    """Rasterize locally and reject material text regions with no contrast."""
+    if _pdfium is None:
+        raise RendererUnavailable("local PDF rasterizer is unavailable")
+    try:
+        document = _pdfium.PdfDocument(pdf_content)
+        mask_document = _pdfium.PdfDocument(_text_only_pdf(pdf_content))
+        for page_number, page in enumerate(document):
+            mask_page = mask_document[page_number]
+            if page.get_rotation() % 360:
+                raise RendererUnavailable("local PDF raster rotated-page geometry is unsupported")
+            image = page.render(scale=2).to_pil().convert("L")
+            mask_image = mask_page.render(scale=2).to_pil().convert("L")
+            crop_left, crop_bottom, crop_right, crop_top = page.get_cropbox()
+            page_width, page_height = crop_right - crop_left, crop_top - crop_bottom
+            media_top = float(page.get_mediabox()[3])
+            render_top = min(float(crop_top), media_top)
+            page_extents: list[tuple[int, float, float, float, float]] = []
+            textpage = mask_page.get_textpage()
+            source_textpage = page.get_textpage()
+            if _normalized_visible_text(source_textpage.get_text_range()) != _normalized_visible_text(textpage.get_text_range()):
+                raise RendererUnavailable("local PDF raster text mask is incomplete")
+            for index in range(textpage.count_chars()):
+                character = textpage.get_text_range(index, 1)
+                if not character or character.isspace():
+                    continue
+                min_x, min_y, max_x, max_y = textpage.get_charbox(index, loose=False)
+                if max_x <= min_x or max_y <= min_y:
+                    raise RendererUnavailable("local PDF raster glyph geometry is invalid")
+                # PDFium character boxes track each painted glyph. A whole
+                # text-object box can hide one required glyph while neighboring
+                # glyphs supply enough contrast to pass.
+                page_extents.append((page_number, float(min_x), float(min_y), float(max_x), float(max_y)))
+            if not page_extents:
+                if any(item[0] == page_number for item in visual_extents):
+                    raise RendererUnavailable("local PDF raster glyph geometry is unavailable")
+            for _page, min_x, min_y, max_x, max_y in page_extents:
+                left = max(0, int((min_x - crop_left) / page_width * image.width))
+                right = min(image.width, int((max_x - crop_left) / page_width * image.width) + 1)
+                top = max(0, int((render_top - max_y) / page_height * image.height))
+                bottom = min(image.height, int((render_top - min_y) / page_height * image.height) + 1)
+                crop = image.crop((left, top, right, bottom))
+                mask_crop = mask_image.crop((left, top, right, bottom))
+                pixels = _raster_pixels(crop)
+                expected_ink = [pixel < 250 for pixel in _raster_pixels(mask_crop)]
+                if not any(expected_ink):
+                    raise RendererUnavailable("local PDF raster glyph mask is empty")
+                pad = 2
+                outer = image.crop((max(0, left - pad), max(0, top - pad), min(image.width, right + pad), min(image.height, bottom + pad)))
+                outer_pixels = _raster_pixels(outer)
+                outer_width, outer_height = outer.size
+                ring = [
+                    pixel
+                    for row in range(outer_height)
+                    for column in range(outer_width)
+                    if not (left - max(0, left - pad) <= column < right - max(0, left - pad) and top - max(0, top - pad) <= row < bottom - max(0, top - pad))
+                    for pixel in [outer_pixels[row * outer_width + column]]
+                ]
+                background = Counter(ring or pixels).most_common(1)[0][0] if (ring or pixels) else 0
+                width, height = right - left, bottom - top
+                contrast_mask = [abs(pixel - background) > 8 for pixel in pixels]
+                contrast_fraction = sum(contrast_mask) / max(len(contrast_mask), 1)
+                row_coverage = sum(any(contrast_mask[row * width:(row + 1) * width]) for row in range(height))
+                column_coverage = sum(any(contrast_mask[column::width]) for column in range(width))
+                min_rows = max(2, (height + 4) // 5)
+                min_columns = max(2, (width + 4) // 5)
+                expected_count = sum(expected_ink)
+                overlap = sum(visible and expected for visible, expected in zip(contrast_mask, expected_ink))
+                recall = overlap / expected_count
+                precision = overlap / max(sum(contrast_mask), 1)
+                if (
+                    width <= 0
+                    or height <= 0
+                    or contrast_fraction < 0.01
+                    or row_coverage < min_rows
+                    or column_coverage < min_columns
+                    or recall < 0.5
+                    or precision < 0.85
+                ):
+                    raise ValueError("final PDF raster contains no visible contrast")
+    except RendererUnavailable:
+        raise
+    except (OSError, RuntimeError, ValueError) as exc:
+        if isinstance(exc, ValueError) and "visible contrast" in str(exc):
+            raise
+        raise RendererUnavailable("local PDF rasterization failed") from exc
 
 
 def _inject_canonical_report(content: bytes, report: ReportSnapshot) -> bytes:
