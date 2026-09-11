@@ -1,16 +1,16 @@
 {
   "schemaVersion": "3.0.0",
   "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "67573940ec5d1730e6e1bc014f43f01d0125942a",
+  "protectedBaseSha": "3a324b9f08dab0ff14efacccd8f7f4766ccd9074",
   "artifacts": [
     {
       "path": ".github/workflows/capability-protected.yml",
       "baseMode": "100644",
       "baseObjectType": "blob",
-      "baseBlobSha": "41131f438a16274abdc643bd12d17ba9604e9214",
+      "baseBlobSha": "26d194df77c5669a6551ab35e1733c37e3c81f33",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "26d194df77c5669a6551ab35e1733c37e3c81f33"
+      "candidateBlobSha": "32fed02d4c247e7c53b103f720c185f26eed03a0"
     }
   ],
   "supportScope": "CAPABILITY_BOOTSTRAP_V1",
