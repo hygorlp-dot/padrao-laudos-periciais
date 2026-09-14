@@ -49,7 +49,7 @@
       "baseBlobSha": "5390c5589a52a6a1c45de799b14544a334ea22b7",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "4cbee35df6262bfe9d5f3b6bb3cb2f6fd8ad03a1"
+      "candidateBlobSha": "129812ad219490c749eaf08352ca00febf1e2a7d"
     },
     {
       "path": "config/capability-exceptions-v1.json",
@@ -67,7 +67,7 @@
       "baseBlobSha": "3087a0656e64f5be11984a787285e89924d42527",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "294a9344546ca643572c7d648318787e9408f82d"
+      "candidateBlobSha": "e2bf6b2854d7a0ac98f92bea6c6336765439ee31"
     }
   ]
 }
