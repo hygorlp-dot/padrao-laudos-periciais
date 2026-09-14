@@ -28,7 +28,7 @@
       "baseBlobSha": "81981df8d1ecdc2f73ecf0a13b4fbfb0428a9001",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "1ef04782fe252e363b38aa848b6c83c539e7fa90"
+      "candidateBlobSha": "6fb630a3a63643fbcc879619d4a3c6be18943e13"
     },
     {
       "path": "scripts/quality/capability_trust_anchor.py",
@@ -49,7 +49,7 @@
       "baseBlobSha": "5390c5589a52a6a1c45de799b14544a334ea22b7",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "b8b8ae61b86ca7342a68ee6a948f527d97a851e7"
+      "candidateBlobSha": "cdd398a0f013f81469a21bc16766bc5292b4e869"
     },
     {
       "path": "config/capability-exceptions-v1.json",

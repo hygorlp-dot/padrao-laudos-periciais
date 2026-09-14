@@ -18,7 +18,7 @@
     {
       "path": "scripts/quality/architecture_analyzer.py",
       "base": {"path": "scripts/quality/architecture_analyzer.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "81981df8d1ecdc2f73ecf0a13b4fbfb0428a9001"},
-      "candidate": {"path": "scripts/quality/architecture_analyzer.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "1ef04782fe252e363b38aa848b6c83c539e7fa90"}
+      "candidate": {"path": "scripts/quality/architecture_analyzer.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "6fb630a3a63643fbcc879619d4a3c6be18943e13"}
     },
     {
       "path": "scripts/quality/capability_trust_anchor.py",
