@@ -101,7 +101,7 @@ def test_transition_manifests_introduce_no_wildcard_or_package_wide_authority():
         "scripts/quality/capability_trust_anchor.py",
     }
     assert architecture_paths == capability_paths
-    assert support_paths == {EXCEPTIONS_PATH, CAPABILITY_TRANSITION_PATH}
+    assert support_paths == {EXCEPTIONS_PATH, CAPABILITY_TRANSITION_PATH, "tests/test_repository_safety_gate.py"}
 
 
 def test_capability_workflow_python_scope_admits_exception_transition_path():
@@ -157,6 +157,7 @@ def test_capability_registry_and_transition_bind_exact_exception_blob():
     assert {row["path"] for row in transition["supportArtifacts"]} == {
         EXCEPTIONS_PATH,
         "tests/test_architecture_capability_exception_rebind_v1.py",
+        "tests/test_repository_safety_gate.py",
     }
 
 
