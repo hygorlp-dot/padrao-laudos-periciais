@@ -153,12 +153,12 @@
         "column": 0
       },
       "normalizedAcquisitionAstSha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
-      "wholeFileSha256": "1f0adc7eef9a3073a2bb5b3474e5c10f5984745fe0f594bd6a61e8b777114fc5",
-      "baselineCommit": "bd9c1aab2d069c71f7b2a7ceedfa8bc45e5d4ba7",
+      "wholeFileSha256": "38e92b2c88ee3bffd248ef409d85f6ddaa6c451c26a77578f6fc92a4cb3f560d",
+      "baselineCommit": "d0e373c914c31bf1f54f6e0af0c4f0920d54bc51",
       "acquiredCapability": "subprocess",
       "justification": "Capability trust anchor reads protected registry/transition documents and tree identities via git ls-tree/show/merge-base; this is the anchor's own required custody mechanism.",
       "owner": "QUALITY_GOVERNANCE",
-      "reviewEvidence": "PHASE_B_WORD_TRUST_SCOPE_BD9C1AA",
+      "reviewEvidence": "PHASE_B_WORD_TRUST_SCOPE_D0E373C",
       "disposition": "ACCEPT_BASELINE",
       "reviewBy": "2027-08-19"
     },
