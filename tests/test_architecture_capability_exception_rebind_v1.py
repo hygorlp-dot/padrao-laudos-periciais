@@ -24,12 +24,12 @@ ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json
 PROTECTED_BASE = "0897a03b67114c6995f209233f88c7d39c3c2557"
 ARCHITECTURE_PROTECTED_BASE = "0897a03b67114c6995f209233f88c7d39c3c2557"
 SOURCE_ANCHORS = {
-    "scripts/quality/architecture_analyzer.py": "d0e373c914c31bf1f54f6e0af0c4f0920d54bc51",
-    "scripts/quality/capability_trust_anchor.py": "d0e373c914c31bf1f54f6e0af0c4f0920d54bc51",
+    "scripts/quality/architecture_analyzer.py": "bd9c1aab2d069c71f7b2a7ceedfa8bc45e5d4ba7",
+    "scripts/quality/capability_trust_anchor.py": "bd9c1aab2d069c71f7b2a7ceedfa8bc45e5d4ba7",
 }
 REVIEW_EVIDENCE = {
-    "scripts/quality/architecture_analyzer.py": "PHASE_B_WORD_TRUST_SCOPE_D0E373C",
-    "scripts/quality/capability_trust_anchor.py": "PHASE_B_WORD_TRUST_SCOPE_D0E373C",
+    "scripts/quality/architecture_analyzer.py": "PHASE_B_WORD_TRUST_SCOPE_BD9C1AA",
+    "scripts/quality/capability_trust_anchor.py": "PHASE_B_WORD_TRUST_SCOPE_BD9C1AA",
 }
 E1A_PROTECTED_WORKFLOWS = {
     ".github/workflows/architecture-protected.yml",
