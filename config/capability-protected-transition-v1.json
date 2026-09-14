@@ -1,8 +1,6 @@
 {
-  "schemaVersion": "3.0.0",
-  "transitionId": "LOCAL_WORD_COM_CONTAINMENT_TRUST_TRANSITION_V1",
-  "purpose": "BOUND_MICROSOFT_WORD_COM_EXECUTION_FOR_AUTHORITATIVE_WORD_TO_PDF",
-  "scope": "LOCAL_WORD_COM_CONTAINMENT_V1",
+  "schemaVersion": "2.0.0",
+  "transitionId": "CAPABILITY_TRUST_ANCHOR_ROTATION_V1",
   "protectedBaseSha": "0897a03b67114c6995f209233f88c7d39c3c2557",
   "protectedArtifacts": [
     {
@@ -26,6 +24,7 @@
       "candidate": {"path": "scripts/quality/capability_trust_anchor.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "12cf1dcc42d5105404ce6ded6f361e1ce44f1f13"}
     }
   ],
+  "supportScope": "LOCAL_WORD_COM_CONTAINMENT_V1",
   "supportArtifacts": [
     {
       "path": "config/capability-exceptions-v1.json",
