@@ -18,6 +18,12 @@ _SUPPORT_SCOPES = {
         "tests/test_architecture_capability_exception_rebind_v1.py",
         "tests/test_safe_uow_bootstrap_v1.py",
     },
+    "LOCAL_WORD_COM_CONTAINMENT_V1": {
+        "scripts/backend_contract/infrastructure/office_pdf.py",
+        "scripts/backend_contract/infrastructure/office_word_worker.py",
+        "tests/test_office_pdf_renderer_v1.py",
+        "tests/test_office_word_containment_v1.py",
+    },
 }
 
 

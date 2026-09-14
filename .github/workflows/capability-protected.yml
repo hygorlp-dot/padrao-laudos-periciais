@@ -75,13 +75,16 @@ jobs:
             throw 'invalid dedicated Word trust transition contract'
           }
           $allowed = @(
-            '.github/workflows/capability-protected.yml',
             'config/architecture-protected-transition-v1.json',
             'config/capability-exceptions-v1.json',
             'config/capability-protected-artifacts-v1.json',
             'config/capability-protected-transition-v1.json',
             'scripts/quality/architecture_analyzer.py',
             'scripts/quality/capability_trust_anchor.py',
+            'scripts/backend_contract/infrastructure/office_pdf.py',
+            'scripts/backend_contract/infrastructure/office_word_worker.py',
+            'tests/test_office_pdf_renderer_v1.py',
+            'tests/test_office_word_containment_v1.py',
             'tests/test_architecture_analyzer_v1.py',
             'tests/test_architecture_capability_exception_rebind_v1.py',
             'tests/test_architecture_capability_trust_anchor_v1.py',
@@ -106,14 +109,11 @@ jobs:
           candidate = os.environ['CAPABILITY_EXPECTED_HEAD_SHA']
           policy = Path(os.environ['GITHUB_WORKSPACE']) / 'trusted/config/capability-policy-v1.json'
           allowed_protected = {
-              '.github/workflows/capability-protected.yml',
-              'config/capability-exceptions-v1.json',
               'config/capability-protected-artifacts-v1.json',
               'scripts/quality/architecture_analyzer.py',
               'scripts/quality/capability_trust_anchor.py',
           }
           allowed_paths = {
-              '.github/workflows/capability-protected.yml',
               'config/architecture-protected-transition-v1.json',
               'config/capability-exceptions-v1.json',
               'config/capability-protected-artifacts-v1.json',
