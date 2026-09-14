@@ -48,6 +48,7 @@ PROTECTED_TRANSITION_SUPPORT_SCOPES = {
             "tests/test_capability_base_owned_blocking_topology_v1.py",
             "tests/test_capability_contracts_v1.py",
             "tests/test_capability_exceptions_v1.py",
+            "tests/test_repository_safety_gate.py",
         ),
     },
     "C1B_SAFE_UOW_BOOTSTRAP_V1": {
