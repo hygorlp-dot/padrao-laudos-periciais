@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,12 +33,27 @@ def _logical(content_id: str, local_id: str) -> str:
     return f"{local_id}-{UUID(content_id).hex.upper()}"
 
 
-def _request(runtime, method, path, *, value=None, body=None, headers=None):
+def _request(runtime, method, path, *, value=None, body=None, headers=None, timeout=30.0):
+    # Operações de composição PJe podem exceder 5s sob variabilidade do runner.
+    # 30s é o teto já validado pelo LocalApiServer e limita cada I/O de socket;
+    # não altera deadline, semântica ou timeout de produção.
     status, _headers, raw = http_request(
         runtime.server, method, path, value=value, raw_body=body,
         headers={"X-Local-API-Token": TOKEN, **(headers or {})},
+        timeout=timeout,
     )
     return status, json.loads(raw) if raw else None
+
+
+@pytest.mark.parametrize("timeout", [True, 0, -1, 31, float("nan"), float("inf")])
+def test_pje_request_timeout_remains_fail_closed(timeout):
+    with pytest.raises(ValueError, match="client operation timeout invalid"):
+        _request(SimpleNamespace(server=None), "GET", "/", timeout=timeout)
+
+
+def test_pje_request_timeout_rejects_non_numeric_budget():
+    with pytest.raises(ValueError, match="client operation timeout invalid"):
+        _request(SimpleNamespace(server=None), "GET", "/", timeout="30")
 
 
 def test_non_pje_material_import_still_succeeds_without_pje_inventory(tmp_path):
