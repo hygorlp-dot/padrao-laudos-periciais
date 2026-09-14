@@ -77,13 +77,15 @@ jobs:
           $allowed = @(
             '.github/workflows/capability-protected.yml',
             'config/architecture-protected-transition-v1.json',
+            'config/capability-exceptions-v1.json',
             'config/capability-protected-artifacts-v1.json',
             'config/capability-protected-transition-v1.json',
             'scripts/quality/architecture_analyzer.py',
             'scripts/quality/capability_trust_anchor.py',
             'tests/test_architecture_analyzer_v1.py',
             'tests/test_architecture_capability_exception_rebind_v1.py',
-            'tests/test_architecture_capability_trust_anchor_v1.py'
+            'tests/test_architecture_capability_trust_anchor_v1.py',
+            'tests/test_repository_safety_gate.py'
           )
           $changed = @(git diff --name-only $base $candidate)
           if ($changed.Count -eq 0 -or (($changed | Where-Object { $allowed -notcontains $_ }).Count -ne 0)) {
@@ -105,6 +107,7 @@ jobs:
           policy = Path(os.environ['GITHUB_WORKSPACE']) / 'trusted/config/capability-policy-v1.json'
           allowed_protected = {
               '.github/workflows/capability-protected.yml',
+              'config/capability-exceptions-v1.json',
               'config/capability-protected-artifacts-v1.json',
               'scripts/quality/architecture_analyzer.py',
               'scripts/quality/capability_trust_anchor.py',
@@ -119,6 +122,7 @@ jobs:
               'tests/test_architecture_analyzer_v1.py',
               'tests/test_architecture_capability_exception_rebind_v1.py',
               'tests/test_architecture_capability_trust_anchor_v1.py',
+              'tests/test_repository_safety_gate.py',
           }
           transition_path = 'config/capability-protected-transition-v1.json'
           changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, candidate], cwd=root, text=True).splitlines())
