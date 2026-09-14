@@ -13,7 +13,7 @@
     {
       "path": "config/capability-protected-artifacts-v1.json",
       "base": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "aa5954c501f9395b1003285183e3a4b1234472bd"},
-      "candidate": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "cc866c2f0f323ba48496cb47a8b7cdf7c1a40ae5"}
+      "candidate": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "d5750ac4f1181d9703b0191c7da6404540e35af7"}
     },
     {
       "path": "scripts/quality/architecture_analyzer.py",
@@ -30,12 +30,12 @@
     {
       "path": "config/capability-exceptions-v1.json",
       "base": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "f17a2bd00243bafb92cb05d71c2289a5a976fae4"},
-      "candidate": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "d6abab2bfa3fbf231ae0c7a5634f69a9dc633f9b"}
+      "candidate": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "f954976512e1c216b2b1b6e92c077b79a70a1034"}
     },
     {
       "path": "tests/test_architecture_capability_exception_rebind_v1.py",
       "base": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "c5d11ef778db5d57239cbeb0995eca44e5c59091"},
-      "candidate": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "0db376d87f6646d5f27c0cc6b913dd2bb8286fc2"}
+      "candidate": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "137961d5c916510eec416d1ec263aaf32f939009"}
     },
     {
       "path": "tests/test_repository_safety_gate.py",
