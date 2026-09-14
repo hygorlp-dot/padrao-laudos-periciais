@@ -19,7 +19,7 @@
       "baseBlobSha": "aa5954c501f9395b1003285183e3a4b1234472bd",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "3c380d26b69db84daa709b673250928953b1e253"
+      "candidateBlobSha": "cc866c2f0f323ba48496cb47a8b7cdf7c1a40ae5"
     },
     {
       "path": "scripts/quality/architecture_analyzer.py",
@@ -28,7 +28,7 @@
       "baseBlobSha": "81981df8d1ecdc2f73ecf0a13b4fbfb0428a9001",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "6d70f3828afd1b9d7d7ae04ade04de6eb2226bba"
+      "candidateBlobSha": "1ef04782fe252e363b38aa848b6c83c539e7fa90"
     },
     {
       "path": "scripts/quality/capability_trust_anchor.py",
@@ -37,7 +37,7 @@
       "baseBlobSha": "621317107cb0daae99576551b99e491c7d3eb71a",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "12cf1dcc42d5105404ce6ded6f361e1ce44f1f13"
+      "candidateBlobSha": "f05432b2e72c47df7a4b9dbbad1a013a9c613e19"
     }
   ],
   "supportScope": "CAPABILITY_BOOTSTRAP_V1",
@@ -49,7 +49,7 @@
       "baseBlobSha": "5390c5589a52a6a1c45de799b14544a334ea22b7",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "645ad2e802dbefa89d0e4ff8d470ec0233213f19"
+      "candidateBlobSha": "06574ffe305b859654081fa20dfed6c1aff62272"
     },
     {
       "path": "config/capability-exceptions-v1.json",
@@ -58,7 +58,16 @@
       "baseBlobSha": "f17a2bd00243bafb92cb05d71c2289a5a976fae4",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "1816a4d5be36aac6dc763a7197d331b8a222da21"
+      "candidateBlobSha": "d6abab2bfa3fbf231ae0c7a5634f69a9dc633f9b"
+    },
+    {
+      "path": "tests/test_repository_safety_gate.py",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "3087a0656e64f5be11984a787285e89924d42527",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "294a9344546ca643572c7d648318787e9408f82d"
     }
   ]
 }

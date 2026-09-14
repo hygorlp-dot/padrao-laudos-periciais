@@ -182,7 +182,7 @@ def test_architecture_transition_binds_current_trust_anchor_rotation():
 
     support_rows = {row["path"]: row for row in transition["supportArtifacts"]}
     assert transition["supportScope"] == "CAPABILITY_BOOTSTRAP_V1"
-    assert set(support_rows) == {CAPABILITY_TRANSITION_PATH, EXCEPTIONS_PATH}
+    assert set(support_rows) == {CAPABILITY_TRANSITION_PATH, EXCEPTIONS_PATH, "tests/test_repository_safety_gate.py"}
     for path, row in support_rows.items():
         assert _architecture_transition_identity(row, "base") == _identity_from_commit(
             PROTECTED_BASE, path
