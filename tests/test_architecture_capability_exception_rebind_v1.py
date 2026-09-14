@@ -24,12 +24,12 @@ ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json
 PROTECTED_BASE = "0897a03b67114c6995f209233f88c7d39c3c2557"
 ARCHITECTURE_PROTECTED_BASE = "0897a03b67114c6995f209233f88c7d39c3c2557"
 SOURCE_ANCHORS = {
-    "scripts/quality/architecture_analyzer.py": "c2cbb55f1dcb0732ca8b215df28ef6148fc91566",
-    "scripts/quality/capability_trust_anchor.py": "f27e80380ee4ba55661e2cf1981f5b7aab54fdf8",
+    "scripts/quality/architecture_analyzer.py": "d0e373c914c31bf1f54f6e0af0c4f0920d54bc51",
+    "scripts/quality/capability_trust_anchor.py": "d0e373c914c31bf1f54f6e0af0c4f0920d54bc51",
 }
 REVIEW_EVIDENCE = {
-    "scripts/quality/architecture_analyzer.py": "C1B_ONE_TIME_TRUST_BOOTSTRAP_PREDECESSOR_C2CBB55",
-    "scripts/quality/capability_trust_anchor.py": "C1B_ONE_TIME_TRUST_BOOTSTRAP_PREDECESSOR_F27E803",
+    "scripts/quality/architecture_analyzer.py": "PHASE_B_WORD_TRUST_SCOPE_D0E373C",
+    "scripts/quality/capability_trust_anchor.py": "PHASE_B_WORD_TRUST_SCOPE_D0E373C",
 }
 E1A_PROTECTED_WORKFLOWS = {
     ".github/workflows/architecture-protected.yml",
@@ -83,7 +83,7 @@ def _architecture_transition_identity(row: dict, side: str) -> tuple[str, str, s
 
 def test_transition_manifests_introduce_no_wildcard_or_package_wide_authority():
     capability_paths = {
-        row["path"] for row in _json(CAPABILITY_TRANSITION_PATH)["artifacts"]
+        row["path"] for row in _json(CAPABILITY_TRANSITION_PATH)["protectedArtifacts"]
     }
     architecture_paths = {
         row["path"] for row in _json(ARCHITECTURE_TRANSITION_PATH)["artifacts"]
@@ -125,7 +125,7 @@ def test_rebind_rotates_only_exact_judge_exception_identities():
         if not changed:
             continue
         changed_paths.add(after["canonicalPath"])
-        assert changed == {"wholeFileSha256"}
+        assert changed == {"baselineCommit", "reviewEvidence", "wholeFileSha256"}
         assert after["baselineCommit"] == SOURCE_ANCHORS[after["canonicalPath"]]
         assert after["reviewEvidence"] == REVIEW_EVIDENCE[after["canonicalPath"]]
         assert after["wholeFileSha256"] == hashlib.sha256(

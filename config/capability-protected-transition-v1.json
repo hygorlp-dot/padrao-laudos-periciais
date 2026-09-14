@@ -13,7 +13,7 @@
     {
       "path": "config/capability-protected-artifacts-v1.json",
       "base": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "aa5954c501f9395b1003285183e3a4b1234472bd"},
-      "candidate": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "ad83ecd79f942104dde67383698b9a6f026fac0f"}
+      "candidate": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "3c380d26b69db84daa709b673250928953b1e253"}
     },
     {
       "path": "scripts/quality/architecture_analyzer.py",
@@ -30,12 +30,12 @@
     {
       "path": "config/capability-exceptions-v1.json",
       "base": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "f17a2bd00243bafb92cb05d71c2289a5a976fae4"},
-      "candidate": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "12652e586a881965ba1b0df0a4c77c9d454f999c"}
+      "candidate": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "1816a4d5be36aac6dc763a7197d331b8a222da21"}
     },
     {
       "path": "tests/test_architecture_capability_exception_rebind_v1.py",
       "base": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "c5d11ef778db5d57239cbeb0995eca44e5c59091"},
-      "candidate": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "e3ba0deeab67eea0f065b37d26c3da0a7a196ecd"}
+      "candidate": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "428b8733936ecf7f7ad21b3a507ea683b166f1bd"}
     }
   ]
 }
