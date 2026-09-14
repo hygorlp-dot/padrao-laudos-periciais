@@ -84,12 +84,12 @@
         "column": 0
       },
       "normalizedAcquisitionAstSha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
-      "wholeFileSha256": "7316721e23058ea9aa40f4854fa2c7bf098fac75664dd4598bf56dfc895477f9d",
-      "baselineCommit": "bd9c1aab2d069c71f7b2a7ceedfa8bc45e5d4ba7",
+      "wholeFileSha256": "001a7116552b58a1f8433032e8ff5bb44bf2b5600d4e2b4f8281bff04d87821f",
+      "baselineCommit": "dd0ec309ac3ea4de93f60120e92c408631969f36",
       "acquiredCapability": "subprocess",
       "justification": "Architecture trust-boundary judge reads protected-base git trees via subprocess git plumbing; this is the judge's own required custody mechanism.",
       "owner": "QUALITY_GOVERNANCE",
-      "reviewEvidence": "PHASE_B_WORD_TRUST_SCOPE_BD9C1AA",
+      "reviewEvidence": "PHASE_B_WORD_TRUST_SCOPE_DD0EC30",
       "disposition": "ACCEPT_BASELINE",
       "reviewBy": "2027-08-19"
     },
