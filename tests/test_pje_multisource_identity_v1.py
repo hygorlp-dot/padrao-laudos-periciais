@@ -283,7 +283,8 @@ def test_helper_declared_deadline_allows_valid_slow_server_completion():
     worker.start()
     try:
         assert entered.wait(timeout=2)
-        assert not worker.join(timeout=5.2)
+        worker.join(timeout=5.2)
+        assert worker.is_alive()
         release.set()
         worker.join(timeout=2)
         assert completed.wait(timeout=2)
