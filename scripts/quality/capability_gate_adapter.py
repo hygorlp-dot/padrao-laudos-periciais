@@ -18,6 +18,10 @@ WORD_RENDER_OPERATION = "RENDER_BOUND_AUTHORITATIVE_WORD_TO_DERIVED_PDF"
 WORD_PARENT_PATH = "scripts/backend_contract/infrastructure/office_pdf.py"
 WORD_WORKER_PATH = "scripts/backend_contract/infrastructure/office_word_worker.py"
 _WORD_PRODUCT_PATHS = {WORD_PARENT_PATH, WORD_WORKER_PATH}
+_WORD_PRODUCT_SHA256 = {
+    WORD_PARENT_PATH: "0752949efd38fe08220d54828f73573223109f791ed4cd63772da95695f8058d",
+    WORD_WORKER_PATH: "891c8811e84461dec50ac85a5649e49919093b36070404b6ae69ac9d0e6b4efa",
+}
 _FORBIDDEN_WORD_IMPORTS = {"_winapi", "ctypes", "multiprocessing", "subprocess"}
 _FORBIDDEN_WORD_FUNCTIONS = {
     "execute",
@@ -394,20 +398,28 @@ def _worker_com_contract_is_closed(tree: ast.AST) -> bool:
     return True
 
 
+def _word_render_digests_are_closed(digests: Mapping[str, str]) -> bool:
+    return (
+        set(digests) == _WORD_PRODUCT_PATHS
+        and all(type(value) is str for value in digests.values())
+        and dict(digests) == _WORD_PRODUCT_SHA256
+    )
+
+
 def word_render_sources_are_closed(sources: Mapping[str, str]) -> bool:
-    """Fail closed unless the exact Word worker surface has bounded semantics."""
+    """Fail closed unless both product sources are the pre-reviewed exact bytes."""
     try:
         if set(sources) != _WORD_PRODUCT_PATHS or any(
             not isinstance(source, str) for source in sources.values()
         ):
             return False
-        trees = {path: ast.parse(source) for path, source in sources.items()}
-        if not _imports_are_closed(trees):
-            return False
-        return _parent_word_process_contract_is_closed(
-            trees[WORD_PARENT_PATH]
-        ) and _worker_com_contract_is_closed(trees[WORD_WORKER_PATH])
-    except (SyntaxError, TypeError, ValueError):
+        return _word_render_digests_are_closed(
+            {
+                path: hashlib.sha256(sources[path].encode("utf-8")).hexdigest()
+                for path in _WORD_PRODUCT_PATHS
+            }
+        )
+    except (AttributeError, TypeError, UnicodeError, ValueError):
         return False
 
 

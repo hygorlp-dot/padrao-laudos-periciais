@@ -12,8 +12,13 @@ import pytest
 
 from scripts.quality.architecture_analyzer import _support_path_in_scope, run_architecture_gate
 from scripts.quality.capability_bootstrap import run_protected_capability_gate
-from scripts.quality.capability_gate_adapter import word_render_sources_are_closed
+from scripts.quality.capability_gate_adapter import (
+    _WORD_PRODUCT_SHA256,
+    _word_render_digests_are_closed,
+    word_render_sources_are_closed,
+)
 from scripts.quality import capability_trust_anchor as trust_anchor
+from scripts.quality import capability_gate_adapter as gate_adapter
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -504,6 +509,9 @@ def test_dedicated_word_workflow_admits_exact_absent_to_present_identities():
     assert "return {'path': path, 'state': 'ABSENT'}" in workflow
     assert "tests/test_delivery_foundation_v1.py" in workflow
     assert "_word_render_contract_is_closed" in workflow
+    assert "$productOnlyRequired" in workflow
+    assert "required <= changed <= allowed" in workflow
+    assert "protected Word transition predecessor is closed on this base" in workflow
 
 
 def _closed_word_render_sources() -> dict[str, str]:
@@ -644,8 +652,12 @@ def _render_job(root, *, word_launcher=_start_owned_word_process, com_binder=_bi
     }
 
 
-def test_word_render_contract_accepts_only_the_fixed_worker_surface():
-    assert word_render_sources_are_closed(_closed_word_render_sources())
+def test_word_render_contract_accepts_only_the_pre_reviewed_exact_digests():
+    assert _word_render_digests_are_closed(dict(_WORD_PRODUCT_SHA256))
+    assert _WORD_PRODUCT_SHA256 == {
+        WORD_PARENT_PATH: "0752949efd38fe08220d54828f73573223109f791ed4cd63772da95695f8058d",
+        WORD_WORKER_PATH: "891c8811e84461dec50ac85a5649e49919093b36070404b6ae69ac9d0e6b4efa",
+    }
 
 
 @pytest.mark.parametrize(
@@ -658,23 +670,60 @@ def test_word_render_contract_accepts_only_the_fixed_worker_surface():
         (WORD_PARENT_PATH, "import sys", "import sys\nimport subprocess"),
     ],
 )
-def test_word_render_contract_rejects_semantic_bypasses(path, old, new):
+def test_word_render_contract_rejects_semantic_bypasses(
+    monkeypatch: pytest.MonkeyPatch, path: str, old: str, new: str
+):
     sources = _closed_word_render_sources()
+    monkeypatch.setattr(
+        gate_adapter,
+        "_WORD_PRODUCT_SHA256",
+        {name: hashlib.sha256(value.encode("utf-8")).hexdigest() for name, value in sources.items()},
+    )
+    assert word_render_sources_are_closed(sources)
     assert old in sources[path]
     sources[path] = sources[path].replace(old, new, 1)
 
     assert not word_render_sources_are_closed(sources)
 
 
-def test_word_render_contract_rejects_generic_public_execution_api():
+def test_word_render_digest_contract_rejects_any_path_or_digest_drift():
+    for path in (WORD_PARENT_PATH, WORD_WORKER_PATH):
+        changed = dict(_WORD_PRODUCT_SHA256)
+        changed[path] = "0" * 64
+        assert not _word_render_digests_are_closed(changed)
+    assert not _word_render_digests_are_closed(
+        {**_WORD_PRODUCT_SHA256, "scripts/unrelated.py": "0" * 64}
+    )
+    assert not _word_render_digests_are_closed(
+        {WORD_PARENT_PATH: _WORD_PRODUCT_SHA256[WORD_PARENT_PATH]}
+    )
+
+
+def test_word_render_contract_rejects_generic_public_execution_api(
+    monkeypatch: pytest.MonkeyPatch,
+):
     sources = _closed_word_render_sources()
+    monkeypatch.setattr(
+        gate_adapter,
+        "_WORD_PRODUCT_SHA256",
+        {name: hashlib.sha256(value.encode("utf-8")).hexdigest() for name, value in sources.items()},
+    )
+    assert word_render_sources_are_closed(sources)
     sources[WORD_PARENT_PATH] += "\ndef run(executable, command_line):\n    return executable, command_line\n"
 
     assert not word_render_sources_are_closed(sources)
 
 
-def test_word_render_contract_rejects_a_second_hidden_process_surface():
+def test_word_render_contract_rejects_a_second_hidden_process_surface(
+    monkeypatch: pytest.MonkeyPatch,
+):
     sources = _closed_word_render_sources()
+    monkeypatch.setattr(
+        gate_adapter,
+        "_WORD_PRODUCT_SHA256",
+        {name: hashlib.sha256(value.encode("utf-8")).hexdigest() for name, value in sources.items()},
+    )
+    assert word_render_sources_are_closed(sources)
     sources[WORD_WORKER_PATH] += '''
 def _alternate_process(executable, command_line, startup):
     return win32process.CreateProcess(

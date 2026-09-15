@@ -109,6 +109,83 @@ jobs:
           if ($changed.Count -eq 0 -or (($changed | Where-Object { $allowed -notcontains $_ }).Count -ne 0)) {
             throw 'dedicated Word transition changed an out-of-scope path'
           }
+          $productOnlyRequired = @(
+            'scripts/backend_contract/infrastructure/office_pdf.py',
+            'scripts/backend_contract/infrastructure/office_word_worker.py'
+          )
+          $productOnlyAllowed = @(
+            'scripts/backend_contract/infrastructure/office_pdf.py',
+            'scripts/backend_contract/infrastructure/office_word_worker.py',
+            'tests/test_delivery_foundation_v1.py',
+            'tests/test_office_pdf_renderer_v1.py',
+            'tests/test_office_word_containment_v1.py'
+          )
+          $productOnly = (
+            (($productOnlyRequired | Where-Object { $changed -notcontains $_ }).Count -eq 0) -and
+            (($changed | Where-Object { $productOnlyAllowed -notcontains $_ }).Count -eq 0)
+          )
+          if ($productOnly) {
+            $productComparison = @'
+          import json, os, subprocess
+          from pathlib import Path
+          from scripts.quality.capability_analyzer import analyze_capabilities
+          from scripts.quality.capability_trust_anchor import _word_render_contract_is_closed
+
+          root = Path(os.environ['CAPABILITY_CANDIDATE_ROOT'])
+          base = os.environ['CAPABILITY_PROTECTED_BASE_SHA']
+          candidate = os.environ['CAPABILITY_EXPECTED_HEAD_SHA']
+          policy = Path(os.environ['GITHUB_WORKSPACE']) / 'trusted/config/capability-policy-v1.json'
+          required = {
+              'scripts/backend_contract/infrastructure/office_pdf.py',
+              'scripts/backend_contract/infrastructure/office_word_worker.py',
+          }
+          allowed = required | {
+              'tests/test_delivery_foundation_v1.py',
+              'tests/test_office_pdf_renderer_v1.py',
+              'tests/test_office_word_containment_v1.py',
+          }
+          changed = set(subprocess.check_output(
+              ['git', 'diff', '--name-only', base, candidate], cwd=root, text=True
+          ).splitlines())
+          blob = lambda commit, path: subprocess.check_output(
+              ['git', 'show', f'{commit}:{path}'], cwd=root
+          )
+          tree = lambda commit: subprocess.check_output(
+              ['git', 'rev-parse', f'{commit}^{{tree}}'], cwd=root, text=True
+          ).strip()
+          key = lambda item: (
+              item.get('code'), item.get('canonicalPath'), item.get('module'),
+              item.get('location', {}).get('line'), item.get('location', {}).get('column'),
+              item.get('normalizedAstSha256'), item.get('policyVersion'), item.get('analyzer'),
+          )
+          left = sorted(key(item) for item in analyze_capabilities(
+              root, base, tree(base), policy_path=policy
+          ))
+          right = sorted(key(item) for item in analyze_capabilities(
+              root, candidate, tree(candidate), policy_path=policy
+          ))
+          result = {
+              'paths': required <= changed <= allowed,
+              'transition': blob(base, 'config/capability-protected-transition-v1.json')
+                  == blob(candidate, 'config/capability-protected-transition-v1.json'),
+              'registry': blob(base, 'config/capability-protected-artifacts-v1.json')
+                  == blob(candidate, 'config/capability-protected-artifacts-v1.json'),
+              'findings': left == right,
+              'contract': _word_render_contract_is_closed(root, candidate) is True,
+          }
+          print(json.dumps(result))
+          if not all(result.values()):
+              raise SystemExit(1)
+          '@ | python -
+            if ($LASTEXITCODE -ne 0) { throw 'exact product-only Word transition failed closed validation' }
+            $productResult = $productComparison | ConvertFrom-Json
+            if (-not $productResult.contract) { throw 'exact Word product source binding failed' }
+            "CAPABILITY_TRUST_TRANSITION_APPROVED=true" >> $env:GITHUB_ENV
+            exit 0
+          }
+          if ($base -ne '382e82d2e380f3ee80e8c97e2cc514f0dd37e315') {
+            throw 'protected Word transition predecessor is closed on this base'
+          }
           if ((($changed | Where-Object { $_ -eq 'scripts/quality/capability_trust_anchor.py' }).Count -eq 0) -and (($changed | Where-Object { $_ -eq 'scripts/quality/architecture_analyzer.py' }).Count -eq 0)) {
             throw 'dedicated Word transition did not change a protected trust judge'
           }
