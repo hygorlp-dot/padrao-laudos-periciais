@@ -9,6 +9,9 @@ REGISTRY_PATH = "config/capability-protected-artifacts-v1.json"
 TRANSITION_PATH = "config/capability-protected-transition-v1.json"
 BOOTSTRAP_PATH = "scripts/quality/capability_bootstrap.py"
 ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
+WORD_TRANSITION_ID = "LOCAL_WORD_COM_CONTAINMENT_TRUST_TRANSITION_V1"
+WORD_TRANSITION_PURPOSE = "BOUND_MICROSOFT_WORD_COM_EXECUTION_FOR_AUTHORITATIVE_WORD_TO_PDF"
+WORD_TRANSITION_SCOPE = "LOCAL_WORD_COM_CONTAINMENT_V1"
 _IDENTITY_KEYS = {"path", "state", "mode", "objectType", "blobSha"}
 _SUPPORT_SCOPES = {
     "C1B_SAFE_UOW_BOOTSTRAP_V1": {
@@ -135,6 +138,46 @@ def _protected_base_bootstrap_present(root: Path, protected_base: str) -> bool |
             return None
         return matches[0]["state"] == "PRESENT"
     except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError, subprocess.CalledProcessError):
+        return None
+
+
+def _word_transition_scope_changed(root: Path, protected_base: str, candidate: str) -> bool | None:
+    """Return whether the exact candidate diff enters the registered Word scope."""
+    try:
+        transition = json.loads(_git(root, "show", f"{candidate}:{TRANSITION_PATH}"))
+        if (
+            not isinstance(transition, dict)
+            or transition.get("transitionId") != WORD_TRANSITION_ID
+            or transition.get("purpose") != WORD_TRANSITION_PURPOSE
+            or transition.get("scope") != WORD_TRANSITION_SCOPE
+        ):
+            return None
+        scope = _SUPPORT_SCOPES.get(transition["scope"])
+        if not scope:
+            return None
+        changed = {
+            item.decode("utf-8")
+            for item in _git(
+                root,
+                "diff",
+                "--name-only",
+                "-z",
+                protected_base,
+                candidate,
+                text=False,
+            ).split(b"\0")
+            if item
+        }
+        return bool(changed & scope)
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+        ValueError,
+        subprocess.CalledProcessError,
+    ):
         return None
 
 

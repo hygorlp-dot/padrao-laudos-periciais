@@ -126,6 +126,44 @@ def test_capability_workflow_python_scope_admits_exception_transition_path():
         assert path in workflow[start:end]
 
 
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("scripts/backend_contract/infrastructure/office_pdf.py", True),
+        ("tests/test_office_pdf_renderer_v1.py", True),
+        (CAPABILITY_GATE_ADAPTER_PATH, True),
+        ("scripts/backend_contract/delivery_foundation.py", False),
+        ("frontend/src/workspaces/DeliveryFoundationView.tsx", False),
+        (".github/workflows/architecture-protected.yml", False),
+        (".github/workflows/arbitrary.yml", False),
+    ],
+)
+def test_word_transition_routing_uses_exact_registered_scope(tmp_path, path, expected):
+    route = getattr(trust_anchor, "_word_transition_scope_changed", None)
+    assert callable(route)
+    repo, base = _future_base_clone(tmp_path)
+    changed = repo / path
+    changed.parent.mkdir(parents=True, exist_ok=True)
+    original = changed.read_text(encoding="utf-8") if changed.exists() else ""
+    changed.write_text(original + "\n# routing fixture\n", encoding="utf-8")
+    candidate = _child_commit(repo, f"routing fixture {path}")
+
+    assert route(repo, base, candidate) is expected
+
+
+def test_word_transition_routing_fails_closed_for_invalid_manifest(tmp_path):
+    route = getattr(trust_anchor, "_word_transition_scope_changed", None)
+    assert callable(route)
+    repo, base = _future_base_clone(tmp_path)
+    transition = repo / CAPABILITY_TRANSITION_PATH
+    value = json.loads(transition.read_text(encoding="utf-8"))
+    value["scope"] = "UNKNOWN_SCOPE"
+    transition.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    candidate = _child_commit(repo, "invalid routing manifest")
+
+    assert route(repo, base, candidate) is None
+
+
 def test_rebind_rotates_only_exact_judge_exception_identities():
     base_rows = _git("show", f"{PROTECTED_BASE}:{EXCEPTIONS_PATH}")
     base = json.loads(base_rows)

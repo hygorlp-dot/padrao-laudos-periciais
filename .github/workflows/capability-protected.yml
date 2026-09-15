@@ -47,6 +47,18 @@ jobs:
           $state = python -c "import os,sys; from pathlib import Path; from scripts.quality.capability_trust_anchor import _protected_base_bootstrap_present; state=_protected_base_bootstrap_present(Path.cwd(), os.environ['CAPABILITY_PROTECTED_BASE_SHA']); sys.exit(1) if state is None else print('true' if state else 'false')"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "CAPABILITY_BASE_BOOTSTRAP_PRESENT=$state" >> $env:GITHUB_ENV
+      - name: Detect dedicated Word scope changes
+        if: env.CAPABILITY_BASE_BOOTSTRAP_PRESENT == 'true'
+        working-directory: trusted
+        shell: pwsh
+        env:
+          CAPABILITY_CANDIDATE_ROOT: ${{ github.workspace }}/candidate
+          CAPABILITY_PROTECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CAPABILITY_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $state = python -c "import os,sys; from pathlib import Path; from scripts.quality.capability_trust_anchor import _word_transition_scope_changed; state=_word_transition_scope_changed(Path(os.environ['CAPABILITY_CANDIDATE_ROOT']), os.environ['CAPABILITY_PROTECTED_BASE_SHA'], os.environ['CAPABILITY_EXPECTED_HEAD_SHA']); sys.exit(1) if state is None else print('true' if state else 'false')"
+          if ($LASTEXITCODE -ne 0) { throw 'Word transition scope could not be derived from the protected manifest' }
+          "CAPABILITY_WORD_SCOPE_CHANGED=$state" >> $env:GITHUB_ENV
       - name: Validate base-owned capability custody
         if: env.CAPABILITY_BASE_BOOTSTRAP_PRESENT != 'true'
         working-directory: trusted
@@ -57,7 +69,7 @@ jobs:
         run: |
           python -c "import os,sys; from pathlib import Path; from scripts.quality.capability_trust_anchor import validate_inert_trust_anchor; findings=validate_inert_trust_anchor(Path(os.environ['CAPABILITY_CANDIDATE_ROOT']), os.environ['CAPABILITY_PROTECTED_BASE_SHA'], os.environ['CAPABILITY_EXPECTED_HEAD_SHA']); print(findings); sys.exit(1 if findings else 0)"
       - name: Validate dedicated Word trust transition
-        if: env.CAPABILITY_BASE_BOOTSTRAP_PRESENT == 'true'
+        if: env.CAPABILITY_BASE_BOOTSTRAP_PRESENT == 'true' && env.CAPABILITY_WORD_SCOPE_CHANGED == 'true'
         working-directory: trusted
         shell: pwsh
         env:
