@@ -72,7 +72,9 @@ def _xml_attribute(node: ElementTree.Element, name: str) -> str | None:
         for key, value in node.attrib.items()
         if _xml_local_name(key) == name
     ]
-    return values[0] if len(values) == 1 else None
+    if len(values) > 1:
+        raise ValueError("ambiguous Word XML attribute")
+    return values[0] if values else None
 
 
 @dataclass(slots=True)

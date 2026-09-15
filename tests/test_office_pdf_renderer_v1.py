@@ -330,6 +330,59 @@ def test_word_worker_rejects_external_relationships_before_process_launch(
     assert calls == []
 
 
+def test_word_worker_rejects_ambiguous_target_mode_before_process_launch(
+    tmp_path: Path,
+) -> None:
+    relationships = (
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" '
+        'xmlns:foreign="urn:synthetic:foreign">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+        'Target="synthetic-private.png" TargetMode="External" '
+        'foreign:TargetMode="Internal"/>'
+        "</Relationships>"
+    )
+    _write_worker_request(
+        tmp_path,
+        _synthetic_word_package(relationships=relationships),
+    )
+    calls: list[tuple] = []
+
+    with pytest.raises(ValueError, match="ambiguous Word XML attribute"):
+        _render_job(
+            tmp_path,
+            word_launcher=lambda root: _word_launcher(root, calls),
+            com_binder=_com_binder(calls),
+        )
+
+    assert calls == []
+
+
+def test_word_worker_rejects_ambiguous_field_instruction_before_process_launch(
+    tmp_path: Path,
+) -> None:
+    body = (
+        '<w:p xmlns:foreign="urn:synthetic:foreign">'
+        '<w:fldSimple w:instr="INCLUDETEXT private.docx" '
+        'foreign:instr="PAGE"/>'
+        "</w:p>"
+    )
+    _write_worker_request(
+        tmp_path,
+        _synthetic_word_package(document_body=body),
+    )
+    calls: list[tuple] = []
+
+    with pytest.raises(ValueError, match="ambiguous Word XML attribute"):
+        _render_job(
+            tmp_path,
+            word_launcher=lambda root: _word_launcher(root, calls),
+            com_binder=_com_binder(calls),
+        )
+
+    assert calls == []
+
+
 def test_word_worker_rejects_internal_altchunk_before_process_launch(
     tmp_path: Path,
 ) -> None:
