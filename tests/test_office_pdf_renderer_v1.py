@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from hashlib import sha256
 from io import BytesIO
 import json
@@ -156,10 +157,12 @@ def _synthetic_word_package(
     *,
     document_body: str = "<w:p><w:r><w:t>Synthetic</w:t></w:r></w:p>",
     relationships: str | None = None,
+    extra_parts: dict[str, bytes] | None = None,
 ) -> bytes:
     output = BytesIO()
     document = (
-        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
         f"<w:body>{document_body}</w:body></w:document>"
     )
     with ZipFile(output, "w", ZIP_DEFLATED) as package:
@@ -173,6 +176,8 @@ def _synthetic_word_package(
         package.writestr("word/document.xml", document)
         if relationships is not None:
             package.writestr("word/_rels/document.xml.rels", relationships)
+        for name, content in (extra_parts or {}).items():
+            package.writestr(name, content)
     return output.getvalue()
 
 
@@ -315,6 +320,103 @@ def test_word_worker_rejects_external_relationships_before_process_launch(
     calls: list[tuple] = []
 
     with pytest.raises(ValueError, match="external"):
+        _render_job(
+            tmp_path,
+            word_launcher=lambda root: _word_launcher(root, calls),
+            com_binder=_com_binder(calls),
+        )
+
+    assert calls == []
+
+
+def test_word_worker_rejects_internal_altchunk_before_process_launch(
+    tmp_path: Path,
+) -> None:
+    relationships = (
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rIdChunk" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" '
+        'Target="afchunk.html"/>'
+        "</Relationships>"
+    )
+    source = _synthetic_word_package(
+        document_body='<w:altChunk r:id="rIdChunk"/>',
+        relationships=relationships,
+        extra_parts={
+            "word/afchunk.html": (
+                b'<html><body><img src="http://127.0.0.1:9/beacon.gif"></body></html>'
+            )
+        },
+    )
+    _write_worker_request(tmp_path, source)
+    calls: list[tuple] = []
+
+    with pytest.raises(ValueError, match="active Word content"):
+        _render_job(
+            tmp_path,
+            word_launcher=lambda root: _word_launcher(root, calls),
+            com_binder=_com_binder(calls),
+        )
+
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("relationship_type", "target"),
+    (
+        ("attachedTemplate", "template.dotm"),
+        ("control", "activeX/activeX1.xml"),
+        ("controlProperty", "activeX/activeX1.bin"),
+        ("externalLink", "embeddings/workbook.xlsx"),
+        ("oleObject", "embeddings/oleObject1.bin"),
+        ("package", "embeddings/package1.bin"),
+        ("subDocument", "subdocument.docx"),
+    ),
+)
+def test_word_worker_rejects_internal_active_relationship_families(
+    tmp_path: Path, relationship_type: str, target: str
+) -> None:
+    relationships = (
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rIdActive" '
+        f'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{relationship_type}" '
+        f'Target="{target}"/>'
+        "</Relationships>"
+    )
+    _write_worker_request(
+        tmp_path,
+        _synthetic_word_package(relationships=relationships),
+    )
+    calls: list[tuple] = []
+
+    with pytest.raises(ValueError, match="active Word content"):
+        _render_job(
+            tmp_path,
+            word_launcher=lambda root: _word_launcher(root, calls),
+            com_binder=_com_binder(calls),
+        )
+
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "part_name",
+    (
+        "word/activeX/activeX1.bin",
+        "word/embeddings/oleObject1.bin",
+        "word/imported-content.rtf",
+    ),
+)
+def test_word_worker_rejects_opaque_active_parts_before_process_launch(
+    tmp_path: Path, part_name: str
+) -> None:
+    _write_worker_request(
+        tmp_path,
+        _synthetic_word_package(extra_parts={part_name: b"synthetic-active-part"}),
+    )
+    calls: list[tuple] = []
+
+    with pytest.raises(ValueError, match="active Word content"):
         _render_job(
             tmp_path,
             word_launcher=lambda root: _word_launcher(root, calls),
@@ -699,3 +801,18 @@ def test_production_sources_expose_no_generic_process_or_com_api() -> None:
     assert "WScript.Shell" not in combined
     assert combined.count('"{000209FF-0000-0000-C000-000000000046}"') == 1
     assert "winreg.HKEY_CURRENT_USER" not in combined
+
+
+def test_word_process_uses_the_owned_render_root_as_its_working_directory() -> None:
+    source = Path(office_word_worker.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    create_process_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "CreateProcess"
+    ]
+
+    assert len(create_process_calls) == 1
+    assert ast.unparse(create_process_calls[0].args[7]) == "str(root)"
