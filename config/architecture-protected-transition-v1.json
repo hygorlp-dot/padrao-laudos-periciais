@@ -11,7 +11,7 @@
     {
       "path": "config/capability-protected-artifacts-v1.json",
       "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "7cf4292b606b0f844356b6e6cd221b73382b5dfd",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "84d7947869bfba173314798fd14827c333a846a0"
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "e541297e2a06adc59ec0f402d3fce58a7b087cec"
     },
     {
       "path": "scripts/quality/architecture_analyzer.py",
@@ -21,7 +21,7 @@
     {
       "path": "scripts/quality/capability_trust_anchor.py",
       "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "bf7f0c6355d53d25bfe0860caa3bdc891e331cc5",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "298836508da8971c68550d80fd895396f003867a"
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "37de4985bab51011742841e1cbb9c5c077a3c583"
     }
   ],
   "supportScope": "CAPABILITY_BOOTSTRAP_V1",
@@ -29,17 +29,17 @@
     {
       "path": "config/capability-exceptions-v1.json",
       "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "f3badbaa2614b9f055d5c64168da90a8258688a2",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "2f50b73ba243419c109c0c6be47d4e397f3cffc1"
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "ab58b8b07779ca384cc3ed6fe013e4b3f4a106ea"
     },
     {
       "path": "config/capability-protected-transition-v1.json",
       "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "de64b8f74525dc84cf4d9cb0346c1169865c3f0a",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "983a91035f9304435cf87aa947184b8f552a724a"
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "28ccbf84a61de46f1f909b3e911e2ee14b07905e"
     },
     {
       "path": "scripts/quality/capability_gate_adapter.py",
       "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "d0c91fae0be77aad738f182412ac0dfa382ff37f",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "796f43401d1ce9ada14652028b59cef8299dec9b"
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "bbf9560d91260d39a4c7c70e0570c8832db3eb7f"
     },
     {
       "path": "tests/test_repository_safety_gate.py",
