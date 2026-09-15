@@ -109,9 +109,14 @@ def test_capability_workflow_python_scope_admits_exception_transition_path():
     workflow = (ROOT / ".github/workflows/capability-protected.yml").read_text(
         encoding="utf-8"
     )
+    protected_start = workflow.index("allowed_protected = {")
+    protected_end = workflow.index("\n          }", protected_start)
+    assert EXCEPTIONS_PATH in workflow[protected_start:protected_end]
     start = workflow.index("allowed_paths = {")
     end = workflow.index("\n          }", start)
     assert EXCEPTIONS_PATH in workflow[start:end]
+    for path in trust_anchor._SUPPORT_SCOPES["LOCAL_WORD_COM_CONTAINMENT_V1"]:
+        assert path in workflow[start:end]
 
 
 def test_rebind_rotates_only_exact_judge_exception_identities():

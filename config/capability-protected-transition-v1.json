@@ -8,7 +8,7 @@
     {
       "path": ".github/workflows/capability-protected.yml",
       "base": {"path": ".github/workflows/capability-protected.yml", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "36affea55b28479ba53d04cf0cfc2c25c5ffe1a6"},
-      "candidate": {"path": ".github/workflows/capability-protected.yml", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "383f88286f4b50f17270647eb06d4e8ccaeb5d2b"}
+      "candidate": {"path": ".github/workflows/capability-protected.yml", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "b1080f5b42130a9078e507116a74178958061b51"}
     },
     {
       "path": "config/capability-protected-artifacts-v1.json",
