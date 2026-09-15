@@ -11,7 +11,7 @@
     {
       "path": "config/capability-protected-artifacts-v1.json",
       "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "7cf4292b606b0f844356b6e6cd221b73382b5dfd",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "c271582c484fbe940e0e6e6860262628527908bc"
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "909a3e4dd49ef6e2697380e65e5e81abedadd7bf"
     },
     {
       "path": "scripts/quality/architecture_analyzer.py",
@@ -29,17 +29,17 @@
     {
       "path": "config/capability-exceptions-v1.json",
       "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "f3badbaa2614b9f055d5c64168da90a8258688a2",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "63ab5e6abbd925fd930db3640a58b11cc3aa1955"
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "fffdd868b59b36844f323af0e8a844b905e106cc"
     },
     {
       "path": "config/capability-protected-transition-v1.json",
       "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "de64b8f74525dc84cf4d9cb0346c1169865c3f0a",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "e242e48015cf9b36a37d082b41d88e25370d0252"
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "1cde4896c7bc5a31903787661e0deef7dbef2faa"
     },
     {
       "path": "scripts/quality/capability_gate_adapter.py",
       "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "d0c91fae0be77aad738f182412ac0dfa382ff37f",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "57558a5b373199e93ee56bec966042394b982779"
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "2de0f94fa5ccec1d66b6d340dc3c6d4b42f20711"
     }
   ]
 }
