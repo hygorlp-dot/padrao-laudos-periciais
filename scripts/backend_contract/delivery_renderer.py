@@ -43,6 +43,7 @@ _A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 _R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 _V = "{urn:schemas-microsoft-com:vml}"
 _WP = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
+_MIN_OBSERVABLE_TEXT_POINTS = 4.0
 ElementTree.register_namespace("w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main")
 
 
@@ -218,33 +219,113 @@ def _ordered_word_image_signatures(package: ZipFile, xml_roots: dict[str, Elemen
     return ordered
 
 
-def _ordered_word_image_extents(
+@dataclass(frozen=True, slots=True)
+class _WordImageLayout:
+    width: float
+    height: float
+    kind: str
+    alignment: str | None
+    x_offset: float | None
+    y_offset: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class _PdfImageLayout:
+    page: int
+    left: float
+    bottom: float
+    right: float
+    top: float
+    page_width: float
+    page_height: float
+
+
+def _ordered_word_image_layouts(
     xml_roots: dict[str, ElementTree.Element],
-) -> list[tuple[float, float] | None]:
-    ordered: list[tuple[float, float] | None] = []
+) -> list[_WordImageLayout | None]:
+    ordered: list[_WordImageLayout | None] = []
 
     def priority(name: str) -> tuple[int, str]:
         return (0 if "/header" in name else 1 if name == "word/document.xml" else 2, name)
 
     for name in sorted(xml_roots, key=priority):
         root = xml_roots[name]
-        extents_by_image: dict[int, tuple[float, float] | None] = {}
-        for drawing in root.iter(f"{_W}drawing"):
-            extent = drawing.find(f".//{_WP}extent")
-            geometry: tuple[float, float] | None = None
-            if extent is not None:
-                try:
-                    width = float(extent.attrib["cx"]) / 12_700
-                    height = float(extent.attrib["cy"]) / 12_700
-                    if all(math.isfinite(value) and value > 0 for value in (width, height)):
-                        geometry = (width, height)
-                except (KeyError, TypeError, ValueError):
-                    geometry = None
-            for image_node in drawing.iter(f"{_A}blip"):
-                extents_by_image[id(image_node)] = geometry
+        layouts_by_image: dict[int, _WordImageLayout | None] = {}
+        for paragraph in root.iter(f"{_W}p"):
+            alignment_node = paragraph.find(f"./{_W}pPr/{_W}jc")
+            alignment = (
+                alignment_node.attrib.get(f"{_W}val", "left").casefold()
+                if alignment_node is not None
+                else "left"
+            )
+            for drawing in paragraph.iter(f"{_W}drawing"):
+                extent = drawing.find(f".//{_WP}extent")
+                layout: _WordImageLayout | None = None
+                if extent is not None:
+                    try:
+                        width = float(extent.attrib["cx"]) / 12_700
+                        height = float(extent.attrib["cy"]) / 12_700
+                        container = next(
+                            (
+                                node
+                                for node in drawing
+                                if node.tag in {f"{_WP}inline", f"{_WP}anchor"}
+                            ),
+                            None,
+                        )
+                        if not all(
+                            math.isfinite(value) and value > 0
+                            for value in (width, height)
+                        ) or container is None:
+                            raise ValueError("invalid Word image layout")
+                        if container.tag == f"{_WP}inline":
+                            layout = _WordImageLayout(
+                                width, height, "inline", alignment, None, None
+                            )
+                        else:
+                            horizontal = container.find(f"{_WP}positionH")
+                            vertical = container.find(f"{_WP}positionV")
+                            horizontal_offset = (
+                                horizontal.find(f"{_WP}posOffset")
+                                if horizontal is not None
+                                else None
+                            )
+                            vertical_offset = (
+                                vertical.find(f"{_WP}posOffset")
+                                if vertical is not None
+                                else None
+                            )
+                            if (
+                                horizontal is None
+                                or vertical is None
+                                or horizontal.attrib.get("relativeFrom") != "page"
+                                or vertical.attrib.get("relativeFrom") != "page"
+                                or horizontal_offset is None
+                                or vertical_offset is None
+                            ):
+                                raise ValueError("unsupported Word image anchor")
+                            x_offset = float(horizontal_offset.text or "") / 12_700
+                            y_offset = float(vertical_offset.text or "") / 12_700
+                            if not all(
+                                math.isfinite(value) and value >= 0
+                                for value in (x_offset, y_offset)
+                            ):
+                                raise ValueError("invalid Word image anchor")
+                            layout = _WordImageLayout(
+                                width,
+                                height,
+                                "anchor",
+                                None,
+                                x_offset,
+                                y_offset,
+                            )
+                    except (KeyError, StopIteration, TypeError, ValueError):
+                        layout = None
+                for image_node in drawing.iter(f"{_A}blip"):
+                    layouts_by_image[id(image_node)] = layout
         for image_node in root.iter():
             if image_node.tag == f"{_A}blip":
-                ordered.append(extents_by_image.get(id(image_node)))
+                ordered.append(layouts_by_image.get(id(image_node)))
             elif image_node.tag == f"{_V}imagedata":
                 ordered.append(None)
     return ordered
@@ -262,20 +343,191 @@ def _ordered_pdf_image_signatures(page: object, reader: PdfReader) -> list[tuple
     return ordered
 
 
-def _ordered_image_extents_match(
-    sources: list[tuple[float, float] | None],
-    candidates: list[tuple[float, float]],
+def _ordered_image_layouts_match(
+    sources: list[_WordImageLayout | None],
+    candidates: list[_PdfImageLayout],
 ) -> bool:
     if len(sources) != len(candidates) or any(source is None for source in sources):
         return False
-    return all(
-        all(
+    for source, candidate in zip(sources, candidates):
+        if source is None:
+            return False
+        observed_width = candidate.right - candidate.left
+        observed_height = candidate.top - candidate.bottom
+        if not all(
             abs(observed - expected) <= max(1.0, expected * 0.05)
-            for expected, observed in zip(source, candidate)
-        )
-        for source, candidate in zip(sources, candidates)
-        if source is not None
-    )
+            for expected, observed in (
+                (source.width, observed_width),
+                (source.height, observed_height),
+            )
+        ):
+            return False
+        if source.kind == "anchor":
+            observed_y_offset = candidate.page_height - candidate.top
+            if (
+                source.x_offset is None
+                or source.y_offset is None
+                or abs(candidate.left - source.x_offset) > 2.0
+                or abs(observed_y_offset - source.y_offset) > 2.0
+            ):
+                return False
+        elif source.alignment in {"left", "start"}:
+            if candidate.left > candidate.page_width * 0.45:
+                return False
+        elif source.alignment in {"right", "end"}:
+            if candidate.right < candidate.page_width * 0.55:
+                return False
+        elif source.alignment == "center":
+            center = (candidate.left + candidate.right) / 2
+            if abs(center - candidate.page_width / 2) > candidate.page_width * 0.15:
+                return False
+        else:
+            return False
+    return True
+
+
+def _collapse_content_kinds(values: list[str]) -> tuple[str, ...]:
+    return tuple(value for index, value in enumerate(values) if not index or value != values[index - 1])
+
+
+def _word_content_kinds(xml_roots: dict[str, ElementTree.Element]) -> tuple[str, ...]:
+    values: list[str] = []
+
+    def priority(name: str) -> tuple[int, str]:
+        return (0 if "/header" in name else 1 if name == "word/document.xml" else 2, name)
+
+    for name in sorted(xml_roots, key=priority):
+        for node in xml_roots[name].iter():
+            if node.tag == f"{_W}t" and node.text and node.text.strip():
+                values.append("TEXT")
+            elif node.tag in {f"{_A}blip", f"{_V}imagedata"}:
+                values.append("IMAGE")
+    return _collapse_content_kinds(values)
+
+
+def _pdf_content_kinds(reader: PdfReader) -> tuple[str, ...]:
+    values: list[str] = []
+    for page in reader.pages:
+        images = {str(name) for name in page.images.keys()}
+        for operands, operator in ContentStream(page.get_contents(), reader).operations:
+            if operator in {b"Tj", b"TJ", b"'", b'"'} and _text_show_has_content(
+                operator, operands
+            ):
+                values.append("TEXT")
+            elif operator == b"Do" and operands and str(operands[0]) in images:
+                values.append("IMAGE")
+    return _collapse_content_kinds(values)
+
+
+def _has_unsafe_image_drawing(page: object, reader: PdfReader) -> bool:
+    fill_alpha = 1.0
+    stroke_alpha = 1.0
+    clip_bounds: tuple[float, float, float, float] | None = None
+    path_rectangle: tuple[float, float, float, float] | None = None
+    clip_pending = False
+    image_matrix: tuple[float, float, float, float, float, float] | None = None
+    stack: list[
+        tuple[
+            float,
+            float,
+            tuple[float, float, float, float] | None,
+            tuple[float, float, float, float] | None,
+            bool,
+            tuple[float, float, float, float, float, float] | None,
+        ]
+    ] = []
+    try:
+        resources = page["/Resources"].get_object()
+        ext_states = resources.get("/ExtGState", {}).get_object()
+    except (AttributeError, KeyError, TypeError):
+        ext_states = {}
+    try:
+        images = {str(name) for name in page.images.keys()}
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return True
+    for operands, operator in ContentStream(page.get_contents(), reader).operations:
+        if operator == b"q":
+            stack.append(
+                (
+                    fill_alpha,
+                    stroke_alpha,
+                    clip_bounds,
+                    path_rectangle,
+                    clip_pending,
+                    image_matrix,
+                )
+            )
+        elif operator == b"Q":
+            (
+                fill_alpha,
+                stroke_alpha,
+                clip_bounds,
+                path_rectangle,
+                clip_pending,
+                image_matrix,
+            ) = (
+                stack.pop()
+                if stack
+                else (1.0, 1.0, None, None, False, None)
+            )
+        elif operator == b"gs" and operands:
+            try:
+                state = ext_states[str(operands[0])].get_object()
+                fill_alpha = float(state.get("/ca", fill_alpha))
+                stroke_alpha = float(state.get("/CA", stroke_alpha))
+            except (AttributeError, KeyError, TypeError, ValueError):
+                return True
+        elif operator in {b"W", b"W*"}:
+            clip_pending = True
+        elif operator == b"n" and clip_pending:
+            if path_rectangle is None:
+                return True
+            clip_bounds = path_rectangle
+            clip_pending = False
+        elif operator == b"re" and len(operands) == 4:
+            try:
+                x, y, width, height = (float(value) for value in operands)
+                path_rectangle = (
+                    min(x, x + width),
+                    min(y, y + height),
+                    max(x, x + width),
+                    max(y, y + height),
+                )
+            except (TypeError, ValueError):
+                return True
+        elif operator == b"cm" and len(operands) == 6:
+            try:
+                image_matrix = tuple(float(value) for value in operands)
+            except (TypeError, ValueError):
+                return True
+        elif operator == b"Do" and operands and str(operands[0]) in images:
+            if (
+                min(fill_alpha, stroke_alpha) < 0.99
+                or clip_pending
+                or image_matrix is None
+            ):
+                return True
+            a, b, c, d, e, f = image_matrix
+            corners = (
+                (e, f),
+                (a + e, b + f),
+                (c + e, d + f),
+                (a + c + e, b + d + f),
+            )
+            image_bounds = (
+                min(point[0] for point in corners),
+                min(point[1] for point in corners),
+                max(point[0] for point in corners),
+                max(point[1] for point in corners),
+            )
+            if clip_bounds is not None and not (
+                clip_bounds[0] <= image_bounds[0] + 0.5
+                and clip_bounds[1] <= image_bounds[1] + 0.5
+                and clip_bounds[2] >= image_bounds[2] - 0.5
+                and clip_bounds[3] >= image_bounds[3] - 0.5
+            ):
+                return True
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -420,12 +672,12 @@ def _pdfium_visible_layout(
 ) -> tuple[
     list[_PositionedText],
     list[_VerticalBarrier],
-    list[tuple[float, float]],
+    list[_PdfImageLayout],
     bool,
 ]:
     positioned: list[_PositionedText] = []
     barriers: list[_VerticalBarrier] = []
-    image_extents: list[tuple[float, float]] = []
+    image_layouts: list[_PdfImageLayout] = []
     unsafe = False
     document = pdfium.PdfDocument(pdf_content)
     try:
@@ -512,6 +764,8 @@ def _pdfium_visible_layout(
                             or horizontal_scale < 0.25
                             or vertical_scale < 0.25
                             or not upright
+                            or max(float(item.get_font_size()), top - bottom)
+                            < _MIN_OBSERVABLE_TEXT_POINTS
                         ):
                             unsafe = True
                         if item.container is None:
@@ -532,13 +786,31 @@ def _pdfium_visible_layout(
                             )
                         )
                     elif item.type == pdfium.raw.FPDF_PAGEOBJ_IMAGE:
+                        matrix = item.get_matrix()
+                        upright = (
+                            float(matrix.a) > 0
+                            and float(matrix.d) > 0
+                            and abs(float(matrix.b)) <= 0.05 * float(matrix.a)
+                            and abs(float(matrix.c)) <= 0.05 * float(matrix.d)
+                        )
                         if not inside_page or right - left < 0.5 or top - bottom < 0.5:
                             unsafe = True
-                        image_extents.append((right - left, top - bottom))
+                        if not upright:
+                            unsafe = True
+                        image_layouts.append(
+                            _PdfImageLayout(
+                                page_number,
+                                left,
+                                bottom,
+                                right,
+                                top,
+                                width,
+                                height,
+                            )
+                        )
                     elif (
                         item.type == pdfium.raw.FPDF_PAGEOBJ_PATH
                         and top - bottom >= 3.0
-                        and right - left <= max(8.0, (top - bottom) * 0.25)
                     ):
                         barriers.append(
                             _VerticalBarrier(page_number, left, right, bottom, top)
@@ -582,7 +854,7 @@ def _pdfium_visible_layout(
                 page.close()
     finally:
         document.close()
-    return positioned, barriers, image_extents, unsafe
+    return positioned, barriers, image_layouts, unsafe
 
 
 def _text_show_has_content(operator: bytes, operands: list[object]) -> bool:
@@ -616,8 +888,8 @@ def _fragment_sequence_end(
             horizontal_tolerance = max(18.0, 1.5 * max(previous.font_size, fragment.font_size))
             crosses_barrier = any(
                 barrier.page == fragment.page
-                and barrier.left < fragment.x
-                and barrier.right > previous.right
+                and barrier.left >= previous.right - 0.5
+                and barrier.right <= fragment.x + 0.5
                 and barrier.bottom <= max(previous.top, fragment.top)
                 and barrier.top >= min(previous.bottom, fragment.bottom)
                 for barrier in barriers
@@ -706,20 +978,24 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                     if len(cells) > 1 and all(cells):
                         table_rows.append(cells)
             word_images = _ordered_word_image_signatures(package, xml_roots)
-            word_image_extents = _ordered_word_image_extents(xml_roots)
+            word_image_layouts = _ordered_word_image_layouts(xml_roots)
+            word_content_kinds = _word_content_kinds(xml_roots)
         reader = PdfReader(BytesIO(pdf_content), strict=True)
         extracted_pages: list[str] = []
         unsafe_text = False
         pdf_images: list[tuple[float, tuple[float, ...], tuple[float, ...], tuple[bool, ...]]] = []
         for page_number, page in enumerate(reader.pages):
-            if _has_nonvisible_text(page, reader):
+            if _has_nonvisible_text(page, reader) or _has_unsafe_image_drawing(
+                page, reader
+            ):
                 unsafe_text = True
             extracted_pages.append(page.extract_text() or "")
             pdf_images.extend(_ordered_pdf_image_signatures(page, reader))
         pdf_text = _normalized_visible_text("\n".join(extracted_pages))
-        positioned, barriers, pdf_image_extents, pdfium_unsafe = _pdfium_visible_layout(
+        positioned, barriers, pdf_image_layouts, pdfium_unsafe = _pdfium_visible_layout(
             pdf_content
         )
+        pdf_content_kinds = _pdf_content_kinds(reader)
         unsafe_text = unsafe_text or pdfium_unsafe
     except (BadZipFile, KeyError, ElementTree.ParseError, PdfReadError, OSError, RuntimeError, ValueError) as exc:
         raise ValueError("final PDF fidelity cannot be verified") from exc
@@ -738,8 +1014,8 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     document_order_matches = all(any(candidate == token for candidate in token_cursor) for token in document_tokens)
 
     images_match = _ordered_image_signatures_match(word_images, pdf_images)
-    image_extents_match = _ordered_image_extents_match(
-        word_image_extents, pdf_image_extents
+    image_layouts_match = _ordered_image_layouts_match(
+        word_image_layouts, pdf_image_layouts
     )
     tables_match = _table_rows_match(table_rows, positioned, barriers)
     if (
@@ -748,7 +1024,8 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         or not token_counts_match
         or not document_order_matches
         or not images_match
-        or not image_extents_match
+        or not image_layouts_match
+        or word_content_kinds != pdf_content_kinds
         or not tables_match
     ):
         raise ValueError("final PDF does not faithfully represent the bound Word artifact")

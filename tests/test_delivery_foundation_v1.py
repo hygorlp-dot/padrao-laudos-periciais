@@ -234,20 +234,39 @@ def _word_with_image_and_text(
     *,
     image_width: float = 40,
     image_height: float = 40,
+    anchor_x: float | None = None,
+    anchor_y: float | None = None,
 ) -> bytes:
     output = BytesIO()
     width_emu = round(image_width * 12_700)
     height_emu = round(image_height * 12_700)
+    if (anchor_x is None) != (anchor_y is None):
+        raise ValueError("anchor coordinates must be provided together")
+    if anchor_x is None:
+        drawing = (
+            "<wp:inline>"
+            f'<wp:extent cx="{width_emu}" cy="{height_emu}"/>'
+            '<a:graphic><a:graphicData><a:blip r:embed="rId1"/>'
+            "</a:graphicData></a:graphic></wp:inline>"
+        )
+    else:
+        drawing = (
+            "<wp:anchor>"
+            '<wp:positionH relativeFrom="page">'
+            f"<wp:posOffset>{round(anchor_x * 12_700)}</wp:posOffset></wp:positionH>"
+            '<wp:positionV relativeFrom="page">'
+            f"<wp:posOffset>{round(anchor_y * 12_700)}</wp:posOffset></wp:positionV>"
+            f'<wp:extent cx="{width_emu}" cy="{height_emu}"/>'
+            '<a:graphic><a:graphicData><a:blip r:embed="rId1"/>'
+            "</a:graphicData></a:graphic></wp:anchor>"
+        )
     document = (
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
         'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
         'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
         'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
         f"<w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p>"
-        "<w:p><w:r><w:drawing><wp:inline>"
-        f'<wp:extent cx="{width_emu}" cy="{height_emu}"/>'
-        '<a:graphic><a:graphicData><a:blip r:embed="rId1"/>'
-        "</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
+        f"<w:p><w:r><w:drawing>{drawing}</w:drawing></w:r></w:p>"
         "</w:body></w:document>"
     )
     relationships = (
@@ -270,12 +289,21 @@ def _image_pdf(
     image_y: float = 700,
     image_width: float = 40,
     image_height: float = 40,
-    image_after_text: bool = False,
+    image_after_text: bool = True,
+    alpha: float = 1,
+    matrix: tuple[float, float, float, float, float, float] | None = None,
+    clip: tuple[float, float, float, float] | None = None,
 ) -> bytes:
     encoded = text.encode("ascii")
+    transform = matrix or (image_width, 0, 0, image_height, image_x, image_y)
+    clip_command = (
+        ""
+        if clip is None
+        else f"{clip[0]:g} {clip[1]:g} {clip[2]:g} {clip[3]:g} re W n "
+    )
     image_command = (
-        f"q {image_width:g} 0 0 {image_height:g} {image_x:g} {image_y:g} cm "
-        "/Im1 Do Q "
+        f"q /GS0 gs {clip_command}"
+        f"{' '.join(f'{value:g}' for value in transform)} cm /Im1 Do Q "
     ).encode("ascii")
     text_command = (
         b"BT /F1 10 Tf 1 0 0 1 50 650 Tm ("
@@ -297,7 +325,9 @@ def _image_pdf(
         + b"\nendstream",
         b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
         b"<< /Type /Page /Parent 5 0 R /MediaBox [0 0 595 842] /Resources "
-        b"<< /Font << /F1 1 0 R >> /XObject << /Im1 2 0 R >> >> /Contents 3 0 R >>",
+        b"<< /Font << /F1 1 0 R >> /XObject << /Im1 2 0 R >> "
+        + f"/ExtGState << /GS0 << /Type /ExtGState /ca {alpha:g} /CA {alpha:g} >> >> ".encode("ascii")
+        + b">> /Contents 3 0 R >>",
         b"<< /Type /Pages /Count 1 /Kids [4 0 R] >>",
         b"<< /Type /Catalog /Pages 5 0 R >>",
     )
@@ -905,6 +935,21 @@ def test_fidelity_never_composes_fragments_across_a_wide_filled_cell_rule() -> N
         )
 
 
+def test_fidelity_never_composes_fragments_across_any_path_contained_in_gap() -> None:
+    stream = (
+        b"BT\n"
+        b"/F1 10 Tf 0 Tr 1 0 0 1 50 700 Tm (Cell-) Tj\n"
+        b"/F1 10 Tf 0 Tr 1 0 0 1 98 700 Tm (A-223) Tj\n"
+        b"/F1 10 Tf 0 Tr 1 0 0 1 250 700 Tm (Cell-B-223) Tj\n"
+        b"ET\n0 0 0 rg 72 650 26 100 re f"
+    )
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            _word_table(("Cell-A-223", "Cell-B-223")),
+            _custom_content_pdf(stream),
+        )
+
+
 @pytest.mark.parametrize(
     "matrix",
     ("0 1 -1 0", "-1 0 0 1", "1 0.8 0 1", "-1 0 0 -1"),
@@ -914,6 +959,18 @@ def test_fidelity_rejects_unbound_affine_text_orientation(matrix: str) -> None:
     stream = f"BT /F1 10 Tf {matrix} 100 700 Tm (Cell-A-223) Tj ET".encode(
         "ascii"
     )
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            _word_text("Cell-A-223"),
+            _custom_content_pdf(stream),
+        )
+
+
+@pytest.mark.parametrize("font_size", (1, 0.6, 0.25))
+def test_fidelity_rejects_near_invisible_text_size(font_size: float) -> None:
+    stream = (
+        f"BT /F1 {font_size:g} Tf 1 0 0 1 100 700 Tm (Cell-A-223) Tj ET"
+    ).encode("ascii")
     with pytest.raises(ValueError, match="faithfully represent"):
         delivery_renderer._validate_pdf_fidelity(
             _word_text("Cell-A-223"),
@@ -1005,6 +1062,58 @@ def test_fidelity_binds_image_to_declared_word_extent_not_intrinsic_ratio() -> N
                 image_width=40,
                 image_height=40,
             ),
+        )
+
+
+@pytest.mark.parametrize(
+    "pdf",
+    (
+        {"alpha": 0},
+        {"matrix": (0, 40, -40, 0, 140, 700)},
+        {"matrix": (-40, 0, 0, 40, 140, 700)},
+        {"clip": (100, 700, 20, 40)},
+        {"image_x": 500},
+        {"image_after_text": False},
+    ),
+    ids=("transparent", "rotated", "mirrored", "cropped", "relocated", "reordered"),
+)
+def test_fidelity_rejects_unbound_image_presentation(pdf: dict[str, object]) -> None:
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, "JPEG")
+    word = _word_with_image_and_text("Synthetic", image.getvalue())
+    options: dict[str, object] = {"image_x": 100}
+    options.update(pdf)
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", image.getvalue(), **options),
+        )
+
+
+def test_fidelity_binds_page_anchored_image_position() -> None:
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, "JPEG")
+    word = _word_with_image_and_text(
+        "Synthetic",
+        image.getvalue(),
+        anchor_x=50,
+        anchor_y=100,
+    )
+
+    delivery_renderer._validate_pdf_fidelity(
+        word,
+        _image_pdf("Synthetic", image.getvalue(), image_x=50, image_y=702),
+    )
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", image.getvalue(), image_x=500, image_y=702),
+        )
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", image.getvalue(), image_x=50, image_y=100),
         )
 
 
