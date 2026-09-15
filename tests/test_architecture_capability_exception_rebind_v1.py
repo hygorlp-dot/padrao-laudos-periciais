@@ -21,7 +21,7 @@ CAPABILITY_REGISTRY_PATH = "config/capability-protected-artifacts-v1.json"
 CAPABILITY_TRANSITION_PATH = "config/capability-protected-transition-v1.json"
 ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
 PROTECTED_BASE = "1f3f5dc479433dde0ce75600c7f16f84816e2637"
-ARCHITECTURE_PROTECTED_BASE = "0897a03b67114c6995f209233f88c7d39c3c2557"
+ARCHITECTURE_PROTECTED_BASE = "40e0de6633275270472db18361ab52b6610f0357"
 SOURCE_ANCHORS = {
     "scripts/quality/architecture_analyzer.py": "c2cbb55f1dcb0732ca8b215df28ef6148fc91566",
     "scripts/quality/capability_trust_anchor.py": "f27e80380ee4ba55661e2cf1981f5b7aab54fdf8",
