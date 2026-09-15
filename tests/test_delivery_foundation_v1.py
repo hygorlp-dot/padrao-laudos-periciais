@@ -55,9 +55,23 @@ SHA_A = "a" * 64
 SHA_B = "b" * 64
 
 
-def test_production_delivery_render_has_no_local_process_or_pdf_authority() -> None:
+def test_phase_c_word_worker_is_bounded_and_not_yet_product_composed() -> None:
     root = Path(__file__).parents[1]
-    assert not (root / "scripts/backend_contract/infrastructure/office_pdf.py").exists()
+    office_source = (
+        root / "scripts/backend_contract/infrastructure/office_pdf.py"
+    ).read_text(encoding="utf-8")
+    worker_source = (
+        root / "scripts/backend_contract/infrastructure/office_word_worker.py"
+    ).read_text(encoding="utf-8")
+    combined = office_source + worker_source
+    assert "RENDER_BOUND_AUTHORITATIVE_WORD_TO_DERIVED_PDF" in combined
+    assert r"SOFTWARE\Classes\Word.Application\CLSID" in worker_source
+    assert "winreg.HKEY_LOCAL_MACHINE" in worker_source
+    assert "DispatchEx" not in combined
+    assert "WScript.Shell" not in combined
+    assert "subprocess" not in combined
+    assert "multiprocessing" not in combined
+    assert "taskkill" not in combined.casefold()
     assert "pdf_converter" not in {item.name for item in fields(RenderDeliveryPackage)}
     composition = (root / "scripts/backend_contract/local_api/composition.py").read_text(encoding="utf-8")
     assert "LocalOfficePdfConverter" not in composition
