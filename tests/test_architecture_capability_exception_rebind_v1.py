@@ -652,6 +652,10 @@ def _render_job(root, *, word_launcher=_start_owned_word_process, com_binder=_bi
     }
 
 
+def _git_blobs(sources: dict[str, str]) -> dict[str, bytes]:
+    return {path: source.encode("utf-8") for path, source in sources.items()}
+
+
 def test_word_render_contract_accepts_only_the_pre_reviewed_exact_digests():
     assert _word_render_digests_are_closed(dict(_WORD_PRODUCT_SHA256))
     assert _WORD_PRODUCT_SHA256 == {
@@ -679,11 +683,11 @@ def test_word_render_contract_rejects_semantic_bypasses(
         "_WORD_PRODUCT_SHA256",
         {name: hashlib.sha256(value.encode("utf-8")).hexdigest() for name, value in sources.items()},
     )
-    assert word_render_sources_are_closed(sources)
+    assert word_render_sources_are_closed(_git_blobs(sources))
     assert old in sources[path]
     sources[path] = sources[path].replace(old, new, 1)
 
-    assert not word_render_sources_are_closed(sources)
+    assert not word_render_sources_are_closed(_git_blobs(sources))
 
 
 def test_word_render_digest_contract_rejects_any_path_or_digest_drift():
@@ -699,6 +703,27 @@ def test_word_render_digest_contract_rejects_any_path_or_digest_drift():
     )
 
 
+def test_word_render_contract_hashes_raw_git_bytes_without_newline_normalization(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    blobs = {
+        WORD_PARENT_PATH: b"parent-line-1\nparent-line-2\n",
+        WORD_WORKER_PATH: b"worker-line-1\nworker-line-2\n",
+    }
+    monkeypatch.setattr(
+        gate_adapter,
+        "_WORD_PRODUCT_SHA256",
+        {path: hashlib.sha256(value).hexdigest() for path, value in blobs.items()},
+    )
+
+    assert word_render_sources_are_closed(blobs)
+    for newline in (b"\r\n", b"\r"):
+        changed = {
+            path: value.replace(b"\n", newline) for path, value in blobs.items()
+        }
+        assert not word_render_sources_are_closed(changed)
+
+
 def test_word_render_contract_rejects_generic_public_execution_api(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -708,10 +733,10 @@ def test_word_render_contract_rejects_generic_public_execution_api(
         "_WORD_PRODUCT_SHA256",
         {name: hashlib.sha256(value.encode("utf-8")).hexdigest() for name, value in sources.items()},
     )
-    assert word_render_sources_are_closed(sources)
+    assert word_render_sources_are_closed(_git_blobs(sources))
     sources[WORD_PARENT_PATH] += "\ndef run(executable, command_line):\n    return executable, command_line\n"
 
-    assert not word_render_sources_are_closed(sources)
+    assert not word_render_sources_are_closed(_git_blobs(sources))
 
 
 def test_word_render_contract_rejects_a_second_hidden_process_surface(
@@ -723,7 +748,7 @@ def test_word_render_contract_rejects_a_second_hidden_process_surface(
         "_WORD_PRODUCT_SHA256",
         {name: hashlib.sha256(value.encode("utf-8")).hexdigest() for name, value in sources.items()},
     )
-    assert word_render_sources_are_closed(sources)
+    assert word_render_sources_are_closed(_git_blobs(sources))
     sources[WORD_WORKER_PATH] += '''
 def _alternate_process(executable, command_line, startup):
     return win32process.CreateProcess(
@@ -731,4 +756,4 @@ def _alternate_process(executable, command_line, startup):
     )
 '''
 
-    assert not word_render_sources_are_closed(sources)
+    assert not word_render_sources_are_closed(_git_blobs(sources))

@@ -406,16 +406,16 @@ def _word_render_digests_are_closed(digests: Mapping[str, str]) -> bool:
     )
 
 
-def word_render_sources_are_closed(sources: Mapping[str, str]) -> bool:
+def word_render_sources_are_closed(sources: Mapping[str, bytes]) -> bool:
     """Fail closed unless both product sources are the pre-reviewed exact bytes."""
     try:
         if set(sources) != _WORD_PRODUCT_PATHS or any(
-            not isinstance(source, str) for source in sources.values()
+            type(source) is not bytes for source in sources.values()
         ):
             return False
         return _word_render_digests_are_closed(
             {
-                path: hashlib.sha256(sources[path].encode("utf-8")).hexdigest()
+                path: hashlib.sha256(sources[path]).hexdigest()
                 for path in _WORD_PRODUCT_PATHS
             }
         )

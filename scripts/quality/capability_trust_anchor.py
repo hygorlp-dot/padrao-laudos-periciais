@@ -209,7 +209,7 @@ def _word_render_contract_is_closed(root: Path, candidate: str) -> bool | None:
     """Validate the exact purpose-specific Word worker at an exact Git identity."""
     try:
         sources = {
-            path: _git(root, "show", f"{candidate}:{path}")
+            path: _git(root, "show", f"{candidate}:{path}", text=False)
             for path in _WORD_PRODUCT_PATHS
         }
         return word_render_sources_are_closed(sources)
