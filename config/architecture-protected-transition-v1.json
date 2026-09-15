@@ -49,7 +49,7 @@
       "baseBlobSha": "5390c5589a52a6a1c45de799b14544a334ea22b7",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "628fb0ca8cb1e19824ad156bf7e820ca2187e5b5"
+      "candidateBlobSha": "7ad59402bb64cf68425a5c3d17958cbeba972497"
     },
     {
       "path": "config/capability-exceptions-v1.json",
