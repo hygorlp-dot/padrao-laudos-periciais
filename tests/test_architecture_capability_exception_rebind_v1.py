@@ -21,6 +21,7 @@ EXCEPTIONS_PATH = "config/capability-exceptions-v1.json"
 CAPABILITY_REGISTRY_PATH = "config/capability-protected-artifacts-v1.json"
 CAPABILITY_TRANSITION_PATH = "config/capability-protected-transition-v1.json"
 ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
+CAPABILITY_GATE_ADAPTER_PATH = "scripts/quality/capability_gate_adapter.py"
 PROTECTED_BASE = "5ece752ce6cd66c5b2f0f7ab460f71246ead9d53"
 ARCHITECTURE_PROTECTED_BASE = "5ece752ce6cd66c5b2f0f7ab460f71246ead9d53"
 SOURCE_ANCHORS = {
@@ -112,9 +113,11 @@ def test_capability_workflow_python_scope_admits_exception_transition_path():
     protected_start = workflow.index("allowed_protected = {")
     protected_end = workflow.index("\n          }", protected_start)
     assert EXCEPTIONS_PATH in workflow[protected_start:protected_end]
+    assert CAPABILITY_GATE_ADAPTER_PATH in workflow[protected_start:protected_end]
     start = workflow.index("allowed_paths = {")
     end = workflow.index("\n          }", start)
     assert EXCEPTIONS_PATH in workflow[start:end]
+    assert CAPABILITY_GATE_ADAPTER_PATH in workflow[start:end]
     for path in trust_anchor._SUPPORT_SCOPES["LOCAL_WORD_COM_CONTAINMENT_V1"]:
         assert path in workflow[start:end]
 
@@ -326,6 +329,7 @@ def test_future_base_blocks_new_unauthorized_capability(tmp_path):
 def test_word_com_containment_scope_is_registered_with_exact_paths():
     scope = trust_anchor._SUPPORT_SCOPES["LOCAL_WORD_COM_CONTAINMENT_V1"]
     assert scope == {
+        CAPABILITY_GATE_ADAPTER_PATH,
         "scripts/backend_contract/infrastructure/office_pdf.py",
         "scripts/backend_contract/infrastructure/office_word_worker.py",
         "tests/test_office_pdf_renderer_v1.py",
@@ -336,6 +340,7 @@ def test_word_com_containment_scope_is_registered_with_exact_paths():
 @pytest.mark.parametrize(
     "path",
     [
+        CAPABILITY_GATE_ADAPTER_PATH,
         "scripts/backend_contract/infrastructure/office_pdf.py",
         "scripts/backend_contract/infrastructure/office_word_worker.py",
         "tests/test_office_pdf_renderer_v1.py",
@@ -354,6 +359,9 @@ def test_word_com_containment_scope_accepts_only_registered_paths(path):
         "scripts/backend_contract/infrastructure/subprocess_runner.py",
         "scripts/backend_contract/infrastructure/office_word_worker.py.bak",
         "scripts/backend_contract/infrastructure/*.py",
+        "scripts/quality/capability_gate_adapter.py.bak",
+        "scripts/quality/capability_gate_adapter.py/child.py",
+        "scripts/quality/*.py",
         "tests/test_office_word_containment_v1.py/extra",
     ],
 )
