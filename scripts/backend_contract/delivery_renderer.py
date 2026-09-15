@@ -66,10 +66,12 @@ def _first_named(root: ElementTree.Element | None, name: str):
 
 
 def _attribute_named(root: ElementTree.Element, name: str) -> str | None:
-    return next(
-        (value for key, value in root.attrib.items() if _local_name(key) == name),
-        None,
-    )
+    values = [
+        value for key, value in root.attrib.items() if _local_name(key) == name
+    ]
+    if len(values) > 1:
+        raise ValueError("ambiguous Word XML attribute")
+    return values[0] if values else None
 
 
 def _word_part_priority(name: str) -> tuple[int, str]:
@@ -398,54 +400,49 @@ def _ordered_word_image_layouts(
                         layout = None
                 for image_node in _iter_named(drawing, "blip"):
                     layouts_by_image[id(image_node)] = layout
-        flow = [
-            item
-            for item in root.iter()
-            if _local_name(item.tag) in {"t", "blip", "imagedata"}
-        ]
-        for index, image_node in enumerate(flow):
-            if _local_name(image_node.tag) not in {"blip", "imagedata"}:
-                continue
-            preceding_node = next(
-                (
-                    item
-                    for item in reversed(flow[:index])
-                    if _local_name(item.tag) == "t"
-                    and item.text
-                    and item.text.strip()
-                ),
-                None,
-            )
-            following_node = next(
-                (
-                    item
-                    for item in flow[index + 1 :]
-                    if _local_name(item.tag) == "t"
-                    and item.text
-                    and item.text.strip()
-                ),
-                None,
-            )
-            preceding = (
-                preceding_node.text.strip() if preceding_node is not None else None
-            )
-            following = (
-                following_node.text.strip() if following_node is not None else None
-            )
+        flow: list[tuple[str, str | ElementTree.Element]] = []
+        for paragraph in _iter_named(root, "p"):
+            text_buffer: list[str] = []
+            for item in paragraph.iter():
+                local_name = _local_name(item.tag)
+                if local_name == "t" and item.text:
+                    text_buffer.append(item.text)
+                elif local_name in {"blip", "imagedata"}:
+                    text = "".join(text_buffer)
+                    if text.strip():
+                        flow.append(("text", text))
+                    text_buffer = []
+                    flow.append(("image", item))
+            text = "".join(text_buffer)
+            if text.strip():
+                flow.append(("text", text))
 
-            def occurrence(
-                node: ElementTree.Element | None, expected: str | None
-            ) -> int | None:
-                if node is None or expected is None:
+        for index, (kind, value) in enumerate(flow):
+            if kind != "image" or not isinstance(value, ElementTree.Element):
+                continue
+            image_node = value
+            preceding_entry = next(
+                (item for item in reversed(flow[:index]) if item[0] == "text"),
+                None,
+            )
+            following_entry = next(
+                (item for item in flow[index + 1 :] if item[0] == "text"),
+                None,
+            )
+            preceding = str(preceding_entry[1]).strip() if preceding_entry else None
+            following = str(following_entry[1]).strip() if following_entry else None
+
+            def occurrence(entry: tuple[str, str | ElementTree.Element] | None) -> int | None:
+                if entry is None:
                     return None
-                node_index = flow.index(node)
+                node_index = flow.index(entry)
+                expected = str(entry[1])
                 normalized = _normalized_visible_text(expected)
                 return sum(
                     1
                     for item in flow[: node_index + 1]
-                    if _local_name(item.tag) == "t"
-                    and item.text
-                    and _normalized_visible_text(item.text) == normalized
+                    if item[0] == "text"
+                    and _normalized_visible_text(str(item[1])) == normalized
                 ) - 1
 
             if _local_name(image_node.tag) == "blip":
@@ -455,8 +452,8 @@ def _ordered_word_image_layouts(
                         layout,
                         preceding_text=preceding,
                         following_text=following,
-                        preceding_occurrence=occurrence(preceding_node, preceding),
-                        following_occurrence=occurrence(following_node, following),
+                        preceding_occurrence=occurrence(preceding_entry),
+                        following_occurrence=occurrence(following_entry),
                     )
                     if layout is not None
                     else None
@@ -583,7 +580,11 @@ def _ordered_image_layouts_match(
                 following_regions = following_regions[
                     source.following_occurrence : source.following_occurrence + 1
                 ]
-            if not preceding_regions and not following_regions:
+            if source.preceding_text and not preceding_regions:
+                return False
+            if source.following_text and not following_regions:
+                return False
+            if not source.preceding_text and not source.following_text:
                 return False
             if preceding_regions and not any(
                 page == candidate.page
@@ -668,12 +669,25 @@ def _has_unsafe_image_drawing(page: object, reader: PdfReader) -> bool:
         return False
     try:
         xobjects = resources.get("/XObject", {}).get_object()
-        intrinsically_masked = {
-            name
-            for name in images
-            if bool(xobjects[name].get_object().get("/ImageMask", False))
-            or xobjects[name].get_object().get("/Mask") not in (None, "/None")
-        }
+        intrinsically_masked = set()
+        for name in images:
+            image_object = xobjects[name].get_object()
+            soft_mask = image_object.get("/SMask")
+            matte = (
+                soft_mask.get_object().get("/Matte")
+                if soft_mask is not None
+                else None
+            )
+            if (
+                bool(image_object.get("/ImageMask", False))
+                or image_object.get("/Mask") not in (None, "/None")
+                or (
+                    matte is not None
+                    and tuple(float(value) for value in matte)
+                    != (0.0, 0.0, 0.0)
+                )
+            ):
+                intrinsically_masked.add(name)
     except (AttributeError, KeyError, TypeError, ValueError):
         return True
 
@@ -779,6 +793,9 @@ def _has_unsafe_image_drawing(page: object, reader: PdfReader) -> bool:
                 state = ext_states[str(operands[0])].get_object()
                 fill_alpha = float(state.get("/ca", fill_alpha))
                 stroke_alpha = float(state.get("/CA", stroke_alpha))
+                blend_mode = state.get("/BM", "/Normal")
+                if blend_mode not in (None, "/Normal"):
+                    return True
                 if "/SMask" in state:
                     soft_mask_active = state.get("/SMask") not in (None, "/None")
             except (AttributeError, KeyError, TypeError, ValueError):
@@ -847,6 +864,7 @@ class _PositionedText:
     right: float
     bottom: float
     top: float
+    color: tuple[int, int, int] = (0, 0, 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -862,6 +880,7 @@ class _VerticalBarrier:
 class _WordTextExpectation:
     text: str
     font_size: float
+    color: tuple[int, int, int]
 
 
 def _word_text_expectations(
@@ -879,13 +898,29 @@ def _word_text_expectations(
             return None
         return value if math.isfinite(value) and value > 0 else None
 
+    def color_from_properties(
+        properties: ElementTree.Element | None,
+    ) -> tuple[int, int, int] | None:
+        color_node = _first_named(properties, "color")
+        if color_node is None:
+            return None
+        value = (_attribute_named(color_node, "val") or "").strip()
+        if value.casefold() == "auto":
+            return (0, 0, 0)
+        if not re.fullmatch(r"[0-9a-fA-F]{6}", value):
+            raise ValueError("unsupported Word text color")
+        return tuple(int(value[index : index + 2], 16) for index in (0, 2, 4))
+
     default_size = 11.0
+    default_color = (0, 0, 0)
     default_paragraph_style: str | None = None
     style_sizes: dict[str, float | None] = {}
+    style_colors: dict[str, tuple[int, int, int] | None] = {}
     style_bases: dict[str, str | None] = {}
     if styles_root is not None:
         defaults = _first_named(styles_root, "docDefaults")
         default_size = size_from_properties(defaults) or default_size
+        default_color = color_from_properties(defaults) or default_color
         for style in _iter_named(styles_root, "style"):
             style_id = _attribute_named(style, "styleId")
             if not style_id:
@@ -899,6 +934,7 @@ def _word_text_expectations(
             properties = next(_children_named(style, "rPr"), None)
             based_on = _first_named(style, "basedOn")
             style_sizes[style_id] = size_from_properties(properties)
+            style_colors[style_id] = color_from_properties(properties)
             style_bases[style_id] = (
                 _attribute_named(based_on, "val") if based_on is not None else None
             )
@@ -910,6 +946,19 @@ def _word_text_expectations(
             size = style_sizes.get(style_id)
             if size is not None:
                 return size
+            style_id = style_bases.get(style_id)
+        return fallback
+
+    def resolve_style_color(
+        style_id: str | None,
+        fallback: tuple[int, int, int] = default_color,
+    ) -> tuple[int, int, int]:
+        visited: set[str] = set()
+        while style_id and style_id not in visited:
+            visited.add(style_id)
+            color = style_colors.get(style_id)
+            if color is not None:
+                return color
             style_id = style_bases.get(style_id)
         return fallback
 
@@ -932,7 +981,10 @@ def _word_text_expectations(
             paragraph_size = resolve_style(
                 paragraph_style or default_paragraph_style
             )
-            segments: list[tuple[str, float]] = []
+            paragraph_color = resolve_style_color(
+                paragraph_style or default_paragraph_style
+            )
+            segments: list[tuple[str, float, tuple[int, int, int]]] = []
             for run in _iter_named(paragraph, "r"):
                 run_properties = next(_children_named(run, "rPr"), None)
                 run_style_node = _first_named(run_properties, "rStyle")
@@ -948,6 +1000,13 @@ def _word_text_expectations(
                     else size_from_properties(run_properties)
                     or paragraph_size
                 )
+                color = (
+                    color_from_properties(run_properties)
+                    or resolve_style_color(run_style, paragraph_color)
+                    if run_style
+                    else color_from_properties(run_properties)
+                    or paragraph_color
+                )
                 raw_text = "".join(
                     item.text or ""
                     for item in _iter_named(run, "t")
@@ -955,14 +1014,22 @@ def _word_text_expectations(
                 )
                 if not raw_text.strip():
                     continue
-                if segments and abs(segments[-1][1] - size) <= 0.01:
-                    previous_text, previous_size = segments[-1]
-                    segments[-1] = (previous_text + raw_text, previous_size)
+                if (
+                    segments
+                    and abs(segments[-1][1] - size) <= 0.01
+                    and segments[-1][2] == color
+                ):
+                    previous_text, previous_size, previous_color = segments[-1]
+                    segments[-1] = (
+                        previous_text + raw_text,
+                        previous_size,
+                        previous_color,
+                    )
                 else:
-                    segments.append((raw_text, size))
+                    segments.append((raw_text, size, color))
             expectations.extend(
-                _WordTextExpectation(_normalized_visible_text(text), size)
-                for text, size in segments
+                _WordTextExpectation(_normalized_visible_text(text), size, color)
+                for text, size, color in segments
                 if _normalized_visible_text(text)
             )
     return expectations
@@ -985,6 +1052,10 @@ def _text_sizes_match(
             tolerance = max(1.5, expectation.font_size * 0.12)
             if all(
                 abs(fragment.font_size - expectation.font_size) <= tolerance
+                and all(
+                    abs(observed - expected) <= 8
+                    for observed, expected in zip(fragment.color, expectation.color)
+                )
                 for fragment in positioned[start:end]
             ):
                 match = (start, end)
@@ -999,7 +1070,8 @@ def _has_nonvisible_text(page: object, reader: PdfReader) -> bool:
     render_mode = 0
     fill_alpha = 1.0
     stroke_alpha = 1.0
-    stack: list[tuple[int, float, float]] = []
+    blend_mode = "/Normal"
+    stack: list[tuple[int, float, float, str]] = []
     try:
         resources = page["/Resources"].get_object()
         ext_states = resources.get("/ExtGState", {}).get_object()
@@ -1008,10 +1080,10 @@ def _has_nonvisible_text(page: object, reader: PdfReader) -> bool:
     text_operators = {b"Tj", b"TJ", b"'", b'"'}
     for operands, operator in ContentStream(page.get_contents(), reader).operations:
         if operator == b"q":
-            stack.append((render_mode, fill_alpha, stroke_alpha))
+            stack.append((render_mode, fill_alpha, stroke_alpha, blend_mode))
         elif operator == b"Q":
-            render_mode, fill_alpha, stroke_alpha = (
-                stack.pop() if stack else (0, 1.0, 1.0)
+            render_mode, fill_alpha, stroke_alpha, blend_mode = (
+                stack.pop() if stack else (0, 1.0, 1.0, "/Normal")
             )
         elif operator == b"Tr" and operands:
             render_mode = int(operands[0])
@@ -1020,10 +1092,11 @@ def _has_nonvisible_text(page: object, reader: PdfReader) -> bool:
                 state = ext_states[str(operands[0])].get_object()
                 fill_alpha = float(state.get("/ca", fill_alpha))
                 stroke_alpha = float(state.get("/CA", stroke_alpha))
+                blend_mode = str(state.get("/BM", blend_mode))
             except (AttributeError, KeyError, TypeError, ValueError):
                 return True
         elif operator in text_operators and _text_show_has_content(operator, operands):
-            if render_mode in {3, 7}:
+            if render_mode != 0 or blend_mode != "/Normal":
                 return True
             visible_alpha = (
                 fill_alpha
@@ -1085,6 +1158,19 @@ def _raster_region_is_observably_painted(
         actual.close()
 
 
+def _page_object_fill_rgba(item: object) -> tuple[int, int, int, int] | None:
+    values = tuple(ctypes.c_uint() for _ in range(4))
+    if not pdfium.raw.FPDFPageObj_GetFillColor(
+        item.raw,
+        ctypes.byref(values[0]),
+        ctypes.byref(values[1]),
+        ctypes.byref(values[2]),
+        ctypes.byref(values[3]),
+    ):
+        return None
+    return tuple(int(value.value) for value in values)
+
+
 def _path_has_visible_fill(item: object) -> bool:
     fill_mode = ctypes.c_int()
     stroke = ctypes.c_int()
@@ -1094,16 +1180,10 @@ def _path_has_visible_fill(item: object) -> bool:
         return True
     if fill_mode.value == 0:
         return False
-    red, green, blue, alpha = (ctypes.c_uint() for _ in range(4))
-    if not pdfium.raw.FPDFPageObj_GetFillColor(
-        item.raw,
-        ctypes.byref(red),
-        ctypes.byref(green),
-        ctypes.byref(blue),
-        ctypes.byref(alpha),
-    ):
+    color = _page_object_fill_rgba(item)
+    if color is None:
         return True
-    return alpha.value > 0
+    return color[3] > 0
 
 
 def _regions_overlap(
@@ -1197,6 +1277,7 @@ def _pdfium_visible_layout(
                         matrix = item.get_matrix()
                         horizontal_scale = math.hypot(float(matrix.a), float(matrix.b))
                         vertical_scale = math.hypot(float(matrix.c), float(matrix.d))
+                        scale_delta = abs(horizontal_scale - vertical_scale)
                         upright = (
                             float(matrix.a) > 0
                             and float(matrix.d) > 0
@@ -1215,6 +1296,8 @@ def _pdfium_visible_layout(
                             not inside_page
                             or horizontal_scale < 0.25
                             or vertical_scale < 0.25
+                            or scale_delta
+                            > 0.05 * max(horizontal_scale, vertical_scale)
                             or not upright
                             or max(float(item.get_font_size()), top - bottom)
                             < _MIN_OBSERVABLE_TEXT_POINTS
@@ -1225,16 +1308,23 @@ def _pdfium_visible_layout(
                         else:
                             unsafe = True
                         prior_text_regions.append(bounds)
+                        fill_color = _page_object_fill_rgba(item)
+                        if fill_color is None or fill_color[3] < 252:
+                            unsafe = True
+                            text_color = (0, 0, 0)
+                        else:
+                            text_color = fill_color[:3]
                         positioned.append(
                             _PositionedText(
                                 page_number,
                                 text,
                                 left,
                                 bottom,
-                                max(float(item.get_font_size()), top - bottom),
+                                float(item.get_font_size()),
                                 right,
                                 bottom,
                                 top,
+                                text_color,
                             )
                         )
                     elif item.type == pdfium.raw.FPDF_PAGEOBJ_IMAGE:
@@ -1338,6 +1428,8 @@ def _fragment_sequence_end(
 ) -> int | None:
     target = _lexical_tokens(expected)
     observed: list[str] = []
+    observed_text: list[str] = []
+    normalized_target = _normalized_visible_text(expected)
     previous: _PositionedText | None = None
     for index in range(start, len(fragments)):
         fragment = fragments[index]
@@ -1365,13 +1457,88 @@ def _fragment_sequence_end(
             ):
                 return None
         observed.extend(_lexical_tokens(fragment.text))
+        observed_text.append(fragment.text)
         observed_tuple = tuple(observed)
-        if observed_tuple == target:
+        compact_text = _normalized_visible_text("".join(observed_text))
+        spaced_text = _normalized_visible_text(" ".join(observed_text))
+        if (
+            observed_tuple == target
+            or compact_text == normalized_target
+            or spaced_text == normalized_target
+        ):
             return index + 1
-        if observed_tuple != target[: len(observed_tuple)]:
+        if (
+            observed_tuple != target[: len(observed_tuple)]
+            and not normalized_target.startswith(compact_text)
+            and not normalized_target.startswith(spaced_text)
+        ):
             return None
         previous = fragment
     return None
+
+
+def _ordered_text_blocks_match(
+    blocks: list[str],
+    positioned: list[_PositionedText],
+    barriers: list[_VerticalBarrier],
+) -> bool:
+    cursor = 0
+    for block in blocks:
+        match = next(
+            (
+                (start, end)
+                for start in range(cursor, len(positioned))
+                if (end := _fragment_sequence_end(block, positioned, start, barriers))
+                is not None
+            ),
+            None,
+        )
+        if match is None:
+            return False
+        cursor = match[1]
+    return bool(blocks)
+
+
+def _positioned_reading_order(
+    fragments: list[_PositionedText],
+) -> list[_PositionedText]:
+    lines: list[list[_PositionedText]] = []
+    for fragment in sorted(
+        fragments, key=lambda item: (item.page, -item.top, item.x)
+    ):
+        matching_line = next(
+            (
+                line
+                for line in lines
+                if line[0].page == fragment.page
+                and max(
+                    max(item.bottom for item in line), fragment.bottom
+                )
+                - min(min(item.top for item in line), fragment.top)
+                <= max(
+                    3.0,
+                    0.35
+                    * max(
+                        fragment.font_size,
+                        *(item.font_size for item in line),
+                    ),
+                )
+            ),
+            None,
+        )
+        if matching_line is None:
+            lines.append([fragment])
+        else:
+            matching_line.append(fragment)
+    ordered_lines = sorted(
+        lines,
+        key=lambda line: (line[0].page, -max(item.top for item in line)),
+    )
+    return [
+        fragment
+        for line in ordered_lines
+        for fragment in sorted(line, key=lambda item: item.x)
+    ]
 
 
 def _table_rows_match(
@@ -1488,6 +1655,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         positioned, barriers, pdf_image_layouts, pdfium_unsafe = _pdfium_visible_layout(
             pdf_content
         )
+        reading_positioned = _positioned_reading_order(positioned)
         pdf_content_kinds = _pdf_content_kinds(reader)
         unsafe_text = unsafe_text or pdfium_unsafe
     except (BadZipFile, KeyError, ElementTree.ParseError, PdfReadError, OSError, RuntimeError, ValueError) as exc:
@@ -1502,17 +1670,17 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         count <= source_counts[token] + repeatable_counts[token] * page_repetitions
         for token, count in pdf_counts.items()
     )
-    document_tokens = _lexical_tokens(" ".join(document_fragments))
-    token_cursor = iter(pdf_tokens)
-    document_order_matches = all(any(candidate == token for candidate in token_cursor) for token in document_tokens)
+    document_order_matches = _ordered_text_blocks_match(
+        document_fragments, reading_positioned, barriers
+    )
 
     images_match = _ordered_image_signatures_match(word_images, pdf_images)
     image_layouts_match = _ordered_image_layouts_match(
-        word_image_layouts, pdf_image_layouts, positioned
+        word_image_layouts, pdf_image_layouts, reading_positioned
     )
-    tables_match = _table_rows_match(table_rows, positioned, barriers)
+    tables_match = _table_rows_match(table_rows, reading_positioned, barriers)
     text_sizes_match = _text_sizes_match(
-        word_text_expectations, positioned, barriers
+        word_text_expectations, reading_positioned, barriers
     )
     content_order_matches = (
         word_content_kinds[: len(pdf_content_kinds)] == pdf_content_kinds
