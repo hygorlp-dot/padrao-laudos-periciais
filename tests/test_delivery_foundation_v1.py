@@ -2018,6 +2018,34 @@ def test_fidelity_rejects_spatially_rearranged_isoluminant_colors() -> None:
         )
 
 
+def test_fidelity_rejects_spatial_color_swap_below_quantized_delta_limit() -> None:
+    gray = (128, 128, 128)
+    isoluminant_magenta = (174, 96, 175)
+
+    def image_bytes(*, swapped: bool) -> bytes:
+        image = Image.new("RGB", (32, 32))
+        for grid_y in range(8):
+            for grid_x in range(8):
+                use_magenta = (grid_x + grid_y) % 2 == int(swapped)
+                color = isoluminant_magenta if use_magenta else gray
+                for y in range(grid_y * 4, (grid_y + 1) * 4):
+                    for x in range(grid_x * 4, (grid_x + 1) * 4):
+                        image.putpixel((x, y), color)
+        output = BytesIO()
+        image.save(output, "JPEG", quality=100, subsampling=0)
+        return output.getvalue()
+
+    source = image_bytes(swapped=False)
+    rearranged = image_bytes(swapped=True)
+    word = _word_with_image_and_text("Synthetic", source)
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", rearranged, image_x=100),
+        )
+
+
 def test_image_fidelity_signature_preserves_legitimate_alpha_semantics() -> None:
     source = Image.new("RGBA", (32, 32), (220, 20, 20, 128))
     word_style = delivery_renderer._image_signature(source)
@@ -2035,6 +2063,35 @@ def test_image_fidelity_signature_preserves_legitimate_alpha_semantics() -> None
     assert not delivery_renderer._ordered_image_signatures_match(
         [word_style], [invisible_forgery]
     )
+
+
+def test_image_fidelity_ignores_rgb_hidden_beneath_zero_alpha() -> None:
+    source = Image.new("RGBA", (32, 32), (255, 0, 0, 0))
+    normalized = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
+    for image in (source, normalized):
+        for x in range(8, 24):
+            for y in range(8, 24):
+                image.putpixel((x, y), (0, 0, 255, 255))
+
+    assert delivery_renderer._ordered_image_signatures_match(
+        [delivery_renderer._image_signature(source)],
+        [delivery_renderer._image_signature(normalized)],
+    )
+
+
+def test_image_fidelity_preserves_legitimate_lossy_color_encoding() -> None:
+    source = Image.new("RGB", (64, 64))
+    for x in range(64):
+        for y in range(64):
+            source.putpixel((x, y), (x * 4, y * 4, (x + y) * 2))
+    encoded = BytesIO()
+    source.save(encoded, "JPEG", quality=85, subsampling=0)
+
+    with Image.open(BytesIO(encoded.getvalue())) as candidate:
+        assert delivery_renderer._ordered_image_signatures_match(
+            [delivery_renderer._image_signature(source)],
+            [delivery_renderer._image_signature(candidate)],
+        )
 
 
 def test_final_pdf_conversion_fails_closed_without_a_local_converter() -> None:
