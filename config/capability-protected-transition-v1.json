@@ -8,7 +8,12 @@
     {
       "path": "config/capability-protected-artifacts-v1.json",
       "base": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "e541297e2a06adc59ec0f402d3fce58a7b087cec"},
-      "candidate": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "9c7c7f52a17ecc43793a1d202754c012583bc495"}
+      "candidate": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "52607072c7d5c9b3f5b6cbf0693fbebf1be6352a"}
+    },
+    {
+      "path": "config/capability-exceptions-v1.json",
+      "base": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "ab58b8b07779ca384cc3ed6fe013e4b3f4a106ea"},
+      "candidate": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "476669e5055822c67995574bf11089ff046b7895"}
     },
     {
       "path": "scripts/quality/capability_gate_adapter.py",
@@ -20,7 +25,7 @@
     {
       "path": "tests/test_architecture_capability_exception_rebind_v1.py",
       "base": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "5b8122ddaeb0a03e0cd1ec2d6636437c14180ed0"},
-      "candidate": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "a329b2b5ce005c724e19b3961621578b61ab435e"}
+      "candidate": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "d0fbebc3cfb8c742376f41ac42dca311dbceed65"}
     }
   ]
 }
