@@ -56,8 +56,8 @@ jobs:
           CAPABILITY_PROTECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           CAPABILITY_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          $state = python -c "import os,sys; from pathlib import Path; from scripts.quality.capability_trust_anchor import _word_transition_scope_changed; state=_word_transition_scope_changed(Path(os.environ['CAPABILITY_CANDIDATE_ROOT']), os.environ['CAPABILITY_PROTECTED_BASE_SHA'], os.environ['CAPABILITY_EXPECTED_HEAD_SHA']); sys.exit(1) if state is None else print('true' if state else 'false')"
-          if ($LASTEXITCODE -ne 0) { throw 'Word transition scope could not be derived from the protected manifest' }
+          $state = python -c "import os,sys; from pathlib import Path; from scripts.quality.capability_trust_anchor import _word_render_contract_is_closed,_word_transition_scope_changed; root=Path(os.environ['CAPABILITY_CANDIDATE_ROOT']); candidate=os.environ['CAPABILITY_EXPECTED_HEAD_SHA']; state=_word_transition_scope_changed(root, os.environ['CAPABILITY_PROTECTED_BASE_SHA'], candidate); contract=True if state is not True else _word_render_contract_is_closed(root, candidate); sys.exit(1) if state is None or contract is not True else print('true' if state else 'false')"
+          if ($LASTEXITCODE -ne 0) { throw 'Word transition scope or product worker contract failed closed validation' }
           "CAPABILITY_WORD_SCOPE_CHANGED=$state" >> $env:GITHUB_ENV
       - name: Validate base-owned capability custody
         if: env.CAPABILITY_BASE_BOOTSTRAP_PRESENT != 'true' || env.CAPABILITY_WORD_SCOPE_CHANGED != 'true'
@@ -97,6 +97,7 @@ jobs:
             'scripts/quality/capability_trust_anchor.py',
             'scripts/backend_contract/infrastructure/office_pdf.py',
             'scripts/backend_contract/infrastructure/office_word_worker.py',
+            'tests/test_delivery_foundation_v1.py',
             'tests/test_office_pdf_renderer_v1.py',
             'tests/test_office_word_containment_v1.py',
             'tests/test_architecture_analyzer_v1.py',
@@ -144,6 +145,7 @@ jobs:
               'tests/test_architecture_analyzer_v1.py',
               'tests/test_architecture_capability_exception_rebind_v1.py',
               'tests/test_architecture_capability_trust_anchor_v1.py',
+              'tests/test_delivery_foundation_v1.py',
               'tests/test_office_pdf_renderer_v1.py',
               'tests/test_office_word_containment_v1.py',
               'tests/test_repository_safety_gate.py',
@@ -152,6 +154,8 @@ jobs:
           changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, candidate], cwd=root, text=True).splitlines())
           def identity(commit, path):
               output = subprocess.check_output(['git', 'ls-tree', commit, '--', path], cwd=root, text=True).strip()
+              if not output:
+                  return {'path': path, 'state': 'ABSENT'}
               metadata, listed = output.split('\t', 1)
               mode, object_type, blob = metadata.split()
               if listed != path or object_type != 'blob':
