@@ -260,7 +260,11 @@ def _word_runs(parts: tuple[tuple[str, int | None], ...]) -> bytes:
 
 
 def _word_with_default_paragraph_style(
-    text: str, half_points: int, *, character_style: bool = False
+    text: str,
+    half_points: int,
+    *,
+    character_style: bool = False,
+    ambiguous_default: bool = False,
 ) -> bytes:
     output = BytesIO()
     run_properties = (
@@ -273,6 +277,12 @@ def _word_with_default_paragraph_style(
         if character_style
         else ""
     )
+    foreign_namespace = ' xmlns:f="urn:synthetic:foreign"' if ambiguous_default else ""
+    default_attributes = (
+        'f:default="0" w:default="1"'
+        if ambiguous_default
+        else 'w:default="1"'
+    )
     with ZipFile(output, "w", ZIP_DEFLATED) as package:
         package.writestr(
             "word/document.xml",
@@ -282,10 +292,11 @@ def _word_with_default_paragraph_style(
         )
         package.writestr(
             "word/styles.xml",
-            '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+            f"{foreign_namespace}>"
             '<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="22"/></w:rPr>'
             "</w:rPrDefault></w:docDefaults>"
-            '<w:style w:type="paragraph" w:default="1" w:styleId="Normal">'
+            f'<w:style w:type="paragraph" {default_attributes} w:styleId="Normal">'
             f'<w:rPr><w:sz w:val="{half_points}"/></w:rPr>'
             f"</w:style>{character_style_xml}</w:styles>",
         )
@@ -318,6 +329,7 @@ def _word_with_image_and_text(
     image_height: float = 40,
     anchor_x: float | None = None,
     anchor_y: float | None = None,
+    text_runs: tuple[str, ...] | None = None,
 ) -> bytes:
     output = BytesIO()
     width_emu = round(image_width * 12_700)
@@ -347,12 +359,15 @@ def _word_with_image_and_text(
         if following_text is not None
         else ""
     )
+    preceding_runs = "".join(
+        f"<w:r><w:t>{item}</w:t></w:r>" for item in (text_runs or (text,))
+    )
     document = (
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
         'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
         'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
         'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-        f"<w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p>"
+        f"<w:body><w:p>{preceding_runs}</w:p>"
         f"<w:p><w:r><w:drawing>{drawing}</w:drawing></w:r></w:p>"
         f"{following}"
         "</w:body></w:document>"
@@ -422,6 +437,7 @@ def _image_pdf(
     image_dictionary_extra: bytes = b"",
     leading_commands: bytes = b"",
     trailing_commands: bytes = b"",
+    blend_mode: bytes | None = None,
 ) -> bytes:
     encoded = text.encode("ascii")
     transform = matrix or (image_width, 0, 0, image_height, image_x, image_y)
@@ -470,7 +486,9 @@ def _image_pdf(
         b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
         b"<< /Type /Page /Parent 5 0 R /MediaBox [0 0 595 842] /Resources "
         b"<< /Font << /F1 1 0 R >> /XObject << /Im1 2 0 R >> "
-        + f"/ExtGState << /GS0 << /Type /ExtGState /ca {alpha:g} /CA {alpha:g} >> >> ".encode("ascii")
+        + f"/ExtGState << /GS0 << /Type /ExtGState /ca {alpha:g} /CA {alpha:g} ".encode("ascii")
+        + (b"" if blend_mode is None else b"/BM " + blend_mode + b" ")
+        + b">> >> "
         + b">> /Contents 3 0 R >>",
         b"<< /Type /Pages /Count 1 /Kids [4 0 R] >>",
         b"<< /Type /Catalog /Pages 5 0 R >>",
@@ -487,7 +505,12 @@ def _image_pdf(
     return bytes(output)
 
 
-def _rgba_image_pdf(rgb: tuple[int, int, int], alpha: int) -> bytes:
+def _rgba_image_pdf(
+    rgb: tuple[int, int, int],
+    alpha: int,
+    *,
+    matte: tuple[float, float, float] | None = None,
+) -> bytes:
     rgb_data = zlib.compress(bytes(rgb) * 64)
     alpha_data = zlib.compress(bytes((alpha,)) * 64)
     stream = (
@@ -497,7 +520,15 @@ def _rgba_image_pdf(rgb: tuple[int, int, int], alpha: int) -> bytes:
     objects = (
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
         b"<< /Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceGray "
-        b"/BitsPerComponent 8 /Filter /FlateDecode /Length "
+        b"/BitsPerComponent 8 /Filter /FlateDecode "
+        + (
+            b""
+            if matte is None
+            else (
+                "/Matte [" + " ".join(f"{value:g}" for value in matte) + "] "
+            ).encode("ascii")
+        )
+        + b"/Length "
         + str(len(alpha_data)).encode("ascii")
         + b" >>\nstream\n"
         + alpha_data
@@ -1224,6 +1255,85 @@ def test_fidelity_applies_default_paragraph_style_font_size(
     )
 
 
+def test_fidelity_rejects_ambiguous_local_name_style_attributes() -> None:
+    word = _word_with_default_paragraph_style(
+        "Default-Style-223", 96, ambiguous_default=True
+    )
+
+    with pytest.raises(ValueError, match="fidelity cannot be verified"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _custom_content_pdf(
+                b"BT /F1 11 Tf 1 0 0 1 50 650 Tm (Default-Style-223) Tj ET"
+            ),
+        )
+
+
+def test_fidelity_rejects_anisotropic_text_scale_as_font_size_equivalence() -> None:
+    word = _word_with_default_paragraph_style("Default-Style-223", 96)
+    stretched = _custom_content_pdf(
+        b"BT /F1 11 Tf 1 0 0 4.36 50 600 Tm (Default-Style-223) Tj ET"
+    )
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(word, stretched)
+
+
+def test_fidelity_binds_authoritative_word_text_color() -> None:
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:body><w:p><w:r><w:rPr><w:sz w:val="20"/>'
+            '<w:color w:val="FF0000"/></w:rPr><w:t>Synthetic</w:t>'
+            "</w:r></w:p></w:body></w:document>",
+        )
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            output.getvalue(),
+            _positioned_text_pdf([[("Synthetic", 50, 700, 10, 0)]]),
+        )
+
+
+def test_fidelity_rejects_non_normal_text_blend_mode() -> None:
+    pdf = _custom_content_pdf(
+        b"/GS1 gs BT /F1 11 Tf 1 0 0 1 50 650 Tm (Synthetic) Tj ET",
+        extra_resources=(
+            b"/ExtGState << /GS1 << /Type /ExtGState /BM /Difference >> >>"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(_word_text("Synthetic"), pdf)
+
+
+def test_fidelity_binds_body_paragraphs_to_visual_reading_order() -> None:
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            "<w:body><w:p><w:r><w:t>First</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>Second</w:t></w:r></w:p></w:body></w:document>",
+        )
+    word = output.getvalue()
+    delivery_renderer._validate_pdf_fidelity(
+        word,
+        _positioned_text_pdf(
+            [[("First", 50, 700, 11, 0), ("Second", 50, 650, 11, 0)]]
+        ),
+    )
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _positioned_text_pdf(
+                [[("First", 50, 500, 11, 0), ("Second", 50, 700, 11, 0)]]
+            ),
+        )
+
+
 @pytest.mark.parametrize(
     ("parts", "stream"),
     (
@@ -1656,6 +1766,29 @@ def test_fidelity_binds_inline_image_to_the_exact_repeated_flow_occurrence() -> 
         delivery_renderer._validate_pdf_fidelity(word, relocated)
 
 
+def test_fidelity_requires_every_available_inline_flow_context() -> None:
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, "JPEG")
+    word = _word_with_image_and_text(
+        "Before",
+        image.getvalue(),
+        following_text="After",
+        text_runs=("Be", "fore"),
+    )
+    moved_above_preceding = _image_pdf(
+        "Before",
+        image.getvalue(),
+        image_x=100,
+        image_y=720,
+        text_y=700,
+        following_text="After",
+        following_text_y=650,
+    )
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(word, moved_above_preceding)
+
+
 def test_fidelity_rejects_distinct_inline_images_swapped_between_duplicate_flows() -> None:
     sources = [
         delivery_renderer._WordImageLayout(
@@ -1731,6 +1864,36 @@ def test_fidelity_rejects_double_premultiplied_transparent_image() -> None:
         delivery_renderer._validate_pdf_fidelity(
             word,
             _rgba_image_pdf((110, 10, 10), 128),
+        )
+
+
+def test_fidelity_rejects_nonblack_soft_mask_matte() -> None:
+    source = BytesIO()
+    Image.new("RGBA", (8, 8), (220, 20, 20, 64)).save(source, "PNG")
+    word = _word_with_image_and_text("Synthetic", source.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _rgba_image_pdf((220, 20, 20), 64, matte=(1, 1, 1)),
+        )
+
+
+def test_fidelity_rejects_non_normal_image_blend_mode() -> None:
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, "JPEG")
+    word = _word_with_image_and_text("Synthetic", image.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf(
+                "Synthetic",
+                image.getvalue(),
+                image_x=100,
+                leading_commands=b"1 0 0 rg 100 600 40 40 re f ",
+                blend_mode=b"/Difference",
+            ),
         )
 
 
