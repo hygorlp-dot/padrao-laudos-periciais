@@ -7,7 +7,7 @@
       "state": "PRESENT",
       "mode": "100644",
       "objectType": "blob",
-      "blobSha": "5ab038d0c764d3192d76303caf0b919600363b9e"
+      "blobSha": "f3badbaa2614b9f055d5c64168da90a8258688a2"
     },
     {
       "path": "config/capability-policy-v1.json",
@@ -70,7 +70,7 @@
       "state": "PRESENT",
       "mode": "100644",
       "objectType": "blob",
-      "blobSha": "4c6cc742538587dece061f99b6c63fc533dca9fc"
+      "blobSha": "bf7f0c6355d53d25bfe0860caa3bdc891e331cc5"
     },
     {
       "path": "scripts/quality/repository_inventory.py",

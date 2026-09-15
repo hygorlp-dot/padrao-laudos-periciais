@@ -22,15 +22,13 @@ CAPABILITY_REGISTRY_PATH = "config/capability-protected-artifacts-v1.json"
 CAPABILITY_TRANSITION_PATH = "config/capability-protected-transition-v1.json"
 ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
 CAPABILITY_GATE_ADAPTER_PATH = "scripts/quality/capability_gate_adapter.py"
-PROTECTED_BASE = "a8065073597b92c5cb116ac421c8a85d66fcacfb"
-ARCHITECTURE_PROTECTED_BASE = "a8065073597b92c5cb116ac421c8a85d66fcacfb"
+PROTECTED_BASE = "1c4b747fb380a79087ace5dd87f5c31be7ffd77a"
+ARCHITECTURE_PROTECTED_BASE = "1c4b747fb380a79087ace5dd87f5c31be7ffd77a"
 SOURCE_ANCHORS = {
-    "scripts/quality/architecture_analyzer.py": "62c916425a46d53aa009c81c724ece89034065a9",
-    "scripts/quality/capability_trust_anchor.py": "62c916425a46d53aa009c81c724ece89034065a9",
+    "scripts/quality/capability_trust_anchor.py": "32b71d4e5db584eee5bae305e817da803465bd09",
 }
 REVIEW_EVIDENCE = {
-    "scripts/quality/architecture_analyzer.py": "ISSUE_220_WORD_TRANSITION_ADAPTER_ARCHITECTURE",
-    "scripts/quality/capability_trust_anchor.py": "ISSUE_220_WORD_TRANSITION_ADAPTER_CAPABILITY",
+    "scripts/quality/capability_trust_anchor.py": "ISSUE_218_WORD_TRANSITION_ROUTING_CAPABILITY",
 }
 E1A_PROTECTED_WORKFLOWS = {
     ".github/workflows/architecture-protected.yml",
@@ -47,7 +45,6 @@ SUPPORT_ARTIFACTS = {
     "tests/test_repository_safety_gate.py",
 }
 ROTATED_EXCEPTION_PATHS = {
-    "scripts/quality/architecture_analyzer.py",
     "scripts/quality/capability_trust_anchor.py",
 }
 
@@ -99,14 +96,12 @@ def test_transition_manifests_introduce_no_wildcard_or_package_wide_authority():
         ".github/workflows/capability-protected.yml",
         CAPABILITY_REGISTRY_PATH,
         EXCEPTIONS_PATH,
-        "scripts/quality/architecture_analyzer.py",
         "scripts/quality/capability_trust_anchor.py",
     }
     assert architecture_paths == capability_paths - {EXCEPTIONS_PATH}
     assert support_paths == {
         EXCEPTIONS_PATH,
         CAPABILITY_TRANSITION_PATH,
-        "tests/test_repository_safety_gate.py",
     }
 
 
@@ -124,6 +119,95 @@ def test_capability_workflow_python_scope_admits_exception_transition_path():
     assert CAPABILITY_GATE_ADAPTER_PATH in workflow[start:end]
     for path in trust_anchor._SUPPORT_SCOPES["LOCAL_WORD_COM_CONTAINMENT_V1"]:
         assert path in workflow[start:end]
+
+    assert (
+        "if: env.CAPABILITY_BASE_BOOTSTRAP_PRESENT != 'true' || "
+        "env.CAPABILITY_WORD_SCOPE_CHANGED != 'true'"
+    ) in workflow
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("scripts/backend_contract/infrastructure/office_pdf.py", True),
+        ("tests/test_office_pdf_renderer_v1.py", True),
+        (CAPABILITY_GATE_ADAPTER_PATH, True),
+        ("scripts/backend_contract/delivery_foundation.py", False),
+        ("frontend/src/workspaces/DeliveryFoundationView.tsx", False),
+        (".github/workflows/architecture-protected.yml", False),
+        (".github/workflows/arbitrary.yml", False),
+    ],
+)
+def test_word_transition_routing_uses_exact_registered_scope(tmp_path, path, expected):
+    route = getattr(trust_anchor, "_word_transition_scope_changed", None)
+    assert callable(route)
+    repo, base = _future_base_clone(tmp_path)
+    changed = repo / path
+    changed.parent.mkdir(parents=True, exist_ok=True)
+    original = changed.read_text(encoding="utf-8") if changed.exists() else ""
+    changed.write_text(original + "\n# routing fixture\n", encoding="utf-8")
+    candidate = _child_commit(repo, f"routing fixture {path}")
+
+    assert route(repo, base, candidate) is expected
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "remove"),
+    [
+        ("scope", "UNKNOWN_SCOPE", False),
+        ("schemaVersion", "2.0.0", False),
+        ("protectedArtifacts", "INVALID", False),
+        ("protectedBaseSha", None, True),
+    ],
+)
+def test_word_transition_routing_fails_closed_for_invalid_manifest(
+    tmp_path, field, value, remove
+):
+    route = getattr(trust_anchor, "_word_transition_scope_changed", None)
+    assert callable(route)
+    repo, base = _future_base_clone(tmp_path)
+    transition = repo / CAPABILITY_TRANSITION_PATH
+    manifest = json.loads(transition.read_text(encoding="utf-8"))
+    if remove:
+        manifest.pop(field)
+    else:
+        manifest[field] = value
+    transition.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    candidate = _child_commit(repo, "invalid routing manifest")
+
+    assert route(repo, base, candidate) is None
+
+
+def test_word_transition_routing_fails_closed_for_transition_only_mutation(tmp_path):
+    route = getattr(trust_anchor, "_word_transition_scope_changed", None)
+    assert callable(route)
+    repo, base = _future_base_clone(tmp_path)
+    transition = repo / CAPABILITY_TRANSITION_PATH
+    manifest = json.loads(transition.read_text(encoding="utf-8"))
+    manifest["protectedBaseSha"] = "0" * 40
+    transition.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    candidate = _child_commit(repo, "transition-only mutation")
+
+    assert route(repo, base, candidate) is None
+
+
+def test_word_transition_routing_accepts_current_transition_with_word_change(tmp_path):
+    route = getattr(trust_anchor, "_word_transition_scope_changed", None)
+    assert callable(route)
+    repo, base = _future_base_clone(tmp_path)
+    changed = repo / "scripts/backend_contract/infrastructure/office_pdf.py"
+    changed.parent.mkdir(parents=True, exist_ok=True)
+    original = changed.read_text(encoding="utf-8") if changed.exists() else ""
+    changed.write_text(
+        original + "\n# Word fixture\n", encoding="utf-8"
+    )
+    transition = repo / CAPABILITY_TRANSITION_PATH
+    manifest = json.loads(transition.read_text(encoding="utf-8"))
+    manifest["protectedBaseSha"] = base
+    transition.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    candidate = _child_commit(repo, "current Word transition")
+
+    assert route(repo, base, candidate) is True
 
 
 def test_rebind_rotates_only_exact_judge_exception_identities():
@@ -165,12 +249,10 @@ def test_capability_registry_and_transition_bind_exact_exception_blob():
         ".github/workflows/capability-protected.yml",
         CAPABILITY_REGISTRY_PATH,
         EXCEPTIONS_PATH,
-        "scripts/quality/architecture_analyzer.py",
         "scripts/quality/capability_trust_anchor.py",
     }
     assert {row["path"] for row in transition["supportArtifacts"]} == {
         "tests/test_architecture_capability_exception_rebind_v1.py",
-        "tests/test_repository_safety_gate.py",
     }
 
 
@@ -183,7 +265,6 @@ def test_architecture_transition_binds_current_trust_anchor_rotation():
     assert set(artifact_rows) == {
         ".github/workflows/capability-protected.yml",
         CAPABILITY_REGISTRY_PATH,
-        "scripts/quality/architecture_analyzer.py",
         "scripts/quality/capability_trust_anchor.py",
     }
 
@@ -198,7 +279,6 @@ def test_architecture_transition_binds_current_trust_anchor_rotation():
     assert set(support_rows) == {
         CAPABILITY_TRANSITION_PATH,
         EXCEPTIONS_PATH,
-        "tests/test_repository_safety_gate.py",
     }
     for path, row in support_rows.items():
         assert _architecture_transition_identity(row, "base") == _identity_from_commit(

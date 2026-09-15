@@ -1,45 +1,35 @@
 {
   "schemaVersion": "3.0.0",
   "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "a8065073597b92c5cb116ac421c8a85d66fcacfb",
+  "protectedBaseSha": "1c4b747fb380a79087ace5dd87f5c31be7ffd77a",
   "artifacts": [
     {
       "path": ".github/workflows/capability-protected.yml",
-      "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "b1080f5b42130a9078e507116a74178958061b51",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "2f767c5b11b262c442023e3723bb9089cdca8898"
+      "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "2f767c5b11b262c442023e3723bb9089cdca8898",
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "55db8f6980f24d240dbc17d4a62c6a0fbdc62ce7"
     },
     {
       "path": "config/capability-protected-artifacts-v1.json",
-      "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "9c58a13f524d256da2e2a8a9f176c6628f0ec3d0",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "1dc01089f9566e2b8ffad54e23fbf7cc13e452ab"
-    },
-    {
-      "path": "scripts/quality/architecture_analyzer.py",
-      "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "6fb630a3a63643fbcc879619d4a3c6be18943e13",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "f61fcdf3a20af013d6730d29faf7d45511741fdd"
+      "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "1dc01089f9566e2b8ffad54e23fbf7cc13e452ab",
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "7cf4292b606b0f844356b6e6cd221b73382b5dfd"
     },
     {
       "path": "scripts/quality/capability_trust_anchor.py",
-      "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "12cf1dcc42d5105404ce6ded6f361e1ce44f1f13",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "4c6cc742538587dece061f99b6c63fc533dca9fc"
+      "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "4c6cc742538587dece061f99b6c63fc533dca9fc",
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "bf7f0c6355d53d25bfe0860caa3bdc891e331cc5"
     }
   ],
   "supportScope": "CAPABILITY_BOOTSTRAP_V1",
   "supportArtifacts": [
     {
       "path": "config/capability-exceptions-v1.json",
-      "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "4c5ff2cb5545be36076198c5e699e9a184c6c4ff",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "5ab038d0c764d3192d76303caf0b919600363b9e"
+      "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "5ab038d0c764d3192d76303caf0b919600363b9e",
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "f3badbaa2614b9f055d5c64168da90a8258688a2"
     },
     {
       "path": "config/capability-protected-transition-v1.json",
-      "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "7ad59402bb64cf68425a5c3d17958cbeba972497",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "b1e9d7ab707952c5ec6998b12ec164aeac2ffb47"
-    },
-    {
-      "path": "tests/test_repository_safety_gate.py",
-      "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "e2bf6b2854d7a0ac98f92bea6c6336765439ee31",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "8d3a4021fabcf5d22c9de64d296dbec6c42febde"
+      "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "b1e9d7ab707952c5ec6998b12ec164aeac2ffb47",
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "de64b8f74525dc84cf4d9cb0346c1169865c3f0a"
     }
   ]
 }
