@@ -98,6 +98,15 @@ def test_transition_manifests_introduce_no_wildcard_or_package_wide_authority():
     assert support_paths == set()
 
 
+def test_capability_workflow_python_scope_admits_exception_transition_path():
+    workflow = (ROOT / ".github/workflows/capability-protected.yml").read_text(
+        encoding="utf-8"
+    )
+    start = workflow.index("allowed_paths = {")
+    end = workflow.index("\n          }", start)
+    assert EXCEPTIONS_PATH in workflow[start:end]
+
+
 def test_rebind_rotates_only_exact_judge_exception_identities():
     base_rows = _git("show", f"{PROTECTED_BASE}:{EXCEPTIONS_PATH}")
     base = json.loads(base_rows)

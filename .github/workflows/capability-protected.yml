@@ -115,6 +115,7 @@ jobs:
           allowed_paths = {
               '.github/workflows/capability-protected.yml',
               'config/architecture-protected-transition-v1.json',
+              'config/capability-exceptions-v1.json',
               'config/capability-protected-artifacts-v1.json',
               'config/capability-protected-transition-v1.json',
               'scripts/quality/architecture_analyzer.py',
