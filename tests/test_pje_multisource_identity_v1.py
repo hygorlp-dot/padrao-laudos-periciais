@@ -14,13 +14,16 @@ from __future__ import annotations
 
 import json
 import os
+from threading import Event, Thread
+from time import monotonic
+from types import SimpleNamespace
 
 import pytest
 
 from scripts.planejamento_pericial.app_composition import build_pericial_local_api
 from tests.test_document_intake_v1 import provision_private_root
 from tests.test_final_closure_r7 import pdf_sintetico
-from tests.test_local_api_v1 import TOKEN, http_request
+from tests.test_local_api_v1 import TOKEN, http_request, services
 
 
 WINDOWS_MUTABLE_RECOVERY = pytest.mark.skipif(
@@ -33,6 +36,7 @@ def _request(runtime, method, path, *, value=None, body=None, headers=None):
     status, _headers, raw = http_request(
         runtime.server, method, path, value=value, raw_body=body,
         headers={"X-Local-API-Token": TOKEN, **(headers or {})},
+        timeout=30.0,
     )
     return status, json.loads(raw) if raw else None
 
@@ -243,6 +247,53 @@ def test_S05_identity_is_derived_from_the_source_not_from_its_position(tmp_path)
                 )
     finally:
         runtime.close()
+
+
+def test_helper_declared_deadline_allows_valid_slow_server_completion():
+    """RED before the fix: the helper must use the canonical 30s bound."""
+    from scripts.backend_contract.local_api.server import LocalApiServer, LocalServerConfig
+    from scripts.backend_contract.local_api.transport import LocalApi
+
+    entered = Event()
+    release = Event()
+    completed = Event()
+
+    class _ValidSlowListWorkspaces:
+        def execute(self):
+            entered.set()
+            release.wait()
+            completed.set()
+            return ()
+
+    server = LocalApiServer(
+        LocalApi(services(list_workspaces=_ValidSlowListWorkspaces()), token=TOKEN),
+        LocalServerConfig(port=0),
+    )
+    server.start()
+    outcome: dict[str, object] = {}
+    started = monotonic()
+
+    def invoke():
+        try:
+            outcome["result"] = _request(SimpleNamespace(server=server), "GET", "/v1/workspaces")
+        except BaseException as exc:  # pragma: no cover - expected RED path
+            outcome["error"] = exc
+
+    worker = Thread(target=invoke)
+    worker.start()
+    try:
+        assert entered.wait(timeout=2)
+        assert not worker.join(timeout=5.2)
+        release.set()
+        worker.join(timeout=2)
+        assert completed.wait(timeout=2)
+        assert "error" not in outcome
+        assert outcome["result"][0] == 200
+        assert 5 < monotonic() - started < 30
+    finally:
+        release.set()
+        worker.join(timeout=2)
+        server.close()
 
 
 @WINDOWS_MUTABLE_RECOVERY
