@@ -227,10 +227,16 @@ def _image_signature(
         gray = resized.convert("L").resize((16, 16))
         pixels = tuple(gray.get_flattened_data())
         mean = sum(pixels) / len(pixels)
+        color_grid = tuple(
+            tuple(channel // 16 for channel in pixel)
+            for pixel in resized.resize((8, 8)).get_flattened_data()
+        )
+
         return (
             tuple(round(value, 1) for value in statistics.mean),
             tuple(round(value, 1) for value in statistics.stddev),
             tuple(value >= mean for value in pixels),
+            color_grid,
         )
 
     raw_signature = visual_signature(rgb)
@@ -249,15 +255,20 @@ def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple
             all(abs(a - b) <= 12 for a, b in zip(first[0], second[0]))
             and all(abs(a - b) <= 12 for a, b in zip(first[1], second[1]))
             and sum(a != b for a, b in zip(first[2], second[2])) <= 16
+            and sum(
+                max(abs(a - b) for a, b in zip(source_pixel, candidate_pixel)) > 2
+                for source_pixel, candidate_pixel in zip(first[3], second[3])
+            )
+            <= 8
         )
 
     def matches(source: tuple, candidate: tuple) -> bool:
         return (
             abs(source[0] - candidate[0]) <= 0.05
-            and abs(source[4] - candidate[4]) <= 8
             and abs(source[5] - candidate[5]) <= 8
-            and sum(a != b for a, b in zip(source[6], candidate[6])) <= 16
-            and visual_matches(source[1:4], candidate[1:4])
+            and abs(source[6] - candidate[6]) <= 8
+            and sum(a != b for a, b in zip(source[7], candidate[7])) <= 16
+            and visual_matches(source[1:5], candidate[1:5])
         )
 
     return len(sources) == len(candidates) and all(
@@ -421,22 +432,31 @@ def _ordered_word_image_layouts(
             if kind != "image" or not isinstance(value, ElementTree.Element):
                 continue
             image_node = value
-            preceding_entry = next(
-                (item for item in reversed(flow[:index]) if item[0] == "text"),
+            preceding_index = next(
+                (
+                    candidate_index
+                    for candidate_index in range(index - 1, -1, -1)
+                    if flow[candidate_index][0] == "text"
+                ),
                 None,
             )
-            following_entry = next(
-                (item for item in flow[index + 1 :] if item[0] == "text"),
+            following_index = next(
+                (
+                    candidate_index
+                    for candidate_index in range(index + 1, len(flow))
+                    if flow[candidate_index][0] == "text"
+                ),
                 None,
             )
+            preceding_entry = flow[preceding_index] if preceding_index is not None else None
+            following_entry = flow[following_index] if following_index is not None else None
             preceding = str(preceding_entry[1]).strip() if preceding_entry else None
             following = str(following_entry[1]).strip() if following_entry else None
 
-            def occurrence(entry: tuple[str, str | ElementTree.Element] | None) -> int | None:
-                if entry is None:
+            def occurrence(node_index: int | None) -> int | None:
+                if node_index is None:
                     return None
-                node_index = flow.index(entry)
-                expected = str(entry[1])
+                expected = str(flow[node_index][1])
                 normalized = _normalized_visible_text(expected)
                 return sum(
                     1
@@ -452,8 +472,8 @@ def _ordered_word_image_layouts(
                         layout,
                         preceding_text=preceding,
                         following_text=following,
-                        preceding_occurrence=occurrence(preceding_entry),
-                        following_occurrence=occurrence(following_entry),
+                        preceding_occurrence=occurrence(preceding_index),
+                        following_occurrence=occurrence(following_index),
                     )
                     if layout is not None
                     else None

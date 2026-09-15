@@ -1821,6 +1821,40 @@ def test_fidelity_rejects_distinct_inline_images_swapped_between_duplicate_flows
     )
 
 
+def test_word_image_flow_occurrences_preserve_equal_tuple_identity() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        """<w:document
+        xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+        xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
+        <w:body>
+          <w:p><w:r><w:t>Before-223</w:t></w:r></w:p>
+          <w:p><w:r><w:drawing><wp:inline>
+            <wp:extent cx="508000" cy="508000"/>
+            <a:graphic><a:graphicData><a:blip/></a:graphicData></a:graphic>
+          </wp:inline></w:drawing></w:r></w:p>
+          <w:p><w:r><w:t>After-223</w:t></w:r></w:p>
+          <w:p><w:r><w:t>Before-223</w:t></w:r></w:p>
+          <w:p><w:r><w:drawing><wp:inline>
+            <wp:extent cx="508000" cy="508000"/>
+            <a:graphic><a:graphicData><a:blip/></a:graphicData></a:graphic>
+          </wp:inline></w:drawing></w:r></w:p>
+          <w:p><w:r><w:t>After-223</w:t></w:r></w:p>
+        </w:body>
+        </w:document>"""
+    )
+
+    layouts = delivery_renderer._ordered_word_image_layouts(
+        {"word/document.xml": document}
+    )
+
+    assert [
+        (layout.preceding_occurrence, layout.following_occurrence)
+        for layout in layouts
+        if layout is not None
+    ] == [(0, 0), (1, 1)]
+
+
 def test_fidelity_rejects_image_hidden_by_intrinsic_color_key_mask() -> None:
     image = BytesIO()
     Image.new("RGB", (8, 8), "red").save(image, "JPEG")
@@ -1951,6 +1985,37 @@ def test_image_fidelity_signature_distinguishes_uniform_opposites() -> None:
         assert delivery_renderer._ordered_word_image_signatures(package, {"word/document.xml": root}) == [
             white_signature, black_signature,
         ]
+
+
+def test_fidelity_rejects_spatially_rearranged_isoluminant_colors() -> None:
+    red = (255, 0, 0)
+    isoluminant_green = (0, 130, 0)
+
+    def image_bytes(*, swapped: bool, output_format: str) -> bytes:
+        image = Image.new("RGB", (32, 32))
+        for x in range(32):
+            for y in range(32):
+                if swapped:
+                    color = isoluminant_green if x < 16 else red
+                else:
+                    color = red if x < 16 else isoluminant_green
+                image.putpixel((x, y), color)
+        output = BytesIO()
+        if output_format == "JPEG":
+            image.save(output, output_format, quality=100, subsampling=0)
+        else:
+            image.save(output, output_format)
+        return output.getvalue()
+
+    source = image_bytes(swapped=False, output_format="PNG")
+    rearranged = image_bytes(swapped=True, output_format="JPEG")
+    word = _word_with_image_and_text("Synthetic", source)
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", rearranged, image_x=100),
+        )
 
 
 def test_image_fidelity_signature_preserves_legitimate_alpha_semantics() -> None:
