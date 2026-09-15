@@ -296,7 +296,7 @@ def _remove_render_tree(
     pause: Callable[[float], object] = time.sleep,
 ) -> None:
     """Remove one exact render tree within a bounded transient-lock window."""
-    for name in (
+    sensitive_names = (
         "source.docx",
         "source.docm",
         "output.partial.pdf",
@@ -304,16 +304,22 @@ def _remove_render_tree(
         "result.json",
         "status.json",
         "bootstrap.docx",
-    ):
-        (root / name).unlink(missing_ok=True)
+    )
     deadline = clock() + 5.0
     while root.exists():
+        locked: PermissionError | None = None
+        for name in sensitive_names:
+            try:
+                (root / name).unlink(missing_ok=True)
+            except PermissionError as exc:
+                locked = exc
         try:
             shutil.rmtree(root)
             return
-        except PermissionError:
+        except PermissionError as exc:
+            locked = locked or exc
             if clock() >= deadline:
-                raise
+                raise locked
             pause(0.05)
 
 
