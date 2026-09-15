@@ -158,10 +158,11 @@ def _synthetic_word_package(
     document_body: str = "<w:p><w:r><w:t>Synthetic</w:t></w:r></w:p>",
     relationships: str | None = None,
     extra_parts: dict[str, bytes] | None = None,
+    word_namespace: str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
 ) -> bytes:
     output = BytesIO()
     document = (
-        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        f'<w:document xmlns:w="{word_namespace}" '
         'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
         f"<w:body>{document_body}</w:body></w:document>"
     )
@@ -352,6 +353,70 @@ def test_word_worker_rejects_internal_altchunk_before_process_launch(
     calls: list[tuple] = []
 
     with pytest.raises(ValueError, match="active Word content"):
+        _render_job(
+            tmp_path,
+            word_launcher=lambda root: _word_launcher(root, calls),
+            com_binder=_com_binder(calls),
+        )
+
+    assert calls == []
+
+
+def test_word_worker_rejects_strict_ooxml_external_relationship_before_launch(
+    tmp_path: Path,
+) -> None:
+    relationships = (
+        '<Relationships xmlns="http://purl.oclc.org/ooxml/package/relationships">'
+        '<Relationship Id="rIdStrict" '
+        'Type="http://purl.oclc.org/ooxml/officeDocument/relationships/attachedTemplate" '
+        'Target="http://127.0.0.1:9/template.dotm" TargetMode="External"/>'
+        "</Relationships>"
+    )
+    _write_worker_request(
+        tmp_path,
+        _synthetic_word_package(relationships=relationships),
+    )
+    calls: list[tuple] = []
+
+    with pytest.raises(ValueError, match="active Word content"):
+        _render_job(
+            tmp_path,
+            word_launcher=lambda root: _word_launcher(root, calls),
+            com_binder=_com_binder(calls),
+        )
+
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "document_body",
+    (
+        '<w:altChunk r:id="rIdChunk"/>',
+        '<w:p><w:fldSimple w:instr="LINK remote.example value"/></w:p>',
+    ),
+    ids=("altchunk", "field"),
+)
+def test_word_worker_rejects_strict_wordprocessing_active_content_before_launch(
+    tmp_path: Path, document_body: str
+) -> None:
+    relationships = (
+        '<Relationships xmlns="http://purl.oclc.org/ooxml/package/relationships">'
+        '<Relationship Id="rIdChunk" '
+        'Type="http://purl.oclc.org/ooxml/officeDocument/relationships/aFChunk" '
+        'Target="chunk.xml"/>'
+        "</Relationships>"
+    )
+    _write_worker_request(
+        tmp_path,
+        _synthetic_word_package(
+            document_body=document_body,
+            relationships=relationships,
+            word_namespace="http://purl.oclc.org/ooxml/wordprocessingml/main",
+        ),
+    )
+    calls: list[tuple] = []
+
+    with pytest.raises(ValueError, match="active Word (?:content|field)"):
         _render_job(
             tmp_path,
             word_launcher=lambda root: _word_launcher(root, calls),

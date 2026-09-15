@@ -36,9 +36,6 @@ _STATUS_PHASES = (
     "WORKER_EXIT",
 )
 _STATUS_INDEX = {phase: index for index, phase in enumerate(_STATUS_PHASES, 1)}
-_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
-_REL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
-_CT = "{http://schemas.openxmlformats.org/package/2006/content-types}"
 _MAX_PACKAGE_PARTS = 4_096
 _MAX_PACKAGE_BYTES = 256 * 1024 * 1024
 _MAX_PART_BYTES = 64 * 1024 * 1024
@@ -63,6 +60,19 @@ _ACQUIRING_RELATIONSHIP_TYPES = frozenset(
 _ACQUIRING_WORD_ELEMENTS = frozenset({"altChunk", "control", "object", "subDoc"})
 _OPAQUE_ACTIVE_PART_PREFIXES = ("word/activex/", "word/embeddings/")
 _IMPORTABLE_PART_SUFFIXES = (".htm", ".html", ".mht", ".mhtml", ".rtf")
+
+
+def _xml_local_name(value: object) -> str:
+    return value.rsplit("}", 1)[-1] if isinstance(value, str) else ""
+
+
+def _xml_attribute(node: ElementTree.Element, name: str) -> str | None:
+    values = [
+        value
+        for key, value in node.attrib.items()
+        if _xml_local_name(key) == name
+    ]
+    return values[0] if len(values) == 1 else None
 
 
 @dataclass(slots=True)
@@ -427,9 +437,10 @@ def _validate_word_source(source: Path, source_format: str) -> None:
 
             content_types = ElementTree.fromstring(package.read("[Content_Types].xml"))
             main_types = {
-                item.attrib.get("ContentType", "")
-                for item in content_types.iter(f"{_CT}Override")
-                if item.attrib.get("PartName") == "/word/document.xml"
+                _xml_attribute(item, "ContentType")
+                for item in content_types.iter()
+                if _xml_local_name(item.tag) == "Override"
+                and _xml_attribute(item, "PartName") == "/word/document.xml"
             }
             expected_type = (
                 "application/vnd.ms-word.document.macroEnabled.main+xml"
@@ -442,15 +453,20 @@ def _validate_word_source(source: Path, source_format: str) -> None:
             for name in names:
                 if name.endswith(".rels"):
                     relationships = ElementTree.fromstring(package.read(name))
-                    for relationship in relationships.iter(f"{_REL}Relationship"):
-                        target = relationship.attrib.get("Target", "").strip()
-                        relationship_type = (
-                            relationship.attrib.get("Type", "").rsplit("/", 1)[-1].casefold()
-                        )
+                    for relationship in relationships.iter():
+                        if _xml_local_name(relationship.tag) != "Relationship":
+                            continue
+                        target_value = _xml_attribute(relationship, "Target")
+                        type_value = _xml_attribute(relationship, "Type")
+                        mode_value = _xml_attribute(relationship, "TargetMode")
+                        if target_value is None or type_value is None:
+                            raise ValueError("invalid Word relationship")
+                        target = target_value.strip()
+                        relationship_type = type_value.rsplit("/", 1)[-1].casefold()
                         if relationship_type in _ACQUIRING_RELATIONSHIP_TYPES:
                             raise ValueError("unsupported active Word content")
                         if (
-                            relationship.attrib.get("TargetMode", "").casefold() == "external"
+                            (mode_value or "").casefold() == "external"
                             or target.startswith(("\\\\", "//"))
                             or re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE)
                         ):
@@ -459,18 +475,23 @@ def _validate_word_source(source: Path, source_format: str) -> None:
                     continue
                 root = ElementTree.fromstring(package.read(name))
                 if any(
-                    node.tag in {f"{_W}{element}" for element in _ACQUIRING_WORD_ELEMENTS}
+                    _xml_local_name(node.tag) in _ACQUIRING_WORD_ELEMENTS
                     for node in root.iter()
                 ):
                     raise ValueError("unsupported active Word content")
                 instructions = [
-                    node.attrib.get(f"{_W}instr", "")
-                    for node in root.iter(f"{_W}fldSimple")
+                    _xml_attribute(node, "instr") or ""
+                    for node in root.iter()
+                    if _xml_local_name(node.tag) == "fldSimple"
                 ]
-                for paragraph in root.iter(f"{_W}p"):
+                for paragraph in (
+                    node for node in root.iter() if _xml_local_name(node.tag) == "p"
+                ):
                     instructions.append(
                         "".join(
-                            node.text or "" for node in paragraph.iter(f"{_W}instrText")
+                            node.text or ""
+                            for node in paragraph.iter()
+                            if _xml_local_name(node.tag) == "instrText"
                         )
                     )
                 for value in instructions:
