@@ -216,7 +216,17 @@ def _image_signature(
             ]
         )
         rgba = straight
-    rgb = rgba.convert("RGB")
+    rgb = Image.new("RGB", rgba.size)
+    rgb.putdata(
+        [
+            (
+                round(red * alpha / 255),
+                round(green * alpha / 255),
+                round(blue * alpha / 255),
+            )
+            for red, green, blue, alpha in rgba.get_flattened_data()
+        ]
+    )
     alpha = rgba.getchannel("A").resize((16, 16))
     alpha_pixels = tuple(alpha.get_flattened_data())
     alpha_mean = sum(alpha_pixels) / len(alpha_pixels)
@@ -227,10 +237,7 @@ def _image_signature(
         gray = resized.convert("L").resize((16, 16))
         pixels = tuple(gray.get_flattened_data())
         mean = sum(pixels) / len(pixels)
-        color_grid = tuple(
-            tuple(channel // 16 for channel in pixel)
-            for pixel in resized.resize((8, 8)).get_flattened_data()
-        )
+        color_grid = tuple(resized.resize((8, 8)).get_flattened_data())
 
         return (
             tuple(round(value, 1) for value in statistics.mean),
@@ -251,15 +258,18 @@ def _image_signature(
 
 def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple]) -> bool:
     def visual_matches(first: tuple, second: tuple) -> bool:
+        color_deltas = [
+            tuple(abs(a - b) for a, b in zip(source_pixel, candidate_pixel))
+            for source_pixel, candidate_pixel in zip(first[3], second[3])
+        ]
         return (
             all(abs(a - b) <= 12 for a, b in zip(first[0], second[0]))
             and all(abs(a - b) <= 12 for a, b in zip(first[1], second[1]))
             and sum(a != b for a, b in zip(first[2], second[2])) <= 16
-            and sum(
-                max(abs(a - b) for a, b in zip(source_pixel, candidate_pixel)) > 2
-                for source_pixel, candidate_pixel in zip(first[3], second[3])
-            )
+            and sum(sum(pixel) for pixel in color_deltas)
+            / (len(color_deltas) * 3)
             <= 8
+            and sum(max(pixel) > 24 for pixel in color_deltas) <= 8
         )
 
     def matches(source: tuple, candidate: tuple) -> bool:
