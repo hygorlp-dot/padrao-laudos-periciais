@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 from hashlib import sha256
 from io import BytesIO
 import posixpath
@@ -225,6 +226,112 @@ def _ordered_pdf_image_signatures(page: object, reader: PdfReader) -> list[tuple
     return ordered
 
 
+@dataclass(frozen=True, slots=True)
+class _PositionedText:
+    page: int
+    text: str
+    x: float
+    y: float
+    font_size: float
+
+
+def _has_nonvisible_text(page: object, reader: PdfReader) -> bool:
+    render_mode = 0
+    stack: list[int] = []
+    text_operators = {b"Tj", b"TJ", b"'", b'"'}
+    for operands, operator in ContentStream(page.get_contents(), reader).operations:
+        if operator == b"q":
+            stack.append(render_mode)
+        elif operator == b"Q":
+            render_mode = stack.pop() if stack else 0
+        elif operator == b"Tr" and operands:
+            render_mode = int(operands[0])
+        elif operator in text_operators and render_mode in {3, 7}:
+            return True
+    return False
+
+
+def _text_show_has_content(operator: bytes, operands: list[object]) -> bool:
+    if not operands:
+        return False
+    values: object = operands[0]
+    if operator == b'"' and len(operands) >= 3:
+        values = operands[2]
+    if operator == b"TJ" and isinstance(values, (list, tuple)):
+        return any(
+            isinstance(value, (str, bytes)) and bool(value)
+            for value in values
+        )
+    return isinstance(values, (str, bytes)) and bool(values)
+
+
+def _fragment_sequence_end(
+    expected: str,
+    fragments: list[_PositionedText],
+    start: int,
+) -> int | None:
+    target = _lexical_tokens(expected)
+    observed: list[str] = []
+    previous: _PositionedText | None = None
+    for index in range(start, len(fragments)):
+        fragment = fragments[index]
+        if previous is not None:
+            line_tolerance = max(3.0, 0.35 * max(previous.font_size, fragment.font_size))
+            estimated_end = previous.x + len(previous.text) * previous.font_size * 0.6
+            horizontal_tolerance = max(18.0, 1.5 * max(previous.font_size, fragment.font_size))
+            if (
+                fragment.page != previous.page
+                or abs(fragment.y - previous.y) > line_tolerance
+                or fragment.x < previous.x
+                or fragment.x > estimated_end + horizontal_tolerance
+            ):
+                return None
+        observed.extend(_lexical_tokens(fragment.text))
+        observed_tuple = tuple(observed)
+        if observed_tuple == target:
+            return index + 1
+        if observed_tuple != target[: len(observed_tuple)]:
+            return None
+        previous = fragment
+    return None
+
+
+def _table_rows_match(
+    rows: list[tuple[str, ...]], positioned: list[_PositionedText]
+) -> bool:
+    for row in rows:
+        row_matches = False
+        for anchor in positioned:
+            line_tolerance = max(3.0, 0.35 * anchor.font_size)
+            line = sorted(
+                (
+                    fragment
+                    for fragment in positioned
+                    if fragment.page == anchor.page
+                    and abs(fragment.y - anchor.y) <= line_tolerance
+                ),
+                key=lambda fragment: fragment.x,
+            )
+            cursor = 0
+            matched = True
+            for cell in row:
+                end = None
+                for start in range(cursor, len(line)):
+                    end = _fragment_sequence_end(cell, line, start)
+                    if end is not None:
+                        break
+                if end is None:
+                    matched = False
+                    break
+                cursor = end
+            if matched:
+                row_matches = True
+                break
+        if not row_matches:
+            return False
+    return True
+
+
 def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     """Reject converter output that is not observably derived from the bound Word."""
     try:
@@ -255,26 +362,103 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
             word_images = _ordered_word_image_signatures(package, xml_roots)
         reader = PdfReader(BytesIO(pdf_content), strict=True)
         extracted_pages: list[str] = []
-        positioned: list[tuple[int, str, float, float]] = []
+        positioned: list[_PositionedText] = []
+        unsafe_text = False
         pdf_images: list[tuple[float, tuple[float, ...], tuple[float, ...], tuple[bool, ...]]] = []
         for page_number, page in enumerate(reader.pages):
-            def visitor(text: str, _cm: object, tm: list[float], _font: object, _size: float) -> None:
+            left = float(page.mediabox.left)
+            bottom = float(page.mediabox.bottom)
+            right = float(page.mediabox.right)
+            top = float(page.mediabox.top)
+            if _has_nonvisible_text(page, reader):
+                unsafe_text = True
+
+            operator_positions: list[tuple[float, float, float]] = []
+            graphics_stack: list[tuple[float, int]] = []
+            current_size = 12.0
+            current_render_mode = 0
+
+            def operand_visitor(
+                operator: bytes, operands: list[object], cm: list[float], tm: list[float]
+            ) -> None:
+                nonlocal current_size, current_render_mode, unsafe_text
+                if operator == b"q":
+                    graphics_stack.append((current_size, current_render_mode))
+                elif operator == b"Q":
+                    if graphics_stack:
+                        current_size, current_render_mode = graphics_stack.pop()
+                elif operator == b"Tf" and len(operands) >= 2:
+                    current_size = float(operands[1])
+                elif operator == b"Tr" and operands:
+                    current_render_mode = int(operands[0])
+                elif operator in {b"Tj", b"TJ", b"'", b'"'} and _text_show_has_content(
+                    operator, operands
+                ):
+                    x = float(tm[4]) * float(cm[0]) + float(tm[5]) * float(cm[2]) + float(cm[4])
+                    y = float(tm[4]) * float(cm[1]) + float(tm[5]) * float(cm[3]) + float(cm[5])
+                    scale = max(
+                        (float(cm[0]) ** 2 + float(cm[1]) ** 2) ** 0.5,
+                        (float(cm[2]) ** 2 + float(cm[3]) ** 2) ** 0.5,
+                    )
+                    effective_size = abs(current_size) * scale
+                    if (
+                        current_render_mode in {3, 7}
+                        or effective_size < 0.5
+                        or x < left - 1.0
+                        or x > right + 1.0
+                        or y < bottom - 1.0
+                        or y > top + 1.0
+                    ):
+                        unsafe_text = True
+                    operator_positions.append((x, y, effective_size))
+
+            page_positioned: list[_PositionedText] = []
+            def visitor(text: str, cm: list[float], tm: list[float], _font: object, size: float) -> None:
+                nonlocal unsafe_text
                 normalized = _normalized_visible_text(text)
                 if normalized:
-                    positioned.append((page_number, normalized, float(tm[4]), float(tm[5])))
-            extracted_pages.append(page.extract_text(visitor_text=visitor) or "")
+                    x = float(tm[4]) * float(cm[0]) + float(tm[5]) * float(cm[2]) + float(cm[4])
+                    y = float(tm[4]) * float(cm[1]) + float(tm[5]) * float(cm[3]) + float(cm[5])
+                    scale = max(
+                        (float(cm[0]) ** 2 + float(cm[1]) ** 2) ** 0.5,
+                        (float(cm[2]) ** 2 + float(cm[3]) ** 2) ** 0.5,
+                    )
+                    effective_size = abs(float(size)) * scale
+                    if (
+                        effective_size < 0.5
+                        or x < left - 1.0
+                        or x > right + 1.0
+                        or y < bottom - 1.0
+                        or y > top + 1.0
+                    ):
+                        unsafe_text = True
+                    page_positioned.append(
+                        _PositionedText(page_number, normalized, x, y, effective_size)
+                    )
+            extracted_pages.append(
+                page.extract_text(
+                    visitor_operand_before=operand_visitor,
+                    visitor_text=visitor,
+                )
+                or ""
+            )
+            if len(operator_positions) == len(page_positioned):
+                page_positioned = [
+                    _PositionedText(page_number, item.text, x, y, size)
+                    for item, (x, y, size) in zip(page_positioned, operator_positions)
+                ]
+            positioned.extend(page_positioned)
             pdf_images.extend(_ordered_pdf_image_signatures(page, reader))
         pdf_text = _normalized_visible_text("\n".join(extracted_pages))
     except (BadZipFile, KeyError, ElementTree.ParseError, PdfReadError, OSError, ValueError) as exc:
         raise ValueError("final PDF fidelity cannot be verified") from exc
-    required = {_normalized_visible_text(item) for item in word_fragments if _normalized_visible_text(item)}
     source_tokens = _lexical_tokens(" ".join(word_fragments))
     pdf_tokens = _lexical_tokens(pdf_text)
     source_counts = Counter(source_tokens)
     pdf_counts = Counter(pdf_tokens)
     repeatable_counts = Counter(_lexical_tokens(" ".join(repeatable_fragments)))
     page_repetitions = max(len(reader.pages) - 1, 0)
-    token_counts_match = all(
+    token_counts_match = all(pdf_counts[token] >= count for token, count in source_counts.items()) and all(
         count <= source_counts[token] + repeatable_counts[token] * page_repetitions
         for token, count in pdf_counts.items()
     )
@@ -283,24 +467,10 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     document_order_matches = all(any(candidate == token for candidate in token_cursor) for token in document_tokens)
 
     images_match = _ordered_image_signatures_match(word_images, pdf_images)
-    tables_match = all(
-        any(
-            all(
-                any(
-                    candidate_index != anchor_index and cell in text and page == anchor_page
-                    and x > anchor_x and abs(y - anchor_y) <= 3
-                    for candidate_index, (page, text, x, y) in enumerate(positioned)
-                )
-                for cell in row[1:]
-            )
-            for anchor_index, (anchor_page, anchor_text, anchor_x, anchor_y) in enumerate(positioned)
-            if row[0] in anchor_text
-        )
-        for row in table_rows
-    )
+    tables_match = _table_rows_match(table_rows, positioned)
     if (
-        not required
-        or any(item not in pdf_text for item in required)
+        not source_tokens
+        or unsafe_text
         or not token_counts_match
         or not document_order_matches
         or not images_match

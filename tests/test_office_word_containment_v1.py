@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 import json
 from pathlib import Path
+import sys
 import types
 
 import pytest
 
+from scripts.backend_contract.infrastructure import office_pdf, office_word_worker
 from scripts.backend_contract.infrastructure.office_pdf import (
     OwnedProcessIdentity,
     WordRenderDeadlines,
@@ -79,10 +82,10 @@ def test_each_word_phase_timeout_is_bounded_and_terminates_only_owned_job(
 ) -> None:
     worker = _FakeOwnedWorker(_identity())
     if phase != "WORKER_START":
-        (tmp_path / "status.json").write_text(
-            json.dumps({"schemaVersion": "1.0.0", "state": "RUNNING", "phase": phase}),
-            encoding="utf-8",
-        )
+        for published_phase in office_word_worker._STATUS_PHASES:
+            office_word_worker._status(tmp_path, published_phase)
+            if published_phase == phase:
+                break
     deadlines = WordRenderDeadlines.uniform(1.0)
 
     with pytest.raises(TimeoutError, match=phase):
@@ -183,3 +186,32 @@ def test_invalid_or_regressing_worker_status_fails_closed(tmp_path: Path) -> Non
         )
 
     assert worker.terminated is True
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows sharing semantics")
+def test_phase_publication_never_replaces_a_snapshot_held_by_parent(
+    tmp_path: Path,
+) -> None:
+    office_word_worker._status(tmp_path, "COM_INIT")
+    published = tuple(tmp_path.glob("status*.json"))
+    assert len(published) == 1
+
+    with published[0].open("r", encoding="utf-8") as held_snapshot:
+        assert json.load(held_snapshot)["phase"] == "COM_INIT"
+        office_word_worker._status(tmp_path, "WORD_PROCESS_START")
+
+    assert office_pdf._read_phase(tmp_path) == "WORD_PROCESS_START"
+
+
+def test_status_snapshots_survive_repeated_parent_reads_with_prior_files_open(
+    tmp_path: Path,
+) -> None:
+    for iteration in range(32):
+        root = tmp_path / str(iteration)
+        root.mkdir()
+        with ExitStack() as open_snapshots:
+            for index, phase in enumerate(office_word_worker._STATUS_PHASES, 1):
+                office_word_worker._status(root, phase)
+                snapshot = root / f"status-{index:02d}.json"
+                open_snapshots.enter_context(snapshot.open("r", encoding="utf-8"))
+                assert office_pdf._read_phase(root) == phase

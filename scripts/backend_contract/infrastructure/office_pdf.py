@@ -128,22 +128,33 @@ def _terminate_owned_worker(worker: _OwnedWordWorker) -> bool:
 
 
 def _read_phase(root: Path) -> str | None:
-    path = root / "status.json"
-    if not path.exists():
+    paths = sorted(root.glob("status*.json"))
+    if not paths:
         return None
-    try:
-        status = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ValueError("invalid Word worker status") from exc
-    if (
-        not isinstance(status, dict)
-        or set(status) != {"schemaVersion", "state", "phase"}
-        or status.get("schemaVersion") != _SCHEMA_VERSION
-        or status.get("state") != "RUNNING"
-        or status.get("phase") not in _PHASE_INDEX
-    ):
+    observed: list[tuple[int, str]] = []
+    for path in paths:
+        match = re.fullmatch(r"status-(\d{2})\.json", path.name)
+        if match is None:
+            raise ValueError("invalid Word worker status")
+        try:
+            status = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("invalid Word worker status") from exc
+        phase = status.get("phase") if isinstance(status, dict) else None
+        index = int(match.group(1))
+        if (
+            not isinstance(status, dict)
+            or set(status) != {"schemaVersion", "state", "phase"}
+            or status.get("schemaVersion") != _SCHEMA_VERSION
+            or status.get("state") != "RUNNING"
+            or phase not in _PHASE_INDEX
+            or _PHASE_INDEX[phase] != index
+        ):
+            raise ValueError("invalid Word worker status")
+        observed.append((index, phase))
+    if observed[0][0] != 1:
         raise ValueError("invalid Word worker status")
-    return status["phase"]
+    return observed[-1][1]
 
 
 def _wait_for_worker(
@@ -302,7 +313,6 @@ def _remove_render_tree(
         "output.partial.pdf",
         "request.json",
         "result.json",
-        "status.json",
         "bootstrap.docx",
     )
     deadline = clock() + 5.0
@@ -311,6 +321,11 @@ def _remove_render_tree(
         for name in sensitive_names:
             try:
                 (root / name).unlink(missing_ok=True)
+            except PermissionError as exc:
+                locked = exc
+        for path in root.glob("status-*.json*"):
+            try:
+                path.unlink(missing_ok=True)
             except PermissionError as exc:
                 locked = exc
         try:

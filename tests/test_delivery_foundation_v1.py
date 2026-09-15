@@ -99,6 +99,102 @@ def _parseable_text_pdf(text: str) -> bytes:
     return bytes(output)
 
 
+def _positioned_text_pdf(
+    pages: list[list[tuple[str, float, float, float, int]]],
+) -> bytes:
+    objects: list[bytes] = []
+
+    def add(value: bytes) -> int:
+        objects.append(value)
+        return len(objects)
+
+    font_id = add(
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"
+    )
+    content_ids: list[int] = []
+    for fragments in pages:
+        commands: list[bytes] = [b"BT"]
+        for value, x, y, size, render_mode in fragments:
+            encoded = (
+                value.encode("cp1252")
+                .replace(b"\\", b"\\\\")
+                .replace(b"(", b"\\(")
+                .replace(b")", b"\\)")
+            )
+            commands.append(
+                f"/F1 {size:g} Tf {render_mode} Tr 1 0 0 1 {x:g} {y:g} Tm ".encode(
+                    "ascii"
+                )
+                + b"("
+                + b") Tj ("
+                + encoded
+                + b") Tj"
+            )
+        commands.append(b"ET")
+        stream = b"\n".join(commands)
+        content_ids.append(
+            add(
+                b"<< /Length "
+                + str(len(stream)).encode("ascii")
+                + b" >>\nstream\n"
+                + stream
+                + b"\nendstream"
+            )
+        )
+    pages_id = len(objects) + len(pages) + 1
+    page_ids = [
+        add(
+            f"<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 595 842] "
+            f"/Resources << /Font << /F1 {font_id} 0 R >> >> /Contents {content_id} 0 R >>".encode(
+                "ascii"
+            )
+        )
+        for content_id in content_ids
+    ]
+    kids = " ".join(f"{item} 0 R" for item in page_ids)
+    add(f"<< /Type /Pages /Count {len(page_ids)} /Kids [{kids}] >>".encode("ascii"))
+    catalog_id = add(f"<< /Type /Catalog /Pages {pages_id} 0 R >>".encode("ascii"))
+    output = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
+    offsets = []
+    for index, value in enumerate(objects, 1):
+        offsets.append(len(output))
+        output.extend(f"{index} 0 obj\n".encode("ascii") + value + b"\nendobj\n")
+    xref = len(output)
+    output.extend(
+        f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode("ascii")
+    )
+    output.extend(
+        b"".join(f"{offset:010d} 00000 n \n".encode("ascii") for offset in offsets)
+    )
+    output.extend(
+        f"trailer << /Size {len(objects) + 1} /Root {catalog_id} 0 R >>\n"
+        f"startxref\n{xref}\n%%EOF".encode("ascii")
+    )
+    return bytes(output)
+
+
+def _word_table(cells: tuple[str, ...]) -> bytes:
+    output = BytesIO()
+    row = "".join(
+        f"<w:tc><w:p><w:r><w:t>{cell}</w:t></w:r></w:p></w:tc>"
+        for cell in cells
+    )
+    document = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body><w:tbl><w:tr>{row}</w:tr></w:tbl></w:body></w:document>"
+    )
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            "</Types>",
+        )
+        package.writestr("word/document.xml", document)
+    return output.getvalue()
+
+
 def binding() -> DeliveryBinding:
     return DeliveryBinding(
         workspace_id="workspace-1",
@@ -531,6 +627,67 @@ def test_final_pdf_rejects_a_table_flattened_into_unrelated_lines() -> None:
     with pytest.raises(ValueError, match="does not faithfully represent"):
         delivery_renderer.render_final_pdf_candidate(
             word_content=word.getvalue(), word_format="DOCX", converter=FlatteningConverter(),
+        )
+
+
+@pytest.mark.parametrize(
+    "first_cell_fragments",
+    (
+        ("Cell-A-223",),
+        ("Cell-A-", "223"),
+        ("Cell", "-", "A", "-", "223"),
+        ("Cell", " ", "A", "-", "223"),
+    ),
+)
+def test_fidelity_accepts_bounded_visible_table_cell_fragmentation(
+    first_cell_fragments: tuple[str, ...],
+) -> None:
+    source_cell = "Cell A-223" if " " in first_cell_fragments else "Cell-A-223"
+    x = 50.0
+    positioned = []
+    for fragment in first_cell_fragments:
+        positioned.append((fragment, x, 700.0, 10.0, 0))
+        x += max(len(fragment), 1) * 5.5
+    positioned.append(("Cell-B-223", 250.0, 701.5, 10.0, 0))
+
+    delivery_renderer._validate_pdf_fidelity(
+        _word_table((source_cell, "Cell-B-223")),
+        _positioned_text_pdf([positioned]),
+    )
+
+
+@pytest.mark.parametrize(
+    "pages",
+    (
+        [[("Cell", 50, 700, 10, 0), ("-A-223", 80, 680, 10, 0), ("Cell-B-223", 250, 700, 10, 0)]],
+        [[("Cell", 50, 700, 10, 0), ("-A-223", 180, 700, 10, 0), ("Cell-B-223", 250, 700, 10, 0)]],
+        [[("Cell-A-223", 250, 700, 10, 0), ("Cell-B-223", 50, 700, 10, 0)]],
+        [[("Cell-A-223", -40, 700, 10, 0), ("Cell-B-223", 250, 700, 10, 0)]],
+        [[("Cell-A-223", 50, 700, 10, 3), ("Cell-B-223", 250, 700, 10, 0)]],
+        [[("Cell-A-223", 50, 700, 0.1, 0), ("Cell-B-223", 250, 700, 10, 0)]],
+    ),
+    ids=("cross-line", "disconnected", "inverted", "out-of-bounds", "hidden", "near-zero"),
+)
+def test_fidelity_rejects_spatial_or_invisible_table_token_injection(
+    pages: list[list[tuple[str, float, float, float, int]]],
+) -> None:
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            _word_table(("Cell-A-223", "Cell-B-223")),
+            _positioned_text_pdf(pages),
+        )
+
+
+def test_fidelity_never_composes_one_table_cell_across_pages() -> None:
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            _word_table(("Cell-A-223", "Cell-B-223")),
+            _positioned_text_pdf(
+                [
+                    [("Cell", 50, 700, 10, 0)],
+                    [("-A-223", 80, 700, 10, 0), ("Cell-B-223", 250, 700, 10, 0)],
+                ]
+            ),
         )
 
 
