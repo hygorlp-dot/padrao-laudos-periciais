@@ -147,10 +147,23 @@ def _word_transition_scope_changed(root: Path, protected_base: str, candidate: s
         transition = json.loads(_git(root, "show", f"{candidate}:{TRANSITION_PATH}"))
         if (
             not isinstance(transition, dict)
+            or set(transition)
+            != {
+                "schemaVersion",
+                "transitionId",
+                "purpose",
+                "scope",
+                "protectedBaseSha",
+                "protectedArtifacts",
+                "supportArtifacts",
+            }
             or transition.get("schemaVersion") != "3.0.0"
             or transition.get("transitionId") != WORD_TRANSITION_ID
             or transition.get("purpose") != WORD_TRANSITION_PURPOSE
             or transition.get("scope") != WORD_TRANSITION_SCOPE
+            or not isinstance(transition.get("protectedBaseSha"), str)
+            or not isinstance(transition.get("protectedArtifacts"), list)
+            or not isinstance(transition.get("supportArtifacts"), list)
         ):
             return None
         scope = _SUPPORT_SCOPES.get(transition["scope"])
@@ -169,7 +182,10 @@ def _word_transition_scope_changed(root: Path, protected_base: str, candidate: s
             ).split(b"\0")
             if item
         }
-        return bool(changed & scope)
+        enters_word_scope = bool(changed & scope)
+        if TRANSITION_PATH in changed and not enters_word_scope:
+            return None
+        return enters_word_scope
     except (
         OSError,
         UnicodeError,

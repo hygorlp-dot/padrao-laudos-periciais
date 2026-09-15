@@ -152,22 +152,62 @@ def test_word_transition_routing_uses_exact_registered_scope(tmp_path, path, exp
 
 
 @pytest.mark.parametrize(
-    ("field", "value"),
-    [("scope", "UNKNOWN_SCOPE"), ("schemaVersion", "2.0.0")],
+    ("field", "value", "remove"),
+    [
+        ("scope", "UNKNOWN_SCOPE", False),
+        ("schemaVersion", "2.0.0", False),
+        ("protectedArtifacts", "INVALID", False),
+        ("protectedBaseSha", None, True),
+    ],
 )
 def test_word_transition_routing_fails_closed_for_invalid_manifest(
-    tmp_path, field, value
+    tmp_path, field, value, remove
 ):
     route = getattr(trust_anchor, "_word_transition_scope_changed", None)
     assert callable(route)
     repo, base = _future_base_clone(tmp_path)
     transition = repo / CAPABILITY_TRANSITION_PATH
     manifest = json.loads(transition.read_text(encoding="utf-8"))
-    manifest[field] = value
+    if remove:
+        manifest.pop(field)
+    else:
+        manifest[field] = value
     transition.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     candidate = _child_commit(repo, "invalid routing manifest")
 
     assert route(repo, base, candidate) is None
+
+
+def test_word_transition_routing_fails_closed_for_transition_only_mutation(tmp_path):
+    route = getattr(trust_anchor, "_word_transition_scope_changed", None)
+    assert callable(route)
+    repo, base = _future_base_clone(tmp_path)
+    transition = repo / CAPABILITY_TRANSITION_PATH
+    manifest = json.loads(transition.read_text(encoding="utf-8"))
+    manifest["protectedBaseSha"] = "0" * 40
+    transition.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    candidate = _child_commit(repo, "transition-only mutation")
+
+    assert route(repo, base, candidate) is None
+
+
+def test_word_transition_routing_accepts_current_transition_with_word_change(tmp_path):
+    route = getattr(trust_anchor, "_word_transition_scope_changed", None)
+    assert callable(route)
+    repo, base = _future_base_clone(tmp_path)
+    changed = repo / "scripts/backend_contract/infrastructure/office_pdf.py"
+    changed.parent.mkdir(parents=True, exist_ok=True)
+    original = changed.read_text(encoding="utf-8") if changed.exists() else ""
+    changed.write_text(
+        original + "\n# Word fixture\n", encoding="utf-8"
+    )
+    transition = repo / CAPABILITY_TRANSITION_PATH
+    manifest = json.loads(transition.read_text(encoding="utf-8"))
+    manifest["protectedBaseSha"] = base
+    transition.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    candidate = _child_commit(repo, "current Word transition")
+
+    assert route(repo, base, candidate) is True
 
 
 def test_rebind_rotates_only_exact_judge_exception_identities():
