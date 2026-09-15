@@ -21,6 +21,7 @@ _SUPPORT_SCOPES = {
     "LOCAL_WORD_COM_CONTAINMENT_V1": {
         "scripts/backend_contract/infrastructure/office_pdf.py",
         "scripts/backend_contract/infrastructure/office_word_worker.py",
+        "scripts/quality/capability_gate_adapter.py",
         "tests/test_office_pdf_renderer_v1.py",
         "tests/test_office_word_containment_v1.py",
     },

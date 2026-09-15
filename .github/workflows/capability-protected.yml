@@ -81,6 +81,7 @@ jobs:
             'config/capability-protected-artifacts-v1.json',
             'config/capability-protected-transition-v1.json',
             'scripts/quality/architecture_analyzer.py',
+            'scripts/quality/capability_gate_adapter.py',
             'scripts/quality/capability_trust_anchor.py',
             'scripts/backend_contract/infrastructure/office_pdf.py',
             'scripts/backend_contract/infrastructure/office_word_worker.py',
@@ -114,6 +115,7 @@ jobs:
               'config/capability-exceptions-v1.json',
               'config/capability-protected-artifacts-v1.json',
               'scripts/quality/architecture_analyzer.py',
+              'scripts/quality/capability_gate_adapter.py',
               'scripts/quality/capability_trust_anchor.py',
           }
           allowed_paths = {
@@ -125,6 +127,7 @@ jobs:
               'scripts/backend_contract/infrastructure/office_pdf.py',
               'scripts/backend_contract/infrastructure/office_word_worker.py',
               'scripts/quality/architecture_analyzer.py',
+              'scripts/quality/capability_gate_adapter.py',
               'scripts/quality/capability_trust_anchor.py',
               'tests/test_architecture_analyzer_v1.py',
               'tests/test_architecture_capability_exception_rebind_v1.py',
