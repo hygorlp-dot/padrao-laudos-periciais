@@ -8,29 +8,29 @@
     {
       "path": ".github/workflows/capability-protected.yml",
       "base": {"path": ".github/workflows/capability-protected.yml", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "2f767c5b11b262c442023e3723bb9089cdca8898"},
-      "candidate": {"path": ".github/workflows/capability-protected.yml", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "df52794c671b02e957eb08d4bffe1fa001d17279"}
+      "candidate": {"path": ".github/workflows/capability-protected.yml", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "55db8f6980f24d240dbc17d4a62c6a0fbdc62ce7"}
     },
     {
       "path": "config/capability-exceptions-v1.json",
       "base": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "5ab038d0c764d3192d76303caf0b919600363b9e"},
-      "candidate": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "4fc0b8bb99f0f5d8dcc22f988471bfc9b5174f0e"}
+      "candidate": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "879cff825d6b92e5431d57ba949fe3e2041c6759"}
     },
     {
       "path": "config/capability-protected-artifacts-v1.json",
       "base": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "1dc01089f9566e2b8ffad54e23fbf7cc13e452ab"},
-      "candidate": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "46f16099e33beb39bc02cc6db7ff39ad4ecea39f"}
+      "candidate": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "70d52994dba9b00a9c5bf13a85b4934a8aa50a18"}
     },
     {
       "path": "scripts/quality/capability_trust_anchor.py",
       "base": {"path": "scripts/quality/capability_trust_anchor.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "4c6cc742538587dece061f99b6c63fc533dca9fc"},
-      "candidate": {"path": "scripts/quality/capability_trust_anchor.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "0967f548b2ae46cbd46b42f0fc6f72c7fc69bcfb"}
+      "candidate": {"path": "scripts/quality/capability_trust_anchor.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "c6f4d521b0a83a2c8d65f5d675ac73391e1da286"}
     }
   ],
   "supportArtifacts": [
     {
       "path": "tests/test_architecture_capability_exception_rebind_v1.py",
       "base": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "a9bf86676f5705c9b43da3c679148ae9f9935f91"},
-      "candidate": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "fbc27c7d968cc403a99f7c58b4acebbe00c4c01b"}
+      "candidate": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "e362f03f86cd105819a92743fd4e6572fbc72791"}
     }
   ]
 }
