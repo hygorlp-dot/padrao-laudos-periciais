@@ -3,17 +3,17 @@
   "transitionId": "LOCAL_WORD_COM_CONTAINMENT_TRUST_TRANSITION_V1",
   "purpose": "BOUND_MICROSOFT_WORD_COM_EXECUTION_FOR_AUTHORITATIVE_WORD_TO_PDF",
   "scope": "LOCAL_WORD_COM_CONTAINMENT_V1",
-  "protectedBaseSha": "0897a03b67114c6995f209233f88c7d39c3c2557",
+  "protectedBaseSha": "5ece752ce6cd66c5b2f0f7ab460f71246ead9d53",
   "protectedArtifacts": [
     {
       "path": ".github/workflows/capability-protected.yml",
-      "base": {"path": ".github/workflows/capability-protected.yml", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "b737e89c35d14fabb9a79f22468695d4352f13ec"},
-      "candidate": {"path": ".github/workflows/capability-protected.yml", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "15a4aacfbb2da8d37466efb1541c3803c07cca40"}
+      "base": {"path": ".github/workflows/capability-protected.yml", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "36affea55b28479ba53d04cf0cfc2c25c5ffe1a6"},
+      "candidate": {"path": ".github/workflows/capability-protected.yml", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "383f88286f4b50f17270647eb06d4e8ccaeb5d2b"}
     },
     {
       "path": "config/capability-protected-artifacts-v1.json",
       "base": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "aa5954c501f9395b1003285183e3a4b1234472bd"},
-      "candidate": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "88ec7c5eacbe677a433b5a073e4d57b70ec0460b"}
+      "candidate": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "9c58a13f524d256da2e2a8a9f176c6628f0ec3d0"}
     },
     {
       "path": "scripts/quality/architecture_analyzer.py",
@@ -30,12 +30,12 @@
     {
       "path": "config/capability-exceptions-v1.json",
       "base": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "f17a2bd00243bafb92cb05d71c2289a5a976fae4"},
-      "candidate": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "42fe0d7d8f2bd234fde841dd90be859b8922fc2a"}
+      "candidate": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "4c5ff2cb5545be36076198c5e699e9a184c6c4ff"}
     },
     {
       "path": "tests/test_architecture_capability_exception_rebind_v1.py",
-      "base": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "c5d11ef778db5d57239cbeb0995eca44e5c59091"},
-      "candidate": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "d0040b8cf167142feaa384c9fa4c497653866b5a"}
+      "base": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "2f5630bae13942800da14198fa17ac6500ae9ce2"},
+      "candidate": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "b7700c2c868f92c941d13e9f2f983f1cbc7e65ed"}
     },
     {
       "path": "tests/test_repository_safety_gate.py",

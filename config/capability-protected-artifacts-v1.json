@@ -7,7 +7,7 @@
       "state": "PRESENT",
       "mode": "100644",
       "objectType": "blob",
-      "blobSha": "42fe0d7d8f2bd234fde841dd90be859b8922fc2a"
+      "blobSha": "4c5ff2cb5545be36076198c5e699e9a184c6c4ff"
     },
     {
       "path": "config/capability-policy-v1.json",

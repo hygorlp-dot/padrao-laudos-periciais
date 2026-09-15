@@ -21,11 +21,11 @@ EXCEPTIONS_PATH = "config/capability-exceptions-v1.json"
 CAPABILITY_REGISTRY_PATH = "config/capability-protected-artifacts-v1.json"
 CAPABILITY_TRANSITION_PATH = "config/capability-protected-transition-v1.json"
 ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
-PROTECTED_BASE = "0897a03b67114c6995f209233f88c7d39c3c2557"
-ARCHITECTURE_PROTECTED_BASE = "0897a03b67114c6995f209233f88c7d39c3c2557"
+PROTECTED_BASE = "5ece752ce6cd66c5b2f0f7ab460f71246ead9d53"
+ARCHITECTURE_PROTECTED_BASE = "5ece752ce6cd66c5b2f0f7ab460f71246ead9d53"
 SOURCE_ANCHORS = {
-    "scripts/quality/architecture_analyzer.py": "dd0ec309ac3ea4de93f60120e92c408631969f36",
-    "scripts/quality/capability_trust_anchor.py": "d0e373c914c31bf1f54f6e0af0c4f0920d54bc51",
+    "scripts/quality/architecture_analyzer.py": "e8c869c802dcbb8d6377ccd4e3c43645ff8da962",
+    "scripts/quality/capability_trust_anchor.py": "86e3cf05a2a907e1b68fede0e49814c9d24fab27",
 }
 REVIEW_EVIDENCE = {
     "scripts/quality/architecture_analyzer.py": "PHASE_B_WORD_TRUST_SCOPE_DD0EC30",
