@@ -21,7 +21,7 @@ CAPABILITY_REGISTRY_PATH = "config/capability-protected-artifacts-v1.json"
 CAPABILITY_TRANSITION_PATH = "config/capability-protected-transition-v1.json"
 ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
 PROTECTED_BASE = "1f3f5dc479433dde0ce75600c7f16f84816e2637"
-ARCHITECTURE_PROTECTED_BASE = "11f7333aaee0148c2c575d53da41ed8100e81d98"
+ARCHITECTURE_PROTECTED_BASE = "40e0de6633275270472db18361ab52b6610f0357"
 SOURCE_ANCHORS = {
     "scripts/quality/architecture_analyzer.py": "c2cbb55f1dcb0732ca8b215df28ef6148fc91566",
     "scripts/quality/capability_trust_anchor.py": "f27e80380ee4ba55661e2cf1981f5b7aab54fdf8",
@@ -96,6 +96,15 @@ def test_transition_manifests_introduce_no_wildcard_or_package_wide_authority():
     assert capability_paths == {EXCEPTIONS_PATH}
     assert architecture_paths == {".github/workflows/capability-protected.yml"}
     assert support_paths == set()
+
+
+def test_capability_workflow_python_scope_admits_exception_transition_path():
+    workflow = (ROOT / ".github/workflows/capability-protected.yml").read_text(
+        encoding="utf-8"
+    )
+    start = workflow.index("allowed_paths = {")
+    end = workflow.index("\n          }", start)
+    assert EXCEPTIONS_PATH in workflow[start:end]
 
 
 def test_rebind_rotates_only_exact_judge_exception_identities():
