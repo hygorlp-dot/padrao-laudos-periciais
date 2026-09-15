@@ -241,11 +241,7 @@ def test_rebind_rotates_only_exact_judge_exception_identities():
         if not changed:
             continue
         changed_paths.add(after["canonicalPath"])
-        expected_changes = {"baselineCommit", "reviewEvidence", "wholeFileSha256"}
-        if after["canonicalPath"] == CAPABILITY_GATE_ADAPTER_PATH:
-            expected_changes.add("acquisitionLocation")
-            assert after["acquisitionLocation"] == {"line": 7, "column": 0}
-        assert changed == expected_changes
+        assert changed == {"baselineCommit", "reviewEvidence", "wholeFileSha256"}
         assert after["baselineCommit"] == SOURCE_ANCHORS[after["canonicalPath"]]
         assert after["reviewEvidence"] == REVIEW_EVIDENCE[after["canonicalPath"]]
         assert after["wholeFileSha256"] == hashlib.sha256(

@@ -1,10 +1,10 @@
 """Fail-closed exact baseline exception matching for capability findings."""
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import subprocess
+import ast
 from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
