@@ -126,12 +126,12 @@
       "canonicalPath": "scripts/quality/capability_gate_adapter.py",
       "module": "scripts.quality.capability_gate_adapter",
         "acquisitionLocation": {
-          "line": 7,
+          "line": 6,
         "column": 0
       },
       "normalizedAcquisitionAstSha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
-        "wholeFileSha256": "648579606c54c2dd7faf849a9232ff681d2cd3b03e9534e53268f2c73d40ebf4",
-        "baselineCommit": "f2f745e8791906ae91049ed0474df710b911613d",
+        "wholeFileSha256": "508711cadd4fae4a8074d0965b0d62a4570d4c4f0e348d40cb49fc12d9c0d7a4",
+        "baselineCommit": "e8ba75f43622a818df13726693ce897f3412d69b",
       "acquiredCapability": "subprocess",
       "justification": "Exception adapter reads baseline/candidate blob content and registry state via git show/merge-base to validate exact-match exceptions.",
       "owner": "QUALITY_GOVERNANCE",
