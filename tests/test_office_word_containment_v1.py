@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import types
 
 import pytest
 
 from scripts.backend_contract.infrastructure.office_pdf import (
     OwnedProcessIdentity,
     WordRenderDeadlines,
+    _WindowsJobWordWorker,
     _same_process_identity,
     _terminate_owned_worker,
     _wait_for_worker,
@@ -104,6 +106,54 @@ def test_pid_reuse_or_creation_identity_mismatch_never_authorizes_kill() -> None
     worker = _FakeOwnedWorker(expected, observed=reused)
     assert _terminate_owned_worker(worker) is False
     assert worker.terminated is False
+
+
+def test_verified_job_remains_authoritative_when_process_observation_fails() -> None:
+    events: list[str] = []
+    active = {"count": 1}
+
+    class _Handle:
+        def __init__(self, kind: str) -> None:
+            self.kind = kind
+
+        def Close(self) -> None:
+            events.append(f"{self.kind}-close")
+
+    process = _Handle("process")
+    job = _Handle("job")
+    win32event = types.SimpleNamespace(
+        WAIT_OBJECT_0=0,
+        WaitForSingleObject=lambda _process, _milliseconds: 258,
+    )
+
+    def _terminate_job(_job, _code) -> None:
+        events.append("job-terminate")
+        active["count"] = 0
+
+    win32job = types.SimpleNamespace(
+        JobObjectBasicAccountingInformation=1,
+        QueryInformationJobObject=lambda _job, _kind: {
+            "ActiveProcesses": active["count"]
+        },
+        TerminateJobObject=_terminate_job,
+    )
+    win32process = types.SimpleNamespace(
+        GetProcessTimes=lambda _process: (_ for _ in ()).throw(
+            OSError("synthetic observation failure")
+        ),
+        GetModuleFileNameEx=lambda _process, _module: "C:/Python/python.exe",
+    )
+    worker = _WindowsJobWordWorker(
+        process,
+        job,
+        _identity(),
+        (win32event, win32job, win32process),
+    )
+
+    assert _terminate_owned_worker(worker) is True
+    worker.close()
+
+    assert events == ["job-terminate", "process-close", "job-close"]
 
 
 def test_preexisting_user_word_is_not_a_termination_target() -> None:
