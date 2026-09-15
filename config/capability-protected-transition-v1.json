@@ -3,34 +3,44 @@
   "transitionId": "LOCAL_WORD_COM_CONTAINMENT_TRUST_TRANSITION_V1",
   "purpose": "BOUND_MICROSOFT_WORD_COM_EXECUTION_FOR_AUTHORITATIVE_WORD_TO_PDF",
   "scope": "LOCAL_WORD_COM_CONTAINMENT_V1",
-  "protectedBaseSha": "1c4b747fb380a79087ace5dd87f5c31be7ffd77a",
+  "protectedBaseSha": "382e82d2e380f3ee80e8c97e2cc514f0dd37e315",
   "protectedArtifacts": [
     {
       "path": ".github/workflows/capability-protected.yml",
-      "base": {"path": ".github/workflows/capability-protected.yml", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "2f767c5b11b262c442023e3723bb9089cdca8898"},
-      "candidate": {"path": ".github/workflows/capability-protected.yml", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "55db8f6980f24d240dbc17d4a62c6a0fbdc62ce7"}
+      "base": {"path": ".github/workflows/capability-protected.yml", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "55db8f6980f24d240dbc17d4a62c6a0fbdc62ce7"},
+      "candidate": {"path": ".github/workflows/capability-protected.yml", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "833d69d2ef3adbef3956f483f8f8fa6a3db20d5c"}
     },
     {
       "path": "config/capability-exceptions-v1.json",
-      "base": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "5ab038d0c764d3192d76303caf0b919600363b9e"},
-      "candidate": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "f3badbaa2614b9f055d5c64168da90a8258688a2"}
+      "base": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "f3badbaa2614b9f055d5c64168da90a8258688a2"},
+      "candidate": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "a75a5ce572983a286b494396afac3d4c9c056d82"}
     },
     {
       "path": "config/capability-protected-artifacts-v1.json",
-      "base": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "1dc01089f9566e2b8ffad54e23fbf7cc13e452ab"},
-      "candidate": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "7cf4292b606b0f844356b6e6cd221b73382b5dfd"}
+      "base": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "7cf4292b606b0f844356b6e6cd221b73382b5dfd"},
+      "candidate": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "39e2aeeb33917d9d43ebd2942f790ceecae85d84"}
+    },
+    {
+      "path": "scripts/quality/architecture_analyzer.py",
+      "base": {"path": "scripts/quality/architecture_analyzer.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "f61fcdf3a20af013d6730d29faf7d45511741fdd"},
+      "candidate": {"path": "scripts/quality/architecture_analyzer.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "d06a874a609b5dd6cd40440bc353f739b104827f"}
+    },
+    {
+      "path": "scripts/quality/capability_gate_adapter.py",
+      "base": {"path": "scripts/quality/capability_gate_adapter.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "d0c91fae0be77aad738f182412ac0dfa382ff37f"},
+      "candidate": {"path": "scripts/quality/capability_gate_adapter.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "f89b1daebbcc619042f145d241ff01f1f968f054"}
     },
     {
       "path": "scripts/quality/capability_trust_anchor.py",
-      "base": {"path": "scripts/quality/capability_trust_anchor.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "4c6cc742538587dece061f99b6c63fc533dca9fc"},
-      "candidate": {"path": "scripts/quality/capability_trust_anchor.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "bf7f0c6355d53d25bfe0860caa3bdc891e331cc5"}
+      "base": {"path": "scripts/quality/capability_trust_anchor.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "bf7f0c6355d53d25bfe0860caa3bdc891e331cc5"},
+      "candidate": {"path": "scripts/quality/capability_trust_anchor.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "298836508da8971c68550d80fd895396f003867a"}
     }
   ],
   "supportArtifacts": [
     {
       "path": "tests/test_architecture_capability_exception_rebind_v1.py",
-      "base": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "a9bf86676f5705c9b43da3c679148ae9f9935f91"},
-      "candidate": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "0a9528587483b39101c91df33d228381c9e9c6ff"}
+      "base": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "0a9528587483b39101c91df33d228381c9e9c6ff"},
+      "candidate": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "4aeded6575544d7a34cb7947f426ce23b93b46a7"}
     }
   ]
 }

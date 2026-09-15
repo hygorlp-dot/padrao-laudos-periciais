@@ -25,29 +25,36 @@ ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json
 CAPABILITY_GATE_ADAPTER_PATH = "scripts/quality/capability_gate_adapter.py"
 WORD_PARENT_PATH = "scripts/backend_contract/infrastructure/office_pdf.py"
 WORD_WORKER_PATH = "scripts/backend_contract/infrastructure/office_word_worker.py"
-PROTECTED_BASE = "1c4b747fb380a79087ace5dd87f5c31be7ffd77a"
-ARCHITECTURE_PROTECTED_BASE = "1c4b747fb380a79087ace5dd87f5c31be7ffd77a"
+PROTECTED_BASE = "382e82d2e380f3ee80e8c97e2cc514f0dd37e315"
+ARCHITECTURE_PROTECTED_BASE = "382e82d2e380f3ee80e8c97e2cc514f0dd37e315"
 SOURCE_ANCHORS = {
-    "scripts/quality/capability_trust_anchor.py": "32b71d4e5db584eee5bae305e817da803465bd09",
+    "scripts/quality/architecture_analyzer.py": "f2f745e8791906ae91049ed0474df710b911613d",
+    "scripts/quality/capability_gate_adapter.py": "f2f745e8791906ae91049ed0474df710b911613d",
+    "scripts/quality/capability_trust_anchor.py": "f2f745e8791906ae91049ed0474df710b911613d",
 }
 REVIEW_EVIDENCE = {
-    "scripts/quality/capability_trust_anchor.py": "ISSUE_218_WORD_TRANSITION_ROUTING_CAPABILITY",
+    "scripts/quality/architecture_analyzer.py": "ISSUE_224_WORD_CONTRACT_PREDECESSOR_ARCHITECTURE",
+    "scripts/quality/capability_gate_adapter.py": "ISSUE_224_EXACT_WORD_CONTRACT_VALIDATOR",
+    "scripts/quality/capability_trust_anchor.py": "ISSUE_224_WORD_CONTRACT_PREDECESSOR_CUSTODY",
 }
 E1A_PROTECTED_WORKFLOWS = {
     ".github/workflows/architecture-protected.yml",
     ".github/workflows/capability-protected.yml",
 }
 ROTATED_PROTECTED_ARTIFACTS = {
+    ".github/workflows/capability-protected.yml",
     "scripts/quality/architecture_analyzer.py",
+    "scripts/quality/capability_gate_adapter.py",
     "scripts/quality/capability_trust_anchor.py",
     CAPABILITY_REGISTRY_PATH,
+    EXCEPTIONS_PATH,
 }
 SUPPORT_ARTIFACTS = {
-    EXCEPTIONS_PATH,
-    CAPABILITY_TRANSITION_PATH,
-    "tests/test_repository_safety_gate.py",
+    "tests/test_architecture_capability_exception_rebind_v1.py",
 }
 ROTATED_EXCEPTION_PATHS = {
+    "scripts/quality/architecture_analyzer.py",
+    "scripts/quality/capability_gate_adapter.py",
     "scripts/quality/capability_trust_anchor.py",
 }
 
@@ -99,12 +106,18 @@ def test_transition_manifests_introduce_no_wildcard_or_package_wide_authority():
         ".github/workflows/capability-protected.yml",
         CAPABILITY_REGISTRY_PATH,
         EXCEPTIONS_PATH,
+        "scripts/quality/architecture_analyzer.py",
+        CAPABILITY_GATE_ADAPTER_PATH,
         "scripts/quality/capability_trust_anchor.py",
     }
-    assert architecture_paths == capability_paths - {EXCEPTIONS_PATH}
+    assert architecture_paths == capability_paths - {
+        EXCEPTIONS_PATH,
+        CAPABILITY_GATE_ADAPTER_PATH,
+    }
     assert support_paths == {
         EXCEPTIONS_PATH,
         CAPABILITY_TRANSITION_PATH,
+        CAPABILITY_GATE_ADAPTER_PATH,
     }
 
 
@@ -132,8 +145,8 @@ def test_capability_workflow_python_scope_admits_exception_transition_path():
 @pytest.mark.parametrize(
     ("path", "expected"),
     [
-        (EXCEPTIONS_PATH, True),
-        (CAPABILITY_TRANSITION_PATH, True),
+        (EXCEPTIONS_PATH, False),
+        (CAPABILITY_TRANSITION_PATH, None),
         ("scripts/backend_contract/infrastructure/office_pdf.py", True),
         ("tests/test_delivery_foundation_v1.py", True),
         ("tests/test_office_pdf_renderer_v1.py", True),
@@ -228,7 +241,11 @@ def test_rebind_rotates_only_exact_judge_exception_identities():
         if not changed:
             continue
         changed_paths.add(after["canonicalPath"])
-        assert changed == {"baselineCommit", "reviewEvidence", "wholeFileSha256"}
+        expected_changes = {"baselineCommit", "reviewEvidence", "wholeFileSha256"}
+        if after["canonicalPath"] == CAPABILITY_GATE_ADAPTER_PATH:
+            expected_changes.add("acquisitionLocation")
+            assert after["acquisitionLocation"] == {"line": 7, "column": 0}
+        assert changed == expected_changes
         assert after["baselineCommit"] == SOURCE_ANCHORS[after["canonicalPath"]]
         assert after["reviewEvidence"] == REVIEW_EVIDENCE[after["canonicalPath"]]
         assert after["wholeFileSha256"] == hashlib.sha256(
@@ -255,6 +272,8 @@ def test_capability_registry_and_transition_bind_exact_exception_blob():
         ".github/workflows/capability-protected.yml",
         CAPABILITY_REGISTRY_PATH,
         EXCEPTIONS_PATH,
+        "scripts/quality/architecture_analyzer.py",
+        CAPABILITY_GATE_ADAPTER_PATH,
         "scripts/quality/capability_trust_anchor.py",
     }
     assert {row["path"] for row in transition["supportArtifacts"]} == {
@@ -271,6 +290,7 @@ def test_architecture_transition_binds_current_trust_anchor_rotation():
     assert set(artifact_rows) == {
         ".github/workflows/capability-protected.yml",
         CAPABILITY_REGISTRY_PATH,
+        "scripts/quality/architecture_analyzer.py",
         "scripts/quality/capability_trust_anchor.py",
     }
 
@@ -285,6 +305,7 @@ def test_architecture_transition_binds_current_trust_anchor_rotation():
     assert set(support_rows) == {
         CAPABILITY_TRANSITION_PATH,
         EXCEPTIONS_PATH,
+        CAPABILITY_GATE_ADAPTER_PATH,
     }
     for path, row in support_rows.items():
         assert _architecture_transition_identity(row, "base") == _identity_from_commit(
