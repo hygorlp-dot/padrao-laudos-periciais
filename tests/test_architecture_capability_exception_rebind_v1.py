@@ -51,6 +51,7 @@ ROTATED_PROTECTED_ARTIFACTS = {
 }
 SUPPORT_ARTIFACTS = {
     "tests/test_architecture_capability_exception_rebind_v1.py",
+    "tests/test_repository_safety_gate.py",
 }
 ROTATED_EXCEPTION_PATHS = {
     "scripts/quality/architecture_analyzer.py",
@@ -274,6 +275,7 @@ def test_capability_registry_and_transition_bind_exact_exception_blob():
     }
     assert {row["path"] for row in transition["supportArtifacts"]} == {
         "tests/test_architecture_capability_exception_rebind_v1.py",
+        "tests/test_repository_safety_gate.py",
     }
 
 
@@ -302,6 +304,7 @@ def test_architecture_transition_binds_current_trust_anchor_rotation():
         CAPABILITY_TRANSITION_PATH,
         EXCEPTIONS_PATH,
         CAPABILITY_GATE_ADAPTER_PATH,
+        "tests/test_repository_safety_gate.py",
     }
     for path, row in support_rows.items():
         assert _architecture_transition_identity(row, "base") == _identity_from_commit(

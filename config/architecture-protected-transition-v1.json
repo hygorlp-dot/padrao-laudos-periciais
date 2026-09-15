@@ -34,12 +34,17 @@
     {
       "path": "config/capability-protected-transition-v1.json",
       "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "de64b8f74525dc84cf4d9cb0346c1169865c3f0a",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "1cde4896c7bc5a31903787661e0deef7dbef2faa"
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "0fdd2373414b18419c0149eaa3f484ac0e8da96f"
     },
     {
       "path": "scripts/quality/capability_gate_adapter.py",
       "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "d0c91fae0be77aad738f182412ac0dfa382ff37f",
       "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "2de0f94fa5ccec1d66b6d340dc3c6d4b42f20711"
+    },
+    {
+      "path": "tests/test_repository_safety_gate.py",
+      "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "8d3a4021fabcf5d22c9de64d296dbec6c42febde",
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "8428a1f34fe26208471105a0ca4b5ccaf4c026f8"
     }
   ]
 }
