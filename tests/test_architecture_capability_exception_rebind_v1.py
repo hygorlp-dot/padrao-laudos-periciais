@@ -10,8 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from scripts.quality.architecture_analyzer import run_architecture_gate
+from scripts.quality.architecture_analyzer import _support_path_in_scope, run_architecture_gate
 from scripts.quality.capability_bootstrap import run_protected_capability_gate
+from scripts.quality import capability_trust_anchor as trust_anchor
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,15 +21,15 @@ EXCEPTIONS_PATH = "config/capability-exceptions-v1.json"
 CAPABILITY_REGISTRY_PATH = "config/capability-protected-artifacts-v1.json"
 CAPABILITY_TRANSITION_PATH = "config/capability-protected-transition-v1.json"
 ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
-PROTECTED_BASE = "1f3f5dc479433dde0ce75600c7f16f84816e2637"
-ARCHITECTURE_PROTECTED_BASE = "40e0de6633275270472db18361ab52b6610f0357"
+PROTECTED_BASE = "5ece752ce6cd66c5b2f0f7ab460f71246ead9d53"
+ARCHITECTURE_PROTECTED_BASE = "5ece752ce6cd66c5b2f0f7ab460f71246ead9d53"
 SOURCE_ANCHORS = {
-    "scripts/quality/architecture_analyzer.py": "c2cbb55f1dcb0732ca8b215df28ef6148fc91566",
-    "scripts/quality/capability_trust_anchor.py": "f27e80380ee4ba55661e2cf1981f5b7aab54fdf8",
+    "scripts/quality/architecture_analyzer.py": "e8c869c802dcbb8d6377ccd4e3c43645ff8da962",
+    "scripts/quality/capability_trust_anchor.py": "86e3cf05a2a907e1b68fede0e49814c9d24fab27",
 }
 REVIEW_EVIDENCE = {
-    "scripts/quality/architecture_analyzer.py": "C1B_ONE_TIME_TRUST_BOOTSTRAP_PREDECESSOR_C2CBB55",
-    "scripts/quality/capability_trust_anchor.py": "C1B_ONE_TIME_TRUST_BOOTSTRAP_PREDECESSOR_F27E803",
+    "scripts/quality/architecture_analyzer.py": "PHASE_B_WORD_TRUST_SCOPE_DD0EC30",
+    "scripts/quality/capability_trust_anchor.py": "PHASE_B_WORD_TRUST_SCOPE_D0E373C",
 }
 E1A_PROTECTED_WORKFLOWS = {
     ".github/workflows/architecture-protected.yml",
@@ -82,7 +83,7 @@ def _architecture_transition_identity(row: dict, side: str) -> tuple[str, str, s
 
 def test_transition_manifests_introduce_no_wildcard_or_package_wide_authority():
     capability_paths = {
-        row["path"] for row in _json(CAPABILITY_TRANSITION_PATH)["artifacts"]
+        row["path"] for row in _json(CAPABILITY_TRANSITION_PATH)["protectedArtifacts"]
     }
     architecture_paths = {
         row["path"] for row in _json(ARCHITECTURE_TRANSITION_PATH)["artifacts"]
@@ -93,18 +94,29 @@ def test_transition_manifests_introduce_no_wildcard_or_package_wide_authority():
     paths = capability_paths | architecture_paths | support_paths
 
     assert all("*" not in path and not path.endswith("/") for path in paths)
-    assert capability_paths == {EXCEPTIONS_PATH}
-    assert architecture_paths == {".github/workflows/capability-protected.yml"}
-    assert support_paths == set()
+    assert capability_paths == {
+        ".github/workflows/capability-protected.yml",
+        CAPABILITY_REGISTRY_PATH,
+        EXCEPTIONS_PATH,
+        "scripts/quality/architecture_analyzer.py",
+        "scripts/quality/capability_trust_anchor.py",
+    }
+    assert architecture_paths == capability_paths - {EXCEPTIONS_PATH}
+    assert support_paths == {EXCEPTIONS_PATH, CAPABILITY_TRANSITION_PATH, "tests/test_repository_safety_gate.py"}
 
 
 def test_capability_workflow_python_scope_admits_exception_transition_path():
     workflow = (ROOT / ".github/workflows/capability-protected.yml").read_text(
         encoding="utf-8"
     )
+    protected_start = workflow.index("allowed_protected = {")
+    protected_end = workflow.index("\n          }", protected_start)
+    assert EXCEPTIONS_PATH in workflow[protected_start:protected_end]
     start = workflow.index("allowed_paths = {")
     end = workflow.index("\n          }", start)
     assert EXCEPTIONS_PATH in workflow[start:end]
+    for path in trust_anchor._SUPPORT_SCOPES["LOCAL_WORD_COM_CONTAINMENT_V1"]:
+        assert path in workflow[start:end]
 
 
 def test_rebind_rotates_only_exact_judge_exception_identities():
@@ -137,12 +149,22 @@ def test_capability_registry_and_transition_bind_exact_exception_blob():
     )
 
     transition = _json(CAPABILITY_TRANSITION_PATH)
+    assert transition["schemaVersion"] == "3.0.0"
+    assert transition["transitionId"] == "LOCAL_WORD_COM_CONTAINMENT_TRUST_TRANSITION_V1"
+    assert transition["purpose"] == "BOUND_MICROSOFT_WORD_COM_EXECUTION_FOR_AUTHORITATIVE_WORD_TO_PDF"
+    assert transition["scope"] == "LOCAL_WORD_COM_CONTAINMENT_V1"
     assert transition["protectedBaseSha"] == PROTECTED_BASE
-    assert len(transition["artifacts"]) == 1
-    row = transition["artifacts"][0]
-    assert row["path"] == EXCEPTIONS_PATH
-    assert _transition_identity(row, "base") == _identity_from_commit(PROTECTED_BASE, EXCEPTIONS_PATH)
-    assert _transition_identity(row, "candidate") == _identity_from_worktree(EXCEPTIONS_PATH)
+    assert {row["path"] for row in transition["protectedArtifacts"]} == {
+        ".github/workflows/capability-protected.yml",
+        CAPABILITY_REGISTRY_PATH,
+        EXCEPTIONS_PATH,
+        "scripts/quality/architecture_analyzer.py",
+        "scripts/quality/capability_trust_anchor.py",
+    }
+    assert {row["path"] for row in transition["supportArtifacts"]} == {
+        "tests/test_architecture_capability_exception_rebind_v1.py",
+        "tests/test_repository_safety_gate.py",
+    }
 
 
 def test_architecture_transition_binds_current_trust_anchor_rotation():
@@ -151,7 +173,12 @@ def test_architecture_transition_binds_current_trust_anchor_rotation():
     assert transition["protectedBaseSha"] == ARCHITECTURE_PROTECTED_BASE
 
     artifact_rows = {row["path"]: row for row in transition["artifacts"]}
-    assert set(artifact_rows) == {".github/workflows/capability-protected.yml"}
+    assert set(artifact_rows) == {
+        ".github/workflows/capability-protected.yml",
+        CAPABILITY_REGISTRY_PATH,
+        "scripts/quality/architecture_analyzer.py",
+        "scripts/quality/capability_trust_anchor.py",
+    }
 
     for path, row in artifact_rows.items():
         assert _architecture_transition_identity(row, "base") == _identity_from_commit(
@@ -161,7 +188,7 @@ def test_architecture_transition_binds_current_trust_anchor_rotation():
 
     support_rows = {row["path"]: row for row in transition["supportArtifacts"]}
     assert transition["supportScope"] == "CAPABILITY_BOOTSTRAP_V1"
-    assert set(support_rows) == set()
+    assert set(support_rows) == {CAPABILITY_TRANSITION_PATH, EXCEPTIONS_PATH, "tests/test_repository_safety_gate.py"}
     for path, row in support_rows.items():
         assert _architecture_transition_identity(row, "base") == _identity_from_commit(
             PROTECTED_BASE, path
@@ -294,3 +321,48 @@ def test_future_base_blocks_new_unauthorized_capability(tmp_path):
 
     findings = run_protected_capability_gate(repo, base, child)
     assert "PROCESS_NAMESPACE_ACQUISITION" in {row["code"] for row in findings}
+
+
+def test_word_com_containment_scope_is_registered_with_exact_paths():
+    scope = trust_anchor._SUPPORT_SCOPES["LOCAL_WORD_COM_CONTAINMENT_V1"]
+    assert scope == {
+        "scripts/backend_contract/infrastructure/office_pdf.py",
+        "scripts/backend_contract/infrastructure/office_word_worker.py",
+        "tests/test_office_pdf_renderer_v1.py",
+        "tests/test_office_word_containment_v1.py",
+    }
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "scripts/backend_contract/infrastructure/office_pdf.py",
+        "scripts/backend_contract/infrastructure/office_word_worker.py",
+        "tests/test_office_pdf_renderer_v1.py",
+        "tests/test_office_word_containment_v1.py",
+    ],
+)
+def test_word_com_containment_scope_accepts_only_registered_paths(path):
+    assert _support_path_in_scope("LOCAL_WORD_COM_CONTAINMENT_V1", path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "scripts/backend_contract/infrastructure/office.py",
+        "scripts/backend_contract/infrastructure/office_pdf.py/child.py",
+        "scripts/backend_contract/infrastructure/subprocess_runner.py",
+        "scripts/backend_contract/infrastructure/office_word_worker.py.bak",
+        "scripts/backend_contract/infrastructure/*.py",
+        "tests/test_office_word_containment_v1.py/extra",
+    ],
+)
+def test_word_com_containment_scope_rejects_siblings_wildcards_and_prefixes(path):
+    assert not _support_path_in_scope("LOCAL_WORD_COM_CONTAINMENT_V1", path)
+
+
+def test_word_com_containment_scope_does_not_authorize_process_or_shell_namespaces():
+    scope = trust_anchor._SUPPORT_SCOPES["LOCAL_WORD_COM_CONTAINMENT_V1"]
+    assert not any("subprocess" in path or "shell" in path for path in scope)
+    assert "scripts/backend_contract/infrastructure/office_pdf.py" in scope
+    assert "scripts/backend_contract/infrastructure/office_word_worker.py" in scope

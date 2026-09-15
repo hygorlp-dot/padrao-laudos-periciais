@@ -1,24 +1,46 @@
 {
-  "schemaVersion": "1.0.0",
-  "transitionId": "CAPABILITY_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "1f3f5dc479433dde0ce75600c7f16f84816e2637",
-  "artifacts": [
+  "schemaVersion": "3.0.0",
+  "transitionId": "LOCAL_WORD_COM_CONTAINMENT_TRUST_TRANSITION_V1",
+  "purpose": "BOUND_MICROSOFT_WORD_COM_EXECUTION_FOR_AUTHORITATIVE_WORD_TO_PDF",
+  "scope": "LOCAL_WORD_COM_CONTAINMENT_V1",
+  "protectedBaseSha": "5ece752ce6cd66c5b2f0f7ab460f71246ead9d53",
+  "protectedArtifacts": [
+    {
+      "path": ".github/workflows/capability-protected.yml",
+      "base": {"path": ".github/workflows/capability-protected.yml", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "36affea55b28479ba53d04cf0cfc2c25c5ffe1a6"},
+      "candidate": {"path": ".github/workflows/capability-protected.yml", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "b1080f5b42130a9078e507116a74178958061b51"}
+    },
+    {
+      "path": "config/capability-protected-artifacts-v1.json",
+      "base": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "aa5954c501f9395b1003285183e3a4b1234472bd"},
+      "candidate": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "9c58a13f524d256da2e2a8a9f176c6628f0ec3d0"}
+    },
     {
       "path": "config/capability-exceptions-v1.json",
-      "base": {
-        "path": "config/capability-exceptions-v1.json",
-        "state": "PRESENT",
-        "mode": "100644",
-        "objectType": "blob",
-        "blobSha": "7f0397407dc89c1c7548086002a70b6bb5f7c825"
-      },
-      "candidate": {
-        "path": "config/capability-exceptions-v1.json",
-        "state": "PRESENT",
-        "mode": "100644",
-        "objectType": "blob",
-        "blobSha": "f17a2bd00243bafb92cb05d71c2289a5a976fae4"
-      }
+      "base": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "f17a2bd00243bafb92cb05d71c2289a5a976fae4"},
+      "candidate": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "4c5ff2cb5545be36076198c5e699e9a184c6c4ff"}
+    },
+    {
+      "path": "scripts/quality/architecture_analyzer.py",
+      "base": {"path": "scripts/quality/architecture_analyzer.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "81981df8d1ecdc2f73ecf0a13b4fbfb0428a9001"},
+      "candidate": {"path": "scripts/quality/architecture_analyzer.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "6fb630a3a63643fbcc879619d4a3c6be18943e13"}
+    },
+    {
+      "path": "scripts/quality/capability_trust_anchor.py",
+      "base": {"path": "scripts/quality/capability_trust_anchor.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "621317107cb0daae99576551b99e491c7d3eb71a"},
+      "candidate": {"path": "scripts/quality/capability_trust_anchor.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "12cf1dcc42d5105404ce6ded6f361e1ce44f1f13"}
+    }
+  ],
+  "supportArtifacts": [
+    {
+      "path": "tests/test_architecture_capability_exception_rebind_v1.py",
+      "base": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "2f5630bae13942800da14198fa17ac6500ae9ce2"},
+      "candidate": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "b16702379154a3bb4232c508b4cac48d1185c25d"}
+    },
+    {
+      "path": "tests/test_repository_safety_gate.py",
+      "base": {"path": "tests/test_repository_safety_gate.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "3087a0656e64f5be11984a787285e89924d42527"},
+      "candidate": {"path": "tests/test_repository_safety_gate.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "e2bf6b2854d7a0ac98f92bea6c6336765439ee31"}
     }
   ]
 }

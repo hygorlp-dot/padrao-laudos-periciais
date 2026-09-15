@@ -61,6 +61,16 @@ PROTECTED_TRANSITION_SUPPORT_SCOPES = {
             "scripts/agentic/uow_bootstrap.py",
         ),
     },
+    "LOCAL_WORD_COM_CONTAINMENT_V1": {
+        "prefixes": (),
+        "paths": (
+            "scripts/backend_contract/infrastructure/office_pdf.py",
+            "scripts/backend_contract/infrastructure/office_word_worker.py",
+            "tests/test_office_pdf_renderer_v1.py",
+            "tests/test_office_word_containment_v1.py",
+            "tests/test_repository_safety_gate.py",
+        ),
+    },
 }
 
 
