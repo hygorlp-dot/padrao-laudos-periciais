@@ -195,15 +195,20 @@ def _custom_content_pdf(stream: bytes, *, extra_resources: bytes = b"") -> bytes
     return bytes(output)
 
 
-def _word_table(cells: tuple[str, ...]) -> bytes:
+def _word_table_rows(rows: tuple[tuple[str, ...], ...]) -> bytes:
     output = BytesIO()
-    row = "".join(
-        f"<w:tc><w:p><w:r><w:t>{cell}</w:t></w:r></w:p></w:tc>"
-        for cell in cells
+    table = "".join(
+        "<w:tr>"
+        + "".join(
+            f"<w:tc><w:p><w:r><w:t>{cell}</w:t></w:r></w:p></w:tc>"
+            for cell in cells
+        )
+        + "</w:tr>"
+        for cells in rows
     )
     document = (
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-        f"<w:body><w:tbl><w:tr>{row}</w:tr></w:tbl></w:body></w:document>"
+        f"<w:body><w:tbl>{table}</w:tbl></w:body></w:document>"
     )
     with ZipFile(output, "w", ZIP_DEFLATED) as package:
         package.writestr(
@@ -215,6 +220,10 @@ def _word_table(cells: tuple[str, ...]) -> bytes:
         )
         package.writestr("word/document.xml", document)
     return output.getvalue()
+
+
+def _word_table(cells: tuple[str, ...]) -> bytes:
+    return _word_table_rows((cells,))
 
 
 def _word_text(text: str) -> bytes:
@@ -293,10 +302,13 @@ def _image_pdf(
     alpha: float = 1,
     matrix: tuple[float, float, float, float, float, float] | None = None,
     clip: tuple[float, float, float, float] | None = None,
+    clip_commands: str | None = None,
 ) -> bytes:
     encoded = text.encode("ascii")
     transform = matrix or (image_width, 0, 0, image_height, image_x, image_y)
-    clip_command = (
+    if clip is not None and clip_commands is not None:
+        raise ValueError("clip and clip_commands are mutually exclusive")
+    clip_command = clip_commands or (
         ""
         if clip is None
         else f"{clip[0]:g} {clip[1]:g} {clip[2]:g} {clip[3]:g} re W n "
@@ -951,6 +963,55 @@ def test_fidelity_never_composes_fragments_across_any_path_contained_in_gap() ->
 
 
 @pytest.mark.parametrize(
+    "clip_rectangle",
+    (b"50 700 100 1.5", b"50 690 1.5 30"),
+    ids=("horizontal-band", "vertical-band"),
+)
+def test_fidelity_rejects_text_materially_removed_by_an_active_clip(
+    clip_rectangle: bytes,
+) -> None:
+    stream = (
+        b"q "
+        + clip_rectangle
+        + b" re W n BT /F1 10 Tf 1 0 0 1 50 700 Tm (Synthetic) Tj ET Q"
+    )
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            _word_text("Synthetic"),
+            _custom_content_pdf(stream),
+        )
+
+
+def test_fidelity_binds_table_rows_to_document_vertical_order() -> None:
+    word = _word_table_rows(
+        (("Row-1-A", "Row-1-B"), ("Row-2-A", "Row-2-B"))
+    )
+    delivery_renderer._validate_pdf_fidelity(
+        word,
+        _positioned_text_pdf(
+            [[
+                ("Row-1-A", 50, 700, 10, 0),
+                ("Row-1-B", 250, 700, 10, 0),
+                ("Row-2-A", 50, 600, 10, 0),
+                ("Row-2-B", 250, 600, 10, 0),
+            ]]
+        ),
+    )
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _positioned_text_pdf(
+                [[
+                    ("Row-1-A", 50, 600, 10, 0),
+                    ("Row-1-B", 250, 600, 10, 0),
+                    ("Row-2-A", 50, 700, 10, 0),
+                    ("Row-2-B", 250, 700, 10, 0),
+                ]]
+            ),
+        )
+
+
+@pytest.mark.parametrize(
     "matrix",
     ("0 1 -1 0", "-1 0 0 1", "1 0.8 0 1", "-1 0 0 -1"),
     ids=("rotated", "mirrored", "skewed", "upside-down"),
@@ -1088,6 +1149,111 @@ def test_fidelity_rejects_unbound_image_presentation(pdf: dict[str, object]) -> 
         delivery_renderer._validate_pdf_fidelity(
             word,
             _image_pdf("Synthetic", image.getvalue(), **options),
+        )
+
+
+@pytest.mark.parametrize(
+    "clip_commands",
+    (
+        "100 700 20 40 re W n 100 700 40 40 re W n ",
+        "110 710 20 20 re 100 700 40 40 re W* n ",
+    ),
+    ids=("cumulative-intersection", "even-odd-hole"),
+)
+def test_fidelity_rejects_images_materially_removed_by_composed_clips(
+    clip_commands: str,
+) -> None:
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, "JPEG")
+    word = _word_with_image_and_text("Synthetic", image.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf(
+                "Synthetic",
+                image.getvalue(),
+                image_x=100,
+                clip_commands=clip_commands,
+            ),
+        )
+
+
+def _transparent_smask_image_pdf(image_bytes: bytes) -> bytes:
+    stream = (
+        b"BT /F1 10 Tf 1 0 0 1 50 650 Tm (Synthetic) Tj ET "
+        b"q /GS0 gs 40 0 0 40 100 700 cm /Im1 Do Q"
+    )
+    transparent_mask = bytes(64)
+    objects = (
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceGray "
+        b"/BitsPerComponent 8 /Length 64 >>\nstream\n"
+        + transparent_mask
+        + b"\nendstream",
+        b"<< /Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceRGB "
+        b"/BitsPerComponent 8 /Filter /DCTDecode /SMask 2 0 R /Length "
+        + str(len(image_bytes)).encode("ascii")
+        + b" >>\nstream\n"
+        + image_bytes
+        + b"\nendstream",
+        b"<< /Length "
+        + str(len(stream)).encode("ascii")
+        + b" >>\nstream\n"
+        + stream
+        + b"\nendstream",
+        b"<< /Type /Page /Parent 6 0 R /MediaBox [0 0 595 842] /Resources "
+        b"<< /Font << /F1 1 0 R >> /XObject << /Im1 3 0 R >> "
+        b"/ExtGState << /GS0 << /Type /ExtGState /ca 1 /CA 1 >> >> >> /Contents 4 0 R >>",
+        b"<< /Type /Pages /Count 1 /Kids [5 0 R] >>",
+        b"<< /Type /Catalog /Pages 6 0 R >>",
+    )
+    output = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
+    offsets = []
+    for index, value in enumerate(objects, 1):
+        offsets.append(len(output))
+        output.extend(f"{index} 0 obj\n".encode("ascii") + value + b"\nendobj\n")
+    xref = len(output)
+    output.extend(b"xref\n0 8\n0000000000 65535 f \n")
+    output.extend(
+        b"".join(
+            f"{offset:010d} 00000 n \n".encode("ascii") for offset in offsets
+        )
+    )
+    output.extend(
+        f"trailer << /Size 8 /Root 7 0 R >>\nstartxref\n{xref}\n%%EOF".encode(
+            "ascii"
+        )
+    )
+    return bytes(output)
+
+
+def test_fidelity_rejects_image_hidden_by_an_intrinsic_soft_mask() -> None:
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, "JPEG")
+    word = _word_with_image_and_text("Synthetic", image.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _transparent_smask_image_pdf(image.getvalue()),
+        )
+
+
+@pytest.mark.parametrize("image_y", (400, 100, 1))
+def test_fidelity_rejects_gross_inline_image_vertical_relocation(
+    image_y: float,
+) -> None:
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, "JPEG")
+    word = _word_with_image_and_text("Synthetic", image.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf(
+                "Synthetic", image.getvalue(), image_x=100, image_y=image_y
+            ),
         )
 
 

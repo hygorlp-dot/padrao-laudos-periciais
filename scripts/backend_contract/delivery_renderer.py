@@ -346,6 +346,7 @@ def _ordered_pdf_image_signatures(page: object, reader: PdfReader) -> list[tuple
 def _ordered_image_layouts_match(
     sources: list[_WordImageLayout | None],
     candidates: list[_PdfImageLayout],
+    positioned_text: list[_PositionedText],
 ) -> bool:
     if len(sources) != len(candidates) or any(source is None for source in sources):
         return False
@@ -383,6 +384,30 @@ def _ordered_image_layouts_match(
                 return False
         else:
             return False
+        if source.kind == "inline":
+            same_page_text = (
+                fragment
+                for fragment in positioned_text
+                if fragment.page == candidate.page
+            )
+            nearest_vertical_gap = min(
+                (
+                    max(
+                        fragment.bottom - candidate.top,
+                        candidate.bottom - fragment.top,
+                        0.0,
+                    )
+                    for fragment in same_page_text
+                ),
+                default=math.inf,
+            )
+            # Inline Word media participates in the surrounding text flow.  OOXML
+            # does not carry an absolute page coordinate for it, so bind it to a
+            # conservative local flow band instead of accepting arbitrary page
+            # relocation based on matching bytes and extent alone.
+            flow_band = 72.0
+            if nearest_vertical_gap > flow_band:
+                return False
     return True
 
 
@@ -423,14 +448,15 @@ def _has_unsafe_image_drawing(page: object, reader: PdfReader) -> bool:
     fill_alpha = 1.0
     stroke_alpha = 1.0
     clip_bounds: tuple[float, float, float, float] | None = None
-    path_rectangle: tuple[float, float, float, float] | None = None
+    clip_is_complex = False
+    path_rectangles: tuple[tuple[float, float, float, float], ...] = ()
+    path_is_complex = False
     clip_pending = False
     image_matrix: tuple[float, float, float, float, float, float] | None = None
     stack: list[
         tuple[
             float,
             float,
-            tuple[float, float, float, float] | None,
             tuple[float, float, float, float] | None,
             bool,
             tuple[float, float, float, float, float, float] | None,
@@ -445,6 +471,44 @@ def _has_unsafe_image_drawing(page: object, reader: PdfReader) -> bool:
         images = {str(name) for name in page.images.keys()}
     except (AttributeError, KeyError, TypeError, ValueError):
         return True
+    if not images:
+        return False
+    try:
+        xobjects = resources.get("/XObject", {}).get_object()
+        intrinsically_masked = {
+            name
+            for name in images
+            if (
+                (image_object := xobjects[name].get_object()).get("/SMask")
+                not in (None, "/None")
+                or image_object.get("/Mask") not in (None, "/None")
+                or bool(image_object.get("/ImageMask", False))
+            )
+        }
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return True
+
+    def apply_pending_clip() -> None:
+        nonlocal clip_bounds, clip_is_complex, clip_pending
+        if not clip_pending:
+            return
+        if path_is_complex or len(path_rectangles) != 1:
+            clip_is_complex = True
+        else:
+            rectangle = path_rectangles[0]
+            if clip_bounds is None:
+                clip_bounds = rectangle
+            else:
+                clip_bounds = (
+                    max(clip_bounds[0], rectangle[0]),
+                    max(clip_bounds[1], rectangle[1]),
+                    min(clip_bounds[2], rectangle[2]),
+                    min(clip_bounds[3], rectangle[3]),
+                )
+                if clip_bounds[2] <= clip_bounds[0] or clip_bounds[3] <= clip_bounds[1]:
+                    clip_is_complex = True
+        clip_pending = False
+
     for operands, operator in ContentStream(page.get_contents(), reader).operations:
         if operator == b"q":
             stack.append(
@@ -452,8 +516,7 @@ def _has_unsafe_image_drawing(page: object, reader: PdfReader) -> bool:
                     fill_alpha,
                     stroke_alpha,
                     clip_bounds,
-                    path_rectangle,
-                    clip_pending,
+                    clip_is_complex,
                     image_matrix,
                 )
             )
@@ -462,14 +525,16 @@ def _has_unsafe_image_drawing(page: object, reader: PdfReader) -> bool:
                 fill_alpha,
                 stroke_alpha,
                 clip_bounds,
-                path_rectangle,
-                clip_pending,
+                clip_is_complex,
                 image_matrix,
             ) = (
                 stack.pop()
                 if stack
-                else (1.0, 1.0, None, None, False, None)
+                else (1.0, 1.0, None, False, None)
             )
+            path_rectangles = ()
+            path_is_complex = False
+            clip_pending = False
         elif operator == b"gs" and operands:
             try:
                 state = ext_states[str(operands[0])].get_object()
@@ -479,32 +544,36 @@ def _has_unsafe_image_drawing(page: object, reader: PdfReader) -> bool:
                 return True
         elif operator in {b"W", b"W*"}:
             clip_pending = True
-        elif operator == b"n" and clip_pending:
-            if path_rectangle is None:
-                return True
-            clip_bounds = path_rectangle
-            clip_pending = False
         elif operator == b"re" and len(operands) == 4:
             try:
                 x, y, width, height = (float(value) for value in operands)
-                path_rectangle = (
+                path_rectangles += ((
                     min(x, x + width),
                     min(y, y + height),
                     max(x, x + width),
                     max(y, y + height),
-                )
+                ),)
             except (TypeError, ValueError):
                 return True
+        elif operator in {b"m", b"l", b"c", b"v", b"y", b"h"}:
+            path_is_complex = True
+        elif operator in {b"n", b"S", b"s", b"f", b"F", b"f*", b"B", b"B*", b"b", b"b*"}:
+            apply_pending_clip()
+            path_rectangles = ()
+            path_is_complex = False
         elif operator == b"cm" and len(operands) == 6:
             try:
                 image_matrix = tuple(float(value) for value in operands)
             except (TypeError, ValueError):
                 return True
         elif operator == b"Do" and operands and str(operands[0]) in images:
+            image_name = str(operands[0])
             if (
                 min(fill_alpha, stroke_alpha) < 0.99
                 or clip_pending
+                or clip_is_complex
                 or image_matrix is None
+                or image_name in intrinsically_masked
             ):
                 return True
             a, b, c, d, e, f = image_matrix
@@ -566,7 +635,9 @@ def _has_nonvisible_text(page: object, reader: PdfReader) -> bool:
         if operator == b"q":
             stack.append((render_mode, fill_alpha, stroke_alpha))
         elif operator == b"Q":
-            render_mode, fill_alpha, stroke_alpha = stack.pop() if stack else (0, 1.0, 1.0)
+            render_mode, fill_alpha, stroke_alpha = (
+                stack.pop() if stack else (0, 1.0, 1.0)
+            )
         elif operator == b"Tr" and operands:
             render_mode = int(operands[0])
         elif operator == b"gs" and operands:
@@ -601,6 +672,7 @@ def _raster_region_is_observably_painted(
     *,
     page_height: float,
     scale: float,
+    minimum_axis_coverage: float,
 ) -> bool:
     left, bottom, right, top = bounds
     box = (
@@ -627,8 +699,10 @@ def _raster_region_is_observably_painted(
             row = [difference.getpixel((x, y)) for x in range(difference.width)]
             active_rows += max(row) - min(row) > 8
         return (
-            active_columns >= max(1, math.ceil(difference.width * 0.12))
-            and active_rows >= max(1, math.ceil(difference.height * 0.12))
+            active_columns
+            >= max(1, math.ceil(difference.width * minimum_axis_coverage))
+            and active_rows
+            >= max(1, math.ceil(difference.height * minimum_axis_coverage))
         )
     finally:
         difference.close()
@@ -705,7 +779,9 @@ def _pdfium_visible_layout(
                 prior_text_regions: list[tuple[float, float, float, float]] = []
                 direct_text_objects: list[object] = []
                 objects = list(page.get_objects(max_depth=15, textpage=text_page))
-                glyph_regions: list[tuple[float, float, float, float]] = []
+                glyph_regions: list[
+                    tuple[tuple[float, float, float, float], str]
+                ] = []
                 for character_index in range(text_page.count_chars()):
                     character = text_page.get_text_range(character_index, 1)
                     if not character or character.isspace():
@@ -725,7 +801,7 @@ def _pdfium_visible_layout(
                     ):
                         unsafe = True
                     else:
-                        glyph_regions.append(glyph_bounds)
+                        glyph_regions.append((glyph_bounds, character))
                 for item in objects:
                     bounds = tuple(float(value) for value in item.get_bounds())
                     if len(bounds) != 4 or not all(math.isfinite(value) for value in bounds):
@@ -834,8 +910,11 @@ def _pdfium_visible_layout(
                         bounds,
                         page_height=height,
                         scale=scale,
+                        minimum_axis_coverage=(
+                            0.50 if any(character.isalnum() for character in text) else 0.12
+                        ),
                     )
-                    for bounds in glyph_regions
+                    for bounds, text in glyph_regions
                 ):
                     unsafe = True
             finally:
@@ -917,8 +996,9 @@ def _table_rows_match(
     positioned: list[_PositionedText],
     barriers: list[_VerticalBarrier],
 ) -> bool:
+    previous_position: tuple[int, float] | None = None
     for row in rows:
-        row_matches = False
+        matching_positions: set[tuple[int, float]] = set()
         for anchor in positioned:
             line_tolerance = max(3.0, 0.35 * anchor.font_size)
             line = sorted(
@@ -943,10 +1023,27 @@ def _table_rows_match(
                     break
                 cursor = end
             if matched:
-                row_matches = True
-                break
-        if not row_matches:
+                matching_positions.add((anchor.page, anchor.y))
+        ordered_positions = sorted(
+            matching_positions,
+            key=lambda value: (value[0], -value[1]),
+        )
+        selected = next(
+            (
+                position
+                for position in ordered_positions
+                if previous_position is None
+                or position[0] > previous_position[0]
+                or (
+                    position[0] == previous_position[0]
+                    and position[1] < previous_position[1] - 0.5
+                )
+            ),
+            None,
+        )
+        if selected is None:
             return False
+        previous_position = selected
     return True
 
 
@@ -1015,7 +1112,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
 
     images_match = _ordered_image_signatures_match(word_images, pdf_images)
     image_layouts_match = _ordered_image_layouts_match(
-        word_image_layouts, pdf_image_layouts
+        word_image_layouts, pdf_image_layouts, positioned
     )
     tables_match = _table_rows_match(table_rows, positioned, barriers)
     if (
