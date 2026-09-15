@@ -13,12 +13,13 @@ from dataclasses import dataclass
 from hashlib import sha256
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import sys
 from typing import Callable
 import winreg
-from zipfile import ZIP_DEFLATED, ZipFile
+from xml.etree import ElementTree
+from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 
 RENDER_OPERATION = "RENDER_BOUND_AUTHORITATIVE_WORD_TO_DERIVED_PDF"
@@ -34,6 +35,14 @@ _STATUS_PHASES = (
     "WORD_QUIT",
     "WORKER_EXIT",
 )
+_STATUS_INDEX = {phase: index for index, phase in enumerate(_STATUS_PHASES, 1)}
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_REL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+_CT = "{http://schemas.openxmlformats.org/package/2006/content-types}"
+_MAX_PACKAGE_PARTS = 4_096
+_MAX_PACKAGE_BYTES = 256 * 1024 * 1024
+_MAX_PART_BYTES = 64 * 1024 * 1024
+_MAX_COMPRESSION_RATIO = 200
 
 
 @dataclass(slots=True)
@@ -59,10 +68,14 @@ def _atomic_json(path: Path, value: dict) -> None:
 
 
 def _status(root: Path, phase: str) -> None:
-    if phase not in _STATUS_PHASES:
+    index = _STATUS_INDEX.get(phase)
+    if index is None:
         raise ValueError("invalid Word worker phase")
+    path = root / f"status-{index:02d}.json"
+    if path.exists() or path.with_suffix(path.suffix + ".tmp").exists():
+        raise RuntimeError("Word worker phase was already published")
     _atomic_json(
-        root / "status.json",
+        path,
         {"schemaVersion": _SCHEMA_VERSION, "state": "RUNNING", "phase": phase},
     )
 
@@ -354,6 +367,86 @@ def _source_path(root: Path, source_format: str) -> Path:
     return source
 
 
+def _validate_word_source(source: Path, source_format: str) -> None:
+    """Reject package content that could make privileged Word acquire egress."""
+    try:
+        with ZipFile(source) as package:
+            infos = package.infolist()
+            if not infos or len(infos) > _MAX_PACKAGE_PARTS:
+                raise ValueError("invalid Word package size")
+            names = [item.filename for item in infos]
+            if len(names) != len(set(names)):
+                raise ValueError("duplicate Word package part")
+            total_size = 0
+            for item in infos:
+                path = PurePosixPath(item.filename)
+                if (
+                    item.filename.startswith(("/", "\\"))
+                    or "\\" in item.filename
+                    or ".." in path.parts
+                    or item.file_size > _MAX_PART_BYTES
+                    or (
+                        item.file_size > 1024 * 1024
+                        and item.file_size
+                        > max(item.compress_size, 1) * _MAX_COMPRESSION_RATIO
+                    )
+                ):
+                    raise ValueError("unsafe Word package part")
+                total_size += item.file_size
+            if total_size > _MAX_PACKAGE_BYTES:
+                raise ValueError("invalid Word package size")
+            required = {"[Content_Types].xml", "word/document.xml"}
+            if not required <= set(names):
+                raise ValueError("incomplete Word package")
+
+            content_types = ElementTree.fromstring(package.read("[Content_Types].xml"))
+            main_types = {
+                item.attrib.get("ContentType", "")
+                for item in content_types.iter(f"{_CT}Override")
+                if item.attrib.get("PartName") == "/word/document.xml"
+            }
+            expected_type = (
+                "application/vnd.ms-word.document.macroEnabled.main+xml"
+                if source_format == "DOCM"
+                else "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
+            )
+            if main_types != {expected_type}:
+                raise ValueError("Word package format identity mismatch")
+
+            for name in names:
+                if name.endswith(".rels"):
+                    relationships = ElementTree.fromstring(package.read(name))
+                    for relationship in relationships.iter(f"{_REL}Relationship"):
+                        target = relationship.attrib.get("Target", "").strip()
+                        if (
+                            relationship.attrib.get("TargetMode", "").casefold()
+                            == "external"
+                            or target.startswith(("\\\\", "//"))
+                            or re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE)
+                        ):
+                            raise ValueError("external Word relationship is forbidden")
+                if not (name.startswith("word/") and name.endswith(".xml")):
+                    continue
+                root = ElementTree.fromstring(package.read(name))
+                instructions = [
+                    node.attrib.get(f"{_W}instr", "")
+                    for node in root.iter(f"{_W}fldSimple")
+                ]
+                for paragraph in root.iter(f"{_W}p"):
+                    instructions.append(
+                        "".join(
+                            node.text or "" for node in paragraph.iter(f"{_W}instrText")
+                        )
+                    )
+                if any(
+                    re.search(r"\b(?:INCLUDETEXT|INCLUDEPICTURE|DDEAUTO|DDE)\b", value, re.IGNORECASE)
+                    for value in instructions
+                ):
+                    raise ValueError("unsupported active Word field")
+    except (BadZipFile, OSError, KeyError, ElementTree.ParseError) as exc:
+        raise ValueError("invalid Word render source") from exc
+
+
 def _render_job(
     root: Path,
     *,
@@ -362,6 +455,7 @@ def _render_job(
 ) -> dict:
     request = _load_request(root)
     source = _source_path(root, request["sourceFormat"])
+    _validate_word_source(source, request["sourceFormat"])
     output = root / "output.partial.pdf"
     if output.exists() or output.is_symlink():
         raise ValueError("invalid Word render output state")

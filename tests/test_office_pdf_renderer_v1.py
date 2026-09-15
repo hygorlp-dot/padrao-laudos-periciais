@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from hashlib import sha256
+from io import BytesIO
 import json
 from pathlib import Path
 import shutil
 import sys
 import types
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
@@ -137,6 +139,44 @@ def _com_binder(calls: list[tuple]):
     return bind
 
 
+def _synthetic_word_package(
+    *,
+    document_body: str = "<w:p><w:r><w:t>Synthetic</w:t></w:r></w:p>",
+    relationships: str | None = None,
+) -> bytes:
+    output = BytesIO()
+    document = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body>{document_body}</w:body></w:document>"
+    )
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            "</Types>",
+        )
+        package.writestr("word/document.xml", document)
+        if relationships is not None:
+            package.writestr("word/_rels/document.xml.rels", relationships)
+    return output.getvalue()
+
+
+def _write_worker_request(root: Path, source: bytes) -> None:
+    (root / "source.docx").write_bytes(source)
+    (root / "request.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": "1.0.0",
+                "operation": RENDER_OPERATION,
+                "sourceFormat": "DOCX",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_converter_uses_closed_worker_protocol_and_preserves_word_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -160,18 +200,8 @@ def test_converter_uses_closed_worker_protocol_and_preserves_word_bytes(
 
 
 def test_word_worker_hard_codes_read_only_word_to_pdf_operation(tmp_path: Path) -> None:
-    source = b"synthetic-worker-word"
-    (tmp_path / "source.docx").write_bytes(source)
-    (tmp_path / "request.json").write_text(
-        json.dumps(
-            {
-                "schemaVersion": "1.0.0",
-                "operation": RENDER_OPERATION,
-                "sourceFormat": "DOCX",
-            }
-        ),
-        encoding="utf-8",
-    )
+    source = _synthetic_word_package()
+    _write_worker_request(tmp_path, source)
     calls: list[tuple] = []
 
     result = _render_job(
@@ -197,17 +227,7 @@ def test_word_worker_hard_codes_read_only_word_to_pdf_operation(tmp_path: Path) 
 def test_word_worker_binds_exact_owned_process_and_disables_macros_before_open(
     tmp_path: Path,
 ) -> None:
-    (tmp_path / "source.docx").write_bytes(b"synthetic-worker-word")
-    (tmp_path / "request.json").write_text(
-        json.dumps(
-            {
-                "schemaVersion": "1.0.0",
-                "operation": RENDER_OPERATION,
-                "sourceFormat": "DOCX",
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_worker_request(tmp_path, _synthetic_word_package())
     calls: list[tuple] = []
 
     _render_job(
@@ -223,6 +243,61 @@ def test_word_worker_binds_exact_owned_process_and_disables_macros_before_open(
     assert names.index("word-process-owned") < names.index("word-com-bound")
     assert names.index("word-com-bound") < names.index("open")
     assert calls.index(("set", "AutomationSecurity", 3)) < names.index("open")
+
+
+@pytest.mark.parametrize(
+    "relationship",
+    (
+        '<Relationship Id="rId1" Type="template" Target="https://example.invalid/private" TargetMode="External"/>',
+        '<Relationship Id="rId1" Type="template" Target="\\\\server\\private\\template.dotx"/>',
+    ),
+)
+def test_word_worker_rejects_external_relationships_before_process_launch(
+    tmp_path: Path, relationship: str
+) -> None:
+    relationships = (
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        f"{relationship}</Relationships>"
+    )
+    _write_worker_request(
+        tmp_path,
+        _synthetic_word_package(relationships=relationships),
+    )
+    calls: list[tuple] = []
+
+    with pytest.raises(ValueError, match="external"):
+        _render_job(
+            tmp_path,
+            word_launcher=lambda root: _word_launcher(root, calls),
+            com_binder=_com_binder(calls),
+        )
+
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "instruction",
+    (
+        'INCLUDETEXT "https://example.invalid/private"',
+        'INCLUDEPICTURE "\\\\server\\private\\image.png"',
+        'DDEAUTO cmd "payload"',
+    ),
+)
+def test_word_worker_rejects_active_external_fields_before_process_launch(
+    tmp_path: Path, instruction: str
+) -> None:
+    body = f"<w:p><w:r><w:instrText>{instruction}</w:instrText></w:r></w:p>"
+    _write_worker_request(tmp_path, _synthetic_word_package(document_body=body))
+    calls: list[tuple] = []
+
+    with pytest.raises(ValueError, match="active Word field"):
+        _render_job(
+            tmp_path,
+            word_launcher=lambda root: _word_launcher(root, calls),
+            com_binder=_com_binder(calls),
+        )
+
+    assert calls == []
 
 
 def test_worker_request_is_exact_and_rejects_arbitrary_protocol(tmp_path: Path) -> None:
@@ -406,17 +481,7 @@ def test_rot_binding_rejects_signaled_original_process_even_if_pid_is_reused(
 
 
 def test_missing_word_version_cannot_produce_success_result(tmp_path: Path) -> None:
-    (tmp_path / "source.docx").write_bytes(b"synthetic-worker-word")
-    (tmp_path / "request.json").write_text(
-        json.dumps(
-            {
-                "schemaVersion": "1.0.0",
-                "operation": RENDER_OPERATION,
-                "sourceFormat": "DOCX",
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_worker_request(tmp_path, _synthetic_word_package())
     calls: list[tuple] = []
 
     class _VersionlessWord(_FakeWord):
