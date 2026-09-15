@@ -43,6 +43,11 @@ _MAX_PACKAGE_PARTS = 4_096
 _MAX_PACKAGE_BYTES = 256 * 1024 * 1024
 _MAX_PART_BYTES = 64 * 1024 * 1024
 _MAX_COMPRESSION_RATIO = 200
+_SAFE_WORD_FIELD_CODES = frozenset({"NUMPAGES", "PAGE", "PAGEREF", "REF", "SEQ", "TOC"})
+_ACQUIRING_WORD_FIELD_CODES = re.compile(
+    r"\b(?:DATABASE|DDE|DDEAUTO|HYPERLINK|INCLUDEPICTURE|INCLUDETEXT|LINK)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(slots=True)
@@ -68,10 +73,11 @@ def _atomic_json(path: Path, value: dict) -> None:
 
 
 def _status(root: Path, phase: str) -> None:
+    """Publish an immutable marker whose validated name is the parent protocol."""
     index = _STATUS_INDEX.get(phase)
     if index is None:
         raise ValueError("invalid Word worker phase")
-    path = root / f"status-{index:02d}.json"
+    path = root / f"status-{index:02d}-{phase}.json"
     if path.exists() or path.with_suffix(path.suffix + ".tmp").exists():
         raise RuntimeError("Word worker phase was already published")
     _atomic_json(
@@ -438,11 +444,17 @@ def _validate_word_source(source: Path, source_format: str) -> None:
                             node.text or "" for node in paragraph.iter(f"{_W}instrText")
                         )
                     )
-                if any(
-                    re.search(r"\b(?:INCLUDETEXT|INCLUDEPICTURE|DDEAUTO|DDE)\b", value, re.IGNORECASE)
-                    for value in instructions
-                ):
-                    raise ValueError("unsupported active Word field")
+                for value in instructions:
+                    if not value.strip():
+                        continue
+                    code = re.match(r"\s*([A-Z]+)\b", value, re.IGNORECASE)
+                    if (
+                        _ACQUIRING_WORD_FIELD_CODES.search(value)
+                        or re.search(r"(?:\\\\|//|[A-Z][A-Z0-9+.-]*:)", value, re.IGNORECASE)
+                        or code is None
+                        or code.group(1).upper() not in _SAFE_WORD_FIELD_CODES
+                    ):
+                        raise ValueError("unsupported active Word field")
     except (BadZipFile, OSError, KeyError, ElementTree.ParseError) as exc:
         raise ValueError("invalid Word render source") from exc
 
@@ -483,6 +495,10 @@ def _render_job(
         app.AutomationSecurity = 3
         if int(app.AutomationSecurity) != 3:
             raise RuntimeError("Word macro automation security did not fail closed")
+        app.Options.UpdateLinksAtOpen = False
+        app.Options.UpdateFieldsAtPrint = False
+        if bool(app.Options.UpdateLinksAtOpen) or bool(app.Options.UpdateFieldsAtPrint):
+            raise RuntimeError("Word automatic external updates did not fail closed")
         renderer_version_value = getattr(app, "Version", None)
         if (
             not isinstance(renderer_version_value, str)

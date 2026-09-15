@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections import Counter
+import ctypes
 from dataclasses import dataclass
 from hashlib import sha256
 from io import BytesIO
+import math
 import posixpath
 import json
 import re
@@ -14,7 +16,8 @@ import unicodedata
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
-from PIL import Image, ImageStat, UnidentifiedImageError
+from PIL import Image, ImageChops, ImageStat, UnidentifiedImageError
+import pypdfium2 as pdfium
 from pypdf import PdfReader
 from pypdf.generic import BooleanObject
 from pypdf.errors import PdfReadError
@@ -233,22 +236,283 @@ class _PositionedText:
     x: float
     y: float
     font_size: float
+    right: float
+    bottom: float
+    top: float
+
+
+@dataclass(frozen=True, slots=True)
+class _VerticalBarrier:
+    page: int
+    left: float
+    right: float
+    bottom: float
+    top: float
 
 
 def _has_nonvisible_text(page: object, reader: PdfReader) -> bool:
     render_mode = 0
-    stack: list[int] = []
+    fill_alpha = 1.0
+    stroke_alpha = 1.0
+    stack: list[tuple[int, float, float]] = []
+    try:
+        resources = page["/Resources"].get_object()
+        ext_states = resources.get("/ExtGState", {}).get_object()
+    except (AttributeError, KeyError, TypeError):
+        ext_states = {}
     text_operators = {b"Tj", b"TJ", b"'", b'"'}
     for operands, operator in ContentStream(page.get_contents(), reader).operations:
         if operator == b"q":
-            stack.append(render_mode)
+            stack.append((render_mode, fill_alpha, stroke_alpha))
         elif operator == b"Q":
-            render_mode = stack.pop() if stack else 0
+            render_mode, fill_alpha, stroke_alpha = stack.pop() if stack else (0, 1.0, 1.0)
         elif operator == b"Tr" and operands:
             render_mode = int(operands[0])
-        elif operator in text_operators and render_mode in {3, 7}:
-            return True
+        elif operator == b"gs" and operands:
+            try:
+                state = ext_states[str(operands[0])].get_object()
+                fill_alpha = float(state.get("/ca", fill_alpha))
+                stroke_alpha = float(state.get("/CA", stroke_alpha))
+            except (AttributeError, KeyError, TypeError, ValueError):
+                return True
+        elif operator in text_operators and _text_show_has_content(operator, operands):
+            if render_mode in {3, 7}:
+                return True
+            visible_alpha = (
+                fill_alpha
+                if render_mode in {0, 4}
+                else stroke_alpha
+                if render_mode in {1, 5}
+                else max(fill_alpha, stroke_alpha)
+            )
+            if visible_alpha <= 0.01:
+                return True
     return False
+
+
+def _raster_region_is_observably_painted(
+    rendered: Image.Image,
+    background: Image.Image,
+    bounds: tuple[float, float, float, float],
+    *,
+    page_height: float,
+    scale: float,
+) -> bool:
+    left, bottom, right, top = bounds
+    box = (
+        max(0, math.floor((left - 1.0) * scale)),
+        max(0, math.floor((page_height - top - 1.0) * scale)),
+        min(rendered.width, math.ceil((right + 1.0) * scale)),
+        min(rendered.height, math.ceil((page_height - bottom + 1.0) * scale)),
+    )
+    if box[2] <= box[0] or box[3] <= box[1]:
+        return False
+    actual = rendered.crop(box).convert("RGB")
+    without_text = background.crop(box).convert("RGB")
+    difference = ImageChops.difference(actual, without_text).convert("L")
+    try:
+        pixels = tuple(difference.get_flattened_data())
+        if not pixels or max(pixels) - min(pixels) <= 8:
+            return False
+        active_columns = 0
+        for x in range(difference.width):
+            column = [difference.getpixel((x, y)) for y in range(difference.height)]
+            active_columns += max(column) - min(column) > 8
+        active_rows = 0
+        for y in range(difference.height):
+            row = [difference.getpixel((x, y)) for x in range(difference.width)]
+            active_rows += max(row) - min(row) > 8
+        return (
+            active_columns >= max(1, math.ceil(difference.width * 0.12))
+            and active_rows >= max(1, math.ceil(difference.height * 0.12))
+        )
+    finally:
+        difference.close()
+        without_text.close()
+        actual.close()
+
+
+def _path_is_opaque_fill(item: object) -> bool:
+    fill_mode = ctypes.c_int()
+    stroke = ctypes.c_int()
+    if not pdfium.raw.FPDFPath_GetDrawMode(
+        item.raw, ctypes.byref(fill_mode), ctypes.byref(stroke)
+    ):
+        return True
+    if fill_mode.value == 0:
+        return False
+    red, green, blue, alpha = (ctypes.c_uint() for _ in range(4))
+    if not pdfium.raw.FPDFPageObj_GetFillColor(
+        item.raw,
+        ctypes.byref(red),
+        ctypes.byref(green),
+        ctypes.byref(blue),
+        ctypes.byref(alpha),
+    ):
+        return True
+    return alpha.value >= 250
+
+
+def _regions_overlap(
+    first: tuple[float, float, float, float],
+    second: tuple[float, float, float, float],
+) -> bool:
+    return (
+        min(first[2], second[2]) - max(first[0], second[0]) > 0.25
+        and min(first[3], second[3]) - max(first[1], second[1]) > 0.25
+    )
+
+
+def _pdfium_visible_layout(
+    pdf_content: bytes,
+) -> tuple[list[_PositionedText], list[_VerticalBarrier], bool]:
+    positioned: list[_PositionedText] = []
+    barriers: list[_VerticalBarrier] = []
+    unsafe = False
+    document = pdfium.PdfDocument(pdf_content)
+    try:
+        for page_number in range(len(document)):
+            page = document[page_number]
+            text_page = None
+            bitmap = None
+            rendered = None
+            background_bitmap = None
+            background = None
+            objects: list[object] = []
+            try:
+                width, height = page.get_size()
+                scale = 2.0
+                if (
+                    not all(math.isfinite(value) and value > 0 for value in (width, height))
+                    or width * scale > 8_192
+                    or height * scale > 8_192
+                    or width * height * scale * scale > 32_000_000
+                ):
+                    raise ValueError("PDF page exceeds fidelity raster limits")
+                text_page = page.get_textpage()
+                bitmap = page.render(scale=scale)
+                rendered = bitmap.to_pil()
+                prior_text_regions: list[tuple[float, float, float, float]] = []
+                direct_text_objects: list[object] = []
+                objects = list(page.get_objects(max_depth=15, textpage=text_page))
+                glyph_regions: list[tuple[float, float, float, float]] = []
+                for character_index in range(text_page.count_chars()):
+                    character = text_page.get_text_range(character_index, 1)
+                    if not character or character.isspace():
+                        continue
+                    glyph_bounds = tuple(
+                        float(value) for value in text_page.get_charbox(character_index)
+                    )
+                    if (
+                        len(glyph_bounds) != 4
+                        or not all(math.isfinite(value) for value in glyph_bounds)
+                        or glyph_bounds[0] < -0.5
+                        or glyph_bounds[1] < -0.5
+                        or glyph_bounds[2] > width + 0.5
+                        or glyph_bounds[3] > height + 0.5
+                        or glyph_bounds[2] <= glyph_bounds[0]
+                        or glyph_bounds[3] <= glyph_bounds[1]
+                    ):
+                        unsafe = True
+                    else:
+                        glyph_regions.append(glyph_bounds)
+                for item in objects:
+                    bounds = tuple(float(value) for value in item.get_bounds())
+                    if len(bounds) != 4 or not all(math.isfinite(value) for value in bounds):
+                        unsafe = True
+                        continue
+                    left, bottom, right, top = bounds
+                    inside_page = (
+                        left >= -0.5
+                        and bottom >= -0.5
+                        and right <= width + 0.5
+                        and top <= height + 0.5
+                        and right > left
+                        and top > bottom
+                    )
+                    if item.type == pdfium.raw.FPDF_PAGEOBJ_TEXT:
+                        text = _normalized_visible_text(item.extract())
+                        matrix = item.get_matrix()
+                        horizontal_scale = math.hypot(float(matrix.a), float(matrix.b))
+                        vertical_scale = math.hypot(float(matrix.c), float(matrix.d))
+                        if not text:
+                            if horizontal_scale < 0.05 or vertical_scale < 0.05:
+                                unsafe = True
+                            continue
+                        if (
+                            not inside_page
+                            or horizontal_scale < 0.25
+                            or vertical_scale < 0.25
+                        ):
+                            unsafe = True
+                        if item.container is None:
+                            direct_text_objects.append(item)
+                        else:
+                            unsafe = True
+                        prior_text_regions.append(bounds)
+                        positioned.append(
+                            _PositionedText(
+                                page_number,
+                                text,
+                                left,
+                                bottom,
+                                max(float(item.get_font_size()), top - bottom),
+                                right,
+                                bottom,
+                                top,
+                            )
+                        )
+                    elif item.type == pdfium.raw.FPDF_PAGEOBJ_IMAGE:
+                        if not inside_page or right - left < 0.5 or top - bottom < 0.5:
+                            unsafe = True
+                    elif (
+                        item.type == pdfium.raw.FPDF_PAGEOBJ_PATH
+                        and right - left <= 3.0
+                        and top - bottom >= 3.0
+                    ):
+                        barriers.append(
+                            _VerticalBarrier(page_number, left, right, bottom, top)
+                        )
+                    if (
+                        item.type == pdfium.raw.FPDF_PAGEOBJ_PATH
+                        and _path_is_opaque_fill(item)
+                        and any(_regions_overlap(bounds, region) for region in prior_text_regions)
+                    ):
+                        unsafe = True
+                for item in direct_text_objects:
+                    page.remove_obj(item)
+                if direct_text_objects:
+                    page.gen_content()
+                background_bitmap = page.render(scale=scale)
+                background = background_bitmap.to_pil()
+                if any(
+                    not _raster_region_is_observably_painted(
+                        rendered,
+                        background,
+                        bounds,
+                        page_height=height,
+                        scale=scale,
+                    )
+                    for bounds in glyph_regions
+                ):
+                    unsafe = True
+            finally:
+                if background is not None:
+                    background.close()
+                if background_bitmap is not None:
+                    background_bitmap.close()
+                if rendered is not None:
+                    rendered.close()
+                if bitmap is not None:
+                    bitmap.close()
+                for item in objects:
+                    item.close()
+                if text_page is not None:
+                    text_page.close()
+                page.close()
+    finally:
+        document.close()
+    return positioned, barriers, unsafe
 
 
 def _text_show_has_content(operator: bytes, operands: list[object]) -> bool:
@@ -269,6 +533,7 @@ def _fragment_sequence_end(
     expected: str,
     fragments: list[_PositionedText],
     start: int,
+    barriers: list[_VerticalBarrier],
 ) -> int | None:
     target = _lexical_tokens(expected)
     observed: list[str] = []
@@ -279,11 +544,20 @@ def _fragment_sequence_end(
             line_tolerance = max(3.0, 0.35 * max(previous.font_size, fragment.font_size))
             estimated_end = previous.x + len(previous.text) * previous.font_size * 0.6
             horizontal_tolerance = max(18.0, 1.5 * max(previous.font_size, fragment.font_size))
+            crosses_barrier = any(
+                barrier.page == fragment.page
+                and barrier.left < fragment.x
+                and barrier.right > previous.right
+                and barrier.bottom <= max(previous.top, fragment.top)
+                and barrier.top >= min(previous.bottom, fragment.bottom)
+                for barrier in barriers
+            )
             if (
                 fragment.page != previous.page
                 or abs(fragment.y - previous.y) > line_tolerance
                 or fragment.x < previous.x
                 or fragment.x > estimated_end + horizontal_tolerance
+                or crosses_barrier
             ):
                 return None
         observed.extend(_lexical_tokens(fragment.text))
@@ -297,7 +571,9 @@ def _fragment_sequence_end(
 
 
 def _table_rows_match(
-    rows: list[tuple[str, ...]], positioned: list[_PositionedText]
+    rows: list[tuple[str, ...]],
+    positioned: list[_PositionedText],
+    barriers: list[_VerticalBarrier],
 ) -> bool:
     for row in rows:
         row_matches = False
@@ -317,7 +593,7 @@ def _table_rows_match(
             for cell in row:
                 end = None
                 for start in range(cursor, len(line)):
-                    end = _fragment_sequence_end(cell, line, start)
+                    end = _fragment_sequence_end(cell, line, start, barriers)
                     if end is not None:
                         break
                 if end is None:
@@ -362,95 +638,17 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
             word_images = _ordered_word_image_signatures(package, xml_roots)
         reader = PdfReader(BytesIO(pdf_content), strict=True)
         extracted_pages: list[str] = []
-        positioned: list[_PositionedText] = []
         unsafe_text = False
         pdf_images: list[tuple[float, tuple[float, ...], tuple[float, ...], tuple[bool, ...]]] = []
         for page_number, page in enumerate(reader.pages):
-            left = float(page.mediabox.left)
-            bottom = float(page.mediabox.bottom)
-            right = float(page.mediabox.right)
-            top = float(page.mediabox.top)
             if _has_nonvisible_text(page, reader):
                 unsafe_text = True
-
-            operator_positions: list[tuple[float, float, float]] = []
-            graphics_stack: list[tuple[float, int]] = []
-            current_size = 12.0
-            current_render_mode = 0
-
-            def operand_visitor(
-                operator: bytes, operands: list[object], cm: list[float], tm: list[float]
-            ) -> None:
-                nonlocal current_size, current_render_mode, unsafe_text
-                if operator == b"q":
-                    graphics_stack.append((current_size, current_render_mode))
-                elif operator == b"Q":
-                    if graphics_stack:
-                        current_size, current_render_mode = graphics_stack.pop()
-                elif operator == b"Tf" and len(operands) >= 2:
-                    current_size = float(operands[1])
-                elif operator == b"Tr" and operands:
-                    current_render_mode = int(operands[0])
-                elif operator in {b"Tj", b"TJ", b"'", b'"'} and _text_show_has_content(
-                    operator, operands
-                ):
-                    x = float(tm[4]) * float(cm[0]) + float(tm[5]) * float(cm[2]) + float(cm[4])
-                    y = float(tm[4]) * float(cm[1]) + float(tm[5]) * float(cm[3]) + float(cm[5])
-                    scale = max(
-                        (float(cm[0]) ** 2 + float(cm[1]) ** 2) ** 0.5,
-                        (float(cm[2]) ** 2 + float(cm[3]) ** 2) ** 0.5,
-                    )
-                    effective_size = abs(current_size) * scale
-                    if (
-                        current_render_mode in {3, 7}
-                        or effective_size < 0.5
-                        or x < left - 1.0
-                        or x > right + 1.0
-                        or y < bottom - 1.0
-                        or y > top + 1.0
-                    ):
-                        unsafe_text = True
-                    operator_positions.append((x, y, effective_size))
-
-            page_positioned: list[_PositionedText] = []
-            def visitor(text: str, cm: list[float], tm: list[float], _font: object, size: float) -> None:
-                nonlocal unsafe_text
-                normalized = _normalized_visible_text(text)
-                if normalized:
-                    x = float(tm[4]) * float(cm[0]) + float(tm[5]) * float(cm[2]) + float(cm[4])
-                    y = float(tm[4]) * float(cm[1]) + float(tm[5]) * float(cm[3]) + float(cm[5])
-                    scale = max(
-                        (float(cm[0]) ** 2 + float(cm[1]) ** 2) ** 0.5,
-                        (float(cm[2]) ** 2 + float(cm[3]) ** 2) ** 0.5,
-                    )
-                    effective_size = abs(float(size)) * scale
-                    if (
-                        effective_size < 0.5
-                        or x < left - 1.0
-                        or x > right + 1.0
-                        or y < bottom - 1.0
-                        or y > top + 1.0
-                    ):
-                        unsafe_text = True
-                    page_positioned.append(
-                        _PositionedText(page_number, normalized, x, y, effective_size)
-                    )
-            extracted_pages.append(
-                page.extract_text(
-                    visitor_operand_before=operand_visitor,
-                    visitor_text=visitor,
-                )
-                or ""
-            )
-            if len(operator_positions) == len(page_positioned):
-                page_positioned = [
-                    _PositionedText(page_number, item.text, x, y, size)
-                    for item, (x, y, size) in zip(page_positioned, operator_positions)
-                ]
-            positioned.extend(page_positioned)
+            extracted_pages.append(page.extract_text() or "")
             pdf_images.extend(_ordered_pdf_image_signatures(page, reader))
         pdf_text = _normalized_visible_text("\n".join(extracted_pages))
-    except (BadZipFile, KeyError, ElementTree.ParseError, PdfReadError, OSError, ValueError) as exc:
+        positioned, barriers, pdfium_unsafe = _pdfium_visible_layout(pdf_content)
+        unsafe_text = unsafe_text or pdfium_unsafe
+    except (BadZipFile, KeyError, ElementTree.ParseError, PdfReadError, OSError, RuntimeError, ValueError) as exc:
         raise ValueError("final PDF fidelity cannot be verified") from exc
     source_tokens = _lexical_tokens(" ".join(word_fragments))
     pdf_tokens = _lexical_tokens(pdf_text)
@@ -467,7 +665,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     document_order_matches = all(any(candidate == token for candidate in token_cursor) for token in document_tokens)
 
     images_match = _ordered_image_signatures_match(word_images, pdf_images)
-    tables_match = _table_rows_match(table_rows, positioned)
+    tables_match = _table_rows_match(table_rows, positioned, barriers)
     if (
         not source_tokens
         or unsafe_text

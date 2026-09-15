@@ -188,6 +188,22 @@ def test_invalid_or_regressing_worker_status_fails_closed(tmp_path: Path) -> Non
     assert worker.terminated is True
 
 
+def test_worker_status_with_missing_predecessor_fails_closed(tmp_path: Path) -> None:
+    worker = _FakeOwnedWorker(_identity())
+    (tmp_path / "status-01-COM_INIT.json").write_text("published", encoding="utf-8")
+    (tmp_path / "status-03-WORD_COM_BIND.json").write_text("published", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="status"):
+        _wait_for_worker(
+            worker,
+            tmp_path,
+            WordRenderDeadlines.uniform(1.0),
+            clock=_clock([0.0]),
+        )
+
+    assert worker.terminated is True
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows sharing semantics")
 def test_phase_publication_never_replaces_a_snapshot_held_by_parent(
     tmp_path: Path,
@@ -195,12 +211,29 @@ def test_phase_publication_never_replaces_a_snapshot_held_by_parent(
     office_word_worker._status(tmp_path, "COM_INIT")
     published = tuple(tmp_path.glob("status*.json"))
     assert len(published) == 1
+    assert published[0].name == "status-01-COM_INIT.json"
 
     with published[0].open("r", encoding="utf-8") as held_snapshot:
         assert json.load(held_snapshot)["phase"] == "COM_INIT"
         office_word_worker._status(tmp_path, "WORD_PROCESS_START")
 
     assert office_pdf._read_phase(tmp_path) == "WORD_PROCESS_START"
+
+
+def test_parent_phase_observation_never_reopens_published_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    office_word_worker._status(tmp_path, "COM_INIT")
+
+    def deny_status_read(path: Path, *args, **kwargs):
+        if path.name.startswith("status-"):
+            raise PermissionError("synthetic Windows sharing violation")
+        return original_read_text(path, *args, **kwargs)
+
+    original_read_text = Path.read_text
+    monkeypatch.setattr(Path, "read_text", deny_status_read)
+
+    assert office_pdf._read_phase(tmp_path) == "COM_INIT"
 
 
 def test_status_snapshots_survive_repeated_parent_reads_with_prior_files_open(
@@ -212,6 +245,6 @@ def test_status_snapshots_survive_repeated_parent_reads_with_prior_files_open(
         with ExitStack() as open_snapshots:
             for index, phase in enumerate(office_word_worker._STATUS_PHASES, 1):
                 office_word_worker._status(root, phase)
-                snapshot = root / f"status-{index:02d}.json"
+                snapshot = root / f"status-{index:02d}-{phase}.json"
                 open_snapshots.enter_context(snapshot.open("r", encoding="utf-8"))
                 assert office_pdf._read_phase(root) == phase

@@ -128,31 +128,26 @@ def _terminate_owned_worker(worker: _OwnedWordWorker) -> bool:
 
 
 def _read_phase(root: Path) -> str | None:
-    paths = sorted(root.glob("status*.json"))
+    """Observe closed atomic markers without reopening their Windows-locked payloads."""
+    try:
+        paths = sorted(root.glob("status*.json"))
+    except OSError as exc:
+        raise ValueError("invalid Word worker status") from exc
     if not paths:
         return None
     observed: list[tuple[int, str]] = []
     for path in paths:
-        match = re.fullmatch(r"status-(\d{2})\.json", path.name)
+        match = re.fullmatch(r"status-(\d{2})-([A-Z_]+)\.json", path.name)
         if match is None:
             raise ValueError("invalid Word worker status")
-        try:
-            status = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise ValueError("invalid Word worker status") from exc
-        phase = status.get("phase") if isinstance(status, dict) else None
+        phase = match.group(2)
         index = int(match.group(1))
-        if (
-            not isinstance(status, dict)
-            or set(status) != {"schemaVersion", "state", "phase"}
-            or status.get("schemaVersion") != _SCHEMA_VERSION
-            or status.get("state") != "RUNNING"
-            or phase not in _PHASE_INDEX
-            or _PHASE_INDEX[phase] != index
-        ):
+        if phase not in _PHASE_INDEX or _PHASE_INDEX[phase] != index:
             raise ValueError("invalid Word worker status")
         observed.append((index, phase))
     if observed[0][0] != 1:
+        raise ValueError("invalid Word worker status")
+    if [index for index, _phase in observed] != list(range(1, observed[-1][0] + 1)):
         raise ValueError("invalid Word worker status")
     return observed[-1][1]
 
