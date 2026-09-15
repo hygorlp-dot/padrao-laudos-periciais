@@ -7,12 +7,15 @@ No command, executable, argv, shell or COM operation is accepted from callers.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 import json
 import math
 import os
 from pathlib import Path
+import re
+import shutil
 import sys
 import tempfile
 import time
@@ -35,7 +38,6 @@ _PHASES = (
     "WORKER_EXIT",
 )
 _PHASE_INDEX = {phase: index for index, phase in enumerate(_PHASES)}
-_RETAINED_AMBIGUOUS_HANDLES: list[tuple[object, object]] = []
 
 
 class RendererUnavailable(ValueError):
@@ -115,9 +117,10 @@ def _same_process_identity(
 
 
 def _terminate_owned_worker(worker: _OwnedWordWorker) -> bool:
-    observed = worker.observed_identity()
-    if observed is None or not _same_process_identity(worker.identity, observed):
-        return False
+    if getattr(worker, "_job_scope_verified", False) is not True:
+        observed = worker.observed_identity()
+        if observed is None or not _same_process_identity(worker.identity, observed):
+            return False
     worker.terminate_job()
     if not worker.wait_contained(5_000):
         raise RendererUnavailable("owned Word worker did not exit after containment")
@@ -201,6 +204,8 @@ def _quote_windows_argument(value: str) -> str:
 
 
 class _WindowsJobWordWorker:
+    _job_scope_verified = True
+
     def __init__(self, process, job, identity: OwnedProcessIdentity, modules: tuple) -> None:
         self._process = process
         self._job = job
@@ -227,35 +232,40 @@ class _WindowsJobWordWorker:
         self._win32job.TerminateJobObject(self._job, 124)
 
     def wait_contained(self, milliseconds: int) -> bool:
+        return self._wait_contained(self._job, self._process, milliseconds)
+
+    def close(self) -> None:
+        if self._process is None or self._job is None:
+            return
+        process = self._process
+        job = self._job
+        self._process = None
+        self._job = None
+        try:
+            if not self._wait_contained(job, process, 0):
+                self._win32job.TerminateJobObject(job, 124)
+            if not self._wait_contained(job, process, 5_000):
+                self._win32job.TerminateJobObject(job, 124)
+                if not self._wait_contained(job, process, 5_000):
+                    raise RendererUnavailable("owned Word job did not close cleanly")
+        finally:
+            try:
+                process.Close()
+            finally:
+                job.Close()
+
+    def _wait_contained(self, job, process, milliseconds: int) -> bool:
         deadline = time.monotonic() + milliseconds / 1000
         while True:
             information = self._win32job.QueryInformationJobObject(
-                self._job, self._win32job.JobObjectBasicAccountingInformation
+                job, self._win32job.JobObjectBasicAccountingInformation
             )
             if information["ActiveProcesses"] == 0:
                 return True
             remaining_ms = int(max(0, (deadline - time.monotonic()) * 1000))
             if remaining_ms <= 0:
                 return False
-            self._win32event.WaitForSingleObject(self._process, min(50, remaining_ms))
-
-    def close(self) -> None:
-        if not self.wait(0):
-            observed = self.observed_identity()
-            if observed is None or not _same_process_identity(self.identity, observed):
-                _RETAINED_AMBIGUOUS_HANDLES.append((self._process, self._job))
-                self._process = None
-                self._job = None
-                return
-            self.terminate_job()
-        if not self.wait_contained(5_000):
-            self.terminate_job()
-            if not self.wait_contained(5_000):
-                raise RendererUnavailable("owned Word job did not close cleanly")
-        self._process.Close()
-        self._job.Close()
-        self._process = None
-        self._job = None
+            self._win32event.WaitForSingleObject(process, min(50, remaining_ms))
 
 
 def _controlled_worker_environment(
@@ -279,6 +289,48 @@ def _controlled_worker_environment(
     return environment
 
 
+def _remove_render_tree(
+    root: Path,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+    pause: Callable[[float], object] = time.sleep,
+) -> None:
+    """Remove one exact render tree within a bounded transient-lock window."""
+    for name in (
+        "source.docx",
+        "source.docm",
+        "output.partial.pdf",
+        "request.json",
+        "result.json",
+        "status.json",
+        "bootstrap.docx",
+    ):
+        (root / name).unlink(missing_ok=True)
+    deadline = clock() + 5.0
+    while root.exists():
+        try:
+            shutil.rmtree(root)
+            return
+        except PermissionError:
+            if clock() >= deadline:
+                raise
+            pause(0.05)
+
+
+@contextmanager
+def _render_directory(temp_root: Path | None):
+    root = Path(
+        tempfile.mkdtemp(
+            prefix="plp-word-pdf-",
+            dir=str(temp_root) if temp_root is not None else None,
+        )
+    ).resolve(strict=True)
+    try:
+        yield root
+    finally:
+        _remove_render_tree(root)
+
+
 def _start_owned_word_worker(root: Path) -> _OwnedWordWorker:
     if sys.platform != "win32":
         raise RendererUnavailable("Microsoft Word Desktop COM requires Windows")
@@ -297,6 +349,7 @@ def _start_owned_word_worker(root: Path) -> _OwnedWordWorker:
         for value in (executable, "-I", worker_script, str(root.resolve(strict=True)))
     )
     process = thread = job = None
+    assigned_to_job = False
     try:
         nonce = uuid4().hex
         job_name = f"Local\\PLP-Word-{nonce}"
@@ -326,6 +379,7 @@ def _start_owned_word_worker(root: Path) -> _OwnedWordWorker:
             startup,
         )
         win32job.AssignProcessToJobObject(job, process)
+        assigned_to_job = True
         times = win32process.GetProcessTimes(process)
         image = win32process.GetModuleFileNameEx(process, 0)
         identity = OwnedProcessIdentity(pid, str(times["CreationTime"]), image)
@@ -354,7 +408,7 @@ def _start_owned_word_worker(root: Path) -> _OwnedWordWorker:
         if process is not None:
             # A process that failed before ownership was returned was created suspended by
             # this exact call; termination is scoped to the returned process/job handles.
-            if job is not None:
+            if assigned_to_job:
                 win32job.TerminateJobObject(job, 125)
             else:
                 win32process.TerminateProcess(process, 125)
@@ -388,7 +442,7 @@ def _load_result(root: Path, word_digest: str) -> tuple[bytes, str]:
         or result.get("wordSha256") != word_digest
         or result.get("pdfSha256") != sha256(output).hexdigest()
         or not isinstance(result.get("rendererVersion"), str)
-        or not result["rendererVersion"]
+        or re.fullmatch(r"16\.\d+(?:\.\d+)*", result["rendererVersion"]) is None
         or not output.startswith(b"%PDF-")
         or not output.rstrip().endswith(b"%%EOF")
     ):
@@ -428,11 +482,7 @@ class LocalOfficePdfConverter:
         word_digest = sha256(word_bytes).hexdigest()
         worker: _OwnedWordWorker | None = None
         try:
-            with tempfile.TemporaryDirectory(
-                prefix="plp-word-pdf-",
-                dir=str(self._temp_root) if self._temp_root is not None else None,
-            ) as directory:
-                root = Path(directory).resolve(strict=True)
+            with _render_directory(self._temp_root) as root:
                 source = root / ("source.docm" if source_format == "DOCM" else "source.docx")
                 source.write_bytes(word_bytes)
                 (root / "request.json").write_text(

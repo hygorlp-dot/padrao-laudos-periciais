@@ -9,6 +9,7 @@ ProgID activation, arbitrary executable, command, or COM method is accepted.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from hashlib import sha256
 import json
 import os
@@ -33,6 +34,21 @@ _STATUS_PHASES = (
     "WORD_QUIT",
     "WORKER_EXIT",
 )
+
+
+@dataclass(slots=True)
+class _OwnedWordProcess:
+    handle: object
+    job: object
+    pid: int
+    creation_identity: str
+    image_path: str
+
+    def Close(self) -> None:
+        try:
+            self.handle.Close()
+        finally:
+            self.job.Close()
 
 
 def _atomic_json(path: Path, value: dict) -> None:
@@ -248,8 +264,15 @@ def _start_owned_word_process(root: Path):
         win32process.ResumeThread(thread)
         thread.Close()
         thread = None
-        owned = process
+        owned = _OwnedWordProcess(
+            handle=process,
+            job=job,
+            pid=pid,
+            creation_identity=str(times["CreationTime"]),
+            image_path=str(Path(image).resolve(strict=True)),
+        )
         process = None
+        job = None
         return owned, bootstrap
     finally:
         if thread is not None:
@@ -257,7 +280,8 @@ def _start_owned_word_process(root: Path):
         if process is not None:
             win32process.TerminateProcess(process, 126)
             process.Close()
-        job.Close()
+        if job is not None:
+            job.Close()
 
 
 def _exact_bootstrap_moniker(running_object_table: object, process: object, bootstrap: Path):
@@ -290,11 +314,16 @@ def _exact_bootstrap_moniker(running_object_table: object, process: object, boot
 
 def _bind_owned_word_com_object(process: object, bootstrap: Path) -> tuple[object, object]:
     import pythoncom
+    import win32event
+    import win32job
     import win32com.client
     import win32process
 
+    if not isinstance(process, _OwnedWordProcess):
+        raise RuntimeError("ROT Word process identity mismatch")
+    handle = process.handle
     running_object_table = pythoncom.GetRunningObjectTable()
-    moniker = _exact_bootstrap_moniker(running_object_table, process, bootstrap)
+    moniker = _exact_bootstrap_moniker(running_object_table, handle, bootstrap)
     unknown = running_object_table.GetObject(moniker)
     bootstrap_document = win32com.client.Dispatch(
         unknown.QueryInterface(pythoncom.IID_IDispatch)
@@ -302,7 +331,17 @@ def _bind_owned_word_com_object(process: object, bootstrap: Path) -> tuple[objec
     app = bootstrap_document.Application
     hwnd = int(bootstrap_document.ActiveWindow.Hwnd)
     _thread_id, observed_pid = win32process.GetWindowThreadProcessId(hwnd)
-    if observed_pid != win32process.GetProcessId(process):
+    times = win32process.GetProcessTimes(handle)
+    image = win32process.GetModuleFileNameEx(handle, 0)
+    if (
+        observed_pid != process.pid
+        or win32process.GetProcessId(handle) != process.pid
+        or str(times.get("CreationTime", "")) != process.creation_identity
+        or os.path.normcase(os.path.abspath(image))
+        != os.path.normcase(os.path.abspath(process.image_path))
+        or not win32job.IsProcessInJob(handle, process.job)
+        or win32event.WaitForSingleObject(handle, 0) != win32event.WAIT_TIMEOUT
+    ):
         raise RuntimeError("ROT Word process identity mismatch")
     return app, bootstrap_document
 
@@ -350,7 +389,13 @@ def _render_job(
         app.AutomationSecurity = 3
         if int(app.AutomationSecurity) != 3:
             raise RuntimeError("Word macro automation security did not fail closed")
-        renderer_version = str(getattr(app, "Version", "UNKNOWN"))
+        renderer_version_value = getattr(app, "Version", None)
+        if (
+            not isinstance(renderer_version_value, str)
+            or re.fullmatch(r"16\.\d+(?:\.\d+)*", renderer_version_value) is None
+        ):
+            raise RuntimeError("Microsoft Word renderer version is invalid")
+        renderer_version = renderer_version_value
         app.Visible = False
         app.DisplayAlerts = 0
         bootstrap_document.Close(SaveChanges=0)
