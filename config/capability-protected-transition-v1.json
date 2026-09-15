@@ -16,6 +16,11 @@
       "candidate": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "9c58a13f524d256da2e2a8a9f176c6628f0ec3d0"}
     },
     {
+      "path": "config/capability-exceptions-v1.json",
+      "base": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "f17a2bd00243bafb92cb05d71c2289a5a976fae4"},
+      "candidate": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "4c5ff2cb5545be36076198c5e699e9a184c6c4ff"}
+    },
+    {
       "path": "scripts/quality/architecture_analyzer.py",
       "base": {"path": "scripts/quality/architecture_analyzer.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "81981df8d1ecdc2f73ecf0a13b4fbfb0428a9001"},
       "candidate": {"path": "scripts/quality/architecture_analyzer.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "6fb630a3a63643fbcc879619d4a3c6be18943e13"}
@@ -27,11 +32,6 @@
     }
   ],
   "supportArtifacts": [
-    {
-      "path": "config/capability-exceptions-v1.json",
-      "base": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "f17a2bd00243bafb92cb05d71c2289a5a976fae4"},
-      "candidate": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "4c5ff2cb5545be36076198c5e699e9a184c6c4ff"}
-    },
     {
       "path": "tests/test_architecture_capability_exception_rebind_v1.py",
       "base": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "2f5630bae13942800da14198fa17ac6500ae9ce2"},
