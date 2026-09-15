@@ -34,7 +34,7 @@ PROTECTED_BASE = "382e82d2e380f3ee80e8c97e2cc514f0dd37e315"
 ARCHITECTURE_PROTECTED_BASE = "382e82d2e380f3ee80e8c97e2cc514f0dd37e315"
 SOURCE_ANCHORS = {
     "scripts/quality/architecture_analyzer.py": "f2f745e8791906ae91049ed0474df710b911613d",
-    "scripts/quality/capability_gate_adapter.py": "5b08b364312e295e0f23733a7685253f7d569b98",
+    "scripts/quality/capability_gate_adapter.py": "a14375bb6f6d40593ca06edae67dee2a9d256071",
     "scripts/quality/capability_trust_anchor.py": "f2f745e8791906ae91049ed0474df710b911613d",
 }
 REVIEW_EVIDENCE = {

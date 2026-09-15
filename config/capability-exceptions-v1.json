@@ -130,8 +130,8 @@
         "column": 0
       },
       "normalizedAcquisitionAstSha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
-        "wholeFileSha256": "efe024ebeb8e5e620f1c536132d4abbd6dd5405729219d2126ef4e9453aa6b6a",
-        "baselineCommit": "5b08b364312e295e0f23733a7685253f7d569b98",
+        "wholeFileSha256": "fda4f1138962802770a50c66e3a066ab020c1d108a9a0ad3e6d16e80f9a47e44",
+        "baselineCommit": "a14375bb6f6d40593ca06edae67dee2a9d256071",
       "acquiredCapability": "subprocess",
       "justification": "Exception adapter reads baseline/candidate blob content and registry state via git show/merge-base to validate exact-match exceptions.",
       "owner": "QUALITY_GOVERNANCE",
