@@ -228,14 +228,26 @@ def _word_text(text: str) -> bytes:
     return output.getvalue()
 
 
-def _word_with_image_and_text(text: str, image_bytes: bytes) -> bytes:
+def _word_with_image_and_text(
+    text: str,
+    image_bytes: bytes,
+    *,
+    image_width: float = 40,
+    image_height: float = 40,
+) -> bytes:
     output = BytesIO()
+    width_emu = round(image_width * 12_700)
+    height_emu = round(image_height * 12_700)
     document = (
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
         'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
         'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
         f"<w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p>"
-        '<w:p><w:r><w:drawing><a:blip r:embed="rId1"/></w:drawing></w:r></w:p>'
+        "<w:p><w:r><w:drawing><wp:inline>"
+        f'<wp:extent cx="{width_emu}" cy="{height_emu}"/>'
+        '<a:graphic><a:graphicData><a:blip r:embed="rId1"/>'
+        "</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
         "</w:body></w:document>"
     )
     relationships = (
@@ -831,6 +843,15 @@ def test_fidelity_never_composes_one_table_cell_across_pages() -> None:
             b"q /GS0 gs BT /F1 10 Tf 1 0 0 1 50 700 Tm (Cell-A-223) Tj ET Q",
             b"/ExtGState << /GS0 << /Type /ExtGState /ca 0 /CA 0 >> >>",
         ),
+        (
+            b"q /GS0 gs BT /F1 10 Tf 1 0 0 1 50 700 Tm (Cell-A-223) Tj ET Q",
+            b"/ExtGState << /GS0 << /Type /ExtGState /ca 0.05 /CA 0.05 >> >>",
+        ),
+        (
+            b"BT /F1 10 Tf 1 0 0 1 50 700 Tm (Cell-A-223) Tj ET "
+            b"q /GS0 gs 1 1 1 rg 0 650 595 100 re f Q",
+            b"/ExtGState << /GS0 << /Type /ExtGState /ca 0.95 /CA 0.95 >> >>",
+        ),
     ),
     ids=(
         "opaque-overpaint",
@@ -840,6 +861,8 @@ def test_fidelity_never_composes_one_table_cell_across_pages() -> None:
         "hidden-tail",
         "partial-off-page",
         "zero-alpha",
+        "low-alpha",
+        "near-opaque-overpaint",
     ),
 )
 def test_fidelity_rejects_nonvisible_or_cross_region_table_fragments(
@@ -863,6 +886,37 @@ def test_fidelity_never_composes_fragments_across_a_visible_cell_rule() -> None:
     with pytest.raises(ValueError, match="faithfully represent"):
         delivery_renderer._validate_pdf_fidelity(
             _word_table(("Cell-A-223", "Cell-B-223")),
+            _custom_content_pdf(stream),
+        )
+
+
+def test_fidelity_never_composes_fragments_across_a_wide_filled_cell_rule() -> None:
+    stream = (
+        b"BT\n"
+        b"/F1 10 Tf 0 Tr 1 0 0 1 50 700 Tm (Cell-) Tj\n"
+        b"/F1 10 Tf 0 Tr 1 0 0 1 84 700 Tm (A-223) Tj\n"
+        b"/F1 10 Tf 0 Tr 1 0 0 1 250 700 Tm (Cell-B-223) Tj\n"
+        b"ET\n0 0 0 rg 80 650 4 100 re f"
+    )
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            _word_table(("Cell-A-223", "Cell-B-223")),
+            _custom_content_pdf(stream),
+        )
+
+
+@pytest.mark.parametrize(
+    "matrix",
+    ("0 1 -1 0", "-1 0 0 1", "1 0.8 0 1", "-1 0 0 -1"),
+    ids=("rotated", "mirrored", "skewed", "upside-down"),
+)
+def test_fidelity_rejects_unbound_affine_text_orientation(matrix: str) -> None:
+    stream = f"BT /F1 10 Tf {matrix} 100 700 Tm (Cell-A-223) Tj ET".encode(
+        "ascii"
+    )
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            _word_text("Cell-A-223"),
             _custom_content_pdf(stream),
         )
 
@@ -892,6 +946,64 @@ def test_fidelity_rejects_matching_image_rendered_outside_the_page() -> None:
                 image_width=100,
                 image_height=30,
                 image_after_text=True,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("image_width", "image_height"),
+    ((0.6, 0.6), (1, 1), (40, 0.6), (400, 100)),
+    ids=("sub-point", "one-point", "flattened", "distorted"),
+)
+def test_fidelity_rejects_image_geometry_not_bound_to_word_layout(
+    image_width: float, image_height: float
+) -> None:
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, "JPEG")
+    word = _word_with_image_and_text("Synthetic", image.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf(
+                "Synthetic",
+                image.getvalue(),
+                image_x=100,
+                image_width=image_width,
+                image_height=image_height,
+            ),
+        )
+
+
+def test_fidelity_binds_image_to_declared_word_extent_not_intrinsic_ratio() -> None:
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, "JPEG")
+    word = _word_with_image_and_text(
+        "Synthetic",
+        image.getvalue(),
+        image_width=40,
+        image_height=20,
+    )
+
+    delivery_renderer._validate_pdf_fidelity(
+        word,
+        _image_pdf(
+            "Synthetic",
+            image.getvalue(),
+            image_x=100,
+            image_width=40,
+            image_height=20,
+        ),
+    )
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf(
+                "Synthetic",
+                image.getvalue(),
+                image_x=100,
+                image_width=40,
+                image_height=40,
             ),
         )
 

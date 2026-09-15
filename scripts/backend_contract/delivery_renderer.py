@@ -42,6 +42,7 @@ _CT = "{http://schemas.openxmlformats.org/package/2006/content-types}"
 _A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 _R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 _V = "{urn:schemas-microsoft-com:vml}"
+_WP = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
 ElementTree.register_namespace("w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main")
 
 
@@ -217,6 +218,38 @@ def _ordered_word_image_signatures(package: ZipFile, xml_roots: dict[str, Elemen
     return ordered
 
 
+def _ordered_word_image_extents(
+    xml_roots: dict[str, ElementTree.Element],
+) -> list[tuple[float, float] | None]:
+    ordered: list[tuple[float, float] | None] = []
+
+    def priority(name: str) -> tuple[int, str]:
+        return (0 if "/header" in name else 1 if name == "word/document.xml" else 2, name)
+
+    for name in sorted(xml_roots, key=priority):
+        root = xml_roots[name]
+        extents_by_image: dict[int, tuple[float, float] | None] = {}
+        for drawing in root.iter(f"{_W}drawing"):
+            extent = drawing.find(f".//{_WP}extent")
+            geometry: tuple[float, float] | None = None
+            if extent is not None:
+                try:
+                    width = float(extent.attrib["cx"]) / 12_700
+                    height = float(extent.attrib["cy"]) / 12_700
+                    if all(math.isfinite(value) and value > 0 for value in (width, height)):
+                        geometry = (width, height)
+                except (KeyError, TypeError, ValueError):
+                    geometry = None
+            for image_node in drawing.iter(f"{_A}blip"):
+                extents_by_image[id(image_node)] = geometry
+        for image_node in root.iter():
+            if image_node.tag == f"{_A}blip":
+                ordered.append(extents_by_image.get(id(image_node)))
+            elif image_node.tag == f"{_V}imagedata":
+                ordered.append(None)
+    return ordered
+
+
 def _ordered_pdf_image_signatures(page: object, reader: PdfReader) -> list[tuple]:
     images = {str(name): page.images[name].image for name in page.images.keys()}
     ordered: list[tuple] = []
@@ -227,6 +260,22 @@ def _ordered_pdf_image_signatures(page: object, reader: PdfReader) -> list[tuple
         if image is not None:
             ordered.append(_image_signature(image))
     return ordered
+
+
+def _ordered_image_extents_match(
+    sources: list[tuple[float, float] | None],
+    candidates: list[tuple[float, float]],
+) -> bool:
+    if len(sources) != len(candidates) or any(source is None for source in sources):
+        return False
+    return all(
+        all(
+            abs(observed - expected) <= max(1.0, expected * 0.05)
+            for expected, observed in zip(source, candidate)
+        )
+        for source, candidate in zip(sources, candidates)
+        if source is not None
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,7 +334,10 @@ def _has_nonvisible_text(page: object, reader: PdfReader) -> bool:
                 if render_mode in {1, 5}
                 else max(fill_alpha, stroke_alpha)
             )
-            if visible_alpha <= 0.01:
+            # Native Word text is emitted fully visible.  Treat materially
+            # translucent text as unfaithful instead of allowing extraction
+            # to stand in for what a professional reader can actually see.
+            if visible_alpha < 0.99:
                 return True
     return False
 
@@ -332,7 +384,7 @@ def _raster_region_is_observably_painted(
         actual.close()
 
 
-def _path_is_opaque_fill(item: object) -> bool:
+def _path_has_visible_fill(item: object) -> bool:
     fill_mode = ctypes.c_int()
     stroke = ctypes.c_int()
     if not pdfium.raw.FPDFPath_GetDrawMode(
@@ -350,7 +402,7 @@ def _path_is_opaque_fill(item: object) -> bool:
         ctypes.byref(alpha),
     ):
         return True
-    return alpha.value >= 250
+    return alpha.value > 0
 
 
 def _regions_overlap(
@@ -365,9 +417,15 @@ def _regions_overlap(
 
 def _pdfium_visible_layout(
     pdf_content: bytes,
-) -> tuple[list[_PositionedText], list[_VerticalBarrier], bool]:
+) -> tuple[
+    list[_PositionedText],
+    list[_VerticalBarrier],
+    list[tuple[float, float]],
+    bool,
+]:
     positioned: list[_PositionedText] = []
     barriers: list[_VerticalBarrier] = []
+    image_extents: list[tuple[float, float]] = []
     unsafe = False
     document = pdfium.PdfDocument(pdf_content)
     try:
@@ -435,14 +493,25 @@ def _pdfium_visible_layout(
                         matrix = item.get_matrix()
                         horizontal_scale = math.hypot(float(matrix.a), float(matrix.b))
                         vertical_scale = math.hypot(float(matrix.c), float(matrix.d))
+                        upright = (
+                            float(matrix.a) > 0
+                            and float(matrix.d) > 0
+                            and abs(float(matrix.b)) <= 0.05 * float(matrix.a)
+                            and abs(float(matrix.c)) <= 0.05 * float(matrix.d)
+                        )
                         if not text:
-                            if horizontal_scale < 0.05 or vertical_scale < 0.05:
+                            if (
+                                horizontal_scale < 0.05
+                                or vertical_scale < 0.05
+                                or not upright
+                            ):
                                 unsafe = True
                             continue
                         if (
                             not inside_page
                             or horizontal_scale < 0.25
                             or vertical_scale < 0.25
+                            or not upright
                         ):
                             unsafe = True
                         if item.container is None:
@@ -465,17 +534,18 @@ def _pdfium_visible_layout(
                     elif item.type == pdfium.raw.FPDF_PAGEOBJ_IMAGE:
                         if not inside_page or right - left < 0.5 or top - bottom < 0.5:
                             unsafe = True
+                        image_extents.append((right - left, top - bottom))
                     elif (
                         item.type == pdfium.raw.FPDF_PAGEOBJ_PATH
-                        and right - left <= 3.0
                         and top - bottom >= 3.0
+                        and right - left <= max(8.0, (top - bottom) * 0.25)
                     ):
                         barriers.append(
                             _VerticalBarrier(page_number, left, right, bottom, top)
                         )
                     if (
                         item.type == pdfium.raw.FPDF_PAGEOBJ_PATH
-                        and _path_is_opaque_fill(item)
+                        and _path_has_visible_fill(item)
                         and any(_regions_overlap(bounds, region) for region in prior_text_regions)
                     ):
                         unsafe = True
@@ -512,7 +582,7 @@ def _pdfium_visible_layout(
                 page.close()
     finally:
         document.close()
-    return positioned, barriers, unsafe
+    return positioned, barriers, image_extents, unsafe
 
 
 def _text_show_has_content(operator: bytes, operands: list[object]) -> bool:
@@ -636,6 +706,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                     if len(cells) > 1 and all(cells):
                         table_rows.append(cells)
             word_images = _ordered_word_image_signatures(package, xml_roots)
+            word_image_extents = _ordered_word_image_extents(xml_roots)
         reader = PdfReader(BytesIO(pdf_content), strict=True)
         extracted_pages: list[str] = []
         unsafe_text = False
@@ -646,7 +717,9 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
             extracted_pages.append(page.extract_text() or "")
             pdf_images.extend(_ordered_pdf_image_signatures(page, reader))
         pdf_text = _normalized_visible_text("\n".join(extracted_pages))
-        positioned, barriers, pdfium_unsafe = _pdfium_visible_layout(pdf_content)
+        positioned, barriers, pdf_image_extents, pdfium_unsafe = _pdfium_visible_layout(
+            pdf_content
+        )
         unsafe_text = unsafe_text or pdfium_unsafe
     except (BadZipFile, KeyError, ElementTree.ParseError, PdfReadError, OSError, RuntimeError, ValueError) as exc:
         raise ValueError("final PDF fidelity cannot be verified") from exc
@@ -665,6 +738,9 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     document_order_matches = all(any(candidate == token for candidate in token_cursor) for token in document_tokens)
 
     images_match = _ordered_image_signatures_match(word_images, pdf_images)
+    image_extents_match = _ordered_image_extents_match(
+        word_image_extents, pdf_image_extents
+    )
     tables_match = _table_rows_match(table_rows, positioned, barriers)
     if (
         not source_tokens
@@ -672,6 +748,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         or not token_counts_match
         or not document_order_matches
         or not images_match
+        or not image_extents_match
         or not tables_match
     ):
         raise ValueError("final PDF does not faithfully represent the bound Word artifact")

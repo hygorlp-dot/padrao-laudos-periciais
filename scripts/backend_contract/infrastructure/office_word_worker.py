@@ -48,6 +48,21 @@ _ACQUIRING_WORD_FIELD_CODES = re.compile(
     r"\b(?:DATABASE|DDE|DDEAUTO|HYPERLINK|INCLUDEPICTURE|INCLUDETEXT|LINK)\b",
     re.IGNORECASE,
 )
+_ACQUIRING_RELATIONSHIP_TYPES = frozenset(
+    {
+        "afchunk",
+        "attachedtemplate",
+        "control",
+        "controlproperty",
+        "externallink",
+        "oleobject",
+        "package",
+        "subdocument",
+    }
+)
+_ACQUIRING_WORD_ELEMENTS = frozenset({"altChunk", "control", "object", "subDoc"})
+_OPAQUE_ACTIVE_PART_PREFIXES = ("word/activex/", "word/embeddings/")
+_IMPORTABLE_PART_SUFFIXES = (".htm", ".html", ".mht", ".mhtml", ".rtf")
 
 
 @dataclass(slots=True)
@@ -267,7 +282,7 @@ def _start_owned_word_process(root: Path):
             False,
             win32con.CREATE_SUSPENDED | win32con.CREATE_NO_WINDOW,
             None,
-            str(Path(word_executable).parent),
+            str(root),
             startup,
         )
         if not win32job.IsProcessInJob(process, job):
@@ -386,6 +401,11 @@ def _validate_word_source(source: Path, source_format: str) -> None:
             total_size = 0
             for item in infos:
                 path = PurePosixPath(item.filename)
+                normalized_name = item.filename.casefold()
+                if normalized_name.startswith(
+                    _OPAQUE_ACTIVE_PART_PREFIXES
+                ) or normalized_name.endswith(_IMPORTABLE_PART_SUFFIXES):
+                    raise ValueError("unsupported active Word content")
                 if (
                     item.filename.startswith(("/", "\\"))
                     or "\\" in item.filename
@@ -424,9 +444,13 @@ def _validate_word_source(source: Path, source_format: str) -> None:
                     relationships = ElementTree.fromstring(package.read(name))
                     for relationship in relationships.iter(f"{_REL}Relationship"):
                         target = relationship.attrib.get("Target", "").strip()
+                        relationship_type = (
+                            relationship.attrib.get("Type", "").rsplit("/", 1)[-1].casefold()
+                        )
+                        if relationship_type in _ACQUIRING_RELATIONSHIP_TYPES:
+                            raise ValueError("unsupported active Word content")
                         if (
-                            relationship.attrib.get("TargetMode", "").casefold()
-                            == "external"
+                            relationship.attrib.get("TargetMode", "").casefold() == "external"
                             or target.startswith(("\\\\", "//"))
                             or re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE)
                         ):
@@ -434,6 +458,11 @@ def _validate_word_source(source: Path, source_format: str) -> None:
                 if not (name.startswith("word/") and name.endswith(".xml")):
                     continue
                 root = ElementTree.fromstring(package.read(name))
+                if any(
+                    node.tag in {f"{_W}{element}" for element in _ACQUIRING_WORD_ELEMENTS}
+                    for node in root.iter()
+                ):
+                    raise ValueError("unsupported active Word content")
                 instructions = [
                     node.attrib.get(f"{_W}instr", "")
                     for node in root.iter(f"{_W}fldSimple")
