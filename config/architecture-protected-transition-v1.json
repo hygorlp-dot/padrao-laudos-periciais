@@ -11,12 +11,12 @@
     {
       "path": "config/capability-protected-artifacts-v1.json",
       "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "1dc01089f9566e2b8ffad54e23fbf7cc13e452ab",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "70d52994dba9b00a9c5bf13a85b4934a8aa50a18"
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "7cf4292b606b0f844356b6e6cd221b73382b5dfd"
     },
     {
       "path": "scripts/quality/capability_trust_anchor.py",
       "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "4c6cc742538587dece061f99b6c63fc533dca9fc",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "c6f4d521b0a83a2c8d65f5d675ac73391e1da286"
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "bf7f0c6355d53d25bfe0860caa3bdc891e331cc5"
     }
   ],
   "supportScope": "CAPABILITY_BOOTSTRAP_V1",
@@ -24,12 +24,12 @@
     {
       "path": "config/capability-exceptions-v1.json",
       "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "5ab038d0c764d3192d76303caf0b919600363b9e",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "879cff825d6b92e5431d57ba949fe3e2041c6759"
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "f3badbaa2614b9f055d5c64168da90a8258688a2"
     },
     {
       "path": "config/capability-protected-transition-v1.json",
       "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "b1e9d7ab707952c5ec6998b12ec164aeac2ffb47",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "559bbd204b689913a015be23c456a6fb27bfa355"
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "de64b8f74525dc84cf4d9cb0346c1169865c3f0a"
     }
   ]
 }

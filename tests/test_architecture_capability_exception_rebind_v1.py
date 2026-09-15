@@ -25,7 +25,7 @@ CAPABILITY_GATE_ADAPTER_PATH = "scripts/quality/capability_gate_adapter.py"
 PROTECTED_BASE = "1c4b747fb380a79087ace5dd87f5c31be7ffd77a"
 ARCHITECTURE_PROTECTED_BASE = "1c4b747fb380a79087ace5dd87f5c31be7ffd77a"
 SOURCE_ANCHORS = {
-    "scripts/quality/capability_trust_anchor.py": "848be66d251c518705a8ced749f0a00035d1dab8",
+    "scripts/quality/capability_trust_anchor.py": "32b71d4e5db584eee5bae305e817da803465bd09",
 }
 REVIEW_EVIDENCE = {
     "scripts/quality/capability_trust_anchor.py": "ISSUE_218_WORD_TRANSITION_ROUTING_CAPABILITY",
