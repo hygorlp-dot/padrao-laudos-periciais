@@ -19,8 +19,8 @@ WORD_PARENT_PATH = "scripts/backend_contract/infrastructure/office_pdf.py"
 WORD_WORKER_PATH = "scripts/backend_contract/infrastructure/office_word_worker.py"
 _WORD_PRODUCT_PATHS = {WORD_PARENT_PATH, WORD_WORKER_PATH}
 _WORD_PRODUCT_SHA256 = {
-    WORD_PARENT_PATH: "0752949efd38fe08220d54828f73573223109f791ed4cd63772da95695f8058d",
-    WORD_WORKER_PATH: "891c8811e84461dec50ac85a5649e49919093b36070404b6ae69ac9d0e6b4efa",
+    WORD_PARENT_PATH: "e1ebb30e5d5b1e49d747d486c8c53d9c0bb91b1d1cfff947298acfe2623245c9",
+    WORD_WORKER_PATH: "753828e9d112a220c231a9d47f1663e7289e3b01d2d55ca65fcb09170ee6fa1b",
 }
 _FORBIDDEN_WORD_IMPORTS = {"_winapi", "ctypes", "multiprocessing", "subprocess"}
 _FORBIDDEN_WORD_FUNCTIONS = {

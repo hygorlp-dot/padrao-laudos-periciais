@@ -63,7 +63,7 @@
       "state": "PRESENT",
       "mode": "100644",
       "objectType": "blob",
-        "blobSha": "bbf9560d91260d39a4c7c70e0570c8832db3eb7f"
+        "blobSha": "14421881173fb35aab368229afc81e0c00b1c163"
     },
     {
       "path": "scripts/quality/capability_trust_anchor.py",
