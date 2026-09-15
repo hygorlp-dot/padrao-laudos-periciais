@@ -60,7 +60,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Word transition scope could not be derived from the protected manifest' }
           "CAPABILITY_WORD_SCOPE_CHANGED=$state" >> $env:GITHUB_ENV
       - name: Validate base-owned capability custody
-        if: env.CAPABILITY_BASE_BOOTSTRAP_PRESENT != 'true'
+        if: env.CAPABILITY_BASE_BOOTSTRAP_PRESENT != 'true' || env.CAPABILITY_WORD_SCOPE_CHANGED != 'true'
         working-directory: trusted
         env:
           CAPABILITY_CANDIDATE_ROOT: ${{ github.workspace }}/candidate

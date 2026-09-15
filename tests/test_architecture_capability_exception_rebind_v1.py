@@ -120,6 +120,11 @@ def test_capability_workflow_python_scope_admits_exception_transition_path():
     for path in trust_anchor._SUPPORT_SCOPES["LOCAL_WORD_COM_CONTAINMENT_V1"]:
         assert path in workflow[start:end]
 
+    assert (
+        "if: env.CAPABILITY_BASE_BOOTSTRAP_PRESENT != 'true' || "
+        "env.CAPABILITY_WORD_SCOPE_CHANGED != 'true'"
+    ) in workflow
+
 
 @pytest.mark.parametrize(
     ("path", "expected"),
@@ -146,14 +151,20 @@ def test_word_transition_routing_uses_exact_registered_scope(tmp_path, path, exp
     assert route(repo, base, candidate) is expected
 
 
-def test_word_transition_routing_fails_closed_for_invalid_manifest(tmp_path):
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("scope", "UNKNOWN_SCOPE"), ("schemaVersion", "2.0.0")],
+)
+def test_word_transition_routing_fails_closed_for_invalid_manifest(
+    tmp_path, field, value
+):
     route = getattr(trust_anchor, "_word_transition_scope_changed", None)
     assert callable(route)
     repo, base = _future_base_clone(tmp_path)
     transition = repo / CAPABILITY_TRANSITION_PATH
-    value = json.loads(transition.read_text(encoding="utf-8"))
-    value["scope"] = "UNKNOWN_SCOPE"
-    transition.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    manifest = json.loads(transition.read_text(encoding="utf-8"))
+    manifest[field] = value
+    transition.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     candidate = _child_commit(repo, "invalid routing manifest")
 
     assert route(repo, base, candidate) is None

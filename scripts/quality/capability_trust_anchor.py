@@ -147,6 +147,7 @@ def _word_transition_scope_changed(root: Path, protected_base: str, candidate: s
         transition = json.loads(_git(root, "show", f"{candidate}:{TRANSITION_PATH}"))
         if (
             not isinstance(transition, dict)
+            or transition.get("schemaVersion") != "3.0.0"
             or transition.get("transitionId") != WORD_TRANSITION_ID
             or transition.get("purpose") != WORD_TRANSITION_PURPOSE
             or transition.get("scope") != WORD_TRANSITION_SCOPE
