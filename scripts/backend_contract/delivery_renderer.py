@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 import ctypes
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from io import BytesIO
 import math
@@ -45,6 +45,38 @@ _V = "{urn:schemas-microsoft-com:vml}"
 _WP = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
 _MIN_OBSERVABLE_TEXT_POINTS = 4.0
 ElementTree.register_namespace("w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main")
+
+
+def _local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _iter_named(root: ElementTree.Element, name: str):
+    return (item for item in root.iter() if _local_name(item.tag) == name)
+
+
+def _children_named(root: ElementTree.Element, name: str):
+    return (item for item in root if _local_name(item.tag) == name)
+
+
+def _first_named(root: ElementTree.Element | None, name: str):
+    if root is None:
+        return None
+    return next(_iter_named(root, name), None)
+
+
+def _attribute_named(root: ElementTree.Element, name: str) -> str | None:
+    return next(
+        (value for key, value in root.attrib.items() if _local_name(key) == name),
+        None,
+    )
+
+
+def _word_part_priority(name: str) -> tuple[int, str]:
+    return (
+        0 if "/header" in name else 1 if name == "word/document.xml" else 2,
+        name,
+    )
 
 
 def render_word_candidate(
@@ -162,27 +194,61 @@ def _lexical_tokens(value: str) -> tuple[str, ...]:
     return tuple(re.findall(r"\w+|[^\w\s]", _normalized_visible_text(value), flags=re.UNICODE))
 
 
-def _image_signature(image: Image.Image) -> tuple[float, tuple[float, ...], tuple[float, ...], tuple[bool, ...]]:
-    rgb = image.convert("RGB").resize((32, 32))
-    statistics = ImageStat.Stat(rgb)
-    gray = rgb.convert("L").resize((16, 16))
-    pixels = tuple(gray.get_flattened_data())
-    mean = sum(pixels) / len(pixels)
+def _image_signature(image: Image.Image) -> tuple:
+    rgba = image.convert("RGBA")
+    rgb = rgba.convert("RGB")
+    alpha = rgba.getchannel("A").resize((16, 16))
+    alpha_pixels = tuple(alpha.get_flattened_data())
+    alpha_mean = sum(alpha_pixels) / len(alpha_pixels)
+
+    def visual_signature(candidate: Image.Image) -> tuple:
+        resized = candidate.resize((32, 32))
+        statistics = ImageStat.Stat(resized)
+        gray = resized.convert("L").resize((16, 16))
+        pixels = tuple(gray.get_flattened_data())
+        mean = sum(pixels) / len(pixels)
+        return (
+            tuple(round(value, 1) for value in statistics.mean),
+            tuple(round(value, 1) for value in statistics.stddev),
+            tuple(value >= mean for value in pixels),
+        )
+
+    alpha_full = rgba.getchannel("A")
+    premultiplied = Image.merge(
+        "RGB",
+        tuple(ImageChops.multiply(channel, alpha_full) for channel in rgb.split()),
+    )
+    raw_signature = visual_signature(rgb)
+    premultiplied_signature = visual_signature(premultiplied)
     return (
         round(image.width / max(image.height, 1), 2),
-        tuple(round(value, 1) for value in statistics.mean),
-        tuple(round(value, 1) for value in statistics.stddev),
-        tuple(value >= mean for value in pixels),
+        *raw_signature,
+        round(alpha_mean, 1),
+        round(ImageStat.Stat(alpha).stddev[0], 1),
+        tuple(value >= alpha_mean for value in alpha_pixels),
+        *premultiplied_signature,
     )
 
 
 def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple]) -> bool:
+    def visual_matches(first: tuple, second: tuple) -> bool:
+        return (
+            all(abs(a - b) <= 12 for a, b in zip(first[0], second[0]))
+            and all(abs(a - b) <= 12 for a, b in zip(first[1], second[1]))
+            and sum(a != b for a, b in zip(first[2], second[2])) <= 16
+        )
+
     def matches(source: tuple, candidate: tuple) -> bool:
         return (
             abs(source[0] - candidate[0]) <= 0.05
-            and all(abs(a - b) <= 12 for a, b in zip(source[1], candidate[1]))
-            and all(abs(a - b) <= 12 for a, b in zip(source[2], candidate[2]))
-            and sum(a != b for a, b in zip(source[3], candidate[3])) <= 16
+            and abs(source[4] - candidate[4]) <= 8
+            and abs(source[5] - candidate[5]) <= 8
+            and sum(a != b for a, b in zip(source[6], candidate[6])) <= 16
+            and any(
+                visual_matches(first, second)
+                for first in (source[1:4], source[7:10])
+                for second in (candidate[1:4], candidate[7:10])
+            )
         )
 
     return len(sources) == len(candidates) and all(
@@ -192,24 +258,24 @@ def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple
 
 def _ordered_word_image_signatures(package: ZipFile, xml_roots: dict[str, ElementTree.Element]) -> list[tuple]:
     ordered: list[tuple] = []
-    def priority(name: str) -> tuple[int, str]:
-        return (0 if "/header" in name else 1 if name == "word/document.xml" else 2, name)
-    for name in sorted(xml_roots, key=priority):
+    for name in sorted(xml_roots, key=_word_part_priority):
         base = posixpath.dirname(name)
         relationships_name = f"{base}/_rels/{posixpath.basename(name)}.rels"
         if relationships_name not in package.namelist():
             continue
         relationships = ElementTree.fromstring(package.read(relationships_name))
         targets = {
-            item.attrib.get("Id"): posixpath.normpath(posixpath.join(base, item.attrib.get("Target", "")))
-            for item in relationships.iter(f"{_REL}Relationship")
-            if item.attrib.get("TargetMode", "").lower() != "external"
+            _attribute_named(item, "Id"): posixpath.normpath(
+                posixpath.join(base, _attribute_named(item, "Target") or "")
+            )
+            for item in _iter_named(relationships, "Relationship")
+            if (_attribute_named(item, "TargetMode") or "").lower() != "external"
         }
         for image_node in xml_roots[name].iter():
-            if image_node.tag == f"{_A}blip":
-                relationship_id = image_node.attrib.get(f"{_R}embed")
-            elif image_node.tag == f"{_V}imagedata":
-                relationship_id = image_node.attrib.get(f"{_R}id")
+            if _local_name(image_node.tag) == "blip":
+                relationship_id = _attribute_named(image_node, "embed")
+            elif _local_name(image_node.tag) == "imagedata":
+                relationship_id = _attribute_named(image_node, "id")
             else:
                 continue
             target = targets.get(relationship_id)
@@ -227,6 +293,8 @@ class _WordImageLayout:
     alignment: str | None
     x_offset: float | None
     y_offset: float | None
+    preceding_text: str | None = None
+    following_text: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,31 +313,29 @@ def _ordered_word_image_layouts(
 ) -> list[_WordImageLayout | None]:
     ordered: list[_WordImageLayout | None] = []
 
-    def priority(name: str) -> tuple[int, str]:
-        return (0 if "/header" in name else 1 if name == "word/document.xml" else 2, name)
-
-    for name in sorted(xml_roots, key=priority):
+    for name in sorted(xml_roots, key=_word_part_priority):
         root = xml_roots[name]
         layouts_by_image: dict[int, _WordImageLayout | None] = {}
-        for paragraph in root.iter(f"{_W}p"):
-            alignment_node = paragraph.find(f"./{_W}pPr/{_W}jc")
+        for paragraph in _iter_named(root, "p"):
+            paragraph_properties = next(_children_named(paragraph, "pPr"), None)
+            alignment_node = _first_named(paragraph_properties, "jc")
             alignment = (
-                alignment_node.attrib.get(f"{_W}val", "left").casefold()
+                (_attribute_named(alignment_node, "val") or "left").casefold()
                 if alignment_node is not None
                 else "left"
             )
-            for drawing in paragraph.iter(f"{_W}drawing"):
-                extent = drawing.find(f".//{_WP}extent")
+            for drawing in _iter_named(paragraph, "drawing"):
+                extent = _first_named(drawing, "extent")
                 layout: _WordImageLayout | None = None
                 if extent is not None:
                     try:
-                        width = float(extent.attrib["cx"]) / 12_700
-                        height = float(extent.attrib["cy"]) / 12_700
+                        width = float(_attribute_named(extent, "cx") or "") / 12_700
+                        height = float(_attribute_named(extent, "cy") or "") / 12_700
                         container = next(
                             (
                                 node
                                 for node in drawing
-                                if node.tag in {f"{_WP}inline", f"{_WP}anchor"}
+                                if _local_name(node.tag) in {"inline", "anchor"}
                             ),
                             None,
                         )
@@ -278,28 +344,28 @@ def _ordered_word_image_layouts(
                             for value in (width, height)
                         ) or container is None:
                             raise ValueError("invalid Word image layout")
-                        if container.tag == f"{_WP}inline":
+                        if _local_name(container.tag) == "inline":
                             layout = _WordImageLayout(
                                 width, height, "inline", alignment, None, None
                             )
                         else:
-                            horizontal = container.find(f"{_WP}positionH")
-                            vertical = container.find(f"{_WP}positionV")
+                            horizontal = next(_children_named(container, "positionH"), None)
+                            vertical = next(_children_named(container, "positionV"), None)
                             horizontal_offset = (
-                                horizontal.find(f"{_WP}posOffset")
+                                _first_named(horizontal, "posOffset")
                                 if horizontal is not None
                                 else None
                             )
                             vertical_offset = (
-                                vertical.find(f"{_WP}posOffset")
+                                _first_named(vertical, "posOffset")
                                 if vertical is not None
                                 else None
                             )
                             if (
                                 horizontal is None
                                 or vertical is None
-                                or horizontal.attrib.get("relativeFrom") != "page"
-                                or vertical.attrib.get("relativeFrom") != "page"
+                                or _attribute_named(horizontal, "relativeFrom") != "page"
+                                or _attribute_named(vertical, "relativeFrom") != "page"
                                 or horizontal_offset is None
                                 or vertical_offset is None
                             ):
@@ -321,12 +387,48 @@ def _ordered_word_image_layouts(
                             )
                     except (KeyError, StopIteration, TypeError, ValueError):
                         layout = None
-                for image_node in drawing.iter(f"{_A}blip"):
+                for image_node in _iter_named(drawing, "blip"):
                     layouts_by_image[id(image_node)] = layout
-        for image_node in root.iter():
-            if image_node.tag == f"{_A}blip":
-                ordered.append(layouts_by_image.get(id(image_node)))
-            elif image_node.tag == f"{_V}imagedata":
+        flow = [
+            item
+            for item in root.iter()
+            if _local_name(item.tag) in {"t", "blip", "imagedata"}
+        ]
+        for index, image_node in enumerate(flow):
+            if _local_name(image_node.tag) not in {"blip", "imagedata"}:
+                continue
+            preceding = next(
+                (
+                    item.text.strip()
+                    for item in reversed(flow[:index])
+                    if _local_name(item.tag) == "t"
+                    and item.text
+                    and item.text.strip()
+                ),
+                None,
+            )
+            following = next(
+                (
+                    item.text.strip()
+                    for item in flow[index + 1 :]
+                    if _local_name(item.tag) == "t"
+                    and item.text
+                    and item.text.strip()
+                ),
+                None,
+            )
+            if _local_name(image_node.tag) == "blip":
+                layout = layouts_by_image.get(id(image_node))
+                ordered.append(
+                    replace(
+                        layout,
+                        preceding_text=preceding,
+                        following_text=following,
+                    )
+                    if layout is not None
+                    else None
+                )
+            else:
                 ordered.append(None)
     return ordered
 
@@ -348,6 +450,25 @@ def _ordered_image_layouts_match(
     candidates: list[_PdfImageLayout],
     positioned_text: list[_PositionedText],
 ) -> bool:
+    def matching_regions(expected: str | None) -> list[tuple[int, float, float]]:
+        if not expected:
+            return []
+        regions: list[tuple[int, float, float]] = []
+        for start in range(len(positioned_text)):
+            end = _fragment_sequence_end(expected, positioned_text, start, [])
+            if end is None:
+                continue
+            fragments = positioned_text[start:end]
+            if fragments and len({fragment.page for fragment in fragments}) == 1:
+                regions.append(
+                    (
+                        fragments[0].page,
+                        min(fragment.bottom for fragment in fragments),
+                        max(fragment.top for fragment in fragments),
+                    )
+                )
+        return regions
+
     if len(sources) != len(candidates) or any(source is None for source in sources):
         return False
     for source, candidate in zip(sources, candidates):
@@ -385,28 +506,23 @@ def _ordered_image_layouts_match(
         else:
             return False
         if source.kind == "inline":
-            same_page_text = (
-                fragment
-                for fragment in positioned_text
-                if fragment.page == candidate.page
-            )
-            nearest_vertical_gap = min(
-                (
-                    max(
-                        fragment.bottom - candidate.top,
-                        candidate.bottom - fragment.top,
-                        0.0,
-                    )
-                    for fragment in same_page_text
-                ),
-                default=math.inf,
-            )
-            # Inline Word media participates in the surrounding text flow.  OOXML
-            # does not carry an absolute page coordinate for it, so bind it to a
-            # conservative local flow band instead of accepting arbitrary page
-            # relocation based on matching bytes and extent alone.
-            flow_band = 72.0
-            if nearest_vertical_gap > flow_band:
+            preceding_regions = matching_regions(source.preceding_text)
+            following_regions = matching_regions(source.following_text)
+            if not preceding_regions and not following_regions:
+                return False
+            if preceding_regions and not any(
+                page == candidate.page
+                and candidate.top <= bottom + 2.0
+                and bottom - candidate.top <= 72.0
+                for page, bottom, _top in preceding_regions
+            ):
+                return False
+            if following_regions and not any(
+                page == candidate.page
+                and candidate.bottom >= top - 2.0
+                and candidate.bottom - top <= 72.0
+                for page, _bottom, top in following_regions
+            ):
                 return False
     return True
 
@@ -417,15 +533,12 @@ def _collapse_content_kinds(values: list[str]) -> tuple[str, ...]:
 
 def _word_content_kinds(xml_roots: dict[str, ElementTree.Element]) -> tuple[str, ...]:
     values: list[str] = []
-
-    def priority(name: str) -> tuple[int, str]:
-        return (0 if "/header" in name else 1 if name == "word/document.xml" else 2, name)
-
-    for name in sorted(xml_roots, key=priority):
+    for name in sorted(xml_roots, key=_word_part_priority):
         for node in xml_roots[name].iter():
-            if node.tag == f"{_W}t" and node.text and node.text.strip():
+            local_name = _local_name(node.tag)
+            if local_name == "t" and node.text and node.text.strip():
                 values.append("TEXT")
-            elif node.tag in {f"{_A}blip", f"{_V}imagedata"}:
+            elif local_name in {"blip", "imagedata"}:
                 values.append("IMAGE")
     return _collapse_content_kinds(values)
 
@@ -447,19 +560,23 @@ def _pdf_content_kinds(reader: PdfReader) -> tuple[str, ...]:
 def _has_unsafe_image_drawing(page: object, reader: PdfReader) -> bool:
     fill_alpha = 1.0
     stroke_alpha = 1.0
+    soft_mask_active = False
     clip_bounds: tuple[float, float, float, float] | None = None
     clip_is_complex = False
     path_rectangles: tuple[tuple[float, float, float, float], ...] = ()
     path_is_complex = False
     clip_pending = False
-    image_matrix: tuple[float, float, float, float, float, float] | None = None
+    ctm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    transform_seen = False
     stack: list[
         tuple[
             float,
             float,
+            bool,
             tuple[float, float, float, float] | None,
             bool,
-            tuple[float, float, float, float, float, float] | None,
+            tuple[float, float, float, float, float, float],
+            bool,
         ]
     ] = []
     try:
@@ -478,12 +595,7 @@ def _has_unsafe_image_drawing(page: object, reader: PdfReader) -> bool:
         intrinsically_masked = {
             name
             for name in images
-            if (
-                (image_object := xobjects[name].get_object()).get("/SMask")
-                not in (None, "/None")
-                or image_object.get("/Mask") not in (None, "/None")
-                or bool(image_object.get("/ImageMask", False))
-            )
+            if bool(xobjects[name].get_object().get("/ImageMask", False))
         }
     except (AttributeError, KeyError, TypeError, ValueError):
         return True
@@ -509,28 +621,78 @@ def _has_unsafe_image_drawing(page: object, reader: PdfReader) -> bool:
                     clip_is_complex = True
         clip_pending = False
 
+    def concatenate(
+        current: tuple[float, float, float, float, float, float],
+        value: tuple[float, float, float, float, float, float],
+    ) -> tuple[float, float, float, float, float, float]:
+        a, b, c, d, e, f = current
+        g, h, i, j, k, line = value
+        return (
+            a * g + c * h,
+            b * g + d * h,
+            a * i + c * j,
+            b * i + d * j,
+            a * k + c * line + e,
+            b * k + d * line + f,
+        )
+
+    def transformed_bounds(
+        left: float,
+        bottom: float,
+        right: float,
+        top: float,
+    ) -> tuple[float, float, float, float]:
+        a, b, c, d, e, f = ctm
+        corners = tuple(
+            (a * x + c * y + e, b * x + d * y + f)
+            for x, y in (
+                (left, bottom),
+                (right, bottom),
+                (left, top),
+                (right, top),
+            )
+        )
+        return (
+            min(point[0] for point in corners),
+            min(point[1] for point in corners),
+            max(point[0] for point in corners),
+            max(point[1] for point in corners),
+        )
+
     for operands, operator in ContentStream(page.get_contents(), reader).operations:
         if operator == b"q":
             stack.append(
                 (
                     fill_alpha,
                     stroke_alpha,
+                    soft_mask_active,
                     clip_bounds,
                     clip_is_complex,
-                    image_matrix,
+                    ctm,
+                    transform_seen,
                 )
             )
         elif operator == b"Q":
             (
                 fill_alpha,
                 stroke_alpha,
+                soft_mask_active,
                 clip_bounds,
                 clip_is_complex,
-                image_matrix,
+                ctm,
+                transform_seen,
             ) = (
                 stack.pop()
                 if stack
-                else (1.0, 1.0, None, False, None)
+                else (
+                    1.0,
+                    1.0,
+                    False,
+                    None,
+                    False,
+                    (1.0, 0.0, 0.0, 1.0, 0.0, 0.0),
+                    False,
+                )
             )
             path_rectangles = ()
             path_is_complex = False
@@ -540,6 +702,8 @@ def _has_unsafe_image_drawing(page: object, reader: PdfReader) -> bool:
                 state = ext_states[str(operands[0])].get_object()
                 fill_alpha = float(state.get("/ca", fill_alpha))
                 stroke_alpha = float(state.get("/CA", stroke_alpha))
+                if "/SMask" in state:
+                    soft_mask_active = state.get("/SMask") not in (None, "/None")
             except (AttributeError, KeyError, TypeError, ValueError):
                 return True
         elif operator in {b"W", b"W*"}:
@@ -547,12 +711,16 @@ def _has_unsafe_image_drawing(page: object, reader: PdfReader) -> bool:
         elif operator == b"re" and len(operands) == 4:
             try:
                 x, y, width, height = (float(value) for value in operands)
-                path_rectangles += ((
-                    min(x, x + width),
-                    min(y, y + height),
-                    max(x, x + width),
-                    max(y, y + height),
-                ),)
+                path_rectangles += (
+                    transformed_bounds(
+                        min(x, x + width),
+                        min(y, y + height),
+                        max(x, x + width),
+                        max(y, y + height),
+                    ),
+                )
+                if abs(ctm[1]) > 1e-9 or abs(ctm[2]) > 1e-9:
+                    path_is_complex = True
             except (TypeError, ValueError):
                 return True
         elif operator in {b"m", b"l", b"c", b"v", b"y", b"h"}:
@@ -563,32 +731,25 @@ def _has_unsafe_image_drawing(page: object, reader: PdfReader) -> bool:
             path_is_complex = False
         elif operator == b"cm" and len(operands) == 6:
             try:
-                image_matrix = tuple(float(value) for value in operands)
+                value = tuple(float(item) for item in operands)
+                if len(value) != 6 or not all(math.isfinite(item) for item in value):
+                    return True
+                ctm = concatenate(ctm, value)
+                transform_seen = True
             except (TypeError, ValueError):
                 return True
         elif operator == b"Do" and operands and str(operands[0]) in images:
             image_name = str(operands[0])
             if (
                 min(fill_alpha, stroke_alpha) < 0.99
+                or soft_mask_active
                 or clip_pending
                 or clip_is_complex
-                or image_matrix is None
+                or not transform_seen
                 or image_name in intrinsically_masked
             ):
                 return True
-            a, b, c, d, e, f = image_matrix
-            corners = (
-                (e, f),
-                (a + e, b + f),
-                (c + e, d + f),
-                (a + c + e, b + d + f),
-            )
-            image_bounds = (
-                min(point[0] for point in corners),
-                min(point[1] for point in corners),
-                max(point[0] for point in corners),
-                max(point[1] for point in corners),
-            )
+            image_bounds = transformed_bounds(0.0, 0.0, 1.0, 1.0)
             if clip_bounds is not None and not (
                 clip_bounds[0] <= image_bounds[0] + 0.5
                 and clip_bounds[1] <= image_bounds[1] + 0.5
@@ -618,6 +779,133 @@ class _VerticalBarrier:
     right: float
     bottom: float
     top: float
+
+
+@dataclass(frozen=True, slots=True)
+class _WordTextExpectation:
+    text: str
+    font_size: float
+
+
+def _word_text_expectations(
+    xml_roots: dict[str, ElementTree.Element],
+) -> list[_WordTextExpectation]:
+    styles_root = xml_roots.get("word/styles.xml")
+
+    def size_from_properties(properties: ElementTree.Element | None) -> float | None:
+        size_node = _first_named(properties, "sz")
+        if size_node is None:
+            return None
+        try:
+            value = float(_attribute_named(size_node, "val") or "") / 2.0
+        except ValueError:
+            return None
+        return value if math.isfinite(value) and value > 0 else None
+
+    default_size = 11.0
+    style_sizes: dict[str, float | None] = {}
+    style_bases: dict[str, str | None] = {}
+    if styles_root is not None:
+        defaults = _first_named(styles_root, "docDefaults")
+        default_size = size_from_properties(defaults) or default_size
+        for style in _iter_named(styles_root, "style"):
+            style_id = _attribute_named(style, "styleId")
+            if not style_id:
+                continue
+            properties = next(_children_named(style, "rPr"), None)
+            based_on = _first_named(style, "basedOn")
+            style_sizes[style_id] = size_from_properties(properties)
+            style_bases[style_id] = (
+                _attribute_named(based_on, "val") if based_on is not None else None
+            )
+
+    def resolve_style(style_id: str | None) -> float:
+        visited: set[str] = set()
+        while style_id and style_id not in visited:
+            visited.add(style_id)
+            size = style_sizes.get(style_id)
+            if size is not None:
+                return size
+            style_id = style_bases.get(style_id)
+        return default_size
+
+    expectations: list[_WordTextExpectation] = []
+    content_names = [
+        name
+        for name in sorted(xml_roots, key=_word_part_priority)
+        if name == "word/document.xml"
+        or name.startswith(("word/header", "word/footer"))
+    ]
+    for name in content_names:
+        for paragraph in _iter_named(xml_roots[name], "p"):
+            paragraph_properties = next(_children_named(paragraph, "pPr"), None)
+            paragraph_style_node = _first_named(paragraph_properties, "pStyle")
+            paragraph_style = (
+                _attribute_named(paragraph_style_node, "val")
+                if paragraph_style_node is not None
+                else None
+            )
+            segments: list[_WordTextExpectation] = []
+            for run in _iter_named(paragraph, "r"):
+                run_properties = next(_children_named(run, "rPr"), None)
+                run_style_node = _first_named(run_properties, "rStyle")
+                run_style = (
+                    _attribute_named(run_style_node, "val")
+                    if run_style_node is not None
+                    else None
+                )
+                size = (
+                    size_from_properties(run_properties)
+                    or resolve_style(run_style)
+                    if run_style
+                    else size_from_properties(run_properties)
+                    or resolve_style(paragraph_style)
+                )
+                text = _normalized_visible_text(
+                    " ".join(
+                        item.text or ""
+                        for item in _iter_named(run, "t")
+                        if item.text and item.text.strip()
+                    )
+                )
+                if not text:
+                    continue
+                if segments and abs(segments[-1].font_size - size) <= 0.01:
+                    previous = segments[-1]
+                    segments[-1] = _WordTextExpectation(
+                        f"{previous.text} {text}", previous.font_size
+                    )
+                else:
+                    segments.append(_WordTextExpectation(text, size))
+            expectations.extend(segments)
+    return expectations
+
+
+def _text_sizes_match(
+    expectations: list[_WordTextExpectation],
+    positioned: list[_PositionedText],
+    barriers: list[_VerticalBarrier],
+) -> bool:
+    cursor = 0
+    for expectation in expectations:
+        match: tuple[int, int] | None = None
+        for start in range(cursor, len(positioned)):
+            end = _fragment_sequence_end(
+                expectation.text, positioned, start, barriers
+            )
+            if end is None:
+                continue
+            tolerance = max(1.5, expectation.font_size * 0.12)
+            if all(
+                abs(fragment.font_size - expectation.font_size) <= tolerance
+                for fragment in positioned[start:end]
+            ):
+                match = (start, end)
+                break
+        if match is None:
+            return False
+        cursor = match[1]
+    return bool(expectations)
 
 
 def _has_nonvisible_text(page: object, reader: PdfReader) -> bool:
@@ -1056,31 +1344,40 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
             repeatable_fragments: list[str] = []
             xml_roots: dict[str, ElementTree.Element] = {}
             table_rows: list[tuple[str, ...]] = []
-            for name in package.namelist():
+            for name in sorted(package.namelist(), key=_word_part_priority):
                 if not (name.startswith("word/") and name.endswith(".xml")):
                     continue
                 root = ElementTree.fromstring(package.read(name))
                 xml_roots[name] = root
-                fragments = [item.text for item in root.iter(f"{_W}t") if item.text and item.text.strip()]
+                fragments = [
+                    item.text
+                    for item in _iter_named(root, "t")
+                    if item.text and item.text.strip()
+                ]
                 word_fragments.extend(fragments)
                 if name == "word/document.xml":
                     document_fragments.extend(fragments)
                 elif name.startswith(("word/header", "word/footer")):
                     repeatable_fragments.extend(fragments)
-                for row in root.iter(f"{_W}tr"):
+                for row in _iter_named(root, "tr"):
                     cells = tuple(
-                        _normalized_visible_text(" ".join(item.text or "" for item in cell.iter(f"{_W}t")))
-                        for cell in row.findall(f"{_W}tc")
+                        _normalized_visible_text(
+                            " ".join(
+                                item.text or "" for item in _iter_named(cell, "t")
+                            )
+                        )
+                        for cell in _children_named(row, "tc")
                     )
                     if len(cells) > 1 and all(cells):
                         table_rows.append(cells)
             word_images = _ordered_word_image_signatures(package, xml_roots)
             word_image_layouts = _ordered_word_image_layouts(xml_roots)
             word_content_kinds = _word_content_kinds(xml_roots)
+            word_text_expectations = _word_text_expectations(xml_roots)
         reader = PdfReader(BytesIO(pdf_content), strict=True)
         extracted_pages: list[str] = []
         unsafe_text = False
-        pdf_images: list[tuple[float, tuple[float, ...], tuple[float, ...], tuple[bool, ...]]] = []
+        pdf_images: list[tuple] = []
         for page_number, page in enumerate(reader.pages):
             if _has_nonvisible_text(page, reader) or _has_unsafe_image_drawing(
                 page, reader
@@ -1115,6 +1412,9 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         word_image_layouts, pdf_image_layouts, positioned
     )
     tables_match = _table_rows_match(table_rows, positioned, barriers)
+    text_sizes_match = _text_sizes_match(
+        word_text_expectations, positioned, barriers
+    )
     if (
         not source_tokens
         or unsafe_text
@@ -1124,6 +1424,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         or not image_layouts_match
         or word_content_kinds != pdf_content_kinds
         or not tables_match
+        or not text_sizes_match
     ):
         raise ValueError("final PDF does not faithfully represent the bound Word artifact")
 

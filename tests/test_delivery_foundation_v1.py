@@ -237,10 +237,28 @@ def _word_text(text: str) -> bytes:
     return output.getvalue()
 
 
+def _word_with_strict_header(body_text: str, header_text: str) -> bytes:
+    output = BytesIO()
+    document = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body><w:p><w:r><w:t>{body_text}</w:t></w:r></w:p></w:body>"
+        "</w:document>"
+    )
+    header = (
+        '<w:hdr xmlns:w="http://purl.oclc.org/ooxml/wordprocessingml/main">'
+        f"<w:p><w:r><w:t>{header_text}</w:t></w:r></w:p></w:hdr>"
+    )
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr("word/document.xml", document)
+        package.writestr("word/header1.xml", header)
+    return output.getvalue()
+
+
 def _word_with_image_and_text(
     text: str,
     image_bytes: bytes,
     *,
+    following_text: str | None = None,
     image_width: float = 40,
     image_height: float = 40,
     anchor_x: float | None = None,
@@ -269,6 +287,11 @@ def _word_with_image_and_text(
             '<a:graphic><a:graphicData><a:blip r:embed="rId1"/>'
             "</a:graphicData></a:graphic></wp:anchor>"
         )
+    following = (
+        f"<w:p><w:r><w:t>{following_text}</w:t></w:r></w:p>"
+        if following_text is not None
+        else ""
+    )
     document = (
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
         'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
@@ -276,6 +299,7 @@ def _word_with_image_and_text(
         'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
         f"<w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p>"
         f"<w:p><w:r><w:drawing>{drawing}</w:drawing></w:r></w:p>"
+        f"{following}"
         "</w:body></w:document>"
     )
     relationships = (
@@ -295,7 +319,10 @@ def _image_pdf(
     image_bytes: bytes,
     *,
     image_x: float,
-    image_y: float = 700,
+    image_y: float = 600,
+    text_y: float = 650,
+    following_text: str | None = None,
+    following_text_y: float = 600,
     image_width: float = 40,
     image_height: float = 40,
     image_after_text: bool = True,
@@ -318,14 +345,25 @@ def _image_pdf(
         f"{' '.join(f'{value:g}' for value in transform)} cm /Im1 Do Q "
     ).encode("ascii")
     text_command = (
-        b"BT /F1 10 Tf 1 0 0 1 50 650 Tm ("
+        f"BT /F1 10 Tf 1 0 0 1 50 {text_y:g} Tm (".encode("ascii")
         + encoded
         + b") Tj ET"
     )
+    following_command = (
+        b""
+        if following_text is None
+        else (
+            f" BT /F1 10 Tf 1 0 0 1 50 {following_text_y:g} Tm (".encode(
+                "ascii"
+            )
+            + following_text.encode("ascii")
+            + b") Tj ET"
+        )
+    )
     stream = (
-        text_command + b" " + image_command
+        text_command + b" " + image_command + following_command
         if image_after_text
-        else image_command + text_command
+        else image_command + text_command + following_command
     )
     objects = (
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
@@ -790,6 +828,20 @@ def test_final_pdf_rejects_a_table_flattened_into_unrelated_lines() -> None:
         )
 
 
+def test_fidelity_includes_authoritative_strict_namespace_header_text() -> None:
+    word = _word_with_strict_header("Body-223", "Header-223")
+
+    delivery_renderer._validate_pdf_fidelity(
+        word,
+        _parseable_text_pdf("Header-223\nBody-223"),
+    )
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _parseable_text_pdf("Body-223"),
+        )
+
+
 @pytest.mark.parametrize(
     "first_cell_fragments",
     (
@@ -964,8 +1016,18 @@ def test_fidelity_never_composes_fragments_across_any_path_contained_in_gap() ->
 
 @pytest.mark.parametrize(
     "clip_rectangle",
-    (b"50 700 100 1.5", b"50 690 1.5 30"),
-    ids=("horizontal-band", "vertical-band"),
+    (
+        b"50 700 100 1.5",
+        b"50 704 100 4",
+        b"50 690 1.5 30",
+        b"50 690 25 30",
+    ),
+    ids=(
+        "thin-horizontal-band",
+        "four-point-horizontal-band",
+        "thin-vertical-band",
+        "partial-vertical-band",
+    ),
 )
 def test_fidelity_rejects_text_materially_removed_by_an_active_clip(
     clip_rectangle: bytes,
@@ -975,6 +1037,20 @@ def test_fidelity_rejects_text_materially_removed_by_an_active_clip(
         + clip_rectangle
         + b" re W n BT /F1 10 Tf 1 0 0 1 50 700 Tm (Synthetic) Tj ET Q"
     )
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            _word_text("Synthetic"),
+            _custom_content_pdf(stream),
+        )
+
+
+@pytest.mark.parametrize("font_size", (4, 48, 72, 120))
+def test_fidelity_rejects_text_scale_not_bound_to_word_source(
+    font_size: float,
+) -> None:
+    stream = (
+        f"BT /F1 {font_size:g} Tf 1 0 0 1 50 650 Tm (Synthetic) Tj ET"
+    ).encode("ascii")
     with pytest.raises(ValueError, match="faithfully represent"):
         delivery_renderer._validate_pdf_fidelity(
             _word_text("Synthetic"),
@@ -1179,6 +1255,22 @@ def test_fidelity_rejects_images_materially_removed_by_composed_clips(
         )
 
 
+def test_fidelity_composes_ctm_before_evaluating_image_clip() -> None:
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, "JPEG")
+    word = _word_with_image_and_text("Synthetic", image.getvalue())
+    pdf = _image_pdf(
+        "Synthetic",
+        image.getvalue(),
+        image_x=100,
+        matrix=(1, 0, 0, 1, 0, 0),
+        clip_commands="40 0 0 40 100 600 cm 0 0 0.6 1 re W n ",
+    )
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(word, pdf)
+
+
 def _transparent_smask_image_pdf(image_bytes: bytes) -> bytes:
     stream = (
         b"BT /F1 10 Tf 1 0 0 1 50 650 Tm (Synthetic) Tj ET "
@@ -1228,6 +1320,58 @@ def _transparent_smask_image_pdf(image_bytes: bytes) -> bytes:
     return bytes(output)
 
 
+def _extgstate_softmask_image_pdf(image_bytes: bytes) -> bytes:
+    mask_stream = b"0 g 0 0 1 1 re f"
+    page_stream = (
+        b"BT /F1 10 Tf 1 0 0 1 50 650 Tm (Synthetic) Tj ET "
+        b"q /GS0 gs 40 0 0 40 100 600 cm /Im1 Do Q"
+    )
+    objects = (
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 1 1] "
+        b"/Group << /S /Transparency /CS /DeviceGray /I true >> /Resources << >> /Length "
+        + str(len(mask_stream)).encode("ascii")
+        + b" >>\nstream\n"
+        + mask_stream
+        + b"\nendstream",
+        b"<< /Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceRGB "
+        b"/BitsPerComponent 8 /Filter /DCTDecode /Length "
+        + str(len(image_bytes)).encode("ascii")
+        + b" >>\nstream\n"
+        + image_bytes
+        + b"\nendstream",
+        b"<< /Type /ExtGState /SMask << /S /Luminosity /G 2 0 R /BC [0] >> >>",
+        b"<< /Length "
+        + str(len(page_stream)).encode("ascii")
+        + b" >>\nstream\n"
+        + page_stream
+        + b"\nendstream",
+        b"<< /Type /Page /Parent 7 0 R /MediaBox [0 0 595 842] /Resources "
+        b"<< /Font << /F1 1 0 R >> /XObject << /Im1 3 0 R >> "
+        b"/ExtGState << /GS0 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Pages /Count 1 /Kids [6 0 R] >>",
+        b"<< /Type /Catalog /Pages 7 0 R >>",
+    )
+    output = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
+    offsets = []
+    for index, value in enumerate(objects, 1):
+        offsets.append(len(output))
+        output.extend(f"{index} 0 obj\n".encode("ascii") + value + b"\nendobj\n")
+    xref = len(output)
+    output.extend(b"xref\n0 9\n0000000000 65535 f \n")
+    output.extend(
+        b"".join(
+            f"{offset:010d} 00000 n \n".encode("ascii") for offset in offsets
+        )
+    )
+    output.extend(
+        f"trailer << /Size 9 /Root 8 0 R >>\nstartxref\n{xref}\n%%EOF".encode(
+            "ascii"
+        )
+    )
+    return bytes(output)
+
+
 def test_fidelity_rejects_image_hidden_by_an_intrinsic_soft_mask() -> None:
     image = BytesIO()
     Image.new("RGB", (8, 8), "red").save(image, "JPEG")
@@ -1237,6 +1381,18 @@ def test_fidelity_rejects_image_hidden_by_an_intrinsic_soft_mask() -> None:
         delivery_renderer._validate_pdf_fidelity(
             word,
             _transparent_smask_image_pdf(image.getvalue()),
+        )
+
+
+def test_fidelity_rejects_image_hidden_by_a_graphics_state_soft_mask() -> None:
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, "JPEG")
+    word = _word_with_image_and_text("Synthetic", image.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _extgstate_softmask_image_pdf(image.getvalue()),
         )
 
 
@@ -1255,6 +1411,38 @@ def test_fidelity_rejects_gross_inline_image_vertical_relocation(
                 "Synthetic", image.getvalue(), image_x=100, image_y=image_y
             ),
         )
+
+
+@pytest.mark.parametrize(
+    "image_y",
+    (650, 720, 540),
+    ids=("between", "above-preceding", "below-following"),
+)
+def test_fidelity_binds_inline_image_to_surrounding_source_flow(
+    image_y: float,
+) -> None:
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, "JPEG")
+    word = _word_with_image_and_text(
+        "Before-223",
+        image.getvalue(),
+        following_text="After-223",
+    )
+    pdf = _image_pdf(
+        "Before-223",
+        image.getvalue(),
+        image_x=100,
+        image_y=image_y,
+        text_y=700,
+        following_text="After-223",
+        following_text_y=600,
+    )
+
+    if image_y == 650:
+        delivery_renderer._validate_pdf_fidelity(word, pdf)
+    else:
+        with pytest.raises(ValueError, match="faithfully represent"):
+            delivery_renderer._validate_pdf_fidelity(word, pdf)
 
 
 def test_fidelity_binds_page_anchored_image_position() -> None:
@@ -1311,6 +1499,24 @@ def test_image_fidelity_signature_distinguishes_uniform_opposites() -> None:
         assert delivery_renderer._ordered_word_image_signatures(package, {"word/document.xml": root}) == [
             white_signature, black_signature,
         ]
+
+
+def test_image_fidelity_signature_preserves_legitimate_alpha_semantics() -> None:
+    source = Image.new("RGBA", (32, 32), (220, 20, 20, 128))
+    word_style = delivery_renderer._image_signature(source)
+    pdf_premultiplied_style = delivery_renderer._image_signature(
+        Image.new("RGBA", (32, 32), (110, 10, 10, 128))
+    )
+    invisible_forgery = delivery_renderer._image_signature(
+        Image.new("RGBA", (32, 32), (110, 10, 10, 0))
+    )
+
+    assert delivery_renderer._ordered_image_signatures_match(
+        [word_style], [pdf_premultiplied_style]
+    )
+    assert not delivery_renderer._ordered_image_signatures_match(
+        [word_style], [invisible_forgery]
+    )
 
 
 def test_final_pdf_conversion_fails_closed_without_a_local_converter() -> None:
