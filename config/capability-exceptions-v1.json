@@ -84,12 +84,12 @@
         "column": 0
       },
       "normalizedAcquisitionAstSha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
-      "wholeFileSha256": "b6d5e50b52af17f7829672db7699b3e5536fa9233b5b3d7d6fef555ebcb07af9",
-      "baselineCommit": "62c916425a46d53aa009c81c724ece89034065a9",
+        "wholeFileSha256": "2b7863088b9958818e94d2ed854d265378c80caa218b84e0a4903b0370c30a5e",
+        "baselineCommit": "f2f745e8791906ae91049ed0474df710b911613d",
       "acquiredCapability": "subprocess",
       "justification": "Architecture trust-boundary judge reads protected-base git trees via subprocess git plumbing; this is the judge's own required custody mechanism.",
       "owner": "QUALITY_GOVERNANCE",
-      "reviewEvidence": "ISSUE_220_WORD_TRANSITION_ADAPTER_ARCHITECTURE",
+        "reviewEvidence": "ISSUE_224_WORD_CONTRACT_PREDECESSOR_ARCHITECTURE",
       "disposition": "ACCEPT_BASELINE",
       "reviewBy": "2027-08-19"
     },
@@ -125,17 +125,17 @@
       "capabilityClass": "PROCESS_NAMESPACE_ACQUISITION",
       "canonicalPath": "scripts/quality/capability_gate_adapter.py",
       "module": "scripts.quality.capability_gate_adapter",
-      "acquisitionLocation": {
-        "line": 6,
+        "acquisitionLocation": {
+          "line": 6,
         "column": 0
       },
       "normalizedAcquisitionAstSha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
-      "wholeFileSha256": "362a80eb63031e2d8de78e8c48df82af9c24c01f8879f614335178fb2dc7f6cd",
-      "baselineCommit": "2bd315608700f74a21103f3ea61a95dbf4013f25",
+        "wholeFileSha256": "f86e8a8941011c91f249aa943c43ba1153e77768dbbad206c37c84cc1b259311",
+        "baselineCommit": "5e208ed31b8025b6c0ceef87df763981d9fdbd21",
       "acquiredCapability": "subprocess",
       "justification": "Exception adapter reads baseline/candidate blob content and registry state via git show/merge-base to validate exact-match exceptions.",
       "owner": "QUALITY_GOVERNANCE",
-      "reviewEvidence": "CAPABILITY_BASELINE_SEED_RECOVERY_V1",
+        "reviewEvidence": "ISSUE_224_EXACT_WORD_CONTRACT_VALIDATOR",
       "disposition": "ACCEPT_BASELINE",
       "reviewBy": "2027-08-19"
     },
@@ -153,12 +153,12 @@
         "column": 0
       },
       "normalizedAcquisitionAstSha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
-      "wholeFileSha256": "4187b46d9b14a457d22938b691608feaa1ef00eebcf6c328d845bedc54967f33",
-      "baselineCommit": "32b71d4e5db584eee5bae305e817da803465bd09",
+        "wholeFileSha256": "57b23c7f55d255210ab924bb86c0165317ba17f2f87a0236ae825c0a9763f9a1",
+        "baselineCommit": "5e208ed31b8025b6c0ceef87df763981d9fdbd21",
       "acquiredCapability": "subprocess",
       "justification": "Capability trust anchor reads protected registry/transition documents and tree identities via git ls-tree/show/merge-base; this is the anchor's own required custody mechanism.",
       "owner": "QUALITY_GOVERNANCE",
-      "reviewEvidence": "ISSUE_218_WORD_TRANSITION_ROUTING_CAPABILITY",
+        "reviewEvidence": "ISSUE_224_WORD_CONTRACT_PREDECESSOR_CUSTODY",
       "disposition": "ACCEPT_BASELINE",
       "reviewBy": "2027-08-19"
     },

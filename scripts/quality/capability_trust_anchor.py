@@ -4,6 +4,8 @@ import json
 import subprocess
 from pathlib import Path, PurePosixPath
 
+from scripts.quality.capability_gate_adapter import word_render_sources_are_closed
+
 
 REGISTRY_PATH = "config/capability-protected-artifacts-v1.json"
 TRANSITION_PATH = "config/capability-protected-transition-v1.json"
@@ -12,6 +14,10 @@ ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json
 WORD_TRANSITION_ID = "LOCAL_WORD_COM_CONTAINMENT_TRUST_TRANSITION_V1"
 WORD_TRANSITION_PURPOSE = "BOUND_MICROSOFT_WORD_COM_EXECUTION_FOR_AUTHORITATIVE_WORD_TO_PDF"
 WORD_TRANSITION_SCOPE = "LOCAL_WORD_COM_CONTAINMENT_V1"
+_WORD_PRODUCT_PATHS = (
+    "scripts/backend_contract/infrastructure/office_pdf.py",
+    "scripts/backend_contract/infrastructure/office_word_worker.py",
+)
 _IDENTITY_KEYS = {"path", "state", "mode", "objectType", "blobSha"}
 _SUPPORT_SCOPES = {
     "C1B_SAFE_UOW_BOOTSTRAP_V1": {
@@ -22,6 +28,7 @@ _SUPPORT_SCOPES = {
         "tests/test_safe_uow_bootstrap_v1.py",
     },
     "LOCAL_WORD_COM_CONTAINMENT_V1": {
+        "tests/test_delivery_foundation_v1.py",
         "scripts/backend_contract/infrastructure/office_pdf.py",
         "scripts/backend_contract/infrastructure/office_word_worker.py",
         "scripts/quality/capability_gate_adapter.py",
@@ -191,6 +198,24 @@ def _word_transition_scope_changed(root: Path, protected_base: str, candidate: s
         UnicodeError,
         json.JSONDecodeError,
         KeyError,
+        TypeError,
+        ValueError,
+        subprocess.CalledProcessError,
+    ):
+        return None
+
+
+def _word_render_contract_is_closed(root: Path, candidate: str) -> bool | None:
+    """Validate the exact purpose-specific Word worker at an exact Git identity."""
+    try:
+        sources = {
+            path: _git(root, "show", f"{candidate}:{path}", text=False)
+            for path in _WORD_PRODUCT_PATHS
+        }
+        return word_render_sources_are_closed(sources)
+    except (
+        OSError,
+        UnicodeError,
         TypeError,
         ValueError,
         subprocess.CalledProcessError,
