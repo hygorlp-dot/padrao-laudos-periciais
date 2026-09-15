@@ -119,6 +119,7 @@ def test_transition_manifests_introduce_no_wildcard_or_package_wide_authority():
         EXCEPTIONS_PATH,
         CAPABILITY_TRANSITION_PATH,
         CAPABILITY_GATE_ADAPTER_PATH,
+        "tests/test_repository_safety_gate.py",
     }
 
 

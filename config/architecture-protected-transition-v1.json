@@ -34,7 +34,7 @@
     {
       "path": "config/capability-protected-transition-v1.json",
       "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "de64b8f74525dc84cf4d9cb0346c1169865c3f0a",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "0fdd2373414b18419c0149eaa3f484ac0e8da96f"
+      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "0e2834b37162d76f61c52265fcfdaaa211370c42"
     },
     {
       "path": "scripts/quality/capability_gate_adapter.py",

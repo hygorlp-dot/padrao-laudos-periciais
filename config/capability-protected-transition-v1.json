@@ -40,7 +40,7 @@
     {
       "path": "tests/test_architecture_capability_exception_rebind_v1.py",
       "base": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "0a9528587483b39101c91df33d228381c9e9c6ff"},
-      "candidate": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "c38930522c7edd198622e5fb8ad503674decc660"}
+      "candidate": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "b80175f755c028ffeb68d265cd85b69ee9e4287b"}
     },
     {
       "path": "tests/test_repository_safety_gate.py",
