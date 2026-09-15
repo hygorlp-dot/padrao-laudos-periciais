@@ -243,7 +243,8 @@ def _worker_com_contract_is_closed(tree: ast.AST) -> bool:
     ):
         return False
     create_calls = _calls(launch, "CreateProcess")
-    if len(create_calls) != 1:
+    all_worker_create_calls = _calls(tree, "CreateProcess")
+    if len(create_calls) != 1 or all_worker_create_calls != create_calls:
         return False
     create = create_calls[0]
     if (

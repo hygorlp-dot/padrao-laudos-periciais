@@ -667,3 +667,15 @@ def test_word_render_contract_rejects_generic_public_execution_api():
     sources[WORD_PARENT_PATH] += "\ndef run(executable, command_line):\n    return executable, command_line\n"
 
     assert not word_render_sources_are_closed(sources)
+
+
+def test_word_render_contract_rejects_a_second_hidden_process_surface():
+    sources = _closed_word_render_sources()
+    sources[WORD_WORKER_PATH] += '''
+def _alternate_process(executable, command_line, startup):
+    return win32process.CreateProcess(
+        executable, command_line, None, None, False, 0, None, None, startup
+    )
+'''
+
+    assert not word_render_sources_are_closed(sources)
