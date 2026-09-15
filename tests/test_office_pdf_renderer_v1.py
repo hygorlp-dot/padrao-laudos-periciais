@@ -491,6 +491,45 @@ def test_render_tree_cleanup_is_bounded_across_transient_office_file_lock(
     assert not root.exists()
 
 
+def test_sensitive_source_unlink_uses_the_same_bounded_cleanup_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "render-root"
+    root.mkdir()
+    source = root / "source.docx"
+    source.write_bytes(b"synthetic-private-source")
+    real_unlink = Path.unlink
+    real_rmtree = shutil.rmtree
+    unlink_attempts = 0
+    pauses: list[float] = []
+
+    def _transient_unlink(path: Path, *, missing_ok: bool = False) -> None:
+        nonlocal unlink_attempts
+        if path == source:
+            unlink_attempts += 1
+            if unlink_attempts == 1:
+                raise PermissionError("synthetic transient source lock")
+        real_unlink(path, missing_ok=missing_ok)
+
+    def _guarded_rmtree(path: Path) -> None:
+        if source.exists():
+            raise PermissionError("synthetic tree lock while source is open")
+        real_rmtree(path)
+
+    monkeypatch.setattr(Path, "unlink", _transient_unlink)
+    monkeypatch.setattr(office_pdf.shutil, "rmtree", _guarded_rmtree)
+
+    office_pdf._remove_render_tree(
+        root,
+        clock=iter((0.0, 0.1)).__next__,
+        pause=pauses.append,
+    )
+
+    assert unlink_attempts == 2
+    assert pauses == [0.05]
+    assert not root.exists()
+
+
 def test_production_sources_expose_no_generic_process_or_com_api() -> None:
     office_source = Path(office_pdf.__file__).read_text(encoding="utf-8")
     worker_source = Path(__file__).parents[1].joinpath(
