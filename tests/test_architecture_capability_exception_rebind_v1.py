@@ -22,15 +22,13 @@ CAPABILITY_REGISTRY_PATH = "config/capability-protected-artifacts-v1.json"
 CAPABILITY_TRANSITION_PATH = "config/capability-protected-transition-v1.json"
 ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json"
 CAPABILITY_GATE_ADAPTER_PATH = "scripts/quality/capability_gate_adapter.py"
-PROTECTED_BASE = "a8065073597b92c5cb116ac421c8a85d66fcacfb"
-ARCHITECTURE_PROTECTED_BASE = "a8065073597b92c5cb116ac421c8a85d66fcacfb"
+PROTECTED_BASE = "1c4b747fb380a79087ace5dd87f5c31be7ffd77a"
+ARCHITECTURE_PROTECTED_BASE = "1c4b747fb380a79087ace5dd87f5c31be7ffd77a"
 SOURCE_ANCHORS = {
-    "scripts/quality/architecture_analyzer.py": "62c916425a46d53aa009c81c724ece89034065a9",
-    "scripts/quality/capability_trust_anchor.py": "62c916425a46d53aa009c81c724ece89034065a9",
+    "scripts/quality/capability_trust_anchor.py": "7153bc7d7b22fbaaffd4c5955f221edff5d752f1",
 }
 REVIEW_EVIDENCE = {
-    "scripts/quality/architecture_analyzer.py": "ISSUE_220_WORD_TRANSITION_ADAPTER_ARCHITECTURE",
-    "scripts/quality/capability_trust_anchor.py": "ISSUE_220_WORD_TRANSITION_ADAPTER_CAPABILITY",
+    "scripts/quality/capability_trust_anchor.py": "ISSUE_218_WORD_TRANSITION_ROUTING_CAPABILITY",
 }
 E1A_PROTECTED_WORKFLOWS = {
     ".github/workflows/architecture-protected.yml",
@@ -47,7 +45,6 @@ SUPPORT_ARTIFACTS = {
     "tests/test_repository_safety_gate.py",
 }
 ROTATED_EXCEPTION_PATHS = {
-    "scripts/quality/architecture_analyzer.py",
     "scripts/quality/capability_trust_anchor.py",
 }
 
@@ -99,14 +96,12 @@ def test_transition_manifests_introduce_no_wildcard_or_package_wide_authority():
         ".github/workflows/capability-protected.yml",
         CAPABILITY_REGISTRY_PATH,
         EXCEPTIONS_PATH,
-        "scripts/quality/architecture_analyzer.py",
         "scripts/quality/capability_trust_anchor.py",
     }
     assert architecture_paths == capability_paths - {EXCEPTIONS_PATH}
     assert support_paths == {
         EXCEPTIONS_PATH,
         CAPABILITY_TRANSITION_PATH,
-        "tests/test_repository_safety_gate.py",
     }
 
 
@@ -203,12 +198,10 @@ def test_capability_registry_and_transition_bind_exact_exception_blob():
         ".github/workflows/capability-protected.yml",
         CAPABILITY_REGISTRY_PATH,
         EXCEPTIONS_PATH,
-        "scripts/quality/architecture_analyzer.py",
         "scripts/quality/capability_trust_anchor.py",
     }
     assert {row["path"] for row in transition["supportArtifacts"]} == {
         "tests/test_architecture_capability_exception_rebind_v1.py",
-        "tests/test_repository_safety_gate.py",
     }
 
 
@@ -221,7 +214,6 @@ def test_architecture_transition_binds_current_trust_anchor_rotation():
     assert set(artifact_rows) == {
         ".github/workflows/capability-protected.yml",
         CAPABILITY_REGISTRY_PATH,
-        "scripts/quality/architecture_analyzer.py",
         "scripts/quality/capability_trust_anchor.py",
     }
 
@@ -236,7 +228,6 @@ def test_architecture_transition_binds_current_trust_anchor_rotation():
     assert set(support_rows) == {
         CAPABILITY_TRANSITION_PATH,
         EXCEPTIONS_PATH,
-        "tests/test_repository_safety_gate.py",
     }
     for path, row in support_rows.items():
         assert _architecture_transition_identity(row, "base") == _identity_from_commit(
