@@ -173,6 +173,28 @@ def _positioned_text_pdf(
     return bytes(output)
 
 
+def _custom_content_pdf(stream: bytes, *, extra_resources: bytes = b"") -> bytes:
+    objects = (
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> "
+        + extra_resources
+        + b" >> /Contents 2 0 R >>",
+        b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        b"<< /Type /Catalog /Pages 4 0 R >>",
+    )
+    output = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
+    offsets = []
+    for index, value in enumerate(objects, 1):
+        offsets.append(len(output))
+        output.extend(f"{index} 0 obj\n".encode("ascii") + value + b"\nendobj\n")
+    xref = len(output)
+    output.extend(b"xref\n0 6\n0000000000 65535 f \n")
+    output.extend(b"".join(f"{offset:010d} 00000 n \n".encode("ascii") for offset in offsets))
+    output.extend(f"trailer << /Size 6 /Root 5 0 R >>\nstartxref\n{xref}\n%%EOF".encode("ascii"))
+    return bytes(output)
+
+
 def _word_table(cells: tuple[str, ...]) -> bytes:
     output = BytesIO()
     row = "".join(
@@ -193,6 +215,90 @@ def _word_table(cells: tuple[str, ...]) -> bytes:
         )
         package.writestr("word/document.xml", document)
     return output.getvalue()
+
+
+def _word_text(text: str) -> bytes:
+    output = BytesIO()
+    document = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:body></w:document>"
+    )
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr("word/document.xml", document)
+    return output.getvalue()
+
+
+def _word_with_image_and_text(text: str, image_bytes: bytes) -> bytes:
+    output = BytesIO()
+    document = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        f"<w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p>"
+        '<w:p><w:r><w:drawing><a:blip r:embed="rId1"/></w:drawing></w:r></w:p>'
+        "</w:body></w:document>"
+    )
+    relationships = (
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Target="media/image1.jpg"/>'
+        "</Relationships>"
+    )
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr("word/document.xml", document)
+        package.writestr("word/_rels/document.xml.rels", relationships)
+        package.writestr("word/media/image1.jpg", image_bytes)
+    return output.getvalue()
+
+
+def _image_pdf(
+    text: str,
+    image_bytes: bytes,
+    *,
+    image_x: float,
+    image_y: float = 700,
+    image_width: float = 40,
+    image_height: float = 40,
+    image_after_text: bool = False,
+) -> bytes:
+    encoded = text.encode("ascii")
+    image_command = (
+        f"q {image_width:g} 0 0 {image_height:g} {image_x:g} {image_y:g} cm "
+        "/Im1 Do Q "
+    ).encode("ascii")
+    text_command = (
+        b"BT /F1 10 Tf 1 0 0 1 50 650 Tm ("
+        + encoded
+        + b") Tj ET"
+    )
+    stream = (
+        text_command + b" " + image_command
+        if image_after_text
+        else image_command + text_command
+    )
+    objects = (
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceRGB "
+        b"/BitsPerComponent 8 /Filter /DCTDecode /Length "
+        + str(len(image_bytes)).encode("ascii")
+        + b" >>\nstream\n"
+        + image_bytes
+        + b"\nendstream",
+        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Type /Page /Parent 5 0 R /MediaBox [0 0 595 842] /Resources "
+        b"<< /Font << /F1 1 0 R >> /XObject << /Im1 2 0 R >> >> /Contents 3 0 R >>",
+        b"<< /Type /Pages /Count 1 /Kids [4 0 R] >>",
+        b"<< /Type /Catalog /Pages 5 0 R >>",
+    )
+    output = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
+    offsets = []
+    for index, value in enumerate(objects, 1):
+        offsets.append(len(output))
+        output.extend(f"{index} 0 obj\n".encode("ascii") + value + b"\nendobj\n")
+    xref = len(output)
+    output.extend(b"xref\n0 7\n0000000000 65535 f \n")
+    output.extend(b"".join(f"{offset:010d} 00000 n \n".encode("ascii") for offset in offsets))
+    output.extend(f"trailer << /Size 7 /Root 6 0 R >>\nstartxref\n{xref}\n%%EOF".encode("ascii"))
+    return bytes(output)
 
 
 def binding() -> DeliveryBinding:
@@ -687,6 +793,105 @@ def test_fidelity_never_composes_one_table_cell_across_pages() -> None:
                     [("Cell", 50, 700, 10, 0)],
                     [("-A-223", 80, 700, 10, 0), ("Cell-B-223", 250, 700, 10, 0)],
                 ]
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("stream", "resources"),
+    (
+        (
+            b"BT /F1 10 Tf 1 0 0 1 50 700 Tm (Cell-A-223) Tj ET "
+            b"q 1 1 1 rg 0 650 595 100 re f Q",
+            b"",
+        ),
+        (
+            b"BT /F1 10 Tf 0 0 0 1 50 700 Tm (Cell-A-223) Tj ET",
+            b"",
+        ),
+        (
+            b"BT /F1 10 Tf 0.2 0 0 1 50 700 Tm (Cell-A-223) Tj ET",
+            b"",
+        ),
+        (
+            b"BT /F1 10 Tf 1 0 0 1 50 700 Tm (Cell-A-223) Tj ET "
+            b"q 1 1 1 rg 55 650 540 100 re f Q",
+            b"",
+        ),
+        (
+            b"BT /F1 10 Tf 1 0 0 1 50 700 Tm (Cell-A-223) Tj ET "
+            b"q 1 1 1 rg 90 650 505 100 re f Q",
+            b"",
+        ),
+        (
+            b"BT /F1 10 Tf 1 0 0 1 590 700 Tm (Cell-A-223) Tj ET",
+            b"",
+        ),
+        (
+            b"q /GS0 gs BT /F1 10 Tf 1 0 0 1 50 700 Tm (Cell-A-223) Tj ET Q",
+            b"/ExtGState << /GS0 << /Type /ExtGState /ca 0 /CA 0 >> >>",
+        ),
+    ),
+    ids=(
+        "opaque-overpaint",
+        "zero-width",
+        "near-zero-width",
+        "hidden-strip",
+        "hidden-tail",
+        "partial-off-page",
+        "zero-alpha",
+    ),
+)
+def test_fidelity_rejects_nonvisible_or_cross_region_table_fragments(
+    stream: bytes, resources: bytes
+) -> None:
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            _word_text("Cell-A-223"),
+            _custom_content_pdf(stream, extra_resources=resources),
+        )
+
+
+def test_fidelity_never_composes_fragments_across_a_visible_cell_rule() -> None:
+    stream = (
+        b"BT\n"
+        b"/F1 10 Tf 0 Tr 1 0 0 1 50 700 Tm () Tj (Cell-) Tj\n"
+        b"/F1 10 Tf 0 Tr 1 0 0 1 82 700 Tm () Tj (A-223) Tj\n"
+        b"/F1 10 Tf 0 Tr 1 0 0 1 250 700 Tm () Tj (Cell-B-223) Tj\n"
+        b"ET\n0 0 0 RG 1 w 80 650 m 80 750 l S"
+    )
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            _word_table(("Cell-A-223", "Cell-B-223")),
+            _custom_content_pdf(stream),
+        )
+
+
+def test_fidelity_rejects_matching_image_rendered_outside_the_page() -> None:
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, "JPEG")
+    word = _word_with_image_and_text("Synthetic", image.getvalue())
+
+    delivery_renderer._validate_pdf_fidelity(
+        word,
+        _image_pdf("Synthetic", image.getvalue(), image_x=100),
+    )
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", image.getvalue(), image_x=700),
+        )
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf(
+                "Synthetic",
+                image.getvalue(),
+                image_x=45,
+                image_y=640,
+                image_width=100,
+                image_height=30,
+                image_after_text=True,
             ),
         )
 

@@ -81,6 +81,7 @@ class _FakeWord:
     def __init__(self, calls: list[tuple]) -> None:
         object.__setattr__(self, "calls", calls)
         self.Documents = self
+        self.Options = _FakeWordOptions(calls)
 
     def __setattr__(self, name, value) -> None:
         if name in {"AutomationSecurity", "Visible", "DisplayAlerts"}:
@@ -93,6 +94,18 @@ class _FakeWord:
 
     def Quit(self, **kwargs) -> None:
         self.calls.append(("quit", kwargs))
+
+
+class _FakeWordOptions:
+    def __init__(self, calls: list[tuple]) -> None:
+        object.__setattr__(self, "calls", calls)
+        object.__setattr__(self, "UpdateLinksAtOpen", True)
+        object.__setattr__(self, "UpdateFieldsAtPrint", True)
+
+    def __setattr__(self, name, value) -> None:
+        if name in {"UpdateLinksAtOpen", "UpdateFieldsAtPrint"}:
+            self.calls.append(("option", name, value))
+        object.__setattr__(self, name, value)
 
 
 class _OwnershipCheckingWord(_FakeWord):
@@ -219,6 +232,11 @@ def test_word_worker_hard_codes_read_only_word_to_pdf_operation(tmp_path: Path) 
     assert result["wordSha256"] == sha256(source).hexdigest()
     assert any(call[0] == "close" for call in calls)
     assert ("set", "AutomationSecurity", 3) in calls
+    assert ("option", "UpdateLinksAtOpen", False) in calls
+    assert ("option", "UpdateFieldsAtPrint", False) in calls
+    assert calls.index(("option", "UpdateLinksAtOpen", False)) < next(
+        index for index, call in enumerate(calls) if call[0] == "open"
+    )
     assert any(call[0] == "bootstrap-close" for call in calls)
     assert any(call[0] == "quit" for call in calls)
     assert any(call[0] == "process-close" for call in calls)
@@ -243,6 +261,37 @@ def test_word_worker_binds_exact_owned_process_and_disables_macros_before_open(
     assert names.index("word-process-owned") < names.index("word-com-bound")
     assert names.index("word-com-bound") < names.index("open")
     assert calls.index(("set", "AutomationSecurity", 3)) < names.index("open")
+
+
+def test_word_worker_fails_closed_when_word_refuses_update_controls(
+    tmp_path: Path,
+) -> None:
+    class RefusingOptions:
+        UpdateLinksAtOpen = True
+        UpdateFieldsAtPrint = True
+
+        def __setattr__(self, _name, _value) -> None:
+            return None
+
+    class RefusingWord(_FakeWord):
+        def __init__(self, calls: list[tuple]) -> None:
+            super().__init__(calls)
+            self.Options = RefusingOptions()
+
+    _write_worker_request(tmp_path, _synthetic_word_package())
+    calls: list[tuple] = []
+
+    with pytest.raises(RuntimeError, match="render failed"):
+        _render_job(
+            tmp_path,
+            word_launcher=lambda root: _word_launcher(root, calls),
+            com_binder=lambda _process, _bootstrap: (
+                RefusingWord(calls),
+                _FakeBootstrapDocument(calls),
+            ),
+        )
+
+    assert not any(call[0] == "open" for call in calls)
 
 
 @pytest.mark.parametrize(
@@ -281,6 +330,9 @@ def test_word_worker_rejects_external_relationships_before_process_launch(
         'INCLUDETEXT "https://example.invalid/private"',
         'INCLUDEPICTURE "\\\\server\\private\\image.png"',
         'DDEAUTO cmd "payload"',
+        'LINK Excel.Sheet.12 "\\\\server\\private\\evidence.xlsx"',
+        'DATABASE \\d "\\\\server\\private\\evidence.accdb"',
+        'HYPERLINK "https://example.invalid/private"',
     ),
 )
 def test_word_worker_rejects_active_external_fields_before_process_launch(
@@ -298,6 +350,41 @@ def test_word_worker_rejects_active_external_fields_before_process_launch(
         )
 
     assert calls == []
+
+
+@pytest.mark.parametrize("instruction", ("PAGE", "NUMPAGES", "SEQ Figure", "REF bookmark"))
+def test_word_worker_permits_only_known_nonacquiring_fields(
+    tmp_path: Path, instruction: str
+) -> None:
+    body = f"<w:p><w:r><w:instrText>{instruction}</w:instrText></w:r></w:p>"
+    _write_worker_request(tmp_path, _synthetic_word_package(document_body=body))
+    calls: list[tuple] = []
+
+    _render_job(
+        tmp_path,
+        word_launcher=lambda root: _word_launcher(root, calls),
+        com_binder=_com_binder(calls),
+    )
+
+    assert any(call[0] == "open" for call in calls)
+
+
+def test_word_worker_does_not_accept_acquiring_field_after_safe_prefix(
+    tmp_path: Path,
+) -> None:
+    body = (
+        "<w:p><w:r><w:instrText>PAGE </w:instrText></w:r>"
+        '<w:r><w:instrText>LINK Excel.Sheet.12 "\\\\server\\private\\evidence.xlsx"'
+        "</w:instrText></w:r></w:p>"
+    )
+    _write_worker_request(tmp_path, _synthetic_word_package(document_body=body))
+
+    with pytest.raises(ValueError, match="active Word field"):
+        _render_job(
+            tmp_path,
+            word_launcher=lambda root: _word_launcher(root, []),
+            com_binder=_com_binder([]),
+        )
 
 
 def test_worker_request_is_exact_and_rejects_arbitrary_protocol(tmp_path: Path) -> None:
