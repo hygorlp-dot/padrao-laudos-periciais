@@ -12,6 +12,17 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pytest
 from jsonschema import Draft202012Validator
 from PIL import Image, ImageFilter
+from pypdf import PdfReader, PdfWriter
+from pypdf.annotations import FreeText
+from pypdf.generic import (
+    ArrayObject,
+    BooleanObject,
+    DecodedStreamObject,
+    DictionaryObject,
+    FloatObject,
+    NameObject,
+    NumberObject,
+)
 
 from scripts.backend_contract import delivery_renderer
 
@@ -318,6 +329,39 @@ def _word_with_strict_header(body_text: str, header_text: str) -> bytes:
     with ZipFile(output, "w", ZIP_DEFLATED) as package:
         package.writestr("word/document.xml", document)
         package.writestr("word/header1.xml", header)
+    return output.getvalue()
+
+
+def _word_with_repeatable_text(
+    body_fragments: tuple[str, ...], header_text: str, footer_text: str
+) -> bytes:
+    def paragraph(text: str) -> str:
+        return (
+            '<w:p><w:r><w:rPr><w:sz w:val="22"/></w:rPr>'
+            f"<w:t>{text}</w:t></w:r></w:p>"
+        )
+
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            "<w:body>"
+            + "".join(paragraph(fragment) for fragment in body_fragments)
+            + "</w:body></w:document>",
+        )
+        package.writestr(
+            "word/header1.xml",
+            '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            + paragraph(header_text)
+            + "</w:hdr>",
+        )
+        package.writestr(
+            "word/footer1.xml",
+            '<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            + paragraph(footer_text)
+            + "</w:ftr>",
+        )
     return output.getvalue()
 
 
@@ -1115,6 +1159,59 @@ def test_repeatable_header_images_are_bound_once_per_page() -> None:
     reordered = [*signatures]
     reordered[2:4] = [second, first]
     assert not matches(reordered, candidates)
+
+
+def test_repeatable_header_image_cannot_move_into_document_body() -> None:
+    image = BytesIO()
+    Image.new("RGB", (240, 72), (22, 74, 140)).save(image, "PNG")
+    word = _word_with_header_image("Synthetic", image.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf(
+                "Synthetic",
+                image.getvalue(),
+                image_x=90,
+                image_y=430,
+                image_width=172.8,
+                image_height=51.84,
+                image_after_text=True,
+            ),
+        )
+def test_repeatable_header_and_footer_text_are_required_on_every_page() -> None:
+    word = _word_with_repeatable_text(
+        ("Body One 223", "Body Two 223", "Body Three 223"),
+        "Header 223",
+        "Footer 223",
+    )
+    complete = _positioned_text_pdf(
+        [
+            [
+                ("Header 223", 50, 800, 11, 0),
+                (f"Body {name} 223", 50, 700, 11, 0),
+                ("Footer 223", 50, 40, 11, 0),
+            ]
+            for name in ("One", "Two", "Three")
+        ]
+    )
+    missing = _positioned_text_pdf(
+        [
+            [
+                ("Header 223", 50, 800, 11, 0),
+                ("Body One 223", 50, 700, 11, 0),
+            ],
+            [("Body Two 223", 50, 700, 11, 0)],
+            [
+                ("Body Three 223", 50, 700, 11, 0),
+                ("Footer 223", 50, 40, 11, 0),
+            ],
+        ]
+    )
+
+    delivery_renderer._validate_pdf_fidelity(word, complete)
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(word, missing)
 
 
 @pytest.mark.parametrize(
@@ -2024,6 +2121,82 @@ def test_fidelity_rejects_unbound_visible_stroked_path() -> None:
         )
 
 
+def test_fidelity_rejects_unbound_pdf_annotation() -> None:
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, "JPEG")
+    word = _word_with_image_and_text("Synthetic", image.getvalue())
+    source_pdf = _image_pdf("Synthetic", image.getvalue(), image_x=100)
+    writer = PdfWriter()
+    writer.append_pages_from_reader(PdfReader(BytesIO(source_pdf), strict=True))
+    writer.add_annotation(
+        0,
+        FreeText(
+            text="UNBOUND FINAL CLAIM",
+            rect=(360, 40, 560, 110),
+            font_size="18pt",
+            font_color="ff0000",
+            border_color="ff0000",
+            background_color="ffff00",
+        ),
+    )
+    altered = BytesIO()
+    writer.write(altered)
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(word, altered.getvalue())
+
+
+def test_fidelity_rejects_unbound_visible_pdf_shading() -> None:
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, "JPEG")
+    word = _word_with_image_and_text("Synthetic", image.getvalue())
+    source_pdf = _image_pdf("Synthetic", image.getvalue(), image_x=100)
+    writer = PdfWriter()
+    writer.clone_document_from_reader(PdfReader(BytesIO(source_pdf), strict=True))
+    page = writer.pages[0]
+    resources = page["/Resources"].get_object()
+    function = DictionaryObject(
+        {
+            NameObject("/FunctionType"): NumberObject(2),
+            NameObject("/Domain"): ArrayObject([FloatObject(0), FloatObject(1)]),
+            NameObject("/C0"): ArrayObject(
+                [FloatObject(1), FloatObject(0), FloatObject(0)]
+            ),
+            NameObject("/C1"): ArrayObject(
+                [FloatObject(1), FloatObject(1), FloatObject(0)]
+            ),
+            NameObject("/N"): FloatObject(1),
+        }
+    )
+    shading = DictionaryObject(
+        {
+            NameObject("/ShadingType"): NumberObject(2),
+            NameObject("/ColorSpace"): NameObject("/DeviceRGB"),
+            NameObject("/Coords"): ArrayObject(
+                [FloatObject(0), FloatObject(0), FloatObject(120), FloatObject(0)]
+            ),
+            NameObject("/Function"): writer._add_object(function),
+            NameObject("/Extend"): ArrayObject(
+                [BooleanObject(True), BooleanObject(True)]
+            ),
+        }
+    )
+    resources[NameObject("/Shading")] = DictionaryObject(
+        {NameObject("/ShAudit"): writer._add_object(shading)}
+    )
+    stream = DecodedStreamObject()
+    stream.set_data(
+        page.get_contents().get_data()
+        + b"\nq 420 40 120 90 re W n 1 0 0 1 420 40 cm /ShAudit sh Q\n"
+    )
+    page[NameObject("/Contents")] = writer._add_object(stream)
+    altered = BytesIO()
+    writer.write(altered)
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(word, altered.getvalue())
+
+
 def test_fidelity_rejects_double_premultiplied_transparent_image() -> None:
     source = BytesIO()
     Image.new("RGBA", (8, 8), (220, 20, 20, 128)).save(source, "PNG")
@@ -2536,6 +2709,54 @@ def test_fidelity_rejects_balanced_padding_hiding_marker_swap() -> None:
     source_image.save(source, "PNG")
     candidate = BytesIO()
     candidate_image.save(candidate, "JPEG", quality=95, subsampling=0)
+    word = _word_with_image_and_text("Synthetic", source.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", candidate.getvalue(), image_x=100),
+        )
+
+
+def test_fidelity_rejects_low_amplitude_padding_hiding_marker_swap() -> None:
+    random = Random(19)
+    source_image = Image.new("RGB", (32, 32))
+    source_image.putdata(
+        [
+            (
+                random.randrange(40, 216),
+                random.randrange(40, 216),
+                random.randrange(40, 216),
+            )
+            for _ in range(32 * 32)
+        ]
+    )
+    first_color = (154, 106, 100)
+    second_color = (106, 154, 100)
+    for y in range(2):
+        for x in range(2):
+            source_image.putpixel((4 + x, 4 + y), first_color)
+            source_image.putpixel((22 + x, 22 + y), second_color)
+
+    candidate_image = source_image.copy()
+    for y in range(32):
+        for x in range(32):
+            if (4 <= x < 6 and 4 <= y < 6) or (22 <= x < 24 and 22 <= y < 24):
+                continue
+            delta = 6 if (x + y) % 2 == 0 else -6
+            candidate_image.putpixel(
+                (x, y),
+                tuple(channel + delta for channel in candidate_image.getpixel((x, y))),
+            )
+    for y in range(2):
+        for x in range(2):
+            candidate_image.putpixel((4 + x, 4 + y), second_color)
+            candidate_image.putpixel((22 + x, 22 + y), first_color)
+
+    source = BytesIO()
+    source_image.save(source, "PNG")
+    candidate = BytesIO()
+    candidate_image.save(candidate, "JPEG", quality=100, subsampling=0)
     word = _word_with_image_and_text("Synthetic", source.getvalue())
 
     with pytest.raises(ValueError, match="faithfully represent"):
