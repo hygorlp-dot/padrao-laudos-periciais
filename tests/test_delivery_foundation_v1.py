@@ -2046,6 +2046,36 @@ def test_fidelity_rejects_spatial_color_swap_below_quantized_delta_limit() -> No
         )
 
 
+def test_fidelity_rejects_color_pattern_hidden_by_coarse_spatial_grid() -> None:
+    red = (255, 0, 0)
+    isoluminant_green = (0, 130, 0)
+
+    def image_bytes(*, inverted: bool, output_format: str) -> bytes:
+        image = Image.new("RGB", (32, 32))
+        for x in range(32):
+            for y in range(32):
+                bit = ((x // 3) + (y // 3)) % 2
+                if inverted:
+                    bit = 1 - bit
+                image.putpixel((x, y), red if bit == 0 else isoluminant_green)
+        output = BytesIO()
+        if output_format == "JPEG":
+            image.save(output, output_format, quality=100, subsampling=0)
+        else:
+            image.save(output, output_format)
+        return output.getvalue()
+
+    source = image_bytes(inverted=False, output_format="PNG")
+    rearranged = image_bytes(inverted=True, output_format="JPEG")
+    word = _word_with_image_and_text("Synthetic", source)
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", rearranged, image_x=100),
+        )
+
+
 def test_image_fidelity_signature_preserves_legitimate_alpha_semantics() -> None:
     source = Image.new("RGBA", (32, 32), (220, 20, 20, 128))
     word_style = delivery_renderer._image_signature(source)

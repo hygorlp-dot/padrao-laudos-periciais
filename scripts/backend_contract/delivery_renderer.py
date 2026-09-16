@@ -237,7 +237,7 @@ def _image_signature(
         gray = resized.convert("L").resize((16, 16))
         pixels = tuple(gray.get_flattened_data())
         mean = sum(pixels) / len(pixels)
-        color_grid = tuple(resized.resize((8, 8)).get_flattened_data())
+        color_grid = tuple(resized.get_flattened_data())
 
         return (
             tuple(round(value, 1) for value in statistics.mean),
@@ -268,8 +268,8 @@ def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple
             and sum(a != b for a, b in zip(first[2], second[2])) <= 16
             and sum(sum(pixel) for pixel in color_deltas)
             / (len(color_deltas) * 3)
-            <= 8
-            and sum(max(pixel) > 24 for pixel in color_deltas) <= 8
+            <= 2
+            and all(max(pixel) <= 12 for pixel in color_deltas)
         )
 
     def matches(source: tuple, candidate: tuple) -> bool:
