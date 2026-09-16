@@ -4659,3 +4659,134 @@ def test_wrapped_continuation_displaced_several_pitches_is_rejected() -> None:
                 ]
             ),
         )
+
+
+# --- Phase C F-13: hidden text has no visible authority ---
+
+
+def _word_with_hidden_run(hidden_markup: str, *, styles: str = "") -> bytes:
+    output = BytesIO()
+    document = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p>"
+        '<w:r><w:rPr><w:sz w:val="22"/></w:rPr><w:t>Visivel</w:t></w:r>'
+        f"{hidden_markup}"
+        "</w:p></w:body></w:document>"
+    )
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            "</Types>",
+        )
+        package.writestr("word/document.xml", document)
+        if styles:
+            package.writestr("word/styles.xml", styles)
+    return output.getvalue()
+
+
+_DIRECT_HIDDEN_RUN = (
+    '<w:r><w:rPr><w:sz w:val="22"/><w:vanish/></w:rPr><w:t>Oculto</w:t></w:r>'
+)
+_STYLED_HIDDEN_RUN = (
+    '<w:r><w:rPr><w:rStyle w:val="Escondido"/><w:sz w:val="22"/></w:rPr>'
+    "<w:t>Oculto</w:t></w:r>"
+)
+_HIDDEN_CHARACTER_STYLES = (
+    '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+    '<w:style w:type="character" w:styleId="Escondido"><w:rPr><w:vanish/></w:rPr></w:style>'
+    "</w:styles>"
+)
+
+
+@pytest.mark.parametrize(
+    ("hidden_markup", "styles"),
+    (
+        (_DIRECT_HIDDEN_RUN, ""),
+        (_STYLED_HIDDEN_RUN, _HIDDEN_CHARACTER_STYLES),
+    ),
+    ids=("direct_vanish", "inherited_vanish"),
+)
+def test_hidden_text_is_not_expected_in_the_derived_pdf(
+    hidden_markup: str, styles: str
+) -> None:
+    """RED F-13: hidden runs were demanded from a PDF that correctly omits them."""
+    word = _word_with_hidden_run(hidden_markup, styles=styles)
+
+    delivery_renderer._validate_pdf_fidelity(
+        word, _positioned_text_pdf([[("Visivel", 50.0, 780.0, 11.0, 0)]])
+    )
+
+
+@pytest.mark.parametrize(
+    ("hidden_markup", "styles"),
+    (
+        (_DIRECT_HIDDEN_RUN, ""),
+        (_STYLED_HIDDEN_RUN, _HIDDEN_CHARACTER_STYLES),
+    ),
+    ids=("direct_vanish", "inherited_vanish"),
+)
+def test_rendered_hidden_text_is_rejected(hidden_markup: str, styles: str) -> None:
+    """A PDF that reveals hidden text is not a faithful rendering."""
+    word = _word_with_hidden_run(hidden_markup, styles=styles)
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _positioned_text_pdf(
+                [
+                    [
+                        ("Visivel", 50.0, 780.0, 11.0, 0),
+                        ("Oculto", 100.0, 780.0, 11.0, 0),
+                    ]
+                ]
+            ),
+        )
+
+
+# --- Phase C F-14: legacy tblLook mask and named attributes must agree ---
+
+
+def _table_look(markup: str):
+    return delivery_renderer.ElementTree.fromstring(
+        '<w:tblLook xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        f"{markup}/>"
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    (
+        ("firstRow", True),
+        ("firstColumn", True),
+        ("lastRow", False),
+        ("noHBand", False),
+        ("noVBand", True),
+    ),
+)
+def test_legacy_table_look_mask_is_decoded(name: str, expected: bool) -> None:
+    look = _table_look('w:val="04A0"')
+    assert delivery_renderer._table_look_flag(look, name) is expected
+
+
+def test_table_look_mask_and_named_attribute_conflict_fails_closed() -> None:
+    look = _table_look('w:val="0020" w:firstRow="0"')
+    with pytest.raises(ValueError, match="conflicting Word table-look"):
+        delivery_renderer._table_look_flag(look, "firstRow")
+
+
+def test_table_look_mask_and_named_attribute_agreement_is_accepted() -> None:
+    look = _table_look('w:val="0020" w:firstRow="1"')
+    assert delivery_renderer._table_look_flag(look, "firstRow") is True
+
+
+def test_malformed_table_look_mask_fails_closed() -> None:
+    with pytest.raises(ValueError, match="invalid Word table-look mask"):
+        delivery_renderer._table_look_flag(_table_look('w:val="zz"'), "firstRow")
+
+
+def test_absent_table_look_uses_the_documented_default() -> None:
+    assert delivery_renderer._table_look_flag(None, "firstRow", default=True) is True
+    assert delivery_renderer._table_look_flag(None, "noHBand") is False

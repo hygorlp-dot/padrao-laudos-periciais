@@ -159,6 +159,124 @@ def _latin_theme_family(value: str | None) -> str | None:
     raise ValueError("unsupported Word font theme reference")
 
 
+def _on_off_value(properties: ElementTree.Element | None, name: str) -> bool | None:
+    node = _first_named(properties, name)
+    if node is None:
+        return None
+    return (_attribute_named(node, "val") or "true").casefold() not in {
+        "0",
+        "false",
+        "off",
+        "none",
+    }
+
+
+def _hidden_run_resolver(styles_root: ElementTree.Element | None):
+    """Resolve w:vanish through docDefaults, the style chain and direct run properties.
+
+    Hidden runs carry no visible authority: Word does not render them, so the
+    oracle must not demand them from the PDF -- and must reject a PDF that shows
+    them, which the token multiset already does once they stop being expected.
+    """
+    style_hidden: dict[str, bool | None] = {}
+    style_bases: dict[str, str | None] = {}
+    default_hidden = False
+    if styles_root is not None:
+        defaults = _first_named(styles_root, "docDefaults")
+        default_hidden = bool(_on_off_value(defaults, "vanish"))
+        for style in _iter_named(styles_root, "style"):
+            style_id = _attribute_named(style, "styleId")
+            if not style_id:
+                continue
+            style_hidden[style_id] = _on_off_value(
+                next(_children_named(style, "rPr"), None), "vanish"
+            )
+            based_on = _first_named(style, "basedOn")
+            style_bases[style_id] = (
+                _attribute_named(based_on, "val") if based_on is not None else None
+            )
+
+    def resolve_style(style_id: str | None) -> bool | None:
+        visited: set[str] = set()
+        while style_id and style_id not in visited:
+            visited.add(style_id)
+            value = style_hidden.get(style_id)
+            if value is not None:
+                return value
+            style_id = style_bases.get(style_id)
+        return None
+
+    def is_hidden(run: ElementTree.Element, paragraph_style_id: str | None) -> bool:
+        properties = next(_children_named(run, "rPr"), None)
+        direct = _on_off_value(properties, "vanish")
+        if direct is not None:
+            return direct
+        run_style = _first_named(properties, "rStyle")
+        if run_style is not None:
+            inherited = resolve_style(_attribute_named(run_style, "val"))
+            if inherited is not None:
+                return inherited
+        inherited = resolve_style(paragraph_style_id)
+        return default_hidden if inherited is None else inherited
+
+    return is_hidden
+
+
+def _paragraph_style_id(paragraph: ElementTree.Element) -> str | None:
+    properties = next(_children_named(paragraph, "pPr"), None)
+    style_node = _first_named(properties, "pStyle")
+    return _attribute_named(style_node, "val") if style_node is not None else None
+
+
+def _visible_paragraph_text(paragraph: ElementTree.Element, is_hidden) -> str:
+    style_id = _paragraph_style_id(paragraph)
+    return "".join(
+        "".join(item.text or "" for item in _iter_named(run, "t"))
+        for run in _iter_named(paragraph, "r")
+        if not is_hidden(run, style_id)
+    )
+
+
+_TABLE_LOOK_FLAGS = {
+    "firstRow": 0x0020,
+    "lastRow": 0x0040,
+    "firstColumn": 0x0080,
+    "lastColumn": 0x0100,
+    "noHBand": 0x0200,
+    "noVBand": 0x0400,
+}
+
+
+def _table_look_flag(
+    look: ElementTree.Element | None, name: str, *, default: bool = False
+) -> bool:
+    """Read one tblLook flag from either the named attributes or the legacy mask.
+
+    Word writes both forms.  When both are present and disagree the table's
+    conditional formatting is ambiguous, so this fails closed rather than
+    silently preferring one encoding.
+    """
+    flag = _TABLE_LOOK_FLAGS.get(name)
+    if flag is None:
+        raise ValueError("unsupported Word table-look flag")
+    if look is None:
+        return default
+    named = _attribute_named(look, name)
+    named_value = named.casefold() in {"1", "true", "on"} if named is not None else None
+    raw_mask = _attribute_named(look, "val")
+    mask_value: bool | None = None
+    if raw_mask is not None:
+        try:
+            mask_value = bool(int(raw_mask, 16) & flag)
+        except ValueError as exc:
+            raise ValueError("invalid Word table-look mask") from exc
+    if named_value is not None and mask_value is not None and named_value != mask_value:
+        raise ValueError("conflicting Word table-look declarations")
+    if named_value is not None:
+        return named_value
+    return default if mask_value is None else mask_value
+
+
 def _table_look(table: ElementTree.Element):
     """Read a table's ``tblLook`` from its own ``tblPr``, never from a nested table."""
     properties = next(_children_named(table, "tblPr"), None)
@@ -1814,6 +1932,7 @@ def _word_text_expectations(
     active_content_names: set[str] | None = None,
 ) -> list[_WordTextExpectation]:
     styles_root = xml_roots.get("word/styles.xml")
+    is_hidden_run = _hidden_run_resolver(styles_root)
     theme_parts = [
         root
         for name, root in xml_roots.items()
@@ -2121,33 +2240,7 @@ def _word_text_expectations(
     ) -> dict[int, tuple[ElementTree.Element, ...]]:
         properties_by_paragraph: dict[int, tuple[ElementTree.Element, ...]] = {}
 
-        def enabled(
-            look: ElementTree.Element | None, name: str, *, default: bool = False
-        ) -> bool:
-            if look is None:
-                return default
-            value = _attribute_named(look, name)
-            if value is not None:
-                return value.casefold() in {"1", "true", "on"}
-            raw_mask = _attribute_named(look, "val")
-            if raw_mask is None:
-                return default
-            try:
-                mask = int(raw_mask, 16)
-            except ValueError as exc:
-                raise ValueError("invalid Word table-look mask") from exc
-            flags = {
-                "firstRow": 0x0020,
-                "lastRow": 0x0040,
-                "firstColumn": 0x0080,
-                "lastColumn": 0x0100,
-                "noHBand": 0x0200,
-                "noVBand": 0x0400,
-            }
-            flag = flags.get(name)
-            if flag is None:
-                raise ValueError("unsupported Word table-look flag")
-            return bool(mask & flag)
+        enabled = _table_look_flag
 
         def style_chain(style_id: str | None) -> list[ElementTree.Element]:
             chain: list[ElementTree.Element] = []
@@ -2555,6 +2648,10 @@ def _word_text_expectations(
                     in_complex_field_result = False
                     continue
                 if id(run) in dynamic_result_runs or in_complex_field_result:
+                    continue
+                if is_hidden_run(run, paragraph_style):
+                    # Word does not render hidden runs, so they carry no visible
+                    # authority and must not become a fidelity expectation.
                     continue
                 run_properties = next(_children_named(run, "rPr"), None)
                 run_style_node = _first_named(run_properties, "rStyle")
@@ -4170,6 +4267,8 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                     raise ValueError("unsupported Word table color")
                 return (*tuple(int(value[index : index + 2], 16) for index in (0, 2, 4)), 255)
 
+            is_hidden_run = _hidden_run_resolver(styles_root)
+
             body_fragments: list[str] = []
             document_fragments: list[str] = []
             header_fragments: list[str] = []
@@ -4189,12 +4288,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                     for paragraph in _iter_named(table_node, "p")
                 }
                 paragraph_fragments = [
-                    (
-                        paragraph,
-                        "".join(
-                            item.text or "" for item in _iter_named(paragraph, "t")
-                        ),
-                    )
+                    (paragraph, _visible_paragraph_text(paragraph, is_hidden_run))
                     for paragraph in _iter_named(root, "p")
                 ]
                 paragraph_fragments = [
@@ -4294,9 +4388,8 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                                 for paragraph in _iter_named(cell, "p")
                                 if (
                                     value := _normalized_visible_text(
-                                        "".join(
-                                            item.text or ""
-                                            for item in _iter_named(paragraph, "t")
+                                        _visible_paragraph_text(
+                                            paragraph, is_hidden_run
                                         )
                                     )
                                 )
@@ -4405,34 +4498,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                         table_look = _table_look(table)
 
                         def look_enabled(name: str, default: bool = False) -> bool:
-                            if table_look is None:
-                                return default
-                            value = _attribute_named(table_look, name)
-                            if value is not None:
-                                return value.casefold() in {"1", "true", "on"}
-                            raw_mask = _attribute_named(table_look, "val")
-                            if raw_mask is None:
-                                return default
-                            try:
-                                mask = int(raw_mask, 16)
-                            except ValueError as exc:
-                                raise ValueError(
-                                    "invalid Word table-look mask"
-                                ) from exc
-                            flags = {
-                                "firstRow": 0x0020,
-                                "lastRow": 0x0040,
-                                "firstColumn": 0x0080,
-                                "lastColumn": 0x0100,
-                                "noHBand": 0x0200,
-                                "noVBand": 0x0400,
-                            }
-                            flag = flags.get(name)
-                            if flag is None:
-                                raise ValueError(
-                                    "unsupported Word table-look flag"
-                                )
-                            return bool(mask & flag)
+                            return _table_look_flag(table_look, name, default=default)
 
                         first_row = look_enabled("firstRow", True)
                         last_row = look_enabled("lastRow")
