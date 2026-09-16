@@ -174,7 +174,14 @@ def _running_word_identities() -> set[tuple[int, str]]:
 
 
 def _record(evidence: dict) -> None:
-    """Write the native evidence package next to the other review artifacts."""
+    """Write the native evidence package, only when explicitly collecting it.
+
+    Running the suite must not dirty a tracked file, so recording is opt-in via
+    PLP_NATIVE_EVIDENCE=1.  The committed package is produced deliberately at the
+    terminal candidate, not as a side effect of every local run.
+    """
+    if os.environ.get("PLP_NATIVE_EVIDENCE") != "1":
+        return
     target = Path("artifacts/native-word-matrix-v1.json")
     target.parent.mkdir(parents=True, exist_ok=True)
     existing = {}
