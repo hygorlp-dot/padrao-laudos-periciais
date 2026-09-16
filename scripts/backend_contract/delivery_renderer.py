@@ -1866,6 +1866,7 @@ def _word_text_expectations(
     style_spacing_before: dict[str, float | None] = {}
     style_spacing_after: dict[str, float | None] = {}
     style_bases: dict[str, str | None] = {}
+    style_nodes: dict[str, ElementTree.Element] = {}
     if styles_root is not None:
         defaults = _first_named(styles_root, "docDefaults")
         default_size = size_from_properties(defaults) or default_size
@@ -1885,6 +1886,7 @@ def _word_text_expectations(
             style_id = _attribute_named(style, "styleId")
             if not style_id:
                 continue
+            style_nodes[style_id] = style
             if (
                 (_attribute_named(style, "type") or "").casefold() == "paragraph"
                 and (_attribute_named(style, "default") or "").casefold()
@@ -1962,6 +1964,131 @@ def _word_text_expectations(
                 return value
             style_id = style_bases.get(style_id)
         return fallback
+
+    def table_run_properties(
+        root: ElementTree.Element,
+    ) -> dict[int, tuple[ElementTree.Element, ...]]:
+        properties_by_paragraph: dict[int, tuple[ElementTree.Element, ...]] = {}
+
+        def enabled(
+            look: ElementTree.Element | None, name: str, *, default: bool = False
+        ) -> bool:
+            if look is None:
+                return default
+            value = _attribute_named(look, name)
+            if value is None:
+                return default
+            return value.casefold() in {"1", "true", "on"}
+
+        def style_chain(style_id: str | None) -> list[ElementTree.Element]:
+            chain: list[ElementTree.Element] = []
+            visited: set[str] = set()
+            while style_id and style_id not in visited:
+                visited.add(style_id)
+                style = style_nodes.get(style_id)
+                if style is None:
+                    break
+                chain.append(style)
+                based_on = _first_named(style, "basedOn")
+                style_id = (
+                    _attribute_named(based_on, "val")
+                    if based_on is not None
+                    else None
+                )
+            chain.reverse()
+            return chain
+
+        conditional_order = (
+            "band1horz",
+            "band2horz",
+            "band1vert",
+            "band2vert",
+            "firstcol",
+            "lastcol",
+            "firstrow",
+            "lastrow",
+            "nwcell",
+            "necell",
+            "swcell",
+            "secell",
+        )
+        for table in _iter_named(root, "tbl"):
+            table_properties = next(_children_named(table, "tblPr"), None)
+            style_reference = _first_named(table_properties, "tblStyle")
+            style_id = (
+                _attribute_named(style_reference, "val")
+                if style_reference is not None
+                else None
+            )
+            chain = style_chain(style_id)
+            look = _first_named(table_properties, "tblLook")
+            rows = list(_children_named(table, "tr"))
+            for row_index, row in enumerate(rows):
+                cells = list(_children_named(row, "tc"))
+                for cell_index, cell in enumerate(cells):
+                    active: set[str] = set()
+                    first_row = row_index == 0 and enabled(
+                        look, "firstRow", default=True
+                    )
+                    last_row = row_index == len(rows) - 1 and enabled(
+                        look, "lastRow"
+                    )
+                    first_column = cell_index == 0 and enabled(
+                        look, "firstColumn"
+                    )
+                    last_column = cell_index == len(cells) - 1 and enabled(
+                        look, "lastColumn"
+                    )
+                    if not enabled(look, "noHBand"):
+                        active.add("band1horz" if row_index % 2 == 0 else "band2horz")
+                    if not enabled(look, "noVBand", default=True):
+                        active.add("band1vert" if cell_index % 2 == 0 else "band2vert")
+                    if first_row:
+                        active.add("firstrow")
+                    if last_row:
+                        active.add("lastrow")
+                    if first_column:
+                        active.add("firstcol")
+                    if last_column:
+                        active.add("lastcol")
+                    if first_row and first_column:
+                        active.add("nwcell")
+                    if first_row and last_column:
+                        active.add("necell")
+                    if last_row and first_column:
+                        active.add("swcell")
+                    if last_row and last_column:
+                        active.add("secell")
+
+                    layers: list[ElementTree.Element] = []
+                    for style in chain:
+                        whole_table = next(_children_named(style, "rPr"), None)
+                        if whole_table is not None:
+                            layers.append(whole_table)
+                        conditional = {
+                            (_attribute_named(item, "type") or "").casefold(): item
+                            for item in _children_named(style, "tblStylePr")
+                        }
+                        for kind in conditional_order:
+                            item = conditional.get(kind)
+                            run_properties = _first_named(item, "rPr")
+                            if kind in active and run_properties is not None:
+                                layers.append(run_properties)
+                    for paragraph in _iter_named(cell, "p"):
+                        properties_by_paragraph[id(paragraph)] = tuple(layers)
+        return properties_by_paragraph
+
+    def layered_value(
+        layers: tuple[ElementTree.Element, ...],
+        extractor: Callable[[ElementTree.Element | None], object | None],
+        fallback: object,
+    ) -> object:
+        value = fallback
+        for layer in layers:
+            candidate = extractor(layer)
+            if candidate is not None:
+                value = candidate
+        return value
 
     anchor_paragraph_id: int | None = None
     anchor_top_margin: float | None = None
@@ -2057,6 +2184,7 @@ def _word_text_expectations(
         previous_body_size: float | None = None
         previous_body_after = 0.0
         pending_blank_height = 0.0
+        table_properties_by_paragraph = table_run_properties(xml_roots[name])
         table_paragraph_ids = {
             id(paragraph)
             for table in _iter_named(xml_roots[name], "tbl")
@@ -2072,36 +2200,70 @@ def _word_text_expectations(
                 if paragraph_style_node is not None
                 else None
             )
-            paragraph_size = resolve_style(
-                paragraph_style or default_paragraph_style
+            table_layers = table_properties_by_paragraph.get(id(paragraph), ())
+            paragraph_size = float(
+                layered_value(
+                    table_layers,
+                    size_from_properties,
+                    resolve_style(default_paragraph_style),
+                )
             )
-            paragraph_font = resolve_style_font(
-                paragraph_style or default_paragraph_style
+            paragraph_font = layered_value(
+                table_layers,
+                font_from_properties,
+                resolve_style_font(default_paragraph_style),
             )
-            paragraph_color = resolve_style_color(
-                paragraph_style or default_paragraph_style
+            paragraph_color = layered_value(
+                table_layers,
+                color_from_properties,
+                resolve_style_color(default_paragraph_style),
             )
             paragraph_bold = bool(
-                resolve_style_value(
-                    paragraph_style or default_paragraph_style,
-                    style_bold,
-                    default_bold,
+                layered_value(
+                    table_layers,
+                    lambda value: on_off_from_properties(value, "b"),
+                    resolve_style_value(
+                        default_paragraph_style, style_bold, default_bold
+                    ),
                 )
             )
             paragraph_italic = bool(
-                resolve_style_value(
-                    paragraph_style or default_paragraph_style,
-                    style_italic,
-                    default_italic,
+                layered_value(
+                    table_layers,
+                    lambda value: on_off_from_properties(value, "i"),
+                    resolve_style_value(
+                        default_paragraph_style, style_italic, default_italic
+                    ),
                 )
             )
             paragraph_underline = bool(
-                resolve_style_value(
-                    paragraph_style or default_paragraph_style,
-                    style_underline,
-                    default_underline,
+                layered_value(
+                    table_layers,
+                    underline_from_properties,
+                    resolve_style_value(
+                        default_paragraph_style,
+                        style_underline,
+                        default_underline,
+                    ),
                 )
             )
+            if paragraph_style is not None:
+                paragraph_size = resolve_style(paragraph_style, paragraph_size)
+                paragraph_font = resolve_style_font(paragraph_style, paragraph_font)
+                paragraph_color = resolve_style_color(paragraph_style, paragraph_color)
+                paragraph_bold = bool(
+                    resolve_style_value(paragraph_style, style_bold, paragraph_bold)
+                )
+                paragraph_italic = bool(
+                    resolve_style_value(
+                        paragraph_style, style_italic, paragraph_italic
+                    )
+                )
+                paragraph_underline = bool(
+                    resolve_style_value(
+                        paragraph_style, style_underline, paragraph_underline
+                    )
+                )
             paragraph_alignment = str(
                 alignment_from_properties(paragraph_properties)
                 or resolve_style_value(
@@ -2129,7 +2291,16 @@ def _word_text_expectations(
                 )
             )
             segments: list[
-                tuple[str, float, tuple[int, int, int], bool, bool, bool, str | None]
+                tuple[
+                    str,
+                    float,
+                    tuple[int, int, int],
+                    bool,
+                    bool,
+                    bool,
+                    str | None,
+                    bool,
+                ]
             ] = []
             dynamic_result_runs = {
                 id(run)
@@ -2204,6 +2375,13 @@ def _word_text_expectations(
                         )
                     )
                 )
+                enforce_visible_run_style = bool(
+                    not in_table
+                    or run_properties is not None
+                    or run_style
+                    or paragraph_style
+                    or table_layers
+                )
                 raw_text = "".join(
                     item.text or ""
                     for item in _iter_named(run, "t")
@@ -2224,6 +2402,7 @@ def _word_text_expectations(
                         italic,
                         underline,
                         font_family,
+                        enforce_visible_run_style,
                     )
                 ):
                     previous_text, previous_size, previous_color, *_ = segments[-1]
@@ -2235,6 +2414,7 @@ def _word_text_expectations(
                         italic,
                         underline,
                         font_family,
+                        enforce_visible_run_style,
                     )
                 else:
                     segments.append(
@@ -2246,6 +2426,7 @@ def _word_text_expectations(
                             italic,
                             underline,
                             font_family,
+                            enforce_visible_run_style,
                         )
                     )
             for segment_index, (
@@ -2256,6 +2437,7 @@ def _word_text_expectations(
                 italic,
                 underline,
                 font_family,
+                enforce_visible_run_style,
             ) in enumerate(segments):
                 normalized = _normalized_visible_text(text)
                 if not normalized:
@@ -2299,7 +2481,7 @@ def _word_text_expectations(
                         None,
                         body_flow_anchor,
                         expected_previous_top_gap,
-                        not (in_table and run_properties is None and not run_style),
+                        enforce_visible_run_style,
                     )
                 )
             if name == "word/document.xml":
@@ -2378,22 +2560,27 @@ def _text_sizes_match(
                 3.0,
                 0.35 * max(fragment.font_size for fragment in matched_fragments),
             )
-            line = [
-                fragment
-                for fragment in positioned
-                if fragment.page == page
-                and abs(fragment.y - matched_fragments[0].y) <= line_tolerance
-            ]
-            line_left = min(fragment.x for fragment in line)
-            line_right = max(fragment.right for fragment in line)
-            page_width = matched_fragments[0].page_width
-            alignment_matches = expectation.in_table or (
-                line_left <= page_width * 0.25
-                if expectation.alignment in {"left", "both"}
-                else line_right >= page_width * 0.75
-                if expectation.alignment == "right"
-                else abs((line_left + line_right) / 2 - page_width / 2)
-                <= max(4.0, page_width * 0.03)
+
+            def fragment_line_matches(anchor: _PositionedText) -> bool:
+                line = [
+                    fragment
+                    for fragment in positioned
+                    if fragment.page == anchor.page
+                    and abs(fragment.y - anchor.y) <= line_tolerance
+                ]
+                line_left = min(fragment.x for fragment in line)
+                line_right = max(fragment.right for fragment in line)
+                page_width = anchor.page_width
+                if expectation.alignment in {"left", "both"}:
+                    return line_left <= page_width * 0.25
+                if expectation.alignment == "right":
+                    return line_right >= page_width * 0.75
+                return abs((line_left + line_right) / 2 - page_width / 2) <= max(
+                    4.0, page_width * 0.03
+                )
+
+            alignment_matches = expectation.in_table or all(
+                fragment_line_matches(fragment) for fragment in matched_fragments
             )
             vertical_matches = expectation.expected_top_offset is None or (
                 page == 0
@@ -2418,7 +2605,7 @@ def _text_sizes_match(
                             fragment.top for fragment in previous_body_fragments
                         ) - max(fragment.top for fragment in matched_fragments)
                         missing_flow_tolerance = max(
-                            18.0, expectation.font_size * 1.75
+                            6.0, expectation.font_size * 0.75
                         )
                         additional_flow_tolerance = max(
                             48.0, expectation.font_size * 3
@@ -2894,12 +3081,24 @@ def _fragment_sequence_end(
                 allow_line_wrap
                 and 0 < line_step
                 <= max(24.0, 2.25 * max(previous.font_size, fragment.font_size))
-                and fragment.x <= previous.x + horizontal_tolerance
+                and min(
+                    abs(fragment.x - previous.x),
+                    abs(fragment.right - previous.right),
+                    abs(
+                        (fragment.x + fragment.right) / 2
+                        - (previous.x + previous.right) / 2
+                    ),
+                )
+                <= horizontal_tolerance
+            )
+            left_fragment, right_fragment = sorted(
+                (previous, fragment), key=lambda value: value.x
             )
             crosses_barrier = any(
                 barrier.page == fragment.page
-                and barrier.left >= previous.right - 0.5
-                and barrier.right <= fragment.x + 0.5
+                and left_fragment.right <= right_fragment.x
+                and barrier.left >= left_fragment.right - 0.5
+                and barrier.right <= right_fragment.x + 0.5
                 and barrier.bottom <= max(previous.top, fragment.top)
                 and barrier.top >= min(previous.bottom, fragment.bottom)
                 for barrier in barriers

@@ -1872,6 +1872,28 @@ def test_fidelity_binds_body_paragraphs_to_visual_reading_order() -> None:
         )
 
 
+def test_fidelity_rejects_right_aligned_paragraph_crossing_columns() -> None:
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:body><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r>'
+            '<w:t>Right column left column</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            output.getvalue(),
+            _positioned_text_pdf(
+                [[
+                    ("Right column", 450, 700, 11, 0),
+                    ("left column", 50, 685, 11, 0),
+                ]]
+            ),
+        )
+
+
 @pytest.mark.parametrize(
     ("parts", "stream"),
     (
@@ -2585,6 +2607,90 @@ def test_word_text_expectations_include_inherited_table_typography() -> None:
     assert expectation.enforce_visible_run_style is False
 
 
+def test_word_text_expectations_keep_style_enforcement_per_table_run() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:tbl><w:tr><w:tc><w:p>'
+        '<w:r><w:rPr><w:b/><w:color w:val="FF0000"/></w:rPr>'
+        '<w:t>Styled 223</w:t></w:r>'
+        '<w:r><w:t> Plain 223</w:t></w:r>'
+        '</w:p></w:tc></w:tr></w:tbl></w:body></w:document>'
+    )
+
+    expectations = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document}
+    )
+
+    assert [item.text for item in expectations] == ["styled 223", "plain 223"]
+    assert expectations[0].bold is True
+    assert expectations[0].color == (255, 0, 0)
+    assert expectations[0].enforce_visible_run_style is True
+    assert expectations[1].enforce_visible_run_style is False
+
+
+def test_word_text_expectations_resolve_conditional_table_typography() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:tbl><w:tblPr><w:tblStyle w:val="SyntheticTable"/>'
+        '<w:tblLook w:firstRow="1"/></w:tblPr><w:tr><w:tc><w:p><w:r>'
+        '<w:t>Styled cell 223</w:t></w:r></w:p></w:tc></w:tr>'
+        '</w:tbl></w:body></w:document>'
+    )
+    styles = delivery_renderer.ElementTree.fromstring(
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="paragraph" w:default="1" w:styleId="Normal">'
+        '<w:rPr><w:sz w:val="22"/><w:rFonts w:ascii="Calibri" '
+        'w:hAnsi="Calibri"/></w:rPr></w:style>'
+        '<w:style w:type="table" w:styleId="SyntheticTable">'
+        '<w:tblStylePr w:type="firstRow"><w:rPr><w:b/><w:sz w:val="40"/>'
+        '<w:rFonts w:ascii="Arial" w:hAnsi="Arial"/></w:rPr>'
+        '</w:tblStylePr></w:style></w:styles>'
+    )
+
+    [expectation] = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document, "word/styles.xml": styles}
+    )
+
+    assert expectation.font_size == 20
+    assert expectation.font_family == "Arial"
+    assert expectation.bold is True
+    assert expectation.enforce_visible_run_style is True
+
+
+def test_word_text_expectations_resolve_sibling_table_conditions_and_base_style() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:tbl><w:tblPr><w:tblStyle w:val="DerivedTable"/>'
+        '<w:tblLook w:firstRow="1" w:lastRow="1" w:firstColumn="1"/>'
+        '</w:tblPr><w:tr><w:tc><w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc>'
+        '<w:tc><w:p><w:r><w:t>B1</w:t></w:r></w:p></w:tc></w:tr>'
+        '<w:tr><w:tc><w:p><w:r><w:t>A2</w:t></w:r></w:p></w:tc>'
+        '<w:tc><w:p><w:r><w:t>B2</w:t></w:r></w:p></w:tc></w:tr>'
+        '</w:tbl></w:body></w:document>'
+    )
+    styles = delivery_renderer.ElementTree.fromstring(
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="table" w:styleId="BaseTable"><w:rPr>'
+        '<w:rFonts w:ascii="Arial" w:hAnsi="Arial"/></w:rPr></w:style>'
+        '<w:style w:type="table" w:styleId="DerivedTable">'
+        '<w:basedOn w:val="BaseTable"/>'
+        '<w:tblStylePr w:type="firstRow"><w:rPr><w:sz w:val="40"/></w:rPr>'
+        '</w:tblStylePr><w:tblStylePr w:type="lastRow"><w:rPr>'
+        '<w:sz w:val="30"/></w:rPr></w:tblStylePr>'
+        '<w:tblStylePr w:type="firstCol"><w:rPr><w:b/></w:rPr>'
+        '</w:tblStylePr></w:style></w:styles>'
+    )
+
+    expectations = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document, "word/styles.xml": styles}
+    )
+
+    assert [item.text for item in expectations] == ["a1", "b1", "a2", "b2"]
+    assert [item.font_size for item in expectations] == [20, 20, 15, 15]
+    assert [item.bold for item in expectations] == [True, False, True, False]
+    assert {item.font_family for item in expectations} == {"Arial"}
+
+
 def test_word_text_expectations_preserve_whitespace_only_run() -> None:
     document = delivery_renderer.ElementTree.fromstring(
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
@@ -2746,6 +2852,63 @@ def test_text_style_matching_rejects_collapsed_blank_paragraph_flow() -> None:
     ]
 
     assert not delivery_renderer._text_sizes_match(expectations, positioned, [])
+
+
+def test_text_style_matching_rejects_single_collapsed_blank_paragraph() -> None:
+    expectations = [
+        delivery_renderer._WordTextExpectation(
+            "first body", 11, (0, 0, 0), False, False, False, "left",
+            body_flow_anchor=True,
+        ),
+        delivery_renderer._WordTextExpectation(
+            "second body", 11, (0, 0, 0), False, False, False, "left",
+            body_flow_anchor=True, expected_previous_top_gap=26.4,
+        ),
+    ]
+    positioned = [
+        delivery_renderer._PositionedText(
+            0, "first body", 90, 709, 11, 180, 709, 717
+        ),
+        delivery_renderer._PositionedText(
+            0, "second body", 90, 695.8, 11, 180, 695.8, 703.8
+        ),
+    ]
+
+    assert not delivery_renderer._text_sizes_match(expectations, positioned, [])
+
+
+def test_wrapped_text_rejects_cross_column_and_reverse_barrier_paths() -> None:
+    positioned = [
+        delivery_renderer._PositionedText(
+            0, "right column", 350, 702, 11, 445, 702, 710
+        ),
+        delivery_renderer._PositionedText(
+            0, "left column", 50, 687, 11, 135, 687, 695
+        ),
+    ]
+    barrier = delivery_renderer._VerticalBarrier(0, 290, 310, 680, 725)
+
+    assert not delivery_renderer._ordered_text_blocks_match(
+        ["right column left column"], positioned, []
+    )
+    assert not delivery_renderer._ordered_text_blocks_match(
+        ["right column left column"], positioned, [barrier]
+    )
+
+
+def test_wrapped_text_rejects_material_first_line_indent_relocation() -> None:
+    positioned = [
+        delivery_renderer._PositionedText(
+            0, "alpha 223", 150, 709, 11, 197, 709, 717
+        ),
+        delivery_renderer._PositionedText(
+            0, "beta 223", 90, 694, 11, 131, 694, 702
+        ),
+    ]
+
+    assert not delivery_renderer._ordered_text_blocks_match(
+        ["alpha 223 beta 223"], positioned, []
+    )
 
 
 def test_first_visible_body_anchor_survives_preceding_empty_paragraph() -> None:
