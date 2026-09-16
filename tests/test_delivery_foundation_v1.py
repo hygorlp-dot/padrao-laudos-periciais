@@ -4462,3 +4462,200 @@ def test_outer_table_style_is_not_inherited_from_a_nested_table() -> None:
 
     assert delivery_renderer._table_style_id(outer) is None
     assert delivery_renderer._table_style_id(inner) == "TableGrid"
+
+
+# --- Phase C F-04: theme font aliases distinguish ABSENT from UNRESOLVED ---
+
+
+_THEME_PART = (
+    '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+    "<a:themeElements><a:fontScheme>"
+    '<a:majorFont><a:latin typeface="Cambria"/></a:majorFont>'
+    '<a:minorFont><a:latin typeface="Calibri"/></a:minorFont>'
+    "</a:fontScheme></a:themeElements></a:theme>"
+)
+
+
+def _theme_roots(run_fonts: str, *, with_theme: bool = True) -> dict:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body><w:p><w:r><w:rPr>{run_fonts}</w:rPr>"
+        "<w:t>Tema 223</w:t></w:r></w:p></w:body></w:document>"
+    )
+    roots = {"word/document.xml": document}
+    if with_theme:
+        roots["word/theme/theme1.xml"] = delivery_renderer.ElementTree.fromstring(_THEME_PART)
+    return roots
+
+
+def test_latin_theme_aliases_resolve_to_the_same_family() -> None:
+    """RED F-04/E2: minorAscii + minorHAnsi name one family, not a conflict."""
+    [expectation] = delivery_renderer._word_text_expectations(
+        _theme_roots('<w:rFonts w:asciiTheme="minorAscii" w:hAnsiTheme="minorHAnsi"/>')
+    )
+    assert expectation.font_family == "Calibri"
+
+
+@pytest.mark.parametrize(
+    "alias", ("minorAscii", "minorHAnsi", "majorAscii", "majorHAnsi")
+)
+def test_each_latin_theme_alias_resolves(alias: str) -> None:
+    [expectation] = delivery_renderer._word_text_expectations(
+        _theme_roots(f'<w:rFonts w:asciiTheme="{alias}"/>')
+    )
+    assert expectation.font_family == ("Cambria" if alias.startswith("major") else "Calibri")
+
+
+def test_genuinely_conflicting_latin_theme_families_fail_closed() -> None:
+    with pytest.raises(ValueError, match="theme"):
+        delivery_renderer._word_text_expectations(
+            _theme_roots('<w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="majorHAnsi"/>')
+        )
+
+
+@pytest.mark.parametrize(
+    "alias",
+    ("minorEastAsia", "majorEastAsia", "minorBidi", "majorBidi"),
+)
+def test_non_latin_theme_slots_fail_closed(alias: str) -> None:
+    """RED F-04/E3: these resolved to None, silently dropping the font check."""
+    with pytest.raises(ValueError, match="theme"):
+        delivery_renderer._word_text_expectations(
+            _theme_roots(f'<w:rFonts w:asciiTheme="{alias}"/>')
+        )
+
+
+def test_unknown_theme_alias_fails_closed() -> None:
+    with pytest.raises(ValueError, match="theme"):
+        delivery_renderer._word_text_expectations(
+            _theme_roots('<w:rFonts w:asciiTheme="sintetico"/>')
+        )
+
+
+def test_theme_alias_without_a_theme_part_fails_closed() -> None:
+    """An alias that cannot be resolved is UNRESOLVED, never ABSENT."""
+    with pytest.raises(ValueError, match="theme"):
+        delivery_renderer._word_text_expectations(
+            _theme_roots('<w:rFonts w:asciiTheme="minorHAnsi"/>', with_theme=False)
+        )
+
+
+def test_absent_theme_reference_is_not_an_error() -> None:
+    [expectation] = delivery_renderer._word_text_expectations(
+        _theme_roots('<w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>')
+    )
+    assert expectation.font_family == "Arial"
+
+
+# --- Phase C F-03/F-08: vertical flow and native wrap regression matrices ---
+#
+# Adjudication: both findings were raised against bdb6135 and are already
+# repaired at 7a8486b (the blank-gap tolerance moved from max(48, size*3) to
+# max(6, size*0.75), and _fragment_sequence_end grew a paragraph wrap anchor).
+# Verified empirically, not by reading.  These matrices lock the repairs in.
+# Real font-metric variation (Calibri/Times/Arial line pitch) is not observable
+# through a synthetic Helvetica PDF and stays on the native Word matrix (N-09).
+
+
+def _word_flow_document(body: str) -> bytes:
+    output = BytesIO()
+    document = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body>{body}</w:body></w:document>"
+    )
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            "</Types>",
+        )
+        package.writestr("word/document.xml", document)
+    return output.getvalue()
+
+
+def _blank_paragraph_word(blanks: int, *, spacing: str = "") -> bytes:
+    properties = f"<w:pPr>{spacing}</w:pPr>" if spacing else ""
+    run = '<w:r><w:rPr><w:sz w:val="22"/></w:rPr>'
+    return _word_flow_document(
+        f"<w:p>{properties}{run}<w:t>Primeiro</w:t></w:r></w:p>"
+        + f"<w:p>{properties}</w:p>" * blanks
+        + f"<w:p>{properties}{run}<w:t>Segundo</w:t></w:r></w:p>"
+    )
+
+
+def _two_line_pdf(gap_pitches: float, *, pitch: float = 13.2) -> bytes:
+    return _positioned_text_pdf(
+        [
+            [
+                ("Primeiro", 50.0, 780.0, 11.0, 0),
+                ("Segundo", 50.0, 780.0 - pitch * gap_pitches, 11.0, 0),
+            ]
+        ]
+    )
+
+
+@pytest.mark.parametrize("blanks", (1, 2, 3, 5))
+def test_material_empty_paragraphs_are_quantised(blanks: int) -> None:
+    word = _blank_paragraph_word(blanks)
+
+    delivery_renderer._validate_pdf_fidelity(word, _two_line_pdf(1 + blanks))
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(word, _two_line_pdf(1))
+
+
+@pytest.mark.parametrize("blanks", (1, 3))
+def test_empty_paragraph_spacing_is_included_in_the_expected_gap(blanks: int) -> None:
+    spacing = '<w:spacing w:before="120" w:after="120"/>'
+    word = _blank_paragraph_word(blanks, spacing=spacing)
+    # 120 twips before + after == 6pt + 6pt per paragraph, on top of the line box.
+    extra = (blanks + 1) * 12.0
+
+    delivery_renderer._validate_pdf_fidelity(
+        word,
+        _positioned_text_pdf(
+            [
+                [
+                    ("Primeiro", 50.0, 780.0, 11.0, 0),
+                    ("Segundo", 50.0, 780.0 - (13.2 * (1 + blanks) + extra), 11.0, 0),
+                ]
+            ]
+        ),
+    )
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(word, _two_line_pdf(1))
+
+
+@pytest.mark.parametrize("line_count", (2, 3, 4))
+def test_native_line_wrap_is_accepted(line_count: int) -> None:
+    lines = ["Alpha Beta", "Gamma Delta", "Epsilon Zeta", "Eta Theta"][:line_count]
+    word = _word_flow_document(
+        '<w:p><w:r><w:rPr><w:sz w:val="22"/></w:rPr>'
+        f"<w:t>{' '.join(lines)}</w:t></w:r></w:p>"
+    )
+    fragments = [
+        (line, 50.0, 780.0 - 13.2 * index, 11.0, 0) for index, line in enumerate(lines)
+    ]
+
+    delivery_renderer._validate_pdf_fidelity(word, _positioned_text_pdf([fragments]))
+
+
+def test_wrapped_continuation_displaced_several_pitches_is_rejected() -> None:
+    word = _word_flow_document(
+        '<w:p><w:r><w:rPr><w:sz w:val="22"/></w:rPr>'
+        "<w:t>Alpha Beta Gamma Delta</w:t></w:r></w:p>"
+    )
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _positioned_text_pdf(
+                [
+                    [
+                        ("Alpha Beta", 50.0, 780.0, 11.0, 0),
+                        ("Gamma Delta", 50.0, 780.0 - 13.2 * 4, 11.0, 0),
+                    ]
+                ]
+            ),
+        )

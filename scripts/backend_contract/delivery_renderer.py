@@ -131,6 +131,34 @@ def _cell_property(cell: ElementTree.Element, name: str):
     return _first_named(next(_children_named(cell, "tcPr"), None), name)
 
 
+_LATIN_THEME_ALIASES = {
+    "majorascii": "major",
+    "majorhansi": "major",
+    "minorascii": "minor",
+    "minorhansi": "minor",
+}
+_UNSUPPORTED_THEME_ALIASES = frozenset(
+    {"majorbidi", "majoreastasia", "minorbidi", "minoreastasia"}
+)
+
+
+def _latin_theme_family(value: str | None) -> str | None:
+    """Resolve an ST_Theme alias to the Latin family it names.
+
+    Returns None only when the reference is genuinely absent.  A reference this
+    oracle cannot model -- the East Asian and complex-script slots, which select
+    <a:ea>/<a:cs> rather than <a:latin>, or any unknown value -- fails closed.
+    """
+    alias = (value or "").strip().casefold()
+    if not alias:
+        return None
+    if alias in _LATIN_THEME_ALIASES:
+        return _LATIN_THEME_ALIASES[alias]
+    if alias in _UNSUPPORTED_THEME_ALIASES:
+        raise ValueError("unsupported Word non-Latin font theme slot")
+    raise ValueError("unsupported Word font theme reference")
+
+
 def _table_look(table: ElementTree.Element):
     """Read a table's ``tblLook`` from its own ``tblPr``, never from a nested table."""
     properties = next(_children_named(table, "tblPr"), None)
@@ -1807,8 +1835,7 @@ def _word_text_expectations(
                 else ""
             )
             if typeface:
-                theme_fonts[f"{prefix}hansi"] = typeface
-                theme_fonts[f"{prefix}ascii"] = typeface
+                theme_fonts[prefix] = typeface
 
     def size_from_properties(properties: ElementTree.Element | None) -> float | None:
         size_node = _first_named(properties, "sz")
@@ -1834,11 +1861,22 @@ def _word_text_expectations(
             raise ValueError("conflicting Word Latin font families")
         if selected:
             return selected
-        ascii_theme = (_attribute_named(fonts, "asciiTheme") or "").casefold()
-        ansi_theme = (_attribute_named(fonts, "hAnsiTheme") or "").casefold()
-        if ascii_theme and ansi_theme and ascii_theme != ansi_theme:
+        # ST_Theme aliases are resolved to the family they name, so that
+        # minorAscii and minorHAnsi -- two spellings of one Latin slot -- are not
+        # mistaken for a conflict.  A slot this oracle does not model resolves to
+        # UNSUPPORTED, never to None: None here means ABSENT, which switches the
+        # font check off entirely.
+        ascii_family = _latin_theme_family(_attribute_named(fonts, "asciiTheme"))
+        ansi_family = _latin_theme_family(_attribute_named(fonts, "hAnsiTheme"))
+        if ascii_family and ansi_family and ascii_family != ansi_family:
             raise ValueError("conflicting Word Latin font themes")
-        return theme_fonts.get(ascii_theme or ansi_theme)
+        family = ascii_family or ansi_family
+        if family is None:
+            return None
+        resolved = theme_fonts.get(family)
+        if not resolved:
+            raise ValueError("unresolved Word Latin font theme")
+        return resolved
 
     def color_from_properties(
         properties: ElementTree.Element | None,
