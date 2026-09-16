@@ -309,20 +309,26 @@ def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple
         candidate_image.putdata(second[3])
         # Preserve near-exact low-contrast Word resampling without relying on
         # unstable correlation over channels whose dynamic range is tiny.
-        raw_color_delta = max(
+        raw_color_deltas = [
             max(abs(source[channel] - candidate[channel]) for channel in range(3))
             for source, candidate in zip(first[3], second[3])
-        )
+        ]
+        raw_color_delta = max(raw_color_deltas)
+        raw_mean_delta = sum(raw_color_deltas) / len(raw_color_deltas)
         blurred_source = source_image.filter(ImageFilter.GaussianBlur(1.5))
         blurred_candidate = candidate_image.filter(ImageFilter.GaussianBlur(1.5))
         # Low-pass residuals separate codec/resampling noise from spatially
         # moved visible regions, including edits that straddle the 8x8 blocks.
-        blurred_color_delta = max(
+        blurred_color_deltas = [
             max(abs(source[channel] - candidate[channel]) for channel in range(3))
             for source, candidate in zip(
                 blurred_source.get_flattened_data(),
                 blurred_candidate.get_flattened_data(),
             )
+        ]
+        blurred_color_delta = max(blurred_color_deltas)
+        blurred_mean_delta = sum(blurred_color_deltas) / len(
+            blurred_color_deltas
         )
         spatial_structure_matches = (
             sum(a != b for a, b in zip(first[2], second[2])) <= 16
@@ -332,8 +338,8 @@ def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple
         return (
             all(abs(a - b) <= 12 for a, b in zip(first[0], second[0]))
             and all(abs(a - b) <= 12 for a, b in zip(first[1], second[1]))
-            and raw_color_delta <= 192
-            and blurred_color_delta <= 50
+            and raw_color_delta <= max(16, raw_mean_delta * 9)
+            and blurred_color_delta <= max(12, blurred_mean_delta * 9)
             and (raw_color_delta <= 12 or spatial_structure_matches)
         )
 
