@@ -348,6 +348,24 @@ def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple
 
         source_detail = detail_energy(source_image)
         candidate_detail = detail_energy(candidate_image)
+        transformed_residuals: list[tuple[float, int]] = []
+        candidate_pixels = tuple(candidate_image.get_flattened_data())
+        for radius in (0.0, 0.5, 1.0, 1.5):
+            transformed_source = (
+                source_image
+                if radius == 0
+                else source_image.filter(ImageFilter.GaussianBlur(radius))
+            )
+            deltas = [
+                max(abs(source[channel] - candidate[channel]) for channel in range(3))
+                for source, candidate in zip(
+                    transformed_source.get_flattened_data(), candidate_pixels
+                )
+            ]
+            transformed_residuals.append((sum(deltas) / len(deltas), max(deltas)))
+        transformed_mean_delta, transformed_max_delta = min(
+            transformed_residuals, key=lambda residual: residual[0]
+        )
         spatial_structure_matches = (
             sum(a != b for a, b in zip(first[2], second[2])) <= 16
             and all(value is None or value >= 0.85 for value in correlations)
@@ -366,6 +384,7 @@ def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple
             )
             and raw_color_delta <= max(16, raw_mean_delta * 9)
             and blurred_color_delta <= max(12, blurred_mean_delta * 9)
+            and transformed_max_delta <= max(16, transformed_mean_delta * 9)
             and (raw_color_delta <= 12 or spatial_structure_matches)
         )
 
