@@ -55,21 +55,34 @@ SHA_A = "a" * 64
 SHA_B = "b" * 64
 
 
-def test_production_delivery_render_has_no_local_process_or_pdf_authority() -> None:
+def test_production_delivery_render_uses_local_word_com_without_generic_process() -> None:
     root = Path(__file__).parents[1]
-    assert not (root / "scripts/backend_contract/infrastructure/office_pdf.py").exists()
-    assert "pdf_converter" not in {item.name for item in fields(RenderDeliveryPackage)}
+    assert (root / "scripts/backend_contract/infrastructure/office_pdf.py").exists()
+    assert "pdf_converter" in {item.name for item in fields(RenderDeliveryPackage)}
     composition = (root / "scripts/backend_contract/local_api/composition.py").read_text(encoding="utf-8")
-    assert "LocalOfficePdfConverter" not in composition
+    assert "LocalOfficePdfConverter" in composition
+    source = (root / "scripts/backend_contract/infrastructure/office_pdf.py").read_text(encoding="utf-8")
+    assert "import subprocess" not in source
+    assert "Popen" not in source
 
 
-def _parseable_text_pdf(text: str) -> bytes:
+def _parseable_text_pdf(text: str, *, x: int = 50, y: int = 780, crop_top: int | None = None, crop_box: tuple[int, int, int, int] | None = None, transform: tuple[int, int, int, int, int, int] | None = None, color: tuple[int, ...] | None = None, color_scope: bool = False, background: bool = False, pre_text_graphics: str = "") -> bytes:
     encoded_lines = [line.encode("cp1252").replace(b"\\", b"\\\\").replace(b"(", b"\\(").replace(b")", b"\\)") for line in text.splitlines()]
-    stream = b"BT /F1 10 Tf 50 780 Td 12 TL " + b" Tj T* ".join(b"(" + line + b")" for line in encoded_lines) + b" Tj ET"
+    prefix = ""
+    suffix = ""
+    if transform is not None:
+        prefix = "q " + " ".join(str(item) for item in transform) + " cm "
+        suffix = " Q"
+    color_command = (("q " if color_scope else "") + " ".join(str(item) for item in color) + (" rg " if len(color or ()) == 3 else " g ")) if color is not None else ""
+    color_suffix = " Q" if color_scope else ""
+    background_command = "0 0 595 842 re f " if background else ""
+    stream = (prefix + background_command + pre_text_graphics + f"BT /F1 10 Tf {color_command}{x} {y} Td 12 TL ").encode("ascii") + b" Tj T* ".join(b"(" + line + b")" for line in encoded_lines) + (b" Tj ET" + color_suffix.encode("ascii") + suffix.encode("ascii"))
+    crop_values = crop_box or ((0, 0, 595, crop_top) if crop_top is not None else None)
+    crop_box_value = f" /CropBox [{' '.join(str(item) for item in crop_values)}]" if crop_values is not None else ""
     objects = (
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
         b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
-        b"<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>",
+        f"<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842]{crop_box_value} /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>".encode("ascii"),
         b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
         b"<< /Type /Catalog /Pages 4 0 R >>",
     )
@@ -333,7 +346,7 @@ def test_supporting_image_bytes_are_verified_by_declared_media_type() -> None:
     assert validate_supporting_artifact(png, "image/png")[2] == "image/png"
     with pytest.raises(ValueError, match="JPEG"):
         validate_supporting_artifact(png, "image/jpeg")
-    with pytest.raises(ValueError, match="unsupported"):
+    with pytest.raises(ValueError, match="(?:unsupported|invalid)"):
         validate_supporting_artifact(b"opaque", "application/octet-stream")
     with pytest.raises(ValueError, match="PNG"):
         validate_supporting_artifact(b"\x89PNG\r\n\x1a\n", "image/png")
@@ -517,6 +530,467 @@ def test_final_pdf_rejects_a_table_flattened_into_unrelated_lines() -> None:
     with pytest.raises(ValueError, match="does not faithfully represent"):
         delivery_renderer.render_final_pdf_candidate(
             word_content=word.getvalue(), word_format="DOCX", converter=FlatteningConverter(),
+        )
+
+
+def test_final_pdf_rejects_text_positioned_outside_page_geometry() -> None:
+    source_text = "B" * 100
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            f'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>{source_text}</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class OffPageConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf(source_text, x=590)
+
+    with pytest.raises(ValueError, match="visual geometry"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=OffPageConverter(),
+        )
+
+
+def test_final_pdf_rejects_text_outside_visible_crop_box() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class CropBoxConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", y=780, crop_top=100)
+
+    with pytest.raises(ValueError, match="visual geometry"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=CropBoxConverter(),
+        )
+
+
+def test_final_pdf_rejects_glyphs_extending_above_visible_page() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class TopEdgeConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", y=842, crop_top=842)
+
+    with pytest.raises(ValueError, match="visual geometry"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=TopEdgeConverter(),
+        )
+
+
+def test_final_pdf_rejects_transformed_text_outside_visible_page() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class TransformedConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", transform=(1, 0, 0, 1, 1000, 0))
+
+    with pytest.raises(ValueError, match="visual geometry"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=TransformedConverter(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("transform", "x", "y"),
+    [
+        ((1, 0, 0, 20, 0, 0), 50, 40),
+        ((0, 1, -1, 0, 500, 820), 50, 780),
+        ((-1, 0, 0, 1, 600, 0), 590, 780),
+    ],
+)
+def test_final_pdf_rejects_transformed_glyph_extents(transform: tuple[int, int, int, int, int, int], x: int, y: int) -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class TransformedConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", x=x, y=y, transform=transform)
+
+    with pytest.raises(ValueError, match="visual geometry"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=TransformedConverter(),
+        )
+
+
+def test_final_pdf_uses_standard_helvetica_widths_for_clipping() -> None:
+    source_text = "W" * 10
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            f'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>{source_text}</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class ClippedConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf(source_text, x=530)
+
+    with pytest.raises(ValueError, match="visual geometry"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=ClippedConverter(),
+        )
+
+
+def test_final_pdf_uses_standard_helvetica_at_width_for_clipping() -> None:
+    source_text = "@" * 10
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            f'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>{source_text}</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class ClippedConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf(source_text, x=520)
+
+    with pytest.raises(ValueError, match="visual geometry"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=ClippedConverter(),
+        )
+
+
+def test_standard_helvetica_punctuation_metrics_are_not_swapped() -> None:
+    assert delivery_renderer._HELVETICA_WIDTHS[";"] == 278
+    assert delivery_renderer._HELVETICA_WIDTHS["<"] == 584
+
+
+def test_final_pdf_rejects_explicitly_invisible_white_text() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class InvisibleConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", color=(1, 1, 1))
+
+    with pytest.raises(ValueError, match="invisible white text"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=InvisibleConverter(),
+        )
+
+
+def test_final_pdf_tracks_graphics_state_for_text_visibility() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class ScopedWhiteConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", color=(1, 1, 1), color_scope=True)
+
+    with pytest.raises(ValueError, match="invisible white text"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=ScopedWhiteConverter(),
+        )
+
+    class ScopedBlackConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", color=(0, 0, 0), color_scope=True)
+
+    assert delivery_renderer.render_final_pdf_candidate(
+        word_content=word.getvalue(), word_format="DOCX", converter=ScopedBlackConverter(),
+    ).startswith(b"%PDF-")
+
+
+@pytest.mark.parametrize("operator", [b"3 Tr", b"0 0 m 1 1 l W"])
+def test_final_pdf_rejects_unmodeled_visual_state(operator: bytes) -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class UnmodeledStateConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND").replace(b"BT /F1", b"BT " + operator + b" /F1", 1)
+
+    with pytest.raises(ValueError, match="(?:unsupported|invalid)"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=UnmodeledStateConverter(),
+        )
+
+
+def test_final_pdf_rejects_post_text_opaque_occlusion() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class OccludingConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND").replace(
+                b"Tj ET", b"Tj ET 1 1 1 rg 0 0 595 842 re f", 1,
+            )
+
+    with pytest.raises(ValueError, match="(?:occlusion|invalid)"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=OccludingConverter(),
+        )
+
+
+def test_visual_raster_red_rejects_black_text_on_opaque_black_background() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class RasterConverter:
+        requires_visual_raster = True
+
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", background=True)
+
+    if delivery_renderer._pdfium is None:
+        pytest.skip("pypdfium2 is unavailable in this runtime")
+    with pytest.raises(ValueError, match="visible contrast"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=RasterConverter(),
+        )
+
+
+def test_visual_raster_accepts_fully_visible_glyphs() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class VisibleConverter:
+        requires_visual_raster = True
+
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND")
+
+    if delivery_renderer._pdfium is None:
+        pytest.skip("pypdfium2 is unavailable in this runtime")
+    assert delivery_renderer.render_final_pdf_candidate(
+        word_content=word.getvalue(), word_format="DOCX", converter=VisibleConverter(),
+    ).startswith(b"%PDF-")
+
+
+def test_visual_raster_accepts_nonzero_cropbox_origin() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class OffsetCropConverter:
+        requires_visual_raster = True
+
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", crop_box=(10, 10, 585, 832))
+
+    if delivery_renderer._pdfium is None:
+        pytest.skip("pypdfium2 is unavailable in this runtime")
+    assert delivery_renderer.render_final_pdf_candidate(
+        word_content=word.getvalue(), word_format="DOCX", converter=OffsetCropConverter(),
+    ).startswith(b"%PDF-")
+
+
+def test_visual_raster_rejects_contrast_marker_without_visible_glyphs() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class MarkerConverter:
+        requires_visual_raster = True
+
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", background=True, pre_text_graphics="q 1 1 1 rg 50 780 1 1 re f Q ")
+
+    if delivery_renderer._pdfium is None:
+        pytest.skip("pypdfium2 is unavailable in this runtime")
+    with pytest.raises(ValueError, match="visible contrast"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=MarkerConverter(),
+        )
+
+
+def test_visual_raster_rejects_tight_panel_around_invisible_text() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class TightPanelConverter:
+        requires_visual_raster = True
+
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", pre_text_graphics="0 g 45 778 70 11 re f ")
+
+    if delivery_renderer._pdfium is None:
+        pytest.skip("pypdfium2 is unavailable in this runtime")
+    with pytest.raises(ValueError, match="visible contrast"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=TightPanelConverter(),
+        )
+
+
+def test_visual_raster_rejects_partial_glyph_occlusion() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class PartialOcclusionConverter:
+        requires_visual_raster = True
+
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", pre_text_graphics="0 g 49 778 8 11 re f ")
+
+    if delivery_renderer._pdfium is None:
+        pytest.skip("pypdfium2 is unavailable in this runtime")
+    with pytest.raises(ValueError, match="visible contrast"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=PartialOcclusionConverter(),
+        )
+
+
+def test_visual_raster_rejects_horizontal_contrast_stripe_without_glyphs() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class StripeConverter:
+        requires_visual_raster = True
+
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", pre_text_graphics="0 g 45 778 70 11 re f 1 g 45 783 70 1 re f 0 g ")
+
+    if delivery_renderer._pdfium is None:
+        pytest.skip("pypdfium2 is unavailable in this runtime")
+    with pytest.raises(ValueError, match="visible contrast"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=StripeConverter(),
+        )
+
+
+def test_visual_raster_rejects_partial_horizontal_glyph_visibility() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class PartialStripeConverter:
+        requires_visual_raster = True
+
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", pre_text_graphics="0 g 45 778 70 11 re f 1 g 45 782 70 3 re f 0 g ")
+
+    if delivery_renderer._pdfium is None:
+        pytest.skip("pypdfium2 is unavailable in this runtime")
+    with pytest.raises(ValueError, match="visible contrast"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=PartialStripeConverter(),
+        )
+
+
+def test_visual_raster_rejects_solid_block_instead_of_glyph_shape() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class SolidBlockConverter:
+        requires_visual_raster = True
+
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND", pre_text_graphics="0 g 50.7 780 5.5 7.3 re f ")
+
+    if delivery_renderer._pdfium is None:
+        pytest.skip("pypdfium2 is unavailable in this runtime")
+    with pytest.raises(ValueError, match="visible contrast"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=SolidBlockConverter(),
+        )
+
+def test_final_pdf_rejects_even_odd_post_text_occlusion() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BOUND</w:t></w:r></w:p></w:body></w:document>',
+        )
+
+    class EvenOddOccludingConverter:
+        def convert(self, _content: bytes, _source_format: str) -> bytes:
+            return _parseable_text_pdf("BOUND").replace(
+                b"Tj ET", b"Tj ET 1 1 1 rg 0 0 595 842 re f*", 1,
+            )
+
+    with pytest.raises(ValueError, match="(?:occlusion|invalid)"):
+        delivery_renderer.render_final_pdf_candidate(
+            word_content=word.getvalue(), word_format="DOCX", converter=EvenOddOccludingConverter(),
         )
 
 
