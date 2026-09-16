@@ -42,11 +42,16 @@ _DOCM_MAIN_CONTENT_TYPE = "application/vnd.ms-word.document.macroEnabled.main+xm
 _PDF_MEDIA = "application/pdf"
 DELIVERY_RENDERING_VERSION = "delivery-renderer/2.0.0"
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
-_REL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 _CT = "{http://schemas.openxmlformats.org/package/2006/content-types}"
 _A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 _R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 _V = "{urn:schemas-microsoft-com:vml}"
+_RELATIONSHIP_NAMESPACES = frozenset(
+    {
+        "http://schemas.openxmlformats.org/package/2006/relationships",
+        "http://purl.oclc.org/ooxml/package/relationships",
+    }
+)
 _WP = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
 _MIN_OBSERVABLE_TEXT_POINTS = 4.0
 ElementTree.register_namespace("w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main")
@@ -77,6 +82,44 @@ def _attribute_named(root: ElementTree.Element, name: str) -> str | None:
     if len(values) > 1:
         raise ValueError("ambiguous Word XML attribute")
     return values[0] if values else None
+
+
+def _xml_namespace(tag: object) -> str:
+    if not isinstance(tag, str) or not tag.startswith("{"):
+        return ""
+    return tag[1:].split("}", 1)[0]
+
+
+def _relationship_nodes(data: bytes) -> list[ElementTree.Element]:
+    """Parse a relationship part under the same closed policy as the Word worker.
+
+    Namespace-exact iteration silently skipped Strict-namespace parts, which made
+    the external-relationship ban unenforceable for them.  Element and attribute
+    identity are read by local name; the namespace itself is allow-listed.
+    """
+    root = ElementTree.fromstring(data)
+    if (
+        _local_name(root.tag) != "Relationships"
+        or _xml_namespace(root.tag) not in _RELATIONSHIP_NAMESPACES
+    ):
+        raise ValueError("unsupported Word relationship namespace")
+    nodes: list[ElementTree.Element] = []
+    for node in root.iter():
+        if node is root:
+            continue
+        if (
+            _local_name(node.tag) != "Relationship"
+            or _xml_namespace(node.tag) not in _RELATIONSHIP_NAMESPACES
+        ):
+            raise ValueError("unsupported Word relationship element")
+        nodes.append(node)
+    return nodes
+
+
+def _is_internal_relationship(node: ElementTree.Element) -> bool:
+    """TargetMode is a closed enumeration: absent or exactly ``Internal``."""
+    mode = _attribute_named(node, "TargetMode")
+    return mode is None or mode == "Internal"
 
 
 def _word_part_priority(name: str) -> tuple[int, str]:
@@ -428,7 +471,7 @@ def _ordered_word_image_signatures(package: ZipFile, xml_roots: dict[str, Elemen
                 posixpath.join(base, _attribute_named(item, "Target") or "")
             )
             for item in _iter_named(relationships, "Relationship")
-            if (_attribute_named(item, "TargetMode") or "").lower() != "external"
+            if _is_internal_relationship(item)
         }
         for image_node in xml_roots[name].iter():
             if _local_name(image_node.tag) == "blip":
@@ -1023,7 +1066,7 @@ def _header_footer_profile(
             posixpath.join("word", _attribute_named(item, "Target") or "")
         )
         for item in _iter_named(relationships, "Relationship")
-        if (_attribute_named(item, "TargetMode") or "").casefold() != "external"
+        if _is_internal_relationship(item)
     }
     profile: dict[str, str | bool | None] = {
         "different_first": _first_named(sections[0], "titlePg") is not None,
@@ -4782,11 +4825,9 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
                 }
                 for name in names:
                     if name.endswith(".rels"):
-                        root = ElementTree.fromstring(package.read(name))
                         if any(
-                            (mode := item.attrib.get("TargetMode")) is not None
-                            and mode != "Internal"
-                            for item in root.iter(f"{_REL}Relationship")
+                            not _is_internal_relationship(item)
+                            for item in _relationship_nodes(package.read(name))
                         ):
                             raise ValueError("external relationships are forbidden in delivery artifacts")
         except (BadZipFile, ElementTree.ParseError, OSError) as exc:
@@ -4849,45 +4890,20 @@ def validate_supporting_artifact(content: bytes, media_type: str) -> tuple[str, 
 
 
 def safe_pdf_conversion_copy(content: bytes, output_format: str) -> tuple[bytes, str]:
-    """Build a macro-free, external-link-free copy used only by the local PDF renderer."""
+    """Admit the authoritative Word bytes to the local renderer without rewriting them.
+
+    This deliberately no longer fabricates a substitute artifact.  Stripping the
+    VBA parts out of a DOCM changed the bytes the renderer saw, broke
+    ``WORD/DOCM = AUTHORITATIVE`` and left the fidelity oracle comparing the
+    derived PDF against a product-made copy rather than against the authority.
+    Macros are neutralised where the privilege actually lives: the Word worker
+    forces ``AutomationSecurity`` to disable them and opens every document
+    ``ReadOnly``, with automatic link and field updates off.
+    """
     validate_final_artifact(content, output_format)
-    if output_format == "DOCX":
-        return content, output_format
-    with ZipFile(BytesIO(content)) as source:
-        parts = {
-            item.filename: source.read(item.filename)
-            for item in source.infolist()
-            if item.filename.casefold()
-            not in {"word/vbaproject.bin", "word/vbadata.xml"}
-        }
-    content_types = ElementTree.fromstring(parts["[Content_Types].xml"])
-    for item in tuple(content_types):
-        if item.attrib.get("PartName", "").casefold() in {
-            "/word/vbaproject.bin",
-            "/word/vbadata.xml",
-        }:
-            content_types.remove(item)
-        elif "macroEnabled.main+xml" in item.attrib.get("ContentType", ""):
-            item.set("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml")
-    parts["[Content_Types].xml"] = ElementTree.tostring(content_types, encoding="utf-8", xml_declaration=True)
-    for name in tuple(parts):
-        if not name.endswith(".rels"):
-            continue
-        root = ElementTree.fromstring(parts[name])
-        for item in tuple(root):
-            relationship_type = item.attrib.get("Type", "").casefold()
-            target = item.attrib.get("Target", "").casefold()
-            if "vbaproject" in relationship_type or target.endswith(
-                ("vbaproject.bin", "vbadata.xml")
-            ):
-                root.remove(item)
-        parts[name] = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
-    output = BytesIO()
-    with ZipFile(output, "w", ZIP_DEFLATED) as package:
-        for name, value in parts.items():
-            package.writestr(name, value)
-    validate_final_artifact(output.getvalue(), "DOCX")
-    return output.getvalue(), "DOCX"
+    if output_format not in {"DOCX", "DOCM"}:
+        raise ValueError("unsupported final artifact format")
+    return content, output_format
 
 
 def verify_reopened_artifact(

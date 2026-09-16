@@ -60,6 +60,135 @@ _ACQUIRING_RELATIONSHIP_TYPES = frozenset(
 _ACQUIRING_WORD_ELEMENTS = frozenset({"altChunk", "control", "object", "subDoc"})
 _OPAQUE_ACTIVE_PART_PREFIXES = ("word/activex/", "word/embeddings/")
 _IMPORTABLE_PART_SUFFIXES = (".htm", ".html", ".mht", ".mhtml", ".rtf")
+_CONTENT_TYPES_PART = "[Content_Types].xml"
+_PACKAGE_RELATIONSHIP_PART = "_rels/.rels"
+_MAIN_DOCUMENT_PART = "word/document.xml"
+_OFFICE_DOCUMENT_RELATIONSHIP = "officedocument"
+# OPC relationship parts are only honoured in the two namespaces this product
+# supports: ECMA-376 Transitional and Strict.  Any other namespace is a package
+# this validator cannot reason about, so it fails closed rather than skipping.
+_RELATIONSHIP_NAMESPACES = frozenset(
+    {
+        "http://schemas.openxmlformats.org/package/2006/relationships",
+        "http://purl.oclc.org/ooxml/package/relationships",
+    }
+)
+_INTERPRETABLE_CONTENT_TYPE_MARKERS = ("wordprocessingml", "ms-word.document")
+
+
+def _xml_namespace(tag: object) -> str:
+    if not isinstance(tag, str) or not tag.startswith("{"):
+        return ""
+    return tag[1:].split("}", 1)[0]
+
+
+def _relationship_nodes(data: bytes) -> list[ElementTree.Element]:
+    """Parse one relationship part under a closed namespace and element policy."""
+    root = ElementTree.fromstring(data)
+    if (
+        _xml_local_name(root.tag) != "Relationships"
+        or _xml_namespace(root.tag) not in _RELATIONSHIP_NAMESPACES
+    ):
+        raise ValueError("unsupported Word relationship namespace")
+    nodes: list[ElementTree.Element] = []
+    for node in root.iter():
+        if node is root:
+            continue
+        if (
+            _xml_local_name(node.tag) != "Relationship"
+            or _xml_namespace(node.tag) not in _RELATIONSHIP_NAMESPACES
+        ):
+            raise ValueError("unsupported Word relationship element")
+        nodes.append(node)
+    return nodes
+
+
+def _relationship_fields(node: ElementTree.Element) -> tuple[str, str, str | None]:
+    target_value = _xml_attribute(node, "Target")
+    type_value = _xml_attribute(node, "Type")
+    mode_value = _xml_attribute(node, "TargetMode")
+    if target_value is None or type_value is None:
+        raise ValueError("invalid Word relationship")
+    return type_value, target_value.strip(), mode_value
+
+
+def _reject_external_relationship(target: str, mode_value: str | None) -> None:
+    # TargetMode is a closed OPC enumeration.  Absent means Internal; the only
+    # accepted spelling is the exact canonical "Internal".  Nothing is stripped,
+    # case-folded or repaired into a permitted value.
+    if (
+        (mode_value is not None and mode_value != "Internal")
+        or target.startswith(("\\\\", "//"))
+        or re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE)
+    ):
+        raise ValueError("external Word relationship is forbidden")
+
+
+def _package_main_part(data: bytes) -> str:
+    """Resolve the authoritative main part from the package relationship graph."""
+    targets: list[str] = []
+    for node in _relationship_nodes(data):
+        type_value, target, mode_value = _relationship_fields(node)
+        if type_value.rsplit("/", 1)[-1].casefold() != _OFFICE_DOCUMENT_RELATIONSHIP:
+            continue
+        _reject_external_relationship(target, mode_value)
+        targets.append(target)
+    if len(targets) != 1:
+        raise ValueError("Word package main part is not uniquely bound")
+    resolved = PurePosixPath(targets[0].lstrip("/"))
+    if ".." in resolved.parts or resolved.is_absolute() or str(resolved) != _MAIN_DOCUMENT_PART:
+        # This product deliberately supports only the conventional main part.
+        # Relocated main parts are rejected instead of widening the sweep to
+        # every shape OPC allows.
+        raise ValueError("Word package main part is not the supported document part")
+    return str(resolved)
+
+
+def _declared_content_types(
+    content_types: ElementTree.Element, names: list[str]
+) -> dict[str, str]:
+    """Map every stored part to its declared content type, failing closed on gaps."""
+    defaults: dict[str, str] = {}
+    overrides: dict[str, str] = {}
+    for item in content_types.iter():
+        local_name = _xml_local_name(item.tag)
+        if local_name == "Default":
+            extension = (_xml_attribute(item, "Extension") or "").casefold()
+            value = _xml_attribute(item, "ContentType") or ""
+            if not extension or not value or extension in defaults:
+                raise ValueError("invalid Word content type declaration")
+            defaults[extension] = value
+        elif local_name == "Override":
+            part = _xml_attribute(item, "PartName") or ""
+            value = _xml_attribute(item, "ContentType") or ""
+            if not part.startswith("/") or not value or part in overrides:
+                raise ValueError("invalid Word content type declaration")
+            overrides[part] = value
+    declared: dict[str, str] = {}
+    for name in names:
+        if name == _CONTENT_TYPES_PART:
+            continue
+        value = overrides.get(f"/{name}")
+        if value is None:
+            # OPC extensions are the text after the final "." of the last segment.
+            # PurePosixPath.suffix cannot be used: it reports "" for ".rels".
+            segment = name.rsplit("/", 1)[-1]
+            extension = segment.rsplit(".", 1)[-1].casefold() if "." in segment else ""
+            value = defaults.get(extension) if extension else None
+        if value is None:
+            raise ValueError("undeclared Word package part")
+        declared[name] = value
+    return declared
+
+
+def _interpretable_word_parts(declared: dict[str, str]) -> set[str]:
+    """Parts Word can interpret as document markup, by content type or convention."""
+    return {
+        name
+        for name, value in declared.items()
+        if any(marker in value.casefold() for marker in _INTERPRETABLE_CONTENT_TYPE_MARKERS)
+        or (name.startswith("word/") and name.endswith(".xml"))
+    }
 
 
 def _xml_local_name(value: object) -> str:
@@ -453,27 +582,23 @@ def _validate_word_source(source: Path, source_format: str) -> None:
                 raise ValueError("Word package format identity mismatch")
 
             for name in names:
-                if name.endswith(".rels"):
-                    relationships = ElementTree.fromstring(package.read(name))
-                    for relationship in relationships.iter():
-                        if _xml_local_name(relationship.tag) != "Relationship":
-                            continue
-                        target_value = _xml_attribute(relationship, "Target")
-                        type_value = _xml_attribute(relationship, "Type")
-                        mode_value = _xml_attribute(relationship, "TargetMode")
-                        if target_value is None or type_value is None:
-                            raise ValueError("invalid Word relationship")
-                        target = target_value.strip()
-                        relationship_type = type_value.rsplit("/", 1)[-1].casefold()
-                        if relationship_type in _ACQUIRING_RELATIONSHIP_TYPES:
-                            raise ValueError("unsupported active Word content")
-                        if (
-                            (mode_value is not None and mode_value != "Internal")
-                            or target.startswith(("\\\\", "//"))
-                            or re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE)
-                        ):
-                            raise ValueError("external Word relationship is forbidden")
-                if not (name.startswith("word/") and name.endswith(".xml")):
+                if not name.endswith(".rels"):
+                    continue
+                for relationship in _relationship_nodes(package.read(name)):
+                    type_value, target, mode_value = _relationship_fields(relationship)
+                    if type_value.rsplit("/", 1)[-1].casefold() in _ACQUIRING_RELATIONSHIP_TYPES:
+                        raise ValueError("unsupported active Word content")
+                    _reject_external_relationship(target, mode_value)
+
+            if _PACKAGE_RELATIONSHIP_PART not in set(names):
+                raise ValueError("Word package main part is not uniquely bound")
+            _package_main_part(package.read(_PACKAGE_RELATIONSHIP_PART))
+            interpretable = _interpretable_word_parts(
+                _declared_content_types(content_types, names)
+            )
+
+            for name in names:
+                if name not in interpretable:
                     continue
                 root = ElementTree.fromstring(package.read(name))
                 if any(

@@ -948,7 +948,7 @@ def test_supporting_image_bytes_are_verified_by_declared_media_type() -> None:
         validate_supporting_artifact(b"\xff\xd8\xff\xff\xd9", "image/jpeg")
 
 
-def test_conversion_copy_strips_macros_and_external_relationships_are_rejected() -> None:
+def test_conversion_copy_preserves_docm_authority_and_rejects_external_relationships() -> None:
     output = BytesIO()
     with ZipFile(output, "w", ZIP_DEFLATED) as package:
         package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/><Override PartName="/word/vbaProject.bin" ContentType="application/vnd.ms-office.vbaProject"/></Types>')
@@ -963,9 +963,13 @@ def test_conversion_copy_strips_macros_and_external_relationships_are_rejected()
         package.writestr("word/document.xml", "<document/>")
         package.writestr("word/vbaProject.bin", b"macro")
     converted, kind = safe_pdf_conversion_copy(clean.getvalue(), "DOCM")
-    assert kind == "DOCX"
+    # The authoritative DOCM reaches the renderer byte-exact.  Macros are
+    # neutralised by the worker's forced AutomationSecurity, not by amputating
+    # parts out of the authority.
+    assert kind == "DOCM"
+    assert converted == clean.getvalue()
     with ZipFile(BytesIO(converted)) as package:
-        assert "word/vbaProject.bin" not in package.namelist()
+        assert "word/vbaProject.bin" in package.namelist()
 
 
 def test_word_validation_rejects_noncanonical_external_target_mode() -> None:
@@ -991,7 +995,7 @@ def test_word_validation_rejects_noncanonical_external_target_mode() -> None:
         validate_final_artifact(output.getvalue(), "DOCX")
 
 
-def test_conversion_copy_strips_macro_parts_case_insensitively() -> None:
+def test_conversion_copy_preserves_macro_parts_verbatim() -> None:
     source = BytesIO()
     with ZipFile(source, "w", ZIP_DEFLATED) as package:
         package.writestr(
@@ -1014,14 +1018,12 @@ def test_conversion_copy_strips_macro_parts_case_insensitively() -> None:
 
     converted, kind = safe_pdf_conversion_copy(source.getvalue(), "DOCM")
 
-    assert kind == "DOCX"
+    assert kind == "DOCM"
+    assert converted == source.getvalue()
     with ZipFile(BytesIO(converted)) as package:
-        assert all(
-            name.casefold() not in {"word/vbaproject.bin", "word/vbadata.xml"}
-            for name in package.namelist()
-        )
+        assert "word/VBAProject.bin" in package.namelist()
         relationships = package.read("word/_rels/document.xml.rels").decode()
-        assert "vbaproject" not in relationships.casefold()
+        assert "vbaproject" in relationships.casefold()
 
 
 def test_rendered_word_bytes_contain_and_change_with_entire_approved_report_body() -> None:
