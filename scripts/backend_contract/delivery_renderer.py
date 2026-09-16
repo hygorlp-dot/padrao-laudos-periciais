@@ -2635,7 +2635,7 @@ def _text_sizes_match(
         return True
     used_fragments: set[int] = set()
     previous_body_fragments: list[_PositionedText] | None = None
-    paragraph_left_anchor: float | None = None
+    paragraph_wrap_anchor: tuple[float, float] | None = None
     for expectation in expectations:
         match: tuple[int, int] | None = None
         for start in range(len(positioned)):
@@ -2652,8 +2652,8 @@ def _text_sizes_match(
                 allow_line_wrap=True,
                 alignment=expectation.alignment,
                 expected_line_height=expectation.line_height,
-                wrap_left_anchor=(
-                    paragraph_left_anchor
+                wrap_anchor=(
+                    paragraph_wrap_anchor
                     if expectation.paragraph_continuation
                     else None
                 ),
@@ -2767,7 +2767,34 @@ def _text_sizes_match(
             return False
         used_fragments.update(range(*match))
         if not expectation.paragraph_continuation:
-            paragraph_left_anchor = positioned[match[0]].x
+            first_fragment = positioned[match[0]]
+            anchor_tolerance = max(3.0, first_fragment.font_size * 0.35)
+            first_line = [
+                fragment
+                for fragment in positioned
+                if fragment.page == first_fragment.page
+                and max(fragment.bottom, first_fragment.bottom)
+                - min(fragment.top, first_fragment.top)
+                <= anchor_tolerance
+                and not any(
+                    barrier.page == fragment.page
+                    and min(fragment.right, first_fragment.right)
+                    <= max(fragment.x, first_fragment.x)
+                    and barrier.left
+                    >= min(fragment.right, first_fragment.right) - 0.5
+                    and barrier.right
+                    <= max(fragment.x, first_fragment.x) + 0.5
+                    and barrier.bottom
+                    <= max(fragment.top, first_fragment.top)
+                    and barrier.top
+                    >= min(fragment.bottom, first_fragment.bottom)
+                    for barrier in barriers
+                )
+            ]
+            paragraph_wrap_anchor = (
+                min(fragment.x for fragment in first_line),
+                max(fragment.right for fragment in first_line),
+            )
         if expectation.body_flow_anchor:
             previous_body_fragments = positioned[match[0] : match[1]]
     return True
@@ -3194,7 +3221,7 @@ def _fragment_sequence_end(
     allow_line_wrap: bool = False,
     alignment: str | None = None,
     expected_line_height: float | None = None,
-    wrap_left_anchor: float | None = None,
+    wrap_anchor: tuple[float, float] | None = None,
 ) -> int | None:
     normalized_target = _normalized_visible_text(expected)
     text_candidates = {""}
@@ -3239,8 +3266,8 @@ def _fragment_sequence_end(
                     and abs(
                         fragment.x
                         - (
-                            wrap_left_anchor
-                            if wrap_left_anchor is not None
+                            wrap_anchor[0]
+                            if wrap_anchor is not None
                             else line_start.x
                         )
                     )
@@ -3248,12 +3275,25 @@ def _fragment_sequence_end(
                 )
             elif wrap_alignment == "right":
                 wrap_anchor_matches = (
-                    abs(fragment.right - previous.right) <= horizontal_tolerance
+                    abs(
+                        fragment.right
+                        - (
+                            wrap_anchor[1]
+                            if wrap_anchor is not None
+                            else previous.right
+                        )
+                    )
+                    <= horizontal_tolerance
                 )
             elif wrap_alignment == "center" and line_start is not None:
+                prior_center = (
+                    sum(wrap_anchor) / 2
+                    if wrap_anchor is not None
+                    else (line_start.x + previous.right) / 2
+                )
                 wrap_anchor_matches = abs(
                     (fragment.x + fragment.right) / 2
-                    - (line_start.x + previous.right) / 2
+                    - prior_center
                 ) <= horizontal_tolerance
             else:
                 wrap_anchor_matches = False
