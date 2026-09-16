@@ -64,6 +64,24 @@ class _CompletedWorker:
         self.closed = True
 
 
+def test_render_directory_rejects_unc_before_filesystem_acquisition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempted = False
+
+    def forbidden_mkdtemp(**_kwargs: object) -> str:
+        nonlocal attempted
+        attempted = True
+        raise AssertionError("mkdtemp must not receive an untrusted UNC root")
+
+    monkeypatch.setattr(office_pdf.tempfile, "mkdtemp", forbidden_mkdtemp)
+
+    with pytest.raises(RendererUnavailable, match="local drive"):
+        with office_pdf._render_directory(Path(r"\\server\private-share")):
+            pass
+
+    assert attempted is False
+
 class _FakeDocument:
     def __init__(self, calls: list[tuple]) -> None:
         self.calls = calls
