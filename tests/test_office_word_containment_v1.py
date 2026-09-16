@@ -377,3 +377,17 @@ def test_early_failure_diagnosis_does_not_depend_on_polling(tmp_path: Path) -> N
     assert exited.terminated is False
 
     assert office_pdf._read_phase(tmp_path) == "WORKER_EXIT"
+
+
+# --- Phase C F-11: Word is started without add-ins or global templates ---
+
+
+def test_owned_word_command_line_disables_add_ins_and_global_templates() -> None:
+    executable = "C:/Office16/WINWORD.EXE"
+    bootstrap = Path("C:/tmp/plp/bootstrap.docx")
+
+    command = office_word_worker._word_command_line(executable, bootstrap)
+
+    assert command.split(" ")[1:4] == ["/a", "/x", "/q"]
+    assert command.startswith(chr(34) + executable + chr(34))
+    assert command.endswith(chr(34) + str(bootstrap) + chr(34))

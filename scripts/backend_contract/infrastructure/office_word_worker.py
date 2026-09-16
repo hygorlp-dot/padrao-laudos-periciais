@@ -279,6 +279,26 @@ def _quote_windows_argument(value: str) -> str:
     return "".join(escaped)
 
 
+def _word_command_line(executable: str, bootstrap: Path) -> str:
+    """Build the only command line this product is allowed to start Word with.
+
+    /a keeps the render deterministic and the user's profile untouched: add-ins
+    and global templates, Normal.dotm included, are not loaded, so no AutoExec
+    macro runs inside the product-owned Word and nothing is written back to the
+    user's template.  /x keeps this a separate instance rather than handing the
+    document to one the user already has open.  /q suppresses the splash.
+    """
+    return " ".join(
+        (
+            _quote_windows_argument(executable),
+            "/a",
+            "/x",
+            "/q",
+            _quote_windows_argument(str(bootstrap)),
+        )
+    )
+
+
 def _owned_job_name() -> str:
     job_name = os.environ.get("PLP_WORD_JOB_NAME", "")
     if not re.fullmatch(r"Local\\PLP-Word-[0-9a-f]{32}", job_name):
@@ -400,14 +420,7 @@ def _start_owned_word_process(root: Path):
 
     word_executable = str(_machine_word_executable())
     bootstrap = _write_bootstrap_document(root)
-    command_line = " ".join(
-        (
-            _quote_windows_argument(word_executable),
-            "/x",
-            "/q",
-            _quote_windows_argument(str(bootstrap)),
-        )
-    )
+    command_line = _word_command_line(word_executable, bootstrap)
     job = win32job.OpenJobObject(win32job.JOB_OBJECT_QUERY, False, _owned_job_name())
     if not win32job.IsProcessInJob(win32api.GetCurrentProcess(), job):
         job.Close()
