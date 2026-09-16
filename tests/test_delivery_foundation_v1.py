@@ -10,7 +10,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from jsonschema import Draft202012Validator
-from PIL import Image
+from PIL import Image, ImageFilter
 
 from scripts.backend_contract import delivery_renderer
 
@@ -2122,6 +2122,27 @@ def test_image_fidelity_preserves_legitimate_lossy_color_encoding() -> None:
             [delivery_renderer._image_signature(source)],
             [delivery_renderer._image_signature(candidate)],
         )
+
+
+def test_image_fidelity_preserves_legitimate_continuous_rgb_resampling() -> None:
+    source = Image.new("RGB", (32, 32))
+    source.putdata(
+        [
+            (
+                (x * 7 + y * 3) % 256,
+                (x * 5 + y * 11) % 256,
+                (x * 13 + y * 2) % 256,
+            )
+            for y in range(32)
+            for x in range(32)
+        ]
+    )
+    resampled = source.filter(ImageFilter.GaussianBlur(1))
+
+    assert delivery_renderer._ordered_image_signatures_match(
+        [delivery_renderer._image_signature(source)],
+        [delivery_renderer._image_signature(resampled)],
+    )
 
 
 def test_final_pdf_conversion_fails_closed_without_a_local_converter() -> None:
