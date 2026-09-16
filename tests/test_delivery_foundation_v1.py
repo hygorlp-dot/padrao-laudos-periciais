@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import fields, replace
 import json
 from pathlib import Path
+from random import Random
 from types import SimpleNamespace
 from io import BytesIO
 import zlib
@@ -2130,6 +2131,96 @@ def test_fidelity_rejects_small_localized_dct_pixel_exchange() -> None:
         )
 
 
+def test_fidelity_rejects_localized_marker_swap_over_texture() -> None:
+    random = Random(0)
+    source_image = Image.new("RGB", (32, 32))
+    source_image.putdata(
+        [
+            (random.randrange(256), random.randrange(256), random.randrange(256))
+            for _ in range(32 * 32)
+        ]
+    )
+    candidate_image = source_image.copy()
+    for y in range(3):
+        for x in range(3):
+            source_image.putpixel((6 + x, 6 + y), (255, 0, 0))
+            source_image.putpixel((22 + x, 22 + y), (0, 255, 0))
+            candidate_image.putpixel((6 + x, 6 + y), (0, 255, 0))
+            candidate_image.putpixel((22 + x, 22 + y), (255, 0, 0))
+
+    source = BytesIO()
+    source_image.save(source, "PNG")
+    candidate = BytesIO()
+    candidate_image.save(candidate, "JPEG", quality=100, subsampling=0)
+    word = _word_with_image_and_text("Synthetic", source.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", candidate.getvalue(), image_x=100),
+        )
+
+
+def test_fidelity_rejects_single_pixel_marker_swap_over_texture() -> None:
+    random = Random(0)
+    source_image = Image.new("RGB", (32, 32))
+    source_image.putdata(
+        [
+            (random.randrange(256), random.randrange(256), random.randrange(256))
+            for _ in range(32 * 32)
+        ]
+    )
+    candidate_image = source_image.copy()
+    source_image.putpixel((6, 6), (255, 0, 0))
+    source_image.putpixel((22, 22), (0, 255, 0))
+    candidate_image.putpixel((6, 6), (0, 255, 0))
+    candidate_image.putpixel((22, 22), (255, 0, 0))
+
+    source = BytesIO()
+    source_image.save(source, "PNG")
+    candidate = BytesIO()
+    candidate_image.save(candidate, "JPEG", quality=100, subsampling=0)
+    word = _word_with_image_and_text("Synthetic", source.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", candidate.getvalue(), image_x=100),
+        )
+
+
+def test_fidelity_rejects_patch_exchange_across_spatial_boundaries() -> None:
+    source_image = Image.new("RGB", (32, 32))
+    source_image.putdata(
+        [
+            (
+                (x * 7 + y * 3) % 256,
+                (x * 5 + y * 11) % 256,
+                (x * 13 + y * 2) % 256,
+            )
+            for y in range(32)
+            for x in range(32)
+        ]
+    )
+    candidate_image = source_image.copy()
+    first_patch = source_image.crop((7, 23, 13, 29))
+    second_patch = source_image.crop((9, 17, 15, 23))
+    candidate_image.paste(second_patch, (7, 23))
+    candidate_image.paste(first_patch, (9, 17))
+
+    source = BytesIO()
+    source_image.save(source, "PNG")
+    candidate = BytesIO()
+    candidate_image.save(candidate, "JPEG", quality=100, subsampling=0)
+    word = _word_with_image_and_text("Synthetic", source.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", candidate.getvalue(), image_x=100),
+        )
+
+
 def test_image_fidelity_signature_preserves_legitimate_alpha_semantics() -> None:
     source = Image.new("RGBA", (32, 32), (220, 20, 20, 128))
     word_style = delivery_renderer._image_signature(source)
@@ -2189,6 +2280,27 @@ def test_image_fidelity_preserves_legitimate_continuous_rgb_resampling() -> None
             )
             for y in range(32)
             for x in range(32)
+        ]
+    )
+    resampled = source.filter(ImageFilter.GaussianBlur(1))
+
+    assert delivery_renderer._ordered_image_signatures_match(
+        [delivery_renderer._image_signature(source)],
+        [delivery_renderer._image_signature(resampled)],
+    )
+
+
+def test_image_fidelity_preserves_low_contrast_resampling() -> None:
+    source = Image.new("RGB", (80, 48))
+    source.putdata(
+        [
+            (
+                110 + (x * 17 + y * 5) % 35,
+                115 + (x * 3 + y * 19) % 31,
+                120 + (x * 11 + y * 7) % 29,
+            )
+            for y in range(48)
+            for x in range(80)
         ]
     )
     resampled = source.filter(ImageFilter.GaussianBlur(1))

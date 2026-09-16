@@ -16,7 +16,7 @@ import unicodedata
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
-from PIL import Image, ImageChops, ImageStat, UnidentifiedImageError
+from PIL import Image, ImageChops, ImageFilter, ImageStat, UnidentifiedImageError
 import pypdfium2 as pdfium
 from pypdf import PdfReader
 from pypdf.generic import BooleanObject
@@ -303,12 +303,38 @@ def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple
                             [second[3][index][channel] for index in indices],
                         )
                     )
+        source_image = Image.new("RGB", (32, 32))
+        source_image.putdata(first[3])
+        candidate_image = Image.new("RGB", (32, 32))
+        candidate_image.putdata(second[3])
+        # Preserve near-exact low-contrast Word resampling without relying on
+        # unstable correlation over channels whose dynamic range is tiny.
+        raw_color_delta = max(
+            max(abs(source[channel] - candidate[channel]) for channel in range(3))
+            for source, candidate in zip(first[3], second[3])
+        )
+        blurred_source = source_image.filter(ImageFilter.GaussianBlur(1.5))
+        blurred_candidate = candidate_image.filter(ImageFilter.GaussianBlur(1.5))
+        # Low-pass residuals separate codec/resampling noise from spatially
+        # moved visible regions, including edits that straddle the 8x8 blocks.
+        blurred_color_delta = max(
+            max(abs(source[channel] - candidate[channel]) for channel in range(3))
+            for source, candidate in zip(
+                blurred_source.get_flattened_data(),
+                blurred_candidate.get_flattened_data(),
+            )
+        )
+        spatial_structure_matches = (
+            sum(a != b for a, b in zip(first[2], second[2])) <= 16
+            and all(value is None or value >= 0.85 for value in correlations)
+            and all(value is None or value >= 0.25 for value in local_correlations)
+        )
         return (
             all(abs(a - b) <= 12 for a, b in zip(first[0], second[0]))
             and all(abs(a - b) <= 12 for a, b in zip(first[1], second[1]))
-            and sum(a != b for a, b in zip(first[2], second[2])) <= 16
-            and all(value is None or value >= 0.85 for value in correlations)
-            and all(value is None or value >= 0.25 for value in local_correlations)
+            and raw_color_delta <= 192
+            and blurred_color_delta <= 50
+            and (raw_color_delta <= 12 or spatial_structure_matches)
         )
 
     def matches(source: tuple, candidate: tuple) -> bool:
