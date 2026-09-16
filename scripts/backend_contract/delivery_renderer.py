@@ -122,6 +122,27 @@ def _is_internal_relationship(node: ElementTree.Element) -> bool:
     return mode is None or mode == "Internal"
 
 
+def _cell_property(cell: ElementTree.Element, name: str):
+    """Read a table-cell property from its own ``tcPr``.
+
+    A recursive descendant search reached into nested tables, so an inner cell's
+    ``gridSpan``/``vMerge`` could govern the outer cell's column geometry.
+    """
+    return _first_named(next(_children_named(cell, "tcPr"), None), name)
+
+
+def _table_look(table: ElementTree.Element):
+    """Read a table's ``tblLook`` from its own ``tblPr``, never from a nested table."""
+    properties = next(_children_named(table, "tblPr"), None)
+    return next(_children_named(properties, "tblLook"), None) if properties is not None else None
+
+
+def _table_style_id(table: ElementTree.Element) -> str | None:
+    """Read a table's style from its own ``tblPr``, never from a nested table."""
+    style_node = _first_named(next(_children_named(table, "tblPr"), None), "tblStyle")
+    return _attribute_named(style_node, "val") if style_node is not None else None
+
+
 def _word_part_priority(name: str) -> tuple[int, str]:
     return (
         0 if "/header" in name else 1 if name == "word/document.xml" else 2,
@@ -2124,14 +2145,9 @@ def _word_text_expectations(
         )
         for table in _iter_named(root, "tbl"):
             table_properties = next(_children_named(table, "tblPr"), None)
-            style_reference = _first_named(table_properties, "tblStyle")
-            style_id = (
-                _attribute_named(style_reference, "val")
-                if style_reference is not None
-                else None
-            )
+            style_id = _table_style_id(table)
             chain = style_chain(style_id)
-            look = _first_named(table_properties, "tblLook")
+            look = next(_children_named(table_properties, "tblLook"), None) if table_properties is not None else None
             row_band_size = 1
             column_band_size = 1
             for style in chain:
@@ -4161,7 +4177,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                 elif name.startswith("word/footer"):
                     footer_fragments.extend(fragments)
                 for table in table_nodes:
-                    grid = _first_named(table, "tblGrid")
+                    grid = next(_children_named(table, "tblGrid"), None)
                     grid_columns = (
                         list(_children_named(grid, "gridCol"))
                         if grid is not None
@@ -4209,7 +4225,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                         valid_row = True
                         for cell in cell_nodes:
                             start = position
-                            grid_span = _first_named(cell, "gridSpan")
+                            grid_span = _cell_property(cell, "gridSpan")
                             try:
                                 span = int(
                                     (
@@ -4226,7 +4242,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                                 valid_row = False
                                 break
                             position += span
-                            vertical_merge = _first_named(cell, "vMerge")
+                            vertical_merge = _cell_property(cell, "vMerge")
                             merge_state = (
                                 (
                                     _attribute_named(vertical_merge, "val")
@@ -4267,18 +4283,16 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                                 inferred_column_count = position
                             column_count_matches = position == inferred_column_count
                         if not valid_row or not column_count_matches:
-                            raw_rows = []
-                            break
+                            raise ValueError("unsupported Word table structure")
                         raw_rows.append(raw_cells)
                     if not raw_rows:
-                        continue
+                        raise ValueError("unsupported Word table structure")
                     rows: list[tuple[str, ...]] = []
                     row_cell_counts: list[int] = []
                     row_vertical_merge_continuations: list[int] = []
                     row_vertical_merge_ranges: list[tuple[tuple[int, int], ...]] = []
                     row_boundaries: list[tuple[int, ...]] = []
                     cells: list[_WordTableCellExpectation] = []
-                    valid_rows = True
                     for row_index, raw_cells in enumerate(raw_rows):
                         anchors = tuple(
                             paragraphs[0]
@@ -4286,8 +4300,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                             if merge_state != "continue" and paragraphs
                         )
                         if not anchors:
-                            valid_rows = False
-                            break
+                            raise ValueError("unsupported Word table structure")
                         rows.append(anchors)
                         row_cell_counts.append(len(raw_cells))
                         row_vertical_merge_continuations.append(
@@ -4340,14 +4353,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                                     direct_fill,
                                 )
                             )
-                    if not valid_rows:
-                        continue
-                    style_node = _first_named(table, "tblStyle")
-                    style_id = (
-                        _attribute_named(style_node, "val")
-                        if style_node is not None
-                        else None
-                    )
+                    style_id = _table_style_id(table)
                     style = (
                         (style_id or "")
                         .casefold()
@@ -4358,7 +4364,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                     ] = {}
                     table_style = table_styles.get(style_id)
                     if table_style is not None:
-                        table_look = _first_named(table, "tblLook")
+                        table_look = _table_look(table)
 
                         def look_enabled(name: str, default: bool = False) -> bool:
                             if table_look is None:

@@ -4328,3 +4328,137 @@ def test_text_only_diagnostic_pdf_can_never_become_a_final_professional_pdf() ->
     assert b"/DiagnosticOnly true" not in alternate_whitespace
     with pytest.raises(ValueError, match="diagnostic PDF cannot be a Delivery artifact"):
         delivery_renderer.validate_delivery_artifact(alternate_whitespace, "PDF")
+
+
+# --- Phase C F-05: table structure must fail closed, never drop expectations ---
+
+# Adjudication note: the Claude diagnostic reported F-05 as a reproduced false
+# positive (an altered PDF passing because the table was dropped).  That did not
+# reproduce: with the table dropped the flattened and row-swapped PDFs are still
+# rejected by the other oracles.  The code gap is real, the exploit is not
+# demonstrated, so F-05 is carried as an invariant-completeness defect.  These
+# tests therefore pin the *policy*: an unresolvable table must fail as a
+# resolution error, not be silently excluded and rejected by accident elsewhere.
+
+
+def _word_table_document(table_markup: str) -> bytes:
+    output = BytesIO()
+    document = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body>{table_markup}</w:body></w:document>"
+    )
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            "</Types>",
+        )
+        package.writestr("word/document.xml", document)
+    return output.getvalue()
+
+
+_WELL_FORMED_TABLE = (
+    "<w:tbl>"
+    "<w:tr><w:tc><w:p><w:r><w:t>Cell A</w:t></w:r></w:p></w:tc>"
+    "<w:tc><w:p><w:r><w:t>Cell B</w:t></w:r></w:p></w:tc></w:tr>"
+    "<w:tr><w:tc><w:p><w:r><w:t>Cell C</w:t></w:r></w:p></w:tc>"
+    "<w:tc><w:p><w:r><w:t>Cell D</w:t></w:r></w:p></w:tc></w:tr>"
+    "</w:tbl>"
+)
+_FLATTENED_TABLE_PDF = "Cell A Cell B Cell C Cell D"
+
+
+def test_well_formed_table_is_bound_and_rejects_flattened_pdf() -> None:
+    """Control: a resolvable table is bound, so the mismatch is a fidelity failure."""
+    with pytest.raises(ValueError, match="does not faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            _word_table_document(_WELL_FORMED_TABLE),
+            _parseable_text_pdf(_FLATTENED_TABLE_PDF),
+        )
+
+
+@pytest.mark.parametrize(
+    "table_markup",
+    (
+        _WELL_FORMED_TABLE.replace(
+            "</w:tbl>",
+            "<w:tr><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr></w:tbl>",
+        ),
+        _WELL_FORMED_TABLE.replace(
+            "<w:tc><w:p><w:r><w:t>Cell A</w:t></w:r></w:p></w:tc>",
+            '<w:tc><w:tcPr><w:gridSpan w:val="nao-numerico"/></w:tcPr>'
+            "<w:p><w:r><w:t>Cell A</w:t></w:r></w:p></w:tc>",
+        ),
+        _WELL_FORMED_TABLE.replace(
+            "<w:tc><w:p><w:r><w:t>Cell A</w:t></w:r></w:p></w:tc>",
+            '<w:tc><w:tcPr><w:gridSpan w:val="0"/></w:tcPr>'
+            "<w:p><w:r><w:t>Cell A</w:t></w:r></w:p></w:tc>",
+        ),
+        _WELL_FORMED_TABLE.replace(
+            "<w:tr><w:tc><w:p><w:r><w:t>Cell C</w:t></w:r></w:p></w:tc>"
+            "<w:tc><w:p><w:r><w:t>Cell D</w:t></w:r></w:p></w:tc></w:tr>",
+            "<w:tr><w:tc><w:p><w:r><w:t>Cell C</w:t></w:r></w:p></w:tc>"
+            "<w:tc><w:p><w:r><w:t>Cell D</w:t></w:r></w:p></w:tc>"
+            "<w:tc><w:p><w:r><w:t>Cell E</w:t></w:r></w:p></w:tc></w:tr>",
+        ),
+        '<w:tbl><w:tr><w:tc><w:tcPr><w:vMerge w:val="continue"/></w:tcPr>'
+        "<w:p><w:r><w:t>Cell A</w:t></w:r></w:p></w:tc>"
+        '<w:tc><w:tcPr><w:vMerge w:val="continue"/></w:tcPr>'
+        "<w:p><w:r><w:t>Cell B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+    ),
+    ids=(
+        "empty_row",
+        "invalid_grid_span",
+        "zero_grid_span",
+        "row_column_count_mismatch",
+        "orphan_vertical_merge_continuation",
+    ),
+)
+def test_unresolvable_table_structure_fails_closed(table_markup: str) -> None:
+    """RED F-05: these shapes were dropped from the oracle instead of rejected."""
+    with pytest.raises(ValueError, match="cannot be verified"):
+        delivery_renderer._validate_pdf_fidelity(
+            _word_table_document(table_markup),
+            _parseable_text_pdf(_FLATTENED_TABLE_PDF),
+        )
+
+
+def test_nested_table_cell_properties_are_not_read_from_the_inner_table() -> None:
+    """RED F-05: recursive lookup let an inner cell govern the outer cell geometry."""
+    markup = (
+        "<w:tbl><w:tr>"
+        "<w:tc><w:p><w:r><w:t>Cell A</w:t></w:r></w:p>"
+        "<w:tbl><w:tr>"
+        '<w:tc><w:tcPr><w:gridSpan w:val="3"/></w:tcPr>'
+        "<w:p><w:r><w:t>Inner X</w:t></w:r></w:p></w:tc>"
+        "</w:tr></w:tbl></w:tc>"
+        "<w:tc><w:p><w:r><w:t>Cell B</w:t></w:r></w:p></w:tc>"
+        "</w:tr></w:tbl>"
+    )
+    # The outer row must resolve to two columns; the inner gridSpan is not its own.
+    with pytest.raises(ValueError, match="does not faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            _word_table_document(markup),
+            _parseable_text_pdf("Cell A Inner X Cell B"),
+        )
+
+
+def test_outer_table_style_is_not_inherited_from_a_nested_table() -> None:
+    """RED F-05: recursive tblStyle lookup let an inner table style the outer one."""
+    markup = (
+        "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Cell A</w:t></w:r></w:p>"
+        '<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/></w:tblPr>'
+        "<w:tr><w:tc><w:p><w:r><w:t>Inner X</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+        "</w:tc><w:tc><w:p><w:r><w:t>Cell B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+    )
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body>{markup}</w:body></w:document>"
+    )
+    outer = next(delivery_renderer._iter_named(document, "tbl"))
+    inner = [item for item in delivery_renderer._iter_named(document, "tbl")][1]
+
+    assert delivery_renderer._table_style_id(outer) is None
+    assert delivery_renderer._table_style_id(inner) == "TableGrid"
