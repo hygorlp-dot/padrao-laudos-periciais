@@ -258,9 +258,9 @@ def _image_signature(
 
 def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple]) -> bool:
     def visual_matches(first: tuple, second: tuple) -> bool:
-        def channel_correlation(channel: int) -> float | None:
-            source_values = [pixel[channel] for pixel in first[3]]
-            candidate_values = [pixel[channel] for pixel in second[3]]
+        def correlation(
+            source_values: list[int], candidate_values: list[int]
+        ) -> float | None:
             source_mean = sum(source_values) / len(source_values)
             candidate_mean = sum(candidate_values) / len(candidate_values)
             source_energy = sum(
@@ -269,7 +269,9 @@ def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple
             candidate_energy = sum(
                 (value - candidate_mean) ** 2 for value in candidate_values
             )
-            if max(first[1][channel], second[1][channel]) < 2:
+            source_stddev = math.sqrt(source_energy / len(source_values))
+            candidate_stddev = math.sqrt(candidate_energy / len(candidate_values))
+            if max(source_stddev, candidate_stddev) < 2:
                 return None
             if not source_energy or not candidate_energy:
                 return -1
@@ -279,12 +281,34 @@ def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple
             )
             return covariance / math.sqrt(source_energy * candidate_energy)
 
-        correlations = [channel_correlation(channel) for channel in range(3)]
+        correlations = [
+            correlation(
+                [pixel[channel] for pixel in first[3]],
+                [pixel[channel] for pixel in second[3]],
+            )
+            for channel in range(3)
+        ]
+        local_correlations: list[float | None] = []
+        for block_y in range(0, 32, 8):
+            for block_x in range(0, 32, 8):
+                indices = [
+                    y * 32 + x
+                    for y in range(block_y, block_y + 8)
+                    for x in range(block_x, block_x + 8)
+                ]
+                for channel in range(3):
+                    local_correlations.append(
+                        correlation(
+                            [first[3][index][channel] for index in indices],
+                            [second[3][index][channel] for index in indices],
+                        )
+                    )
         return (
             all(abs(a - b) <= 12 for a, b in zip(first[0], second[0]))
             and all(abs(a - b) <= 12 for a, b in zip(first[1], second[1]))
             and sum(a != b for a, b in zip(first[2], second[2])) <= 16
             and all(value is None or value >= 0.85 for value in correlations)
+            and all(value is None or value >= 0.25 for value in local_correlations)
         )
 
     def matches(source: tuple, candidate: tuple) -> bool:
