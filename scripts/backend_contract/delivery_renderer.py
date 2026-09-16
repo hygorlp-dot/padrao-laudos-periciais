@@ -384,7 +384,11 @@ def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple
             )
             and raw_color_delta <= max(16, raw_mean_delta * 9)
             and blurred_color_delta <= max(12, blurred_mean_delta * 9)
-            and transformed_max_delta <= max(16, transformed_mean_delta * 9)
+            # The best source-derived transform is an independent reference.
+            # Keep both budgets fixed so candidate-wide padding cannot inflate
+            # the admissible maximum and conceal a localized alteration.
+            and transformed_mean_delta <= 12
+            and transformed_max_delta <= 50
             and (raw_color_delta <= 12 or spatial_structure_matches)
         )
 
@@ -748,6 +752,129 @@ def _ordered_image_layouts_match(
                 return False
             previous_inline = candidate
     return True
+
+
+def _repeatable_word_images_match(
+    *,
+    document_signatures: list[tuple],
+    document_layouts: list[_WordImageLayout | None],
+    header_signatures: list[tuple],
+    header_layouts: list[_WordImageLayout | None],
+    footer_signatures: list[tuple],
+    footer_layouts: list[_WordImageLayout | None],
+    candidate_signatures: list[tuple],
+    candidate_layouts: list[_PdfImageLayout],
+    positioned_text: list[_PositionedText],
+    page_count: int,
+) -> bool:
+    if (
+        len(candidate_signatures) != len(candidate_layouts)
+        or len(document_signatures) != len(document_layouts)
+        or len(header_signatures) != len(header_layouts)
+        or len(footer_signatures) != len(footer_layouts)
+        or page_count < 1
+    ):
+        return False
+
+    def repeatable_layout_matches(
+        source: _WordImageLayout | None,
+        candidate: _PdfImageLayout,
+        *,
+        region: str,
+    ) -> bool:
+        if source is None:
+            return False
+        observed_width = candidate.right - candidate.left
+        observed_height = candidate.top - candidate.bottom
+        if not all(
+            abs(observed - expected) <= max(1.0, expected * 0.05)
+            for expected, observed in (
+                (source.width, observed_width),
+                (source.height, observed_height),
+            )
+        ):
+            return False
+        if region == "header" and candidate.bottom < candidate.page_height * 0.5:
+            return False
+        if region == "footer" and candidate.top > candidate.page_height * 0.5:
+            return False
+        if source.kind == "anchor":
+            observed_y_offset = candidate.page_height - candidate.top
+            return (
+                source.x_offset is not None
+                and source.y_offset is not None
+                and abs(candidate.left - source.x_offset) <= 2.0
+                and abs(observed_y_offset - source.y_offset) <= 2.0
+            )
+        if source.kind != "inline":
+            return False
+        if source.alignment in {"left", "start"}:
+            return candidate.left <= candidate.page_width * 0.45
+        if source.alignment in {"right", "end"}:
+            return candidate.right >= candidate.page_width * 0.55
+        if source.alignment == "center":
+            center = (candidate.left + candidate.right) / 2
+            return abs(center - candidate.page_width / 2) <= candidate.page_width * 0.15
+        return False
+
+    used: set[int] = set()
+
+    def consume_repeated(
+        signatures: list[tuple],
+        layouts: list[_WordImageLayout | None],
+        *,
+        region: str,
+    ) -> bool:
+        if not signatures:
+            return True
+        for page in range(page_count):
+            search_start = 0
+            for signature, layout in zip(signatures, layouts):
+                selected = next(
+                    (
+                        index
+                        for index in range(search_start, len(candidate_signatures))
+                        if index not in used
+                        and candidate_layouts[index].page == page
+                        and repeatable_layout_matches(
+                            layout, candidate_layouts[index], region=region
+                        )
+                        and _ordered_image_signatures_match(
+                            [signature], [candidate_signatures[index]]
+                        )
+                    ),
+                    None,
+                )
+                if selected is None:
+                    return False
+                used.add(selected)
+                search_start = selected + 1
+        return True
+
+    if not consume_repeated(
+        header_signatures, header_layouts, region="header"
+    ) or not consume_repeated(footer_signatures, footer_layouts, region="footer"):
+        return False
+    remaining_signatures = [
+        signature
+        for index, signature in enumerate(candidate_signatures)
+        if index not in used
+    ]
+    remaining_layouts = [
+        layout for index, layout in enumerate(candidate_layouts) if index not in used
+    ]
+    return _ordered_image_signatures_match(
+        document_signatures, remaining_signatures
+    ) and _ordered_image_layouts_match(
+        document_layouts, remaining_layouts, positioned_text
+    )
+
+
+def _content_kinds_are_ordered_subsequence(
+    expected: tuple[str, ...], observed: tuple[str, ...]
+) -> bool:
+    iterator = iter(observed)
+    return all(any(candidate == value for candidate in iterator) for value in expected)
 
 
 def _collapse_content_kinds(values: list[str]) -> tuple[str, ...]:
@@ -1317,29 +1444,29 @@ def _page_object_fill_rgba(item: object) -> tuple[int, int, int, int] | None:
     return tuple(int(value.value) for value in values)
 
 
-def _path_has_visible_fill(item: object) -> bool:
+def _path_has_visible_paint(item: object) -> bool:
     fill_mode = ctypes.c_int()
     stroke = ctypes.c_int()
     if not pdfium.raw.FPDFPath_GetDrawMode(
         item.raw, ctypes.byref(fill_mode), ctypes.byref(stroke)
     ):
         return True
-    if fill_mode.value == 0:
+    if fill_mode.value != 0:
+        color = _page_object_fill_rgba(item)
+        if color is None or color[3] > 0:
+            return True
+    if not stroke.value:
         return False
-    color = _page_object_fill_rgba(item)
-    if color is None:
+    values = tuple(ctypes.c_uint() for _ in range(4))
+    if not pdfium.raw.FPDFPageObj_GetStrokeColor(
+        item.raw,
+        ctypes.byref(values[0]),
+        ctypes.byref(values[1]),
+        ctypes.byref(values[2]),
+        ctypes.byref(values[3]),
+    ):
         return True
-    return color[3] > 0
-
-
-def _regions_overlap(
-    first: tuple[float, float, float, float],
-    second: tuple[float, float, float, float],
-) -> bool:
-    return (
-        min(first[2], second[2]) - max(first[0], second[0]) > 0.25
-        and min(first[3], second[3]) - max(first[1], second[1]) > 0.25
-    )
+    return values[3].value > 0
 
 
 def _pdfium_visible_layout(
@@ -1377,8 +1504,6 @@ def _pdfium_visible_layout(
                 text_page = page.get_textpage()
                 bitmap = page.render(scale=scale)
                 rendered = bitmap.to_pil()
-                prior_text_regions: list[tuple[float, float, float, float]] = []
-                prior_image_regions: list[tuple[float, float, float, float]] = []
                 direct_text_objects: list[object] = []
                 objects = list(page.get_objects(max_depth=15, textpage=text_page))
                 glyph_regions: list[
@@ -1453,7 +1578,6 @@ def _pdfium_visible_layout(
                             direct_text_objects.append(item)
                         else:
                             unsafe = True
-                        prior_text_regions.append(bounds)
                         fill_color = _page_object_fill_rgba(item)
                         if fill_color is None or fill_color[3] < 252:
                             unsafe = True
@@ -1496,7 +1620,6 @@ def _pdfium_visible_layout(
                                 height,
                             )
                         )
-                        prior_image_regions.append(bounds)
                     elif (
                         item.type == pdfium.raw.FPDF_PAGEOBJ_PATH
                         and top - bottom >= 3.0
@@ -1506,11 +1629,7 @@ def _pdfium_visible_layout(
                         )
                     if (
                         item.type == pdfium.raw.FPDF_PAGEOBJ_PATH
-                        and _path_has_visible_fill(item)
-                        and any(
-                            _regions_overlap(bounds, region)
-                            for region in prior_text_regions + prior_image_regions
-                        )
+                        and _path_has_visible_paint(item)
                     ):
                         unsafe = True
                 for item in direct_text_objects:
@@ -1782,9 +1901,28 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                     )
                     if len(cells) > 1 and all(cells):
                         table_rows.append(cells)
-            word_images = _ordered_word_image_signatures(package, xml_roots)
-            word_image_layouts = _ordered_word_image_layouts(xml_roots)
-            word_content_kinds = _word_content_kinds(xml_roots)
+            document_roots = {
+                name: root
+                for name, root in xml_roots.items()
+                if name == "word/document.xml"
+            }
+            header_roots = {
+                name: root
+                for name, root in xml_roots.items()
+                if name.startswith("word/header")
+            }
+            footer_roots = {
+                name: root
+                for name, root in xml_roots.items()
+                if name.startswith("word/footer")
+            }
+            document_images = _ordered_word_image_signatures(package, document_roots)
+            document_image_layouts = _ordered_word_image_layouts(document_roots)
+            header_images = _ordered_word_image_signatures(package, header_roots)
+            header_image_layouts = _ordered_word_image_layouts(header_roots)
+            footer_images = _ordered_word_image_signatures(package, footer_roots)
+            footer_image_layouts = _ordered_word_image_layouts(footer_roots)
+            word_content_kinds = _word_content_kinds(document_roots)
             word_text_expectations = _word_text_expectations(xml_roots)
         reader = PdfReader(BytesIO(pdf_content), strict=True)
         extracted_pages: list[str] = []
@@ -1820,16 +1958,24 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         document_fragments, reading_positioned, barriers
     )
 
-    images_match = _ordered_image_signatures_match(word_images, pdf_images)
-    image_layouts_match = _ordered_image_layouts_match(
-        word_image_layouts, pdf_image_layouts, reading_positioned
+    images_match = _repeatable_word_images_match(
+        document_signatures=document_images,
+        document_layouts=document_image_layouts,
+        header_signatures=header_images,
+        header_layouts=header_image_layouts,
+        footer_signatures=footer_images,
+        footer_layouts=footer_image_layouts,
+        candidate_signatures=pdf_images,
+        candidate_layouts=pdf_image_layouts,
+        positioned_text=reading_positioned,
+        page_count=len(reader.pages),
     )
     tables_match = _table_rows_match(table_rows, reading_positioned, barriers)
     text_sizes_match = _text_sizes_match(
         word_text_expectations, reading_positioned, barriers
     )
-    content_order_matches = (
-        word_content_kinds[: len(pdf_content_kinds)] == pdf_content_kinds
+    content_order_matches = _content_kinds_are_ordered_subsequence(
+        word_content_kinds, pdf_content_kinds
     )
     if (
         not source_tokens
@@ -1837,7 +1983,6 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         or not token_counts_match
         or not document_order_matches
         or not images_match
-        or not image_layouts_match
         or not content_order_matches
         or not tables_match
         or not text_sizes_match
