@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 import types
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
@@ -17,6 +18,34 @@ from scripts.backend_contract.infrastructure.office_pdf import (
     _terminate_owned_worker,
     _wait_for_worker,
 )
+
+
+def test_worker_rejects_noncanonical_external_target_mode(tmp_path: Path) -> None:
+    source = tmp_path / "source.docx"
+    with ZipFile(source, "w", ZIP_DEFLATED) as package:
+        package.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.'
+            'wordprocessingml.document.main+xml"/></Types>',
+        )
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/'
+            'wordprocessingml/2006/main"><w:body><w:p><w:r>'
+            '<w:t>Synthetic</w:t></w:r></w:p></w:body></w:document>',
+        )
+        package.writestr(
+            "word/_rels/document.xml.rels",
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/'
+            '2006/relationships"><Relationship Id="rId1" Type="template" '
+            'Target="synthetic-private.png" TargetMode=" External "/>'
+            "</Relationships>",
+        )
+
+    with pytest.raises(ValueError, match="relationship"):
+        office_word_worker._validate_word_source(source, "DOCX")
 
 
 class _FakeOwnedWorker:

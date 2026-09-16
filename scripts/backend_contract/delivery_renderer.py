@@ -1531,6 +1531,7 @@ class _WordTextExpectation:
     expected_page: int | None = None
     body_flow_anchor: bool = False
     expected_previous_top_gap: float | None = None
+    enforce_visible_run_style: bool = True
 
 
 def _word_page_geometry(
@@ -1731,6 +1732,7 @@ def _word_text_expectations(
             )
             if typeface:
                 theme_fonts[f"{prefix}hansi"] = typeface
+                theme_fonts[f"{prefix}ascii"] = typeface
 
     def size_from_properties(properties: ElementTree.Element | None) -> float | None:
         size_node = _first_named(properties, "sz")
@@ -2063,11 +2065,6 @@ def _word_text_expectations(
         for paragraph in _iter_named(xml_roots[name], "p"):
             in_table = id(paragraph) in table_paragraph_ids
             paragraph_has_drawing = _first_named(paragraph, "drawing") is not None
-            if in_table and not any(
-                next(_children_named(run, "rPr"), None) is not None
-                for run in _iter_named(paragraph, "r")
-            ):
-                continue
             paragraph_properties = next(_children_named(paragraph, "pPr"), None)
             paragraph_style_node = _first_named(paragraph_properties, "pStyle")
             paragraph_style = (
@@ -2210,8 +2207,12 @@ def _word_text_expectations(
                 raw_text = "".join(
                     item.text or ""
                     for item in _iter_named(run, "t")
-                    if item.text and item.text.strip()
+                    if item.text
                 )
+                if raw_text and not raw_text.strip() and segments:
+                    previous = segments[-1]
+                    segments[-1] = (previous[0] + raw_text, *previous[1:])
+                    continue
                 if not raw_text.strip():
                     continue
                 if (
@@ -2298,6 +2299,7 @@ def _word_text_expectations(
                         None,
                         body_flow_anchor,
                         expected_previous_top_gap,
+                        not (in_table and run_properties is None and not run_style),
                     )
                 )
             if name == "word/document.xml":
@@ -2336,7 +2338,11 @@ def _text_sizes_match(
             ):
                 continue
             end = _fragment_sequence_end(
-                expectation.text, positioned, start, barriers
+                expectation.text,
+                positioned,
+                start,
+                barriers,
+                allow_line_wrap=True,
             )
             if end is None:
                 continue
@@ -2346,12 +2352,19 @@ def _text_sizes_match(
             matched_fragments = positioned[start:end]
             style_matches = all(
                 abs(fragment.font_size - expectation.font_size) <= tolerance
-                and all(
-                    abs(observed - expected) <= 8
-                    for observed, expected in zip(fragment.color, expectation.color)
+                and (
+                    not expectation.enforce_visible_run_style
+                    or (
+                        all(
+                            abs(observed - expected) <= 8
+                            for observed, expected in zip(
+                                fragment.color, expectation.color
+                            )
+                        )
+                        and (fragment.font_weight >= 600) == expectation.bold
+                        and (abs(fragment.italic_angle) >= 2) == expectation.italic
+                    )
                 )
-                and (fragment.font_weight >= 600) == expectation.bold
-                and (abs(fragment.italic_angle) >= 2) == expectation.italic
                 and (
                     expectation.font_family is None
                     or fragment.font_family is not None
@@ -2401,16 +2414,23 @@ def _text_sizes_match(
                 else:
                     previous_page = previous_body_fragments[0].page
                     if page == previous_page:
-                        observed_gap = max(
+                        observed_gap = min(
                             fragment.top for fragment in previous_body_fragments
                         ) - max(fragment.top for fragment in matched_fragments)
+                        missing_flow_tolerance = max(
+                            18.0, expectation.font_size * 1.75
+                        )
+                        additional_flow_tolerance = max(
+                            48.0, expectation.font_size * 3
+                        )
                         flow_matches = (
                             observed_gap >= 0
-                            and abs(
-                                observed_gap
-                                - expectation.expected_previous_top_gap
-                            )
-                            <= max(48.0, expectation.font_size * 3.0)
+                            and observed_gap
+                            >= expectation.expected_previous_top_gap
+                            - missing_flow_tolerance
+                            and observed_gap
+                            <= expectation.expected_previous_top_gap
+                            + additional_flow_tolerance
                         )
                     else:
                         flow_matches = page == previous_page + 1
@@ -2847,6 +2867,8 @@ def _fragment_sequence_end(
     fragments: list[_PositionedText],
     start: int,
     barriers: list[_VerticalBarrier],
+    *,
+    allow_line_wrap: bool = False,
 ) -> int | None:
     target = _lexical_tokens(expected)
     observed: list[str] = []
@@ -2862,6 +2884,18 @@ def _fragment_sequence_end(
             )
             estimated_end = previous.x + len(previous.text) * previous.font_size * 0.6
             horizontal_tolerance = max(18.0, 1.5 * max(previous.font_size, fragment.font_size))
+            same_line = (
+                vertical_gap <= line_tolerance
+                and fragment.x >= previous.x
+                and fragment.x <= estimated_end + horizontal_tolerance
+            )
+            line_step = previous.top - fragment.top
+            wrapped_line = (
+                allow_line_wrap
+                and 0 < line_step
+                <= max(24.0, 2.25 * max(previous.font_size, fragment.font_size))
+                and fragment.x <= previous.x + horizontal_tolerance
+            )
             crosses_barrier = any(
                 barrier.page == fragment.page
                 and barrier.left >= previous.right - 0.5
@@ -2872,9 +2906,7 @@ def _fragment_sequence_end(
             )
             if (
                 fragment.page != previous.page
-                or vertical_gap > line_tolerance
-                or fragment.x < previous.x
-                or fragment.x > estimated_end + horizontal_tolerance
+                or not (same_line or wrapped_line)
                 or crosses_barrier
             ):
                 return None
@@ -2912,7 +2944,15 @@ def _ordered_text_blocks_match(
             (
                 (start, end)
                 for start in range(cursor, len(positioned))
-                if (end := _fragment_sequence_end(block, positioned, start, barriers))
+                if (
+                    end := _fragment_sequence_end(
+                        block,
+                        positioned,
+                        start,
+                        barriers,
+                        allow_line_wrap=True,
+                    )
+                )
                 is not None
             ),
             None,
@@ -4209,7 +4249,11 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
                 for name in names:
                     if name.endswith(".rels"):
                         root = ElementTree.fromstring(package.read(name))
-                        if any(item.attrib.get("TargetMode", "").lower() == "external" for item in root.iter(f"{_REL}Relationship")):
+                        if any(
+                            (mode := item.attrib.get("TargetMode")) is not None
+                            and mode != "Internal"
+                            for item in root.iter(f"{_REL}Relationship")
+                        ):
                             raise ValueError("external relationships are forbidden in delivery artifacts")
         except (BadZipFile, ElementTree.ParseError, OSError) as exc:
             raise ValueError("final Word artifact is invalid") from exc

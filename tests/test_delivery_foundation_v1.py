@@ -964,6 +964,29 @@ def test_conversion_copy_strips_macros_and_external_relationships_are_rejected()
         assert "word/vbaProject.bin" not in package.namelist()
 
 
+def test_word_validation_rejects_noncanonical_external_target_mode() -> None:
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.'
+            'wordprocessingml.document.main+xml"/></Types>',
+        )
+        package.writestr("word/document.xml", "<document/>")
+        package.writestr(
+            "word/_rels/document.xml.rels",
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/'
+            '2006/relationships"><Relationship Id="rId1" Type="template" '
+            'Target="synthetic-private.png" TargetMode=" External "/>'
+            "</Relationships>",
+        )
+
+    with pytest.raises(ValueError, match="external relationships"):
+        validate_final_artifact(output.getvalue(), "DOCX")
+
+
 def test_conversion_copy_strips_macro_parts_case_insensitively() -> None:
     source = BytesIO()
     with ZipFile(source, "w", ZIP_DEFLATED) as package:
@@ -2541,6 +2564,40 @@ def test_word_text_expectations_include_table_cell_emphasis() -> None:
     assert [(item.text, item.bold, item.in_table) for item in expectations] == [
         ("bold cell 223", True, True)
     ]
+    assert expectations[0].enforce_visible_run_style is True
+
+
+def test_word_text_expectations_include_inherited_table_typography() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:tbl><w:tr><w:tc><w:p><w:r>"
+        "<w:t>Cell 223</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+        "</w:body></w:document>"
+    )
+
+    [expectation] = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document}
+    )
+
+    assert expectation.text == "cell 223"
+    assert expectation.font_size == 11
+    assert expectation.in_table is True
+    assert expectation.enforce_visible_run_style is False
+
+
+def test_word_text_expectations_preserve_whitespace_only_run() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p><w:r><w:t>Target A</w:t></w:r>"
+        '<w:r><w:t xml:space="preserve"> </w:t></w:r>'
+        "<w:r><w:t>Target B</w:t></w:r></w:p></w:body></w:document>"
+    )
+
+    [expectation] = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document}
+    )
+
+    assert expectation.text == "target a target b"
 
 
 def test_word_text_expectation_binds_explicit_font_family() -> None:
@@ -2639,6 +2696,58 @@ def test_text_style_matching_rejects_later_body_paragraph_relocation() -> None:
     )
 
 
+def test_text_style_matching_preserves_wrapped_paragraph_flow() -> None:
+    expectations = [
+        delivery_renderer._WordTextExpectation(
+            "wrapped body across two lines", 11, (0, 0, 0), False, False, False,
+            "left", body_flow_anchor=True,
+        ),
+        delivery_renderer._WordTextExpectation(
+            "second body", 11, (0, 0, 0), False, False, False, "left",
+            body_flow_anchor=True, expected_previous_top_gap=25,
+        ),
+    ]
+    positioned = [
+        delivery_renderer._PositionedText(
+            0, "wrapped body across", 90, 709, 11, 500, 709, 717
+        ),
+        delivery_renderer._PositionedText(
+            0, "two lines", 90, 694, 11, 180, 694, 702
+        ),
+        delivery_renderer._PositionedText(
+            0, "second body", 90, 669, 11, 180, 669, 677
+        ),
+    ]
+
+    assert delivery_renderer._ordered_text_blocks_match(
+        ["wrapped body across two lines", "second body"], positioned, []
+    )
+    assert delivery_renderer._text_sizes_match(expectations, positioned, [])
+
+
+def test_text_style_matching_rejects_collapsed_blank_paragraph_flow() -> None:
+    expectations = [
+        delivery_renderer._WordTextExpectation(
+            "first body", 11, (0, 0, 0), False, False, False, "left",
+            body_flow_anchor=True,
+        ),
+        delivery_renderer._WordTextExpectation(
+            "second body", 11, (0, 0, 0), False, False, False, "left",
+            body_flow_anchor=True, expected_previous_top_gap=62.8,
+        ),
+    ]
+    positioned = [
+        delivery_renderer._PositionedText(
+            0, "first body", 90, 709, 11, 180, 709, 717
+        ),
+        delivery_renderer._PositionedText(
+            0, "second body", 90, 689, 11, 180, 689, 697
+        ),
+    ]
+
+    assert not delivery_renderer._text_sizes_match(expectations, positioned, [])
+
+
 def test_first_visible_body_anchor_survives_preceding_empty_paragraph() -> None:
     document = delivery_renderer.ElementTree.fromstring(
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
@@ -2733,6 +2842,35 @@ def test_word_text_expectation_resolves_nondefault_theme_part_name() -> None:
     )
 
     assert expectation.font_family == "Times New Roman"
+
+
+def test_word_text_expectation_resolves_minor_ascii_theme_font() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p><w:r><w:t>Theme font</w:t></w:r></w:p></w:body>"
+        "</w:document>"
+    )
+    styles = delivery_renderer.ElementTree.fromstring(
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:asciiTheme="minorAscii"/>'
+        "</w:rPr></w:rPrDefault></w:docDefaults></w:styles>"
+    )
+    theme = delivery_renderer.ElementTree.fromstring(
+        '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+        '<a:themeElements><a:fontScheme><a:minorFont>'
+        '<a:latin typeface="Calibri"/></a:minorFont>'
+        "</a:fontScheme></a:themeElements></a:theme>"
+    )
+
+    [expectation] = delivery_renderer._word_text_expectations(
+        {
+            "word/document.xml": document,
+            "word/styles.xml": styles,
+            "word/theme/custom.xml": theme,
+        }
+    )
+
+    assert expectation.font_family == "Calibri"
 
 
 def test_word_page_geometry_preserves_size_and_orientation() -> None:
