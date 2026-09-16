@@ -2334,6 +2334,38 @@ def test_fidelity_rejects_balanced_distributed_chromatic_adulteration() -> None:
         )
 
 
+def test_fidelity_rejects_detail_budget_trading_patch_exchange() -> None:
+    source_image = Image.new("RGB", (32, 32))
+    source_image.putdata(
+        [
+            (
+                (x * 7 + y * 3) % 256,
+                (x * 5 + y * 11) % 256,
+                (x * 13 + y * 2) % 256,
+            )
+            for y in range(32)
+            for x in range(32)
+        ]
+    )
+    candidate_image = source_image.filter(ImageFilter.GaussianBlur(1))
+    first_patch = source_image.crop((7, 23, 9, 25))
+    second_patch = source_image.crop((17, 7, 19, 9))
+    candidate_image.paste(second_patch, (7, 23))
+    candidate_image.paste(first_patch, (17, 7))
+
+    source = BytesIO()
+    source_image.save(source, "PNG")
+    candidate = BytesIO()
+    candidate_image.save(candidate, "JPEG", quality=100, subsampling=0)
+    word = _word_with_image_and_text("Synthetic", source.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", candidate.getvalue(), image_x=100),
+        )
+
+
 def test_fidelity_rejects_patch_exchange_across_spatial_boundaries() -> None:
     source_image = Image.new("RGB", (32, 32))
     source_image.putdata(
