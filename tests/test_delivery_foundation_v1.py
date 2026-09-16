@@ -963,6 +963,39 @@ def test_conversion_copy_strips_macros_and_external_relationships_are_rejected()
         assert "word/vbaProject.bin" not in package.namelist()
 
 
+def test_conversion_copy_strips_macro_parts_case_insensitively() -> None:
+    source = BytesIO()
+    with ZipFile(source, "w", ZIP_DEFLATED) as package:
+        package.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/>'
+            '<Override PartName="/word/VBAProject.bin" '
+            'ContentType="application/vnd.ms-office.vbaProject"/></Types>',
+        )
+        package.writestr("word/document.xml", "<document/>")
+        package.writestr("word/VBAProject.bin", b"synthetic macro payload")
+        package.writestr(
+            "word/_rels/document.xml.rels",
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rIdMacro" '
+            'Type="http://schemas.microsoft.com/office/2006/relationships/vbaProject" '
+            'Target="VBAProject.bin"/></Relationships>',
+        )
+
+    converted, kind = safe_pdf_conversion_copy(source.getvalue(), "DOCM")
+
+    assert kind == "DOCX"
+    with ZipFile(BytesIO(converted)) as package:
+        assert all(
+            name.casefold() not in {"word/vbaproject.bin", "word/vbadata.xml"}
+            for name in package.namelist()
+        )
+        relationships = package.read("word/_rels/document.xml.rels").decode()
+        assert "vbaproject" not in relationships.casefold()
+
+
 def test_rendered_word_bytes_contain_and_change_with_entire_approved_report_body() -> None:
     root = Path(__file__).parents[1] / "tests/fixtures"
     report = report_snapshot_from_mapping(json.loads((root / "report-snapshot-v1.json").read_text(encoding="utf-8")))
@@ -1209,6 +1242,41 @@ def test_repeatable_header_images_are_bound_once_per_page() -> None:
     assert not matches(reordered, candidates)
 
 
+def test_header_image_variants_are_selected_per_effective_page() -> None:
+    first = delivery_renderer._image_signature(Image.new("RGB", (32, 16), "blue"))
+    default = delivery_renderer._image_signature(Image.new("RGB", (32, 16), "red"))
+    layout = delivery_renderer._WordImageLayout(
+        120, 30, "inline", "left", None, None
+    )
+    candidates = [
+        delivery_renderer._PdfImageLayout(
+            page, 50, 760, 170, 790, 595, 842
+        )
+        for page in range(2)
+    ]
+
+    def matches(signatures: list[tuple]) -> bool:
+        return delivery_renderer._repeatable_word_images_match(
+            document_signatures=[],
+            document_layouts=[],
+            header_signatures=[],
+            header_layouts=[],
+            footer_signatures=[],
+            footer_layouts=[],
+            candidate_signatures=signatures,
+            candidate_layouts=candidates,
+            positioned_text=[],
+            page_count=2,
+            header_signatures_by_page=[[first], [default]],
+            header_layouts_by_page=[[layout], [layout]],
+            footer_signatures_by_page=[[], []],
+            footer_layouts_by_page=[[], []],
+        )
+
+    assert matches([first, default])
+    assert not matches([default, first])
+
+
 def test_repeatable_header_image_cannot_move_into_document_body() -> None:
     image = BytesIO()
     Image.new("RGB", (240, 72), (22, 74, 140)).save(image, "PNG")
@@ -1262,6 +1330,21 @@ def test_repeatable_header_and_footer_text_are_required_on_every_page() -> None:
         delivery_renderer._validate_pdf_fidelity(word, missing)
 
 
+def test_repeatable_header_text_cannot_move_into_document_body_band() -> None:
+    positioned = [
+        delivery_renderer._PositionedText(
+            0, "header 223", 50, 493, 11, 160, 493, 501
+        )
+    ]
+
+    assert not delivery_renderer._repeatable_text_matches(
+        header_fragments_by_page=[["Header 223"]],
+        footer_fragments_by_page=[[]],
+        positioned=positioned,
+        page_heights=[792],
+    )
+
+
 def test_page_field_uses_effective_page_number_instead_of_cached_word_result() -> None:
     paragraph = delivery_renderer.ElementTree.fromstring(
         '<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
@@ -1298,6 +1381,45 @@ def test_internal_word_hyperlink_is_bound_to_named_bookmark_text() -> None:
     )
     with pytest.raises(ValueError, match="external Word hyperlink"):
         delivery_renderer._word_internal_link_expectations(document)
+
+
+def test_internal_word_hyperlink_preserves_duplicate_target_occurrence() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p><w:r><w:t>Repeated target</w:t></w:r></w:p>"
+        '<w:p><w:bookmarkStart w:id="1" w:name="Target"/>'
+        '<w:r><w:t>Repeated target</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>'
+        '<w:p><w:hyperlink w:anchor="Target"><w:r><w:t>Go there</w:t></w:r>'
+        "</w:hyperlink></w:p></w:body></w:document>"
+    )
+
+    [expectation] = delivery_renderer._word_internal_link_expectations(document)
+
+    assert expectation.target_occurrence == 1
+
+
+def test_text_style_expectations_ignore_inactive_header_variants() -> None:
+    roots = {
+        "word/document.xml": delivery_renderer.ElementTree.fromstring(
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            "<w:body><w:p><w:r><w:t>Body</w:t></w:r></w:p></w:body></w:document>"
+        ),
+        "word/header1.xml": delivery_renderer.ElementTree.fromstring(
+            '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            "<w:p><w:r><w:t>Active first</w:t></w:r></w:p></w:hdr>"
+        ),
+        "word/header2.xml": delivery_renderer.ElementTree.fromstring(
+            '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            "<w:p><w:r><w:t>Unused default</w:t></w:r></w:p></w:hdr>"
+        ),
+    }
+
+    expectations = delivery_renderer._word_text_expectations(
+        roots,
+        active_content_names={"word/document.xml", "word/header1.xml"},
+    )
+
+    assert {item.text for item in expectations} == {"body", "active first"}
 
 
 @pytest.mark.parametrize(
@@ -2271,6 +2393,111 @@ def test_fidelity_rejects_loss_of_text_emphasis_underline_and_alignment() -> Non
 
     with pytest.raises(ValueError, match="faithfully represent"):
         delivery_renderer._validate_pdf_fidelity(word, regular_left_aligned)
+
+
+def test_fidelity_rejects_bold_loss_inside_a_table_cell() -> None:
+    output = BytesIO()
+    document = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:tbl><w:tr>"
+        "<w:tc><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Bold cell 223</w:t></w:r></w:p></w:tc>"
+        "<w:tc><w:p><w:r><w:t>Control cell 223</w:t></w:r></w:p></w:tc>"
+        "</w:tr></w:tbl></w:body></w:document>"
+    )
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr("word/document.xml", document)
+    regular = _positioned_text_pdf(
+        [[
+            ("Bold cell 223", 50, 700, 11, 0),
+            ("Control cell 223", 250, 700, 11, 0),
+        ]]
+    )
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(output.getvalue(), regular)
+
+
+def test_word_text_expectations_include_table_cell_emphasis() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:tbl><w:tr><w:tc><w:p><w:r><w:rPr><w:b/></w:rPr>"
+        "<w:t>Bold cell 223</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+        "</w:body></w:document>"
+    )
+
+    expectations = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document}
+    )
+
+    assert [(item.text, item.bold, item.in_table) for item in expectations] == [
+        ("bold cell 223", True, True)
+    ]
+
+
+def test_word_text_expectation_binds_explicit_font_family() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:p><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" '
+        'w:hAnsi="Times New Roman"/></w:rPr><w:t>Authoritative font</w:t>'
+        "</w:r></w:p></w:body></w:document>"
+    )
+
+    [expectation] = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document}
+    )
+
+    assert expectation.font_family == "Times New Roman"
+
+
+def test_text_style_matching_rejects_font_family_substitution() -> None:
+    expectation = delivery_renderer._WordTextExpectation(
+        "authoritative font", 11, (0, 0, 0), False, False, False, "left",
+        font_family="Times New Roman",
+    )
+    candidate = delivery_renderer._PositionedText(
+        0, "authoritative font", 50, 700, 11, 160, 700, 710,
+        font_family="Arial",
+    )
+
+    assert not delivery_renderer._text_sizes_match([expectation], [candidate], [])
+
+
+def test_text_style_matching_rejects_first_body_vertical_relocation() -> None:
+    expectation = delivery_renderer._WordTextExpectation(
+        "authoritative body", 11, (0, 0, 0), False, False, False, "left",
+        expected_top_offset=72,
+    )
+    authoritative = delivery_renderer._PositionedText(
+        0, "authoritative body", 90, 709, 11, 220, 709, 717,
+        page_height=792,
+    )
+    relocated = replace(authoritative, bottom=529, top=537)
+
+    assert delivery_renderer._text_sizes_match(
+        [expectation], [authoritative], []
+    )
+    assert not delivery_renderer._text_sizes_match(
+        [expectation], [relocated], []
+    )
+
+
+def test_word_page_geometry_preserves_size_and_orientation() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:p><w:r><w:t>Page geometry</w:t></w:r></w:p>'
+        '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>'
+        "</w:body></w:document>"
+    )
+
+    geometry = delivery_renderer._word_page_geometry(document)
+
+    assert geometry == (612.0, 792.0)
+    assert delivery_renderer._page_geometry_matches(
+        geometry, [(612.0, 792.0)]
+    )
+    assert not delivery_renderer._page_geometry_matches(
+        geometry, [(792.0, 612.0)]
+    )
 
 
 def test_fidelity_rejects_body_text_relocated_away_from_word_alignment() -> None:

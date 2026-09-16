@@ -811,6 +811,10 @@ def _repeatable_word_images_match(
     candidate_layouts: list[_PdfImageLayout],
     positioned_text: list[_PositionedText],
     page_count: int,
+    header_signatures_by_page: list[list[tuple]] | None = None,
+    header_layouts_by_page: list[list[_WordImageLayout | None]] | None = None,
+    footer_signatures_by_page: list[list[tuple]] | None = None,
+    footer_layouts_by_page: list[list[_WordImageLayout | None]] | None = None,
 ) -> bool:
     if (
         len(candidate_signatures) != len(candidate_layouts)
@@ -818,6 +822,28 @@ def _repeatable_word_images_match(
         or len(header_signatures) != len(header_layouts)
         or len(footer_signatures) != len(footer_layouts)
         or page_count < 1
+    ):
+        return False
+    header_signature_pages = header_signatures_by_page or [
+        header_signatures for _ in range(page_count)
+    ]
+    header_layout_pages = header_layouts_by_page or [
+        header_layouts for _ in range(page_count)
+    ]
+    footer_signature_pages = footer_signatures_by_page or [
+        footer_signatures for _ in range(page_count)
+    ]
+    footer_layout_pages = footer_layouts_by_page or [
+        footer_layouts for _ in range(page_count)
+    ]
+    if any(
+        len(collection) != page_count
+        for collection in (
+            header_signature_pages,
+            header_layout_pages,
+            footer_signature_pages,
+            footer_layout_pages,
+        )
     ):
         return False
 
@@ -865,14 +891,16 @@ def _repeatable_word_images_match(
     used: set[int] = set()
 
     def consume_repeated(
-        signatures: list[tuple],
-        layouts: list[_WordImageLayout | None],
+        signatures_by_page: list[list[tuple]],
+        layouts_by_page: list[list[_WordImageLayout | None]],
         *,
         region: str,
     ) -> bool:
-        if not signatures:
-            return True
         for page in range(page_count):
+            signatures = signatures_by_page[page]
+            layouts = layouts_by_page[page]
+            if len(signatures) != len(layouts):
+                return False
             search_start = 0
             for signature, layout in zip(signatures, layouts):
                 selected = next(
@@ -897,8 +925,10 @@ def _repeatable_word_images_match(
         return True
 
     if not consume_repeated(
-        header_signatures, header_layouts, region="header"
-    ) or not consume_repeated(footer_signatures, footer_layouts, region="footer"):
+        header_signature_pages, header_layout_pages, region="header"
+    ) or not consume_repeated(
+        footer_signature_pages, footer_layout_pages, region="footer"
+    ):
         return False
     remaining_signatures = [
         signature
@@ -1034,9 +1064,9 @@ def _repeatable_text_matches(
             for fragment in positioned
             if fragment.page == page
             and (
-                fragment.bottom >= height * 0.5
+                fragment.bottom >= height * 0.75
                 if header
-                else fragment.top <= height * 0.5
+                else fragment.top <= height * 0.25
             )
         ]
         cursor = 0
@@ -1198,9 +1228,16 @@ def _annotations_match_internal_links(
             matched = positioned[start:end]
             if all(item.page == destination_page for item in matched):
                 target_matches.append(matched)
-        if not any(
-            abs(destination_y - max(fragment.top for fragment in match)) <= 12.0
-            for match in target_matches
+        if expectation.target_occurrence >= len(target_matches):
+            return False
+        authoritative_target = target_matches[expectation.target_occurrence]
+        if (
+            authoritative_target[0].page != destination_page
+            or abs(
+                destination_y
+                - max(fragment.top for fragment in authoritative_target)
+            )
+            > 12.0
         ):
             return False
         used_expectations.add(expectation_index)
@@ -1441,6 +1478,8 @@ class _PositionedText:
     font_weight: int = 400
     italic_angle: int = 0
     page_width: float = 612.0
+    font_family: str | None = None
+    page_height: float = 792.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1461,12 +1500,66 @@ class _WordTextExpectation:
     italic: bool
     underline: bool
     alignment: str
+    in_table: bool = False
+    font_family: str | None = None
+    expected_top_offset: float | None = None
+
+
+def _word_page_geometry(
+    document: ElementTree.Element | None,
+) -> tuple[float, float] | None:
+    if document is None:
+        return None
+    dimensions: set[tuple[float, float]] = set()
+    for section in _iter_named(document, "sectPr"):
+        page_size = _first_named(section, "pgSz")
+        if page_size is None:
+            continue
+        try:
+            width = float(_attribute_named(page_size, "w") or "") / 20.0
+            height = float(_attribute_named(page_size, "h") or "") / 20.0
+        except ValueError as exc:
+            raise ValueError("invalid Word page geometry") from exc
+        if not all(math.isfinite(value) and value > 0 for value in (width, height)):
+            raise ValueError("invalid Word page geometry")
+        dimensions.add((width, height))
+    if not dimensions:
+        return None
+    if len(dimensions) != 1:
+        raise ValueError("multiple Word page geometries are not supported")
+    return next(iter(dimensions))
+
+
+def _page_geometry_matches(
+    expected: tuple[float, float] | None,
+    observed: list[tuple[float, float]],
+) -> bool:
+    if expected is None:
+        return True
+    return bool(observed) and all(
+        abs(width - expected[0]) <= 2.0 and abs(height - expected[1]) <= 2.0
+        for width, height in observed
+    )
+
+
+def _normalized_font_family(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]", "", value.casefold().split("+")[-1])
+    for suffix in ("bolditalic", "boldoblique", "italic", "oblique", "bold", "regular"):
+        if normalized.endswith(suffix):
+            normalized = normalized[: -len(suffix)]
+            break
+    for suffix in ("psmt", "mt"):
+        if normalized.endswith(suffix):
+            normalized = normalized[: -len(suffix)]
+            break
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)
 class _WordInternalLinkExpectation:
     text: str
     target_text: str
+    target_occurrence: int = 0
 
 
 def _word_internal_link_expectations(
@@ -1474,17 +1567,29 @@ def _word_internal_link_expectations(
 ) -> list[_WordInternalLinkExpectation]:
     if document is None:
         return []
-    bookmark_targets: dict[str, str] = {}
-    for paragraph in _iter_named(document, "p"):
-        text = _normalized_visible_text(
+    paragraphs = list(_iter_named(document, "p"))
+    paragraph_texts = [
+        _normalized_visible_text(
             "".join(item.text or "" for item in _iter_named(paragraph, "t"))
         )
+        for paragraph in paragraphs
+    ]
+    bookmark_targets: dict[str, tuple[str, int]] = {}
+    for paragraph_index, (paragraph, text) in enumerate(
+        zip(paragraphs, paragraph_texts)
+    ):
         for bookmark in _iter_named(paragraph, "bookmarkStart"):
             name = _attribute_named(bookmark, "name")
             if name and text:
                 if name in bookmark_targets:
                     raise ValueError("duplicate Word bookmark target")
-                bookmark_targets[name] = text
+                bookmark_targets[name] = (
+                    text,
+                    sum(
+                        candidate == text
+                        for candidate in paragraph_texts[:paragraph_index]
+                    ),
+                )
 
     expectations: list[_WordInternalLinkExpectation] = []
     for hyperlink in _iter_named(document, "hyperlink"):
@@ -1494,15 +1599,20 @@ def _word_internal_link_expectations(
         text = _normalized_visible_text(
             "".join(item.text or "" for item in _iter_named(hyperlink, "t"))
         )
-        target_text = bookmark_targets.get(anchor or "")
-        if not anchor or not text or not target_text:
+        target = bookmark_targets.get(anchor or "")
+        if not anchor or not text or target is None:
             raise ValueError("Word internal hyperlink target is invalid")
-        expectations.append(_WordInternalLinkExpectation(text, target_text))
+        target_text, target_occurrence = target
+        expectations.append(
+            _WordInternalLinkExpectation(text, target_text, target_occurrence)
+        )
     return expectations
 
 
 def _word_text_expectations(
     xml_roots: dict[str, ElementTree.Element],
+    *,
+    active_content_names: set[str] | None = None,
 ) -> list[_WordTextExpectation]:
     styles_root = xml_roots.get("word/styles.xml")
 
@@ -1515,6 +1625,20 @@ def _word_text_expectations(
         except ValueError:
             return None
         return value if math.isfinite(value) and value > 0 else None
+
+    def font_from_properties(properties: ElementTree.Element | None) -> str | None:
+        fonts = _first_named(properties, "rFonts")
+        if fonts is None:
+            return None
+        ascii_font = (_attribute_named(fonts, "ascii") or "").strip()
+        ansi_font = (_attribute_named(fonts, "hAnsi") or "").strip()
+        selected = ascii_font or ansi_font
+        if ascii_font and ansi_font and (
+            _normalized_font_family(ascii_font)
+            != _normalized_font_family(ansi_font)
+        ):
+            raise ValueError("conflicting Word Latin font families")
+        return selected or None
 
     def color_from_properties(
         properties: ElementTree.Element | None,
@@ -1564,28 +1688,53 @@ def _word_text_expectations(
             raise ValueError("unsupported Word paragraph alignment")
         return value
 
+    def spacing_before_from_properties(
+        properties: ElementTree.Element | None,
+    ) -> float | None:
+        spacing = _first_named(properties, "spacing")
+        if spacing is None:
+            return None
+        raw = _attribute_named(spacing, "before")
+        if raw is None:
+            return None
+        try:
+            value = float(raw) / 20.0
+        except ValueError as exc:
+            raise ValueError("invalid Word paragraph spacing") from exc
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("invalid Word paragraph spacing")
+        return value
+
     default_size = 11.0
+    default_font: str | None = None
     default_color = (0, 0, 0)
     default_bold = False
     default_italic = False
     default_underline = False
     default_alignment = "left"
+    default_spacing_before = 0.0
     default_paragraph_style: str | None = None
     style_sizes: dict[str, float | None] = {}
+    style_fonts: dict[str, str | None] = {}
     style_colors: dict[str, tuple[int, int, int] | None] = {}
     style_bold: dict[str, bool | None] = {}
     style_italic: dict[str, bool | None] = {}
     style_underline: dict[str, bool | None] = {}
     style_alignment: dict[str, str | None] = {}
+    style_spacing_before: dict[str, float | None] = {}
     style_bases: dict[str, str | None] = {}
     if styles_root is not None:
         defaults = _first_named(styles_root, "docDefaults")
         default_size = size_from_properties(defaults) or default_size
+        default_font = font_from_properties(defaults)
         default_color = color_from_properties(defaults) or default_color
         default_bold = on_off_from_properties(defaults, "b") or False
         default_italic = on_off_from_properties(defaults, "i") or False
         default_underline = underline_from_properties(defaults) or False
         default_alignment = alignment_from_properties(defaults) or default_alignment
+        default_spacing_before = (
+            spacing_before_from_properties(defaults) or default_spacing_before
+        )
         for style in _iter_named(styles_root, "style"):
             style_id = _attribute_named(style, "styleId")
             if not style_id:
@@ -1600,11 +1749,15 @@ def _word_text_expectations(
             paragraph_properties = next(_children_named(style, "pPr"), None)
             based_on = _first_named(style, "basedOn")
             style_sizes[style_id] = size_from_properties(properties)
+            style_fonts[style_id] = font_from_properties(properties)
             style_colors[style_id] = color_from_properties(properties)
             style_bold[style_id] = on_off_from_properties(properties, "b")
             style_italic[style_id] = on_off_from_properties(properties, "i")
             style_underline[style_id] = underline_from_properties(properties)
             style_alignment[style_id] = alignment_from_properties(
+                paragraph_properties
+            )
+            style_spacing_before[style_id] = spacing_before_from_properties(
                 paragraph_properties
             )
             style_bases[style_id] = (
@@ -1634,6 +1787,19 @@ def _word_text_expectations(
             style_id = style_bases.get(style_id)
         return fallback
 
+    def resolve_style_font(
+        style_id: str | None,
+        fallback: str | None = default_font,
+    ) -> str | None:
+        visited: set[str] = set()
+        while style_id and style_id not in visited:
+            visited.add(style_id)
+            font = style_fonts.get(style_id)
+            if font is not None:
+                return font
+            style_id = style_bases.get(style_id)
+        return fallback
+
     def resolve_style_value(
         style_id: str | None,
         values: dict[str, object | None],
@@ -1648,12 +1814,50 @@ def _word_text_expectations(
             style_id = style_bases.get(style_id)
         return fallback
 
+    anchor_paragraph_id: int | None = None
+    anchor_top_margin: float | None = None
+    document = xml_roots.get("word/document.xml")
+    body = _first_named(document, "body")
+    if body is not None:
+        for child in body:
+            if _local_name(child.tag) == "sectPr":
+                continue
+            paragraphs = (
+                [child]
+                if _local_name(child.tag) == "p"
+                else list(_iter_named(child, "p"))
+            )
+            if len(paragraphs) == 1:
+                paragraph = paragraphs[0]
+                text = "".join(
+                    item.text or "" for item in _iter_named(paragraph, "t")
+                )
+                if text.strip() and _first_named(paragraph, "drawing") is None:
+                    anchor_paragraph_id = id(paragraph)
+            break
+        sections = list(_iter_named(document, "sectPr")) if document is not None else []
+        if sections:
+            page_margin = _first_named(sections[0], "pgMar")
+            raw_top = (
+                _attribute_named(page_margin, "top")
+                if page_margin is not None
+                else None
+            )
+            if raw_top is not None:
+                try:
+                    anchor_top_margin = float(raw_top) / 20.0
+                except ValueError as exc:
+                    raise ValueError("invalid Word page margin") from exc
+                if not math.isfinite(anchor_top_margin) or anchor_top_margin < 0:
+                    raise ValueError("invalid Word page margin")
+
     expectations: list[_WordTextExpectation] = []
     content_names = [
         name
         for name in sorted(xml_roots, key=_word_part_priority)
         if name == "word/document.xml"
         or name.startswith(("word/header", "word/footer"))
+        if active_content_names is None or name in active_content_names
     ]
     for name in content_names:
         table_paragraph_ids = {
@@ -1662,7 +1866,11 @@ def _word_text_expectations(
             for paragraph in _iter_named(table, "p")
         }
         for paragraph in _iter_named(xml_roots[name], "p"):
-            if id(paragraph) in table_paragraph_ids:
+            in_table = id(paragraph) in table_paragraph_ids
+            if in_table and not any(
+                next(_children_named(run, "rPr"), None) is not None
+                for run in _iter_named(paragraph, "r")
+            ):
                 continue
             paragraph_properties = next(_children_named(paragraph, "pPr"), None)
             paragraph_style_node = _first_named(paragraph_properties, "pStyle")
@@ -1672,6 +1880,9 @@ def _word_text_expectations(
                 else None
             )
             paragraph_size = resolve_style(
+                paragraph_style or default_paragraph_style
+            )
+            paragraph_font = resolve_style_font(
                 paragraph_style or default_paragraph_style
             )
             paragraph_color = resolve_style_color(
@@ -1706,8 +1917,17 @@ def _word_text_expectations(
                     default_alignment,
                 )
             )
+            paragraph_spacing_before = float(
+                spacing_before_from_properties(paragraph_properties)
+                if spacing_before_from_properties(paragraph_properties) is not None
+                else resolve_style_value(
+                    paragraph_style or default_paragraph_style,
+                    style_spacing_before,
+                    default_spacing_before,
+                )
+            )
             segments: list[
-                tuple[str, float, tuple[int, int, int], bool, bool, bool]
+                tuple[str, float, tuple[int, int, int], bool, bool, bool, str | None]
             ] = []
             dynamic_result_runs = {
                 id(run)
@@ -1741,6 +1961,13 @@ def _word_text_expectations(
                     if run_style
                     else size_from_properties(run_properties)
                     or paragraph_size
+                )
+                font_family = (
+                    font_from_properties(run_properties)
+                    or resolve_style_font(run_style, paragraph_font)
+                    if run_style
+                    else font_from_properties(run_properties)
+                    or paragraph_font
                 )
                 color = (
                     color_from_properties(run_properties)
@@ -1786,7 +2013,12 @@ def _word_text_expectations(
                     segments
                     and abs(segments[-1][1] - size) <= 0.01
                     and segments[-1][2] == color
-                    and segments[-1][3:] == (bold, italic, underline)
+                    and segments[-1][3:] == (
+                        bold,
+                        italic,
+                        underline,
+                        font_family,
+                    )
                 ):
                     previous_text, previous_size, previous_color, *_ = segments[-1]
                     segments[-1] = (
@@ -1796,24 +2028,54 @@ def _word_text_expectations(
                         bold,
                         italic,
                         underline,
+                        font_family,
                     )
                 else:
                     segments.append(
-                        (raw_text, size, color, bold, italic, underline)
+                        (
+                            raw_text,
+                            size,
+                            color,
+                            bold,
+                            italic,
+                            underline,
+                            font_family,
+                        )
                     )
-            expectations.extend(
-                _WordTextExpectation(
-                    _normalized_visible_text(text),
-                    size,
-                    color,
-                    bold,
-                    italic,
-                    underline,
-                    paragraph_alignment,
+            for segment_index, (
+                text,
+                size,
+                color,
+                bold,
+                italic,
+                underline,
+                font_family,
+            ) in enumerate(segments):
+                normalized = _normalized_visible_text(text)
+                if not normalized:
+                    continue
+                expected_top_offset = (
+                    anchor_top_margin + paragraph_spacing_before
+                    if name == "word/document.xml"
+                    and id(paragraph) == anchor_paragraph_id
+                    and segment_index == 0
+                    and anchor_top_margin is not None
+                    else None
                 )
-                for text, size, color, bold, italic, underline in segments
-                if _normalized_visible_text(text)
-            )
+                expectations.append(
+                    _WordTextExpectation(
+                        normalized,
+                        size,
+                        color,
+                        bold,
+                        italic,
+                        underline,
+                        paragraph_alignment,
+                        in_table,
+                        font_family,
+                        expected_top_offset,
+                    )
+                )
     return expectations
 
 
@@ -1845,6 +2107,12 @@ def _text_sizes_match(
                 )
                 and (fragment.font_weight >= 600) == expectation.bold
                 and (abs(fragment.italic_angle) >= 2) == expectation.italic
+                and (
+                    expectation.font_family is None
+                    or fragment.font_family is not None
+                    and _normalized_font_family(fragment.font_family)
+                    == _normalized_font_family(expectation.font_family)
+                )
                 for fragment in matched_fragments
             )
             page = matched_fragments[0].page
@@ -1861,7 +2129,7 @@ def _text_sizes_match(
             line_left = min(fragment.x for fragment in line)
             line_right = max(fragment.right for fragment in line)
             page_width = matched_fragments[0].page_width
-            alignment_matches = (
+            alignment_matches = expectation.in_table or (
                 line_left <= page_width * 0.25
                 if expectation.alignment in {"left", "both"}
                 else line_right >= page_width * 0.75
@@ -1869,7 +2137,16 @@ def _text_sizes_match(
                 else abs((line_left + line_right) / 2 - page_width / 2)
                 <= max(4.0, page_width * 0.03)
             )
-            if style_matches and alignment_matches:
+            vertical_matches = expectation.expected_top_offset is None or (
+                page == 0
+                and abs(
+                    matched_fragments[0].page_height
+                    - max(fragment.top for fragment in matched_fragments)
+                    - expectation.expected_top_offset
+                )
+                <= max(18.0, expectation.font_size * 1.75)
+            )
+            if style_matches and alignment_matches and vertical_matches:
                 match = (start, end)
                 break
         if match is None:
@@ -2145,6 +2422,11 @@ def _pdfium_visible_layout(
                         try:
                             font = item.get_font()
                             font_weight = int(font.get_weight())
+                            font_family = str(
+                                font.get_family_name() or font.get_base_name()
+                            ).strip()
+                            if not font_family:
+                                raise ValueError("PDF font family is unavailable")
                             italic_value = ctypes.c_int()
                             if not pdfium.raw.FPDFFont_GetItalicAngle(
                                 font.raw, ctypes.byref(italic_value)
@@ -2154,21 +2436,24 @@ def _pdfium_visible_layout(
                         except (AttributeError, RuntimeError, TypeError, ValueError):
                             unsafe = True
                             font_weight = 400
+                            font_family = None
                             italic_angle = 0
                         positioned.append(
                             _PositionedText(
-                                page_number,
-                                text,
-                                left,
-                                bottom,
-                                float(item.get_font_size()),
-                                right,
-                                bottom,
-                                top,
-                                text_color,
-                                font_weight,
-                                italic_angle,
-                                width,
+                                page=page_number,
+                                text=text,
+                                x=left,
+                                y=bottom,
+                                font_size=float(item.get_font_size()),
+                                right=right,
+                                bottom=bottom,
+                                top=top,
+                                color=text_color,
+                                font_weight=font_weight,
+                                italic_angle=italic_angle,
+                                page_width=width,
+                                font_family=font_family,
+                                page_height=height,
                             )
                         )
                     elif item.type == pdfium.raw.FPDF_PAGEOBJ_IMAGE:
@@ -3351,9 +3636,27 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
             header_image_layouts = _ordered_word_image_layouts(header_roots)
             footer_images = _ordered_word_image_signatures(package, footer_roots)
             footer_image_layouts = _ordered_word_image_layouts(footer_roots)
+            header_images_by_part = {
+                name: _ordered_word_image_signatures(package, {name: root})
+                for name, root in header_roots.items()
+            }
+            header_layouts_by_part = {
+                name: _ordered_word_image_layouts({name: root})
+                for name, root in header_roots.items()
+            }
+            footer_images_by_part = {
+                name: _ordered_word_image_signatures(package, {name: root})
+                for name, root in footer_roots.items()
+            }
+            footer_layouts_by_part = {
+                name: _ordered_word_image_layouts({name: root})
+                for name, root in footer_roots.items()
+            }
             word_content_kinds = _word_content_kinds(document_roots)
-            word_text_expectations = _word_text_expectations(xml_roots)
             word_internal_links = _word_internal_link_expectations(
+                xml_roots.get("word/document.xml")
+            )
+            word_page_geometry = _word_page_geometry(
                 xml_roots.get("word/document.xml")
             )
         reader = PdfReader(BytesIO(pdf_content), strict=True)
@@ -3361,6 +3664,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         unsafe_text = False
         pdf_images: list[tuple] = []
         page_heights: list[float] = []
+        page_dimensions: list[tuple[float, float]] = []
         for page_number, page in enumerate(reader.pages):
             if (
                 _has_nonvisible_text(page, reader)
@@ -3368,6 +3672,9 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
             ):
                 unsafe_text = True
             page_heights.append(float(page.mediabox.height))
+            page_dimensions.append(
+                (float(page.mediabox.width), float(page.mediabox.height))
+            )
             extracted_pages.append(page.extract_text() or "")
             pdf_images.extend(_ordered_pdf_image_signatures(page, reader))
         pdf_text = _normalized_visible_text("\n".join(extracted_pages))
@@ -3404,28 +3711,81 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     def part_fragments(name: str | None, page: int) -> list[str]:
         if name is None:
             return []
-        return [
-            fragment
-            for paragraph in _iter_named(xml_roots[name], "p")
-            if (
-                fragment := _dynamic_paragraph_text(
-                    paragraph, page_number=page + 1
-                )
-            ).strip()
-        ]
+        try:
+            return [
+                fragment
+                for paragraph in _iter_named(xml_roots[name], "p")
+                if (
+                    fragment := _dynamic_paragraph_text(
+                        paragraph, page_number=page + 1
+                    )
+                ).strip()
+            ]
+        except (KeyError, ValueError) as exc:
+            raise ValueError("final PDF fidelity cannot be verified") from exc
 
     if header_footer_profile is None:
         header_fragments_by_page = [list(header_fragments) for _ in range(page_count)]
         footer_fragments_by_page = [list(footer_fragments) for _ in range(page_count)]
+        active_content_names = {
+            "word/document.xml",
+            *header_roots,
+            *footer_roots,
+        }
+        header_image_signatures_by_page = [
+            list(header_images) for _ in range(page_count)
+        ]
+        header_image_layouts_by_page = [
+            list(header_image_layouts) for _ in range(page_count)
+        ]
+        footer_image_signatures_by_page = [
+            list(footer_images) for _ in range(page_count)
+        ]
+        footer_image_layouts_by_page = [
+            list(footer_image_layouts) for _ in range(page_count)
+        ]
     else:
+        selected_header_parts = [
+            selected_part("header", page) for page in range(page_count)
+        ]
+        selected_footer_parts = [
+            selected_part("footer", page) for page in range(page_count)
+        ]
         header_fragments_by_page = [
-            part_fragments(selected_part("header", page), page)
-            for page in range(page_count)
+            part_fragments(name, page)
+            for page, name in enumerate(selected_header_parts)
         ]
         footer_fragments_by_page = [
-            part_fragments(selected_part("footer", page), page)
-            for page in range(page_count)
+            part_fragments(name, page)
+            for page, name in enumerate(selected_footer_parts)
         ]
+        active_content_names = {
+            "word/document.xml",
+            *(name for name in selected_header_parts if name is not None),
+            *(name for name in selected_footer_parts if name is not None),
+        }
+        header_image_signatures_by_page = [
+            list(header_images_by_part.get(name, []))
+            for name in selected_header_parts
+        ]
+        header_image_layouts_by_page = [
+            list(header_layouts_by_part.get(name, []))
+            for name in selected_header_parts
+        ]
+        footer_image_signatures_by_page = [
+            list(footer_images_by_part.get(name, []))
+            for name in selected_footer_parts
+        ]
+        footer_image_layouts_by_page = [
+            list(footer_layouts_by_part.get(name, []))
+            for name in selected_footer_parts
+        ]
+    try:
+        word_text_expectations = _word_text_expectations(
+            xml_roots, active_content_names=active_content_names
+        )
+    except ValueError as exc:
+        raise ValueError("final PDF fidelity cannot be verified") from exc
 
     source_tokens = _lexical_tokens(" ".join(body_fragments))
     pdf_tokens = _lexical_tokens(pdf_text)
@@ -3464,6 +3824,10 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         candidate_layouts=pdf_image_layouts,
         positioned_text=reading_positioned,
         page_count=len(reader.pages),
+        header_signatures_by_page=header_image_signatures_by_page,
+        header_layouts_by_page=header_image_layouts_by_page,
+        footer_signatures_by_page=footer_image_signatures_by_page,
+        footer_layouts_by_page=footer_image_layouts_by_page,
     )
     tables_match = _table_rows_match(table_rows, reading_positioned, barriers)
     painted_paths_match = _painted_paths_are_bound_to_tables(
@@ -3483,6 +3847,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         not source_tokens
         or unsafe_text
         or not annotations_match
+        or not _page_geometry_matches(word_page_geometry, page_dimensions)
         or not token_counts_match
         or not document_order_matches
         or not repeatable_text_matches
@@ -3532,7 +3897,11 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
                 names = set(package.namelist())
                 if not {"[Content_Types].xml", "word/document.xml"} <= names:
                     raise ValueError("final Word artifact is incomplete")
-                has_macro = "word/vbaProject.bin" in names
+                has_macro = any(
+                    name.casefold()
+                    in {"word/vbaproject.bin", "word/vbadata.xml"}
+                    for name in names
+                )
                 content_types = ElementTree.fromstring(
                     package.read("[Content_Types].xml")
                 )
@@ -3611,10 +3980,18 @@ def safe_pdf_conversion_copy(content: bytes, output_format: str) -> tuple[bytes,
     if output_format == "DOCX":
         return content, output_format
     with ZipFile(BytesIO(content)) as source:
-        parts = {item.filename: source.read(item.filename) for item in source.infolist() if item.filename not in {"word/vbaProject.bin", "word/vbaData.xml"}}
+        parts = {
+            item.filename: source.read(item.filename)
+            for item in source.infolist()
+            if item.filename.casefold()
+            not in {"word/vbaproject.bin", "word/vbadata.xml"}
+        }
     content_types = ElementTree.fromstring(parts["[Content_Types].xml"])
     for item in tuple(content_types):
-        if item.attrib.get("PartName") in {"/word/vbaProject.bin", "/word/vbaData.xml"}:
+        if item.attrib.get("PartName", "").casefold() in {
+            "/word/vbaproject.bin",
+            "/word/vbadata.xml",
+        }:
             content_types.remove(item)
         elif "macroEnabled.main+xml" in item.attrib.get("ContentType", ""):
             item.set("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml")
@@ -3624,7 +4001,11 @@ def safe_pdf_conversion_copy(content: bytes, output_format: str) -> tuple[bytes,
             continue
         root = ElementTree.fromstring(parts[name])
         for item in tuple(root):
-            if "vbaProject" in item.attrib.get("Type", "") or item.attrib.get("Target", "").endswith(("vbaProject.bin", "vbaData.xml")):
+            relationship_type = item.attrib.get("Type", "").casefold()
+            target = item.attrib.get("Target", "").casefold()
+            if "vbaproject" in relationship_type or target.endswith(
+                ("vbaproject.bin", "vbadata.xml")
+            ):
                 root.remove(item)
         parts[name] = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
     output = BytesIO()
