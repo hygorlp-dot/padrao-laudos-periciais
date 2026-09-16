@@ -305,7 +305,10 @@ def _controlled_worker_environment(
         "TEMP": str(runtime_temp),
         "TMP": str(runtime_temp),
     }
-    for key in ("SystemRoot", "WINDIR"):
+    # SystemDrive is required by loaders that resolve system paths relative to it.
+    # PATH stays deliberately absent: the worker starts exactly one executable and
+    # resolves it by full path, so no search path is needed.
+    for key in ("SystemDrive", "SystemRoot", "WINDIR"):
         value = os.environ.get(key)
         if value:
             environment[key] = value

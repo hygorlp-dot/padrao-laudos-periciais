@@ -755,7 +755,6 @@ def _render_job(
             except Exception as exc:
                 failure = failure or exc
 
-    _status(root, "WORKER_EXIT")
     if failure is not None:
         raise RuntimeError("Microsoft Word render failed") from failure
     if sha256(source.read_bytes()).hexdigest() != source_digest:
@@ -773,6 +772,10 @@ def _render_job(
         "pdfSha256": sha256(pdf_bytes).hexdigest(),
     }
     _atomic_json(root / "result.json", result)
+    # Published last, once the result exists.  Publishing it before re-hashing the
+    # source and reading the PDF charged that work to the worker-exit deadline,
+    # the shortest one, even though the source may be hundreds of megabytes.
+    _status(root, "WORKER_EXIT")
     return result
 
 
