@@ -1,0 +1,48 @@
+{
+  "environment": {
+    "candidateHead": "370f862699c4384819e74188315db51a0d958975",
+    "platform": "win32",
+    "python": "3.14.6",
+    "pywin32": "C:\\Users\\hygor\\AppData\\Local\\Programs\\Python\\Python314\\Lib\\site-packages\\win32\\win32api.pyd",
+    "wordExecutable": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
+    "wordFileVersion": "16.0.20326.20144"
+  },
+  "n01_docx": {
+    "carriesMacroPart": false,
+    "pdfBytes": 81419,
+    "pdfSha256": "7c0bcfeaa11ee4c1ddbdec03b4d660bd33cb6e64190b2eedfebe2a5c64dde463",
+    "rendererType": "MICROSOFT_WORD_DESKTOP_COM",
+    "rendererVersion": "16.0",
+    "sourceFormat": "DOCX",
+    "wordSha256After": "bac2f8b69b542435f0c50553ad45b3cc5e75e493c58fe12af1d8f87236cc4963",
+    "wordSha256Before": "bac2f8b69b542435f0c50553ad45b3cc5e75e493c58fe12af1d8f87236cc4963"
+  },
+  "n01b_docx_full_path": {
+    "fidelity": "PASS",
+    "pdfSha256": "485c7a87a2fd17f38ce4fdb479479acecbce7f53a96347ba8f417703238f3fdd",
+    "wordSha256": "2634e4c4ebe3482b4e9cdc775f5d1cdda6adb00ce83d25b7742088916cbe8bfe"
+  },
+  "n02_docm": {
+    "carriesMacroPart": false,
+    "pdfBytes": 81419,
+    "pdfSha256": "2ab6eb2f621fd664372519b1c61f98cad488171c89edf0ed62c76dd0511e792f",
+    "rendererType": "MICROSOFT_WORD_DESKTOP_COM",
+    "rendererVersion": "16.0",
+    "sourceFormat": "DOCM",
+    "wordSha256After": "6aa2a8c51024f5804a1890315aaf7ad07ae621e15d3a176a41c13214183d0eaa",
+    "wordSha256Before": "6aa2a8c51024f5804a1890315aaf7ad07ae621e15d3a176a41c13214183d0eaa"
+  },
+  "n02b_docm_exact_bytes": {
+    "converterReceivedFormat": "DOCM",
+    "converterReceivedSha256": "2941be7c7e8ed88847fc3878eb7bbe22ca5f995258dafc4a48417d95b579e20f",
+    "wordSha256": "2941be7c7e8ed88847fc3878eb7bbe22ca5f995258dafc4a48417d95b579e20f"
+  },
+  "n04_user_word_survives": {
+    "identitiesAfter": [
+      "11060:2026-09-16 18:56:49.719000+00:00"
+    ],
+    "identitiesBefore": [
+      "11060:2026-09-16 18:56:49.719000+00:00"
+    ]
+  }
+}
