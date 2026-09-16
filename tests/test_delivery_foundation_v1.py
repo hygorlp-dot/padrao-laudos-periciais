@@ -321,6 +321,39 @@ def _word_with_strict_header(body_text: str, header_text: str) -> bytes:
     return output.getvalue()
 
 
+def _word_with_header_image(body_text: str, image_bytes: bytes) -> bytes:
+    output = BytesIO()
+    width_emu = round(172.8 * 12_700)
+    height_emu = round(51.84 * 12_700)
+    document = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body><w:p><w:r><w:t>{body_text}</w:t></w:r></w:p></w:body>"
+        "</w:document>"
+    )
+    header = (
+        '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        "<w:p><w:r><w:drawing><wp:inline>"
+        f'<wp:extent cx="{width_emu}" cy="{height_emu}"/>'
+        '<a:graphic><a:graphicData><a:blip r:embed="rId1"/>'
+        "</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
+        "</w:hdr>"
+    )
+    relationships = (
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Target="media/header.png"/>'
+        "</Relationships>"
+    )
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr("word/document.xml", document)
+        package.writestr("word/header1.xml", header)
+        package.writestr("word/_rels/header1.xml.rels", relationships)
+        package.writestr("word/media/header.png", image_bytes)
+    return output.getvalue()
+
+
 def _word_with_image_and_text(
     text: str,
     image_bytes: bytes,
@@ -1015,6 +1048,73 @@ def test_fidelity_includes_authoritative_strict_namespace_header_text() -> None:
             word,
             _parseable_text_pdf("Body-223"),
         )
+
+
+def test_fidelity_accepts_native_ordered_header_image() -> None:
+    image = BytesIO()
+    Image.new("RGB", (240, 72), (22, 74, 140)).save(image, "PNG")
+    word = _word_with_header_image("Synthetic", image.getvalue())
+
+    delivery_renderer._validate_pdf_fidelity(
+        word,
+        _image_pdf(
+            "Synthetic",
+            image.getvalue(),
+            image_x=90,
+            image_y=740,
+            image_width=172.8,
+            image_height=51.84,
+            image_after_text=True,
+        ),
+    )
+
+
+def test_repeatable_header_images_are_bound_once_per_page() -> None:
+    first = delivery_renderer._image_signature(Image.new("RGB", (32, 16), "blue"))
+    second = delivery_renderer._image_signature(Image.new("RGB", (32, 16), "red"))
+    source_layouts = [
+        delivery_renderer._WordImageLayout(
+            120, 30, "inline", "left", None, None
+        ),
+        delivery_renderer._WordImageLayout(
+            120, 30, "inline", "left", None, None
+        ),
+    ]
+    candidates = [
+        delivery_renderer._PdfImageLayout(
+            page, 50, bottom, 170, bottom + 30, 595, 842
+        )
+        for page in range(3)
+        for bottom in (760, 720)
+    ]
+    signatures = [first, second] * 3
+
+    def matches(
+        candidate_signatures: list[tuple],
+        candidate_layouts: list[delivery_renderer._PdfImageLayout],
+    ) -> bool:
+        return delivery_renderer._repeatable_word_images_match(
+            document_signatures=[],
+            document_layouts=[],
+            header_signatures=[first, second],
+            header_layouts=source_layouts,
+            footer_signatures=[],
+            footer_layouts=[],
+            candidate_signatures=candidate_signatures,
+            candidate_layouts=candidate_layouts,
+            positioned_text=[],
+            page_count=3,
+        )
+
+    assert matches(signatures, candidates)
+    assert not matches(signatures[:-1], candidates[:-1])
+    assert not matches(signatures + [first], candidates + [candidates[-1]])
+    relocated = [*candidates]
+    relocated[2] = replace(relocated[2], bottom=300, top=330)
+    assert not matches(signatures, relocated)
+    reordered = [*signatures]
+    reordered[2:4] = [second, first]
+    assert not matches(reordered, candidates)
 
 
 @pytest.mark.parametrize(
@@ -1890,6 +1990,40 @@ def test_fidelity_rejects_image_fully_occluded_by_a_later_opaque_path() -> None:
         )
 
 
+def test_fidelity_rejects_unbound_visible_filled_path() -> None:
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, "JPEG")
+    word = _word_with_image_and_text("Synthetic", image.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf(
+                "Synthetic",
+                image.getvalue(),
+                image_x=100,
+                trailing_commands=b" q 1 0 0 rg 420 40 120 90 re f Q",
+            ),
+        )
+
+
+def test_fidelity_rejects_unbound_visible_stroked_path() -> None:
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, "JPEG")
+    word = _word_with_image_and_text("Synthetic", image.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf(
+                "Synthetic",
+                image.getvalue(),
+                image_x=100,
+                trailing_commands=b" q 1 0 0 RG 4 w 420 40 120 90 re S Q",
+            ),
+        )
+
+
 def test_fidelity_rejects_double_premultiplied_transparent_image() -> None:
     source = BytesIO()
     Image.new("RGBA", (8, 8), (220, 20, 20, 128)).save(source, "PNG")
@@ -2357,6 +2491,51 @@ def test_fidelity_rejects_detail_budget_trading_patch_exchange() -> None:
     source_image.save(source, "PNG")
     candidate = BytesIO()
     candidate_image.save(candidate, "JPEG", quality=100, subsampling=0)
+    word = _word_with_image_and_text("Synthetic", source.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", candidate.getvalue(), image_x=100),
+        )
+
+
+def test_fidelity_rejects_balanced_padding_hiding_marker_swap() -> None:
+    random = Random(0)
+    source_image = Image.new("RGB", (32, 32))
+    source_image.putdata(
+        [
+            (random.randrange(256), random.randrange(256), random.randrange(256))
+            for _ in range(32 * 32)
+        ]
+    )
+    first_color = (158, 98, 100)
+    second_color = (98, 158, 100)
+    for y in range(2):
+        for x in range(2):
+            source_image.putpixel((4 + x, 4 + y), first_color)
+            source_image.putpixel((22 + x, 22 + y), second_color)
+
+    candidate_image = source_image.copy()
+    for y in range(32):
+        for x in range(32):
+            if (4 <= x < 6 and 4 <= y < 6) or (22 <= x < 24 and 22 <= y < 24):
+                continue
+            pixel = candidate_image.getpixel((x, y))
+            delta = 20 if (x + y) % 2 == 0 else -20
+            candidate_image.putpixel(
+                (x, y),
+                tuple(max(0, min(255, channel + delta)) for channel in pixel),
+            )
+    for y in range(2):
+        for x in range(2):
+            candidate_image.putpixel((4 + x, 4 + y), second_color)
+            candidate_image.putpixel((22 + x, 22 + y), first_color)
+
+    source = BytesIO()
+    source_image.save(source, "PNG")
+    candidate = BytesIO()
+    candidate_image.save(candidate, "JPEG", quality=95, subsampling=0)
     word = _word_with_image_and_text("Synthetic", source.getvalue())
 
     with pytest.raises(ValueError, match="faithfully represent"):
