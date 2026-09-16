@@ -1124,6 +1124,40 @@ def _pdf_content_kinds(reader: PdfReader) -> tuple[str, ...]:
     return _collapse_content_kinds(values)
 
 
+def _positioned_target_locations(
+    target: str,
+    positioned: list[_PositionedText],
+    barriers: list[_VerticalBarrier],
+) -> list[tuple[int, float, float]]:
+    normalized_target = _normalized_visible_text(target)
+    if not normalized_target:
+        return []
+    locations: list[tuple[int, float, float]] = []
+    for start, fragment in enumerate(positioned):
+        normalized_fragment = _normalized_visible_text(fragment.text)
+        cursor = 0
+        while normalized_fragment:
+            offset = normalized_fragment.find(normalized_target, cursor)
+            if offset < 0:
+                break
+            width = max(0.0, fragment.right - fragment.x)
+            target_x = fragment.x + width * offset / len(normalized_fragment)
+            locations.append((fragment.page, target_x, fragment.top))
+            cursor = offset + len(normalized_target)
+        end = _fragment_sequence_end(target, positioned, start, barriers)
+        if end is not None and end > start + 1:
+            matched = positioned[start:end]
+            if all(item.page == matched[0].page for item in matched):
+                locations.append(
+                    (
+                        matched[0].page,
+                        matched[0].x,
+                        max(item.top for item in matched),
+                    )
+                )
+    return sorted(set(locations), key=lambda item: (item[0], -item[2], item[1]))
+
+
 def _annotations_match_internal_links(
     reader: PdfReader,
     expectations: list[_WordInternalLinkExpectation],
@@ -1185,8 +1219,11 @@ def _annotations_match_internal_links(
                     destination_reference.generation,
                 )
             )
+            destination_x = float(destination[2])
             destination_y = float(destination[3])
-            if destination_page is None or not math.isfinite(destination_y):
+            if destination_page is None or not all(
+                map(math.isfinite, (destination_x, destination_y))
+            ):
                 return False
         except (AttributeError, IndexError, KeyError, TypeError, ValueError):
             return False
@@ -1216,26 +1253,16 @@ def _annotations_match_internal_links(
         if candidate is None:
             return False
         expectation_index, expectation = candidate
-        target_matches = []
-        for start, fragment in enumerate(positioned):
-            end = _fragment_sequence_end(
-                expectation.target_text, positioned, start, barriers
-            )
-            if end is None:
-                continue
-            matched = positioned[start:end]
-            if matched and all(item.page == matched[0].page for item in matched):
-                target_matches.append(matched)
+        target_matches = _positioned_target_locations(
+            expectation.target_text, positioned, barriers
+        )
         if expectation.target_occurrence >= len(target_matches):
             return False
         authoritative_target = target_matches[expectation.target_occurrence]
         if (
-            authoritative_target[0].page != destination_page
-            or abs(
-                destination_y
-                - max(fragment.top for fragment in authoritative_target)
-            )
-            > 12.0
+            authoritative_target[0] != destination_page
+            or abs(destination_x - authoritative_target[1]) > 18.0
+            or abs(destination_y - authoritative_target[2]) > 12.0
         ):
             return False
         used_expectations.add(expectation_index)
@@ -1502,6 +1529,8 @@ class _WordTextExpectation:
     font_family: str | None = None
     expected_top_offset: float | None = None
     expected_page: int | None = None
+    body_flow_anchor: bool = False
+    expected_previous_top_gap: float | None = None
 
 
 def _word_page_geometry(
@@ -1555,6 +1584,53 @@ def _pdf_pages_have_visible_content(
     return page_count > 0 and observed_pages == set(range(page_count))
 
 
+def _pdf_pages_have_document_content(
+    *,
+    extracted_pages: list[str],
+    header_fragments_by_page: list[list[str]],
+    footer_fragments_by_page: list[list[str]],
+    image_layouts: list[_PdfImageLayout],
+    painted_paths: list[_PaintedPath],
+    page_heights: list[float],
+) -> bool:
+    page_count = len(extracted_pages)
+    if page_count == 0 or any(
+        len(values) != page_count
+        for values in (
+            header_fragments_by_page,
+            footer_fragments_by_page,
+            page_heights,
+        )
+    ):
+        return False
+    for page, extracted in enumerate(extracted_pages):
+        page_counts = Counter(_lexical_tokens(extracted))
+        repeatable_counts = Counter(
+            _lexical_tokens(
+                " ".join(
+                    header_fragments_by_page[page]
+                    + footer_fragments_by_page[page]
+                )
+            )
+        )
+        if page_counts - repeatable_counts:
+            continue
+        page_height = page_heights[page]
+        if not math.isfinite(page_height) or page_height <= 0:
+            return False
+        body_bottom = page_height * 0.25
+        body_top = page_height * 0.75
+        if any(
+            item.page == page
+            and item.top > body_bottom
+            and item.bottom < body_top
+            for item in (*image_layouts, *painted_paths)
+        ):
+            continue
+        return False
+    return True
+
+
 def _normalized_font_family(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9]", "", value.casefold().split("+")[-1])
     for suffix in ("bolditalic", "boldoblique", "italic", "oblique", "bold", "regular"):
@@ -1580,29 +1656,34 @@ def _word_internal_link_expectations(
 ) -> list[_WordInternalLinkExpectation]:
     if document is None:
         return []
-    paragraphs = list(_iter_named(document, "p"))
-    paragraph_texts = [
-        _normalized_visible_text(
-            "".join(item.text or "" for item in _iter_named(paragraph, "t"))
-        )
-        for paragraph in paragraphs
-    ]
     bookmark_targets: dict[str, tuple[str, int]] = {}
-    for paragraph_index, (paragraph, text) in enumerate(
-        zip(paragraphs, paragraph_texts)
-    ):
-        for bookmark in _iter_named(paragraph, "bookmarkStart"):
-            name = _attribute_named(bookmark, "name")
-            if name and text:
-                if name in bookmark_targets:
-                    raise ValueError("duplicate Word bookmark target")
-                bookmark_targets[name] = (
-                    text,
-                    sum(
-                        candidate == text
-                        for candidate in paragraph_texts[:paragraph_index]
-                    ),
-                )
+    visible_prefix = ""
+    for paragraph in _iter_named(document, "p"):
+        active: dict[str, tuple[str, int]] = {}
+        for node in paragraph.iter():
+            local_name = _local_name(node.tag)
+            if local_name == "bookmarkStart":
+                bookmark_id = _attribute_named(node, "id")
+                name = _attribute_named(node, "name")
+                if not bookmark_id or not name or bookmark_id in active:
+                    raise ValueError("Word bookmark target is invalid")
+                active[bookmark_id] = (name, len(visible_prefix))
+            elif local_name == "t" and node.text:
+                visible_prefix += node.text
+            elif local_name == "bookmarkEnd":
+                bookmark_id = _attribute_named(node, "id")
+                target = active.pop(bookmark_id or "", None)
+                if target is None:
+                    raise ValueError("Word bookmark target is invalid")
+                name, start = target
+                target_text = _normalized_visible_text(visible_prefix[start:])
+                if not target_text or name in bookmark_targets:
+                    raise ValueError("Word bookmark target is invalid")
+                prefix = _normalized_visible_text(visible_prefix[:start])
+                bookmark_targets[name] = (target_text, prefix.count(target_text))
+        visible_prefix += "\n"
+        if active:
+            raise ValueError("Word bookmark target is incomplete")
 
     expectations: list[_WordInternalLinkExpectation] = []
     for hyperlink in _iter_named(document, "hyperlink"):
@@ -1628,7 +1709,14 @@ def _word_text_expectations(
     active_content_names: set[str] | None = None,
 ) -> list[_WordTextExpectation]:
     styles_root = xml_roots.get("word/styles.xml")
-    theme_root = xml_roots.get("word/theme/theme1.xml")
+    theme_parts = [
+        root
+        for name, root in xml_roots.items()
+        if name.startswith("word/theme/") and name.endswith(".xml")
+    ]
+    if len(theme_parts) > 1:
+        raise ValueError("multiple Word theme parts are not supported")
+    theme_root = theme_parts[0] if theme_parts else None
     theme_fonts: dict[str, str] = {}
     if theme_root is not None:
         for prefix, element_name in (
@@ -1739,6 +1827,23 @@ def _word_text_expectations(
             raise ValueError("invalid Word paragraph spacing")
         return value
 
+    def spacing_after_from_properties(
+        properties: ElementTree.Element | None,
+    ) -> float | None:
+        spacing = _first_named(properties, "spacing")
+        if spacing is None:
+            return None
+        raw = _attribute_named(spacing, "after")
+        if raw is None:
+            return None
+        try:
+            value = float(raw) / 20.0
+        except ValueError as exc:
+            raise ValueError("invalid Word paragraph spacing") from exc
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("invalid Word paragraph spacing")
+        return value
+
     default_size = 11.0
     default_font: str | None = None
     default_color = (0, 0, 0)
@@ -1747,6 +1852,7 @@ def _word_text_expectations(
     default_underline = False
     default_alignment = "left"
     default_spacing_before = 0.0
+    default_spacing_after = 0.0
     default_paragraph_style: str | None = None
     style_sizes: dict[str, float | None] = {}
     style_fonts: dict[str, str | None] = {}
@@ -1756,6 +1862,7 @@ def _word_text_expectations(
     style_underline: dict[str, bool | None] = {}
     style_alignment: dict[str, str | None] = {}
     style_spacing_before: dict[str, float | None] = {}
+    style_spacing_after: dict[str, float | None] = {}
     style_bases: dict[str, str | None] = {}
     if styles_root is not None:
         defaults = _first_named(styles_root, "docDefaults")
@@ -1768,6 +1875,9 @@ def _word_text_expectations(
         default_alignment = alignment_from_properties(defaults) or default_alignment
         default_spacing_before = (
             spacing_before_from_properties(defaults) or default_spacing_before
+        )
+        default_spacing_after = (
+            spacing_after_from_properties(defaults) or default_spacing_after
         )
         for style in _iter_named(styles_root, "style"):
             style_id = _attribute_named(style, "styleId")
@@ -1792,6 +1902,9 @@ def _word_text_expectations(
                 paragraph_properties
             )
             style_spacing_before[style_id] = spacing_before_from_properties(
+                paragraph_properties
+            )
+            style_spacing_after[style_id] = spacing_after_from_properties(
                 paragraph_properties
             )
             style_bases[style_id] = (
@@ -1890,8 +2003,27 @@ def _word_text_expectations(
                     blank_before = spacing_before_from_properties(
                         paragraph_properties
                     )
+                    if blank_before is None:
+                        blank_before = float(
+                            resolve_style_value(
+                                style_id,
+                                style_spacing_before,
+                                default_spacing_before,
+                            )
+                        )
+                    blank_after = spacing_after_from_properties(
+                        paragraph_properties
+                    )
+                    if blank_after is None:
+                        blank_after = float(
+                            resolve_style_value(
+                                style_id,
+                                style_spacing_after,
+                                default_spacing_after,
+                            )
+                        )
                     anchor_preceding_blank_height += (
-                        (blank_before or 0.0) + blank_size * 1.2
+                        blank_before + blank_size * 1.2 + blank_after
                     )
                     continue
             break
@@ -1920,6 +2052,9 @@ def _word_text_expectations(
         if active_content_names is None or name in active_content_names
     ]
     for name in content_names:
+        previous_body_size: float | None = None
+        previous_body_after = 0.0
+        pending_blank_height = 0.0
         table_paragraph_ids = {
             id(paragraph)
             for table in _iter_named(xml_roots[name], "tbl")
@@ -1927,6 +2062,7 @@ def _word_text_expectations(
         }
         for paragraph in _iter_named(xml_roots[name], "p"):
             in_table = id(paragraph) in table_paragraph_ids
+            paragraph_has_drawing = _first_named(paragraph, "drawing") is not None
             if in_table and not any(
                 next(_children_named(run, "rPr"), None) is not None
                 for run in _iter_named(paragraph, "r")
@@ -1984,6 +2120,15 @@ def _word_text_expectations(
                     paragraph_style or default_paragraph_style,
                     style_spacing_before,
                     default_spacing_before,
+                )
+            )
+            paragraph_spacing_after = float(
+                spacing_after_from_properties(paragraph_properties)
+                if spacing_after_from_properties(paragraph_properties) is not None
+                else resolve_style_value(
+                    paragraph_style or default_paragraph_style,
+                    style_spacing_after,
+                    default_spacing_after,
                 )
             )
             segments: list[
@@ -2124,6 +2269,20 @@ def _word_text_expectations(
                     and anchor_top_margin is not None
                     else None
                 )
+                body_flow_anchor = (
+                    name == "word/document.xml"
+                    and not in_table
+                    and not paragraph_has_drawing
+                    and segment_index == 0
+                )
+                expected_previous_top_gap = (
+                    previous_body_size * 1.2
+                    + previous_body_after
+                    + pending_blank_height
+                    + paragraph_spacing_before
+                    if body_flow_anchor and previous_body_size is not None
+                    else None
+                )
                 expectations.append(
                     _WordTextExpectation(
                         normalized,
@@ -2136,8 +2295,26 @@ def _word_text_expectations(
                         in_table,
                         font_family,
                         expected_top_offset,
+                        None,
+                        body_flow_anchor,
+                        expected_previous_top_gap,
                     )
                 )
+            if name == "word/document.xml":
+                if in_table or paragraph_has_drawing:
+                    previous_body_size = None
+                    previous_body_after = 0.0
+                    pending_blank_height = 0.0
+                elif segments:
+                    previous_body_size = paragraph_size
+                    previous_body_after = paragraph_spacing_after
+                    pending_blank_height = 0.0
+                else:
+                    pending_blank_height += (
+                        paragraph_spacing_before
+                        + paragraph_size * 1.2
+                        + paragraph_spacing_after
+                    )
     return expectations
 
 
@@ -2149,6 +2326,7 @@ def _text_sizes_match(
     if not expectations:
         return True
     used_fragments: set[int] = set()
+    previous_body_fragments: list[_PositionedText] | None = None
     for expectation in expectations:
         match: tuple[int, int] | None = None
         for start in range(len(positioned)):
@@ -2213,12 +2391,42 @@ def _text_sizes_match(
                 )
                 <= max(18.0, expectation.font_size * 1.75)
             )
-            if style_matches and alignment_matches and vertical_matches:
+            flow_matches = True
+            if (
+                expectation.body_flow_anchor
+                and expectation.expected_previous_top_gap is not None
+            ):
+                if previous_body_fragments is None:
+                    flow_matches = False
+                else:
+                    previous_page = previous_body_fragments[0].page
+                    if page == previous_page:
+                        observed_gap = max(
+                            fragment.top for fragment in previous_body_fragments
+                        ) - max(fragment.top for fragment in matched_fragments)
+                        flow_matches = (
+                            observed_gap >= 0
+                            and abs(
+                                observed_gap
+                                - expectation.expected_previous_top_gap
+                            )
+                            <= max(48.0, expectation.font_size * 3.0)
+                        )
+                    else:
+                        flow_matches = page == previous_page + 1
+            if (
+                style_matches
+                and alignment_matches
+                and vertical_matches
+                and flow_matches
+            ):
                 match = (start, end)
                 break
         if match is None:
             return False
         used_fragments.update(range(*match))
+        if expectation.body_flow_anchor:
+            previous_body_fragments = positioned[match[0] : match[1]]
     return True
 
 
@@ -3927,6 +4135,14 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         or not _page_geometry_matches(word_page_geometry, page_dimensions)
         or not _pdf_pages_have_visible_content(
             page_count, reading_positioned, pdf_image_layouts, painted_paths
+        )
+        or not _pdf_pages_have_document_content(
+            extracted_pages=extracted_pages,
+            header_fragments_by_page=header_fragments_by_page,
+            footer_fragments_by_page=footer_fragments_by_page,
+            image_layouts=pdf_image_layouts,
+            painted_paths=painted_paths,
+            page_heights=page_heights,
         )
         or not token_counts_match
         or not document_order_matches

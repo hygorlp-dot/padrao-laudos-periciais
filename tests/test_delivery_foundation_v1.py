@@ -21,6 +21,7 @@ from pypdf.generic import (
     DictionaryObject,
     FloatObject,
     NameObject,
+    NullObject,
     NumberObject,
 )
 
@@ -1398,6 +1399,114 @@ def test_internal_word_hyperlink_preserves_duplicate_target_occurrence() -> None
     assert expectation.target_occurrence == 1
 
 
+def test_internal_word_hyperlink_binds_bookmarked_run_not_whole_paragraph() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:p><w:r><w:t>Target A </w:t></w:r>'
+        '<w:bookmarkStart w:id="2" w:name="TargetB"/>'
+        '<w:r><w:t>Target B</w:t></w:r><w:bookmarkEnd w:id="2"/></w:p>'
+        '<w:p><w:hyperlink w:anchor="TargetB"><w:r><w:t>Go B</w:t></w:r>'
+        "</w:hyperlink></w:p></w:body></w:document>"
+    )
+
+    [expectation] = delivery_renderer._word_internal_link_expectations(document)
+
+    assert expectation.target_text == "target b"
+    assert expectation.target_occurrence == 0
+
+
+def test_bookmark_target_locations_distinguish_runs_on_same_line() -> None:
+    positioned = [
+        delivery_renderer._PositionedText(
+            0,
+            "Target A Target B",
+            90,
+            700,
+            11,
+            190,
+            700,
+            712,
+        )
+    ]
+
+    [location] = delivery_renderer._positioned_target_locations(
+        "target b", positioned, []
+    )
+
+    assert location[0] == 0
+    assert location[1] > 135
+    assert location[2] == 712
+
+
+def test_internal_link_destination_distinguishes_same_line_bookmarks() -> None:
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/'
+            'wordprocessingml/2006/main"><w:body><w:p>'
+            '<w:bookmarkStart w:id="1" w:name="A"/><w:r><w:t>Target A</w:t></w:r>'
+            '<w:bookmarkEnd w:id="1"/><w:r><w:t> </w:t></w:r>'
+            '<w:bookmarkStart w:id="2" w:name="B"/><w:r><w:t>Target B</w:t></w:r>'
+            '<w:bookmarkEnd w:id="2"/></w:p><w:p>'
+            '<w:hyperlink w:anchor="B"><w:r><w:t>Go B</w:t></w:r></w:hyperlink>'
+            "</w:p></w:body></w:document>",
+        )
+    source_pdf = _positioned_text_pdf(
+        [[
+            ("Target A", 50, 700, 11, 0),
+            ("Target B", 120, 700, 11, 0),
+            ("Go B", 50, 675, 11, 0),
+        ]]
+    )
+
+    def candidate(destination_x: float) -> bytes:
+        writer = PdfWriter()
+        writer.clone_document_from_reader(PdfReader(BytesIO(source_pdf), strict=True))
+        page = writer.pages[0]
+        annotation = DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Annot"),
+                NameObject("/Subtype"): NameObject("/Link"),
+                NameObject("/Rect"): ArrayObject(
+                    [FloatObject(48), FloatObject(670), FloatObject(85), FloatObject(690)]
+                ),
+                NameObject("/Dest"): ArrayObject(
+                    [
+                        page.indirect_reference,
+                        NameObject("/XYZ"),
+                        FloatObject(destination_x),
+                        FloatObject(710),
+                        NullObject(),
+                    ]
+                ),
+            }
+        )
+        page[NameObject("/Annots")] = ArrayObject([writer._add_object(annotation)])
+        output = BytesIO()
+        writer.write(output)
+        return output.getvalue()
+
+    correct = candidate(120)
+    reader = PdfReader(BytesIO(correct), strict=True)
+    positioned, barriers, *_ = delivery_renderer._pdfium_visible_layout(correct)
+    with ZipFile(BytesIO(word.getvalue())) as package:
+        expectations = delivery_renderer._word_internal_link_expectations(
+            delivery_renderer.ElementTree.fromstring(
+                package.read("word/document.xml")
+            )
+        )
+    assert delivery_renderer._annotations_match_internal_links(
+        reader,
+        expectations,
+        delivery_renderer._positioned_reading_order(positioned),
+        barriers,
+    )
+    delivery_renderer._validate_pdf_fidelity(word.getvalue(), correct)
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(word.getvalue(), candidate(50))
+
+
 def test_text_style_expectations_ignore_inactive_header_variants() -> None:
     roots = {
         "word/document.xml": delivery_renderer.ElementTree.fromstring(
@@ -2502,6 +2611,34 @@ def test_text_style_matching_rejects_first_body_vertical_relocation() -> None:
     )
 
 
+def test_text_style_matching_rejects_later_body_paragraph_relocation() -> None:
+    expectations = [
+        delivery_renderer._WordTextExpectation(
+            "first body", 11, (0, 0, 0), False, False, False, "left",
+            body_flow_anchor=True,
+        ),
+        delivery_renderer._WordTextExpectation(
+            "second body", 11, (0, 0, 0), False, False, False, "left",
+            body_flow_anchor=True,
+            expected_previous_top_gap=25,
+        ),
+    ]
+    first = delivery_renderer._PositionedText(
+        0, "first body", 90, 709, 11, 180, 709, 717
+    )
+    normal_second = delivery_renderer._PositionedText(
+        0, "second body", 90, 684, 11, 190, 684, 692
+    )
+    relocated_second = replace(normal_second, bottom=514, top=522)
+
+    assert delivery_renderer._text_sizes_match(
+        expectations, [first, normal_second], []
+    )
+    assert not delivery_renderer._text_sizes_match(
+        expectations, [first, relocated_second], []
+    )
+
+
 def test_first_visible_body_anchor_survives_preceding_empty_paragraph() -> None:
     document = delivery_renderer.ElementTree.fromstring(
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
@@ -2516,6 +2653,27 @@ def test_first_visible_body_anchor_survives_preceding_empty_paragraph() -> None:
 
     assert expectation.expected_top_offset is not None
     assert expectation.expected_top_offset > 72
+
+
+def test_first_visible_body_anchor_accounts_for_multiple_empty_paragraphs() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:p/><w:p/><w:p/><w:p><w:r><w:t>Anchored body</w:t>'
+        '</w:r></w:p><w:sectPr><w:pgMar w:top="1440"/></w:sectPr>'
+        "</w:body></w:document>"
+    )
+    styles = delivery_renderer.ElementTree.fromstring(
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="paragraph" w:default="1" w:styleId="Normal">'
+        '<w:pPr><w:spacing w:after="160"/></w:pPr><w:rPr><w:sz w:val="22"/>'
+        "</w:rPr></w:style></w:styles>"
+    )
+
+    [expectation] = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document, "word/styles.xml": styles}
+    )
+
+    assert expectation.expected_top_offset == pytest.approx(135.6)
 
 
 def test_word_text_expectation_resolves_minor_theme_font() -> None:
@@ -2548,6 +2706,35 @@ def test_word_text_expectation_resolves_minor_theme_font() -> None:
     assert expectation.font_family == "Calibri"
 
 
+def test_word_text_expectation_resolves_nondefault_theme_part_name() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p><w:r><w:t>Theme font</w:t></w:r></w:p></w:body>"
+        "</w:document>"
+    )
+    styles = delivery_renderer.ElementTree.fromstring(
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:asciiTheme="minorHAnsi"/>'
+        "</w:rPr></w:rPrDefault></w:docDefaults></w:styles>"
+    )
+    theme = delivery_renderer.ElementTree.fromstring(
+        '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+        '<a:themeElements><a:fontScheme><a:minorFont>'
+        '<a:latin typeface="Times New Roman"/></a:minorFont>'
+        "</a:fontScheme></a:themeElements></a:theme>"
+    )
+
+    [expectation] = delivery_renderer._word_text_expectations(
+        {
+            "word/document.xml": document,
+            "word/styles.xml": styles,
+            "word/theme/custom.xml": theme,
+        }
+    )
+
+    assert expectation.font_family == "Times New Roman"
+
+
 def test_word_page_geometry_preserves_size_and_orientation() -> None:
     document = delivery_renderer.ElementTree.fromstring(
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
@@ -2576,6 +2763,17 @@ def test_pdf_page_coverage_rejects_unbound_blank_page() -> None:
 
     assert not delivery_renderer._pdf_pages_have_visible_content(
         2, positioned, [], []
+    )
+
+
+def test_pdf_page_coverage_rejects_page_with_only_repeatable_text() -> None:
+    assert not delivery_renderer._pdf_pages_have_document_content(
+        extracted_pages=["Header 223\nBody 223", "Header 223"],
+        header_fragments_by_page=[["Header 223"], ["Header 223"]],
+        footer_fragments_by_page=[[], []],
+        image_layouts=[],
+        painted_paths=[],
+        page_heights=[792, 792],
     )
 
 
