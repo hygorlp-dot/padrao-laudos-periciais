@@ -388,7 +388,11 @@ def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple
             # Keep both budgets fixed so candidate-wide padding cannot inflate
             # the admissible maximum and conceal a localized alteration.
             and transformed_mean_delta <= 12
-            and transformed_max_delta <= 50
+            # Microsoft Word preserves the embedded image payload in the
+            # supported native conversion path.  A small fixed residual keeps
+            # ordinary lossy encoding/resampling admissible without giving a
+            # candidate enough localized budget to exchange visible markers.
+            and transformed_max_delta <= 12
             and (raw_color_delta <= 12 or spatial_structure_matches)
         )
 
@@ -458,6 +462,23 @@ class _PdfImageLayout:
     top: float
     page_width: float
     page_height: float
+
+
+@dataclass(frozen=True, slots=True)
+class _PaintedPath:
+    page: int
+    left: float
+    bottom: float
+    right: float
+    top: float
+
+
+@dataclass(frozen=True, slots=True)
+class _WordTableExpectation:
+    rows: tuple[tuple[str, ...], ...]
+    width: float | None
+    column_count: int
+    painted_path_count: int
 
 
 def _ordered_word_image_layouts(
@@ -794,9 +815,9 @@ def _repeatable_word_images_match(
             )
         ):
             return False
-        if region == "header" and candidate.bottom < candidate.page_height * 0.5:
+        if region == "header" and candidate.bottom < candidate.page_height * 0.75:
             return False
-        if region == "footer" and candidate.top > candidate.page_height * 0.5:
+        if region == "footer" and candidate.top > candidate.page_height * 0.25:
             return False
         if source.kind == "anchor":
             observed_y_offset = candidate.page_height - candidate.top
@@ -877,6 +898,49 @@ def _content_kinds_are_ordered_subsequence(
     return all(any(candidate == value for candidate in iterator) for value in expected)
 
 
+def _repeatable_text_matches(
+    *,
+    header_fragments: list[str],
+    footer_fragments: list[str],
+    positioned: list[_PositionedText],
+    page_heights: list[float],
+) -> bool:
+    def region_matches(
+        expected_fragments: list[str], *, page: int, header: bool
+    ) -> bool:
+        if not expected_fragments:
+            return True
+        height = page_heights[page]
+        region = [
+            fragment
+            for fragment in positioned
+            if fragment.page == page
+            and (
+                fragment.bottom >= height * 0.5
+                if header
+                else fragment.top <= height * 0.5
+            )
+        ]
+        cursor = 0
+        for expected in expected_fragments:
+            matches = [
+                (start, end)
+                for start in range(len(region))
+                if (end := _fragment_sequence_end(expected, region, start, []))
+                is not None
+            ]
+            if len(matches) != 1 or matches[0][0] < cursor:
+                return False
+            cursor = matches[0][1]
+        return True
+
+    return len(page_heights) > 0 and all(
+        region_matches(header_fragments, page=page, header=True)
+        and region_matches(footer_fragments, page=page, header=False)
+        for page in range(len(page_heights))
+    )
+
+
 def _collapse_content_kinds(values: list[str]) -> tuple[str, ...]:
     return tuple(value for index, value in enumerate(values) if not index or value != values[index - 1])
 
@@ -905,6 +969,14 @@ def _pdf_content_kinds(reader: PdfReader) -> tuple[str, ...]:
             elif operator == b"Do" and operands and str(operands[0]) in images:
                 values.append("IMAGE")
     return _collapse_content_kinds(values)
+
+
+def _has_annotations(page: object) -> bool:
+    try:
+        annotations = page.get("/Annots")
+        return annotations is not None and bool(annotations.get_object())
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return True
 
 
 def _has_unsafe_image_drawing(page: object, reader: PdfReader) -> bool:
@@ -1475,11 +1547,13 @@ def _pdfium_visible_layout(
     list[_PositionedText],
     list[_VerticalBarrier],
     list[_PdfImageLayout],
+    list[_PaintedPath],
     bool,
 ]:
     positioned: list[_PositionedText] = []
     barriers: list[_VerticalBarrier] = []
     image_layouts: list[_PdfImageLayout] = []
+    painted_paths: list[_PaintedPath] = []
     unsafe = False
     document = pdfium.PdfDocument(pdf_content)
     try:
@@ -1631,6 +1705,16 @@ def _pdfium_visible_layout(
                         item.type == pdfium.raw.FPDF_PAGEOBJ_PATH
                         and _path_has_visible_paint(item)
                     ):
+                        painted_paths.append(
+                            _PaintedPath(page_number, left, bottom, right, top)
+                        )
+                    elif item.type not in {
+                        pdfium.raw.FPDF_PAGEOBJ_TEXT,
+                        pdfium.raw.FPDF_PAGEOBJ_IMAGE,
+                        pdfium.raw.FPDF_PAGEOBJ_PATH,
+                    }:
+                        # Shadings and opaque container objects have no
+                        # source-side Word authority in the supported model.
                         unsafe = True
                 for item in direct_text_objects:
                     page.remove_obj(item)
@@ -1668,7 +1752,7 @@ def _pdfium_visible_layout(
                 page.close()
     finally:
         document.close()
-    return positioned, barriers, image_layouts, unsafe
+    return positioned, barriers, image_layouts, painted_paths, unsafe
 
 
 def _text_show_has_content(operator: bytes, operands: list[object]) -> bool:
@@ -1806,14 +1890,15 @@ def _positioned_reading_order(
     ]
 
 
-def _table_rows_match(
+def _matched_table_row_fragments(
     rows: list[tuple[str, ...]],
     positioned: list[_PositionedText],
     barriers: list[_VerticalBarrier],
-) -> bool:
+) -> list[list[_PositionedText]] | None:
     previous_position: tuple[int, float] | None = None
+    selected_rows: list[list[_PositionedText]] = []
     for row in rows:
-        matching_positions: set[tuple[int, float]] = set()
+        matching_positions: dict[tuple[int, float], list[_PositionedText]] = {}
         for anchor in positioned:
             line_tolerance = max(3.0, 0.35 * anchor.font_size)
             line = sorted(
@@ -1827,6 +1912,7 @@ def _table_rows_match(
             )
             cursor = 0
             matched = True
+            matched_fragments: list[_PositionedText] = []
             for cell in row:
                 end = None
                 for start in range(cursor, len(line)):
@@ -1836,9 +1922,10 @@ def _table_rows_match(
                 if end is None:
                     matched = False
                     break
+                matched_fragments.extend(line[start:end])
                 cursor = end
             if matched:
-                matching_positions.add((anchor.page, anchor.y))
+                matching_positions[(anchor.page, anchor.y)] = matched_fragments
         ordered_positions = sorted(
             matching_positions,
             key=lambda value: (value[0], -value[1]),
@@ -1857,9 +1944,128 @@ def _table_rows_match(
             None,
         )
         if selected is None:
-            return False
+            return None
+        selected_rows.append(matching_positions[selected])
         previous_position = selected
-    return True
+    return selected_rows
+
+
+def _table_rows_match(
+    rows: list[tuple[str, ...]],
+    positioned: list[_PositionedText],
+    barriers: list[_VerticalBarrier],
+) -> bool:
+    return _matched_table_row_fragments(rows, positioned, barriers) is not None
+
+
+def _painted_paths_are_bound_to_tables(
+    paths: list[_PaintedPath],
+    tables: list[_WordTableExpectation],
+    positioned: list[_PositionedText],
+    barriers: list[_VerticalBarrier],
+) -> bool:
+    expected_count = sum(table.painted_path_count for table in tables)
+    if len(paths) != expected_count:
+        return False
+    rows = [row for table in tables for row in table.rows]
+    matched_rows = _matched_table_row_fragments(rows, positioned, barriers)
+    if matched_rows is None:
+        return False
+    cursor = 0
+    used: set[int] = set()
+    for table in tables:
+        table_rows = matched_rows[cursor : cursor + len(table.rows)]
+        cursor += len(table.rows)
+        if not table.painted_path_count:
+            continue
+        fragments = [fragment for row in table_rows for fragment in row]
+        pages = {fragment.page for fragment in fragments}
+        if table.width is None or len(pages) != 1 or not fragments:
+            return False
+        page = next(iter(pages))
+        left = min(fragment.x for fragment in fragments) - 12.0
+        right = min(fragment.x for fragment in fragments) + table.width + 12.0
+        bottom = min(fragment.bottom for fragment in fragments) - 12.0
+        top = max(fragment.top for fragment in fragments) + 12.0
+        candidates = [
+            index
+            for index, path in enumerate(paths)
+            if index not in used
+            and path.page == page
+            and path.left >= left
+            and path.right <= right
+            and path.bottom >= bottom
+            and path.top <= top
+            and min(path.right - path.left, path.top - path.bottom) <= 1.5
+        ]
+        if len(candidates) != table.painted_path_count:
+            return False
+        table_paths = [paths[index] for index in candidates]
+
+        def clusters(values: list[float]) -> list[list[float]]:
+            grouped: list[list[float]] = []
+            for value in sorted(values):
+                if not grouped or abs(value - sum(grouped[-1]) / len(grouped[-1])) > 1.0:
+                    grouped.append([value])
+                else:
+                    grouped[-1].append(value)
+            return grouped
+
+        vertical_paths = [
+            path
+            for path in table_paths
+            if path.top - path.bottom > 2 * (path.right - path.left)
+        ]
+        horizontal_paths = [
+            path
+            for path in table_paths
+            if path.right - path.left > 2 * (path.top - path.bottom)
+        ]
+        x_clusters = clusters(
+            [(path.left + path.right) / 2 for path in vertical_paths]
+        )
+        y_clusters = clusters(
+            [(path.bottom + path.top) / 2 for path in horizontal_paths]
+        )
+        if (
+            len(x_clusters) != table.column_count + 1
+            or len(y_clusters) != len(table.rows) + 1
+        ):
+            return False
+        x_centers = [sum(group) / len(group) for group in x_clusters]
+        expected_width = table.width
+        if abs((max(x_centers) - min(x_centers)) - expected_width) > max(
+            2.0, expected_width * 0.03
+        ):
+            return False
+        for group in y_clusters:
+            center = sum(group) / len(group)
+            members = [
+                path
+                for path in horizontal_paths
+                if abs((path.bottom + path.top) / 2 - center) <= 1.0
+            ]
+            if (
+                min(path.left for path in members) > min(x_centers) + 2.0
+                or max(path.right for path in members) < max(x_centers) - 2.0
+            ):
+                return False
+        for group in x_clusters:
+            center = sum(group) / len(group)
+            members = [
+                path
+                for path in vertical_paths
+                if abs((path.left + path.right) / 2 - center) <= 1.0
+            ]
+            if (
+                min(path.bottom for path in members)
+                > min(fragment.bottom for fragment in fragments) + 2.0
+                or max(path.top for path in members)
+                < max(fragment.top for fragment in fragments) - 2.0
+            ):
+                return False
+        used.update(candidates)
+    return len(used) == len(paths)
 
 
 def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
@@ -1869,8 +2075,11 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
             word_fragments: list[str] = []
             document_fragments: list[str] = []
             repeatable_fragments: list[str] = []
+            header_fragments: list[str] = []
+            footer_fragments: list[str] = []
             xml_roots: dict[str, ElementTree.Element] = {}
             table_rows: list[tuple[str, ...]] = []
+            tables: list[_WordTableExpectation] = []
             for name in sorted(package.namelist(), key=_word_part_priority):
                 if not (name.startswith("word/") and name.endswith(".xml")):
                     continue
@@ -1884,23 +2093,74 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                 word_fragments.extend(fragments)
                 if name == "word/document.xml":
                     document_fragments.extend(fragments)
-                elif name.startswith(("word/header", "word/footer")):
+                elif name.startswith("word/header"):
+                    header_fragments.extend(fragments)
                     repeatable_fragments.extend(fragments)
-                for row in _iter_named(root, "tr"):
-                    cells = tuple(
-                        _normalized_visible_text(
-                            " ".join(
-                                "".join(
-                                    item.text or ""
-                                    for item in _iter_named(paragraph, "t")
+                elif name.startswith("word/footer"):
+                    footer_fragments.extend(fragments)
+                    repeatable_fragments.extend(fragments)
+                for table in _iter_named(root, "tbl"):
+                    rows: list[tuple[str, ...]] = []
+                    for row in _children_named(table, "tr"):
+                        cells = tuple(
+                            _normalized_visible_text(
+                                " ".join(
+                                    "".join(
+                                        item.text or ""
+                                        for item in _iter_named(paragraph, "t")
+                                    )
+                                    for paragraph in _iter_named(cell, "p")
                                 )
-                                for paragraph in _iter_named(cell, "p")
                             )
+                            for cell in _children_named(row, "tc")
                         )
-                        for cell in _children_named(row, "tc")
+                        if len(cells) > 1 and all(cells):
+                            rows.append(cells)
+                    if not rows:
+                        continue
+                    grid = _first_named(table, "tblGrid")
+                    grid_columns = (
+                        list(_children_named(grid, "gridCol"))
+                        if grid is not None
+                        else []
                     )
-                    if len(cells) > 1 and all(cells):
-                        table_rows.append(cells)
+                    try:
+                        grid_widths = [
+                            float(_attribute_named(column, "w") or "") / 20
+                            for column in grid_columns
+                        ]
+                    except (TypeError, ValueError):
+                        grid_widths = []
+                    width = (
+                        sum(grid_widths)
+                        if grid_widths
+                        and all(math.isfinite(value) and value > 0 for value in grid_widths)
+                        else None
+                    )
+                    style_node = _first_named(table, "tblStyle")
+                    style = (
+                        (_attribute_named(style_node, "val") or "")
+                        .casefold()
+                        .replace(" ", "")
+                        if style_node is not None
+                        else ""
+                    )
+                    row_count = len(rows)
+                    column_count = len(grid_columns)
+                    painted_path_count = (
+                        3 * row_count * column_count
+                        + 2 * row_count
+                        + 2 * column_count
+                        + 5
+                        if style == "tablegrid" and column_count > 0
+                        else 0
+                    )
+                    table_rows.extend(rows)
+                    tables.append(
+                        _WordTableExpectation(
+                            tuple(rows), width, column_count, painted_path_count
+                        )
+                    )
             document_roots = {
                 name: root
                 for name, root in xml_roots.items()
@@ -1928,17 +2188,25 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         extracted_pages: list[str] = []
         unsafe_text = False
         pdf_images: list[tuple] = []
+        page_heights: list[float] = []
         for page_number, page in enumerate(reader.pages):
-            if _has_nonvisible_text(page, reader) or _has_unsafe_image_drawing(
-                page, reader
+            if (
+                _has_annotations(page)
+                or _has_nonvisible_text(page, reader)
+                or _has_unsafe_image_drawing(page, reader)
             ):
                 unsafe_text = True
+            page_heights.append(float(page.mediabox.height))
             extracted_pages.append(page.extract_text() or "")
             pdf_images.extend(_ordered_pdf_image_signatures(page, reader))
         pdf_text = _normalized_visible_text("\n".join(extracted_pages))
-        positioned, barriers, pdf_image_layouts, pdfium_unsafe = _pdfium_visible_layout(
-            pdf_content
-        )
+        (
+            positioned,
+            barriers,
+            pdf_image_layouts,
+            painted_paths,
+            pdfium_unsafe,
+        ) = _pdfium_visible_layout(pdf_content)
         reading_positioned = _positioned_reading_order(positioned)
         pdf_content_kinds = _pdf_content_kinds(reader)
         unsafe_text = unsafe_text or pdfium_unsafe
@@ -1957,6 +2225,12 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     document_order_matches = _ordered_text_blocks_match(
         document_fragments, reading_positioned, barriers
     )
+    repeatable_text_matches = _repeatable_text_matches(
+        header_fragments=header_fragments,
+        footer_fragments=footer_fragments,
+        positioned=reading_positioned,
+        page_heights=page_heights,
+    )
 
     images_match = _repeatable_word_images_match(
         document_signatures=document_images,
@@ -1971,6 +2245,9 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         page_count=len(reader.pages),
     )
     tables_match = _table_rows_match(table_rows, reading_positioned, barriers)
+    painted_paths_match = _painted_paths_are_bound_to_tables(
+        painted_paths, tables, reading_positioned, barriers
+    )
     text_sizes_match = _text_sizes_match(
         word_text_expectations, reading_positioned, barriers
     )
@@ -1982,9 +2259,11 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         or unsafe_text
         or not token_counts_match
         or not document_order_matches
+        or not repeatable_text_matches
         or not images_match
         or not content_order_matches
         or not tables_match
+        or not painted_paths_match
         or not text_sizes_match
     ):
         raise ValueError("final PDF does not faithfully represent the bound Word artifact")
