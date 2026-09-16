@@ -132,6 +132,11 @@ def _cell_property(cell: ElementTree.Element, name: str):
 
 
 _WORD_TEXT_SEPARATORS = frozenset({"br", "cr", "tab"})
+# PAGEREF and REF carry a "\h" switch that makes Word render the cross-reference
+# as a hyperlink.  Those produce a /Link annotation with no w:hyperlink element
+# anywhere in the package, so their expectations come from the field itself.
+_HYPERLINKED_FIELD_ANCHOR = re.compile(r"\s*(?:PAGEREF|REF)\s+(\S+)(?=\s|$)", re.IGNORECASE)
+_FIELD_HYPERLINK_SWITCH = re.compile(r"\\h(?=\s|$)", re.IGNORECASE)
 _LATIN_THEME_ALIASES = {
     "majorascii": "major",
     "majorhansi": "major",
@@ -1925,12 +1930,28 @@ def _word_internal_link_expectations(
     length = 0
     active: dict[str, tuple[str, int]] = {}
     spans: dict[str, tuple[int, int]] = {}
+    fields: list[dict] = []
+    field_links: list[tuple[str, str]] = []
 
     def append(value: str) -> None:
         nonlocal length
         if value:
             buffer.append(value)
             length += len(value)
+        if value and fields and fields[-1]["in_result"]:
+            fields[-1]["result"].append(value)
+
+    def close_field(field: dict) -> None:
+        # Word emits a /Link annotation for a hyperlinked cross-reference even
+        # though the package carries no w:hyperlink element for it.
+        instruction = "".join(field["instruction"])
+        match = _HYPERLINKED_FIELD_ANCHOR.match(instruction)
+        if match is None or _FIELD_HYPERLINK_SWITCH.search(instruction) is None:
+            return
+        text = _normalized_visible_text("".join(field["result"]))
+        if not text:
+            raise ValueError("Word internal hyperlink target is invalid")
+        field_links.append((text, match.group(1)))
 
     def walk(node: ElementTree.Element) -> None:
         # One depth-first pass visits each node exactly once.  Iterating
@@ -1957,6 +1978,30 @@ def _word_internal_link_expectations(
                 continue
             if local_name == "t":
                 append(child.text or "")
+                continue
+            if local_name == "instrText":
+                if fields:
+                    fields[-1]["instruction"].append(child.text or "")
+                continue
+            if local_name == "fldChar":
+                marker = (_attribute_named(child, "fldCharType") or "").casefold()
+                if marker == "begin":
+                    fields.append({"instruction": [], "result": [], "in_result": False})
+                elif marker == "separate" and fields:
+                    fields[-1]["in_result"] = True
+                elif marker == "end" and fields:
+                    close_field(fields.pop())
+                continue
+            if local_name == "fldSimple":
+                fields.append(
+                    {
+                        "instruction": [_attribute_named(child, "instr") or ""],
+                        "result": [],
+                        "in_result": True,
+                    }
+                )
+                walk(child)
+                close_field(fields.pop())
                 continue
             if local_name in _WORD_TEXT_SEPARATORS:
                 # A tab or break separates tokens even though it carries no text.
@@ -1997,6 +2042,14 @@ def _word_internal_link_expectations(
         )
         target = bookmark_targets.get(anchor or "")
         if not anchor or not link_text or target is None:
+            raise ValueError("Word internal hyperlink target is invalid")
+        target_text, target_occurrence = target
+        expectations.append(
+            _WordInternalLinkExpectation(link_text, target_text, target_occurrence)
+        )
+    for link_text, anchor in field_links:
+        target = bookmark_targets.get(anchor)
+        if target is None:
             raise ValueError("Word internal hyperlink target is invalid")
         target_text, target_occurrence = target
         expectations.append(

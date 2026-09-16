@@ -422,3 +422,30 @@ def test_native_environment_is_recorded() -> None:
             }
         }
     )
+
+
+def test_native_hyperlinked_cross_reference_is_accepted() -> None:
+    ""r"N-12: Word emits a /Link annotation for a PAGEREF \h cross-reference."""
+    run = '<w:r><w:rPr><w:sz w:val="24"/></w:rPr>'
+    body = (
+        '<w:p><w:bookmarkStart w:id="1" w:name="Secao1"/>'
+        + run
+        + '<w:t>Secao Um</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p><w:p>'
+        + run
+        + '<w:fldChar w:fldCharType="begin"/></w:r>'
+        + run
+        + r'<w:instrText xml:space="preserve"> PAGEREF Secao1 \h </w:instrText></w:r>'
+        + run
+        + '<w:fldChar w:fldCharType="separate"/></w:r>'
+        + run
+        + '<w:t>1</w:t></w:r>'
+        + run
+        + '<w:fldChar w:fldCharType="end"/></w:r></w:p>'
+    )
+    word = _package(main_type=_DOCX_MAIN_TYPE, body=body)
+
+    delivery_renderer.render_final_pdf_candidate(
+        word_content=word,
+        word_format="DOCX",
+        converter=LocalOfficePdfConverter(temp_root=_native_temp_root()),
+    )

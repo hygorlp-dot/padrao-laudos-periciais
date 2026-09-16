@@ -4976,3 +4976,64 @@ def test_genuinely_invisible_text_is_still_detected() -> None:
     *_, unsafe = delivery_renderer._pdfium_visible_layout(pdf)
 
     assert unsafe is True
+
+
+# --- Phase C F-09b: hyperlinked cross-reference fields produce link annotations ---
+#
+# Reproduced on Word 16.0.20326 first, as section 18 requires: a PAGEREF field
+# with the r"\h" switch makes Word emit a /Link annotation while the package
+# carries no w:hyperlink element at all, so the annotation count never matched
+# and a faithful document was rejected.  TOC entries need no new handling: Word
+# writes them as w:hyperlink inside the field result, which was already read.
+
+
+def _cross_reference_document(switch: str = r" \h "):
+    run = '<w:r><w:rPr><w:sz w:val="24"/></w:rPr>'
+    return _link_document(
+        '<w:p><w:bookmarkStart w:id="1" w:name="Secao1"/>'
+        + run
+        + "<w:t>Secao Um</w:t></w:r>"
+        + '<w:bookmarkEnd w:id="1"/></w:p><w:p>'
+        + run
+        + '<w:fldChar w:fldCharType="begin"/></w:r>'
+        + run
+        + '<w:instrText xml:space="preserve"> PAGEREF Secao1'
+        + switch
+        + "</w:instrText></w:r>"
+        + run
+        + '<w:fldChar w:fldCharType="separate"/></w:r>'
+        + run
+        + "<w:t>7</w:t></w:r>"
+        + run
+        + '<w:fldChar w:fldCharType="end"/></w:r></w:p>'
+    )
+
+
+def test_hyperlinked_cross_reference_field_becomes_a_link_expectation() -> None:
+    [expectation] = delivery_renderer._word_internal_link_expectations(
+        _cross_reference_document()
+    )
+
+    assert expectation.text == "7"
+    assert expectation.target_text == "secao um"
+    assert expectation.target_occurrence == 0
+
+
+def test_cross_reference_without_the_hyperlink_switch_creates_no_expectation() -> None:
+    assert delivery_renderer._word_internal_link_expectations(
+        _cross_reference_document(switch=" ")
+    ) == []
+
+
+def test_simple_field_cross_reference_becomes_a_link_expectation() -> None:
+    document = _link_document(
+        '<w:p><w:bookmarkStart w:id="1" w:name="Secao1"/>'
+        '<w:r><w:t>Secao Um</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>'
+        r'<w:p><w:fldSimple w:instr=" REF Secao1 \h ">'
+        "<w:r><w:t>Secao Um</w:t></w:r></w:fldSimple></w:p>"
+    )
+
+    [expectation] = delivery_renderer._word_internal_link_expectations(document)
+
+    assert expectation.text == "secao um"
+    assert expectation.target_text == "secao um"
