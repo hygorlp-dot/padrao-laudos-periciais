@@ -3084,6 +3084,31 @@ def test_wrapped_text_accepts_bound_cross_page_word_fragmentation() -> None:
     )
 
 
+def test_centered_wrapped_paragraph_keeps_anchor_across_styled_segments() -> None:
+    expectations = [
+        delivery_renderer._WordTextExpectation(
+            "prefix", 11, (0, 0, 0), True, False, False, "center",
+        ),
+        delivery_renderer._WordTextExpectation(
+            "alpha beta", 11, (0, 0, 0), False, False, False, "center",
+            paragraph_continuation=True,
+        ),
+    ]
+    positioned = [
+        delivery_renderer._PositionedText(
+            0, "prefix", 200, 700, 11, 250, 700, 710, font_weight=700
+        ),
+        delivery_renderer._PositionedText(
+            0, "alpha", 250, 700, 11, 400, 700, 710
+        ),
+        delivery_renderer._PositionedText(
+            0, "beta", 220, 685, 11, 380, 685, 695
+        ),
+    ]
+
+    assert delivery_renderer._text_sizes_match(expectations, positioned, [])
+
+
 def test_wrapped_text_rejects_cross_column_and_reverse_barrier_paths() -> None:
     positioned = [
         delivery_renderer._PositionedText(
