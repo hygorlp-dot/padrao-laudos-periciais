@@ -1532,6 +1532,8 @@ class _WordTextExpectation:
     body_flow_anchor: bool = False
     expected_previous_top_gap: float | None = None
     enforce_visible_run_style: bool = True
+    line_height: float | None = None
+    paragraph_continuation: bool = False
 
 
 def _word_page_geometry(
@@ -1846,6 +1848,37 @@ def _word_text_expectations(
             raise ValueError("invalid Word paragraph spacing")
         return value
 
+    def line_spacing_from_properties(
+        properties: ElementTree.Element | None,
+    ) -> tuple[str, float] | None:
+        spacing = _first_named(properties, "spacing")
+        if spacing is None:
+            return None
+        raw = _attribute_named(spacing, "line")
+        if raw is None:
+            return None
+        try:
+            value = float(raw)
+        except ValueError as exc:
+            raise ValueError("invalid Word line spacing") from exc
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("invalid Word line spacing")
+        rule = (_attribute_named(spacing, "lineRule") or "auto").casefold()
+        if rule not in {"auto", "exact", "atleast"}:
+            raise ValueError("unsupported Word line spacing")
+        return rule, value
+
+    def resolved_line_height(
+        spec: tuple[str, float] | None, font_size: float
+    ) -> float:
+        if spec is None:
+            return font_size * 1.2
+        rule, value = spec
+        if rule == "auto":
+            return font_size * 1.2 * value / 240.0
+        points = value / 20.0
+        return points if rule == "exact" else max(font_size * 1.2, points)
+
     default_size = 11.0
     default_font: str | None = None
     default_color = (0, 0, 0)
@@ -1855,6 +1888,7 @@ def _word_text_expectations(
     default_alignment = "left"
     default_spacing_before = 0.0
     default_spacing_after = 0.0
+    default_line_spacing: tuple[str, float] | None = None
     default_paragraph_style: str | None = None
     style_sizes: dict[str, float | None] = {}
     style_fonts: dict[str, str | None] = {}
@@ -1865,6 +1899,7 @@ def _word_text_expectations(
     style_alignment: dict[str, str | None] = {}
     style_spacing_before: dict[str, float | None] = {}
     style_spacing_after: dict[str, float | None] = {}
+    style_line_spacing: dict[str, tuple[str, float] | None] = {}
     style_bases: dict[str, str | None] = {}
     style_nodes: dict[str, ElementTree.Element] = {}
     if styles_root is not None:
@@ -1882,6 +1917,7 @@ def _word_text_expectations(
         default_spacing_after = (
             spacing_after_from_properties(defaults) or default_spacing_after
         )
+        default_line_spacing = line_spacing_from_properties(defaults)
         for style in _iter_named(styles_root, "style"):
             style_id = _attribute_named(style, "styleId")
             if not style_id:
@@ -1909,6 +1945,9 @@ def _word_text_expectations(
                 paragraph_properties
             )
             style_spacing_after[style_id] = spacing_after_from_properties(
+                paragraph_properties
+            )
+            style_line_spacing[style_id] = line_spacing_from_properties(
                 paragraph_properties
             )
             style_bases[style_id] = (
@@ -1976,9 +2015,27 @@ def _word_text_expectations(
             if look is None:
                 return default
             value = _attribute_named(look, name)
-            if value is None:
+            if value is not None:
+                return value.casefold() in {"1", "true", "on"}
+            raw_mask = _attribute_named(look, "val")
+            if raw_mask is None:
                 return default
-            return value.casefold() in {"1", "true", "on"}
+            try:
+                mask = int(raw_mask, 16)
+            except ValueError as exc:
+                raise ValueError("invalid Word table-look mask") from exc
+            flags = {
+                "firstRow": 0x0020,
+                "lastRow": 0x0040,
+                "firstColumn": 0x0080,
+                "lastColumn": 0x0100,
+                "noHBand": 0x0200,
+                "noVBand": 0x0400,
+            }
+            flag = flags.get(name)
+            if flag is None:
+                raise ValueError("unsupported Word table-look flag")
+            return bool(mask & flag)
 
         def style_chain(style_id: str | None) -> list[ElementTree.Element]:
             chain: list[ElementTree.Element] = []
@@ -1999,18 +2056,18 @@ def _word_text_expectations(
             return chain
 
         conditional_order = (
-            "band1horz",
-            "band2horz",
-            "band1vert",
             "band2vert",
-            "firstcol",
+            "band1vert",
+            "band2horz",
+            "band1horz",
             "lastcol",
-            "firstrow",
+            "firstcol",
             "lastrow",
-            "nwcell",
-            "necell",
-            "swcell",
+            "firstrow",
             "secell",
+            "swcell",
+            "necell",
+            "nwcell",
         )
         for table in _iter_named(root, "tbl"):
             table_properties = next(_children_named(table, "tblPr"), None)
@@ -2022,27 +2079,44 @@ def _word_text_expectations(
             )
             chain = style_chain(style_id)
             look = _first_named(table_properties, "tblLook")
+            row_band_size = 1
+            column_band_size = 1
+            for style in chain:
+                style_table_properties = next(
+                    _children_named(style, "tblPr"), None
+                )
+                for name, target in (
+                    ("tblStyleRowBandSize", "row"),
+                    ("tblStyleColBandSize", "column"),
+                ):
+                    size_node = _first_named(style_table_properties, name)
+                    if size_node is None:
+                        continue
+                    try:
+                        size = int(_attribute_named(size_node, "val") or "")
+                    except ValueError as exc:
+                        raise ValueError("invalid Word table band size") from exc
+                    if size < 1:
+                        raise ValueError("invalid Word table band size")
+                    if target == "row":
+                        row_band_size = size
+                    else:
+                        column_band_size = size
+            first_row_enabled = enabled(look, "firstRow", default=True)
+            last_row_enabled = enabled(look, "lastRow")
+            first_column_enabled = enabled(look, "firstColumn")
+            last_column_enabled = enabled(look, "lastColumn")
             rows = list(_children_named(table, "tr"))
             for row_index, row in enumerate(rows):
                 cells = list(_children_named(row, "tc"))
                 for cell_index, cell in enumerate(cells):
                     active: set[str] = set()
-                    first_row = row_index == 0 and enabled(
-                        look, "firstRow", default=True
+                    first_row = row_index == 0 and first_row_enabled
+                    last_row = row_index == len(rows) - 1 and last_row_enabled
+                    first_column = cell_index == 0 and first_column_enabled
+                    last_column = (
+                        cell_index == len(cells) - 1 and last_column_enabled
                     )
-                    last_row = row_index == len(rows) - 1 and enabled(
-                        look, "lastRow"
-                    )
-                    first_column = cell_index == 0 and enabled(
-                        look, "firstColumn"
-                    )
-                    last_column = cell_index == len(cells) - 1 and enabled(
-                        look, "lastColumn"
-                    )
-                    if not enabled(look, "noHBand"):
-                        active.add("band1horz" if row_index % 2 == 0 else "band2horz")
-                    if not enabled(look, "noVBand", default=True):
-                        active.add("band1vert" if cell_index % 2 == 0 else "band2vert")
                     if first_row:
                         active.add("firstrow")
                     if last_row:
@@ -2059,17 +2133,40 @@ def _word_text_expectations(
                         active.add("swcell")
                     if last_row and last_column:
                         active.add("secell")
+                    special_region = (
+                        first_row or last_row or first_column or last_column
+                    )
+                    if not special_region and not enabled(look, "noHBand"):
+                        band_row = row_index - int(first_row_enabled)
+                        active.add(
+                            "band1horz"
+                            if (band_row // row_band_size) % 2 == 0
+                            else "band2horz"
+                        )
+                    if not special_region and not enabled(
+                        look, "noVBand", default=True
+                    ):
+                        band_column = cell_index - int(first_column_enabled)
+                        active.add(
+                            "band1vert"
+                            if (band_column // column_band_size) % 2 == 0
+                            else "band2vert"
+                        )
 
                     layers: list[ElementTree.Element] = []
                     for style in chain:
                         whole_table = next(_children_named(style, "rPr"), None)
                         if whole_table is not None:
                             layers.append(whole_table)
-                        conditional = {
+                    conditionals = [
+                        {
                             (_attribute_named(item, "type") or "").casefold(): item
                             for item in _children_named(style, "tblStylePr")
                         }
-                        for kind in conditional_order:
+                        for style in chain
+                    ]
+                    for kind in conditional_order:
+                        for conditional in conditionals:
                             item = conditional.get(kind)
                             run_properties = _first_named(item, "rPr")
                             if kind in active and run_properties is not None:
@@ -2151,8 +2248,19 @@ def _word_text_expectations(
                                 default_spacing_after,
                             )
                         )
+                    blank_line_spacing = line_spacing_from_properties(
+                        paragraph_properties
+                    )
+                    if blank_line_spacing is None:
+                        blank_line_spacing = resolve_style_value(
+                            style_id,
+                            style_line_spacing,
+                            default_line_spacing,
+                        )
                     anchor_preceding_blank_height += (
-                        blank_before + blank_size * 1.2 + blank_after
+                        blank_before
+                        + resolved_line_height(blank_line_spacing, blank_size)
+                        + blank_after
                     )
                     continue
             break
@@ -2181,7 +2289,7 @@ def _word_text_expectations(
         if active_content_names is None or name in active_content_names
     ]
     for name in content_names:
-        previous_body_size: float | None = None
+        previous_body_line_height: float | None = None
         previous_body_after = 0.0
         pending_blank_height = 0.0
         table_properties_by_paragraph = table_run_properties(xml_roots[name])
@@ -2290,6 +2398,15 @@ def _word_text_expectations(
                     default_spacing_after,
                 )
             )
+            paragraph_line_spacing = line_spacing_from_properties(
+                paragraph_properties
+            )
+            if paragraph_line_spacing is None:
+                paragraph_line_spacing = resolve_style_value(
+                    paragraph_style or default_paragraph_style,
+                    style_line_spacing,
+                    default_line_spacing,
+                )
             segments: list[
                 tuple[
                     str,
@@ -2380,6 +2497,7 @@ def _word_text_expectations(
                     or run_properties is not None
                     or run_style
                     or paragraph_style
+                    or default_paragraph_style
                     or table_layers
                 )
                 raw_text = "".join(
@@ -2429,6 +2547,10 @@ def _word_text_expectations(
                             enforce_visible_run_style,
                         )
                     )
+            paragraph_line_height = resolved_line_height(
+                paragraph_line_spacing,
+                max((segment[1] for segment in segments), default=paragraph_size),
+            )
             for segment_index, (
                 text,
                 size,
@@ -2459,11 +2581,11 @@ def _word_text_expectations(
                     and segment_index == 0
                 )
                 expected_previous_top_gap = (
-                    previous_body_size * 1.2
+                    previous_body_line_height
                     + previous_body_after
                     + pending_blank_height
                     + paragraph_spacing_before
-                    if body_flow_anchor and previous_body_size is not None
+                    if body_flow_anchor and previous_body_line_height is not None
                     else None
                 )
                 expectations.append(
@@ -2482,21 +2604,23 @@ def _word_text_expectations(
                         body_flow_anchor,
                         expected_previous_top_gap,
                         enforce_visible_run_style,
+                        paragraph_line_height,
+                        segment_index > 0,
                     )
                 )
             if name == "word/document.xml":
                 if in_table or paragraph_has_drawing:
-                    previous_body_size = None
+                    previous_body_line_height = None
                     previous_body_after = 0.0
                     pending_blank_height = 0.0
                 elif segments:
-                    previous_body_size = paragraph_size
+                    previous_body_line_height = paragraph_line_height
                     previous_body_after = paragraph_spacing_after
                     pending_blank_height = 0.0
                 else:
                     pending_blank_height += (
                         paragraph_spacing_before
-                        + paragraph_size * 1.2
+                        + paragraph_line_height
                         + paragraph_spacing_after
                     )
     return expectations
@@ -2511,6 +2635,7 @@ def _text_sizes_match(
         return True
     used_fragments: set[int] = set()
     previous_body_fragments: list[_PositionedText] | None = None
+    paragraph_left_anchor: float | None = None
     for expectation in expectations:
         match: tuple[int, int] | None = None
         for start in range(len(positioned)):
@@ -2525,6 +2650,13 @@ def _text_sizes_match(
                 start,
                 barriers,
                 allow_line_wrap=True,
+                alignment=expectation.alignment,
+                expected_line_height=expectation.line_height,
+                wrap_left_anchor=(
+                    paragraph_left_anchor
+                    if expectation.paragraph_continuation
+                    else None
+                ),
             )
             if end is None:
                 continue
@@ -2566,7 +2698,9 @@ def _text_sizes_match(
                     fragment
                     for fragment in positioned
                     if fragment.page == anchor.page
-                    and abs(fragment.y - anchor.y) <= line_tolerance
+                    and max(fragment.bottom, anchor.bottom)
+                    - min(fragment.top, anchor.top)
+                    <= line_tolerance
                 ]
                 line_left = min(fragment.x for fragment in line)
                 line_right = max(fragment.right for fragment in line)
@@ -2608,7 +2742,7 @@ def _text_sizes_match(
                             6.0, expectation.font_size * 0.75
                         )
                         additional_flow_tolerance = max(
-                            48.0, expectation.font_size * 3
+                            6.0, expectation.font_size * 0.75
                         )
                         flow_matches = (
                             observed_gap >= 0
@@ -2632,6 +2766,8 @@ def _text_sizes_match(
         if match is None:
             return False
         used_fragments.update(range(*match))
+        if not expectation.paragraph_continuation:
+            paragraph_left_anchor = positioned[match[0]].x
         if expectation.body_flow_anchor:
             previous_body_fragments = positioned[match[0] : match[1]]
     return True
@@ -3056,14 +3192,18 @@ def _fragment_sequence_end(
     barriers: list[_VerticalBarrier],
     *,
     allow_line_wrap: bool = False,
+    alignment: str | None = None,
+    expected_line_height: float | None = None,
+    wrap_left_anchor: float | None = None,
 ) -> int | None:
-    target = _lexical_tokens(expected)
-    observed: list[str] = []
-    observed_text: list[str] = []
     normalized_target = _normalized_visible_text(expected)
+    text_candidates = {""}
     previous: _PositionedText | None = None
+    line_start: _PositionedText | None = None
     for index in range(start, len(fragments)):
         fragment = fragments[index]
+        if line_start is None:
+            line_start = fragment
         if previous is not None:
             line_tolerance = max(3.0, 0.35 * max(previous.font_size, fragment.font_size))
             vertical_gap = max(previous.bottom, fragment.bottom) - min(
@@ -3077,19 +3217,57 @@ def _fragment_sequence_end(
                 and fragment.x <= estimated_end + horizontal_tolerance
             )
             line_step = previous.top - fragment.top
+            wrap_alignment = alignment
+            if wrap_alignment is None and line_start is not None:
+                prior_center = (line_start.x + previous.right) / 2
+                if line_start.x <= previous.page_width * 0.25:
+                    wrap_alignment = "left"
+                elif previous.right >= previous.page_width * 0.75:
+                    wrap_alignment = "right"
+                elif abs(prior_center - previous.page_width / 2) <= max(
+                    4.0, previous.page_width * 0.08
+                ):
+                    wrap_alignment = "center"
+            maximum_line_step = max(
+                24.0,
+                expected_line_height or 0.0,
+                2.25 * max(previous.font_size, fragment.font_size),
+            )
+            if wrap_alignment in {"left", "both"}:
+                wrap_anchor_matches = (
+                    line_start is not None
+                    and abs(
+                        fragment.x
+                        - (
+                            wrap_left_anchor
+                            if wrap_left_anchor is not None
+                            else line_start.x
+                        )
+                    )
+                    <= horizontal_tolerance
+                )
+            elif wrap_alignment == "right":
+                wrap_anchor_matches = (
+                    abs(fragment.right - previous.right) <= horizontal_tolerance
+                )
+            elif wrap_alignment == "center" and line_start is not None:
+                wrap_anchor_matches = abs(
+                    (fragment.x + fragment.right) / 2
+                    - (line_start.x + previous.right) / 2
+                ) <= horizontal_tolerance
+            else:
+                wrap_anchor_matches = False
             wrapped_line = (
                 allow_line_wrap
-                and 0 < line_step
-                <= max(24.0, 2.25 * max(previous.font_size, fragment.font_size))
-                and min(
-                    abs(fragment.x - previous.x),
-                    abs(fragment.right - previous.right),
-                    abs(
-                        (fragment.x + fragment.right) / 2
-                        - (previous.x + previous.right) / 2
-                    ),
-                )
-                <= horizontal_tolerance
+                and 0 < line_step <= maximum_line_step
+                and wrap_anchor_matches
+            )
+            wrapped_page = (
+                allow_line_wrap
+                and fragment.page == previous.page + 1
+                and previous.top <= previous.page_height * 0.30
+                and fragment.top >= fragment.page_height * 0.70
+                and wrap_anchor_matches
             )
             left_fragment, right_fragment = sorted(
                 (previous, fragment), key=lambda value: value.x
@@ -3103,29 +3281,28 @@ def _fragment_sequence_end(
                 and barrier.top >= min(previous.bottom, fragment.bottom)
                 for barrier in barriers
             )
-            if (
-                fragment.page != previous.page
-                or not (same_line or wrapped_line)
-                or crosses_barrier
-            ):
+            same_page_continuation = (
+                fragment.page == previous.page and (same_line or wrapped_line)
+            )
+            if not (same_page_continuation or wrapped_page) or crosses_barrier:
                 return None
-        observed.extend(_lexical_tokens(fragment.text))
-        observed_text.append(fragment.text)
-        observed_tuple = tuple(observed)
-        compact_text = _normalized_visible_text("".join(observed_text))
-        spaced_text = _normalized_visible_text(" ".join(observed_text))
-        if (
-            observed_tuple == target
-            or compact_text == normalized_target
-            or spaced_text == normalized_target
-        ):
+            if wrapped_line or wrapped_page:
+                line_start = fragment
+        fragment_text = _normalized_visible_text(fragment.text)
+        next_candidates = {
+            candidate
+            for observed in text_candidates
+            for candidate in (
+                _normalized_visible_text(observed + fragment_text),
+                _normalized_visible_text(observed + " " + fragment_text),
+            )
+            if normalized_target.startswith(candidate)
+        }
+        if normalized_target in next_candidates:
             return index + 1
-        if (
-            observed_tuple != target[: len(observed_tuple)]
-            and not normalized_target.startswith(compact_text)
-            and not normalized_target.startswith(spaced_text)
-        ):
+        if not next_candidates:
             return None
+        text_candidates = next_candidates
         previous = fragment
     return None
 
@@ -4015,9 +4192,31 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                             if table_look is None:
                                 return default
                             value = _attribute_named(table_look, name)
-                            if value is None:
+                            if value is not None:
+                                return value.casefold() in {"1", "true", "on"}
+                            raw_mask = _attribute_named(table_look, "val")
+                            if raw_mask is None:
                                 return default
-                            return value.casefold() in {"1", "true", "on"}
+                            try:
+                                mask = int(raw_mask, 16)
+                            except ValueError as exc:
+                                raise ValueError(
+                                    "invalid Word table-look mask"
+                                ) from exc
+                            flags = {
+                                "firstRow": 0x0020,
+                                "lastRow": 0x0040,
+                                "firstColumn": 0x0080,
+                                "lastColumn": 0x0100,
+                                "noHBand": 0x0200,
+                                "noVBand": 0x0400,
+                            }
+                            flag = flags.get(name)
+                            if flag is None:
+                                raise ValueError(
+                                    "unsupported Word table-look flag"
+                                )
+                            return bool(mask & flag)
 
                         first_row = look_enabled("firstRow", True)
                         last_row = look_enabled("lastRow")
@@ -4087,17 +4286,24 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                             band_size_node = _first_named(
                                 style_properties, "tblStyleRowBandSize"
                             )
-                            band_size = int(
-                                _attribute_named(band_size_node, "val") or "1"
-                            )
-                            if band_size != 1:
-                                raise ValueError("unsupported Word table row band size")
+                            try:
+                                band_size = int(
+                                    _attribute_named(band_size_node, "val") or "1"
+                                )
+                            except ValueError as exc:
+                                raise ValueError(
+                                    "invalid Word table row band size"
+                                ) from exc
+                            if band_size < 1:
+                                raise ValueError(
+                                    "invalid Word table row band size"
+                                )
                             start = 1 if first_row else 0
                             stop = len(rows) - (1 if last_row else 0)
                             band_rows = {
                                 index
                                 for index in range(start, stop)
-                                if (index - start) % 2 == 0
+                                if ((index - start) // band_size) % 2 == 0
                             }
                             cells = [
                                 replace(
