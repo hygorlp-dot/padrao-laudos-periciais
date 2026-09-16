@@ -2189,6 +2189,38 @@ def test_fidelity_rejects_single_pixel_marker_swap_over_texture() -> None:
         )
 
 
+def test_fidelity_rejects_moderate_marker_swap_over_texture() -> None:
+    random = Random(0)
+    source_image = Image.new("RGB", (32, 32))
+    source_image.putdata(
+        [
+            (random.randrange(256), random.randrange(256), random.randrange(256))
+            for _ in range(32 * 32)
+        ]
+    )
+    candidate_image = source_image.copy()
+    first_color = (200, 40, 40)
+    second_color = (40, 200, 40)
+    for y in range(2):
+        for x in range(2):
+            source_image.putpixel((6 + x, 6 + y), first_color)
+            source_image.putpixel((22 + x, 22 + y), second_color)
+            candidate_image.putpixel((6 + x, 6 + y), second_color)
+            candidate_image.putpixel((22 + x, 22 + y), first_color)
+
+    source = BytesIO()
+    source_image.save(source, "PNG")
+    candidate = BytesIO()
+    candidate_image.save(candidate, "JPEG", quality=100, subsampling=0)
+    word = _word_with_image_and_text("Synthetic", source.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", candidate.getvalue(), image_x=100),
+        )
+
+
 def test_fidelity_rejects_patch_exchange_across_spatial_boundaries() -> None:
     source_image = Image.new("RGB", (32, 32))
     source_image.putdata(
