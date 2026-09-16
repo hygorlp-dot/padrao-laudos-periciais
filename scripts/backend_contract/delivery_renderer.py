@@ -330,14 +330,40 @@ def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple
         blurred_mean_delta = sum(blurred_color_deltas) / len(
             blurred_color_deltas
         )
+
+        def detail_energy(image: Image.Image) -> tuple[float, float, float]:
+            low_pass = image.filter(ImageFilter.GaussianBlur(1))
+            pixels = tuple(image.get_flattened_data())
+            low_pass_pixels = tuple(low_pass.get_flattened_data())
+            return tuple(
+                math.sqrt(
+                    sum(
+                        (pixel[channel] - smooth[channel]) ** 2
+                        for pixel, smooth in zip(pixels, low_pass_pixels)
+                    )
+                    / len(pixels)
+                )
+                for channel in range(3)
+            )
+
+        source_detail = detail_energy(source_image)
+        candidate_detail = detail_energy(candidate_image)
         spatial_structure_matches = (
             sum(a != b for a, b in zip(first[2], second[2])) <= 16
             and all(value is None or value >= 0.85 for value in correlations)
             and all(value is None or value >= 0.25 for value in local_correlations)
         )
         return (
-            all(abs(a - b) <= 12 for a, b in zip(first[0], second[0]))
+            all(abs(a - b) <= 4 for a, b in zip(first[0], second[0]))
             and all(abs(a - b) <= 12 for a, b in zip(first[1], second[1]))
+            and raw_mean_delta <= 24
+            and raw_color_delta <= 192
+            and blurred_mean_delta <= 12
+            and blurred_color_delta <= 50
+            and all(
+                candidate <= source * 1.1 + 2
+                for source, candidate in zip(source_detail, candidate_detail)
+            )
             and raw_color_delta <= max(16, raw_mean_delta * 9)
             and blurred_color_delta <= max(12, blurred_mean_delta * 9)
             and (raw_color_delta <= 12 or spatial_structure_matches)

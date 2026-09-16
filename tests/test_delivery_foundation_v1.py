@@ -2221,6 +2221,119 @@ def test_fidelity_rejects_moderate_marker_swap_over_texture() -> None:
         )
 
 
+def test_fidelity_rejects_diffuse_residual_padding_around_marker_swap() -> None:
+    random = Random(0)
+    source_image = Image.new("RGB", (32, 32))
+    source_image.putdata(
+        [
+            (random.randrange(256), random.randrange(256), random.randrange(256))
+            for _ in range(32 * 32)
+        ]
+    )
+    candidate_image = source_image.copy()
+    for y in range(32):
+        for x in range(32):
+            red, green, blue = candidate_image.getpixel((x, y))
+            direction = 1 if x < 16 else -1
+            candidate_image.putpixel(
+                (x, y),
+                (
+                    max(0, min(255, red + direction * 26)),
+                    max(0, min(255, green - direction * 13)),
+                    blue,
+                ),
+            )
+    for y in range(3):
+        for x in range(3):
+            source_image.putpixel((6 + x, 6 + y), (255, 0, 0))
+            source_image.putpixel((22 + x, 22 + y), (0, 130, 0))
+            candidate_image.putpixel((6 + x, 6 + y), (0, 130, 0))
+            candidate_image.putpixel((22 + x, 22 + y), (255, 0, 0))
+
+    source = BytesIO()
+    source_image.save(source, "PNG")
+    candidate = BytesIO()
+    candidate_image.save(candidate, "JPEG", quality=100, subsampling=0)
+    word = _word_with_image_and_text("Synthetic", source.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", candidate.getvalue(), image_x=100),
+        )
+
+
+def test_fidelity_rejects_distributed_chromatic_adulteration() -> None:
+    source_image = Image.new("RGB", (32, 32))
+    source_image.putdata(
+        [
+            (
+                (x * 7 + y * 3) % 256,
+                (x * 5 + y * 11) % 256,
+                (x * 13 + y * 2) % 256,
+            )
+            for y in range(32)
+            for x in range(32)
+        ]
+    )
+    candidate_image = source_image.copy()
+    for y in range(0, 32, 2):
+        for x in range(0, 32, 2):
+            red, green, blue = candidate_image.getpixel((x, y))
+            candidate_image.putpixel(
+                (x, y),
+                (min(255, red + 48), max(0, green - 48), blue),
+            )
+
+    source = BytesIO()
+    source_image.save(source, "PNG")
+    candidate = BytesIO()
+    candidate_image.save(candidate, "JPEG", quality=100, subsampling=0)
+    word = _word_with_image_and_text("Synthetic", source.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", candidate.getvalue(), image_x=100),
+        )
+
+
+def test_fidelity_rejects_balanced_distributed_chromatic_adulteration() -> None:
+    source_image = Image.new("RGB", (32, 32))
+    source_image.putdata(
+        [
+            (
+                80 + (x * 7 + y * 3) % 96,
+                80 + (x * 5 + y * 11) % 96,
+                80 + (x * 13 + y * 2) % 96,
+            )
+            for y in range(32)
+            for x in range(32)
+        ]
+    )
+    candidate_image = source_image.copy()
+    for y in range(0, 32, 2):
+        for x in range(0, 32, 2):
+            red, green, blue = candidate_image.getpixel((x, y))
+            direction = 1 if (x // 2 + y // 2) % 2 == 0 else -1
+            candidate_image.putpixel(
+                (x, y),
+                (red + direction * 32, green - direction * 32, blue),
+            )
+
+    source = BytesIO()
+    source_image.save(source, "PNG")
+    candidate = BytesIO()
+    candidate_image.save(candidate, "JPEG", quality=100, subsampling=0)
+    word = _word_with_image_and_text("Synthetic", source.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", candidate.getvalue(), image_x=100),
+        )
+
+
 def test_fidelity_rejects_patch_exchange_across_spatial_boundaries() -> None:
     source_image = Image.new("RGB", (32, 32))
     source_image.putdata(
