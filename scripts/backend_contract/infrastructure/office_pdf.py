@@ -8,6 +8,7 @@ No command, executable, argv, shell or COM operation is accepted from callers.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import ctypes
 from dataclasses import dataclass
 from hashlib import sha256
 import json
@@ -38,6 +39,8 @@ _PHASES = (
     "WORKER_EXIT",
 )
 _PHASE_INDEX = {phase: index for index, phase in enumerate(_PHASES)}
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+_DRIVE_FIXED = 3
 
 
 class RendererUnavailable(ValueError):
@@ -335,10 +338,36 @@ def _remove_render_tree(
 
 @contextmanager
 def _render_directory(temp_root: Path | None):
+    candidate = Path(temp_root) if temp_root is not None else Path(tempfile.gettempdir())
+    raw_candidate = os.fspath(candidate)
+    if raw_candidate.startswith(("\\\\", "//")):
+        raise RendererUnavailable("local Word render root must be on a local drive")
+    try:
+        validated_root = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise RendererUnavailable("local Word render root is unavailable") from exc
+    if not validated_root.is_dir():
+        raise RendererUnavailable("local Word render root is not a directory")
+    if os.name == "nt":
+        anchor = validated_root.anchor
+        if not anchor or anchor.startswith(("\\\\", "//")):
+            raise RendererUnavailable("local Word render root must be on a local drive")
+        if ctypes.windll.kernel32.GetDriveTypeW(str(Path(anchor))) != _DRIVE_FIXED:
+            raise RendererUnavailable("local Word render root must be on a fixed drive")
+        current = validated_root
+        while True:
+            attributes = getattr(
+                os.stat(current, follow_symlinks=False), "st_file_attributes", 0
+            )
+            if attributes & _FILE_ATTRIBUTE_REPARSE_POINT:
+                raise RendererUnavailable("local Word render root cannot use reparse points")
+            if current == Path(anchor):
+                break
+            current = current.parent
     root = Path(
         tempfile.mkdtemp(
             prefix="plp-word-pdf-",
-            dir=str(temp_root) if temp_root is not None else None,
+            dir=str(validated_root),
         )
     ).resolve(strict=True)
     try:

@@ -365,6 +365,19 @@ def _word_with_repeatable_text(
     return output.getvalue()
 
 
+def _word_with_emphasized_text(text: str) -> bytes:
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:body><w:p><w:pPr><w:jc w:val="center"/></w:pPr>'
+            '<w:r><w:rPr><w:b/><w:i/><w:u w:val="single"/></w:rPr>'
+            f"<w:t>{text}</w:t></w:r></w:p></w:body></w:document>",
+        )
+    return output.getvalue()
+
+
 def _word_with_header_image(body_text: str, image_bytes: bytes) -> bytes:
     output = BytesIO()
     width_emu = round(172.8 * 12_700)
@@ -851,7 +864,13 @@ def test_delivery_review_rejects_professional_identity_outside_bound_authority()
 def test_final_word_reopens_while_diagnostic_pdf_remains_non_delivery() -> None:
     output = BytesIO()
     with ZipFile(output, "w", ZIP_DEFLATED) as package:
-        package.writestr("[Content_Types].xml", "<Types/>")
+        package.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/>'
+            "</Types>",
+        )
         package.writestr("word/document.xml", "<document/>")
         package.writestr("word/vbaProject.bin", b"synthetic macro")
     word = output.getvalue()
@@ -871,7 +890,13 @@ def test_final_word_reopens_while_diagnostic_pdf_remains_non_delivery() -> None:
 def test_artifact_validation_rejects_macro_identity_change_and_malformed_pdf() -> None:
     output = BytesIO()
     with ZipFile(output, "w", ZIP_DEFLATED) as package:
-        package.writestr("[Content_Types].xml", "<Types/>")
+        package.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            "</Types>",
+        )
         package.writestr("word/document.xml", "<document/>")
     with pytest.raises(ValueError, match="macro identity"):
         validate_final_artifact(output.getvalue(), "DOCM")
@@ -879,6 +904,23 @@ def test_artifact_validation_rejects_macro_identity_change_and_malformed_pdf() -
         validate_final_artifact(b"%PDF-1.7\nno page or eof", "PDF")
     with pytest.raises(ValueError, match="PDF"):
         validate_final_artifact(b"%PDF-1.7\n1 0 obj <</Type /Page>> endobj\n%%EOF", "PDF")
+
+
+def test_macro_enabled_word_container_does_not_require_a_vba_project() -> None:
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/>'
+            "</Types>",
+        )
+        package.writestr("word/document.xml", "<document/>")
+
+    _digest, _size, media = validate_final_artifact(output.getvalue(), "DOCM")
+
+    assert media == "application/vnd.ms-word.document.macroEnabled.12"
 
 
 def test_supporting_image_bytes_are_verified_by_declared_media_type() -> None:
@@ -931,7 +973,13 @@ def test_rendered_word_bytes_contain_and_change_with_entire_approved_report_body
     </w:body></w:document>'''
     package_bytes = BytesIO()
     with ZipFile(package_bytes, "w", ZIP_DEFLATED) as package:
-        package.writestr("[Content_Types].xml", "<Types/>")
+        package.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/>'
+            "</Types>",
+        )
         package.writestr("word/document.xml", document)
         package.writestr("word/styles.xml", "<styles/>")
         package.writestr("word/numbering.xml", "<numbering/>")
@@ -1212,6 +1260,44 @@ def test_repeatable_header_and_footer_text_are_required_on_every_page() -> None:
     delivery_renderer._validate_pdf_fidelity(word, complete)
     with pytest.raises(ValueError, match="faithfully represent"):
         delivery_renderer._validate_pdf_fidelity(word, missing)
+
+
+def test_page_field_uses_effective_page_number_instead_of_cached_word_result() -> None:
+    paragraph = delivery_renderer.ElementTree.fromstring(
+        '<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:r><w:t>Page </w:t></w:r>'
+        '<w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple>'
+        "</w:p>"
+    )
+
+    assert delivery_renderer._dynamic_paragraph_text(
+        paragraph, page_number=3
+    ) == "Page 3"
+
+
+def test_internal_word_hyperlink_is_bound_to_named_bookmark_text() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<w:body><w:p><w:bookmarkStart w:id="1" w:name="Target"/>'
+        '<w:r><w:t>Target text</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>'
+        '<w:p><w:hyperlink w:anchor="Target"><w:r><w:t>Go to target</w:t></w:r>'
+        "</w:hyperlink></w:p></w:body></w:document>"
+    )
+
+    assert delivery_renderer._word_internal_link_expectations(document) == [
+        delivery_renderer._WordInternalLinkExpectation(
+            "go to target", "target text"
+        )
+    ]
+
+    external = next(delivery_renderer._iter_named(document, "hyperlink"))
+    external.set(
+        "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id",
+        "rIdExternal",
+    )
+    with pytest.raises(ValueError, match="external Word hyperlink"):
+        delivery_renderer._word_internal_link_expectations(document)
 
 
 @pytest.mark.parametrize(
@@ -2119,6 +2205,82 @@ def test_fidelity_rejects_unbound_visible_stroked_path() -> None:
                 trailing_commands=b" q 1 0 0 RG 4 w 420 40 120 90 re S Q",
             ),
         )
+
+
+def test_table_grid_path_binding_supports_page_segments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fragment(page: int, text: str, x: float) -> delivery_renderer._PositionedText:
+        return delivery_renderer._PositionedText(
+            page, text, x, 700, 11, x + 30, 690, 710
+        )
+
+    matched_rows = [
+        [fragment(0, "A", 100), fragment(0, "B", 200)],
+        [fragment(1, "C", 100), fragment(1, "D", 200)],
+    ]
+    monkeypatch.setattr(
+        delivery_renderer,
+        "_matched_table_row_fragments",
+        lambda _rows, _positioned, _barriers: matched_rows,
+    )
+
+    def segment_paths(page: int) -> list[delivery_renderer._PaintedPath]:
+        paths = [
+            delivery_renderer._PaintedPath(page, x - 0.25, 690, x + 0.25, 710)
+            for x in (100, 200, 300)
+        ] + [
+            delivery_renderer._PaintedPath(page, 100, y - 0.25, 300, y + 0.25)
+            for y in (690, 710)
+        ]
+        while len(paths) < 17:
+            paths.append(paths[len(paths) % 5])
+        return paths
+
+    paths = segment_paths(0) + segment_paths(1)
+    table = delivery_renderer._WordTableExpectation(
+        (("A", "B"), ("C", "D")),
+        (0, 100, 200),
+        (2, 2),
+        (0, 0),
+        ((), ()),
+        ((1,), (1,)),
+        (),
+        True,
+    )
+    assert delivery_renderer._painted_paths_are_bound_to_tables(
+        paths, [table], [], []
+    )
+    assert not delivery_renderer._painted_paths_are_bound_to_tables(
+        paths + [delivery_renderer._PaintedPath(1, 110, 695, 111, 705)],
+        [table],
+        [],
+        [],
+    )
+    red_paths = [replace(path, fill_color=(255, 0, 0, 255)) for path in paths]
+    assert not delivery_renderer._painted_paths_are_bound_to_tables(
+        red_paths, [table], [], []
+    )
+
+
+def test_fidelity_rejects_loss_of_text_emphasis_underline_and_alignment() -> None:
+    word = _word_with_emphasized_text("MATERIAL SAFETY WARNING 223")
+    regular_left_aligned = _positioned_text_pdf(
+        [[("MATERIAL SAFETY WARNING 223", 50, 700, 11, 0)]]
+    )
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(word, regular_left_aligned)
+
+
+def test_fidelity_rejects_body_text_relocated_away_from_word_alignment() -> None:
+    word = _word_text("Authoritative heading 223")
+    relocated = _positioned_text_pdf(
+        [[("Authoritative heading 223", 300, 700, 11, 0)]]
+    )
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(word, relocated)
 
 
 def test_fidelity_rejects_unbound_pdf_annotation() -> None:

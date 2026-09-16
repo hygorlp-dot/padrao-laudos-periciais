@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
 import ctypes
 from dataclasses import dataclass, replace
 from hashlib import sha256
@@ -34,6 +35,10 @@ from .report_template import (
 
 _DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _DOCM_MEDIA = "application/vnd.ms-word.document.macroEnabled.12"
+_DOCX_MAIN_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
+)
+_DOCM_MAIN_CONTENT_TYPE = "application/vnd.ms-word.document.macroEnabled.main+xml"
 _PDF_MEDIA = "application/pdf"
 DELIVERY_RENDERING_VERSION = "delivery-renderer/2.0.0"
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -471,14 +476,33 @@ class _PaintedPath:
     bottom: float
     right: float
     top: float
+    fill_color: tuple[int, int, int, int] | None = (0, 0, 0, 255)
+    stroke_color: tuple[int, int, int, int] | None = None
+    fill_mode: int = 1
+    stroke: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _WordTableCellExpectation:
+    row_start: int
+    row_end: int
+    column_start: int
+    column_end: int
+    paragraphs: tuple[str, ...]
+    fill_color: tuple[int, int, int, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class _WordTableExpectation:
     rows: tuple[tuple[str, ...], ...]
-    width: float | None
-    column_count: int
-    painted_path_count: int
+    column_offsets: tuple[float, ...]
+    row_cell_counts: tuple[int, ...]
+    row_vertical_merge_continuations: tuple[int, ...]
+    row_vertical_merge_ranges: tuple[tuple[tuple[int, int], ...], ...]
+    row_boundaries: tuple[tuple[int, ...], ...]
+    cells: tuple[_WordTableCellExpectation, ...]
+    painted_grid: bool
+    horizontal_borders: tuple[tuple[int, tuple[int, int, int, int]], ...] = ()
 
 
 def _ordered_word_image_layouts(
@@ -898,10 +922,104 @@ def _content_kinds_are_ordered_subsequence(
     return all(any(candidate == value for candidate in iterator) for value in expected)
 
 
+def _dynamic_paragraph_text(
+    paragraph: ElementTree.Element, *, page_number: int
+) -> str:
+    def events(node: ElementTree.Element):
+        for child in node:
+            if _local_name(child.tag) == "fldSimple":
+                yield ("field", (_attribute_named(child, "instr") or "").strip())
+                continue
+            yield ("node", child)
+            yield from events(child)
+
+    values: list[str] = []
+    field_instruction: list[str] | None = None
+    skip_field_result = False
+    for kind, value in events(paragraph):
+        if kind == "field":
+            if str(value).casefold() != "page":
+                raise ValueError("unsupported dynamic Word field")
+            values.append(str(page_number))
+            continue
+        item = value
+        assert isinstance(item, ElementTree.Element)
+        name = _local_name(item.tag)
+        if name == "fldChar":
+            field_type = (_attribute_named(item, "fldCharType") or "").casefold()
+            if field_type == "begin":
+                field_instruction = []
+                skip_field_result = False
+            elif field_type == "separate" and field_instruction is not None:
+                instruction = "".join(field_instruction).strip().casefold()
+                if instruction != "page":
+                    raise ValueError("unsupported dynamic Word field")
+                values.append(str(page_number))
+                skip_field_result = True
+            elif field_type == "end":
+                field_instruction = None
+                skip_field_result = False
+        elif name == "instrText" and field_instruction is not None:
+            field_instruction.append(item.text or "")
+        elif name == "t" and not skip_field_result and field_instruction is None:
+            values.append(item.text or "")
+    return "".join(values)
+
+
+def _header_footer_profile(
+    package: ZipFile,
+    xml_roots: dict[str, ElementTree.Element],
+) -> dict[str, str | bool | None] | None:
+    document = xml_roots.get("word/document.xml")
+    if document is None:
+        return None
+    sections = list(_iter_named(document, "sectPr"))
+    references = [
+        item
+        for section in sections
+        for item in section
+        if _local_name(item.tag) in {"headerReference", "footerReference"}
+    ]
+    if not references:
+        return None
+    if len(sections) != 1:
+        raise ValueError("multiple Word sections are not supported for final PDF")
+    relationships_name = "word/_rels/document.xml.rels"
+    if relationships_name not in package.namelist():
+        raise ValueError("Word header/footer relationships are missing")
+    relationships = ElementTree.fromstring(package.read(relationships_name))
+    targets = {
+        _attribute_named(item, "Id"): posixpath.normpath(
+            posixpath.join("word", _attribute_named(item, "Target") or "")
+        )
+        for item in _iter_named(relationships, "Relationship")
+        if (_attribute_named(item, "TargetMode") or "").casefold() != "external"
+    }
+    profile: dict[str, str | bool | None] = {
+        "different_first": _first_named(sections[0], "titlePg") is not None,
+        "even_and_odd": False,
+    }
+    settings = xml_roots.get("word/settings.xml")
+    if settings is not None:
+        profile["even_and_odd"] = (
+            _first_named(settings, "evenAndOddHeaders") is not None
+        )
+    for reference in references:
+        kind = "header" if _local_name(reference.tag) == "headerReference" else "footer"
+        variant = (_attribute_named(reference, "type") or "default").casefold()
+        if variant not in {"default", "first", "even"}:
+            raise ValueError("unsupported Word header/footer variant")
+        target = targets.get(_attribute_named(reference, "id"))
+        if target not in xml_roots:
+            raise ValueError("Word header/footer target is missing")
+        profile[f"{kind}_{variant}"] = target
+    return profile
+
+
 def _repeatable_text_matches(
     *,
-    header_fragments: list[str],
-    footer_fragments: list[str],
+    header_fragments_by_page: list[list[str]],
+    footer_fragments_by_page: list[list[str]],
     positioned: list[_PositionedText],
     page_heights: list[float],
 ) -> bool:
@@ -934,10 +1052,15 @@ def _repeatable_text_matches(
             cursor = matches[0][1]
         return True
 
-    return len(page_heights) > 0 and all(
-        region_matches(header_fragments, page=page, header=True)
-        and region_matches(footer_fragments, page=page, header=False)
+    return (
+        len(page_heights) > 0
+        and len(header_fragments_by_page) == len(page_heights)
+        and len(footer_fragments_by_page) == len(page_heights)
+        and all(
+        region_matches(header_fragments_by_page[page], page=page, header=True)
+        and region_matches(footer_fragments_by_page[page], page=page, header=False)
         for page in range(len(page_heights))
+        )
     )
 
 
@@ -971,12 +1094,117 @@ def _pdf_content_kinds(reader: PdfReader) -> tuple[str, ...]:
     return _collapse_content_kinds(values)
 
 
-def _has_annotations(page: object) -> bool:
+def _annotations_match_internal_links(
+    reader: PdfReader,
+    expectations: list[_WordInternalLinkExpectation],
+    positioned: list[_PositionedText],
+    barriers: list[_VerticalBarrier],
+) -> bool:
+    page_references = {
+        (
+            page.indirect_reference.idnum,
+            page.indirect_reference.generation,
+        ): index
+        for index, page in enumerate(reader.pages)
+        if page.indirect_reference is not None
+    }
+    observed: list[tuple[int, object]] = []
     try:
-        annotations = page.get("/Annots")
-        return annotations is not None and bool(annotations.get_object())
+        for page_index, page in enumerate(reader.pages):
+            annotations = page.get("/Annots")
+            if annotations is None:
+                continue
+            observed.extend(
+                (page_index, annotation.get_object())
+                for annotation in annotations.get_object()
+            )
     except (AttributeError, KeyError, TypeError, ValueError):
-        return True
+        return False
+    if len(observed) != len(expectations):
+        return False
+
+    used_expectations: set[int] = set()
+    for page_index, annotation in observed:
+        try:
+            if str(annotation.get("/Subtype")) != "/Link" or any(
+                key in annotation
+                for key in ("/A", "/AA", "/JS", "/URI", "/Launch")
+            ):
+                return False
+            rectangle = [float(value) for value in annotation["/Rect"]]
+            if len(rectangle) != 4 or not all(map(math.isfinite, rectangle)):
+                return False
+            left, bottom, right, top = rectangle
+            page = reader.pages[page_index]
+            if (
+                left >= right
+                or bottom >= top
+                or left < float(page.mediabox.left)
+                or bottom < float(page.mediabox.bottom)
+                or right > float(page.mediabox.right)
+                or top > float(page.mediabox.top)
+            ):
+                return False
+            destination = annotation["/Dest"].get_object()
+            if len(destination) < 4 or str(destination[1]) != "/XYZ":
+                return False
+            destination_reference = destination[0]
+            destination_page = page_references.get(
+                (
+                    destination_reference.idnum,
+                    destination_reference.generation,
+                )
+            )
+            destination_y = float(destination[3])
+            if destination_page is None or not math.isfinite(destination_y):
+                return False
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+            return False
+
+        link_fragments = _positioned_reading_order(
+            [
+                fragment
+                for fragment in positioned
+                if fragment.page == page_index
+                and fragment.x >= left - 2.0
+                and fragment.right <= right + 2.0
+                and fragment.bottom >= bottom - 2.0
+                and fragment.top <= top + 2.0
+            ]
+        )
+        link_text = _normalized_visible_text(
+            " ".join(fragment.text for fragment in link_fragments)
+        )
+        candidate = next(
+            (
+                (index, expectation)
+                for index, expectation in enumerate(expectations)
+                if index not in used_expectations and expectation.text == link_text
+            ),
+            None,
+        )
+        if candidate is None:
+            return False
+        expectation_index, expectation = candidate
+        target_matches = []
+        for start, fragment in enumerate(positioned):
+            if fragment.page != destination_page:
+                continue
+            end = _fragment_sequence_end(
+                expectation.target_text, positioned, start, barriers
+            )
+            if end is None:
+                continue
+            matched = positioned[start:end]
+            if all(item.page == destination_page for item in matched):
+                target_matches.append(matched)
+        if not any(
+            abs(destination_y - max(fragment.top for fragment in match)) <= 12.0
+            for match in target_matches
+        ):
+            return False
+        used_expectations.add(expectation_index)
+    return len(used_expectations) == len(expectations)
 
 
 def _has_unsafe_image_drawing(page: object, reader: PdfReader) -> bool:
@@ -1210,6 +1438,9 @@ class _PositionedText:
     bottom: float
     top: float
     color: tuple[int, int, int] = (0, 0, 0)
+    font_weight: int = 400
+    italic_angle: int = 0
+    page_width: float = 612.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1226,6 +1457,48 @@ class _WordTextExpectation:
     text: str
     font_size: float
     color: tuple[int, int, int]
+    bold: bool
+    italic: bool
+    underline: bool
+    alignment: str
+
+
+@dataclass(frozen=True, slots=True)
+class _WordInternalLinkExpectation:
+    text: str
+    target_text: str
+
+
+def _word_internal_link_expectations(
+    document: ElementTree.Element | None,
+) -> list[_WordInternalLinkExpectation]:
+    if document is None:
+        return []
+    bookmark_targets: dict[str, str] = {}
+    for paragraph in _iter_named(document, "p"):
+        text = _normalized_visible_text(
+            "".join(item.text or "" for item in _iter_named(paragraph, "t"))
+        )
+        for bookmark in _iter_named(paragraph, "bookmarkStart"):
+            name = _attribute_named(bookmark, "name")
+            if name and text:
+                if name in bookmark_targets:
+                    raise ValueError("duplicate Word bookmark target")
+                bookmark_targets[name] = text
+
+    expectations: list[_WordInternalLinkExpectation] = []
+    for hyperlink in _iter_named(document, "hyperlink"):
+        if _attribute_named(hyperlink, "id"):
+            raise ValueError("external Word hyperlink is not allowed")
+        anchor = _attribute_named(hyperlink, "anchor")
+        text = _normalized_visible_text(
+            "".join(item.text or "" for item in _iter_named(hyperlink, "t"))
+        )
+        target_text = bookmark_targets.get(anchor or "")
+        if not anchor or not text or not target_text:
+            raise ValueError("Word internal hyperlink target is invalid")
+        expectations.append(_WordInternalLinkExpectation(text, target_text))
+    return expectations
 
 
 def _word_text_expectations(
@@ -1256,16 +1529,63 @@ def _word_text_expectations(
             raise ValueError("unsupported Word text color")
         return tuple(int(value[index : index + 2], 16) for index in (0, 2, 4))
 
+    def on_off_from_properties(
+        properties: ElementTree.Element | None, name: str
+    ) -> bool | None:
+        node = _first_named(properties, name)
+        if node is None:
+            return None
+        value = (_attribute_named(node, "val") or "true").casefold()
+        return value not in {"0", "false", "off", "none"}
+
+    def underline_from_properties(
+        properties: ElementTree.Element | None,
+    ) -> bool | None:
+        node = _first_named(properties, "u")
+        if node is None:
+            return None
+        value = (_attribute_named(node, "val") or "single").casefold()
+        if value in {"0", "false", "off", "none"}:
+            return False
+        if value != "single":
+            raise ValueError("unsupported Word underline style")
+        return True
+
+    def alignment_from_properties(
+        properties: ElementTree.Element | None,
+    ) -> str | None:
+        node = _first_named(properties, "jc")
+        if node is None:
+            return None
+        value = (_attribute_named(node, "val") or "").casefold()
+        aliases = {"start": "left", "end": "right"}
+        value = aliases.get(value, value)
+        if value not in {"left", "center", "right", "both"}:
+            raise ValueError("unsupported Word paragraph alignment")
+        return value
+
     default_size = 11.0
     default_color = (0, 0, 0)
+    default_bold = False
+    default_italic = False
+    default_underline = False
+    default_alignment = "left"
     default_paragraph_style: str | None = None
     style_sizes: dict[str, float | None] = {}
     style_colors: dict[str, tuple[int, int, int] | None] = {}
+    style_bold: dict[str, bool | None] = {}
+    style_italic: dict[str, bool | None] = {}
+    style_underline: dict[str, bool | None] = {}
+    style_alignment: dict[str, str | None] = {}
     style_bases: dict[str, str | None] = {}
     if styles_root is not None:
         defaults = _first_named(styles_root, "docDefaults")
         default_size = size_from_properties(defaults) or default_size
         default_color = color_from_properties(defaults) or default_color
+        default_bold = on_off_from_properties(defaults, "b") or False
+        default_italic = on_off_from_properties(defaults, "i") or False
+        default_underline = underline_from_properties(defaults) or False
+        default_alignment = alignment_from_properties(defaults) or default_alignment
         for style in _iter_named(styles_root, "style"):
             style_id = _attribute_named(style, "styleId")
             if not style_id:
@@ -1277,9 +1597,16 @@ def _word_text_expectations(
             ):
                 default_paragraph_style = style_id
             properties = next(_children_named(style, "rPr"), None)
+            paragraph_properties = next(_children_named(style, "pPr"), None)
             based_on = _first_named(style, "basedOn")
             style_sizes[style_id] = size_from_properties(properties)
             style_colors[style_id] = color_from_properties(properties)
+            style_bold[style_id] = on_off_from_properties(properties, "b")
+            style_italic[style_id] = on_off_from_properties(properties, "i")
+            style_underline[style_id] = underline_from_properties(properties)
+            style_alignment[style_id] = alignment_from_properties(
+                paragraph_properties
+            )
             style_bases[style_id] = (
                 _attribute_named(based_on, "val") if based_on is not None else None
             )
@@ -1307,6 +1634,20 @@ def _word_text_expectations(
             style_id = style_bases.get(style_id)
         return fallback
 
+    def resolve_style_value(
+        style_id: str | None,
+        values: dict[str, object | None],
+        fallback: object,
+    ) -> object:
+        visited: set[str] = set()
+        while style_id and style_id not in visited:
+            visited.add(style_id)
+            value = values.get(style_id)
+            if value is not None:
+                return value
+            style_id = style_bases.get(style_id)
+        return fallback
+
     expectations: list[_WordTextExpectation] = []
     content_names = [
         name
@@ -1315,7 +1656,14 @@ def _word_text_expectations(
         or name.startswith(("word/header", "word/footer"))
     ]
     for name in content_names:
+        table_paragraph_ids = {
+            id(paragraph)
+            for table in _iter_named(xml_roots[name], "tbl")
+            for paragraph in _iter_named(table, "p")
+        }
         for paragraph in _iter_named(xml_roots[name], "p"):
+            if id(paragraph) in table_paragraph_ids:
+                continue
             paragraph_properties = next(_children_named(paragraph, "pPr"), None)
             paragraph_style_node = _first_named(paragraph_properties, "pStyle")
             paragraph_style = (
@@ -1329,8 +1677,57 @@ def _word_text_expectations(
             paragraph_color = resolve_style_color(
                 paragraph_style or default_paragraph_style
             )
-            segments: list[tuple[str, float, tuple[int, int, int]]] = []
+            paragraph_bold = bool(
+                resolve_style_value(
+                    paragraph_style or default_paragraph_style,
+                    style_bold,
+                    default_bold,
+                )
+            )
+            paragraph_italic = bool(
+                resolve_style_value(
+                    paragraph_style or default_paragraph_style,
+                    style_italic,
+                    default_italic,
+                )
+            )
+            paragraph_underline = bool(
+                resolve_style_value(
+                    paragraph_style or default_paragraph_style,
+                    style_underline,
+                    default_underline,
+                )
+            )
+            paragraph_alignment = str(
+                alignment_from_properties(paragraph_properties)
+                or resolve_style_value(
+                    paragraph_style or default_paragraph_style,
+                    style_alignment,
+                    default_alignment,
+                )
+            )
+            segments: list[
+                tuple[str, float, tuple[int, int, int], bool, bool, bool]
+            ] = []
+            dynamic_result_runs = {
+                id(run)
+                for field in _iter_named(paragraph, "fldSimple")
+                for run in _iter_named(field, "r")
+            }
+            in_complex_field_result = False
             for run in _iter_named(paragraph, "r"):
+                field_markers = [
+                    (_attribute_named(marker, "fldCharType") or "").casefold()
+                    for marker in _iter_named(run, "fldChar")
+                ]
+                if "separate" in field_markers:
+                    in_complex_field_result = True
+                    continue
+                if "end" in field_markers:
+                    in_complex_field_result = False
+                    continue
+                if id(run) in dynamic_result_runs or in_complex_field_result:
+                    continue
                 run_properties = next(_children_named(run, "rPr"), None)
                 run_style_node = _first_named(run_properties, "rStyle")
                 run_style = (
@@ -1352,6 +1749,32 @@ def _word_text_expectations(
                     else color_from_properties(run_properties)
                     or paragraph_color
                 )
+                bold = (
+                    on_off_from_properties(run_properties, "b")
+                    if on_off_from_properties(run_properties, "b") is not None
+                    else bool(
+                        resolve_style_value(run_style, style_bold, paragraph_bold)
+                    )
+                )
+                italic = (
+                    on_off_from_properties(run_properties, "i")
+                    if on_off_from_properties(run_properties, "i") is not None
+                    else bool(
+                        resolve_style_value(
+                            run_style, style_italic, paragraph_italic
+                        )
+                    )
+                )
+                underline_value = underline_from_properties(run_properties)
+                underline = (
+                    underline_value
+                    if underline_value is not None
+                    else bool(
+                        resolve_style_value(
+                            run_style, style_underline, paragraph_underline
+                        )
+                    )
+                )
                 raw_text = "".join(
                     item.text or ""
                     for item in _iter_named(run, "t")
@@ -1363,18 +1786,32 @@ def _word_text_expectations(
                     segments
                     and abs(segments[-1][1] - size) <= 0.01
                     and segments[-1][2] == color
+                    and segments[-1][3:] == (bold, italic, underline)
                 ):
-                    previous_text, previous_size, previous_color = segments[-1]
+                    previous_text, previous_size, previous_color, *_ = segments[-1]
                     segments[-1] = (
                         previous_text + raw_text,
                         previous_size,
                         previous_color,
+                        bold,
+                        italic,
+                        underline,
                     )
                 else:
-                    segments.append((raw_text, size, color))
+                    segments.append(
+                        (raw_text, size, color, bold, italic, underline)
+                    )
             expectations.extend(
-                _WordTextExpectation(_normalized_visible_text(text), size, color)
-                for text, size, color in segments
+                _WordTextExpectation(
+                    _normalized_visible_text(text),
+                    size,
+                    color,
+                    bold,
+                    italic,
+                    underline,
+                    paragraph_alignment,
+                )
+                for text, size, color, bold, italic, underline in segments
                 if _normalized_visible_text(text)
             )
     return expectations
@@ -1385,30 +1822,60 @@ def _text_sizes_match(
     positioned: list[_PositionedText],
     barriers: list[_VerticalBarrier],
 ) -> bool:
-    cursor = 0
+    if not expectations:
+        return True
+    used_fragments: set[int] = set()
     for expectation in expectations:
         match: tuple[int, int] | None = None
-        for start in range(cursor, len(positioned)):
+        for start in range(len(positioned)):
             end = _fragment_sequence_end(
                 expectation.text, positioned, start, barriers
             )
             if end is None:
                 continue
+            if any(index in used_fragments for index in range(start, end)):
+                continue
             tolerance = max(1.5, expectation.font_size * 0.12)
-            if all(
+            matched_fragments = positioned[start:end]
+            style_matches = all(
                 abs(fragment.font_size - expectation.font_size) <= tolerance
                 and all(
                     abs(observed - expected) <= 8
                     for observed, expected in zip(fragment.color, expectation.color)
                 )
-                for fragment in positioned[start:end]
-            ):
+                and (fragment.font_weight >= 600) == expectation.bold
+                and (abs(fragment.italic_angle) >= 2) == expectation.italic
+                for fragment in matched_fragments
+            )
+            page = matched_fragments[0].page
+            line_tolerance = max(
+                3.0,
+                0.35 * max(fragment.font_size for fragment in matched_fragments),
+            )
+            line = [
+                fragment
+                for fragment in positioned
+                if fragment.page == page
+                and abs(fragment.y - matched_fragments[0].y) <= line_tolerance
+            ]
+            line_left = min(fragment.x for fragment in line)
+            line_right = max(fragment.right for fragment in line)
+            page_width = matched_fragments[0].page_width
+            alignment_matches = (
+                line_left <= page_width * 0.25
+                if expectation.alignment in {"left", "both"}
+                else line_right >= page_width * 0.75
+                if expectation.alignment == "right"
+                else abs((line_left + line_right) / 2 - page_width / 2)
+                <= max(4.0, page_width * 0.03)
+            )
+            if style_matches and alignment_matches:
                 match = (start, end)
                 break
         if match is None:
             return False
-        cursor = match[1]
-    return bool(expectations)
+        used_fragments.update(range(*match))
+    return True
 
 
 def _has_nonvisible_text(page: object, reader: PdfReader) -> bool:
@@ -1516,19 +1983,7 @@ def _page_object_fill_rgba(item: object) -> tuple[int, int, int, int] | None:
     return tuple(int(value.value) for value in values)
 
 
-def _path_has_visible_paint(item: object) -> bool:
-    fill_mode = ctypes.c_int()
-    stroke = ctypes.c_int()
-    if not pdfium.raw.FPDFPath_GetDrawMode(
-        item.raw, ctypes.byref(fill_mode), ctypes.byref(stroke)
-    ):
-        return True
-    if fill_mode.value != 0:
-        color = _page_object_fill_rgba(item)
-        if color is None or color[3] > 0:
-            return True
-    if not stroke.value:
-        return False
+def _page_object_stroke_rgba(item: object) -> tuple[int, int, int, int] | None:
     values = tuple(ctypes.c_uint() for _ in range(4))
     if not pdfium.raw.FPDFPageObj_GetStrokeColor(
         item.raw,
@@ -1537,8 +1992,37 @@ def _path_has_visible_paint(item: object) -> bool:
         ctypes.byref(values[2]),
         ctypes.byref(values[3]),
     ):
+        return None
+    return tuple(int(value.value) for value in values)
+
+
+def _path_paint_properties(
+    item: object,
+) -> tuple[int, bool, tuple[int, int, int, int] | None, tuple[int, int, int, int] | None]:
+    fill_mode = ctypes.c_int()
+    stroke = ctypes.c_int()
+    if not pdfium.raw.FPDFPath_GetDrawMode(
+        item.raw, ctypes.byref(fill_mode), ctypes.byref(stroke)
+    ):
+        return -1, True, None, None
+    return (
+        fill_mode.value,
+        bool(stroke.value),
+        _page_object_fill_rgba(item) if fill_mode.value else None,
+        _page_object_stroke_rgba(item) if stroke.value else None,
+    )
+
+
+def _path_has_visible_paint(item: object) -> bool:
+    fill_mode, stroke, fill_color, stroke_color = _path_paint_properties(item)
+    if fill_mode < 0:
         return True
-    return values[3].value > 0
+    if fill_mode:
+        if fill_color is None or fill_color[3] > 0:
+            return True
+    if not stroke:
+        return False
+    return stroke_color is None or stroke_color[3] > 0
 
 
 def _pdfium_visible_layout(
@@ -1658,6 +2142,19 @@ def _pdfium_visible_layout(
                             text_color = (0, 0, 0)
                         else:
                             text_color = fill_color[:3]
+                        try:
+                            font = item.get_font()
+                            font_weight = int(font.get_weight())
+                            italic_value = ctypes.c_int()
+                            if not pdfium.raw.FPDFFont_GetItalicAngle(
+                                font.raw, ctypes.byref(italic_value)
+                            ):
+                                raise ValueError("PDF font italic angle is unavailable")
+                            italic_angle = int(italic_value.value)
+                        except (AttributeError, RuntimeError, TypeError, ValueError):
+                            unsafe = True
+                            font_weight = 400
+                            italic_angle = 0
                         positioned.append(
                             _PositionedText(
                                 page_number,
@@ -1669,6 +2166,9 @@ def _pdfium_visible_layout(
                                 bottom,
                                 top,
                                 text_color,
+                                font_weight,
+                                italic_angle,
+                                width,
                             )
                         )
                     elif item.type == pdfium.raw.FPDF_PAGEOBJ_IMAGE:
@@ -1705,8 +2205,21 @@ def _pdfium_visible_layout(
                         item.type == pdfium.raw.FPDF_PAGEOBJ_PATH
                         and _path_has_visible_paint(item)
                     ):
+                        fill_mode, stroke, fill_color, stroke_color = (
+                            _path_paint_properties(item)
+                        )
                         painted_paths.append(
-                            _PaintedPath(page_number, left, bottom, right, top)
+                            _PaintedPath(
+                                page_number,
+                                left,
+                                bottom,
+                                right,
+                                top,
+                                fill_color,
+                                stroke_color,
+                                fill_mode,
+                                stroke,
+                            )
                         )
                     elif item.type not in {
                         pdfium.raw.FPDF_PAGEOBJ_TEXT,
@@ -1831,6 +2344,8 @@ def _ordered_text_blocks_match(
     positioned: list[_PositionedText],
     barriers: list[_VerticalBarrier],
 ) -> bool:
+    if not blocks:
+        return True
     cursor = 0
     for block in blocks:
         match = next(
@@ -1845,7 +2360,7 @@ def _ordered_text_blocks_match(
         if match is None:
             return False
         cursor = match[1]
-    return bool(blocks)
+    return True
 
 
 def _positioned_reading_order(
@@ -1958,49 +2473,183 @@ def _table_rows_match(
     return _matched_table_row_fragments(rows, positioned, barriers) is not None
 
 
+def _table_cell_fill_matches(
+    *,
+    cell: _WordTableCellExpectation,
+    paths: list[_PaintedPath],
+    used: set[int],
+    page: int,
+    bounds: tuple[float, float, float, float],
+    color_matches: Callable[
+        [tuple[int, int, int, int] | None, tuple[int, int, int, int]], bool
+    ],
+) -> bool:
+    if cell.fill_color is None:
+        return True
+    left, bottom, right, top = bounds
+    candidates = [
+        index
+        for index, path in enumerate(paths)
+        if index not in used
+        and path.page == page
+        and path.fill_mode > 0
+        and not path.stroke
+        and color_matches(path.fill_color, cell.fill_color)
+        and path.left >= left - 2.0
+        and path.right <= right + 2.0
+        and path.bottom >= bottom - 2.0
+        and path.top <= top + 2.0
+    ]
+    cell_area = max((right - left) * (top - bottom), 1.0)
+    if not candidates or not any(
+        (paths[index].right - paths[index].left)
+        * (paths[index].top - paths[index].bottom)
+        >= cell_area * 0.2
+        for index in candidates
+    ):
+        return False
+    used.update(candidates)
+    return True
+
+
+def _table_cell_and_fill_match(
+    *,
+    cell: _WordTableCellExpectation,
+    positioned: list[_PositionedText],
+    barriers: list[_VerticalBarrier],
+    paths: list[_PaintedPath],
+    used: set[int],
+    page: int,
+    bounds: tuple[float, float, float, float],
+    color_matches: Callable[
+        [tuple[int, int, int, int] | None, tuple[int, int, int, int]], bool
+    ],
+) -> bool:
+    left, bottom, right, top = bounds
+    cell_fragments = _positioned_reading_order(
+        [
+            fragment
+            for fragment in positioned
+            if fragment.page == page
+            and fragment.x >= left - 2.0
+            and fragment.right <= right + 2.0
+            and fragment.bottom >= bottom - 2.0
+            and fragment.top <= top + 2.0
+        ]
+    )
+    paragraph_cursor = 0
+    for paragraph in cell.paragraphs:
+        end = _fragment_sequence_end(
+            paragraph, cell_fragments, paragraph_cursor, barriers
+        )
+        if end is None:
+            return False
+        paragraph_cursor = end
+    return _table_cell_fill_matches(
+        cell=cell,
+        paths=paths,
+        used=used,
+        page=page,
+        bounds=bounds,
+        color_matches=color_matches,
+    )
+
+
 def _painted_paths_are_bound_to_tables(
     paths: list[_PaintedPath],
     tables: list[_WordTableExpectation],
     positioned: list[_PositionedText],
     barriers: list[_VerticalBarrier],
+    text_expectations: list[_WordTextExpectation] | None = None,
 ) -> bool:
-    expected_count = sum(table.painted_path_count for table in tables)
-    if len(paths) != expected_count:
-        return False
-    rows = [row for table in tables for row in table.rows]
-    matched_rows = _matched_table_row_fragments(rows, positioned, barriers)
-    if matched_rows is None:
-        return False
-    cursor = 0
+    def native_black_fill(path: _PaintedPath) -> bool:
+        return (
+            path.fill_mode > 0
+            and not path.stroke
+            and path.fill_color is not None
+            and path.fill_color[3] >= 252
+            and max(path.fill_color[:3]) <= 8
+        )
+
+    def color_matches(
+        observed: tuple[int, int, int, int] | None,
+        expected: tuple[int, int, int, int],
+    ) -> bool:
+        return observed is not None and all(
+            abs(left - right) <= 2 for left, right in zip(observed, expected)
+        )
+
     used: set[int] = set()
-    for table in tables:
-        table_rows = matched_rows[cursor : cursor + len(table.rows)]
-        cursor += len(table.rows)
-        if not table.painted_path_count:
+    used_text_fragments: set[int] = set()
+    for expectation in text_expectations or []:
+        if not expectation.underline:
             continue
-        fragments = [fragment for row in table_rows for fragment in row]
+        match = next(
+            (
+                (start, end)
+                for start in range(len(positioned))
+                if (
+                    end := _fragment_sequence_end(
+                        expectation.text, positioned, start, barriers
+                    )
+                )
+                is not None
+                and not any(
+                    index in used_text_fragments for index in range(start, end)
+                )
+            ),
+            None,
+        )
+        if match is None:
+            return False
+        used_text_fragments.update(range(*match))
+        fragments = positioned[match[0] : match[1]]
         pages = {fragment.page for fragment in fragments}
-        if table.width is None or len(pages) != 1 or not fragments:
+        if len(pages) != 1:
             return False
         page = next(iter(pages))
-        left = min(fragment.x for fragment in fragments) - 12.0
-        right = min(fragment.x for fragment in fragments) + table.width + 12.0
-        bottom = min(fragment.bottom for fragment in fragments) - 12.0
-        top = max(fragment.top for fragment in fragments) + 12.0
+        left = min(fragment.x for fragment in fragments)
+        right = max(fragment.right for fragment in fragments)
+        bottom = min(fragment.bottom for fragment in fragments)
         candidates = [
             index
             for index, path in enumerate(paths)
             if index not in used
             and path.page == page
-            and path.left >= left
-            and path.right <= right
-            and path.bottom >= bottom
-            and path.top <= top
-            and min(path.right - path.left, path.top - path.bottom) <= 1.5
+            and native_black_fill(path)
+            and path.right - path.left > 4 * (path.top - path.bottom)
+            and abs(path.left - left) <= 2.0
+            and abs(path.right - right) <= 2.0
+            and path.top <= bottom + 1.0
+            and bottom - path.top <= 3.0
         ]
-        if len(candidates) != table.painted_path_count:
+        if len(candidates) != 1:
             return False
-        table_paths = [paths[index] for index in candidates]
+        used.add(candidates[0])
+
+    rows = [row for table in tables for row in table.rows]
+    matched_rows = _matched_table_row_fragments(rows, positioned, barriers)
+    if matched_rows is None:
+        return False
+    cursor = 0
+    for table in tables:
+        table_rows = matched_rows[cursor : cursor + len(table.rows)]
+        cursor += len(table.rows)
+        has_cell_fills = any(cell.fill_color is not None for cell in table.cells)
+        if not table.painted_grid and not table.horizontal_borders and not has_cell_fills:
+            continue
+        if len(table.column_offsets) < 2:
+            return False
+
+        page_segments: list[list[tuple[int, list[_PositionedText]]]] = []
+        for row_index, row in enumerate(table_rows):
+            row_pages = {fragment.page for fragment in row}
+            if len(row_pages) != 1:
+                return False
+            page = next(iter(row_pages))
+            if not page_segments or page_segments[-1][0][1][0].page != page:
+                page_segments.append([])
+            page_segments[-1].append((row_index, row))
 
         def clusters(values: list[float]) -> list[list[float]]:
             grouped: list[list[float]] = []
@@ -2011,60 +2660,285 @@ def _painted_paths_are_bound_to_tables(
                     grouped[-1].append(value)
             return grouped
 
-        vertical_paths = [
-            path
-            for path in table_paths
-            if path.top - path.bottom > 2 * (path.right - path.left)
-        ]
-        horizontal_paths = [
-            path
-            for path in table_paths
-            if path.right - path.left > 2 * (path.top - path.bottom)
-        ]
-        x_clusters = clusters(
-            [(path.left + path.right) / 2 for path in vertical_paths]
-        )
-        y_clusters = clusters(
-            [(path.bottom + path.top) / 2 for path in horizontal_paths]
-        )
-        if (
-            len(x_clusters) != table.column_count + 1
-            or len(y_clusters) != len(table.rows) + 1
-        ):
-            return False
-        x_centers = [sum(group) / len(group) for group in x_clusters]
-        expected_width = table.width
-        if abs((max(x_centers) - min(x_centers)) - expected_width) > max(
-            2.0, expected_width * 0.03
-        ):
-            return False
-        for group in y_clusters:
-            center = sum(group) / len(group)
-            members = [
-                path
-                for path in horizontal_paths
-                if abs((path.bottom + path.top) / 2 - center) <= 1.0
+        for segment in page_segments:
+            row_indices = [row_index for row_index, _row in segment]
+            fragments = [
+                fragment for _row_index, row in segment for fragment in row
             ]
-            if (
-                min(path.left for path in members) > min(x_centers) + 2.0
-                or max(path.right for path in members) < max(x_centers) - 2.0
+            page = fragments[0].page
+            left = min(fragment.x for fragment in fragments) - 12.0
+            table_width = table.column_offsets[-1]
+            right = min(fragment.x for fragment in fragments) + table_width + 12.0
+            bottom = min(fragment.bottom for fragment in fragments) - 12.0
+            top = max(fragment.top for fragment in fragments) + 12.0
+            if not table.painted_grid:
+                if len(page_segments) != 1 or not table.horizontal_borders:
+                    return False
+                border_colors = {
+                    color for _boundary, color in table.horizontal_borders
+                }
+                border_candidates = [
+                    index
+                    for index, path in enumerate(paths)
+                    if index not in used
+                    and path.page == page
+                    and path.left >= left
+                    and path.right <= right
+                    and path.bottom >= bottom
+                    and path.top <= top
+                    and min(
+                        path.right - path.left, path.top - path.bottom
+                    ) <= 1.5
+                    and any(
+                        color_matches(path.fill_color, color)
+                        for color in border_colors
+                    )
+                ]
+                border_paths = [paths[index] for index in border_candidates]
+                y_clusters = clusters(
+                    [(path.bottom + path.top) / 2 for path in border_paths]
+                )
+                expected_boundaries = sorted(
+                    boundary for boundary, _color in table.horizontal_borders
+                )
+                if len(y_clusters) != len(expected_boundaries):
+                    return False
+                y_centers_by_boundary = {
+                    boundary: sum(group) / len(group)
+                    for boundary, group in zip(expected_boundaries, y_clusters)
+                }
+                table_left = min(path.left for path in border_paths)
+                table_right = table_left + table_width
+                if abs(max(path.right for path in border_paths) - table_right) > max(
+                    2.0, table_width * 0.03
+                ):
+                    return False
+                x_centers = [
+                    table_left + offset for offset in table.column_offsets
+                ]
+                y_centers = [
+                    y_centers_by_boundary[index]
+                    for index in range(len(table.rows) + 1)
+                    if index in y_centers_by_boundary
+                ]
+                if len(y_centers) != len(table.rows) + 1:
+                    return False
+                for boundary, expected_color in table.horizontal_borders:
+                    center = y_centers_by_boundary[boundary]
+                    members = [
+                        path
+                        for path in border_paths
+                        if color_matches(path.fill_color, expected_color)
+                        and abs((path.bottom + path.top) / 2 - center) <= 1.0
+                    ]
+                    if (
+                        not members
+                        or min(path.left for path in members) > table_left + 2.0
+                        or max(path.right for path in members) < table_right - 2.0
+                    ):
+                        return False
+                row_positions = {
+                    row_index: position
+                    for position, row_index in enumerate(row_indices)
+                }
+                used.update(border_candidates)
+                for cell in table.cells:
+                    if cell.row_start not in row_positions or cell.row_end not in row_positions:
+                        return False
+                    start_position = row_positions[cell.row_start]
+                    end_position = row_positions[cell.row_end]
+                    cell_left = x_centers[cell.column_start]
+                    cell_right = x_centers[cell.column_end]
+                    cell_top = y_centers[-1 - start_position]
+                    cell_bottom = y_centers[-2 - end_position]
+                    if not _table_cell_and_fill_match(
+                        cell=cell,
+                        positioned=positioned,
+                        barriers=barriers,
+                        paths=paths,
+                        used=used,
+                        page=page,
+                        bounds=(cell_left, cell_bottom, cell_right, cell_top),
+                        color_matches=color_matches,
+                    ):
+                        return False
+                continue
+            candidates = [
+                index
+                for index, path in enumerate(paths)
+                if index not in used
+                and path.page == page
+                and path.left >= left
+                and path.right <= right
+                and path.bottom >= bottom
+                and path.top <= top
+                and min(path.right - path.left, path.top - path.bottom) <= 1.5
+                and native_black_fill(path)
+            ]
+            if not candidates:
+                return False
+            table_paths = [paths[index] for index in candidates]
+            vertical_paths = [
+                path
+                for path in table_paths
+                if path.top - path.bottom > 2 * (path.right - path.left)
+            ]
+            horizontal_paths = [
+                path
+                for path in table_paths
+                if path.right - path.left > 2 * (path.top - path.bottom)
+            ]
+            x_clusters = clusters(
+                [(path.left + path.right) / 2 for path in vertical_paths]
+            )
+            y_clusters = clusters(
+                [(path.bottom + path.top) / 2 for path in horizontal_paths]
+            )
+            active_boundaries = sorted(
+                {0, len(table.column_offsets) - 1}.union(
+                    *(set(table.row_boundaries[index]) for index in row_indices)
+                )
+            )
+            if len(x_clusters) != len(active_boundaries) or len(y_clusters) != len(segment) + 1:
+                return False
+            x_centers = [sum(group) / len(group) for group in x_clusters]
+            expected_x_offsets = [table.column_offsets[index] for index in active_boundaries]
+            observed_x_offsets = [value - x_centers[0] for value in x_centers]
+            if any(
+                abs(observed - expected) > max(2.0, table_width * 0.03)
+                for observed, expected in zip(observed_x_offsets, expected_x_offsets)
             ):
                 return False
-        for group in x_clusters:
-            center = sum(group) / len(group)
-            members = [
-                path
-                for path in vertical_paths
-                if abs((path.left + path.right) / 2 - center) <= 1.0
-            ]
-            if (
-                min(path.bottom for path in members)
-                > min(fragment.bottom for fragment in fragments) + 2.0
-                or max(path.top for path in members)
-                < max(fragment.top for fragment in fragments) - 2.0
+            y_centers = [sum(group) / len(group) for group in y_clusters]
+            if any(
+                not (
+                    any(
+                        abs((path.left + path.right) / 2 - center) <= 1.0
+                        for center in x_centers
+                    )
+                    or any(
+                        abs((path.bottom + path.top) / 2 - center) <= 1.0
+                        for center in y_centers
+                    )
+                )
+                for path in table_paths
             ):
                 return False
-        used.update(candidates)
+            row_positions = {
+                row_index: position
+                for position, row_index in enumerate(row_indices)
+            }
+            for cell in table.cells:
+                if cell.row_start not in row_positions:
+                    continue
+                if cell.row_end not in row_positions:
+                    return False
+                start_position = row_positions[cell.row_start]
+                end_position = row_positions[cell.row_end]
+                if end_position < start_position:
+                    return False
+                cell_left = x_centers[0] + table.column_offsets[cell.column_start]
+                cell_right = x_centers[0] + table.column_offsets[cell.column_end]
+                cell_top = y_centers[-1 - start_position]
+                cell_bottom = y_centers[-2 - end_position]
+                cell_fragments = _positioned_reading_order(
+                    [
+                        fragment
+                        for fragment in positioned
+                        if fragment.page == page
+                        and fragment.x >= cell_left - 2.0
+                        and fragment.right <= cell_right + 2.0
+                        and fragment.bottom >= cell_bottom - 2.0
+                        and fragment.top <= cell_top + 2.0
+                    ]
+                )
+                paragraph_cursor = 0
+                for paragraph in cell.paragraphs:
+                    end = _fragment_sequence_end(
+                        paragraph, cell_fragments, paragraph_cursor, barriers
+                    )
+                    if end is None:
+                        return False
+                    paragraph_cursor = end
+                if not _table_cell_fill_matches(
+                    cell=cell,
+                    paths=paths,
+                    used=used,
+                    page=page,
+                    bounds=(cell_left, cell_bottom, cell_right, cell_top),
+                    color_matches=color_matches,
+                ):
+                    return False
+            for cluster_index, group in enumerate(y_clusters):
+                center = sum(group) / len(group)
+                members = [
+                    path
+                    for path in horizontal_paths
+                    if abs((path.bottom + path.top) / 2 - center) <= 1.0
+                ]
+                source_boundary = len(segment) - cluster_index
+                if source_boundary in {0, len(segment)}:
+                    active_ranges = [(0, len(table.column_offsets) - 1)]
+                else:
+                    lower_row_index = row_indices[source_boundary]
+                    inactive = set()
+                    for start, end in table.row_vertical_merge_ranges[
+                        lower_row_index
+                    ]:
+                        inactive.update(range(start, end))
+                    active_ranges = []
+                    range_start: int | None = None
+                    for column in range(len(table.column_offsets) - 1):
+                        if column not in inactive and range_start is None:
+                            range_start = column
+                        if column in inactive and range_start is not None:
+                            active_ranges.append((range_start, column))
+                            range_start = None
+                    if range_start is not None:
+                        active_ranges.append(
+                            (range_start, len(table.column_offsets) - 1)
+                        )
+                for start, end in active_ranges:
+                    expected_left = x_centers[0] + table.column_offsets[start]
+                    expected_right = x_centers[0] + table.column_offsets[end]
+                    overlapping = [
+                        path
+                        for path in members
+                        if path.right >= expected_left - 2.0
+                        and path.left <= expected_right + 2.0
+                    ]
+                    if (
+                        not overlapping
+                        or min(path.left for path in overlapping)
+                        > expected_left + 2.0
+                        or max(path.right for path in overlapping)
+                        < expected_right - 2.0
+                    ):
+                        return False
+            for boundary, group in zip(active_boundaries, x_clusters):
+                center = sum(group) / len(group)
+                members = [
+                    path
+                    for path in vertical_paths
+                    if abs((path.left + path.right) / 2 - center) <= 1.0
+                ]
+                for position, row_index in enumerate(row_indices):
+                    row_boundaries = {
+                        0,
+                        len(table.column_offsets) - 1,
+                        *table.row_boundaries[row_index],
+                    }
+                    if boundary not in row_boundaries:
+                        continue
+                    row_top = y_centers[-1 - position]
+                    row_bottom = y_centers[-2 - position]
+                    if not any(
+                        path.bottom <= row_bottom + 2.0
+                        and path.top >= row_top - 2.0
+                        for path in members
+                    ):
+                        return False
+            used.update(candidates)
     return len(used) == len(paths)
 
 
@@ -2072,9 +2946,30 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     """Reject converter output that is not observably derived from the bound Word."""
     try:
         with ZipFile(BytesIO(word_content)) as package:
-            word_fragments: list[str] = []
+            styles_root = (
+                ElementTree.fromstring(package.read("word/styles.xml"))
+                if "word/styles.xml" in package.namelist()
+                else None
+            )
+            table_styles = {
+                _attribute_named(style, "styleId"): style
+                for style in (_iter_named(styles_root, "style") if styles_root is not None else ())
+                if (_attribute_named(style, "type") or "").casefold() == "table"
+                and _attribute_named(style, "styleId")
+            }
+
+            def table_color(node: ElementTree.Element | None) -> tuple[int, int, int, int] | None:
+                if node is None:
+                    return None
+                value = (_attribute_named(node, "fill") or _attribute_named(node, "color") or "").strip()
+                if value.casefold() in {"", "auto", "none"}:
+                    return None
+                if not re.fullmatch(r"[0-9a-fA-F]{6}", value):
+                    raise ValueError("unsupported Word table color")
+                return (*tuple(int(value[index : index + 2], 16) for index in (0, 2, 4)), 255)
+
+            body_fragments: list[str] = []
             document_fragments: list[str] = []
-            repeatable_fragments: list[str] = []
             header_fragments: list[str] = []
             footer_fragments: list[str] = []
             xml_roots: dict[str, ElementTree.Element] = {}
@@ -2085,39 +2980,39 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                     continue
                 root = ElementTree.fromstring(package.read(name))
                 xml_roots[name] = root
-                fragments = [
-                    "".join(item.text or "" for item in _iter_named(paragraph, "t"))
+                table_nodes = list(_iter_named(root, "tbl"))
+                table_paragraph_ids = {
+                    id(paragraph)
+                    for table_node in table_nodes
+                    for paragraph in _iter_named(table_node, "p")
+                }
+                paragraph_fragments = [
+                    (
+                        paragraph,
+                        "".join(
+                            item.text or "" for item in _iter_named(paragraph, "t")
+                        ),
+                    )
                     for paragraph in _iter_named(root, "p")
                 ]
-                fragments = [fragment for fragment in fragments if fragment.strip()]
-                word_fragments.extend(fragments)
+                paragraph_fragments = [
+                    (paragraph, fragment)
+                    for paragraph, fragment in paragraph_fragments
+                    if fragment.strip()
+                ]
+                fragments = [fragment for _paragraph, fragment in paragraph_fragments]
                 if name == "word/document.xml":
-                    document_fragments.extend(fragments)
+                    body_fragments.extend(fragments)
+                    document_fragments.extend(
+                        fragment
+                        for paragraph, fragment in paragraph_fragments
+                        if id(paragraph) not in table_paragraph_ids
+                    )
                 elif name.startswith("word/header"):
                     header_fragments.extend(fragments)
-                    repeatable_fragments.extend(fragments)
                 elif name.startswith("word/footer"):
                     footer_fragments.extend(fragments)
-                    repeatable_fragments.extend(fragments)
-                for table in _iter_named(root, "tbl"):
-                    rows: list[tuple[str, ...]] = []
-                    for row in _children_named(table, "tr"):
-                        cells = tuple(
-                            _normalized_visible_text(
-                                " ".join(
-                                    "".join(
-                                        item.text or ""
-                                        for item in _iter_named(paragraph, "t")
-                                    )
-                                    for paragraph in _iter_named(cell, "p")
-                                )
-                            )
-                            for cell in _children_named(row, "tc")
-                        )
-                        if len(cells) > 1 and all(cells):
-                            rows.append(cells)
-                    if not rows:
-                        continue
+                for table in table_nodes:
                     grid = _first_named(table, "tblGrid")
                     grid_columns = (
                         list(_children_named(grid, "gridCol"))
@@ -2131,34 +3026,307 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                         ]
                     except (TypeError, ValueError):
                         grid_widths = []
-                    width = (
-                        sum(grid_widths)
-                        if grid_widths
-                        and all(math.isfinite(value) and value > 0 for value in grid_widths)
+                    valid_grid = bool(grid_widths) and all(
+                        math.isfinite(value) and value > 0 for value in grid_widths
+                    )
+                    column_offsets = [0.0]
+                    if valid_grid:
+                        for value in grid_widths:
+                            column_offsets.append(column_offsets[-1] + value)
+
+                    raw_rows: list[
+                        list[
+                            tuple[
+                                int,
+                                int,
+                                str | None,
+                                tuple[str, ...],
+                                tuple[int, int, int, int] | None,
+                            ]
+                        ]
+                    ] = []
+                    inferred_column_count: int | None = None
+                    for row in _children_named(table, "tr"):
+                        cell_nodes = list(_children_named(row, "tc"))
+                        position = 0
+                        raw_cells: list[
+                            tuple[
+                                int,
+                                int,
+                                str | None,
+                                tuple[str, ...],
+                                tuple[int, int, int, int] | None,
+                            ]
+                        ] = []
+                        valid_row = True
+                        for cell in cell_nodes:
+                            start = position
+                            grid_span = _first_named(cell, "gridSpan")
+                            try:
+                                span = int(
+                                    (
+                                        _attribute_named(grid_span, "val")
+                                        if grid_span is not None
+                                        else None
+                                    )
+                                    or "1"
+                                )
+                            except ValueError:
+                                valid_row = False
+                                break
+                            if span < 1:
+                                valid_row = False
+                                break
+                            position += span
+                            vertical_merge = _first_named(cell, "vMerge")
+                            merge_state = (
+                                (
+                                    _attribute_named(vertical_merge, "val")
+                                    or "continue"
+                                ).casefold()
+                                if vertical_merge is not None
+                                else None
+                            )
+                            cell_paragraphs = tuple(
+                                value
+                                for paragraph in _iter_named(cell, "p")
+                                if (
+                                    value := _normalized_visible_text(
+                                        "".join(
+                                            item.text or ""
+                                            for item in _iter_named(paragraph, "t")
+                                        )
+                                    )
+                                )
+                            )
+                            cell_properties = next(_children_named(cell, "tcPr"), None)
+                            direct_fill = table_color(
+                                _first_named(cell_properties, "shd")
+                            )
+                            raw_cells.append(
+                                (
+                                    start,
+                                    position,
+                                    merge_state,
+                                    cell_paragraphs,
+                                    direct_fill,
+                                )
+                            )
+                        if grid_columns:
+                            column_count_matches = position == len(grid_columns)
+                        else:
+                            if inferred_column_count is None:
+                                inferred_column_count = position
+                            column_count_matches = position == inferred_column_count
+                        if not valid_row or not column_count_matches:
+                            raw_rows = []
+                            break
+                        raw_rows.append(raw_cells)
+                    if not raw_rows:
+                        continue
+                    rows: list[tuple[str, ...]] = []
+                    row_cell_counts: list[int] = []
+                    row_vertical_merge_continuations: list[int] = []
+                    row_vertical_merge_ranges: list[tuple[tuple[int, int], ...]] = []
+                    row_boundaries: list[tuple[int, ...]] = []
+                    cells: list[_WordTableCellExpectation] = []
+                    valid_rows = True
+                    for row_index, raw_cells in enumerate(raw_rows):
+                        anchors = tuple(
+                            paragraphs[0]
+                            for _start, _end, merge_state, paragraphs, _fill in raw_cells
+                            if merge_state != "continue" and paragraphs
+                        )
+                        if not anchors:
+                            valid_rows = False
+                            break
+                        rows.append(anchors)
+                        row_cell_counts.append(len(raw_cells))
+                        row_vertical_merge_continuations.append(
+                            sum(
+                                merge_state == "continue"
+                                for _start, _end, merge_state, _paragraphs, _fill in raw_cells
+                            )
+                        )
+                        row_vertical_merge_ranges.append(
+                            tuple(
+                                (start, end)
+                                for start, end, merge_state, _paragraphs, _fill in raw_cells
+                                if merge_state == "continue"
+                            )
+                        )
+                        row_boundaries.append(
+                            tuple(
+                                end
+                                for _start, end, _merge_state, _paragraphs, _fill in raw_cells
+                                if end < len(grid_columns)
+                            )
+                        )
+                        for start, end, merge_state, paragraphs, direct_fill in raw_cells:
+                            if merge_state == "continue" or not paragraphs:
+                                continue
+                            row_end = row_index
+                            if merge_state == "restart":
+                                for candidate_index in range(
+                                    row_index + 1, len(raw_rows)
+                                ):
+                                    continuation = next(
+                                        (
+                                                candidate
+                                                for candidate in raw_rows[candidate_index]
+                                                if candidate[0] == start
+                                            and candidate[1] == end
+                                        ),
+                                        None,
+                                    )
+                                    if continuation is None or continuation[2] != "continue":
+                                        break
+                                    row_end = candidate_index
+                            cells.append(
+                                _WordTableCellExpectation(
+                                    row_index,
+                                    row_end,
+                                    start,
+                                    end,
+                                    paragraphs,
+                                    direct_fill,
+                                )
+                            )
+                    if not valid_rows:
+                        continue
+                    style_node = _first_named(table, "tblStyle")
+                    style_id = (
+                        _attribute_named(style_node, "val")
+                        if style_node is not None
                         else None
                     )
-                    style_node = _first_named(table, "tblStyle")
                     style = (
-                        (_attribute_named(style_node, "val") or "")
+                        (style_id or "")
                         .casefold()
                         .replace(" ", "")
-                        if style_node is not None
-                        else ""
                     )
-                    row_count = len(rows)
+                    horizontal_borders: dict[
+                        int, tuple[int, int, int, int]
+                    ] = {}
+                    table_style = table_styles.get(style_id)
+                    if table_style is not None:
+                        table_look = _first_named(table, "tblLook")
+
+                        def look_enabled(name: str, default: bool = False) -> bool:
+                            if table_look is None:
+                                return default
+                            value = _attribute_named(table_look, name)
+                            if value is None:
+                                return default
+                            return value.casefold() in {"1", "true", "on"}
+
+                        first_row = look_enabled("firstRow", True)
+                        last_row = look_enabled("lastRow")
+                        no_horizontal_banding = look_enabled("noHBand")
+
+                        def add_style_borders(
+                            properties: ElementTree.Element | None,
+                            *,
+                            top_boundary: int,
+                            bottom_boundary: int,
+                        ) -> None:
+                            borders = _first_named(properties, "tblBorders")
+                            if borders is None:
+                                borders = _first_named(properties, "tcBorders")
+                            if borders is None:
+                                return
+                            for name, boundary in (
+                                ("top", top_boundary),
+                                ("bottom", bottom_boundary),
+                            ):
+                                border = _first_named(borders, name)
+                                if border is None or (
+                                    _attribute_named(border, "val") or ""
+                                ).casefold() in {"nil", "none"}:
+                                    continue
+                                color = table_color(border)
+                                if color is None:
+                                    continue
+                                existing = horizontal_borders.get(boundary)
+                                if existing is not None and existing != color:
+                                    raise ValueError("conflicting Word table border colors")
+                                horizontal_borders[boundary] = color
+
+                        add_style_borders(
+                            next(_children_named(table_style, "tblPr"), None),
+                            top_boundary=len(rows),
+                            bottom_boundary=0,
+                        )
+                        conditional_styles = {
+                            (_attribute_named(item, "type") or "").casefold(): item
+                            for item in _children_named(table_style, "tblStylePr")
+                        }
+                        if first_row and rows:
+                            first_properties = conditional_styles.get("firstrow")
+                            add_style_borders(
+                                _first_named(first_properties, "tcPr"),
+                                top_boundary=len(rows),
+                                bottom_boundary=len(rows) - 1,
+                            )
+                        if last_row and rows:
+                            last_properties = conditional_styles.get("lastrow")
+                            add_style_borders(
+                                _first_named(last_properties, "tcPr"),
+                                top_boundary=1,
+                                bottom_boundary=0,
+                            )
+                        band_style = conditional_styles.get("band1horz")
+                        band_fill = table_color(
+                            _first_named(
+                                _first_named(band_style, "tcPr"), "shd"
+                            )
+                        )
+                        if band_fill is not None and not no_horizontal_banding:
+                            style_properties = next(
+                                _children_named(table_style, "tblPr"), None
+                            )
+                            band_size_node = _first_named(
+                                style_properties, "tblStyleRowBandSize"
+                            )
+                            band_size = int(
+                                _attribute_named(band_size_node, "val") or "1"
+                            )
+                            if band_size != 1:
+                                raise ValueError("unsupported Word table row band size")
+                            start = 1 if first_row else 0
+                            stop = len(rows) - (1 if last_row else 0)
+                            band_rows = {
+                                index
+                                for index in range(start, stop)
+                                if (index - start) % 2 == 0
+                            }
+                            cells = [
+                                replace(
+                                    cell,
+                                    fill_color=(
+                                        cell.fill_color
+                                        if cell.fill_color is not None
+                                        else band_fill
+                                    ),
+                                )
+                                if cell.row_start in band_rows
+                                else cell
+                                for cell in cells
+                            ]
                     column_count = len(grid_columns)
-                    painted_path_count = (
-                        3 * row_count * column_count
-                        + 2 * row_count
-                        + 2 * column_count
-                        + 5
-                        if style == "tablegrid" and column_count > 0
-                        else 0
-                    )
+                    painted_grid = style == "tablegrid" and column_count > 0
                     table_rows.extend(rows)
                     tables.append(
                         _WordTableExpectation(
-                            tuple(rows), width, column_count, painted_path_count
+                            tuple(rows),
+                            tuple(column_offsets) if valid_grid else (),
+                            tuple(row_cell_counts),
+                            tuple(row_vertical_merge_continuations),
+                            tuple(row_vertical_merge_ranges),
+                            tuple(row_boundaries),
+                            tuple(cells),
+                            painted_grid,
+                            tuple(sorted(horizontal_borders.items())),
                         )
                     )
             document_roots = {
@@ -2176,6 +3344,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                 for name, root in xml_roots.items()
                 if name.startswith("word/footer")
             }
+            header_footer_profile = _header_footer_profile(package, xml_roots)
             document_images = _ordered_word_image_signatures(package, document_roots)
             document_image_layouts = _ordered_word_image_layouts(document_roots)
             header_images = _ordered_word_image_signatures(package, header_roots)
@@ -2184,6 +3353,9 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
             footer_image_layouts = _ordered_word_image_layouts(footer_roots)
             word_content_kinds = _word_content_kinds(document_roots)
             word_text_expectations = _word_text_expectations(xml_roots)
+            word_internal_links = _word_internal_link_expectations(
+                xml_roots.get("word/document.xml")
+            )
         reader = PdfReader(BytesIO(pdf_content), strict=True)
         extracted_pages: list[str] = []
         unsafe_text = False
@@ -2191,8 +3363,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         page_heights: list[float] = []
         for page_number, page in enumerate(reader.pages):
             if (
-                _has_annotations(page)
-                or _has_nonvisible_text(page, reader)
+                _has_nonvisible_text(page, reader)
                 or _has_unsafe_image_drawing(page, reader)
             ):
                 unsafe_text = True
@@ -2209,25 +3380,75 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         ) = _pdfium_visible_layout(pdf_content)
         reading_positioned = _positioned_reading_order(positioned)
         pdf_content_kinds = _pdf_content_kinds(reader)
+        annotations_match = _annotations_match_internal_links(
+            reader, word_internal_links, reading_positioned, barriers
+        )
         unsafe_text = unsafe_text or pdfium_unsafe
     except (BadZipFile, KeyError, ElementTree.ParseError, PdfReadError, OSError, RuntimeError, ValueError) as exc:
         raise ValueError("final PDF fidelity cannot be verified") from exc
-    source_tokens = _lexical_tokens(" ".join(word_fragments))
+    page_count = len(reader.pages)
+
+    def selected_part(kind: str, page: int) -> str | None:
+        if header_footer_profile is None:
+            return None
+        if page == 0 and bool(header_footer_profile.get("different_first")):
+            value = header_footer_profile.get(f"{kind}_first")
+        elif (page + 1) % 2 == 0 and bool(
+            header_footer_profile.get("even_and_odd")
+        ):
+            value = header_footer_profile.get(f"{kind}_even")
+        else:
+            value = header_footer_profile.get(f"{kind}_default")
+        return value if isinstance(value, str) else None
+
+    def part_fragments(name: str | None, page: int) -> list[str]:
+        if name is None:
+            return []
+        return [
+            fragment
+            for paragraph in _iter_named(xml_roots[name], "p")
+            if (
+                fragment := _dynamic_paragraph_text(
+                    paragraph, page_number=page + 1
+                )
+            ).strip()
+        ]
+
+    if header_footer_profile is None:
+        header_fragments_by_page = [list(header_fragments) for _ in range(page_count)]
+        footer_fragments_by_page = [list(footer_fragments) for _ in range(page_count)]
+    else:
+        header_fragments_by_page = [
+            part_fragments(selected_part("header", page), page)
+            for page in range(page_count)
+        ]
+        footer_fragments_by_page = [
+            part_fragments(selected_part("footer", page), page)
+            for page in range(page_count)
+        ]
+
+    source_tokens = _lexical_tokens(" ".join(body_fragments))
     pdf_tokens = _lexical_tokens(pdf_text)
     source_counts = Counter(source_tokens)
     pdf_counts = Counter(pdf_tokens)
-    repeatable_counts = Counter(_lexical_tokens(" ".join(repeatable_fragments)))
-    page_repetitions = max(len(reader.pages) - 1, 0)
-    token_counts_match = all(pdf_counts[token] >= count for token, count in source_counts.items()) and all(
-        count <= source_counts[token] + repeatable_counts[token] * page_repetitions
-        for token, count in pdf_counts.items()
+    expected_repeatable_counts = Counter(
+        _lexical_tokens(
+            " ".join(
+                fragment
+                for page_fragments in (
+                    header_fragments_by_page + footer_fragments_by_page
+                )
+                for fragment in page_fragments
+            )
+        )
     )
+    token_counts_match = pdf_counts == source_counts + expected_repeatable_counts
     document_order_matches = _ordered_text_blocks_match(
         document_fragments, reading_positioned, barriers
     )
     repeatable_text_matches = _repeatable_text_matches(
-        header_fragments=header_fragments,
-        footer_fragments=footer_fragments,
+        header_fragments_by_page=header_fragments_by_page,
+        footer_fragments_by_page=footer_fragments_by_page,
         positioned=reading_positioned,
         page_heights=page_heights,
     )
@@ -2246,7 +3467,11 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     )
     tables_match = _table_rows_match(table_rows, reading_positioned, barriers)
     painted_paths_match = _painted_paths_are_bound_to_tables(
-        painted_paths, tables, reading_positioned, barriers
+        painted_paths,
+        tables,
+        reading_positioned,
+        barriers,
+        word_text_expectations,
     )
     text_sizes_match = _text_sizes_match(
         word_text_expectations, reading_positioned, barriers
@@ -2257,6 +3482,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     if (
         not source_tokens
         or unsafe_text
+        or not annotations_match
         or not token_counts_match
         or not document_order_matches
         or not repeatable_text_matches
@@ -2307,16 +3533,31 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
                 if not {"[Content_Types].xml", "word/document.xml"} <= names:
                     raise ValueError("final Word artifact is incomplete")
                 has_macro = "word/vbaProject.bin" in names
+                content_types = ElementTree.fromstring(
+                    package.read("[Content_Types].xml")
+                )
+                main_content_types = {
+                    item.attrib.get("ContentType")
+                    for item in content_types.iter(f"{_CT}Override")
+                    if item.attrib.get("PartName") == "/word/document.xml"
+                }
                 for name in names:
                     if name.endswith(".rels"):
                         root = ElementTree.fromstring(package.read(name))
                         if any(item.attrib.get("TargetMode", "").lower() == "external" for item in root.iter(f"{_REL}Relationship")):
                             raise ValueError("external relationships are forbidden in delivery artifacts")
-        except (BadZipFile, OSError) as exc:
+        except (BadZipFile, ElementTree.ParseError, OSError) as exc:
             raise ValueError("final Word artifact is invalid") from exc
-        if has_macro != (output_format == "DOCM"):
+        expected_main_type = (
+            _DOCM_MAIN_CONTENT_TYPE
+            if output_format == "DOCM"
+            else _DOCX_MAIN_CONTENT_TYPE
+        )
+        if main_content_types != {expected_main_type} or (
+            output_format == "DOCX" and has_macro
+        ):
             raise ValueError("final Word artifact macro identity changed")
-        media_type = _DOCM_MEDIA if has_macro else _DOCX_MEDIA
+        media_type = _DOCM_MEDIA if output_format == "DOCM" else _DOCX_MEDIA
     elif output_format == "PDF":
         try:
             reader = PdfReader(BytesIO(content), strict=True)
