@@ -1479,7 +1479,7 @@ def test_internal_link_destination_distinguishes_same_line_bookmarks() -> None:
         [[
             ("Target A", 50, 700, 11, 0),
             ("Target B", 120, 700, 11, 0),
-            ("Go B", 50, 675, 11, 0),
+            ("Go B", 50, 685, 11, 0),
         ]]
     )
 
@@ -1492,7 +1492,7 @@ def test_internal_link_destination_distinguishes_same_line_bookmarks() -> None:
                 NameObject("/Type"): NameObject("/Annot"),
                 NameObject("/Subtype"): NameObject("/Link"),
                 NameObject("/Rect"): ArrayObject(
-                    [FloatObject(48), FloatObject(670), FloatObject(85), FloatObject(690)]
+                    [FloatObject(48), FloatObject(680), FloatObject(85), FloatObject(700)]
                 ),
                 NameObject("/Dest"): ArrayObject(
                     [
@@ -1860,7 +1860,7 @@ def test_fidelity_binds_body_paragraphs_to_visual_reading_order() -> None:
     delivery_renderer._validate_pdf_fidelity(
         word,
         _positioned_text_pdf(
-            [[("First", 50, 700, 11, 0), ("Second", 50, 650, 11, 0)]]
+            [[("First", 50, 700, 11, 0), ("Second", 50, 685, 11, 0)]]
         ),
     )
     with pytest.raises(ValueError, match="faithfully represent"):
@@ -2691,6 +2691,141 @@ def test_word_text_expectations_resolve_sibling_table_conditions_and_base_style(
     assert {item.font_family for item in expectations} == {"Arial"}
 
 
+def test_word_text_expectations_apply_base_condition_after_derived_whole_table() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:tbl><w:tblPr><w:tblStyle w:val="Derived"/>'
+        '<w:tblLook w:firstRow="1"/></w:tblPr><w:tr><w:tc><w:p><w:r>'
+        '<w:t>Authority</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body>'
+        '</w:document>'
+    )
+    styles = delivery_renderer.ElementTree.fromstring(
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="table" w:styleId="Base"><w:tblStylePr w:type="firstRow">'
+        '<w:rPr><w:sz w:val="40"/><w:color w:val="FF0000"/></w:rPr>'
+        '</w:tblStylePr></w:style><w:style w:type="table" w:styleId="Derived">'
+        '<w:basedOn w:val="Base"/><w:rPr><w:sz w:val="16"/>'
+        '<w:color w:val="0000FF"/></w:rPr></w:style></w:styles>'
+    )
+
+    [expectation] = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document, "word/styles.xml": styles}
+    )
+
+    assert expectation.font_size == 20
+    assert expectation.color == (255, 0, 0)
+
+
+def test_word_text_expectations_honor_table_look_mask_and_column_precedence() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:tbl><w:tblPr><w:tblStyle w:val="Masked"/>'
+        '<w:tblLook w:val="0040"/></w:tblPr>'
+        '<w:tr><w:tc><w:p><w:r><w:t>First</w:t></w:r></w:p></w:tc></w:tr>'
+        '<w:tr><w:tc><w:p><w:r><w:t>Last</w:t></w:r></w:p></w:tc></w:tr>'
+        '</w:tbl><w:tbl><w:tblPr><w:tblStyle w:val="Columns"/>'
+        '<w:tblLook w:firstRow="0" w:firstColumn="1" w:lastColumn="1"/>'
+        '</w:tblPr><w:tr><w:tc><w:p><w:r><w:t>Overlap</w:t></w:r>'
+        '</w:p></w:tc></w:tr></w:tbl></w:body></w:document>'
+    )
+    styles = delivery_renderer.ElementTree.fromstring(
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="table" w:styleId="Masked">'
+        '<w:tblStylePr w:type="firstRow"><w:rPr><w:sz w:val="30"/>'
+        '</w:rPr></w:tblStylePr><w:tblStylePr w:type="lastRow"><w:rPr>'
+        '<w:sz w:val="40"/></w:rPr></w:tblStylePr></w:style>'
+        '<w:style w:type="table" w:styleId="Columns">'
+        '<w:tblStylePr w:type="lastCol"><w:rPr><w:sz w:val="28"/>'
+        '</w:rPr></w:tblStylePr><w:tblStylePr w:type="firstCol"><w:rPr>'
+        '<w:sz w:val="40"/></w:rPr></w:tblStylePr></w:style></w:styles>'
+    )
+
+    expectations = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document, "word/styles.xml": styles}
+    )
+
+    assert [item.font_size for item in expectations] == [11, 20, 20]
+
+
+def test_word_text_expectations_honor_table_row_band_size_for_typography() -> None:
+    rows = "".join(
+        f'<w:tr><w:tc><w:p><w:r><w:t>Row {index}</w:t></w:r></w:p></w:tc></w:tr>'
+        for index in range(4)
+    )
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:tbl><w:tblPr><w:tblStyle w:val="Bands"/>'
+        '<w:tblLook w:firstRow="0" w:lastRow="0" w:firstColumn="0" '
+        'w:lastColumn="0" w:noHBand="0" w:noVBand="1"/></w:tblPr>'
+        f'{rows}</w:tbl></w:body></w:document>'
+    )
+    styles = delivery_renderer.ElementTree.fromstring(
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="table" w:styleId="Bands"><w:tblPr>'
+        '<w:tblStyleRowBandSize w:val="2"/></w:tblPr>'
+        '<w:tblStylePr w:type="band1Horz"><w:rPr><w:sz w:val="40"/>'
+        '</w:rPr></w:tblStylePr><w:tblStylePr w:type="band2Horz"><w:rPr>'
+        '<w:sz w:val="16"/></w:rPr></w:tblStylePr></w:style></w:styles>'
+    )
+
+    expectations = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document, "word/styles.xml": styles}
+    )
+
+    assert [item.font_size for item in expectations] == [20, 20, 8, 8]
+
+
+def test_word_table_banding_starts_after_enabled_first_row() -> None:
+    rows = "".join(
+        f'<w:tr><w:tc><w:p><w:r><w:t>Row {index}</w:t></w:r></w:p></w:tc></w:tr>'
+        for index in range(3)
+    )
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:tbl><w:tblPr><w:tblStyle w:val="Bands"/>'
+        '<w:tblLook w:firstRow="1" w:firstColumn="0" w:lastColumn="0" '
+        'w:noHBand="0" w:noVBand="1"/></w:tblPr>'
+        f'{rows}</w:tbl></w:body></w:document>'
+    )
+    styles = delivery_renderer.ElementTree.fromstring(
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="table" w:styleId="Bands">'
+        '<w:tblStylePr w:type="firstRow"><w:rPr><w:sz w:val="36"/>'
+        '</w:rPr></w:tblStylePr><w:tblStylePr w:type="band1Horz"><w:rPr>'
+        '<w:sz w:val="28"/></w:rPr></w:tblStylePr><w:tblStylePr '
+        'w:type="band2Horz"><w:rPr><w:sz w:val="20"/></w:rPr>'
+        '</w:tblStylePr></w:style></w:styles>'
+    )
+
+    expectations = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document, "word/styles.xml": styles}
+    )
+
+    assert [item.font_size for item in expectations] == [18, 14, 10]
+
+
+def test_default_paragraph_emphasis_is_enforced_inside_table() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:tbl><w:tr><w:tc><w:p><w:r><w:t>Inherited</w:t>'
+        '</w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>'
+    )
+    styles = delivery_renderer.ElementTree.fromstring(
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="paragraph" w:default="1" w:styleId="Normal">'
+        '<w:rPr><w:b/><w:color w:val="FF0000"/></w:rPr>'
+        '</w:style></w:styles>'
+    )
+
+    [expectation] = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document, "word/styles.xml": styles}
+    )
+
+    assert expectation.bold is True
+    assert expectation.color == (255, 0, 0)
+    assert expectation.enforce_visible_run_style is True
+
+
 def test_word_text_expectations_preserve_whitespace_only_run() -> None:
     document = delivery_renderer.ElementTree.fromstring(
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
@@ -2875,6 +3010,78 @@ def test_text_style_matching_rejects_single_collapsed_blank_paragraph() -> None:
     ]
 
     assert not delivery_renderer._text_sizes_match(expectations, positioned, [])
+
+
+def test_text_style_matching_rejects_added_blank_paragraph_flow() -> None:
+    expectations = [
+        delivery_renderer._WordTextExpectation(
+            "first body", 11, (0, 0, 0), False, False, False, "left",
+            body_flow_anchor=True,
+        ),
+        delivery_renderer._WordTextExpectation(
+            "second body", 11, (0, 0, 0), False, False, False, "left",
+            body_flow_anchor=True, expected_previous_top_gap=13.2,
+        ),
+    ]
+    positioned = [
+        delivery_renderer._PositionedText(
+            0, "first body", 90, 709, 11, 180, 709, 717
+        ),
+        delivery_renderer._PositionedText(
+            0, "second body", 90, 665, 11, 180, 665, 673
+        ),
+    ]
+
+    assert not delivery_renderer._text_sizes_match(expectations, positioned, [])
+
+
+def test_word_text_expectations_bind_inherited_line_spacing() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:p><w:pPr><w:pStyle w:val="Double"/></w:pPr>'
+        '<w:r><w:rPr><w:sz w:val="40"/></w:rPr><w:t>First</w:t></w:r>'
+        '</w:p><w:p><w:r><w:t>Second</w:t>'
+        '</w:r></w:p></w:body></w:document>'
+    )
+    styles = delivery_renderer.ElementTree.fromstring(
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"/>'
+        '<w:style w:type="paragraph" w:styleId="Double"><w:basedOn w:val="Normal"/>'
+        '<w:pPr><w:spacing w:line="480" w:lineRule="auto"/></w:pPr>'
+        '</w:style></w:styles>'
+    )
+
+    expectations = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document, "word/styles.xml": styles}
+    )
+
+    assert expectations[0].line_height == pytest.approx(48)
+    assert expectations[1].expected_previous_top_gap == pytest.approx(48)
+
+
+def test_wrapped_text_accepts_bound_cross_page_word_fragmentation() -> None:
+    positioned = [
+        delivery_renderer._PositionedText(
+            0, "alpha synthetic00", 90, 90, 11, 210, 90, 100
+        ),
+        delivery_renderer._PositionedText(
+            1, "35 omega", 90, 700, 11, 160, 700, 710
+        ),
+    ]
+
+    assert delivery_renderer._ordered_text_blocks_match(
+        ["alpha synthetic0035 omega"], positioned, []
+    )
+
+    relocated = [
+        positioned[0],
+        delivery_renderer._PositionedText(
+            1, "35 omega", 130, 700, 11, 200, 700, 710
+        ),
+    ]
+    assert not delivery_renderer._ordered_text_blocks_match(
+        ["alpha synthetic0035 omega"], relocated, []
+    )
 
 
 def test_wrapped_text_rejects_cross_column_and_reverse_barrier_paths() -> None:
