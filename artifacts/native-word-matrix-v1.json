@@ -1,6 +1,6 @@
 {
   "environment": {
-    "candidateHead": "370f862699c4384819e74188315db51a0d958975",
+    "candidateHead": "6a3e27efe15b829c21bab4f0efb7f722cef7511d",
     "platform": "win32",
     "python": "3.14.6",
     "pywin32": "C:\\Users\\hygor\\AppData\\Local\\Programs\\Python\\Python314\\Lib\\site-packages\\win32\\win32api.pyd",
@@ -10,39 +10,39 @@
   "n01_docx": {
     "carriesMacroPart": false,
     "pdfBytes": 81419,
-    "pdfSha256": "7c0bcfeaa11ee4c1ddbdec03b4d660bd33cb6e64190b2eedfebe2a5c64dde463",
+    "pdfSha256": "0b76907bd8e15312ef650dcd43b19c3c9de237631e6b9f8571559e2785346a03",
     "rendererType": "MICROSOFT_WORD_DESKTOP_COM",
     "rendererVersion": "16.0",
     "sourceFormat": "DOCX",
-    "wordSha256After": "bac2f8b69b542435f0c50553ad45b3cc5e75e493c58fe12af1d8f87236cc4963",
-    "wordSha256Before": "bac2f8b69b542435f0c50553ad45b3cc5e75e493c58fe12af1d8f87236cc4963"
+    "wordSha256After": "62728badc6d325d5fa79cb26766e84488670e20ebbe3c9cd2388489883b2cd4c",
+    "wordSha256Before": "62728badc6d325d5fa79cb26766e84488670e20ebbe3c9cd2388489883b2cd4c"
   },
   "n01b_docx_full_path": {
     "fidelity": "PASS",
-    "pdfSha256": "485c7a87a2fd17f38ce4fdb479479acecbce7f53a96347ba8f417703238f3fdd",
-    "wordSha256": "2634e4c4ebe3482b4e9cdc775f5d1cdda6adb00ce83d25b7742088916cbe8bfe"
+    "pdfSha256": "5615e73772ea4ba34d8744601c59d9428988d1d0b81bba6b80a9861b076193f0",
+    "wordSha256": "70eecbd06e9316baa32cec298f76f0127b5da8ff5cd596f2a65c97ce3fbaddc9"
   },
   "n02_docm": {
     "carriesMacroPart": false,
     "pdfBytes": 81419,
-    "pdfSha256": "2ab6eb2f621fd664372519b1c61f98cad488171c89edf0ed62c76dd0511e792f",
+    "pdfSha256": "9475517e429860f37472a02100d8fb3e3dfa40e8ff366c35b2ab931ed0cbe7f8",
     "rendererType": "MICROSOFT_WORD_DESKTOP_COM",
     "rendererVersion": "16.0",
     "sourceFormat": "DOCM",
-    "wordSha256After": "6aa2a8c51024f5804a1890315aaf7ad07ae621e15d3a176a41c13214183d0eaa",
-    "wordSha256Before": "6aa2a8c51024f5804a1890315aaf7ad07ae621e15d3a176a41c13214183d0eaa"
+    "wordSha256After": "948ee583f97fd55d82f7411ce9781382f10d9e8c5927017fd5dc0706a4963046",
+    "wordSha256Before": "948ee583f97fd55d82f7411ce9781382f10d9e8c5927017fd5dc0706a4963046"
   },
   "n02b_docm_exact_bytes": {
     "converterReceivedFormat": "DOCM",
-    "converterReceivedSha256": "2941be7c7e8ed88847fc3878eb7bbe22ca5f995258dafc4a48417d95b579e20f",
-    "wordSha256": "2941be7c7e8ed88847fc3878eb7bbe22ca5f995258dafc4a48417d95b579e20f"
+    "converterReceivedSha256": "7f1ab525f9838f08dbbb8cb5dcc927e03762c709a1dd518f11c6d27166b2cb5b",
+    "wordSha256": "7f1ab525f9838f08dbbb8cb5dcc927e03762c709a1dd518f11c6d27166b2cb5b"
   },
   "n04_user_word_survives": {
     "identitiesAfter": [
-      "11060:2026-09-16 18:56:49.719000+00:00"
+      "13508:2026-09-16 19:26:14.700000+00:00"
     ],
     "identitiesBefore": [
-      "11060:2026-09-16 18:56:49.719000+00:00"
+      "13508:2026-09-16 19:26:14.700000+00:00"
     ]
   }
 }
