@@ -4790,3 +4790,189 @@ def test_malformed_table_look_mask_fails_closed() -> None:
 def test_absent_table_look_uses_the_documented_default() -> None:
     assert delivery_renderer._table_look_flag(None, "firstRow", default=True) is True
     assert delivery_renderer._table_look_flag(None, "noHBand") is False
+
+
+# --- Phase C F-09: bookmark occurrence uses one tokenisation on both sides ---
+
+
+def _link_document(body: str):
+    return delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        f"<w:body>{body}</w:body></w:document>"
+    )
+
+
+_GO = '<w:p><w:hyperlink w:anchor="Alvo"><w:r><w:t>Ir</w:t></w:r></w:hyperlink></w:p>'
+
+
+def test_single_character_bookmark_target_counts_occurrences_not_letters() -> None:
+    """RED F-09: prefix.count() counted every letter "i", not every occurrence."""
+    document = _link_document(
+        "<w:p><w:r><w:t>Minhas linhas iniciais</w:t></w:r></w:p>"
+        '<w:p><w:bookmarkStart w:id="1" w:name="Alvo"/>'
+        "<w:r><w:t>I</w:t></w:r>"
+        '<w:bookmarkEnd w:id="1"/></w:p>' + _GO
+    )
+
+    [expectation] = delivery_renderer._word_internal_link_expectations(document)
+
+    assert expectation.target_text == "i"
+    assert expectation.target_occurrence == 0
+
+
+def test_bookmark_spanning_two_paragraphs_is_supported() -> None:
+    """RED F-09: a bookmark crossing a paragraph boundary rejected the document."""
+    document = _link_document(
+        '<w:p><w:bookmarkStart w:id="1" w:name="Alvo"/>'
+        "<w:r><w:t>Primeira parte</w:t></w:r></w:p>"
+        '<w:p><w:r><w:t>segunda parte</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>' + _GO
+    )
+
+    [expectation] = delivery_renderer._word_internal_link_expectations(document)
+
+    assert expectation.target_text == "primeira parte segunda parte"
+
+
+def test_bookmark_target_separated_by_a_tab_keeps_its_tokens_apart() -> None:
+    """RED F-09: w:tab contributed nothing, fusing "Anexo" and "I" into "anexoi"."""
+    document = _link_document(
+        '<w:p><w:bookmarkStart w:id="1" w:name="Alvo"/>'
+        "<w:r><w:t>Anexo</w:t><w:tab/><w:t>I</w:t></w:r>"
+        '<w:bookmarkEnd w:id="1"/></w:p>' + _GO
+    )
+
+    [expectation] = delivery_renderer._word_internal_link_expectations(document)
+
+    assert expectation.target_text == "anexo i"
+
+
+def test_bookmark_target_separated_by_a_break_keeps_its_tokens_apart() -> None:
+    document = _link_document(
+        '<w:p><w:bookmarkStart w:id="1" w:name="Alvo"/>'
+        "<w:r><w:t>Anexo</w:t><w:br/><w:t>II</w:t></w:r>"
+        '<w:bookmarkEnd w:id="1"/></w:p>' + _GO
+    )
+
+    [expectation] = delivery_renderer._word_internal_link_expectations(document)
+
+    assert expectation.target_text == "anexo ii"
+
+
+def test_text_inside_a_textbox_is_not_counted_twice() -> None:
+    """RED F-09: nested paragraphs were visited by the outer walk and again alone."""
+    document = _link_document(
+        "<w:p><w:r><w:t>Anexo</w:t></w:r>"
+        "<w:r><w:pict><w:txbxContent><w:p><w:r><w:t>Anexo</w:t></w:r></w:p>"
+        "</w:txbxContent></w:pict></w:r></w:p>"
+        '<w:p><w:bookmarkStart w:id="1" w:name="Alvo"/>'
+        "<w:r><w:t>Anexo</w:t></w:r>"
+        '<w:bookmarkEnd w:id="1"/></w:p>' + _GO
+    )
+
+    [expectation] = delivery_renderer._word_internal_link_expectations(document)
+
+    assert expectation.target_text == "anexo"
+    assert expectation.target_occurrence == 2
+
+
+def test_whitespace_run_before_the_bookmark_does_not_shift_the_occurrence() -> None:
+    document = _link_document(
+        "<w:p><w:r><w:t>Anexo</w:t></w:r></w:p>"
+        '<w:p><w:r><w:t xml:space="preserve">   </w:t></w:r>'
+        '<w:bookmarkStart w:id="1" w:name="Alvo"/>'
+        "<w:r><w:t>Anexo</w:t></w:r>"
+        '<w:bookmarkEnd w:id="1"/></w:p>' + _GO
+    )
+
+    [expectation] = delivery_renderer._word_internal_link_expectations(document)
+
+    assert expectation.target_text == "anexo"
+    assert expectation.target_occurrence == 1
+
+
+def test_internal_link_resolves_the_second_of_two_identical_targets() -> None:
+    """The ordinal must select the bookmarked occurrence, not the first lexical one."""
+    word = BytesIO()
+    with ZipFile(word, "w", ZIP_DEFLATED) as package:
+        package.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/'
+            'wordprocessingml/2006/main"><w:body><w:p>'
+            "<w:r><w:t>Anexo I</w:t></w:r>"
+            '<w:r><w:t xml:space="preserve">   </w:t></w:r>'
+            '<w:bookmarkStart w:id="1" w:name="Segundo"/>'
+            "<w:r><w:t>Anexo I</w:t></w:r>"
+            '<w:bookmarkEnd w:id="1"/></w:p><w:p>'
+            '<w:hyperlink w:anchor="Segundo"><w:r><w:t>Ir</w:t></w:r></w:hyperlink>'
+            "</w:p></w:body></w:document>",
+        )
+    source_pdf = _positioned_text_pdf(
+        [[
+            ("Anexo I", 50, 700, 11, 0),
+            ("Anexo I", 100, 700, 11, 0),
+            ("Ir", 50, 685, 11, 0),
+        ]]
+    )
+
+    def candidate(destination_x: float) -> bytes:
+        writer = PdfWriter()
+        writer.clone_document_from_reader(PdfReader(BytesIO(source_pdf), strict=True))
+        page = writer.pages[0]
+        annotation = DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Annot"),
+                NameObject("/Subtype"): NameObject("/Link"),
+                NameObject("/Rect"): ArrayObject(
+                    [FloatObject(48), FloatObject(680), FloatObject(70), FloatObject(700)]
+                ),
+                NameObject("/Dest"): ArrayObject(
+                    [
+                        page.indirect_reference,
+                        NameObject("/XYZ"),
+                        FloatObject(destination_x),
+                        FloatObject(710),
+                        NullObject(),
+                    ]
+                ),
+            }
+        )
+        page[NameObject("/Annots")] = ArrayObject([writer._add_object(annotation)])
+        output = BytesIO()
+        writer.write(output)
+        return output.getvalue()
+
+    delivery_renderer._validate_pdf_fidelity(word.getvalue(), candidate(100))
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(word.getvalue(), candidate(50))
+
+
+# --- Phase C F-21: narrow glyphs are observable ---
+#
+# Found while building the F-09 duplicate-target fixture, not reported by the
+# diagnostic review.  _raster_region_is_observably_painted pads the crop box by
+# 1pt per side to tolerate rasterisation offsets, then measures the required
+# axis coverage against that padded width.  The padding does not add ink, so for
+# a glyph narrower than about 2pt of ink the 0.50 threshold is unreachable in
+# any font.  Roman numerals make this ordinary in judicial reports.
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("Anexo I", "Inciso I", "Anexo II", "Item l", "Peca i", "Anexo I - Planta"),
+)
+def test_narrow_glyphs_do_not_read_as_nonvisible(text: str) -> None:
+    pdf = _positioned_text_pdf([[(text, 50.0, 700.0, 11.0, 0)]])
+
+    *_, unsafe = delivery_renderer._pdfium_visible_layout(pdf)
+
+    assert unsafe is False
+
+
+def test_genuinely_invisible_text_is_still_detected() -> None:
+    """Control: render mode 3 (invisible) must keep failing."""
+    pdf = _positioned_text_pdf([[("Anexo I", 50.0, 700.0, 11.0, 3)]])
+
+    *_, unsafe = delivery_renderer._pdfium_visible_layout(pdf)
+
+    assert unsafe is True

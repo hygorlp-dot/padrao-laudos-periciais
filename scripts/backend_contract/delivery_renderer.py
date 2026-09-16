@@ -131,6 +131,7 @@ def _cell_property(cell: ElementTree.Element, name: str):
     return _first_named(next(_children_named(cell, "tcPr"), None), name)
 
 
+_WORD_TEXT_SEPARATORS = frozenset({"br", "cr", "tab"})
 _LATIN_THEME_ALIASES = {
     "majorascii": "major",
     "majorhansi": "major",
@@ -1339,33 +1340,51 @@ def _positioned_target_locations(
     positioned: list[_PositionedText],
     barriers: list[_VerticalBarrier],
 ) -> list[tuple[int, float, float]]:
-    normalized_target = _normalized_visible_text(target)
-    if not normalized_target:
+    """Enumerate visible occurrences of a target in reading order.
+
+    This used to mix two enumerations -- a substring search inside one fragment
+    and a multi-fragment sequence match -- and then deduplicate them by their
+    geometry.  One visible occurrence could contribute two entries, or two could
+    collapse into one, so the ordinal handed in from the Word side addressed the
+    wrong destination.  Occurrences are now non-overlapping windows of the same
+    lexical token sequence the Word side counts.
+    """
+    needle = _lexical_tokens(target)
+    if not needle:
         return []
+    stream: list[tuple[str, int, int, int]] = []
+    for index, fragment in enumerate(positioned):
+        tokens = _lexical_tokens(fragment.text)
+        for order, token in enumerate(tokens):
+            stream.append((token, index, order, len(tokens)))
     locations: list[tuple[int, float, float]] = []
-    for start, fragment in enumerate(positioned):
-        normalized_fragment = _normalized_visible_text(fragment.text)
-        cursor = 0
-        while normalized_fragment:
-            offset = normalized_fragment.find(normalized_target, cursor)
-            if offset < 0:
-                break
-            width = max(0.0, fragment.right - fragment.x)
-            target_x = fragment.x + width * offset / len(normalized_fragment)
-            locations.append((fragment.page, target_x, fragment.top))
-            cursor = offset + len(normalized_target)
-        end = _fragment_sequence_end(target, positioned, start, barriers)
-        if end is not None and end > start + 1:
-            matched = positioned[start:end]
-            if all(item.page == matched[0].page for item in matched):
-                locations.append(
-                    (
-                        matched[0].page,
-                        matched[0].x,
-                        max(item.top for item in matched),
-                    )
+    cursor = 0
+    while cursor + len(needle) <= len(stream):
+        window = stream[cursor : cursor + len(needle)]
+        if tuple(token for token, _index, _order, _count in window) != needle:
+            cursor += 1
+            continue
+        first_index, last_index = window[0][1], window[-1][1]
+        matched = positioned[first_index : last_index + 1]
+        first = matched[0]
+        crosses_barrier = any(
+            barrier.page == first.page
+            and barrier.left >= first.x - 0.5
+            and barrier.right <= matched[-1].right + 0.5
+            for barrier in barriers
+        )
+        if all(item.page == first.page for item in matched) and not crosses_barrier:
+            width = max(0.0, first.right - first.x)
+            offset = window[0][2] / max(window[0][3], 1)
+            locations.append(
+                (
+                    first.page,
+                    first.x + width * offset,
+                    max(item.top for item in matched),
                 )
-    return sorted(set(locations), key=lambda item: (item[0], -item[2], item[1]))
+            )
+        cursor += len(needle)
+    return locations
 
 
 def _annotations_match_internal_links(
@@ -1874,57 +1893,116 @@ class _WordInternalLinkExpectation:
     target_occurrence: int = 0
 
 
+def _token_occurrences(haystack: tuple[str, ...], needle: tuple[str, ...]) -> int:
+    """Count non-overlapping occurrences of a token window, as the PDF side does."""
+    if not needle:
+        return 0
+    count = 0
+    index = 0
+    while index + len(needle) <= len(haystack):
+        if haystack[index : index + len(needle)] == needle:
+            count += 1
+            index += len(needle)
+        else:
+            index += 1
+    return count
+
+
 def _word_internal_link_expectations(
     document: ElementTree.Element | None,
 ) -> list[_WordInternalLinkExpectation]:
+    """Bind internal hyperlinks to the visible occurrence their bookmark covers.
+
+    The occurrence ordinal used to be ``prefix.count(target_text)``, a substring
+    count over normalised text.  The PDF side counts positioned occurrences, so
+    the two ordinals measured different things and a one-character or repeated
+    target resolved to the wrong destination.  Both sides now count the same
+    thing: non-overlapping windows of the same lexical token sequence.
+    """
     if document is None:
         return []
-    bookmark_targets: dict[str, tuple[str, int]] = {}
-    visible_prefix = ""
-    for paragraph in _iter_named(document, "p"):
-        active: dict[str, tuple[str, int]] = {}
-        for node in paragraph.iter():
-            local_name = _local_name(node.tag)
+    buffer: list[str] = []
+    length = 0
+    active: dict[str, tuple[str, int]] = {}
+    spans: dict[str, tuple[int, int]] = {}
+
+    def append(value: str) -> None:
+        nonlocal length
+        if value:
+            buffer.append(value)
+            length += len(value)
+
+    def walk(node: ElementTree.Element) -> None:
+        # One depth-first pass visits each node exactly once.  Iterating
+        # paragraphs and then descending into each of them counted the content
+        # of nested paragraphs -- a text box inside a paragraph -- twice.
+        for child in node:
+            local_name = _local_name(child.tag)
             if local_name == "bookmarkStart":
-                bookmark_id = _attribute_named(node, "id")
-                name = _attribute_named(node, "name")
+                bookmark_id = _attribute_named(child, "id")
+                name = _attribute_named(child, "name")
                 if not bookmark_id or not name or bookmark_id in active:
                     raise ValueError("Word bookmark target is invalid")
-                active[bookmark_id] = (name, len(visible_prefix))
-            elif local_name == "t" and node.text:
-                visible_prefix += node.text
-            elif local_name == "bookmarkEnd":
-                bookmark_id = _attribute_named(node, "id")
-                target = active.pop(bookmark_id or "", None)
-                if target is None:
+                active[bookmark_id] = (name, length)
+                continue
+            if local_name == "bookmarkEnd":
+                bookmark_id = _attribute_named(child, "id")
+                entry = active.pop(bookmark_id or "", None)
+                if entry is None:
                     raise ValueError("Word bookmark target is invalid")
-                name, start = target
-                target_text = _normalized_visible_text(visible_prefix[start:])
-                if not target_text or name in bookmark_targets:
+                name, start = entry
+                if name in spans:
                     raise ValueError("Word bookmark target is invalid")
-                prefix = _normalized_visible_text(visible_prefix[:start])
-                bookmark_targets[name] = (target_text, prefix.count(target_text))
-        visible_prefix += "\n"
-        if active:
-            raise ValueError("Word bookmark target is incomplete")
+                spans[name] = (start, length)
+                continue
+            if local_name == "t":
+                append(child.text or "")
+                continue
+            if local_name in _WORD_TEXT_SEPARATORS:
+                # A tab or break separates tokens even though it carries no text.
+                append(" ")
+                continue
+            if local_name == "p":
+                # Paragraph boundaries separate tokens on both sides, so a nested
+                # paragraph cannot fuse with the text that precedes it.
+                append(chr(10))
+                walk(child)
+                append(chr(10))
+                continue
+            walk(child)
+
+    walk(document)
+    if active:
+        raise ValueError("Word bookmark target is incomplete")
+
+    text = "".join(buffer)
+    bookmark_targets: dict[str, tuple[str, int]] = {}
+    for name, (start, end) in spans.items():
+        target_text = _normalized_visible_text(text[start:end])
+        target_tokens = _lexical_tokens(text[start:end])
+        if not target_text or not target_tokens:
+            raise ValueError("Word bookmark target is invalid")
+        bookmark_targets[name] = (
+            target_text,
+            _token_occurrences(_lexical_tokens(text[:start]), target_tokens),
+        )
 
     expectations: list[_WordInternalLinkExpectation] = []
     for hyperlink in _iter_named(document, "hyperlink"):
         if _attribute_named(hyperlink, "id"):
             raise ValueError("external Word hyperlink is not allowed")
         anchor = _attribute_named(hyperlink, "anchor")
-        text = _normalized_visible_text(
+        link_text = _normalized_visible_text(
             "".join(item.text or "" for item in _iter_named(hyperlink, "t"))
         )
         target = bookmark_targets.get(anchor or "")
-        if not anchor or not text or target is None:
+        if not anchor or not link_text or target is None:
             raise ValueError("Word internal hyperlink target is invalid")
         target_text, target_occurrence = target
         expectations.append(
-            _WordInternalLinkExpectation(text, target_text, target_occurrence)
+            _WordInternalLinkExpectation(link_text, target_text, target_occurrence)
         )
     return expectations
-
 
 def _word_text_expectations(
     xml_roots: dict[str, ElementTree.Element],
@@ -3124,11 +3202,21 @@ def _raster_region_is_observably_painted(
         for y in range(difference.height):
             row = [difference.getpixel((x, y)) for x in range(difference.width)]
             active_rows += max(row) - min(row) > 8
+        # Coverage is measured against the glyph's own extent, not the cropped
+        # box.  The box is padded by 1pt per side to tolerate rasterisation
+        # offsets; that padding carries no ink, so using it as the denominator
+        # put the threshold out of reach for any glyph narrower than roughly
+        # 2pt -- "I", "l", "i" and the Roman numerals that fill judicial
+        # reports would read as non-visible in a faithful render.
+        glyph_columns = min(
+            float(difference.width), max(1.0, (right - left) * scale)
+        )
+        glyph_rows = min(
+            float(difference.height), max(1.0, (top - bottom) * scale)
+        )
         return (
-            active_columns
-            >= max(1, math.ceil(difference.width * minimum_axis_coverage))
-            and active_rows
-            >= max(1, math.ceil(difference.height * minimum_axis_coverage))
+            active_columns >= max(1, math.ceil(glyph_columns * minimum_axis_coverage))
+            and active_rows >= max(1, math.ceil(glyph_rows * minimum_axis_coverage))
         )
     finally:
         difference.close()
