@@ -258,18 +258,33 @@ def _image_signature(
 
 def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple]) -> bool:
     def visual_matches(first: tuple, second: tuple) -> bool:
-        color_deltas = [
-            tuple(abs(a - b) for a, b in zip(source_pixel, candidate_pixel))
-            for source_pixel, candidate_pixel in zip(first[3], second[3])
-        ]
+        def channel_correlation(channel: int) -> float | None:
+            source_values = [pixel[channel] for pixel in first[3]]
+            candidate_values = [pixel[channel] for pixel in second[3]]
+            source_mean = sum(source_values) / len(source_values)
+            candidate_mean = sum(candidate_values) / len(candidate_values)
+            source_energy = sum(
+                (value - source_mean) ** 2 for value in source_values
+            )
+            candidate_energy = sum(
+                (value - candidate_mean) ** 2 for value in candidate_values
+            )
+            if max(first[1][channel], second[1][channel]) < 2:
+                return None
+            if not source_energy or not candidate_energy:
+                return -1
+            covariance = sum(
+                (source - source_mean) * (candidate - candidate_mean)
+                for source, candidate in zip(source_values, candidate_values)
+            )
+            return covariance / math.sqrt(source_energy * candidate_energy)
+
+        correlations = [channel_correlation(channel) for channel in range(3)]
         return (
             all(abs(a - b) <= 12 for a, b in zip(first[0], second[0]))
             and all(abs(a - b) <= 12 for a, b in zip(first[1], second[1]))
             and sum(a != b for a, b in zip(first[2], second[2])) <= 16
-            and sum(sum(pixel) for pixel in color_deltas)
-            / (len(color_deltas) * 3)
-            <= 2
-            and all(max(pixel) <= 12 for pixel in color_deltas)
+            and all(value is None or value >= 0.85 for value in correlations)
         )
 
     def matches(source: tuple, candidate: tuple) -> bool:
