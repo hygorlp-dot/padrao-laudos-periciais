@@ -3279,6 +3279,43 @@ def _path_has_visible_paint(item: object) -> bool:
     return stroke_color is None or stroke_color[3] > 0
 
 
+def _text_free_background(pdf_content: bytes, page_number: int, scale: float):
+    """Render one page with its direct text removed, on an independent copy.
+
+    The occlusion check needs a text-free raster of the same page.  Producing it
+    by removing objects from the document the layout was just read from mutates
+    the analysis subject and transfers ownership of objects that are closed
+    afterwards.  This builds the temporary analytical representation the
+    fidelity contract allows: a separate load of the same bytes, discarded here.
+    The delivered PDF is never touched.
+    """
+    document = pdfium.PdfDocument(pdf_content)
+    page = None
+    bitmap = None
+    removed: list[object] = []
+    try:
+        page = document[page_number]
+        for item in page.get_objects(max_depth=15):
+            if item.type == pdfium.raw.FPDF_PAGEOBJ_TEXT and item.container is None:
+                removed.append(item)
+            else:
+                item.close()
+        for item in removed:
+            page.remove_obj(item)
+        if removed:
+            page.gen_content()
+        bitmap = page.render(scale=scale)
+        return bitmap.to_pil()
+    finally:
+        if bitmap is not None:
+            bitmap.close()
+        for item in removed:
+            item.close()
+        if page is not None:
+            page.close()
+        document.close()
+
+
 def _pdfium_visible_layout(
     pdf_content: bytes,
 ) -> tuple[
@@ -3300,7 +3337,6 @@ def _pdfium_visible_layout(
             text_page = None
             bitmap = None
             rendered = None
-            background_bitmap = None
             background = None
             objects: list[object] = []
             try:
@@ -3316,7 +3352,6 @@ def _pdfium_visible_layout(
                 text_page = page.get_textpage()
                 bitmap = page.render(scale=scale)
                 rendered = bitmap.to_pil()
-                direct_text_objects: list[object] = []
                 objects = list(page.get_objects(max_depth=15, textpage=text_page))
                 glyph_regions: list[
                     tuple[tuple[float, float, float, float], str]
@@ -3386,9 +3421,7 @@ def _pdfium_visible_layout(
                             < _MIN_OBSERVABLE_TEXT_POINTS
                         ):
                             unsafe = True
-                        if item.container is None:
-                            direct_text_objects.append(item)
-                        else:
+                        if item.container is not None:
                             unsafe = True
                         fill_color = _page_object_fill_rgba(item)
                         if fill_color is None or fill_color[3] < 252:
@@ -3491,12 +3524,7 @@ def _pdfium_visible_layout(
                         # Shadings and opaque container objects have no
                         # source-side Word authority in the supported model.
                         unsafe = True
-                for item in direct_text_objects:
-                    page.remove_obj(item)
-                if direct_text_objects:
-                    page.gen_content()
-                background_bitmap = page.render(scale=scale)
-                background = background_bitmap.to_pil()
+                background = _text_free_background(pdf_content, page_number, scale)
                 if any(
                     not _raster_region_is_observably_painted(
                         rendered,
@@ -3514,8 +3542,6 @@ def _pdfium_visible_layout(
             finally:
                 if background is not None:
                     background.close()
-                if background_bitmap is not None:
-                    background_bitmap.close()
                 if rendered is not None:
                     rendered.close()
                 if bitmap is not None:

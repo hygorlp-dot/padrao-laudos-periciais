@@ -277,3 +277,103 @@ def test_status_snapshots_survive_repeated_parent_reads_with_prior_files_open(
                 snapshot = root / f"status-{index:02d}-{phase}.json"
                 open_snapshots.enter_context(snapshot.open("r", encoding="utf-8"))
                 assert office_pdf._read_phase(root) == phase
+
+
+# --- Phase C F-12: skipped phases are not protocol corruption ---
+
+
+def _publish(root: Path, phases: tuple[tuple[int, str], ...]) -> None:
+    for index, phase in phases:
+        (root / f"status-{index:02d}-{phase}.json").write_text(
+            '{"schemaVersion":"1.0.0","state":"RUNNING","phase":"' + phase + '"}',
+            encoding="utf-8",
+        )
+
+
+def test_phases_skipped_by_an_early_failure_are_readable(tmp_path: Path) -> None:
+    """RED F-12: a bind failure publishes 1,2,3,8 and read as corruption."""
+    _publish(
+        tmp_path,
+        ((1, "COM_INIT"), (2, "WORD_PROCESS_START"), (3, "WORD_COM_BIND"), (8, "WORKER_EXIT")),
+    )
+
+    assert office_pdf._read_phase(tmp_path) == "WORKER_EXIT"
+
+
+def test_phases_skipped_by_a_document_open_failure_are_readable(tmp_path: Path) -> None:
+    _publish(
+        tmp_path,
+        (
+            (1, "COM_INIT"),
+            (2, "WORD_PROCESS_START"),
+            (3, "WORD_COM_BIND"),
+            (4, "DOCUMENT_OPEN"),
+            (7, "WORD_QUIT"),
+            (8, "WORKER_EXIT"),
+        ),
+    )
+
+    assert office_pdf._read_phase(tmp_path) == "WORKER_EXIT"
+
+
+def test_complete_phase_sequence_is_readable(tmp_path: Path) -> None:
+    _publish(
+        tmp_path,
+        (
+            (1, "COM_INIT"),
+            (2, "WORD_PROCESS_START"),
+            (3, "WORD_COM_BIND"),
+            (4, "DOCUMENT_OPEN"),
+            (5, "EXPORT_AS_FIXED_FORMAT"),
+            (6, "DOCUMENT_CLOSE"),
+            (7, "WORD_QUIT"),
+            (8, "WORKER_EXIT"),
+        ),
+    )
+
+    assert office_pdf._read_phase(tmp_path) == "WORKER_EXIT"
+
+
+@pytest.mark.parametrize(
+    "phases",
+    (
+        ((0, "WORKER_START"),),
+        ((1, "COM_INIT"), (3, "DOCUMENT_OPEN")),
+        ((2, "COM_INIT"),),
+        ((1, "COM_INIT"), (9, "WORKER_EXIT")),
+        ((1, "SYNTHETIC_PHASE"),),
+    ),
+    ids=(
+        "phase_zero_is_never_published",
+        "index_does_not_match_its_phase",
+        "phase_published_under_the_wrong_index",
+        "index_outside_the_protocol",
+        "unknown_phase_name",
+    ),
+)
+def test_malformed_phase_markers_remain_protocol_corruption(
+    tmp_path: Path, phases: tuple[tuple[int, str], ...]
+) -> None:
+    _publish(tmp_path, phases)
+
+    with pytest.raises(ValueError, match="invalid Word worker status"):
+        office_pdf._read_phase(tmp_path)
+
+
+def test_early_failure_diagnosis_does_not_depend_on_polling(tmp_path: Path) -> None:
+    """The same cause must produce the same outcome whenever the poll observes it."""
+    _publish(
+        tmp_path,
+        ((1, "COM_INIT"), (2, "WORD_PROCESS_START"), (3, "WORD_COM_BIND"), (8, "WORKER_EXIT")),
+    )
+
+    # Observed before the worker handle signals, and observed after it signals:
+    # neither path may report a status-protocol violation for an ordinary
+    # early failure, so both fall through to the result-payload gate.
+    exited = _FakeOwnedWorker(_identity(), exits=True)
+    _wait_for_worker(
+        exited, tmp_path, WordRenderDeadlines.uniform(1.0), clock=_clock([0.0, 0.0, 0.0])
+    )
+    assert exited.terminated is False
+
+    assert office_pdf._read_phase(tmp_path) == "WORKER_EXIT"

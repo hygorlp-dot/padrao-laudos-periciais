@@ -39,6 +39,9 @@ _PHASES = (
     "WORKER_EXIT",
 )
 _PHASE_INDEX = {phase: index for index, phase in enumerate(_PHASES)}
+# COM_INIT..EXPORT_AS_FIXED_FORMAT are entered in order; DOCUMENT_CLOSE,
+# WORD_QUIT and WORKER_EXIT are teardown phases published only when reached.
+_LAST_PROGRESS_PHASE = _PHASE_INDEX["EXPORT_AS_FIXED_FORMAT"]
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 _DRIVE_FIXED = 3
 
@@ -150,7 +153,18 @@ def _read_phase(root: Path) -> str | None:
         observed.append((index, phase))
     if observed[0][0] != 1:
         raise ValueError("invalid Word worker status")
-    if [index for index, _phase in observed] != list(range(1, observed[-1][0] + 1)):
+    indices = [index for index, _phase in observed]
+    if any(later <= earlier for earlier, later in zip(indices, indices[1:])):
+        raise ValueError("invalid Word worker status")
+    # The worker advances linearly through COM_INIT..EXPORT_AS_FIXED_FORMAT and
+    # then publishes only the teardown phases it actually enters, so a failure
+    # before Documents.Open legitimately leaves holes after the progress prefix.
+    # Those holes are PHASE_SKIPPED.  A hole *inside* the progress prefix is
+    # still PROTOCOL_CORRUPTION, because those phases always precede each other.
+    progress = [index for index in indices if index <= _LAST_PROGRESS_PHASE]
+    if progress != list(range(1, len(progress) + 1)):
+        raise ValueError("invalid Word worker status")
+    if not progress and indices:
         raise ValueError("invalid Word worker status")
     return observed[-1][1]
 
