@@ -456,3 +456,108 @@ def test_native_hyperlinked_cross_reference_is_accepted() -> None:
         word_format="DOCX",
         converter=LocalOfficePdfConverter(temp_root=_native_temp_root()),
     )
+
+
+def _author_word_template(directory: Path) -> Path:
+    """Author a template in real Word: placeholders, the six protected field
+    kinds, the CANONICAL_REPORT control and the TEMPLATE_ID property."""
+    import pythoncom
+    import win32com.client
+
+    pythoncom.CoInitialize()
+    app = win32com.client.Dispatch("Word.Application")
+    app.Visible = False
+    app.DisplayAlerts = 0
+    try:
+        document = app.Documents.Add()
+        document.Content.InsertAfter(
+            "[[EXPERT_FULL_NAME]]\r[[EXPERT_REGISTRATION]]\r"
+            "[[REPORT_ID]]\rMarcador\r"
+        )
+        document.Bookmarks.Add("Marca", document.Paragraphs(4).Range)
+        document.Content.InsertParagraphAfter()
+        paragraph = document.Paragraphs(document.Paragraphs.Count)
+        paragraph.Range.InsertAfter("corpo")
+        control = document.ContentControls.Add(0, paragraph.Range)
+        control.Tag = "CANONICAL_REPORT"
+        control.Title = "CANONICAL_REPORT"
+        for code in (
+            "TOC \\o",
+            "PAGE",
+            "NUMPAGES",
+            "SEQ Figura",
+            "REF Marca",
+            "PAGEREF Marca",
+        ):
+            document.Content.InsertParagraphAfter()
+            end = document.Content.End - 1
+            document.Fields.Add(
+                Range=document.Range(end, end), Type=-1, Text=code, PreserveFormatting=False
+            )
+        document.CustomDocumentProperties.Add("TEMPLATE_ID", False, 4, "TEMPLATE-1")
+        path = directory / "template.docx"
+        document.SaveAs2(FileName=str(path), FileFormat=16)
+        document.Close(SaveChanges=0)
+    finally:
+        app.Quit(SaveChanges=0)
+        pythoncom.CoUninitialize()
+    return path
+
+
+def test_native_product_template_path_renders(tmp_path: Path) -> None:
+    """OPC Case B: a Word-authored template must survive the whole product path.
+
+    Template validation -> binding -> canonical injection -> pre-COM validation
+    -> native render. This is the only test that exercises a genuine Word
+    package rather than a hand-built ZIP, and it is what caught the canonical
+    injection destroying the package's namespace prefixes.
+    """
+    import json as _json
+
+    from scripts.backend_contract.infrastructure import office_word_worker
+    from scripts.backend_contract.report_foundation import report_snapshot_from_mapping
+    from scripts.backend_contract.report_template import (
+        template_binding_manifest_from_mapping,
+    )
+
+    template = _author_word_template(tmp_path).read_bytes()
+    report = report_snapshot_from_mapping(
+        _json.loads(
+            (Path(__file__).parents[1] / "tests/fixtures/report-snapshot-v1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    )
+    manifest = template_binding_manifest_from_mapping(
+        {
+            "schema_version": "1.0.0",
+            "template_id": "TEMPLATE-1",
+            "output_kind": "DOCX",
+            "bindings": [
+                {"field": "EXPERT_FULL_NAME", "placeholder": "[[EXPERT_FULL_NAME]]"},
+                {"field": "EXPERT_REGISTRATION", "placeholder": "[[EXPERT_REGISTRATION]]"},
+                {"field": "REPORT_ID", "placeholder": "[[REPORT_ID]]"},
+            ],
+        }
+    )
+
+    candidate = delivery_renderer.render_word_candidate(
+        template_bytes=template, report=report, manifest=manifest
+    ).output_bytes
+    source = tmp_path / "source.docx"
+    source.write_bytes(candidate)
+    office_word_worker._validate_word_source(source, "DOCX")
+
+    pdf = LocalOfficePdfConverter(temp_root=_native_temp_root()).convert(candidate, "DOCX")
+
+    assert pdf.startswith(b"%PDF-")
+    _record(
+        {
+            "n13_product_template_path": {
+                "templateSha256": sha256(template).hexdigest(),
+                "candidateSha256": sha256(candidate).hexdigest(),
+                "pdfSha256": sha256(pdf).hexdigest(),
+                "preComValidation": "ACCEPT",
+            }
+        }
+    )

@@ -5037,3 +5037,96 @@ def test_simple_field_cross_reference_becomes_a_link_expectation() -> None:
 
     assert expectation.text == "secao um"
     assert expectation.target_text == "secao um"
+
+
+# --- Phase C F-22: canonical injection must preserve package markup ---
+#
+# Reproduced on Word 16.0.20326 during the OPC adjudication: a template authored
+# in real Word binds and renders, but the candidate produced from it cannot be
+# opened by Word at all.  _inject_canonical_report re-serialised the whole
+# word/document.xml with ElementTree, which drops namespace prefixes nothing in
+# the tree happens to use, while mc:Ignorable keeps naming them.  A Markup
+# Compatibility attribute referring to an undeclared prefix makes the part
+# invalid.  Pre-existing; found by driving the real product template path.
+
+
+_WORD_SHAPED_DOCUMENT = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    '<w:document '
+    'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+    'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
+    'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" '
+    'xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" '
+    'mc:Ignorable="w14 w15">'
+    "<w:body>"
+    '<w:p w14:paraId="5C0E038D"><w:r><w:t>Cabecalho</w:t></w:r></w:p>'
+    "<w:sdt><w:sdtPr>"
+    '<w:tag w:val="CANONICAL_REPORT"/>'
+    "</w:sdtPr><w:sdtContent>"
+    "<w:p><w:r><w:t>substituir</w:t></w:r></w:p>"
+    "</w:sdtContent></w:sdt>"
+    "<w:sectPr/></w:body></w:document>"
+)
+
+
+def _word_shaped_bound_artifact() -> bytes:
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" '
+            'ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            "</Types>",
+        )
+        package.writestr(
+            "_rels/.rels",
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/'
+            '2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+        )
+        package.writestr("word/document.xml", _WORD_SHAPED_DOCUMENT)
+    return output.getvalue()
+
+
+def _injected_document(report: object) -> str:
+    injected = delivery_renderer._inject_canonical_report(
+        _word_shaped_bound_artifact(), report
+    )
+    with ZipFile(BytesIO(injected)) as package:
+        return package.read("word/document.xml").decode("utf-8")
+
+
+def _approved_report():
+    root = Path(__file__).parents[1] / "tests/fixtures"
+    return report_snapshot_from_mapping(
+        json.loads((root / "report-snapshot-v1.json").read_text(encoding="utf-8"))
+    )
+
+
+def test_canonical_injection_keeps_every_ignorable_prefix_declared() -> None:
+    """RED F-22: mc:Ignorable named prefixes the serialiser had dropped."""
+    document = _injected_document(_approved_report())
+
+    ignorable = delivery_renderer.re.search(r'mc:Ignorable="([^"]*)"', document)
+    assert ignorable is not None
+    for prefix in ignorable.group(1).split():
+        assert f'xmlns:{prefix}="' in document, f"{prefix} is named but not declared"
+
+
+def test_canonical_injection_preserves_namespaced_attributes() -> None:
+    document = _injected_document(_approved_report())
+
+    assert 'w14:paraId="5C0E038D"' in document
+    assert "ns0:" not in document
+
+
+def test_canonical_injection_still_replaces_the_control_content() -> None:
+    document = _injected_document(_approved_report())
+
+    assert "substituir" not in document
+    assert "REPORT_SNAPSHOT_SHA256" in document
+    assert document.count("CANONICAL_REPORT") >= 1

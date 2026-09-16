@@ -5050,6 +5050,69 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         raise ValueError("final PDF does not faithfully represent the bound Word artifact")
 
 
+_WORDPROCESSING_NS = b"http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+
+def _wordprocessing_prefix(part: bytes) -> bytes:
+    """Return the prefix this part binds to the WordprocessingML namespace."""
+    match = re.search(rb'xmlns:([A-Za-z0-9_.-]+)="' + re.escape(_WORDPROCESSING_NS) + rb'"', part)
+    if match is not None:
+        return match.group(1) + b":"
+    if re.search(rb'xmlns="' + re.escape(_WORDPROCESSING_NS) + rb'"', part) is not None:
+        return b""
+    raise ValueError("bound Word artifact is invalid")
+
+
+def _canonical_content_markup(report: ReportSnapshot, prefix: bytes) -> bytes:
+    def escaped(value: str) -> bytes:
+        return (
+            value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        ).encode("utf-8")
+
+    return b"".join(
+        b"<" + prefix + b"p><" + prefix + b"r><" + prefix + b't xml:space="preserve">'
+        + escaped(line)
+        + b"</" + prefix + b"t></" + prefix + b"r></" + prefix + b"p>"
+        for line in _canonical_report_lines(report)
+    )
+
+
+def _replace_canonical_content(part: bytes, report: ReportSnapshot) -> bytes:
+    """Replace the CANONICAL_REPORT control's content without touching other bytes."""
+    prefix = _wordprocessing_prefix(part)
+    anchor = part.find(b'"CANONICAL_REPORT"')
+    open_tag = b"<" + prefix + b"sdtContent"
+    close_tag = b"</" + prefix + b"sdtContent>"
+    start = part.find(open_tag, anchor) if anchor >= 0 else -1
+    end_of_open = part.find(b">", start) if start >= 0 else -1
+    if anchor < 0 or start < 0 or end_of_open < 0:
+        raise ValueError("CANONICAL_REPORT content control is incomplete")
+    markup = _canonical_content_markup(report, prefix)
+    if part[end_of_open - 1 : end_of_open] == b"/":
+        # An empty control is written self-closing and must become a pair.
+        return (
+            part[: end_of_open - 1] + b">" + markup + close_tag + part[end_of_open + 1 :]
+        )
+    depth = 1
+    cursor = end_of_open + 1
+    while depth:
+        next_open = part.find(open_tag, cursor)
+        next_close = part.find(close_tag, cursor)
+        if next_close < 0:
+            raise ValueError("CANONICAL_REPORT content control is incomplete")
+        if 0 <= next_open < next_close:
+            nested_end = part.find(b">", next_open)
+            if nested_end < 0:
+                raise ValueError("CANONICAL_REPORT content control is incomplete")
+            if part[nested_end - 1 : nested_end] != b"/":
+                depth += 1
+            cursor = nested_end + 1
+            continue
+        depth -= 1
+        cursor = next_close + len(close_tag)
+    return part[: end_of_open + 1] + markup + part[cursor - len(close_tag) :]
+
+
 def _inject_canonical_report(content: bytes, report: ReportSnapshot) -> bytes:
     try:
         with ZipFile(BytesIO(content)) as source:
@@ -5064,13 +5127,17 @@ def _inject_canonical_report(content: bytes, report: ReportSnapshot) -> bytes:
             controls.append(control)
     if len(controls) != 1:
         raise ValueError("template requires exactly one CANONICAL_REPORT content control")
-    target = controls[0].find(f"{_W}sdtContent")
-    if target is None:
+    if controls[0].find(f"{_W}sdtContent") is None:
         raise ValueError("CANONICAL_REPORT content control is incomplete")
-    target.clear()
-    for line in _canonical_report_lines(report):
-        target.append(_paragraph(line))
-    parts["word/document.xml"] = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+    # The tree above decides *which* control to fill; the part itself is edited in
+    # place.  Re-serialising the whole document with ElementTree dropped every
+    # namespace prefix no element happened to use, while mc:Ignorable kept naming
+    # them -- a Markup Compatibility attribute pointing at an undeclared prefix
+    # makes the part invalid, and Word refuses to open the candidate at all.
+    # Editing only the control's own bytes leaves the rest of the markup intact.
+    parts["word/document.xml"] = _replace_canonical_content(
+        parts["word/document.xml"], report
+    )
     output = BytesIO()
     with ZipFile(output, "w", ZIP_DEFLATED) as package:
         for name, value in parts.items():
