@@ -2076,6 +2076,60 @@ def test_fidelity_rejects_color_pattern_hidden_by_coarse_spatial_grid() -> None:
         )
 
 
+def test_fidelity_rejects_localized_isoluminant_patch_exchange() -> None:
+    red = (255, 0, 0)
+    isoluminant_green = (0, 130, 0)
+    source_image = Image.new("RGB", (32, 32), red)
+    for x in range(16, 32):
+        for y in range(32):
+            source_image.putpixel((x, y), isoluminant_green)
+
+    rearranged_image = source_image.copy()
+    for x in range(5, 11):
+        for y in range(13, 19):
+            rearranged_image.putpixel((x, y), isoluminant_green)
+    for x in range(21, 27):
+        for y in range(13, 19):
+            rearranged_image.putpixel((x, y), red)
+
+    source = BytesIO()
+    source_image.save(source, "PNG")
+    rearranged = BytesIO()
+    rearranged_image.save(rearranged, "JPEG", quality=100, subsampling=0)
+    word = _word_with_image_and_text("Synthetic", source.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", rearranged.getvalue(), image_x=100),
+        )
+
+
+def test_fidelity_rejects_small_localized_dct_pixel_exchange() -> None:
+    red = (255, 0, 0)
+    isoluminant_green = (0, 130, 0)
+    source_image = Image.new("RGB", (8, 8), red)
+    for x in range(4, 8):
+        for y in range(8):
+            source_image.putpixel((x, y), isoluminant_green)
+
+    rearranged_image = source_image.copy()
+    rearranged_image.putpixel((1, 3), isoluminant_green)
+    rearranged_image.putpixel((6, 3), red)
+
+    source = BytesIO()
+    source_image.save(source, "PNG")
+    rearranged = BytesIO()
+    rearranged_image.save(rearranged, "JPEG", quality=100, subsampling=0)
+    word = _word_with_image_and_text("Synthetic", source.getvalue())
+
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word,
+            _image_pdf("Synthetic", rearranged.getvalue(), image_x=100),
+        )
+
+
 def test_image_fidelity_signature_preserves_legitimate_alpha_semantics() -> None:
     source = Image.new("RGBA", (32, 32), (220, 20, 20, 128))
     word_style = delivery_renderer._image_signature(source)
