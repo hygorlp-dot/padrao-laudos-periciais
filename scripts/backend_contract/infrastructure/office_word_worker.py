@@ -468,7 +468,7 @@ def _validate_word_source(source: Path, source_format: str) -> None:
                         if relationship_type in _ACQUIRING_RELATIONSHIP_TYPES:
                             raise ValueError("unsupported active Word content")
                         if (
-                            (mode_value or "").casefold() == "external"
+                            (mode_value is not None and mode_value != "Internal")
                             or target.startswith(("\\\\", "//"))
                             or re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE)
                         ):
