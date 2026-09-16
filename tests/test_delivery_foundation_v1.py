@@ -2462,6 +2462,27 @@ def test_text_style_matching_rejects_font_family_substitution() -> None:
     assert not delivery_renderer._text_sizes_match([expectation], [candidate], [])
 
 
+def test_text_style_matching_binds_repeatable_style_to_each_page() -> None:
+    expectations = [
+        delivery_renderer._WordTextExpectation(
+            "repeated header", 11, (0, 0, 0), True, False, False, "left",
+            expected_page=page,
+        )
+        for page in (0, 1)
+    ]
+    candidates = [
+        delivery_renderer._PositionedText(
+            page, "repeated header", 50, 745, 11, 170, 745, 753,
+            font_weight=700 if page == 0 else 400,
+        )
+        for page in (0, 1)
+    ]
+
+    assert not delivery_renderer._text_sizes_match(
+        expectations, candidates, []
+    )
+
+
 def test_text_style_matching_rejects_first_body_vertical_relocation() -> None:
     expectation = delivery_renderer._WordTextExpectation(
         "authoritative body", 11, (0, 0, 0), False, False, False, "left",
@@ -2481,6 +2502,52 @@ def test_text_style_matching_rejects_first_body_vertical_relocation() -> None:
     )
 
 
+def test_first_visible_body_anchor_survives_preceding_empty_paragraph() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:p/><w:p><w:r><w:t>Anchored body</w:t></w:r></w:p>'
+        '<w:sectPr><w:pgMar w:top="1440"/></w:sectPr>'
+        "</w:body></w:document>"
+    )
+
+    [expectation] = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document}
+    )
+
+    assert expectation.expected_top_offset is not None
+    assert expectation.expected_top_offset > 72
+
+
+def test_word_text_expectation_resolves_minor_theme_font() -> None:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p><w:r><w:t>Theme font</w:t></w:r></w:p></w:body>"
+        "</w:document>"
+    )
+    styles = delivery_renderer.ElementTree.fromstring(
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:asciiTheme="minorHAnsi" '
+        'w:hAnsiTheme="minorHAnsi"/></w:rPr></w:rPrDefault></w:docDefaults>'
+        "</w:styles>"
+    )
+    theme = delivery_renderer.ElementTree.fromstring(
+        '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+        '<a:themeElements><a:fontScheme><a:majorFont><a:latin typeface="Cambria"/>'
+        '</a:majorFont><a:minorFont><a:latin typeface="Calibri"/></a:minorFont>'
+        "</a:fontScheme></a:themeElements></a:theme>"
+    )
+
+    [expectation] = delivery_renderer._word_text_expectations(
+        {
+            "word/document.xml": document,
+            "word/styles.xml": styles,
+            "word/theme/theme1.xml": theme,
+        }
+    )
+
+    assert expectation.font_family == "Calibri"
+
+
 def test_word_page_geometry_preserves_size_and_orientation() -> None:
     document = delivery_renderer.ElementTree.fromstring(
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
@@ -2497,6 +2564,18 @@ def test_word_page_geometry_preserves_size_and_orientation() -> None:
     )
     assert not delivery_renderer._page_geometry_matches(
         geometry, [(792.0, 612.0)]
+    )
+
+
+def test_pdf_page_coverage_rejects_unbound_blank_page() -> None:
+    positioned = [
+        delivery_renderer._PositionedText(
+            0, "bound content", 50, 700, 11, 150, 700, 710
+        )
+    ]
+
+    assert not delivery_renderer._pdf_pages_have_visible_content(
+        2, positioned, [], []
     )
 
 
