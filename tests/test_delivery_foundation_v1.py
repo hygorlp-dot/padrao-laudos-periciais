@@ -336,9 +336,10 @@ def _word_with_strict_header(body_text: str, header_text: str) -> bytes:
 def _word_with_repeatable_text(
     body_fragments: tuple[str, ...], header_text: str, footer_text: str
 ) -> bytes:
-    def paragraph(text: str) -> str:
+    def paragraph(text: str, *, page_break_before: bool = False) -> str:
+        properties = "<w:pPr><w:pageBreakBefore/></w:pPr>" if page_break_before else ""
         return (
-            '<w:p><w:r><w:rPr><w:sz w:val="22"/></w:rPr>'
+            f'<w:p>{properties}<w:r><w:rPr><w:sz w:val="22"/></w:rPr>'
             f"<w:t>{text}</w:t></w:r></w:p>"
         )
 
@@ -348,7 +349,10 @@ def _word_with_repeatable_text(
             "word/document.xml",
             '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
             "<w:body>"
-            + "".join(paragraph(fragment) for fragment in body_fragments)
+            + "".join(
+                paragraph(fragment, page_break_before=index > 0)
+                for index, fragment in enumerate(body_fragments)
+            )
             + "</w:body></w:document>",
         )
         package.writestr(
@@ -1615,6 +1619,24 @@ def test_fidelity_never_composes_one_table_cell_across_pages() -> None:
         )
 
 
+def test_borderless_table_row_accepts_wrapped_text_within_its_own_cell() -> None:
+    positioned = [
+        delivery_renderer._PositionedText(
+            0, "left cell", 90, 700, 11, 145, 700, 710
+        ),
+        delivery_renderer._PositionedText(
+            0, "right cell alpha", 190, 700, 11, 300, 700, 710
+        ),
+        delivery_renderer._PositionedText(
+            0, "beta", 190, 685, 11, 225, 685, 695
+        ),
+    ]
+
+    assert delivery_renderer._table_rows_match(
+        [("left cell", "right cell alpha beta")], positioned, []
+    )
+
+
 @pytest.mark.parametrize(
     ("stream", "resources"),
     (
@@ -2801,7 +2823,61 @@ def test_word_table_banding_starts_after_enabled_first_row() -> None:
         {"word/document.xml": document, "word/styles.xml": styles}
     )
 
-    assert [item.font_size for item in expectations] == [18, 14, 10]
+    assert [item.font_size for item in expectations] == [18, 10, 14]
+
+
+def test_empty_first_row_condition_keeps_applicable_horizontal_band_typography() -> None:
+    rows = "".join(
+        f'<w:tr><w:tc><w:p><w:r><w:t>Row {index}</w:t></w:r></w:p></w:tc></w:tr>'
+        for index in range(2)
+    )
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:tbl><w:tblPr><w:tblStyle w:val="Bands"/>'
+        '<w:tblLook w:firstRow="1" w:firstColumn="0" w:lastColumn="0" '
+        'w:noHBand="0" w:noVBand="1"/></w:tblPr>'
+        f'{rows}</w:tbl></w:body></w:document>'
+    )
+    styles = delivery_renderer.ElementTree.fromstring(
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="table" w:styleId="Bands">'
+        '<w:tblStylePr w:type="firstRow"><w:rPr/></w:tblStylePr>'
+        '<w:tblStylePr w:type="band1Horz"><w:rPr><w:sz w:val="40"/>'
+        '</w:rPr></w:tblStylePr></w:style></w:styles>'
+    )
+
+    expectations = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document, "word/styles.xml": styles}
+    )
+
+    assert [item.font_size for item in expectations] == [20, 11]
+
+
+def test_first_column_region_suppresses_horizontal_band_typography() -> None:
+    rows = "".join(
+        f'<w:tr><w:tc><w:p><w:r><w:t>Row {index}</w:t></w:r></w:p></w:tc></w:tr>'
+        for index in range(2)
+    )
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:tbl><w:tblPr><w:tblStyle w:val="Bands"/>'
+        '<w:tblLook w:firstRow="0" w:firstColumn="1" w:lastColumn="0" '
+        'w:noHBand="0" w:noVBand="1"/></w:tblPr>'
+        f'{rows}</w:tbl></w:body></w:document>'
+    )
+    styles = delivery_renderer.ElementTree.fromstring(
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="table" w:styleId="Bands">'
+        '<w:tblStylePr w:type="band1Horz"><w:rPr><w:sz w:val="40"/>'
+        '</w:rPr></w:tblStylePr><w:tblStylePr w:type="band2Horz"><w:rPr>'
+        '<w:sz w:val="16"/></w:rPr></w:tblStylePr></w:style></w:styles>'
+    )
+
+    expectations = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document, "word/styles.xml": styles}
+    )
+
+    assert [item.font_size for item in expectations] == [11, 11]
 
 
 def test_default_paragraph_emphasis_is_enforced_inside_table() -> None:
@@ -3107,6 +3183,129 @@ def test_centered_wrapped_paragraph_keeps_anchor_across_styled_segments() -> Non
     ]
 
     assert delivery_renderer._text_sizes_match(expectations, positioned, [])
+
+
+@pytest.mark.parametrize("alignment", ("left", "both"))
+def test_styled_wrap_anchor_excludes_unrelated_same_line_text(
+    alignment: str,
+) -> None:
+    expectations = [
+        delivery_renderer._WordTextExpectation(
+            "side authority", 11, (0, 0, 0), False, False, False, "left",
+        ),
+        delivery_renderer._WordTextExpectation(
+            "prefix", 11, (0, 0, 0), True, False, False, alignment,
+        ),
+        delivery_renderer._WordTextExpectation(
+            "alpha beta", 11, (0, 0, 0), False, False, False, alignment,
+            paragraph_continuation=True,
+        ),
+    ]
+    positioned = [
+        delivery_renderer._PositionedText(
+            0, "side authority", 30, 702, 11, 80, 702, 710
+        ),
+        delivery_renderer._PositionedText(
+            0, "prefix", 90, 702, 11, 140, 702, 710, font_weight=700
+        ),
+        delivery_renderer._PositionedText(
+            0, "alpha", 90, 687, 11, 150, 687, 695
+        ),
+        delivery_renderer._PositionedText(
+            0, "beta", 30, 672, 11, 75, 672, 680
+        ),
+    ]
+
+    assert not delivery_renderer._text_sizes_match(expectations, positioned, [])
+
+
+def test_right_styled_wrap_anchor_excludes_unrelated_same_line_text() -> None:
+    expectations = [
+        delivery_renderer._WordTextExpectation(
+            "prefix", 11, (0, 0, 0), True, False, False, "right",
+        ),
+        delivery_renderer._WordTextExpectation(
+            "alpha beta", 11, (0, 0, 0), False, False, False, "right",
+            paragraph_continuation=True,
+        ),
+        delivery_renderer._WordTextExpectation(
+            "side authority", 11, (0, 0, 0), False, False, False, "right",
+        ),
+    ]
+    positioned = [
+        delivery_renderer._PositionedText(
+            0, "prefix", 400, 702, 11, 500, 702, 710, font_weight=700
+        ),
+        delivery_renderer._PositionedText(
+            0, "side authority", 520, 702, 11, 580, 702, 710
+        ),
+        delivery_renderer._PositionedText(
+            0, "alpha", 440, 687, 11, 500, 687, 695
+        ),
+        delivery_renderer._PositionedText(
+            0, "beta", 530, 672, 11, 580, 672, 680
+        ),
+    ]
+
+    assert not delivery_renderer._text_sizes_match(expectations, positioned, [])
+
+
+def test_centered_table_wrap_anchor_excludes_unrelated_same_line_text() -> None:
+    expectations = [
+        delivery_renderer._WordTextExpectation(
+            "prefix", 11, (0, 0, 0), True, False, False, "center",
+            in_table=True,
+        ),
+        delivery_renderer._WordTextExpectation(
+            "alpha beta", 11, (0, 0, 0), False, False, False, "center",
+            in_table=True,
+            paragraph_continuation=True,
+        ),
+        delivery_renderer._WordTextExpectation(
+            "side authority", 11, (0, 0, 0), False, False, False, "center",
+            in_table=True,
+        ),
+    ]
+    positioned = [
+        delivery_renderer._PositionedText(
+            0, "prefix", 250, 702, 11, 350, 702, 710, font_weight=700
+        ),
+        delivery_renderer._PositionedText(
+            0, "side authority", 500, 702, 11, 560, 702, 710
+        ),
+        delivery_renderer._PositionedText(
+            0, "alpha", 250, 687, 11, 362, 687, 695
+        ),
+        delivery_renderer._PositionedText(
+            0, "beta", 350, 672, 11, 460, 672, 680
+        ),
+    ]
+
+    assert not delivery_renderer._text_sizes_match(expectations, positioned, [])
+
+
+def test_body_flow_rejects_arbitrary_page_break_away_from_page_boundary() -> None:
+    expectations = [
+        delivery_renderer._WordTextExpectation(
+            "first body", 11, (0, 0, 0), False, False, False, "left",
+            body_flow_anchor=True,
+        ),
+        delivery_renderer._WordTextExpectation(
+            "second body", 11, (0, 0, 0), False, False, False, "left",
+            body_flow_anchor=True,
+            expected_previous_top_gap=13.2,
+        ),
+    ]
+    positioned = [
+        delivery_renderer._PositionedText(
+            0, "first body", 90, 390, 11, 180, 390, 400
+        ),
+        delivery_renderer._PositionedText(
+            1, "second body", 90, 700, 11, 180, 700, 710
+        ),
+    ]
+
+    assert not delivery_renderer._text_sizes_match(expectations, positioned, [])
 
 
 def test_wrapped_text_rejects_cross_column_and_reverse_barrier_paths() -> None:

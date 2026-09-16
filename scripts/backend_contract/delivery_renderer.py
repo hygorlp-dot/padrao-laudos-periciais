@@ -1517,6 +1517,15 @@ class _VerticalBarrier:
 
 
 @dataclass(frozen=True, slots=True)
+class _ParagraphWrapAnchor:
+    page: int
+    left: float
+    right: float
+    bottom: float
+    top: float
+
+
+@dataclass(frozen=True, slots=True)
 class _WordTextExpectation:
     text: str
     font_size: float
@@ -1534,6 +1543,7 @@ class _WordTextExpectation:
     enforce_visible_run_style: bool = True
     line_height: float | None = None
     paragraph_continuation: bool = False
+    page_break_before: bool = False
 
 
 def _word_page_geometry(
@@ -2133,20 +2143,23 @@ def _word_text_expectations(
                         active.add("swcell")
                     if last_row and last_column:
                         active.add("secell")
-                    special_region = (
-                        first_row or last_row or first_column or last_column
-                    )
-                    if not special_region and not enabled(look, "noHBand"):
-                        band_row = row_index - int(first_row_enabled)
+                    if (
+                        not first_column
+                        and not last_column
+                        and not enabled(look, "noHBand")
+                    ):
+                        band_row = row_index
                         active.add(
                             "band1horz"
                             if (band_row // row_band_size) % 2 == 0
                             else "band2horz"
                         )
-                    if not special_region and not enabled(
-                        look, "noVBand", default=True
+                    if (
+                        not first_row
+                        and not last_row
+                        and not enabled(look, "noVBand", default=True)
                     ):
-                        band_column = cell_index - int(first_column_enabled)
+                        band_column = cell_index
                         active.add(
                             "band1vert"
                             if (band_column // column_band_size) % 2 == 0
@@ -2407,6 +2420,14 @@ def _word_text_expectations(
                     style_line_spacing,
                     default_line_spacing,
                 )
+            page_break_node = _first_named(
+                paragraph_properties, "pageBreakBefore"
+            )
+            paragraph_page_break_before = (
+                page_break_node is not None
+                and (_attribute_named(page_break_node, "val") or "true").casefold()
+                not in {"0", "false", "off"}
+            )
             segments: list[
                 tuple[
                     str,
@@ -2606,6 +2627,7 @@ def _word_text_expectations(
                         enforce_visible_run_style,
                         paragraph_line_height,
                         segment_index > 0,
+                        paragraph_page_break_before and segment_index == 0,
                     )
                 )
             if name == "word/document.xml":
@@ -2635,7 +2657,7 @@ def _text_sizes_match(
         return True
     used_fragments: set[int] = set()
     previous_body_fragments: list[_PositionedText] | None = None
-    paragraph_wrap_anchor: tuple[float, float] | None = None
+    paragraph_wrap_anchor: _ParagraphWrapAnchor | None = None
     for expectation in expectations:
         match: tuple[int, int] | None = None
         for start in range(len(positioned)):
@@ -2733,10 +2755,15 @@ def _text_sizes_match(
                 if previous_body_fragments is None:
                     flow_matches = False
                 else:
-                    previous_page = previous_body_fragments[0].page
+                    previous_page = previous_body_fragments[-1].page
                     if page == previous_page:
+                        previous_page_fragments = [
+                            fragment
+                            for fragment in previous_body_fragments
+                            if fragment.page == previous_page
+                        ]
                         observed_gap = min(
-                            fragment.top for fragment in previous_body_fragments
+                            fragment.top for fragment in previous_page_fragments
                         ) - max(fragment.top for fragment in matched_fragments)
                         missing_flow_tolerance = max(
                             6.0, expectation.font_size * 0.75
@@ -2754,7 +2781,18 @@ def _text_sizes_match(
                             + additional_flow_tolerance
                         )
                     else:
-                        flow_matches = page == previous_page + 1
+                        previous_fragment = previous_body_fragments[-1]
+                        current_fragment = matched_fragments[0]
+                        flow_matches = (
+                            page == previous_page + 1
+                            and current_fragment.top
+                            >= current_fragment.page_height * 0.70
+                            and (
+                                expectation.page_break_before
+                                or previous_fragment.top
+                                <= previous_fragment.page_height * 0.30
+                            )
+                        )
             if (
                 style_matches
                 and alignment_matches
@@ -2767,34 +2805,46 @@ def _text_sizes_match(
             return False
         used_fragments.update(range(*match))
         if not expectation.paragraph_continuation:
-            first_fragment = positioned[match[0]]
+            paragraph_fragments = positioned[match[0] : match[1]]
+            first_fragment = paragraph_fragments[0]
             anchor_tolerance = max(3.0, first_fragment.font_size * 0.35)
             first_line = [
                 fragment
-                for fragment in positioned
+                for fragment in paragraph_fragments
                 if fragment.page == first_fragment.page
                 and max(fragment.bottom, first_fragment.bottom)
                 - min(fragment.top, first_fragment.top)
                 <= anchor_tolerance
-                and not any(
-                    barrier.page == fragment.page
-                    and min(fragment.right, first_fragment.right)
-                    <= max(fragment.x, first_fragment.x)
-                    and barrier.left
-                    >= min(fragment.right, first_fragment.right) - 0.5
-                    and barrier.right
-                    <= max(fragment.x, first_fragment.x) + 0.5
-                    and barrier.bottom
-                    <= max(fragment.top, first_fragment.top)
-                    and barrier.top
-                    >= min(fragment.bottom, first_fragment.bottom)
-                    for barrier in barriers
-                )
             ]
-            paragraph_wrap_anchor = (
+            paragraph_wrap_anchor = _ParagraphWrapAnchor(
+                first_fragment.page,
                 min(fragment.x for fragment in first_line),
                 max(fragment.right for fragment in first_line),
+                min(fragment.bottom for fragment in first_line),
+                max(fragment.top for fragment in first_line),
             )
+        elif paragraph_wrap_anchor is not None:
+            first_fragment = positioned[match[0]]
+            line_tolerance = max(3.0, first_fragment.font_size * 0.35)
+            horizontal_tolerance = max(18.0, 1.5 * first_fragment.font_size)
+            same_anchor_line = (
+                first_fragment.page == paragraph_wrap_anchor.page
+                and max(first_fragment.bottom, paragraph_wrap_anchor.bottom)
+                - min(first_fragment.top, paragraph_wrap_anchor.top)
+                <= line_tolerance
+                and first_fragment.x
+                <= paragraph_wrap_anchor.right + horizontal_tolerance
+                and first_fragment.right
+                >= paragraph_wrap_anchor.left - horizontal_tolerance
+            )
+            if same_anchor_line:
+                paragraph_wrap_anchor = _ParagraphWrapAnchor(
+                    paragraph_wrap_anchor.page,
+                    min(paragraph_wrap_anchor.left, first_fragment.x),
+                    max(paragraph_wrap_anchor.right, first_fragment.right),
+                    min(paragraph_wrap_anchor.bottom, first_fragment.bottom),
+                    max(paragraph_wrap_anchor.top, first_fragment.top),
+                )
         if expectation.body_flow_anchor:
             previous_body_fragments = positioned[match[0] : match[1]]
     return True
@@ -3221,16 +3271,38 @@ def _fragment_sequence_end(
     allow_line_wrap: bool = False,
     alignment: str | None = None,
     expected_line_height: float | None = None,
-    wrap_anchor: tuple[float, float] | None = None,
+    wrap_anchor: _ParagraphWrapAnchor | None = None,
 ) -> int | None:
     normalized_target = _normalized_visible_text(expected)
     text_candidates = {""}
     previous: _PositionedText | None = None
     line_start: _PositionedText | None = None
+    active_wrap_anchor = wrap_anchor
     for index in range(start, len(fragments)):
         fragment = fragments[index]
         if line_start is None:
             line_start = fragment
+            if active_wrap_anchor is not None:
+                line_tolerance = max(3.0, 0.35 * fragment.font_size)
+                horizontal_tolerance = max(18.0, 1.5 * fragment.font_size)
+                same_anchor_line = (
+                    fragment.page == active_wrap_anchor.page
+                    and max(fragment.bottom, active_wrap_anchor.bottom)
+                    - min(fragment.top, active_wrap_anchor.top)
+                    <= line_tolerance
+                    and fragment.x
+                    <= active_wrap_anchor.right + horizontal_tolerance
+                    and fragment.right
+                    >= active_wrap_anchor.left - horizontal_tolerance
+                )
+                if same_anchor_line:
+                    active_wrap_anchor = _ParagraphWrapAnchor(
+                        active_wrap_anchor.page,
+                        min(active_wrap_anchor.left, fragment.x),
+                        max(active_wrap_anchor.right, fragment.right),
+                        min(active_wrap_anchor.bottom, fragment.bottom),
+                        max(active_wrap_anchor.top, fragment.top),
+                    )
         if previous is not None:
             line_tolerance = max(3.0, 0.35 * max(previous.font_size, fragment.font_size))
             vertical_gap = max(previous.bottom, fragment.bottom) - min(
@@ -3266,8 +3338,8 @@ def _fragment_sequence_end(
                     and abs(
                         fragment.x
                         - (
-                            wrap_anchor[0]
-                            if wrap_anchor is not None
+                            active_wrap_anchor.left
+                            if active_wrap_anchor is not None
                             else line_start.x
                         )
                     )
@@ -3278,8 +3350,8 @@ def _fragment_sequence_end(
                     abs(
                         fragment.right
                         - (
-                            wrap_anchor[1]
-                            if wrap_anchor is not None
+                            active_wrap_anchor.right
+                            if active_wrap_anchor is not None
                             else previous.right
                         )
                     )
@@ -3287,8 +3359,8 @@ def _fragment_sequence_end(
                 )
             elif wrap_alignment == "center" and line_start is not None:
                 prior_center = (
-                    sum(wrap_anchor) / 2
-                    if wrap_anchor is not None
+                    (active_wrap_anchor.left + active_wrap_anchor.right) / 2
+                    if active_wrap_anchor is not None
                     else (line_start.x + previous.right) / 2
                 )
                 wrap_anchor_matches = abs(
@@ -3426,34 +3498,51 @@ def _matched_table_row_fragments(
     positioned: list[_PositionedText],
     barriers: list[_VerticalBarrier],
 ) -> list[list[_PositionedText]] | None:
+    ordered = _positioned_reading_order(positioned)
     previous_position: tuple[int, float] | None = None
     selected_rows: list[list[_PositionedText]] = []
     for row in rows:
         matching_positions: dict[tuple[int, float], list[_PositionedText]] = {}
-        for anchor in positioned:
+        for anchor in ordered:
             line_tolerance = max(3.0, 0.35 * anchor.font_size)
-            line = sorted(
-                (
-                    fragment
-                    for fragment in positioned
-                    if fragment.page == anchor.page
-                    and abs(fragment.y - anchor.y) <= line_tolerance
-                ),
-                key=lambda fragment: fragment.x,
-            )
+            line_starts = [
+                index
+                for index, fragment in enumerate(ordered)
+                if fragment.page == anchor.page
+                and abs(fragment.y - anchor.y) <= line_tolerance
+            ]
             cursor = 0
             matched = True
             matched_fragments: list[_PositionedText] = []
             for cell in row:
                 end = None
-                for start in range(cursor, len(line)):
-                    end = _fragment_sequence_end(cell, line, start, barriers)
+                for start in line_starts:
+                    if start < cursor:
+                        continue
+                    end = next(
+                        (
+                            candidate
+                            for alignment in ("left", "right", "center")
+                            if (
+                                candidate := _fragment_sequence_end(
+                                    cell,
+                                    ordered,
+                                    start,
+                                    barriers,
+                                    allow_line_wrap=True,
+                                    alignment=alignment,
+                                )
+                            )
+                            is not None
+                        ),
+                        None,
+                    )
                     if end is not None:
                         break
                 if end is None:
                     matched = False
                     break
-                matched_fragments.extend(line[start:end])
+                matched_fragments.extend(ordered[start:end])
                 cursor = end
             if matched:
                 matching_positions[(anchor.page, anchor.y)] = matched_fragments
