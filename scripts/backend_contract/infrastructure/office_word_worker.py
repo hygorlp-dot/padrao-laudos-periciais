@@ -166,7 +166,8 @@ def _declared_content_types(
             overrides[part] = value
     declared: dict[str, str] = {}
     for name in names:
-        if name == _CONTENT_TYPES_PART:
+        if name == _CONTENT_TYPES_PART or name.endswith("/"):
+            # Directory entries carry no content and declare no content type.
             continue
         value = overrides.get(f"/{name}")
         if value is None:
@@ -550,7 +551,10 @@ def _validate_word_source(source: Path, source_format: str) -> None:
             if not infos or len(infos) > _MAX_PACKAGE_PARTS:
                 raise ValueError("invalid Word package size")
             names = [item.filename for item in infos]
-            if len(names) != len(set(names)):
+            if len(names) != len(set(names)) or len(names) != len(
+                {name.casefold() for name in names}
+            ):
+                # OPC forbids part names that differ only by case.
                 raise ValueError("duplicate Word package part")
             total_size = 0
             for item in infos:
@@ -595,7 +599,10 @@ def _validate_word_source(source: Path, source_format: str) -> None:
                 raise ValueError("Word package format identity mismatch")
 
             for name in names:
-                if not name.endswith(".rels"):
+                # OPC part names compare case-insensitively, so a ".RELS" part is
+                # the same part to Word but was a different string here, and the
+                # whole relationship policy never saw it.
+                if not name.casefold().endswith(".rels"):
                     continue
                 for relationship in _relationship_nodes(package.read(name)):
                     type_value, target, mode_value = _relationship_fields(relationship)

@@ -4383,10 +4383,6 @@ def test_well_formed_table_is_bound_and_rejects_flattened_pdf() -> None:
     "table_markup",
     (
         _WELL_FORMED_TABLE.replace(
-            "</w:tbl>",
-            "<w:tr><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr></w:tbl>",
-        ),
-        _WELL_FORMED_TABLE.replace(
             "<w:tc><w:p><w:r><w:t>Cell A</w:t></w:r></w:p></w:tc>",
             '<w:tc><w:tcPr><w:gridSpan w:val="nao-numerico"/></w:tcPr>'
             "<w:p><w:r><w:t>Cell A</w:t></w:r></w:p></w:tc>",
@@ -4409,7 +4405,6 @@ def test_well_formed_table_is_bound_and_rejects_flattened_pdf() -> None:
         "<w:p><w:r><w:t>Cell B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
     ),
     ids=(
-        "empty_row",
         "invalid_grid_span",
         "zero_grid_span",
         "row_column_count_mismatch",
@@ -5130,3 +5125,206 @@ def test_canonical_injection_still_replaces_the_control_content() -> None:
     assert "substituir" not in document
     assert "REPORT_SNAPSHOT_SHA256" in document
     assert document.count("CANONICAL_REPORT") >= 1
+
+
+def test_blank_table_row_is_resolvable() -> None:
+    """A spacer row carries no text anchor but its geometry is fully known."""
+    markup = _WELL_FORMED_TABLE.replace(
+        "</w:tbl>",
+        "<w:tr><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr></w:tbl>",
+    )
+    with pytest.raises(ValueError, match="does not faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            _word_table_document(markup),
+            _parseable_text_pdf(_FLATTENED_TABLE_PDF),
+        )
+
+
+def test_row_with_grid_before_is_resolvable() -> None:
+    """Word writes gridBefore whenever a row does not start at column one."""
+    markup = (
+        "<w:tbl><w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/></w:tblGrid>"
+        "<w:tr><w:tc><w:p><w:r><w:t>Cell A</w:t></w:r></w:p></w:tc>"
+        "<w:tc><w:p><w:r><w:t>Cell B</w:t></w:r></w:p></w:tc></w:tr>"
+        "<w:tr><w:trPr><w:gridBefore w:val=\"1\"/></w:trPr>"
+        "<w:tc><w:p><w:r><w:t>Cell C</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+    )
+    with pytest.raises(ValueError, match="does not faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            _word_table_document(markup), _parseable_text_pdf("Cell A Cell B Cell C")
+        )
+
+
+# --- Phase C §27 internal review: reviewer and auditor findings ---
+
+_MAIN_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+
+
+def _doc(body: str):
+    return delivery_renderer.ElementTree.fromstring(
+        f"<w:document {_MAIN_NS}><w:body>{body}</w:body></w:document>"
+    )
+
+
+def _frag(text: str, x: float, right: float, top: float = 100.0, page: int = 0):
+    return delivery_renderer._PositionedText(
+        page, text, x, top, 10.0, right, top - 8.0, top
+    )
+
+
+def test_superseded_tracked_formatting_is_not_read_as_current() -> None:
+    """P0: w:rPrChange records the formatting a change replaced; Word ignores it.
+
+    A recursive property lookup found the superseded w:vanish and read a visible
+    run as hidden, and hidden runs carry no expectation at all, so deleting that
+    text from the PDF became undetectable.
+    """
+    paragraph = next(
+        delivery_renderer._iter_named(
+            _doc(
+                "<w:p><w:r><w:rPr>"
+                '<w:rPrChange w:id="1" w:author="a" w:date="d">'
+                "<w:rPr><w:vanish/></w:rPr></w:rPrChange>"
+                "</w:rPr><w:t>TEXTO VISIVEL</w:t></w:r></w:p>"
+            ),
+            "p",
+        )
+    )
+
+    text = delivery_renderer._visible_paragraph_text(
+        paragraph, delivery_renderer._hidden_run_resolver(None)
+    )
+
+    assert text == "TEXTO VISIVEL"
+
+
+def test_current_formatting_still_hides_a_genuinely_hidden_run() -> None:
+    paragraph = next(
+        delivery_renderer._iter_named(
+            _doc("<w:p><w:r><w:rPr><w:vanish/></w:rPr><w:t>OCULTO</w:t></w:r></w:p>"),
+            "p",
+        )
+    )
+
+    assert (
+        delivery_renderer._visible_paragraph_text(
+            paragraph, delivery_renderer._hidden_run_resolver(None)
+        )
+        == ""
+    )
+
+
+def test_text_box_content_is_counted_once() -> None:
+    """A text box lives in a run of its container, and is a paragraph of its own."""
+    document = _doc(
+        "<w:p><w:r><w:t>OUTER</w:t></w:r>"
+        "<w:r><w:pict><w:txbxContent><w:p><w:r><w:t>BOXED</w:t></w:r></w:p>"
+        "</w:txbxContent></w:pict></w:r></w:p>"
+    )
+    hidden = delivery_renderer._hidden_run_resolver(None)
+
+    fragments = [
+        delivery_renderer._visible_paragraph_text(paragraph, hidden)
+        for paragraph in delivery_renderer._iter_named(document, "p")
+    ]
+
+    assert fragments == ["OUTER", "BOXED"]
+
+
+def test_word_toc_entry_produces_one_link_expectation() -> None:
+    """Word wraps the PAGEREF field of a TOC entry in the hyperlink itself."""
+    document = _doc(
+        '<w:p><w:bookmarkStart w:id="1" w:name="_Toc1"/>'
+        "<w:r><w:t>Introducao</w:t></w:r>"
+        '<w:bookmarkEnd w:id="1"/></w:p>'
+        '<w:p><w:hyperlink w:anchor="_Toc1">'
+        "<w:r><w:t>Introducao</w:t></w:r><w:r><w:tab/></w:r>"
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:r><w:instrText xml:space="preserve"> PAGEREF _Toc1 \\h </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        "<w:r><w:t>3</w:t></w:r>"
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+        "</w:hyperlink></w:p>"
+    )
+
+    [expectation] = delivery_renderer._word_internal_link_expectations(document)
+
+    # The tab separates the title from the page number, as it does in the PDF.
+    assert expectation.text == "introducao 3"
+
+
+def test_hidden_run_does_not_shift_the_link_occurrence_ordinal() -> None:
+    document = _doc(
+        "<w:p><w:r><w:rPr><w:vanish/></w:rPr><w:t>Anexo A</w:t></w:r></w:p>"
+        '<w:p><w:bookmarkStart w:id="1" w:name="B1"/>'
+        "<w:r><w:t>Anexo A</w:t></w:r>"
+        '<w:bookmarkEnd w:id="1"/></w:p>'
+        '<w:p><w:hyperlink w:anchor="B1"><w:r><w:t>Ir</w:t></w:r></w:hyperlink></w:p>'
+    )
+
+    [expectation] = delivery_renderer._word_internal_link_expectations(document)
+
+    assert expectation.target_occurrence == 0
+
+
+def test_target_split_across_text_objects_is_still_one_occurrence() -> None:
+    """Word emits a new text object at every run boundary, mid-word included."""
+    split = [_frag("An", 0.0, 20.0), _frag("exo A", 20.0, 60.0)]
+
+    assert delivery_renderer._positioned_target_locations("Anexo A", split, []) == [
+        (0, 0.0, 100.0)
+    ]
+
+
+def test_adjacent_occurrences_are_not_fused_into_one_token() -> None:
+    separated = [_frag("Anexo A", 0.0, 60.0), _frag("Anexo A", 100.0, 160.0)]
+
+    assert len(
+        delivery_renderer._positioned_target_locations("Anexo A", separated, [])
+    ) == 2
+
+
+def test_a_distant_rule_does_not_remove_an_occurrence() -> None:
+    """Dropping an occurrence silently renumbers every later ordinal."""
+    fragments = [_frag("Anexo A", 0.0, 60.0)]
+    distant_rule = [delivery_renderer._VerticalBarrier(0, 10.0, 12.0, 10.0, 20.0)]
+
+    assert delivery_renderer._positioned_target_locations(
+        "Anexo A", fragments, distant_rule
+    ) == [(0, 0.0, 100.0)]
+
+
+def test_running_header_is_excluded_from_target_enumeration() -> None:
+    """A header repeating the target text must not become occurrence zero."""
+    header = _frag("Anexo A", 50.0, 110.0, top=760.0)
+    body = _frag("Anexo A", 50.0, 110.0, top=500.0)
+
+    excluded = delivery_renderer._in_repeatable_band(header, [["Anexo A"]], [[]], [792.0])
+    included = delivery_renderer._in_repeatable_band(body, [["Anexo A"]], [[]], [792.0])
+
+    assert excluded is True
+    assert included is False
+
+
+def test_body_text_is_not_excluded_when_the_page_has_no_header() -> None:
+    top_of_page = _frag("Anexo A", 50.0, 110.0, top=760.0)
+
+    assert delivery_renderer._in_repeatable_band(top_of_page, [[]], [[]], [792.0]) is False
+
+
+def test_body_field_result_carries_a_typography_expectation() -> None:
+    """Its text is already required verbatim, so its style must be checked too."""
+    document = _doc(
+        '<w:p><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>PLAIN </w:t></w:r>'
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:r><w:instrText xml:space="preserve"> REF _Ref1 \\h </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        '<w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>CROSSREF</w:t></w:r>'
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>'
+    )
+
+    expectations = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document}
+    )
+
+    assert "crossref" in " ".join(item.text for item in expectations)
