@@ -602,3 +602,67 @@ def test_native_table_cell_amounts_cannot_be_exchanged() -> None:
     delivery_renderer._validate_pdf_fidelity(swapped, swapped_pdf)
     with pytest.raises(ValueError, match="faithfully represent"):
         delivery_renderer._validate_pdf_fidelity(authoritative, swapped_pdf)
+
+
+_RUN = '<w:r><w:rPr><w:sz w:val="24"/></w:rPr>'
+
+
+def _paragraph(text: str) -> str:
+    return f"<w:p>{_RUN}<w:t>{text}</w:t></w:r></w:p>"
+
+
+def _simple_table() -> str:
+    cell = f"<w:tc><w:p>{_RUN}<w:t>{{}}</w:t></w:r></w:p></w:tc>"
+    return (
+        '<w:tbl><w:tblGrid><w:gridCol w:w="4000"/><w:gridCol w:w="4000"/></w:tblGrid>'
+        "<w:tr>" + cell.format("Alfa") + cell.format("Beta") + "</w:tr></w:tbl>"
+    )
+
+
+def test_native_body_and_table_relative_order_is_bound() -> None:
+    """Both PDFs are genuine Word output; only the block order differs.
+
+    Body order and table order used to be checked against independent cursors,
+    so relocating a whole table relative to the body text was accepted.
+    """
+    table = _simple_table()
+    document_order = _package(
+        main_type=_DOCX_MAIN_TYPE,
+        body=_paragraph("Metodologia") + table + _paragraph("Conclusao"),
+    )
+    permuted = _package(
+        main_type=_DOCX_MAIN_TYPE,
+        body=table + _paragraph("Metodologia") + _paragraph("Conclusao"),
+    )
+    converter = LocalOfficePdfConverter(temp_root=_native_temp_root())
+
+    ordered_pdf = converter.convert(document_order, "DOCX")
+    permuted_pdf = converter.convert(permuted, "DOCX")
+
+    delivery_renderer._validate_pdf_fidelity(document_order, ordered_pdf)
+    delivery_renderer._validate_pdf_fidelity(permuted, permuted_pdf)
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(document_order, permuted_pdf)
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(permuted, ordered_pdf)
+
+
+def test_native_material_character_substitution_is_rejected() -> None:
+    """NFKC and casefold make the matching stream work; they must not decide authority."""
+    authoritative = _package(
+        main_type=_DOCX_MAIN_TYPE,
+        body=_paragraph("Area util 78,50 m\u00b2") + _paragraph("PARECER REJEITADO"),
+    )
+    substituted = _package(
+        main_type=_DOCX_MAIN_TYPE,
+        body=_paragraph("Area util 78,50 m2") + _paragraph("Parecer Rejeitado"),
+    )
+    converter = LocalOfficePdfConverter(temp_root=_native_temp_root())
+
+    faithful_pdf = converter.convert(authoritative, "DOCX")
+    substituted_pdf = converter.convert(substituted, "DOCX")
+
+    delivery_renderer._validate_pdf_fidelity(authoritative, faithful_pdf)
+    delivery_renderer._validate_pdf_fidelity(substituted, substituted_pdf)
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(authoritative, substituted_pdf)

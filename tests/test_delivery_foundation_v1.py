@@ -5335,47 +5335,6 @@ def test_body_field_result_carries_a_typography_expectation() -> None:
     assert "crossref" in " ".join(item.text for item in expectations)
 
 
-# --- Phase C deferred hypothesis: BODY_TABLE_RELATIVE_ORDER_NOT_BOUND ---
-
-
-@pytest.mark.skip(
-    reason=(
-        "HYPOTHESIS_REQUIRING_REPRODUCTION - BODY_TABLE_RELATIVE_ORDER_NOT_BOUND. "
-        "Raised by SYSTEMIC_AUDITOR at 1a5b71c; not promoted to a defect because no "
-        "discriminating fixture exists yet. "
-        "CAUSAL ARGUMENT: _validate_pdf_fidelity checks two order invariants against "
-        "two independent cursors. document_fragments deliberately excludes paragraphs "
-        "that belong to a w:tbl, and _ordered_text_blocks_match advances its cursor "
-        "over those non-table paragraphs only; _table_rows_match advances a separate "
-        "cursor over table rows only. token_counts_match is a multiset and is "
-        "order-blind, _content_kinds_are_ordered_subsequence collapses everything to "
-        "TEXT/IMAGE and is only a subsequence test, and _text_sizes_match restarts its "
-        "search from index 0 for every expectation. Nothing therefore constrains how "
-        "the two sequences interleave, so a derived PDF that relocates a whole table "
-        "relative to the body text could satisfy every check. "
-        "REPRODUCTION ATTEMPT: a Word body of paragraph/table/paragraph was validated "
-        "against two synthetic PDFs, one in document order and one with the table "
-        "moved above the first paragraph. Both were REJECTED, so the fixture does not "
-        "discriminate and proves nothing either way. "
-        "REPRODUCER LIMITATION: _parseable_text_pdf cannot produce a PDF that the "
-        "table oracle accepts at all - even the faithful ordering is rejected - "
-        "because it emits one text object per line with no cell geometry, so "
-        "_matched_table_row_fragments never binds a row. Any fixture built on it "
-        "cannot isolate ordering from table binding. "
-        "REOPENING CRITERIA: reopen when a PDF that the table oracle ACCEPTS can be "
-        "produced - most directly by rendering a real table through Microsoft Word in "
-        "the native matrix, capturing that PDF, and then reordering its page content "
-        "streams while leaving the table itself intact. If the reordered PDF is "
-        "accepted, this becomes a CONFIRMED P1 false positive and the minimum repair "
-        "is a single ordered stream of body blocks - paragraph fragments and table row "
-        "anchors in document order - advanced by one shared cursor. "
-        "Until then the oracle must not be weakened or refactored on this argument."
-    )
-)
-def test_body_and_table_relative_order_is_bound() -> None:
-    raise AssertionError("unreachable: see skip reason")
-
-
 # --- Phase C §27 round 2: reviewer and auditor findings ---
 
 
@@ -5531,3 +5490,217 @@ def test_profiled_header_text_excludes_hidden_runs() -> None:
     )
 
     assert text == "Visivel"
+
+
+# --- Phase C invariant-wide sweep: siblings of the four families ---
+
+
+def _styles(body: str):
+    return delivery_renderer.ElementTree.fromstring(f"<w:styles {_MAIN_NS}>{body}</w:styles>")
+
+
+# Family 1 - current formatting only, across every property reader.
+
+
+@pytest.mark.parametrize(
+    ("historical", "attribute", "expected"),
+    (
+        ("<w:b/>", "bold", False),
+        ("<w:i/>", "italic", False),
+        ('<w:u w:val="single"/>', "underline", False),
+        ('<w:color w:val="808080"/>', "color", (0, 0, 0)),
+        ('<w:rFonts w:ascii="Comic Sans MS"/>', "font_family", None),
+        ('<w:sz w:val="72"/>', "font_size", 11.0),
+    ),
+)
+def test_superseded_run_property_never_becomes_current(
+    historical: str, attribute: str, expected: object
+) -> None:
+    document = _doc(
+        "<w:p><w:r><w:rPr>"
+        f'<w:rPrChange w:id="1" w:author="a" w:date="d"><w:rPr>{historical}</w:rPr>'
+        "</w:rPrChange></w:rPr><w:t>Texto</w:t></w:r></w:p>"
+    )
+
+    [expectation] = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document}
+    )
+
+    assert getattr(expectation, attribute) == expected
+
+
+def test_superseded_section_properties_do_not_define_the_page() -> None:
+    """w:sectPrChange nests a whole superseded w:sectPr."""
+    document = _doc(
+        "<w:p><w:r><w:t>X</w:t></w:r></w:p>"
+        '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
+        '<w:sectPrChange w:id="1" w:author="a" w:date="d">'
+        '<w:sectPr><w:pgSz w:w="99999" w:h="99999"/></w:sectPr>'
+        "</w:sectPrChange></w:sectPr>"
+    )
+
+    geometry = delivery_renderer._word_page_geometry(document)
+
+    assert geometry == (595.3, 841.9)
+
+
+def test_superseded_paragraph_properties_do_not_force_a_page_break() -> None:
+    document = _doc(
+        "<w:p><w:pPr>"
+        '<w:pPrChange w:id="2" w:author="a" w:date="d">'
+        "<w:pPr><w:pageBreakBefore/></w:pPr></w:pPrChange>"
+        "</w:pPr><w:r><w:t>Paragrafo</w:t></w:r></w:p>"
+    )
+
+    [expectation] = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document}
+    )
+
+    assert expectation.page_break_before is False
+
+
+def test_current_formatting_is_still_honoured() -> None:
+    """Control: the invariant must not suppress formatting that IS current."""
+    document = _doc(
+        '<w:p><w:r><w:rPr><w:b/><w:sz w:val="28"/>'
+        '<w:rPrChange w:id="3" w:author="a" w:date="d"><w:rPr><w:sz w:val="72"/></w:rPr>'
+        "</w:rPrChange></w:rPr><w:t>Texto</w:t></w:r></w:p>"
+    )
+
+    [expectation] = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document}
+    )
+
+    assert expectation.bold is True
+    assert expectation.font_size == 14.0
+
+
+# Family 2 - nested content enters the authority model exactly once.
+
+
+_CELL = "<w:tc><w:p><w:r><w:t>{}</w:t></w:r></w:p></w:tc>"
+
+
+@pytest.mark.parametrize(
+    ("label", "body", "expected"),
+    (
+        (
+            "textbox_in_paragraph",
+            "<w:p><w:r><w:t>FORA</w:t></w:r><w:r><w:pict><w:txbxContent>"
+            "<w:p><w:r><w:t>DENTRO</w:t></w:r></w:p></w:txbxContent></w:pict></w:r></w:p>",
+            ["fora", "dentro"],
+        ),
+        (
+            "textbox_in_table_cell",
+            "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>CELULA</w:t></w:r>"
+            "<w:r><w:pict><w:txbxContent><w:p><w:r><w:t>CAIXA</w:t></w:r></w:p>"
+            "</w:txbxContent></w:pict></w:r></w:p></w:tc></w:tr></w:tbl>",
+            ["celula", "caixa"],
+        ),
+        (
+            "nested_table",
+            "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>EXTERNA</w:t></w:r></w:p>"
+            "<w:tbl><w:tr>" + _CELL.format("INTERNA") + "</w:tr></w:tbl>"
+            "</w:tc></w:tr></w:tbl>",
+            ["externa", "interna"],
+        ),
+        (
+            "drawing_textbox",
+            "<w:p><w:r><w:t>FORA</w:t></w:r><w:r><w:drawing>"
+            '<wps:txbx xmlns:wps="urn:synthetic"><w:txbxContent>'
+            "<w:p><w:r><w:t>DENTRO</w:t></w:r></w:p></w:txbxContent></wps:txbx>"
+            "</w:drawing></w:r></w:p>",
+            ["fora", "dentro"],
+        ),
+    ),
+)
+def test_nested_content_is_counted_exactly_once(
+    label: str, body: str, expected: list[str]
+) -> None:
+    document = _doc(body)
+    hidden = delivery_renderer._hidden_run_resolver(None)
+
+    tokens = [
+        delivery_renderer._visible_paragraph_text(paragraph, hidden)
+        for paragraph in delivery_renderer._iter_named(document, "p")
+    ]
+    expectations = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document}
+    )
+
+    assert [item.casefold() for item in tokens] == expected
+    assert [item.text for item in expectations] == expected
+
+
+def test_nested_table_paragraphs_belong_to_the_nested_table_only() -> None:
+    cell = delivery_renderer.ElementTree.fromstring(
+        f"<w:tc {_MAIN_NS}><w:p><w:r><w:t>EXTERNA</w:t></w:r></w:p>"
+        "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>INTERNA</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+        "</w:tc>"
+    )
+
+    own = [
+        delivery_renderer._visible_paragraph_text(
+            paragraph, delivery_renderer._hidden_run_resolver(None)
+        )
+        for paragraph in delivery_renderer._own_cell_paragraphs(cell)
+    ]
+
+    assert own == ["EXTERNA"]
+
+
+# Family 4 - material identity, negative matrix.
+
+
+@pytest.mark.parametrize(
+    ("authoritative", "altered"),
+    (
+        ("Total 12 m²", "Total 12 m2"),
+        ("Item 3º", "Item 3o"),
+        ("DEFERIDO", "Deferido"),
+        ("Seção", "Secao"),
+        ("R$ 1.000", "R$ 1000"),
+    ),
+)
+def test_material_identity_channel_rejects_substitution(
+    authoritative: str, altered: str
+) -> None:
+    assert delivery_renderer._strict_tokens(
+        authoritative
+    ) != delivery_renderer._strict_tokens(altered)
+
+
+# Body/table relative order - previously deferred, now confirmed and repaired.
+
+
+def test_body_and_table_relative_order_is_bound() -> None:
+    """Confirmed against Microsoft Word: the permuted render used to be accepted.
+
+    Body paragraph order and table row order were checked against two
+    independent cursors, and nothing constrained their interleaving.
+    """
+    row = ("Alfa", "Beta")
+    fragments = [
+        _frag("Metodologia", 72.0, 200.0, top=700.0),
+        _frag("Alfa", 72.0, 120.0, top=660.0),
+        _frag("Beta", 200.0, 250.0, top=660.0),
+        _frag("Conclusao", 72.0, 200.0, top=620.0),
+    ]
+    document_order = [
+        ("text", "Metodologia"),
+        ("row", row),
+        ("text", "Conclusao"),
+    ]
+    permuted = [
+        ("row", row),
+        ("text", "Metodologia"),
+        ("text", "Conclusao"),
+    ]
+
+    assert (
+        delivery_renderer._body_block_order_matches(document_order, fragments, [])
+        is True
+    )
+    assert (
+        delivery_renderer._body_block_order_matches(permuted, fragments, []) is False
+    )

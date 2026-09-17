@@ -221,6 +221,26 @@ def _latin_theme_family(value: str | None) -> str | None:
 _REVISION_SUFFIX = "Change"
 
 
+def _current_iter(root: ElementTree.Element | None, name: str):
+    """Every descendant with this local name, ignoring superseded formatting.
+
+    A tracked section-property change nests a whole superseded ``w:sectPr``, so a
+    plain descendant search saw two section definitions in a document that has
+    one, and read the historical page size as if it were current.
+    """
+    if root is None:
+        return
+    stack = list(root)
+    while stack:
+        node = stack.pop(0)
+        local_name = _local_name(node.tag)
+        if local_name.endswith(_REVISION_SUFFIX):
+            continue
+        if local_name == name:
+            yield node
+        stack[:0] = list(node)
+
+
 def _current_named(root: ElementTree.Element | None, name: str):
     """First descendant with this local name, ignoring superseded formatting.
 
@@ -327,6 +347,25 @@ def _own_runs(paragraph: ElementTree.Element):
         if local_name == "p":
             continue
         if local_name == "r":
+            yield node
+            continue
+        stack[:0] = list(node)
+
+
+def _own_cell_paragraphs(cell: ElementTree.Element):
+    """Paragraphs belonging to this cell, excluding those of a nested table.
+
+    A nested table is enumerated as a table in its own right, so folding its
+    paragraphs into the containing cell bound the same visible text to two
+    places in the authority model.
+    """
+    stack = list(cell)
+    while stack:
+        node = stack.pop(0)
+        local_name = _local_name(node.tag)
+        if local_name == "tbl":
+            continue
+        if local_name == "p":
             yield node
             continue
         stack[:0] = list(node)
@@ -1392,7 +1431,7 @@ def _header_footer_profile(
     document = xml_roots.get("word/document.xml")
     if document is None:
         return None
-    sections = list(_iter_named(document, "sectPr"))
+    sections = list(_current_iter(document, "sectPr"))
     references = [
         item
         for section in sections
@@ -1415,7 +1454,7 @@ def _header_footer_profile(
         if _is_internal_relationship(item)
     }
     profile: dict[str, str | bool | None] = {
-        "different_first": _first_named(sections[0], "titlePg") is not None,
+        "different_first": _current_named(sections[0], "titlePg") is not None,
         "even_and_odd": False,
     }
     settings = xml_roots.get("word/settings.xml")
@@ -1997,8 +2036,8 @@ def _word_page_geometry(
     if document is None:
         return None
     dimensions: set[tuple[float, float]] = set()
-    for section in _iter_named(document, "sectPr"):
-        page_size = _first_named(section, "pgSz")
+    for section in _current_iter(document, "sectPr"):
+        page_size = _current_named(section, "pgSz")
         if page_size is None:
             continue
         try:
@@ -2655,7 +2694,7 @@ def _word_text_expectations(
                     ("tblStyleRowBandSize", "row"),
                     ("tblStyleColBandSize", "column"),
                 ):
-                    size_node = _first_named(style_table_properties, name)
+                    size_node = _current_named(style_table_properties, name)
                     if size_node is None:
                         continue
                     try:
@@ -2737,7 +2776,7 @@ def _word_text_expectations(
                     for kind in conditional_order:
                         for conditional in conditionals:
                             item = conditional.get(kind)
-                            run_properties = _first_named(item, "rPr")
+                            run_properties = _current_named(item, "rPr")
                             if kind in active and run_properties is not None:
                                 layers.append(run_properties)
                     for paragraph in _iter_named(cell, "p"):
@@ -2833,9 +2872,9 @@ def _word_text_expectations(
                     )
                     continue
             break
-        sections = list(_iter_named(document, "sectPr")) if document is not None else []
+        sections = list(_current_iter(document, "sectPr")) if document is not None else []
         if sections:
-            page_margin = _first_named(sections[0], "pgMar")
+            page_margin = _current_named(sections[0], "pgMar")
             raw_top = (
                 _attribute_named(page_margin, "top")
                 if page_margin is not None
@@ -2976,7 +3015,7 @@ def _word_text_expectations(
                     style_line_spacing,
                     default_line_spacing,
                 )
-            page_break_node = _first_named(
+            page_break_node = _current_named(
                 paragraph_properties, "pageBreakBefore"
             )
             paragraph_page_break_before = (
@@ -4179,6 +4218,96 @@ def _table_cell_paragraphs_match(
     return True
 
 
+def _row_line_at_or_after(
+    row: tuple[str, ...],
+    ordered: list[_PositionedText],
+    barriers: list[_VerticalBarrier],
+    previous_position: tuple[int, float] | None,
+) -> tuple[tuple[int, float], list[_PositionedText]] | None:
+    """Earliest line at or after ``previous_position`` carrying this row's anchors."""
+    best: tuple[tuple[int, float], list[_PositionedText]] | None = None
+    for anchor in ordered:
+        position = (anchor.page, -anchor.y)
+        if previous_position is not None and position < previous_position:
+            continue
+        line_tolerance = max(3.0, 0.35 * anchor.font_size)
+        line_starts = [
+            index
+            for index, fragment in enumerate(ordered)
+            if fragment.page == anchor.page
+            and abs(fragment.y - anchor.y) <= line_tolerance
+        ]
+        cursor = 0
+        matched_fragments: list[_PositionedText] = []
+        matched = True
+        for cell in row:
+            end = None
+            for start in line_starts:
+                if start < cursor:
+                    continue
+                end = _fragment_sequence_end(cell, ordered, start, barriers)
+                if end is not None:
+                    matched_fragments.extend(ordered[start:end])
+                    cursor = end
+                    break
+                end = None
+            if end is None:
+                matched = False
+                break
+        if not matched:
+            continue
+        if best is None or position < best[0]:
+            best = (position, matched_fragments)
+    return best
+
+
+def _body_block_order_matches(
+    blocks: list[tuple[str, object]],
+    positioned: list[_PositionedText],
+    barriers: list[_VerticalBarrier],
+) -> bool:
+    """Bind body paragraphs and table rows to ONE reading-order cursor.
+
+    Paragraph order and table row order were each verified against their own
+    independent cursor, and nothing constrained how the two interleave, so a
+    whole table could be relocated relative to the body text and every other
+    check still held.  Reproduced against Microsoft Word: two genuine renders
+    differing only in that order, and the permuted one was accepted.
+    """
+    ordered = _positioned_reading_order(positioned)
+    previous_position: tuple[int, float] | None = None
+    for kind, value in blocks:
+        if kind == "row":
+            row = value
+            assert isinstance(row, tuple)
+            if not row:
+                continue
+            selected = _row_line_at_or_after(row, ordered, barriers, previous_position)
+            if selected is None:
+                return False
+            previous_position = selected[0]
+            continue
+        text = value
+        assert isinstance(text, str)
+        found = None
+        for start, fragment in enumerate(ordered):
+            position = (fragment.page, -fragment.y)
+            if previous_position is not None and position < previous_position:
+                continue
+            if (
+                _fragment_sequence_end(
+                    text, ordered, start, barriers, allow_line_wrap=True
+                )
+                is not None
+            ):
+                found = position
+                break
+        if found is None:
+            return False
+        previous_position = found
+    return True
+
+
 def _matched_table_row_fragments(
     rows: list[tuple[str, ...]],
     positioned: list[_PositionedText],
@@ -4773,6 +4902,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
             footer_fragments: list[str] = []
             xml_roots: dict[str, ElementTree.Element] = {}
             table_rows: list[tuple[str, ...]] = []
+            rows_by_table: dict[int, list[tuple[str, ...]]] = {}
             tables: list[_WordTableExpectation] = []
             for name in sorted(package.namelist(), key=_word_part_priority):
                 if not (name.startswith("word/") and name.endswith(".xml")):
@@ -4894,7 +5024,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                             )
                             cell_paragraphs = tuple(
                                 value
-                                for paragraph in _iter_named(cell, "p")
+                                for paragraph in _own_cell_paragraphs(cell)
                                 if (
                                     value := _normalized_visible_text(
                                         _visible_paragraph_text(
@@ -5128,6 +5258,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                     column_count = len(grid_columns)
                     painted_grid = style == "tablegrid" and column_count > 0
                     table_rows.extend(rows)
+                    rows_by_table[id(table)] = rows
                     tables.append(
                         _WordTableExpectation(
                             tuple(rows),
@@ -5156,6 +5287,21 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                 for name, root in xml_roots.items()
                 if name.startswith("word/footer")
             }
+            body_blocks: list[tuple[str, object]] = []
+            document_root = xml_roots.get("word/document.xml")
+            document_body = _first_named(document_root, "body")
+            if document_body is not None:
+                for child in document_body:
+                    child_name = _local_name(child.tag)
+                    if child_name == "p":
+                        visible = _visible_paragraph_text(child, is_hidden_run)
+                        if visible.strip():
+                            body_blocks.append(("text", visible))
+                    elif child_name == "tbl":
+                        body_blocks.extend(
+                            ("row", row) for row in rows_by_table.get(id(child), [])
+                        )
+
             header_footer_profile = _header_footer_profile(package, xml_roots)
             document_images = _ordered_word_image_signatures(package, document_roots)
             document_image_layouts = _ordered_word_image_layouts(document_roots)
@@ -5401,6 +5547,9 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         footer_layouts_by_page=footer_image_layouts_by_page,
     )
     tables_match = _table_rows_match(table_rows, reading_positioned, barriers)
+    body_order_matches = _body_block_order_matches(
+        body_blocks, reading_positioned, barriers
+    )
     cell_paragraphs_match = _table_cell_paragraphs_match(
         tables, reading_positioned, barriers
     )
@@ -5440,6 +5589,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         or not images_match
         or not content_order_matches
         or not tables_match
+        or not body_order_matches
         or not cell_paragraphs_match
         or not painted_paths_match
         or not text_sizes_match
