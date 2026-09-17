@@ -373,9 +373,7 @@ def _render_directory(temp_root: Path | None):
             raise RendererUnavailable("local Word render root must be on a fixed drive")
         current = validated_root
         while True:
-            attributes = getattr(
-                os.stat(current, follow_symlinks=False), "st_file_attributes", 0
-            )
+            attributes = os.stat(current, follow_symlinks=False).st_file_attributes
             if attributes & _FILE_ATTRIBUTE_REPARSE_POINT:
                 raise RendererUnavailable("local Word render root cannot use reparse points")
             if current == Path(anchor):
