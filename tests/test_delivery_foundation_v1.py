@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+
 from dataclasses import fields, replace
 import json
 from pathlib import Path
@@ -5899,3 +5901,242 @@ def test_spacer_row_does_not_break_painted_table_page_segments() -> None:
 
     assert matched is not None
     assert matched[1] == []
+
+
+# --- Phase C: body-flow through block wrappers ---
+#
+# VISIBLE_BODY_BLOCK appears EXACTLY_ONCE in SEMANTIC_ORDER.
+# DIRECT_CHILD_ONLY != SEMANTIC_BODY_FLOW: the product places CANONICAL_REPORT
+# inside a block-level w:sdt, so a direct-children-only walk made the ordering
+# invariant vacuously true for the product's own document shape.
+
+
+def _body_blocks_of(body: str) -> list[tuple[str, object]]:
+    captured: list[tuple[str, object]] = []
+    original = delivery_renderer._body_block_order_matches
+
+    def spy(blocks, positioned, barriers):
+        captured.extend(blocks)
+        return original(blocks, positioned, barriers)
+
+    delivery_renderer._body_block_order_matches = spy
+    try:
+        with contextlib.suppress(ValueError):
+            delivery_renderer._validate_pdf_fidelity(
+                _package_bytes(body), _parseable_text_pdf("Alpha Beta Gama Delta")
+            )
+    finally:
+        delivery_renderer._body_block_order_matches = original
+    return captured
+
+
+_SDT = "<w:sdt><w:sdtContent>{}</w:sdtContent></w:sdt>"
+
+
+@pytest.mark.parametrize(
+    ("label", "body", "expected"),
+    (
+        (
+            "paragraph_sdt_paragraph_table",
+            _P.format("Alpha") + _SDT.format(_P.format("Beta")) + _SIMPLE_TABLE,
+            [("text", "Alpha"), ("text", "Beta"), ("row", ("gama", "delta"))],
+        ),
+        (
+            "sdt_table_then_paragraph",
+            _SDT.format(_SIMPLE_TABLE) + _P.format("Alpha"),
+            [("row", ("gama", "delta")), ("text", "Alpha")],
+        ),
+        (
+            "canonical_report_control",
+            '<w:sdt><w:sdtPr><w:tag w:val="CANONICAL_REPORT"/></w:sdtPr>'
+            "<w:sdtContent>"
+            + _P.format("Alpha")
+            + "</w:sdtContent></w:sdt>"
+            + _SIMPLE_TABLE,
+            [("text", "Alpha"), ("row", ("gama", "delta"))],
+        ),
+        (
+            "nested_sdt",
+            _SDT.format(_SDT.format(_P.format("Alpha"))) + _SIMPLE_TABLE,
+            [("text", "Alpha"), ("row", ("gama", "delta"))],
+        ),
+        (
+            "table_inside_sdt_between_paragraphs",
+            _P.format("Alpha") + _SDT.format(_SIMPLE_TABLE) + _P.format("Beta"),
+            [("text", "Alpha"), ("row", ("gama", "delta")), ("text", "Beta")],
+        ),
+    ),
+)
+def test_body_flow_crosses_block_wrappers_exactly_once(
+    label: str, body: str, expected: list[tuple[str, object]]
+) -> None:
+    assert _body_blocks_of(body) == expected
+
+
+def test_content_control_inside_a_table_cell_is_not_double_counted() -> None:
+    cell = (
+        "<w:tc>"
+        + _SDT.format("<w:p><w:r><w:t>Interno</w:t></w:r></w:p>")
+        + "</w:tc>"
+    )
+    table = (
+        '<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>'
+        "<w:tr>" + cell + "</w:tr></w:tbl>"
+    )
+    document = _doc(table)
+    hidden = delivery_renderer._hidden_run_resolver(None)
+
+    tokens = [
+        delivery_renderer._visible_paragraph_text(paragraph, hidden)
+        for paragraph in delivery_renderer._current_iter(document, "p")
+    ]
+    expectations = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document}
+    )
+
+    assert tokens == ["Interno"]
+    assert [item.text for item in expectations] == ["interno"]
+
+
+@pytest.mark.parametrize(
+    ("label", "body"),
+    (
+        ("wrapped_paragraphs", _SDT.format(_P.format("Alpha") + _P.format("Beta")) + _SIMPLE_TABLE),
+        ("wrapped_table", _P.format("Alpha") + _SDT.format(_SIMPLE_TABLE) + _P.format("Beta")),
+    ),
+)
+def test_material_permutation_inside_a_wrapper_is_rejected(label: str, body: str) -> None:
+    """Tokens stay identical; only the relative order of the blocks changes."""
+    blocks = _body_blocks_of(body)
+    fragments = []
+    top = 700.0
+    for kind, value in blocks:
+        if kind == "text":
+            fragments.append(_frag(value, 50.0, 200.0, top=top))
+        else:
+            for column, cell in enumerate(value):
+                fragments.append(
+                    _frag(cell, 50.0 + column * 150.0, 140.0 + column * 150.0, top=top)
+                )
+        top -= 40.0
+    ordered = delivery_renderer._positioned_reading_order(fragments)
+
+    assert delivery_renderer._body_block_order_matches(blocks, ordered, []) is True
+    assert (
+        delivery_renderer._body_block_order_matches(
+            list(reversed(blocks)), ordered, []
+        )
+        is False
+    )
+
+
+# --- Phase C: the active-field guard is tested by behaviour, not by its text ---
+#
+# A meta-quoting slip once turned the "\b" word boundaries into literal
+# backspace characters, leaving a pattern that looked right and matched nothing.
+
+
+@pytest.mark.parametrize(
+    "instruction",
+    (
+        " DDEAUTO Excel System Comando ",
+        " DDE Excel System ",
+        " INCLUDETEXT outro.docx ",
+        " INCLUDEPICTURE http://x/y.png ",
+        " LINK Excel.Sheet.12 ",
+        " DATABASE d ",
+        " HYPERLINK http://x ",
+        " includetext outro.docx ",
+        " IncludeText outro.docx ",
+    ),
+)
+def test_acquiring_field_instruction_is_detected(instruction: str) -> None:
+    assert delivery_renderer._ACQUIRING_DELIVERY_FIELDS.search(instruction) is not None
+
+
+@pytest.mark.parametrize(
+    "instruction",
+    (
+        " PAGE ",
+        " NUMPAGES ",
+        " SEQ Figura ",
+        " REF Marca ",
+        " PAGEREF Marca ",
+        " TOC \\o ",
+        " NOLINK ",
+        " UNDDE ",
+        " DDEX ",
+        " XDDE ",
+    ),
+)
+def test_safe_field_instruction_is_allowed(instruction: str) -> None:
+    assert delivery_renderer._ACQUIRING_DELIVERY_FIELDS.search(instruction) is None
+
+
+def test_acquiring_field_detected_at_string_boundaries() -> None:
+    assert delivery_renderer._ACQUIRING_DELIVERY_FIELDS.search("DDEAUTO") is not None
+    assert delivery_renderer._ACQUIRING_DELIVERY_FIELDS.search("x LINK") is not None
+    assert delivery_renderer._ACQUIRING_DELIVERY_FIELDS.search("LINK x") is not None
+
+
+# --- Phase C: material spelling survives fragmentation ---
+
+
+def _material_fragment(text: str, x: float, right: float, top: float = 700.0):
+    return delivery_renderer._PositionedText(
+        0,
+        delivery_renderer._normalized_visible_text(text),
+        x,
+        top,
+        10.0,
+        right,
+        top - 8.0,
+        top,
+        strict_text=text,
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "pieces", "expected"),
+    (
+        ("split_mid_word", ["Ane", "xo A"], "Anexo A"),
+        ("split_before_accent", ["Se", "ção 1"], "Seção 1"),
+        ("split_after_punctuation", ["Item.", " 3"], "Item. 3"),
+        ("partial_prefix", ["R", "EJEITADO"], "REJEITADO"),
+        ("repeated_token", ["Anexo ", "Anexo"], "Anexo Anexo"),
+        ("three_way_split", ["Con", "clu", "sao"], "Conclusao"),
+    ),
+)
+def test_faithful_fragmentation_still_matches(
+    label: str, pieces: list[str], expected: str
+) -> None:
+    fragments = []
+    x = 50.0
+    for piece in pieces:
+        # 6pt per character matches the matcher's own advance estimate, so the
+        # fixture exercises fragmentation rather than a horizontal gap.
+        fragments.append(_material_fragment(piece, x, x + 6.0 * len(piece)))
+        x += 6.0 * len(piece)
+
+    assert delivery_renderer._ordered_text_blocks_match([expected], fragments, []) is True
+
+
+@pytest.mark.parametrize(
+    ("label", "pieces", "expected"),
+    (
+        ("case_divergence", ["Ane", "xo a"], "Anexo A"),
+        ("symbol_divergence", ["78,50 m", "2"], "78,50 m²"),
+        ("ordinal_divergence", ["1", "o andar"], "1º andar"),
+        ("accent_divergence", ["Se", "cao 1"], "Seção 1"),
+    ),
+)
+def test_material_mutation_in_fragments_is_rejected(
+    label: str, pieces: list[str], expected: str
+) -> None:
+    fragments = []
+    x = 50.0
+    for piece in pieces:
+        fragments.append(_material_fragment(piece, x, x + 6.0 * len(piece)))
+        x += 6.0 * len(piece)
+
+    assert delivery_renderer._ordered_text_blocks_match([expected], fragments, []) is False
