@@ -458,3 +458,77 @@ def test_ordinary_internal_targets_are_still_accepted(tmp_path: Path) -> None:
     source = _write_package(tmp_path / "source.docx", parts)
 
     office_word_worker._validate_word_source(source, "DOCX")
+
+
+# --- Phase C §27 round 3: the two boundaries must reach the same verdict ---
+
+
+_ACQUIRING_PAYLOADS = {
+    "dde_field": (
+        "<w:p><w:r><w:fldSimple "
+        'w:instr=" DDEAUTO Excel System Comando "/></w:r></w:p>'
+    ),
+    "includetext_field": (
+        '<w:p><w:r><w:fldSimple w:instr=" INCLUDETEXT outro.docx "/></w:r></w:p>'
+    ),
+    "alt_chunk": '<w:altChunk r:id="rIdChunk"/>',
+    "ole_object": "<w:p><w:r><w:object/></w:r></w:p>",
+}
+
+
+@pytest.mark.parametrize("payload", sorted(_ACQUIRING_PAYLOADS))
+def test_both_boundaries_reject_the_same_active_content(
+    tmp_path: Path, payload: str
+) -> None:
+    """The render path has no production caller, so delivery is the only gate.
+
+    Both validators must therefore reach the same verdict on the same package.
+    """
+    parts = _minimal_docx_parts()
+    parts["word/document.xml"] = _document(_ACQUIRING_PAYLOADS[payload])
+    source = _write_package(tmp_path / "source.docx", parts)
+
+    with pytest.raises(ValueError):
+        office_word_worker._validate_word_source(source, "DOCX")
+    with pytest.raises(ValueError):
+        delivery_renderer.validate_final_artifact(source.read_bytes(), "DOCX")
+
+
+def test_both_boundaries_reject_an_attached_template_relationship(
+    tmp_path: Path,
+) -> None:
+    parts = _minimal_docx_parts()
+    parts["word/_rels/document.xml.rels"] = (
+        f'<Relationships xmlns="{_TRANSITIONAL_RELS_NS}">'
+        '<Relationship Id="rIdT" Type="http://schemas.openxmlformats.org/officeDocument/'
+        '2006/relationships/attachedTemplate" Target="modelo.dotm"/></Relationships>'
+    )
+    parts["word/modelo.dotm"] = "synthetic"
+    parts["[Content_Types].xml"] = _content_types(
+        {"/word/document.xml": _DOCX_MAIN_TYPE},
+        defaults={"dotm": "application/vnd.ms-word.template.macroEnabled.12"},
+    )
+    source = _write_package(tmp_path / "source.docx", parts)
+
+    with pytest.raises(ValueError):
+        office_word_worker._validate_word_source(source, "DOCX")
+    with pytest.raises(ValueError):
+        delivery_renderer.validate_final_artifact(source.read_bytes(), "DOCX")
+
+
+def test_both_boundaries_reject_case_only_part_collisions(tmp_path: Path) -> None:
+    parts = _minimal_docx_parts()
+    parts["word/Document.xml"] = _document()
+    source = _write_package(tmp_path / "source.docx", parts)
+
+    with pytest.raises(ValueError, match="duplicate Word package part"):
+        office_word_worker._validate_word_source(source, "DOCX")
+    with pytest.raises(ValueError, match="duplicate Word package part"):
+        delivery_renderer.validate_final_artifact(source.read_bytes(), "DOCX")
+
+
+def test_both_boundaries_accept_the_supported_package(tmp_path: Path) -> None:
+    source = _write_package(tmp_path / "source.docx", _minimal_docx_parts())
+
+    office_word_worker._validate_word_source(source, "DOCX")
+    delivery_renderer.validate_final_artifact(source.read_bytes(), "DOCX")

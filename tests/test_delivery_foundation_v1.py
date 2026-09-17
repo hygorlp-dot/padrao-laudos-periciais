@@ -2628,7 +2628,10 @@ def test_word_text_expectations_include_inherited_table_typography() -> None:
     assert expectation.text == "cell 223"
     assert expectation.font_size == 11
     assert expectation.in_table is True
-    assert expectation.enforce_visible_run_style is False
+    # A table run with nothing declared still inherits Word's own defaults, so
+    # colour, weight and slant stay enforced.  Switching the check off whenever
+    # no authority happened to be declared let red text in a cell pass.
+    assert expectation.enforce_visible_run_style is True
 
 
 def test_word_text_expectations_keep_style_enforcement_per_table_run() -> None:
@@ -2649,7 +2652,7 @@ def test_word_text_expectations_keep_style_enforcement_per_table_run() -> None:
     assert expectations[0].bold is True
     assert expectations[0].color == (255, 0, 0)
     assert expectations[0].enforce_visible_run_style is True
-    assert expectations[1].enforce_visible_run_style is False
+    assert expectations[1].enforce_visible_run_style is True
 
 
 def test_word_text_expectations_resolve_conditional_table_typography() -> None:
@@ -5704,3 +5707,195 @@ def test_body_and_table_relative_order_is_bound() -> None:
     assert (
         delivery_renderer._body_block_order_matches(permuted, fragments, []) is False
     )
+
+
+# --- Phase C §27 round 3 ---
+
+
+def _package_bytes(body: str, extra: dict[str, str] | None = None) -> bytes:
+    output = BytesIO()
+    main = (
+        "application/vnd.openxmlformats-officedocument."
+        "wordprocessingml.document.main+xml"
+    )
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            f'<Override PartName="/word/document.xml" ContentType="{main}"/></Types>',
+        )
+        package.writestr(
+            "word/document.xml",
+            f"<w:document {_MAIN_NS}><w:body>{body}</w:body></w:document>",
+        )
+        for name, value in (extra or {}).items():
+            package.writestr(name, value)
+    return output.getvalue()
+
+
+_P = '<w:p><w:r><w:t>{}</w:t></w:r></w:p>'
+_TC = "<w:tc><w:p><w:r><w:t>{}</w:t></w:r></w:p></w:tc>"
+_SIMPLE_TABLE = (
+    '<w:tbl><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>'
+    "<w:tr>" + _TC.format("Gama") + _TC.format("Delta") + "</w:tr></w:tbl>"
+)
+
+
+def test_note_references_fail_closed() -> None:
+    """Word paints note text AND an auto-generated mark the source does not carry.
+
+    Leaving note content unbound meant a PDF that dropped a ressalva entirely was
+    accepted, so the construct is declared unsupported instead.
+    """
+    notes = (
+        f"<w:footnotes {_MAIN_NS}>"
+        '<w:footnote w:id="2"><w:p><w:r><w:t>Ressalva</w:t></w:r></w:p></w:footnote>'
+        "</w:footnotes>"
+    )
+    word = _package_bytes(
+        _P.format("Alpha") + '<w:p><w:r><w:footnoteReference w:id="2"/></w:r></w:p>',
+        {"word/footnotes.xml": notes},
+    )
+
+    with pytest.raises(ValueError, match="cannot be verified"):
+        delivery_renderer._validate_pdf_fidelity(word, _parseable_text_pdf("Alpha"))
+
+
+def test_document_without_notes_is_unaffected() -> None:
+    delivery_renderer._validate_pdf_fidelity(
+        _package_bytes(_P.format("Alpha")), _parseable_text_pdf("Alpha")
+    )
+
+
+def test_block_content_control_is_part_of_the_ordering_stream() -> None:
+    """The product's own canonical report lives in a body-level w:sdt."""
+    wrapped = (
+        "<w:sdt><w:sdtContent>"
+        + _P.format("Alpha")
+        + _P.format("Beta")
+        + "</w:sdtContent></w:sdt>"
+        + _SIMPLE_TABLE
+    )
+    captured: dict[str, object] = {}
+    original = delivery_renderer._body_block_order_matches
+
+    def spy(blocks, positioned, barriers):
+        captured["blocks"] = blocks
+        return original(blocks, positioned, barriers)
+
+    delivery_renderer._body_block_order_matches = spy
+    try:
+        with pytest.raises(ValueError):
+            delivery_renderer._validate_pdf_fidelity(
+                _package_bytes(wrapped),
+                _parseable_text_pdf("Gama Delta\nAlpha\nBeta"),
+            )
+    finally:
+        delivery_renderer._body_block_order_matches = original
+
+    assert captured["blocks"] == [
+        ("text", "Alpha"),
+        ("text", "Beta"),
+        ("row", ("gama", "delta")),
+    ]
+
+
+def test_table_row_inside_a_content_control_is_resolved() -> None:
+    table = (
+        '<w:tbl><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>'
+        "<w:tr>" + _TC.format("R1A") + _TC.format("R1B") + "</w:tr>"
+        "<w:sdt><w:sdtContent><w:tr>"
+        + _TC.format("R2A")
+        + _TC.format("R2B")
+        + "</w:tr></w:sdtContent></w:sdt></w:tbl>"
+    )
+    captured: dict[str, object] = {}
+    original = delivery_renderer._table_rows_match
+
+    def spy(rows, positioned, barriers):
+        captured["rows"] = rows
+        return original(rows, positioned, barriers)
+
+    delivery_renderer._table_rows_match = spy
+    try:
+        with pytest.raises(ValueError):
+            delivery_renderer._validate_pdf_fidelity(
+                _package_bytes(table), _parseable_text_pdf("R2A R2B\nR1A R1B")
+            )
+    finally:
+        delivery_renderer._table_rows_match = original
+
+    assert captured["rows"] == [("r1a", "r1b"), ("r2a", "r2b")]
+
+
+def test_tables_in_parts_word_never_renders_are_not_expected() -> None:
+    glossary = f"<w:document {_MAIN_NS}><w:body>{_SIMPLE_TABLE}</w:body></w:document>"
+
+    delivery_renderer._validate_pdf_fidelity(
+        _package_bytes(_P.format("Alpha"), {"word/glossary/document.xml": glossary}),
+        _parseable_text_pdf("Alpha"),
+    )
+
+
+def test_alternate_content_branches_are_counted_once() -> None:
+    """Word renders one branch; counting both doubled every text box."""
+    document = delivery_renderer.ElementTree.fromstring(
+        f"<w:document {_MAIN_NS} "
+        'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">'
+        "<w:body><w:p><w:r><w:t>Alpha</w:t></w:r><w:r><mc:AlternateContent>"
+        '<mc:Choice Requires="wps"><w:drawing><w:txbxContent>'
+        "<w:p><w:r><w:t>Caixa</w:t></w:r></w:p></w:txbxContent></w:drawing></mc:Choice>"
+        "<mc:Fallback><w:pict><w:txbxContent>"
+        "<w:p><w:r><w:t>Caixa</w:t></w:r></w:p></w:txbxContent></w:pict></mc:Fallback>"
+        "</mc:AlternateContent></w:r></w:p></w:body></w:document>"
+    )
+
+    expectations = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document}
+    )
+
+    assert [item.text for item in expectations] == ["alpha", "caixa"]
+
+
+def test_fold_equal_fragments_cannot_be_transposed() -> None:
+    """NFKC and casefold make matching work; they must not decide identity."""
+
+    def fragment(text: str, top: float):
+        return delivery_renderer._PositionedText(
+            0,
+            delivery_renderer._normalized_visible_text(text),
+            50.0,
+            top,
+            10.0,
+            130.0,
+            top - 8.0,
+            top,
+            strict_text=text,
+        )
+
+    blocks = ["Quesito 1 REJEITADO", "Quesito 2 rejeitado"]
+    faithful = delivery_renderer._positioned_reading_order(
+        [fragment("Quesito 1 REJEITADO", 700.0), fragment("Quesito 2 rejeitado", 660.0)]
+    )
+    transposed = delivery_renderer._positioned_reading_order(
+        [fragment("Quesito 1 rejeitado", 700.0), fragment("Quesito 2 REJEITADO", 660.0)]
+    )
+
+    assert delivery_renderer._ordered_text_blocks_match(blocks, faithful, []) is True
+    assert delivery_renderer._ordered_text_blocks_match(blocks, transposed, []) is False
+
+
+def test_spacer_row_does_not_break_painted_table_page_segments() -> None:
+    """A spacer row anchors no fragment, so it has no page of its own."""
+    fragments = [
+        _frag("Alfa", 50.0, 110.0, top=700.0),
+        _frag("Beta", 200.0, 260.0, top=700.0),
+    ]
+    ordered = delivery_renderer._positioned_reading_order(fragments)
+
+    matched = delivery_renderer._matched_table_row_fragments(
+        [("alfa", "beta"), ()], ordered, []
+    )
+
+    assert matched is not None
+    assert matched[1] == []

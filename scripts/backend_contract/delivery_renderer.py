@@ -219,6 +219,15 @@ def _latin_theme_family(value: str | None) -> str | None:
 
 
 _REVISION_SUFFIX = "Change"
+# Word writes every text box and shape as mc:AlternateContent with a DrawingML
+# Choice and a VML Fallback carrying the SAME content.  It renders one of them,
+# so counting both doubled the text, the images and every bookmark offset.
+_UNRENDERED_BRANCH = "Fallback"
+_NOTE_REFERENCES = frozenset({"footnoteReference", "endnoteReference"})
+
+
+def _is_unrendered_container(local_name: str) -> bool:
+    return local_name.endswith(_REVISION_SUFFIX) or local_name == _UNRENDERED_BRANCH
 
 
 def _current_iter(root: ElementTree.Element | None, name: str):
@@ -234,7 +243,7 @@ def _current_iter(root: ElementTree.Element | None, name: str):
     while stack:
         node = stack.pop(0)
         local_name = _local_name(node.tag)
-        if local_name.endswith(_REVISION_SUFFIX):
+        if _is_unrendered_container(local_name):
             continue
         if local_name == name:
             yield node
@@ -255,7 +264,7 @@ def _current_named(root: ElementTree.Element | None, name: str):
     while stack:
         node = stack.pop(0)
         local_name = _local_name(node.tag)
-        if local_name.endswith(_REVISION_SUFFIX):
+        if _is_unrendered_container(local_name):
             continue
         if local_name == name:
             return node
@@ -344,12 +353,48 @@ def _own_runs(paragraph: ElementTree.Element):
     while stack:
         node = stack.pop(0)
         local_name = _local_name(node.tag)
-        if local_name == "p":
+        if local_name == "p" or _is_unrendered_container(local_name):
             continue
         if local_name == "r":
             yield node
             continue
         stack[:0] = list(node)
+
+
+def _own_block_sequence(container: ElementTree.Element):
+    """Block-level content in document order, through transparent containers.
+
+    EG_ContentBlockContent admits w:sdt and w:customXml wherever a paragraph or
+    a table may appear, and the product's own canonical report lives inside a
+    body-level w:sdt.  Recognising only direct w:p/w:tbl children hid everything
+    inside such a container from the shared ordering cursor, which made the
+    ordering invariant vacuous for exactly the product's own document shape.
+    """
+    for child in container:
+        local_name = _local_name(child.tag)
+        if local_name in {"p", "tbl"}:
+            yield local_name, child
+            continue
+        if _is_unrendered_container(local_name):
+            continue
+        # Anything else is either a transparent container (w:sdt, w:customXml,
+        # a block-level w:ins/w:del) or carries no block content at all, so
+        # descending is safe and cannot invent content.
+        yield from _own_block_sequence(child)
+
+
+def _own_table_rows(table: ElementTree.Element):
+    """Rows of this table, through transparent containers, never a nested table."""
+    for child in table:
+        local_name = _local_name(child.tag)
+        if local_name == "tr":
+            yield child
+            continue
+        if local_name == "tbl" or _is_unrendered_container(local_name):
+            continue
+        if local_name in {"tblPr", "tblGrid"}:
+            continue
+        yield from _own_table_rows(child)
 
 
 def _own_cell_paragraphs(cell: ElementTree.Element):
@@ -363,7 +408,7 @@ def _own_cell_paragraphs(cell: ElementTree.Element):
     while stack:
         node = stack.pop(0)
         local_name = _local_name(node.tag)
-        if local_name == "tbl":
+        if local_name == "tbl" or _is_unrendered_container(local_name):
             continue
         if local_name == "p":
             yield node
@@ -383,7 +428,7 @@ def _own_text(run: ElementTree.Element) -> str:
     while stack:
         node = stack.pop(0)
         local_name = _local_name(node.tag)
-        if local_name == "p":
+        if local_name == "p" or _is_unrendered_container(local_name):
             continue
         if local_name == "t":
             collected.append(node.text or "")
@@ -1989,6 +2034,10 @@ class _PositionedText:
     page_width: float = 612.0
     font_family: str | None = None
     page_height: float = 792.0
+    # The folded spelling drives matching; this keeps the spelling Word actually
+    # produced, so material identity can be decided without losing wrap
+    # tolerance.
+    strict_text: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -2779,7 +2828,7 @@ def _word_text_expectations(
                             run_properties = _current_named(item, "rPr")
                             if kind in active and run_properties is not None:
                                 layers.append(run_properties)
-                    for paragraph in _iter_named(cell, "p"):
+                    for paragraph in _current_iter(cell, "p"):
                         properties_by_paragraph[id(paragraph)] = tuple(layers)
         return properties_by_paragraph
 
@@ -2904,9 +2953,9 @@ def _word_text_expectations(
         table_paragraph_ids = {
             id(paragraph)
             for table in _iter_named(xml_roots[name], "tbl")
-            for paragraph in _iter_named(table, "p")
+            for paragraph in _current_iter(table, "p")
         }
-        for paragraph in _iter_named(xml_roots[name], "p"):
+        for paragraph in _current_iter(xml_roots[name], "p"):
             in_table = id(paragraph) in table_paragraph_ids
             paragraph_has_drawing = _first_named(paragraph, "drawing") is not None
             paragraph_properties = next(_children_named(paragraph, "pPr"), None)
@@ -3120,14 +3169,11 @@ def _word_text_expectations(
                         )
                     )
                 )
-                enforce_visible_run_style = bool(
-                    not in_table
-                    or run_properties is not None
-                    or run_style
-                    or paragraph_style
-                    or default_paragraph_style
-                    or table_layers
-                )
+                # A table run with nothing declared still inherits Word's own
+                # defaults: black, non-bold, non-italic.  Switching the visible
+                # style check off whenever no authority happened to be declared
+                # left colour, weight and slant unenforced inside table cells.
+                enforce_visible_run_style = True
                 raw_text = _own_text(run)
                 if raw_text and not raw_text.strip() and segments:
                     previous = segments[-1]
@@ -3722,7 +3768,8 @@ def _pdfium_visible_layout(
                         and top > bottom
                     )
                     if item.type == pdfium.raw.FPDF_PAGEOBJ_TEXT:
-                        text = _normalized_visible_text(item.extract())
+                        raw_text = item.extract()
+                        text = _normalized_visible_text(raw_text)
                         matrix = item.get_matrix()
                         horizontal_scale = math.hypot(float(matrix.a), float(matrix.b))
                         vertical_scale = math.hypot(float(matrix.c), float(matrix.d))
@@ -3783,6 +3830,7 @@ def _pdfium_visible_layout(
                             _PositionedText(
                                 page=page_number,
                                 text=text,
+                                strict_text=raw_text,
                                 x=left,
                                 y=bottom,
                                 font_size=float(item.get_font_size()),
@@ -3901,6 +3949,24 @@ def _text_show_has_content(operator: bytes, operands: list[object]) -> bool:
     return isinstance(values, (str, bytes)) and bool(values)
 
 
+def _strict_prefix_holds(
+    candidate: tuple[str, ...], target: tuple[str, ...]
+) -> bool:
+    """Whether a partially accumulated token run can still become the target.
+
+    The last token may still be incomplete: Word emits a new text object at any
+    run boundary, so a word arrives in pieces and only becomes whole when the
+    next fragment is merged onto it.
+    """
+    if not candidate:
+        return True
+    if len(candidate) > len(target):
+        return False
+    if candidate[:-1] != target[: len(candidate) - 1]:
+        return False
+    return target[len(candidate) - 1].startswith(candidate[-1])
+
+
 def _fragment_sequence_end(
     expected: str,
     fragments: list[_PositionedText],
@@ -3911,8 +3977,15 @@ def _fragment_sequence_end(
     alignment: str | None = None,
     expected_line_height: float | None = None,
     wrap_anchor: _ParagraphWrapAnchor | None = None,
+    strict_identity: bool = False,
 ) -> int | None:
     normalized_target = _normalized_visible_text(expected)
+    # Identity is decided on a parallel case- and character-preserving stream,
+    # accumulated as TOKENS rather than as a string: the folded stream exists so
+    # that wrap and fragment matching tolerate Word's whitespace, and a strict
+    # string comparison inherits none of that tolerance.
+    strict_target_tokens = _strict_tokens(expected) if strict_identity else ()
+    strict_candidates: set[tuple[str, ...]] = {()}
     text_candidates = {""}
     previous: _PositionedText | None = None
     line_start: _PositionedText | None = None
@@ -4049,11 +4122,33 @@ def _fragment_sequence_end(
             )
             if normalized_target.startswith(candidate)
         }
-        if normalized_target in next_candidates:
+        fragment_tokens = (
+            _strict_tokens(fragment.strict_text or fragment.text)
+            if strict_identity
+            else ()
+        )
+        next_strict: set[tuple[str, ...]] = set()
+        for observed_tokens in strict_candidates:
+            separated = observed_tokens + fragment_tokens
+            if _strict_prefix_holds(separated, strict_target_tokens):
+                next_strict.add(separated)
+            if observed_tokens and fragment_tokens:
+                # A token split across text objects resumes mid-word.
+                merged = (
+                    observed_tokens[:-1]
+                    + (observed_tokens[-1] + fragment_tokens[0],)
+                    + fragment_tokens[1:]
+                )
+                if _strict_prefix_holds(merged, strict_target_tokens):
+                    next_strict.add(merged)
+        if normalized_target in next_candidates and (
+            not strict_identity or strict_target_tokens in next_strict
+        ):
             return index + 1
-        if not next_candidates:
+        if not next_candidates or (strict_identity and not next_strict):
             return None
         text_candidates = next_candidates
+        strict_candidates = next_strict
         previous = fragment
     return None
 
@@ -4078,6 +4173,7 @@ def _ordered_text_blocks_match(
                         start,
                         barriers,
                         allow_line_wrap=True,
+                        strict_identity=True,
                     )
                 )
                 is not None
@@ -4296,7 +4392,12 @@ def _body_block_order_matches(
                 continue
             if (
                 _fragment_sequence_end(
-                    text, ordered, start, barriers, allow_line_wrap=True
+                    text,
+                    ordered,
+                    start,
+                    barriers,
+                    allow_line_wrap=True,
+                    strict_identity=True,
                 )
                 is not None
             ):
@@ -4569,6 +4670,10 @@ def _painted_paths_are_bound_to_tables(
 
         page_segments: list[list[tuple[int, list[_PositionedText]]]] = []
         for row_index, row in enumerate(table_rows):
+            if not row:
+                # A spacer row anchors no fragment, so it has no page of its own.
+                # Demanding one rejected ordinary judicial tables outright.
+                continue
             row_pages = {fragment.page for fragment in row}
             if len(row_pages) != 1:
                 return False
@@ -4909,15 +5014,32 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                     continue
                 root = ElementTree.fromstring(package.read(name))
                 xml_roots[name] = root
-                table_nodes = list(_iter_named(root, "tbl"))
+                # Word renders the document body and the selected headers and
+                # footers.  Glossary, footnote, endnote and comment parts are
+                # swept for security but must not contribute expectations the
+                # PDF can never satisfy.
+                renders_content = name == "word/document.xml" or name.startswith(
+                    ("word/header", "word/footer")
+                )
+                if renders_content and any(
+                    _local_name(node.tag) in _NOTE_REFERENCES
+                    for node in root.iter()
+                ):
+                    # Word paints the note text AND an auto-generated reference
+                    # mark, twice, neither of which exists in the source.  The
+                    # oracle cannot derive that numbering, so rather than leave
+                    # note content unbound -- where deleting a ressalva would go
+                    # undetected -- the construct is declared unsupported.
+                    raise ValueError("unsupported Word note content")
+                table_nodes = list(_iter_named(root, "tbl")) if renders_content else []
                 table_paragraph_ids = {
                     id(paragraph)
                     for table_node in table_nodes
-                    for paragraph in _iter_named(table_node, "p")
+                    for paragraph in _current_iter(table_node, "p")
                 }
                 paragraph_fragments = [
                     (paragraph, _visible_paragraph_text(paragraph, is_hidden_run))
-                    for paragraph in _iter_named(root, "p")
+                    for paragraph in _current_iter(root, "p")
                 ]
                 paragraph_fragments = [
                     (paragraph, fragment)
@@ -4970,7 +5092,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                         ]
                     ] = []
                     inferred_column_count: int | None = None
-                    for row in _children_named(table, "tr"):
+                    for row in _own_table_rows(table):
                         cell_nodes = list(_children_named(row, "tc"))
                         # Word writes gridBefore/gridAfter whenever a row does not
                         # span the whole grid -- the ordinary result of merging or
@@ -5291,13 +5413,12 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
             document_root = xml_roots.get("word/document.xml")
             document_body = _first_named(document_root, "body")
             if document_body is not None:
-                for child in document_body:
-                    child_name = _local_name(child.tag)
+                for child_name, child in _own_block_sequence(document_body):
                     if child_name == "p":
                         visible = _visible_paragraph_text(child, is_hidden_run)
                         if visible.strip():
                             body_blocks.append(("text", visible))
-                    elif child_name == "tbl":
+                    else:
                         body_blocks.extend(
                             ("row", row) for row in rows_by_table.get(id(child), [])
                         )
@@ -5385,7 +5506,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         try:
             return [
                 fragment
-                for paragraph in _iter_named(xml_roots[name], "p")
+                for paragraph in _current_iter(xml_roots[name], "p")
                 if (
                     fragment := _dynamic_paragraph_text(
                         paragraph,
@@ -5692,15 +5813,44 @@ def _inject_canonical_report(content: bytes, report: ReportSnapshot) -> bytes:
     return output.getvalue()
 
 
+# The delivery boundary is the only gate on Word bytes that reach the court:
+# the local render path has no production caller, so the worker's pre-COM policy
+# never runs on delivered bytes.  The same acquiring-content and OPC identity
+# rules are therefore restated here.  tests/test_office_word_authority_v1.py
+# pins the two boundaries to the same verdicts so they cannot drift.
+_ACQUIRING_DELIVERY_ELEMENTS = frozenset({"altChunk", "control", "object", "subDoc"})
+_ACQUIRING_DELIVERY_FIELDS = re.compile(
+    r"\b(?:DATABASE|DDE|DDEAUTO|HYPERLINK|INCLUDEPICTURE|INCLUDETEXT|LINK)\b",
+    re.IGNORECASE,
+)
+_ACQUIRING_DELIVERY_RELATIONSHIPS = frozenset(
+    {
+        "afchunk",
+        "attachedtemplate",
+        "control",
+        "controlproperty",
+        "externallink",
+        "oleobject",
+        "package",
+        "subdocument",
+    }
+)
+
+
 def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, int, str]:
     if type(content) is not bytes or not content:
         raise ValueError("final artifact bytes are empty")
     if output_format in {"DOCX", "DOCM"}:
         try:
             with ZipFile(BytesIO(content)) as package:
-                names = set(package.namelist())
+                stored = package.namelist()
+                names = set(stored)
                 if not {"[Content_Types].xml", "word/document.xml"} <= names:
                     raise ValueError("final Word artifact is incomplete")
+                if len(stored) != len({name.casefold() for name in stored}):
+                    # OPC compares part names case-insensitively, so two such
+                    # names are one part with two conflicting definitions.
+                    raise ValueError("duplicate Word package part")
                 has_macro = any(
                     name.casefold()
                     in {"word/vbaproject.bin", "word/vbadata.xml"}
@@ -5710,17 +5860,53 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
                     package.read("[Content_Types].xml")
                 )
                 main_content_types = {
-                    item.attrib.get("ContentType")
-                    for item in content_types.iter(f"{_CT}Override")
-                    if item.attrib.get("PartName") == "/word/document.xml"
+                    _attribute_named(item, "ContentType")
+                    for item in content_types.iter()
+                    if _local_name(item.tag) == "Override"
+                    and (_attribute_named(item, "PartName") or "").casefold()
+                    == "/word/document.xml"
                 }
                 for name in names:
                     if name.casefold().endswith(".rels"):
-                        if any(
-                            not _is_internal_relationship(item)
-                            for item in _relationship_nodes(package.read(name))
-                        ):
-                            raise ValueError("external relationships are forbidden in delivery artifacts")
+                        for item in _relationship_nodes(package.read(name)):
+                            if not _is_internal_relationship(item):
+                                raise ValueError("external relationships are forbidden in delivery artifacts")
+                            relationship_type = (
+                                _attribute_named(item, "Type") or ""
+                            ).rsplit("/", 1)[-1].casefold()
+                            if relationship_type in _ACQUIRING_DELIVERY_RELATIONSHIPS:
+                                raise ValueError("active content is forbidden in delivery artifacts")
+                for name in names:
+                    if not (
+                        name.casefold().startswith("word/")
+                        and name.casefold().endswith(".xml")
+                    ):
+                        continue
+                    part_root = ElementTree.fromstring(package.read(name))
+                    if any(
+                        _local_name(node.tag) in _ACQUIRING_DELIVERY_ELEMENTS
+                        for node in part_root.iter()
+                    ):
+                        raise ValueError("active content is forbidden in delivery artifacts")
+                    instructions = [
+                        _attribute_named(node, "instr") or ""
+                        for node in part_root.iter()
+                        if _local_name(node.tag) == "fldSimple"
+                    ]
+                    instructions.extend(
+                        "".join(
+                            item.text or ""
+                            for item in node.iter()
+                            if _local_name(item.tag) == "instrText"
+                        )
+                        for node in part_root.iter()
+                        if _local_name(node.tag) == "p"
+                    )
+                    if any(
+                        _ACQUIRING_DELIVERY_FIELDS.search(value)
+                        for value in instructions
+                    ):
+                        raise ValueError("active content is forbidden in delivery artifacts")
         except (BadZipFile, ElementTree.ParseError, OSError) as exc:
             raise ValueError("final Word artifact is invalid") from exc
         expected_main_type = (
