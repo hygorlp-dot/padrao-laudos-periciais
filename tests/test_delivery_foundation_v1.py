@@ -5328,3 +5328,44 @@ def test_body_field_result_carries_a_typography_expectation() -> None:
     )
 
     assert "crossref" in " ".join(item.text for item in expectations)
+
+
+# --- Phase C deferred hypothesis: BODY_TABLE_RELATIVE_ORDER_NOT_BOUND ---
+
+
+@pytest.mark.skip(
+    reason=(
+        "HYPOTHESIS_REQUIRING_REPRODUCTION - BODY_TABLE_RELATIVE_ORDER_NOT_BOUND. "
+        "Raised by SYSTEMIC_AUDITOR at 1a5b71c; not promoted to a defect because no "
+        "discriminating fixture exists yet. "
+        "CAUSAL ARGUMENT: _validate_pdf_fidelity checks two order invariants against "
+        "two independent cursors. document_fragments deliberately excludes paragraphs "
+        "that belong to a w:tbl, and _ordered_text_blocks_match advances its cursor "
+        "over those non-table paragraphs only; _table_rows_match advances a separate "
+        "cursor over table rows only. token_counts_match is a multiset and is "
+        "order-blind, _content_kinds_are_ordered_subsequence collapses everything to "
+        "TEXT/IMAGE and is only a subsequence test, and _text_sizes_match restarts its "
+        "search from index 0 for every expectation. Nothing therefore constrains how "
+        "the two sequences interleave, so a derived PDF that relocates a whole table "
+        "relative to the body text could satisfy every check. "
+        "REPRODUCTION ATTEMPT: a Word body of paragraph/table/paragraph was validated "
+        "against two synthetic PDFs, one in document order and one with the table "
+        "moved above the first paragraph. Both were REJECTED, so the fixture does not "
+        "discriminate and proves nothing either way. "
+        "REPRODUCER LIMITATION: _parseable_text_pdf cannot produce a PDF that the "
+        "table oracle accepts at all - even the faithful ordering is rejected - "
+        "because it emits one text object per line with no cell geometry, so "
+        "_matched_table_row_fragments never binds a row. Any fixture built on it "
+        "cannot isolate ordering from table binding. "
+        "REOPENING CRITERIA: reopen when a PDF that the table oracle ACCEPTS can be "
+        "produced - most directly by rendering a real table through Microsoft Word in "
+        "the native matrix, capturing that PDF, and then reordering its page content "
+        "streams while leaving the table itself intact. If the reordered PDF is "
+        "accepted, this becomes a CONFIRMED P1 false positive and the minimum repair "
+        "is a single ordered stream of body blocks - paragraph fragments and table row "
+        "anchors in document order - advanced by one shared cursor. "
+        "Until then the oracle must not be weakened or refactored on this argument."
+    )
+)
+def test_body_and_table_relative_order_is_bound() -> None:
+    raise AssertionError("unreachable: see skip reason")
