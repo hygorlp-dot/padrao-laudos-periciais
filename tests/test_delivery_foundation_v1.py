@@ -5294,22 +5294,27 @@ def test_a_distant_rule_does_not_remove_an_occurrence() -> None:
     ) == [(0, 0.0, 100.0)]
 
 
-def test_running_header_is_excluded_from_target_enumeration() -> None:
-    """A header repeating the target text must not become occurrence zero."""
-    header = _frag("Anexo A", 50.0, 110.0, top=760.0)
-    body = _frag("Anexo A", 50.0, 110.0, top=500.0)
+def test_repeatable_matching_reports_the_fragments_it_consumed() -> None:
+    """Header exclusion is by provenance, not by a geometric slab of the page.
 
-    excluded = delivery_renderer._in_repeatable_band(header, [["Anexo A"]], [[]], [792.0])
-    included = delivery_renderer._in_repeatable_band(body, [["Anexo A"]], [[]], [792.0])
+    A 25% band also swallows ordinary body text near the top margin, which
+    renumbered internal-link occurrences and rejected faithful documents.
+    """
+    header = _frag("Cabecalho", 50.0, 140.0, top=760.0)
+    body_near_margin = _frag("Texto do corpo", 50.0, 200.0, top=700.0)
+    consumed: set[int] = set()
 
-    assert excluded is True
-    assert included is False
+    matched = delivery_renderer._repeatable_text_matches(
+        header_fragments_by_page=[["Cabecalho"]],
+        footer_fragments_by_page=[[]],
+        positioned=[header, body_near_margin],
+        page_heights=[792.0],
+        consumed=consumed,
+    )
 
-
-def test_body_text_is_not_excluded_when_the_page_has_no_header() -> None:
-    top_of_page = _frag("Anexo A", 50.0, 110.0, top=760.0)
-
-    assert delivery_renderer._in_repeatable_band(top_of_page, [[]], [[]], [792.0]) is False
+    assert matched is True
+    assert id(header) in consumed
+    assert id(body_near_margin) not in consumed
 
 
 def test_body_field_result_carries_a_typography_expectation() -> None:
@@ -5369,3 +5374,160 @@ def test_body_field_result_carries_a_typography_expectation() -> None:
 )
 def test_body_and_table_relative_order_is_bound() -> None:
     raise AssertionError("unreachable: see skip reason")
+
+
+# --- Phase C §27 round 2: reviewer and auditor findings ---
+
+
+@pytest.mark.parametrize(
+    ("authoritative", "altered"),
+    (
+        ("area util 78,50 m²", "area util 78,50 m2"),
+        ("PARECER REJEITADO", "Parecer Rejeitado"),
+        ("1º andar", "1o andar"),
+        ("AB", "ＡＢ"),
+    ),
+)
+def test_strict_tokens_distinguish_material_substitutions(
+    authoritative: str, altered: str
+) -> None:
+    """P0: NFKC+casefold folded away exactly what a judicial report depends on."""
+    assert delivery_renderer._strict_tokens(authoritative) != delivery_renderer._strict_tokens(
+        altered
+    )
+    # The matching stream stays folded, so wrap and fragment matching still work.
+    assert delivery_renderer._lexical_tokens(authoritative) == delivery_renderer._lexical_tokens(
+        altered
+    )
+
+
+@pytest.mark.parametrize(
+    ("authoritative", "rendered"),
+    (
+        ("a b", "a b"),
+        ("ﬁm", "fim"),
+        ("co­operacao", "cooperacao"),
+        ("a‑b", "a-b"),
+    ),
+)
+def test_strict_tokens_tolerate_what_word_actually_varies(
+    authoritative: str, rendered: str
+) -> None:
+    assert delivery_renderer._strict_tokens(authoritative) == delivery_renderer._strict_tokens(
+        rendered
+    )
+
+
+def test_superseded_run_formatting_never_becomes_the_expectation() -> None:
+    """P0: w:rPrChange holds the formatting a change REPLACED."""
+    styles = delivery_renderer.ElementTree.fromstring(
+        f"<w:styles {_MAIN_NS}>"
+        '<w:style w:type="paragraph" w:styleId="Titulo"><w:rPr><w:sz w:val="32"/></w:rPr></w:style>'
+        "</w:styles>"
+    )
+    document = _doc(
+        '<w:p><w:pPr><w:pStyle w:val="Titulo"/></w:pPr>'
+        '<w:r><w:rPr><w:rPrChange w:id="1" w:author="a" w:date="d"><w:rPr>'
+        '<w:sz w:val="16"/><w:b/><w:color w:val="808080"/>'
+        '<w:rFonts w:ascii="Comic Sans MS"/>'
+        "</w:rPr></w:rPrChange></w:rPr>"
+        "<w:t>TEXTO</w:t></w:r></w:p>"
+    )
+
+    [expectation] = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document, "word/styles.xml": styles}
+    )
+
+    assert expectation.font_size == 16.0
+    assert expectation.bold is False
+    assert expectation.color == (0, 0, 0)
+    assert expectation.font_family is None
+
+
+def test_superseded_paragraph_style_does_not_hide_visible_text() -> None:
+    styles = delivery_renderer.ElementTree.fromstring(
+        f"<w:styles {_MAIN_NS}>"
+        '<w:style w:type="paragraph" w:styleId="Oculto"><w:rPr><w:vanish/></w:rPr></w:style>'
+        "</w:styles>"
+    )
+    paragraph = next(
+        delivery_renderer._iter_named(
+            _doc(
+                '<w:p><w:pPr><w:pPrChange w:id="2" w:author="a" w:date="d">'
+                '<w:pPr><w:pStyle w:val="Oculto"/></w:pPr></w:pPrChange></w:pPr>'
+                "<w:r><w:t>PARAGRAFO</w:t></w:r></w:p>"
+            ),
+            "p",
+        )
+    )
+
+    text = delivery_renderer._visible_paragraph_text(
+        paragraph, delivery_renderer._hidden_run_resolver(styles)
+    )
+
+    assert text == "PARAGRAFO"
+
+
+def test_tab_separates_tokens_on_the_body_side_too() -> None:
+    """A TOC line is "Introducao<tab>3"; fusing it matches no faithful PDF."""
+    paragraph = next(
+        delivery_renderer._iter_named(
+            _doc("<w:p><w:r><w:t>Introducao</w:t><w:tab/><w:t>3</w:t></w:r></w:p>"), "p"
+        )
+    )
+
+    text = delivery_renderer._visible_paragraph_text(
+        paragraph, delivery_renderer._hidden_run_resolver(None)
+    )
+
+    assert delivery_renderer._lexical_tokens(text) == ("introducao", "3")
+
+
+def test_text_box_is_counted_once_by_the_expectation_builder() -> None:
+    document = _doc(
+        "<w:p><w:r><w:t>ANTES</w:t></w:r>"
+        "<w:r><w:pict><w:txbxContent><w:p><w:r><w:t>DENTRO</w:t></w:r></w:p>"
+        "</w:txbxContent></w:pict></w:r></w:p>"
+    )
+
+    expectations = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document}
+    )
+
+    assert [item.text for item in expectations] == ["antes", "dentro"]
+
+
+def test_blank_spacer_row_does_not_consume_the_next_row_line() -> None:
+    fragments = [
+        _frag("Cabecalho A", 50.0, 110.0, top=700.0),
+        _frag("Cabecalho B", 200.0, 260.0, top=700.0),
+        _frag("Dado A", 50.0, 110.0, top=640.0),
+        _frag("Dado B", 200.0, 260.0, top=640.0),
+    ]
+    ordered = delivery_renderer._positioned_reading_order(fragments)
+    header = ("Cabecalho A", "Cabecalho B")
+    data = ("Dado A", "Dado B")
+
+    assert delivery_renderer._table_rows_match([header, (), data], ordered, []) is True
+    # Order is still bound: a swapped table must not pass.
+    assert delivery_renderer._table_rows_match([data, (), header], ordered, []) is False
+
+
+def test_profiled_header_text_excludes_hidden_runs() -> None:
+    paragraph = next(
+        delivery_renderer._iter_named(
+            _doc(
+                "<w:p><w:r><w:t>Visivel</w:t></w:r>"
+                "<w:r><w:rPr><w:vanish/></w:rPr><w:t>Oculto</w:t></w:r></w:p>"
+            ),
+            "p",
+        )
+    )
+
+    text = delivery_renderer._dynamic_paragraph_text(
+        paragraph,
+        page_number=1,
+        is_hidden_run=delivery_renderer._hidden_run_resolver(None),
+    )
+
+    assert text == "Visivel"

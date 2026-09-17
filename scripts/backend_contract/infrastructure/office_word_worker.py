@@ -112,15 +112,45 @@ def _relationship_fields(node: ElementTree.Element) -> tuple[str, str, str | Non
     return type_value, target_value.strip(), mode_value
 
 
+_PERCENT_ESCAPE = re.compile(r"%([0-9a-fA-F]{2})")
+_INVISIBLE_TARGET_CHARACTERS = re.compile(
+    "[" + chr(0) + "-" + chr(0x1F) + chr(0x7F) + chr(0x200B) + "-" + chr(0x200F)
+    + chr(0x202A) + "-" + chr(0x202E) + chr(0x2060) + "-" + chr(0x2064) + chr(0xFEFF) + "]"
+)
+
+
+def _target_forms(target: str) -> tuple[str, ...]:
+    """Every spelling of a relationship target Word may resolve.
+
+    OPC targets are URI references, so Word percent-decodes them.  Testing only
+    the literal spelling let "http%3A%2F%2F..." and a leading zero-width
+    character walk straight past the external-target ban.
+    """
+    forms = [target]
+    current = target
+    for _unused in range(4):
+        decoded = _PERCENT_ESCAPE.sub(lambda item: chr(int(item.group(1), 16)), current)
+        if decoded == current:
+            break
+        forms.append(decoded)
+        current = decoded
+    forms.extend(_INVISIBLE_TARGET_CHARACTERS.sub("", form).strip() for form in tuple(forms))
+    return tuple(dict.fromkeys(forms))
+
+
+def _looks_external(target: str) -> bool:
+    return any(
+        form.startswith(("\\\\", "//"))
+        or re.match(r"^[a-z][a-z0-9+.-]*:", form, re.IGNORECASE) is not None
+        for form in _target_forms(target)
+    )
+
+
 def _reject_external_relationship(target: str, mode_value: str | None) -> None:
     # TargetMode is a closed OPC enumeration.  Absent means Internal; the only
     # accepted spelling is the exact canonical "Internal".  Nothing is stripped,
     # case-folded or repaired into a permitted value.
-    if (
-        (mode_value is not None and mode_value != "Internal")
-        or target.startswith(("\\\\", "//"))
-        or re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE)
-    ):
+    if (mode_value is not None and mode_value != "Internal") or _looks_external(target):
         raise ValueError("external Word relationship is forbidden")
 
 
@@ -159,7 +189,7 @@ def _declared_content_types(
                 raise ValueError("invalid Word content type declaration")
             defaults[extension] = value
         elif local_name == "Override":
-            part = _xml_attribute(item, "PartName") or ""
+            part = (_xml_attribute(item, "PartName") or "").casefold()
             value = _xml_attribute(item, "ContentType") or ""
             if not part.startswith("/") or not value or part in overrides:
                 raise ValueError("invalid Word content type declaration")
@@ -169,7 +199,11 @@ def _declared_content_types(
         if name == _CONTENT_TYPES_PART or name.endswith("/"):
             # Directory entries carry no content and declare no content type.
             continue
-        value = overrides.get(f"/{name}")
+        # OPC part names compare case-insensitively, so an Override whose
+        # PartName differs only in case is the same part to Word.  Matching it
+        # exactly let such a part fall through to the generic XML default and
+        # escape the active-content sweep entirely.
+        value = overrides.get(f"/{name}".casefold())
         if value is None:
             # OPC extensions are the text after the final "." of the last segment.
             # PurePosixPath.suffix cannot be used: it reports "" for ".rels".
@@ -188,7 +222,9 @@ def _interpretable_word_parts(declared: dict[str, str]) -> set[str]:
         name
         for name, value in declared.items()
         if any(marker in value.casefold() for marker in _INTERPRETABLE_CONTENT_TYPE_MARKERS)
-        or (name.startswith("word/") and name.endswith(".xml"))
+        or (
+            name.casefold().startswith("word/") and name.casefold().endswith(".xml")
+        )
     }
 
 

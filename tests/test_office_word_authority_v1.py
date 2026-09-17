@@ -390,3 +390,71 @@ def test_zip_directory_entries_do_not_read_as_undeclared(tmp_path: Path) -> None
             package.writestr(name, value)
         package.writestr("word/", "")
     office_word_worker._validate_word_source(source, "DOCX")
+
+
+# --- Phase C §27 round 2: OPC part-name casing and encoded targets ---
+
+
+def test_case_variant_content_type_override_still_sweeps_the_part(tmp_path: Path) -> None:
+    """P0: an Override differing only in case is the same part to Word."""
+    parts = _minimal_docx_parts()
+    parts["[Content_Types].xml"] = _content_types(
+        {
+            "/word/document.xml": _DOCX_MAIN_TYPE,
+            "/Parts/Header1.xml": (
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.header+xml"
+            ),
+        }
+    )
+    parts["parts/header1.xml"] = (
+        '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:p><w:fldSimple w:instr=" INCLUDETEXT x.docx "/></w:p></w:hdr>'
+    )
+    source = _write_package(tmp_path / "source.docx", parts)
+
+    with pytest.raises(ValueError):
+        office_word_worker._validate_word_source(source, "DOCX")
+
+
+@pytest.mark.parametrize(
+    "target",
+    (
+        "%5C%5Cevil%5Cshare%5Cx.dotm",
+        "http%3A%2F%2Fevil%2Fx",
+        "%255C%255Cevil%255Cshare",
+        "\u200bhttp://evil/x",
+    ),
+)
+def test_encoded_external_target_is_rejected_by_both_validators(
+    tmp_path: Path, target: str
+) -> None:
+    """OPC targets are URI references, so Word decodes them before resolving."""
+    parts = _minimal_docx_parts()
+    parts["word/_rels/document.xml.rels"] = (
+        f'<Relationships xmlns="{_TRANSITIONAL_RELS_NS}">'
+        '<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/'
+        f'2006/relationships/image" Target="{target}"/></Relationships>'
+    )
+    source = _write_package(tmp_path / "source.docx", parts)
+
+    with pytest.raises(ValueError):
+        office_word_worker._validate_word_source(source, "DOCX")
+    with pytest.raises(ValueError):
+        delivery_renderer.validate_final_artifact(source.read_bytes(), "DOCX")
+
+
+def test_ordinary_internal_targets_are_still_accepted(tmp_path: Path) -> None:
+    parts = _minimal_docx_parts()
+    parts["word/_rels/document.xml.rels"] = (
+        f'<Relationships xmlns="{_TRANSITIONAL_RELS_NS}">'
+        '<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/'
+        '2006/relationships/image" Target="media/logo%20oficial.png"/></Relationships>'
+    )
+    parts["word/media/logo oficial.png"] = "synthetic"
+    parts["[Content_Types].xml"] = _content_types(
+        {"/word/document.xml": _DOCX_MAIN_TYPE}, defaults={"png": "image/png"}
+    )
+    source = _write_package(tmp_path / "source.docx", parts)
+
+    office_word_worker._validate_word_source(source, "DOCX")

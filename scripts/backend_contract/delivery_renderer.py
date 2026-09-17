@@ -116,6 +116,40 @@ def _relationship_nodes(data: bytes) -> list[ElementTree.Element]:
     return nodes
 
 
+_PERCENT_ESCAPE = re.compile(r"%([0-9a-fA-F]{2})")
+_INVISIBLE_TARGET_CHARACTERS = re.compile(
+    "[" + chr(0) + "-" + chr(0x1F) + chr(0x7F) + chr(0x200B) + "-" + chr(0x200F)
+    + chr(0x202A) + "-" + chr(0x202E) + chr(0x2060) + "-" + chr(0x2064) + chr(0xFEFF) + "]"
+)
+
+
+def _target_forms(target: str) -> tuple[str, ...]:
+    """Every spelling of a relationship target Word may resolve.
+
+    OPC targets are URI references, so Word percent-decodes them.  Testing only
+    the literal spelling let "http%3A%2F%2F..." and a leading zero-width
+    character walk straight past the external-target ban.
+    """
+    forms = [target]
+    current = target
+    for _unused in range(4):
+        decoded = _PERCENT_ESCAPE.sub(lambda item: chr(int(item.group(1), 16)), current)
+        if decoded == current:
+            break
+        forms.append(decoded)
+        current = decoded
+    forms.extend(_INVISIBLE_TARGET_CHARACTERS.sub("", form).strip() for form in tuple(forms))
+    return tuple(dict.fromkeys(forms))
+
+
+def _looks_external(target: str) -> bool:
+    return any(
+        form.startswith(("\\\\", "//"))
+        or re.match(r"^[a-z][a-z0-9+.-]*:", form, re.IGNORECASE) is not None
+        for form in _target_forms(target)
+    )
+
+
 def _is_internal_relationship(node: ElementTree.Element) -> bool:
     """Internal means a canonical TargetMode *and* a target that stays local.
 
@@ -127,10 +161,7 @@ def _is_internal_relationship(node: ElementTree.Element) -> bool:
     if mode is not None and mode != "Internal":
         return False
     target = (_attribute_named(node, "Target") or "").strip()
-    return not (
-        target.startswith(("\\\\", "//"))
-        or re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE)
-    )
+    return not _looks_external(target)
 
 
 def _grid_skip(row_properties: ElementTree.Element | None, name: str) -> int:
@@ -264,7 +295,7 @@ def _hidden_run_resolver(styles_root: ElementTree.Element | None):
         direct = _on_off_value(properties, "vanish")
         if direct is not None:
             return direct
-        run_style = _first_named(properties, "rStyle")
+        run_style = _current_named(properties, "rStyle")
         if run_style is not None:
             inherited = resolve_style(_attribute_named(run_style, "val"))
             if inherited is not None:
@@ -277,7 +308,7 @@ def _hidden_run_resolver(styles_root: ElementTree.Element | None):
 
 def _paragraph_style_id(paragraph: ElementTree.Element) -> str | None:
     properties = next(_children_named(paragraph, "pPr"), None)
-    style_node = _first_named(properties, "pStyle")
+    style_node = _current_named(properties, "pStyle")
     return _attribute_named(style_node, "val") if style_node is not None else None
 
 
@@ -302,7 +333,12 @@ def _own_runs(paragraph: ElementTree.Element):
 
 
 def _own_text(run: ElementTree.Element) -> str:
-    """Text of this run, excluding any paragraph nested inside it."""
+    """Text of this run, excluding any paragraph nested inside it.
+
+    A tab or break carries no text but separates tokens, exactly as it does for
+    the link walker.  Dropping them fused "Anexo<tab>I" into one token that no
+    faithful PDF can produce, and made deleting the tab undetectable.
+    """
     collected: list[str] = []
     stack = list(run)
     while stack:
@@ -312,6 +348,9 @@ def _own_text(run: ElementTree.Element) -> str:
             continue
         if local_name == "t":
             collected.append(node.text or "")
+            continue
+        if local_name in _WORD_TEXT_SEPARATORS:
+            collected.append(" ")
             continue
         stack[:0] = list(node)
     return "".join(collected)
@@ -492,6 +531,39 @@ def render_final_pdf_candidate(*, word_content: bytes, word_format: str, convert
 
 def _normalized_visible_text(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).split()).casefold()
+
+
+# Substitutions a faithful Word render genuinely produces, and nothing more.
+# Everything else must survive byte-for-byte: NFKC folds away exactly the
+# distinctions a judicial report depends on -- m2 for m², 1o for 1º -- and
+# casefold erases the difference between REJEITADO and rejeitado.
+_STRICT_TEXT_EQUIVALENTS = {
+    " ": " ",
+    " ": " ",
+    " ": " ",
+    "‑": "-",
+    "­": "",
+    "ﬀ": "ff",
+    "ﬁ": "fi",
+    "ﬂ": "fl",
+    "ﬃ": "ffi",
+    "ﬄ": "ffl",
+}
+
+
+def _strict_visible_text(value: str) -> str:
+    """Case- and character-preserving text, normalised only where Word varies."""
+    folded = "".join(
+        _STRICT_TEXT_EQUIVALENTS.get(character, character)
+        for character in unicodedata.normalize("NFC", value)
+    )
+    return " ".join(folded.split())
+
+
+def _strict_tokens(value: str) -> tuple[str, ...]:
+    return tuple(
+        re.findall(r"\w+|[^\w\s]", _strict_visible_text(value), flags=re.UNICODE)
+    )
 
 
 def _lexical_tokens(value: str) -> tuple[str, ...]:
@@ -812,7 +884,7 @@ def _ordered_word_image_layouts(
         layouts_by_image: dict[int, _WordImageLayout | None] = {}
         for paragraph in _iter_named(root, "p"):
             paragraph_properties = next(_children_named(paragraph, "pPr"), None)
-            alignment_node = _first_named(paragraph_properties, "jc")
+            alignment_node = _current_named(paragraph_properties, "jc")
             alignment = (
                 (_attribute_named(alignment_node, "val") or "left").casefold()
                 if alignment_node is not None
@@ -1250,12 +1322,30 @@ def _content_kinds_are_ordered_subsequence(
 
 
 def _dynamic_paragraph_text(
-    paragraph: ElementTree.Element, *, page_number: int
+    paragraph: ElementTree.Element,
+    *,
+    page_number: int,
+    is_hidden_run=None,
+    style_id: str | None = None,
 ) -> str:
+    """Header and footer text with PAGE resolved for this page.
+
+    This is the profiled counterpart of _visible_paragraph_text and must agree
+    with it: hidden runs are not rendered, nested paragraphs belong to their own
+    sweep, and a tab or break separates tokens.
+    """
+    if is_hidden_run is None:
+        is_hidden_run = _hidden_run_resolver(None)
+
     def events(node: ElementTree.Element):
         for child in node:
-            if _local_name(child.tag) == "fldSimple":
+            local_name = _local_name(child.tag)
+            if local_name == "p":
+                continue
+            if local_name == "fldSimple":
                 yield ("field", (_attribute_named(child, "instr") or "").strip())
+                continue
+            if local_name == "r" and is_hidden_run(child, style_id):
                 continue
             yield ("node", child)
             yield from events(child)
@@ -1288,6 +1378,8 @@ def _dynamic_paragraph_text(
                 skip_field_result = False
         elif name == "instrText" and field_instruction is not None:
             field_instruction.append(item.text or "")
+        elif name in _WORD_TEXT_SEPARATORS and field_instruction is None:
+            values.append(" ")
         elif name == "t" and not skip_field_result and field_instruction is None:
             values.append(item.text or "")
     return "".join(values)
@@ -1349,7 +1441,15 @@ def _repeatable_text_matches(
     footer_fragments_by_page: list[list[str]],
     positioned: list[_PositionedText],
     page_heights: list[float],
+    consumed: set[int] | None = None,
 ) -> bool:
+    """Whether every repeatable fragment appears exactly once in its band.
+
+    When ``consumed`` is given it collects the identity of the fragments that
+    actually matched, so callers can subtract exactly the header and footer
+    content rather than a geometric slab of the page.
+    """
+
     def region_matches(
         expected_fragments: list[str], *, page: int, header: bool
     ) -> bool:
@@ -1376,6 +1476,10 @@ def _repeatable_text_matches(
             ]
             if len(matches) != 1 or matches[0][0] < cursor:
                 return False
+            if consumed is not None:
+                consumed.update(
+                    id(item) for item in region[matches[0][0] : matches[0][1]]
+                )
             cursor = matches[0][1]
         return True
 
@@ -1494,30 +1598,6 @@ def _positioned_target_locations(
         )
         cursor += len(needle)
     return locations
-
-
-def _in_repeatable_band(
-    fragment: _PositionedText,
-    header_fragments_by_page: list[list[str]],
-    footer_fragments_by_page: list[list[str]],
-    page_heights: list[float],
-) -> bool:
-    """Whether a fragment sits in a page region a header or footer occupies."""
-    page = fragment.page
-    if page >= len(page_heights):
-        return False
-    height = page_heights[page]
-    if (
-        page < len(header_fragments_by_page)
-        and header_fragments_by_page[page]
-        and fragment.bottom >= height * 0.75
-    ):
-        return True
-    return (
-        page < len(footer_fragments_by_page)
-        and bool(footer_fragments_by_page[page])
-        and fragment.top <= height * 0.25
-    )
 
 
 def _annotations_match_internal_links(
@@ -2243,7 +2323,7 @@ def _word_text_expectations(
                 theme_fonts[prefix] = typeface
 
     def size_from_properties(properties: ElementTree.Element | None) -> float | None:
-        size_node = _first_named(properties, "sz")
+        size_node = _current_named(properties, "sz")
         if size_node is None:
             return None
         try:
@@ -2253,7 +2333,7 @@ def _word_text_expectations(
         return value if math.isfinite(value) and value > 0 else None
 
     def font_from_properties(properties: ElementTree.Element | None) -> str | None:
-        fonts = _first_named(properties, "rFonts")
+        fonts = _current_named(properties, "rFonts")
         if fonts is None:
             return None
         ascii_font = (_attribute_named(fonts, "ascii") or "").strip()
@@ -2286,7 +2366,7 @@ def _word_text_expectations(
     def color_from_properties(
         properties: ElementTree.Element | None,
     ) -> tuple[int, int, int] | None:
-        color_node = _first_named(properties, "color")
+        color_node = _current_named(properties, "color")
         if color_node is None:
             return None
         value = (_attribute_named(color_node, "val") or "").strip()
@@ -2299,7 +2379,7 @@ def _word_text_expectations(
     def on_off_from_properties(
         properties: ElementTree.Element | None, name: str
     ) -> bool | None:
-        node = _first_named(properties, name)
+        node = _current_named(properties, name)
         if node is None:
             return None
         value = (_attribute_named(node, "val") or "true").casefold()
@@ -2308,7 +2388,7 @@ def _word_text_expectations(
     def underline_from_properties(
         properties: ElementTree.Element | None,
     ) -> bool | None:
-        node = _first_named(properties, "u")
+        node = _current_named(properties, "u")
         if node is None:
             return None
         value = (_attribute_named(node, "val") or "single").casefold()
@@ -2321,7 +2401,7 @@ def _word_text_expectations(
     def alignment_from_properties(
         properties: ElementTree.Element | None,
     ) -> str | None:
-        node = _first_named(properties, "jc")
+        node = _current_named(properties, "jc")
         if node is None:
             return None
         value = (_attribute_named(node, "val") or "").casefold()
@@ -2334,7 +2414,7 @@ def _word_text_expectations(
     def spacing_before_from_properties(
         properties: ElementTree.Element | None,
     ) -> float | None:
-        spacing = _first_named(properties, "spacing")
+        spacing = _current_named(properties, "spacing")
         if spacing is None:
             return None
         raw = _attribute_named(spacing, "before")
@@ -2351,7 +2431,7 @@ def _word_text_expectations(
     def spacing_after_from_properties(
         properties: ElementTree.Element | None,
     ) -> float | None:
-        spacing = _first_named(properties, "spacing")
+        spacing = _current_named(properties, "spacing")
         if spacing is None:
             return None
         raw = _attribute_named(spacing, "after")
@@ -2368,7 +2448,7 @@ def _word_text_expectations(
     def line_spacing_from_properties(
         properties: ElementTree.Element | None,
     ) -> tuple[str, float] | None:
-        spacing = _first_named(properties, "spacing")
+        spacing = _current_named(properties, "spacing")
         if spacing is None:
             return None
         raw = _attribute_named(spacing, "line")
@@ -2702,7 +2782,7 @@ def _word_text_expectations(
                     paragraph_properties = next(
                         _children_named(paragraph, "pPr"), None
                     )
-                    style_node = _first_named(paragraph_properties, "pStyle")
+                    style_node = _current_named(paragraph_properties, "pStyle")
                     style_id = (
                         _attribute_named(style_node, "val")
                         if style_node is not None
@@ -2791,7 +2871,7 @@ def _word_text_expectations(
             in_table = id(paragraph) in table_paragraph_ids
             paragraph_has_drawing = _first_named(paragraph, "drawing") is not None
             paragraph_properties = next(_children_named(paragraph, "pPr"), None)
-            paragraph_style_node = _first_named(paragraph_properties, "pStyle")
+            paragraph_style_node = _current_named(paragraph_properties, "pStyle")
             paragraph_style = (
                 _attribute_named(paragraph_style_node, "val")
                 if paragraph_style_node is not None
@@ -2922,7 +3002,7 @@ def _word_text_expectations(
                 for run in _iter_named(field, "r")
             }
             in_complex_field_result = False
-            for run in _iter_named(paragraph, "r"):
+            for run in _own_runs(paragraph):
                 field_markers = [
                     (_attribute_named(marker, "fldCharType") or "").casefold()
                     for marker in _iter_named(run, "fldChar")
@@ -2948,7 +3028,7 @@ def _word_text_expectations(
                     # authority and must not become a fidelity expectation.
                     continue
                 run_properties = next(_children_named(run, "rPr"), None)
-                run_style_node = _first_named(run_properties, "rStyle")
+                run_style_node = _current_named(run_properties, "rStyle")
                 run_style = (
                     _attribute_named(run_style_node, "val")
                     if run_style_node is not None
@@ -3009,11 +3089,7 @@ def _word_text_expectations(
                     or default_paragraph_style
                     or table_layers
                 )
-                raw_text = "".join(
-                    item.text or ""
-                    for item in _iter_named(run, "t")
-                    if item.text
-                )
+                raw_text = _own_text(run)
                 if raw_text and not raw_text.strip() and segments:
                     previous = segments[-1]
                     segments[-1] = (previous[0] + raw_text, *previous[1:])
@@ -4017,6 +4093,92 @@ def _positioned_reading_order(
     ]
 
 
+def _row_anchor_positions(
+    row: tuple[str, ...], fragments: list[_PositionedText]
+) -> list[float] | None:
+    """Left edge of each cell anchor, recovered from the row's matched fragments."""
+    positions: list[float] = []
+    index = 0
+    for anchor in row:
+        end = _fragment_sequence_end(anchor, fragments, index, [])
+        if end is None or index >= len(fragments):
+            return None
+        positions.append(fragments[index].x)
+        index = end
+    return positions
+
+
+def _paragraph_sits_in_column(
+    text: str,
+    ordered: list[_PositionedText],
+    barriers: list[_VerticalBarrier],
+    *,
+    page: int,
+    below: float,
+    column_x: float,
+    anchor_positions: list[float],
+) -> bool:
+    for start, fragment in enumerate(ordered):
+        if fragment.page != page or fragment.top > below:
+            continue
+        if _fragment_sequence_end(text, ordered, start, barriers) is None:
+            continue
+        distances = [abs(fragment.x - value) for value in anchor_positions]
+        nearest = min(distances)
+        if distances.count(nearest) == 1 and abs(fragment.x - column_x) == nearest:
+            return True
+    return False
+
+
+def _table_cell_paragraphs_match(
+    tables: list[_WordTableExpectation],
+    positioned: list[_PositionedText],
+    barriers: list[_VerticalBarrier],
+) -> bool:
+    """Bind every cell paragraph to its own column, not just the first one.
+
+    Only the first paragraph of each cell became a row anchor, so everything
+    below it carried no positional binding at all: in a table with no painted
+    geometry the amounts of two cells could be exchanged and every remaining
+    check -- token multiset, row anchors, typography -- still held.  Each
+    further paragraph must now appear below its anchor and nearer that anchor's
+    column than any other in the row.
+    """
+    ordered = _positioned_reading_order(positioned)
+    for table in tables:
+        if not any(len(cell.paragraphs) > 1 for cell in table.cells):
+            continue
+        matched_rows = _matched_table_row_fragments(list(table.rows), ordered, barriers)
+        if matched_rows is None:
+            return False
+        cells_by_row: dict[int, list[_WordTableCellExpectation]] = {}
+        for cell in table.cells:
+            cells_by_row.setdefault(cell.row_start, []).append(cell)
+        for row_index, row in enumerate(table.rows):
+            if not row:
+                continue
+            fragments = matched_rows[row_index]
+            anchor_positions = _row_anchor_positions(row, fragments)
+            row_cells = cells_by_row.get(row_index, [])
+            if anchor_positions is None or len(row_cells) != len(anchor_positions):
+                return False
+            page = fragments[0].page
+            below = max(item.top for item in fragments)
+            for column_x, cell in zip(anchor_positions, row_cells):
+                for text in cell.paragraphs[1:]:
+                    if not _paragraph_sits_in_column(
+                        text,
+                        ordered,
+                        barriers,
+                        page=page,
+                        below=below,
+                        column_x=column_x,
+                        anchor_positions=anchor_positions,
+                    ):
+                        return False
+    return True
+
+
 def _matched_table_row_fragments(
     rows: list[tuple[str, ...]],
     positioned: list[_PositionedText],
@@ -4026,6 +4188,12 @@ def _matched_table_row_fragments(
     previous_position: tuple[int, float] | None = None
     selected_rows: list[list[_PositionedText]] = []
     for row in rows:
+        if not row:
+            # A spacer row paints no text, so it anchors nothing.  Letting the
+            # empty tuple match every line consumed the next real row's line and
+            # made an ordinary table unmatchable.
+            selected_rows.append([])
+            continue
         matching_positions: dict[tuple[int, float], list[_PositionedText]] = {}
         for anchor in ordered:
             line_tolerance = max(3.0, 0.35 * anchor.font_size)
@@ -4737,7 +4905,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                             )
                             cell_properties = next(_children_named(cell, "tcPr"), None)
                             direct_fill = table_color(
-                                _first_named(cell_properties, "shd")
+                                _current_named(cell_properties, "shd")
                             )
                             raw_cells.append(
                                 (
@@ -4867,9 +5035,9 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                             top_boundary: int,
                             bottom_boundary: int,
                         ) -> None:
-                            borders = _first_named(properties, "tblBorders")
+                            borders = _current_named(properties, "tblBorders")
                             if borders is None:
-                                borders = _first_named(properties, "tcBorders")
+                                borders = _current_named(properties, "tcBorders")
                             if borders is None:
                                 return
                             for name, boundary in (
@@ -5037,6 +5205,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
             extracted_pages.append(page.extract_text() or "")
             pdf_images.extend(_ordered_pdf_image_signatures(page, reader))
         pdf_text = _normalized_visible_text("\n".join(extracted_pages))
+        strict_pdf_text = "\n".join(extracted_pages)
         (
             positioned,
             barriers,
@@ -5073,7 +5242,10 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                 for paragraph in _iter_named(xml_roots[name], "p")
                 if (
                     fragment := _dynamic_paragraph_text(
-                        paragraph, page_number=page + 1
+                        paragraph,
+                        page_number=page + 1,
+                        is_hidden_run=is_hidden_run,
+                        style_id=_paragraph_style_id(paragraph),
                     )
                 ).strip()
             ]
@@ -5169,28 +5341,47 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         )
     )
     token_counts_match = pdf_counts == source_counts + expected_repeatable_counts
+    # The matching stream above is NFKC-folded and case-insensitive so that wrap
+    # and fragment matching work.  That folding also hides material substitution,
+    # so the same multiset is compared again without it.
+    strict_repeatable = Counter(
+        _strict_tokens(
+            " ".join(
+                fragment
+                for page_fragments in (
+                    header_fragments_by_page + footer_fragments_by_page
+                )
+                for fragment in page_fragments
+            )
+        )
+    )
+    strict_token_counts_match = Counter(_strict_tokens(strict_pdf_text)) == (
+        Counter(_strict_tokens(" ".join(body_fragments))) + strict_repeatable
+    )
     document_order_matches = _ordered_text_blocks_match(
         document_fragments, reading_positioned, barriers
     )
     # A bookmark target is body content, but the PDF-side occurrence enumeration
     # sees every visible fragment, and reading order puts the running header
-    # first.  A header repeating the target text therefore became occurrence 0
-    # and the link resolved to the wrong place.  Enumerate over body fragments.
-    body_positioned = [
-        fragment
-        for fragment in reading_positioned
-        if not _in_repeatable_band(
-            fragment, header_fragments_by_page, footer_fragments_by_page, page_heights
-        )
-    ]
-    annotations_match = _annotations_match_internal_links(
-        reader, word_internal_links, reading_positioned, barriers, body_positioned
-    )
+    # first.  A header repeating the target text would otherwise become
+    # occurrence 0 and the link would resolve to the wrong place.  Subtract
+    # exactly the fragments that matched as header or footer content -- a
+    # geometric band would also swallow ordinary body text near the margin.
+    repeatable_fragments: set[int] = set()
     repeatable_text_matches = _repeatable_text_matches(
         header_fragments_by_page=header_fragments_by_page,
         footer_fragments_by_page=footer_fragments_by_page,
         positioned=reading_positioned,
         page_heights=page_heights,
+        consumed=repeatable_fragments,
+    )
+    body_positioned = [
+        fragment
+        for fragment in reading_positioned
+        if id(fragment) not in repeatable_fragments
+    ]
+    annotations_match = _annotations_match_internal_links(
+        reader, word_internal_links, reading_positioned, barriers, body_positioned
     )
 
     images_match = _repeatable_word_images_match(
@@ -5210,6 +5401,9 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         footer_layouts_by_page=footer_image_layouts_by_page,
     )
     tables_match = _table_rows_match(table_rows, reading_positioned, barriers)
+    cell_paragraphs_match = _table_cell_paragraphs_match(
+        tables, reading_positioned, barriers
+    )
     painted_paths_match = _painted_paths_are_bound_to_tables(
         painted_paths,
         tables,
@@ -5240,11 +5434,13 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
             page_heights=page_heights,
         )
         or not token_counts_match
+        or not strict_token_counts_match
         or not document_order_matches
         or not repeatable_text_matches
         or not images_match
         or not content_order_matches
         or not tables_match
+        or not cell_paragraphs_match
         or not painted_paths_match
         or not text_sizes_match
     ):

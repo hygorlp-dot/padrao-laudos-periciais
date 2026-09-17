@@ -561,3 +561,44 @@ def test_native_product_template_path_renders(tmp_path: Path) -> None:
             }
         }
     )
+
+
+def _valuation_table_package(first_amount: str, second_amount: str) -> bytes:
+    run = '<w:r><w:rPr><w:sz w:val="24"/></w:rPr>'
+
+    def cell(*paragraphs: str) -> str:
+        return (
+            "<w:tc>"
+            + "".join(f"<w:p>{run}<w:t>{text}</w:t></w:r></w:p>" for text in paragraphs)
+            + "</w:tc>"
+        )
+
+    body = (
+        f"<w:p>{run}<w:t>Quadro de valores</w:t></w:r></w:p>"
+        '<w:tbl><w:tblGrid><w:gridCol w:w="4000"/><w:gridCol w:w="4000"/></w:tblGrid>'
+        "<w:tr>"
+        + cell("Honorarios", first_amount)
+        + cell("Custas", second_amount)
+        + "</w:tr></w:tbl>"
+    )
+    return _package(main_type=_DOCX_MAIN_TYPE, body=body)
+
+
+def test_native_table_cell_amounts_cannot_be_exchanged() -> None:
+    """Both PDFs are genuine Word output; only the cell contents are swapped.
+
+    Only the first paragraph of each cell used to be bound to a position, so the
+    two amounts could trade places and the token multiset, the row anchors and
+    the typography all still matched.
+    """
+    authoritative = _valuation_table_package("42.000,00", "1.000,00")
+    swapped = _valuation_table_package("1.000,00", "42.000,00")
+    converter = LocalOfficePdfConverter(temp_root=_native_temp_root())
+
+    faithful_pdf = converter.convert(authoritative, "DOCX")
+    swapped_pdf = converter.convert(swapped, "DOCX")
+
+    delivery_renderer._validate_pdf_fidelity(authoritative, faithful_pdf)
+    delivery_renderer._validate_pdf_fidelity(swapped, swapped_pdf)
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(authoritative, swapped_pdf)
