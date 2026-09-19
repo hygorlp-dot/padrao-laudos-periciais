@@ -62,6 +62,13 @@ def _local_name(tag: str) -> str:
 
 
 def _iter_named(root: ElementTree.Element, name: str):
+    """Every descendant with this local name, unrendered branches included.
+
+    Use this for a SECURITY sweep, where anything Word might interpret has to be
+    seen and pruning would hide an attack, and for parts with no rendering
+    semantics at all -- relationships, content types, style definitions.  A
+    FIDELITY sweep, deciding what the PDF must show, uses _current_iter instead.
+    """
     return (item for item in root.iter() if _local_name(item.tag) == name)
 
 
@@ -293,6 +300,11 @@ def _current_iter(root: ElementTree.Element | None, name: str):
     one, and read the historical page size as if it were current.
     """
     return (node for node in _current_nodes(root) if _local_name(node.tag) == name)
+
+
+def _current_first(root: ElementTree.Element | None, name: str):
+    """First rendered descendant with this local name, or None."""
+    return next(_current_iter(root, name), None)
 
 
 def _current_named(root: ElementTree.Element | None, name: str):
@@ -1035,7 +1047,10 @@ def _ordered_word_image_layouts(
     for name in sorted(xml_roots, key=_word_part_priority):
         root = xml_roots[name]
         layouts_by_image: dict[int, _WordImageLayout | None] = {}
-        for paragraph in _iter_named(root, "p"):
+        # A picture inside an mc:Fallback twin or a tracked deletion is not a
+        # rendered picture.  The signature sweep prunes them, so this one must
+        # too: a length mismatch between the two rejects a faithful PDF.
+        for paragraph in _current_iter(root, "p"):
             paragraph_properties = next(_children_named(paragraph, "pPr"), None)
             alignment_node = _current_named(paragraph_properties, "jc")
             alignment = (
@@ -1043,7 +1058,7 @@ def _ordered_word_image_layouts(
                 if alignment_node is not None
                 else "left"
             )
-            for drawing in _iter_named(paragraph, "drawing"):
+            for drawing in _current_iter(paragraph, "drawing"):
                 extent = _first_named(drawing, "extent")
                 layout: _WordImageLayout | None = None
                 if extent is not None:
@@ -1106,12 +1121,12 @@ def _ordered_word_image_layouts(
                             )
                     except (KeyError, StopIteration, TypeError, ValueError):
                         layout = None
-                for image_node in _iter_named(drawing, "blip"):
+                for image_node in _current_iter(drawing, "blip"):
                     layouts_by_image[id(image_node)] = layout
         flow: list[tuple[str, str | ElementTree.Element]] = []
-        for paragraph in _iter_named(root, "p"):
+        for paragraph in _current_iter(root, "p"):
             text_buffer: list[str] = []
-            for item in paragraph.iter():
+            for item in _current_nodes(paragraph):
                 local_name = _local_name(item.tag)
                 if local_name == "t" and item.text:
                     text_buffer.append(item.text)
@@ -1660,7 +1675,9 @@ def _collapse_content_kinds(values: list[str]) -> tuple[str, ...]:
 def _word_content_kinds(xml_roots: dict[str, ElementTree.Element]) -> tuple[str, ...]:
     values: list[str] = []
     for name in sorted(xml_roots, key=_word_part_priority):
-        for node in xml_roots[name].iter():
+        # Deleted and moved-from runs carry no rendered content, so demanding
+        # them from the PDF rejected a faithful pair.
+        for node in _current_nodes(xml_roots[name]):
             local_name = _local_name(node.tag)
             if local_name == "t" and node.text and node.text.strip():
                 values.append("TEXT")
@@ -2933,13 +2950,17 @@ def _word_text_expectations(
         for kind, child in _own_block_sequence(body):
             if kind == "p":
                 paragraph = child
+                # Read the paragraph the way the segment builder reads it.
+                # Selecting the anchor from raw text chose a paragraph holding
+                # only tracked-deleted runs, which then produced no expectation
+                # at all and left the page-margin binding vacuous once more.
                 text = "".join(
-                    item.text or "" for item in _iter_named(paragraph, "t")
+                    item.text or "" for item in _current_iter(paragraph, "t")
                 )
-                if text.strip() and _first_named(paragraph, "drawing") is None:
+                if text.strip() and _current_first(paragraph, "drawing") is None:
                     anchor_paragraph_id = id(paragraph)
                     break
-                if not text.strip() and _first_named(paragraph, "drawing") is None:
+                if not text.strip() and _current_first(paragraph, "drawing") is None:
                     paragraph_properties = next(
                         _children_named(paragraph, "pPr"), None
                     )
@@ -3159,14 +3180,14 @@ def _word_text_expectations(
             ] = []
             dynamic_result_runs = {
                 id(run)
-                for field in _iter_named(paragraph, "fldSimple")
-                for run in _iter_named(field, "r")
+                for field in _current_iter(paragraph, "fldSimple")
+                for run in _current_iter(field, "r")
             }
             in_complex_field_result = False
             for run in _own_runs(paragraph):
                 field_markers = [
                     (_attribute_named(marker, "fldCharType") or "").casefold()
-                    for marker in _iter_named(run, "fldChar")
+                    for marker in _current_iter(run, "fldChar")
                 ]
                 if "separate" in field_markers:
                     in_complex_field_result = True
@@ -5108,9 +5129,12 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                 renders_content = name == "word/document.xml" or name.startswith(
                     ("word/header", "word/footer")
                 )
+                # A deleted note reference is not note content: Word paints
+                # neither its mark nor its text, so declaring the construct
+                # unsupported left a faithful document undeliverable.
                 if renders_content and any(
                     _local_name(node.tag) in _NOTE_REFERENCES
-                    for node in root.iter()
+                    for node in _current_nodes(root)
                 ):
                     # Word paints the note text AND an auto-generated reference
                     # mark, twice, neither of which exists in the source.  The
@@ -5815,14 +5839,30 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
 _WORDPROCESSING_NS = b"http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
 
+_QUOTE = b"[\"']"
+
+
 def _wordprocessing_prefix(part: bytes) -> bytes:
-    """Return the prefix this part binds to the WordprocessingML namespace."""
-    match = re.search(rb'xmlns:([A-Za-z0-9_.-]+)="' + re.escape(_WORDPROCESSING_NS) + rb'"', part)
-    if match is not None:
-        return match.group(1) + b":"
-    if re.search(rb'xmlns="' + re.escape(_WORDPROCESSING_NS) + rb'"', part) is not None:
-        return b""
-    raise ValueError("bound Word artifact is invalid")
+    """The single prefix this part binds to the WordprocessingML namespace.
+
+    Several prefixes may legally denote one namespace, and a byte-level edit
+    cannot then know which spelling the control the tree selected actually uses:
+    a decoy w:tag under a second prefix took the anchor while the selected
+    control spelled its tag z:tag.  Word writes exactly one prefix, so a part
+    binding more than one is refused instead of guessed at.
+    """
+    namespace = re.escape(_WORDPROCESSING_NS)
+    prefixes = {
+        match.group(1) + b":"
+        for match in re.finditer(
+            b"xmlns:([A-Za-z0-9_.-]+)=" + _QUOTE + namespace + _QUOTE, part
+        )
+    }
+    if re.search(b"xmlns=" + _QUOTE + namespace + _QUOTE, part) is not None:
+        prefixes.add(b"")
+    if len(prefixes) != 1:
+        raise ValueError("bound Word artifact is invalid")
+    return prefixes.pop()
 
 
 def _canonical_content_markup(report: ReportSnapshot, prefix: bytes) -> bytes:
@@ -5849,18 +5889,20 @@ def _canonical_tag_anchor(part: bytes, prefix: bytes) -> int:
     while the bound control kept its placeholder, and the boundary accepted it.
     Only a w:val on a w:tag element decides, and it has to be the only one.
     """
-    needle = b'"CANONICAL_REPORT"'
+    # XML permits either quote around an attribute value.
+    needles = (b'"CANONICAL_REPORT"', b"'CANONICAL_REPORT'")
     tag_open = b"<" + prefix + b"tag"
     anchors: list[int] = []
-    cursor = part.find(needle)
-    while cursor >= 0:
-        element = part.rfind(b"<", 0, cursor)
-        if element >= 0 and part.startswith(tag_open, element):
-            # Guard against a longer element name that merely starts with "tag".
-            following = part[element + len(tag_open) : element + len(tag_open) + 1]
-            if following in (b" ", b"\t", b"\r", b"\n"):
-                anchors.append(cursor)
-        cursor = part.find(needle, cursor + 1)
+    for needle in needles:
+        cursor = part.find(needle)
+        while cursor >= 0:
+            element = part.rfind(b"<", 0, cursor)
+            if element >= 0 and part.startswith(tag_open, element):
+                # Guard against a longer name that merely starts with "tag".
+                following = part[element + len(tag_open) : element + len(tag_open) + 1]
+                if following in (b" ", b"\t", b"\r", b"\n"):
+                    anchors.append(cursor)
+            cursor = part.find(needle, cursor + 1)
     if len(anchors) != 1:
         raise ValueError("CANONICAL_REPORT content control is not uniquely anchored")
     return anchors[0]
@@ -5886,10 +5928,16 @@ def _verify_canonical_binding(part: bytes, report: ReportSnapshot) -> None:
     content = bound[0].find(f"{_W}sdtContent")
     if content is None:
         raise ValueError("CANONICAL_REPORT content control is incomplete")
-    text = "".join(node.text or "" for node in content.iter(f"{_W}t"))
-    for line in _canonical_report_lines(report):
-        if line not in text:
-            raise ValueError("canonical report did not bind to its content control")
+    # Containment is not binding.  Asking only whether the canonical lines are
+    # present let a forged paragraph survive inside the control, ahead of them
+    # and shaped like a genuine report line, so the control's own paragraphs must
+    # be exactly the canonical lines and nothing else.
+    rendered = [
+        "".join(node.text or "" for node in paragraph.iter(f"{_W}t"))
+        for paragraph in content.iter(f"{_W}p")
+    ]
+    if rendered != list(_canonical_report_lines(report)):
+        raise ValueError("canonical report did not bind to its content control")
 
 
 def _replace_canonical_content(part: bytes, report: ReportSnapshot) -> bytes:
@@ -6131,25 +6179,39 @@ def _delivery_interpretable_parts(declared: dict[str, str]) -> set[str]:
 def _delivery_field_instructions(root: ElementTree.Element) -> list[str]:
     """Split a part's run stream into one instruction per field.
 
-    Mirrors the Word worker: w:instrText only means anything between a
-    w:fldChar "begin" and the "end" closing it, so concatenating a paragraph and
-    judging its leading code let a second field ride along behind the first.
+    Mirrors the Word worker: w:instrText only means anything between a w:fldChar
+    "begin" and the "separate" that ends the instruction, so concatenating a
+    paragraph -- or a whole field across its separator -- and judging the leading
+    code let a second instruction ride along behind the first.
     """
     instructions: list[str] = []
     open_fields: list[list[str]] = []
-    unbounded: list[str] = []
     for node in root.iter():
         local_name = _local_name(node.tag)
         if local_name == "fldChar":
             marker = (_attribute_named(node, "fldCharType") or "").strip().casefold()
             if marker == "begin":
                 open_fields.append([])
+            elif marker == "separate" and open_fields:
+                # The instruction ends at the separator.  Whatever a producer
+                # writes after it is judged on its own code: concatenating
+                # across the separator rebuilt, inside a single field, the very
+                # defect that segmenting by field was meant to close.
+                instructions.append("".join(open_fields[-1]))
+                open_fields[-1] = []
             elif marker == "end" and open_fields:
                 instructions.append("".join(open_fields.pop()))
         elif local_name == "instrText":
-            (open_fields[-1] if open_fields else unbounded).append(node.text or "")
+            if open_fields:
+                open_fields[-1].append(node.text or "")
+            else:
+                # Bare instruction text is not a field to Word at all, but one
+                # shared buffer let a safe leading code speak for every node
+                # behind it, so each node is judged alone.
+                instructions.append(node.text or "")
+    # A field left open is still judged: an unreadable run stream must not
+    # swallow an instruction.
     instructions.extend("".join(buffer) for buffer in open_fields)
-    instructions.append("".join(unbounded))
     return instructions
 
 
@@ -6173,6 +6235,27 @@ def _reject_unsupported_delivery_field(value: str) -> None:
 
 _SAFE_PDF_ACTION = "/GoTo"
 _ACQUIRING_PDF_NAME_TREES = ("/JavaScript", "/EmbeddedFiles", "/Renditions")
+# Catalog entries that attach files or turn the document into a portfolio.
+_ACQUIRING_PDF_CATALOG_KEYS = ("/AA", "/Collection", "/AF")
+# Annotation subtypes whose whole purpose is to carry or launch content.  They
+# keep their payload and their activation in subtype-specific keys instead of
+# announcing themselves through /A or /AA, so an action sweep never sees them.
+# Enumerated from the PDF annotation types, not from the cases a review reported.
+_ACQUIRING_PDF_ANNOTATIONS = frozenset(
+    {"/FileAttachment", "/Movie", "/Sound", "/Screen", "/RichMedia", "/3D"}
+)
+_ACQUIRING_PDF_ANNOTATION_KEYS = (
+    "/FS",
+    "/Movie",
+    "/Sound",
+    "/RichMediaContent",
+    "/RichMediaSettings",
+    "/3DD",
+    "/3DA",
+)
+# Object graphs can be cyclic, and a hostile one can be deep; the walks below are
+# bounded so a malformed document cannot turn a validator into a hang.
+_PDF_TRAVERSAL_LIMIT = 4096
 
 
 def _pdf_object(value):
@@ -6196,19 +6279,77 @@ def _reject_pdf_action(value) -> None:
             _reject_pdf_action(item)
 
 
+def _reject_pdf_annotation(value) -> None:
+    """An annotation may point inside the document and carry nothing else."""
+    item = _pdf_object(value)
+    if not isinstance(item, dict):
+        return
+    if str(item.get("/Subtype")) in _ACQUIRING_PDF_ANNOTATIONS or any(
+        key in item for key in _ACQUIRING_PDF_ANNOTATION_KEYS
+    ):
+        raise ValueError("active content is forbidden in delivery artifacts")
+    if item.get("/AA") is not None:
+        raise ValueError("active content is forbidden in delivery artifacts")
+    _reject_pdf_action(item.get("/A"))
+
+
+def _reject_pdf_field_tree(value, seen: set[int] | None = None) -> None:
+    """A form field carries actions whether or not a page shows a widget for it."""
+    visited = set() if seen is None else seen
+    fields = _pdf_object(value)
+    for field in fields if isinstance(fields, list) else ():
+        item = _pdf_object(field)
+        if (
+            not isinstance(item, dict)
+            or id(item) in visited
+            or len(visited) > _PDF_TRAVERSAL_LIMIT
+        ):
+            continue
+        visited.add(id(item))
+        if item.get("/AA") is not None:
+            raise ValueError("active content is forbidden in delivery artifacts")
+        _reject_pdf_action(item.get("/A"))
+        _reject_pdf_field_tree(item.get("/Kids"), visited)
+
+
+def _reject_pdf_outline(value) -> None:
+    """A bookmark is a destination; an outline item may not launch anything."""
+    outlines = _pdf_object(value)
+    if not isinstance(outlines, dict):
+        return
+    pending = [outlines.get("/First")]
+    visited: set[int] = set()
+    while pending and len(visited) <= _PDF_TRAVERSAL_LIMIT:
+        item = _pdf_object(pending.pop())
+        if not isinstance(item, dict) or id(item) in visited:
+            continue
+        visited.add(id(item))
+        if item.get("/AA") is not None or item.get("/SE") is not None:
+            raise ValueError("active content is forbidden in delivery artifacts")
+        _reject_pdf_action(item.get("/A"))
+        pending.extend((item.get("/Next"), item.get("/First")))
+
+
 def _reject_active_pdf_content(reader: PdfReader) -> None:
     """A delivered PDF carries no action a viewer could execute.
 
-    The PDF branch validated only that the bytes parse, carry pages and have a
-    header and a trailer, so a catalog-level /OpenAction /Launch, a /Names
-    /JavaScript tree, an /EmbeddedFiles tree, an XFA form and page-level /AA
-    entries were all admitted -- at both validate_final_artifact and
-    validate_delivery_artifact.  The Word branch has refused acquiring content
-    from the start; this is the same rule stated for the other output format.
-    The product's own table of contents is internal /GoTo, which stays allowed.
+    The first statement of this policy enumerated the five shapes a review had
+    reported -- catalog /OpenAction, /AA, /Names, /XFA, page /AA -- while this
+    docstring already claimed the general rule, and a docstring stronger than its
+    code reads as verified without being so.  Eight further paths were accepted:
+    the document outline, /AcroForm/Fields reached without a page widget, a
+    /Collection portfolio, and five annotation subtypes carrying their payload
+    in subtype-specific keys.  The rule now has two halves -- no action other
+    than an internal /GoTo, and no annotation that carries a file, a stream or an
+    auto-activation -- applied everywhere an action or annotation can be reached.
+
+    This gates more than the product's own render: AttachDeliveryPackageArtifact
+    refuses MAIN_REPORT but admits an ANNEX from arbitrary uploaded content on
+    the strength of validate_delivery_artifact alone, so a third-party PDF enters
+    the package handed to the court through here and nowhere else.
     """
     root = _pdf_object(reader.trailer["/Root"])
-    if root.get("/AA") is not None:
+    if any(root.get(key) is not None for key in _ACQUIRING_PDF_CATALOG_KEYS):
         raise ValueError("active content is forbidden in delivery artifacts")
     _reject_pdf_action(root.get("/OpenAction"))
     names = _pdf_object(root.get("/Names"))
@@ -6217,18 +6358,18 @@ def _reject_active_pdf_content(reader: PdfReader) -> None:
     ):
         raise ValueError("active content is forbidden in delivery artifacts")
     forms = _pdf_object(root.get("/AcroForm"))
-    if isinstance(forms, dict) and "/XFA" in forms:
-        raise ValueError("active content is forbidden in delivery artifacts")
+    if isinstance(forms, dict):
+        if "/XFA" in forms:
+            raise ValueError("active content is forbidden in delivery artifacts")
+        # Fields are reachable from the catalog whether or not any page shows a
+        # widget for them, so the page sweep alone never saw their actions.
+        _reject_pdf_field_tree(forms.get("/Fields"))
+    _reject_pdf_outline(root.get("/Outlines"))
     for page in reader.pages:
         if page.get("/AA") is not None:
             raise ValueError("active content is forbidden in delivery artifacts")
         for annotation in _pdf_object(page.get("/Annots")) or ():
-            item = _pdf_object(annotation)
-            if not isinstance(item, dict):
-                continue
-            if item.get("/AA") is not None:
-                raise ValueError("active content is forbidden in delivery artifacts")
-            _reject_pdf_action(item.get("/A"))
+            _reject_pdf_annotation(annotation)
 
 
 def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, int, str]:

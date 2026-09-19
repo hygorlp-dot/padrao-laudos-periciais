@@ -25,6 +25,7 @@ from pypdf.generic import (
     NameObject,
     NullObject,
     NumberObject,
+    create_string_object,
 )
 
 from scripts.backend_contract import delivery_renderer
@@ -968,26 +969,25 @@ def test_conversion_copy_preserves_docm_authority_and_rejects_external_relations
 
 
 def test_word_validation_rejects_noncanonical_external_target_mode() -> None:
-    output = BytesIO()
-    with ZipFile(output, "w", ZIP_DEFLATED) as package:
-        package.writestr(
-            "[Content_Types].xml",
-            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-            '<Override PartName="/word/document.xml" '
-            'ContentType="application/vnd.openxmlformats-officedocument.'
-            'wordprocessingml.document.main+xml"/></Types>',
-        )
-        package.writestr("word/document.xml", "<document/>")
-        package.writestr(
-            "word/_rels/document.xml.rels",
-            '<Relationships xmlns="http://schemas.openxmlformats.org/package/'
-            '2006/relationships"><Relationship Id="rId1" Type="template" '
-            'Target="synthetic-private.png" TargetMode=" External "/>'
-            "</Relationships>",
-        )
+    """TargetMode is a closed enumeration: a padded spelling is not Internal.
+
+    The package around it is valid OPC, so the rejection is the one this test is
+    written for rather than an earlier complaint about the package shape.
+    """
+    word = word_package(
+        "<document/>",
+        parts={
+            "word/_rels/document.xml.rels": (
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/'
+                '2006/relationships"><Relationship Id="rId1" Type="template" '
+                'Target="synthetic-private.png" TargetMode=" External "/>'
+                "</Relationships>"
+            ),
+        },
+    )
 
     with pytest.raises(ValueError, match="external relationships"):
-        validate_final_artifact(output.getvalue(), "DOCX")
+        validate_final_artifact(word, "DOCX")
 
 
 def test_conversion_copy_preserves_macro_parts_verbatim() -> None:
@@ -6641,3 +6641,494 @@ def test_top_margin_anchor_survives_a_block_wrapper() -> None:
 
     assert plain[0] is not None, "the plain shape must anchor at the top margin"
     assert offsets(wrapper) == plain
+
+
+# --- Phase C §27 round 5: the PDF action policy is a rule, not a case list -----
+#
+# The first statement of this policy enumerated exactly the five shapes the
+# previous round reported -- catalog /OpenAction, /AA, /Names, /XFA and page /AA
+# -- while its docstring claimed the general rule.  A docstring stronger than
+# its code reads as verified and is not.  Eight further paths were accepted:
+# the document outline, /AcroForm/Fields reached without a page widget, a
+# /Collection portfolio, and five annotation subtypes that carry their payload
+# and their activation in subtype-specific keys rather than announcing
+# themselves through /A or /AA.
+#
+# This matters beyond the product's own render: AttachDeliveryPackageArtifact
+# refuses MAIN_REPORT but admits an ANNEX from arbitrary uploaded private
+# content on the strength of validate_delivery_artifact alone, so this boundary
+# is the only gate on a third-party PDF entering the package handed to the court.
+
+
+def _blank_pdf_writer() -> PdfWriter:
+    writer = PdfWriter()
+    writer.add_blank_page(width=595, height=842)
+    return writer
+
+
+def _pdf_rect() -> ArrayObject:
+    return ArrayObject(
+        [NumberObject(10), NumberObject(10), NumberObject(90), NumberObject(40)]
+    )
+
+
+def _pdf_action(subtype: str, **extra) -> DictionaryObject:
+    node = DictionaryObject({NameObject("/S"): NameObject(subtype)})
+    node.update({NameObject(key): value for key, value in extra.items()})
+    return node
+
+
+def _embedded_payload(writer: PdfWriter):
+    stream = DecodedStreamObject()
+    stream.set_data(b"MZ synthetic payload")
+    stream[NameObject("/Type")] = NameObject("/EmbeddedFile")
+    return writer._add_object(stream)
+
+
+def _pdf_filespec(writer: PdfWriter) -> DictionaryObject:
+    return DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Filespec"),
+            NameObject("/F"): create_string_object("anexo.exe"),
+            NameObject("/EF"): DictionaryObject(
+                {NameObject("/F"): _embedded_payload(writer)}
+            ),
+        }
+    )
+
+
+def _with_annotation(writer: PdfWriter, node: DictionaryObject) -> None:
+    writer.pages[0][NameObject("/Annots")] = ArrayObject([writer._add_object(node)])
+
+
+def _annotation(subtype: str, **extra) -> DictionaryObject:
+    node = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Annot"),
+            NameObject("/Subtype"): NameObject(subtype),
+            NameObject("/Rect"): _pdf_rect(),
+        }
+    )
+    node.update({NameObject(key): value for key, value in extra.items()})
+    return node
+
+
+def _outline_item_pdf(writer: PdfWriter, action: DictionaryObject) -> None:
+    item = DictionaryObject(
+        {
+            NameObject("/Title"): create_string_object("Capitulo 1"),
+            NameObject("/A"): writer._add_object(action),
+        }
+    )
+    reference = writer._add_object(item)
+    writer._root_object[NameObject("/Outlines")] = writer._add_object(
+        DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Outlines"),
+                NameObject("/First"): reference,
+                NameObject("/Last"): reference,
+                NameObject("/Count"): NumberObject(1),
+            }
+        )
+    )
+
+
+def _acroform_field_pdf(writer: PdfWriter, **extra) -> None:
+    field = DictionaryObject(
+        {
+            NameObject("/FT"): NameObject("/Btn"),
+            NameObject("/T"): create_string_object("gatilho"),
+        }
+    )
+    field.update({NameObject(key): value for key, value in extra.items()})
+    writer._root_object[NameObject("/AcroForm")] = DictionaryObject(
+        {NameObject("/Fields"): ArrayObject([writer._add_object(field)])}
+    )
+
+
+def _executable_pdf(label: str) -> bytes:
+    writer = _blank_pdf_writer()
+    if label == "outline_item_launch":
+        _outline_item_pdf(
+            writer, _pdf_action("/Launch", **{"/F": create_string_object("calc.exe")})
+        )
+    elif label == "outline_item_additional_actions":
+        _outline_item_pdf(writer, _pdf_action("/GoTo"))
+        outlines = _pdf_object_of(writer._root_object["/Outlines"])
+        item = _pdf_object_of(outlines["/First"])
+        item[NameObject("/AA")] = DictionaryObject(
+            {NameObject("/O"): _pdf_action("/JavaScript")}
+        )
+    elif label == "nested_outline_item_launch":
+        _outline_item_pdf(writer, _pdf_action("/GoTo"))
+        outlines = _pdf_object_of(writer._root_object["/Outlines"])
+        parent = _pdf_object_of(outlines["/First"])
+        child = writer._add_object(
+            DictionaryObject(
+                {
+                    NameObject("/Title"): create_string_object("Sub"),
+                    NameObject("/A"): writer._add_object(_pdf_action("/Launch")),
+                }
+            )
+        )
+        parent[NameObject("/First")] = child
+        parent[NameObject("/Last")] = child
+    elif label == "acroform_field_javascript":
+        _acroform_field_pdf(
+            writer,
+            **{
+                "/AA": DictionaryObject(
+                    {NameObject("/C"): _pdf_action("/JavaScript")}
+                )
+            },
+        )
+    elif label == "acroform_kid_field_launch":
+        kid = DictionaryObject(
+            {NameObject("/A"): writer._add_object(_pdf_action("/Launch"))}
+        )
+        _acroform_field_pdf(writer, **{"/Kids": ArrayObject([writer._add_object(kid)])})
+    elif label == "annotation_file_attachment":
+        _with_annotation(
+            writer, _annotation("/FileAttachment", **{"/FS": _pdf_filespec(writer)})
+        )
+    elif label == "annotation_movie_unc_target":
+        _with_annotation(
+            writer,
+            _annotation(
+                "/Movie",
+                **{
+                    "/Movie": DictionaryObject(
+                        {
+                            NameObject("/F"): create_string_object(
+                                chr(92) * 2 + "servidor" + chr(92) + "filme.avi"
+                            )
+                        }
+                    )
+                },
+            ),
+        )
+    elif label == "annotation_sound":
+        _with_annotation(
+            writer, _annotation("/Sound", **{"/Sound": _embedded_payload(writer)})
+        )
+    elif label == "annotation_rich_media_autoplay":
+        _with_annotation(
+            writer,
+            _annotation(
+                "/RichMedia",
+                **{
+                    "/RichMediaContent": DictionaryObject(
+                        {
+                            NameObject("/Assets"): DictionaryObject(
+                                {
+                                    NameObject("/Names"): ArrayObject(
+                                        [
+                                            create_string_object("payload"),
+                                            _pdf_filespec(writer),
+                                        ]
+                                    )
+                                }
+                            )
+                        }
+                    ),
+                    "/RichMediaSettings": DictionaryObject(
+                        {
+                            NameObject("/Activation"): DictionaryObject(
+                                {NameObject("/Condition"): NameObject("/PO")}
+                            )
+                        }
+                    ),
+                },
+            ),
+        )
+    elif label == "annotation_three_dimensional":
+        _with_annotation(
+            writer,
+            _annotation(
+                "/3D",
+                **{
+                    "/3DD": _embedded_payload(writer),
+                    "/3DA": DictionaryObject({NameObject("/A"): NameObject("/PO")}),
+                },
+            ),
+        )
+    elif label == "annotation_screen_rendition":
+        _with_annotation(
+            writer, _annotation("/Screen", **{"/A": _pdf_action("/Rendition")})
+        )
+    elif label == "catalog_collection_portfolio":
+        writer._root_object[NameObject("/Collection")] = DictionaryObject(
+            {NameObject("/View"): NameObject("/D")}
+        )
+        writer._root_object[NameObject("/AF")] = ArrayObject(
+            [writer._add_object(_pdf_filespec(writer))]
+        )
+    else:  # pragma: no cover - guards the parametrisation against a typo
+        raise AssertionError(label)
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def _pdf_object_of(value):
+    return value.get_object() if hasattr(value, "get_object") else value
+
+
+_EXECUTABLE_PDF_LABELS = (
+    "outline_item_launch",
+    "outline_item_additional_actions",
+    "nested_outline_item_launch",
+    "acroform_field_javascript",
+    "acroform_kid_field_launch",
+    "annotation_file_attachment",
+    "annotation_movie_unc_target",
+    "annotation_sound",
+    "annotation_rich_media_autoplay",
+    "annotation_three_dimensional",
+    "annotation_screen_rendition",
+    "catalog_collection_portfolio",
+)
+
+
+@pytest.mark.parametrize("label", _EXECUTABLE_PDF_LABELS)
+def test_delivered_pdf_rejects_every_executable_or_acquiring_path(label: str) -> None:
+    content = _executable_pdf(label)
+
+    with pytest.raises(ValueError, match="active content"):
+        validate_final_artifact(content, "PDF")
+    with pytest.raises(ValueError, match="active content"):
+        delivery_renderer.validate_delivery_artifact(content, "PDF")
+
+
+def test_delivered_pdf_accepts_an_internal_link_annotation() -> None:
+    """The product's own table of contents is a /Link with an internal /GoTo."""
+    writer = _blank_pdf_writer()
+    _with_annotation(
+        writer,
+        _annotation(
+            "/Link",
+            **{
+                "/A": _pdf_action(
+                    "/GoTo",
+                    **{"/D": ArrayObject([NumberObject(0), NameObject("/XYZ")])},
+                )
+            },
+        ),
+    )
+    output = BytesIO()
+    writer.write(output)
+
+    assert validate_final_artifact(output.getvalue(), "PDF")[2] == "application/pdf"
+
+
+def test_delivered_pdf_accepts_a_bookmark_outline_with_internal_destinations() -> None:
+    writer = _blank_pdf_writer()
+    _outline_item_pdf(
+        writer,
+        _pdf_action("/GoTo", **{"/D": ArrayObject([NumberObject(0), NameObject("/XYZ")])}),
+    )
+    output = BytesIO()
+    writer.write(output)
+
+    assert validate_final_artifact(output.getvalue(), "PDF")[2] == "application/pdf"
+
+
+def test_delivered_pdf_accepts_a_markup_annotation_without_a_payload() -> None:
+    """A third-party annex may legitimately carry review markup."""
+    writer = _blank_pdf_writer()
+    _with_annotation(writer, _annotation("/Highlight"))
+    output = BytesIO()
+    writer.write(output)
+
+    assert validate_final_artifact(output.getvalue(), "PDF")[2] == "application/pdf"
+
+
+# --- Phase C §27 round 5: one namespace prefix, and an exact binding -----------
+#
+# Two defects met here.  _wordprocessing_prefix returned only the FIRST prefix
+# bound to the WordprocessingML namespace, and the byte-level anchor then looked
+# for that one spelling; more than one prefix may legally denote one namespace,
+# so a decoy <w:tag w:val="CANONICAL_REPORT"/> placed as a direct child of a
+# nested w:sdt -- where the tree check ./w:sdtPr/w:tag cannot see it -- took the
+# anchor while the tree had selected a control spelling its tag z:tag.  The tree
+# and the bytes disagreed about what a w:tag is.
+#
+# _verify_canonical_binding then passed, because it asked only whether the
+# canonical lines are CONTAINED in the control.  The forged paragraph survived
+# inside the control, ahead of them, shaped like a genuine report line.
+
+_DUAL_PREFIX_NS = (
+    'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+    'xmlns:z="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+)
+
+
+def _injected_dual_prefix(body: str) -> str:
+    injected = delivery_renderer._inject_canonical_report(
+        word_package(f"<w:document {_DUAL_PREFIX_NS}><w:body>{body}</w:body></w:document>"),
+        _product_path_report(),
+    )
+    with ZipFile(BytesIO(injected)) as package:
+        return package.read("word/document.xml").decode("utf-8")
+
+
+def test_a_second_prefix_for_one_namespace_is_refused() -> None:
+    """The byte edit cannot know which spelling the selected control uses."""
+    body = (
+        '<w:sdt><w:sdtPr><z:tag z:val="CANONICAL_REPORT"/></w:sdtPr><w:sdtContent>'
+        "<w:p><w:r><w:t>PLACEHOLDER</w:t></w:r></w:p>"
+        "</w:sdtContent></w:sdt>"
+    )
+
+    with pytest.raises(ValueError, match="bound Word artifact is invalid"):
+        _injected_dual_prefix(body)
+
+
+def test_a_decoy_tag_under_a_second_prefix_cannot_take_the_injection() -> None:
+    """The decoy sits as a direct child of a nested w:sdt, where the tree check
+    ./w:sdtPr/w:tag does not look, so only the byte anchor ever saw it."""
+    body = (
+        '<w:sdt><w:sdtPr><z:tag z:val="CANONICAL_REPORT"/></w:sdtPr><w:sdtContent>'
+        "<w:p><w:r><w:t>CONTEXTO | area construida | CONFIRMADO | FORJADO</w:t></w:r></w:p>"
+        '<w:sdt><w:sdtPr><w:id w:val="2"/></w:sdtPr><w:tag w:val="CANONICAL_REPORT"/>'
+        "<w:sdtContent><w:p><w:r><w:t>AQUI ENTRA O LAUDO</w:t></w:r></w:p></w:sdtContent>"
+        "</w:sdt></w:sdtContent></w:sdt>"
+    )
+
+    with pytest.raises(ValueError):
+        _injected_dual_prefix(body)
+
+
+def test_content_surviving_inside_the_control_is_refused() -> None:
+    """Containment is not binding: an extra paragraph must not ride along."""
+    body = (
+        '<w:sdt><w:sdtPr><w:tag w:val="CANONICAL_REPORT"/></w:sdtPr><w:sdtContent>'
+        "<w:p><w:r><w:t>PLACEHOLDER</w:t></w:r></w:p>"
+        '<w:sdt><w:sdtPr><w:id w:val="9"/></w:sdtPr>'
+        "<w:sdtContent><w:p><w:r><w:t>LINHA FORJADA</w:t></w:r></w:p></w:sdtContent>"
+        "</w:sdt></w:sdtContent></w:sdt>"
+    )
+    rendered = _injected_main_part(body)
+
+    assert "LINHA FORJADA" not in rendered
+
+
+def test_a_single_quoted_tag_value_is_accepted() -> None:
+    """XML permits either quote; Word writes double, another producer may not."""
+    rendered = _injected_main_part(
+        "<w:sdt><w:sdtPr><w:tag w:val='CANONICAL_REPORT'/></w:sdtPr>"
+        "<w:sdtContent><w:p><w:r><w:t>PLACEHOLDER</w:t></w:r></w:p>"
+        "</w:sdtContent></w:sdt>"
+    )
+
+    assert "PLACEHOLDER" not in rendered
+    assert "REPORT_SNAPSHOT_SHA256" in rendered
+
+
+# --- Phase C §27 round 5: fidelity sweeps prune, security sweeps do not --------
+#
+# Two kinds of sweep live in this module and they want opposite defaults.  A
+# FIDELITY sweep decides what the PDF must show, so it has to see exactly what
+# Word renders; a SECURITY sweep decides what privileged Word may interpret, so
+# it must see everything, and pruning there would hide an attack.  Introducing
+# _current_nodes fixed one fidelity sweep and left four others raw, which made
+# them disagree with each other -- the picture sweeps most visibly, since a
+# length mismatch between signatures and layouts rejects a faithful PDF.
+
+
+def _picture_layout_count(body: str, target: str = "media/logo.png") -> int:
+    image = BytesIO()
+    Image.new("RGB", (4, 4), "white").save(image, format="PNG")
+    payload = word_package(
+        f"<w:document {_IMAGE_NS}><w:body>{body}</w:body></w:document>",
+        parts={
+            "word/_rels/document.xml.rels": (
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/'
+                f'officeDocument/2006/relationships/image" Target="{target}"/>'
+                "</Relationships>"
+            ),
+            "word/media/logo.png": image.getvalue(),
+        },
+        defaults={"png": "image/png"},
+    )
+    with ZipFile(BytesIO(payload)) as package:
+        root = delivery_renderer.ElementTree.fromstring(
+            package.read("word/document.xml")
+        )
+    return len(delivery_renderer._ordered_word_image_layouts({"word/document.xml": root}))
+
+
+_DELETED_PICTURE = (
+    '<w:p><w:del w:id="1" w:author="a" w:date="d"><w:r>'
+    '<w:drawing><a:blip r:embed="rId9"/></w:drawing>'
+    "</w:r></w:del></w:p>"
+)
+
+
+@pytest.mark.parametrize(
+    ("label", "body", "expected"),
+    (
+        ("single_picture", _SINGLE_PICTURE, 1),
+        ("alternate_content_twin", _ALTERNATE_PICTURE, 1),
+        ("tracked_deleted_picture", _DELETED_PICTURE, 0),
+    ),
+)
+def test_picture_signatures_and_layouts_agree(
+    label: str, body: str, expected: int
+) -> None:
+    """A length mismatch between the two sweeps rejects a faithful PDF."""
+    signatures = _picture_signature_count(body, "media/logo.png")
+    layouts = _picture_layout_count(body)
+
+    assert (signatures, layouts) == (expected, expected)
+
+
+def test_content_kinds_ignore_text_word_does_not_render() -> None:
+    document = _doc(
+        '<w:p><w:r><w:t>Visivel</w:t></w:r>'
+        '<w:del w:id="1" w:author="a" w:date="d"><w:r><w:t>Apagado</w:t></w:r></w:del>'
+        '<w:moveFrom w:id="2" w:author="a" w:date="d"><w:r><w:t>Origem</w:t></w:r></w:moveFrom>'
+        "</w:p>"
+    )
+
+    kinds = delivery_renderer._word_content_kinds({"word/document.xml": document})
+
+    assert kinds == ("TEXT",)
+
+
+def test_a_deleted_note_reference_does_not_make_the_document_undeliverable() -> None:
+    """Word does not render a deleted note reference, so it is not note content."""
+    notes = (
+        f"<w:footnotes {_MAIN_NS}>"
+        '<w:footnote w:id="2"><w:p><w:r><w:t>Ressalva</w:t></w:r></w:p></w:footnote>'
+        "</w:footnotes>"
+    )
+    word = _package_bytes(
+        _P.format("Alpha")
+        + '<w:p><w:del w:id="1" w:author="a" w:date="d"><w:r>'
+        '<w:footnoteReference w:id="2"/></w:r></w:del></w:p>',
+        {"word/footnotes.xml": notes},
+    )
+
+    delivery_renderer._validate_pdf_fidelity(word, _parseable_text_pdf("Alpha"))
+
+
+def test_the_top_margin_anchor_skips_a_paragraph_word_does_not_render() -> None:
+    section = '<w:sectPr><w:pgMar w:top="1440" w:bottom="1440" w:left="1440" w:right="1440"/></w:sectPr>'
+    deleted_first = (
+        '<w:p><w:del w:id="1" w:author="a" w:date="d"><w:r><w:t>Apagado</w:t></w:r></w:del></w:p>'
+        "<w:p><w:r><w:t>Abertura</w:t></w:r></w:p>"
+    )
+    plain = "<w:p><w:r><w:t>Abertura</w:t></w:r></w:p>"
+
+    def anchored(body: str) -> int:
+        return sum(
+            item.expected_top_offset is not None
+            for item in delivery_renderer._word_text_expectations(
+                {"word/document.xml": _doc(body + section)}
+            )
+        )
+
+    assert anchored(plain) == 1
+    assert anchored(deleted_first) == 1

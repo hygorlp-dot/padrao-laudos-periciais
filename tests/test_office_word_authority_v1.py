@@ -720,6 +720,30 @@ def _parity_catalogue() -> dict[str, tuple[str, dict[str, str]]]:
     )
     entries["importable_part"] = ("reject", importable)
 
+    # Three shapes where the boundaries disagreed with nothing observing it.
+    # In two of them the delivery reading is the OPC-correct one and the worker
+    # was the stricter side, which is still a divergence: a template the worker
+    # refuses cannot reach the renderer at all.
+    dot_segment = _minimal_docx_parts()
+    dot_segment["_rels/.rels"] = _package_rels("word/extra/../document.xml")
+    entries["main_part_target_with_dot_segment"] = ("accept", dot_segment)
+
+    macro_in_docx = _minimal_docx_parts()
+    macro_in_docx["word/vbaProject.bin"] = "synthetic"
+    macro_in_docx["[Content_Types].xml"] = _content_types(
+        {
+            "/word/document.xml": _DOCX_MAIN_TYPE,
+            "/word/vbaProject.bin": "application/vnd.ms-office.vbaProject",
+        }
+    )
+    entries["docx_carrying_a_macro_part"] = ("reject", macro_in_docx)
+
+    upper_override = _minimal_docx_parts()
+    upper_override["[Content_Types].xml"] = _content_types(
+        {"/WORD/DOCUMENT.XML": _DOCX_MAIN_TYPE}
+    )
+    entries["override_part_name_in_upper_case"] = ("accept", upper_override)
+
     for code in _SAFE_FIELD_CODES:
         name = code.split()[0].casefold()
         entries[f"safe_field_{name}"] = (
@@ -735,6 +759,18 @@ def _parity_catalogue() -> dict[str, tuple[str, dict[str, str]]]:
         entries[f"unlisted_field_{name}_behind_page"] = (
             "reject",
             _body_parts("<w:p>" + _field("PAGE") + _field(code) + "</w:p>"),
+        )
+        entries[f"unlisted_field_{name}_after_separator"] = (
+            "reject",
+            _body_parts(
+                "<w:p>"
+                + '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+                + '<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>'
+                + '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+                + f'<w:r><w:instrText xml:space="preserve"> {code} </w:instrText></w:r>'
+                + '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+                + "</w:p>"
+            ),
         )
     return entries
 
@@ -800,3 +836,94 @@ def test_encoded_external_target_is_external_at_both_boundaries(target: str) -> 
 def test_local_target_stays_internal_at_both_boundaries(target: str) -> None:
     assert office_word_worker._looks_external(target) is False
     assert delivery_renderer._looks_external(target) is False
+
+
+# --- Phase C §27 round 5: an instruction ends at w:separate ---------------------
+#
+# Segmentation moved from paragraph to field but kept "one instruction is
+# everything between begin and end".  A field has two regions and w:separate is
+# the boundary, so concatenating across it rebuilt the defect inside a single
+# field: { PAGE <separate> MACROBUTTON ... } presented an allow-listed leading
+# code and the unlisted one rode along behind it.  The module comment asserted
+# that the result carries only w:t; nothing enforced it, and an assertion in a
+# comment is not a control.
+#
+# The same shape held for instruction text belonging to no field: every bare node
+# went into one buffer whose leading code spoke for all of them.
+
+
+def _field_split_by_separate(before: str, after: str) -> str:
+    return (
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        f'<w:r><w:instrText xml:space="preserve"> {before} </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        f'<w:r><w:instrText xml:space="preserve"> {after} </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+    )
+
+
+def _bare_instructions(*codes: str) -> str:
+    return (
+        "<w:p><w:r>"
+        + "".join(
+            f'<w:instrText xml:space="preserve"> {code} </w:instrText>' for code in codes
+        )
+        + "</w:r></w:p>"
+    )
+
+
+@pytest.mark.parametrize("code", _UNLISTED_FIELD_CODES)
+def test_unlisted_code_after_the_separator_is_rejected(tmp_path: Path, code: str) -> None:
+    body = "<w:p>" + _field_split_by_separate("PAGE", code) + "</w:p>"
+    source = _write_package(tmp_path / "source.docx", _body_parts(body))
+
+    with pytest.raises(ValueError):
+        office_word_worker._validate_word_source(source, "DOCX")
+    with pytest.raises(ValueError):
+        delivery_renderer.validate_final_artifact(source.read_bytes(), "DOCX")
+
+
+def test_a_field_result_that_carries_no_instruction_is_still_accepted(
+    tmp_path: Path,
+) -> None:
+    """The ordinary shape: instruction, separator, then the cached result text."""
+    body = (
+        "<w:p>"
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:r><w:instrText xml:space="preserve"> PAGEREF Secao1 \\h </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        "<w:r><w:t>7</w:t></w:r>"
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+        "</w:p>"
+    )
+    source = _write_package(tmp_path / "source.docx", _body_parts(body))
+
+    office_word_worker._validate_word_source(source, "DOCX")
+    delivery_renderer.validate_final_artifact(source.read_bytes(), "DOCX")
+
+
+def test_bare_instruction_nodes_are_judged_one_at_a_time(tmp_path: Path) -> None:
+    source = _write_package(
+        tmp_path / "source.docx",
+        _body_parts(_bare_instructions("PAGE", "MACROBUTTON AcaoX Rotulo")),
+    )
+
+    with pytest.raises(ValueError):
+        office_word_worker._validate_word_source(source, "DOCX")
+    with pytest.raises(ValueError):
+        delivery_renderer.validate_final_artifact(source.read_bytes(), "DOCX")
+
+
+def test_several_allow_listed_bare_instruction_nodes_are_accepted(
+    tmp_path: Path,
+) -> None:
+    """Judging each node alone must not reject the protected codes themselves."""
+    source = _write_package(
+        tmp_path / "source.docx",
+        _body_parts(
+            _bare_instructions("TOC", "PAGE", "NUMPAGES", "SEQ Figura", "REF B", "PAGEREF B")
+        ),
+    )
+
+    office_word_worker._validate_word_source(source, "DOCX")
+    delivery_renderer.validate_final_artifact(source.read_bytes(), "DOCX")

@@ -14,6 +14,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path, PurePosixPath
+import posixpath
 import re
 import sys
 from typing import Callable
@@ -198,13 +199,17 @@ def _package_main_part(data: bytes) -> str:
         targets.append(target)
     if len(targets) != 1:
         raise ValueError("Word package main part is not uniquely bound")
-    resolved = PurePosixPath(targets[0].lstrip("/"))
-    if ".." in resolved.parts or resolved.is_absolute() or str(resolved) != _MAIN_DOCUMENT_PART:
+    # An OPC target is a relative URI reference, so its dot segments resolve.
+    # Refusing them outright made this boundary reject a package the delivery
+    # boundary accepts, and a template the worker refuses cannot be rendered at
+    # all.  What must not be allowed is a target that escapes the package.
+    resolved = posixpath.normpath(targets[0].lstrip("/"))
+    if resolved.startswith("..") or resolved != _MAIN_DOCUMENT_PART:
         # This product deliberately supports only the conventional main part.
         # Relocated main parts are rejected instead of widening the sweep to
         # every shape OPC allows.
         raise ValueError("Word package main part is not the supported document part")
-    return str(resolved)
+    return resolved
 
 
 def _declared_content_types(
@@ -616,8 +621,8 @@ def _field_instructions(root: ElementTree.Element) -> list[str]:
     """Split a part's run stream into one instruction per field.
 
     ``w:instrText`` only means anything between a ``w:fldChar`` "begin" and the
-    "end" closing it, one paragraph may carry several fields, and one field -- a
-    TOC, typically -- may span many paragraphs.  Concatenating each paragraph
+    "separate" that ends the instruction, one paragraph may carry several fields,
+    and one field -- a TOC, typically -- may span many paragraphs.  Concatenating each paragraph
     and reading its leading code answered a different question, namely what the
     *paragraph* starts with, so ``{ PAGE }{ MACROBUTTON ... }`` presented an
     allow-listed code while a second, unlisted field rode along behind it, and a
@@ -627,24 +632,32 @@ def _field_instructions(root: ElementTree.Element) -> list[str]:
     """
     instructions: list[str] = []
     open_fields: list[list[str]] = []
-    unbounded: list[str] = []
     for node in root.iter():
         local_name = _xml_local_name(node.tag)
         if local_name == "fldChar":
             marker = (_xml_attribute(node, "fldCharType") or "").strip().casefold()
             if marker == "begin":
                 open_fields.append([])
+            elif marker == "separate" and open_fields:
+                # The instruction ends at the separator.  Whatever a producer
+                # writes after it is judged on its own code: concatenating
+                # across the separator rebuilt, inside a single field, the very
+                # defect that segmenting by field was meant to close.
+                instructions.append("".join(open_fields[-1]))
+                open_fields[-1] = []
             elif marker == "end" and open_fields:
                 instructions.append("".join(open_fields.pop()))
         elif local_name == "instrText":
-            # The instruction sits between "begin" and "separate"; the result
-            # that follows carries w:t, never w:instrText, so accumulating to
-            # the close yields the instruction and nothing else.
-            (open_fields[-1] if open_fields else unbounded).append(node.text or "")
-    # Fields left open, and instruction text belonging to no field at all, are
-    # still judged: an unreadable run stream must not swallow an instruction.
+            if open_fields:
+                open_fields[-1].append(node.text or "")
+            else:
+                # Bare instruction text is not a field to Word at all, but one
+                # shared buffer let a safe leading code speak for every node
+                # behind it, so each node is judged alone.
+                instructions.append(node.text or "")
+    # A field left open is still judged: an unreadable run stream must not
+    # swallow an instruction.
     instructions.extend("".join(buffer) for buffer in open_fields)
-    instructions.append("".join(unbounded))
     return instructions
 
 
@@ -693,14 +706,29 @@ def _validate_word_source(source: Path, source_format: str) -> None:
                 _xml_attribute(item, "ContentType")
                 for item in content_types.iter()
                 if _xml_local_name(item.tag) == "Override"
-                and _xml_attribute(item, "PartName") == "/word/document.xml"
+                # OPC part names compare case-insensitively -- as
+                # _declared_content_types in this same module already accounts
+                # for.  Matching exactly here meant an Override spelled in a
+                # different case declared nothing, and the package was refused
+                # although the declaration is valid.
+                and (_xml_attribute(item, "PartName") or "").casefold()
+                == "/" + _MAIN_DOCUMENT_PART
             }
             expected_type = (
                 "application/vnd.ms-word.document.macroEnabled.main+xml"
                 if source_format == "DOCM"
                 else "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
             )
-            if main_types != {expected_type}:
+            carries_macro = any(
+                name.casefold() in {"word/vbaproject.bin", "word/vbadata.xml"}
+                for name in names
+            )
+            # The delivery boundary has always refused this; the privileged
+            # boundary must not be the laxer of the two, whatever the worker
+            # does afterwards to disarm macros.
+            if main_types != {expected_type} or (
+                source_format != "DOCM" and carries_macro
+            ):
                 raise ValueError("Word package format identity mismatch")
 
             for name in names:
