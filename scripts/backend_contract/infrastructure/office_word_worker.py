@@ -119,23 +119,56 @@ _INVISIBLE_TARGET_CHARACTERS = re.compile(
 )
 
 
+def _percent_decoded_octets(value: str) -> str:
+    """Percent escapes are octets, and a URI decoder reads them as UTF-8.
+
+    Decoding each escape straight to a code point read "%E2%80%8B" as three
+    Latin-1 characters, so a percent-encoded zero-width space never became one
+    and never reached the invisible-character strip.
+    """
+    raw = bytearray()
+    index = 0
+    while index < len(value):
+        match = _PERCENT_ESCAPE.match(value, index)
+        if match is not None:
+            raw.append(int(match.group(1), 16))
+            index = match.end()
+            continue
+        raw.extend(value[index].encode("utf-8"))
+        index += 1
+    return raw.decode("utf-8", errors="replace")
+
+
+_TARGET_FORM_ROUNDS = 8
+
+
 def _target_forms(target: str) -> tuple[str, ...]:
     """Every spelling of a relationship target Word may resolve.
 
-    OPC targets are URI references, so Word percent-decodes them.  Testing only
-    the literal spelling let "http%3A%2F%2F..." and a leading zero-width
-    character walk straight past the external-target ban.
+    OPC targets are URI references, so Word percent-decodes them.  Decoding and
+    invisible-character stripping were applied once each, in that order, so a
+    zero-width character *inside* an escape broke the escape for the decoder and
+    was only removed afterwards, when nothing decoded it again.  Closing the set
+    under every operation removes the ordering: a spelling is final only once no
+    operation changes it.
     """
-    forms = [target]
-    current = target
-    for _unused in range(4):
-        decoded = _PERCENT_ESCAPE.sub(lambda item: chr(int(item.group(1), 16)), current)
-        if decoded == current:
-            break
-        forms.append(decoded)
-        current = decoded
-    forms.extend(_INVISIBLE_TARGET_CHARACTERS.sub("", form).strip() for form in tuple(forms))
-    return tuple(dict.fromkeys(forms))
+    forms = {target}
+    for _unused in range(_TARGET_FORM_ROUNDS):
+        grown = {
+            form
+            for current in forms
+            for form in (
+                _PERCENT_ESCAPE.sub(lambda item: chr(int(item.group(1), 16)), current),
+                _percent_decoded_octets(current),
+                _INVISIBLE_TARGET_CHARACTERS.sub("", current).strip(),
+            )
+        }
+        if grown <= forms:
+            return tuple(forms)
+        forms |= grown
+    # The spellings never settled, so no finite set of them proves this target
+    # stays local.  Report one that cannot be read as anything but external.
+    return tuple(forms) + (chr(92) * 2 + "unresolved",)
 
 
 def _looks_external(target: str) -> bool:
@@ -579,6 +612,42 @@ def _source_path(root: Path, source_format: str) -> Path:
     return source
 
 
+def _field_instructions(root: ElementTree.Element) -> list[str]:
+    """Split a part's run stream into one instruction per field.
+
+    ``w:instrText`` only means anything between a ``w:fldChar`` "begin" and the
+    "end" closing it, one paragraph may carry several fields, and one field -- a
+    TOC, typically -- may span many paragraphs.  Concatenating each paragraph
+    and reading its leading code answered a different question, namely what the
+    *paragraph* starts with, so ``{ PAGE }{ MACROBUTTON ... }`` presented an
+    allow-listed code while a second, unlisted field rode along behind it, and a
+    TOC split across paragraphs was rejected outright.  Walking the whole part
+    in document order with a stack judges what Word actually executes: every
+    field, nested ones included, on its own code.
+    """
+    instructions: list[str] = []
+    open_fields: list[list[str]] = []
+    unbounded: list[str] = []
+    for node in root.iter():
+        local_name = _xml_local_name(node.tag)
+        if local_name == "fldChar":
+            marker = (_xml_attribute(node, "fldCharType") or "").strip().casefold()
+            if marker == "begin":
+                open_fields.append([])
+            elif marker == "end" and open_fields:
+                instructions.append("".join(open_fields.pop()))
+        elif local_name == "instrText":
+            # The instruction sits between "begin" and "separate"; the result
+            # that follows carries w:t, never w:instrText, so accumulating to
+            # the close yields the instruction and nothing else.
+            (open_fields[-1] if open_fields else unbounded).append(node.text or "")
+    # Fields left open, and instruction text belonging to no field at all, are
+    # still judged: an unreadable run stream must not swallow an instruction.
+    instructions.extend("".join(buffer) for buffer in open_fields)
+    instructions.append("".join(unbounded))
+    return instructions
+
+
 def _validate_word_source(source: Path, source_format: str) -> None:
     """Reject package content that could make privileged Word acquire egress."""
     try:
@@ -667,16 +736,7 @@ def _validate_word_source(source: Path, source_format: str) -> None:
                     for node in root.iter()
                     if _xml_local_name(node.tag) == "fldSimple"
                 ]
-                for paragraph in (
-                    node for node in root.iter() if _xml_local_name(node.tag) == "p"
-                ):
-                    instructions.append(
-                        "".join(
-                            node.text or ""
-                            for node in paragraph.iter()
-                            if _xml_local_name(node.tag) == "instrText"
-                        )
-                    )
+                instructions.extend(_field_instructions(root))
                 for value in instructions:
                     if not value.strip():
                         continue

@@ -532,3 +532,271 @@ def test_both_boundaries_accept_the_supported_package(tmp_path: Path) -> None:
 
     office_word_worker._validate_word_source(source, "DOCX")
     delivery_renderer.validate_final_artifact(source.read_bytes(), "DOCX")
+
+
+# --- Phase C §27 round 4: a field code is judged per field, not per paragraph ---
+#
+# ``w:instrText`` only means anything between a ``w:fldChar`` "begin" and the
+# "end" that closes it, and one paragraph may carry several fields.  The sweep
+# concatenated a whole paragraph and read the first code with ``re.match``, so a
+# leading ``{ PAGE }`` presented an allow-listed code while a second, unlisted
+# field rode along behind it.  Reproduced for ten codes.  The denylist hid the
+# gap: it uses ``search``, so it still caught DDEAUTO in second position while
+# the allowlist -- the primary control -- was fully bypassed.
+
+
+def _field(code: str) -> str:
+    """A field as Word writes it: begin / instruction / separate / result / end."""
+    return (
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        f'<w:r><w:instrText xml:space="preserve"> {code} </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        "<w:r><w:t>1</w:t></w:r>"
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+    )
+
+
+_UNLISTED_FIELD_CODES = (
+    "AUTOTEXT Assinatura",
+    "AUTOTEXTLIST Lista",
+    "DDEAUTO Excel System Comando",
+    "DOCVARIABLE Segredo",
+    "EMBED Excel.Sheet.12",
+    "FILLIN Pergunta",
+    "GOTOBUTTON Alvo Rotulo",
+    "IMPORT grafico.png",
+    "INCLUDE relatorio.docx",
+    "INCLUDETEXT outro.docx",
+    "MACROBUTTON AcaoX Rotulo",
+    "PRINT Comando",
+)
+_SAFE_FIELD_CODES = ("PAGE", "NUMPAGES", "SEQ Figura", "REF Marca", "PAGEREF Marca")
+
+
+def _body_parts(body: str) -> dict[str, str]:
+    parts = _minimal_docx_parts()
+    parts["word/document.xml"] = _document(body)
+    return parts
+
+
+@pytest.mark.parametrize("code", _UNLISTED_FIELD_CODES)
+def test_unlisted_field_is_rejected_on_its_own(tmp_path: Path, code: str) -> None:
+    source = _write_package(tmp_path / "source.docx", _body_parts("<w:p>" + _field(code) + "</w:p>"))
+
+    with pytest.raises(ValueError):
+        office_word_worker._validate_word_source(source, "DOCX")
+
+
+@pytest.mark.parametrize("code", _UNLISTED_FIELD_CODES)
+def test_unlisted_field_is_rejected_behind_a_safe_field(tmp_path: Path, code: str) -> None:
+    """Two real fields in one paragraph; Word executes both."""
+    body = "<w:p>" + _field("PAGE") + _field(code) + "</w:p>"
+    source = _write_package(tmp_path / "source.docx", _body_parts(body))
+
+    with pytest.raises(ValueError):
+        office_word_worker._validate_word_source(source, "DOCX")
+
+
+@pytest.mark.parametrize("code", _SAFE_FIELD_CODES)
+def test_allow_listed_field_is_still_accepted(tmp_path: Path, code: str) -> None:
+    source = _write_package(tmp_path / "source.docx", _body_parts("<w:p>" + _field(code) + "</w:p>"))
+
+    office_word_worker._validate_word_source(source, "DOCX")
+
+
+def test_a_field_spanning_paragraphs_is_read_as_one_field(tmp_path: Path) -> None:
+    """A TOC field routinely spans paragraphs; segmenting per paragraph would
+    see an unclosed begin and must not turn that into a false rejection."""
+    body = (
+        '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:r><w:instrText xml:space="preserve"> TOC </w:instrText></w:r></w:p>'
+        r'<w:p><w:r><w:instrText xml:space="preserve">\o "1-3" </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>'
+        "<w:p><w:r><w:t>Sumario</w:t></w:r></w:p>"
+        '<w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>'
+    )
+    source = _write_package(tmp_path / "source.docx", _body_parts(body))
+
+    office_word_worker._validate_word_source(source, "DOCX")
+
+
+def test_a_nested_field_is_judged_on_its_own_code(tmp_path: Path) -> None:
+    body = (
+        "<w:p>"
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:r><w:instrText xml:space="preserve"> MACROBUTTON AcaoX Rotulo </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+        "</w:p>"
+    )
+    source = _write_package(tmp_path / "source.docx", _body_parts(body))
+
+    with pytest.raises(ValueError):
+        office_word_worker._validate_word_source(source, "DOCX")
+
+
+def test_instruction_text_outside_any_field_is_still_judged(tmp_path: Path) -> None:
+    """Bare instrText is not a field to Word, but it cannot be dropped silently."""
+    source = _write_package(tmp_path / "source.docx", _body_parts(_ACQUIRING_BODY))
+
+    with pytest.raises(ValueError):
+        office_word_worker._validate_word_source(source, "DOCX")
+
+
+# --- Phase C §27 round 4: boundary parity is decided by a shared catalogue ---
+#
+# One policy was stated twice with different content: the worker runs an
+# allowlist over package shape and field codes, delivery ran a seven-name
+# denylist over parts picked by the literal prefix "word/".  Every divergence
+# below was reproduced before being repaired.
+#
+# The policy is restated rather than shared because delivery must not import
+# the contained worker: that module imports winreg at module level, so the edge
+# would make the delivery boundary Windows-only and would invert the direction
+# of the containment.  Restating is only sound while drift is observable, which
+# is what this catalogue is for -- both boundaries are asked for a verdict on
+# the same bytes, and the expected verdict is pinned.
+
+
+def _bin_types() -> dict[str, str]:
+    return {"bin": "application/vnd.openxmlformats-officedocument.oleObject"}
+
+
+def _parity_catalogue() -> dict[str, tuple[str, dict[str, str]]]:
+    entries: dict[str, tuple[str, dict[str, str]]] = {
+        "supported_package": ("accept", _minimal_docx_parts()),
+        "ole_object_element": (
+            "reject",
+            _body_parts("<w:p><w:r><w:object/></w:r></w:p>"),
+        ),
+    }
+
+    relocated = {
+        "[Content_Types].xml": _content_types(
+            {"/word/document.xml": _DOCX_MAIN_TYPE, "/main/document.xml": _DOCX_MAIN_TYPE}
+        ),
+        "_rels/.rels": _package_rels("main/document.xml"),
+        "word/document.xml": _document(),
+        "main/document.xml": _document(_ACQUIRING_BODY),
+    }
+    entries["relocated_main_part"] = ("reject", relocated)
+
+    orphaned = _minimal_docx_parts()
+    del orphaned["_rels/.rels"]
+    entries["no_package_relationships"] = ("reject", orphaned)
+
+    outside = _minimal_docx_parts()
+    outside["extra/header.xml"] = _document(_ACQUIRING_BODY)
+    outside["[Content_Types].xml"] = _content_types(
+        {"/word/document.xml": _DOCX_MAIN_TYPE, "/extra/header.xml": _DOCX_MAIN_TYPE}
+    )
+    entries["acquiring_field_outside_word_prefix"] = ("reject", outside)
+
+    for label, part in (
+        ("ole_embedding_part", "word/embeddings/oleObject1.bin"),
+        ("activex_part", "word/activeX/activeX1.bin"),
+    ):
+        parts = _minimal_docx_parts()
+        parts[part] = "synthetic"
+        parts["[Content_Types].xml"] = _content_types(
+            {"/word/document.xml": _DOCX_MAIN_TYPE}, defaults=_bin_types()
+        )
+        entries[label] = ("reject", parts)
+
+    undeclared = _minimal_docx_parts()
+    undeclared["word/media/logo.png"] = "synthetic"
+    entries["undeclared_part"] = ("reject", undeclared)
+
+    traversal = _minimal_docx_parts()
+    traversal["../evil.xml"] = _document()
+    entries["part_name_traversal"] = ("reject", traversal)
+
+    importable = _minimal_docx_parts()
+    importable["word/relatorio.htm"] = "<html><body>sintetico</body></html>"
+    importable["[Content_Types].xml"] = _content_types(
+        {"/word/document.xml": _DOCX_MAIN_TYPE}, defaults={"htm": "text/html"}
+    )
+    entries["importable_part"] = ("reject", importable)
+
+    for code in _SAFE_FIELD_CODES:
+        name = code.split()[0].casefold()
+        entries[f"safe_field_{name}"] = (
+            "accept",
+            _body_parts("<w:p>" + _field(code) + "</w:p>"),
+        )
+    for code in _UNLISTED_FIELD_CODES:
+        name = code.split()[0].casefold()
+        entries[f"unlisted_field_{name}"] = (
+            "reject",
+            _body_parts("<w:p>" + _field(code) + "</w:p>"),
+        )
+        entries[f"unlisted_field_{name}_behind_page"] = (
+            "reject",
+            _body_parts("<w:p>" + _field("PAGE") + _field(code) + "</w:p>"),
+        )
+    return entries
+
+
+_PARITY_CATALOGUE = _parity_catalogue()
+
+
+@pytest.mark.parametrize("label", sorted(_PARITY_CATALOGUE))
+def test_both_boundaries_reach_the_same_verdict(tmp_path: Path, label: str) -> None:
+    expected, parts = _PARITY_CATALOGUE[label]
+    source = _write_package(tmp_path / "source.docx", parts)
+
+    try:
+        office_word_worker._validate_word_source(source, "DOCX")
+        worker = "accept"
+    except ValueError:
+        worker = "reject"
+    try:
+        delivery_renderer.validate_final_artifact(source.read_bytes(), "DOCX")
+        delivery = "accept"
+    except ValueError:
+        delivery = "reject"
+
+    assert (worker, delivery) == (expected, expected), (
+        f"{label}: worker={worker} delivery={delivery} expected={expected}"
+    )
+
+
+# --- Phase C §27 round 4: target spellings must be closed, not applied once ---
+#
+# Percent-decoding and invisible-character stripping ran once each, in that
+# order, so a zero-width character *inside* an escape broke the escape for the
+# decoder and was only removed afterwards, when nothing decoded it again.  The
+# escapes are also octets: a URI decoder reads them as UTF-8, so "%E2%80%8B" is
+# itself a zero-width space that the byte-wise decoder never produced.
+
+_ZWSP = chr(0x200B)
+_ENCODED_EXTERNAL_TARGETS = (
+    "%5C%5Cservidor%5Cshare",
+    "%255C%255Cservidor",
+    "http%3A%2F%2Fexemplo/parte",
+    _ZWSP + "%5C%5Cservidor",
+    "%" + _ZWSP + "5C%" + _ZWSP + "5Cservidor",
+    "%25" + _ZWSP + "5C%255Cservidor",
+    "%E2%80%8B%5C%5Cservidor",
+    "%2525255C%2525255Cservidor",
+)
+_LOCAL_TARGETS = (
+    "media/logo.png",
+    "media/logo%20oficial.png",
+    "../media/logo.png",
+    "word/document.xml",
+)
+
+
+@pytest.mark.parametrize("target", _ENCODED_EXTERNAL_TARGETS)
+def test_encoded_external_target_is_external_at_both_boundaries(target: str) -> None:
+    assert office_word_worker._looks_external(target) is True
+    assert delivery_renderer._looks_external(target) is True
+
+
+@pytest.mark.parametrize("target", _LOCAL_TARGETS)
+def test_local_target_stays_internal_at_both_boundaries(target: str) -> None:
+    assert office_word_worker._looks_external(target) is False
+    assert delivery_renderer._looks_external(target) is False

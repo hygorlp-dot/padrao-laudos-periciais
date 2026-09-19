@@ -29,6 +29,13 @@ from pypdf.generic import (
 
 from scripts.backend_contract import delivery_renderer
 
+from tests.opc_word_fixtures import (
+    DOCM_MAIN_TYPE,
+    VBA_PROJECT_TYPE,
+    bound_template_document,
+    word_package,
+)
+
 from scripts.backend_contract.delivery_foundation import (
     DeliveryAction,
     DeliveryArtifact,
@@ -869,18 +876,12 @@ def test_delivery_review_rejects_professional_identity_outside_bound_authority()
 
 
 def test_final_word_reopens_while_diagnostic_pdf_remains_non_delivery() -> None:
-    output = BytesIO()
-    with ZipFile(output, "w", ZIP_DEFLATED) as package:
-        package.writestr(
-            "[Content_Types].xml",
-            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-            '<Override PartName="/word/document.xml" '
-            'ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/>'
-            "</Types>",
-        )
-        package.writestr("word/document.xml", "<document/>")
-        package.writestr("word/vbaProject.bin", b"synthetic macro")
-    word = output.getvalue()
+    word = word_package(
+        "<document/>",
+        main_type=DOCM_MAIN_TYPE,
+        parts={"word/vbaProject.bin": b"synthetic macro"},
+        overrides={"/word/vbaProject.bin": VBA_PROJECT_TYPE},
+    )
     digest, size, media = validate_final_artifact(word, "DOCM")
     assert media == "application/vnd.ms-word.document.macroEnabled.12"
     verify_reopened_artifact(content=word, output_format="DOCM", expected_size=size, expected_sha256=digest)
@@ -895,18 +896,8 @@ def test_final_word_reopens_while_diagnostic_pdf_remains_non_delivery() -> None:
 
 
 def test_artifact_validation_rejects_macro_identity_change_and_malformed_pdf() -> None:
-    output = BytesIO()
-    with ZipFile(output, "w", ZIP_DEFLATED) as package:
-        package.writestr(
-            "[Content_Types].xml",
-            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-            '<Override PartName="/word/document.xml" '
-            'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
-            "</Types>",
-        )
-        package.writestr("word/document.xml", "<document/>")
     with pytest.raises(ValueError, match="macro identity"):
-        validate_final_artifact(output.getvalue(), "DOCM")
+        validate_final_artifact(word_package("<document/>"), "DOCM")
     with pytest.raises(ValueError, match="PDF"):
         validate_final_artifact(b"%PDF-1.7\nno page or eof", "PDF")
     with pytest.raises(ValueError, match="PDF"):
@@ -914,18 +905,9 @@ def test_artifact_validation_rejects_macro_identity_change_and_malformed_pdf() -
 
 
 def test_macro_enabled_word_container_does_not_require_a_vba_project() -> None:
-    output = BytesIO()
-    with ZipFile(output, "w", ZIP_DEFLATED) as package:
-        package.writestr(
-            "[Content_Types].xml",
-            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-            '<Override PartName="/word/document.xml" '
-            'ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/>'
-            "</Types>",
-        )
-        package.writestr("word/document.xml", "<document/>")
+    word = word_package("<document/>", main_type=DOCM_MAIN_TYPE)
 
-    _digest, _size, media = validate_final_artifact(output.getvalue(), "DOCM")
+    _digest, _size, media = validate_final_artifact(word, "DOCM")
 
     assert media == "application/vnd.ms-word.document.macroEnabled.12"
 
@@ -951,25 +933,36 @@ def test_supporting_image_bytes_are_verified_by_declared_media_type() -> None:
 
 
 def test_conversion_copy_preserves_docm_authority_and_rejects_external_relationships() -> None:
-    output = BytesIO()
-    with ZipFile(output, "w", ZIP_DEFLATED) as package:
-        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/><Override PartName="/word/vbaProject.bin" ContentType="application/vnd.ms-office.vbaProject"/></Types>')
-        package.writestr("word/document.xml", "<document/>")
-        package.writestr("word/vbaProject.bin", b"macro")
-        package.writestr("word/_rels/document.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="template" Target="https://example.invalid/private" TargetMode="External"/></Relationships>')
+    macro_parts = {"word/vbaProject.bin": b"macro"}
+    macro_overrides = {"/word/vbaProject.bin": VBA_PROJECT_TYPE}
+    acquiring = word_package(
+        "<document/>",
+        main_type=DOCM_MAIN_TYPE,
+        parts={
+            **macro_parts,
+            "word/_rels/document.xml.rels": (
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rId1" Type="template" '
+                'Target="https://example.invalid/private" TargetMode="External"/>'
+                "</Relationships>"
+            ),
+        },
+        overrides=macro_overrides,
+    )
     with pytest.raises(ValueError, match="external relationships"):
-        validate_final_artifact(output.getvalue(), "DOCM")
-    clean = BytesIO()
-    with ZipFile(clean, "w", ZIP_DEFLATED) as package:
-        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/><Override PartName="/word/vbaProject.bin" ContentType="application/vnd.ms-office.vbaProject"/></Types>')
-        package.writestr("word/document.xml", "<document/>")
-        package.writestr("word/vbaProject.bin", b"macro")
-    converted, kind = safe_pdf_conversion_copy(clean.getvalue(), "DOCM")
+        validate_final_artifact(acquiring, "DOCM")
+    clean = word_package(
+        "<document/>",
+        main_type=DOCM_MAIN_TYPE,
+        parts=macro_parts,
+        overrides=macro_overrides,
+    )
+    converted, kind = safe_pdf_conversion_copy(clean, "DOCM")
     # The authoritative DOCM reaches the renderer byte-exact.  Macros are
     # neutralised by the worker's forced AutomationSecurity, not by amputating
     # parts out of the authority.
     assert kind == "DOCM"
-    assert converted == clean.getvalue()
+    assert converted == clean
     with ZipFile(BytesIO(converted)) as package:
         assert "word/vbaProject.bin" in package.namelist()
 
@@ -998,30 +991,25 @@ def test_word_validation_rejects_noncanonical_external_target_mode() -> None:
 
 
 def test_conversion_copy_preserves_macro_parts_verbatim() -> None:
-    source = BytesIO()
-    with ZipFile(source, "w", ZIP_DEFLATED) as package:
-        package.writestr(
-            "[Content_Types].xml",
-            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-            '<Override PartName="/word/document.xml" '
-            'ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/>'
-            '<Override PartName="/word/VBAProject.bin" '
-            'ContentType="application/vnd.ms-office.vbaProject"/></Types>',
-        )
-        package.writestr("word/document.xml", "<document/>")
-        package.writestr("word/VBAProject.bin", b"synthetic macro payload")
-        package.writestr(
-            "word/_rels/document.xml.rels",
-            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-            '<Relationship Id="rIdMacro" '
-            'Type="http://schemas.microsoft.com/office/2006/relationships/vbaProject" '
-            'Target="VBAProject.bin"/></Relationships>',
-        )
+    source = word_package(
+        "<document/>",
+        main_type=DOCM_MAIN_TYPE,
+        parts={
+            "word/VBAProject.bin": b"synthetic macro payload",
+            "word/_rels/document.xml.rels": (
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rIdMacro" '
+                'Type="http://schemas.microsoft.com/office/2006/relationships/vbaProject" '
+                'Target="VBAProject.bin"/></Relationships>'
+            ),
+        },
+        overrides={"/word/VBAProject.bin": VBA_PROJECT_TYPE},
+    )
 
-    converted, kind = safe_pdf_conversion_copy(source.getvalue(), "DOCM")
+    converted, kind = safe_pdf_conversion_copy(source, "DOCM")
 
     assert kind == "DOCM"
-    assert converted == source.getvalue()
+    assert converted == source
     with ZipFile(BytesIO(converted)) as package:
         assert "word/VBAProject.bin" in package.namelist()
         relationships = package.read("word/_rels/document.xml.rels").decode()
@@ -1031,29 +1019,25 @@ def test_conversion_copy_preserves_macro_parts_verbatim() -> None:
 def test_rendered_word_bytes_contain_and_change_with_entire_approved_report_body() -> None:
     root = Path(__file__).parents[1] / "tests/fixtures"
     report = report_snapshot_from_mapping(json.loads((root / "report-snapshot-v1.json").read_text(encoding="utf-8")))
-    document = '''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
-      <w:p><w:r><w:t>[[EXPERT_FULL_NAME]]</w:t></w:r></w:p><w:p><w:r><w:t>[[EXPERT_REGISTRATION]]</w:t></w:r></w:p><w:p><w:r><w:t>[[REPORT_ID]]</w:t></w:r></w:p>
-      <w:sdt><w:sdtPr><w:tag w:val="CANONICAL_REPORT"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>empty</w:t></w:r></w:p></w:sdtContent></w:sdt>
-      <w:p><w:bookmarkStart w:id="1" w:name="B"/><w:r><w:instrText>TOC</w:instrText><w:instrText>PAGE</w:instrText><w:instrText>NUMPAGES</w:instrText><w:instrText>SEQ Figure</w:instrText><w:instrText>REF B</w:instrText><w:instrText>PAGEREF B</w:instrText></w:r><w:bookmarkEnd w:id="1"/></w:p>
-    </w:body></w:document>'''
-    package_bytes = BytesIO()
-    with ZipFile(package_bytes, "w", ZIP_DEFLATED) as package:
-        package.writestr(
-            "[Content_Types].xml",
-            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-            '<Override PartName="/word/document.xml" '
-            'ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/>'
-            "</Types>",
-        )
-        package.writestr("word/document.xml", document)
-        package.writestr("word/styles.xml", "<styles/>")
-        package.writestr("word/numbering.xml", "<numbering/>")
-        package.writestr("word/vbaProject.bin", b"macro")
-        package.writestr("docProps/custom.xml", '<Properties><property name="TEMPLATE_ID"><value>TEMPLATE-1</value></property></Properties>')
+    document = bound_template_document()
+    package_bytes = word_package(
+        document,
+        main_type=DOCM_MAIN_TYPE,
+        parts={
+            "word/styles.xml": "<styles/>",
+            "word/numbering.xml": "<numbering/>",
+            "word/vbaProject.bin": b"macro",
+            "docProps/custom.xml": (
+                '<Properties><property name="TEMPLATE_ID">'
+                "<value>TEMPLATE-1</value></property></Properties>"
+            ),
+        },
+        overrides={"/word/vbaProject.bin": VBA_PROJECT_TYPE},
+    )
     manifest = template_binding_manifest_from_mapping({"schema_version": "1.0.0", "template_id": "TEMPLATE-1", "output_kind": "DOCM", "bindings": [{"field": "EXPERT_FULL_NAME", "placeholder": "[[EXPERT_FULL_NAME]]"}, {"field": "EXPERT_REGISTRATION", "placeholder": "[[EXPERT_REGISTRATION]]"}, {"field": "REPORT_ID", "placeholder": "[[REPORT_ID]]"}]})
-    first = render_word_candidate(template_bytes=package_bytes.getvalue(), report=report, manifest=manifest).output_bytes
+    first = render_word_candidate(template_bytes=package_bytes, report=report, manifest=manifest).output_bytes
     changed = replace(report, claims=(replace(report.claims[0], text="Texto material deliberadamente alterado."), *report.claims[1:]))
-    second = render_word_candidate(template_bytes=package_bytes.getvalue(), report=changed, manifest=manifest).output_bytes
+    second = render_word_candidate(template_bytes=package_bytes, report=changed, manifest=manifest).output_bytes
     with ZipFile(BytesIO(first)) as package:
         rendered = package.read("word/document.xml").decode("utf-8")
     assert report.claims[0].text in rendered
@@ -1129,13 +1113,10 @@ def test_pdf_renderer_wraps_long_lines_and_rejects_lossy_unicode() -> None:
 
 def test_final_pdf_is_converted_from_the_exact_bound_word_bytes() -> None:
     report = report_snapshot_from_mapping(json.loads((Path(__file__).parent / "fixtures/report-snapshot-v1.json").read_text(encoding="utf-8")))
-    word = BytesIO()
     document = f"""<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
       <w:p><w:r><w:t>{report.report_id}</w:t></w:r></w:p>
     </w:body></w:document>"""
-    with ZipFile(word, "w", ZIP_DEFLATED) as package:
-        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
-        package.writestr("word/document.xml", document)
+    word = word_package(document)
 
     class Converter:
         def __init__(self) -> None:
@@ -1147,10 +1128,10 @@ def test_final_pdf_is_converted_from_the_exact_bound_word_bytes() -> None:
 
     converter = Converter()
     pdf = delivery_renderer.render_final_pdf_candidate(
-        word_content=word.getvalue(), word_format="DOCX", converter=converter,
+        word_content=word, word_format="DOCX", converter=converter,
     )
 
-    assert converter.received == (word.getvalue(), "DOCX")
+    assert converter.received == (word, "DOCX")
     assert pdf.startswith(b"%PDF-")
 
     unrelated = replace(report, report_id="RELATORIO-ERRADO")
@@ -1161,7 +1142,7 @@ def test_final_pdf_is_converted_from_the_exact_bound_word_bytes() -> None:
 
     with pytest.raises(ValueError, match="does not faithfully represent"):
         delivery_renderer.render_final_pdf_candidate(
-            word_content=word.getvalue(), word_format="DOCX", converter=WrongConverter(),
+            word_content=word, word_format="DOCX", converter=WrongConverter(),
         )
 
     class AdditiveForgeryConverter:
@@ -1170,18 +1151,15 @@ def test_final_pdf_is_converted_from_the_exact_bound_word_bytes() -> None:
 
     with pytest.raises(ValueError, match="does not faithfully represent"):
         delivery_renderer.render_final_pdf_candidate(
-            word_content=word.getvalue(), word_format="DOCX", converter=AdditiveForgeryConverter(),
+            word_content=word, word_format="DOCX", converter=AdditiveForgeryConverter(),
         )
 
 
 def test_final_pdf_rejects_a_table_flattened_into_unrelated_lines() -> None:
-    word = BytesIO()
     document = '''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
       <w:tbl><w:tr><w:tc><w:p><w:r><w:t>Cell A</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Cell B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
     </w:body></w:document>'''
-    with ZipFile(word, "w", ZIP_DEFLATED) as package:
-        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
-        package.writestr("word/document.xml", document)
+    word = word_package(document)
 
     class FlatteningConverter:
         def convert(self, _content: bytes, _source_format: str) -> bytes:
@@ -1189,7 +1167,7 @@ def test_final_pdf_rejects_a_table_flattened_into_unrelated_lines() -> None:
 
     with pytest.raises(ValueError, match="does not faithfully represent"):
         delivery_renderer.render_final_pdf_candidate(
-            word_content=word.getvalue(), word_format="DOCX", converter=FlatteningConverter(),
+            word_content=word, word_format="DOCX", converter=FlatteningConverter(),
         )
 
 
@@ -4298,23 +4276,17 @@ def test_final_pdf_conversion_fails_closed_without_a_local_converter() -> None:
         def convert(self, _content: bytes, _source_format: str) -> bytes:
             raise RuntimeError("local Office PDF converter is unavailable")
 
-    word = BytesIO()
-    with ZipFile(word, "w", ZIP_DEFLATED) as package:
-        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
-        package.writestr("word/document.xml", "<document/>")
+    word = word_package("<document/>")
     with pytest.raises(ValueError, match="local Office PDF conversion unavailable"):
         delivery_renderer.render_final_pdf_candidate(
-            word_content=word.getvalue(), word_format="DOCX", converter=Unavailable(),
+            word_content=word, word_format="DOCX", converter=Unavailable(),
         )
 
 
 def test_text_only_diagnostic_pdf_can_never_become_a_final_professional_pdf() -> None:
     report = report_snapshot_from_mapping(json.loads((Path(__file__).parent / "fixtures/report-snapshot-v1.json").read_text(encoding="utf-8")))
     diagnostic = render_pdf_candidate(report)
-    word = BytesIO()
-    with ZipFile(word, "w", ZIP_DEFLATED) as package:
-        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
-        package.writestr("word/document.xml", "<document/>")
+    word = word_package("<document/>")
 
     class DiagnosticConverter:
         def convert(self, _content: bytes, _source_format: str) -> bytes:
@@ -4322,7 +4294,7 @@ def test_text_only_diagnostic_pdf_can_never_become_a_final_professional_pdf() ->
 
     with pytest.raises(ValueError, match="diagnostic PDF cannot be finalized"):
         delivery_renderer.render_final_pdf_candidate(
-            word_content=word.getvalue(), word_format="DOCX", converter=DiagnosticConverter(),
+            word_content=word, word_format="DOCX", converter=DiagnosticConverter(),
         )
     digest, size, _ = validate_final_artifact(diagnostic, "PDF")
     with pytest.raises(ValueError, match="diagnostic PDF cannot be a Delivery artifact"):
@@ -5798,7 +5770,7 @@ def test_block_content_control_is_part_of_the_ordering_stream() -> None:
     assert captured["blocks"] == [
         ("text", "Alpha"),
         ("text", "Beta"),
-        ("row", ("gama", "delta")),
+        ("row", ("Gama", "Delta")),
     ]
 
 
@@ -5827,7 +5799,7 @@ def test_table_row_inside_a_content_control_is_resolved() -> None:
     finally:
         delivery_renderer._table_rows_match = original
 
-    assert captured["rows"] == [("r1a", "r1b"), ("r2a", "r2b")]
+    assert captured["rows"] == [("R1A", "R1B"), ("R2A", "R2B")]
 
 
 def test_tables_in_parts_word_never_renders_are_not_expected() -> None:
@@ -5896,7 +5868,7 @@ def test_spacer_row_does_not_break_painted_table_page_segments() -> None:
     ordered = delivery_renderer._positioned_reading_order(fragments)
 
     matched = delivery_renderer._matched_table_row_fragments(
-        [("alfa", "beta"), ()], ordered, []
+        [("Alfa", "Beta"), ()], ordered, []
     )
 
     assert matched is not None
@@ -5939,12 +5911,12 @@ _SDT = "<w:sdt><w:sdtContent>{}</w:sdtContent></w:sdt>"
         (
             "paragraph_sdt_paragraph_table",
             _P.format("Alpha") + _SDT.format(_P.format("Beta")) + _SIMPLE_TABLE,
-            [("text", "Alpha"), ("text", "Beta"), ("row", ("gama", "delta"))],
+            [("text", "Alpha"), ("text", "Beta"), ("row", ("Gama", "Delta"))],
         ),
         (
             "sdt_table_then_paragraph",
             _SDT.format(_SIMPLE_TABLE) + _P.format("Alpha"),
-            [("row", ("gama", "delta")), ("text", "Alpha")],
+            [("row", ("Gama", "Delta")), ("text", "Alpha")],
         ),
         (
             "canonical_report_control",
@@ -5953,17 +5925,17 @@ _SDT = "<w:sdt><w:sdtContent>{}</w:sdtContent></w:sdt>"
             + _P.format("Alpha")
             + "</w:sdtContent></w:sdt>"
             + _SIMPLE_TABLE,
-            [("text", "Alpha"), ("row", ("gama", "delta"))],
+            [("text", "Alpha"), ("row", ("Gama", "Delta"))],
         ),
         (
             "nested_sdt",
             _SDT.format(_SDT.format(_P.format("Alpha"))) + _SIMPLE_TABLE,
-            [("text", "Alpha"), ("row", ("gama", "delta"))],
+            [("text", "Alpha"), ("row", ("Gama", "Delta"))],
         ),
         (
             "table_inside_sdt_between_paragraphs",
             _P.format("Alpha") + _SDT.format(_SIMPLE_TABLE) + _P.format("Beta"),
-            [("text", "Alpha"), ("row", ("gama", "delta")), ("text", "Beta")],
+            [("text", "Alpha"), ("row", ("Gama", "Delta")), ("text", "Beta")],
         ),
     ),
 )
@@ -6140,3 +6112,532 @@ def test_material_mutation_in_fragments_is_rejected(
         x += 6.0 * len(piece)
 
     assert delivery_renderer._ordered_text_blocks_match([expected], fragments, []) is False
+
+
+# --- Phase C §27 round 4: the hardened boundary still admits the product path --
+#
+# validate_final_artifact now resolves the main part from the package-level
+# officeDocument relationship instead of trusting the part *named*
+# word/document.xml.  That is a real tightening, so the one path the product
+# actually supports is pinned end to end: a valid OPC template goes through
+# bind_report_template and the canonical injection and comes out acceptable,
+# and the same path with _rels/.rels removed fails closed.
+
+_PRODUCT_PATH_MANIFEST = {
+    "schema_version": "1.0.0",
+    "template_id": "TEMPLATE-1",
+    "output_kind": "DOCM",
+    "bindings": [
+        {"field": "EXPERT_FULL_NAME", "placeholder": "[[EXPERT_FULL_NAME]]"},
+        {"field": "EXPERT_REGISTRATION", "placeholder": "[[EXPERT_REGISTRATION]]"},
+        {"field": "REPORT_ID", "placeholder": "[[REPORT_ID]]"},
+    ],
+}
+
+
+def _product_path_report():
+    return report_snapshot_from_mapping(
+        json.loads(
+            (Path(__file__).parent / "fixtures/report-snapshot-v1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    )
+
+
+def _valid_docm_template() -> bytes:
+    return word_package(
+        bound_template_document(),
+        main_type=DOCM_MAIN_TYPE,
+        parts={
+            "word/styles.xml": "<styles/>",
+            "word/numbering.xml": "<numbering/>",
+            "word/vbaProject.bin": b"synthetic-macro",
+            "docProps/custom.xml": (
+                '<Properties><property name="TEMPLATE_ID">'
+                "<value>TEMPLATE-1</value></property></Properties>"
+            ),
+        },
+        overrides={"/word/vbaProject.bin": VBA_PROJECT_TYPE},
+    )
+
+
+def test_valid_opc_template_still_reaches_the_hardened_delivery_boundary() -> None:
+    manifest = template_binding_manifest_from_mapping(_PRODUCT_PATH_MANIFEST)
+
+    candidate = render_word_candidate(
+        template_bytes=_valid_docm_template(),
+        report=_product_path_report(),
+        manifest=manifest,
+    )
+
+    digest, size, media = validate_final_artifact(candidate.output_bytes, "DOCM")
+
+    assert media == "application/vnd.ms-word.document.macroEnabled.12"
+    verify_reopened_artifact(
+        content=candidate.output_bytes,
+        output_format="DOCM",
+        expected_size=size,
+        expected_sha256=digest,
+    )
+    with ZipFile(BytesIO(candidate.output_bytes)) as package:
+        stored = package.namelist()
+    assert "_rels/.rels" in stored
+    assert "word/vbaProject.bin" in stored
+
+
+def test_template_without_package_relationships_fails_closed_on_the_product_path() -> None:
+    """The same template with the one part OPC needs to locate the main part gone."""
+    manifest = template_binding_manifest_from_mapping(_PRODUCT_PATH_MANIFEST)
+    stripped = BytesIO()
+    with ZipFile(BytesIO(_valid_docm_template())) as source:
+        with ZipFile(stripped, "w", ZIP_DEFLATED) as target:
+            for name in source.namelist():
+                if name == "_rels/.rels":
+                    continue
+                target.writestr(name, source.read(name))
+    orphaned = stripped.getvalue()
+
+    with pytest.raises(ValueError, match="uniquely bound"):
+        validate_final_artifact(orphaned, "DOCM")
+    with pytest.raises(ValueError):
+        render_word_candidate(
+            template_bytes=orphaned, report=_product_path_report(), manifest=manifest
+        )
+
+
+# --- Phase C §27 round 4: canonical injection binds a control, not a string ----
+#
+# _replace_canonical_content anchored on the first byte occurrence of
+# "CANONICAL_REPORT" anywhere in the part, discarding the unique control the
+# tree had just selected.  A w:alias carrying the same name, a w:placeholder
+# naming it, or body text merely quoting it took the injection instead: the
+# authored paragraph was overwritten, the real control kept its placeholder, and
+# validate_final_artifact accepted the result.
+
+_CANONICAL_CONTROL = (
+    '<w:sdt><w:sdtPr><w:tag w:val="CANONICAL_REPORT"/></w:sdtPr>'
+    "<w:sdtContent><w:p><w:r><w:t>PLACEHOLDER</w:t></w:r></w:p></w:sdtContent></w:sdt>"
+)
+
+
+def _injected_main_part(body: str) -> str:
+    injected = delivery_renderer._inject_canonical_report(
+        word_package(
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            f"<w:body>{body}</w:body></w:document>"
+        ),
+        _product_path_report(),
+    )
+    validate_final_artifact(injected, "DOCX")
+    with ZipFile(BytesIO(injected)) as package:
+        return package.read("word/document.xml").decode("utf-8")
+
+
+@pytest.mark.parametrize(
+    ("label", "decoy", "survivor"),
+    (
+        (
+            "alias_carrying_the_control_name",
+            '<w:sdt><w:sdtPr><w:alias w:val="CANONICAL_REPORT"/>'
+            '<w:tag w:val="OUTRO"/></w:sdtPr><w:sdtContent>'
+            "<w:p><w:r><w:t>IDENTIFICACAO DAS PARTES</w:t></w:r></w:p>"
+            "</w:sdtContent></w:sdt>",
+            "IDENTIFICACAO DAS PARTES",
+        ),
+        (
+            "placeholder_naming_the_control",
+            '<w:sdt><w:sdtPr><w:tag w:val="OUTRO"/>'
+            '<w:placeholder><w:docPart w:val="CANONICAL_REPORT"/></w:placeholder>'
+            "</w:sdtPr><w:sdtContent>"
+            "<w:p><w:r><w:t>QUESITOS DO JUIZO</w:t></w:r></w:p>"
+            "</w:sdtContent></w:sdt>",
+            "QUESITOS DO JUIZO",
+        ),
+        (
+            "body_text_quoting_the_control_name",
+            '<w:p><w:r><w:t>o controle "CANONICAL_REPORT" do modelo</w:t></w:r></w:p>',
+            "do modelo",
+        ),
+    ),
+)
+def test_canonical_injection_ignores_a_byte_match_outside_the_tag(
+    label: str, decoy: str, survivor: str
+) -> None:
+    rendered = _injected_main_part(decoy + _CANONICAL_CONTROL)
+
+    assert survivor in rendered, "authored content was overwritten"
+    assert "PLACEHOLDER" not in rendered, "the bound control was not filled"
+    assert "REPORT_SNAPSHOT_SHA256" in rendered
+
+
+def test_canonical_injection_still_fills_the_only_control() -> None:
+    rendered = _injected_main_part(
+        "<w:p><w:r><w:t>ABERTURA</w:t></w:r></w:p>" + _CANONICAL_CONTROL
+    )
+
+    assert "ABERTURA" in rendered
+    assert "PLACEHOLDER" not in rendered
+    assert "REPORT_SNAPSHOT_SHA256" in rendered
+
+
+def test_canonical_injection_fails_closed_on_an_ambiguous_tag_anchor() -> None:
+    """Two controls both tagged CANONICAL_REPORT: nothing may be guessed."""
+    with pytest.raises(ValueError, match="exactly one CANONICAL_REPORT"):
+        _injected_main_part(_CANONICAL_CONTROL + _CANONICAL_CONTROL)
+
+
+# --- Phase C §27 round 4: a delivered PDF carries no executable action ---------
+#
+# The PDF branch validated only that the bytes parse, carry pages and have a
+# header and trailer.  A catalog-level /OpenAction /Launch, a /Names /JavaScript
+# tree, a /Names /EmbeddedFiles tree and page /AA entries were all accepted by
+# validate_final_artifact *and* by validate_delivery_artifact.  An internal
+# /GoTo destination is the one action the product's own table of contents needs,
+# so it stays allowed and everything else fails closed.
+
+
+def _pdf_with_catalog(entries: dict) -> bytes:
+    writer = PdfWriter(clone_from=BytesIO(_parseable_text_pdf("Laudo sintetico")))
+    writer._root_object.update(entries)
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def _action(subtype: str) -> DictionaryObject:
+    return DictionaryObject({NameObject("/S"): NameObject(subtype)})
+
+
+_ACTIVE_PDF_CATALOGS = {
+    "open_action_launch": {NameObject("/OpenAction"): _action("/Launch")},
+    "open_action_javascript": {NameObject("/OpenAction"): _action("/JavaScript")},
+    "open_action_submit_form": {NameObject("/OpenAction"): _action("/SubmitForm")},
+    "open_action_remote_goto": {NameObject("/OpenAction"): _action("/GoToR")},
+    "open_action_uri": {NameObject("/OpenAction"): _action("/URI")},
+    "additional_actions": {
+        NameObject("/AA"): DictionaryObject({NameObject("/O"): _action("/Launch")})
+    },
+    "javascript_name_tree": {
+        NameObject("/Names"): DictionaryObject(
+            {NameObject("/JavaScript"): DictionaryObject()}
+        )
+    },
+    "embedded_files_name_tree": {
+        NameObject("/Names"): DictionaryObject(
+            {NameObject("/EmbeddedFiles"): DictionaryObject()}
+        )
+    },
+    "xfa_form": {
+        NameObject("/AcroForm"): DictionaryObject(
+            {NameObject("/XFA"): ArrayObject()}
+        )
+    },
+    "chained_next_action": {
+        NameObject("/OpenAction"): DictionaryObject(
+            {
+                NameObject("/S"): NameObject("/GoTo"),
+                NameObject("/Next"): _action("/Launch"),
+            }
+        )
+    },
+}
+
+
+@pytest.mark.parametrize("label", sorted(_ACTIVE_PDF_CATALOGS))
+def test_delivered_pdf_rejects_executable_actions(label: str) -> None:
+    content = _pdf_with_catalog(_ACTIVE_PDF_CATALOGS[label])
+
+    with pytest.raises(ValueError, match="active content"):
+        validate_final_artifact(content, "PDF")
+    with pytest.raises(ValueError, match="active content"):
+        delivery_renderer.validate_delivery_artifact(content, "PDF")
+
+
+def test_delivered_pdf_still_accepts_an_internal_destination() -> None:
+    """The product's own table of contents is internal /GoTo and must survive."""
+    content = _pdf_with_catalog(
+        {NameObject("/OpenAction"): _action("/GoTo")}
+    )
+
+    digest, size, media = validate_final_artifact(content, "PDF")
+
+    assert media == "application/pdf"
+    assert size == len(content)
+    assert len(digest) == 64
+
+
+def test_delivered_pdf_without_any_action_is_unaffected() -> None:
+    content = _parseable_text_pdf("Laudo sintetico")
+
+    assert validate_final_artifact(content, "PDF")[2] == "application/pdf"
+
+
+# --- Phase C §27 round 4: material spelling reaches the table oracle too -------
+#
+# MATERIAL SPELLING was bound for body paragraphs and nowhere else.  Cell text
+# was folded at construction -- _normalized_visible_text applied before any
+# comparison -- so the raw spelling never survived to the identity decision and
+# every table matcher compared the folded channel alone.  Two cells folding to
+# the same text could be exchanged in the PDF and the oracle approved: a status
+# column holding REJEITADO and Rejeitado, or an area column holding 12 m2 and
+# 12 m\u00b2.  _fragment_sequence_end derives the folded channel from the raw text
+# itself, so the repair is to stop folding at construction -- not to turn the
+# flag on over text that has already lost its spelling.
+
+
+def _table_cell_pdf(first: str, second: str) -> bytes:
+    return _positioned_text_pdf(
+        [[(first, 50.0, 700.0, 10.0, 0), (second, 250.0, 700.0, 10.0, 0)]]
+    )
+
+
+def _table_column_pdf(first: str, second: str) -> bytes:
+    return _positioned_text_pdf(
+        [[(first, 50.0, 700.0, 10.0, 0), (second, 50.0, 660.0, 10.0, 0)]]
+    )
+
+
+def test_table_row_anchors_carry_the_material_spelling() -> None:
+    """Folding cell text at construction destroyed the identity channel."""
+    captured: dict[str, object] = {}
+    original = delivery_renderer._table_rows_match
+
+    def spy(rows, positioned, barriers):
+        captured["rows"] = rows
+        return original(rows, positioned, barriers)
+
+    delivery_renderer._table_rows_match = spy
+    try:
+        with contextlib.suppress(ValueError):
+            delivery_renderer._validate_pdf_fidelity(
+                _word_table(("REJEITADO", "Rejeitado")),
+                _table_cell_pdf("REJEITADO", "Rejeitado"),
+            )
+    finally:
+        delivery_renderer._table_rows_match = original
+
+    assert captured["rows"] == [("REJEITADO", "Rejeitado")]
+
+
+@pytest.mark.parametrize(
+    ("label", "cells", "painted", "faithful"),
+    (
+        ("case_faithful", ("REJEITADO", "Rejeitado"), ("REJEITADO", "Rejeitado"), True),
+        ("case_exchanged", ("REJEITADO", "Rejeitado"), ("Rejeitado", "REJEITADO"), False),
+        (
+            "symbol_faithful",
+            ("12 m\u00b2", "12 m2"),
+            ("12 m\u00b2", "12 m2"),
+            True,
+        ),
+        (
+            "symbol_exchanged",
+            ("12 m\u00b2", "12 m2"),
+            ("12 m2", "12 m\u00b2"),
+            False,
+        ),
+        (
+            "ordinal_faithful",
+            ("1\u00ba andar", "1o andar"),
+            ("1\u00ba andar", "1o andar"),
+            True,
+        ),
+        (
+            "ordinal_exchanged",
+            ("1\u00ba andar", "1o andar"),
+            ("1o andar", "1\u00ba andar"),
+            False,
+        ),
+        (
+            "distinct_control",
+            ("Cell-A-223", "Cell-B-223"),
+            ("Cell-A-223", "Cell-B-223"),
+            True,
+        ),
+    ),
+)
+def test_material_spelling_binds_table_cells(
+    label: str, cells: tuple[str, str], painted: tuple[str, str], faithful: bool
+) -> None:
+    word = _word_table(cells)
+    pdf = _table_cell_pdf(*painted)
+
+    if faithful:
+        delivery_renderer._validate_pdf_fidelity(word, pdf)
+        return
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(word, pdf)
+
+
+@pytest.mark.parametrize(
+    ("label", "cells", "painted", "faithful"),
+    (
+        ("column_faithful", ("APROVADO", "Aprovado"), ("APROVADO", "Aprovado"), True),
+        ("column_exchanged", ("APROVADO", "Aprovado"), ("Aprovado", "APROVADO"), False),
+    ),
+)
+def test_material_spelling_binds_rows_of_one_column(
+    label: str, cells: tuple[str, str], painted: tuple[str, str], faithful: bool
+) -> None:
+    word = _word_table_rows(((cells[0],), (cells[1],)))
+    pdf = _table_column_pdf(*painted)
+
+    if faithful:
+        delivery_renderer._validate_pdf_fidelity(word, pdf)
+        return
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(word, pdf)
+
+
+# --- Phase C §27 round 4: three false rejects and one vacuity -------------------
+#
+# None of these lets a bad PDF through: two reject a faithful one and one makes
+# the only page-margin binding vacuous for the product's own document shape.
+# They are grouped because they share one cause -- a sweep that does not agree
+# with the rest of the oracle about which subtrees Word renders, or about how a
+# relationship target resolves.
+
+_IMAGE_NS = (
+    'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+    'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+    'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+    'xmlns:v="urn:schemas-microsoft-com:vml" '
+    'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
+)
+_SINGLE_PICTURE = (
+    '<w:p><w:r><w:drawing><a:blip r:embed="rId9"/></w:drawing></w:r></w:p>'
+)
+_ALTERNATE_PICTURE = (
+    "<w:p><w:r><mc:AlternateContent>"
+    '<mc:Choice Requires="wps"><w:drawing><a:blip r:embed="rId9"/></w:drawing></mc:Choice>'
+    '<mc:Fallback><w:pict><v:imagedata r:id="rId9"/></w:pict></mc:Fallback>'
+    "</mc:AlternateContent></w:r></w:p>"
+)
+
+
+def _picture_signature_count(body: str, target: str) -> int:
+    image = BytesIO()
+    Image.new("RGB", (4, 4), "white").save(image, format="PNG")
+    payload = word_package(
+        f"<w:document {_IMAGE_NS}><w:body>{body}</w:body></w:document>",
+        parts={
+            "word/_rels/document.xml.rels": (
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/'
+                f'officeDocument/2006/relationships/image" Target="{target}"/>'
+                "</Relationships>"
+            ),
+            "word/media/logo.png": image.getvalue(),
+        },
+        defaults={"png": "image/png"},
+    )
+    with ZipFile(BytesIO(payload)) as package:
+        root = delivery_renderer.ElementTree.fromstring(
+            package.read("word/document.xml")
+        )
+        return len(
+            delivery_renderer._ordered_word_image_signatures(
+                package, {"word/document.xml": root}
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("label", "body", "target"),
+    (
+        ("relative_target", _SINGLE_PICTURE, "media/logo.png"),
+        ("absolute_target", _SINGLE_PICTURE, "/word/media/logo.png"),
+        ("percent_encoded_target", _SINGLE_PICTURE, "media/logo%2Epng"),
+        ("alternate_content_twin", _ALTERNATE_PICTURE, "media/logo.png"),
+    ),
+)
+def test_one_rendered_picture_yields_one_signature(
+    label: str, body: str, target: str
+) -> None:
+    """An absolute OPC target is legal, and an mc:Fallback twin is not a picture.
+
+    posixpath.join discards the base for an absolute target and left a leading
+    slash that matched no stored part, so the image was dropped and the length
+    check then rejected a faithful PDF.  The raw .iter() sweep counted the VML
+    twin of a shape as a second picture, with the same effect.
+    """
+    assert _picture_signature_count(body, target) == 1
+
+
+@pytest.mark.parametrize(
+    ("label", "markup", "expected"),
+    (
+        (
+            "insertion_is_rendered",
+            '<w:ins w:id="1" w:author="a" w:date="d"><w:r><w:t>Inserido</w:t></w:r></w:ins>',
+            "Inserido",
+        ),
+        (
+            "move_to_is_rendered",
+            '<w:moveTo w:id="2" w:author="a" w:date="d"><w:r><w:t>Destino</w:t></w:r></w:moveTo>',
+            "Destino",
+        ),
+        (
+            "deletion_is_not_rendered",
+            '<w:del w:id="3" w:author="a" w:date="d"><w:r><w:delText>Apagado</w:delText></w:r></w:del>',
+            "",
+        ),
+        (
+            "deletion_carrying_plain_text_is_not_rendered",
+            '<w:del w:id="4" w:author="a" w:date="d"><w:r><w:t>Apagado</w:t></w:r></w:del>',
+            "",
+        ),
+        (
+            "move_from_is_not_rendered",
+            '<w:moveFrom w:id="5" w:author="a" w:date="d"><w:r><w:t>Origem</w:t></w:r></w:moveFrom>',
+            "",
+        ),
+    ),
+)
+def test_revision_visibility_is_decided_by_the_container(
+    label: str, markup: str, expected: str
+) -> None:
+    """The rule was carried by the element name w:delText, not by the container.
+
+    CT_RunTrackChange admits an ordinary w:r/w:t inside w:del and w:moveFrom, so
+    a producer writing that made the oracle demand deleted or moved-from text
+    from the PDF.  Direction is a false reject, and no producer was observed
+    writing it, so this is a code gap pinned by behaviour rather than a
+    reproduced attack.
+    """
+    paragraph = next(delivery_renderer._current_iter(_doc("<w:p>" + markup + "</w:p>"), "p"))
+    hidden = delivery_renderer._hidden_run_resolver(None)
+
+    assert delivery_renderer._visible_paragraph_text(paragraph, hidden) == expected
+
+
+def test_top_margin_anchor_survives_a_block_wrapper() -> None:
+    """The product's canonical report is a body-level w:sdt holding paragraphs.
+
+    Requiring exactly one paragraph per direct body child broke out of the
+    anchor loop at once for that shape, so expected_top_offset was never
+    attached and the only page-margin binding in the oracle was vacuous for
+    exactly the document the product produces.
+    """
+    section = '<w:sectPr><w:pgMar w:top="1440" w:bottom="1440" w:left="1440" w:right="1440"/></w:sectPr>'
+    paragraphs = (
+        "<w:p><w:r><w:t>Alpha</w:t></w:r></w:p><w:p><w:r><w:t>Beta</w:t></w:r></w:p>"
+    )
+    wrapper = (
+        '<w:sdt><w:sdtPr><w:tag w:val="CANONICAL_REPORT"/></w:sdtPr>'
+        f"<w:sdtContent>{paragraphs}</w:sdtContent></w:sdt>"
+    )
+
+    def offsets(body: str) -> list[float | None]:
+        return [
+            item.expected_top_offset
+            for item in delivery_renderer._word_text_expectations(
+                {"word/document.xml": _doc(body + section)}
+            )
+        ]
+
+    plain = offsets(paragraphs)
+
+    assert plain[0] is not None, "the plain shape must anchor at the top margin"
+    assert offsets(wrapper) == plain

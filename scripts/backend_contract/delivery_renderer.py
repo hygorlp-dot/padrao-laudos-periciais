@@ -123,23 +123,56 @@ _INVISIBLE_TARGET_CHARACTERS = re.compile(
 )
 
 
+def _percent_decoded_octets(value: str) -> str:
+    """Percent escapes are octets, and a URI decoder reads them as UTF-8.
+
+    Decoding each escape straight to a code point read "%E2%80%8B" as three
+    Latin-1 characters, so a percent-encoded zero-width space never became one
+    and never reached the invisible-character strip.
+    """
+    raw = bytearray()
+    index = 0
+    while index < len(value):
+        match = _PERCENT_ESCAPE.match(value, index)
+        if match is not None:
+            raw.append(int(match.group(1), 16))
+            index = match.end()
+            continue
+        raw.extend(value[index].encode("utf-8"))
+        index += 1
+    return raw.decode("utf-8", errors="replace")
+
+
+_TARGET_FORM_ROUNDS = 8
+
+
 def _target_forms(target: str) -> tuple[str, ...]:
     """Every spelling of a relationship target Word may resolve.
 
-    OPC targets are URI references, so Word percent-decodes them.  Testing only
-    the literal spelling let "http%3A%2F%2F..." and a leading zero-width
-    character walk straight past the external-target ban.
+    OPC targets are URI references, so Word percent-decodes them.  Decoding and
+    invisible-character stripping were applied once each, in that order, so a
+    zero-width character *inside* an escape broke the escape for the decoder and
+    was only removed afterwards, when nothing decoded it again.  Closing the set
+    under every operation removes the ordering: a spelling is final only once no
+    operation changes it.
     """
-    forms = [target]
-    current = target
-    for _unused in range(4):
-        decoded = _PERCENT_ESCAPE.sub(lambda item: chr(int(item.group(1), 16)), current)
-        if decoded == current:
-            break
-        forms.append(decoded)
-        current = decoded
-    forms.extend(_INVISIBLE_TARGET_CHARACTERS.sub("", form).strip() for form in tuple(forms))
-    return tuple(dict.fromkeys(forms))
+    forms = {target}
+    for _unused in range(_TARGET_FORM_ROUNDS):
+        grown = {
+            form
+            for current in forms
+            for form in (
+                _PERCENT_ESCAPE.sub(lambda item: chr(int(item.group(1), 16)), current),
+                _percent_decoded_octets(current),
+                _INVISIBLE_TARGET_CHARACTERS.sub("", current).strip(),
+            )
+        }
+        if grown <= forms:
+            return tuple(forms)
+        forms |= grown
+    # The spellings never settled, so no finite set of them proves this target
+    # stays local.  Report one that cannot be read as anything but external.
+    return tuple(forms) + (chr(92) * 2 + "unresolved",)
 
 
 def _looks_external(target: str) -> bool:
@@ -222,12 +255,34 @@ _REVISION_SUFFIX = "Change"
 # Word writes every text box and shape as mc:AlternateContent with a DrawingML
 # Choice and a VML Fallback carrying the SAME content.  It renders one of them,
 # so counting both doubled the text, the images and every bookmark offset.
-_UNRENDERED_BRANCH = "Fallback"
+# CT_RunTrackChange admits an ordinary w:r/w:t inside w:del and w:moveFrom, so
+# the rule "deleted content is not rendered" was carried by the element name
+# w:delText rather than by the container.  A producer writing plain w:t there
+# made the oracle demand deleted or moved-from text from the PDF.
+_UNRENDERED_BRANCHES = frozenset({"Fallback", "del", "moveFrom"})
 _NOTE_REFERENCES = frozenset({"footnoteReference", "endnoteReference"})
 
 
 def _is_unrendered_container(local_name: str) -> bool:
-    return local_name.endswith(_REVISION_SUFFIX) or local_name == _UNRENDERED_BRANCH
+    return local_name.endswith(_REVISION_SUFFIX) or local_name in _UNRENDERED_BRANCHES
+
+
+def _current_nodes(root: ElementTree.Element | None):
+    """Every descendant Word actually renders, in document order.
+
+    Unrendered branches are pruned once, here, so a sweep for any element --
+    pictures, note references -- cannot disagree with the sweeps that select by
+    name about which subtrees exist.
+    """
+    if root is None:
+        return
+    stack = list(root)
+    while stack:
+        node = stack.pop(0)
+        if _is_unrendered_container(_local_name(node.tag)):
+            continue
+        yield node
+        stack[:0] = list(node)
 
 
 def _current_iter(root: ElementTree.Element | None, name: str):
@@ -237,17 +292,7 @@ def _current_iter(root: ElementTree.Element | None, name: str):
     plain descendant search saw two section definitions in a document that has
     one, and read the historical page size as if it were current.
     """
-    if root is None:
-        return
-    stack = list(root)
-    while stack:
-        node = stack.pop(0)
-        local_name = _local_name(node.tag)
-        if _is_unrendered_container(local_name):
-            continue
-        if local_name == name:
-            yield node
-        stack[:0] = list(node)
+    return (node for node in _current_nodes(root) if _local_name(node.tag) == name)
 
 
 def _current_named(root: ElementTree.Element | None, name: str):
@@ -868,6 +913,29 @@ def _ordered_image_signatures_match(sources: list[tuple], candidates: list[tuple
     )
 
 
+def _resolved_relationship_target(base: str, target: str, stored: set[str]) -> str:
+    """Resolve a relationship target to the part name the package actually stores.
+
+    An absolute target ("/word/media/logo.png") is legal OPC and names a part
+    from the package root, but posixpath.join discards the base for it and left a
+    leading slash matching no stored name.  Targets are URI references too, so a
+    percent-escaped name resolved to a part that was never stored.  Either way
+    the picture was silently dropped, and the length check downstream then
+    rejected a faithful PDF.  An unresolvable target keeps its joined spelling so
+    callers see exactly what they saw before.
+    """
+    candidates = [
+        posixpath.normpath(spelling.lstrip("/"))
+        if spelling.startswith("/")
+        else posixpath.normpath(posixpath.join(base, spelling))
+        for spelling in dict.fromkeys((target, _percent_decoded_octets(target)))
+    ]
+    for candidate in candidates:
+        if candidate in stored:
+            return candidate
+    return candidates[0]
+
+
 def _ordered_word_image_signatures(package: ZipFile, xml_roots: dict[str, ElementTree.Element]) -> list[tuple]:
     ordered: list[tuple] = []
     for name in sorted(xml_roots, key=_word_part_priority):
@@ -876,14 +944,15 @@ def _ordered_word_image_signatures(package: ZipFile, xml_roots: dict[str, Elemen
         if relationships_name not in package.namelist():
             continue
         relationships = ElementTree.fromstring(package.read(relationships_name))
+        stored = set(package.namelist())
         targets = {
-            _attribute_named(item, "Id"): posixpath.normpath(
-                posixpath.join(base, _attribute_named(item, "Target") or "")
+            _attribute_named(item, "Id"): _resolved_relationship_target(
+                base, _attribute_named(item, "Target") or "", stored
             )
             for item in _iter_named(relationships, "Relationship")
             if _is_internal_relationship(item)
         }
-        for image_node in xml_roots[name].iter():
+        for image_node in _current_nodes(xml_roots[name]):
             if _local_name(image_node.tag) == "blip":
                 relationship_id = _attribute_named(image_node, "embed")
             elif _local_name(image_node.tag) == "imagedata":
@@ -1491,9 +1560,10 @@ def _header_footer_profile(
     if relationships_name not in package.namelist():
         raise ValueError("Word header/footer relationships are missing")
     relationships = ElementTree.fromstring(package.read(relationships_name))
+    stored = set(package.namelist())
     targets = {
-        _attribute_named(item, "Id"): posixpath.normpath(
-            posixpath.join("word", _attribute_named(item, "Target") or "")
+        _attribute_named(item, "Id"): _resolved_relationship_target(
+            "word", _attribute_named(item, "Target") or "", stored
         )
         for item in _iter_named(relationships, "Relationship")
         if _is_internal_relationship(item)
@@ -1555,7 +1625,11 @@ def _repeatable_text_matches(
             matches = [
                 (start, end)
                 for start in range(len(region))
-                if (end := _fragment_sequence_end(expected, region, start, []))
+                if (
+                    end := _fragment_sequence_end(
+                        expected, region, start, [], strict_identity=True
+                    )
+                )
                 is not None
             ]
             if len(matches) != 1 or matches[0][0] < cursor:
@@ -2728,7 +2802,7 @@ def _word_text_expectations(
             "necell",
             "nwcell",
         )
-        for table in _iter_named(root, "tbl"):
+        for table in _current_iter(root, "tbl"):
             table_properties = next(_children_named(table, "tblPr"), None)
             style_id = _table_style_id(table)
             chain = style_chain(style_id)
@@ -2850,16 +2924,15 @@ def _word_text_expectations(
     document = xml_roots.get("word/document.xml")
     body = _first_named(document, "body")
     if body is not None:
-        for child in body:
-            if _local_name(child.tag) == "sectPr":
-                continue
-            paragraphs = (
-                [child]
-                if _local_name(child.tag) == "p"
-                else list(_iter_named(child, "p"))
-            )
-            if len(paragraphs) == 1:
-                paragraph = paragraphs[0]
+        # DIRECT_CHILD_ONLY != SEMANTIC_BODY_FLOW.  The product's canonical report
+        # lives in a body-level w:sdt holding several paragraphs, so requiring
+        # exactly one paragraph per direct child broke out of this loop at once
+        # and expected_top_offset was never attached: the only page-margin
+        # binding in the oracle was vacuous for exactly the document shape the
+        # product produces.
+        for kind, child in _own_block_sequence(body):
+            if kind == "p":
+                paragraph = child
                 text = "".join(
                     item.text or "" for item in _iter_named(paragraph, "t")
                 )
@@ -2952,7 +3025,7 @@ def _word_text_expectations(
         table_properties_by_paragraph = table_run_properties(xml_roots[name])
         table_paragraph_ids = {
             id(paragraph)
-            for table in _iter_named(xml_roots[name], "tbl")
+            for table in _current_iter(xml_roots[name], "tbl")
             for paragraph in _current_iter(table, "p")
         }
         for paragraph in _current_iter(xml_roots[name], "p"):
@@ -4235,7 +4308,9 @@ def _row_anchor_positions(
     positions: list[float] = []
     index = 0
     for anchor in row:
-        end = _fragment_sequence_end(anchor, fragments, index, [])
+        end = _fragment_sequence_end(
+            anchor, fragments, index, [], strict_identity=True
+        )
         if end is None or index >= len(fragments):
             return None
         positions.append(fragments[index].x)
@@ -4256,7 +4331,12 @@ def _paragraph_sits_in_column(
     for start, fragment in enumerate(ordered):
         if fragment.page != page or fragment.top > below:
             continue
-        if _fragment_sequence_end(text, ordered, start, barriers) is None:
+        if (
+            _fragment_sequence_end(
+                text, ordered, start, barriers, strict_identity=True
+            )
+            is None
+        ):
             continue
         distances = [abs(fragment.x - value) for value in anchor_positions]
         nearest = min(distances)
@@ -4341,7 +4421,9 @@ def _row_line_at_or_after(
             for start in line_starts:
                 if start < cursor:
                     continue
-                end = _fragment_sequence_end(cell, ordered, start, barriers)
+                end = _fragment_sequence_end(
+                    cell, ordered, start, barriers, strict_identity=True
+                )
                 if end is not None:
                     matched_fragments.extend(ordered[start:end])
                     cursor = end
@@ -4453,6 +4535,7 @@ def _matched_table_row_fragments(
                                     barriers,
                                     allow_line_wrap=True,
                                     alignment=alignment,
+                                    strict_identity=True,
                                 )
                             )
                             is not None
@@ -4567,7 +4650,7 @@ def _table_cell_and_fill_match(
     paragraph_cursor = 0
     for paragraph in cell.paragraphs:
         end = _fragment_sequence_end(
-            paragraph, cell_fragments, paragraph_cursor, barriers
+            paragraph, cell_fragments, paragraph_cursor, barriers, strict_identity=True
         )
         if end is None:
             return False
@@ -4886,7 +4969,11 @@ def _painted_paths_are_bound_to_tables(
                 paragraph_cursor = 0
                 for paragraph in cell.paragraphs:
                     end = _fragment_sequence_end(
-                        paragraph, cell_fragments, paragraph_cursor, barriers
+                        paragraph,
+                        cell_fragments,
+                        paragraph_cursor,
+                        barriers,
+                        strict_identity=True,
                     )
                     if end is None:
                         return False
@@ -5031,7 +5118,9 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                     # note content unbound -- where deleting a ressalva would go
                     # undetected -- the construct is declared unsupported.
                     raise ValueError("unsupported Word note content")
-                table_nodes = list(_iter_named(root, "tbl")) if renders_content else []
+                table_nodes = (
+                    list(_current_iter(root, "tbl")) if renders_content else []
+                )
                 table_paragraph_ids = {
                     id(paragraph)
                     for table_node in table_nodes
@@ -5144,16 +5233,21 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                                 if vertical_merge is not None
                                 else None
                             )
+                            # The raw spelling has to survive to the identity
+                            # decision: _fragment_sequence_end derives the folded
+                            # matching channel from the raw text itself.  Folding
+                            # here destroyed it, so every table matcher compared
+                            # the folded channel alone and two cells that fold
+                            # alike were interchangeable in the PDF.  Emptiness is
+                            # judged on the stripped text, as body fragments are.
                             cell_paragraphs = tuple(
                                 value
                                 for paragraph in _own_cell_paragraphs(cell)
                                 if (
-                                    value := _normalized_visible_text(
-                                        _visible_paragraph_text(
-                                            paragraph, is_hidden_run
-                                        )
+                                    value := _visible_paragraph_text(
+                                        paragraph, is_hidden_run
                                     )
-                                )
+                                ).strip()
                             )
                             cell_properties = next(_children_named(cell, "tcPr"), None)
                             direct_fill = table_color(
@@ -5745,15 +5839,68 @@ def _canonical_content_markup(report: ReportSnapshot, prefix: bytes) -> bytes:
     )
 
 
+def _canonical_tag_anchor(part: bytes, prefix: bytes) -> int:
+    """Byte offset of the w:val that names the canonical control on its w:tag.
+
+    The anchor used to be the first occurrence of the name anywhere in the part,
+    which threw away the unique control the tree had just selected.  A w:alias
+    carrying the same friendly name, or a w:placeholder naming the same doc
+    part, took the injection instead: the paragraph it sat in was overwritten
+    while the bound control kept its placeholder, and the boundary accepted it.
+    Only a w:val on a w:tag element decides, and it has to be the only one.
+    """
+    needle = b'"CANONICAL_REPORT"'
+    tag_open = b"<" + prefix + b"tag"
+    anchors: list[int] = []
+    cursor = part.find(needle)
+    while cursor >= 0:
+        element = part.rfind(b"<", 0, cursor)
+        if element >= 0 and part.startswith(tag_open, element):
+            # Guard against a longer element name that merely starts with "tag".
+            following = part[element + len(tag_open) : element + len(tag_open) + 1]
+            if following in (b" ", b"\t", b"\r", b"\n"):
+                anchors.append(cursor)
+        cursor = part.find(needle, cursor + 1)
+    if len(anchors) != 1:
+        raise ValueError("CANONICAL_REPORT content control is not uniquely anchored")
+    return anchors[0]
+
+
+def _verify_canonical_binding(part: bytes, report: ReportSnapshot) -> None:
+    """The byte edit landed inside the control the tree selected, and filled it.
+
+    The surgery is done on bytes so the package's namespace prefixes survive, so
+    the result is read back and checked against the tree rather than trusted.
+    """
+    root = ElementTree.fromstring(part)
+    bound = [
+        control
+        for control in root.iter(f"{_W}sdt")
+        if any(
+            _attribute_named(item, "val") == "CANONICAL_REPORT"
+            for item in control.findall(f"./{_W}sdtPr/{_W}tag")
+        )
+    ]
+    if len(bound) != 1:
+        raise ValueError("template requires exactly one CANONICAL_REPORT content control")
+    content = bound[0].find(f"{_W}sdtContent")
+    if content is None:
+        raise ValueError("CANONICAL_REPORT content control is incomplete")
+    text = "".join(node.text or "" for node in content.iter(f"{_W}t"))
+    for line in _canonical_report_lines(report):
+        if line not in text:
+            raise ValueError("canonical report did not bind to its content control")
+
+
 def _replace_canonical_content(part: bytes, report: ReportSnapshot) -> bytes:
     """Replace the CANONICAL_REPORT control's content without touching other bytes."""
     prefix = _wordprocessing_prefix(part)
-    anchor = part.find(b'"CANONICAL_REPORT"')
+    anchor = _canonical_tag_anchor(part, prefix)
     open_tag = b"<" + prefix + b"sdtContent"
     close_tag = b"</" + prefix + b"sdtContent>"
-    start = part.find(open_tag, anchor) if anchor >= 0 else -1
+    start = part.find(open_tag, anchor)
     end_of_open = part.find(b">", start) if start >= 0 else -1
-    if anchor < 0 or start < 0 or end_of_open < 0:
+    if start < 0 or end_of_open < 0:
         raise ValueError("CANONICAL_REPORT content control is incomplete")
     markup = _canonical_content_markup(report, prefix)
     if part[end_of_open - 1 : end_of_open] == b"/":
@@ -5806,6 +5953,7 @@ def _inject_canonical_report(content: bytes, report: ReportSnapshot) -> bytes:
     parts["word/document.xml"] = _replace_canonical_content(
         parts["word/document.xml"], report
     )
+    _verify_canonical_binding(parts["word/document.xml"], report)
     output = BytesIO()
     with ZipFile(output, "w", ZIP_DEFLATED) as package:
         for name, value in parts.items():
@@ -5837,36 +5985,289 @@ _ACQUIRING_DELIVERY_RELATIONSHIPS = frozenset(
 )
 
 
+_DELIVERY_MAX_PACKAGE_PARTS = 4_096
+_DELIVERY_MAX_PACKAGE_BYTES = 256 * 1024 * 1024
+_DELIVERY_MAX_PART_BYTES = 64 * 1024 * 1024
+_DELIVERY_MAX_COMPRESSION_RATIO = 200
+_DELIVERY_OPAQUE_ACTIVE_PART_PREFIXES = ("word/activex/", "word/embeddings/")
+_DELIVERY_IMPORTABLE_PART_SUFFIXES = (".htm", ".html", ".mht", ".mhtml", ".rtf")
+_DELIVERY_CONTENT_TYPES_PART = "[Content_Types].xml"
+_DELIVERY_PACKAGE_RELATIONSHIP_PART = "_rels/.rels"
+_DELIVERY_MAIN_DOCUMENT_PART = "word/document.xml"
+_DELIVERY_OFFICE_DOCUMENT_RELATIONSHIP = "officedocument"
+_DELIVERY_INTERPRETABLE_CONTENT_TYPE_MARKERS = ("wordprocessingml", "ms-word.document")
+_SAFE_DELIVERY_FIELD_CODES = frozenset(
+    {"NUMPAGES", "PAGE", "PAGEREF", "REF", "SEQ", "TOC"}
+)
+# Built from chr(92) rather than written as escapes: a meta-quoting slip once
+# turned a word boundary into a literal backspace, leaving a pattern that read
+# correctly and matched nothing.  The behaviour is pinned by tests, not by text.
+_DELIVERY_FIELD_CODE = re.compile(
+    chr(92) + "s*([A-Z]+)" + chr(92) + "b", re.IGNORECASE
+)
+_DELIVERY_FIELD_ARGUMENT = re.compile(
+    "(?:" + chr(92) * 4 + "|//|[A-Z][A-Z0-9+.-]*:)", re.IGNORECASE
+)
+
+
+def _reject_unsafe_delivery_parts(infos) -> None:
+    """Part-name, size and opaque-part policy, restated from the Word worker."""
+    total_size = 0
+    for item in infos:
+        name = item.filename
+        normalized = name.casefold()
+        if normalized.startswith(
+            _DELIVERY_OPAQUE_ACTIVE_PART_PREFIXES
+        ) or normalized.endswith(_DELIVERY_IMPORTABLE_PART_SUFFIXES):
+            raise ValueError("active content is forbidden in delivery artifacts")
+        if (
+            name.startswith(("/", chr(92)))
+            or chr(92) in name
+            or ".." in name.split("/")
+            or item.file_size > _DELIVERY_MAX_PART_BYTES
+            or (
+                item.file_size > 1024 * 1024
+                and item.file_size
+                > max(item.compress_size, 1) * _DELIVERY_MAX_COMPRESSION_RATIO
+            )
+        ):
+            raise ValueError("unsafe Word package part")
+        total_size += item.file_size
+    if total_size > _DELIVERY_MAX_PACKAGE_BYTES:
+        raise ValueError("invalid Word package size")
+
+
+def _delivery_package_main_part(data: bytes) -> str:
+    """Resolve the authoritative main part from the package relationship graph.
+
+    Delivery assumed the part named word/document.xml was the one Word would
+    open.  The authority is the officeDocument relationship, so a package could
+    carry a benign word/document.xml and point Word at another part entirely.
+    """
+    targets: list[str] = []
+    for node in _relationship_nodes(data):
+        type_value = _attribute_named(node, "Type")
+        target_value = _attribute_named(node, "Target")
+        if type_value is None or target_value is None:
+            raise ValueError("invalid Word relationship")
+        if (
+            type_value.rsplit("/", 1)[-1].casefold()
+            != _DELIVERY_OFFICE_DOCUMENT_RELATIONSHIP
+        ):
+            continue
+        if not _is_internal_relationship(node):
+            raise ValueError(
+                "external relationships are forbidden in delivery artifacts"
+            )
+        targets.append(target_value.strip())
+    if len(targets) != 1:
+        raise ValueError("final Word artifact main part is not uniquely bound")
+    resolved = posixpath.normpath(targets[0].lstrip("/"))
+    if resolved != _DELIVERY_MAIN_DOCUMENT_PART:
+        # Only the conventional main part is supported, so a relocated one is
+        # rejected instead of widening the sweep to every shape OPC allows.
+        raise ValueError(
+            "final Word artifact main part is not the supported document part"
+        )
+    return resolved
+
+
+def _delivery_declared_content_types(
+    content_types: ElementTree.Element, names: list[str]
+) -> dict[str, str]:
+    """Map every stored part to its declared content type, failing closed on gaps."""
+    defaults: dict[str, str] = {}
+    overrides: dict[str, str] = {}
+    for item in content_types.iter():
+        local_name = _local_name(item.tag)
+        if local_name == "Default":
+            extension = (_attribute_named(item, "Extension") or "").casefold()
+            value = _attribute_named(item, "ContentType") or ""
+            if not extension or not value or extension in defaults:
+                raise ValueError("invalid Word content type declaration")
+            defaults[extension] = value
+        elif local_name == "Override":
+            part = (_attribute_named(item, "PartName") or "").casefold()
+            value = _attribute_named(item, "ContentType") or ""
+            if not part.startswith("/") or not value or part in overrides:
+                raise ValueError("invalid Word content type declaration")
+            overrides[part] = value
+    declared: dict[str, str] = {}
+    for name in names:
+        if name == _DELIVERY_CONTENT_TYPES_PART or name.endswith("/"):
+            # Directory entries carry no content and declare no content type.
+            continue
+        value = overrides.get("/" + name.casefold())
+        if value is None:
+            # OPC extensions are the text after the final "." of the last
+            # segment.  PurePosixPath.suffix cannot be used: it reports "" for
+            # ".rels".
+            segment = name.rsplit("/", 1)[-1]
+            extension = segment.rsplit(".", 1)[-1].casefold() if "." in segment else ""
+            value = defaults.get(extension) if extension else None
+        if value is None:
+            raise ValueError("undeclared Word package part")
+        declared[name] = value
+    return declared
+
+
+def _delivery_interpretable_parts(declared: dict[str, str]) -> set[str]:
+    """Parts Word can interpret as markup, by content type as well as by name.
+
+    Selecting by the literal prefix "word/" let a part declared with a
+    WordprocessingML content type sit anywhere else and never be swept.
+    """
+    return {
+        name
+        for name, value in declared.items()
+        if any(
+            marker in value.casefold()
+            for marker in _DELIVERY_INTERPRETABLE_CONTENT_TYPE_MARKERS
+        )
+        or (name.casefold().startswith("word/") and name.casefold().endswith(".xml"))
+    }
+
+
+def _delivery_field_instructions(root: ElementTree.Element) -> list[str]:
+    """Split a part's run stream into one instruction per field.
+
+    Mirrors the Word worker: w:instrText only means anything between a
+    w:fldChar "begin" and the "end" closing it, so concatenating a paragraph and
+    judging its leading code let a second field ride along behind the first.
+    """
+    instructions: list[str] = []
+    open_fields: list[list[str]] = []
+    unbounded: list[str] = []
+    for node in root.iter():
+        local_name = _local_name(node.tag)
+        if local_name == "fldChar":
+            marker = (_attribute_named(node, "fldCharType") or "").strip().casefold()
+            if marker == "begin":
+                open_fields.append([])
+            elif marker == "end" and open_fields:
+                instructions.append("".join(open_fields.pop()))
+        elif local_name == "instrText":
+            (open_fields[-1] if open_fields else unbounded).append(node.text or "")
+    instructions.extend("".join(buffer) for buffer in open_fields)
+    instructions.append("".join(unbounded))
+    return instructions
+
+
+def _reject_unsupported_delivery_field(value: str) -> None:
+    """One field, judged by the allowlist the Word worker already applies.
+
+    Delivery ran a seven-name denylist, so every code outside it -- INCLUDE,
+    Word's legacy alias for INCLUDETEXT, and nine others -- was admitted.
+    """
+    if not value.strip():
+        return
+    code = _DELIVERY_FIELD_CODE.match(value)
+    if (
+        _ACQUIRING_DELIVERY_FIELDS.search(value)
+        or _DELIVERY_FIELD_ARGUMENT.search(value)
+        or code is None
+        or code.group(1).upper() not in _SAFE_DELIVERY_FIELD_CODES
+    ):
+        raise ValueError("active content is forbidden in delivery artifacts")
+
+
+_SAFE_PDF_ACTION = "/GoTo"
+_ACQUIRING_PDF_NAME_TREES = ("/JavaScript", "/EmbeddedFiles", "/Renditions")
+
+
+def _pdf_object(value):
+    return value.get_object() if hasattr(value, "get_object") else value
+
+
+def _reject_pdf_action(value) -> None:
+    """An internal /GoTo is the only action a delivered PDF may carry.
+
+    A bare destination -- an array, or a named destination -- is not an action
+    at all and executes nothing, so it passes through untouched.
+    """
+    action = _pdf_object(value)
+    if not isinstance(action, dict):
+        return
+    if str(action.get("/S")) != _SAFE_PDF_ACTION:
+        raise ValueError("active content is forbidden in delivery artifacts")
+    following = _pdf_object(action.get("/Next"))
+    for item in following if isinstance(following, list) else (following,):
+        if item is not None:
+            _reject_pdf_action(item)
+
+
+def _reject_active_pdf_content(reader: PdfReader) -> None:
+    """A delivered PDF carries no action a viewer could execute.
+
+    The PDF branch validated only that the bytes parse, carry pages and have a
+    header and a trailer, so a catalog-level /OpenAction /Launch, a /Names
+    /JavaScript tree, an /EmbeddedFiles tree, an XFA form and page-level /AA
+    entries were all admitted -- at both validate_final_artifact and
+    validate_delivery_artifact.  The Word branch has refused acquiring content
+    from the start; this is the same rule stated for the other output format.
+    The product's own table of contents is internal /GoTo, which stays allowed.
+    """
+    root = _pdf_object(reader.trailer["/Root"])
+    if root.get("/AA") is not None:
+        raise ValueError("active content is forbidden in delivery artifacts")
+    _reject_pdf_action(root.get("/OpenAction"))
+    names = _pdf_object(root.get("/Names"))
+    if isinstance(names, dict) and any(
+        key in names for key in _ACQUIRING_PDF_NAME_TREES
+    ):
+        raise ValueError("active content is forbidden in delivery artifacts")
+    forms = _pdf_object(root.get("/AcroForm"))
+    if isinstance(forms, dict) and "/XFA" in forms:
+        raise ValueError("active content is forbidden in delivery artifacts")
+    for page in reader.pages:
+        if page.get("/AA") is not None:
+            raise ValueError("active content is forbidden in delivery artifacts")
+        for annotation in _pdf_object(page.get("/Annots")) or ():
+            item = _pdf_object(annotation)
+            if not isinstance(item, dict):
+                continue
+            if item.get("/AA") is not None:
+                raise ValueError("active content is forbidden in delivery artifacts")
+            _reject_pdf_action(item.get("/A"))
+
+
 def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, int, str]:
     if type(content) is not bytes or not content:
         raise ValueError("final artifact bytes are empty")
     if output_format in {"DOCX", "DOCM"}:
         try:
             with ZipFile(BytesIO(content)) as package:
-                stored = package.namelist()
+                infos = package.infolist()
+                stored = [item.filename for item in infos]
                 names = set(stored)
-                if not {"[Content_Types].xml", "word/document.xml"} <= names:
+                if not infos or len(infos) > _DELIVERY_MAX_PACKAGE_PARTS:
+                    raise ValueError("invalid Word package size")
+                if not {
+                    _DELIVERY_CONTENT_TYPES_PART,
+                    _DELIVERY_MAIN_DOCUMENT_PART,
+                } <= names:
                     raise ValueError("final Word artifact is incomplete")
                 if len(stored) != len({name.casefold() for name in stored}):
                     # OPC compares part names case-insensitively, so two such
                     # names are one part with two conflicting definitions.
                     raise ValueError("duplicate Word package part")
+                _reject_unsafe_delivery_parts(infos)
                 has_macro = any(
                     name.casefold()
                     in {"word/vbaproject.bin", "word/vbadata.xml"}
                     for name in names
                 )
                 content_types = ElementTree.fromstring(
-                    package.read("[Content_Types].xml")
+                    package.read(_DELIVERY_CONTENT_TYPES_PART)
                 )
                 main_content_types = {
                     _attribute_named(item, "ContentType")
                     for item in content_types.iter()
                     if _local_name(item.tag) == "Override"
                     and (_attribute_named(item, "PartName") or "").casefold()
-                    == "/word/document.xml"
+                    == "/" + _DELIVERY_MAIN_DOCUMENT_PART
                 }
-                for name in names:
+                for name in stored:
                     if name.casefold().endswith(".rels"):
                         for item in _relationship_nodes(package.read(name)):
                             if not _is_internal_relationship(item):
@@ -5876,11 +6277,16 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
                             ).rsplit("/", 1)[-1].casefold()
                             if relationship_type in _ACQUIRING_DELIVERY_RELATIONSHIPS:
                                 raise ValueError("active content is forbidden in delivery artifacts")
-                for name in names:
-                    if not (
-                        name.casefold().startswith("word/")
-                        and name.casefold().endswith(".xml")
-                    ):
+                if _DELIVERY_PACKAGE_RELATIONSHIP_PART not in names:
+                    raise ValueError("final Word artifact main part is not uniquely bound")
+                _delivery_package_main_part(
+                    package.read(_DELIVERY_PACKAGE_RELATIONSHIP_PART)
+                )
+                interpretable = _delivery_interpretable_parts(
+                    _delivery_declared_content_types(content_types, stored)
+                )
+                for name in stored:
+                    if name not in interpretable:
                         continue
                     part_root = ElementTree.fromstring(package.read(name))
                     if any(
@@ -5893,20 +6299,9 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
                         for node in part_root.iter()
                         if _local_name(node.tag) == "fldSimple"
                     ]
-                    instructions.extend(
-                        "".join(
-                            item.text or ""
-                            for item in node.iter()
-                            if _local_name(item.tag) == "instrText"
-                        )
-                        for node in part_root.iter()
-                        if _local_name(node.tag) == "p"
-                    )
-                    if any(
-                        _ACQUIRING_DELIVERY_FIELDS.search(value)
-                        for value in instructions
-                    ):
-                        raise ValueError("active content is forbidden in delivery artifacts")
+                    instructions.extend(_delivery_field_instructions(part_root))
+                    for value in instructions:
+                        _reject_unsupported_delivery_field(value)
         except (BadZipFile, ElementTree.ParseError, OSError) as exc:
             raise ValueError("final Word artifact is invalid") from exc
         expected_main_type = (
@@ -5930,6 +6325,7 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
             raise ValueError("final PDF artifact is invalid") from exc
         if not content.startswith(b"%PDF-") or not content.rstrip().endswith(b"%%EOF"):
             raise ValueError("final PDF artifact is invalid")
+        _reject_active_pdf_content(reader)
         media_type = _PDF_MEDIA
     else:
         raise ValueError("unsupported final artifact format")
