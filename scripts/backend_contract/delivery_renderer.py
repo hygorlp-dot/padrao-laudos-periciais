@@ -302,6 +302,19 @@ def _current_iter(root: ElementTree.Element | None, name: str):
     return (node for node in _current_nodes(root) if _local_name(node.tag) == name)
 
 
+def _on_off(node: ElementTree.Element | None, *, default: bool = False) -> bool:
+    """A WordprocessingML ON/OFF element: present means on unless w:val says off.
+
+    Reading these by mere presence made w:titlePg w:val="0" -- Word's own way of
+    turning a setting back off without deleting the element -- read as on, so the
+    header/footer profile bound the wrong part.
+    """
+    if node is None:
+        return default
+    value = (_attribute_named(node, "val") or "true").strip().casefold()
+    return value not in {"0", "false", "off", "no"}
+
+
 def _current_first(root: ElementTree.Element | None, name: str):
     """First rendered descendant with this local name, or None."""
     return next(_current_iter(root, name), None)
@@ -452,6 +465,25 @@ def _own_table_rows(table: ElementTree.Element):
         if local_name in {"tblPr", "tblGrid"}:
             continue
         yield from _own_table_rows(child)
+
+
+def _own_row_cells(row: ElementTree.Element):
+    """Cells of this row, through transparent containers, never a nested table.
+
+    A cell-level content control is ordinary Word, and enumerating direct w:tc
+    children alone both lost the cell and shifted every conditional-format band
+    onto the wrong column.
+    """
+    for child in row:
+        local_name = _local_name(child.tag)
+        if local_name == "tc":
+            yield child
+            continue
+        if local_name == "tbl" or _is_unrendered_container(local_name):
+            continue
+        if local_name == "trPr":
+            continue
+        yield from _own_row_cells(child)
 
 
 def _own_cell_paragraphs(cell: ElementTree.Element):
@@ -972,9 +1004,23 @@ def _ordered_word_image_signatures(package: ZipFile, xml_roots: dict[str, Elemen
             else:
                 continue
             target = targets.get(relationship_id)
-            if target and target in package.namelist():
-                with Image.open(BytesIO(package.read(target))) as image:
-                    ordered.append(_image_signature(image))
+            if not target or target not in stored:
+                # A package that references a picture it does not contain is
+                # broken.  Skipping it silently left this sweep one shorter than
+                # the layout sweep, and the length guard between them then
+                # rejected the pair with no indication why.
+                raise ValueError("Word picture relationship cannot be resolved")
+            # DECLARED GAP, round 6: a legacy VML picture (w:pict/v:imagedata
+            # outside an mc:AlternateContent) and a picture anchored outside every
+            # w:p both get a signature here while the flow-based layout sweep
+            # gives them no position, so the length guard in
+            # _repeatable_word_images_match rejects a faithful pair.  Refusing
+            # them outright was tried and over-reached: a VML picture in the flow
+            # is a shape this suite already supports.  Recorded rather than
+            # guessed at, because aligning the two sweeps needs a layout model
+            # for pictures outside the text flow.
+            with Image.open(BytesIO(package.read(target))) as image:
+                ordered.append(_image_signature(image))
     return ordered
 
 
@@ -1493,6 +1539,7 @@ def _dynamic_paragraph_text(
     paragraph: ElementTree.Element,
     *,
     page_number: int,
+    page_count: int | None = None,
     is_hidden_run=None,
     style_id: str | None = None,
 ) -> str:
@@ -1510,6 +1557,12 @@ def _dynamic_paragraph_text(
             local_name = _local_name(child.tag)
             if local_name == "p":
                 continue
+            if _is_unrendered_container(local_name):
+                # This reader is the profiled counterpart of
+                # _visible_paragraph_text and its docstring says the two must
+                # agree.  _own_runs prunes; this did not, so a tracked deletion
+                # carrying a plain w:t made them disagree on the same paragraph.
+                continue
             if local_name == "fldSimple":
                 yield ("field", (_attribute_named(child, "instr") or "").strip())
                 continue
@@ -1518,14 +1571,27 @@ def _dynamic_paragraph_text(
             yield ("node", child)
             yield from events(child)
 
+    def resolved_field(instruction: str) -> str:
+        """PAGE and NUMPAGES are the two the product's own template mandates.
+
+        report_template refuses to bind a template missing NUMPAGES, while this
+        reader used to fail on it, so an ordinary "Pagina X de Y" footer made the
+        two rules mutually unsatisfiable and every render of such a template
+        failed.
+        """
+        code = instruction.strip().casefold()
+        if code == "page":
+            return str(page_number)
+        if code == "numpages" and page_count is not None:
+            return str(page_count)
+        raise ValueError("unsupported dynamic Word field")
+
     values: list[str] = []
     field_instruction: list[str] | None = None
     skip_field_result = False
     for kind, value in events(paragraph):
         if kind == "field":
-            if str(value).casefold() != "page":
-                raise ValueError("unsupported dynamic Word field")
-            values.append(str(page_number))
+            values.append(resolved_field(str(value)))
             continue
         item = value
         assert isinstance(item, ElementTree.Element)
@@ -1536,10 +1602,7 @@ def _dynamic_paragraph_text(
                 field_instruction = []
                 skip_field_result = False
             elif field_type == "separate" and field_instruction is not None:
-                instruction = "".join(field_instruction).strip().casefold()
-                if instruction != "page":
-                    raise ValueError("unsupported dynamic Word field")
-                values.append(str(page_number))
+                values.append(resolved_field("".join(field_instruction)))
                 skip_field_result = True
             elif field_type == "end":
                 field_instruction = None
@@ -1584,13 +1647,13 @@ def _header_footer_profile(
         if _is_internal_relationship(item)
     }
     profile: dict[str, str | bool | None] = {
-        "different_first": _current_named(sections[0], "titlePg") is not None,
+        "different_first": _on_off(_current_named(sections[0], "titlePg")),
         "even_and_odd": False,
     }
     settings = xml_roots.get("word/settings.xml")
     if settings is not None:
         profile["even_and_odd"] = (
-            _first_named(settings, "evenAndOddHeaders") is not None
+            _on_off(_current_first(settings, "evenAndOddHeaders"))
         )
     for reference in references:
         kind = "header" if _local_name(reference.tag) == "headerReference" else "footer"
@@ -2356,6 +2419,13 @@ def _word_internal_link_expectations(
         # One depth-first pass visits each node exactly once.
         for child in node:
             local_name = _local_name(child.tag)
+            if _is_unrendered_container(local_name):
+                # A bookmark ordinal is counted over the text the PDF will show.
+                # Counting text Word never paints -- a tracked deletion carrying
+                # a plain w:r/w:t, or the mc:Fallback twin of a text box -- shifted
+                # the ordinal, so the link either resolved to the wrong place or
+                # the faithful PDF was rejected outright.
+                continue
             if local_name == "bookmarkStart":
                 bookmark_id = _attribute_named(child, "id")
                 name = _attribute_named(child, "name")
@@ -2851,9 +2921,12 @@ def _word_text_expectations(
             last_row_enabled = enabled(look, "lastRow")
             first_column_enabled = enabled(look, "firstColumn")
             last_column_enabled = enabled(look, "lastColumn")
-            rows = list(_children_named(table, "tr"))
+            # Rows and cells behind a transparent container are still rows and
+            # cells.  Reading direct children only moved the firstRow and
+            # firstColumn bands onto the wrong row and column.
+            rows = list(_own_table_rows(table))
             for row_index, row in enumerate(rows):
-                cells = list(_children_named(row, "tc"))
+                cells = list(_own_row_cells(row))
                 for cell_index, cell in enumerate(cells):
                     active: set[str] = set()
                     first_row = row_index == 0 and first_row_enabled
@@ -2950,13 +3023,19 @@ def _word_text_expectations(
         for kind, child in _own_block_sequence(body):
             if kind == "p":
                 paragraph = child
-                # Read the paragraph the way the segment builder reads it.
-                # Selecting the anchor from raw text chose a paragraph holding
-                # only tracked-deleted runs, which then produced no expectation
-                # at all and left the page-margin binding vacuous once more.
-                text = "".join(
-                    item.text or "" for item in _current_iter(paragraph, "t")
-                )
+                # ONE decider.  This loop and the segment builder below must
+                # agree on which paragraphs produce a visible expectation, and
+                # three consecutive review rounds found them disagreeing through
+                # a new document shape each time: tracked deletions, then hidden
+                # runs, then text living only in a nested (text box) paragraph.
+                # Asking _visible_paragraph_text -- the same reader the builder
+                # uses -- ends the class rather than the instance.
+                #
+                # Declared limitation: when the first body block is a table, or a
+                # paragraph whose only content is a picture, no paragraph holds
+                # the first visible line and this binding does not apply.  That
+                # is a gap in what the oracle models, not a silent disagreement.
+                text = _visible_paragraph_text(paragraph, is_hidden_run)
                 if text.strip() and _current_first(paragraph, "drawing") is None:
                     anchor_paragraph_id = id(paragraph)
                     break
@@ -3051,7 +3130,10 @@ def _word_text_expectations(
         }
         for paragraph in _current_iter(xml_roots[name], "p"):
             in_table = id(paragraph) in table_paragraph_ids
-            paragraph_has_drawing = _first_named(paragraph, "drawing") is not None
+            # The anchor loop asks this with _current_first; asking it with the
+            # unpruned helper made a tracked-deleted picture switch the body-flow
+            # binding off for the rest of the part.
+            paragraph_has_drawing = _current_first(paragraph, "drawing") is not None
             paragraph_properties = next(_children_named(paragraph, "pPr"), None)
             paragraph_style_node = _current_named(paragraph_properties, "pStyle")
             paragraph_style = (
@@ -5206,7 +5288,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                     ] = []
                     inferred_column_count: int | None = None
                     for row in _own_table_rows(table):
-                        cell_nodes = list(_children_named(row, "tc"))
+                        cell_nodes = list(_own_row_cells(row))
                         # Word writes gridBefore/gridAfter whenever a row does not
                         # span the whole grid -- the ordinary result of merging or
                         # deleting leading or trailing cells.  Without them the
@@ -5629,6 +5711,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                     fragment := _dynamic_paragraph_text(
                         paragraph,
                         page_number=page + 1,
+                        page_count=page_count,
                         is_hidden_run=is_hidden_run,
                         style_id=_paragraph_style_id(paragraph),
                     )
@@ -6245,6 +6328,7 @@ _ACQUIRING_PDF_ANNOTATIONS = frozenset(
     {"/FileAttachment", "/Movie", "/Sound", "/Screen", "/RichMedia", "/3D"}
 )
 _ACQUIRING_PDF_ANNOTATION_KEYS = (
+    "/AF",
     "/FS",
     "/Movie",
     "/Sound",
@@ -6253,30 +6337,47 @@ _ACQUIRING_PDF_ANNOTATION_KEYS = (
     "/3DD",
     "/3DA",
 )
-# Object graphs can be cyclic, and a hostile one can be deep; the walks below are
-# bounded so a malformed document cannot turn a validator into a hang.
+# Object graphs can be cyclic, and a hostile one can be deep, so every walk below
+# is bounded and cycle-guarded.  The bound REFUSES on exhaustion: it was first
+# written as the loop's continuation condition, which made running out of budget
+# mean "nothing left to check" and accepted a /Launch sitting past the limit.  A
+# completeness guard must not share an exit with "examined everything, clean".
 _PDF_TRAVERSAL_LIMIT = 4096
+
+
+def _pdf_visit(seen: set[int], node: object) -> bool:
+    """Record a node as visited; refuse a graph too large to walk."""
+    if len(seen) >= _PDF_TRAVERSAL_LIMIT:
+        raise ValueError("delivery artifact structure is too large to verify")
+    if id(node) in seen:
+        return False
+    seen.add(id(node))
+    return True
 
 
 def _pdf_object(value):
     return value.get_object() if hasattr(value, "get_object") else value
 
 
-def _reject_pdf_action(value) -> None:
+def _reject_pdf_action(value, seen: set[int] | None = None) -> None:
     """An internal /GoTo is the only action a delivered PDF may carry.
 
-    A bare destination -- an array, or a named destination -- is not an action
-    at all and executes nothing, so it passes through untouched.
+    A bare destination -- an array, or a named destination -- is not an action at
+    all and executes nothing, so it passes through untouched.  The /Next chain is
+    walked under the shared budget: two actions pointing at each other used to
+    recurse until Python raised, and a RecursionError is not the ValueError this
+    boundary's callers catch.
     """
+    visited = set() if seen is None else seen
     action = _pdf_object(value)
-    if not isinstance(action, dict):
+    if not isinstance(action, dict) or not _pdf_visit(visited, action):
         return
     if str(action.get("/S")) != _SAFE_PDF_ACTION:
         raise ValueError("active content is forbidden in delivery artifacts")
     following = _pdf_object(action.get("/Next"))
     for item in following if isinstance(following, list) else (following,):
         if item is not None:
-            _reject_pdf_action(item)
+            _reject_pdf_action(item, visited)
 
 
 def _reject_pdf_annotation(value) -> None:
@@ -6299,13 +6400,8 @@ def _reject_pdf_field_tree(value, seen: set[int] | None = None) -> None:
     fields = _pdf_object(value)
     for field in fields if isinstance(fields, list) else ():
         item = _pdf_object(field)
-        if (
-            not isinstance(item, dict)
-            or id(item) in visited
-            or len(visited) > _PDF_TRAVERSAL_LIMIT
-        ):
+        if not isinstance(item, dict) or not _pdf_visit(visited, item):
             continue
-        visited.add(id(item))
         if item.get("/AA") is not None:
             raise ValueError("active content is forbidden in delivery artifacts")
         _reject_pdf_action(item.get("/A"))
@@ -6319,13 +6415,14 @@ def _reject_pdf_outline(value) -> None:
         return
     pending = [outlines.get("/First")]
     visited: set[int] = set()
-    while pending and len(visited) <= _PDF_TRAVERSAL_LIMIT:
+    while pending:
         item = _pdf_object(pending.pop())
-        if not isinstance(item, dict) or id(item) in visited:
+        if not isinstance(item, dict) or not _pdf_visit(visited, item):
             continue
-        visited.add(id(item))
-        if item.get("/AA") is not None or item.get("/SE") is not None:
+        if item.get("/AA") is not None:
             raise ValueError("active content is forbidden in delivery artifacts")
+        # /SE names a structure element in a tagged PDF and executes nothing;
+        # refusing it turned an ordinary tagged annex with bookmarks away.
         _reject_pdf_action(item.get("/A"))
         pending.extend((item.get("/Next"), item.get("/First")))
 
@@ -6366,7 +6463,10 @@ def _reject_active_pdf_content(reader: PdfReader) -> None:
         _reject_pdf_field_tree(forms.get("/Fields"))
     _reject_pdf_outline(root.get("/Outlines"))
     for page in reader.pages:
-        if page.get("/AA") is not None:
+        # /AF attaches a file wherever it appears -- catalog, page, annotation --
+        # so enforcing it on the catalog alone let an /EmbeddedFile in through a
+        # page or an annotation.
+        if page.get("/AA") is not None or page.get("/AF") is not None:
             raise ValueError("active content is forbidden in delivery artifacts")
         for annotation in _pdf_object(page.get("/Annots")) or ():
             _reject_pdf_annotation(annotation)
@@ -6486,6 +6586,11 @@ def validate_delivery_artifact(content: bytes, output_format: str) -> tuple[str,
     return result
 
 
+# A supporting image is a photograph or a diagram from an inspection, not a
+# canvas: the bound is stated here rather than left to Pillow's own warning.
+_MAX_SUPPORTING_IMAGE_PIXELS = 80_000_000
+
+
 def validate_supporting_artifact(content: bytes, media_type: str) -> tuple[str, int, str]:
     """Verify non-Office supporting bytes without trusting filename metadata."""
     if type(content) is not bytes or not content:
@@ -6497,8 +6602,15 @@ def validate_supporting_artifact(content: bytes, media_type: str) -> tuple[str, 
         with Image.open(BytesIO(content)) as image:
             if image.format != expected_format:
                 raise ValueError(f"supporting {expected_format} artifact is invalid")
+            width, height = image.size
+            if width * height > _MAX_SUPPORTING_IMAGE_PIXELS:
+                raise ValueError(f"supporting {expected_format} artifact is invalid")
             image.verify()
-    except (OSError, UnidentifiedImageError) as exc:
+    except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as exc:
+        # A header alone can declare a gigapixel image.  Pillow raises
+        # DecompressionBombError, which derives from Exception rather than
+        # OSError, so it escaped this boundary entirely and reached callers that
+        # only catch ValueError.
         raise ValueError(f"supporting {expected_format} artifact is invalid") from exc
     return sha256(content).hexdigest(), len(content), media_type
 

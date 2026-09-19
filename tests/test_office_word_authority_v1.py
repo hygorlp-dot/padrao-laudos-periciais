@@ -799,6 +799,149 @@ def test_both_boundaries_reach_the_same_verdict(tmp_path: Path, label: str) -> N
     )
 
 
+# --- Phase C §27 round 6: the catalogue covers the axes it claims to -----------
+#
+# The catalogue's own comment says restating the policy is sound only while drift
+# is observable.  It ran DOCX alone, so the whole DOCM axis was unobserved, and
+# it had no entry for the package bounds or for the acquiring elements and
+# relationship types beyond one of each.  That claim now holds by construction.
+
+
+def _minimal_docm_parts() -> dict[str, str]:
+    parts = _minimal_docx_parts(_DOCM_MAIN_TYPE)
+    parts["[Content_Types].xml"] = _content_types(
+        {
+            "/word/document.xml": _DOCM_MAIN_TYPE,
+            "/word/vbaProject.bin": "application/vnd.ms-office.vbaProject",
+        }
+    )
+    parts["word/vbaProject.bin"] = "synthetic"
+    return parts
+
+
+def _docm_catalogue() -> dict[str, tuple[str, dict[str, str]]]:
+    entries: dict[str, tuple[str, dict[str, str]]] = {
+        "docm_with_a_macro_part": ("accept", _minimal_docm_parts()),
+        "docm_without_a_macro_part": ("accept", _minimal_docx_parts(_DOCM_MAIN_TYPE)),
+    }
+    wrong_identity = _minimal_docm_parts()
+    wrong_identity["[Content_Types].xml"] = _content_types(
+        {
+            "/word/document.xml": _DOCX_MAIN_TYPE,
+            "/word/vbaProject.bin": "application/vnd.ms-office.vbaProject",
+        }
+    )
+    entries["docm_declaring_the_docx_main_type"] = ("reject", wrong_identity)
+
+    for label, payload in (
+        ("docm_dde_field", _ACQUIRING_BODY),
+        ("docm_ole_object", "<w:p><w:r><w:object/></w:r></w:p>"),
+    ):
+        parts = _minimal_docm_parts()
+        parts["word/document.xml"] = _document(payload)
+        entries[label] = ("reject", parts)
+    return entries
+
+
+_DOCM_PARITY_CATALOGUE = _docm_catalogue()
+
+
+@pytest.mark.parametrize("label", sorted(_DOCM_PARITY_CATALOGUE))
+def test_both_boundaries_reach_the_same_verdict_on_docm(
+    tmp_path: Path, label: str
+) -> None:
+    expected, parts = _DOCM_PARITY_CATALOGUE[label]
+    source = _write_package(tmp_path / "source.docm", parts)
+
+    try:
+        office_word_worker._validate_word_source(source, "DOCM")
+        worker = "accept"
+    except ValueError:
+        worker = "reject"
+    try:
+        delivery_renderer.validate_final_artifact(source.read_bytes(), "DOCM")
+        delivery = "accept"
+    except ValueError:
+        delivery = "reject"
+
+    assert (worker, delivery) == (expected, expected), (
+        f"{label}: worker={worker} delivery={delivery} expected={expected}"
+    )
+
+
+_ACQUIRING_ELEMENTS = ("altChunk", "control", "object", "subDoc")
+_ACQUIRING_RELATIONSHIPS = (
+    "afChunk",
+    "attachedTemplate",
+    "control",
+    "controlProperty",
+    "externalLink",
+    "oleObject",
+    "package",
+    "subDocument",
+)
+
+
+@pytest.mark.parametrize("element", _ACQUIRING_ELEMENTS)
+def test_both_boundaries_reject_every_acquiring_element(
+    tmp_path: Path, element: str
+) -> None:
+    parts = _body_parts(f"<w:p><w:r><w:{element}/></w:r></w:p>")
+    source = _write_package(tmp_path / "source.docx", parts)
+
+    with pytest.raises(ValueError):
+        office_word_worker._validate_word_source(source, "DOCX")
+    with pytest.raises(ValueError):
+        delivery_renderer.validate_final_artifact(source.read_bytes(), "DOCX")
+
+
+@pytest.mark.parametrize("relationship", _ACQUIRING_RELATIONSHIPS)
+def test_both_boundaries_reject_every_acquiring_relationship(
+    tmp_path: Path, relationship: str
+) -> None:
+    parts = _minimal_docx_parts()
+    parts["word/_rels/document.xml.rels"] = (
+        f'<Relationships xmlns="{_TRANSITIONAL_RELS_NS}">'
+        '<Relationship Id="rIdX" Type="http://schemas.openxmlformats.org/'
+        f'officeDocument/2006/relationships/{relationship}" Target="alvo.bin"/>'
+        "</Relationships>"
+    )
+    parts["word/alvo.bin"] = "synthetic"
+    parts["[Content_Types].xml"] = _content_types(
+        {"/word/document.xml": _DOCX_MAIN_TYPE},
+        defaults={"bin": "application/octet-stream"},
+    )
+    source = _write_package(tmp_path / "source.docx", parts)
+
+    with pytest.raises(ValueError):
+        office_word_worker._validate_word_source(source, "DOCX")
+    with pytest.raises(ValueError):
+        delivery_renderer.validate_final_artifact(source.read_bytes(), "DOCX")
+
+
+def test_both_boundaries_reject_a_package_with_too_many_parts(tmp_path: Path) -> None:
+    parts = _minimal_docx_parts()
+    for index in range(office_word_worker._MAX_PACKAGE_PARTS + 4):
+        parts[f"word/extra{index}.xml"] = "<x/>"
+    source = _write_package(tmp_path / "source.docx", parts)
+
+    with pytest.raises(ValueError):
+        office_word_worker._validate_word_source(source, "DOCX")
+    with pytest.raises(ValueError):
+        delivery_renderer.validate_final_artifact(source.read_bytes(), "DOCX")
+
+
+def test_both_boundaries_reject_an_overly_compressible_part(tmp_path: Path) -> None:
+    parts = _minimal_docx_parts()
+    parts["word/inflado.xml"] = "<x>" + ("a" * (3 * 1024 * 1024)) + "</x>"
+    source = _write_package(tmp_path / "source.docx", parts)
+
+    with pytest.raises(ValueError):
+        office_word_worker._validate_word_source(source, "DOCX")
+    with pytest.raises(ValueError):
+        delivery_renderer.validate_final_artifact(source.read_bytes(), "DOCX")
+
+
 # --- Phase C §27 round 4: target spellings must be closed, not applied once ---
 #
 # Percent-decoding and invisible-character stripping ran once each, in that

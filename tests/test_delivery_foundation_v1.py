@@ -34,6 +34,7 @@ from tests.opc_word_fixtures import (
     DOCM_MAIN_TYPE,
     VBA_PROJECT_TYPE,
     bound_template_document,
+    word_field,
     word_package,
 )
 
@@ -7132,3 +7133,543 @@ def test_the_top_margin_anchor_skips_a_paragraph_word_does_not_render() -> None:
 
     assert anchored(plain) == 1
     assert anchored(deleted_first) == 1
+
+
+# --- Phase C §27 round 6: a completeness guard may not default open ------------
+#
+# _PDF_TRAVERSAL_LIMIT was written as the walk's continuation condition, so
+# running out of budget meant "nothing left to check" and a /Launch sitting past
+# the limit was accepted.  A guard over completeness must not share an exit with
+# "examined everything, clean": exhaustion refuses now.
+#
+# /AF attaches a file wherever it appears -- catalog, page, annotation -- and was
+# enforced on the catalog alone, so an /EmbeddedFile entered through a page or an
+# annotation.  And two actions whose /Next pointed at each other recursed until
+# Python raised, which is not the ValueError this boundary's callers catch.
+
+
+def _outline_chain_pdf(launch_at: int | None, total: int) -> bytes:
+    writer = _blank_pdf_writer()
+    references = []
+    for index in range(total):
+        payload = _pdf_action("/Launch" if index == launch_at else "/GoTo")
+        references.append(
+            writer._add_object(
+                DictionaryObject(
+                    {
+                        NameObject("/Title"): create_string_object(f"item {index}"),
+                        NameObject("/A"): writer._add_object(payload),
+                    }
+                )
+            )
+        )
+    for index, reference in enumerate(references[:-1]):
+        reference.get_object()[NameObject("/Next")] = references[index + 1]
+    writer._root_object[NameObject("/Outlines")] = writer._add_object(
+        DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Outlines"),
+                NameObject("/First"): references[0],
+                NameObject("/Last"): references[-1],
+                NameObject("/Count"): NumberObject(total),
+            }
+        )
+    )
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def _field_chain_pdf(launch_at: int | None, total: int) -> bytes:
+    writer = _blank_pdf_writer()
+    fields = []
+    for index in range(total):
+        node = DictionaryObject(
+            {
+                NameObject("/FT"): NameObject("/Btn"),
+                NameObject("/T"): create_string_object(f"campo {index}"),
+            }
+        )
+        if index == launch_at:
+            node[NameObject("/A")] = writer._add_object(_pdf_action("/Launch"))
+        fields.append(writer._add_object(node))
+    writer._root_object[NameObject("/AcroForm")] = DictionaryObject(
+        {NameObject("/Fields"): ArrayObject(fields)}
+    )
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+_BEYOND_LIMIT = delivery_renderer._PDF_TRAVERSAL_LIMIT + 60
+
+
+@pytest.mark.parametrize(
+    ("kind", "within"),
+    (("outline", True), ("outline", False), ("fields", True), ("fields", False)),
+)
+def test_an_action_past_the_traversal_bound_is_not_certified(
+    kind: str, within: bool
+) -> None:
+    """Whether the walk reaches the action or runs out of budget, it refuses."""
+    total = 40 if within else _BEYOND_LIMIT
+    launch_at = 10 if within else _BEYOND_LIMIT - 6
+    build = _outline_chain_pdf if kind == "outline" else _field_chain_pdf
+    content = build(launch_at, total)
+
+    with pytest.raises(ValueError):
+        validate_final_artifact(content, "PDF")
+    with pytest.raises(ValueError):
+        delivery_renderer.validate_delivery_artifact(content, "PDF")
+
+
+def test_a_graph_too_large_to_walk_is_refused_by_name() -> None:
+    with pytest.raises(ValueError, match="too large to verify"):
+        validate_final_artifact(_outline_chain_pdf(None, _BEYOND_LIMIT), "PDF")
+
+
+def _associated_file_pdf(where: str) -> bytes:
+    writer = _blank_pdf_writer()
+    attachment = ArrayObject([writer._add_object(_pdf_filespec(writer))])
+    if where == "catalog":
+        writer._root_object[NameObject("/AF")] = attachment
+    elif where == "page":
+        writer.pages[0][NameObject("/AF")] = attachment
+    else:
+        _with_annotation(writer, _annotation("/Link", **{"/AF": attachment}))
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+@pytest.mark.parametrize("where", ("catalog", "page", "annotation"))
+def test_an_embedded_file_is_refused_wherever_it_is_attached(where: str) -> None:
+    content = _associated_file_pdf(where)
+
+    with pytest.raises(ValueError, match="active content"):
+        validate_final_artifact(content, "PDF")
+    with pytest.raises(ValueError, match="active content"):
+        delivery_renderer.validate_delivery_artifact(content, "PDF")
+
+
+def _cyclic_next_pdf(second_subtype: str) -> bytes:
+    writer = _blank_pdf_writer()
+    first = writer._add_object(_pdf_action("/GoTo"))
+    second = writer._add_object(_pdf_action(second_subtype))
+    first.get_object()[NameObject("/Next")] = second
+    second.get_object()[NameObject("/Next")] = first
+    writer._root_object[NameObject("/OpenAction")] = first
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def test_a_cyclic_action_chain_terminates_without_leaking() -> None:
+    """Two internal /GoTo actions pointing at each other execute nothing."""
+    assert validate_final_artifact(_cyclic_next_pdf("/GoTo"), "PDF")[2] == "application/pdf"
+
+
+def test_a_cyclic_action_chain_still_sees_the_unsafe_action() -> None:
+    with pytest.raises(ValueError, match="active content"):
+        validate_final_artifact(_cyclic_next_pdf("/Launch"), "PDF")
+
+
+def test_a_tagged_bookmark_naming_its_structure_element_is_accepted() -> None:
+    """/SE points at a structure element and executes nothing."""
+    writer = _blank_pdf_writer()
+    item = DictionaryObject(
+        {
+            NameObject("/Title"): create_string_object("Capitulo 1"),
+            NameObject("/A"): writer._add_object(_pdf_action("/GoTo")),
+            NameObject("/SE"): writer._add_object(
+                DictionaryObject({NameObject("/S"): NameObject("/Document")})
+            ),
+        }
+    )
+    reference = writer._add_object(item)
+    writer._root_object[NameObject("/Outlines")] = writer._add_object(
+        DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Outlines"),
+                NameObject("/First"): reference,
+                NameObject("/Last"): reference,
+            }
+        )
+    )
+    output = BytesIO()
+    writer.write(output)
+
+    assert validate_final_artifact(output.getvalue(), "PDF")[2] == "application/pdf"
+
+
+def _png_header(width: int, height: int) -> bytes:
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload))
+            + kind
+            + payload
+            + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+        )
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IEND", b"")
+
+
+@pytest.mark.parametrize(("width", "height"), ((40000, 40000), (20000, 20000)))
+def test_a_gigapixel_supporting_image_is_refused_as_a_value_error(
+    width: int, height: int
+) -> None:
+    """A header alone can declare a gigapixel image; Pillow's own error for that
+    derives from Exception, so it escaped a boundary whose callers catch
+    ValueError."""
+    with pytest.raises(ValueError, match="supporting PNG artifact is invalid"):
+        validate_supporting_artifact(_png_header(width, height), "image/png")
+
+
+def test_an_ordinary_supporting_image_is_still_accepted() -> None:
+    output = BytesIO()
+    Image.new("RGB", (64, 48), "white").save(output, format="PNG")
+
+    assert validate_supporting_artifact(output.getvalue(), "image/png")[2] == "image/png"
+
+
+# --- Phase C §27 round 6: the readers that must agree, agree -------------------
+#
+# Four fidelity readers were still on the unpruned side after the split was
+# declared.  Each is compared against something that reads only what Word paints,
+# so a tracked deletion carrying a plain w:r/w:t -- which CT_RunTrackChange
+# permits, as this module's own comment says -- made them disagree.
+
+_DELETION = '<w:del w:id="9" w:author="a" w:date="d"><w:r><w:t>{}</w:t></w:r></w:del>'
+_MOVED_FROM = (
+    '<w:moveFrom w:id="8" w:author="a" w:date="d"><w:r><w:t>{}</w:t></w:r></w:moveFrom>'
+)
+_TWIN_TEXT_BOX = (
+    "<w:r><mc:AlternateContent>"
+    '<mc:Choice Requires="wps"><w:drawing><w:txbxContent>'
+    "<w:p><w:r><w:t>{0}</w:t></w:r></w:p></w:txbxContent></w:drawing></mc:Choice>"
+    "<mc:Fallback><w:pict><w:txbxContent>"
+    "<w:p><w:r><w:t>{0}</w:t></w:r></w:p></w:txbxContent></w:pict></mc:Fallback>"
+    "</mc:AlternateContent></w:r>"
+)
+
+
+def _link_ordinal(extra: str) -> int:
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">'
+        "<w:body>"
+        # The unrendered content sits BEFORE the bookmark on purpose: that is
+        # what shifts the ordinal, and a fixture placing it after would pass
+        # whether or not the walk prunes.
+        f"<w:p>{extra}</w:p>"
+        '<w:p><w:bookmarkStart w:id="1" w:name="alvo"/>'
+        "<w:r><w:t>Quesito</w:t></w:r>"
+        '<w:bookmarkEnd w:id="1"/></w:p>'
+        '<w:p><w:hyperlink w:anchor="alvo"><w:r><w:t>ver Quesito</w:t></w:r></w:hyperlink></w:p>'
+        "</w:body></w:document>"
+    )
+    expectations = delivery_renderer._word_internal_link_expectations(document)
+    assert len(expectations) == 1
+    return expectations[0].target_occurrence
+
+
+_PLAIN_TEXT_BOX = (
+    "<w:r><w:drawing><w:txbxContent>"
+    "<w:p><w:r><w:t>{}</w:t></w:r></w:p>"
+    "</w:txbxContent></w:drawing></w:r>"
+)
+
+
+@pytest.mark.parametrize(
+    ("label", "extra", "expected"),
+    (
+        ("nothing_unrendered", "", 0),
+        # Word paints neither a deleted run nor a moved-from one, so neither may
+        # shift the ordinal.
+        ("tracked_deletion", _DELETION.format("Quesito"), 0),
+        ("moved_from", _MOVED_FROM.format("Quesito"), 0),
+        # A text box IS painted, and the rest of the oracle counts its text as an
+        # expectation, so counting it here once is consistent.  The defect was
+        # counting it TWICE, once per mc:AlternateContent branch.
+        ("plain_text_box", _PLAIN_TEXT_BOX.format("Quesito"), 1),
+        ("alternate_content_twin", _TWIN_TEXT_BOX.format("Quesito"), 1),
+    ),
+)
+def test_a_bookmark_ordinal_counts_painted_text_exactly_once(
+    label: str, extra: str, expected: int
+) -> None:
+    """The ordinal is matched against what pdfium painted, so it must count that."""
+    assert _link_ordinal(extra) == expected
+
+
+def test_an_alternate_content_text_box_counts_as_one_text_box() -> None:
+    """The twin branches carry the same content; Word renders one of them."""
+    assert _link_ordinal(_TWIN_TEXT_BOX.format("Quesito")) == _link_ordinal(
+        _PLAIN_TEXT_BOX.format("Quesito")
+    )
+
+
+def test_the_profiled_paragraph_reader_agrees_with_the_plain_one() -> None:
+    """_dynamic_paragraph_text's docstring says it must agree; it did not."""
+    paragraph = next(
+        delivery_renderer._current_iter(
+            _doc("<w:p><w:r><w:t>Laudo</w:t></w:r>" + _DELETION.format("suprimido") + "</w:p>"),
+            "p",
+        )
+    )
+    hidden = delivery_renderer._hidden_run_resolver(None)
+
+    plain = delivery_renderer._visible_paragraph_text(paragraph, hidden)
+    profiled = delivery_renderer._dynamic_paragraph_text(
+        paragraph, page_number=1, is_hidden_run=hidden
+    )
+
+    assert (plain, profiled) == ("Laudo", "Laudo")
+
+
+_TABLE_BAND_STYLE = (
+    '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+    '<w:style w:type="table" w:styleId="Grade">'
+    '<w:tblStylePr w:type="firstRow"><w:rPr><w:b/></w:rPr></w:tblStylePr>'
+    "</w:style></w:styles>"
+)
+
+
+def _banded_table(wrap_first_row: bool):
+    header = "<w:tr>" + _TC.format("Cabeca") + "</w:tr>"
+    if wrap_first_row:
+        header = "<w:sdt><w:sdtContent>" + header + "</w:sdtContent></w:sdt>"
+    return _doc(
+        '<w:tbl><w:tblPr><w:tblStyle w:val="Grade"/>'
+        '<w:tblLook w:firstRow="1"/></w:tblPr>'
+        '<w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>'
+        + header
+        + "<w:tr>"
+        + _TC.format("Dado")
+        + "</w:tr></w:tbl>"
+    )
+
+
+@pytest.mark.parametrize("wrapped", (False, True))
+def test_conditional_table_formatting_follows_rendered_rows(wrapped: bool) -> None:
+    """A repeating-section control around the header row is ordinary Word."""
+    expectations = delivery_renderer._word_text_expectations(
+        {
+            "word/document.xml": _banded_table(wrapped),
+            "word/styles.xml": delivery_renderer.ElementTree.fromstring(_TABLE_BAND_STYLE),
+        }
+    )
+
+    assert {item.text: bool(item.bold) for item in expectations} == {
+        "cabeca": True,
+        "dado": False,
+    }
+
+
+def test_a_cell_behind_a_content_control_keeps_the_table_resolvable() -> None:
+    """A cell-level content control must not make a legal table unsupported."""
+    wrapped = (
+        '<w:tbl><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>'
+        "<w:tr>"
+        + _TC.format("Alfa")
+        + "<w:sdt><w:sdtContent>"
+        + _TC.format("Beta")
+        + "</w:sdtContent></w:sdt>"
+        + "</w:tr></w:tbl>"
+    )
+
+    delivery_renderer._validate_pdf_fidelity(
+        _package_bytes(wrapped),
+        _positioned_text_pdf(
+            [[("Alfa", 50.0, 700.0, 10.0, 0), ("Beta", 250.0, 700.0, 10.0, 0)]]
+        ),
+    )
+
+
+def test_a_tracked_deleted_picture_keeps_the_paragraph_spacing_binding() -> None:
+    """The anchor loop and the expectation loop must ask the same question."""
+    section = '<w:sectPr><w:pgMar w:top="1440" w:bottom="1440" w:left="1440" w:right="1440"/></w:sectPr>'
+    deleted_picture = (
+        '<w:p><w:r><w:t>Abertura</w:t></w:r></w:p>'
+        '<w:p><w:del w:id="3" w:author="a" w:date="d"><w:r>'
+        '<w:drawing><wp:docPr descr="x"/></w:drawing></w:r></w:del>'
+        "<w:r><w:t>Segunda</w:t></w:r></w:p>"
+    )
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">'
+        f"<w:body>{deleted_picture}{section}</w:body></w:document>"
+    )
+
+    expectations = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document}
+    )
+    by_text = {item.text: item for item in expectations}
+
+    assert by_text["abertura"].expected_top_offset is not None
+    assert by_text["segunda"].expected_previous_top_gap is not None
+
+
+# --- Phase C §27 round 6: one anchor decider, ON/OFF by value, NUMPAGES --------
+#
+# The page-margin anchor was found vacuous in THREE consecutive rounds, through a
+# new document shape each time, because the loop that picks the anchor and the
+# builder that emits the expectation read a paragraph differently.  They now ask
+# the same reader, which ends the class instead of the instance.
+
+_SECTION_MARGINS = (
+    '<w:sectPr><w:pgMar w:top="1440" w:bottom="1440" w:left="1440" w:right="1440"/></w:sectPr>'
+)
+_HIDDEN_ONLY = "<w:p><w:r><w:rPr><w:vanish/></w:rPr><w:t>Invisivel</w:t></w:r></w:p>"
+_NESTED_ONLY = (
+    "<w:p><w:r><w:drawing><w:txbxContent>"
+    "<w:p><w:r><w:t>Dentro da caixa</w:t></w:r></w:p>"
+    "</w:txbxContent></w:drawing></w:r></w:p>"
+)
+
+
+def _anchored_texts(body: str) -> list[str]:
+    return [
+        item.text
+        for item in delivery_renderer._word_text_expectations(
+            {"word/document.xml": _doc(body + _SECTION_MARGINS)}
+        )
+        if item.expected_top_offset is not None
+    ]
+
+
+@pytest.mark.parametrize(
+    ("label", "leading"),
+    (
+        ("nothing_before", ""),
+        ("hidden_run_only_paragraph", _HIDDEN_ONLY),
+        (
+            "tracked_deleted_paragraph",
+            '<w:p><w:del w:id="1" w:author="a" w:date="d"><w:r><w:t>Apagado</w:t></w:r></w:del></w:p>',
+        ),
+    ),
+)
+def test_the_top_margin_anchor_lands_on_the_first_visible_paragraph(
+    label: str, leading: str
+) -> None:
+    """A paragraph that produces no expectation cannot be the anchor."""
+    assert _anchored_texts(leading + "<w:p><w:r><w:t>Abertura</w:t></w:r></w:p>") == [
+        "abertura"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("label", "leading"),
+    (
+        ("leading_table", _SIMPLE_TABLE),
+        (
+            "picture_only_paragraph",
+            '<w:p><w:r><w:drawing><wp:docPr descr="x"/></w:drawing></w:r></w:p>',
+        ),
+        # A paragraph whose only content is a text box carries a w:drawing, so it
+        # falls under the same declared limitation as a picture.
+        ("text_box_only_paragraph", _NESTED_ONLY),
+    ),
+)
+def test_the_top_margin_binding_is_declared_not_to_apply(label: str, leading: str) -> None:
+    """DECLARED LIMITATION: no paragraph holds the first visible line here.
+
+    This is recorded as a test so the gap is visible rather than discovered again
+    as a silent vacuity.  Closing it needs a page-margin model for a leading
+    table or a leading picture, which the oracle does not have.
+    """
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">'
+        f"<w:body>{leading}<w:p><w:r><w:t>Abertura</w:t></w:r></w:p>{_SECTION_MARGINS}"
+        "</w:body></w:document>"
+    )
+
+    anchored = [
+        item.text
+        for item in delivery_renderer._word_text_expectations(
+            {"word/document.xml": document}
+        )
+        if item.expected_top_offset is not None
+    ]
+
+    assert anchored == []
+
+
+@pytest.mark.parametrize(
+    ("markup", "expected"),
+    (
+        ("", False),
+        ("<w:titlePg/>", True),
+        ('<w:titlePg w:val="1"/>', True),
+        ('<w:titlePg w:val="true"/>', True),
+        ('<w:titlePg w:val="0"/>', False),
+        ('<w:titlePg w:val="false"/>', False),
+        ('<w:titlePg w:val="off"/>', False),
+    ),
+)
+def test_an_on_off_setting_is_read_by_value(markup: str, expected: bool) -> None:
+    """w:val="0" is how Word turns a setting off without deleting the element."""
+    section = delivery_renderer.ElementTree.fromstring(
+        f'<w:sectPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"{markup}</w:sectPr>"
+    )
+
+    node = delivery_renderer._current_named(section, "titlePg")
+
+    assert delivery_renderer._on_off(node) is expected
+
+
+def test_a_page_of_pages_footer_resolves_both_fields() -> None:
+    """report_template mandates NUMPAGES; this reader used to fail on it, so the
+    two rules were mutually unsatisfiable for an ordinary footer."""
+    footer = _doc(
+        "<w:p><w:r><w:t>Pagina </w:t></w:r>"
+        + word_field("PAGE")
+        + "<w:r><w:t> de </w:t></w:r>"
+        + word_field("NUMPAGES")
+        + "</w:p>"
+    )
+    paragraph = next(delivery_renderer._current_iter(footer, "p"))
+
+    resolved = delivery_renderer._dynamic_paragraph_text(
+        paragraph, page_number=2, page_count=7
+    )
+
+    assert resolved == "Pagina 2 de 7"
+
+
+def test_an_unmodelled_header_field_still_fails_closed() -> None:
+    paragraph = next(
+        delivery_renderer._current_iter(_doc("<w:p>" + word_field("DATE") + "</w:p>"), "p")
+    )
+
+    with pytest.raises(ValueError, match="unsupported dynamic Word field"):
+        delivery_renderer._dynamic_paragraph_text(paragraph, page_number=1, page_count=1)
+
+
+def test_a_picture_the_package_does_not_contain_is_named_as_such() -> None:
+    """Skipping it silently made the two picture sweeps disagree by length."""
+    payload = word_package(
+        f"<w:document {_IMAGE_NS}><w:body>{_SINGLE_PICTURE}</w:body></w:document>",
+        parts={
+            "word/_rels/document.xml.rels": (
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/'
+                'officeDocument/2006/relationships/image" Target="media/ausente.png"/>'
+                "</Relationships>"
+            ),
+        },
+    )
+    with ZipFile(BytesIO(payload)) as package:
+        root = delivery_renderer.ElementTree.fromstring(
+            package.read("word/document.xml")
+        )
+        with pytest.raises(ValueError, match="picture relationship cannot be resolved"):
+            delivery_renderer._ordered_word_image_signatures(
+                package, {"word/document.xml": root}
+            )
