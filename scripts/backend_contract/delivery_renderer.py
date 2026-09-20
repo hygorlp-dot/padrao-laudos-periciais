@@ -21,7 +21,6 @@ from PIL import Image, ImageChops, ImageFilter, ImageStat
 import pypdfium2 as pdfium
 from pypdf import PdfReader
 from pypdf.generic import BooleanObject
-from pypdf.errors import PdfReadError
 from pypdf.generic import ContentStream, StreamObject
 
 from .report_foundation import ReportSnapshot
@@ -727,9 +726,18 @@ _CANONICAL_LINE_BREAKS = (
     chr(0x2028),
     chr(0x2029),
 )
-# What XML 1.0 forbids outright, and what no rendering would show anyway.
-_XML_FORBIDDEN_CONTROLS = re.compile(
-    "[" + chr(0) + "-" + chr(8) + chr(14) + "-" + chr(31) + "]"
+# The complement of the XML 1.0 Char production, not just the C0 controls: the
+# production also excludes the surrogate range and the two non-characters #xFFFE
+# and #xFFFF, which are not controls and passed a guard named for controls.  A
+# U+FFFF in a claim reached the re-parse and left as a ParseError.
+_XML_FORBIDDEN_CHARACTERS = re.compile(
+    "["
+    + chr(0) + "-" + chr(8)
+    + chr(11) + chr(12)
+    + chr(14) + "-" + chr(31)
+    + chr(0xD800) + "-" + chr(0xDFFF)
+    + chr(0xFFFE) + chr(0xFFFF)
+    + "]"
 )
 
 
@@ -737,7 +745,7 @@ def _canonical_text(value: str) -> str:
     """One canonical line, in the only form XML can carry back unchanged."""
     for control in _CANONICAL_LINE_BREAKS:
         value = value.replace(control, chr(10))
-    found = _XML_FORBIDDEN_CONTROLS.search(value)
+    found = _XML_FORBIDDEN_CHARACTERS.search(value)
     if found is not None:
         raise ValueError(
             "canonical report text carries a character XML cannot represent: "
@@ -5791,7 +5799,11 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         reading_positioned = _positioned_reading_order(positioned)
         pdf_content_kinds = _pdf_content_kinds(reader)
         unsafe_text = unsafe_text or pdfium_unsafe
-    except (BadZipFile, KeyError, ElementTree.ParseError, PdfReadError, OSError, RuntimeError, ValueError) as exc:
+    except Exception as exc:
+        # The module's third pypdf guard, and the last one still enumerating its
+        # failure vocabulary while the other two convert the class.  A catalog
+        # object that is not a dictionary makes pypdf raise AttributeError, which
+        # this list did not name.
         raise ValueError("final PDF fidelity cannot be verified") from exc
     page_count = len(reader.pages)
 
@@ -6517,6 +6529,41 @@ _ACQUIRING_PDF_NAME_TREES = ("/JavaScript", "/EmbeddedFiles", "/Renditions")
 # that give it its meaning.
 _ACQUIRING_PDF_CATALOG_KEYS = ("/AA", "/Collection", "/AF")
 _ABSOLUTE_ACQUIRING_PDF_KEYS = ("/AA", "/AF", "/Collection")
+# An ACTION is recognisable by its own shape: a dictionary whose /S names a PDF
+# action type.  The slots were enumerated instead -- /A on an annotation, an
+# outline item or a field, /OpenAction, /AA, /Next -- and a page's /PresSteps
+# navigation node, whose /NA and /PA ARE actions (ISO 32000-1 12.4.4.2), was
+# reached by no route and named in no set, so /Launch and /JavaScript went
+# through.  Judging the shape covers every slot, including the ones nobody has
+# thought of yet.
+#
+# /GoTo is absent because an internal destination is the one action this boundary
+# allows.  A structure element's /S is a structure TYPE, not an action type, so a
+# tagged PDF is unaffected unless its author invents a structure type spelled
+# like an action -- which would cost availability, the declared direction.
+_ACQUIRING_PDF_ACTION_TYPES = frozenset(
+    {
+        "/GoToR",
+        "/GoToE",
+        "/GoToDp",
+        "/Launch",
+        "/Thread",
+        "/URI",
+        "/Sound",
+        "/Movie",
+        "/Hide",
+        "/Named",
+        "/SetOCGState",
+        "/Rendition",
+        "/Trans",
+        "/GoTo3DView",
+        "/JavaScript",
+        "/SubmitForm",
+        "/ResetForm",
+        "/ImportData",
+        "/RichMediaExecute",
+    }
+)
 # ...but "wherever they sit" has one real exception, and it is not about the keys'
 # meaning: some PDF dictionaries are keyed by names the PRODUCER chooses, so their
 # keys are data rather than vocabulary.  A page resource dictionary may name an
@@ -6644,8 +6691,10 @@ def _pdf_is_name_keyed(node: dict) -> bool:
 
 
 def _reject_pdf_attachment(item: dict) -> None:
-    """The absolute keys, judged identically at every object that carries them."""
+    """The absolute keys and the action shape, judged at every object alike."""
     if any(item.get(key) is not None for key in _ABSOLUTE_ACQUIRING_PDF_KEYS):
+        raise ValueError("active content is forbidden in delivery artifacts")
+    if str(item.get("/S") or "") in _ACQUIRING_PDF_ACTION_TYPES:
         raise ValueError("active content is forbidden in delivery artifacts")
 
 
@@ -6783,6 +6832,13 @@ def _reject_pdf_field_tree(value, seen: set[int] | None = None) -> None:
             if item.get("/AA") is not None:
                 raise ValueError("active content is forbidden in delivery artifacts")
             _reject_pdf_action(item.get("/A"), visited)
+            # A field and its widget may be the SAME object, and a field reached
+            # only from /AcroForm -- with no page showing a widget for it -- was
+            # judged as a field and never as an annotation, so a /FileAttachment
+            # carrying /FS passed.  Round 9 closed the symmetric half, an
+            # annotation that is its own action, and left this one.  The visit
+            # record is keyed by judgement, so asking for both is cheap.
+            _reject_pdf_annotation(item, visited)
             pending.append(item.get("/Kids"))
 
 

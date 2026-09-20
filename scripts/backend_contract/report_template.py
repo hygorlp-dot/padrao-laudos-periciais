@@ -17,6 +17,47 @@ _FIELD_NAMES = {"TOC", "PAGE", "NUMPAGES", "SEQ", "REF", "PAGEREF"}
 _ACQUIRING_TEMPLATE_FIELDS = re.compile(
     r"\b(?:INCLUDETEXT|INCLUDEPICTURE|DDEAUTO|DDE)\b", re.IGNORECASE
 )
+# The same expression both validators use.  This reader took the token up to the
+# first whitespace, and Word ends a field NAME at whitespace OR at a double
+# quote: PAGEREF"Marca" binds as wdFieldPageRef in Word 16 and both validators
+# accept it, while this statement refused it -- so a template they certify could
+# never be bound.
+_TEMPLATE_FIELD_CODE = re.compile(r"\s*([A-Z]+)\b", re.IGNORECASE)
+# A binding value is text the product accepts upstream, and it has to survive
+# being written into XML.  The canonical block normalises the line-break family
+# and refuses what XML cannot carry; this site only escaped the three
+# metacharacters, so an expert whose name held Word's manual line break made
+# every render of an approved report fail, blaming the template.
+_TEMPLATE_LINE_BREAKS = (
+    chr(13) + chr(10),
+    chr(13),
+    chr(11),
+    chr(12),
+    chr(0x85),
+    chr(0x2028),
+    chr(0x2029),
+)
+_TEMPLATE_FORBIDDEN_CHARACTERS = re.compile(
+    "["
+    + chr(0) + "-" + chr(8)
+    + chr(14) + "-" + chr(31)
+    + chr(0xD800) + "-" + chr(0xDFFF)
+    + chr(0xFFFE) + chr(0xFFFF)
+    + "]"
+)
+
+
+def _template_text(value: str) -> str:
+    """One binding value, in the only form XML can carry unchanged."""
+    for control in _TEMPLATE_LINE_BREAKS:
+        value = value.replace(control, chr(10))
+    found = _TEMPLATE_FORBIDDEN_CHARACTERS.search(value)
+    if found is not None:
+        raise ValueError(
+            "template binding value carries a character XML cannot represent: "
+            "U+{:04X}".format(ord(found.group()))
+        )
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 _FIELD_VALUES = {
     "EXPERT_FULL_NAME": lambda report: report.expert_profile.full_name,
     "EXPERT_REGISTRATION": lambda report: report.expert_profile.registration,
@@ -161,14 +202,21 @@ def _safe_parts(template_bytes: bytes) -> tuple[list[ZipInfo], dict[str, bytes]]
                 raise ValueError("unsafe template package")
             for item in infos:
                 path = PurePosixPath(item.filename)
+                if path.is_absolute() or ".." in path.parts:
+                    raise ValueError("unsafe template package")
                 if item.filename.endswith("/"):
                     # A directory entry carries no content.  Both validators skip
                     # them and a parity test pins that they are legal, while this
                     # third statement refused them -- so the backup gate
                     # certified a template that could then never be bound.
+                    #
+                    # The skip belongs AFTER the traversal check, not before it:
+                    # placed first it let "../escape/" and "/word/" through, and
+                    # a name ending in "/" can still carry bytes, so the size and
+                    # ratio guards below have to see it too.
+                    if item.file_size:
+                        raise ValueError("unsafe template package")
                     continue
-                if path.is_absolute() or ".." in path.parts:
-                    raise ValueError("unsafe template package")
                 if (
                     item.file_size > _COMPRESSION_RATIO_FLOOR
                     and item.file_size
@@ -222,10 +270,10 @@ def _mechanics(parts: dict[str, bytes]) -> tuple[set[str], tuple[str, ...], int]
             if not instruction.strip():
                 # The result region of an ordinary field contributes nothing.
                 continue
-            name = instruction.strip().split(maxsplit=1)[0].upper()
-            if name not in _FIELD_NAMES:
+            code = _TEMPLATE_FIELD_CODE.match(instruction)
+            if code is None or code.group(1).upper() not in _FIELD_NAMES:
                 raise ValueError("unsupported active Word field instruction")
-            field_names.add(name)
+            field_names.add(code.group(1).upper())
     bookmarks = tuple(sorted(item.attrib.get(f"{_W}name", "") for item in root.iter(f"{_W}bookmarkStart") if item.attrib.get(f"{_W}name")))
     controls = sum(1 for _ in root.iter(f"{_W}sdt"))
     for item in root.iter(f"{_WP}docPr"):
@@ -301,12 +349,9 @@ def bind_report_template(template_bytes: bytes, report: ReportSnapshot, manifest
     for binding in manifest.bindings:
         if document.count(binding.placeholder) != 1:
             raise ValueError("canonical field must remain single-source")
-        # A binding value is TEXT.  Writing it into the part unescaped made an
-        # expert whose name carries "&" produce invalid XML, and the refusal
-        # blamed the template; the canonical injection one module away escapes.
-        value = _FIELD_VALUES[binding.field](report)
-        escaped = value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        document = document.replace(binding.placeholder, escaped)
+        document = document.replace(
+            binding.placeholder, _template_text(_FIELD_VALUES[binding.field](report))
+        )
     after = dict(before)
     after["word/document.xml"] = document.encode("utf-8")
     after_mechanics = _mechanics(after)

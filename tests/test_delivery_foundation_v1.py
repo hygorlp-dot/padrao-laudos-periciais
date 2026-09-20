@@ -8898,7 +8898,31 @@ def test_a_page_whose_annots_is_not_an_array_is_refused() -> None:
 def test_a_canonical_line_survives_the_xml_round_trip(
     label: str, value: str, expected: str
 ) -> None:
-    assert delivery_renderer._canonical_text(value) == expected
+    """Named for a round trip, and now performing one.
+
+    It asserted `_canonical_text(value) == expected` -- the helper, not the path.
+    A value the helper admitted but XML cannot carry (U+FFFF) therefore went
+    unnoticed until a review found it leaving as a ParseError.  This writes the
+    canonical markup and reads it back, which is what the binding check does.
+    """
+    normalised = delivery_renderer._canonical_text(value)
+    assert normalised == expected
+
+    prefix = b"w:"
+    markup = (
+        b'<w:document xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main">'
+        + b"<w:body><w:p><w:r><w:t xml:space=\"preserve\">"
+        + normalised.replace("&", "&amp;").replace("<", "&lt;").encode("utf-8")
+        + b"</w:t></w:r></w:p></w:body></w:document>"
+    )
+    root = delivery_renderer.ElementTree.fromstring(markup)
+    read_back = "".join(
+        node.text or "" for node in delivery_renderer._current_iter(root, "t")
+    )
+
+    assert read_back == normalised, f"{label}: the XML reader changed the text"
+    assert prefix  # the markup above mirrors _canonical_content_markup's shape
 
 
 @pytest.mark.parametrize("code", (0, 7, 8, 27))
@@ -9123,3 +9147,227 @@ def test_a_catalog_that_is_not_a_dictionary_is_a_value_error(
     """
     with pytest.raises(ValueError, match="final PDF artifact is invalid"):
         validate_final_artifact(_raw_pdf_with_catalog(body), "PDF")
+
+
+# --- Phase C §27 round 10 -----------------------------------------------------
+#
+# An ACTION is recognisable by its own shape.  The slots were enumerated -- /A,
+# /OpenAction, /AA, /Next -- and a page's /PresSteps navigation node, whose /NA
+# and /PA ARE actions (ISO 32000-1 12.4.4.2), was reached by no route and named
+# in no set.
+
+
+def _navigation_node_pdf(slot: str, subtype: str) -> bytes:
+    writer = _blank_pdf_writer()
+    action = DictionaryObject()
+    action.update(
+        {
+            NameObject("/S"): NameObject(subtype),
+            NameObject("/F"): create_string_object("calc.exe"),
+        }
+    )
+    node = DictionaryObject()
+    node.update({NameObject("/Type"): NameObject("/NavNode"), NameObject(slot): action})
+    writer.pages[0][NameObject("/PresSteps")] = writer._add_object(node)
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+@pytest.mark.parametrize("slot", ("/NA", "/PA"))
+@pytest.mark.parametrize("subtype", ("/Launch", "/JavaScript", "/URI", "/SubmitForm"))
+def test_an_action_is_judged_by_its_shape_in_any_slot(slot: str, subtype: str) -> None:
+    content = _navigation_node_pdf(slot, subtype)
+
+    with pytest.raises(ValueError, match="active content"):
+        validate_final_artifact(content, "PDF")
+    with pytest.raises(ValueError, match="active content"):
+        delivery_renderer.validate_delivery_artifact(content, "PDF")
+
+
+@pytest.mark.parametrize("slot", ("/NA", "/PA"))
+def test_an_internal_destination_in_a_navigation_node_is_accepted(slot: str) -> None:
+    """/GoTo is the one action this boundary allows, wherever it sits."""
+    assert validate_final_artifact(_navigation_node_pdf(slot, "/GoTo"), "PDF")[2] == (
+        "application/pdf"
+    )
+
+
+def test_a_structure_element_is_not_read_as_an_action() -> None:
+    """A structure element's /S is a structure TYPE, not an action type."""
+    writer = _blank_pdf_writer()
+    element = DictionaryObject()
+    element.update(
+        {NameObject("/Type"): NameObject("/StructElem"), NameObject("/S"): NameObject("/P")}
+    )
+    root = DictionaryObject()
+    root.update(
+        {
+            NameObject("/Type"): NameObject("/StructTreeRoot"),
+            NameObject("/K"): writer._add_object(element),
+        }
+    )
+    writer._root_object[NameObject("/StructTreeRoot")] = writer._add_object(root)
+    output = BytesIO()
+    writer.write(output)
+
+    assert validate_final_artifact(output.getvalue(), "PDF")[2] == "application/pdf"
+
+
+def test_a_field_reached_only_from_acroform_is_judged_as_an_annotation() -> None:
+    """A field and its widget may be one object, with no page showing it."""
+    writer = _blank_pdf_writer()
+    field = DictionaryObject()
+    field.update(
+        {
+            NameObject("/FT"): NameObject("/Btn"),
+            NameObject("/T"): create_string_object("campo"),
+            NameObject("/Subtype"): NameObject("/FileAttachment"),
+            NameObject("/FS"): writer._add_object(_pdf_filespec(writer)),
+        }
+    )
+    forms = DictionaryObject()
+    forms[NameObject("/Fields")] = ArrayObject([writer._add_object(field)])
+    writer._root_object[NameObject("/AcroForm")] = forms
+    output = BytesIO()
+    writer.write(output)
+
+    with pytest.raises(ValueError, match="active content"):
+        validate_final_artifact(output.getvalue(), "PDF")
+
+
+# --- a binding value is text the product accepts upstream ---------------------
+
+
+def _render_with_expert_name(name: str):
+    report = _product_path_report()
+    return render_word_candidate(
+        template_bytes=_valid_docm_template(),
+        report=replace(
+            report, expert_profile=replace(report.expert_profile, full_name=name)
+        ),
+        manifest=template_binding_manifest_from_mapping(_PRODUCT_PATH_MANIFEST),
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "name"),
+    (
+        ("ampersand", "Alves & Filhos"),
+        ("angle brackets", "Ana <Perita> Souza"),
+        ("word manual break", "Ana" + chr(11) + "Maria"),
+        ("crlf", "Ana" + chr(13) + chr(10) + "Maria"),
+    ),
+)
+def test_a_binding_value_the_product_accepts_still_renders(
+    label: str, name: str
+) -> None:
+    """The asymmetry: the SAME character in a claim rendered and here failed.
+
+    The claim goes through _canonical_text; the binding value was written raw,
+    so an expert whose name carries Word's manual line break made every render
+    of an approved report fail, blaming the template.
+    """
+    assert validate_final_artifact(_render_with_expert_name(name).output_bytes, "DOCM")[1] > 0
+
+
+@pytest.mark.parametrize("code", (0, 7, 0xFFFE, 0xFFFF))
+def test_a_binding_value_xml_cannot_carry_is_refused_by_name(code: int) -> None:
+    with pytest.raises(ValueError, match="U[+]{:04X}".format(code)):
+        _render_with_expert_name("Ana" + chr(code) + "Maria")
+
+
+@pytest.mark.parametrize("code", (0xFFFE, 0xFFFF))
+def test_an_xml_noncharacter_in_a_claim_is_refused_by_name(code: int) -> None:
+    """The XML 1.0 Char production excludes more than the C0 controls.
+
+    The guard was named for controls and these two are not controls, so a U+FFFF
+    in a claim reached the re-parse and left as a ParseError.
+    """
+    with pytest.raises(ValueError, match="U[+]{:04X}".format(code)):
+        delivery_renderer._canonical_text("Trinca" + chr(code) + "de 2mm")
+
+
+# --- the three statements read the field CODE alike ---------------------------
+
+
+@pytest.mark.parametrize(
+    ("code", "accepted"),
+    (
+        # Word ends a field NAME at whitespace OR at a double quote, and binds
+        # all of these; the binder took the token up to the first whitespace.
+        ('PAGEREF"Marca"', True),
+        ('REF"Marca"', True),
+        ("PAGEREF Marca", True),
+        ('MACROBUTTON"AutoOpen"', False),
+        ("MACROBUTTON AutoOpen", False),
+    ),
+)
+def test_all_three_statements_read_the_field_code_alike(
+    code: str, accepted: bool
+) -> None:
+    from scripts.backend_contract import report_template
+
+    document = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p>"
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        f'<w:r><w:instrText xml:space="preserve"> {code} </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        "<w:r><w:t>1</w:t></w:r>"
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+        "</w:p></w:body></w:document>"
+    )
+    parts = {"word/document.xml": document.encode("utf-8")}
+
+    def binder() -> None:
+        report_template._mechanics(parts)
+
+    if accepted:
+        binder()
+        assert validate_final_artifact(word_package(document), "DOCX")[1] > 0
+    else:
+        with pytest.raises(ValueError):
+            binder()
+        with pytest.raises(ValueError, match="active content"):
+            validate_final_artifact(word_package(document), "DOCX")
+
+
+# --- a directory entry is skipped, not waved through --------------------------
+
+
+def _template_with_entry(name: str, payload: bytes) -> bytes:
+    base = _valid_docm_template()
+    with ZipFile(BytesIO(base)) as archive:
+        parts = {item: archive.read(item) for item in archive.namelist()}
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr(name, payload)
+        for item, value in parts.items():
+            package.writestr(item, value)
+    return output.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("label", "name", "payload", "legal"),
+    (
+        ("legitimate", "word/", b"", True),
+        ("traversal", "../escape/", b"", False),
+        ("absolute", "/word/", b"", False),
+        ("content behind a directory name", "word/big/", b"A" * 4096, False),
+    ),
+)
+def test_a_directory_entry_is_skipped_after_the_other_guards_run(
+    label: str, name: str, payload: bytes, legal: bool
+) -> None:
+    """The skip was placed BEFORE the traversal and size guards, so it waved
+    "../escape/" and "/word/" straight through -- the defaulting-open shape,
+    committed inside the repair for a different one."""
+    from scripts.backend_contract import report_template
+
+    package = _template_with_entry(name, payload)
+    if legal:
+        assert report_template._safe_parts(package)
+    else:
+        with pytest.raises(ValueError, match="unsafe template package"):
+            report_template._safe_parts(package)
