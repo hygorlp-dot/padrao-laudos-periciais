@@ -9,6 +9,7 @@ from random import Random
 from types import SimpleNamespace
 from io import BytesIO
 import zlib
+import struct
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
@@ -25,6 +26,7 @@ from pypdf.generic import (
     NameObject,
     NullObject,
     NumberObject,
+    IndirectObject,
     create_string_object,
 )
 
@@ -7976,12 +7978,15 @@ def test_the_band_decider_matches_native_word(
     )
 
 
-def test_the_typography_and_shading_sweeps_band_the_same_rows() -> None:
-    """The two sweeps feed one verdict, so they must agree on which rows band.
+def test_typography_bands_the_rows_native_word_bands() -> None:
+    """The run-typography sweep bands what Word paints.
 
-    They are compared here through the style that makes the disagreement
-    visible: band1Horz declaring BOTH a fill and a run property, which is the
-    shape every built-in banded Word table style has.
+    This was named as if it compared the two sweeps; it calls only
+    _word_text_expectations, so it pins the typography arithmetic and nothing
+    about the shading sweep.  The comparison it promised is a source-level guard
+    below -- the two sweeps share one decider and one band-size resolver -- and
+    the behavioural half needs a PDF carrying painted cell fills, which this
+    suite cannot build cheaply.  Saying so is better than a name that claims it.
     """
     rows = "".join(
         f"<w:tr>{_TC.format(f'Linha {index}')}</w:tr>" for index in range(4)
@@ -8101,3 +8106,655 @@ def test_the_template_kind_is_read_from_the_declared_content_type() -> None:
             parts = {name: archive.read(name) for name in archive.namelist()}
 
         assert report_template._declared_output_kind(parts) == expected
+
+
+# --- Phase C §27 round 8 ------------------------------------------------------
+
+
+def _region_document(body: str):
+    return delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body><w:p>{body}</w:p></w:body></w:document>"
+    )
+
+
+def _region_field(code: str, *, element: str, result: str = "resultado") -> str:
+    return (
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        f'<w:r><w:{element} xml:space="preserve">{code}</w:{element}></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        f"<w:r><w:t>{result}</w:t></w:r>"
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "body", "expected"),
+    (
+        ("instrText", _region_field(" AUTHOR ", element="instrText"), " AUTHOR "),
+        # Native Word 16 reports the same Code and the same field Type for this
+        # one; the product read the empty string and skipped it as "no field".
+        ("plain_w_t", _region_field(" AUTHOR ", element="t"), " AUTHOR "),
+        (
+            "delText_in_del",
+            '<w:del w:id="9" w:author="a" w:date="d">'
+            + _region_field(" AUTHOR ", element="delText")
+            + "</w:del>",
+            " AUTHOR ",
+        ),
+        # Split across two elements: neither half is a code on its own, and Word
+        # joins them.  The product read only the first half.
+        (
+            "split_across_elements",
+            '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+            '<w:r><w:instrText xml:space="preserve"> AUT</w:instrText></w:r>'
+            '<w:r><w:t xml:space="preserve">HOR </w:t></w:r>'
+            '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+            "<w:r><w:t>r</w:t></w:r>"
+            '<w:r><w:fldChar w:fldCharType="end"/></w:r>',
+            " AUTHOR ",
+        ),
+    ),
+)
+def test_the_field_instruction_is_the_regions_text(
+    label: str, body: str, expected: str
+) -> None:
+    """A field code is the text of the region, not the content of an element.
+
+    Round 7 closed the w:delInstrText spelling and then named a closed element
+    vocabulary.  The premise was wrong: native Word 16 builds the same code, and
+    binds the same field, from w:t and w:delText in the instruction region too
+    (probe, 2026-09-20), so an element list can only hold the spellings someone
+    thought of.
+    """
+    root = _region_document(body)
+
+    assert delivery_renderer._delivery_field_instructions(root)[0] == expected
+
+
+@pytest.mark.parametrize("element", ("instrText", "t"))
+def test_an_acquiring_code_in_the_instruction_region_is_refused(element: str) -> None:
+    # word_package writes a REAL package: _package_bytes omits _rels/.rels, so
+    # the boundary refused it as unbound before ever reading the field.
+    content = word_package(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p>"
+        + _region_field(" DDEAUTO WinWord System ", element=element)
+        + "</w:p></w:body></w:document>"
+    )
+
+    with pytest.raises(ValueError, match="active content"):
+        validate_final_artifact(content, "DOCX")
+
+
+def test_the_field_result_is_not_read_as_a_field_code() -> None:
+    """Reading the region must not spread into what the field DISPLAYS.
+
+    The result region is ordinary text; judging it would refuse any report whose
+    rendered field value happens to start with a word like INCLUDE.
+    """
+    content = word_package(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p>"
+        + _region_field(" PAGE ", element="instrText", result="DDEAUTO WinWord System")
+        + "</w:p></w:body></w:document>"
+    )
+
+    assert validate_final_artifact(content, "DOCX")[2].endswith("wordprocessingml.document")
+
+
+def test_ordinary_body_text_is_never_a_field_code() -> None:
+    root = _region_document('<w:r><w:t>INCLUDE o anexo e PRINT a via</w:t></w:r>')
+
+    assert delivery_renderer._delivery_field_instructions(root) == []
+
+
+def test_a_field_whose_instruction_region_is_empty_is_refused() -> None:
+    """Recovering no code is "stopped examining", not "examined and found none"."""
+    root = _region_document(
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        "<w:r><w:t>r</w:t></w:r>"
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+    )
+
+    with pytest.raises(ValueError, match="active content"):
+        delivery_renderer._delivery_field_instructions(root)
+
+
+# --- the absolute-key walk judges vocabulary, not producer-chosen names -------
+
+
+def _resource_named(name: str) -> bytes:
+    """A page whose image resource is NAMED /AF. It attaches nothing.
+
+    Resource dictionaries, /Dests and /CharProcs are keyed by names the producer
+    chooses, so their keys are data.  Reading them as PDF vocabulary refused an
+    inert third-party annex -- the very path this boundary exists for.
+    """
+    writer = _blank_pdf_writer()
+    image = DecodedStreamObject()
+    image.set_data(b"")
+    image.update(
+        {
+            NameObject("/Type"): NameObject("/XObject"),
+            NameObject("/Subtype"): NameObject("/Image"),
+            NameObject("/Width"): NumberObject(1),
+            NameObject("/Height"): NumberObject(1),
+        }
+    )
+    holder = DictionaryObject()
+    holder[NameObject(name)] = writer._add_object(image)
+    resources = DictionaryObject()
+    resources[NameObject("/XObject")] = holder
+    writer.pages[0][NameObject("/Resources")] = resources
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+@pytest.mark.parametrize("name", ("/Im0", "/AF", "/AA", "/Collection"))
+def test_a_resource_named_like_a_structural_key_is_still_inert(name: str) -> None:
+    assert validate_final_artifact(_resource_named(name), "PDF")[2] == "application/pdf"
+
+
+def test_an_attachment_inside_a_name_dictionary_is_still_found() -> None:
+    """Inside a name dictionary every child is judged, and none is itself one.
+
+    Otherwise naming an image /XObject would buy an attacker exactly one
+    unjudged object.
+    """
+    writer = _blank_pdf_writer()
+    image = DecodedStreamObject()
+    image.set_data(b"")
+    image.update(
+        {
+            NameObject("/Type"): NameObject("/XObject"),
+            NameObject("/Subtype"): NameObject("/Image"),
+            NameObject("/AF"): ArrayObject([writer._add_object(_pdf_filespec(writer))]),
+        }
+    )
+    holder = DictionaryObject()
+    holder[NameObject("/XObject")] = writer._add_object(image)
+    resources = DictionaryObject()
+    resources[NameObject("/XObject")] = holder
+    writer.pages[0][NameObject("/Resources")] = resources
+    output = BytesIO()
+    writer.write(output)
+
+    with pytest.raises(ValueError, match="active content"):
+        validate_final_artifact(output.getvalue(), "PDF")
+
+
+# --- no recursion over attacker-controlled depth ------------------------------
+
+
+def _deep_parent_chain(depth: int, action: DictionaryObject | None) -> bytes:
+    writer = _blank_pdf_writer()
+    tail = DictionaryObject()
+    tail.update(
+        {NameObject("/FT"): NameObject("/Btn"), NameObject("/T"): create_string_object("fim")}
+    )
+    if action is not None:
+        tail[NameObject("/A")] = action
+    node = writer._add_object(tail)
+    for index in range(depth):
+        link = DictionaryObject()
+        link.update(
+            {
+                NameObject("/FT"): NameObject("/Btn"),
+                NameObject("/T"): create_string_object(f"n{index}"),
+                NameObject("/Parent"): node,
+            }
+        )
+        node = writer._add_object(link)
+    _with_annotation(writer, _annotation("/Widget", **{"/Parent": node}))
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def test_a_deep_parent_chain_refuses_as_a_value_error() -> None:
+    """The budget is 4096, four times Python's recursion limit, so a recursive
+    walk could never reach its own bound: it left through RecursionError, which
+    is not the ValueError this boundary's callers catch."""
+    content = _deep_parent_chain(1200, _pdf_action("/Launch"))
+
+    with pytest.raises(ValueError, match="active content"):
+        validate_final_artifact(content, "PDF")
+
+
+def test_a_deep_inert_parent_chain_is_still_accepted() -> None:
+    assert validate_final_artifact(_deep_parent_chain(1200, None), "PDF")[2] == (
+        "application/pdf"
+    )
+
+
+def test_a_broken_indirect_reference_is_a_value_error() -> None:
+    """The graph walk resolves references the parse guard never touched.
+
+    PdfReadError derives from Exception, so it crossed this boundary unhandled
+    instead of arriving as the declared refusal.
+
+    The reference has to dangle while the FILE stays well formed.  Editing the
+    written bytes to insert one shifts every xref offset after it, so the reader
+    fails while opening the file and the existing parse guard converts that --
+    the test then passes without the repair and pins nothing.  Writing a
+    reference to an object number the writer never emits leaves the xref intact
+    and makes the failure happen where the sweep resolves it.
+    """
+    writer = _blank_pdf_writer()
+    writer._root_object[NameObject("/Metadata")] = IndirectObject(9999, 0, writer)
+    output = BytesIO()
+    writer.write(output)
+
+    with pytest.raises(ValueError, match="final PDF artifact is invalid"):
+        validate_final_artifact(output.getvalue(), "PDF")
+
+
+# --- the band SIZE and the band STYLE come from the chain too -----------------
+
+_BAND_SHADING = '<w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="B2DEF2"/></w:tcPr>'
+
+
+def _derived_band_styles(base_band_size: str | None, derived_declares_band: bool) -> str:
+    band = f'<w:tblStylePr w:type="band1Horz">{_BAND_SHADING}<w:rPr><w:b/></w:rPr></w:tblStylePr>'
+    size = (
+        f'<w:tblStyleRowBandSize w:val="{base_band_size}"/>'
+        if base_band_size is not None
+        else ""
+    )
+    return (
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="table" w:styleId="Derivada"><w:basedOn w:val="Base"/>'
+        # Word saves a style derived from a built-in banded style with an EMPTY
+        # w:tblPr and no band-size node at all.
+        "<w:tblPr/>" + (band if derived_declares_band else "") + "</w:style>"
+        f'<w:style w:type="table" w:styleId="Base"><w:tblPr>{size}</w:tblPr>'
+        + ("" if derived_declares_band else band)
+        + "</w:style></w:styles>"
+    )
+
+
+def _banded_rows_document(rows: int):
+    body = "".join(f"<w:tr>{_TC.format(f'r{index}')}</w:tr>" for index in range(rows))
+    return delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:tbl><w:tblPr><w:tblStyle w:val="Derivada"/>'
+        '<w:tblLook w:firstRow="1" w:lastRow="0" w:firstColumn="0" '
+        'w:lastColumn="0" w:noHBand="0" w:noVBand="1"/></w:tblPr>'
+        f'<w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid>{body}</w:tbl></w:body></w:document>'
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "base_size", "derived_declares", "expected"),
+    (
+        # What Word actually writes: empty w:tblPr, no band-size node anywhere.
+        ("no_size_anywhere", None, True, [1, 3]),
+        # The size is inherited from the base style, not declared on the used one.
+        ("size_inherited_from_base", "2", True, [1, 2]),
+        # The conditional format itself is inherited.
+        ("band_inherited_from_base", None, False, [1, 3]),
+    ),
+)
+def test_typography_resolves_the_band_size_over_the_based_on_chain(
+    label: str, base_size: str | None, derived_declares: bool, expected: list[int]
+) -> None:
+    """The run-typography sweep's half of the inheritance, which already held."""
+    expectations = delivery_renderer._word_text_expectations(
+        {
+            "word/document.xml": _banded_rows_document(5),
+            "word/styles.xml": delivery_renderer.ElementTree.fromstring(
+                _derived_band_styles(base_size, derived_declares)
+            ),
+        }
+    )
+
+    assert [
+        index for index, item in enumerate(expectations) if bool(item.bold)
+    ] == expected
+
+
+@pytest.mark.parametrize(
+    ("label", "base_size", "derived_declares"),
+    (
+        ("no_size_anywhere", None, True),
+        ("size_inherited_from_base", "2", True),
+        ("band_inherited_from_base", None, False),
+    ),
+)
+def test_a_derived_banded_style_never_leaves_the_shading_sweep_as_attribute_error(
+    label: str, base_size: str | None, derived_declares: bool
+) -> None:
+    """w:tblStyleRowBandSize is OPTIONAL and its schema default is 1.
+
+    The typography sweep skipped an absent node and kept the default; the
+    cell-shading sweep passed None into an attribute read.  Word 16 makes that
+    reachable through an ordinary authoring step -- a table style created from a
+    built-in banded one is saved with an EMPTY w:tblPr and no band-size node --
+    so every report whose template used such a style failed every render, and
+    failed with AttributeError rather than the ValueError this boundary's
+    callers catch.
+
+    The crash is in the SHADING sweep, so the typography sweep above cannot see
+    it; this drives _validate_pdf_fidelity.  Whether the PDF matches is beside
+    the point: a mismatch is a ValueError and acceptable here.  The TYPE is the
+    invariant.
+    """
+    body = (
+        '<w:tbl><w:tblPr><w:tblStyle w:val="Derivada"/>'
+        '<w:tblLook w:firstRow="1" w:lastRow="0" w:firstColumn="0" '
+        'w:lastColumn="0" w:noHBand="0" w:noVBand="1"/></w:tblPr>'
+        '<w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid>'
+        + "".join(f"<w:tr>{_TC.format(f'r{index}')}</w:tr>" for index in range(5))
+        + "</w:tbl>"
+    )
+    package = _package_bytes(
+        body, {"word/styles.xml": _derived_band_styles(base_size, derived_declares)}
+    )
+    pdf = _positioned_text_pdf(
+        [[(f"r{index}", 50.0, 700.0 - index * 20.0, 10.0, 0) for index in range(5)]]
+    )
+
+    try:
+        delivery_renderer._validate_pdf_fidelity(package, pdf)
+    except ValueError:
+        # A refusal is a legitimate outcome; an AttributeError is not.
+        pass
+
+
+def test_both_table_sweeps_share_one_band_decider_and_one_size_resolver() -> None:
+    """A source-level guard, and named as one.
+
+    Round 7 unified the band INDEX arithmetic and left the band SIZE with two
+    readers, which is the same defect one layer down; the behavioural comparison
+    would need a PDF carrying painted cell fills, which this suite cannot build
+    cheaply.  This fails if a second reader is reintroduced, which is what the
+    class needs pinned.
+    """
+    source = Path(delivery_renderer.__file__).read_text(encoding="utf-8")
+
+    assert source.count("def _table_band(") == 1
+    assert source.count("def _table_band_sizes(") == 1
+    assert source.count("def _table_style_chain(") == 1
+    # _table_band: its own def, both axes of the typography sweep, and the
+    # shading sweep.  _table_band_sizes: its own def and one call per sweep.
+    assert source.count("_table_band(") == 4
+    assert source.count("_table_band_sizes(") == 3
+    # And the band-size ELEMENT is named nowhere but inside the resolver, so no
+    # second reader can grow back by reading it directly.
+    start = source.index("def _table_band_sizes(")
+    boundary = chr(10) + 'def '
+    resolver = source[start : source.index(boundary, start + 1)]
+    assert source.count("tblStyleRowBandSize") == resolver.count("tblStyleRowBandSize")
+
+
+# --- Phase C §27 round 8, systemic lane ---------------------------------------
+
+
+def _unsupported_compression(package: bytes) -> bytes:
+    """Rewrite every compression-method field to 99 (WinZip AES).
+
+    zipfile raises NotImplementedError for a method CPython does not implement,
+    and NotImplementedError is not an OSError, so it left every package boundary
+    as itself -- past callers that catch ValueError, and past
+    VerifyWorkspaceBackup, which catches (KeyError, TypeError, ValueError) and so
+    could never raise its declared RepositoryIntegrityError.  An OPC producer may
+    choose any method, so this is a shape a real package can have.
+    """
+    data = bytearray(package)
+    for signature, offset in ((b"PK" + bytes([3, 4]), 8), (b"PK" + bytes([1, 2]), 10)):
+        start = 0
+        while True:
+            index = data.find(signature, start)
+            if index < 0:
+                break
+            struct.pack_into("<H", data, index + offset, 99)
+            start = index + 4
+    return bytes(data)
+
+
+@pytest.mark.parametrize("output_format", ("DOCX", "DOCM"))
+def test_an_unimplemented_compression_method_is_a_value_error(output_format: str) -> None:
+    package = _unsupported_compression(
+        word_package(
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            "<w:body><w:p/></w:body></w:document>",
+            main_type=(
+                DOCM_MAIN_TYPE
+                if output_format == "DOCM"
+                else "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document.main+xml"
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="final Word artifact is invalid"):
+        validate_final_artifact(package, output_format)
+
+
+def test_the_template_binder_also_converts_the_whole_failure_class() -> None:
+    from scripts.backend_contract import report_template
+
+    package = _unsupported_compression(
+        word_package(
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            "<w:body><w:p/></w:body></w:document>"
+        )
+    )
+
+    with pytest.raises(ValueError, match="unsafe template package"):
+        report_template._safe_parts(package)
+
+
+def test_the_graph_bound_refuses_on_exhaustion() -> None:
+    """The bound was sized by measurement and nothing observed it in either
+    direction.  Exhaustion must refuse: a completeness guard cannot share an
+    exit with "examined everything, clean"."""
+    writer = _blank_pdf_writer()
+    node = writer._root_object
+    for index in range(delivery_renderer._PDF_GRAPH_LIMIT + 8):
+        child = DictionaryObject()
+        node[NameObject("/Kids")] = ArrayObject([writer._add_object(child)])
+        node = child
+    output = BytesIO()
+    writer.write(output)
+
+    with pytest.raises(ValueError, match="too large to verify"):
+        validate_final_artifact(output.getvalue(), "PDF")
+
+
+def test_a_graph_within_the_bound_is_still_accepted() -> None:
+    writer = _blank_pdf_writer()
+    node = writer._root_object
+    for index in range(64):
+        child = DictionaryObject()
+        node[NameObject("/Kids")] = ArrayObject([writer._add_object(child)])
+        node = child
+    output = BytesIO()
+    writer.write(output)
+
+    assert validate_final_artifact(output.getvalue(), "PDF")[2] == "application/pdf"
+
+
+# --- three statements of the field policy, one verdict ------------------------
+
+_REVIEWED_FIELD = (
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+    "<w:body><w:p>"
+    '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+    '<w:r><w:instrText xml:space="preserve"> PAGEREF Marca </w:instrText></w:r>'
+    '<w:ins w:id="5" w:author="revisor" w:date="2026-09-20T00:00:00Z">'
+    '<w:r><w:instrText xml:space="preserve"> ' + chr(92) + 'h</w:instrText></w:r>'
+    "</w:ins>"
+    '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+    "<w:r><w:t>3</w:t></w:r>"
+    '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+    "</w:p></w:body></w:document>"
+)
+
+
+def test_all_three_field_readers_agree_on_a_reviewed_instruction() -> None:
+    r"""Editing a protected field under track changes splits its instruction.
+
+    Word 16 reads one PAGEREF field; report_template judged each w:instrText node
+    alone, so the switch " \h" arrived as its own instruction whose leading token
+    is not a protected code.  Because _FIELD_NAMES requires all six protected
+    codes, one reviewed field made every render of that template fail for good.
+
+    The policy is now stated three times -- report_template cannot import the
+    delivery boundary because that module imports it -- so the three readers are
+    asked for the same verdict here.
+    """
+    from scripts.backend_contract import report_template
+    from scripts.backend_contract.infrastructure import office_word_worker
+
+    root = delivery_renderer.ElementTree.fromstring(_REVIEWED_FIELD)
+    expected = " PAGEREF Marca  " + chr(92) + "h"
+
+    assert delivery_renderer._delivery_field_instructions(root)[0] == expected
+    assert office_word_worker._field_instructions(root)[0] == expected
+    assert report_template._template_field_instructions(root)[0] == expected
+
+
+def test_the_package_bound_is_the_same_number_in_all_three_statements() -> None:
+    """A template both validators certify must not fail in the binder."""
+    from scripts.backend_contract import report_template
+    from scripts.backend_contract.infrastructure import office_word_worker
+
+    assert (
+        office_word_worker._MAX_PACKAGE_PARTS
+        == delivery_renderer._DELIVERY_MAX_PACKAGE_PARTS
+        == report_template._MAX_PARTS
+    )
+    assert (
+        office_word_worker._MAX_PACKAGE_BYTES
+        == delivery_renderer._DELIVERY_MAX_PACKAGE_BYTES
+        == report_template._MAX_UNCOMPRESSED_BYTES
+    )
+
+
+@pytest.mark.parametrize(
+    "declared",
+    (
+        "application/vnd.ms-word.document.macroenabled.main+xml",
+        DOCM_MAIN_TYPE,
+    ),
+)
+def test_the_main_content_type_is_compared_case_insensitively(declared: str) -> None:
+    """Media types are case-insensitive (RFC 2045 5.1).
+
+    The binder casefolded and both validators compared exactly, so a spelling the
+    binder accepted made every render fail -- the third instance of the
+    mutually-unsatisfiable class, introduced by the repair for the second.
+    """
+    from scripts.backend_contract import report_template
+
+    package = word_package(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p/></w:body></w:document>",
+        main_type=declared,
+    )
+    with ZipFile(BytesIO(package)) as archive:
+        parts = {name: archive.read(name) for name in archive.namelist()}
+
+    assert report_template._declared_output_kind(parts) == "DOCM"
+    assert validate_final_artifact(package, "DOCM")[2].endswith("macroEnabled.12")
+
+
+def _appearance_state_pdf(state: str, *, attach: bool = False) -> bytes:
+    """A checkbox whose export value is `state`.
+
+    An annotation's /AP is structural -- /N, /D, /R -- but each of those is keyed
+    by APPEARANCE STATE, which for a checkbox is its export value.  A court form
+    whose option exports "AF" is an ordinary document and was refused.
+    """
+    writer = _blank_pdf_writer()
+    appearances = DictionaryObject()
+    off = DecodedStreamObject()
+    off.set_data(b"")
+    appearances[NameObject("/Off")] = writer._add_object(off)
+    on = DecodedStreamObject()
+    on.set_data(b"")
+    if attach:
+        on.update(
+            {NameObject("/AF"): ArrayObject([writer._add_object(_pdf_filespec(writer))])}
+        )
+    appearances[NameObject(state)] = writer._add_object(on)
+    holder = DictionaryObject()
+    holder[NameObject("/N")] = writer._add_object(appearances)
+    _with_annotation(
+        writer,
+        _annotation(
+            "/Widget",
+            **{
+                "/FT": NameObject("/Btn"),
+                "/T": create_string_object("opcao"),
+                "/AP": holder,
+            },
+        ),
+    )
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def _name_keyed_catalog_pdf(key: str, name: str) -> bytes:
+    """A catalog dictionary whose own keys are names the author chose."""
+    writer = _blank_pdf_writer()
+    holder = DictionaryObject()
+    if key == "/RoleMap":
+        holder[NameObject(name)] = NameObject("/P")
+        writer._root_object[NameObject("/StructTreeRoot")] = writer._add_object(
+            _pdf_dictionary_of(
+                {"/Type": NameObject("/StructTreeRoot"), "/RoleMap": writer._add_object(holder)}
+            )
+        )
+    else:
+        holder[NameObject(name)] = writer._add_object(
+            _pdf_dictionary_of({"/LastModified": create_string_object("D:20260920")})
+        )
+        writer._root_object[NameObject(key)] = writer._add_object(holder)
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def _pdf_dictionary_of(entries: dict) -> DictionaryObject:
+    node = DictionaryObject()
+    node.update({NameObject(key): value for key, value in entries.items()})
+    return node
+
+
+@pytest.mark.parametrize("state", ("/Sim", "/AF", "/AA", "/Collection"))
+def test_a_checkbox_export_value_is_not_read_as_a_pdf_key(state: str) -> None:
+    assert validate_final_artifact(_appearance_state_pdf(state), "PDF")[2] == (
+        "application/pdf"
+    )
+
+
+def test_an_attachment_inside_an_appearance_stream_is_still_found() -> None:
+    """Extending the name-keyed set must not stop the walk judging the children."""
+    with pytest.raises(ValueError, match="active content"):
+        validate_final_artifact(_appearance_state_pdf("/Sim", attach=True), "PDF")
+
+
+@pytest.mark.parametrize(
+    ("key", "name"),
+    (
+        # Word emits the paragraph style name as the structure type.
+        ("/RoleMap", "/Normal"),
+        ("/RoleMap", "/AF"),
+        ("/RoleMap", "/AA"),
+        # Private application data, keyed by application name.
+        ("/PieceInfo", "/MSWord"),
+        ("/PieceInfo", "/AF"),
+    ),
+)
+def test_a_name_keyed_catalog_dictionary_is_not_read_as_pdf_keys(
+    key: str, name: str
+) -> None:
+    assert validate_final_artifact(_name_keyed_catalog_pdf(key, name), "PDF")[2] == (
+        "application/pdf"
+    )

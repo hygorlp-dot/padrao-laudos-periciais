@@ -302,6 +302,63 @@ def _current_iter(root: ElementTree.Element | None, name: str):
     return (node for node in _current_nodes(root) if _local_name(node.tag) == name)
 
 
+def _table_style_chain(
+    styles: dict, style_id: str | None
+) -> list[ElementTree.Element]:
+    """A table style and everything it is basedOn, base first.
+
+    Both table sweeps need this and each had its own answer: the run-typography
+    sweep walked the chain, the cell-shading sweep read the used style alone.
+    """
+    chain: list[ElementTree.Element] = []
+    visited: set[str] = set()
+    while style_id and style_id not in visited:
+        visited.add(style_id)
+        style = styles.get(style_id)
+        if style is None:
+            break
+        chain.append(style)
+        based_on = _first_named(style, "basedOn")
+        style_id = _attribute_named(based_on, "val") if based_on is not None else None
+    chain.reverse()
+    return chain
+
+
+def _table_band_sizes(chain: list[ElementTree.Element]) -> tuple[int, int]:
+    """Row and column band sizes, resolved over the basedOn chain.
+
+    Round 7 unified the band INDEX arithmetic into _table_band and left the band
+    SIZE with two readers, which is the same defect one layer down.  w:tblStyleRowBandSize
+    is an OPTIONAL child whose schema default is 1: one reader skipped an absent
+    node and kept the default, the other passed None into an attribute read.
+
+    Word 16 makes that reachable through an ordinary workflow.  A table style
+    derived from a built-in banded style is saved with an EMPTY w:tblPr, a
+    materialised band1Horz fill and no band-size node at all (probe,
+    2026-09-20), so the shading sweep crashed with AttributeError -- not the
+    ValueError this boundary's callers catch -- and every report whose template
+    used such a style failed every render.
+    """
+    sizes = {"row": 1, "column": 1}
+    for style in chain:
+        properties = next(_children_named(style, "tblPr"), None)
+        for name, target in (
+            ("tblStyleRowBandSize", "row"),
+            ("tblStyleColBandSize", "column"),
+        ):
+            node = _current_named(properties, name)
+            if node is None:
+                continue
+            try:
+                size = int(_attribute_named(node, "val") or "")
+            except ValueError as exc:
+                raise ValueError("invalid Word table band size") from exc
+            if size < 1:
+                raise ValueError("invalid Word table band size")
+            sizes[target] = size
+    return sizes["row"], sizes["column"]
+
+
 def _table_band(
     index: int,
     count: int,
@@ -2900,22 +2957,7 @@ def _word_text_expectations(
         enabled = _table_look_flag
 
         def style_chain(style_id: str | None) -> list[ElementTree.Element]:
-            chain: list[ElementTree.Element] = []
-            visited: set[str] = set()
-            while style_id and style_id not in visited:
-                visited.add(style_id)
-                style = style_nodes.get(style_id)
-                if style is None:
-                    break
-                chain.append(style)
-                based_on = _first_named(style, "basedOn")
-                style_id = (
-                    _attribute_named(based_on, "val")
-                    if based_on is not None
-                    else None
-                )
-            chain.reverse()
-            return chain
+            return _table_style_chain(style_nodes, style_id)
 
         conditional_order = (
             "band2vert",
@@ -2936,29 +2978,7 @@ def _word_text_expectations(
             style_id = _table_style_id(table)
             chain = style_chain(style_id)
             look = next(_children_named(table_properties, "tblLook"), None) if table_properties is not None else None
-            row_band_size = 1
-            column_band_size = 1
-            for style in chain:
-                style_table_properties = next(
-                    _children_named(style, "tblPr"), None
-                )
-                for name, target in (
-                    ("tblStyleRowBandSize", "row"),
-                    ("tblStyleColBandSize", "column"),
-                ):
-                    size_node = _current_named(style_table_properties, name)
-                    if size_node is None:
-                        continue
-                    try:
-                        size = int(_attribute_named(size_node, "val") or "")
-                    except ValueError as exc:
-                        raise ValueError("invalid Word table band size") from exc
-                    if size < 1:
-                        raise ValueError("invalid Word table band size")
-                    if target == "row":
-                        row_band_size = size
-                    else:
-                        column_band_size = size
+            row_band_size, column_band_size = _table_band_sizes(chain)
             first_row_enabled = enabled(look, "firstRow", default=True)
             last_row_enabled = enabled(look, "lastRow")
             first_column_enabled = enabled(look, "firstColumn")
@@ -5563,10 +5583,21 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                             top_boundary=len(rows),
                             bottom_boundary=0,
                         )
-                        conditional_styles = {
-                            (_attribute_named(item, "type") or "").casefold(): item
-                            for item in _children_named(table_style, "tblStylePr")
-                        }
+                        # The conditional formats are inherited too: a style
+                        # derived from a built-in banded style carries its own
+                        # band1Horz, but one declaring none must still find the
+                        # base style's.  Walking the chain base-first and letting
+                        # the nearer definition win is what the typography sweep
+                        # already does by layering.
+                        style_chain_nodes = _table_style_chain(
+                            table_styles, style_id
+                        )
+                        conditional_styles = {}
+                        for chain_style in style_chain_nodes:
+                            for item in _children_named(chain_style, "tblStylePr"):
+                                conditional_styles[
+                                    (_attribute_named(item, "type") or "").casefold()
+                                ] = item
                         if first_row and rows:
                             first_properties = conditional_styles.get("firstrow")
                             add_style_borders(
@@ -5588,24 +5619,9 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                             )
                         )
                         if band_fill is not None and not no_horizontal_banding:
-                            style_properties = next(
-                                _children_named(table_style, "tblPr"), None
+                            band_size, _unused = _table_band_sizes(
+                                style_chain_nodes
                             )
-                            band_size_node = _first_named(
-                                style_properties, "tblStyleRowBandSize"
-                            )
-                            try:
-                                band_size = int(
-                                    _attribute_named(band_size_node, "val") or "1"
-                                )
-                            except ValueError as exc:
-                                raise ValueError(
-                                    "invalid Word table row band size"
-                                ) from exc
-                            if band_size < 1:
-                                raise ValueError(
-                                    "invalid Word table row band size"
-                                )
                             band_rows = {
                                 index
                                 for index in range(len(rows))
@@ -6313,21 +6329,26 @@ def _delivery_interpretable_parts(declared: dict[str, str]) -> set[str]:
     }
 
 
-# WordprocessingML spells a field code two ways in EG_RunInnerContent:
-# w:instrText and w:delInstrText, the "Deleted Field Code" Word writes when a
-# field is deleted with track changes on.  Reading only the first left this
-# allowlist blind to the second: DDEAUTO, INCLUDETEXT and MACROBUTTON were
-# accepted by both boundaries under the deleted spelling and refused under the
-# live one.  Native Word 16 settles what that costs -- it binds the deleted
-# spelling as a live field object (Fields.Count == 1, Type == wdFieldAuthor)
-# while the revision still stands -- so the deleted spelling reaches the
-# interpreter exactly like the live one and must be judged exactly like it.
+# A field's instruction is the TEXT OF THE REGION between w:fldChar "begin" and
+# "separate".  It is not the content of a particular element, and the previous
+# attempt to name a closed element vocabulary here was wrong on the premise:
+# native Word 16 reports the same field Code and the same field Type whether
+# that text arrives in w:instrText, w:delInstrText, w:t or w:delText, and binds
+# the field either way (probe, 2026-09-20).  Round 7 closed the w:delInstrText
+# spelling and declared the vocabulary closed; plain w:t inside the instruction
+# region then carried DDEAUTO past both boundaries.  A list of spellings can
+# only ever hold the ones someone thought of, so this reads the region.
 #
-# These two, plus the w:fldSimple/@w:instr attribute read separately, are the
-# whole vocabulary: no other element in EG_RunInnerContent carries a field
-# instruction.  Naming the set here keeps that closure visible at the one place
-# a future spelling would have to be added.
+# w:instrText and w:delInstrText keep a distinct role: they are instruction
+# spellings even where they have no business being, so they are still judged in
+# the RESULT region and outside any field, where plain text is ordinary content
+# and must not be read as code.
 _FIELD_INSTRUCTION_ELEMENTS = frozenset({"instrText", "delInstrText"})
+_FIELD_TEXT_ELEMENTS = _FIELD_INSTRUCTION_ELEMENTS | {"t", "delText"}
+# w:tab and w:br do not join the characters around them.  Word reads
+# " AUT<tab>HOR " as the code AUT, not AUTHOR (same probe), so emitting the
+# separator keeps this reader tokenising the region the way Word does.
+_FIELD_SEPARATOR_ELEMENTS = {"tab": chr(9), "br": chr(10), "cr": chr(10)}
 
 
 # OPC binds a VBA project through its DECLARED CONTENT TYPE and the vbaProject
@@ -6341,46 +6362,84 @@ _FIELD_INSTRUCTION_ELEMENTS = frozenset({"instrText", "delInstrText"})
 # the officeDocument relationship and not the name ``word/document.xml`` is the
 # authority.  The names stay as a second signal; the declaration is the rule.
 _VBA_PROJECT_CONTENT_TYPE = "application/vnd.ms-office.vbaproject"
+# The vbaProject RELATIONSHIP is the third signal, and the one Word itself
+# follows.  Shown a part related as a vbaProject, native Word 16 tried to parse it
+# AS a project although its declared content type said oleObject, and refused the
+# file -- so the relationship, not the declaration alone, is what takes Word
+# there.  Round 7's comment already claimed the relationship was read; it was
+# not, and one incomplete signal had simply become two.
+_VBA_PROJECT_RELATIONSHIP = "vbaproject"
 _MACRO_PART_NAMES = frozenset({"word/vbaproject.bin", "word/vbadata.xml"})
+
+
+def _closed_delivery_field_instruction(field: list) -> str:
+    """The text a closed region contributes, refusing an instruction that is empty.
+
+    The result region may legitimately contribute nothing -- it holds what the
+    field displays -- but an instruction region that produced no text while a
+    field was open is a field whose code this reader could not recover.  That is
+    the "stopped examining" exit, and it must not share a path with "examined
+    everything and found no code": both sweeps skip an empty instruction.
+    """
+    buffer, in_result = field
+    text = "".join(buffer)
+    if in_result:
+        return text
+    if not text.strip():
+        raise ValueError("active content is forbidden in delivery artifacts")
+    return text
 
 
 def _delivery_field_instructions(root: ElementTree.Element) -> list[str]:
     """Split a part's run stream into one instruction per field.
 
-    Mirrors the Word worker, including the deleted spelling of a field code:
-    an instruction only means anything between a w:fldChar
-    "begin" and the "separate" that ends the instruction, so concatenating a
-    paragraph -- or a whole field across its separator -- and judging the leading
-    code let a second instruction ride along behind the first.
+    A field is ``w:fldChar`` begin / instruction / separate / result / end; one
+    paragraph may carry several, one field -- a TOC, typically -- may span many
+    paragraphs, and fields nest.  Concatenating a paragraph and reading its
+    leading code answered a different question, so ``{ PAGE }{ MACROBUTTON ... }``
+    presented an allow-listed code while a second field rode along behind it.
+    Walking the whole part in document order with a stack judges what Word
+    actually executes: every field, nested ones included, on its own code.
     """
     instructions: list[str] = []
-    open_fields: list[list[str]] = []
+    # Each open field carries its buffer and whether "separate" has been seen.
+    open_fields: list[list] = []
     for node in root.iter():
         local_name = _local_name(node.tag)
         if local_name == "fldChar":
             marker = (_attribute_named(node, "fldCharType") or "").strip().casefold()
             if marker == "begin":
-                open_fields.append([])
+                open_fields.append([[], False])
             elif marker == "separate" and open_fields:
                 # The instruction ends at the separator.  Whatever a producer
                 # writes after it is judged on its own code: concatenating
                 # across the separator rebuilt, inside a single field, the very
                 # defect that segmenting by field was meant to close.
-                instructions.append("".join(open_fields[-1]))
-                open_fields[-1] = []
+                instructions.append(_closed_delivery_field_instruction(open_fields[-1]))
+                open_fields[-1] = [[], True]
             elif marker == "end" and open_fields:
-                instructions.append("".join(open_fields.pop()))
-        elif local_name in _FIELD_INSTRUCTION_ELEMENTS:
+                instructions.append(_closed_delivery_field_instruction(open_fields.pop()))
+        elif local_name in _FIELD_TEXT_ELEMENTS:
+            spelled_as_instruction = local_name in _FIELD_INSTRUCTION_ELEMENTS
             if open_fields:
-                open_fields[-1].append(node.text or "")
-            else:
+                buffer, in_result = open_fields[-1]
+                # In the result region only an instruction spelling is anomalous
+                # enough to judge; plain text there is what the field displays,
+                # and reading it as code would refuse every ordinary document.
+                if not in_result or spelled_as_instruction:
+                    buffer.append(node.text or "")
+            elif spelled_as_instruction:
                 # Bare instruction text is not a field to Word at all, but one
                 # shared buffer let a safe leading code speak for every node
                 # behind it, so each node is judged alone.
                 instructions.append(node.text or "")
+        elif local_name in _FIELD_SEPARATOR_ELEMENTS and open_fields:
+            buffer, in_result = open_fields[-1]
+            if not in_result:
+                buffer.append(_FIELD_SEPARATOR_ELEMENTS[local_name])
     # A field left open is still judged: an unreadable run stream must not
     # swallow an instruction.
-    instructions.extend("".join(buffer) for buffer in open_fields)
+    instructions.extend(_closed_delivery_field_instruction(item) for item in open_fields)
     return instructions
 
 
@@ -6420,6 +6479,44 @@ _ACQUIRING_PDF_NAME_TREES = ("/JavaScript", "/EmbeddedFiles", "/Renditions")
 # that give it its meaning.
 _ACQUIRING_PDF_CATALOG_KEYS = ("/AA", "/Collection", "/AF")
 _ABSOLUTE_ACQUIRING_PDF_KEYS = ("/AA", "/AF", "/Collection")
+# ...but "wherever they sit" has one real exception, and it is not about the keys'
+# meaning: some PDF dictionaries are keyed by names the PRODUCER chooses, so their
+# keys are data rather than vocabulary.  A page resource dictionary may name an
+# image /AF, and a catalog /Dests may name a destination AA; neither carries an
+# attachment or an action, and refusing them made an inert third-party annex
+# unusable.  Entering one of these keys means the dictionary behind it is keyed by
+# names: its keys are not read, and its values are judged as usual.
+_PDF_NAME_DICTIONARY_KEYS = frozenset(
+    {
+        # Resource subdictionaries: keys are the names the content stream uses.
+        "/XObject",
+        "/Font",
+        "/ExtGState",
+        "/ColorSpace",
+        "/Pattern",
+        "/Shading",
+        "/Properties",
+        # A Type 3 font's glyph procedures, keyed by glyph name.
+        "/CharProcs",
+        # The PDF 1.1 catalog destination dictionary, keyed by destination name.
+        "/Dests",
+        # A tagged PDF's structure-type and class maps.  Word emits the
+        # paragraph style name as the structure type, so these keys are the
+        # author's vocabulary, not the format's.
+        "/RoleMap",
+        "/ClassMap",
+        # Private application data, keyed by application name.
+        "/PieceInfo",
+    }
+)
+# An annotation's /AP is structural -- /N, /D, /R -- but each of those is keyed by
+# APPEARANCE STATE, which for a checkbox is its export value.  A court form whose
+# checkbox exports "AF" is an ordinary document, so /AP needs a state of its own:
+# its keys are judged, its children are name dictionaries.
+_PDF_APPEARANCE_KEY = "/AP"
+_PDF_JUDGE_KEYS = "judge"
+_PDF_NAME_KEYS = "names"
+_PDF_APPEARANCE_KEYS = "appearance"
 # Annotation subtypes whose whole purpose is to carry or launch content.  They
 # keep their payload and their activation in subtype-specific keys instead of
 # announcing themselves through /A or /AA, so an action sweep never sees them.
@@ -6480,45 +6577,80 @@ def _reject_acquiring_pdf_keys(root) -> None:
     half -- an action is only an action where the structure says so -- but no
     object reachable from the catalog can now carry an attachment or an
     automatic action merely because no named route happened to visit it.
+
+    DECLARED LIMITATION.  _PDF_NAME_DICTIONARY_KEYS is a list of the containers
+    PDF keys by author-chosen names, and that list is not closed: a name-keyed
+    container not named there has its keys read as vocabulary, so an inert
+    document can be refused for a name it happens to use.  Two reviews found two
+    such containers, which is why the limitation is written down rather than
+    assumed away.  The error direction is deliberate: an unlisted container costs
+    availability, while inverting the default -- judging keys only where a
+    container is positively recognised -- would let an attachment through every
+    container nobody thought of, and that is the direction this boundary exists
+    to refuse.
     """
     seen: set[int] = set()
-    pending = [root]
+    # (object, what this object's KEYS are)
+    pending: list[tuple[object, str]] = [(root, _PDF_JUDGE_KEYS)]
     while pending:
-        node = _pdf_object(pending.pop())
-        if isinstance(node, (dict, list)):
-            if len(seen) >= _PDF_GRAPH_LIMIT:
-                raise ValueError("delivery artifact structure is too large to verify")
-            if id(node) in seen:
-                continue
-            seen.add(id(node))
-        else:
+        value, kind = pending.pop()
+        node = _pdf_object(value)
+        if not isinstance(node, (dict, list)):
             continue
-        if isinstance(node, dict):
+        if len(seen) >= _PDF_GRAPH_LIMIT:
+            raise ValueError("delivery artifact structure is too large to verify")
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        if isinstance(node, list):
+            pending.extend((item, kind) for item in node)
+        elif kind == _PDF_NAME_KEYS:
+            # Inside a name dictionary every child is judged, and no child is
+            # itself treated as a name dictionary: otherwise naming an image
+            # /XObject would buy an attacker one unjudged object.
+            pending.extend((item, _PDF_JUDGE_KEYS) for item in node.values())
+        elif kind == _PDF_APPEARANCE_KEYS:
+            # /N, /D and /R are structural; what hangs off them is state-keyed.
             _reject_pdf_attachment(node)
-            pending.extend(node.values())
+            pending.extend((item, _PDF_NAME_KEYS) for item in node.values())
         else:
-            pending.extend(node)
+            _reject_pdf_attachment(node)
+            for key, item in node.items():
+                name = str(key)
+                if name in _PDF_NAME_DICTIONARY_KEYS:
+                    child = _PDF_NAME_KEYS
+                elif name == _PDF_APPEARANCE_KEY:
+                    child = _PDF_APPEARANCE_KEYS
+                else:
+                    child = _PDF_JUDGE_KEYS
+                pending.append((item, child))
+
+
+# Every walk below is ITERATIVE.  Each of these chains -- an action's /Next, a
+# widget's /Parent, a field's /Kids -- is as deep as the document says, and the
+# shared budget is 4096, four times Python's default recursion limit, so a
+# recursive walk could never reach its own bound: it left through RecursionError
+# instead, which is not the ValueError this boundary's callers catch and which
+# VerifyWorkspaceBackup cannot turn into its declared RepositoryIntegrityError.
+# The cycle guard was already shared; the depth had to stop being the stack's.
 
 
 def _reject_pdf_action(value, seen: set[int] | None = None) -> None:
     """An internal /GoTo is the only action a delivered PDF may carry.
 
     A bare destination -- an array, or a named destination -- is not an action at
-    all and executes nothing, so it passes through untouched.  The /Next chain is
-    walked under the shared budget: two actions pointing at each other used to
-    recurse until Python raised, and a RecursionError is not the ValueError this
-    boundary's callers catch.
+    all and executes nothing, so it passes through untouched.
     """
     visited = set() if seen is None else seen
-    action = _pdf_object(value)
-    if not isinstance(action, dict) or not _pdf_visit(visited, action):
-        return
-    if str(action.get("/S")) != _SAFE_PDF_ACTION:
-        raise ValueError("active content is forbidden in delivery artifacts")
-    following = _pdf_object(action.get("/Next"))
-    for item in following if isinstance(following, list) else (following,):
-        if item is not None:
-            _reject_pdf_action(item, visited)
+    pending = [value]
+    while pending:
+        action = _pdf_object(pending.pop())
+        if not isinstance(action, dict) or not _pdf_visit(visited, action):
+            continue
+        if str(action.get("/S")) != _SAFE_PDF_ACTION:
+            raise ValueError("active content is forbidden in delivery artifacts")
+        following = _pdf_object(action.get("/Next"))
+        pending.extend(following if isinstance(following, list) else (following,))
 
 
 def _reject_pdf_annotation(value, seen: set[int] | None = None) -> None:
@@ -6530,33 +6662,35 @@ def _reject_pdf_annotation(value, seen: set[int] | None = None) -> None:
     /JavaScript field action off a widget's parent and never be visited.
     """
     visited = set() if seen is None else seen
-    item = _pdf_object(value)
-    if not isinstance(item, dict) or not _pdf_visit(visited, item):
-        return
-    if str(item.get("/Subtype")) in _ACQUIRING_PDF_ANNOTATIONS or any(
-        key in item for key in _ACQUIRING_PDF_ANNOTATION_KEYS
-    ):
-        raise ValueError("active content is forbidden in delivery artifacts")
-    if item.get("/AA") is not None:
-        raise ValueError("active content is forbidden in delivery artifacts")
-    _reject_pdf_action(item.get("/A"))
-    parent = item.get("/Parent")
-    if parent is not None:
-        _reject_pdf_annotation(parent, visited)
+    pending = [value]
+    while pending:
+        item = _pdf_object(pending.pop())
+        if not isinstance(item, dict) or not _pdf_visit(visited, item):
+            continue
+        if str(item.get("/Subtype")) in _ACQUIRING_PDF_ANNOTATIONS or any(
+            key in item for key in _ACQUIRING_PDF_ANNOTATION_KEYS
+        ):
+            raise ValueError("active content is forbidden in delivery artifacts")
+        if item.get("/AA") is not None:
+            raise ValueError("active content is forbidden in delivery artifacts")
+        _reject_pdf_action(item.get("/A"), visited)
+        pending.append(item.get("/Parent"))
 
 
 def _reject_pdf_field_tree(value, seen: set[int] | None = None) -> None:
     """A form field carries actions whether or not a page shows a widget for it."""
     visited = set() if seen is None else seen
-    fields = _pdf_object(value)
-    for field in fields if isinstance(fields, list) else ():
-        item = _pdf_object(field)
-        if not isinstance(item, dict) or not _pdf_visit(visited, item):
-            continue
-        if item.get("/AA") is not None:
-            raise ValueError("active content is forbidden in delivery artifacts")
-        _reject_pdf_action(item.get("/A"))
-        _reject_pdf_field_tree(item.get("/Kids"), visited)
+    pending = [value]
+    while pending:
+        fields = _pdf_object(pending.pop())
+        for field in fields if isinstance(fields, list) else ():
+            item = _pdf_object(field)
+            if not isinstance(item, dict) or not _pdf_visit(visited, item):
+                continue
+            if item.get("/AA") is not None:
+                raise ValueError("active content is forbidden in delivery artifacts")
+            _reject_pdf_action(item.get("/A"), visited)
+            pending.append(item.get("/Kids"))
 
 
 def _reject_pdf_outline(value) -> None:
@@ -6674,11 +6808,33 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
                 declared_types = _delivery_declared_content_types(
                     content_types, stored
                 )
-                has_macro = any(
-                    name.casefold() in _MACRO_PART_NAMES for name in names
-                ) or any(
-                    value.casefold() == _VBA_PROJECT_CONTENT_TYPE
-                    for value in declared_types.values()
+                # Every relationship, read and validated once, before any
+                # verdict rests on it.  Validity BEFORE internality: a
+                # Relationship with no Target read as the empty string, which
+                # _is_internal_relationship then judged internal.
+                delivery_relationships = []
+                for name in stored:
+                    if not name.casefold().endswith(".rels"):
+                        continue
+                    for item in _relationship_nodes(package.read(name)):
+                        declared_type = _attribute_named(item, "Type")
+                        declared_target = _attribute_named(item, "Target")
+                        if not (declared_type or "").strip() or not (
+                            declared_target or ""
+                        ).strip():
+                            raise ValueError("invalid Word relationship in delivery artifact")
+                        delivery_relationships.append((item, declared_type))
+                relationship_types = {
+                    declared_type.rsplit("/", 1)[-1].casefold()
+                    for _item, declared_type in delivery_relationships
+                }
+                has_macro = (
+                    any(name.casefold() in _MACRO_PART_NAMES for name in names)
+                    or any(
+                        value.casefold() == _VBA_PROJECT_CONTENT_TYPE
+                        for value in declared_types.values()
+                    )
+                    or _VBA_PROJECT_RELATIONSHIP in relationship_types
                 )
                 main_content_types = {
                     _attribute_named(item, "ContentType")
@@ -6687,28 +6843,14 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
                     and (_attribute_named(item, "PartName") or "").casefold()
                     == "/" + _DELIVERY_MAIN_DOCUMENT_PART
                 }
-                for name in stored:
-                    if name.casefold().endswith(".rels"):
-                        for item in _relationship_nodes(package.read(name)):
-                            # Validity BEFORE internality.  A Relationship with
-                            # no Target read as the empty string, which
-                            # _is_internal_relationship then judged internal, so
-                            # the duplicated policy disagreed with the worker --
-                            # which refuses both shapes as invalid -- on a
-                            # package neither boundary should accept.
-                            declared_type = _attribute_named(item, "Type")
-                            declared_target = _attribute_named(item, "Target")
-                            if not (declared_type or "").strip() or not (
-                                declared_target or ""
-                            ).strip():
-                                raise ValueError("invalid Word relationship in delivery artifact")
-                            if not _is_internal_relationship(item):
-                                raise ValueError("external relationships are forbidden in delivery artifacts")
-                            relationship_type = declared_type.rsplit("/", 1)[
-                                -1
-                            ].casefold()
-                            if relationship_type in _ACQUIRING_DELIVERY_RELATIONSHIPS:
-                                raise ValueError("active content is forbidden in delivery artifacts")
+                for item, declared_type in delivery_relationships:
+                    if not _is_internal_relationship(item):
+                        raise ValueError("external relationships are forbidden in delivery artifacts")
+                    if (
+                        declared_type.rsplit("/", 1)[-1].casefold()
+                        in _ACQUIRING_DELIVERY_RELATIONSHIPS
+                    ):
+                        raise ValueError("active content is forbidden in delivery artifacts")
                 if _DELIVERY_PACKAGE_RELATIONSHIP_PART not in names:
                     raise ValueError("final Word artifact main part is not uniquely bound")
                 _delivery_package_main_part(
@@ -6732,14 +6874,29 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
                     instructions.extend(_delivery_field_instructions(part_root))
                     for value in instructions:
                         _reject_unsupported_delivery_field(value)
-        except (BadZipFile, ElementTree.ParseError, OSError) as exc:
+        except ValueError:
+            raise
+        except Exception as exc:
+            # A package parser is a parser over hostile bytes and its failure
+            # vocabulary is NOT a closed set.  zipfile raises NotImplementedError
+            # -- not an OSError -- for any part stored with a compression method
+            # CPython does not implement, and an OPC producer may choose any
+            # method, so method 99 (WinZip AES) walked straight out of this
+            # boundary and past VerifyWorkspaceBackup, which catches only
+            # (KeyError, TypeError, ValueError) and so could never raise its
+            # declared RepositoryIntegrityError.  This is the repair already
+            # applied to validate_supporting_artifact: convert the class, not its
+            # next member.  ValueError is re-raised untouched because this
+            # boundary's own refusals are ValueErrors raised inside the block.
             raise ValueError("final Word artifact is invalid") from exc
         expected_main_type = (
             _DOCM_MAIN_CONTENT_TYPE
             if output_format == "DOCM"
             else _DOCX_MAIN_CONTENT_TYPE
         )
-        if main_content_types != {expected_main_type} or (
+        if {value.casefold() for value in main_content_types if value} != {
+            expected_main_type.casefold()
+        } or (
             output_format == "DOCX" and has_macro
         ):
             raise ValueError("final Word artifact macro identity changed")
@@ -6755,7 +6912,19 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
             raise ValueError("final PDF artifact is invalid") from exc
         if not content.startswith(b"%PDF-") or not content.rstrip().endswith(b"%%EOF"):
             raise ValueError("final PDF artifact is invalid")
-        _reject_active_pdf_content(reader)
+        try:
+            _reject_active_pdf_content(reader)
+        except ValueError:
+            # This sweep's own refusals -- "active content is forbidden", "too
+            # large to verify" -- must reach the caller as themselves, which is
+            # why the sweep sits outside the parse guard above at all.
+            raise
+        except (PdfReadError, OSError, KeyError) as exc:
+            # The sweep resolves indirect references the parse guard never
+            # touched, so a catalog pointing at a missing object now surfaces
+            # here.  PdfReadError derives from Exception and would otherwise
+            # cross this boundary unhandled.
+            raise ValueError("final PDF artifact is invalid") from exc
         media_type = _PDF_MEDIA
     else:
         raise ValueError("unsupported final artifact format")

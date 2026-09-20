@@ -6,7 +6,7 @@ from io import BytesIO
 from pathlib import PurePosixPath
 import re
 from xml.etree import ElementTree
-from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile, ZipInfo
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .report_foundation import ReportSnapshot, ReportState
 
@@ -19,8 +19,77 @@ _FIELD_VALUES = {
     "EXPERT_REGISTRATION": lambda report: report.expert_profile.registration,
     "REPORT_ID": lambda report: report.report_id,
 }
-_MAX_PARTS = 1000
-_MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+# The same bound the two validators state.  The binder's own numbers were
+# stricter, so a photo-heavy template both validators certify -- and that the
+# backup gate has already accepted -- failed every render in _safe_parts.
+_MAX_PARTS = 4096
+_MAX_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
+_MAX_COMPRESSION_RATIO = 200
+# The ratio guard applies only above 1 MiB on both other sides: a small, highly
+# compressible part is ordinary, not an attack.
+_COMPRESSION_RATIO_FLOOR = 1024 * 1024
+
+
+# The third statement of the field policy.  report_template cannot import the
+# delivery boundary -- that module imports this one -- so the segmentation is
+# duplicated here exactly as it is duplicated between the two validators, and the
+# parity catalogue now asks all three for a verdict rather than two.
+#
+# A field's instruction is the TEXT OF THE REGION between w:fldChar "begin" and
+# "separate".  Judging each w:instrText node alone refused an instruction Word 16
+# itself writes: editing a protected field under track changes splits it, so
+# " PAGEREF Marca " and " \h" arrive as two nodes and the second one's leading
+# token is a switch.  Because _FIELD_NAMES requires all six protected codes to be
+# present, one reviewed field made every render of that template fail for good.
+_FIELD_INSTRUCTION_ELEMENTS = frozenset({"instrText", "delInstrText"})
+_FIELD_TEXT_ELEMENTS = _FIELD_INSTRUCTION_ELEMENTS | {"t", "delText"}
+_FIELD_SEPARATOR_ELEMENTS = {"tab": chr(9), "br": chr(10), "cr": chr(10)}
+
+
+def _local_name(tag: object) -> str:
+    value = str(tag)
+    return value.rsplit("}", 1)[-1] if "}" in value else value
+
+
+def _template_field_instructions(root: ElementTree.Element) -> list[str]:
+    """Every field instruction in a part, one per field, in document order."""
+    instructions: list[str] = []
+    open_fields: list[list] = []
+
+    def closed(field: list) -> str:
+        buffer, in_result = field
+        value = "".join(buffer)
+        if in_result:
+            return value
+        if not value.strip():
+            raise ValueError("unsupported active Word field instruction")
+        return value
+
+    for node in root.iter():
+        name = _local_name(node.tag)
+        if name == "fldChar":
+            marker = (node.attrib.get(f"{_W}fldCharType") or "").strip().casefold()
+            if marker == "begin":
+                open_fields.append([[], False])
+            elif marker == "separate" and open_fields:
+                instructions.append(closed(open_fields[-1]))
+                open_fields[-1] = [[], True]
+            elif marker == "end" and open_fields:
+                instructions.append(closed(open_fields.pop()))
+        elif name in _FIELD_TEXT_ELEMENTS:
+            spelled_as_instruction = name in _FIELD_INSTRUCTION_ELEMENTS
+            if open_fields:
+                buffer, in_result = open_fields[-1]
+                if not in_result or spelled_as_instruction:
+                    buffer.append(node.text or "")
+            elif spelled_as_instruction:
+                instructions.append(node.text or "")
+        elif name in _FIELD_SEPARATOR_ELEMENTS and open_fields:
+            buffer, in_result = open_fields[-1]
+            if not in_result:
+                buffer.append(_FIELD_SEPARATOR_ELEMENTS[name])
+    instructions.extend(closed(item) for item in open_fields)
+    return instructions
 
 
 def _text(value: object) -> bool:
@@ -91,10 +160,19 @@ def _safe_parts(template_bytes: bytes) -> tuple[list[ZipInfo], dict[str, bytes]]
                 path = PurePosixPath(item.filename)
                 if path.is_absolute() or ".." in path.parts or item.filename.endswith("/"):
                     raise ValueError("unsafe template package")
-                if item.compress_size and item.file_size / item.compress_size > 200:
+                if (
+                    item.file_size > _COMPRESSION_RATIO_FLOOR
+                    and item.file_size
+                    > max(item.compress_size, 1) * _MAX_COMPRESSION_RATIO
+                ):
                     raise ValueError("unsafe template package")
             return infos, {item.filename: package.read(item.filename) for item in infos}
-    except (BadZipFile, OSError) as exc:
+    except ValueError:
+        raise
+    except Exception as exc:
+        # zipfile's failure vocabulary is not closed: NotImplementedError for an
+        # unimplemented compression method is not an OSError, and it left this
+        # boundary as itself.
         raise ValueError("unsafe template package") from exc
 
 
@@ -116,17 +194,19 @@ def _mechanics(parts: dict[str, bytes]) -> tuple[set[str], tuple[str, ...], int]
         except ElementTree.ParseError as exc:
             raise ValueError("template Word XML is invalid") from exc
     for xml_root in xml_roots:
-      for paragraph in xml_root.iter(f"{_W}p"):
-        nodes = [item.text or "" for item in paragraph.iter(f"{_W}instrText") if (item.text or "").strip()]
+        nodes = _template_field_instructions(xml_root)
         nodes.extend(
             item.attrib.get(f"{_W}instr", "")
-            for item in paragraph.iter(f"{_W}fldSimple")
+            for item in xml_root.iter(f"{_W}fldSimple")
             if item.attrib.get(f"{_W}instr", "").strip()
         )
         compact = re.sub(r"\s+", "", "".join(nodes)).upper()
         if any(marker in compact for marker in ("INCLUDETEXT", "INCLUDEPICTURE", "DDEAUTO", "DDE")) or "://" in compact:
             raise ValueError("unsupported active Word field instruction")
         for instruction in nodes:
+            if not instruction.strip():
+                # The result region of an ordinary field contributes nothing.
+                continue
             name = instruction.strip().split(maxsplit=1)[0].upper()
             if name not in _FIELD_NAMES:
                 raise ValueError("unsupported active Word field instruction")

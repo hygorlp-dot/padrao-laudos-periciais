@@ -550,6 +550,28 @@ _VBA_PROJECT_REL = (
 )
 
 
+def _region_field(code: str, *, element: str, deleted: bool = False) -> str:
+    """The same field with its code carried by `element` inside the region.
+
+    Native Word 16 builds a field code from the TEXT of the runs between fldChar
+    "begin" and "separate" and reports the same Code and the same field Type
+    whether that text sits in w:instrText, w:delInstrText, w:t or w:delText
+    (probe, 2026-09-20).  Round 7 named a closed element vocabulary here and
+    plain w:t then carried DDEAUTO past both boundaries.
+    """
+    result = "delText" if deleted else "t"
+    runs = (
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        f'<w:r><w:{element} xml:space="preserve"> {code} </w:{element}></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        f"<w:r><w:{result}>1</w:{result}></w:r>"
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+    )
+    if deleted:
+        return f'<w:del w:id="9" w:author="a" w:date="2026-01-01T00:00:00Z">{runs}</w:del>'
+    return runs
+
+
 def _deleted_field(code: str) -> str:
     """The same field, written the way Word writes a field deleted under review.
 
@@ -798,6 +820,48 @@ def _parity_catalogue() -> dict[str, tuple[str, dict[str, str]]]:
         bin_default,
     )
 
+    # OPC binds through the relationship as well as the content type, and the
+    # relationship is what Word itself follows: shown a part related as a
+    # vbaProject, native Word 16 tried to parse it AS a project although its
+    # declared content type said oleObject.  Round 7's comment claimed the
+    # relationship was read; only the content type and the names were.
+    routed_macro = _minimal_docx_parts()
+    routed_macro["word/macros.bin"] = "synthetic"
+    routed_macro["word/_rels/document.xml.rels"] = (
+        f'<Relationships xmlns="{_TRANSITIONAL_RELS_NS}">'
+        f'<Relationship Id="rIdVba" Type="{_VBA_PROJECT_REL}" Target="macros.bin"/>'
+        "</Relationships>"
+    )
+    routed_macro["[Content_Types].xml"] = _content_types(
+        {
+            "/word/document.xml": _DOCX_MAIN_TYPE,
+            "/word/macros.bin": (
+                "application/vnd.openxmlformats-officedocument.oleObject"
+            ),
+        }
+    )
+    entries["docx_with_a_macro_part_reached_only_by_relationship"] = (
+        "reject",
+        routed_macro,
+    )
+
+    # The two boundaries refused an ABSENT attribute and disagreed on an EMPTY
+    # one -- the worker accepted it -- and the catalogue held only the absent
+    # shape, which is exactly the axis it could not observe.
+    for label, attributes in (
+        ("relationship_with_empty_target", f'Type="{_VBA_PROJECT_REL}" Target=""'),
+        ("relationship_with_blank_target", f'Type="{_VBA_PROJECT_REL}" Target="   "'),
+        ("relationship_with_empty_type", 'Type="" Target="media/logo.png"'),
+        ("relationship_with_blank_type", 'Type="   " Target="media/logo.png"'),
+    ):
+        blank = _minimal_docx_parts()
+        blank["word/_rels/document.xml.rels"] = (
+            f'<Relationships xmlns="{_TRANSITIONAL_RELS_NS}">'
+            f'<Relationship Id="rIdX" {attributes}/>'
+            "</Relationships>"
+        )
+        entries[label] = ("reject", blank)
+
     # A relationship missing Target or Type: the worker refused both as invalid
     # while delivery read the absent Target as the empty string -- internal --
     # and accepted.  Neither boundary should accept either shape.
@@ -831,6 +895,10 @@ def _parity_catalogue() -> dict[str, tuple[str, dict[str, str]]]:
             "accept",
             _body_parts("<w:p>" + _deleted_field(code) + "</w:p>"),
         )
+        entries[f"safe_region_field_{name}_in_t"] = (
+            "accept",
+            _body_parts("<w:p>" + _region_field(code, element="t") + "</w:p>"),
+        )
     for code in _UNLISTED_FIELD_CODES:
         name = code.split()[0].casefold()
         entries[f"unlisted_field_{name}"] = (
@@ -841,6 +909,17 @@ def _parity_catalogue() -> dict[str, tuple[str, dict[str, str]]]:
             "reject",
             _body_parts("<w:p>" + _deleted_field(code) + "</w:p>"),
         )
+        # The instruction is the REGION's text, so the code is judged wherever in
+        # the region it sits -- not only in the two elements named for it.
+        for spelling, deleted in (("t", False), ("delText", True)):
+            entries[f"unlisted_region_field_{name}_in_{spelling.casefold()}"] = (
+                "reject",
+                _body_parts(
+                    "<w:p>"
+                    + _region_field(code, element=spelling, deleted=deleted)
+                    + "</w:p>"
+                ),
+            )
         entries[f"unlisted_field_{name}_behind_page"] = (
             "reject",
             _body_parts("<w:p>" + _field("PAGE") + _field(code) + "</w:p>"),

@@ -20,7 +20,7 @@ import sys
 from typing import Callable
 import winreg
 from xml.etree import ElementTree
-from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_DEFLATED, ZipFile
 
 
 RENDER_OPERATION = "RENDER_BOUND_AUTHORITATIVE_WORD_TO_DERIVED_PDF"
@@ -108,7 +108,11 @@ def _relationship_fields(node: ElementTree.Element) -> tuple[str, str, str | Non
     target_value = _xml_attribute(node, "Target")
     type_value = _xml_attribute(node, "Type")
     mode_value = _xml_attribute(node, "TargetMode")
-    if target_value is None or type_value is None:
+    if not (target_value or "").strip() or not (type_value or "").strip():
+        # Absent OR empty OR whitespace.  Refusing only the absent shape left
+        # this side laxer than delivery, which refuses all three, and the parity
+        # catalogue held only the absent one -- so the empty shapes were exactly
+        # what it could not observe.
         raise ValueError("invalid Word relationship")
     return type_value, target_value.strip(), mode_value
 
@@ -617,21 +621,26 @@ def _source_path(root: Path, source_format: str) -> Path:
     return source
 
 
-# WordprocessingML spells a field code two ways in EG_RunInnerContent:
-# w:instrText and w:delInstrText, the "Deleted Field Code" Word writes when a
-# field is deleted with track changes on.  Reading only the first left this
-# allowlist blind to the second: DDEAUTO, INCLUDETEXT and MACROBUTTON were
-# accepted by both boundaries under the deleted spelling and refused under the
-# live one.  Native Word 16 settles what that costs -- it binds the deleted
-# spelling as a live field object (Fields.Count == 1, Type == wdFieldAuthor)
-# while the revision still stands -- so the deleted spelling reaches the
-# interpreter exactly like the live one and must be judged exactly like it.
+# A field's instruction is the TEXT OF THE REGION between w:fldChar "begin" and
+# "separate".  It is not the content of a particular element, and the previous
+# attempt to name a closed element vocabulary here was wrong on the premise:
+# native Word 16 reports the same field Code and the same field Type whether
+# that text arrives in w:instrText, w:delInstrText, w:t or w:delText, and binds
+# the field either way (probe, 2026-09-20).  Round 7 closed the w:delInstrText
+# spelling and declared the vocabulary closed; plain w:t inside the instruction
+# region then carried DDEAUTO past both boundaries.  A list of spellings can
+# only ever hold the ones someone thought of, so this reads the region.
 #
-# These two, plus the w:fldSimple/@w:instr attribute read separately, are the
-# whole vocabulary: no other element in EG_RunInnerContent carries a field
-# instruction.  Naming the set here keeps that closure visible at the one place
-# a future spelling would have to be added.
+# w:instrText and w:delInstrText keep a distinct role: they are instruction
+# spellings even where they have no business being, so they are still judged in
+# the RESULT region and outside any field, where plain text is ordinary content
+# and must not be read as code.
 _FIELD_INSTRUCTION_ELEMENTS = frozenset({"instrText", "delInstrText"})
+_FIELD_TEXT_ELEMENTS = _FIELD_INSTRUCTION_ELEMENTS | {"t", "delText"}
+# w:tab and w:br do not join the characters around them.  Word reads
+# " AUT<tab>HOR " as the code AUT, not AUTHOR (same probe), so emitting the
+# separator keeps this reader tokenising the region the way Word does.
+_FIELD_SEPARATOR_ELEMENTS = {"tab": chr(9), "br": chr(10), "cr": chr(10)}
 
 
 # OPC binds a VBA project through its DECLARED CONTENT TYPE and the vbaProject
@@ -645,52 +654,84 @@ _FIELD_INSTRUCTION_ELEMENTS = frozenset({"instrText", "delInstrText"})
 # the officeDocument relationship and not the name ``word/document.xml`` is the
 # authority.  The names stay as a second signal; the declaration is the rule.
 _VBA_PROJECT_CONTENT_TYPE = "application/vnd.ms-office.vbaproject"
+# The vbaProject RELATIONSHIP is the third signal, and the one Word itself
+# follows.  Shown a part related as a vbaProject, native Word 16 tried to parse it
+# AS a project although its declared content type said oleObject, and refused the
+# file -- so the relationship, not the declaration alone, is what takes Word
+# there.  Round 7's comment already claimed the relationship was read; it was
+# not, and one incomplete signal had simply become two.
+_VBA_PROJECT_RELATIONSHIP = "vbaproject"
 _MACRO_PART_NAMES = frozenset({"word/vbaproject.bin", "word/vbadata.xml"})
+
+
+def _closed_field_instruction(field: list) -> str:
+    """The text a closed region contributes, refusing an instruction that is empty.
+
+    The result region may legitimately contribute nothing -- it holds what the
+    field displays -- but an instruction region that produced no text while a
+    field was open is a field whose code this reader could not recover.  That is
+    the "stopped examining" exit, and it must not share a path with "examined
+    everything and found no code": both sweeps skip an empty instruction.
+    """
+    buffer, in_result = field
+    text = "".join(buffer)
+    if in_result:
+        return text
+    if not text.strip():
+        raise ValueError("unsupported active Word field")
+    return text
 
 
 def _field_instructions(root: ElementTree.Element) -> list[str]:
     """Split a part's run stream into one instruction per field.
 
-    A field code (``w:instrText``, or ``w:delInstrText`` when the field was
-    deleted with track changes on) only means anything between a
-    ``w:fldChar`` "begin" and the
-    "separate" that ends the instruction, one paragraph may carry several fields,
-    and one field -- a TOC, typically -- may span many paragraphs.  Concatenating each paragraph
-    and reading its leading code answered a different question, namely what the
-    *paragraph* starts with, so ``{ PAGE }{ MACROBUTTON ... }`` presented an
-    allow-listed code while a second, unlisted field rode along behind it, and a
-    TOC split across paragraphs was rejected outright.  Walking the whole part
-    in document order with a stack judges what Word actually executes: every
-    field, nested ones included, on its own code.
+    A field is ``w:fldChar`` begin / instruction / separate / result / end; one
+    paragraph may carry several, one field -- a TOC, typically -- may span many
+    paragraphs, and fields nest.  Concatenating a paragraph and reading its
+    leading code answered a different question, so ``{ PAGE }{ MACROBUTTON ... }``
+    presented an allow-listed code while a second field rode along behind it.
+    Walking the whole part in document order with a stack judges what Word
+    actually executes: every field, nested ones included, on its own code.
     """
     instructions: list[str] = []
-    open_fields: list[list[str]] = []
+    # Each open field carries its buffer and whether "separate" has been seen.
+    open_fields: list[list] = []
     for node in root.iter():
         local_name = _xml_local_name(node.tag)
         if local_name == "fldChar":
             marker = (_xml_attribute(node, "fldCharType") or "").strip().casefold()
             if marker == "begin":
-                open_fields.append([])
+                open_fields.append([[], False])
             elif marker == "separate" and open_fields:
                 # The instruction ends at the separator.  Whatever a producer
                 # writes after it is judged on its own code: concatenating
                 # across the separator rebuilt, inside a single field, the very
                 # defect that segmenting by field was meant to close.
-                instructions.append("".join(open_fields[-1]))
-                open_fields[-1] = []
+                instructions.append(_closed_field_instruction(open_fields[-1]))
+                open_fields[-1] = [[], True]
             elif marker == "end" and open_fields:
-                instructions.append("".join(open_fields.pop()))
-        elif local_name in _FIELD_INSTRUCTION_ELEMENTS:
+                instructions.append(_closed_field_instruction(open_fields.pop()))
+        elif local_name in _FIELD_TEXT_ELEMENTS:
+            spelled_as_instruction = local_name in _FIELD_INSTRUCTION_ELEMENTS
             if open_fields:
-                open_fields[-1].append(node.text or "")
-            else:
+                buffer, in_result = open_fields[-1]
+                # In the result region only an instruction spelling is anomalous
+                # enough to judge; plain text there is what the field displays,
+                # and reading it as code would refuse every ordinary document.
+                if not in_result or spelled_as_instruction:
+                    buffer.append(node.text or "")
+            elif spelled_as_instruction:
                 # Bare instruction text is not a field to Word at all, but one
                 # shared buffer let a safe leading code speak for every node
                 # behind it, so each node is judged alone.
                 instructions.append(node.text or "")
+        elif local_name in _FIELD_SEPARATOR_ELEMENTS and open_fields:
+            buffer, in_result = open_fields[-1]
+            if not in_result:
+                buffer.append(_FIELD_SEPARATOR_ELEMENTS[local_name])
     # A field left open is still judged: an unreadable run stream must not
     # swallow an instruction.
-    instructions.extend("".join(buffer) for buffer in open_fields)
+    instructions.extend(_closed_field_instruction(item) for item in open_fields)
     return instructions
 
 
@@ -752,39 +793,54 @@ def _validate_word_source(source: Path, source_format: str) -> None:
                 if source_format == "DOCM"
                 else "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
             )
-# A ``Default`` entry is a RULE FOR TYPING parts with a given extension, not an
-# assertion that such a part exists -- a package may legally declare
-# ``Default Extension="bin"`` and store no .bin at all, as this suite's own
-# native fixture does.  Reading the declarations directly therefore reported a
-# macro in every package built by that fixture.  The question is what each
-# STORED part resolves to, which is exactly what the declared-content-type map
-# already answers.
+            # A ``Default`` entry is a RULE FOR TYPING parts with a given
+            # extension, not an assertion that such a part exists -- a package
+            # may legally declare ``Default Extension="bin"`` and store no .bin
+            # at all, as this suite's own native fixture does.  Reading the
+            # declarations directly therefore reported a macro in every package
+            # that fixture built.  The question is what each STORED part
+            # resolves to, which the declared-content-type map already answers.
             declared_types = _declared_content_types(content_types, names)
-            carries_macro = any(
-                name.casefold() in _MACRO_PART_NAMES for name in names
-            ) or any(
-                value.casefold() == _VBA_PROJECT_CONTENT_TYPE
-                for value in declared_types.values()
+            # Every relationship, read once: the macro axis needs them before the
+            # format identity check below, and the acquiring and external sweeps
+            # need the same nodes after it.  Reading them here also means a
+            # malformed relationship is refused before any verdict rests on it.
+            relationships = [
+                node
+                # OPC part names compare case-insensitively, so a ".RELS" part is
+                # the same part to Word but was a different string here, and the
+                # whole relationship policy never saw it.
+                for name in names
+                if name.casefold().endswith(".rels")
+                for node in _relationship_nodes(package.read(name))
+            ]
+            relationship_fields = [_relationship_fields(node) for node in relationships]
+            relationship_types = {
+                type_value.rsplit("/", 1)[-1].casefold()
+                for type_value, _target, _mode in relationship_fields
+            }
+            carries_macro = (
+                any(name.casefold() in _MACRO_PART_NAMES for name in names)
+                or any(
+                    value.casefold() == _VBA_PROJECT_CONTENT_TYPE
+                    for value in declared_types.values()
+                )
+                or _VBA_PROJECT_RELATIONSHIP in relationship_types
             )
             # The delivery boundary has always refused this; the privileged
             # boundary must not be the laxer of the two, whatever the worker
             # does afterwards to disarm macros.
-            if main_types != {expected_type} or (
+            if {value.casefold() for value in main_types if value} != {
+                expected_type.casefold()
+            } or (
                 source_format != "DOCM" and carries_macro
             ):
                 raise ValueError("Word package format identity mismatch")
 
-            for name in names:
-                # OPC part names compare case-insensitively, so a ".RELS" part is
-                # the same part to Word but was a different string here, and the
-                # whole relationship policy never saw it.
-                if not name.casefold().endswith(".rels"):
-                    continue
-                for relationship in _relationship_nodes(package.read(name)):
-                    type_value, target, mode_value = _relationship_fields(relationship)
-                    if type_value.rsplit("/", 1)[-1].casefold() in _ACQUIRING_RELATIONSHIP_TYPES:
-                        raise ValueError("unsupported active Word content")
-                    _reject_external_relationship(target, mode_value)
+            for type_value, target, mode_value in relationship_fields:
+                if type_value.rsplit("/", 1)[-1].casefold() in _ACQUIRING_RELATIONSHIP_TYPES:
+                    raise ValueError("unsupported active Word content")
+                _reject_external_relationship(target, mode_value)
 
             if _PACKAGE_RELATIONSHIP_PART not in set(names):
                 raise ValueError("Word package main part is not uniquely bound")
@@ -817,7 +873,20 @@ def _validate_word_source(source: Path, source_format: str) -> None:
                         or code.group(1).upper() not in _SAFE_WORD_FIELD_CODES
                     ):
                         raise ValueError("unsupported active Word field")
-    except (BadZipFile, OSError, KeyError, ElementTree.ParseError) as exc:
+    except ValueError:
+        raise
+    except Exception as exc:
+        # A package parser is a parser over hostile bytes and its failure
+        # vocabulary is NOT a closed set.  zipfile raises NotImplementedError
+        # -- not an OSError -- for any part stored with a compression method
+        # CPython does not implement, and an OPC producer may choose any
+        # method, so method 99 (WinZip AES) walked straight out of this
+        # boundary and past VerifyWorkspaceBackup, which catches only
+        # (KeyError, TypeError, ValueError) and so could never raise its
+        # declared RepositoryIntegrityError.  This is the repair already
+        # applied to validate_supporting_artifact: convert the class, not its
+        # next member.  ValueError is re-raised untouched because this
+        # boundary's own refusals are ValueErrors raised inside the block.
         raise ValueError("invalid Word render source") from exc
 
 
