@@ -143,6 +143,43 @@ def _digest(parts: dict[str, bytes], name: str) -> str | None:
     return sha256(parts[name]).hexdigest() if name in parts else None
 
 
+_MAIN_PART_CONTENT_TYPES = {
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml": "DOCX",
+    "application/vnd.ms-word.document.macroenabled.main+xml": "DOCM",
+}
+
+
+def _declared_output_kind(parts: dict) -> str:
+    """DOCX or DOCM as the package itself declares it, not as its parts hint.
+
+    The kind used to be inferred from the PRESENCE of word/vbaProject.bin, while
+    the delivery boundary decided the same axis from the main part's declared
+    content type.  Native Word 16 writes a .docm carrying no VBA part at all
+    when the document has no macros (probe, 2026-09-19), so for every such
+    template the two rules were mutually unsatisfiable: binding refused it as
+    DOCM for want of a macro part, and the boundary refused it as DOCX for its
+    declared content type.  Both now read the same signal.
+    """
+    try:
+        root = ElementTree.fromstring(parts["[Content_Types].xml"])
+    except (KeyError, ElementTree.ParseError) as exc:
+        raise ValueError("template content types are unreadable") from exc
+    declared = {
+        (item.attrib.get("ContentType") or "").casefold()
+        for item in root.iter()
+        if item.tag.rsplit("}", 1)[-1] == "Override"
+        and (item.attrib.get("PartName") or "").casefold() == "/word/document.xml"
+    }
+    kinds = {
+        _MAIN_PART_CONTENT_TYPES[value]
+        for value in declared
+        if value in _MAIN_PART_CONTENT_TYPES
+    }
+    if len(kinds) != 1:
+        raise ValueError("template main part content type is not uniquely declared")
+    return kinds.pop()
+
+
 def bind_report_template(template_bytes: bytes, report: ReportSnapshot, manifest: TemplateBindingManifest) -> DocumentBindingResult:
     if type(report) is not ReportSnapshot or report.state is not ReportState.APPROVED or not report.coverage.complete or report.upstream_stale:
         raise ValueError("Word binding requires an approved report")
@@ -160,9 +197,8 @@ def bind_report_template(template_bytes: bytes, report: ReportSnapshot, manifest
     before_mechanics = _mechanics(before)
     if before_mechanics[0] != _FIELD_NAMES:
         raise ValueError("protected Word fields are incomplete")
-    is_macro = "word/vbaProject.bin" in before
-    if (manifest.output_kind == "DOCM") != is_macro:
-        raise ValueError("template kind and macro package disagree")
+    if _declared_output_kind(before) != manifest.output_kind:
+        raise ValueError("template kind and package content type disagree")
     document = before["word/document.xml"].decode("utf-8")
     declared_placeholders = {item.placeholder for item in manifest.bindings}
     if set(re.findall(r"\[\[[A-Z][A-Z0-9_]*\]\]", document)) != declared_placeholders:

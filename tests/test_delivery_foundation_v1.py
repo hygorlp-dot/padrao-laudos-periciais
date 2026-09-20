@@ -2783,6 +2783,20 @@ def test_word_text_expectations_honor_table_row_band_size_for_typography() -> No
     assert [item.font_size for item in expectations] == [20, 20, 8, 8]
 
 
+# Native Word 16 evidence (probe, 2026-09-19) decides the three assertions
+# below, which previously pinned the run-typography sweep's own arithmetic
+# against the cell-shading sweep's.  A table whose firstRow declares only italic
+# and whose firstCol declares only bold, so each band's font size is visible
+# where the band applies:
+#
+#     rows, firstRow on:  11pt floor | 14pt band1 | 10pt band2 | 14pt band1
+#     cols, firstCol on:  11pt floor | 14pt band1 | 10pt band2 | 14pt band1
+#
+# An index whose own conditional format is enabled carries no band, the count
+# restarts at the first index that does, and the first-column region does not
+# suppress the row band -- it only adds what firstCol itself declares.
+
+
 def test_word_table_banding_starts_after_enabled_first_row() -> None:
     rows = "".join(
         f'<w:tr><w:tc><w:p><w:r><w:t>Row {index}</w:t></w:r></w:p></w:tc></w:tr>'
@@ -2809,10 +2823,10 @@ def test_word_table_banding_starts_after_enabled_first_row() -> None:
         {"word/document.xml": document, "word/styles.xml": styles}
     )
 
-    assert [item.font_size for item in expectations] == [18, 10, 14]
+    assert [item.font_size for item in expectations] == [18, 14, 10]
 
 
-def test_empty_first_row_condition_keeps_applicable_horizontal_band_typography() -> None:
+def test_an_enabled_first_row_is_excluded_from_banding_though_it_declares_nothing() -> None:
     rows = "".join(
         f'<w:tr><w:tc><w:p><w:r><w:t>Row {index}</w:t></w:r></w:p></w:tc></w:tr>'
         for index in range(2)
@@ -2836,10 +2850,12 @@ def test_empty_first_row_condition_keeps_applicable_horizontal_band_typography()
         {"word/document.xml": document, "word/styles.xml": styles}
     )
 
-    assert [item.font_size for item in expectations] == [20, 11]
+    # The header keeps the wholeTable floor: an enabled firstRow is outside the
+    # band range whether or not its own condition declares anything.
+    assert [item.font_size for item in expectations] == [11, 20]
 
 
-def test_first_column_region_suppresses_horizontal_band_typography() -> None:
+def test_the_first_column_region_does_not_suppress_the_horizontal_band() -> None:
     rows = "".join(
         f'<w:tr><w:tc><w:p><w:r><w:t>Row {index}</w:t></w:r></w:p></w:tc></w:tr>'
         for index in range(2)
@@ -2863,7 +2879,10 @@ def test_first_column_region_suppresses_horizontal_band_typography() -> None:
         {"word/document.xml": document, "word/styles.xml": styles}
     )
 
-    assert [item.font_size for item in expectations] == [11, 11]
+    # firstCol is above the bands in the layering order, so it overrides only
+    # what it declares -- here nothing about size -- and both rows keep their
+    # own band's typography.
+    assert [item.font_size for item in expectations] == [20, 8]
 
 
 def test_default_paragraph_emphasis_is_enforced_inside_table() -> None:
@@ -7229,12 +7248,64 @@ def test_a_graph_too_large_to_walk_is_refused_by_name() -> None:
 
 
 def _associated_file_pdf(where: str) -> bytes:
+    """/AF on every object ISO 32000-2 allows it on, not on the three reported.
+
+    The rule was stated generally and applied to the catalog, then to the page,
+    then to the annotation -- three reviews, one sentence, one object at a time.
+    A form XObject, a structure element and a form field each admitted an
+    /EmbeddedFile carrying an MZ payload while the comment above the code said
+    the rule governed them.
+    """
     writer = _blank_pdf_writer()
     attachment = ArrayObject([writer._add_object(_pdf_filespec(writer))])
     if where == "catalog":
         writer._root_object[NameObject("/AF")] = attachment
     elif where == "page":
         writer.pages[0][NameObject("/AF")] = attachment
+    elif where == "form_xobject":
+        xobject = DecodedStreamObject()
+        xobject.set_data(b"")
+        xobject.update(
+            {
+                NameObject("/Type"): NameObject("/XObject"),
+                NameObject("/Subtype"): NameObject("/Form"),
+                NameObject("/AF"): attachment,
+            }
+        )
+        resources = DictionaryObject()
+        holder = DictionaryObject()
+        holder[NameObject("/Fm0")] = writer._add_object(xobject)
+        resources[NameObject("/XObject")] = holder
+        writer.pages[0][NameObject("/Resources")] = resources
+    elif where == "structure_element":
+        element = DictionaryObject()
+        element.update(
+            {
+                NameObject("/Type"): NameObject("/StructElem"),
+                NameObject("/S"): NameObject("/P"),
+                NameObject("/AF"): attachment,
+            }
+        )
+        root = DictionaryObject()
+        root.update(
+            {
+                NameObject("/Type"): NameObject("/StructTreeRoot"),
+                NameObject("/K"): writer._add_object(element),
+            }
+        )
+        writer._root_object[NameObject("/StructTreeRoot")] = writer._add_object(root)
+    elif where == "acroform_field":
+        field = DictionaryObject()
+        field.update(
+            {
+                NameObject("/FT"): NameObject("/Btn"),
+                NameObject("/T"): create_string_object("campo"),
+                NameObject("/AF"): attachment,
+            }
+        )
+        forms = DictionaryObject()
+        forms[NameObject("/Fields")] = ArrayObject([writer._add_object(field)])
+        writer._root_object[NameObject("/AcroForm")] = forms
     else:
         _with_annotation(writer, _annotation("/Link", **{"/AF": attachment}))
     output = BytesIO()
@@ -7242,7 +7313,17 @@ def _associated_file_pdf(where: str) -> bytes:
     return output.getvalue()
 
 
-@pytest.mark.parametrize("where", ("catalog", "page", "annotation"))
+@pytest.mark.parametrize(
+    "where",
+    (
+        "catalog",
+        "page",
+        "annotation",
+        "form_xobject",
+        "structure_element",
+        "acroform_field",
+    ),
+)
 def test_an_embedded_file_is_refused_wherever_it_is_attached(where: str) -> None:
     content = _associated_file_pdf(where)
 
@@ -7318,7 +7399,21 @@ def _png_header(width: int, height: int) -> bytes:
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IEND", b"")
 
 
-@pytest.mark.parametrize(("width", "height"), ((40000, 40000), (20000, 20000)))
+# Pillow refuses anything past 2 * MAX_IMAGE_PIXELS (178,956,970) on its own, so
+# a case above that line exercises Pillow's guard and says nothing about the
+# product's declared bound.  The declared bound governs exactly the window
+# between the two, and only a case INSIDE that window can fail if it is removed.
+_PILLOW_OWN_BOMB_LIMIT = 2 * Image.MAX_IMAGE_PIXELS
+
+
+@pytest.mark.parametrize(
+    ("width", "height"),
+    (
+        (40000, 40000),  # 1.6e9 px: Pillow's own guard
+        (20000, 20000),  # 4.0e8 px: Pillow's own guard
+        (10000, 9000),  # 9.0e7 px: inside the product's declared window
+    ),
+)
 def test_a_gigapixel_supporting_image_is_refused_as_a_value_error(
     width: int, height: int
 ) -> None:
@@ -7327,6 +7422,27 @@ def test_a_gigapixel_supporting_image_is_refused_as_a_value_error(
     ValueError."""
     with pytest.raises(ValueError, match="supporting PNG artifact is invalid"):
         validate_supporting_artifact(_png_header(width, height), "image/png")
+
+
+def test_the_declared_pixel_bound_governs_a_window_pillow_does_not() -> None:
+    """The bound is load-bearing only where Pillow's own guard does not reach."""
+    assert (
+        delivery_renderer._MAX_SUPPORTING_IMAGE_PIXELS
+        < 10000 * 9000
+        < _PILLOW_OWN_BOMB_LIMIT
+    )
+
+
+def test_a_structurally_invalid_png_under_the_bound_is_still_a_value_error() -> None:
+    """A PNG with a valid IHDR and no IDAT put an IndexError out of Image.verify().
+
+    It is well under the pixel bound, so that branch does not fire, and the
+    except list did not name IndexError -- so a boundary whose whole contract is
+    "refusals are ValueError" leaked a different type to callers that catch only
+    ValueError.
+    """
+    with pytest.raises(ValueError, match="supporting PNG artifact is invalid"):
+        validate_supporting_artifact(_png_header(100, 100), "image/png")
 
 
 def test_an_ordinary_supporting_image_is_still_accepted() -> None:
@@ -7673,3 +7789,315 @@ def test_a_picture_the_package_does_not_contain_is_named_as_such() -> None:
             delivery_renderer._ordered_word_image_signatures(
                 package, {"word/document.xml": root}
             )
+
+
+# --- Phase C §27 round 7 ------------------------------------------------------
+#
+# Three findings this round were one shape: the sweep walked named routes and
+# returned "clean" for objects it had not visited.  The repair splits the policy
+# by KEY rather than by route, because /A cannot be judged structurally -- on an
+# annotation it is an action, on a structure element it is the attribute object
+# (ISO 32000-2 14.7.2) -- while /AF, /AA and /Collection mean the same thing
+# wherever they sit.
+
+
+def _outline_through_last_pdf(action_subtype: str) -> bytes:
+    """An outline whose second item is reachable only backwards.
+
+    The outline is a doubly linked list.  Seeding /First and following /Next
+    left every item hung off the root's /Last unvisited, and the walk then
+    returned normally -- the "examined everything, clean" exit, reached by
+    omission instead of by budget.
+    """
+    writer = _blank_pdf_writer()
+    first = writer._add_object(DictionaryObject())
+    first.get_object()[NameObject("/Title")] = create_string_object("A")
+    last = DictionaryObject()
+    last.update(
+        {
+            NameObject("/Title"): create_string_object("B"),
+            NameObject("/A"): _pdf_action(action_subtype),
+            NameObject("/Prev"): first,
+        }
+    )
+    outlines = DictionaryObject()
+    outlines.update(
+        {
+            NameObject("/Type"): NameObject("/Outlines"),
+            NameObject("/First"): first,
+            NameObject("/Last"): writer._add_object(last),
+            NameObject("/Count"): NumberObject(2),
+        }
+    )
+    writer._root_object[NameObject("/Outlines")] = writer._add_object(outlines)
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def test_an_outline_item_reachable_only_through_last_is_still_examined() -> None:
+    content = _outline_through_last_pdf("/Launch")
+
+    with pytest.raises(ValueError, match="active content"):
+        validate_final_artifact(content, "PDF")
+    with pytest.raises(ValueError, match="active content"):
+        delivery_renderer.validate_delivery_artifact(content, "PDF")
+
+
+def test_a_backward_linked_outline_of_destinations_is_still_accepted() -> None:
+    """Walking /Last and /Prev must not refuse an ordinary two-bookmark outline."""
+    assert validate_final_artifact(_outline_through_last_pdf("/GoTo"), "PDF")[2] == (
+        "application/pdf"
+    )
+
+
+def _widget_parent_pdf(**parent_entries) -> bytes:
+    """A widget whose field is reachable only through /Parent, with no /AcroForm.
+
+    A widget inherits its action and its additional-actions from the field it
+    belongs to.  Nothing seeded the field walk here, so the parent was never
+    visited by any route.
+    """
+    writer = _blank_pdf_writer()
+    parent = DictionaryObject()
+    parent.update(
+        {
+            NameObject("/FT"): NameObject("/Btn"),
+            NameObject("/T"): create_string_object("pai"),
+            **{NameObject(key): value for key, value in parent_entries.items()},
+        }
+    )
+    _with_annotation(
+        writer,
+        _annotation("/Widget", **{"/Parent": writer._add_object(parent)}),
+    )
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+@pytest.mark.parametrize("carrier", ("additional_actions", "action"))
+def test_a_field_action_behind_a_widget_parent_is_examined(carrier: str) -> None:
+    if carrier == "additional_actions":
+        holder = DictionaryObject()
+        holder[NameObject("/K")] = _pdf_action("/JavaScript")
+        entries = {"/AA": holder}
+    else:
+        entries = {"/A": _pdf_action("/Launch")}
+    content = _widget_parent_pdf(**entries)
+
+    with pytest.raises(ValueError, match="active content"):
+        validate_final_artifact(content, "PDF")
+    with pytest.raises(ValueError, match="active content"):
+        delivery_renderer.validate_delivery_artifact(content, "PDF")
+
+
+def test_an_ordinary_widget_with_a_plain_parent_field_is_accepted() -> None:
+    """Following /Parent must not refuse a form field that does nothing."""
+    assert validate_final_artifact(_widget_parent_pdf(), "PDF")[2] == "application/pdf"
+
+
+def _calculation_order_pdf(action_subtype: str) -> bytes:
+    """A field listed in /CO and not in /Fields.
+
+    /CO is a second catalog route into the field graph and only /Fields seeded
+    the walk, so the module's own sentence -- fields are reachable from the
+    catalog whether or not a page shows a widget for them -- governed one of the
+    two routes it describes.
+    """
+    writer = _blank_pdf_writer()
+    field = DictionaryObject()
+    field.update(
+        {
+            NameObject("/FT"): NameObject("/Btn"),
+            NameObject("/T"): create_string_object("calc"),
+            NameObject("/A"): _pdf_action(action_subtype),
+        }
+    )
+    forms = DictionaryObject()
+    forms.update(
+        {
+            NameObject("/Fields"): ArrayObject([]),
+            NameObject("/CO"): ArrayObject([writer._add_object(field)]),
+        }
+    )
+    writer._root_object[NameObject("/AcroForm")] = forms
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def test_a_field_reached_only_through_calculation_order_is_examined() -> None:
+    content = _calculation_order_pdf("/Launch")
+
+    with pytest.raises(ValueError, match="active content"):
+        validate_final_artifact(content, "PDF")
+    with pytest.raises(ValueError, match="active content"):
+        delivery_renderer.validate_delivery_artifact(content, "PDF")
+
+
+# --- the two band readers now answer to one decider ---------------------------
+
+
+@pytest.mark.parametrize(
+    ("count", "skip_first", "skip_last", "band_size", "expected"),
+    (
+        # Native Word 16, firstRow on: floor, band1, band2, band1.
+        (4, True, False, 1, (None, 0, 1, 0)),
+        # No header: banding starts at the first row.
+        (4, False, False, 1, (0, 1, 0, 1)),
+        # A total row is excluded at the other end.
+        (4, True, True, 1, (None, 0, 1, None)),
+        # Band size 2 pairs the rows after the header.
+        (5, True, False, 2, (None, 0, 0, 1, 1)),
+    ),
+)
+def test_the_band_decider_matches_native_word(
+    count: int, skip_first: bool, skip_last: bool, band_size: int, expected
+) -> None:
+    """One decider, checked against what Word actually paints.
+
+    Two readers used to answer this with different arithmetic and they disagreed
+    on every table with a header row: the oracle demanded band1Horz's fill and
+    band2Horz's typography of the same row, which no faithful render satisfies.
+    """
+    assert (
+        tuple(
+            delivery_renderer._table_band(
+                index,
+                count,
+                skip_first=skip_first,
+                skip_last=skip_last,
+                band_size=band_size,
+            )
+            for index in range(count)
+        )
+        == expected
+    )
+
+
+def test_the_typography_and_shading_sweeps_band_the_same_rows() -> None:
+    """The two sweeps feed one verdict, so they must agree on which rows band.
+
+    They are compared here through the style that makes the disagreement
+    visible: band1Horz declaring BOTH a fill and a run property, which is the
+    shape every built-in banded Word table style has.
+    """
+    rows = "".join(
+        f"<w:tr>{_TC.format(f'Linha {index}')}</w:tr>" for index in range(4)
+    )
+    document = delivery_renderer.ElementTree.fromstring(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:tbl><w:tblPr><w:tblStyle w:val="Faixas"/>'
+        '<w:tblLook w:firstRow="1" w:lastRow="0" w:firstColumn="0" '
+        'w:lastColumn="0" w:noHBand="0" w:noVBand="1"/></w:tblPr>'
+        '<w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid>'
+        f"{rows}</w:tbl></w:body></w:document>"
+    )
+    styles = delivery_renderer.ElementTree.fromstring(
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="table" w:styleId="Faixas">'
+        '<w:tblPr><w:tblStyleRowBandSize w:val="1"/></w:tblPr>'
+        '<w:tblStylePr w:type="band1Horz">'
+        '<w:tcPr><w:shd w:fill="D9D9D9"/></w:tcPr>'
+        "<w:rPr><w:b/></w:rPr></w:tblStylePr>"
+        "</w:style></w:styles>"
+    )
+
+    expectations = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document, "word/styles.xml": styles}
+    )
+    bold_rows = {
+        index for index, item in enumerate(expectations) if bool(item.bold)
+    }
+
+    # Native Word 16: the header carries no band, and band1 is the first data row.
+    assert bold_rows == {1, 3}
+
+
+# --- the FIDELITY/SECURITY split, asserted rather than described --------------
+
+
+@pytest.mark.parametrize(
+    ("branch", "markup", "expected"),
+    (
+        (
+            "del",
+            '<w:del w:id="7" w:author="a" w:date="d">'
+            "<w:r><w:t>suprimido</w:t></w:r></w:del>",
+            "Laudo",
+        ),
+        (
+            "moveFrom",
+            '<w:moveFrom w:id="7" w:author="a" w:date="d">'
+            "<w:r><w:t>movido</w:t></w:r></w:moveFrom>",
+            "Laudo",
+        ),
+        (
+            "AlternateContent",
+            "<mc:AlternateContent>"
+            '<mc:Choice Requires="wps"><w:r><w:t>escolhido</w:t></w:r></mc:Choice>'
+            "<mc:Fallback><w:r><w:t>reserva</w:t></w:r></mc:Fallback>"
+            "</mc:AlternateContent>",
+            "Laudoescolhido",
+        ),
+    ),
+)
+def test_every_fidelity_reader_prunes_the_same_branches(
+    branch: str, markup: str, expected: str
+) -> None:
+    """The split was declared in two docstrings and rediscovered twice anyway.
+
+    Round 5 moved five sweeps to the pruning walker and left five raw; round 6
+    found four more, the last of them the same predicate spelled two ways inside
+    one builder.  Nine sweeps, two rounds, one class -- because nothing observed
+    which side a reader was on.  This asserts the invariant itself: for every
+    branch Word does not paint, every fidelity reader sees the same text.
+    """
+    paragraph = next(
+        delivery_renderer._current_iter(
+            delivery_renderer.ElementTree.fromstring(
+                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+                'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">'
+                f"<w:body><w:p><w:r><w:t>Laudo</w:t></w:r>{markup}</w:p></w:body>"
+                "</w:document>"
+            ),
+            "p",
+        )
+    )
+    hidden = delivery_renderer._hidden_run_resolver(None)
+
+    assert delivery_renderer._visible_paragraph_text(paragraph, hidden) == expected
+    assert (
+        delivery_renderer._dynamic_paragraph_text(
+            paragraph, page_number=1, is_hidden_run=hidden
+        )
+        == expected
+    )
+
+
+# --- the macro axis is a declaration, not a spelling -------------------------
+
+
+def test_the_template_kind_is_read_from_the_declared_content_type() -> None:
+    """Native Word 16 writes a .docm with no VBA part when there are no macros.
+
+    The binder decided the kind by the PRESENCE of word/vbaProject.bin while the
+    delivery boundary decided it by the main part's declared content type, so
+    for every macro-free .docm the two rules were mutually unsatisfiable and no
+    render of such a template could succeed.
+    """
+    from scripts.backend_contract import report_template
+
+    body = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p/></w:body></w:document>"
+    )
+    for package, expected in (
+        (word_package(body), "DOCX"),
+        (word_package(body, main_type=DOCM_MAIN_TYPE), "DOCM"),
+    ):
+        with ZipFile(BytesIO(package)) as archive:
+            parts = {name: archive.read(name) for name in archive.namelist()}
+
+        assert report_template._declared_output_kind(parts) == expected

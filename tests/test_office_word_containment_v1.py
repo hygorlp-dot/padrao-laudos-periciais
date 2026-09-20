@@ -5,9 +5,10 @@ import json
 from pathlib import Path
 import sys
 import types
-from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
+
+from tests.opc_word_fixtures import word_package
 
 from scripts.backend_contract.infrastructure import office_pdf, office_word_worker
 from scripts.backend_contract.infrastructure.office_pdf import (
@@ -21,30 +22,33 @@ from scripts.backend_contract.infrastructure.office_pdf import (
 
 
 def test_worker_rejects_noncanonical_external_target_mode(tmp_path: Path) -> None:
+    """A TargetMode Word still honours, spelled with padding to dodge a compare.
+
+    The fixture is a VALID package in every other respect.  It previously
+    declared one Override and stored an undeclared .rels part, so the package was
+    malformed on a second count and could be refused without the TargetMode rule
+    ever being consulted -- the assertion matched "relationship" loosely enough
+    that the test looked green either way.  The refusal is now named exactly, so
+    a future reordering cannot quietly answer a different question.
+    """
     source = tmp_path / "source.docx"
-    with ZipFile(source, "w", ZIP_DEFLATED) as package:
-        package.writestr(
-            "[Content_Types].xml",
-            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-            '<Override PartName="/word/document.xml" '
-            'ContentType="application/vnd.openxmlformats-officedocument.'
-            'wordprocessingml.document.main+xml"/></Types>',
-        )
-        package.writestr(
-            "word/document.xml",
+    source.write_bytes(
+        word_package(
             '<w:document xmlns:w="http://schemas.openxmlformats.org/'
             'wordprocessingml/2006/main"><w:body><w:p><w:r>'
-            '<w:t>Synthetic</w:t></w:r></w:p></w:body></w:document>',
+            "<w:t>Synthetic</w:t></w:r></w:p></w:body></w:document>",
+            parts={
+                "word/_rels/document.xml.rels": (
+                    '<Relationships xmlns="http://schemas.openxmlformats.org/'
+                    'package/2006/relationships"><Relationship Id="rId1" '
+                    'Type="template" Target="synthetic-private.png" '
+                    'TargetMode=" External "/></Relationships>'
+                )
+            },
         )
-        package.writestr(
-            "word/_rels/document.xml.rels",
-            '<Relationships xmlns="http://schemas.openxmlformats.org/package/'
-            '2006/relationships"><Relationship Id="rId1" Type="template" '
-            'Target="synthetic-private.png" TargetMode=" External "/>'
-            "</Relationships>",
-        )
+    )
 
-    with pytest.raises(ValueError, match="relationship"):
+    with pytest.raises(ValueError, match="external Word relationship"):
         office_word_worker._validate_word_source(source, "DOCX")
 
 

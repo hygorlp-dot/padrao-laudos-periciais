@@ -617,10 +617,43 @@ def _source_path(root: Path, source_format: str) -> Path:
     return source
 
 
+# WordprocessingML spells a field code two ways in EG_RunInnerContent:
+# w:instrText and w:delInstrText, the "Deleted Field Code" Word writes when a
+# field is deleted with track changes on.  Reading only the first left this
+# allowlist blind to the second: DDEAUTO, INCLUDETEXT and MACROBUTTON were
+# accepted by both boundaries under the deleted spelling and refused under the
+# live one.  Native Word 16 settles what that costs -- it binds the deleted
+# spelling as a live field object (Fields.Count == 1, Type == wdFieldAuthor)
+# while the revision still stands -- so the deleted spelling reaches the
+# interpreter exactly like the live one and must be judged exactly like it.
+#
+# These two, plus the w:fldSimple/@w:instr attribute read separately, are the
+# whole vocabulary: no other element in EG_RunInnerContent carries a field
+# instruction.  Naming the set here keeps that closure visible at the one place
+# a future spelling would have to be added.
+_FIELD_INSTRUCTION_ELEMENTS = frozenset({"instrText", "delInstrText"})
+
+
+# OPC binds a VBA project through its DECLARED CONTENT TYPE and the vbaProject
+# relationship; ``word/vbaProject.bin`` is only the conventional name.  Judging
+# the name made this rule a spelling check: a project stored as
+# ``word/macros.bin``, declared ``application/vnd.ms-office.vbaProject`` and
+# related exactly as OPC says, passed both boundaries at once -- the duplicated
+# policy agreed, and agreed on the wrong signal.
+#
+# This is the same lesson this module already learned for the main part, where
+# the officeDocument relationship and not the name ``word/document.xml`` is the
+# authority.  The names stay as a second signal; the declaration is the rule.
+_VBA_PROJECT_CONTENT_TYPE = "application/vnd.ms-office.vbaproject"
+_MACRO_PART_NAMES = frozenset({"word/vbaproject.bin", "word/vbadata.xml"})
+
+
 def _field_instructions(root: ElementTree.Element) -> list[str]:
     """Split a part's run stream into one instruction per field.
 
-    ``w:instrText`` only means anything between a ``w:fldChar`` "begin" and the
+    A field code (``w:instrText``, or ``w:delInstrText`` when the field was
+    deleted with track changes on) only means anything between a
+    ``w:fldChar`` "begin" and the
     "separate" that ends the instruction, one paragraph may carry several fields,
     and one field -- a TOC, typically -- may span many paragraphs.  Concatenating each paragraph
     and reading its leading code answered a different question, namely what the
@@ -647,7 +680,7 @@ def _field_instructions(root: ElementTree.Element) -> list[str]:
                 open_fields[-1] = []
             elif marker == "end" and open_fields:
                 instructions.append("".join(open_fields.pop()))
-        elif local_name == "instrText":
+        elif local_name in _FIELD_INSTRUCTION_ELEMENTS:
             if open_fields:
                 open_fields[-1].append(node.text or "")
             else:
@@ -719,9 +752,19 @@ def _validate_word_source(source: Path, source_format: str) -> None:
                 if source_format == "DOCM"
                 else "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
             )
+# A ``Default`` entry is a RULE FOR TYPING parts with a given extension, not an
+# assertion that such a part exists -- a package may legally declare
+# ``Default Extension="bin"`` and store no .bin at all, as this suite's own
+# native fixture does.  Reading the declarations directly therefore reported a
+# macro in every package built by that fixture.  The question is what each
+# STORED part resolves to, which is exactly what the declared-content-type map
+# already answers.
+            declared_types = _declared_content_types(content_types, names)
             carries_macro = any(
-                name.casefold() in {"word/vbaproject.bin", "word/vbadata.xml"}
-                for name in names
+                name.casefold() in _MACRO_PART_NAMES for name in names
+            ) or any(
+                value.casefold() == _VBA_PROJECT_CONTENT_TYPE
+                for value in declared_types.values()
             )
             # The delivery boundary has always refused this; the privileged
             # boundary must not be the laxer of the two, whatever the worker
@@ -746,9 +789,7 @@ def _validate_word_source(source: Path, source_format: str) -> None:
             if _PACKAGE_RELATIONSHIP_PART not in set(names):
                 raise ValueError("Word package main part is not uniquely bound")
             _package_main_part(package.read(_PACKAGE_RELATIONSHIP_PART))
-            interpretable = _interpretable_word_parts(
-                _declared_content_types(content_types, names)
-            )
+            interpretable = _interpretable_word_parts(declared_types)
 
             for name in names:
                 if name not in interpretable:

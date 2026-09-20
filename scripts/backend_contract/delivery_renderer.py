@@ -17,7 +17,7 @@ import unicodedata
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
-from PIL import Image, ImageChops, ImageFilter, ImageStat, UnidentifiedImageError
+from PIL import Image, ImageChops, ImageFilter, ImageStat
 import pypdfium2 as pdfium
 from pypdf import PdfReader
 from pypdf.generic import BooleanObject
@@ -300,6 +300,48 @@ def _current_iter(root: ElementTree.Element | None, name: str):
     one, and read the historical page size as if it were current.
     """
     return (node for node in _current_nodes(root) if _local_name(node.tag) == name)
+
+
+def _table_band(
+    index: int,
+    count: int,
+    *,
+    skip_first: bool,
+    skip_last: bool,
+    band_size: int,
+) -> int | None:
+    """Which conditional band a table row or column falls in; None for neither.
+
+    ONE decider, for both axes and both sweeps.  Two readers used to answer this
+    -- run typography and cell shading -- with different arithmetic, and they
+    disagreed on every table carrying a header row: the oracle then demanded
+    band1Horz's fill and band2Horz's typography of the same row, which no
+    faithful render can satisfy, and accepted band1Horz typography on a row Word
+    paints as band2Horz.
+
+    Native Word 16 evidence (probe, 2026-09-19).  A table whose firstRow
+    declares only italic and whose firstCol declares only bold, so each band's
+    own font size shows through wherever the band applies:
+
+        rows, firstRow on:  11pt floor | 14pt band1 | 10pt band2 | 14pt band1
+        cols, firstCol on:  11pt floor | 14pt band1 | 10pt band2 | 14pt band1
+
+    An index whose own conditional format is enabled therefore carries NO band,
+    and the band count restarts at the first index that does -- identically on
+    both axes.
+
+    The same probe shows there is no cross-axis suppression: a banded row keeps
+    its band inside the first column, which only adds firstCol's bold.  Gating
+    the horizontal band on the column region is not precedence.  Precedence is
+    already modelled by the order the conditional formats are layered, which
+    places firstCol and firstRow above the bands and overrides only the
+    properties the higher layer actually declares; a gate destroys the rest.
+    """
+    start = 1 if skip_first else 0
+    stop = count - (1 if skip_last else 0)
+    if not start <= index < stop:
+        return None
+    return ((index - start) // band_size) % 2
 
 
 def _on_off(node: ElementTree.Element | None, *, default: bool = False) -> bool:
@@ -2951,28 +2993,35 @@ def _word_text_expectations(
                         active.add("swcell")
                     if last_row and last_column:
                         active.add("secell")
-                    if (
-                        not first_column
-                        and not last_column
-                        and not enabled(look, "noHBand")
-                    ):
-                        band_row = row_index
-                        active.add(
-                            "band1horz"
-                            if (band_row // row_band_size) % 2 == 0
-                            else "band2horz"
+                    # The look flags decide the band RANGE for the whole
+                    # table, so the table-level values are what _table_band
+                    # needs here -- not the per-cell first_row/first_column
+                    # above, which are false everywhere except the first index
+                    # and would put the range back at zero for every other row.
+                    if not enabled(look, "noHBand"):
+                        horizontal = _table_band(
+                            row_index,
+                            len(rows),
+                            skip_first=first_row_enabled,
+                            skip_last=last_row_enabled,
+                            band_size=row_band_size,
                         )
-                    if (
-                        not first_row
-                        and not last_row
-                        and not enabled(look, "noVBand", default=True)
-                    ):
-                        band_column = cell_index
-                        active.add(
-                            "band1vert"
-                            if (band_column // column_band_size) % 2 == 0
-                            else "band2vert"
+                        if horizontal is not None:
+                            active.add(
+                                "band1horz" if horizontal == 0 else "band2horz"
+                            )
+                    if not enabled(look, "noVBand", default=True):
+                        vertical = _table_band(
+                            cell_index,
+                            len(cells),
+                            skip_first=first_column_enabled,
+                            skip_last=last_column_enabled,
+                            band_size=column_band_size,
                         )
+                        if vertical is not None:
+                            active.add(
+                                "band1vert" if vertical == 0 else "band2vert"
+                            )
 
                     layers: list[ElementTree.Element] = []
                     for style in chain:
@@ -5557,12 +5606,17 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                                 raise ValueError(
                                     "invalid Word table row band size"
                                 )
-                            start = 1 if first_row else 0
-                            stop = len(rows) - (1 if last_row else 0)
                             band_rows = {
                                 index
-                                for index in range(start, stop)
-                                if ((index - start) // band_size) % 2 == 0
+                                for index in range(len(rows))
+                                if _table_band(
+                                    index,
+                                    len(rows),
+                                    skip_first=first_row,
+                                    skip_last=last_row,
+                                    band_size=band_size,
+                                )
+                                == 0
                             }
                             cells = [
                                 replace(
@@ -6259,10 +6313,42 @@ def _delivery_interpretable_parts(declared: dict[str, str]) -> set[str]:
     }
 
 
+# WordprocessingML spells a field code two ways in EG_RunInnerContent:
+# w:instrText and w:delInstrText, the "Deleted Field Code" Word writes when a
+# field is deleted with track changes on.  Reading only the first left this
+# allowlist blind to the second: DDEAUTO, INCLUDETEXT and MACROBUTTON were
+# accepted by both boundaries under the deleted spelling and refused under the
+# live one.  Native Word 16 settles what that costs -- it binds the deleted
+# spelling as a live field object (Fields.Count == 1, Type == wdFieldAuthor)
+# while the revision still stands -- so the deleted spelling reaches the
+# interpreter exactly like the live one and must be judged exactly like it.
+#
+# These two, plus the w:fldSimple/@w:instr attribute read separately, are the
+# whole vocabulary: no other element in EG_RunInnerContent carries a field
+# instruction.  Naming the set here keeps that closure visible at the one place
+# a future spelling would have to be added.
+_FIELD_INSTRUCTION_ELEMENTS = frozenset({"instrText", "delInstrText"})
+
+
+# OPC binds a VBA project through its DECLARED CONTENT TYPE and the vbaProject
+# relationship; ``word/vbaProject.bin`` is only the conventional name.  Judging
+# the name made this rule a spelling check: a project stored as
+# ``word/macros.bin``, declared ``application/vnd.ms-office.vbaProject`` and
+# related exactly as OPC says, passed both boundaries at once -- the duplicated
+# policy agreed, and agreed on the wrong signal.
+#
+# This is the same lesson this module already learned for the main part, where
+# the officeDocument relationship and not the name ``word/document.xml`` is the
+# authority.  The names stay as a second signal; the declaration is the rule.
+_VBA_PROJECT_CONTENT_TYPE = "application/vnd.ms-office.vbaproject"
+_MACRO_PART_NAMES = frozenset({"word/vbaproject.bin", "word/vbadata.xml"})
+
+
 def _delivery_field_instructions(root: ElementTree.Element) -> list[str]:
     """Split a part's run stream into one instruction per field.
 
-    Mirrors the Word worker: w:instrText only means anything between a w:fldChar
+    Mirrors the Word worker, including the deleted spelling of a field code:
+    an instruction only means anything between a w:fldChar
     "begin" and the "separate" that ends the instruction, so concatenating a
     paragraph -- or a whole field across its separator -- and judging the leading
     code let a second instruction ride along behind the first.
@@ -6284,7 +6370,7 @@ def _delivery_field_instructions(root: ElementTree.Element) -> list[str]:
                 open_fields[-1] = []
             elif marker == "end" and open_fields:
                 instructions.append("".join(open_fields.pop()))
-        elif local_name == "instrText":
+        elif local_name in _FIELD_INSTRUCTION_ELEMENTS:
             if open_fields:
                 open_fields[-1].append(node.text or "")
             else:
@@ -6318,8 +6404,22 @@ def _reject_unsupported_delivery_field(value: str) -> None:
 
 _SAFE_PDF_ACTION = "/GoTo"
 _ACQUIRING_PDF_NAME_TREES = ("/JavaScript", "/EmbeddedFiles", "/Renditions")
-# Catalog entries that attach files or turn the document into a portfolio.
+# Keys whose meaning does NOT depend on where they sit: /AF always attaches a
+# file, /AA always carries automatic actions, /Collection always turns the
+# document into a portfolio.  Because they are absolute they can be judged by a
+# structural walk of the whole object graph, and they must be: enforcing /AF on
+# named routes alone let an /EmbeddedFile in through the catalog, then through a
+# page, then through an annotation, then through a form field, a form XObject
+# and a structure element -- six reports of one rule stated generally and
+# applied case by case.
+#
+# /A is NOT in this set and cannot be.  On an annotation or an outline item it
+# is an action; on a structure element it is the attribute object (ISO 32000
+# 14.7.2).  A walk that judged /A everywhere would read a tagged PDF's
+# attributes as actions and refuse faithful documents, so /A stays on the routes
+# that give it its meaning.
 _ACQUIRING_PDF_CATALOG_KEYS = ("/AA", "/Collection", "/AF")
+_ABSOLUTE_ACQUIRING_PDF_KEYS = ("/AA", "/AF", "/Collection")
 # Annotation subtypes whose whole purpose is to carry or launch content.  They
 # keep their payload and their activation in subtype-specific keys instead of
 # announcing themselves through /A or /AA, so an action sweep never sees them.
@@ -6343,6 +6443,13 @@ _ACQUIRING_PDF_ANNOTATION_KEYS = (
 # mean "nothing left to check" and accepted a /Launch sitting past the limit.  A
 # completeness guard must not share an exit with "examined everything, clean".
 _PDF_TRAVERSAL_LIMIT = 4096
+# The structural walk covers the whole graph, so its bound is sized from
+# measurement rather than guessed: a 38-page laudo-shaped PDF authored by Word 16
+# holds 6411 distinct nodes reachable from /Root (probe, 2026-09-19), already
+# above the route budget above.  This bound also refuses on exhaustion, so it has
+# to sit far enough above a real report that exhaustion means a hostile graph and
+# not a long laudo.
+_PDF_GRAPH_LIMIT = 262_144
 
 
 def _pdf_visit(seen: set[int], node: object) -> bool:
@@ -6357,6 +6464,40 @@ def _pdf_visit(seen: set[int], node: object) -> bool:
 
 def _pdf_object(value):
     return value.get_object() if hasattr(value, "get_object") else value
+
+
+def _reject_pdf_attachment(item: dict) -> None:
+    """The absolute keys, judged identically at every object that carries them."""
+    if any(item.get(key) is not None for key in _ABSOLUTE_ACQUIRING_PDF_KEYS):
+        raise ValueError("active content is forbidden in delivery artifacts")
+
+
+def _reject_acquiring_pdf_keys(root) -> None:
+    """Walk the whole object graph for the keys whose meaning is not contextual.
+
+    This is the half of the policy that can be stated once and applied
+    everywhere.  The routes below still exist, and still carry the contextual
+    half -- an action is only an action where the structure says so -- but no
+    object reachable from the catalog can now carry an attachment or an
+    automatic action merely because no named route happened to visit it.
+    """
+    seen: set[int] = set()
+    pending = [root]
+    while pending:
+        node = _pdf_object(pending.pop())
+        if isinstance(node, (dict, list)):
+            if len(seen) >= _PDF_GRAPH_LIMIT:
+                raise ValueError("delivery artifact structure is too large to verify")
+            if id(node) in seen:
+                continue
+            seen.add(id(node))
+        else:
+            continue
+        if isinstance(node, dict):
+            _reject_pdf_attachment(node)
+            pending.extend(node.values())
+        else:
+            pending.extend(node)
 
 
 def _reject_pdf_action(value, seen: set[int] | None = None) -> None:
@@ -6380,10 +6521,17 @@ def _reject_pdf_action(value, seen: set[int] | None = None) -> None:
             _reject_pdf_action(item, visited)
 
 
-def _reject_pdf_annotation(value) -> None:
-    """An annotation may point inside the document and carry nothing else."""
+def _reject_pdf_annotation(value, seen: set[int] | None = None) -> None:
+    """An annotation may point inside the document and carry nothing else.
+
+    A widget inherits /A and /AA from the field it belongs to, so the /Parent
+    chain is part of the annotation, not a separate object: a package with no
+    /AcroForm at all -- so nothing seeds the field walk -- could hang a
+    /JavaScript field action off a widget's parent and never be visited.
+    """
+    visited = set() if seen is None else seen
     item = _pdf_object(value)
-    if not isinstance(item, dict):
+    if not isinstance(item, dict) or not _pdf_visit(visited, item):
         return
     if str(item.get("/Subtype")) in _ACQUIRING_PDF_ANNOTATIONS or any(
         key in item for key in _ACQUIRING_PDF_ANNOTATION_KEYS
@@ -6392,6 +6540,9 @@ def _reject_pdf_annotation(value) -> None:
     if item.get("/AA") is not None:
         raise ValueError("active content is forbidden in delivery artifacts")
     _reject_pdf_action(item.get("/A"))
+    parent = item.get("/Parent")
+    if parent is not None:
+        _reject_pdf_annotation(parent, visited)
 
 
 def _reject_pdf_field_tree(value, seen: set[int] | None = None) -> None:
@@ -6413,7 +6564,12 @@ def _reject_pdf_outline(value) -> None:
     outlines = _pdf_object(value)
     if not isinstance(outlines, dict):
         return
-    pending = [outlines.get("/First")]
+    # The outline is a DOUBLY linked list.  Seeding only /First and following
+    # only /Next left every item reachable through the root's /Last and a
+    # sibling's /Prev unvisited, and the walk then returned normally -- the same
+    # "examined everything, clean" exit as a walk that found nothing, reached by
+    # omission instead of by budget.
+    pending = [outlines.get("/First"), outlines.get("/Last")]
     visited: set[int] = set()
     while pending:
         item = _pdf_object(pending.pop())
@@ -6424,7 +6580,14 @@ def _reject_pdf_outline(value) -> None:
         # /SE names a structure element in a tagged PDF and executes nothing;
         # refusing it turned an ordinary tagged annex with bookmarks away.
         _reject_pdf_action(item.get("/A"))
-        pending.extend((item.get("/Next"), item.get("/First")))
+        pending.extend(
+            (
+                item.get("/Next"),
+                item.get("/Prev"),
+                item.get("/First"),
+                item.get("/Last"),
+            )
+        )
 
 
 def _reject_active_pdf_content(reader: PdfReader) -> None:
@@ -6448,6 +6611,8 @@ def _reject_active_pdf_content(reader: PdfReader) -> None:
     root = _pdf_object(reader.trailer["/Root"])
     if any(root.get(key) is not None for key in _ACQUIRING_PDF_CATALOG_KEYS):
         raise ValueError("active content is forbidden in delivery artifacts")
+    # Absolute keys, everywhere, before any route is walked.
+    _reject_acquiring_pdf_keys(root)
     _reject_pdf_action(root.get("/OpenAction"))
     names = _pdf_object(root.get("/Names"))
     if isinstance(names, dict) and any(
@@ -6459,8 +6624,11 @@ def _reject_active_pdf_content(reader: PdfReader) -> None:
         if "/XFA" in forms:
             raise ValueError("active content is forbidden in delivery artifacts")
         # Fields are reachable from the catalog whether or not any page shows a
-        # widget for them, so the page sweep alone never saw their actions.
+        # widget for them, so the page sweep alone never saw their actions.  The
+        # same sentence governs /CO, the calculation order array, which is a
+        # second catalog route into the same graph and was not seeded.
         _reject_pdf_field_tree(forms.get("/Fields"))
+        _reject_pdf_field_tree(forms.get("/CO"))
     _reject_pdf_outline(root.get("/Outlines"))
     for page in reader.pages:
         # /AF attaches a file wherever it appears -- catalog, page, annotation --
@@ -6493,13 +6661,24 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
                     # names are one part with two conflicting definitions.
                     raise ValueError("duplicate Word package part")
                 _reject_unsafe_delivery_parts(infos)
-                has_macro = any(
-                    name.casefold()
-                    in {"word/vbaproject.bin", "word/vbadata.xml"}
-                    for name in names
-                )
                 content_types = ElementTree.fromstring(
                     package.read(_DELIVERY_CONTENT_TYPES_PART)
+                )
+                # A ``Default`` entry is a RULE FOR TYPING parts with a given extension, not an
+                # assertion that such a part exists -- a package may legally declare
+                # ``Default Extension="bin"`` and store no .bin at all, as this suite's own
+                # native fixture does.  Reading the declarations directly therefore reported a
+                # macro in every package built by that fixture.  The question is what each
+                # STORED part resolves to, which is exactly what the declared-content-type map
+                # already answers.
+                declared_types = _delivery_declared_content_types(
+                    content_types, stored
+                )
+                has_macro = any(
+                    name.casefold() in _MACRO_PART_NAMES for name in names
+                ) or any(
+                    value.casefold() == _VBA_PROJECT_CONTENT_TYPE
+                    for value in declared_types.values()
                 )
                 main_content_types = {
                     _attribute_named(item, "ContentType")
@@ -6511,11 +6690,23 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
                 for name in stored:
                     if name.casefold().endswith(".rels"):
                         for item in _relationship_nodes(package.read(name)):
+                            # Validity BEFORE internality.  A Relationship with
+                            # no Target read as the empty string, which
+                            # _is_internal_relationship then judged internal, so
+                            # the duplicated policy disagreed with the worker --
+                            # which refuses both shapes as invalid -- on a
+                            # package neither boundary should accept.
+                            declared_type = _attribute_named(item, "Type")
+                            declared_target = _attribute_named(item, "Target")
+                            if not (declared_type or "").strip() or not (
+                                declared_target or ""
+                            ).strip():
+                                raise ValueError("invalid Word relationship in delivery artifact")
                             if not _is_internal_relationship(item):
                                 raise ValueError("external relationships are forbidden in delivery artifacts")
-                            relationship_type = (
-                                _attribute_named(item, "Type") or ""
-                            ).rsplit("/", 1)[-1].casefold()
+                            relationship_type = declared_type.rsplit("/", 1)[
+                                -1
+                            ].casefold()
                             if relationship_type in _ACQUIRING_DELIVERY_RELATIONSHIPS:
                                 raise ValueError("active content is forbidden in delivery artifacts")
                 if _DELIVERY_PACKAGE_RELATIONSHIP_PART not in names:
@@ -6523,9 +6714,7 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
                 _delivery_package_main_part(
                     package.read(_DELIVERY_PACKAGE_RELATIONSHIP_PART)
                 )
-                interpretable = _delivery_interpretable_parts(
-                    _delivery_declared_content_types(content_types, stored)
-                )
+                interpretable = _delivery_interpretable_parts(declared_types)
                 for name in stored:
                     if name not in interpretable:
                         continue
@@ -6606,11 +6795,20 @@ def validate_supporting_artifact(content: bytes, media_type: str) -> tuple[str, 
             if width * height > _MAX_SUPPORTING_IMAGE_PIXELS:
                 raise ValueError(f"supporting {expected_format} artifact is invalid")
             image.verify()
-    except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as exc:
-        # A header alone can declare a gigapixel image.  Pillow raises
-        # DecompressionBombError, which derives from Exception rather than
-        # OSError, so it escaped this boundary entirely and reached callers that
-        # only catch ValueError.
+    except ValueError:
+        # The format and pixel-bound refusals above already speak this
+        # boundary's language.
+        raise
+    except Exception as exc:
+        # An image decoder is a parser over hostile bytes, and its failure
+        # vocabulary is NOT a closed set.  This except enumerated OSError, then
+        # gained UnidentifiedImageError, then DecompressionBombError, and a PNG
+        # with a valid IHDR and no IDAT still put an IndexError out of
+        # Image.verify() -- past a boundary whose callers catch ValueError, and
+        # past VerifyWorkspaceBackup, which catches (KeyError, TypeError,
+        # ValueError) and so could not turn it into the declared
+        # RepositoryIntegrityError.  Converting the class closes the shape
+        # rather than its next member.
         raise ValueError(f"supporting {expected_format} artifact is invalid") from exc
     return sha256(content).hexdigest(), len(content), media_type
 

@@ -545,6 +545,31 @@ def test_both_boundaries_accept_the_supported_package(tmp_path: Path) -> None:
 # the allowlist -- the primary control -- was fully bypassed.
 
 
+_VBA_PROJECT_REL = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vbaProject"
+)
+
+
+def _deleted_field(code: str) -> str:
+    """The same field, written the way Word writes a field deleted under review.
+
+    WordprocessingML spells a field code two ways -- w:instrText and
+    w:delInstrText -- and both boundaries read only the first, so every code
+    below was refused live and accepted deleted.  Native Word 16 binds the
+    deleted spelling as a live field object while the revision still stands, so
+    the two spellings reach the interpreter alike and must be judged alike.
+    """
+    return (
+        '<w:del w:id="9" w:author="a" w:date="2026-01-01T00:00:00Z">'
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        f'<w:r><w:delInstrText xml:space="preserve"> {code} </w:delInstrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        "<w:r><w:delText>1</w:delText></w:r>"
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+        "</w:del>"
+    )
+
+
 def _field(code: str) -> str:
     """A field as Word writes it: begin / instruction / separate / result / end."""
     return (
@@ -738,6 +763,56 @@ def _parity_catalogue() -> dict[str, tuple[str, dict[str, str]]]:
     )
     entries["docx_carrying_a_macro_part"] = ("reject", macro_in_docx)
 
+    # OPC binds a VBA project by declared content type and relationship, never
+    # by part name, so pinning only the conventional spelling left the rule a
+    # spelling check -- and both boundaries agreed on the wrong signal at once,
+    # which is exactly the drift this catalogue exists to observe.
+    renamed_macro = _minimal_docx_parts()
+    renamed_macro["word/macros.bin"] = "synthetic"
+    renamed_macro["word/_rels/document.xml.rels"] = (
+        f'<Relationships xmlns="{_TRANSITIONAL_RELS_NS}">'
+        f'<Relationship Id="rIdVba" Type="{_VBA_PROJECT_REL}" Target="macros.bin"/>'
+        "</Relationships>"
+    )
+    renamed_macro["[Content_Types].xml"] = _content_types(
+        {
+            "/word/document.xml": _DOCX_MAIN_TYPE,
+            "/word/macros.bin": "application/vnd.ms-office.vbaProject",
+        }
+    )
+    entries["docx_carrying_a_renamed_macro_part"] = ("reject", renamed_macro)
+
+    # ...and the converse, which a first attempt at the rule above got wrong: an
+    # OPC Default is a RULE FOR TYPING parts with an extension, not a claim that
+    # such a part exists.  A package may declare Default Extension="bin" and
+    # store no .bin at all -- this suite's own native fixture does exactly that
+    # for every non-macro case -- so reading declarations instead of resolved
+    # part types reported a macro in a package that carries none.
+    bin_default = _minimal_docx_parts()
+    bin_default["[Content_Types].xml"] = _content_types(
+        {"/word/document.xml": _DOCX_MAIN_TYPE},
+        defaults={"bin": "application/vnd.ms-office.vbaProject"},
+    )
+    entries["docx_declaring_a_bin_default_without_a_macro_part"] = (
+        "accept",
+        bin_default,
+    )
+
+    # A relationship missing Target or Type: the worker refused both as invalid
+    # while delivery read the absent Target as the empty string -- internal --
+    # and accepted.  Neither boundary should accept either shape.
+    for label, attributes in (
+        ("relationship_without_target", f'Type="{_VBA_PROJECT_REL}"'),
+        ("relationship_without_type", 'Target="media/logo.png"'),
+    ):
+        broken = _minimal_docx_parts()
+        broken["word/_rels/document.xml.rels"] = (
+            f'<Relationships xmlns="{_TRANSITIONAL_RELS_NS}">'
+            f'<Relationship Id="rIdX" {attributes}/>'
+            "</Relationships>"
+        )
+        entries[label] = ("reject", broken)
+
     upper_override = _minimal_docx_parts()
     upper_override["[Content_Types].xml"] = _content_types(
         {"/WORD/DOCUMENT.XML": _DOCX_MAIN_TYPE}
@@ -750,11 +825,21 @@ def _parity_catalogue() -> dict[str, tuple[str, dict[str, str]]]:
             "accept",
             _body_parts("<w:p>" + _field(code) + "</w:p>"),
         )
+        # The repair must judge the deleted spelling, not merely refuse it:
+        # an allow-listed code stays allow-listed when it is deleted.
+        entries[f"safe_deleted_field_{name}"] = (
+            "accept",
+            _body_parts("<w:p>" + _deleted_field(code) + "</w:p>"),
+        )
     for code in _UNLISTED_FIELD_CODES:
         name = code.split()[0].casefold()
         entries[f"unlisted_field_{name}"] = (
             "reject",
             _body_parts("<w:p>" + _field(code) + "</w:p>"),
+        )
+        entries[f"unlisted_deleted_field_{name}"] = (
+            "reject",
+            _body_parts("<w:p>" + _deleted_field(code) + "</w:p>"),
         )
         entries[f"unlisted_field_{name}_behind_page"] = (
             "reject",
