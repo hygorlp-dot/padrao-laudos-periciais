@@ -14,6 +14,9 @@ from .report_foundation import ReportSnapshot, ReportState
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _WP = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
 _FIELD_NAMES = {"TOC", "PAGE", "NUMPAGES", "SEQ", "REF", "PAGEREF"}
+_ACQUIRING_TEMPLATE_FIELDS = re.compile(
+    r"\b(?:INCLUDETEXT|INCLUDEPICTURE|DDEAUTO|DDE)\b", re.IGNORECASE
+)
 _FIELD_VALUES = {
     "EXPERT_FULL_NAME": lambda report: report.expert_profile.full_name,
     "EXPERT_REGISTRATION": lambda report: report.expert_profile.registration,
@@ -158,7 +161,13 @@ def _safe_parts(template_bytes: bytes) -> tuple[list[ZipInfo], dict[str, bytes]]
                 raise ValueError("unsafe template package")
             for item in infos:
                 path = PurePosixPath(item.filename)
-                if path.is_absolute() or ".." in path.parts or item.filename.endswith("/"):
+                if item.filename.endswith("/"):
+                    # A directory entry carries no content.  Both validators skip
+                    # them and a parity test pins that they are legal, while this
+                    # third statement refused them -- so the backup gate
+                    # certified a template that could then never be bound.
+                    continue
+                if path.is_absolute() or ".." in path.parts:
                     raise ValueError("unsafe template package")
                 if (
                     item.file_size > _COMPRESSION_RATIO_FLOOR
@@ -200,9 +209,15 @@ def _mechanics(parts: dict[str, bytes]) -> tuple[set[str], tuple[str, ...], int]
             for item in xml_root.iter(f"{_W}fldSimple")
             if item.attrib.get(f"{_W}instr", "").strip()
         )
-        compact = re.sub(r"\s+", "", "".join(nodes)).upper()
-        if any(marker in compact for marker in ("INCLUDETEXT", "INCLUDEPICTURE", "DDEAUTO", "DDE")) or "://" in compact:
-            raise ValueError("unsupported active Word field instruction")
+        for instruction in nodes:
+            # Both validators match each instruction on its own, on word
+            # boundaries.  Joining every instruction of a part, stripping all
+            # whitespace and asking for bare substrings read any identifier
+            # containing those letters as an opcode -- a bookmark named
+            # "Addendum" was refused -- and let one field's trailing characters
+            # join the next field's leading ones.
+            if _ACQUIRING_TEMPLATE_FIELDS.search(instruction) or "://" in instruction:
+                raise ValueError("unsupported active Word field instruction")
         for instruction in nodes:
             if not instruction.strip():
                 # The result region of an ordinary field contributes nothing.
@@ -286,7 +301,12 @@ def bind_report_template(template_bytes: bytes, report: ReportSnapshot, manifest
     for binding in manifest.bindings:
         if document.count(binding.placeholder) != 1:
             raise ValueError("canonical field must remain single-source")
-        document = document.replace(binding.placeholder, _FIELD_VALUES[binding.field](report))
+        # A binding value is TEXT.  Writing it into the part unescaped made an
+        # expert whose name carries "&" produce invalid XML, and the refusal
+        # blamed the template; the canonical injection one module away escapes.
+        value = _FIELD_VALUES[binding.field](report)
+        escaped = value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        document = document.replace(binding.placeholder, escaped)
     after = dict(before)
     after["word/document.xml"] = document.encode("utf-8")
     after_mechanics = _mechanics(after)

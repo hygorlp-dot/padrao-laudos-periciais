@@ -22,7 +22,7 @@ import pypdfium2 as pdfium
 from pypdf import PdfReader
 from pypdf.generic import BooleanObject
 from pypdf.errors import PdfReadError
-from pypdf.generic import ContentStream
+from pypdf.generic import ContentStream, StreamObject
 
 from .report_foundation import ReportSnapshot
 from .report_foundation import report_snapshot_to_mapping
@@ -711,6 +711,41 @@ def _paragraph(text: str):
     return paragraph
 
 
+# XML 1.0 normalises CR and CRLF in character data to LF, so a canonical line
+# written with a CR reads back with an LF and the binding check could never hold
+# -- and its refusal blamed the template for a character in the report.  U+000B
+# is what Word stores for a manual line break, and XML 1.0 cannot carry it at
+# all, so it left this boundary as a ParseError.  Every member of that family
+# becomes LF, which already round-trips.  The digest inside the block binds the
+# true report text, so this normalises the RENDERING, never the authority.
+_CANONICAL_LINE_BREAKS = (
+    chr(13) + chr(10),
+    chr(13),
+    chr(11),
+    chr(12),
+    chr(0x85),
+    chr(0x2028),
+    chr(0x2029),
+)
+# What XML 1.0 forbids outright, and what no rendering would show anyway.
+_XML_FORBIDDEN_CONTROLS = re.compile(
+    "[" + chr(0) + "-" + chr(8) + chr(14) + "-" + chr(31) + "]"
+)
+
+
+def _canonical_text(value: str) -> str:
+    """One canonical line, in the only form XML can carry back unchanged."""
+    for control in _CANONICAL_LINE_BREAKS:
+        value = value.replace(control, chr(10))
+    found = _XML_FORBIDDEN_CONTROLS.search(value)
+    if found is not None:
+        raise ValueError(
+            "canonical report text carries a character XML cannot represent: "
+            "U+{:04X}".format(ord(found.group()))
+        )
+    return value
+
+
 def _canonical_report_lines(report: ReportSnapshot) -> tuple[str, ...]:
     mapping = report_snapshot_to_mapping(report)
     digest = sha256(json.dumps(mapping, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
@@ -736,7 +771,10 @@ def _canonical_report_lines(report: ReportSnapshot) -> tuple[str, ...]:
             ))
     for decision in report.review_decisions:
         lines.append(f"REVISÃO PROFISSIONAL | {decision.action.value} | {decision.professional_id} | {decision.reason} | {decision.timestamp}")
-    return tuple(lines)
+    # Every consumer of these lines -- the canonical injection, the binding check
+    # that reads them back out of the package, and the diagnostic PDF -- has to
+    # see the same text, so the normalisation belongs here and nowhere else.
+    return tuple(_canonical_text(line) for line in lines)
 
 
 def render_pdf_candidate(report: ReportSnapshot) -> bytes:
@@ -6549,18 +6587,60 @@ _PDF_TRAVERSAL_LIMIT = 4096
 _PDF_GRAPH_LIMIT = 262_144
 
 
-def _pdf_visit(seen: set[int], node: object) -> bool:
-    """Record a node as visited; refuse a graph too large to walk."""
+def _pdf_visit(seen: set, node: object, judgement: str) -> bool:
+    """Record a node as visited UNDER ONE JUDGEMENT; refuse a graph too large.
+
+    The record used to be the object alone, while the walks sharing it judge
+    different things: an annotation on its /Subtype and payload keys, a field on
+    its /AA, an action on its /S.  So the first walk to reach an object silenced
+    the others, and an annotation that IS its own action dictionary -- /A
+    pointing back at the widget, carrying /S /JavaScript -- was recorded by the
+    annotation walk and then never judged as an action at all.  A viewer
+    activating that widget follows /A, finds /S /JavaScript and runs /JS.
+
+    Keying the record on (object, judgement) keeps one shared budget while
+    letting every judgement reach every object it is responsible for.
+    """
+    key = (id(node), judgement)
     if len(seen) >= _PDF_TRAVERSAL_LIMIT:
         raise ValueError("delivery artifact structure is too large to verify")
-    if id(node) in seen:
+    if key in seen:
         return False
-    seen.add(id(node))
+    seen.add(key)
     return True
 
 
 def _pdf_object(value):
     return value.get_object() if hasattr(value, "get_object") else value
+
+
+# A dictionary whose keys the PRODUCER chose announces nothing about itself.  An
+# object does: a stream, a /Type or /Subtype, a shading's /ShadingType, a
+# pattern's /PatternType, a name TREE node's /Names, /Kids or /Limits.
+_PDF_OBJECT_MARKERS = ("/Type", "/Subtype", "/ShadingType", "/PatternType")
+_PDF_NAME_TREE_MARKERS = ("/Names", "/Kids", "/Limits")
+
+
+def _pdf_is_name_keyed(node: dict) -> bool:
+    """Is this node actually a producer-keyed container, or an object?
+
+    The keys that CAN hold such a container can also hold an ordinary object,
+    and treating the edge as proof carried an /EmbeddedFile past this boundary
+    four ways: /AP /N is the appearance STREAM whenever the annotation has no
+    states -- the ordinary case -- /Dests under /Names is a name TREE node,
+    /ColorSpace on an image is an array whose second element is the ICC profile
+    stream, and /Shading on a pattern is a single shading dictionary.
+
+    So the exemption needs both halves: the edge says the key may hold a
+    name-keyed container, and the node has to look like one.  Getting this
+    wrong in the strict direction only costs availability, which is why an
+    unrecognised marker leaves the node judged.
+    """
+    if isinstance(node, StreamObject) or "/Length" in node:
+        return False
+    if any(marker in node for marker in _PDF_OBJECT_MARKERS):
+        return False
+    return not any(marker in node for marker in _PDF_NAME_TREE_MARKERS)
 
 
 def _reject_pdf_attachment(item: dict) -> None:
@@ -6578,16 +6658,21 @@ def _reject_acquiring_pdf_keys(root) -> None:
     object reachable from the catalog can now carry an attachment or an
     automatic action merely because no named route happened to visit it.
 
-    DECLARED LIMITATION.  _PDF_NAME_DICTIONARY_KEYS is a list of the containers
-    PDF keys by author-chosen names, and that list is not closed: a name-keyed
-    container not named there has its keys read as vocabulary, so an inert
-    document can be refused for a name it happens to use.  Two reviews found two
-    such containers, which is why the limitation is written down rather than
-    assumed away.  The error direction is deliberate: an unlisted container costs
-    availability, while inverting the default -- judging keys only where a
-    container is positively recognised -- would let an attachment through every
-    container nobody thought of, and that is the direction this boundary exists
-    to refuse.
+    DECLARED LIMITATION, in both directions.  _PDF_NAME_DICTIONARY_KEYS lists the
+    containers PDF keys by author-chosen names, and that list is not closed.
+
+    Too narrow costs AVAILABILITY: a name-keyed container not listed has its keys
+    read as vocabulary, so an inert document is refused for a name it happens to
+    use.  Three reviews found four such containers.
+
+    Too broad costs a NARROW piece of coverage: inside a listed container the
+    keys are not read, so a key literally spelled /AF whose value is a file
+    specification is not judged.  Nothing surfaces it -- a viewer looking up an
+    XObject named /AF finds a file specification, which is not an XObject, and
+    ignores it -- but it is a gap and it is stated rather than implied.  The
+    second half of the exemption is what keeps this narrow: reaching a listed key
+    is not enough, the node also has to look like a name-keyed container, so an
+    object behind such a key is judged like any other.
     """
     seen: set[int] = set()
     # (object, what this object's KEYS are)
@@ -6599,18 +6684,26 @@ def _reject_acquiring_pdf_keys(root) -> None:
             continue
         if len(seen) >= _PDF_GRAPH_LIMIT:
             raise ValueError("delivery artifact structure is too large to verify")
-        if id(node) in seen:
+        # Keyed on the KIND as well, for the same reason the route walks are: a
+        # producer decides the order of its own dictionary keys, so an object
+        # reachable under two kinds would otherwise be examined under whichever
+        # the stack popped first and skipped under the other.
+        if (id(node), kind) in seen:
             continue
-        seen.add(id(node))
+        seen.add((id(node), kind))
         if isinstance(node, list):
-            pending.extend((item, kind) for item in node)
-        elif kind == _PDF_NAME_KEYS:
+            # An array is never a name-keyed container and must not carry the
+            # exemption to its elements: /ColorSpace on an image is an array
+            # holding the ICC profile stream, which is an object like any other.
+            pending.extend((item, _PDF_JUDGE_KEYS) for item in node)
+        elif kind == _PDF_NAME_KEYS and _pdf_is_name_keyed(node):
             # Inside a name dictionary every child is judged, and no child is
             # itself treated as a name dictionary: otherwise naming an image
             # /XObject would buy an attacker one unjudged object.
             pending.extend((item, _PDF_JUDGE_KEYS) for item in node.values())
         elif kind == _PDF_APPEARANCE_KEYS:
-            # /N, /D and /R are structural; what hangs off them is state-keyed.
+            # /N, /D and /R are structural; what hangs off them may be
+            # state-keyed, or may be the appearance stream itself.
             _reject_pdf_attachment(node)
             pending.extend((item, _PDF_NAME_KEYS) for item in node.values())
         else:
@@ -6645,7 +6738,7 @@ def _reject_pdf_action(value, seen: set[int] | None = None) -> None:
     pending = [value]
     while pending:
         action = _pdf_object(pending.pop())
-        if not isinstance(action, dict) or not _pdf_visit(visited, action):
+        if not isinstance(action, dict) or not _pdf_visit(visited, action, "action"):
             continue
         if str(action.get("/S")) != _SAFE_PDF_ACTION:
             raise ValueError("active content is forbidden in delivery artifacts")
@@ -6665,7 +6758,7 @@ def _reject_pdf_annotation(value, seen: set[int] | None = None) -> None:
     pending = [value]
     while pending:
         item = _pdf_object(pending.pop())
-        if not isinstance(item, dict) or not _pdf_visit(visited, item):
+        if not isinstance(item, dict) or not _pdf_visit(visited, item, "annotation"):
             continue
         if str(item.get("/Subtype")) in _ACQUIRING_PDF_ANNOTATIONS or any(
             key in item for key in _ACQUIRING_PDF_ANNOTATION_KEYS
@@ -6685,7 +6778,7 @@ def _reject_pdf_field_tree(value, seen: set[int] | None = None) -> None:
         fields = _pdf_object(pending.pop())
         for field in fields if isinstance(fields, list) else ():
             item = _pdf_object(field)
-            if not isinstance(item, dict) or not _pdf_visit(visited, item):
+            if not isinstance(item, dict) or not _pdf_visit(visited, item, "field"):
                 continue
             if item.get("/AA") is not None:
                 raise ValueError("active content is forbidden in delivery artifacts")
@@ -6707,7 +6800,7 @@ def _reject_pdf_outline(value) -> None:
     visited: set[int] = set()
     while pending:
         item = _pdf_object(pending.pop())
-        if not isinstance(item, dict) or not _pdf_visit(visited, item):
+        if not isinstance(item, dict) or not _pdf_visit(visited, item, "outline"):
             continue
         if item.get("/AA") is not None:
             raise ValueError("active content is forbidden in delivery artifacts")
@@ -6770,7 +6863,16 @@ def _reject_active_pdf_content(reader: PdfReader) -> None:
         # page or an annotation.
         if page.get("/AA") is not None or page.get("/AF") is not None:
             raise ValueError("active content is forbidden in delivery artifacts")
-        for annotation in _pdf_object(page.get("/Annots")) or ():
+        annotations = _pdf_object(page.get("/Annots"))
+        # A page says what its /Annots is; iterating it unchecked put a
+        # TypeError out of a boundary whose contract is that refusals are
+        # ValueError.  Skipping it instead would be worse: the sweep would
+        # return "clean" for a page whose annotations it never looked at, which
+        # is the defaulting-open shape this policy exists to avoid.  An /Annots
+        # that is not an array is a malformed page and is refused as one.
+        if annotations is not None and not isinstance(annotations, list):
+            raise ValueError("final PDF artifact is invalid")
+        for annotation in annotations or ():
             _reject_pdf_annotation(annotation)
 
 
@@ -6908,7 +7010,12 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
                 raise ValueError("final PDF artifact is invalid")
             for page in reader.pages:
                 _ = page.mediabox
-        except (PdfReadError, OSError, ValueError, KeyError) as exc:
+        except Exception as exc:
+            # Both guards on this branch convert the CLASS.  This one enumerated
+            # (PdfReadError, OSError, ValueError, KeyError), and building the
+            # page list resolves /Root -> /Pages: a catalog object that is a bare
+            # number, a name or an array made pypdf raise AttributeError right
+            # here, past every caller that catches ValueError.
             raise ValueError("final PDF artifact is invalid") from exc
         if not content.startswith(b"%PDF-") or not content.rstrip().endswith(b"%%EOF"):
             raise ValueError("final PDF artifact is invalid")
@@ -6919,11 +7026,14 @@ def validate_final_artifact(content: bytes, output_format: str) -> tuple[str, in
             # large to verify" -- must reach the caller as themselves, which is
             # why the sweep sits outside the parse guard above at all.
             raise
-        except (PdfReadError, OSError, KeyError) as exc:
-            # The sweep resolves indirect references the parse guard never
-            # touched, so a catalog pointing at a missing object now surfaces
-            # here.  PdfReadError derives from Exception and would otherwise
-            # cross this boundary unhandled.
+        except Exception as exc:
+            # CONVERT THE CLASS, not the members a review reported.  This guard
+            # first enumerated (PdfReadError, OSError, KeyError) while the same
+            # commit argued the opposite at the three OPC boundaries, and a
+            # /Root that is a bare number then left as AttributeError and a
+            # page whose /Annots is a number as TypeError -- past callers that
+            # catch ValueError, and past VerifyWorkspaceBackup, which catches
+            # only (KeyError, TypeError, ValueError).
             raise ValueError("final PDF artifact is invalid") from exc
         media_type = _PDF_MEDIA
     else:

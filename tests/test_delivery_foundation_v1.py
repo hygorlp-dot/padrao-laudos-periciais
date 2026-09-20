@@ -8758,3 +8758,368 @@ def test_a_name_keyed_catalog_dictionary_is_not_read_as_pdf_keys(
     assert validate_final_artifact(_name_keyed_catalog_pdf(key, name), "PDF")[2] == (
         "application/pdf"
     )
+
+
+# --- Phase C §27 round 9 ------------------------------------------------------
+#
+# The name-key exemption added in round 8 was applied to the NODE a key led to,
+# not to that node's KEYS.  Every key that can hold a producer-keyed container
+# can also hold an ordinary object, so four shapes carried an /EmbeddedFile with
+# an MZ payload straight through.
+
+
+def _attachment_array(writer: PdfWriter) -> ArrayObject:
+    return ArrayObject([writer._add_object(_pdf_filespec(writer))])
+
+
+def _pdf_stream(**entries) -> DecodedStreamObject:
+    item = DecodedStreamObject()
+    item.set_data(b"")
+    item.update({NameObject(key): value for key, value in entries.items()})
+    return item
+
+
+def _entries(**values) -> DictionaryObject:
+    node = DictionaryObject()
+    node.update({NameObject(key): value for key, value in values.items()})
+    return node
+
+
+def _exempted_object_pdf(shape: str) -> bytes:
+    """An /AF attached to an OBJECT reached through a name-dictionary key."""
+    writer = _blank_pdf_writer()
+    attachment = _attachment_array(writer)
+    if shape == "appearance_stream":
+        # /AP /N is the appearance stream itself whenever the annotation has no
+        # appearance states -- the ordinary case.
+        appearance = _pdf_stream(
+            **{
+                "/Type": NameObject("/XObject"),
+                "/Subtype": NameObject("/Form"),
+                "/AF": attachment,
+            }
+        )
+        _with_annotation(
+            writer,
+            _annotation("/Widget", **{"/AP": _entries(**{"/N": writer._add_object(appearance)})}),
+        )
+    elif shape == "name_tree_node":
+        # /Dests under the catalog /Names is a name TREE node.
+        node = _entries(
+            **{
+                "/Names": ArrayObject([create_string_object("alvo"), ArrayObject([])]),
+                "/AF": attachment,
+            }
+        )
+        writer._root_object[NameObject("/Names")] = writer._add_object(
+            _entries(**{"/Dests": writer._add_object(node)})
+        )
+    elif shape == "colorspace_array":
+        # /ColorSpace on an image is an ARRAY, and the exemption rode along it.
+        profile = _pdf_stream(**{"/N": NumberObject(3), "/AF": attachment})
+        image = _pdf_stream(
+            **{
+                "/Type": NameObject("/XObject"),
+                "/Subtype": NameObject("/Image"),
+                "/Width": NumberObject(1),
+                "/Height": NumberObject(1),
+                "/ColorSpace": ArrayObject(
+                    [NameObject("/ICCBased"), writer._add_object(profile)]
+                ),
+            }
+        )
+        holder = DictionaryObject()
+        holder[NameObject("/Im0")] = writer._add_object(image)
+        writer.pages[0][NameObject("/Resources")] = _entries(**{"/XObject": holder})
+    else:
+        # /Shading on a pattern is a single shading dictionary.
+        shading = _entries(
+            **{
+                "/ShadingType": NumberObject(2),
+                "/ColorSpace": NameObject("/DeviceRGB"),
+                "/AF": attachment,
+            }
+        )
+        pattern = _entries(
+            **{"/PatternType": NumberObject(2), "/Shading": writer._add_object(shading)}
+        )
+        holder = DictionaryObject()
+        holder[NameObject("/P0")] = writer._add_object(pattern)
+        writer.pages[0][NameObject("/Resources")] = _entries(**{"/Pattern": holder})
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+@pytest.mark.parametrize(
+    "shape",
+    ("appearance_stream", "name_tree_node", "colorspace_array", "pattern_shading"),
+)
+def test_an_object_behind_a_name_key_is_still_judged(shape: str) -> None:
+    """The exemption covers a dictionary's KEYS, never the node it leads to."""
+    content = _exempted_object_pdf(shape)
+
+    with pytest.raises(ValueError, match="active content"):
+        validate_final_artifact(content, "PDF")
+    with pytest.raises(ValueError, match="active content"):
+        delivery_renderer.validate_delivery_artifact(content, "PDF")
+
+
+def test_a_page_whose_annots_is_not_an_array_is_refused() -> None:
+    """Refused, not skipped: skipping would report a page clean unexamined."""
+    writer = _blank_pdf_writer()
+    writer.pages[0][NameObject("/Annots")] = NumberObject(5)
+    output = BytesIO()
+    writer.write(output)
+
+    with pytest.raises(ValueError, match="final PDF artifact is invalid"):
+        validate_final_artifact(output.getvalue(), "PDF")
+
+
+# --- text the product itself accepts must survive the XML round trip ----------
+
+
+@pytest.mark.parametrize(
+    ("label", "value", "expected"),
+    (
+        ("plain", "Trinca de 2mm", "Trinca de 2mm"),
+        # XML 1.0 normalises CR and CRLF in character data to LF, so a line
+        # written with CR read back with LF and the binding check could never
+        # hold -- and blamed the template for a character in the report.
+        ("crlf", "Trinca" + chr(13) + chr(10) + "de 2mm", "Trinca" + chr(10) + "de 2mm"),
+        ("bare_cr", "Trinca" + chr(13) + "de 2mm", "Trinca" + chr(10) + "de 2mm"),
+        ("lf", "Trinca" + chr(10) + "de 2mm", "Trinca" + chr(10) + "de 2mm"),
+        ("tab", "Trinca" + chr(9) + "de 2mm", "Trinca" + chr(9) + "de 2mm"),
+        # U+000B is what Word stores for a manual line break, and XML 1.0 cannot
+        # carry it at all: it left the boundary as a ParseError.
+        ("word_manual_break", "Trinca" + chr(11) + "de 2mm", "Trinca" + chr(10) + "de 2mm"),
+    ),
+)
+def test_a_canonical_line_survives_the_xml_round_trip(
+    label: str, value: str, expected: str
+) -> None:
+    assert delivery_renderer._canonical_text(value) == expected
+
+
+@pytest.mark.parametrize("code", (0, 7, 8, 27))
+def test_a_control_character_xml_cannot_carry_is_refused_by_name(code: int) -> None:
+    """A control with no rendering meaning is named, not silently dropped.
+
+    The canonical block is the authoritative copy of an approved report, so it
+    is the last place to alter text quietly.
+    """
+    with pytest.raises(ValueError, match="U[+]{:04X}".format(code)):
+        delivery_renderer._canonical_text("Trinca" + chr(code) + "de 2mm")
+
+
+def test_a_report_pasted_from_word_still_renders() -> None:
+    """The whole product path, with a claim carrying CRLF and a manual break."""
+    report = _product_path_report()
+    claims = tuple(
+        replace(item, text=item.text + chr(13) + chr(10) + "segunda linha" + chr(11) + "terceira")
+        if index == 0
+        else item
+        for index, item in enumerate(report.claims)
+    )
+    candidate = render_word_candidate(
+        template_bytes=_valid_docm_template(),
+        report=replace(report, claims=claims),
+        manifest=template_binding_manifest_from_mapping(_PRODUCT_PATH_MANIFEST),
+    )
+
+    assert validate_final_artifact(candidate.output_bytes, "DOCM")[1] > 0
+
+
+def test_an_expert_name_carrying_xml_metacharacters_still_renders() -> None:
+    """A binding value is TEXT; writing it raw made the part invalid XML."""
+    report = _product_path_report()
+    profile = replace(report.expert_profile, full_name="Alves & Filhos <Perícias>")
+    candidate = render_word_candidate(
+        template_bytes=_valid_docm_template(),
+        report=replace(report, expert_profile=profile),
+        manifest=template_binding_manifest_from_mapping(_PRODUCT_PATH_MANIFEST),
+    )
+
+    assert validate_final_artifact(candidate.output_bytes, "DOCM")[1] > 0
+
+
+def test_a_template_carrying_a_zip_directory_entry_still_binds() -> None:
+    """7-Zip, zip and jar emit them; both validators skip them and say so.
+
+    The binder refused them, so the backup gate certified a template that could
+    then never be bound -- a legitimate render failing permanently.
+    """
+    base = _valid_docm_template()
+    with ZipFile(BytesIO(base)) as archive:
+        parts = {name: archive.read(name) for name in archive.namelist()}
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr("word/", b"")
+        for name, value in parts.items():
+            package.writestr(name, value)
+
+    candidate = render_word_candidate(
+        template_bytes=output.getvalue(),
+        report=_product_path_report(),
+        manifest=template_binding_manifest_from_mapping(_PRODUCT_PATH_MANIFEST),
+    )
+
+    assert validate_final_artifact(candidate.output_bytes, "DOCM")[1] > 0
+
+
+def test_a_bookmark_name_containing_an_opcode_is_not_read_as_one() -> None:
+    """The third statement matched bare substrings on a joined, stripped run.
+
+    Both validators match each instruction alone, on word boundaries, so a
+    bookmark named "Addendum" was legal to them and an opcode to the binder.
+    """
+    from scripts.backend_contract import report_template
+
+    assert report_template._ACQUIRING_TEMPLATE_FIELDS.search(" REF Addendum ") is None
+    assert report_template._ACQUIRING_TEMPLATE_FIELDS.search(" DDEAUTO x ") is not None
+    assert report_template._ACQUIRING_TEMPLATE_FIELDS.search(" INCLUDETEXT x ") is not None
+
+
+# --- Phase C §27 round 9, reviewer lane ---------------------------------------
+
+
+def _self_referential_action_pdf(route: str) -> bytes:
+    """An annotation, or a field, that IS its own action dictionary.
+
+    A viewer activating the widget follows /A, finds a dictionary carrying
+    /S /JavaScript, and runs /JS.  Round 8 made the walks iterative and in the
+    same edit began passing the annotation walk's visited set into the action
+    walk; the two judge different things, so the first visit became the only
+    judgement and the action was never read at all.
+    """
+    writer = _blank_pdf_writer()
+    node = DictionaryObject()
+    node.update(
+        {
+            NameObject("/FT"): NameObject("/Btn"),
+            NameObject("/T"): create_string_object("botao"),
+            NameObject("/S"): NameObject("/JavaScript"),
+            NameObject("/JS"): create_string_object("app.alert(1)"),
+        }
+    )
+    if route == "annotation":
+        node.update(
+            {
+                NameObject("/Type"): NameObject("/Annot"),
+                NameObject("/Subtype"): NameObject("/Widget"),
+                NameObject("/Rect"): ArrayObject([NumberObject(0)] * 4),
+            }
+        )
+    reference = writer._add_object(node)
+    node[NameObject("/A")] = reference
+    if route == "annotation":
+        writer.pages[0][NameObject("/Annots")] = ArrayObject([reference])
+    else:
+        forms = DictionaryObject()
+        forms[NameObject("/Fields")] = ArrayObject([reference])
+        writer._root_object[NameObject("/AcroForm")] = forms
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+@pytest.mark.parametrize("route", ("annotation", "field"))
+def test_an_object_that_is_its_own_action_is_still_judged_as_one(route: str) -> None:
+    """A cycle guard may only be shared by walks applying the SAME judgement."""
+    content = _self_referential_action_pdf(route)
+
+    with pytest.raises(ValueError, match="active content"):
+        validate_final_artifact(content, "PDF")
+    with pytest.raises(ValueError, match="active content"):
+        delivery_renderer.validate_delivery_artifact(content, "PDF")
+
+
+def _doubly_named_resource_pdf(order: tuple[str, str]) -> bytes:
+    """One form XObject named under TWO resource keys; only the order differs.
+
+    The structural walk's visit record was keyed on the object alone while the
+    walk carried a per-item kind, so the key a producer happened to write first
+    decided which judgement the object got -- and which it escaped.
+    """
+    writer = _blank_pdf_writer()
+    shared = DecodedStreamObject()
+    shared.set_data(b"")
+    shared.update(
+        {
+            NameObject("/Type"): NameObject("/XObject"),
+            NameObject("/Subtype"): NameObject("/Form"),
+            NameObject("/AF"): ArrayObject([writer._add_object(_pdf_filespec(writer))]),
+        }
+    )
+    reference = writer._add_object(shared)
+    resources = DictionaryObject()
+    for key in order:
+        holder = DictionaryObject()
+        holder[NameObject("/Im0")] = reference
+        resources[NameObject(key)] = holder
+    writer.pages[0][NameObject("/Resources")] = resources
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+@pytest.mark.parametrize(
+    "order", (("/XObject", "/Pattern"), ("/Pattern", "/XObject"))
+)
+def test_the_verdict_does_not_depend_on_dictionary_key_order(order) -> None:
+    """A producer chooses the order of its own keys; it must not choose the rule."""
+    with pytest.raises(ValueError, match="active content"):
+        validate_final_artifact(_doubly_named_resource_pdf(order), "PDF")
+
+
+def _raw_pdf_with_catalog(root_body: bytes) -> bytes:
+    """A one-page PDF whose /Root points at `root_body`.
+
+    pypdf will not write a catalog that is not a dictionary, so the shape has to
+    be written directly.
+    """
+    objects = [
+        root_body,
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>",
+    ]
+    output = bytearray(b"%PDF-1.7\n")
+    offsets: list[int] = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(output))
+        output += f"{number} 0 obj\n".encode("ascii") + body + b"\nendobj\n"
+    xref = len(output)
+    output += f"xref\n0 {len(objects) + 1}\n".encode("ascii")
+    output += b"0000000000 65535 f \n"
+    for offset in offsets:
+        output += f"{offset:010d} 00000 n \n".encode("ascii")
+    output += (
+        f"trailer << /Size {len(objects) + 1} /Root 1 0 R >>\n"
+        f"startxref\n{xref}\n%%EOF"
+    ).encode("ascii")
+    return bytes(output)
+
+
+def test_a_well_formed_hand_written_pdf_is_accepted() -> None:
+    """The control: the builder below produces something the boundary accepts."""
+    content = _raw_pdf_with_catalog(b"<< /Type /Catalog /Pages 2 0 R >>")
+
+    assert validate_final_artifact(content, "PDF")[2] == "application/pdf"
+
+
+@pytest.mark.parametrize(
+    ("label", "body"),
+    (("number", b"42"), ("name", b"/Catalogo"), ("array", b"[1 2 3]")),
+)
+def test_a_catalog_that_is_not_a_dictionary_is_a_value_error(
+    label: str, body: bytes
+) -> None:
+    """Building the page list resolves /Root -> /Pages.
+
+    Both guards on this branch convert the CLASS now: this one enumerated its
+    exceptions and pypdf raised AttributeError straight through it, past every
+    caller that catches ValueError and past VerifyWorkspaceBackup, which catches
+    only (KeyError, TypeError, ValueError).
+    """
+    with pytest.raises(ValueError, match="final PDF artifact is invalid"):
+        validate_final_artifact(_raw_pdf_with_catalog(body), "PDF")

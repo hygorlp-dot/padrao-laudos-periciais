@@ -548,6 +548,9 @@ def test_both_boundaries_accept_the_supported_package(tmp_path: Path) -> None:
 _VBA_PROJECT_REL = (
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vbaProject"
 )
+_IMAGE_REL = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+)
 
 
 def _region_field(code: str, *, element: str, deleted: bool = False) -> str:
@@ -849,8 +852,12 @@ def _parity_catalogue() -> dict[str, tuple[str, dict[str, str]]]:
     # one -- the worker accepted it -- and the catalogue held only the absent
     # shape, which is exactly the axis it could not observe.
     for label, attributes in (
-        ("relationship_with_empty_target", f'Type="{_VBA_PROJECT_REL}" Target=""'),
-        ("relationship_with_blank_target", f'Type="{_VBA_PROJECT_REL}" Target="   "'),
+        # These two named a vbaProject relationship, which a DOCX already
+        # refuses through the macro axis whatever its Target says -- so they
+        # stayed green with the empty-Target rule deleted.  An image
+        # relationship isolates the axis: with a Target it is accepted.
+        ("relationship_with_empty_target", f'Type="{_IMAGE_REL}" Target=""'),
+        ("relationship_with_blank_target", f'Type="{_IMAGE_REL}" Target="   "'),
         ("relationship_with_empty_type", 'Type="" Target="media/logo.png"'),
         ("relationship_with_blank_type", 'Type="   " Target="media/logo.png"'),
     ):
