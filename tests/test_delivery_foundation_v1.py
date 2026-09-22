@@ -66,9 +66,11 @@ from scripts.backend_contract.delivery_renderer import (
 from scripts.backend_contract.report_template import template_binding_manifest_from_mapping
 from scripts.backend_contract.application.delivery_foundation import (
     AttachDeliveryPackageArtifact,
+    FinalizeDeliverySnapshot,
     GetDeliverySnapshot,
     RenderDeliveryPackage,
     ReviewDeliverySnapshot,
+    VerifyDeliveryPackage,
     build_delivery_binding,
     mark_delivery_authority_unavailable,
     reconcile_delivery,
@@ -917,6 +919,7 @@ def _delivery_attachment_service(content: bytes, media_type: str):
     saved: list[DeliverySnapshot] = []
     suffix = {
         "application/pdf": ".pdf",
+        "image/png": ".png",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
         "application/vnd.ms-word.document.macroenabled.12": ".docm",
     }[media_type.casefold()]
@@ -948,6 +951,21 @@ def _delivery_attachment_service(content: bytes, media_type: str):
     return service, PrivateContentId.parse(content_id), saved
 
 
+def _macro_docm(*, active: bool = False) -> bytes:
+    return word_package(
+        word_field('INCLUDETEXT "https://example.invalid/synthetic"') if active else "<document/>",
+        main_type=DOCM_MAIN_TYPE,
+        parts={"word/vbaProject.bin": b"synthetic macro"},
+        overrides={"/word/vbaProject.bin": VBA_PROJECT_TYPE},
+    )
+
+
+def _supporting_png() -> bytes:
+    output = BytesIO()
+    Image.new("RGB", (2, 2), color=(23, 47, 89)).save(output, format="PNG")
+    return output.getvalue()
+
+
 @pytest.mark.parametrize(
     "role",
     (
@@ -957,18 +975,47 @@ def _delivery_attachment_service(content: bytes, media_type: str):
         DeliveryRole.SUPPORTING_FILE,
     ),
 )
+@pytest.mark.parametrize(
+    "media_type",
+    (
+        "application/vnd.ms-word.document.macroenabled.12",
+        "application/vnd.ms-word.document.macroEnabled.12",
+    ),
+)
 def test_non_authoritative_docm_is_rejected_before_package_admission(
-    role: DeliveryRole,
+    role: DeliveryRole, media_type: str
 ) -> None:
-    content = word_package(
-        "<document/>",
-        main_type=DOCM_MAIN_TYPE,
-        parts={"word/vbaProject.bin": b"synthetic macro"},
-        overrides={"/word/vbaProject.bin": VBA_PROJECT_TYPE},
-    )
-    service, content_id, saved = _delivery_attachment_service(
-        content, "application/vnd.ms-word.document.macroenabled.12"
-    )
+    service, content_id, saved = _delivery_attachment_service(_macro_docm(), media_type)
+
+    with pytest.raises(ValueError, match="non-authoritative DOCM"):
+        service.execute(
+            "workspace-1",
+            expected_revision=1,
+            content_id=content_id,
+            role=role.value,
+        )
+
+    assert saved == []
+
+
+@pytest.mark.parametrize(
+    "role",
+    (
+        DeliveryRole.ANNEX,
+        DeliveryRole.PHOTO_APPENDIX,
+        DeliveryRole.TECHNICAL_APPENDIX,
+        DeliveryRole.SUPPORTING_FILE,
+    ),
+)
+@pytest.mark.parametrize("active", (False, True))
+def test_docm_hidden_behind_png_metadata_is_rejected_for_every_supporting_role(
+    role: DeliveryRole, active: bool,
+) -> None:
+    polyglot = _supporting_png() + _macro_docm(active=active)
+    assert validate_supporting_artifact(polyglot, "image/png")[2] == "image/png"
+    if not active:
+        assert validate_final_artifact(polyglot, "DOCM")[2].endswith("macroEnabled.12")
+    service, content_id, saved = _delivery_attachment_service(polyglot, "image/png")
 
     with pytest.raises(ValueError, match="non-authoritative DOCM"):
         service.execute(
@@ -1006,6 +1053,7 @@ def test_malformed_docm_supporting_attachment_fails_closed() -> None:
             DeliveryFormat.DOCX,
         ),
         (_parseable_text_pdf("Synthetic annex"), "application/pdf", DeliveryFormat.PDF),
+        (_supporting_png(), "image/png", DeliveryFormat.OTHER),
     ),
 )
 def test_supported_non_authoritative_attachments_keep_existing_admission(
@@ -1022,6 +1070,107 @@ def test_supported_non_authoritative_attachments_keep_existing_admission(
 
     assert attached.artifacts[-1].format is expected_format
     assert saved == [attached]
+
+
+def _delivery_artifact_for(
+    *, role: DeliveryRole, output_format: DeliveryFormat, content_id: str, content: bytes
+) -> DeliveryArtifact:
+    media_type = {
+        DeliveryFormat.DOCX: (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+        DeliveryFormat.DOCM: "application/vnd.ms-word.document.macroEnabled.12",
+    }[output_format]
+    return DeliveryArtifact(
+        artifact_id=f"ARTIFACT-{len(content_id)}-{role.value}",
+        role=role,
+        format=output_format,
+        filename=f"{role.value.casefold()}.{output_format.value.casefold()}",
+        content_id=content_id,
+        media_type=media_type,
+        byte_size=len(content),
+        checksum_sha256=sha256(content).hexdigest(),
+    )
+
+
+@pytest.mark.parametrize(
+    "role",
+    (
+        DeliveryRole.ANNEX,
+        DeliveryRole.PHOTO_APPENDIX,
+        DeliveryRole.TECHNICAL_APPENDIX,
+        DeliveryRole.SUPPORTING_FILE,
+    ),
+)
+@pytest.mark.parametrize("hidden", (False, True))
+@pytest.mark.parametrize("active", (False, True))
+def test_reopened_non_authoritative_docm_fails_before_finalization(
+    role: DeliveryRole, hidden: bool, active: bool,
+) -> None:
+    main_id = "55555555-5555-4555-8555-555555555555"
+    annex_id = "66666666-6666-4666-8666-666666666666"
+    main = word_package("<document/>")
+    annex = (_supporting_png() if hidden else b"") + _macro_docm(active=active)
+    artifacts = (
+        _delivery_artifact_for(
+            role=DeliveryRole.MAIN_REPORT,
+            output_format=DeliveryFormat.DOCX,
+            content_id=main_id,
+            content=main,
+        ),
+        _delivery_artifact_for(
+            role=role,
+            output_format=DeliveryFormat.DOCM,
+            content_id=annex_id,
+            content=annex,
+        ),
+    )
+    if hidden:
+        artifacts = (artifacts[0], replace(
+            artifacts[1], format=DeliveryFormat.OTHER,
+            filename="annex.png", media_type="image/png",
+        ))
+    reopened = snapshot(artifacts=artifacts)
+    private = {
+        main_id: SimpleNamespace(
+            metadata=SimpleNamespace(
+                original_filename=artifacts[0].filename,
+                media_type=artifacts[0].media_type,
+            ),
+            content=main,
+        ),
+        annex_id: SimpleNamespace(
+            metadata=SimpleNamespace(
+                original_filename=artifacts[1].filename,
+                media_type=artifacts[1].media_type,
+            ),
+            content=annex,
+        ),
+    }
+    verify = VerifyDeliveryPackage(
+        get_snapshot=SimpleNamespace(
+            execute=lambda _workspace_id: (SimpleNamespace(revision=1), reopened)
+        ),
+        get_private_content=SimpleNamespace(
+            execute=lambda _workspace_id, content_id: private[str(content_id)]
+        ),
+    )
+    finalize = FinalizeDeliverySnapshot(
+        verify_package=verify,
+        review_snapshot=SimpleNamespace(
+            execute=lambda *_args, **_kwargs: pytest.fail(
+                "unsafe reopened package reached professional finalization"
+            )
+        ),
+    )
+
+    with pytest.raises(ValueError, match="non-authoritative DOCM"):
+        finalize.execute(
+            "workspace-1",
+            professional_id="EXPERT-1",
+            reason="Synthetic finalization attempt.",
+            expected_revision=1,
+        )
 
 
 def test_macro_enabled_word_container_does_not_require_a_vba_project() -> None:
@@ -9352,6 +9501,73 @@ def test_a_field_reached_only_from_acroform_is_judged_as_an_annotation() -> None
         validate_final_artifact(output.getvalue(), "PDF")
 
 
+def _malformed_contextual_pdf(shape: str) -> bytes:
+    writer = _blank_pdf_writer()
+    unknown_action = _pdf_action("/VendorExecute")
+    if shape == "annotation_a_array":
+        _with_annotation(
+            writer,
+            _annotation("/Link", **{"/A": ArrayObject([unknown_action])}),
+        )
+    elif shape == "annotation_a_scalar":
+        _with_annotation(writer, _annotation("/Link", **{"/A": NumberObject(7)}))
+    elif shape == "action_next_scalar":
+        action = _pdf_action("/GoTo", **{"/Next": NumberObject(7)})
+        writer._root_object[NameObject("/OpenAction")] = action
+    elif shape == "action_next_array_with_scalar":
+        action = _pdf_action("/GoTo", **{"/Next": ArrayObject([NumberObject(7)])})
+        writer._root_object[NameObject("/OpenAction")] = action
+    elif shape in {"fields_dictionary", "calculation_order_dictionary"}:
+        field = DictionaryObject({NameObject("/A"): unknown_action})
+        forms = DictionaryObject()
+        forms[NameObject("/Fields")] = ArrayObject([])
+        key = "/Fields" if shape == "fields_dictionary" else "/CO"
+        forms[NameObject(key)] = field
+        writer._root_object[NameObject("/AcroForm")] = forms
+    elif shape == "acroform_scalar":
+        writer._root_object[NameObject("/AcroForm")] = NumberObject(7)
+    elif shape == "outlines_scalar":
+        writer._root_object[NameObject("/Outlines")] = NumberObject(7)
+    elif shape == "names_scalar":
+        writer._root_object[NameObject("/Names")] = NumberObject(7)
+    else:
+        _with_annotation(writer, _annotation("/Widget", **{"/AP": NumberObject(7)}))
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+@pytest.mark.parametrize(
+    "shape",
+    (
+        "annotation_a_array",
+        "annotation_a_scalar",
+        "action_next_scalar",
+        "action_next_array_with_scalar",
+        "fields_dictionary",
+        "calculation_order_dictionary",
+        "acroform_scalar",
+        "outlines_scalar",
+        "names_scalar",
+        "appearance_scalar",
+    ),
+)
+def test_malformed_contextual_pdf_containers_fail_closed(shape: str) -> None:
+    with pytest.raises(ValueError):
+        validate_final_artifact(_malformed_contextual_pdf(shape), "PDF")
+
+
+def test_catalog_open_action_keeps_supporting_an_internal_destination_array() -> None:
+    writer = _blank_pdf_writer()
+    writer._root_object[NameObject("/OpenAction")] = ArrayObject(
+        [writer.pages[0].indirect_reference, NameObject("/Fit")]
+    )
+    output = BytesIO()
+    writer.write(output)
+
+    assert validate_final_artifact(output.getvalue(), "PDF")[2] == "application/pdf"
+
+
 # --- a binding value is text the product accepts upstream ---------------------
 
 
@@ -9420,9 +9636,10 @@ def test_an_xml_noncharacter_in_a_claim_is_refused_by_name(code: int) -> None:
     ),
 )
 def test_all_three_statements_read_the_field_code_alike(
-    code: str, accepted: bool
+    tmp_path: Path, code: str, accepted: bool
 ) -> None:
     from scripts.backend_contract import report_template
+    from scripts.backend_contract.infrastructure import office_word_worker
 
     document = (
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
@@ -9435,6 +9652,8 @@ def test_all_three_statements_read_the_field_code_alike(
         "</w:p></w:body></w:document>"
     )
     parts = {"word/document.xml": document.encode("utf-8")}
+    source = tmp_path / "source.docx"
+    source.write_bytes(word_package(document))
 
     def binder() -> None:
         report_template._mechanics(parts)
@@ -9442,11 +9661,14 @@ def test_all_three_statements_read_the_field_code_alike(
     if accepted:
         binder()
         assert validate_final_artifact(word_package(document), "DOCX")[1] > 0
+        office_word_worker._validate_word_source(source, "DOCX")
     else:
         with pytest.raises(ValueError):
             binder()
         with pytest.raises(ValueError, match="active content"):
             validate_final_artifact(word_package(document), "DOCX")
+        with pytest.raises(ValueError, match="active (?:content|Word field)"):
+            office_word_worker._validate_word_source(source, "DOCX")
 
 
 # --- a directory entry is skipped, not waved through --------------------------

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, fields, replace
 import hashlib
+from io import BytesIO
 import json
 from pathlib import Path
+from zipfile import is_zipfile
 
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 
@@ -384,6 +386,18 @@ class RenderDeliveryPackage:
         return saved, rendered
 
 
+def _validate_non_authoritative_word(content: bytes, output_format: DeliveryFormat) -> None:
+    if output_format is DeliveryFormat.DOCM:
+        raise ValueError("non-authoritative DOCM attachments are forbidden")
+    # ZIP recognition also sees containers appended to an image.  Require a
+    # valid DOCX positively: a rejected DOCM is not evidence of non-Word bytes.
+    if is_zipfile(BytesIO(content)):
+        try:
+            validate_final_artifact(content, DeliveryFormat.DOCX.value)
+        except ValueError as exc:
+            raise ValueError("non-authoritative DOCM or invalid Word attachments are forbidden") from exc
+
+
 @dataclass(frozen=True, slots=True)
 class AttachDeliveryPackageArtifact:
     get_snapshot: object
@@ -410,8 +424,7 @@ class AttachDeliveryPackageArtifact:
             "application/vnd.ms-word.document.macroEnabled.12": DeliveryFormat.DOCM,
         }
         output_format = known.get(media, DeliveryFormat.OTHER)
-        if output_format is DeliveryFormat.DOCM:
-            raise ValueError("non-authoritative DOCM attachments are forbidden")
+        _validate_non_authoritative_word(content.content, output_format)
         if output_format is DeliveryFormat.OTHER:
             validate_supporting_artifact(content.content, media)
         else:
@@ -444,6 +457,8 @@ class VerifyDeliveryPackage:
             content = self.get_private_content.execute(workspace_id, PrivateContentId.parse(artifact.content_id))
             if content.metadata.original_filename != artifact.filename or content.metadata.media_type != artifact.media_type:
                 raise RepositoryIntegrityError("reopened private artifact metadata diverges")
+            if artifact.role is not DeliveryRole.MAIN_REPORT:
+                _validate_non_authoritative_word(content.content, artifact.format)
             if artifact.format is DeliveryFormat.OTHER:
                 digest, size, media = validate_supporting_artifact(content.content, artifact.media_type)
                 if size != artifact.byte_size or digest != artifact.checksum_sha256 or media != artifact.media_type:

@@ -6777,22 +6777,37 @@ def _reject_acquiring_pdf_keys(root) -> None:
 # The cycle guard was already shared; the depth had to stop being the stack's.
 
 
-def _reject_pdf_action(value, seen: set[int] | None = None) -> None:
+def _reject_pdf_action(
+    value, seen: set[int] | None = None, *, allow_destination: bool = False
+) -> None:
     """An internal /GoTo is the only action a delivered PDF may carry.
 
-    A bare destination -- an array, or a named destination -- is not an action at
-    all and executes nothing, so it passes through untouched.
+    A catalog /OpenAction may instead be a bare destination -- an array or a
+    named destination -- which executes nothing.  No other action-bearing
+    position receives that exception.
     """
     visited = set() if seen is None else seen
-    pending = [value]
+    pending = [(value, allow_destination)]
     while pending:
-        action = _pdf_object(pending.pop())
-        if not isinstance(action, dict) or not _pdf_visit(visited, action, "action"):
+        raw, destination_allowed = pending.pop()
+        action = _pdf_object(raw)
+        if action is None:
+            continue
+        if destination_allowed and isinstance(action, (list, str, bytes)):
+            continue
+        if not isinstance(action, dict):
+            raise ValueError("final PDF artifact is invalid")
+        if not _pdf_visit(visited, action, "action"):
             continue
         if str(action.get("/S")) != _SAFE_PDF_ACTION:
             raise ValueError("active content is forbidden in delivery artifacts")
         following = _pdf_object(action.get("/Next"))
-        pending.extend(following if isinstance(following, list) else (following,))
+        if following is None:
+            continue
+        if isinstance(following, list):
+            pending.extend((item, False) for item in following)
+        else:
+            pending.append((following, False))
 
 
 def _reject_pdf_annotation(value, seen: set[int] | None = None) -> None:
@@ -6807,7 +6822,11 @@ def _reject_pdf_annotation(value, seen: set[int] | None = None) -> None:
     pending = [value]
     while pending:
         item = _pdf_object(pending.pop())
-        if not isinstance(item, dict) or not _pdf_visit(visited, item, "annotation"):
+        if item is None:
+            continue
+        if not isinstance(item, dict):
+            raise ValueError("final PDF artifact is invalid")
+        if not _pdf_visit(visited, item, "annotation"):
             continue
         if str(item.get("/Subtype")) in _ACQUIRING_PDF_ANNOTATIONS or any(
             key in item for key in _ACQUIRING_PDF_ANNOTATION_KEYS
@@ -6815,6 +6834,9 @@ def _reject_pdf_annotation(value, seen: set[int] | None = None) -> None:
             raise ValueError("active content is forbidden in delivery artifacts")
         if item.get("/AA") is not None:
             raise ValueError("active content is forbidden in delivery artifacts")
+        appearance = _pdf_object(item.get("/AP"))
+        if appearance is not None and not isinstance(appearance, dict):
+            raise ValueError("final PDF artifact is invalid")
         _reject_pdf_action(item.get("/A"), visited)
         pending.append(item.get("/Parent"))
 
@@ -6825,9 +6847,15 @@ def _reject_pdf_field_tree(value, seen: set[int] | None = None) -> None:
     pending = [value]
     while pending:
         fields = _pdf_object(pending.pop())
-        for field in fields if isinstance(fields, list) else ():
+        if fields is None:
+            continue
+        if not isinstance(fields, list):
+            raise ValueError("final PDF artifact is invalid")
+        for field in fields:
             item = _pdf_object(field)
-            if not isinstance(item, dict) or not _pdf_visit(visited, item, "field"):
+            if not isinstance(item, dict):
+                raise ValueError("final PDF artifact is invalid")
+            if not _pdf_visit(visited, item, "field"):
                 continue
             if item.get("/AA") is not None:
                 raise ValueError("active content is forbidden in delivery artifacts")
@@ -6845,8 +6873,10 @@ def _reject_pdf_field_tree(value, seen: set[int] | None = None) -> None:
 def _reject_pdf_outline(value) -> None:
     """A bookmark is a destination; an outline item may not launch anything."""
     outlines = _pdf_object(value)
-    if not isinstance(outlines, dict):
+    if outlines is None:
         return
+    if not isinstance(outlines, dict):
+        raise ValueError("final PDF artifact is invalid")
     # The outline is a DOUBLY linked list.  Seeding only /First and following
     # only /Next left every item reachable through the root's /Last and a
     # sibling's /Prev unvisited, and the walk then returned normally -- the same
@@ -6856,7 +6886,11 @@ def _reject_pdf_outline(value) -> None:
     visited: set[int] = set()
     while pending:
         item = _pdf_object(pending.pop())
-        if not isinstance(item, dict) or not _pdf_visit(visited, item, "outline"):
+        if item is None:
+            continue
+        if not isinstance(item, dict):
+            raise ValueError("final PDF artifact is invalid")
+        if not _pdf_visit(visited, item, "outline"):
             continue
         if item.get("/AA") is not None:
             raise ValueError("active content is forbidden in delivery artifacts")
@@ -6896,14 +6930,17 @@ def _reject_active_pdf_content(reader: PdfReader) -> None:
         raise ValueError("active content is forbidden in delivery artifacts")
     # Absolute keys, everywhere, before any route is walked.
     _reject_acquiring_pdf_keys(root)
-    _reject_pdf_action(root.get("/OpenAction"))
+    _reject_pdf_action(root.get("/OpenAction"), allow_destination=True)
     names = _pdf_object(root.get("/Names"))
-    if isinstance(names, dict) and any(
-        key in names for key in _ACQUIRING_PDF_NAME_TREES
-    ):
-        raise ValueError("active content is forbidden in delivery artifacts")
+    if names is not None:
+        if not isinstance(names, dict):
+            raise ValueError("final PDF artifact is invalid")
+        if any(key in names for key in _ACQUIRING_PDF_NAME_TREES):
+            raise ValueError("active content is forbidden in delivery artifacts")
     forms = _pdf_object(root.get("/AcroForm"))
-    if isinstance(forms, dict):
+    if forms is not None:
+        if not isinstance(forms, dict):
+            raise ValueError("final PDF artifact is invalid")
         if "/XFA" in forms:
             raise ValueError("active content is forbidden in delivery artifacts")
         # Fields are reachable from the catalog whether or not any page shows a
