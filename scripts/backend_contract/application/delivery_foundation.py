@@ -410,6 +410,8 @@ class AttachDeliveryPackageArtifact:
             "application/vnd.ms-word.document.macroEnabled.12": DeliveryFormat.DOCM,
         }
         output_format = known.get(media, DeliveryFormat.OTHER)
+        if output_format is DeliveryFormat.DOCM:
+            raise ValueError("non-authoritative DOCM attachments are forbidden")
         if output_format is DeliveryFormat.OTHER:
             validate_supporting_artifact(content.content, media)
         else:

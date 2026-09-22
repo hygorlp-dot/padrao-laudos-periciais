@@ -3,11 +3,13 @@ from __future__ import annotations
 import contextlib
 
 from dataclasses import fields, replace
+from hashlib import sha256
 import json
 from pathlib import Path
 from random import Random
 from types import SimpleNamespace
 from io import BytesIO
+from uuid import UUID
 import zlib
 import struct
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -63,6 +65,7 @@ from scripts.backend_contract.delivery_renderer import (
 )
 from scripts.backend_contract.report_template import template_binding_manifest_from_mapping
 from scripts.backend_contract.application.delivery_foundation import (
+    AttachDeliveryPackageArtifact,
     GetDeliverySnapshot,
     RenderDeliveryPackage,
     ReviewDeliverySnapshot,
@@ -70,6 +73,7 @@ from scripts.backend_contract.application.delivery_foundation import (
     mark_delivery_authority_unavailable,
     reconcile_delivery,
 )
+from scripts.backend_contract.application.models import PrivateContentId
 from scripts.backend_contract.case_analysis import case_analysis_from_mapping
 from scripts.backend_contract.construction_defect_analysis import freeze_json_payload
 from scripts.backend_contract.pericial_planning import pericial_planning_from_mapping
@@ -906,6 +910,118 @@ def test_artifact_validation_rejects_macro_identity_change_and_malformed_pdf() -
         validate_final_artifact(b"%PDF-1.7\nno page or eof", "PDF")
     with pytest.raises(ValueError, match="PDF"):
         validate_final_artifact(b"%PDF-1.7\n1 0 obj <</Type /Page>> endobj\n%%EOF", "PDF")
+
+
+def _delivery_attachment_service(content: bytes, media_type: str):
+    content_id = "33333333-3333-4333-8333-333333333333"
+    saved: list[DeliverySnapshot] = []
+    suffix = {
+        "application/pdf": ".pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        "application/vnd.ms-word.document.macroenabled.12": ".docm",
+    }[media_type.casefold()]
+
+    class Saver:
+        def execute(self, _workspace_id, value, _expected_revision, *, allow_artifacts):
+            assert allow_artifacts is True
+            saved.append(value)
+            return SimpleNamespace(revision=value.revision)
+
+    service = AttachDeliveryPackageArtifact(
+        get_snapshot=SimpleNamespace(
+            execute=lambda _workspace_id: (SimpleNamespace(revision=1), snapshot())
+        ),
+        get_private_content=SimpleNamespace(
+            execute=lambda _workspace_id, _content_id: SimpleNamespace(
+                metadata=SimpleNamespace(
+                    media_type=media_type,
+                    original_filename=f"anexo-sintetico{suffix}",
+                    byte_size=len(content),
+                    checksum_sha256=sha256(content).hexdigest(),
+                ),
+                content=content,
+            )
+        ),
+        save_snapshot=Saver(),
+        ids=SimpleNamespace(new_uuid=lambda: UUID("44444444-4444-4444-8444-444444444444")),
+    )
+    return service, PrivateContentId.parse(content_id), saved
+
+
+@pytest.mark.parametrize(
+    "role",
+    (
+        DeliveryRole.ANNEX,
+        DeliveryRole.PHOTO_APPENDIX,
+        DeliveryRole.TECHNICAL_APPENDIX,
+        DeliveryRole.SUPPORTING_FILE,
+    ),
+)
+def test_non_authoritative_docm_is_rejected_before_package_admission(
+    role: DeliveryRole,
+) -> None:
+    content = word_package(
+        "<document/>",
+        main_type=DOCM_MAIN_TYPE,
+        parts={"word/vbaProject.bin": b"synthetic macro"},
+        overrides={"/word/vbaProject.bin": VBA_PROJECT_TYPE},
+    )
+    service, content_id, saved = _delivery_attachment_service(
+        content, "application/vnd.ms-word.document.macroenabled.12"
+    )
+
+    with pytest.raises(ValueError, match="non-authoritative DOCM"):
+        service.execute(
+            "workspace-1",
+            expected_revision=1,
+            content_id=content_id,
+            role=role.value,
+        )
+
+    assert saved == []
+
+
+def test_malformed_docm_supporting_attachment_fails_closed() -> None:
+    service, content_id, saved = _delivery_attachment_service(
+        b"not-a-word-package", "application/vnd.ms-word.document.macroEnabled.12"
+    )
+
+    with pytest.raises(ValueError, match="non-authoritative DOCM"):
+        service.execute(
+            "workspace-1",
+            expected_revision=1,
+            content_id=content_id,
+            role=DeliveryRole.SUPPORTING_FILE.value,
+        )
+
+    assert saved == []
+
+
+@pytest.mark.parametrize(
+    ("content", "media_type", "expected_format"),
+    (
+        (
+            word_package("<document/>"),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            DeliveryFormat.DOCX,
+        ),
+        (_parseable_text_pdf("Synthetic annex"), "application/pdf", DeliveryFormat.PDF),
+    ),
+)
+def test_supported_non_authoritative_attachments_keep_existing_admission(
+    content: bytes, media_type: str, expected_format: DeliveryFormat
+) -> None:
+    service, content_id, saved = _delivery_attachment_service(content, media_type)
+
+    _record, attached = service.execute(
+        "workspace-1",
+        expected_revision=1,
+        content_id=content_id,
+        role=DeliveryRole.ANNEX.value,
+    )
+
+    assert attached.artifacts[-1].format is expected_format
+    assert saved == [attached]
 
 
 def test_macro_enabled_word_container_does_not_require_a_vba_project() -> None:
