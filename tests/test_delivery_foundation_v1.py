@@ -59,6 +59,7 @@ from scripts.backend_contract.delivery_renderer import (
     render_pdf_candidate,
     render_word_candidate,
     safe_pdf_conversion_copy,
+    validate_delivery_artifact,
     validate_supporting_artifact,
     validate_final_artifact,
     verify_reopened_artifact,
@@ -1171,6 +1172,79 @@ def test_reopened_non_authoritative_docm_fails_before_finalization(
             reason="Synthetic finalization attempt.",
             expected_revision=1,
         )
+
+
+@pytest.mark.parametrize(
+    ("content", "media_type"),
+    (
+        (_macro_docm(), "application/vnd.ms-word.document.macroEnabled.12"),
+        (
+            word_package("<document/>"),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+    ),
+)
+def test_main_report_role_still_cannot_enter_through_attachment(
+    content: bytes, media_type: str
+) -> None:
+    service, content_id, saved = _delivery_attachment_service(content, media_type)
+
+    with pytest.raises(ValueError, match="protected rendering"):
+        service.execute(
+            "workspace-1",
+            expected_revision=1,
+            content_id=content_id,
+            role=DeliveryRole.MAIN_REPORT.value,
+        )
+
+    assert saved == []
+
+
+def test_reopened_authoritative_docm_main_report_is_preserved() -> None:
+    # The role-aware refusal belongs to supporting roles only: the authoritative
+    # macro-enabled main report must still reopen byte-exactly beside an annex.
+    main_id = "77777777-7777-4777-8777-777777777777"
+    annex_id = "88888888-8888-4888-8888-888888888888"
+    main = _macro_docm()
+    annex = word_package("<document/>")
+    artifacts = (
+        _delivery_artifact_for(
+            role=DeliveryRole.MAIN_REPORT,
+            output_format=DeliveryFormat.DOCM,
+            content_id=main_id,
+            content=main,
+        ),
+        _delivery_artifact_for(
+            role=DeliveryRole.ANNEX,
+            output_format=DeliveryFormat.DOCX,
+            content_id=annex_id,
+            content=annex,
+        ),
+    )
+    reopened = snapshot(artifacts=artifacts)
+    private = {
+        item.content_id: SimpleNamespace(
+            metadata=SimpleNamespace(
+                original_filename=item.filename, media_type=item.media_type
+            ),
+            content=content,
+        )
+        for item, content in zip(artifacts, (main, annex))
+    }
+    verify = VerifyDeliveryPackage(
+        get_snapshot=SimpleNamespace(
+            execute=lambda _workspace_id: (SimpleNamespace(revision=1), reopened)
+        ),
+        get_private_content=SimpleNamespace(
+            execute=lambda _workspace_id, content_id: private[str(content_id)]
+        ),
+    )
+
+    _record, verified = verify.execute("workspace-1", expected_revision=1)
+
+    assert verified.artifacts[0].format is DeliveryFormat.DOCM
+    # Backup verification stays role-blind and must keep admitting the same bytes.
+    assert validate_delivery_artifact(main, "DOCM")[2].endswith("macroEnabled.12")
 
 
 def test_macro_enabled_word_container_does_not_require_a_vba_project() -> None:
@@ -8898,6 +8972,28 @@ def test_the_package_bound_is_the_same_number_in_all_three_statements() -> None:
         == delivery_renderer._DELIVERY_MAX_PACKAGE_BYTES
         == report_template._MAX_UNCOMPRESSED_BYTES
     )
+    assert (
+        office_word_worker._MAX_PART_BYTES
+        == delivery_renderer._DELIVERY_MAX_PART_BYTES
+        == report_template._MAX_PART_BYTES
+    )
+
+
+def test_a_part_over_the_bound_is_refused_by_the_binder_as_by_the_validator() -> None:
+    """The binder had no per-part bound, so it bound what every render refused."""
+    from scripts.backend_contract import report_template
+
+    package = word_package(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p/></w:body></w:document>",
+        # Incompressible, so the ratio guard cannot be what refuses it.
+        parts={"word/media/image1.png": Random(222).randbytes(report_template._MAX_PART_BYTES + 1)},
+    )
+
+    with pytest.raises(ValueError, match="unsafe Word package part"):
+        validate_final_artifact(package, "DOCX")
+    with pytest.raises(ValueError, match="unsafe template package"):
+        report_template._safe_parts(package)
 
 
 @pytest.mark.parametrize(

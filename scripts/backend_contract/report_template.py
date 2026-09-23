@@ -68,6 +68,9 @@ _FIELD_VALUES = {
 # backup gate has already accepted -- failed every render in _safe_parts.
 _MAX_PARTS = 4096
 _MAX_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
+# Both validators also bound each part.  Without it a template holding one
+# oversized part was bound here and then refused by every render.
+_MAX_PART_BYTES = 64 * 1024 * 1024
 _MAX_COMPRESSION_RATIO = 200
 # The ratio guard applies only above 1 MiB on both other sides: a small, highly
 # compressible part is ordinary, not an attack.
@@ -217,7 +220,7 @@ def _safe_parts(template_bytes: bytes) -> tuple[list[ZipInfo], dict[str, bytes]]
                     if item.file_size:
                         raise ValueError("unsafe template package")
                     continue
-                if (
+                if item.file_size > _MAX_PART_BYTES or (
                     item.file_size > _COMPRESSION_RATIO_FLOOR
                     and item.file_size
                     > max(item.compress_size, 1) * _MAX_COMPRESSION_RATIO
