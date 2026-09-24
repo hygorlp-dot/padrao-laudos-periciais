@@ -31,6 +31,9 @@ TRANSITION = "config/capability-protected-transition-v1.json"
 ARCHITECTURE_TRANSITION = "config/architecture-protected-transition-v1.json"
 SUPPORT_TEST = "tests/test_architecture_capability_exception_rebind_v1.py"
 WORD_PARENT = "scripts/backend_contract/infrastructure/office_pdf.py"
+# The last main before LOCAL_WORD_COM_CONTAINMENT_FINAL_HASH_REBIND_V2 landed: the only
+# base MODE A could ever admit, kept here to prove the transition and its closure.
+PRE_REBIND_BASE = "0275c4766f5292fcf9a599999bebc9fbff97ccb0"
 BASE_ADAPTER_BLOB = "14421881173fb35aab368229afc81e0c00b1c163"
 SUPERSEDED = (
     "e1ebb30e5d5b1e49d747d486c8c53d9c0bb91b1d1cfff947298acfe2623245c9",
@@ -97,10 +100,8 @@ def _commit(repo: Path, message: str) -> str:
 
 @pytest.fixture(scope="module")
 def workspace(tmp_path_factory):
-    """A throwaway clone of HEAD plus a trusted-side layout for the judge."""
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, capture_output=True, text=True
-    ).stdout.strip()
+    """A throwaway clone at the pre-rebind base plus a trusted-side layout for the judge."""
+    head = PRE_REBIND_BASE
     base_dir = tmp_path_factory.mktemp("word-rebind")
     repo = base_dir / "candidate"
     subprocess.run(
@@ -319,3 +320,28 @@ def test_mode_a_is_wired_only_behind_the_failed_product_contract():
     source = _mode_a_source()
     assert "trust/" not in source and "pull_request" not in source
     assert "if 'error' in result or len(result) != 10 or not all(result.values()):" in source
+
+
+def test_head_carries_exactly_the_final_digests_and_nothing_superseded():
+    source = (ROOT / ADAPTER).read_text(encoding="utf-8")
+    assert all(source.count(value) == 1 for value in FINAL)
+    assert not any(value in source for value in SUPERSEDED)
+    from scripts.quality.capability_gate_adapter import _word_render_digests_are_closed
+
+    paths = trust_anchor._WORD_PRODUCT_PATHS
+    assert _word_render_digests_are_closed(dict(zip(paths, FINAL))) is True
+    assert _word_render_digests_are_closed(dict(zip(paths, SUPERSEDED))) is False
+    assert _word_render_digests_are_closed(dict(zip(paths, ("0" * 64, FINAL[1])))) is False
+    assert _word_render_digests_are_closed(dict(zip(paths, (FINAL[0], "f" * 64)))) is False
+
+
+def test_mode_a_is_closed_on_the_landed_main(workspace):
+    """Once the rebind is on main, no further trust-only rebind is admissible."""
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    assert _git(workspace["repo"], "rev-parse", f"{head}:{ADAPTER}").strip() != BASE_ADAPTER_BLOB
+    replay = _build_rebind(workspace["repo"], head)
+    code, result = _judge(workspace, head, replay)
+    assert code != 0
+    assert "error" not in result and result.get("base") is False, result

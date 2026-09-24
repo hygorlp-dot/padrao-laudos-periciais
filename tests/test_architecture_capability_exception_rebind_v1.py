@@ -30,15 +30,13 @@ ARCHITECTURE_TRANSITION_PATH = "config/architecture-protected-transition-v1.json
 CAPABILITY_GATE_ADAPTER_PATH = "scripts/quality/capability_gate_adapter.py"
 WORD_PARENT_PATH = "scripts/backend_contract/infrastructure/office_pdf.py"
 WORD_WORKER_PATH = "scripts/backend_contract/infrastructure/office_word_worker.py"
-PROTECTED_BASE = "18aeaf679d5b1ebe3c764bb81d1a5db67dddf512"
-# The architecture transition now carries the trust-only rebind judge predecessor.
-ARCHITECTURE_PROTECTED_BASE = "b67d8c8cf43da89235e95f3a93f0da4a2a2d1a4e"
-CAPABILITY_WORKFLOW_PATH = ".github/workflows/capability-protected.yml"
+PROTECTED_BASE = "0275c4766f5292fcf9a599999bebc9fbff97ccb0"
+ARCHITECTURE_PROTECTED_BASE = "0275c4766f5292fcf9a599999bebc9fbff97ccb0"
 SOURCE_ANCHORS = {
-    "scripts/quality/capability_gate_adapter.py": "daf9733a494e7f2bb1bc75dede624e973aec0982",
+    "scripts/quality/capability_gate_adapter.py": "996d4c109f78fabc4c57d7bf771d698cf63b2c63",
 }
 REVIEW_EVIDENCE = {
-    "scripts/quality/capability_gate_adapter.py": "ISSUE_226_CORRECTED_WORD_HASH_REBIND",
+    "scripts/quality/capability_gate_adapter.py": "LOCAL_WORD_COM_CONTAINMENT_FINAL_HASH_REBIND_V2",
 }
 E1A_PROTECTED_WORKFLOWS = {
     ".github/workflows/architecture-protected.yml",
@@ -51,6 +49,7 @@ ROTATED_PROTECTED_ARTIFACTS = {
 }
 SUPPORT_ARTIFACTS = {
     "tests/test_architecture_capability_exception_rebind_v1.py",
+    "tests/test_architecture_capability_word_trust_only_rebind_v1.py",
 }
 ROTATED_EXCEPTION_PATHS = {
     "scripts/quality/capability_gate_adapter.py",
@@ -105,8 +104,12 @@ def test_transition_manifests_introduce_no_wildcard_or_package_wide_authority():
         EXCEPTIONS_PATH,
         CAPABILITY_GATE_ADAPTER_PATH,
     }
-    assert architecture_paths == {CAPABILITY_WORKFLOW_PATH}
-    assert support_paths == set()
+    assert architecture_paths == {CAPABILITY_REGISTRY_PATH}
+    assert support_paths == {
+        EXCEPTIONS_PATH,
+        CAPABILITY_TRANSITION_PATH,
+        CAPABILITY_GATE_ADAPTER_PATH,
+    }
 
 
 def test_capability_workflow_python_scope_admits_exception_transition_path():
@@ -257,23 +260,33 @@ def test_capability_registry_and_transition_bind_exact_exception_blob():
         EXCEPTIONS_PATH,
         CAPABILITY_GATE_ADAPTER_PATH,
     }
-    assert {row["path"] for row in transition["supportArtifacts"]} == {
-        "tests/test_architecture_capability_exception_rebind_v1.py",
-    }
+    assert {row["path"] for row in transition["supportArtifacts"]} == SUPPORT_ARTIFACTS
 
 
 def test_architecture_transition_binds_current_trust_anchor_rotation():
     transition = _json(ARCHITECTURE_TRANSITION_PATH)
-    assert transition["schemaVersion"] == "2.0.0"
-    assert set(transition) == {"schemaVersion", "transitionId", "protectedBaseSha", "artifacts"}
+    assert transition["schemaVersion"] == "3.0.0"
     assert transition["protectedBaseSha"] == ARCHITECTURE_PROTECTED_BASE
 
     artifact_rows = {row["path"]: row for row in transition["artifacts"]}
-    assert set(artifact_rows) == {CAPABILITY_WORKFLOW_PATH}
+    assert set(artifact_rows) == {CAPABILITY_REGISTRY_PATH}
 
     for path, row in artifact_rows.items():
         assert _architecture_transition_identity(row, "base") == _identity_from_commit(
             ARCHITECTURE_PROTECTED_BASE, path
+        )
+        assert _architecture_transition_identity(row, "candidate") == _identity_from_worktree(path)
+
+    support_rows = {row["path"]: row for row in transition["supportArtifacts"]}
+    assert transition["supportScope"] == "LOCAL_WORD_COM_CONTAINMENT_V1"
+    assert set(support_rows) == {
+        CAPABILITY_TRANSITION_PATH,
+        EXCEPTIONS_PATH,
+        CAPABILITY_GATE_ADAPTER_PATH,
+    }
+    for path, row in support_rows.items():
+        assert _architecture_transition_identity(row, "base") == _identity_from_commit(
+            PROTECTED_BASE, path
         )
         assert _architecture_transition_identity(row, "candidate") == _identity_from_worktree(path)
 
@@ -618,18 +631,35 @@ def _git_blobs(sources: dict[str, str]) -> dict[str, bytes]:
 def test_word_render_contract_accepts_only_the_pre_reviewed_exact_digests():
     assert _word_render_digests_are_closed(dict(_WORD_PRODUCT_SHA256))
     assert _WORD_PRODUCT_SHA256 == {
-        WORD_PARENT_PATH: "e1ebb30e5d5b1e49d747d486c8c53d9c0bb91b1d1cfff947298acfe2623245c9",
-        WORD_WORKER_PATH: "753828e9d112a220c231a9d47f1663e7289e3b01d2d55ca65fcb09170ee6fa1b",
+        WORD_PARENT_PATH: "b7394dc88f96e9c6e815d12345cd232b0fa6172471f3699db1127b7366883080",
+        WORD_WORKER_PATH: "a453ca2d4a8a8b2aefb2ee786911d1b1314fea7d31f30884845e439041bbf87e",
     }
 
 
-def test_word_render_contract_rejects_superseded_pre_review_hashes():
-    assert not _word_render_digests_are_closed(
-        {
-            WORD_PARENT_PATH: "0752949efd38fe08220d54828f73573223109f791ed4cd63772da95695f8058d",
-            WORD_WORKER_PATH: "891c8811e84461dec50ac85a5649e49919093b36070404b6ae69ac9d0e6b4efa",
-        }
-    )
+@pytest.mark.parametrize(
+    ("parent", "worker"),
+    [
+        # Pre-review bytes, then the V1 corrected bytes superseded by FINAL_HASH_REBIND_V2.
+        (
+            "0752949efd38fe08220d54828f73573223109f791ed4cd63772da95695f8058d",
+            "891c8811e84461dec50ac85a5649e49919093b36070404b6ae69ac9d0e6b4efa",
+        ),
+        (
+            "e1ebb30e5d5b1e49d747d486c8c53d9c0bb91b1d1cfff947298acfe2623245c9",
+            "753828e9d112a220c231a9d47f1663e7289e3b01d2d55ca65fcb09170ee6fa1b",
+        ),
+        (
+            "e1ebb30e5d5b1e49d747d486c8c53d9c0bb91b1d1cfff947298acfe2623245c9",
+            "a453ca2d4a8a8b2aefb2ee786911d1b1314fea7d31f30884845e439041bbf87e",
+        ),
+        (
+            "b7394dc88f96e9c6e815d12345cd232b0fa6172471f3699db1127b7366883080",
+            "753828e9d112a220c231a9d47f1663e7289e3b01d2d55ca65fcb09170ee6fa1b",
+        ),
+    ],
+)
+def test_word_render_contract_rejects_superseded_pre_review_hashes(parent, worker):
+    assert not _word_render_digests_are_closed({WORD_PARENT_PATH: parent, WORD_WORKER_PATH: worker})
 
 
 @pytest.mark.parametrize(
