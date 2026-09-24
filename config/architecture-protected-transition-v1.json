@@ -1,30 +1,16 @@
 {
-  "schemaVersion": "3.0.0",
+  "schemaVersion": "2.0.0",
   "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "18aeaf679d5b1ebe3c764bb81d1a5db67dddf512",
+  "protectedBaseSha": "b67d8c8cf43da89235e95f3a93f0da4a2a2d1a4e",
   "artifacts": [
     {
-      "path": "config/capability-protected-artifacts-v1.json",
-      "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "e541297e2a06adc59ec0f402d3fce58a7b087cec",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "52607072c7d5c9b3f5b6cbf0693fbebf1be6352a"
-    }
-  ],
-  "supportScope": "LOCAL_WORD_COM_CONTAINMENT_V1",
-  "supportArtifacts": [
-    {
-      "path": "config/capability-exceptions-v1.json",
-      "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "ab58b8b07779ca384cc3ed6fe013e4b3f4a106ea",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "476669e5055822c67995574bf11089ff046b7895"
-    },
-    {
-      "path": "config/capability-protected-transition-v1.json",
-      "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "28ccbf84a61de46f1f909b3e911e2ee14b07905e",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "4dfd55b7b958d3c4fedacca3aaf79189c32faeb4"
-    },
-    {
-      "path": "scripts/quality/capability_gate_adapter.py",
-      "baseMode": "100644", "baseObjectType": "blob", "baseBlobSha": "bbf9560d91260d39a4c7c70e0570c8832db3eb7f",
-      "candidateMode": "100644", "candidateObjectType": "blob", "candidateBlobSha": "14421881173fb35aab368229afc81e0c00b1c163"
+      "path": ".github/workflows/capability-protected.yml",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "51d274cb55e1c175d2373092b38e2855f867f74f",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "d2b2c9a36e3515c0380f34c0f5df5a98393d2721"
     }
   ]
 }
