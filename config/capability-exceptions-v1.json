@@ -130,12 +130,12 @@
         "column": 0
       },
       "normalizedAcquisitionAstSha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
-        "wholeFileSha256": "2306386af91d589c8d998353988665a8332d28dd7ea3bced1928f67a218e8d66",
-        "baselineCommit": "daf9733a494e7f2bb1bc75dede624e973aec0982",
+        "wholeFileSha256": "b6b8a4edb7d7f5739401829cf37ee914d9dd0b8bfa20c4575bf943c3770e453f",
+        "baselineCommit": "996d4c109f78fabc4c57d7bf771d698cf63b2c63",
       "acquiredCapability": "subprocess",
       "justification": "Exception adapter reads baseline/candidate blob content and registry state via git show/merge-base to validate exact-match exceptions.",
       "owner": "QUALITY_GOVERNANCE",
-        "reviewEvidence": "ISSUE_226_CORRECTED_WORD_HASH_REBIND",
+        "reviewEvidence": "LOCAL_WORD_COM_CONTAINMENT_FINAL_HASH_REBIND_V2",
       "disposition": "ACCEPT_BASELINE",
       "reviewBy": "2027-08-19"
     },

@@ -3,29 +3,94 @@
   "transitionId": "LOCAL_WORD_COM_CONTAINMENT_TRUST_TRANSITION_V1",
   "purpose": "BOUND_MICROSOFT_WORD_COM_EXECUTION_FOR_AUTHORITATIVE_WORD_TO_PDF",
   "scope": "LOCAL_WORD_COM_CONTAINMENT_V1",
-  "protectedBaseSha": "18aeaf679d5b1ebe3c764bb81d1a5db67dddf512",
+  "protectedBaseSha": "0275c4766f5292fcf9a599999bebc9fbff97ccb0",
   "protectedArtifacts": [
     {
       "path": "config/capability-protected-artifacts-v1.json",
-      "base": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "e541297e2a06adc59ec0f402d3fce58a7b087cec"},
-      "candidate": {"path": "config/capability-protected-artifacts-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "52607072c7d5c9b3f5b6cbf0693fbebf1be6352a"}
+      "base": {
+        "path": "config/capability-protected-artifacts-v1.json",
+        "state": "PRESENT",
+        "mode": "100644",
+        "objectType": "blob",
+        "blobSha": "52607072c7d5c9b3f5b6cbf0693fbebf1be6352a"
+      },
+      "candidate": {
+        "path": "config/capability-protected-artifacts-v1.json",
+        "state": "PRESENT",
+        "mode": "100644",
+        "objectType": "blob",
+        "blobSha": "be6d754a9a27361c317b5b8d9ac96734e8787d2a"
+      }
     },
     {
       "path": "config/capability-exceptions-v1.json",
-      "base": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "ab58b8b07779ca384cc3ed6fe013e4b3f4a106ea"},
-      "candidate": {"path": "config/capability-exceptions-v1.json", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "476669e5055822c67995574bf11089ff046b7895"}
+      "base": {
+        "path": "config/capability-exceptions-v1.json",
+        "state": "PRESENT",
+        "mode": "100644",
+        "objectType": "blob",
+        "blobSha": "476669e5055822c67995574bf11089ff046b7895"
+      },
+      "candidate": {
+        "path": "config/capability-exceptions-v1.json",
+        "state": "PRESENT",
+        "mode": "100644",
+        "objectType": "blob",
+        "blobSha": "e79d8ade92b1e4d2c1b5539c872305f50bb91845"
+      }
     },
     {
       "path": "scripts/quality/capability_gate_adapter.py",
-      "base": {"path": "scripts/quality/capability_gate_adapter.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "bbf9560d91260d39a4c7c70e0570c8832db3eb7f"},
-      "candidate": {"path": "scripts/quality/capability_gate_adapter.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "14421881173fb35aab368229afc81e0c00b1c163"}
+      "base": {
+        "path": "scripts/quality/capability_gate_adapter.py",
+        "state": "PRESENT",
+        "mode": "100644",
+        "objectType": "blob",
+        "blobSha": "14421881173fb35aab368229afc81e0c00b1c163"
+      },
+      "candidate": {
+        "path": "scripts/quality/capability_gate_adapter.py",
+        "state": "PRESENT",
+        "mode": "100644",
+        "objectType": "blob",
+        "blobSha": "592c36c15f5c54be5ce01fa91affb8d85221cb15"
+      }
     }
   ],
   "supportArtifacts": [
     {
       "path": "tests/test_architecture_capability_exception_rebind_v1.py",
-      "base": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "5b8122ddaeb0a03e0cd1ec2d6636437c14180ed0"},
-      "candidate": {"path": "tests/test_architecture_capability_exception_rebind_v1.py", "state": "PRESENT", "mode": "100644", "objectType": "blob", "blobSha": "d0fbebc3cfb8c742376f41ac42dca311dbceed65"}
+      "base": {
+        "path": "tests/test_architecture_capability_exception_rebind_v1.py",
+        "state": "PRESENT",
+        "mode": "100644",
+        "objectType": "blob",
+        "blobSha": "b1fbd3f985255f38553bc7cecd805de85ad5ccc6"
+      },
+      "candidate": {
+        "path": "tests/test_architecture_capability_exception_rebind_v1.py",
+        "state": "PRESENT",
+        "mode": "100644",
+        "objectType": "blob",
+        "blobSha": "26dadf528f37d60a3455efc196e974567693d8b9"
+      }
+    },
+    {
+      "path": "tests/test_architecture_capability_word_trust_only_rebind_v1.py",
+      "base": {
+        "path": "tests/test_architecture_capability_word_trust_only_rebind_v1.py",
+        "state": "PRESENT",
+        "mode": "100644",
+        "objectType": "blob",
+        "blobSha": "37eb75fbb3f0d06ec31d447456bfd2911b784a02"
+      },
+      "candidate": {
+        "path": "tests/test_architecture_capability_word_trust_only_rebind_v1.py",
+        "state": "PRESENT",
+        "mode": "100644",
+        "objectType": "blob",
+        "blobSha": "d70301f6de06929ebf2cbe8787da026124ae2c7a"
+      }
     }
   ]
 }
