@@ -6,7 +6,7 @@ from io import BytesIO
 from pathlib import PurePosixPath
 import re
 from xml.etree import ElementTree
-from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile, ZipInfo
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .report_foundation import ReportSnapshot, ReportState
 
@@ -14,13 +14,129 @@ from .report_foundation import ReportSnapshot, ReportState
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _WP = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
 _FIELD_NAMES = {"TOC", "PAGE", "NUMPAGES", "SEQ", "REF", "PAGEREF"}
+_ACQUIRING_TEMPLATE_FIELDS = re.compile(
+    r"\b(?:INCLUDETEXT|INCLUDEPICTURE|DDEAUTO|DDE)\b", re.IGNORECASE
+)
+# The same expression both validators use.  This reader took the token up to the
+# first whitespace, and Word ends a field NAME at whitespace OR at a double
+# quote: PAGEREF"Marca" binds as wdFieldPageRef in Word 16 and both validators
+# accept it, while this statement refused it -- so a template they certify could
+# never be bound.
+_TEMPLATE_FIELD_CODE = re.compile(r"\s*([A-Z]+)\b", re.IGNORECASE)
+# A binding value is text the product accepts upstream, and it has to survive
+# being written into XML.  The canonical block normalises the line-break family
+# and refuses what XML cannot carry; this site only escaped the three
+# metacharacters, so an expert whose name held Word's manual line break made
+# every render of an approved report fail, blaming the template.
+_TEMPLATE_LINE_BREAKS = (
+    chr(13) + chr(10),
+    chr(13),
+    chr(11),
+    chr(12),
+    chr(0x85),
+    chr(0x2028),
+    chr(0x2029),
+)
+_TEMPLATE_FORBIDDEN_CHARACTERS = re.compile(
+    "["
+    + chr(0) + "-" + chr(8)
+    + chr(14) + "-" + chr(31)
+    + chr(0xD800) + "-" + chr(0xDFFF)
+    + chr(0xFFFE) + chr(0xFFFF)
+    + "]"
+)
+
+
+def _template_text(value: str) -> str:
+    """One binding value, in the only form XML can carry unchanged."""
+    for control in _TEMPLATE_LINE_BREAKS:
+        value = value.replace(control, chr(10))
+    found = _TEMPLATE_FORBIDDEN_CHARACTERS.search(value)
+    if found is not None:
+        raise ValueError(
+            "template binding value carries a character XML cannot represent: "
+            "U+{:04X}".format(ord(found.group()))
+        )
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 _FIELD_VALUES = {
     "EXPERT_FULL_NAME": lambda report: report.expert_profile.full_name,
     "EXPERT_REGISTRATION": lambda report: report.expert_profile.registration,
     "REPORT_ID": lambda report: report.report_id,
 }
-_MAX_PARTS = 1000
-_MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+# The same bound the two validators state.  The binder's own numbers were
+# stricter, so a photo-heavy template both validators certify -- and that the
+# backup gate has already accepted -- failed every render in _safe_parts.
+_MAX_PARTS = 4096
+_MAX_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
+# Both validators also bound each part.  Without it a template holding one
+# oversized part was bound here and then refused by every render.
+_MAX_PART_BYTES = 64 * 1024 * 1024
+_MAX_COMPRESSION_RATIO = 200
+# The ratio guard applies only above 1 MiB on both other sides: a small, highly
+# compressible part is ordinary, not an attack.
+_COMPRESSION_RATIO_FLOOR = 1024 * 1024
+
+
+# The third statement of the field policy.  report_template cannot import the
+# delivery boundary -- that module imports this one -- so the segmentation is
+# duplicated here exactly as it is duplicated between the two validators, and the
+# parity catalogue now asks all three for a verdict rather than two.
+#
+# A field's instruction is the TEXT OF THE REGION between w:fldChar "begin" and
+# "separate".  Judging each w:instrText node alone refused an instruction Word 16
+# itself writes: editing a protected field under track changes splits it, so
+# " PAGEREF Marca " and " \h" arrive as two nodes and the second one's leading
+# token is a switch.  Because _FIELD_NAMES requires all six protected codes to be
+# present, one reviewed field made every render of that template fail for good.
+_FIELD_INSTRUCTION_ELEMENTS = frozenset({"instrText", "delInstrText"})
+_FIELD_TEXT_ELEMENTS = _FIELD_INSTRUCTION_ELEMENTS | {"t", "delText"}
+_FIELD_SEPARATOR_ELEMENTS = {"tab": chr(9), "br": chr(10), "cr": chr(10)}
+
+
+def _local_name(tag: object) -> str:
+    value = str(tag)
+    return value.rsplit("}", 1)[-1] if "}" in value else value
+
+
+def _template_field_instructions(root: ElementTree.Element) -> list[str]:
+    """Every field instruction in a part, one per field, in document order."""
+    instructions: list[str] = []
+    open_fields: list[list] = []
+
+    def closed(field: list) -> str:
+        buffer, in_result = field
+        value = "".join(buffer)
+        if in_result:
+            return value
+        if not value.strip():
+            raise ValueError("unsupported active Word field instruction")
+        return value
+
+    for node in root.iter():
+        name = _local_name(node.tag)
+        if name == "fldChar":
+            marker = (node.attrib.get(f"{_W}fldCharType") or "").strip().casefold()
+            if marker == "begin":
+                open_fields.append([[], False])
+            elif marker == "separate" and open_fields:
+                instructions.append(closed(open_fields[-1]))
+                open_fields[-1] = [[], True]
+            elif marker == "end" and open_fields:
+                instructions.append(closed(open_fields.pop()))
+        elif name in _FIELD_TEXT_ELEMENTS:
+            spelled_as_instruction = name in _FIELD_INSTRUCTION_ELEMENTS
+            if open_fields:
+                buffer, in_result = open_fields[-1]
+                if not in_result or spelled_as_instruction:
+                    buffer.append(node.text or "")
+            elif spelled_as_instruction:
+                instructions.append(node.text or "")
+        elif name in _FIELD_SEPARATOR_ELEMENTS and open_fields:
+            buffer, in_result = open_fields[-1]
+            if not in_result:
+                buffer.append(_FIELD_SEPARATOR_ELEMENTS[name])
+    instructions.extend(closed(item) for item in open_fields)
+    return instructions
 
 
 def _text(value: object) -> bool:
@@ -89,12 +205,34 @@ def _safe_parts(template_bytes: bytes) -> tuple[list[ZipInfo], dict[str, bytes]]
                 raise ValueError("unsafe template package")
             for item in infos:
                 path = PurePosixPath(item.filename)
-                if path.is_absolute() or ".." in path.parts or item.filename.endswith("/"):
+                if path.is_absolute() or ".." in path.parts:
                     raise ValueError("unsafe template package")
-                if item.compress_size and item.file_size / item.compress_size > 200:
+                if item.filename.endswith("/"):
+                    # A directory entry carries no content.  Both validators skip
+                    # them and a parity test pins that they are legal, while this
+                    # third statement refused them -- so the backup gate
+                    # certified a template that could then never be bound.
+                    #
+                    # The skip belongs AFTER the traversal check, not before it:
+                    # placed first it let "../escape/" and "/word/" through, and
+                    # a name ending in "/" can still carry bytes, so the size and
+                    # ratio guards below have to see it too.
+                    if item.file_size:
+                        raise ValueError("unsafe template package")
+                    continue
+                if item.file_size > _MAX_PART_BYTES or (
+                    item.file_size > _COMPRESSION_RATIO_FLOOR
+                    and item.file_size
+                    > max(item.compress_size, 1) * _MAX_COMPRESSION_RATIO
+                ):
                     raise ValueError("unsafe template package")
             return infos, {item.filename: package.read(item.filename) for item in infos}
-    except (BadZipFile, OSError) as exc:
+    except ValueError:
+        raise
+    except Exception as exc:
+        # zipfile's failure vocabulary is not closed: NotImplementedError for an
+        # unimplemented compression method is not an OSError, and it left this
+        # boundary as itself.
         raise ValueError("unsafe template package") from exc
 
 
@@ -116,21 +254,29 @@ def _mechanics(parts: dict[str, bytes]) -> tuple[set[str], tuple[str, ...], int]
         except ElementTree.ParseError as exc:
             raise ValueError("template Word XML is invalid") from exc
     for xml_root in xml_roots:
-      for paragraph in xml_root.iter(f"{_W}p"):
-        nodes = [item.text or "" for item in paragraph.iter(f"{_W}instrText") if (item.text or "").strip()]
+        nodes = _template_field_instructions(xml_root)
         nodes.extend(
             item.attrib.get(f"{_W}instr", "")
-            for item in paragraph.iter(f"{_W}fldSimple")
+            for item in xml_root.iter(f"{_W}fldSimple")
             if item.attrib.get(f"{_W}instr", "").strip()
         )
-        compact = re.sub(r"\s+", "", "".join(nodes)).upper()
-        if any(marker in compact for marker in ("INCLUDETEXT", "INCLUDEPICTURE", "DDEAUTO", "DDE")) or "://" in compact:
-            raise ValueError("unsupported active Word field instruction")
         for instruction in nodes:
-            name = instruction.strip().split(maxsplit=1)[0].upper()
-            if name not in _FIELD_NAMES:
+            # Both validators match each instruction on its own, on word
+            # boundaries.  Joining every instruction of a part, stripping all
+            # whitespace and asking for bare substrings read any identifier
+            # containing those letters as an opcode -- a bookmark named
+            # "Addendum" was refused -- and let one field's trailing characters
+            # join the next field's leading ones.
+            if _ACQUIRING_TEMPLATE_FIELDS.search(instruction) or "://" in instruction:
                 raise ValueError("unsupported active Word field instruction")
-            field_names.add(name)
+        for instruction in nodes:
+            if not instruction.strip():
+                # The result region of an ordinary field contributes nothing.
+                continue
+            code = _TEMPLATE_FIELD_CODE.match(instruction)
+            if code is None or code.group(1).upper() not in _FIELD_NAMES:
+                raise ValueError("unsupported active Word field instruction")
+            field_names.add(code.group(1).upper())
     bookmarks = tuple(sorted(item.attrib.get(f"{_W}name", "") for item in root.iter(f"{_W}bookmarkStart") if item.attrib.get(f"{_W}name")))
     controls = sum(1 for _ in root.iter(f"{_W}sdt"))
     for item in root.iter(f"{_WP}docPr"):
@@ -141,6 +287,43 @@ def _mechanics(parts: dict[str, bytes]) -> tuple[set[str], tuple[str, ...], int]
 
 def _digest(parts: dict[str, bytes], name: str) -> str | None:
     return sha256(parts[name]).hexdigest() if name in parts else None
+
+
+_MAIN_PART_CONTENT_TYPES = {
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml": "DOCX",
+    "application/vnd.ms-word.document.macroenabled.main+xml": "DOCM",
+}
+
+
+def _declared_output_kind(parts: dict) -> str:
+    """DOCX or DOCM as the package itself declares it, not as its parts hint.
+
+    The kind used to be inferred from the PRESENCE of word/vbaProject.bin, while
+    the delivery boundary decided the same axis from the main part's declared
+    content type.  Native Word 16 writes a .docm carrying no VBA part at all
+    when the document has no macros (probe, 2026-09-19), so for every such
+    template the two rules were mutually unsatisfiable: binding refused it as
+    DOCM for want of a macro part, and the boundary refused it as DOCX for its
+    declared content type.  Both now read the same signal.
+    """
+    try:
+        root = ElementTree.fromstring(parts["[Content_Types].xml"])
+    except (KeyError, ElementTree.ParseError) as exc:
+        raise ValueError("template content types are unreadable") from exc
+    declared = {
+        (item.attrib.get("ContentType") or "").casefold()
+        for item in root.iter()
+        if item.tag.rsplit("}", 1)[-1] == "Override"
+        and (item.attrib.get("PartName") or "").casefold() == "/word/document.xml"
+    }
+    kinds = {
+        _MAIN_PART_CONTENT_TYPES[value]
+        for value in declared
+        if value in _MAIN_PART_CONTENT_TYPES
+    }
+    if len(kinds) != 1:
+        raise ValueError("template main part content type is not uniquely declared")
+    return kinds.pop()
 
 
 def bind_report_template(template_bytes: bytes, report: ReportSnapshot, manifest: TemplateBindingManifest) -> DocumentBindingResult:
@@ -160,9 +343,8 @@ def bind_report_template(template_bytes: bytes, report: ReportSnapshot, manifest
     before_mechanics = _mechanics(before)
     if before_mechanics[0] != _FIELD_NAMES:
         raise ValueError("protected Word fields are incomplete")
-    is_macro = "word/vbaProject.bin" in before
-    if (manifest.output_kind == "DOCM") != is_macro:
-        raise ValueError("template kind and macro package disagree")
+    if _declared_output_kind(before) != manifest.output_kind:
+        raise ValueError("template kind and package content type disagree")
     document = before["word/document.xml"].decode("utf-8")
     declared_placeholders = {item.placeholder for item in manifest.bindings}
     if set(re.findall(r"\[\[[A-Z][A-Z0-9_]*\]\]", document)) != declared_placeholders:
@@ -170,7 +352,9 @@ def bind_report_template(template_bytes: bytes, report: ReportSnapshot, manifest
     for binding in manifest.bindings:
         if document.count(binding.placeholder) != 1:
             raise ValueError("canonical field must remain single-source")
-        document = document.replace(binding.placeholder, _FIELD_VALUES[binding.field](report))
+        document = document.replace(
+            binding.placeholder, _template_text(_FIELD_VALUES[binding.field](report))
+        )
     after = dict(before)
     after["word/document.xml"] = document.encode("utf-8")
     after_mechanics = _mechanics(after)

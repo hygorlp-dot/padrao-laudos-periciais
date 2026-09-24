@@ -6,9 +6,7 @@ from copy import deepcopy
 from dataclasses import replace
 import hashlib
 import os
-from io import BytesIO
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile
 from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, StreamObject
 
@@ -26,6 +24,13 @@ from scripts.backend_contract.pericial_planning import pericial_planning_from_ma
 from scripts.backend_contract.report_foundation import report_snapshot_from_mapping
 from scripts.backend_contract.technical_findings import technical_snapshot_from_mapping
 from scripts.backend_contract.vistoria import inspection_session_from_mapping
+
+from tests.opc_word_fixtures import (
+    DOCM_MAIN_TYPE,
+    VBA_PROJECT_TYPE,
+    bound_template_document,
+    word_package,
+)
 from scripts.backend_contract.local_api.composition import build_local_api
 from scripts.planejamento_pericial.app_composition import build_pericial_application
 from tests.test_local_api_v1 import FixedClock, TOKEN, http_request
@@ -828,28 +833,27 @@ def _replace_text(value: object, replacements: dict[str, str]) -> object:
 
 
 def _docx(text: str = "Laudo sintético aprovado") -> bytes:
-    output = BytesIO()
-    with ZipFile(output, "w", ZIP_DEFLATED) as package:
-        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
-        package.writestr("word/document.xml", f'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:body></w:document>')
-    return output.getvalue()
+    return word_package(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:body></w:document>"
+    )
 
 
 def _bound_template_docm(template_id: str) -> bytes:
-    document = '''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
-      <w:p><w:r><w:t>[[EXPERT_FULL_NAME]]</w:t></w:r></w:p><w:p><w:r><w:t>[[EXPERT_REGISTRATION]]</w:t></w:r></w:p><w:p><w:r><w:t>[[REPORT_ID]]</w:t></w:r></w:p>
-      <w:sdt><w:sdtPr><w:tag w:val="CANONICAL_REPORT"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>empty</w:t></w:r></w:p></w:sdtContent></w:sdt>
-      <w:p><w:bookmarkStart w:id="1" w:name="B"/><w:r><w:instrText>TOC</w:instrText><w:instrText>PAGE</w:instrText><w:instrText>NUMPAGES</w:instrText><w:instrText>SEQ Figure</w:instrText><w:instrText>REF B</w:instrText><w:instrText>PAGEREF B</w:instrText></w:r><w:bookmarkEnd w:id="1"/></w:p>
-    </w:body></w:document>'''
-    output = BytesIO()
-    with ZipFile(output, "w", ZIP_DEFLATED) as package:
-        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/><Override PartName="/word/vbaProject.bin" ContentType="application/vnd.ms-office.vbaProject"/></Types>')
-        package.writestr("word/document.xml", document)
-        package.writestr("word/styles.xml", "<styles/>")
-        package.writestr("word/numbering.xml", "<numbering/>")
-        package.writestr("word/vbaProject.bin", b"synthetic-macro")
-        package.writestr("docProps/custom.xml", f'<Properties><property name="TEMPLATE_ID"><value>{template_id}</value></property></Properties>')
-    return output.getvalue()
+    return word_package(
+        bound_template_document(),
+        main_type=DOCM_MAIN_TYPE,
+        parts={
+            "word/styles.xml": "<styles/>",
+            "word/numbering.xml": "<numbering/>",
+            "word/vbaProject.bin": b"synthetic-macro",
+            "docProps/custom.xml": (
+                '<Properties><property name="TEMPLATE_ID">'
+                f"<value>{template_id}</value></property></Properties>"
+            ),
+        },
+        overrides={"/word/vbaProject.bin": VBA_PROJECT_TYPE},
+    )
 
 
 def _private(content_id: str, content: bytes, filename: str, media_type: str) -> dict:
