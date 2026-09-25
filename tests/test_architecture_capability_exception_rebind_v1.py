@@ -32,7 +32,7 @@ WORD_PARENT_PATH = "scripts/backend_contract/infrastructure/office_pdf.py"
 WORD_WORKER_PATH = "scripts/backend_contract/infrastructure/office_word_worker.py"
 PROTECTED_BASE = "0275c4766f5292fcf9a599999bebc9fbff97ccb0"
 # The architecture transition now carries the Word support-routing judge predecessor.
-ARCHITECTURE_PROTECTED_BASE = "1b2e5622c2b73899d6d1581e24ba5feb897c805c"
+ARCHITECTURE_PROTECTED_BASE = "0f5527590896a80a6f296e627bb61717ff1eb8d4"
 CAPABILITY_WORKFLOW_PATH = ".github/workflows/capability-protected.yml"
 SOURCE_ANCHORS = {
     "scripts/quality/capability_gate_adapter.py": "996d4c109f78fabc4c57d7bf771d698cf63b2c63",

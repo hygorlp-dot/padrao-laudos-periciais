@@ -1,7 +1,7 @@
 {
   "schemaVersion": "2.0.0",
   "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "1b2e5622c2b73899d6d1581e24ba5feb897c805c",
+  "protectedBaseSha": "0f5527590896a80a6f296e627bb61717ff1eb8d4",
   "artifacts": [
     {
       "path": ".github/workflows/capability-protected.yml",
