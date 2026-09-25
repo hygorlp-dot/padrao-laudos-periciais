@@ -73,19 +73,28 @@ def repo(tmp_path_factory) -> dict:
 
 
 def _candidate(repo: dict, edits: dict[str, str | bytes]) -> str:
-    path = repo["path"]
-    _git(path, "checkout", "-q", "--detach", repo["base"])
+    """A child commit of the base built with plumbing only (no working-tree checkout)."""
+    path, base = repo["path"], repo["base"]
+    index = path.parent / "routing-fixture.index"
+    env = {**os.environ, "GIT_INDEX_FILE": str(index)}
+
+    def git(*args: str, data: bytes | None = None) -> bytes:
+        return subprocess.run(
+            ["git", *_GIT_IDENTITY, *args], cwd=path, env=env, input=data, check=True, capture_output=True,
+        ).stdout
+
+    git("read-tree", base)
     for name, change in edits.items():
-        target = path / name
-        target.parent.mkdir(parents=True, exist_ok=True)
         if isinstance(change, bytes):
-            target.write_bytes(change)
+            content = change
         else:
-            original = target.read_text(encoding="utf-8") if target.exists() else ""
-            target.write_text(original + change, encoding="utf-8", newline="\n")
-    _git(path, "add", "-A")
-    _git(path, "commit", "-q", "--no-verify", "-m", "routing fixture")
-    return _git(path, "rev-parse", "HEAD").strip()
+            listed = git("ls-tree", base, "--", name).strip()
+            original = git("show", f"{base}:{name}") if listed else b""
+            content = original + change.encode("utf-8")
+        blob = git("hash-object", "-w", "--stdin", data=content).decode().strip()
+        git("update-index", "--add", "--cacheinfo", f"100644,{blob},{name}")
+    tree = git("write-tree").decode().strip()
+    return git("commit-tree", tree, "-p", base, "-m", "routing fixture").decode().strip()
 
 
 def _route(repo: dict, candidate: str) -> str:
@@ -124,12 +133,11 @@ def test_a_support_test_changed_alone_takes_the_common_route(repo, support) -> N
 
     assert _route(repo, candidate) == "COMMON"
     assert validate_inert_trust_anchor(repo["path"], repo["base"], candidate) == []
-    assert run_protected_capability_gate(repo["path"], repo["base"], candidate) == []
 
 
-def test_support_test_with_unrelated_delivery_integration_takes_the_common_route(repo) -> None:
-    """The PR #203 shape: Word bytes and trust authority untouched."""
-    candidate = _candidate(repo, {SUPPORT_TESTS[0]: _NOTE, **_DELIVERY_INTEGRATION})
+def test_support_tests_with_unrelated_delivery_integration_take_the_common_route(repo) -> None:
+    """The PR #203 shape, with every Word-scoped support test: one full analysis."""
+    candidate = _candidate(repo, {**{path: _NOTE for path in SUPPORT_TESTS}, **_DELIVERY_INTEGRATION})
 
     assert _route(repo, candidate) == "COMMON"
     assert validate_inert_trust_anchor(repo["path"], repo["base"], candidate) == []
@@ -152,6 +160,35 @@ def test_word_product_bytes_still_start_a_dedicated_transition_and_are_refused(r
 
     assert _route(repo, candidate) != "COMMON"
     assert _route(repo, candidate) == "FAILED_CLOSED"
+
+
+@pytest.mark.parametrize("product", [WORD_PARENT, WORD_WORKER])
+def test_a_renamed_word_product_file_is_never_support_only(repo, product) -> None:
+    """Rename detection would list only the new path; the old one still triggers."""
+    path, base = repo["path"], repo["base"]
+    env = {**os.environ, "GIT_INDEX_FILE": str(path.parent / "rename-fixture.index")}
+
+    def git(*args: str, data: bytes | None = None) -> str:
+        return subprocess.run(
+            ["git", *_GIT_IDENTITY, *args], cwd=path, env=env, input=data,
+            check=True, capture_output=True,
+        ).stdout.decode()
+
+    git("read-tree", base)
+    content = subprocess.run(
+        ["git", "show", f"{base}:{product}"], cwd=path, check=True, capture_output=True,
+    ).stdout + b"\n# altered after rename\n"
+    blob = git("hash-object", "-w", "--stdin", data=content).strip()
+    git("update-index", "--force-remove", product)
+    git("update-index", "--add", "--cacheinfo", f"100644,{blob},{product}.renamed.py")
+    support = subprocess.run(
+        ["git", "show", f"{base}:{SUPPORT_TESTS[1]}"], cwd=path, check=True, capture_output=True,
+    ).stdout + _NOTE.encode()
+    git("update-index", "--add", "--cacheinfo",
+        f"100644,{git('hash-object', '-w', '--stdin', data=support).strip()},{SUPPORT_TESTS[1]}")
+    candidate = git("commit-tree", git("write-tree").strip(), "-p", base, "-m", "rename fixture").strip()
+
+    assert _route(repo, candidate) != "COMMON"
 
 
 @pytest.mark.parametrize(
@@ -178,21 +215,18 @@ def test_a_transition_manifest_change_stays_on_the_dedicated_route(repo) -> None
     assert _route(repo, candidate) == "DEDICATED"
 
 
-@pytest.mark.parametrize(
-    "module",
-    [
-        "import subprocess\nsubprocess.run(['cmd'])\n",
-        "import os\nos.system('cmd')\n",
-    ],
-    ids=["generic-subprocess", "shell"],
-)
-def test_the_common_route_still_refuses_new_process_authority(repo, module) -> None:
+def test_the_common_route_still_refuses_new_process_authority(repo) -> None:
+    subprocess_module = "scripts/backend_contract/routing_fixture_subprocess.py"
+    shell_module = "scripts/backend_contract/routing_fixture_shell.py"
     candidate = _candidate(repo, {
-        SUPPORT_TESTS[0]: _NOTE, "scripts/backend_contract/routing_fixture_authority.py": module,
+        SUPPORT_TESTS[0]: _NOTE,
+        subprocess_module: "import subprocess\nsubprocess.run(['cmd'])\n",
+        shell_module: "import os\nos.system('cmd')\n",
     })
 
     assert _route(repo, candidate) == "COMMON"
-    assert run_protected_capability_gate(repo["path"], repo["base"], candidate) != []
+    refused = run_protected_capability_gate(repo["path"], repo["base"], candidate)
+    assert {subprocess_module, shell_module} <= {item.get("canonicalPath") for item in refused}
 
 
 def test_the_routing_block_depends_on_structure_not_names_or_identity() -> None:

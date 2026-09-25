@@ -77,10 +77,12 @@ jobs:
               registry = _load_registry(root, base)
               if registry is None:
                   sys.exit(1)
+              # --no-renames: a renamed Word product file must still show its old
+              # path here; UTF-8 decoding, as the scope check itself does.
               changed = {
-                  item for item in subprocess.check_output(
-                      ['git', 'diff', '--name-only', '-z', base, candidate], cwd=root, text=True,
-                  ).split('\0') if item
+                  item.decode('utf-8') for item in subprocess.check_output(
+                      ['git', 'diff', '--no-renames', '--name-only', '-z', base, candidate], cwd=root,
+                  ).split(b'\0') if item
               }
               triggers = set(_WORD_PRODUCT_PATHS) | {row['path'] for row in registry} | {
                   TRANSITION_PATH, REGISTRY_PATH, ARCHITECTURE_TRANSITION_PATH,
