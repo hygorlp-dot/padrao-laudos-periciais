@@ -530,25 +530,36 @@ def test_short_glyph_separators_on_the_second_line_stay_ordered(separator) -> No
 # refused a faithful PDF of the product's own canonical text.
 
 
-def _fixture_pair(name: str, pdf_name: str | None = None) -> tuple[bytes, bytes]:
-    word = (_FIXTURES / f"{name}.docx").read_bytes()
-    pdf = (_FIXTURES / f"{pdf_name or name}.pdf").read_bytes()
-    return word, pdf
+def _fixture_pair(word_name: str, pdf_name: str) -> tuple[bytes, bytes]:
+    # Full file names, so the fixture registry can see each file exercised here.
+    return (_FIXTURES / word_name).read_bytes(), (_FIXTURES / pdf_name).read_bytes()
 
 
-@pytest.mark.parametrize("name", ["word16-line-end-hyphen", "word16-line-end-hyphens-multiple"])
-def test_word_16_line_end_hyphens_are_read_as_the_hyphens_word_painted(name) -> None:
+@pytest.mark.parametrize(
+    ("word_name", "pdf_name"),
+    [
+        ("word16-line-end-hyphen.docx", "word16-line-end-hyphen.pdf"),
+        ("word16-line-end-hyphens-multiple.docx", "word16-line-end-hyphens-multiple.pdf"),
+    ],
+)
+def test_word_16_line_end_hyphens_are_read_as_the_hyphens_word_painted(word_name, pdf_name) -> None:
     """RED_THIS_REPAIR: one and three proven line-end hyphens."""
-    word, pdf = _fixture_pair(name)
+    word, pdf = _fixture_pair(word_name, pdf_name)
 
     fragments = "".join(item.strict_text for item in delivery_renderer._pdfium_visible_layout(pdf)[0])
     assert "\x02" not in fragments
     delivery_renderer._validate_pdf_fidelity(word, pdf)
 
 
-@pytest.mark.parametrize("name", ["word16-line-end-hyphen-nowrap", "word16-line-end-hyphen-with-tail"])
-def test_hyphenated_identifiers_with_and_without_a_wrap_stay_faithful(name) -> None:
-    word, pdf = _fixture_pair(name)
+@pytest.mark.parametrize(
+    ("word_name", "pdf_name"),
+    [
+        ("word16-line-end-hyphen-nowrap.docx", "word16-line-end-hyphen-nowrap.pdf"),
+        ("word16-line-end-hyphen-with-tail.docx", "word16-line-end-hyphen-with-tail.pdf"),
+    ],
+)
+def test_hyphenated_identifiers_with_and_without_a_wrap_stay_faithful(word_name, pdf_name) -> None:
+    word, pdf = _fixture_pair(word_name, pdf_name)
 
     delivery_renderer._validate_pdf_fidelity(word, pdf)
 
@@ -556,14 +567,14 @@ def test_hyphenated_identifiers_with_and_without_a_wrap_stay_faithful(name) -> N
 @pytest.mark.parametrize(
     "mutated",
     [
-        "word16-line-end-hyphen-missing",
-        "word16-line-end-hyphen-replaced",
-        "word16-line-end-hyphen-id-changed",
-        "word16-line-end-hyphen-reordered",
+        "word16-line-end-hyphen-missing.pdf",
+        "word16-line-end-hyphen-replaced.pdf",
+        "word16-line-end-hyphen-id-changed.pdf",
+        "word16-line-end-hyphen-reordered.pdf",
     ],
 )
 def test_a_pdf_that_really_changed_the_hyphenated_text_is_still_refused(mutated) -> None:
-    word, pdf = _fixture_pair("word16-line-end-hyphen-with-tail", mutated)
+    word, pdf = _fixture_pair("word16-line-end-hyphen-with-tail.docx", mutated)
 
     with pytest.raises(ValueError, match="faithfully represent"):
         delivery_renderer._validate_pdf_fidelity(word, pdf)
