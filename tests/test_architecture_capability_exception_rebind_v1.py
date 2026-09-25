@@ -31,7 +31,9 @@ CAPABILITY_GATE_ADAPTER_PATH = "scripts/quality/capability_gate_adapter.py"
 WORD_PARENT_PATH = "scripts/backend_contract/infrastructure/office_pdf.py"
 WORD_WORKER_PATH = "scripts/backend_contract/infrastructure/office_word_worker.py"
 PROTECTED_BASE = "0275c4766f5292fcf9a599999bebc9fbff97ccb0"
-ARCHITECTURE_PROTECTED_BASE = "0275c4766f5292fcf9a599999bebc9fbff97ccb0"
+# The architecture transition now carries the Word support-routing judge predecessor.
+ARCHITECTURE_PROTECTED_BASE = "1b2e5622c2b73899d6d1581e24ba5feb897c805c"
+CAPABILITY_WORKFLOW_PATH = ".github/workflows/capability-protected.yml"
 SOURCE_ANCHORS = {
     "scripts/quality/capability_gate_adapter.py": "996d4c109f78fabc4c57d7bf771d698cf63b2c63",
 }
@@ -104,12 +106,8 @@ def test_transition_manifests_introduce_no_wildcard_or_package_wide_authority():
         EXCEPTIONS_PATH,
         CAPABILITY_GATE_ADAPTER_PATH,
     }
-    assert architecture_paths == {CAPABILITY_REGISTRY_PATH}
-    assert support_paths == {
-        EXCEPTIONS_PATH,
-        CAPABILITY_TRANSITION_PATH,
-        CAPABILITY_GATE_ADAPTER_PATH,
-    }
+    assert architecture_paths == {CAPABILITY_WORKFLOW_PATH}
+    assert support_paths == set()
 
 
 def test_capability_workflow_python_scope_admits_exception_transition_path():
@@ -265,28 +263,16 @@ def test_capability_registry_and_transition_bind_exact_exception_blob():
 
 def test_architecture_transition_binds_current_trust_anchor_rotation():
     transition = _json(ARCHITECTURE_TRANSITION_PATH)
-    assert transition["schemaVersion"] == "3.0.0"
+    assert transition["schemaVersion"] == "2.0.0"
+    assert set(transition) == {"schemaVersion", "transitionId", "protectedBaseSha", "artifacts"}
     assert transition["protectedBaseSha"] == ARCHITECTURE_PROTECTED_BASE
 
     artifact_rows = {row["path"]: row for row in transition["artifacts"]}
-    assert set(artifact_rows) == {CAPABILITY_REGISTRY_PATH}
+    assert set(artifact_rows) == {CAPABILITY_WORKFLOW_PATH}
 
     for path, row in artifact_rows.items():
         assert _architecture_transition_identity(row, "base") == _identity_from_commit(
             ARCHITECTURE_PROTECTED_BASE, path
-        )
-        assert _architecture_transition_identity(row, "candidate") == _identity_from_worktree(path)
-
-    support_rows = {row["path"]: row for row in transition["supportArtifacts"]}
-    assert transition["supportScope"] == "LOCAL_WORD_COM_CONTAINMENT_V1"
-    assert set(support_rows) == {
-        CAPABILITY_TRANSITION_PATH,
-        EXCEPTIONS_PATH,
-        CAPABILITY_GATE_ADAPTER_PATH,
-    }
-    for path, row in support_rows.items():
-        assert _architecture_transition_identity(row, "base") == _identity_from_commit(
-            PROTECTED_BASE, path
         )
         assert _architecture_transition_identity(row, "candidate") == _identity_from_worktree(path)
 
