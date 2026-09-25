@@ -56,7 +56,43 @@ jobs:
           CAPABILITY_PROTECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           CAPABILITY_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          $state = python -c "import os,sys; from pathlib import Path; from scripts.quality.capability_trust_anchor import _word_render_contract_is_closed,_word_transition_scope_changed; root=Path(os.environ['CAPABILITY_CANDIDATE_ROOT']); candidate=os.environ['CAPABILITY_EXPECTED_HEAD_SHA']; state=_word_transition_scope_changed(root, os.environ['CAPABILITY_PROTECTED_BASE_SHA'], candidate); contract=True if state is not True else _word_render_contract_is_closed(root, candidate); sys.exit(1) if state is None or contract is not True else print('true' if state else 'false')"
+          $state = @'
+          # WORD_SUPPORT_ROUTING_BEGIN
+          import os, subprocess, sys
+          from pathlib import Path
+          from scripts.quality.capability_trust_anchor import (
+              ARCHITECTURE_TRANSITION_PATH, REGISTRY_PATH, TRANSITION_PATH, _WORD_PRODUCT_PATHS,
+              _load_registry, _word_render_contract_is_closed, _word_transition_scope_changed,
+          )
+
+          root = Path(os.environ['CAPABILITY_CANDIDATE_ROOT'])
+          base = os.environ['CAPABILITY_PROTECTED_BASE_SHA']
+          candidate = os.environ['CAPABILITY_EXPECTED_HEAD_SHA']
+          state = _word_transition_scope_changed(root, base, candidate)
+          if state is True:
+              # The Word scope names what a dedicated transition may carry.  Only
+              # Word product bytes, protected trust artifacts and the transition
+              # manifests START one; the Word-scoped tests are its support and,
+              # changed on their own, are judged by the ordinary custody route.
+              registry = _load_registry(root, base)
+              if registry is None:
+                  sys.exit(1)
+              # --no-renames: a renamed Word product file must still show its old
+              # path here; UTF-8 decoding, as the scope check itself does.
+              changed = {
+                  item.decode('utf-8') for item in subprocess.check_output(
+                      ['git', 'diff', '--no-renames', '--name-only', '-z', base, candidate], cwd=root,
+                  ).split(b'\0') if item
+              }
+              triggers = set(_WORD_PRODUCT_PATHS) | {row['path'] for row in registry} | {
+                  TRANSITION_PATH, REGISTRY_PATH, ARCHITECTURE_TRANSITION_PATH,
+              }
+              if not changed & triggers:
+                  state = False
+          contract = True if state is not True else _word_render_contract_is_closed(root, candidate)
+          sys.exit(1) if state is None or contract is not True else print('true' if state else 'false')
+          # WORD_SUPPORT_ROUTING_END
+          '@ | python -
           if ($LASTEXITCODE -ne 0) {
             # A trust-only hash rebind edits the adapter, so it enters the Word
             # scope, yet by construction carries no product bytes for the
