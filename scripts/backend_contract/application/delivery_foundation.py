@@ -24,10 +24,11 @@ from ..delivery_foundation import (
     DeliveryRole,
     DeliverySnapshot,
     DeliveryState,
+    DerivedPdfRenderer,
     delivery_snapshot_from_mapping,
     delivery_snapshot_to_mapping,
 )
-from ..delivery_renderer import DELIVERY_RENDERING_VERSION, render_word_candidate, validate_delivery_artifact, validate_final_artifact, validate_supporting_artifact, verify_reopened_artifact
+from ..delivery_renderer import DELIVERY_RENDERING_VERSION, render_final_pdf_candidate, render_word_candidate, validate_delivery_artifact, validate_final_artifact, validate_supporting_artifact, verify_reopened_artifact
 from ..report_template import TemplateBindingManifest, template_binding_manifest_from_mapping
 from ..pericial_planning import PlanningSnapshot, pericial_planning_to_mapping
 from ..report_foundation import ReportSnapshot, ReportState, report_snapshot_to_mapping
@@ -344,6 +345,32 @@ class RenderDeliveryPackage:
     store_private_content: object
     save_snapshot: object
     ids: object
+    pdf_converter: object | None = None
+
+    def _derive_pdf(self, word: bytes, output_kind: str) -> tuple[bytes, DerivedPdfRenderer] | tuple[None, None]:
+        """Derive the PDF from the exact Word bytes, or report that none exists.
+
+        The Word artifact is the professional authority and stays deliverable
+        whatever happens here.  A PDF exists only when the protected renderer
+        produced it and every structural, security and fidelity check passed;
+        any refusal on that path -- renderer unavailable, timeout, conversion
+        failure, invalid or unfaithful output, unknown provenance -- arrives as
+        ValueError and leaves no PDF behind.
+        """
+        if self.pdf_converter is None:
+            return None, None
+        try:
+            pdf = render_final_pdf_candidate(
+                word_content=word, word_format=output_kind, converter=self.pdf_converter,
+            )
+            renderer = DerivedPdfRenderer(
+                renderer_type=self.pdf_converter.renderer_type,
+                renderer_version=self.pdf_converter.renderer_version,
+                platform=self.pdf_converter.platform,
+            )
+        except ValueError:
+            return None, None
+        return pdf, renderer
 
     def execute(self, workspace_id, *, manifest: TemplateBindingManifest, expected_revision: int):
         record, snapshot = self.get_snapshot.execute(workspace_id)
@@ -361,6 +388,7 @@ class RenderDeliveryPackage:
             raise ValueError("Delivery report bytes diverge from bound authority")
         word = render_word_candidate(template_bytes=template.content, report=report, manifest=manifest).output_bytes
         word_digest, word_size, word_media = validate_final_artifact(word, manifest.output_kind)
+        pdf, pdf_renderer = self._derive_pdf(word, manifest.output_kind)
         stem = f"laudo-{snapshot.delivery_id.lower()}-r{snapshot.revision + 1}"
         word_name = f"{stem}.{manifest.output_kind.lower()}"
         word_metadata = self.store_private_content.execute(
@@ -369,6 +397,24 @@ class RenderDeliveryPackage:
         )
         if (word_metadata.byte_size, word_metadata.checksum_sha256) != (word_size, word_digest):
             raise RepositoryIntegrityError("private delivery storage changed rendered bytes")
+        derived = ()
+        if pdf is not None:
+            pdf_digest, pdf_size, pdf_media = validate_delivery_artifact(pdf, DeliveryFormat.PDF.value)
+            pdf_name = f"{stem}.pdf"
+            pdf_metadata = self.store_private_content.execute(
+                workspace_id=workspace_id, original_filename=pdf_name, content=pdf,
+                media_type=pdf_media, origin=PrivateContentOrigin.LOCAL_IMPORT,
+            )
+            if (pdf_metadata.byte_size, pdf_metadata.checksum_sha256) != (pdf_size, pdf_digest):
+                raise RepositoryIntegrityError("private delivery storage changed derived PDF bytes")
+            derived = (
+                DeliveryArtifact(
+                    artifact_id=f"ARTIFACT-{str(self.ids.new_uuid()).upper()}", role=DeliveryRole.DERIVED_PDF,
+                    format=DeliveryFormat.PDF, filename=pdf_name,
+                    content_id=str(pdf_metadata.content_id), media_type=pdf_media,
+                    byte_size=pdf_size, checksum_sha256=pdf_digest,
+                ),
+            )
         artifacts = (
             DeliveryArtifact(
                 artifact_id=f"ARTIFACT-{str(self.ids.new_uuid()).upper()}", role=DeliveryRole.MAIN_REPORT,
@@ -376,11 +422,15 @@ class RenderDeliveryPackage:
                 content_id=str(word_metadata.content_id), media_type=word_media,
                 byte_size=word_size, checksum_sha256=word_digest,
             ),
-            *(item for item in snapshot.artifacts if item.role is not DeliveryRole.MAIN_REPORT),
+            *derived,
+            # A previous render's PDF was derived from bytes this render replaces;
+            # it is never carried forward.
+            *(item for item in snapshot.artifacts if item.role not in {DeliveryRole.MAIN_REPORT, DeliveryRole.DERIVED_PDF}),
         )
         rendered = replace(
             snapshot, revision=snapshot.revision + 1, artifacts=artifacts,
             package=DeliveryPackage("1.0.0", tuple(item.artifact_id for item in artifacts)),
+            derived_pdf_renderer=pdf_renderer,
         )
         saved = self.save_snapshot.execute(workspace_id, rendered, expected_revision, allow_artifacts=True)
         return saved, rendered
@@ -413,7 +463,7 @@ class AttachDeliveryPackageArtifact:
             package_role = DeliveryRole(role)
         except ValueError as exc:
             raise ValueError("Delivery package role is invalid") from exc
-        if package_role is DeliveryRole.MAIN_REPORT:
+        if package_role in {DeliveryRole.MAIN_REPORT, DeliveryRole.DERIVED_PDF}:
             raise ValueError("main report artifacts require protected rendering")
         content = self.get_private_content.execute(workspace_id, content_id)
         media = content.metadata.media_type or "application/octet-stream"

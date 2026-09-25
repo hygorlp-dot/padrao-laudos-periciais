@@ -18,11 +18,21 @@ import {
   type DeliveryEnvelope,
 } from "../data/deliverySnapshot";
 
+const ROLE_LABELS: Record<string, string> = {
+  MAIN_REPORT: "Word autoritativo",
+  DERIVED_PDF: "PDF derivado · não autoritativo",
+  ANNEX: "Anexo",
+  PHOTO_APPENDIX: "Apêndice fotográfico",
+  TECHNICAL_APPENDIX: "Apêndice técnico",
+  SUPPORTING_FILE: "Arquivo de apoio",
+};
+
 type ViewState = { kind: "loading" } | { kind: "missing" } | { kind: "ready"; value: DeliveryEnvelope } | { kind: "error" };
 
 export function DeliveryFoundationView({ workspaceId }: { workspaceId: string }) {
   const [state, setState] = useState<ViewState>({ kind: "loading" });
   const [busy, setBusy] = useState(false);
+  const [rendering, setRendering] = useState(false);
   const [templateId, setTemplateId] = useState("");
   const [templateFile, setTemplateFile] = useState<File | null>(null);
   const [reason, setReason] = useState("");
@@ -59,7 +69,7 @@ export function DeliveryFoundationView({ workspaceId }: { workspaceId: string })
 
   const transition = async (action: "render" | "ready" | "approve" | "finalize" | "deliver" | "supersede") => {
     if (state.kind !== "ready") return;
-    setBusy(true);
+    setBusy(true); setRendering(action === "render");
     try {
       const value = action === "render" ? await renderDeliveryPackage(workspaceId, state.value)
         : action === "ready" ? await reviewDeliverySnapshot(workspaceId, state.value, "MARK_READY_FOR_REVIEW", reason)
@@ -68,7 +78,7 @@ export function DeliveryFoundationView({ workspaceId }: { workspaceId: string })
               : action === "deliver" ? await deliverDeliverySnapshot(workspaceId, state.value, reason)
                 : await reviewDeliverySnapshot(workspaceId, state.value, "SUPERSEDE", reason);
       acceptMutation(value); setReason("");
-    } catch { setState({ kind: "error" }); } finally { setBusy(false); }
+    } catch { setState({ kind: "error" }); } finally { setBusy(false); setRendering(false); }
   };
   const attachSupporting = async (event: FormEvent) => {
     event.preventDefault(); if (state.kind !== "ready" || !supportingFile) return; setBusy(true);
@@ -82,14 +92,18 @@ export function DeliveryFoundationView({ workspaceId }: { workspaceId: string })
 
   const { snapshot } = state.value;
   const stale = snapshot.state === "STALE";
+  const rendered = snapshot.artifacts.some((artifact) => artifact.role === "MAIN_REPORT");
+  const derivedPdf = snapshot.artifacts.some((artifact) => artifact.role === "DERIVED_PDF");
   return <section className="delivery-workbench" aria-labelledby="delivery-title">
     <header className="delivery-header"><div><p className="eyebrow">Artefato exato · revisão {state.value.revision}</p><h2 id="delivery-title">Entrega e integridade</h2><p>Finalização local; protocolo judicial permanece fora deste escopo.</p></div><strong className={`delivery-state delivery-state--${snapshot.state.toLowerCase()}`}>{snapshot.state}</strong></header>
     {stale && <section className="analysis-inventory-warning" role="alert"><strong>Entrega desatualizada</strong><p>Uma autoridade vinculada mudou. Os bytes anteriores continuam preservados, mas não são apresentados como atuais.</p><ul>{snapshot.stale_reasons.map((item) => <li key={item}>{item}</li>)}</ul></section>}
     <section className="delivery-binding" aria-labelledby="binding-title"><h3 id="binding-title">Vínculo aprovado</h3><dl><dt>Laudo</dt><dd>{snapshot.binding.report_snapshot_id} · revisão {snapshot.binding.report_revision}</dd><dt>Aprovação</dt><dd>{snapshot.binding.report_approval_id}</dd><dt>Template</dt><dd>{snapshot.template_id} · {snapshot.template_format}</dd><dt>Renderizador</dt><dd>{snapshot.rendering_version}</dd></dl><details><summary>Auditoria dos hashes vinculados</summary><code>{snapshot.binding.report_digest}</code><code>{snapshot.template_digest}</code></details></section>
-    <section className="delivery-package" aria-labelledby="package-title"><div><p className="eyebrow">Manifesto {snapshot.package.manifest_version}</p><h3 id="package-title">Pacote de entrega</h3></div>{snapshot.artifacts.length === 0 ? <p>Nenhum candidato renderizado. Renderizar não finaliza nem entrega.</p> : <ul>{snapshot.artifacts.map((artifact) => <li key={artifact.artifact_id}><div><strong>{artifact.filename}</strong><span>{artifact.role} · {artifact.format} · {artifact.byte_size.toLocaleString("pt-BR")} bytes</span><code>{artifact.checksum_sha256}</code></div><a className="text-action" href={artifactDownloadUrl(workspaceId, artifact.content_id)} download={artifact.filename}>Baixar {artifact.filename}</a></li>)}</ul>}</section>
+    <section className="delivery-package" aria-labelledby="package-title"><div><p className="eyebrow">Manifesto {snapshot.package.manifest_version}</p><h3 id="package-title">Pacote de entrega</h3></div>{snapshot.artifacts.length === 0 ? <p>Nenhum candidato renderizado. Renderizar não finaliza nem entrega.</p> : <ul>{snapshot.artifacts.map((artifact) => <li key={artifact.artifact_id}><div><strong>{artifact.filename}</strong><span>{ROLE_LABELS[artifact.role] ?? artifact.role} · {artifact.format} · {artifact.byte_size.toLocaleString("pt-BR")} bytes</span><code>{artifact.checksum_sha256}</code></div><a className="text-action" href={artifactDownloadUrl(workspaceId, artifact.content_id)} download={artifact.filename}>Baixar {artifact.filename}</a></li>)}</ul>}{rendered && (derivedPdf
+      ? <p className="delivery-derived-pdf" role="status">PDF derivado do Word pelo Microsoft Word local, convertido e validado. O Word/DOCM continua sendo o artefato autoritativo.</p>
+      : <p className="delivery-derived-pdf delivery-derived-pdf--unavailable" role="status">PDF derivado indisponível nesta renderização. Nenhum PDF foi gerado; o Word/DOCM autoritativo continua válido.</p>)}</section>
     {snapshot.state === "DRAFT" && <form className="delivery-supporting" onSubmit={attachSupporting}><h3>Compor pacote explícito</h3><label>Função no pacote<select value={supportingRole} onChange={(event) => setSupportingRole(event.target.value as typeof supportingRole)}><option value="ANNEX">Anexo</option><option value="PHOTO_APPENDIX">Apêndice fotográfico</option><option value="TECHNICAL_APPENDIX">Apêndice técnico</option><option value="SUPPORTING_FILE">Arquivo de apoio</option></select></label><label>Arquivo privado<input type="file" required accept=".pdf,.docx,.docm,.jpg,.jpeg,.png" onChange={(event) => setSupportingFile(event.target.files?.[0] ?? null)}/></label><button type="submit" disabled={busy || !supportingFile}>Adicionar ao manifesto</button></form>}
     <details className="delivery-history"><summary>Histórico preservado · {history.length} revisões</summary><ol>{history.map((item) => <li key={`${item.snapshot.delivery_id}-${item.revision}`}><strong>Revisão {item.revision} · {item.snapshot.state}</strong><span>{item.snapshot.delivery_id}</span>{item.snapshot.artifacts.map((artifact) => <a key={artifact.artifact_id} href={artifactDownloadUrl(workspaceId, artifact.content_id)} download={artifact.filename}>Baixar {artifact.filename}</a>)}</li>)}</ol></details>
-    {!stale && snapshot.state !== "SUPERSEDED" && <section className="delivery-actions"><h3>Decisão profissional explícita</h3>{snapshot.state === "DRAFT" && <><button type="button" disabled={busy} onClick={() => transition("render")}>{snapshot.artifacts.length ? "Renderizar novo Word final" : "Renderizar Word final"}</button><p>PDF final local indisponível. O artefato profissional autoritativo é o Word vinculado e verificado.</p></>}<label>Fundamentação da decisão<textarea value={reason} onChange={(event) => setReason(event.target.value)} disabled={busy}/></label>{snapshot.state === "DRAFT" && snapshot.artifacts.length > 0 && <button type="button" disabled={busy || !reason.trim()} onClick={() => transition("ready")}>Enviar para revisão</button>}{snapshot.state === "READY_FOR_REVIEW" && <button type="button" disabled={busy || !reason.trim()} onClick={() => transition("approve")}>Aprovar fonte da entrega</button>}{snapshot.state === "APPROVED" && <button type="button" disabled={busy || !reason.trim()} onClick={() => transition("finalize")}>Finalizar artefatos</button>}{snapshot.state === "FINALIZED" && <button type="button" disabled={busy || !reason.trim()} onClick={() => transition("deliver")}>Registrar como entregue</button>}{snapshot.state === "DELIVERED" && <button type="button" disabled={busy || !reason.trim()} onClick={() => transition("supersede")}>Marcar como substituída</button>}</section>}
+    {!stale && snapshot.state !== "SUPERSEDED" && <section className="delivery-actions"><h3>Decisão profissional explícita</h3>{snapshot.state === "DRAFT" && <><button type="button" disabled={busy} aria-busy={rendering} onClick={() => transition("render")}>{rendering ? "Renderizando Word e PDF derivado…" : rendered ? "Renderizar novamente Word e PDF derivado" : "Renderizar Word e PDF derivado"}</button><p>O Word/DOCM é o artefato profissional autoritativo. O PDF é derivado dele pelo Microsoft Word local e só aparece no pacote depois de convertido e validado; se a conversão falhar, nenhum PDF é oferecido.</p></>}<label>Fundamentação da decisão<textarea value={reason} onChange={(event) => setReason(event.target.value)} disabled={busy}/></label>{snapshot.state === "DRAFT" && snapshot.artifacts.length > 0 && <button type="button" disabled={busy || !reason.trim()} onClick={() => transition("ready")}>Enviar para revisão</button>}{snapshot.state === "READY_FOR_REVIEW" && <button type="button" disabled={busy || !reason.trim()} onClick={() => transition("approve")}>Aprovar fonte da entrega</button>}{snapshot.state === "APPROVED" && <button type="button" disabled={busy || !reason.trim()} onClick={() => transition("finalize")}>Finalizar artefatos</button>}{snapshot.state === "FINALIZED" && <button type="button" disabled={busy || !reason.trim()} onClick={() => transition("deliver")}>Registrar como entregue</button>}{snapshot.state === "DELIVERED" && <button type="button" disabled={busy || !reason.trim()} onClick={() => transition("supersede")}>Marcar como substituída</button>}</section>}
     {(snapshot.state === "SUPERSEDED" || (stale && snapshot.stale_origin_state === "DELIVERED")) && <TemplateForm title="Emitir nova revisão" busy={busy} templateId={templateId} file={templateFile} onId={setTemplateId} onFile={setTemplateFile} onSubmit={() => handleTemplate(true)} />}
   </section>;
 }

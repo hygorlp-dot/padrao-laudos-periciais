@@ -28,18 +28,26 @@ from scripts.backend_contract.vistoria import inspection_session_from_mapping
 from tests.opc_word_fixtures import (
     DOCM_MAIN_TYPE,
     VBA_PROJECT_TYPE,
-    bound_template_document,
     word_package,
 )
+from scripts.backend_contract.local_api import composition as local_composition
 from scripts.backend_contract.local_api.composition import build_local_api
 from scripts.planejamento_pericial.app_composition import build_pericial_application
 from tests.test_local_api_v1 import FixedClock, TOKEN, http_request
 from tests.test_document_intake_v1 import provision_private_root
 from tests.test_final_closure_r7 import pdf_sintetico
 from tests.test_product_bridge_v1 import browser_mutation_headers, frontend_build, request as bridge_request
+from tests.test_office_word_native_matrix_v1 import (
+    _STYLES as _NATIVE_STYLES,
+    _STYLES_TYPE as _NATIVE_STYLES_TYPE,
+    _word_available as _native_word_available,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
+# The longitudinal oracle drives the real Phase C renderer.  Where Microsoft Word
+# Desktop exists it must produce the derived PDF; elsewhere it must not.
+NATIVE_WORD = _native_word_available()
 WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
 
 WINDOWS_MUTABLE_RECOVERY = pytest.mark.skipif(
@@ -91,8 +99,26 @@ def _pdf_sintetico_com_jdm(path: Path) -> None:
         writer.write(handle)
 
 
+class _UnavailableWordRenderer:
+    """Stands in for LocalOfficePdfConverter where Word cannot render."""
+
+    renderer_type = "MICROSOFT_WORD_DESKTOP_COM"
+    renderer_version = "UNKNOWN"
+    platform = "win32"
+
+    def convert(self, _word: bytes, _source_format: str) -> bytes:
+        from scripts.backend_contract.infrastructure.office_pdf import RendererUnavailable
+
+        raise RendererUnavailable("local Word renderer unavailable")
+
+
 @WINDOWS_MUTABLE_RECOVERY
-def test_d1_d11_normal_composed_product_path_delivers_closes_and_recovers_without_ai(tmp_path: Path) -> None:
+def test_d1_d11_normal_composed_product_path_delivers_closes_and_recovers_without_ai(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Deterministically without a renderer: the Word stays the complete,
+    # deliverable authority and no PDF is ever claimed.
+    monkeypatch.setattr(local_composition, "LocalOfficePdfConverter", _UnavailableWordRenderer)
     runtime = build_local_api(tmp_path / "product.db", token=TOKEN, private_root=tmp_path / "private")
     runtime.start()
     try:
@@ -354,6 +380,8 @@ def test_d1_d11_normal_composed_product_path_delivers_closes_and_recovers_withou
             assert status == 200
         assert delivery["snapshot"]["state"] == "DELIVERED"
         assert delivery["snapshot"]["artifacts"][0]["format"] == "DOCM"
+        assert [item["role"] for item in delivery["snapshot"]["artifacts"]] == ["MAIN_REPORT"]
+        assert "derived_pdf_renderer" not in delivery["snapshot"]
 
         status, budget = _http(runtime, "POST", f"/v1/workspaces/{workspace_id}/budget-snapshot", {"process_id": None, "appointment_id": None})
         assert status == 201
@@ -678,6 +706,28 @@ def test_longitudinal_oracle_starts_with_synthetic_pje_through_product_bridge(tm
             "expected_revision": delivery["revision"], "manifest": manifest,
         })
         assert status == 200, delivery
+        rendered_artifacts = delivery["snapshot"]["artifacts"]
+        assert rendered_artifacts[0]["role"] == "MAIN_REPORT" and rendered_artifacts[0]["format"] == "DOCM"
+        derived = [item for item in rendered_artifacts if item["role"] == "DERIVED_PDF"]
+        if NATIVE_WORD:
+            # UI bridge -> local API -> composition -> RenderDeliveryPackage ->
+            # render_final_pdf_candidate -> LocalOfficePdfConverter -> contained
+            # Word worker -> validated PDF -> private storage -> snapshot.
+            assert len(derived) == 1, rendered_artifacts
+            assert derived[0]["format"] == "PDF" and derived[0]["media_type"] == "application/pdf"
+            provenance = delivery["snapshot"]["derived_pdf_renderer"]
+            assert provenance["renderer_type"] == "MICROSOFT_WORD_DESKTOP_COM"
+            assert provenance["platform"] == "win32" and provenance["renderer_version"].startswith("16.")
+            for artifact in rendered_artifacts[:2]:
+                status, _download_headers, downloaded = _bridge_raw(
+                    runtime, "GET", f"{root}/delivery-snapshot/artifacts/{artifact['content_id']}",
+                )
+                assert status == 200
+                assert hashlib.sha256(downloaded).hexdigest() == artifact["checksum_sha256"]
+                assert len(downloaded) == artifact["byte_size"]
+            assert downloaded.startswith(b"%PDF-")
+        else:
+            assert derived == [] and "derived_pdf_renderer" not in delivery["snapshot"]
         for action in ("MARK_READY_FOR_REVIEW", "APPROVE"):
             status, delivery = _bridge_http(runtime, "POST", f"{root}/delivery-snapshot/reviews", {
                 "expected_revision": delivery["revision"], "action": action, "professional_id": profile["profile_id"],
@@ -839,12 +889,76 @@ def _docx(text: str = "Laudo sintético aprovado") -> bytes:
     )
 
 
+_W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+_R_NS = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+
+
+def _oracle_field(code: str, cached: str) -> str:
+    return (
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        f'<w:r><w:instrText xml:space="preserve"> {code} </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        f'<w:r><w:t xml:space="preserve">{cached}</w:t></w:r>'
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+    )
+
+
 def _bound_template_docm(template_id: str) -> bytes:
+    """A bound template shaped like one authored in Word 16.
+
+    It declares and relates its docDefaults (an unrelated, empty styles part
+    leaves Word on a Normal style the fidelity oracle cannot observe); page
+    numbering lives in the footer, which the oracle evaluates per page; and the
+    body fields carry the results Word itself would cache.  Body PAGE/NUMPAGES
+    with a stale "1" after the canonical report grows the document, or a REF to
+    a bookmark wrapping itself, are not a faithful Word document.
+    """
+    document = (
+        f"<w:document {_W_NS} {_R_NS}><w:body>"
+        "<w:p><w:r><w:t>[[EXPERT_FULL_NAME]]</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>[[EXPERT_REGISTRATION]]</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>[[REPORT_ID]]</w:t></w:r></w:p>"
+        '<w:p><w:bookmarkStart w:id="1" w:name="B"/><w:r><w:t>Referencia tecnica</w:t></w:r>'
+        '<w:bookmarkEnd w:id="1"/></w:p>'
+        "<w:p>"
+        + _oracle_field("TOC", "1")
+        + _oracle_field("SEQ Figure", "1")
+        + '<w:r><w:t xml:space="preserve"> </w:t></w:r>'
+        + _oracle_field("REF B", "Referencia tecnica")
+        + '<w:r><w:t xml:space="preserve"> </w:t></w:r>'
+        + _oracle_field("PAGEREF B", "1")
+        + "</w:p>"
+        '<w:sdt><w:sdtPr><w:tag w:val="CANONICAL_REPORT"/></w:sdtPr><w:sdtContent>'
+        "<w:p><w:r><w:t>empty</w:t></w:r></w:p></w:sdtContent></w:sdt>"
+        '<w:sectPr><w:footerReference w:type="default" r:id="rIdFooter"/></w:sectPr>'
+        "</w:body></w:document>"
+    )
+    footer = (
+        f"<w:ftr {_W_NS}><w:p>"
+        + _oracle_field("PAGE", "1")
+        + '<w:r><w:t xml:space="preserve"> de </w:t></w:r>'
+        + _oracle_field("NUMPAGES", "1")
+        + "</w:p></w:ftr>"
+    )
     return word_package(
-        bound_template_document(),
+        document,
         main_type=DOCM_MAIN_TYPE,
+        overrides={
+            "/word/vbaProject.bin": VBA_PROJECT_TYPE,
+            "/word/styles.xml": _NATIVE_STYLES_TYPE,
+            "/word/footer1.xml": "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+        },
         parts={
-            "word/styles.xml": "<styles/>",
+            "word/styles.xml": _NATIVE_STYLES,
+            "word/footer1.xml": footer,
+            "word/_rels/document.xml.rels": (
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/'
+                '2006/relationships/styles" Target="styles.xml"/>'
+                '<Relationship Id="rIdFooter" Type="http://schemas.openxmlformats.org/officeDocument/'
+                '2006/relationships/footer" Target="footer1.xml"/></Relationships>'
+            ),
             "word/numbering.xml": "<numbering/>",
             "word/vbaProject.bin": b"synthetic-macro",
             "docProps/custom.xml": (
@@ -852,7 +966,6 @@ def _bound_template_docm(template_id: str) -> bytes:
                 f"<value>{template_id}</value></property></Properties>"
             ),
         },
-        overrides={"/word/vbaProject.bin": VBA_PROJECT_TYPE},
     )
 
 

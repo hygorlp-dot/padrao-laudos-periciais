@@ -106,9 +106,17 @@ def test_phase_c_word_worker_is_bounded_and_not_yet_product_composed() -> None:
     assert "subprocess" not in combined
     assert "multiprocessing" not in combined
     assert "taskkill" not in combined.casefold()
-    assert "pdf_converter" not in {item.name for item in fields(RenderDeliveryPackage)}
+    # PR #203 makes the Phase C renderer productively reachable: the render
+    # service takes a converter, and the composition supplies exactly the
+    # purpose-specific one with nothing about its process configurable.
+    assert "pdf_converter" in {item.name for item in fields(RenderDeliveryPackage)}
     composition = (root / "scripts/backend_contract/local_api/composition.py").read_text(encoding="utf-8")
-    assert "LocalOfficePdfConverter" not in composition
+    assert composition.count("LocalOfficePdfConverter(") == 1
+    assert "LocalOfficePdfConverter()," in composition
+    assert "from ..infrastructure.office_pdf import LocalOfficePdfConverter\n" in composition
+    assert not any(
+        word in composition for word in ("DispatchEx", "ProgID", "win32com", "subprocess", "shell=True")
+    )
 
 
 def _parseable_text_pdf(text: str) -> bytes:

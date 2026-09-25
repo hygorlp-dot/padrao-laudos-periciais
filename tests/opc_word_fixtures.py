@@ -113,13 +113,17 @@ def bound_template_document() -> str:
     return (
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
         "<w:body>"
-        "<w:p><w:r><w:t>[[EXPERT_FULL_NAME]]</w:t></w:r></w:p>"
+        # Bookmark B targets real text.  It used to wrap the paragraph holding
+        # REF B and PAGEREF B themselves, which Word 16 paints as "Error!
+        # Bookmark self-reference not valid" -- no faithful PDF can exist.
+        '<w:p><w:bookmarkStart w:id="1" w:name="B"/><w:r><w:t>[[EXPERT_FULL_NAME]]</w:t></w:r>'
+        '<w:bookmarkEnd w:id="1"/></w:p>'
         "<w:p><w:r><w:t>[[EXPERT_REGISTRATION]]</w:t></w:r></w:p>"
         "<w:p><w:r><w:t>[[REPORT_ID]]</w:t></w:r></w:p>"
         '<w:sdt><w:sdtPr><w:tag w:val="CANONICAL_REPORT"/></w:sdtPr><w:sdtContent>'
         "<w:p><w:r><w:t>empty</w:t></w:r></w:p></w:sdtContent></w:sdt>"
-        '<w:p><w:bookmarkStart w:id="1" w:name="B"/>'
+        "<w:p>"
         + "".join(word_field(code) for code in TEMPLATE_FIELD_CODES)
-        + '<w:bookmarkEnd w:id="1"/></w:p>'
+        + "</w:p>"
         "</w:body></w:document>"
     )
