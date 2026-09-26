@@ -89,6 +89,7 @@ from ..application.report_foundation import (
 )
 from ..application.delivery_foundation import (
     delivery_snapshot_to_validated_mapping,
+    template_binding_manifest_to_mapping,
     validated_template_binding_manifest_from_mapping,
 )
 from ..application.budget_foundation import (
@@ -169,6 +170,7 @@ class LocalApiServices:
     list_report_sources: object | None = None
     export_report_audit_trail: object | None = None
     store_delivery_template: object | None = None
+    store_default_delivery_template: object | None = None
     get_delivery_artifact: object | None = None
     get_delivery_snapshot: object | None = None
     get_delivery_history: object | None = None
@@ -898,6 +900,18 @@ class LocalApi:
                 if service is None or set(dto) != expected_fields: raise ValueError("Budget command request is invalid")
                 record, snapshot = service.execute(workspace_id, **dto)
                 return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": budget_snapshot_to_validated_mapping(snapshot)})
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("delivery-templates", "default"):
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                service = self._services.store_default_delivery_template
+                if service is None:
+                    return _error(503, "DELIVERY_STORAGE_UNAVAILABLE")
+                workspace_id = self._workspace_id(raw_segments[2])
+                if self._request_dto(request_headers, body) != {}:
+                    raise ValueError("Default template request is invalid")
+                record, manifest = service.execute(workspace_id)
+                return _json_response(201, {"template": _private_content_dto(record, workspace_id), "manifest": template_binding_manifest_to_mapping(manifest)})
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "delivery-templates":
                 if normalized_method != "POST":

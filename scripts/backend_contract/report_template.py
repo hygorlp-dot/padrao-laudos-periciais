@@ -58,11 +58,28 @@ def _template_text(value: str) -> str:
             "U+{:04X}".format(ord(found.group()))
         )
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+def _context_note(field: str):
+    """The professional text the expert gave for a process context field."""
+    def value(report):
+        item = next((entry for entry in report.context_matrix if entry.field == field), None)
+        if item is None or item.status.value != "PRESENT":
+            raise ValueError(f"template field {field} requires present process context")
+        return item.note
+    return value
+
+
 _FIELD_VALUES = {
     "EXPERT_FULL_NAME": lambda report: report.expert_profile.full_name,
     "EXPERT_REGISTRATION": lambda report: report.expert_profile.registration,
     "REPORT_ID": lambda report: report.report_id,
+    "EXPERT_TITLE": lambda report: report.expert_profile.professional_title,
+    "EXPERT_COURT_REGISTRATION": lambda report: report.expert_profile.court_registration,
+    "PROCESS_NUMBER": _context_note("PROCESS_NUMBER"),
+    "COURT": _context_note("COURT"),
 }
+# Pagination a professional document cannot do without; the other protected
+# fields stay protected whenever a template carries them.
+_REQUIRED_FIELD_NAMES = {"TOC", "PAGE", "NUMPAGES"}
 # The same bound the two validators state.  The binder's own numbers were
 # stricter, so a photo-heavy template both validators certify -- and that the
 # backup gate has already accepted -- failed every render in _safe_parts.
@@ -163,7 +180,13 @@ class TemplateBindingManifest:
     def __post_init__(self):
         if self.schema_version != "1.0.0" or not _text(self.template_id) or self.output_kind not in {"DOCX", "DOCM"}:
             raise ValueError("template manifest is invalid")
-        if type(self.bindings) is not tuple or {item.field for item in self.bindings} != set(_FIELD_VALUES) or len(self.bindings) != len(_FIELD_VALUES):
+        # Each declared field binds once; the template must carry exactly the
+        # declared placeholders, which the binding checks against the document.
+        if type(self.bindings) is not tuple or not self.bindings or any(type(item) is not TemplateBinding for item in self.bindings):
+            raise ValueError("template manifest must bind every canonical field once")
+        fields_bound = [item.field for item in self.bindings]
+        placeholders = [item.placeholder for item in self.bindings]
+        if len(set(fields_bound)) != len(fields_bound) or len(set(placeholders)) != len(placeholders) or not set(fields_bound) <= set(_FIELD_VALUES):
             raise ValueError("template manifest must bind every canonical field once")
 
 
@@ -341,7 +364,7 @@ def bind_report_template(template_bytes: bytes, report: ReportSnapshot, manifest
     if identity_values != [manifest.template_id]:
         raise ValueError("template identity does not match manifest")
     before_mechanics = _mechanics(before)
-    if before_mechanics[0] != _FIELD_NAMES:
+    if not _REQUIRED_FIELD_NAMES <= set(before_mechanics[0]) <= _FIELD_NAMES:
         raise ValueError("protected Word fields are incomplete")
     if _declared_output_kind(before) != manifest.output_kind:
         raise ValueError("template kind and package content type disagree")

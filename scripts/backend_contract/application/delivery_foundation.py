@@ -28,7 +28,8 @@ from ..delivery_foundation import (
     delivery_snapshot_from_mapping,
     delivery_snapshot_to_mapping,
 )
-from ..delivery_renderer import DELIVERY_RENDERING_VERSION, render_final_pdf_candidate, render_word_candidate, validate_delivery_artifact, validate_final_artifact, validate_supporting_artifact, verify_reopened_artifact
+from ..delivery_renderer import DELIVERY_RENDERING_VERSION, has_toc_control, locate_heading_pages, render_final_pdf_candidate, render_word_candidate, report_heading_texts, validate_delivery_artifact, validate_final_artifact, validate_supporting_artifact, verify_reopened_artifact
+from ..report_default_template import DEFAULT_TEMPLATE_FILENAME, default_report_template, default_template_manifest
 from ..report_template import TemplateBindingManifest, template_binding_manifest_from_mapping
 from ..pericial_planning import PlanningSnapshot, pericial_planning_to_mapping
 from ..report_foundation import ReportSnapshot, ReportState, report_snapshot_to_mapping
@@ -372,6 +373,34 @@ class RenderDeliveryPackage:
             return None, None
         return pdf, renderer
 
+    # Word lays the document out; the table of contents quotes Word's own pages.
+    # Numbering the entries can move a heading, so the pages are measured again
+    # on the numbered render until they hold.  A render that never settles, or
+    # has no PDF to measure, keeps an unnumbered table of contents rather than
+    # a number Word did not produce.
+    _PAGINATION_PASSES = 3
+
+    def _paginated(self, template: bytes, report, manifest: TemplateBindingManifest):
+        word = render_word_candidate(template_bytes=template, report=report, manifest=manifest).output_bytes
+        pdf, renderer = self._derive_pdf(word, manifest.output_kind)
+        if pdf is None or not has_toc_control(word):
+            return word, pdf, renderer
+        headings = report_heading_texts(report)
+        unnumbered = (word, pdf, renderer)
+        current, current_pages = unnumbered, None
+        for _ in range(self._PAGINATION_PASSES):
+            located = locate_heading_pages(current[1], headings)
+            if located is None:
+                return unnumbered
+            if located == current_pages:
+                return current
+            candidate = render_word_candidate(template_bytes=template, report=report, manifest=manifest, toc_pages=located).output_bytes
+            candidate_pdf, candidate_renderer = self._derive_pdf(candidate, manifest.output_kind)
+            if candidate_pdf is None:
+                return unnumbered
+            current, current_pages = (candidate, candidate_pdf, candidate_renderer), located
+        return unnumbered
+
     def execute(self, workspace_id, *, manifest: TemplateBindingManifest, expected_revision: int):
         record, snapshot = self.get_snapshot.execute(workspace_id)
         if record.revision != expected_revision or snapshot.state is not DeliveryState.DRAFT:
@@ -386,9 +415,8 @@ class RenderDeliveryPackage:
         _, report = self.get_report.execute(workspace_id)
         if type(report) is not ReportSnapshot or _digest(report_snapshot_to_mapping(report)) != snapshot.binding.report_digest:
             raise ValueError("Delivery report bytes diverge from bound authority")
-        word = render_word_candidate(template_bytes=template.content, report=report, manifest=manifest).output_bytes
+        word, pdf, pdf_renderer = self._paginated(template.content, report, manifest)
         word_digest, word_size, word_media = validate_final_artifact(word, manifest.output_kind)
-        pdf, pdf_renderer = self._derive_pdf(word, manifest.output_kind)
         stem = f"laudo-{snapshot.delivery_id.lower()}-r{snapshot.revision + 1}"
         word_name = f"{stem}.{manifest.output_kind.lower()}"
         word_metadata = self.store_private_content.execute(
@@ -434,6 +462,39 @@ class RenderDeliveryPackage:
         )
         saved = self.save_snapshot.execute(workspace_id, rendered, expected_revision, allow_artifacts=True)
         return saved, rendered
+
+
+_DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+@dataclass(frozen=True, slots=True)
+class StoreDefaultDeliveryTemplate:
+    """Generate the product's default template for the approved report and keep it private.
+
+    The template follows the report's own editorial profile, so what the expert
+    configured is what the Word shows.  It is stored like an uploaded template
+    and bound by its digest from then on.
+    """
+    get_report: object
+    store_private_content: object
+
+    def execute(self, workspace_id):
+        _, report = self.get_report.execute(workspace_id)
+        if type(report) is not ReportSnapshot or report.state is not ReportState.APPROVED or report.upstream_stale:
+            raise ValueError("default delivery template requires an approved report")
+        content = default_report_template(report.editorial_profile)
+        record = self.store_private_content.execute(
+            workspace_id=workspace_id, original_filename=DEFAULT_TEMPLATE_FILENAME, content=content,
+            media_type=_DOCX_MEDIA_TYPE, origin=PrivateContentOrigin.LOCAL_IMPORT,
+        )
+        return record, default_template_manifest()
+
+
+def template_binding_manifest_to_mapping(manifest: TemplateBindingManifest) -> dict:
+    return {
+        "schema_version": manifest.schema_version, "template_id": manifest.template_id, "output_kind": manifest.output_kind,
+        "bindings": [{"field": item.field, "placeholder": item.placeholder} for item in manifest.bindings],
+    }
 
 
 def _validate_non_authoritative_word(content: bytes, output_format: DeliveryFormat) -> None:

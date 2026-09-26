@@ -35,6 +35,7 @@ from ..report_foundation import (
     expert_profile_from_mapping,
     expert_profile_to_mapping,
     report_claim_for_source,
+    editorial_profile_from_mapping,
 )
 from ..technical_findings import TechnicalSnapshot, technical_snapshot_to_mapping
 from ..vistoria import InspectionSession, inspection_session_to_mapping
@@ -461,6 +462,11 @@ class AmendReportDraft:
             )
             answers = (*snapshot.answers, answer)
             amended = replace(snapshot, answers=answers, coverage=_draft_coverage(snapshot, answers=answers))
+        elif action == "SET_EDITORIAL_PROFILE":
+            if set(values) != {"editorial_profile"}:
+                raise ValueError("Report editorial amendment is invalid")
+            profile = editorial_profile_from_mapping(values["editorial_profile"])
+            amended = replace(snapshot, editorial_profile=profile)
         elif action == "UPDATE_ANSWER_TEXT":
             if set(values) != {"answer_id", "text"} or type(values["text"]) is not str or not values["text"].strip():
                 raise ValueError("Report answer amendment is invalid")

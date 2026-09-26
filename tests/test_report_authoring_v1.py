@@ -231,3 +231,18 @@ def test_the_audit_trail_is_exported_apart_from_the_document() -> None:
     assert trail["lines"][0].startswith("LAUDO CANÔNICO | ")
     assert any(line.startswith("REPORT_SNAPSHOT_SHA256 | ") for line in trail["lines"])
     assert any("CLAIM-001" in line for line in trail["lines"])
+
+
+def test_the_editorial_profile_is_set_on_a_draft_within_validated_ranges() -> None:
+    from scripts.backend_contract.report_foundation import editorial_profile_to_mapping
+
+    case, technical, _ = _upstream()
+    report = _draft_bound_to(case, technical)
+    service, saved = _amend(report, case, technical)
+    custom = {**editorial_profile_to_mapping(report.editorial_profile), "profile_id": "CUSTOM", "font_family": "Calibri", "body_font_pt": 12}
+    _, amended = service.execute("w", expected_revision=7, action="SET_EDITORIAL_PROFILE", values={"editorial_profile": custom})
+    assert (amended.editorial_profile.font_family, amended.editorial_profile.body_font_pt) == ("Calibri", 12)
+    with pytest.raises(ValueError):
+        service.execute("w", expected_revision=7, action="SET_EDITORIAL_PROFILE", values={"editorial_profile": {**custom, "body_font_pt": 30}})
+    with pytest.raises(ValueError):
+        service.execute("w", expected_revision=7, action="SET_EDITORIAL_PROFILE", values={"profile": custom})

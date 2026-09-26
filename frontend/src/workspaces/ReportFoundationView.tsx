@@ -11,6 +11,7 @@ import {
   ReportApiError,
   saveExpertProfile,
   startReportSnapshot,
+  type EditorialProfile,
   type ReportAmendment,
   type ReportEnvelope,
   type ReportSnapshot,
@@ -108,6 +109,8 @@ export function ReportFoundationView({ workspaceId }: { workspaceId: string }) {
     {!editable && !snapshot.upstream_stale && <p className="field-hint">O laudo está {stateLabel(snapshot.state).toLowerCase()}; o texto fica bloqueado para edição. Para alterar, marque-o como substituído em Revisão e inicie uma nova versão.</p>}
     {actionError && <section className="inline-alert" role="alert"><strong>{actionError}</strong><p>O laudo continua como estava. Confira a fonte escolhida e tente de novo.</p><button className="text-action" type="button" onClick={() => setActionError(null)}>Fechar aviso</button></section>}
     {sources === null && <p className="field-hint" role="status">As fontes para citação não puderam ser carregadas. Os textos existentes continuam visíveis.</p>}
+
+    <EditorialPanel profile={snapshot.editorial_profile} editable={editable} busy={busy} onSave={(profile) => amend("SET_EDITORIAL_PROFILE", { editorial_profile: profile }, "Não foi possível salvar o padrão editorial.")} />
 
     <ContextPanel snapshot={snapshot} sources={sources} editable={editable} busy={busy} onSave={(field, sourceId, note) => amend("UPDATE_CONTEXT", { field, status: "PRESENT", source_id: sourceId, note }, "Não foi possível atualizar o contexto processual.")} />
 
@@ -310,4 +313,55 @@ function AuditTrailButton({ workspaceId }: { workspaceId: string }) {
     <button className="text-action" type="button" disabled={busy} onClick={() => void download()}>{busy ? "Preparando trilha…" : "Baixar trilha de auditoria"}</button>
     {failed && <span role="alert" className="field-hint">Não foi possível exportar a trilha de auditoria.</span>}
   </>;
+}
+
+// O preset do produto (Justiça Plural, cap. 4). Restaurar envia exatamente isto.
+const EDITORIAL_PRESET: EditorialProfile = { profile_id: "JUSTICA_PLURAL_CHAPTER_4", font_family: "Arial", body_font_pt: 11, table_font_pt: 10, caption_font_pt: 9, alignment: "JUSTIFIED", line_spacing: 1.15, first_line_indent_cm: 1.25, page_size: "A4", margin_top_cm: 2, margin_bottom_cm: 2, margin_left_cm: 3, margin_right_cm: 2, hyphenation: false, overrides: [] };
+const TYPOGRAPHY_DEFAULT = { heading1_pt: 14, heading2_pt: 12, heading3_pt: 11, headings_bold: true, heading_space_before_pt: 12, heading_space_after_pt: 6, paragraph_space_after_pt: 6 };
+const FONTS = ["Arial", "Calibri", "Cambria", "Georgia", "Times New Roman", "Verdana"];
+
+function EditorialPanel({ profile, editable, busy, onSave }: { profile: EditorialProfile; editable: boolean; busy: boolean; onSave: (profile: EditorialProfile) => Promise<boolean> }) {
+  const current = { ...EDITORIAL_PRESET, ...profile };
+  const [draft, setDraft] = useState<EditorialProfile>(current);
+  const [typography, setTypography] = useState({ ...TYPOGRAPHY_DEFAULT, ...(profile.typography ?? {}) });
+  const isPreset = profile.profile_id === "JUSTICA_PLURAL_CHAPTER_4";
+  const number = (value: string) => Number(value.replace(",", "."));
+  const field = (label: string, key: keyof EditorialProfile, min: number, max: number, step: number) => (
+    <label>{label}<input type="number" min={min} max={max} step={step} value={Number(draft[key] ?? 0)} disabled={!editable || busy} onChange={(event) => setDraft({ ...draft, [key]: number(event.target.value) })} /></label>
+  );
+  const heading = (label: string, key: keyof typeof TYPOGRAPHY_DEFAULT, min: number, max: number) => (
+    <label>{label}<input type="number" min={min} max={max} step={1} value={Number(typography[key])} disabled={!editable || busy} onChange={(event) => setTypography({ ...typography, [key]: number(event.target.value) })} /></label>
+  );
+  const save = () => {
+    void onSave({ ...draft, profile_id: "CUSTOM", typography: { ...typography } });
+  };
+  return <details className="analysis-section report-editorial">
+    <summary><strong>Padrão editorial</strong> <span className="field-hint">{isPreset ? "Padrão do produto" : "Personalizado"} · {current.font_family} {current.body_font_pt} pt · entrelinha {String(current.line_spacing).replace(".", ",")} · recuo {String(current.first_line_indent_cm).replace(".", ",")} cm</span></summary>
+    <p className="field-hint">Vale para o modelo padrão do produto usado na entrega. Um modelo Word próprio mantém a formatação do seu arquivo.</p>
+    <fieldset disabled={!editable || busy}><legend>Corpo do texto</legend>
+      <label>Fonte<select value={draft.font_family} onChange={(event) => setDraft({ ...draft, font_family: event.target.value })}>{FONTS.map((font) => <option key={font}>{font}</option>)}</select></label>
+      {field("Tamanho (pt)", "body_font_pt", 10, 14, 1)}
+      <label>Alinhamento<select value={draft.alignment} onChange={(event) => setDraft({ ...draft, alignment: event.target.value })}><option value="JUSTIFIED">Justificado</option><option value="LEFT">À esquerda</option></select></label>
+      <label>Entrelinha<select value={String(draft.line_spacing)} onChange={(event) => setDraft({ ...draft, line_spacing: Number(event.target.value) })}>{[1, 1.15, 1.5, 2].map((value) => <option key={value} value={String(value)}>{String(value).replace(".", ",")}</option>)}</select></label>
+      {field("Recuo da primeira linha (cm)", "first_line_indent_cm", 0, 3, 0.25)}
+      {heading("Espaço após parágrafo (pt)", "paragraph_space_after_pt", 0, 36)}
+    </fieldset>
+    <fieldset disabled={!editable || busy}><legend>Títulos</legend>
+      {heading("Título 1 (pt)", "heading1_pt", 12, 20)}
+      {heading("Título 2 (pt)", "heading2_pt", 11, 16)}
+      {heading("Título 3 (pt)", "heading3_pt", 10, 14)}
+      <label className="checkbox-label"><input type="checkbox" checked={typography.headings_bold} onChange={(event) => setTypography({ ...typography, headings_bold: event.target.checked })} /> Títulos em negrito</label>
+      {heading("Espaço antes do título (pt)", "heading_space_before_pt", 0, 36)}
+      {heading("Espaço após o título (pt)", "heading_space_after_pt", 0, 36)}
+    </fieldset>
+    <fieldset disabled={!editable || busy}><legend>Tabelas, legendas e página A4</legend>
+      {field("Tabelas (pt)", "table_font_pt", 8, 12, 1)}
+      {field("Legendas (pt)", "caption_font_pt", 8, 11, 1)}
+      {field("Margem superior (cm)", "margin_top_cm", 1.5, 4, 0.5)}
+      {field("Margem inferior (cm)", "margin_bottom_cm", 1.5, 4, 0.5)}
+      {field("Margem esquerda (cm)", "margin_left_cm", 1.5, 4, 0.5)}
+      {field("Margem direita (cm)", "margin_right_cm", 1.5, 4, 0.5)}
+    </fieldset>
+    {editable && <div className="action-row"><button className="primary-action" type="button" disabled={busy} onClick={save}>Salvar padrão editorial</button><button className="text-action" type="button" disabled={busy || isPreset} onClick={() => void onSave(EDITORIAL_PRESET)}>Restaurar padrão do produto</button></div>}
+  </details>;
 }

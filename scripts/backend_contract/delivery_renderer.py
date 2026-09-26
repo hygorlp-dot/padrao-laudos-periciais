@@ -695,9 +695,10 @@ def _word_part_priority(name: str) -> tuple[int, str]:
 
 def render_word_candidate(
     *, template_bytes: bytes, report: ReportSnapshot, manifest: TemplateBindingManifest,
+    toc_pages: tuple[int, ...] | None = None,
 ) -> DocumentBindingResult:
     result = bind_report_template(template_bytes, report, manifest)
-    output = _inject_canonical_report(result.output_bytes, report)
+    output = _inject_canonical_report(result.output_bytes, report, toc_pages)
     validate_final_artifact(output, manifest.output_kind)
     return DocumentBindingResult(output, result.integrity)
 
@@ -850,6 +851,142 @@ def professional_report_blocks(report: ReportSnapshot) -> tuple[ReportPresentati
         blocks.append(ReportPresentationBlock("HEADING_1", f"{number}. {_canonical_text(section.title).upper()}"))
         blocks.extend(body)
     return tuple(blocks)
+
+
+TOC_CONTROL_TAG = "TOC_ENTRIES"
+_TOC_BOOKMARK_BASE = 90000
+
+
+def _toc_bookmark(index: int) -> str:
+    return f"_TocPLP{index:03d}"
+
+
+def report_heading_texts(report: ReportSnapshot) -> tuple[str, ...]:
+    """The presented section headings, in order: what a table of contents lists."""
+    return tuple(block.text for block in professional_report_blocks(report) if block.kind == "HEADING_1")
+
+
+def toc_entry_texts(report: ReportSnapshot, pages: tuple[int, ...] | None) -> tuple[str, ...]:
+    """The TOC control's paragraphs in reading order: heading, then its page cell."""
+    headings = report_heading_texts(report)
+    if pages is not None and len(pages) != len(headings):
+        raise ValueError("table of contents pages do not match the headings")
+    if not headings:
+        return ("—",)
+    texts: list[str] = []
+    for index, heading in enumerate(headings):
+        texts.extend((heading, str(pages[index]) if pages is not None else ""))
+    return tuple(texts)
+
+
+def _named_style_id(styles: bytes | None, built_in_name: str) -> str | None:
+    if not styles:
+        return None
+    try:
+        root = ElementTree.fromstring(styles)
+    except ElementTree.ParseError:
+        return None
+    for style in root.iter(f"{_W}style"):
+        if style.attrib.get(f"{_W}type") != "paragraph":
+            continue
+        name = style.find(f"{_W}name")
+        if name is not None and (name.attrib.get(f"{_W}val") or "").strip().lower() == built_in_name:
+            style_id = style.attrib.get(f"{_W}styleId")
+            if style_id and re.fullmatch(r"[A-Za-z0-9_-]{1,253}", style_id):
+                return style_id
+    return None
+
+
+def _toc_content_markup(report: ReportSnapshot, prefix: bytes, pages: tuple[int, ...] | None, toc_style: str | None) -> bytes:
+    """The table of contents as a borderless two-column table of heading and page.
+
+    Each page is a PAGEREF field to the heading's bookmark whose cached result
+    is the page Word itself laid the heading out on (measured on its own
+    render), so updating fields in Word reproduces the same numbers.  Without a
+    measurement the page cells stay empty -- never a guessed number.
+    """
+    def escaped(text: str) -> bytes:
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;").encode("utf-8")
+
+    def element(name: bytes, attributes: bytes = b"") -> bytes:
+        return b"<" + prefix + name + attributes + b"/>"
+
+    def value(name: bytes, text: str) -> bytes:
+        return b" " + prefix + name + b'="' + escaped(text) + b'"'
+
+    def wrap(name: bytes, content: bytes) -> bytes:
+        return b"<" + prefix + name + b">" + content + b"</" + prefix + name + b">"
+
+    def text_run(text: str) -> bytes:
+        return wrap(b"r", b"<" + prefix + b't xml:space="preserve">' + escaped(text) + b"</" + prefix + b"t>")
+
+    def field_char(kind: str) -> bytes:
+        return wrap(b"r", element(b"fldChar", value(b"fldCharType", kind)))
+
+    def instruction(text: str) -> bytes:
+        return wrap(b"r", b"<" + prefix + b'instrText xml:space="preserve">' + escaped(f" {text} ") + b"</" + prefix + b"instrText>")
+
+    def paragraph(content: bytes, *, right: bool = False) -> bytes:
+        style = element(b"pStyle", value(b"val", toc_style)) if toc_style else b""
+        alignment = element(b"jc", value(b"val", "right")) if right else b""
+        indent = element(b"ind", value(b"firstLine", "0"))
+        return wrap(b"p", wrap(b"pPr", style + indent + alignment) + content)
+
+    headings = report_heading_texts(report)
+    if pages is not None and len(pages) != len(headings):
+        raise ValueError("table of contents pages do not match the headings")
+    if not headings:
+        return paragraph(text_run("—"))
+    no_border = b"".join(element(side, value(b"val", "nil")) for side in (b"top", b"left", b"bottom", b"right", b"insideH", b"insideV"))
+    table_properties = wrap(b"tblPr", element(b"tblW", value(b"w", "5000") + value(b"type", "pct")) + wrap(b"tblBorders", no_border) + element(b"tblLayout", value(b"type", "fixed")))
+    grid = wrap(b"tblGrid", element(b"gridCol", value(b"w", "7800")) + element(b"gridCol", value(b"w", "1200")))
+    rows = []
+    for index, heading in enumerate(headings, 1):
+        page_content = b""
+        if pages is not None:
+            page_content = field_char("begin") + instruction(f"PAGEREF {_toc_bookmark(index)}") + field_char("separate") + text_run(str(pages[index - 1])) + field_char("end")
+        rows.append(wrap(b"tr", (
+            wrap(b"tc", wrap(b"tcPr", element(b"tcW", value(b"w", "7800") + value(b"type", "dxa"))) + paragraph(text_run(heading)))
+            + wrap(b"tc", wrap(b"tcPr", element(b"tcW", value(b"w", "1200") + value(b"type", "dxa"))) + paragraph(page_content, right=True))
+        )))
+    return wrap(b"tbl", table_properties + grid + b"".join(rows))
+
+
+def locate_heading_pages(pdf: bytes, headings: tuple[str, ...]) -> tuple[int, ...] | None:
+    """The 1-based page on which Word laid out each heading, read from its PDF.
+
+    A heading appears twice -- in the table of contents and in the body -- so
+    the body occurrence is its last page.  Headings must come out in order;
+    anything ambiguous yields None and the table of contents stays unnumbered.
+    """
+    if not headings:
+        return ()
+    try:
+        document = pdfium.PdfDocument(pdf)
+    except Exception:
+        return None
+    try:
+        page_texts = []
+        for index in range(len(document)):
+            page = document[index]
+            text_page = page.get_textpage()
+            try:
+                page_texts.append(" ".join(_strict_visible_text(text_page.get_text_range()).split()))
+            finally:
+                text_page.close()
+                page.close()
+    finally:
+        document.close()
+    pages = []
+    for heading in headings:
+        needle = " ".join(_strict_visible_text(heading).split())
+        found = [index + 1 for index, text in enumerate(page_texts) if needle in text]
+        if not found:
+            return None
+        pages.append(found[-1])
+    if any(later < earlier for earlier, later in zip(pages, pages[1:])):
+        return None
+    return tuple(pages)
 
 
 def _heading_style_id(styles: bytes | None) -> str | None:
@@ -2445,6 +2582,9 @@ class _ParagraphWrapAnchor:
     right: float
     bottom: float
     top: float
+    # The paragraph's first-line offset while it has not wrapped yet: a later run
+    # that wraps first returns to the paragraph edge, left of an indented start.
+    first_line_offset: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -2466,6 +2606,77 @@ class _WordTextExpectation:
     line_height: float | None = None
     paragraph_continuation: bool = False
     page_break_before: bool = False
+    # Points the first line starts to the right of the paragraph's other lines
+    # (negative for a hanging indent).  Word wraps the continuation lines back
+    # to the paragraph edge, so they begin left of an indented first line.
+    first_line_offset: float = 0.0
+
+
+def _twips_attribute(node: ElementTree.Element | None, name: str) -> float | None:
+    if node is None:
+        return None
+    value = _attribute_named(node, name)
+    if value is None:
+        return None
+    try:
+        return float(value) / 20
+    except ValueError:
+        return None
+
+
+def _first_line_offset_resolver(
+    styles_root: ElementTree.Element | None,
+) -> Callable[[ElementTree.Element], float]:
+    """Resolve w:ind firstLine/hanging through docDefaults, the style chain and pPr.
+
+    Only the offset between the first line and the continuation lines is
+    modelled; a character-based indent the oracle cannot convert contributes
+    nothing, which keeps the former behaviour (and its refusals) for it.
+    """
+    default_layer = None
+    styles: dict[str, ElementTree.Element] = {}
+    default_style: str | None = None
+    if styles_root is not None:
+        defaults = _first_named(styles_root, "docDefaults")
+        default_layer = _first_named(_first_named(defaults, "pPrDefault"), "pPr") if defaults is not None else None
+        for style in _iter_named(styles_root, "style"):
+            style_id = _attribute_named(style, "styleId")
+            if not style_id or (_attribute_named(style, "type") or "").casefold() != "paragraph":
+                continue
+            styles[style_id] = style
+            if (_attribute_named(style, "default") or "").casefold() in {"1", "true", "on"}:
+                default_style = style_id
+
+    def chain(style_id: str | None) -> list[ElementTree.Element]:
+        layers: list[ElementTree.Element] = []
+        visited: set[str] = set()
+        while style_id and style_id not in visited and style_id in styles:
+            visited.add(style_id)
+            style = styles[style_id]
+            properties = next(_children_named(style, "pPr"), None)
+            if properties is not None:
+                layers.append(properties)
+            based_on = _first_named(style, "basedOn")
+            style_id = _attribute_named(based_on, "val") if based_on is not None else None
+        return list(reversed(layers))
+
+    def resolve(paragraph: ElementTree.Element) -> float:
+        properties = next(_children_named(paragraph, "pPr"), None)
+        style_node = _current_named(properties, "pStyle") if properties is not None else None
+        style_id = _attribute_named(style_node, "val") if style_node is not None else default_style
+        layers = ([default_layer] if default_layer is not None else []) + chain(style_id) + ([properties] if properties is not None else [])
+        offset = 0.0
+        for layer in layers:
+            indent = _current_named(layer, "ind")
+            hanging = _twips_attribute(indent, "hanging")
+            first_line = _twips_attribute(indent, "firstLine")
+            if hanging is not None:
+                offset = -hanging
+            elif first_line is not None:
+                offset = first_line
+        return offset
+
+    return resolve
 
 
 def _word_page_geometry(
@@ -2783,6 +2994,7 @@ def _word_text_expectations(
 ) -> list[_WordTextExpectation]:
     styles_root = xml_roots.get("word/styles.xml")
     is_hidden_run = _hidden_run_resolver(styles_root)
+    first_line_offset = _first_line_offset_resolver(styles_root)
     theme_parts = [
         root
         for name, root in xml_roots.items()
@@ -3658,6 +3870,7 @@ def _word_text_expectations(
                         paragraph_line_height,
                         segment_index > 0,
                         paragraph_page_break_before and segment_index == 0,
+                        first_line_offset(paragraph) if segment_index == 0 else 0.0,
                     )
                 )
             if name == "word/document.xml":
@@ -3708,6 +3921,9 @@ def _text_sizes_match(
                     paragraph_wrap_anchor
                     if expectation.paragraph_continuation
                     else None
+                ),
+                first_line_offset=(
+                    0.0 if expectation.paragraph_continuation else expectation.first_line_offset
                 ),
             )
             if end is None:
@@ -3792,9 +4008,9 @@ def _text_sizes_match(
                             for fragment in previous_body_fragments
                             if fragment.page == previous_page
                         ]
-                        observed_gap = min(
-                            fragment.top for fragment in previous_page_fragments
-                        ) - max(fragment.top for fragment in matched_fragments)
+                        observed_gap = _last_line_top(previous_page_fragments) - max(
+                            fragment.top for fragment in matched_fragments
+                        )
                         missing_flow_tolerance = max(
                             6.0, expectation.font_size * 0.75
                         )
@@ -3852,6 +4068,8 @@ def _text_sizes_match(
                 max(fragment.right for fragment in first_line),
                 min(fragment.bottom for fragment in first_line),
                 max(fragment.top for fragment in first_line),
+                # Once the first run itself wrapped, the edge is already known.
+                expectation.first_line_offset if len(first_line) == len(paragraph_fragments) else 0.0,
             )
         elif paragraph_wrap_anchor is not None:
             first_fragment = positioned[match[0]]
@@ -3868,16 +4086,42 @@ def _text_sizes_match(
                 >= paragraph_wrap_anchor.left - horizontal_tolerance
             )
             if same_anchor_line:
+                continuation = positioned[match[0] : match[1]]
+                wrapped = any(
+                    fragment.page != first_fragment.page
+                    or max(fragment.bottom, first_fragment.bottom) - min(fragment.top, first_fragment.top) > line_tolerance
+                    for fragment in continuation
+                )
                 paragraph_wrap_anchor = _ParagraphWrapAnchor(
                     paragraph_wrap_anchor.page,
                     min(paragraph_wrap_anchor.left, first_fragment.x),
                     max(paragraph_wrap_anchor.right, first_fragment.right),
                     min(paragraph_wrap_anchor.bottom, first_fragment.bottom),
                     max(paragraph_wrap_anchor.top, first_fragment.top),
+                    0.0 if wrapped else paragraph_wrap_anchor.first_line_offset,
                 )
         if expectation.body_flow_anchor:
             previous_body_fragments = positioned[match[0] : match[1]]
+        elif expectation.paragraph_continuation and previous_body_fragments is not None:
+            # A later run of the same paragraph can carry its last lines; the next
+            # paragraph's gap is measured from there, not from the first run.
+            previous_body_fragments = previous_body_fragments + positioned[match[0] : match[1]]
     return True
+
+
+def _last_line_top(fragments: list[_PositionedText]) -> float:
+    """The top of the lowest rendered line, not of its shortest glyph.
+
+    A hyphen or a period reports a glyph box well below the line's cap height;
+    taking the minimum top over the fragments measured the gap from that glyph
+    and read a faithful paragraph spacing as missing.
+    """
+    lowest = min(fragments, key=lambda fragment: _vertical_extent(fragment)[0])
+    line = [lowest]
+    for fragment in fragments:
+        if fragment is not lowest and fragment.page == lowest.page and _shares_rendered_line(line, fragment):
+            line.append(fragment)
+    return max(fragment.top for fragment in line)
 
 
 def _has_nonvisible_text(page: object, reader: PdfReader) -> bool:
@@ -4415,8 +4659,13 @@ def _fragment_sequence_end(
     expected_line_height: float | None = None,
     wrap_anchor: _ParagraphWrapAnchor | None = None,
     strict_identity: bool = False,
+    first_line_offset: float = 0.0,
 ) -> int | None:
     normalized_target = _normalized_visible_text(expected)
+    # Only a match that begins the paragraph starts on its first line; after the
+    # first wrap every line shares the paragraph edge.
+    wrap_offset = first_line_offset if wrap_anchor is None else wrap_anchor.first_line_offset
+    first_line_pending = wrap_offset != 0.0
     # Identity is decided on a parallel case- and character-preserving stream,
     # accumulated as TOKENS rather than as a string: the folded stream exists so
     # that wrap and fragment matching tolerate Word's whitespace, and a strict
@@ -4451,6 +4700,7 @@ def _fragment_sequence_end(
                         max(active_wrap_anchor.right, fragment.right),
                         min(active_wrap_anchor.bottom, fragment.bottom),
                         max(active_wrap_anchor.top, fragment.top),
+                        active_wrap_anchor.first_line_offset,
                     )
         if previous is not None:
             line_tolerance = max(3.0, 0.35 * max(previous.font_size, fragment.font_size))
@@ -4491,6 +4741,7 @@ def _fragment_sequence_end(
                             if active_wrap_anchor is not None
                             else line_start.x
                         )
+                        + (wrap_offset if first_line_pending else 0.0)
                     )
                     <= horizontal_tolerance
                 )
@@ -4549,6 +4800,7 @@ def _fragment_sequence_end(
                 return None
             if wrapped_line or wrapped_page:
                 line_start = fragment
+                first_line_pending = False
         fragment_text = _normalized_visible_text(fragment.text)
         next_candidates = {
             candidate
@@ -4594,11 +4846,13 @@ def _ordered_text_blocks_match(
     blocks: list[str],
     positioned: list[_PositionedText],
     barriers: list[_VerticalBarrier],
+    offsets: list[float] | None = None,
 ) -> bool:
     if not blocks:
         return True
     cursor = 0
-    for block in blocks:
+    for block_index, block in enumerate(blocks):
+        offset = offsets[block_index] if offsets is not None else 0.0
         match = next(
             (
                 (start, end)
@@ -4611,6 +4865,7 @@ def _ordered_text_blocks_match(
                         barriers,
                         allow_line_wrap=True,
                         strict_identity=True,
+                        first_line_offset=offset,
                     )
                 )
                 is not None
@@ -4847,7 +5102,10 @@ def _body_block_order_matches(
                 return False
             previous_position = selected[0]
             continue
-        text = value
+        if isinstance(value, tuple):
+            text, offset = value
+        else:
+            text, offset = value, 0.0
         assert isinstance(text, str)
         found = None
         for start, fragment in enumerate(ordered):
@@ -4862,6 +5120,7 @@ def _body_block_order_matches(
                     barriers,
                     allow_line_wrap=True,
                     strict_identity=True,
+                    first_line_offset=offset,
                 )
                 is not None
             ):
@@ -5472,6 +5731,8 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
 
             body_fragments: list[str] = []
             document_fragments: list[str] = []
+            document_offsets: list[float] = []
+            paragraph_offset = _first_line_offset_resolver(styles_root)
             header_fragments: list[str] = []
             footer_fragments: list[str] = []
             xml_roots: dict[str, ElementTree.Element] = {}
@@ -5525,6 +5786,11 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                     body_fragments.extend(fragments)
                     document_fragments.extend(
                         fragment
+                        for paragraph, fragment in paragraph_fragments
+                        if id(paragraph) not in table_paragraph_ids
+                    )
+                    document_offsets.extend(
+                        paragraph_offset(paragraph)
                         for paragraph, fragment in paragraph_fragments
                         if id(paragraph) not in table_paragraph_ids
                     )
@@ -5897,7 +6163,9 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                     if child_name == "p":
                         visible = _visible_paragraph_text(child, is_hidden_run)
                         if visible.strip():
-                            body_blocks.append(("text", visible))
+                            offset = paragraph_offset(child)
+                            # An unindented paragraph keeps its plain shape.
+                            body_blocks.append(("text", (visible, offset) if offset else visible))
                     else:
                         body_blocks.extend(
                             ("row", row) for row in rows_by_table.get(id(child), [])
@@ -6111,7 +6379,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         Counter(_strict_tokens(" ".join(body_fragments))) + strict_repeatable
     )
     document_order_matches = _ordered_text_blocks_match(
-        document_fragments, reading_positioned, barriers
+        document_fragments, reading_positioned, barriers, document_offsets
     )
     # A bookmark target is body content, but the PDF-side occurrence enumeration
     # sees every visible fragment, and reading order puts the running header
@@ -6232,7 +6500,7 @@ def _wordprocessing_prefix(part: bytes) -> bytes:
     return prefixes.pop()
 
 
-def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_style: str | None = None) -> bytes:
+def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_style: str | None = None, *, break_before_first_heading: bool = False) -> bytes:
     """The professional presentation, written in the package's own prefix."""
     def escaped(value: str) -> bytes:
         return (
@@ -6253,11 +6521,18 @@ def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_sty
         return b" " + prefix + name + b'="' + escaped(text) + b'"'
 
     paragraphs = []
+    heading_index = 0
     for block in professional_report_blocks(report):
         if block.kind == "HEADING_1":
+            heading_index += 1
             style = element(b"pStyle", value(b"val", heading_style)) if heading_style else b""
-            properties = b"<" + prefix + b"pPr>" + style + element(b"keepNext") + element(b"outlineLvl", value(b"val", "0")) + b"</" + prefix + b"pPr>"
-            paragraphs.append(b"<" + prefix + b"p>" + properties + run(block.text, bold=heading_style is None) + b"</" + prefix + b"p>")
+            # With a table of contents before it, the report body opens a page.
+            page_break = element(b"pageBreakBefore") if break_before_first_heading and heading_index == 1 else b""
+            properties = b"<" + prefix + b"pPr>" + style + element(b"keepNext") + page_break + element(b"outlineLvl", value(b"val", "0")) + b"</" + prefix + b"pPr>"
+            identity = str(_TOC_BOOKMARK_BASE + heading_index)
+            bookmark_start = element(b"bookmarkStart", value(b"id", identity) + value(b"name", _toc_bookmark(heading_index)))
+            bookmark_end = element(b"bookmarkEnd", value(b"id", identity))
+            paragraphs.append(b"<" + prefix + b"p>" + properties + bookmark_start + run(block.text, bold=heading_style is None) + bookmark_end + b"</" + prefix + b"p>")
         elif block.lead:
             content = run(block.lead, bold=True) + (run(" " + block.text) if block.text else b"")
             paragraphs.append(b"<" + prefix + b"p>" + content + b"</" + prefix + b"p>")
@@ -6266,7 +6541,7 @@ def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_sty
     return b"".join(paragraphs)
 
 
-def _canonical_tag_anchor(part: bytes, prefix: bytes) -> int:
+def _canonical_tag_anchor(part: bytes, prefix: bytes, tag: str = "CANONICAL_REPORT") -> int:
     """Byte offset of the w:val that names the canonical control on its w:tag.
 
     The anchor used to be the first occurrence of the name anywhere in the part,
@@ -6277,7 +6552,7 @@ def _canonical_tag_anchor(part: bytes, prefix: bytes) -> int:
     Only a w:val on a w:tag element decides, and it has to be the only one.
     """
     # XML permits either quote around an attribute value.
-    needles = (b'"CANONICAL_REPORT"', b"'CANONICAL_REPORT'")
+    needles = (b'"' + tag.encode("ascii") + b'"', b"'" + tag.encode("ascii") + b"'")
     tag_open = b"<" + prefix + b"tag"
     anchors: list[int] = []
     for needle in needles:
@@ -6291,7 +6566,7 @@ def _canonical_tag_anchor(part: bytes, prefix: bytes) -> int:
                     anchors.append(cursor)
             cursor = part.find(needle, cursor + 1)
     if len(anchors) != 1:
-        raise ValueError("CANONICAL_REPORT content control is not uniquely anchored")
+        raise ValueError(f"{tag} content control is not uniquely anchored")
     return anchors[0]
 
 
@@ -6327,17 +6602,20 @@ def _verify_canonical_binding(part: bytes, report: ReportSnapshot) -> None:
         raise ValueError("canonical report did not bind to its content control")
 
 
-def _replace_canonical_content(part: bytes, report: ReportSnapshot, heading_style: str | None = None) -> bytes:
-    """Replace the CANONICAL_REPORT control's content without touching other bytes."""
+def _replace_canonical_content(part: bytes, report: ReportSnapshot, heading_style: str | None = None, *, tag: str = "CANONICAL_REPORT", markup: bytes | None = None, break_before_first_heading: bool = False) -> bytes:
+    """Replace a tagged control's content without touching other bytes."""
     prefix = _wordprocessing_prefix(part)
-    anchor = _canonical_tag_anchor(part, prefix)
+    anchor = _canonical_tag_anchor(part, prefix, tag)
     open_tag = b"<" + prefix + b"sdtContent"
     close_tag = b"</" + prefix + b"sdtContent>"
     start = part.find(open_tag, anchor)
     end_of_open = part.find(b">", start) if start >= 0 else -1
     if start < 0 or end_of_open < 0:
         raise ValueError("CANONICAL_REPORT content control is incomplete")
-    markup = _canonical_content_markup(report, prefix, heading_style)
+    if markup is None:
+        markup = _canonical_content_markup(report, prefix, heading_style, break_before_first_heading=break_before_first_heading)
+    elif callable(markup):
+        markup = markup(prefix)
     if part[end_of_open - 1 : end_of_open] == b"/":
         # An empty control is written self-closing and must become a pair.
         return (
@@ -6363,7 +6641,36 @@ def _replace_canonical_content(part: bytes, report: ReportSnapshot, heading_styl
     return part[: end_of_open + 1] + markup + part[cursor - len(close_tag) :]
 
 
-def _inject_canonical_report(content: bytes, report: ReportSnapshot) -> bytes:
+def _controls_tagged(root: ElementTree.Element, tag: str) -> list[ElementTree.Element]:
+    return [
+        control
+        for control in root.iter(f"{_W}sdt")
+        if any(item.attrib.get(f"{_W}val") == tag for item in control.findall(f"./{_W}sdtPr/{_W}tag"))
+    ]
+
+
+def _verify_toc_binding(part: bytes, report: ReportSnapshot, pages: tuple[int, ...] | None) -> None:
+    root = ElementTree.fromstring(part)
+    bound = _controls_tagged(root, TOC_CONTROL_TAG)
+    content = bound[0].find(f"{_W}sdtContent") if len(bound) == 1 else None
+    if content is None:
+        raise ValueError("table of contents did not bind to its content control")
+    rendered = ["".join(node.text or "" for node in paragraph.iter(f"{_W}t")) for paragraph in content.iter(f"{_W}p")]
+    if rendered != list(toc_entry_texts(report, pages)):
+        raise ValueError("table of contents did not bind to its content control")
+
+
+def has_toc_control(content: bytes) -> bool:
+    """Whether a Word package offers the product's table-of-contents area."""
+    try:
+        with ZipFile(BytesIO(content)) as package:
+            root = ElementTree.fromstring(package.read("word/document.xml"))
+    except (BadZipFile, KeyError, ElementTree.ParseError):
+        return False
+    return len(_controls_tagged(root, TOC_CONTROL_TAG)) == 1
+
+
+def _inject_canonical_report(content: bytes, report: ReportSnapshot, toc_pages: tuple[int, ...] | None = None) -> bytes:
     try:
         with ZipFile(BytesIO(content)) as source:
             parts = {item.filename: source.read(item.filename) for item in source.infolist()}
@@ -6385,10 +6692,24 @@ def _inject_canonical_report(content: bytes, report: ReportSnapshot) -> bytes:
     # them -- a Markup Compatibility attribute pointing at an undeclared prefix
     # makes the part invalid, and Word refuses to open the candidate at all.
     # Editing only the control's own bytes leaves the rest of the markup intact.
+    toc_controls = _controls_tagged(root, TOC_CONTROL_TAG)
     parts["word/document.xml"] = _replace_canonical_content(
-        parts["word/document.xml"], report, _heading_style_id(parts.get("word/styles.xml"))
+        parts["word/document.xml"], report, _heading_style_id(parts.get("word/styles.xml")),
+        break_before_first_heading=bool(toc_controls),
     )
     _verify_canonical_binding(parts["word/document.xml"], report)
+    if len(toc_controls) > 1:
+        raise ValueError("template requires at most one TOC_ENTRIES content control")
+    if toc_controls:
+        toc_style = _named_style_id(parts.get("word/styles.xml"), "toc 1")
+        parts["word/document.xml"] = _replace_canonical_content(
+            parts["word/document.xml"], report, tag=TOC_CONTROL_TAG,
+            markup=lambda prefix: _toc_content_markup(report, prefix, toc_pages, toc_style),
+        )
+        _verify_toc_binding(parts["word/document.xml"], report, toc_pages)
+        _verify_canonical_binding(parts["word/document.xml"], report)
+    elif toc_pages is not None:
+        raise ValueError("table of contents pages require the TOC_ENTRIES content control")
     output = BytesIO()
     with ZipFile(output, "w", ZIP_DEFLATED) as package:
         for name, value in parts.items():
