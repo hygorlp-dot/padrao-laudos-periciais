@@ -39,9 +39,13 @@ UI/Data Layer nem a aceitação Human RC. Foram 11 testes no main
 
 ## Delivery
 
-O Word/DOCM aprovado é o artefato profissional autoritativo. A conversão PDF
-local final ainda está diferida por fronteira de confiança: PDF diagnóstico ou
-texto extraído não prova fidelidade visual e não pode ser finalizado como PDF
+O Word/DOCM aprovado é o artefato profissional autoritativo. Ao renderizar a
+entrega, o produto deriva o PDF localmente pelo Microsoft Word 16 instalado na
+máquina, sem serviço em nuvem. O PDF só é aceito após verificação de fidelidade
+estrutural e visual e fica vinculado por SHA-256 ao Word exato. Se a conversão
+for recusada ou o Word não estiver disponível, o Word permanece como entrega
+completa e a interface informa o PDF como indisponível. PDF diagnóstico ou texto
+extraído não prova fidelidade visual e não pode ser finalizado como PDF
 profissional.
 
 ## Estado de implementação
@@ -49,7 +53,7 @@ profissional.
 Implementados: foundations das Stages 0–7, Budget, Productization/Recovery,
 Field/Mobile, AI Gateway/proposals e o oracle longitudinal sintético.
 
-Pendentes: PDF local fiel, Human RC no Windows, execução de caso real e
+Pendentes: Human RC no Windows, execução de caso real e
 release/packaging distribuível. A dívida histórica de duração do `verify_core`
 permanece registrada no Issue #192 e não é alterada por este manual.
 

@@ -27,8 +27,10 @@ chamadas diretas aos serviços. Isso não prova a UI/Data Layer nem a aceitaçã
 Human RC. O post-main oracle do Issue #187 passou em `11 testes` no main
 `27175535933a`.
 
-O Word/DOCM é o artefato profissional autoritativo. PDF final local permanece
-indisponível e falha fechado; PDF diagnóstico não é PDF profissional final.
+O Word/DOCM é o artefato profissional autoritativo. O PDF é derivado localmente
+pelo Microsoft Word 16, aceito somente após verificação de fidelidade estrutural
+e visual e vinculado por SHA-256 ao Word exato; qualquer recusa mantém o Word e
+nenhum PDF. PDF diagnóstico não é PDF profissional final.
 
 Stage 10 possui gateway e propostas de IA com provider e contexto explícitos,
 saída estruturada, revalidação da aplicação, auditoria append-only e limites

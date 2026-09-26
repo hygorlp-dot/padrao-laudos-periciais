@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0.0",
   "generated_from": "POST_MAIN_LONGITUDINAL_PRODUCT_INTEGRITY_ORACLE_V1",
-  "current_main_sha": "27175535933a2ff2185ffbd02819796274cdbeff",
+  "current_main_sha": "75a9522dfcf80e75e65af9a1462d04daffd87047",
   "roadmap_v6_item_2": "COMPLETE",
   "human_rc_ready": false,
   "private_egress": false,
@@ -20,7 +20,7 @@
     {"stage": 5, "name": "VISTORIA_FOUNDATION", "status": "COMPLETE"},
     {"stage": 6, "name": "EVIDENCE_AND_TECHNICAL_FINDINGS_FOUNDATION", "status": "COMPLETE"},
     {"stage": 7, "name": "REPORT_FOUNDATION", "status": "COMPLETE"},
-    {"stage": 8, "name": "DELIVERY_FOUNDATION", "status": "COMPLETE_WITH_LOCAL_FINAL_PDF_DEFERRED"},
+    {"stage": 8, "name": "DELIVERY_FOUNDATION", "status": "COMPLETE"},
     {"stage": 9, "name": "BUDGET_FOUNDATION", "status": "COMPLETE"},
     {"stage": 10, "name": "AI_AUTOMATION_FOUNDATION", "status": "IMPLEMENTED_PROPOSAL_ONLY"},
     {"stage": 11, "name": "PRODUCTIZATION_FOUNDATION", "status": "COMPLETE"},
