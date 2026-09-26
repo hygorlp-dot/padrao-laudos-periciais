@@ -39,6 +39,13 @@ function response(status: number, value: object) {
 
 afterEach(() => vi.unstubAllGlobals());
 
+// The site location panel reads its own resource; the planning mock stays exact.
+function planningOnly(planning: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
+  return vi.fn((input: RequestInfo | URL, init?: RequestInit) => String(input).includes("/site-location")
+    ? Promise.resolve(response(404, { error: { code: "ARTIFACT_REVISION_NOT_FOUND" } }))
+    : planning(input, init));
+}
+
 describe("pericial planning view", () => {
   test("presents readiness, preparation groups and exact derivation without findings", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(200, { revision: 1, updated_at: "2026-08-30T19:00:00-03:00", snapshot: SNAPSHOT })));
@@ -66,7 +73,7 @@ describe("pericial planning view", () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response(404, { error: { code: "ARTIFACT_REVISION_NOT_FOUND" } }))
       .mockResolvedValueOnce(response(201, { revision: 1, updated_at: "2026-08-31T12:00:00+00:00", snapshot: SNAPSHOT }));
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("fetch", planningOnly(fetchMock));
     const user = userEvent.setup();
     render(<PericialPlanningView workspaceId={WORKSPACE_ID} />);
     await user.click(await screen.findByRole("button", { name: "Iniciar planejamento" }));
@@ -90,7 +97,7 @@ describe("pericial planning view", () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response(200, { revision: 1, updated_at: "2026-08-30T19:00:00-03:00", snapshot: SNAPSHOT }))
       .mockResolvedValueOnce(response(200, { revision: 2, updated_at: "2026-08-30T19:05:00-03:00", snapshot: SNAPSHOT }));
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("fetch", planningOnly(fetchMock));
     const user = userEvent.setup();
     render(<PericialPlanningView workspaceId={WORKSPACE_ID} />);
     await screen.findByRole("heading", { name: "Plano da perícia" });

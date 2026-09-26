@@ -11,6 +11,7 @@ import {
   ReportApiError,
   saveExpertProfile,
   startReportSnapshot,
+  startReportVersion,
   referenceCitation,
   type EditorialProfile,
   type ReportAmendment,
@@ -24,6 +25,7 @@ import {
 import { workspacePath } from "../routes/routeCatalog";
 import { authorityLabel, sourceKindLabel, stateLabel } from "../ui/labels";
 import { TechnicalDetails } from "../ui/TechnicalDetails";
+import { coordinatesText } from "../data/siteLocation";
 
 type State = { kind: "loading" } | { kind: "profile-missing" } | { kind: "report-missing" } | { kind: "ready"; value: ReportEnvelope } | { kind: "error" };
 type Section = ReportSnapshot["sections"][number];
@@ -59,6 +61,7 @@ export function ReportFoundationView({ workspaceId }: { workspaceId: string }) {
   const [sources, setSources] = useState<ReportSourceCatalog | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [versionNotice, setVersionNotice] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   const refreshExpert = useRefreshExpertIdentity();
   const [profile, setProfile] = useState({ full_name: "", professional_title: "", registration: "", court_registration: "", contact_line: "" });
@@ -88,6 +91,24 @@ export function ReportFoundationView({ workspaceId }: { workspaceId: string }) {
     } catch { setState({ kind: "error" }); } finally { setBusy(false); }
   };
 
+  const newVersion = async () => {
+    if (state.kind !== "ready") return;
+    setBusy(true); setActionError(null);
+    try {
+      const { envelope, dropped } = await startReportVersion(workspaceId, state.value);
+      setState({ kind: "ready", value: envelope });
+      const removed = [
+        dropped.claims ? `${dropped.claims} ${dropped.claims === 1 ? "texto sem fonte atual" : "textos sem fonte atual"}` : "",
+        dropped.answers ? `${dropped.answers} ${dropped.answers === 1 ? "resposta a quesito" : "respostas a quesitos"}` : "",
+        dropped.context_fields.length ? `contexto processual a confirmar: ${dropped.context_fields.map((field) => CONTEXT_LABELS[field] ?? field).join(", ")}` : "",
+        dropped.findings_table ? "tabela-resumo dos achados" : "",
+        dropped.site_location ? "localização do imóvel" : "",
+      ].filter(Boolean);
+      setVersionNotice(removed.length ? `Saíram desta versão: ${removed.join("; ")}.` : "Todo o conteúdo continua sustentado pelas fontes atuais.");
+    } catch { setActionError("Não foi possível abrir a nova versão."); }
+    finally { setBusy(false); }
+  };
+
   const amend = async (action: ReportAmendment, values: Record<string, unknown>, failure: string) => {
     if (state.kind !== "ready") return false;
     setBusy(true); setActionError(null);
@@ -108,8 +129,10 @@ export function ReportFoundationView({ workspaceId }: { workspaceId: string }) {
 
   return <section className="report-authoring" aria-labelledby="report-title">
     <header className="technical-header"><div><h2 id="report-title">Laudo técnico</h2><p>{snapshot.expert_profile.full_name} · {snapshot.expert_profile.registration}</p><span className="status-pill" data-tone={snapshot.state === "APPROVED" ? "done" : snapshot.state === "SUPERSEDED" ? "warn" : undefined}>{stateLabel(snapshot.state)}</span></div><div className="planning-readiness"><strong>{coverage.cpc473_present_sections} de {coverage.cpc473_required_sections} seções obrigatórias</strong><span>Contexto processual {coverage.context_present_fields} de {coverage.context_required_fields} · {unanswered === 0 ? "quesitos respondidos" : `${unanswered} ${unanswered === 1 ? "quesito sem resposta" : "quesitos sem resposta"}`}</span></div></header>
-    {snapshot.upstream_stale && <section className="analysis-inventory-warning" role="alert"><strong>Fontes anteriores mudaram — revise antes de continuar</strong><ul>{snapshot.upstream_stale_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul></section>}
-    {!editable && !snapshot.upstream_stale && <p className="field-hint">O laudo está {stateLabel(snapshot.state).toLowerCase()}; o texto fica bloqueado para edição. Para alterar, marque-o como substituído em Revisão e inicie uma nova versão.</p>}
+    {snapshot.upstream_stale && <section className="analysis-inventory-warning" role="alert"><strong>Fontes anteriores mudaram — o laudo precisa de uma nova versão</strong><ul>{snapshot.upstream_stale_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul></section>}
+    {!editable && !snapshot.upstream_stale && snapshot.state !== "SUPERSEDED" && <p className="field-hint">O laudo está {stateLabel(snapshot.state).toLowerCase()}; o texto fica bloqueado para edição. Para alterar, marque-o como substituído em Revisão e inicie uma nova versão aqui.</p>}
+    {(snapshot.upstream_stale || snapshot.state === "SUPERSEDED") && <section className="analysis-section report-version"><h3>Nova versão do laudo</h3><p>A nova versão abre um rascunho vinculado às fontes atuais. O que elas ainda sustentam é mantido; o que deixou de existir sai e é listado para você. A revisão e a aprovação recomeçam, e as versões anteriores ficam no histórico.</p><button className="primary-action" type="button" disabled={busy} onClick={() => void newVersion()}>{busy ? "Abrindo nova versão…" : "Iniciar nova versão do laudo"}</button></section>}
+    {versionNotice && <section className="inline-note" role="status"><strong>Nova versão aberta em rascunho.</strong><p>{versionNotice}</p><button className="text-action" type="button" onClick={() => setVersionNotice(null)}>Fechar aviso</button></section>}
     {actionError && <section className="inline-alert" role="alert"><strong>{actionError}</strong><p>O laudo continua como estava. Confira a fonte escolhida e tente de novo.</p><button className="text-action" type="button" onClick={() => setActionError(null)}>Fechar aviso</button></section>}
     {sources === null && <p className="field-hint" role="status">As fontes para citação não puderam ser carregadas. Os textos existentes continuam visíveis.</p>}
 
@@ -142,11 +165,12 @@ function SectionEditor({ section, snapshot, sources, editable, busy, amend }: {
   const claims = snapshot.claims.filter((claim) => claim.section_id === section.section_id);
   const [adding, setAdding] = useState(false);
   const titleId = `section-${section.section_id}`;
-  const generated = (section.kind === "TECHNICAL_FINDINGS" && Boolean(snapshot.findings_table?.length)) || (section.kind === "REFERENCES" && Boolean(snapshot.references?.length));
+  const generated = (section.kind === "TECHNICAL_FINDINGS" && Boolean(snapshot.findings_table?.length)) || (section.kind === "REFERENCES" && Boolean(snapshot.references?.length)) || (section.kind === "INSPECTION" && Boolean(snapshot.site_location));
   const empty = claims.length === 0 && section.kind !== "ANSWERS_TO_QUESTIONS" && !generated;
   return <article className="report-section" aria-labelledby={titleId}>
     <header><h3 id={titleId}>{section.order}. {section.title}</h3>{section.required_by_cpc473 && <span className="status-pill" data-tone={claims.length ? "done" : "warn"}>{claims.length ? "Obrigatória · preenchida" : "Obrigatória · pendente"}</span>}</header>
     {empty && <p className="report-empty">{section.required_by_cpc473 ? "Seção obrigatória ainda sem conteúdo." : "Sem conteúdo. Seções vazias não aparecem no documento final."}</p>}
+    {section.kind === "INSPECTION" && <SiteLocationCitation snapshot={snapshot} editable={editable} busy={busy} amend={amend} />}
     {section.kind === "TECHNICAL_FINDINGS" && <FindingsTablePanel snapshot={snapshot} editable={editable} busy={busy} amend={amend} />}
     {claims.map((claim) => <ClaimEditor key={`${claim.claim_id}:${claim.text}`} claim={claim} sources={sources} references={snapshot.references ?? []} editable={editable} busy={busy} amend={amend} protectedByAnswer={snapshot.answers.some((answer) => answer.claim_ids.includes(claim.claim_id))} />)}
     {section.kind === "REFERENCES" && <ReferencesPanel references={snapshot.references ?? []} editable={editable} busy={busy} amend={amend} />}
@@ -181,6 +205,25 @@ function ClaimEditor({ claim, sources, references, editable, busy, amend, protec
       <button className="text-action" type="button" disabled={busy || protectedByAnswer} title={protectedByAnswer ? "Este texto sustenta a resposta a um quesito." : undefined} onClick={() => void amend("REMOVE_CLAIM", { claim_id: claim.claim_id }, "Não foi possível remover o texto.")}>Remover</button>
     </div>}
     <TechnicalDetails>{claim.provenance.map((item) => <span className="data" key={item.provenance_id}>{claim.claim_id} · {item.source_kind} · {item.source_id} · revisão {item.source_revision}</span>)}</TechnicalDetails>
+  </div>;
+}
+
+function SiteLocationCitation({ snapshot, editable, busy, amend }: {
+  snapshot: ReportSnapshot;
+  editable: boolean;
+  busy: boolean;
+  amend: (action: ReportAmendment, values: Record<string, unknown>, failure: string) => Promise<boolean>;
+}) {
+  const site = snapshot.site_location;
+  if (!site && !editable) return null;
+  return <div className="report-site-location">
+    {site
+      ? <p>Local vistoriado{site.address_label ? `: ${site.address_label}` : ""} · <span className="data">{coordinatesText(site)}</span> (WGS 84)</p>
+      : <p className="field-hint">A localização confirmada no Planejamento pode abrir esta seção com o endereço e as coordenadas.</p>}
+    {editable && <div className="action-row">
+      <button className="secondary-action" type="button" disabled={busy} onClick={() => void amend("SET_SITE_LOCATION", {}, "Não foi possível inserir a localização. Confirme a localização do imóvel no Planejamento.")}>{site ? "Atualizar localização" : "Inserir localização"}</button>
+      {site && <button className="text-action" type="button" disabled={busy} onClick={() => void amend("REMOVE_SITE_LOCATION", {}, "Não foi possível remover a localização.")}>Remover</button>}
+    </div>}
   </div>;
 }
 

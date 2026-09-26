@@ -12,6 +12,7 @@ from pathlib import Path
 from threading import Lock
 from uuid import UUID, uuid4
 
+from ..application.site_location import ConfirmSiteLocation, GetSiteLocation, ProposeSiteLocation
 from ..application.ports import Clock, IdGenerator, RepositoryError, RepositoryIntegrityError
 from ..application.workspace_recovery import (
     AbandonWorkspaceRecovery,
@@ -88,6 +89,7 @@ from ..application.construction_defect_analysis import (
     StartConstructionDefectAnalysis,
 )
 from ..application.report_foundation import (
+    StartReportVersion,
     GetExpertProfile,
     GetReportSnapshot,
     SaveExpertProfile,
@@ -483,6 +485,14 @@ def build_local_api(
         local_clock,
         local_ids,
     )
+    get_site_location = GetSiteLocation(get_latest_artifact)
+    propose_site_location = ProposeSiteLocation(
+        store.revisions,
+        get_latest_artifact,
+        private_store.authority_guard if private_store is not None else nullcontext,
+        local_clock,
+        local_ids,
+    )
     get_report_snapshot = GetReportSnapshot(
         get_latest_artifact,
         get_case_analysis,
@@ -490,6 +500,7 @@ def build_local_api(
         get_technical_snapshot,
         get_expert_profile,
         get_construction_defect_analysis,
+        get_site_location=get_site_location,
     )
     save_report_snapshot = SaveReportSnapshot(
         store.revisions,
@@ -502,6 +513,7 @@ def build_local_api(
         local_clock,
         local_ids,
         get_construction_defect_analysis,
+        get_site_location=get_site_location,
     )
     get_delivery_snapshot = None
     get_delivery_history = None
@@ -736,11 +748,18 @@ def build_local_api(
             get_construction_defect_analysis,
         ),
         review_report_snapshot=ReviewReportSnapshot(get_report_snapshot, save_report_snapshot, local_clock, local_ids),
-        amend_report_draft=AmendReportDraft(get_report_snapshot, save_report_snapshot, local_ids, get_case_analysis, get_technical_snapshot, get_construction_defect_analysis),
+        start_report_version=StartReportVersion(
+            get_latest_artifact, get_case_analysis, get_inspection_session, get_technical_snapshot, get_expert_profile,
+            save_report_snapshot, local_ids, get_construction_defect_analysis, get_site_location,
+        ),
+        amend_report_draft=AmendReportDraft(get_report_snapshot, save_report_snapshot, local_ids, get_case_analysis, get_technical_snapshot, get_construction_defect_analysis, get_site_location),
         list_report_sources=ListReportSources(get_case_analysis, get_inspection_session, get_technical_snapshot, get_construction_defect_analysis),
         export_report_audit_trail=ExportReportAuditTrail(get_report_snapshot),
         store_delivery_template=generic_store,
         store_default_delivery_template=StoreDefaultDeliveryTemplate(get_report_snapshot, generic_store),
+        get_site_location=get_site_location,
+        propose_site_location=propose_site_location,
+        confirm_site_location=ConfirmSiteLocation(get_site_location, get_latest_artifact, propose_site_location),
         get_delivery_artifact=get_private_content,
         get_delivery_snapshot=get_delivery_snapshot,
         get_delivery_history=get_delivery_history,

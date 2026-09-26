@@ -25,6 +25,7 @@ APPLICATION_ARTIFACT_OWNERSHIP = {
         ArtifactOwnership("PJE_INTAKE_V1", "PJe Intake Application Service", True),
         ArtifactOwnership("PROCESS_CASE", "Process Case Application Service", True),
         ArtifactOwnership("REPORT_SNAPSHOT_V1", "Report Application Service", True),
+        ArtifactOwnership("SITE_LOCATION_V1", "Site Location Application Service", True),
         ArtifactOwnership("TECHNICAL_SNAPSHOT_V1", "Technical Findings Application Service", True),
         ArtifactOwnership("AI_RUN", "AI Gateway Application Service", True),
         ArtifactOwnership("AI_PROPOSAL", "AI Gateway Application Service", True),

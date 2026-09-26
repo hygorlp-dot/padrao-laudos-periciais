@@ -15,6 +15,7 @@ from typing import Any
 from uuid import UUID, NAMESPACE_URL, uuid4, uuid5
 from weakref import WeakKeyDictionary
 
+from ..site_location import site_location_from_mapping
 from ..application.models import (
     ArtifactRevision,
     PericiaWorkspace,
@@ -321,6 +322,7 @@ _ARTIFACT_VALIDATORS = {
     "PJE_INTAKE_V1": validate_pje_intake_payload,
     "PROCESS_CASE": ProcessCaseData.from_mapping,
     "REPORT_SNAPSHOT_V1": report_snapshot_from_mapping,
+    "SITE_LOCATION_V1": site_location_from_mapping,
     "TECHNICAL_SNAPSHOT_V1": technical_snapshot_from_mapping,
     "AI_RUN": lambda value: _validate_ai_envelope(value, "AI_RUN"),
     "AI_PROPOSAL": lambda value: _validate_ai_envelope(value, "AI_PROPOSAL"),
@@ -438,6 +440,7 @@ _CANONICAL_PRODUCT_ARTIFACT_IDS = {
     "PERICIAL_PLANNING_SNAPSHOT_V1": "PERICIAL-PLANNING",
     "PROCESS_CASE": "PROCESS_CASE",
     "REPORT_SNAPSHOT_V1": "REPORT-SNAPSHOT",
+    "SITE_LOCATION_V1": "SITE-LOCATION",
     "TECHNICAL_SNAPSHOT_V1": "TECHNICAL-SNAPSHOT",
 }
 _DOMAIN_REVISION_FIELDS = {

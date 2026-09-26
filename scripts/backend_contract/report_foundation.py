@@ -430,6 +430,37 @@ class ReportFindingRow:
 
 
 @dataclass(frozen=True, slots=True)
+class ReportSiteLocation:
+    """The confirmed site location, captured at a revision of its record.
+
+    The report repeats the coordinates the expert confirmed; the revision and
+    checksum bind them, so a location changed afterwards makes the report
+    stale instead of silently disagreeing with it.
+    """
+    latitude: float
+    longitude: float
+    address_label: str | None
+    source_revision: int
+    source_checksum: str
+
+    def __post_init__(self):
+        for name, low, high in (("latitude", -90.0, 90.0), ("longitude", -180.0, 180.0)):
+            value = getattr(self, name)
+            if type(value) is not float or not low <= value <= high or round(value, 6) != value:
+                raise ValueError("report site location is invalid")
+        if self.address_label is not None and (not _text(self.address_label) or self.address_label != self.address_label.strip()):
+            raise ValueError("report site location is invalid")
+        if type(self.source_revision) is not int or self.source_revision < 1 or type(self.source_checksum) is not str or len(self.source_checksum) != 64 or any(ch not in "0123456789abcdef" for ch in self.source_checksum):
+            raise ValueError("report site location binding is invalid")
+
+    @property
+    def coordinates_text(self) -> str:
+        latitude = f"{abs(self.latitude):.6f}".replace(".", ",") + ("° S" if self.latitude < 0 else "° N")
+        longitude = f"{abs(self.longitude):.6f}".replace(".", ",") + ("° O" if self.longitude < 0 else "° L")
+        return f"{latitude}, {longitude}"
+
+
+@dataclass(frozen=True, slots=True)
 class ReportReviewDecision:
     review_id: str
     action: ReviewAction
@@ -488,6 +519,7 @@ class ReportSnapshot:
     # and an empty collection is written as absent.
     references: tuple[ReportReference, ...] | None = None
     findings_table: tuple[ReportFindingRow, ...] | None = None
+    site_location: ReportSiteLocation | None = None
 
     def __post_init__(self):
         _all_text(self, ("schema_version", "report_id", "workspace_id"))
@@ -524,6 +556,8 @@ class ReportSnapshot:
                 raise ValueError("report references are invalid")
             if len({item.reference_id for item in self.references}) != len(self.references) or len({item.entry.casefold() for item in self.references}) != len(self.references):
                 raise ValueError("report references must be unique")
+        if self.site_location is not None and type(self.site_location) is not ReportSiteLocation:
+            raise ValueError("report site location is invalid")
         if self.findings_table is not None:
             if type(self.findings_table) is not tuple or not self.findings_table or any(type(item) is not ReportFindingRow for item in self.findings_table):
                 raise ValueError("report findings table is invalid")
@@ -612,11 +646,21 @@ def report_snapshot_from_mapping(value: object) -> ReportSnapshot:
     if type(value) is not dict:
         raise ValueError("ReportSnapshot mapping is invalid")
     allowed = {item.name for item in fields(ReportSnapshot)}
-    optional = {"references", "findings_table"}
+    optional = {"references", "findings_table", "site_location"}
     if not allowed - optional <= set(value) <= allowed:
         raise ValueError("ReportSnapshot fields are invalid")
     data = dict(value)
-    for name in optional:
+    if "site_location" not in data:
+        data["site_location"] = None
+    elif type(data["site_location"]) is not dict:
+        raise ValueError("ReportSnapshot site_location is invalid")
+    else:
+        site = dict(data["site_location"])
+        for name in ("latitude", "longitude"):
+            if type(site.get(name)) is int:
+                site[name] = float(site[name])
+        data["site_location"] = _construct(ReportSiteLocation, site)
+    for name in ("references", "findings_table"):
         if name not in data:
             data[name] = None
         elif type(data[name]) is not list or not data[name]:
@@ -684,7 +728,7 @@ def report_snapshot_to_mapping(value: ReportSnapshot) -> dict[str, Any]:
     for answer in mapping["answers"]:
         if answer["question_text"] is None:
             del answer["question_text"]
-    for name in ("references", "findings_table"):
+    for name in ("references", "findings_table", "site_location"):
         if mapping[name] is None:
             del mapping[name]
     return mapping
