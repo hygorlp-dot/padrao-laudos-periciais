@@ -218,6 +218,28 @@ describe("professional report authoring (Laudo)", () => {
     expect(screen.getByText(/Nada entra no laudo sem a sua decisão/)).toBeInTheDocument();
   });
 
+  test("a report that cannot start yet says which stages it needs instead of blaming integrity", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/expert-profile")) return Promise.resolve(response(200, { revision: 1, updated_at: "2026-08-31T12:00:00Z", profile }));
+      if (url.endsWith("/report-snapshot") && init?.method === "POST") return Promise.resolve(response(400, { error: { code: "INVALID_REQUEST" } }));
+      if (url.endsWith("/report-snapshot")) return Promise.resolve(response(404, {}));
+      return Promise.resolve(response(404, {}));
+    }));
+    render(<ReportFoundationView workspaceId={ID} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Iniciar laudo" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("O laudo ainda não pode começar");
+    expect(screen.queryByText(/conferência de integridade/)).not.toBeInTheDocument();
+  });
+
+  test("stale reasons are said in plain Portuguese, once each", async () => {
+    vi.stubGlobal("fetch", routed({ ...baseSnapshot, upstream_stale: true, upstream_stale_reasons: ["technical snapshot revision changed", "technical snapshot content changed", "site location changed"] }));
+    render(<ReportFoundationView workspaceId={ID} />);
+    expect(await screen.findByText("As evidências e os achados técnicos mudaram depois deste laudo.")).toBeInTheDocument();
+    expect(screen.getByText("A localização do imóvel mudou depois de inserida no laudo.")).toBeInTheDocument();
+    expect(screen.queryByText(/technical snapshot/)).not.toBeInTheDocument();
+  });
+
   test("requires the master expert profile before starting a report", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

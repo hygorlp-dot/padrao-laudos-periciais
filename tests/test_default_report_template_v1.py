@@ -151,6 +151,22 @@ def test_a_short_glyph_does_not_define_the_line_top() -> None:
     assert dr._last_line_top(two_lines) == pytest.approx(686.0)
 
 
+def test_a_lead_run_paragraph_keeps_its_edge_after_every_wrap() -> None:
+    """RED_THIS_REPAIR: a three-line answer after a bold lead was refused on its second wrap."""
+    lead = _text(0, "Resposta:", 121.0, 700.0, right=168.0)
+    continuation = [
+        _text(0, "Sim. Existem fissuras na parede", 177.0, 700.0),
+        _text(0, "leste da sala conforme o registro", 85.0, 683.0),
+        _text(0, "fotografico.", 85.0, 666.0),
+    ]
+    anchor = dr._ParagraphWrapAnchor(0, lead.x, lead.right, lead.bottom, lead.top, 36.0)
+    text = "Sim. Existem fissuras na parede leste da sala conforme o registro fotografico."
+    assert dr._fragment_sequence_end(text, continuation, 0, [], allow_line_wrap=True, alignment="both", wrap_anchor=anchor) == 3
+    # The edge stays bound: a third line starting elsewhere is still refused.
+    elsewhere = [*continuation[:2], _text(0, "fotografico.", 300.0, 666.0)]
+    assert dr._fragment_sequence_end(text, elsewhere, 0, [], allow_line_wrap=True, alignment="both", wrap_anchor=anchor) is None
+
+
 # --- Microsoft Word 16 ------------------------------------------------------
 
 

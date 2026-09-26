@@ -25,7 +25,7 @@ import {
   type ReportSourceKind,
 } from "../data/reportSnapshot";
 import { workspacePath } from "../routes/routeCatalog";
-import { authorityLabel, sourceKindLabel, stateLabel } from "../ui/labels";
+import { authorityLabel, reasonLabels, sourceKindLabel, stateLabel } from "../ui/labels";
 import { TechnicalDetails } from "../ui/TechnicalDetails";
 import { coordinatesText } from "../data/siteLocation";
 
@@ -64,6 +64,7 @@ export function ReportFoundationView({ workspaceId }: { workspaceId: string }) {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [versionNotice, setVersionNotice] = useState<string | null>(null);
+  const [startError, setStartError] = useState(false);
   const [version, setVersion] = useState(0);
   const refreshExpert = useRefreshExpertIdentity();
   const [profile, setProfile] = useState({ full_name: "", professional_title: "", registration: "", court_registration: "", contact_line: "" });
@@ -89,8 +90,11 @@ export function ReportFoundationView({ workspaceId }: { workspaceId: string }) {
     try {
       await saveExpertProfile(workspaceId, { profile_id: "EXPERT-PROFILE-001", revision: 1, full_name: profile.full_name.trim(), professional_title: profile.professional_title.trim(), registration: profile.registration.trim(), court_registration: profile.court_registration.trim(), contact_line: profile.contact_line.trim() });
       refreshExpert();
-      setState({ kind: "ready", value: await startReportSnapshot(workspaceId) });
-    } catch { setState({ kind: "error" }); } finally { setBusy(false); }
+    } catch { setState({ kind: "error" }); setBusy(false); return; }
+    // The profile is saved; the report may still lack the stages it binds.
+    try { setState({ kind: "ready", value: await startReportSnapshot(workspaceId) }); }
+    catch { setStartError(true); setState({ kind: "report-missing" }); }
+    finally { setBusy(false); }
   };
 
   const newVersion = async () => {
@@ -122,7 +126,7 @@ export function ReportFoundationView({ workspaceId }: { workspaceId: string }) {
   if (state.kind === "loading") return <section className="status-state status-state--loading" role="status"><span className="state-rule" aria-hidden="true"/><div><h2>Abrindo o laudo</h2><p>Conferindo as fontes vinculadas a cada seção.</p></div></section>;
   if (state.kind === "error") return <section className="status-state status-state--error" role="alert"><span className="state-mark" aria-hidden="true">!</span><div><h2>Não foi possível carregar o laudo</h2><p>Os dados salvos do laudo não passaram na conferência de integridade. Nada foi alterado.</p><button className="text-action" type="button" onClick={() => { setState({ kind: "loading" }); setVersion((value) => value + 1); }}>Tentar novamente</button></div></section>;
   if (state.kind === "profile-missing") return <section className="technical-authority"><h2>Configure o perfil mestre do perito</h2><p>Esta fonte única preenche a identificação profissional sem alterar conclusões técnicas.</p><form onSubmit={configure}><label>Nome completo<input required aria-invalid={formError} value={profile.full_name} onChange={(event) => setProfile({ ...profile, full_name: event.target.value })}/></label><label>Título profissional<input required aria-invalid={formError} value={profile.professional_title} onChange={(event) => setProfile({ ...profile, professional_title: event.target.value })}/></label><label>Registro profissional<input required aria-invalid={formError} value={profile.registration} onChange={(event) => setProfile({ ...profile, registration: event.target.value })}/></label><label>Cadastro no tribunal<input required aria-invalid={formError} value={profile.court_registration} onChange={(event) => setProfile({ ...profile, court_registration: event.target.value })}/></label><label>Contato profissional<input required aria-invalid={formError} value={profile.contact_line} onChange={(event) => setProfile({ ...profile, contact_line: event.target.value })}/></label>{formError && <p role="alert">Complete todos os campos obrigatórios do perfil mestre.</p>}<button className="primary-action" type="submit" disabled={busy}>{busy ? "Salvando…" : "Salvar perfil e iniciar laudo"}</button></form></section>;
-  if (state.kind === "report-missing") return <section className="status-state status-state--empty"><span className="empty-sheet" aria-hidden="true"><span /><span /><span /></span><div><h2>Laudo ainda não iniciado</h2><p>O laudo reúne as análises e decisões já registradas. Nada é redigido automaticamente.</p><button className="primary-action" type="button" disabled={busy} onClick={async () => { setBusy(true); try { setState({ kind: "ready", value: await startReportSnapshot(workspaceId) }); } catch { setState({ kind: "error" }); } finally { setBusy(false); } }}>{busy ? "Iniciando…" : "Iniciar laudo"}</button></div></section>;
+  if (state.kind === "report-missing") return <section className="status-state status-state--empty"><span className="empty-sheet" aria-hidden="true"><span /><span /><span /></span><div><h2>Laudo ainda não iniciado</h2><p>O laudo reúne as análises e decisões já registradas. Nada é redigido automaticamente.</p>{startError && <p className="inline-alert" role="alert">O laudo ainda não pode começar: ele se vincula à análise do caso, à vistoria e à cadeia técnica de Evidências. Registre essas etapas e tente de novo.</p>}<button className="primary-action" type="button" disabled={busy} onClick={async () => { setBusy(true); setStartError(false); try { setState({ kind: "ready", value: await startReportSnapshot(workspaceId) }); } catch { setStartError(true); } finally { setBusy(false); } }}>{busy ? "Iniciando…" : "Iniciar laudo"}</button></div></section>;
 
   const { snapshot } = state.value;
   const editable = snapshot.state === "DRAFT" && !snapshot.upstream_stale && snapshot.review_decisions.length === 0;
@@ -131,7 +135,7 @@ export function ReportFoundationView({ workspaceId }: { workspaceId: string }) {
 
   return <section className="report-authoring" aria-labelledby="report-title">
     <header className="technical-header"><div><h2 id="report-title">Laudo técnico</h2><p>{snapshot.expert_profile.full_name} · {snapshot.expert_profile.registration}</p><span className="status-pill" data-tone={snapshot.state === "APPROVED" ? "done" : snapshot.state === "SUPERSEDED" ? "warn" : undefined}>{stateLabel(snapshot.state)}</span></div><div className="planning-readiness"><strong>{coverage.cpc473_present_sections} de {coverage.cpc473_required_sections} seções obrigatórias</strong><span>Contexto processual {coverage.context_present_fields} de {coverage.context_required_fields} · {unanswered === 0 ? "quesitos respondidos" : `${unanswered} ${unanswered === 1 ? "quesito sem resposta" : "quesitos sem resposta"}`}</span></div></header>
-    {snapshot.upstream_stale && <section className="analysis-inventory-warning" role="alert"><strong>Fontes anteriores mudaram — o laudo precisa de uma nova versão</strong><ul>{snapshot.upstream_stale_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul></section>}
+    {snapshot.upstream_stale && <section className="analysis-inventory-warning" role="alert"><strong>Fontes anteriores mudaram — o laudo precisa de uma nova versão</strong><ul>{reasonLabels(snapshot.upstream_stale_reasons).map((reason) => <li key={reason}>{reason}</li>)}</ul></section>}
     {!editable && !snapshot.upstream_stale && snapshot.state !== "SUPERSEDED" && <p className="field-hint">O laudo está {stateLabel(snapshot.state).toLowerCase()}; o texto fica bloqueado para edição. Para alterar, marque-o como substituído em Revisão e inicie uma nova versão aqui.</p>}
     {(snapshot.upstream_stale || snapshot.state === "SUPERSEDED") && <section className="analysis-section report-version"><h3>Nova versão do laudo</h3><p>A nova versão abre um rascunho vinculado às fontes atuais. O que elas ainda sustentam é mantido; o que deixou de existir sai e é listado para você. A revisão e a aprovação recomeçam, e as versões anteriores ficam no histórico.</p><button className="primary-action" type="button" disabled={busy} onClick={() => void newVersion()}>{busy ? "Abrindo nova versão…" : "Iniciar nova versão do laudo"}</button></section>}
     {versionNotice && <section className="inline-note" role="status"><strong>Nova versão aberta em rascunho.</strong><p>{versionNotice}</p><button className="text-action" type="button" onClick={() => setVersionNotice(null)}>Fechar aviso</button></section>}
@@ -412,7 +416,10 @@ function QuestionItem({ index, question, snapshot, editable, busy, amend }: {
   amend: (action: ReportAmendment, values: Record<string, unknown>, failure: string) => Promise<boolean>;
 }) {
   const answer = snapshot.answers.find((item) => item.question_id === question.question_id);
-  const [findingId, setFindingId] = useState(question.findings[0]?.finding_id ?? "");
+  const [chosenFindingId, setFindingId] = useState("");
+  // The catalog can arrive after this editor mounts; until the expert picks
+  // another, the finding the select shows is the one the answer binds.
+  const findingId = question.findings.some((item) => item.finding_id === chosenFindingId) ? chosenFindingId : question.findings[0]?.finding_id ?? "";
   const [text, setText] = useState(answer?.text ?? "");
   const cited = (id: string) => snapshot.claims.some((claim) => claim.provenance.some((item) => item.source_kind === "TECHNICAL_FINDING" && item.source_id === id));
   const finding = question.findings.find((item) => item.finding_id === (answer?.finding_id ?? findingId));

@@ -215,7 +215,7 @@ def test_only_a_confirmed_location_enters_the_report_and_a_later_change_makes_it
     _, captured = _amend(_draft(), get).execute("w", expected_revision=7, action="SET_SITE_LOCATION", values={})
     site = captured.site_location
     assert (site.latitude, site.longitude, site.address_label, site.source_revision) == (-23.55052, -46.633308, "Rua Sintética, 100", 2)
-    assert _site_location_reasons(captured, get) == ()
+    assert _site_location_reasons(captured, get, "w") == ()
     mapping = report_snapshot_to_mapping(captured)
     assert report_snapshot_from_mapping(mapping) == captured
     assert "site_location" not in report_snapshot_to_mapping(_draft())
@@ -223,7 +223,7 @@ def test_only_a_confirmed_location_enters_the_report_and_a_later_change_makes_it
     # The expert pastes a new place: the captured one no longer matches.
     _get, propose, _confirm = _services(store)
     propose.execute("w", location_input="-23.6, -46.7", address_label=None, note=None, expected_revision=2)
-    stale = _with_site_location_staleness(replace(captured, state=ReportState.DRAFT), get)
+    stale = _with_site_location_staleness(replace(captured, state=ReportState.DRAFT), get, "w")
     assert stale.upstream_stale and "site location changed" in stale.upstream_stale_reasons
 
     unconfirmed_store = _Store()
@@ -311,3 +311,21 @@ def test_a_backup_restores_a_site_location_and_refuses_a_forged_one() -> None:
     ):
         with pytest.raises((RepositoryIntegrityError, ValueError)):
             _revision_from_mapping(envelope(forged, artifact_id), workspace)
+
+
+def test_the_location_is_read_with_the_workspace_identity_the_service_was_given() -> None:
+    """RED_THIS_REPAIR: the snapshot's text id reached the repository, which accepts only WorkspaceId."""
+    from scripts.backend_contract.application.models import WorkspaceId
+
+    workspace = WorkspaceId.parse("11111111-1111-4111-8111-111111111111")
+    store, _get = _confirmed_store()
+
+    def strict(workspace_id, kind, artifact_id):
+        if type(workspace_id) is not WorkspaceId:
+            raise TypeError("workspace_id inválido")
+        return store.latest(workspace_id, kind, artifact_id)
+
+    get = GetSiteLocation(SimpleNamespace(execute=strict))
+    _, captured = _amend(_draft(), get).execute(workspace, expected_revision=7, action="SET_SITE_LOCATION", values={})
+    assert _site_location_reasons(captured, get, workspace) == ()
+    assert not _with_site_location_staleness(captured, get, workspace).upstream_stale

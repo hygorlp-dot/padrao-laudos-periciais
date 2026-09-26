@@ -4919,6 +4919,13 @@ def _fragment_sequence_end(
             if wrapped_line or wrapped_page:
                 line_start = fragment
                 first_line_pending = False
+                # After a wrap every further line shares the paragraph edge,
+                # not the lead run's indented first-line position the anchor
+                # was taken from (reproduced with Word 16 on a three-line answer).
+                if active_wrap_anchor is not None:
+                    active_wrap_anchor = _ParagraphWrapAnchor(
+                        fragment.page, fragment.x, fragment.right, fragment.bottom, fragment.top, 0.0,
+                    )
         fragment_text = _normalized_visible_text(fragment.text)
         next_candidates = {
             candidate
