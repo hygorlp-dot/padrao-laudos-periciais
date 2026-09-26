@@ -736,7 +736,7 @@ def build_local_api(
             get_construction_defect_analysis,
         ),
         review_report_snapshot=ReviewReportSnapshot(get_report_snapshot, save_report_snapshot, local_clock, local_ids),
-        amend_report_draft=AmendReportDraft(get_report_snapshot, save_report_snapshot, local_ids, get_case_analysis, get_technical_snapshot),
+        amend_report_draft=AmendReportDraft(get_report_snapshot, save_report_snapshot, local_ids, get_case_analysis, get_technical_snapshot, get_construction_defect_analysis),
         list_report_sources=ListReportSources(get_case_analysis, get_inspection_session, get_technical_snapshot, get_construction_defect_analysis),
         export_report_audit_trail=ExportReportAuditTrail(get_report_snapshot),
         store_delivery_template=generic_store,

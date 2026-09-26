@@ -24,6 +24,9 @@ from ..report_foundation import (
     REPORT_SNAPSHOT_ARTIFACT_KIND,
     ReportCoverage,
     ReportAnswer,
+    ReportFindingRow,
+    ReportProvenance,
+    ReportReference,
     ReportReviewDecision,
     ReportSection,
     ReportSnapshot,
@@ -228,11 +231,12 @@ def _validate_claim_provenance(
         "TECHNICAL_FINDING": ({item.finding_id for item in technical.findings}, snapshot.source_snapshot.technical_snapshot_revision),
         "PROFESSIONAL_DECISION": ({item.decision_id for item in technical.decisions}, snapshot.source_snapshot.technical_snapshot_revision),
     }
-    for claim in snapshot.claims:
-        for provenance in claim.provenance:
-            identities, revision = sources[provenance.source_kind]
-            if provenance.source_id not in identities or provenance.source_revision != revision:
-                raise ValueError("Report Snapshot claim provenance is not present in bound upstream authority")
+    bound = [provenance for claim in snapshot.claims for provenance in claim.provenance]
+    bound.extend(row.provenance for row in snapshot.findings_table or ())
+    for provenance in bound:
+        identities, revision = sources[provenance.source_kind]
+        if provenance.source_id not in identities or provenance.source_revision != revision:
+            raise ValueError("Report Snapshot claim provenance is not present in bound upstream authority")
     documents = {item.document_id for item in case.documents}
     claims = {item.item_id for item in case.claims}
     decisions = {item.item_id for item in case.decisions}
@@ -346,7 +350,7 @@ class SaveReportSnapshot:
                 predecessor = validated_report_snapshot_from_mapping(thaw_payload(predecessor_record.payload))
                 if not allow_review_transition and snapshot.review_decisions != predecessor.review_decisions:
                     raise ValueError("Report Snapshot review decisions require the professional review command")
-                material_fields = ("source_snapshot", "expert_profile", "editorial_profile", "context_matrix", "sections", "claims", "answers")
+                material_fields = ("source_snapshot", "expert_profile", "editorial_profile", "context_matrix", "sections", "claims", "answers", "references", "findings_table")
                 if predecessor.review_decisions and any(getattr(predecessor, name) != getattr(snapshot, name) for name in material_fields):
                     raise ValueError("Report Snapshot material change requires a new draft before professional review")
             created_at = self.clock.now()
@@ -434,6 +438,7 @@ class AmendReportDraft:
     # authorities instead of asking the expert for internal identities.
     get_case_analysis: object | None = None
     get_technical_snapshot: object | None = None
+    get_construction_defect_analysis: object | None = None
 
     def execute(self, workspace_id, *, expected_revision: int, action: str, values: dict):
         record, snapshot = self.get_snapshot.execute(workspace_id)
@@ -462,6 +467,35 @@ class AmendReportDraft:
             )
             answers = (*snapshot.answers, answer)
             amended = replace(snapshot, answers=answers, coverage=_draft_coverage(snapshot, answers=answers))
+        elif action == "ADD_REFERENCE":
+            if set(values) != {"kind", "author", "title", "year", "identifier", "details"}:
+                raise ValueError("Report reference amendment is invalid")
+            def optional_text(value):
+                if value is None or (type(value) is str and not value.strip()):
+                    return None
+                if type(value) is not str:
+                    raise ValueError("Report reference amendment is invalid")
+                return value.strip()
+            if any(type(values[name]) is not str for name in ("kind", "author", "title")) or (values["year"] is not None and type(values["year"]) is not int):
+                raise ValueError("Report reference amendment is invalid")
+            reference = ReportReference(
+                f"REFERENCE-{str(self.ids.new_uuid()).upper()}", values["kind"], values["author"].strip(), values["title"].strip(),
+                values["year"], optional_text(values["identifier"]), optional_text(values["details"]),
+            )
+            amended = replace(snapshot, references=(*(snapshot.references or ()), reference))
+        elif action == "REMOVE_REFERENCE":
+            if set(values) != {"reference_id"} or not any(item.reference_id == values["reference_id"] for item in snapshot.references or ()):
+                raise ValueError("Report reference amendment is invalid")
+            remaining = tuple(item for item in snapshot.references if item.reference_id != values["reference_id"])
+            amended = replace(snapshot, references=remaining or None)
+        elif action == "SET_FINDINGS_TABLE":
+            if values != {}:
+                raise ValueError("Report findings table amendment is invalid")
+            amended = replace(snapshot, findings_table=self._findings_rows(workspace_id, snapshot))
+        elif action == "REMOVE_FINDINGS_TABLE":
+            if values != {} or snapshot.findings_table is None:
+                raise ValueError("Report findings table amendment is invalid")
+            amended = replace(snapshot, findings_table=None)
         elif action == "SET_EDITORIAL_PROFILE":
             if set(values) != {"editorial_profile"}:
                 raise ValueError("Report editorial amendment is invalid")
@@ -530,6 +564,39 @@ class AmendReportDraft:
             raise ValueError("Report draft amendment action is invalid")
         saved = self.save_snapshot.execute(workspace_id, amended, expected_revision)
         return saved, amended
+
+    def _findings_rows(self, workspace_id, snapshot: ReportSnapshot) -> tuple[ReportFindingRow, ...]:
+        """One row per approved pathology, in the analysis order, as recorded.
+
+        Nothing is inferred: a pathology without a described manifestation or
+        an observed (or concluded) finding refuses the table instead of filling
+        a cell the record does not support.  The save re-checks the bound
+        revision, so a table captured from stale authority is refused there.
+        """
+        revision = snapshot.source_snapshot.construction_defect_analysis_revision
+        if revision is None or self.get_construction_defect_analysis is None:
+            raise ValueError("Report findings table has no bound pathology authority")
+        _, pathology = _optional_pathology(workspace_id, self.get_construction_defect_analysis)
+        effective = set(pathology.effective_pat_ids) if pathology is not None else set()
+        rows = []
+        for item in (pathology.analysis_final.get("patologias", ()) if pathology is not None else ()):
+            if not isinstance(item, Mapping) or item.get("id") not in effective:
+                continue
+            observed = item.get("constatacao") if isinstance(item.get("constatacao"), Mapping) else {}
+            finding = observed.get("descricao") or item.get("conclusao_tecnica")
+            manifestation = item.get("manifestacao")
+            if not isinstance(manifestation, str) or not manifestation.strip() or not isinstance(finding, str) or not finding.strip():
+                raise ValueError("Report findings table requires described pathologies")
+            environment = item.get("ambiente")
+            situation = observed.get("situacao")
+            rows.append(ReportFindingRow(
+                manifestation.strip(), environment.strip() if isinstance(environment, str) and environment.strip() else None,
+                finding.strip(), situation if isinstance(situation, str) else None,
+                ReportProvenance(f"PROVENANCE-{str(self.ids.new_uuid()).upper()}", "PATHOLOGY", item["id"], revision),
+            ))
+        if not rows:
+            raise ValueError("Report findings table requires approved pathologies")
+        return tuple(rows)
 
 
 def _answer_for_question(snapshot: ReportSnapshot, case: CaseAnalysisSnapshot, technical: TechnicalSnapshot, *, answer_id: str, question_id: str, finding_id: str, text: str) -> ReportAnswer:

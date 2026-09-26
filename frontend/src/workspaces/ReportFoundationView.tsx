@@ -11,8 +11,11 @@ import {
   ReportApiError,
   saveExpertProfile,
   startReportSnapshot,
+  referenceCitation,
   type EditorialProfile,
   type ReportAmendment,
+  type ReportReference,
+  type ReportReferenceKind,
   type ReportEnvelope,
   type ReportSnapshot,
   type ReportSourceCatalog,
@@ -139,11 +142,14 @@ function SectionEditor({ section, snapshot, sources, editable, busy, amend }: {
   const claims = snapshot.claims.filter((claim) => claim.section_id === section.section_id);
   const [adding, setAdding] = useState(false);
   const titleId = `section-${section.section_id}`;
-  const empty = claims.length === 0 && section.kind !== "ANSWERS_TO_QUESTIONS";
+  const generated = (section.kind === "TECHNICAL_FINDINGS" && Boolean(snapshot.findings_table?.length)) || (section.kind === "REFERENCES" && Boolean(snapshot.references?.length));
+  const empty = claims.length === 0 && section.kind !== "ANSWERS_TO_QUESTIONS" && !generated;
   return <article className="report-section" aria-labelledby={titleId}>
     <header><h3 id={titleId}>{section.order}. {section.title}</h3>{section.required_by_cpc473 && <span className="status-pill" data-tone={claims.length ? "done" : "warn"}>{claims.length ? "Obrigatória · preenchida" : "Obrigatória · pendente"}</span>}</header>
     {empty && <p className="report-empty">{section.required_by_cpc473 ? "Seção obrigatória ainda sem conteúdo." : "Sem conteúdo. Seções vazias não aparecem no documento final."}</p>}
-    {claims.map((claim) => <ClaimEditor key={`${claim.claim_id}:${claim.text}`} claim={claim} sources={sources} editable={editable} busy={busy} amend={amend} protectedByAnswer={snapshot.answers.some((answer) => answer.claim_ids.includes(claim.claim_id))} />)}
+    {section.kind === "TECHNICAL_FINDINGS" && <FindingsTablePanel snapshot={snapshot} editable={editable} busy={busy} amend={amend} />}
+    {claims.map((claim) => <ClaimEditor key={`${claim.claim_id}:${claim.text}`} claim={claim} sources={sources} references={snapshot.references ?? []} editable={editable} busy={busy} amend={amend} protectedByAnswer={snapshot.answers.some((answer) => answer.claim_ids.includes(claim.claim_id))} />)}
+    {section.kind === "REFERENCES" && <ReferencesPanel references={snapshot.references ?? []} editable={editable} busy={busy} amend={amend} />}
     {section.kind === "ANSWERS_TO_QUESTIONS" && <QuestionsEditor snapshot={snapshot} sources={sources} editable={editable} busy={busy} amend={amend} />}
     {editable && sources && (adding
       ? <AddClaimForm section={section} sources={sources} busy={busy} onCancel={() => setAdding(false)} onAdd={async (kind, id, text) => { if (await amend("ADD_CLAIM", { section_id: section.section_id, text, source_kind: kind, source_id: id }, "Não foi possível adicionar o texto.")) setAdding(false); }} />
@@ -151,9 +157,10 @@ function SectionEditor({ section, snapshot, sources, editable, busy, amend }: {
   </article>;
 }
 
-function ClaimEditor({ claim, sources, editable, busy, amend, protectedByAnswer }: {
+function ClaimEditor({ claim, sources, references, editable, busy, amend, protectedByAnswer }: {
   claim: ReportSnapshot["claims"][number];
   sources: ReportSourceCatalog | null;
+  references: ReportReference[];
   editable: boolean;
   busy: boolean;
   amend: (action: ReportAmendment, values: Record<string, unknown>, failure: string) => Promise<boolean>;
@@ -167,12 +174,84 @@ function ClaimEditor({ claim, sources, editable, busy, amend, protectedByAnswer 
     {editable
       ? <label className="report-claim-text">Texto<textarea value={text} onChange={(event) => setText(event.target.value)} disabled={busy} /></label>
       : <p>{claim.text}</p>}
+    {editable && references.length > 0 && <label className="report-cite">Inserir citação<select value="" disabled={busy} onChange={(event) => { const chosen = references.find((item) => item.reference_id === event.target.value); if (chosen) setText(`${text.trimEnd()} ${referenceCitation(chosen)}`); }}><option value="">Escolha a referência</option>{references.map((item) => <option key={item.reference_id} value={item.reference_id}>{referenceCitation(item)} — {item.title}</option>)}</select></label>}
     <p className="report-claim-source"><span className="status-pill">{authorityLabel(claim.authority)}</span> Fonte: {sourceKindLabel(provenance?.source_kind)}{label ? ` — ${label}` : ""}</p>
     {editable && <div className="action-row">
       <button className="secondary-action" type="button" disabled={busy || !text.trim() || text.trim() === claim.text} onClick={() => void amend("UPDATE_CLAIM_TEXT", { claim_id: claim.claim_id, text }, "Não foi possível salvar o texto.")}>Salvar texto</button>
       <button className="text-action" type="button" disabled={busy || protectedByAnswer} title={protectedByAnswer ? "Este texto sustenta a resposta a um quesito." : undefined} onClick={() => void amend("REMOVE_CLAIM", { claim_id: claim.claim_id }, "Não foi possível remover o texto.")}>Remover</button>
     </div>}
     <TechnicalDetails>{claim.provenance.map((item) => <span className="data" key={item.provenance_id}>{claim.claim_id} · {item.source_kind} · {item.source_id} · revisão {item.source_revision}</span>)}</TechnicalDetails>
+  </div>;
+}
+
+const SITUATION_LABEL: Record<string, string> = { CONFORME: "Conforme", ANOMALIA: "Anomalia", FALHA: "Falha", INCONCLUSIVA: "Inconclusiva", NAO_CONSTATADA: "Não constatada" };
+
+function FindingsTablePanel({ snapshot, editable, busy, amend }: {
+  snapshot: ReportSnapshot;
+  editable: boolean;
+  busy: boolean;
+  amend: (action: ReportAmendment, values: Record<string, unknown>, failure: string) => Promise<boolean>;
+}) {
+  const rows = snapshot.findings_table ?? [];
+  const bound = snapshot.source_snapshot.construction_defect_analysis_snapshot_id !== null;
+  if (!rows.length && !(editable && bound)) return null;
+  return <div className="report-findings-table">
+    {rows.length > 0 && <table>
+      <caption>Tabela 1 – Resumo dos achados técnicos</caption>
+      <thead><tr><th scope="col">Item</th><th scope="col">Manifestação</th><th scope="col">Ambiente</th><th scope="col">Achado</th><th scope="col">Situação</th></tr></thead>
+      <tbody>{rows.map((row, index) => <tr key={row.provenance.provenance_id}><td>{index + 1}</td><td>{row.manifestation}</td><td>{row.environment ?? "Não informado"}</td><td>{row.finding}</td><td>{row.situation ? SITUATION_LABEL[row.situation] ?? row.situation : "Não informada"}</td></tr>)}</tbody>
+    </table>}
+    {editable && <>
+      <p className="field-hint">{rows.length ? "A tabela repete o que as patologias aprovadas registram; se a análise mudar, atualize-a." : "Monte a tabela-resumo a partir das patologias aprovadas na análise de vícios. Nada é inferido: cada linha repete o registro."}</p>
+      <div className="action-row">
+        <button className="secondary-action" type="button" disabled={busy || !bound} onClick={() => void amend("SET_FINDINGS_TABLE", {}, "Não foi possível montar a tabela-resumo. Confira se há patologias aprovadas com manifestação e achado descritos.")}>{rows.length ? "Atualizar tabela-resumo" : "Inserir tabela-resumo dos achados"}</button>
+        {rows.length > 0 && <button className="text-action" type="button" disabled={busy} onClick={() => void amend("REMOVE_FINDINGS_TABLE", {}, "Não foi possível remover a tabela-resumo.")}>Remover tabela</button>}
+      </div>
+    </>}
+  </div>;
+}
+
+const REFERENCE_KINDS: Array<[ReportReferenceKind, string]> = [
+  ["TECHNICAL_STANDARD", "Norma técnica"],
+  ["LEGAL_REFERENCE", "Legislação"],
+  ["TECHNICAL_LITERATURE", "Literatura técnica"],
+  ["MANUFACTURER_DOCUMENTATION", "Documentação de fabricante"],
+  ["OTHER_REFERENCE", "Outra referência"],
+];
+const EMPTY_REFERENCE = { kind: "TECHNICAL_STANDARD" as ReportReferenceKind, author: "", title: "", year: "", identifier: "", details: "" };
+
+function ReferencesPanel({ references, editable, busy, amend }: {
+  references: ReportReference[];
+  editable: boolean;
+  busy: boolean;
+  amend: (action: ReportAmendment, values: Record<string, unknown>, failure: string) => Promise<boolean>;
+}) {
+  const [draft, setDraft] = useState(EMPTY_REFERENCE);
+  const year = draft.year.trim() ? Number(draft.year) : null;
+  const yearValid = year === null || (Number.isInteger(year) && year >= 1800 && year <= 2200);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!draft.author.trim() || !draft.title.trim() || !yearValid) return;
+    const saved = await amend("ADD_REFERENCE", { kind: draft.kind, author: draft.author.trim(), title: draft.title.trim(), year, identifier: draft.identifier.trim() || null, details: draft.details.trim() || null }, "Não foi possível adicionar a referência. Confira se ela já não está na lista.");
+    if (saved) setDraft(EMPTY_REFERENCE);
+  };
+  const kindLabel = (kind: string) => REFERENCE_KINDS.find(([value]) => value === kind)?.[1] ?? kind;
+  return <div className="report-references">
+    <p className="field-hint">Normas, leis e obras que fundamentam o laudo. Documentos dos autos continuam como evidência e não entram aqui. A seção de referências do documento é gerada desta lista, em ordem alfabética.</p>
+    {references.length > 0 && <ul>{references.map((item) => <li key={item.reference_id}>
+      <div><strong>{referenceCitation(item)}</strong> <span className="status-pill">{kindLabel(item.kind)}</span><p>{item.identifier ? `${item.identifier}: ` : ""}{item.title}{item.details ? ` · ${item.details}` : ""}</p></div>
+      {editable && <button className="text-action" type="button" disabled={busy} onClick={() => void amend("REMOVE_REFERENCE", { reference_id: item.reference_id }, "Não foi possível remover a referência.")}>Remover</button>}
+    </li>)}</ul>}
+    {editable && <form className="report-add" onSubmit={submit} aria-label="Adicionar referência">
+      <label>Tipo<select value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value as ReportReferenceKind })}>{REFERENCE_KINDS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      <label>Autor ou entidade<input required value={draft.author} placeholder="Associação Brasileira de Normas Técnicas" onChange={(event) => setDraft({ ...draft, author: event.target.value })} /></label>
+      <label>Identificação (opcional)<input value={draft.identifier} placeholder="ABNT NBR 15575-1" onChange={(event) => setDraft({ ...draft, identifier: event.target.value })} /></label>
+      <label>Título<input required value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
+      <label>Ano (opcional)<input inputMode="numeric" aria-invalid={!yearValid} value={draft.year} onChange={(event) => setDraft({ ...draft, year: event.target.value })} /></label>
+      <label>Local, editora ou publicação (opcional)<input value={draft.details} placeholder="Rio de Janeiro" onChange={(event) => setDraft({ ...draft, details: event.target.value })} /></label>
+      {!yearValid && <p role="alert">Informe o ano com quatro dígitos ou deixe em branco.</p>}
+      <div className="action-row"><button className="secondary-action" type="submit" disabled={busy || !draft.author.trim() || !draft.title.trim() || !yearValid}>Adicionar referência</button></div>
+    </form>}
   </div>;
 }
 

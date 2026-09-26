@@ -1590,3 +1590,67 @@ button.text-action {
   text-decoration-color: var(--color-ochre);
   text-underline-offset: 0.22em;
 }
+
+.report-findings-table {
+  display: grid;
+  gap: var(--space-3);
+  overflow-x: auto;
+}
+
+.report-findings-table table {
+  width: 100%;
+  min-width: 36rem;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.report-findings-table caption {
+  padding-bottom: var(--space-2);
+  text-align: left;
+  font-weight: 700;
+}
+
+.report-findings-table th,
+.report-findings-table td {
+  padding: var(--space-2);
+  border: 1px solid var(--color-rule);
+  text-align: left;
+  vertical-align: top;
+}
+
+.report-findings-table th {
+  background: var(--color-paper);
+}
+
+.report-references {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.report-references ul {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.report-references li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-rule);
+}
+
+.report-references li p {
+  margin: var(--space-1) 0 0;
+}
+
+.report-cite {
+  display: grid;
+  gap: var(--space-1);
+  max-width: 32rem;
+  font-size: 0.88rem;
+}
