@@ -52,9 +52,11 @@ describe("inspection session view", () => {
     expect(screen.getAllByText("Execução parcial")).toHaveLength(2);
     expect(screen.getByText("1250 mm")).toBeInTheDocument();
     expect(screen.getByText(/Declaração da parte — não é observação pericial/)).toBeInTheDocument();
-    expect(screen.getByText(/Original privado · SHA-256/)).toBeInTheDocument();
+    expect(screen.getByText(/Original preservado/)).toBeInTheDocument();
+    // O hash do original continua auditável, dentro dos detalhes técnicos.
+    expect(screen.getByText(new RegExp(`SHA-256 ${"e".repeat(64)}`)).closest("details")).not.toBeNull();
     expect(screen.getByText("Área complementar inacessível.")).toBeInTheDocument();
-    expect(screen.getByText(/candidato a análise técnica futura/i)).toBeInTheDocument();
+    expect(screen.getByText(/candidato à análise técnica — ainda não é achado/i)).toBeInTheDocument();
     expect(screen.queryByText(/conclusão pericial|responsabilidade|resposta ao quesito/i)).not.toBeInTheDocument();
   });
 

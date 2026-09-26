@@ -1,4 +1,4 @@
-import type { ShellRoute } from "../routes/routeCatalog";
+import { WORKFLOW_STAGE_COUNT, type ShellRoute } from "../routes/routeCatalog";
 
 type TopBarProps = {
   currentRoute?: ShellRoute;
@@ -8,7 +8,7 @@ type TopBarProps = {
 export function TopBar({ currentRoute, workspaceName }: TopBarProps) {
   const routePosition =
     currentRoute?.kind === "stage"
-      ? `Etapa ${currentRoute.index} de 10`
+      ? `Etapa ${Number(currentRoute.index)} de ${WORKFLOW_STAGE_COUNT}`
       : "Visão geral";
 
   return (

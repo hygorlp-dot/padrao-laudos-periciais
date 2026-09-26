@@ -76,7 +76,9 @@ describe("case analysis view", () => {
     expect(screen.getAllByText(/identidade judicial requer revisão/).length).toBeGreaterThan(0);
     expect(screen.getByText(/representação requer revisão/)).toBeInTheDocument();
     await user.click(screen.getAllByText("Ver proveniência")[0]);
-    expect(screen.getAllByText(`DOC-001 · p. 3, §2 · ocorrência OCC-CLAIM-001 · SHA ${"a".repeat(64)} · revisão 4`).length).toBeGreaterThan(0);
+    // A página vem primeiro; identidades e hash continuam no detalhe da proveniência.
+    expect(screen.getAllByText(`· DOC-001 · ocorrência OCC-CLAIM-001 · SHA-256 ${"a".repeat(64)} · revisão 4`).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("p. 3, §2", { exact: false }).length).toBeGreaterThan(0);
   });
 
   test("shows an honest not-yet-analyzed state", async () => {

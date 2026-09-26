@@ -334,7 +334,7 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
           Gera um pacote com esta perícia — revisões, documentos e proveniência —
           para você guardar onde quiser. O pacote fica só na sua máquina.
         </p>
-        <button type="button" onClick={onExport} disabled={backup.kind === "working"}>
+        <button className="primary-action" type="button" onClick={onExport} disabled={backup.kind === "working"}>
           {backup.kind === "working" ? "Gerando backup…" : "Criar backup"}
         </button>
         {backup.kind === "done" ? (
@@ -373,6 +373,7 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
 
         {restore.kind === "idle" || restore.kind === "verifying" ? (
           <button
+            className="primary-action"
             type="button"
             onClick={onVerify}
             disabled={!selected || restore.kind === "verifying"}
@@ -388,6 +389,7 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
             </p>
             {summaryList(restore.summary)}
             <button
+              className="primary-action"
               type="button"
               onClick={() => onStage(restore.summary)}
               disabled={restore.kind === "staging"}
@@ -421,6 +423,7 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
                   ativa.
                 </label>
                 <button
+                  className="authority-action"
                   type="button"
                   onClick={() => onPromote(restore.staged)}
                   disabled={!confirmed || restore.kind !== "staged"}

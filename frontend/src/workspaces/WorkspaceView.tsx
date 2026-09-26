@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 
+import { ExpertIdentityProvider } from "../data/expertIdentity";
 import { getWorkspace, WorkspaceApiError, type Workspace } from "../data/workspaces";
 import { navigate } from "../app/router";
 import { workspacePath, type ShellRoute } from "../routes/routeCatalog";
@@ -17,8 +18,10 @@ import { ReportFoundationView } from "./ReportFoundationView";
 import { DeliveryFoundationView } from "./DeliveryFoundationView";
 import { BudgetFoundationView } from "./BudgetFoundationView";
 import { WorkspaceRecoveryView } from "./WorkspaceRecoveryView";
+import { FindingsLedgerView } from "./FindingsLedgerView";
+import { ReportReviewView } from "./ReportReviewView";
 
-const IMPLEMENTED_STAGE_PATHS = ["/processo", "/materiais", "/analise", "/planejamento", "/vistoria", "/evidencias", "/analise-tecnica", "/laudo", "/exportar", "/orcamento", "/recuperacao"];
+const IMPLEMENTED_STAGE_PATHS = ["/processo", "/materiais", "/analise", "/planejamento", "/vistoria", "/evidencias", "/constatacoes", "/analise-tecnica", "/laudo", "/revisao", "/exportar", "/orcamento", "/recuperacao"];
 
 type WorkspaceViewProps = {
   currentPath: string;
@@ -121,6 +124,7 @@ export function WorkspaceView({ currentPath, workspaceId, route }: WorkspaceView
       workspaceId={workspaceId}
       workspaceName={workspace?.name}
     >
+      <ExpertIdentityProvider workspaceId={workspaceId}>
       <article className="route-view" aria-labelledby="page-title">
         <PageHeader route={route} />
         {state.kind === "loading" ? (
@@ -174,6 +178,12 @@ export function WorkspaceView({ currentPath, workspaceId, route }: WorkspaceView
         {state.kind === "ready" && route.path === "/evidencias" ? (
           <TechnicalFindingsView workspaceId={workspaceId} />
         ) : null}
+        {state.kind === "ready" && route.path === "/constatacoes" ? (
+          <FindingsLedgerView workspaceId={workspaceId} />
+        ) : null}
+        {state.kind === "ready" && route.path === "/revisao" ? (
+          <ReportReviewView workspaceId={workspaceId} />
+        ) : null}
         {state.kind === "ready" && route.path === "/analise-tecnica" ? (
           <ConstructionDefectAnalysisView workspaceId={workspaceId} />
         ) : null}
@@ -202,6 +212,7 @@ export function WorkspaceView({ currentPath, workspaceId, route }: WorkspaceView
           </a>
         ) : null}
       </article>
+      </ExpertIdentityProvider>
     </AppShell>
   );
 }

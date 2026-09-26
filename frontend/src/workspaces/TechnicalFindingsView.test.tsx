@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { ExpertIdentityProvider } from "../data/expertIdentity";
 import { TechnicalFindingsView } from "./TechnicalFindingsView";
 
 const ID = "11111111-1111-4111-8111-111111111111";
@@ -29,18 +30,51 @@ const response = (status: number, value: object) => new Response(JSON.stringify(
 
 afterEach(() => vi.unstubAllGlobals());
 
+// A tela também lê vistoria, análise e perfil do perito para montar os seletores.
+// Estas leituras são roteadas por URL; o mock recebido responde só à cadeia técnica.
+const inspection = {
+  revision: 2, updated_at: "2026-08-31T10:00:00Z",
+  snapshot: {
+    schema_version: "1.0.0", session_id: "INSPECTION-001", workspace_id: ID,
+    plan_snapshot: { plan_id: "PLAN-1", planning_snapshot_id: "PLANNING-1", planning_revision: 1, planning_digest: "c".repeat(64), workspace_id: ID, approved_item_ids: [], source_revision: 1 },
+    started_at: "2026-08-31T09:00:00Z", ended_at: null, location_context: "Imóvel sintético", participant_references: [], responsible_professional: "PROFESSIONAL-001", source_revision: 1,
+    items: [{ item_id: "ITEM-1", planning_item_id: "PLAN-ITEM-1", title: "Item", state: "COMPLETED", observation_ids: [], measurement_ids: ["MEASUREMENT-002"], photo_ids: [], limitation_ids: [], note: null }],
+    observations: [], statements: [],
+    measurements: [{ measurement_id: "MEASUREMENT-002", inspection_item_id: "ITEM-1", quantity: "abertura", raw_value: "0,3", raw_unit: "mm", normalized_value: null, normalized_unit: null, instrument_id: "I", method_id: "M", location_id: "L", timestamp: "2026-08-31T09:10:00Z", operator: "P", uncertainty: null, raw_observation: "Fissura da sala", provenance: "Campo" }],
+    measurement_series: [], methods: [], instruments: [], instrument_statuses: [], photos: [], videos: [], sketches: [], locations: [], environmental_conditions: [], access_occurrences: [], limitations: [], missing_items: [], evidence_candidates: [],
+    coverage: { total_items: 1, pending_items: 0, completed_items: 1, partial_items: 0, not_executed_items: 0, not_applicable_items: 0, blocked_items: 0, complete: true, limitation_ids: [], reasons: [] },
+    reviews: [], upstream_stale: false, upstream_stale_reasons: [],
+  },
+};
+const expertProfile = { revision: 1, updated_at: "2026-08-31T10:00:00Z", profile: { profile_id: "EXPERT-PROFILE-001", revision: 1, full_name: "Perita Sintética", professional_title: "Engenheira civil", registration: "CREA-XX 000000", court_registration: "TJ-000", contact_line: "contato" } };
+function routed(technical: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>, options: { profile?: boolean } = {}) {
+  return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/inspection-session")) return Promise.resolve(response(200, inspection));
+    if (url.endsWith("/case-analysis")) return Promise.resolve(response(404, {}));
+    if (url.endsWith("/expert-profile")) return Promise.resolve(options.profile ? response(200, expertProfile) : response(404, {}));
+    return technical(input, init);
+  });
+}
+const technicalCalls = (mock: ReturnType<typeof vi.fn>) => mock.mock.calls.filter(([url]) => String(url).includes("/technical-snapshot"));
+
 describe("technical findings workbench", () => {
   test("renders the complete chain without flattening proposal into professional finding", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(200, envelope)));
+    vi.stubGlobal("fetch", routed(vi.fn(() => Promise.resolve(response(200, envelope)))));
     render(<TechnicalFindingsView workspaceId={ID} />);
     expect(await screen.findByRole("heading", { name: "Cadeia técnica" })).toBeInTheDocument();
-    expect(screen.getByText("Leitura bruta sintética.")).toBeInTheDocument();
-    expect(screen.getByText("Comparação")).toBeInTheDocument();
-    expect(screen.getByText("Proposição técnica sintética.")).toBeInTheDocument();
+    const chain = within(screen.getByRole("list", { name: "Etapas da cadeia técnica" }));
+    expect(chain.getByText("Leitura bruta sintética.")).toBeInTheDocument();
+    expect(chain.getByText("Comparação")).toBeInTheDocument();
+    expect(chain.getByText("Proposição técnica sintética.")).toBeInTheDocument();
     expect(screen.getByText(/proposta não produz conclusão efetiva/i)).toBeInTheDocument();
     expect(screen.getAllByText(/decisão profissional explícita/i)).toHaveLength(1);
     expect(screen.getByLabelText("Tipo canônico da fonte")).toBeInTheDocument();
     expect(screen.getByLabelText("Evidência pendente")).toBeInTheDocument();
+    // Estados e origens na língua do perito; códigos só nos detalhes técnicos.
+    expect(screen.getByText("Proposta automática")).toBeInTheDocument();
+    expect(screen.queryByText("AI_PROPOSAL")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Aprovado").length).toBeGreaterThan(0);
     expect(screen.getByLabelText("Método de suporte")).toBeInTheDocument();
     expect(screen.getAllByRole("option", { name: "Modificar e aprovar" })).toHaveLength(1);
     expect(screen.queryByText(/responsabilidade civil|culpa jurídica|resposta final automática/i)).not.toBeInTheDocument();
@@ -48,32 +82,44 @@ describe("technical findings workbench", () => {
 
   test("starts an empty snapshot from current upstream authorities", async () => {
     const empty = { ...snapshot, evidence_items: [], source_links: [], evidence_assessments: [], method_applications: [], method_inputs: [], method_outputs: [], finding_proposals: [], findings: [], limitations: [], uncertainties: [], question_links: [], decisions: [], coverage: { evidence_items: 0, approved_evidence: 0, method_applications: 0, finding_proposals: 0, effective_findings: 0, unresolved_conflicts: 0, complete: false, reasons: ["Cadeia vazia."] } };
-    const fetchMock = vi.fn().mockResolvedValueOnce(response(404, {})).mockResolvedValueOnce(response(201, { ...envelope, snapshot: empty }));
+    const technical = vi.fn().mockResolvedValueOnce(response(404, {})).mockResolvedValueOnce(response(201, { ...envelope, snapshot: empty }));
+    const fetchMock = routed(technical);
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup(); render(<TechnicalFindingsView workspaceId={ID} />);
     await user.click(await screen.findByRole("button", { name: "Iniciar cadeia técnica" }));
     expect(await screen.findByRole("heading", { name: "Cadeia técnica" })).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenLastCalledWith(expect.stringContaining("/technical-snapshot"), expect.objectContaining({ method: "POST" }));
+    expect(technical).toHaveBeenLastCalledWith(expect.stringContaining("/technical-snapshot"), expect.objectContaining({ method: "POST" }));
   });
 
   test("shows stale upstream as a blocking state", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(200, { ...envelope, snapshot: { ...snapshot, upstream_stale: true, upstream_stale_reasons: ["inspection session content changed"], coverage: { ...snapshot.coverage, complete: false } } })));
+    vi.stubGlobal("fetch", routed(vi.fn(() => Promise.resolve(response(200, { ...envelope, snapshot: { ...snapshot, upstream_stale: true, upstream_stale_reasons: ["inspection session content changed"], coverage: { ...snapshot.coverage, complete: false } } })))));
     render(<TechnicalFindingsView workspaceId={ID} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("não continue");
   });
 
   test("fails closed when the response belongs to another workspace", async () => {
     const other = "22222222-2222-4222-8222-222222222222";
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(200, { ...envelope, snapshot: { ...snapshot, workspace_id: other, source_snapshot: { ...snapshot.source_snapshot, workspace_id: other } } })));
+    vi.stubGlobal("fetch", routed(vi.fn(() => Promise.resolve(response(200, { ...envelope, snapshot: { ...snapshot, workspace_id: other, source_snapshot: { ...snapshot.source_snapshot, workspace_id: other } } })))));
     render(<TechnicalFindingsView workspaceId={ID} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível carregar");
   });
 
   test("captures explicit professional identity and never defaults approval", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(200, envelope)));
+    vi.stubGlobal("fetch", routed(vi.fn(() => Promise.resolve(response(200, envelope)))));
     render(<TechnicalFindingsView workspaceId={ID} />);
     expect(await screen.findByLabelText("Ação profissional")).toHaveValue("REJECT");
     expect(screen.getByLabelText("Profissional responsável")).toHaveValue("");
+    expect(screen.getAllByText(/Cadastre seu perfil na etapa Laudo/).length).toBeGreaterThan(0);
+  });
+
+  test("prefills the deciding professional from the expert profile, still editable, never approving", async () => {
+    vi.stubGlobal("fetch", routed(vi.fn(() => Promise.resolve(response(200, envelope))), { profile: true }));
+    render(<ExpertIdentityProvider workspaceId={ID}><TechnicalFindingsView workspaceId={ID} /></ExpertIdentityProvider>);
+    await waitFor(() => expect(screen.getByLabelText("Profissional responsável")).toHaveValue("EXPERT-PROFILE-001"));
+    expect(screen.getAllByText(/Perita Sintética · CREA-XX 000000/).length).toBeGreaterThan(0);
+    expect(screen.getByLabelText("Ação profissional")).toHaveValue("REJECT");
+    fireEvent.change(screen.getByLabelText("Profissional responsável"), { target: { value: "OUTRO" } });
+    expect(screen.getByLabelText("Profissional responsável")).toHaveValue("OUTRO");
   });
 
   test("submits only a non-authoritative evidence proposal through its command", async () => {
@@ -84,19 +130,22 @@ describe("technical findings workbench", () => {
       evidence_assessments: [...snapshot.evidence_assessments, { ...snapshot.evidence_assessments[0], assessment_id: "ASSESSMENT-REJECTED", evidence_id: "EVIDENCE-REJECTED", supported_proposition: "Fonte rejeitada.", limitation_ids: ["LIMIT-EVIDENCE-REJECTED"], source_link_ids: ["SOURCE-LINK-REJECTED"], review_state: "REJECTED", reviewer: "PROFESSIONAL-001", reviewed_at: "2026-08-31T10:01:00Z" }],
       coverage: { ...snapshot.coverage, evidence_items: 2 },
     };
-    const fetchMock = vi.fn().mockResolvedValueOnce(response(200, { ...envelope, snapshot: withRejectedEvidence })).mockResolvedValueOnce(response(200, envelope));
+    const technical = vi.fn().mockResolvedValueOnce(response(200, { ...envelope, snapshot: withRejectedEvidence })).mockResolvedValueOnce(response(200, envelope));
+    const fetchMock = routed(technical);
     vi.stubGlobal("fetch", fetchMock);
     render(<TechnicalFindingsView workspaceId={ID} />);
     await screen.findByRole("heading", { name: "Cadeia técnica" });
-    const values = {
-      "Identidade da fonte ou observação": "MEASUREMENT-002", "Proposição sustentada": "Leitura bruta adicional.",
-      "Por que é relevante": "Relaciona-se à questão técnica.", "Limitação da evidência": "Amostra pontual.",
-    };
-    for (const [label, value] of Object.entries(values).filter(([label]) => label !== "Limitação da evidência")) fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    // A fonte é escolhida pelo conteúdo registrado em campo, sem digitar identificador.
+    const source = screen.getByLabelText("Fonte");
+    await waitFor(() => expect(screen.getByRole("option", { name: "abertura: 0,3 mm · Fissura da sala" })).toBeInTheDocument());
+    fireEvent.change(source, { target: { value: "MEASUREMENT-002" } });
+    fireEvent.change(screen.getByLabelText("Proposição sustentada"), { target: { value: "Leitura bruta adicional." } });
+    fireEvent.change(screen.getByLabelText("Por que é relevante"), { target: { value: "Relaciona-se à questão técnica." } });
     fireEvent.click(screen.getByRole("button", { name: "Registrar proposta de evidência" }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    const body = JSON.parse(String(fetchMock.mock.calls[1][1].body));
-    expect(fetchMock.mock.calls[1][0]).toContain("/evidence-proposals");
+    await waitFor(() => expect(technicalCalls(fetchMock)).toHaveLength(2));
+    const call = technicalCalls(fetchMock)[1];
+    const body = JSON.parse(String((call[1] as RequestInit).body));
+    expect(String(call[0])).toContain("/evidence-proposals");
     expect(body).toEqual({ source_kind: "MEASUREMENT", source_id: "MEASUREMENT-002", proposition: "Leitura bruta adicional.", why_relevant: "Relaciona-se à questão técnica.", expected_revision: 1 });
     expect(JSON.stringify(body)).not.toMatch(/decision_id|finding_id|reviewed_at|APPROVED/);
   });
