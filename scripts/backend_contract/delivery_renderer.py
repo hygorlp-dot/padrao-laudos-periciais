@@ -785,6 +785,96 @@ def _canonical_report_lines(report: ReportSnapshot) -> tuple[str, ...]:
     return tuple(_canonical_text(line) for line in lines)
 
 
+def canonical_report_audit_lines(report: ReportSnapshot) -> tuple[str, ...]:
+    """The canonical audit trail: identities, authority and provenance per line.
+
+    It is the technical record of what the report states and why, kept out of
+    the professional document and offered separately for audit.
+    """
+    return _canonical_report_lines(report)
+
+
+@dataclass(frozen=True, slots=True)
+class ReportPresentationBlock:
+    """One paragraph of the professional report, derived from canonical authority.
+
+    Presentation never creates authority: every block is a claim text, an answer
+    text, a question the case record states, or a heading for a section that has
+    content.  ``lead`` is a bold lead-in (``Quesito 1:``); ``text`` follows it.
+    """
+
+    kind: str
+    text: str
+    lead: str = ""
+
+    @property
+    def visible_text(self) -> str:
+        if self.lead and self.text:
+            return f"{self.lead} {self.text}"
+        return self.lead or self.text
+
+
+def _presentation_paragraphs(text: str) -> list[str]:
+    # An expert's line breaks separate paragraphs in the document.
+    return [line.strip() for line in _canonical_text(text).split(chr(10)) if line.strip()]
+
+
+def professional_report_blocks(report: ReportSnapshot) -> tuple[ReportPresentationBlock, ...]:
+    """The report as a professional document: numbered sections, prose, answers.
+
+    Sections without content are omitted and the visible numbering follows the
+    sections actually presented; the canonical order and identity stay in the
+    audit trail.  No identity, authority code or provenance appears here.
+    """
+    claims_by_section: dict[str, list] = {section.section_id: [] for section in report.sections}
+    for claim in report.claims:
+        claims_by_section[claim.section_id].append(claim)
+    answers_by_section: dict[str, list] = {section.section_id: [] for section in report.sections}
+    for answer in report.answers:
+        answers_by_section[answer.section_id].append(answer)
+    blocks: list[ReportPresentationBlock] = []
+    number = 0
+    for section in sorted(report.sections, key=lambda item: item.order):
+        body: list[ReportPresentationBlock] = []
+        for claim in claims_by_section[section.section_id]:
+            body.extend(ReportPresentationBlock("PARAGRAPH", paragraph) for paragraph in _presentation_paragraphs(claim.text))
+        for index, answer in enumerate(answers_by_section[section.section_id], 1):
+            question = " ".join(_presentation_paragraphs(answer.question_text)) if answer.question_text else ""
+            body.append(ReportPresentationBlock("QUESTION", question, f"Quesito {index}:"))
+            paragraphs = _presentation_paragraphs(answer.text)
+            body.append(ReportPresentationBlock("ANSWER", paragraphs[0] if paragraphs else "", "Resposta:"))
+            body.extend(ReportPresentationBlock("PARAGRAPH", paragraph) for paragraph in paragraphs[1:])
+        if not body:
+            continue
+        number += 1
+        blocks.append(ReportPresentationBlock("HEADING_1", f"{number}. {_canonical_text(section.title).upper()}"))
+        blocks.extend(body)
+    return tuple(blocks)
+
+
+def _heading_style_id(styles: bytes | None) -> str | None:
+    """The template's own style for built-in "heading 1", whatever its id.
+
+    A Portuguese Word names it Ttulo1, an English one Heading1; the built-in
+    name is what both share.  No style means direct formatting instead.
+    """
+    if not styles:
+        return None
+    try:
+        root = ElementTree.fromstring(styles)
+    except ElementTree.ParseError:
+        return None
+    for style in root.iter(f"{_W}style"):
+        if style.attrib.get(f"{_W}type") != "paragraph":
+            continue
+        name = style.find(f"{_W}name")
+        if name is not None and (name.attrib.get(f"{_W}val") or "").strip().lower() == "heading 1":
+            style_id = style.attrib.get(f"{_W}styleId")
+            if style_id and re.fullmatch(r"[A-Za-z0-9_-]{1,253}", style_id):
+                return style_id
+    return None
+
+
 def render_pdf_candidate(report: ReportSnapshot) -> bytes:
     """Render a text-only diagnostic PDF; never use as a final professional artifact."""
     report_digest = sha256(json.dumps(report_snapshot_to_mapping(report), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
@@ -6142,18 +6232,38 @@ def _wordprocessing_prefix(part: bytes) -> bytes:
     return prefixes.pop()
 
 
-def _canonical_content_markup(report: ReportSnapshot, prefix: bytes) -> bytes:
+def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_style: str | None = None) -> bytes:
+    """The professional presentation, written in the package's own prefix."""
     def escaped(value: str) -> bytes:
         return (
             value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         ).encode("utf-8")
 
-    return b"".join(
-        b"<" + prefix + b"p><" + prefix + b"r><" + prefix + b't xml:space="preserve">'
-        + escaped(line)
-        + b"</" + prefix + b"t></" + prefix + b"r></" + prefix + b"p>"
-        for line in _canonical_report_lines(report)
-    )
+    def element(name: bytes, attributes: bytes = b"") -> bytes:
+        return b"<" + prefix + name + attributes + b"/>"
+
+    def run(text: str, bold: bool = False) -> bytes:
+        properties = b"<" + prefix + b"rPr>" + element(b"b") + b"</" + prefix + b"rPr>" if bold else b""
+        return (
+            b"<" + prefix + b"r>" + properties + b"<" + prefix + b't xml:space="preserve">'
+            + escaped(text) + b"</" + prefix + b"t></" + prefix + b"r>"
+        )
+
+    def value(name: bytes, text: str) -> bytes:
+        return b" " + prefix + name + b'="' + escaped(text) + b'"'
+
+    paragraphs = []
+    for block in professional_report_blocks(report):
+        if block.kind == "HEADING_1":
+            style = element(b"pStyle", value(b"val", heading_style)) if heading_style else b""
+            properties = b"<" + prefix + b"pPr>" + style + element(b"keepNext") + element(b"outlineLvl", value(b"val", "0")) + b"</" + prefix + b"pPr>"
+            paragraphs.append(b"<" + prefix + b"p>" + properties + run(block.text, bold=heading_style is None) + b"</" + prefix + b"p>")
+        elif block.lead:
+            content = run(block.lead, bold=True) + (run(" " + block.text) if block.text else b"")
+            paragraphs.append(b"<" + prefix + b"p>" + content + b"</" + prefix + b"p>")
+        else:
+            paragraphs.append(b"<" + prefix + b"p>" + run(block.text) + b"</" + prefix + b"p>")
+    return b"".join(paragraphs)
 
 
 def _canonical_tag_anchor(part: bytes, prefix: bytes) -> int:
@@ -6213,11 +6323,11 @@ def _verify_canonical_binding(part: bytes, report: ReportSnapshot) -> None:
         "".join(node.text or "" for node in paragraph.iter(f"{_W}t"))
         for paragraph in content.iter(f"{_W}p")
     ]
-    if rendered != list(_canonical_report_lines(report)):
+    if rendered != [block.visible_text for block in professional_report_blocks(report)]:
         raise ValueError("canonical report did not bind to its content control")
 
 
-def _replace_canonical_content(part: bytes, report: ReportSnapshot) -> bytes:
+def _replace_canonical_content(part: bytes, report: ReportSnapshot, heading_style: str | None = None) -> bytes:
     """Replace the CANONICAL_REPORT control's content without touching other bytes."""
     prefix = _wordprocessing_prefix(part)
     anchor = _canonical_tag_anchor(part, prefix)
@@ -6227,7 +6337,7 @@ def _replace_canonical_content(part: bytes, report: ReportSnapshot) -> bytes:
     end_of_open = part.find(b">", start) if start >= 0 else -1
     if start < 0 or end_of_open < 0:
         raise ValueError("CANONICAL_REPORT content control is incomplete")
-    markup = _canonical_content_markup(report, prefix)
+    markup = _canonical_content_markup(report, prefix, heading_style)
     if part[end_of_open - 1 : end_of_open] == b"/":
         # An empty control is written self-closing and must become a pair.
         return (
@@ -6276,7 +6386,7 @@ def _inject_canonical_report(content: bytes, report: ReportSnapshot) -> bytes:
     # makes the part invalid, and Word refuses to open the candidate at all.
     # Editing only the control's own bytes leaves the rest of the markup intact.
     parts["word/document.xml"] = _replace_canonical_content(
-        parts["word/document.xml"], report
+        parts["word/document.xml"], report, _heading_style_id(parts.get("word/styles.xml"))
     )
     _verify_canonical_binding(parts["word/document.xml"], report)
     output = BytesIO()

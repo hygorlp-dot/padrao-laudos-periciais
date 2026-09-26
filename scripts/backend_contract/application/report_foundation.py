@@ -1,5 +1,6 @@
 """Application authority for upstream-bound canonical report revisions."""
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
@@ -428,12 +429,66 @@ class AmendReportDraft:
     get_snapshot: object
     save_snapshot: object
     ids: object
+    # Upstream readers let the answer command derive its chain from the bound
+    # authorities instead of asking the expert for internal identities.
+    get_case_analysis: object | None = None
+    get_technical_snapshot: object | None = None
 
     def execute(self, workspace_id, *, expected_revision: int, action: str, values: dict):
         record, snapshot = self.get_snapshot.execute(workspace_id)
         if record.revision != expected_revision or snapshot.state is not ReportState.DRAFT or snapshot.review_decisions or snapshot.upstream_stale or type(values) is not dict:
             raise ValueError("Report draft amendment is invalid")
-        if action == "ADD_CLAIM":
+        if action == "ANSWER_QUESTION":
+            if set(values) != {"question_id", "finding_id", "text"} or any(type(values[name]) is not str or not values[name].strip() for name in values):
+                raise ValueError("Report answer amendment is invalid")
+            if self.get_case_analysis is None or self.get_technical_snapshot is None:
+                raise ValueError("Report answer derivation is unavailable")
+            case_record, case = self.get_case_analysis.execute(workspace_id)
+            technical_record, technical = self.get_technical_snapshot.execute(workspace_id)
+            bound = snapshot.source_snapshot
+            if (
+                case_record.revision != bound.case_analysis_revision
+                or report_upstream_digest(case) != bound.case_analysis_digest
+                or technical_record.revision != bound.technical_snapshot_revision
+                or report_upstream_digest(technical) != bound.technical_snapshot_digest
+            ):
+                raise ValueError("Report answer upstream authority is stale")
+            if any(item.question_id == values["question_id"] for item in snapshot.answers):
+                raise ValueError("Report question is already answered")
+            answer = _answer_for_question(
+                snapshot, case, technical, answer_id=f"ANSWER-{str(self.ids.new_uuid()).upper()}",
+                question_id=values["question_id"], finding_id=values["finding_id"], text=values["text"].strip(),
+            )
+            answers = (*snapshot.answers, answer)
+            amended = replace(snapshot, answers=answers, coverage=_draft_coverage(snapshot, answers=answers))
+        elif action == "UPDATE_ANSWER_TEXT":
+            if set(values) != {"answer_id", "text"} or type(values["text"]) is not str or not values["text"].strip():
+                raise ValueError("Report answer amendment is invalid")
+            if not any(item.answer_id == values["answer_id"] for item in snapshot.answers):
+                raise ValueError("Report answer is unknown")
+            answers = tuple(replace(item, text=values["text"].strip()) if item.answer_id == values["answer_id"] else item for item in snapshot.answers)
+            amended = replace(snapshot, answers=answers)
+        elif action == "REMOVE_ANSWER":
+            if set(values) != {"answer_id"} or not any(item.answer_id == values["answer_id"] for item in snapshot.answers):
+                raise ValueError("Report answer amendment is invalid")
+            answers = tuple(item for item in snapshot.answers if item.answer_id != values["answer_id"])
+            amended = replace(snapshot, answers=answers, coverage=_draft_coverage(snapshot, answers=answers))
+        elif action == "UPDATE_CLAIM_TEXT":
+            if set(values) != {"claim_id", "text"} or type(values["text"]) is not str or not values["text"].strip():
+                raise ValueError("Report claim amendment is invalid")
+            if not any(item.claim_id == values["claim_id"] for item in snapshot.claims):
+                raise ValueError("Report claim is unknown")
+            # Only the presentation text changes; authority and provenance stay.
+            claims = tuple(replace(item, text=values["text"].strip()) if item.claim_id == values["claim_id"] else item for item in snapshot.claims)
+            amended = replace(snapshot, claims=claims)
+        elif action == "REMOVE_CLAIM":
+            if set(values) != {"claim_id"} or not any(item.claim_id == values["claim_id"] for item in snapshot.claims):
+                raise ValueError("Report claim amendment is invalid")
+            if any(values["claim_id"] in item.claim_ids for item in snapshot.answers):
+                raise ValueError("Report claim supports an answer to a question")
+            claims = tuple(item for item in snapshot.claims if item.claim_id != values["claim_id"])
+            amended = replace(snapshot, claims=claims, coverage=_draft_coverage(snapshot, claims=claims))
+        elif action == "ADD_CLAIM":
             if set(values) != {"section_id", "text", "source_kind", "source_id"}:
                 raise ValueError("Report claim amendment is invalid")
             source_kind = values["source_kind"]
@@ -469,6 +524,131 @@ class AmendReportDraft:
             raise ValueError("Report draft amendment action is invalid")
         saved = self.save_snapshot.execute(workspace_id, amended, expected_revision)
         return saved, amended
+
+
+def _answer_for_question(snapshot: ReportSnapshot, case: CaseAnalysisSnapshot, technical: TechnicalSnapshot, *, answer_id: str, question_id: str, finding_id: str, text: str) -> ReportAnswer:
+    """The whole answer chain follows from the question and the effective finding.
+
+    Evidence, methods and the decision are the ones the finding already carries;
+    the cited claims are the report paragraphs that cite that finding or its
+    decision.  Nothing here is inferred: a link that does not exist is refused.
+    """
+    if (question_id, finding_id) not in {(item.question_id, item.finding_id) for item in technical.question_links}:
+        raise ValueError("Report answer requires an effective finding linked to the question")
+    finding = next((item for item in technical.findings if item.finding_id == finding_id), None)
+    proposal = next((item for item in technical.finding_proposals if finding is not None and item.proposal_id == finding.proposal_id), None)
+    if finding is None or proposal is None:
+        raise ValueError("Report answer requires an effective finding linked to the question")
+    evidence_ids = tuple(dict.fromkeys((*proposal.supporting_evidence_ids, *proposal.contrary_evidence_ids)))
+    claim_ids = tuple(
+        claim.claim_id
+        for claim in snapshot.claims
+        if any(
+            (item.source_kind == "TECHNICAL_FINDING" and item.source_id == finding_id)
+            or (item.source_kind == "PROFESSIONAL_DECISION" and item.source_id == finding.decision_id)
+            for item in claim.provenance
+        )
+    )
+    if not claim_ids:
+        raise ValueError("Report answer requires the finding to be cited in the report")
+    section = next(item for item in snapshot.sections if item.kind == "ANSWERS_TO_QUESTIONS")
+    question_text = next((item.text for item in case.questions if item.item_id == question_id), None)
+    return ReportAnswer(
+        answer_id, section.section_id, question_id, text, finding_id, evidence_ids,
+        tuple(proposal.method_application_ids), finding.decision_id, claim_ids, question_text,
+    )
+
+
+def _pathology_labels(pathology: ConstructionDefectAnalysisSnapshot | None) -> list[dict]:
+    if pathology is None:
+        return []
+    effective = set(pathology.effective_pat_ids)
+    items = []
+    for item in pathology.analysis_final.get("patologias", ()):
+        if isinstance(item, Mapping) and item.get("id") in effective:
+            items.append({"kind": "PATHOLOGY", "id": item["id"], "label": f"{item['id']} · {item.get('manifestacao') or 'manifestação sem descrição'}"})
+    return items
+
+
+@dataclass(frozen=True, slots=True)
+class ListReportSources:
+    """Everything the expert may cite, labelled by content, never by identity.
+
+    The list is read from the same authorities the report binds, so a source
+    offered here is one the save command will accept.
+    """
+    get_case_analysis: object
+    get_inspection_session: object
+    get_technical_snapshot: object
+    get_construction_defect_analysis: object | None = None
+
+    def execute(self, workspace_id) -> dict:
+        _, case = self.get_case_analysis.execute(workspace_id)
+        _, inspection = self.get_inspection_session.execute(workspace_id)
+        _, technical = self.get_technical_snapshot.execute(workspace_id)
+        _, pathology = _optional_pathology(workspace_id, self.get_construction_defect_analysis)
+        documents = [
+            {"kind": "CASE_DOCUMENT", "id": item.document_id, "label": f"{item.sequence:02d} · {item.raw_type} · páginas {item.page_count_or_span}"}
+            for item in case.documents if item.content_available
+        ]
+        sources = [
+            *({"kind": "ALLEGATION", "id": item.item_id, "label": item.text} for item in case.claims),
+            *({"kind": "COURT_DECISION", "id": item.item_id, "label": item.text} for item in case.decisions),
+            *documents,
+            *({"kind": "FIELD_OBSERVATION", "id": item.observation_id, "label": item.raw_observation} for item in inspection.observations),
+            *({"kind": "MEASUREMENT", "id": item.measurement_id, "label": f"{item.quantity}: {item.raw_value} {item.raw_unit}"} for item in inspection.measurements),
+            *_pathology_labels(pathology),
+            *({"kind": "TECHNICAL_FINDING", "id": item.finding_id, "label": item.technical_proposition} for item in technical.findings),
+            *({"kind": "PROFESSIONAL_DECISION", "id": item.decision_id, "label": f"Decisão sobre: {next((finding.technical_proposition for finding in technical.findings if finding.decision_id == item.decision_id), item.reason)}"} for item in technical.decisions if any(finding.decision_id == item.decision_id for finding in technical.findings)),
+        ]
+        entities = {item.entity_id: item for item in case.judicial_context.entities}
+        participants = [
+            {"id": item.participant_id, "label": getattr(entities.get(item.entity_id), "raw_name", item.participant_id)}
+            for item in case.judicial_context.participants
+        ]
+        document_options = [{"id": item["id"], "label": item["label"]} for item in documents]
+        decisions = [{"id": item.item_id, "label": item.text} for item in case.decisions]
+        claims = [{"id": item.item_id, "label": item.text} for item in case.claims]
+        questions_text = {item.item_id: item.text for item in case.questions}
+        question_ids = list(dict.fromkeys(item.question_id for item in technical.question_links))
+        question_options = [{"id": question_id, "label": questions_text.get(question_id, question_id)} for question_id in question_ids]
+        findings = {item.finding_id: item for item in technical.findings}
+        questions = [
+            {
+                "question_id": question_id,
+                "text": questions_text.get(question_id),
+                "findings": [
+                    {"finding_id": link.finding_id, "label": findings[link.finding_id].technical_proposition}
+                    for link in technical.question_links
+                    if link.question_id == question_id and link.finding_id in findings
+                ],
+            }
+            for question_id in question_ids
+        ]
+        return {
+            "sources": sources,
+            "context_sources": {
+                "PROCESS_NUMBER": document_options + decisions,
+                "COURT": document_options + decisions,
+                "PARTIES": participants + document_options,
+                "ADDRESSES": document_options,
+                "CLAIM_AND_GROUNDS": claims + document_options,
+                "REQUESTS": question_options + decisions + document_options,
+            },
+            "questions": questions,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ExportReportAuditTrail:
+    """The canonical audit trail of the current report, offered apart from the document."""
+    get_snapshot: object
+
+    def execute(self, workspace_id) -> dict:
+        from ..delivery_renderer import canonical_report_audit_lines
+
+        record, snapshot = self.get_snapshot.execute(workspace_id)
+        return {"report_id": snapshot.report_id, "revision": record.revision, "lines": list(canonical_report_audit_lines(snapshot))}
 
 
 @dataclass(frozen=True, slots=True)

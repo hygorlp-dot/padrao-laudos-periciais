@@ -263,9 +263,16 @@ class ReportAnswer:
     method_ids: tuple[str, ...]
     decision_id: str
     claim_ids: tuple[str, ...]
+    # The question as the case record states it, captured from the bound case
+    # analysis when the answer is written, so the report can present it without
+    # an internal identity.  Answers written before it existed carry None and
+    # keep their exact persisted mapping (the key is omitted, never nulled).
+    question_text: str | None = None
 
     def __post_init__(self):
         _all_text(self, ("answer_id", "section_id", "question_id", "text", "finding_id", "decision_id"))
+        if self.question_text is not None and not _text(self.question_text):
+            raise ValueError("report answer question text is invalid")
         try:
             for values in (self.evidence_ids, self.method_ids, self.claim_ids):
                 _texts(values, allow_empty=False)
@@ -438,7 +445,17 @@ def report_snapshot_from_mapping(value: object) -> ReportSnapshot:
         claim["authority"] = AuthorityClass(claim["authority"])
         claims.append(_construct(ReportClaim, claim, tuples={"provenance": ReportProvenance}))
     data["claims"] = tuple(claims)
-    data["answers"] = tuple(_construct(ReportAnswer, item, tuples={"evidence_ids": None, "method_ids": None, "claim_ids": None}) for item in data["answers"])
+    answers = []
+    for item in data["answers"]:
+        answer = dict(item) if type(item) is dict else item
+        if type(answer) is dict and "question_text" not in answer:
+            answer["question_text"] = None
+        elif type(answer) is dict and answer["question_text"] is None:
+            # An absent question text is written by omission; an explicit null
+            # would give one snapshot two mappings and two digests.
+            raise ValueError("ReportAnswer question text is invalid")
+        answers.append(_construct(ReportAnswer, answer, tuples={"evidence_ids": None, "method_ids": None, "claim_ids": None}))
+    data["answers"] = tuple(answers)
     reviews = []
     for item in data["review_decisions"]:
         review = dict(item)
@@ -464,4 +481,8 @@ def expert_profile_to_mapping(value: ExpertMasterProfile) -> dict[str, Any]:
 def report_snapshot_to_mapping(value: ReportSnapshot) -> dict[str, Any]:
     if type(value) is not ReportSnapshot:
         raise TypeError("expected ReportSnapshot")
-    return json.loads(json.dumps(asdict(value), ensure_ascii=False))
+    mapping = json.loads(json.dumps(asdict(value), ensure_ascii=False))
+    for answer in mapping["answers"]:
+        if answer["question_text"] is None:
+            del answer["question_text"]
+    return mapping

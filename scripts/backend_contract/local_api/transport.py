@@ -166,6 +166,8 @@ class LocalApiServices:
     start_report_snapshot: object | None = None
     review_report_snapshot: object | None = None
     amend_report_draft: object | None = None
+    list_report_sources: object | None = None
+    export_report_audit_trail: object | None = None
     store_delivery_template: object | None = None
     get_delivery_artifact: object | None = None
     get_delivery_snapshot: object | None = None
@@ -822,6 +824,22 @@ class LocalApi:
                     raise ValueError("Report review request is invalid")
                 record, snapshot = self._services.review_report_snapshot.execute(workspace_id, **dto)
                 return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_validated_mapping(snapshot)})
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("report-snapshot", "sources"):
+                workspace_id = self._workspace_id(raw_segments[2])
+                if normalized_method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.list_report_sources is None:
+                    return _error(503, "REPORT_SNAPSHOT_UNAVAILABLE")
+                return _json_response(200, self._services.list_report_sources.execute(workspace_id))
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("report-snapshot", "audit-trail"):
+                workspace_id = self._workspace_id(raw_segments[2])
+                if normalized_method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.export_report_audit_trail is None:
+                    return _error(503, "REPORT_SNAPSHOT_UNAVAILABLE")
+                return _json_response(200, self._services.export_report_audit_trail.execute(workspace_id))
 
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("report-snapshot", "draft-amendments"):
                 workspace_id = self._workspace_id(raw_segments[2])
